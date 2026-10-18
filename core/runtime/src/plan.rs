@@ -209,7 +209,7 @@ impl PlanInfo {
             if blob(n, data) != at.blob {
                 continue;
             }
-            if let Some(inst) = at.inst.upgrade().filter(|i| !i.released() && !i.dead())
+            if let Some(inst) = at.inst.upgrade().filter(|i| i.lendable())
                 && !lent.values().any(|x| Arc::ptr_eq(x, &inst))
             {
                 lent.insert(i, inst);

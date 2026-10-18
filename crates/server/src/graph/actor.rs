@@ -58,7 +58,7 @@ pub(super) type Job = Box<dyn FnOnce(&mut Actor) + Send>;
 pub(super) type Hook = Box<dyn FnMut(&Inner) + Send>;
 
 pub(crate) struct Actor {
-    inner: Arc<Inner>,
+    pub(super) inner: Arc<Inner>,
     pub(crate) open: Option<Open>,
     /// What this Graph's plugin instances report unasked (its [`m2_plugins::Owner`]'s): no other
     /// session, test or rig sees them.
@@ -162,9 +162,12 @@ pub(crate) struct Open {
     pub(super) prepared: Prepared,
     /// The timeline last published, whose lanes the next one shares where they are the same.
     timeline: Arc<super::Timeline>,
+    /// What plugin windows did that waits for the session: holds, autosaves (HOME-5, HOME-6).
+    pub(crate) windows: super::plugin_window::Windows,
 }
 
 /// The plan the engine plays: what it was built from, and how `SwapLane` reaches its lanes.
+#[derive(Clone)]
 pub(crate) struct Plays {
     /// The player it was loaded into ([`Device::epoch`]).
     pub(crate) epoch: u64,
@@ -428,7 +431,7 @@ fn continuing(from: &Revision, to: &Revision) -> Continues {
 
 /// How the user knows plugin node `node` of `rev`'s graph: its plugin's name and its track's, as
 /// the app shows them ("Surge XT (lead)").
-fn plugin_named(rev: &Revision, packages: &PackageSet, node: usize) -> String {
+pub(super) fn plugin_named(rev: &Revision, packages: &PackageSet, node: usize) -> String {
     let Some(n) = rev.compiled.flat.nodes.get(node) else { return "A plugin".into() };
     let plugin = match &n.op {
         FOp::Plugin { plugin, .. } => packages.plugin_info(plugin).map_or_else(|| plugin.clone(), |i| i.found.name.clone()),
@@ -469,6 +472,11 @@ fn build(session: &Session, audio: &mut audio::Cache, owner: &m2_plugins::Owner,
 }
 
 impl Open {
+    /// The accepted revision's controls, by id.
+    pub(crate) fn controls(&self) -> &HashMap<String, Control> {
+        &self.controls
+    }
+
     fn check_token(&self, token: u64) -> Result<()> {
         if token != self.token {
             return Err(anyhow!("the open project changed; refresh the graph before editing"));
@@ -1151,6 +1159,7 @@ impl Actor {
             revived: HashMap::new(),
             prepared: Prepared::default(),
             timeline: Arc::default(),
+            windows: Default::default(),
         };
         // The overlays saved for it, which its first renderer plays from its first block (A6).
         let accepted = o.session.accepted();
@@ -1273,7 +1282,7 @@ impl Actor {
     /// instance fails too is left silent, and the user told that once. When the plugin host
     /// process crashed (HOST-3), its instances are all told in one notice, `plugin.crashed`.
     fn heard_plugins(&mut self) {
-        let (mut crashed, mut hung) = (HashSet::new(), false);
+        let (mut crashed, mut hung, mut dirty, mut closed) = (HashSet::new(), false, vec![], vec![]);
         while let Ok(e) = self.events.try_recv() {
             match e {
                 HostEvent::Restart(h) => {
@@ -1283,17 +1292,20 @@ impl Actor {
                 }
                 // Latency compensation and state autosave come later (RENDER-17, HOME-6).
                 HostEvent::Latency(h, frames) => eprintln!("music2: plugin {h:?} reports {frames} frames of latency"),
-                HostEvent::Dirty(_) => {}
+                HostEvent::Dirty(h) => dirty.push(h),
                 HostEvent::Crashed(h) => {
                     crashed.insert(h);
+                    closed.push(h);
                 }
                 HostEvent::Hung(h) => {
                     crashed.insert(h);
+                    closed.push(h);
                     hung = true;
                 }
-                HostEvent::WindowClosed(_) => {}
+                HostEvent::WindowClosed(h) => closed.push(h),
             }
         }
+        self.heard_windows(dirty, closed);
         let Some(o) = &mut self.open else { return };
         let Some(p) = &o.plays else { return };
         // A crashed instance fails at its next call; one that isn't called now (asleep) is marked
@@ -1359,6 +1371,8 @@ impl Actor {
     /// ([`Self::export_done`]). With none playing, it renders with instances of its own, beside
     /// playback.
     pub(super) fn export(&mut self, length: Length, jobs: mpsc::Sender<Job>) -> Result<super::Export> {
+        // A state changed in a plugin's window is saved first, so the export plays it (RENDER-1).
+        self.flush_autosaves();
         let device = self.inner.current_device();
         let o = self.open.as_mut().context("no project is open")?;
         let rev = o.session.accepted_arc();

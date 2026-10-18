@@ -578,8 +578,19 @@ struct PluginNode {
     release: Vec<(u32, i16)>,
     /// (parameter id, input, value last sent).
     params: Vec<(u32, Input, Option<f32>)>,
+    /// Beside each parameter: whether a lane or a cable drives it (a gesture latches it, MON-6),
+    /// rather than a value in code (a gesture holds it for a Tx, HOME-5).
+    driven: Vec<bool>,
+    /// Beside each parameter: the value its window holds or latched it at, while it does (live
+    /// only): what is sent in its place.
+    over: Vec<Option<f64>>,
+    /// Calls left in which a change outside a gesture is set back without a word: a plugin may
+    /// say what a state it loaded set (HOME-5a's notice is for the person's own changes).
+    quiet: u8,
     /// One call's events in and out, sized when built (RENDER-28). What comes out (parameter
-    /// gestures, HOST-4) is kept for one call: nothing consumes it before plugin windows.
+    /// gestures and values, HOST-4) is read after each live call: a gesture holds or latches a
+    /// code-owned parameter, a change outside one is set back, and one to a parameter code
+    /// doesn't set marks the state changed.
     events: m2_plugins::Events,
     out: m2_plugins::Events,
     /// What its last call reported: whether the engine may idle (RENDER-6a).
@@ -617,7 +628,9 @@ const OUT_EVENTS: usize = 256;
 /// at its first frame for each of `ended`, and a NoteOff for each of `release`; with `again` (the
 /// lane's scheduler, once an export gave the instance back), a NoteOn there for each of `keys` the
 /// scheduler still holds, and the others forgotten; then the lane's note events (already in order)
-/// from `*next` on, merged with `params` sampled every [`PARAM_STEP`] frames. At one frame
+/// from `*next` on, merged with `params` sampled every [`PARAM_STEP`] frames; one with a value in
+/// `over` (its window holds or latched it) gets that value, only when a send is due (`None`
+/// last sent), never its input's. At one frame
 /// parameters come after notes, the order a stable sort by time gave before. An On becomes a
 /// NoteOn (and a Tuning between keys), an Off a NoteOff for the key `keys` holds for it. Returns
 /// how many NoteOffs it sent, and the time of the last. Never allocates: `out` and `keys` keep
@@ -630,6 +643,7 @@ fn plugin_events(
     notes: &[Event],
     next: &mut usize,
     params: &mut [(u32, Input, Option<f32>)],
+    over: &[Option<f64>],
     r: &impl Reads,
     (lo, hi): (usize, usize),
     keys: &mut Vec<(u32, i16)>,
@@ -696,7 +710,14 @@ fn plugin_events(
         if f >= hi {
             break;
         }
-        for (id, input, last) in params.iter_mut() {
+        for (i, (id, input, last)) in params.iter_mut().enumerate() {
+            if let Some(&Some(v)) = over.get(i) {
+                if last.is_none() {
+                    out.push(P::Param { time: (f - lo) as u32, id: *id, value: v });
+                    *last = Some(v as f32);
+                }
+                continue;
+            }
             match input {
                 // Sent whenever it differs from the last value sent, as a port's sample is: an
                 // instance that outlives its plan may have been sent another (HOST-5).
@@ -743,7 +764,10 @@ impl PluginNode {
             for p in &mut self.params {
                 p.2 = None;
             }
+            self.quiet = 3;
         }
+        let quiet = self.quiet > 0;
+        self.quiet = self.quiet.saturating_sub(1);
         if std::mem::take(&mut self.reset_first) {
             host.reset(h);
             // A plugin may leave the thread flushing subnormals (RENDER-2a).
@@ -753,6 +777,9 @@ impl PluginNode {
             inst.mark_lent();
         }
         let mut again = std::mem::take(&mut self.again).then(|| self.notes.and_then(|s| lanes[s].scheduler())).flatten();
+        if b.live {
+            taken_over(&mut self.params, &mut self.over, inst);
+        }
         // One call per run: a call never spans a jump, and each gets its own transport (RENDER-9).
         for (ri, run) in b.runs.as_slice().iter().enumerate() {
             let (lo, hi) = (run.off as usize, (run.off + run.n) as usize);
@@ -764,6 +791,7 @@ impl PluginNode {
                 notes,
                 &mut next,
                 &mut self.params,
+                &self.over,
                 r,
                 (lo, hi),
                 &mut self.keys,
@@ -818,6 +846,9 @@ impl PluginNode {
                 self.ended.clear();
                 self.release.clear();
             }
+            if b.live {
+                heard(&self.out, &mut self.params, &mut self.over, &self.driven, inst, quiet);
+            }
         }
         if b.strict
             && let Some(at) = out.iter().position(|x| !x.is_finite())
@@ -843,6 +874,67 @@ impl PluginNode {
             p.2 = None;
         }
         Ok(())
+    }
+}
+
+/// What its window holds or latched, read before a live call (HOME-5a, MON-6). One no longer
+/// taken over gets its input's value again.
+fn taken_over(params: &mut [(u32, Input, Option<f32>)], over: &mut [Option<f64>], inst: &PluginInstance) {
+    let o = inst.overrides();
+    for (i, p) in params.iter_mut().enumerate() {
+        let now = o.get(p.0).filter(|(f, _)| f & (plugins::HELD | plugins::LATCHED) != 0).map(|(_, v)| v);
+        if over[i].is_some() && now.is_none() {
+            p.2 = None;
+        }
+        over[i] = now;
+    }
+}
+
+/// What a live call output (HOST-4): a gesture on a parameter code owns holds it (a value in
+/// code, HOME-5) or latches it (a lane or a cable, MON-6); a change outside one is set back at
+/// the next call (HOME-5a); a change to one code doesn't set changed its state (HOME-6).
+/// Atomics only: nothing here allocates or locks.
+fn heard(
+    out: &m2_plugins::Events,
+    params: &mut [(u32, Input, Option<f32>)],
+    over: &mut [Option<f64>],
+    driven: &[bool],
+    inst: &PluginInstance,
+    quiet: bool,
+) {
+    use m2_plugins::Event as P;
+    let o = inst.overrides();
+    for e in out.iter() {
+        let (id, at) = match e {
+            P::Gesture { id, .. } | P::Param { id, .. } => (id, params.iter().position(|p| p.0 == id)),
+            _ => continue,
+        };
+        match (e, at) {
+            (P::Gesture { begin: true, .. }, Some(i)) => {
+                let kind = if driven[i] { plugins::LATCHED } else { plugins::HELD };
+                let was = params[i].2.map_or(0.0, f64::from);
+                if o.begin(id, kind, was) {
+                    over[i] = Some(was);
+                }
+            }
+            (P::Gesture { begin: false, .. }, Some(_)) => o.end(id),
+            (P::Gesture { begin: false, .. }, None) => inst.state_changed(),
+            (P::Param { value, .. }, Some(i)) => match o.get(id) {
+                Some(_) => {
+                    o.value(id, value);
+                    over[i] = Some(value);
+                    params[i].2 = Some(value as f32);
+                }
+                None => {
+                    params[i].2 = None;
+                    if !quiet {
+                        inst.reverted(id);
+                    }
+                }
+            },
+            (P::Param { .. }, None) => inst.state_changed(),
+            _ => {}
+        }
     }
 }
 
@@ -1139,7 +1231,7 @@ impl Builder<'_> {
         // Inputs come in the order of the plugin's ports; a parameter is bound by the id in its
         // address, never by its place in the list (FMT-18).
         let sig = m2_ir::Kernels::plugin(self.packages, id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
-        let (mut audio_in, mut notes, mut params) = (None, None, vec![]);
+        let (mut audio_in, mut notes, mut params, mut driven) = (None, None, vec![], vec![]);
         for (port, input) in sig.inputs.iter().zip(inputs) {
             match (port.name.as_str(), input) {
                 ("in", _) => audio_in = Some(input.clone()),
@@ -1152,6 +1244,8 @@ impl Builder<'_> {
                 (name, _) => {
                     let (_, pid) = packages::address(name).with_context(|| format!("{}: `{name}` isn't a parameter address", n.name))?;
                     params.push((pid, input.clone(), None));
+                    // A value in code is a constant (a cell, or folded); anything else drives it.
+                    driven.push(matches!(input, Input::Port { src, .. } if !matches!(nodes[src.node].op, FOp::Const(_))));
                 }
             }
         }
@@ -1181,7 +1275,10 @@ impl Builder<'_> {
             keys: Vec::with_capacity(held),
             ended: Vec::with_capacity(held),
             release: Vec::with_capacity(held),
+            over: vec![None; params.len()],
+            quiet: 0,
             params,
+            driven,
             events: m2_plugins::Events::with_capacity(events),
             out: m2_plugins::Events::with_capacity(OUT_EVENTS),
             status: m2_plugins::Status::Continue,

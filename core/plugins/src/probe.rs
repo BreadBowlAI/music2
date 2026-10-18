@@ -473,6 +473,9 @@ struct Probe {
     /// Its state's tag is `crash-at-<n>` or `hang-at-<n>`: the call, whether it hangs, and the
     /// file that makes it happen once.
     stops_at: Option<(u64, bool, Option<PathBuf>)>,
+    /// Its tag's scripted acts ([`scripts`]).
+    scripts: Vec<Script>,
+    state_host: Option<&'static clap_host_state>,
     stats: Arc<Stats>,
     rate: f64,
     gain: f64,
@@ -597,6 +600,8 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         fails_process: false,
         sets_fz: false,
         stops_at: None,
+        scripts: vec![],
+        state_host: None,
         stats: stats.clone(),
         rate: 48_000.0,
         gain: 1.0,
@@ -619,6 +624,8 @@ unsafe extern "C" fn init(p: *const clap_plugin) -> bool {
     me.checks = (!ext.is_null()).then(|| unsafe { &*ext });
     let log = get.map_or(null(), |g| unsafe { g(me.host, CLAP_EXT_LOG.as_ptr()) }) as *const clap_host_log;
     me.log = (!log.is_null()).then(|| unsafe { &*log });
+    let st = get.map_or(null(), |g| unsafe { g(me.host, CLAP_EXT_STATE.as_ptr()) }) as *const clap_host_state;
+    me.state_host = (!st.is_null()).then(|| unsafe { &*st });
     me.record("init");
     true
 }
@@ -772,6 +779,7 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
         }
         next += 1;
     }
+    me.act(me.calls + 1, pr.out_events);
     me.calls += 1;
     if me.calls.is_multiple_of(10)
         && let Some(f) = unsafe { (*me.host).request_callback }
@@ -1077,8 +1085,116 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
     me.fails_process = tag.starts_with("fails-process");
     me.sets_fz = tag.starts_with("sets-fz");
     me.stops_at = stops_at(&tag);
+    me.scripts = scripts(&tag);
     *me.stats.tag.lock().unwrap_or_else(|e| e.into_inner()) = tag;
     true
+}
+
+/// What its window does by itself, as a person would (HOST-4), from its tag's words:
+/// `gesture-at-<n>[-<m>]:<id>=<v>` turns parameter `id` to `v` in a gesture from call `n` to call
+/// `m` (begin and the value at `n`, the value again at each call up to `m`, the end at `m`);
+/// `preset-at-<n>:<id>=<v>` sets it with no gesture, as a preset loaded in its own browser does;
+/// `dirty-at-<n>[-<m>]` calls `mark_dirty` at each call from `n` to `m`.
+fn scripts(tag: &str) -> Vec<Script> {
+    let range = |r: &str| -> Option<(u64, u64)> {
+        let (a, b) = r.split_once('-').map_or((r, r), |(a, b)| (a, b));
+        Some((a.parse().ok()?, b.parse().ok()?))
+    };
+    let set = |rest: &str| -> Option<(u64, u64, u32, f64)> {
+        let (when, what) = rest.split_once(':')?;
+        let (id, v) = what.split_once('=')?;
+        let (from, to) = range(when)?;
+        Some((from, to, id.parse().ok()?, v.parse().ok()?))
+    };
+    tag.split_whitespace()
+        .filter_map(|w| {
+            if let Some(r) = w.strip_prefix("gesture-at-") {
+                let (from, to, id, value) = set(r)?;
+                Some(Script { what: Act::Gesture, from, to, id, value })
+            } else if let Some(r) = w.strip_prefix("preset-at-") {
+                let (from, to, id, value) = set(r)?;
+                Some(Script { what: Act::Preset, from, to, id, value })
+            } else if let Some(r) = w.strip_prefix("dirty-at-") {
+                let (from, to) = range(r)?;
+                Some(Script { what: Act::Dirty, from, to, id: 0, value: 0.0 })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Act {
+    Gesture,
+    Preset,
+    Dirty,
+}
+
+/// One of [`scripts`]'s words.
+#[derive(Clone, Copy, Debug)]
+struct Script {
+    what: Act,
+    from: u64,
+    to: u64,
+    id: u32,
+    value: f64,
+}
+
+impl Probe {
+    /// Call `call`'s scripted acts: its own value set, and what it outputs (on the audio thread:
+    /// events on the stack, no allocation).
+    fn act(&mut self, call: u64, out: *const clap_output_events) {
+        let push = |h: *const clap_event_header| {
+            if !out.is_null()
+                && let Some(f) = unsafe { (*out).try_push }
+            {
+                unsafe { f(out, h) };
+            }
+        };
+        let header = |size: usize, type_: u16| clap_event_header { size: size as u32, time: 0, space_id: CLAP_CORE_EVENT_SPACE_ID, type_, flags: 0 };
+        for i in 0..self.scripts.len() {
+            let s = self.scripts[i];
+            if call < s.from || call > s.to {
+                continue;
+            }
+            if s.what == Act::Dirty {
+                if let Some(f) = self.state_host.and_then(|x| x.mark_dirty) {
+                    unsafe { f(self.host) };
+                }
+                continue;
+            }
+            let gesture = |begin: bool| clap_event_param_gesture {
+                header: header(
+                    size_of::<clap_event_param_gesture>(),
+                    if begin { CLAP_EVENT_PARAM_GESTURE_BEGIN } else { CLAP_EVENT_PARAM_GESTURE_END },
+                ),
+                param_id: s.id,
+            };
+            if s.what == Act::Gesture && call == s.from {
+                push(&gesture(true).header);
+            }
+            let value = clap_event_param_value {
+                header: header(size_of::<clap_event_param_value>(), CLAP_EVENT_PARAM_VALUE),
+                param_id: s.id,
+                cookie: std::ptr::null_mut(),
+                note_id: -1,
+                port_index: -1,
+                channel: -1,
+                key: -1,
+                value: s.value,
+            };
+            push(&value.header);
+            match s.id {
+                GAIN => self.gain = s.value,
+                LEVEL => self.level = s.value,
+                _ => {}
+            }
+            if s.what == Act::Gesture && call == s.to {
+                push(&gesture(false).header);
+            }
+        }
+    }
 }
 
 /// `crash-at-<n>[:<file>]` or `hang-at-<n>[:<file>]`.

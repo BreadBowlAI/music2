@@ -258,6 +258,7 @@ pub(crate) union Raw {
     note: clap_event_note,
     expr: clap_event_note_expression,
     param: clap_event_param_value,
+    gesture: clap_event_param_gesture,
 }
 
 fn header(size: usize, time: u32, type_: u16) -> clap_event_header {
@@ -282,6 +283,16 @@ fn raw(e: &Event) -> Raw {
                 channel: 0,
                 key,
                 value: semitones,
+            },
+        },
+        Event::Gesture { time, id, begin } => Raw {
+            gesture: clap_event_param_gesture {
+                header: header(
+                    size_of::<clap_event_param_gesture>(),
+                    time,
+                    if begin { CLAP_EVENT_PARAM_GESTURE_BEGIN } else { CLAP_EVENT_PARAM_GESTURE_END },
+                ),
+                param_id: id,
             },
         },
         Event::Param { time, id, value } => Raw {
@@ -326,6 +337,10 @@ pub(crate) unsafe fn decode(h: *const clap_event_header) -> Option<Event> {
         CLAP_EVENT_PARAM_VALUE => {
             let p = unsafe { &*(h as *const clap_event_param_value) };
             Some(Event::Param { time, id: p.param_id, value: p.value })
+        }
+        CLAP_EVENT_PARAM_GESTURE_BEGIN | CLAP_EVENT_PARAM_GESTURE_END => {
+            let g = unsafe { &*(h as *const clap_event_param_gesture) };
+            Some(Event::Gesture { time, id: g.param_id, begin: hd.type_ == CLAP_EVENT_PARAM_GESTURE_BEGIN })
         }
         _ => None,
     }

@@ -61,8 +61,9 @@ mod tempo_lease;
 mod import;
 pub mod record;
 pub(crate) mod exchange;
+pub(crate) mod plugin_window;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -427,6 +428,10 @@ struct Inner {
     layout: Mutex<LayoutSeen>,
     /// How players start, and what is known of the sound output (gaps #13, #31).
     output: output::Outputs,
+    /// The graph state's `plugins` (HOST-7, MON-6), as the actor last published it.
+    plugins: Mutex<Value>,
+    /// The plugin instances whose window is open, by handle.
+    open_windows: Mutex<HashSet<u64>>,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -563,6 +568,8 @@ impl Inner {
             export_hooks: Arc::default(),
             layout: Mutex::default(),
             output,
+            plugins: Mutex::new(Value::Object(Default::default())),
+            open_windows: Mutex::default(),
         }
     }
 
@@ -700,6 +707,7 @@ impl Inner {
         state["local"] = local;
         state["midi"] = self.midi_state();
         state["record"] = self.record_state();
+        state["plugins"] = self.plugins.lock().clone();
         Some(state)
     }
 

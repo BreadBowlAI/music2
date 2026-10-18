@@ -3161,22 +3161,23 @@ fn an_export_after_a_released_parameter_is_what_m2_render_makes() {
              export default song(() => p.out);\n"
         )
     };
+    // A number written in the call is a cell (HOME-5, since ph-2): the plugin hears it as an f32.
     let mut ex = Ex::with(&song(", level_2: 0.05"), &m2_plugins::probe::state_with("released", 1.0, 0.4));
     let first = ex.handles();
     let stats = m2_plugins::probe::stats(first[0]).unwrap();
-    assert_eq!(param(first[0], m2_plugins::probe::LEVEL), 0.05, "the code's level");
+    assert_eq!(param(first[0], m2_plugins::probe::LEVEL) as f32, 0.05, "the code's level");
     ex.fixture.put("song.ts", &song(""));
     assert!(ex.state.graph.poll());
     ex.fill(4);
     assert!(synced(&ex.state.graph) && ex.handles() == first, "the same instance plays the edit");
-    assert_eq!(param(first[0], m2_plugins::probe::LEVEL), 0.05, "it keeps the value it was last sent (HOME-5a)");
+    assert_eq!(param(first[0], m2_plugins::probe::LEVEL) as f32, 0.05, "it keeps the value it was last sent (HOME-5a)");
     let before = stats.main_calls().len();
     let (out, done) = export_now(&mut ex);
     assert!(done["done"] == true && done["paused"] == false, "{done}");
     assert!(moves(&stats.main_calls(), before).is_empty(), "the live instance wasn't borrowed");
     let (a, b) = (wav(&out), rendered(&ex));
     assert!(a.iter().any(|x| *x != 0) && a == b, "the export is what m2 render makes, bit for bit");
-    assert_eq!(param(first[0], m2_plugins::probe::LEVEL), 0.05, "live keeps it");
+    assert_eq!(param(first[0], m2_plugins::probe::LEVEL) as f32, 0.05, "live keeps it");
 }
 
 // HOST-5, RENDER-1 (plug-2 of the step 7 review): a borrowed plugin that won't come back active

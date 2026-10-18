@@ -293,6 +293,9 @@ pub enum Event {
     /// Tuning in semitones for one note (for pitches between keys).
     Tuning { time: u32, id: i32, key: i16, semitones: f64 },
     Param { time: u32, id: u32, value: f64 },
+    /// The person began (or ended) changing a parameter in the plugin's window: what a plugin
+    /// outputs around the values it sets (CLAP's gesture events, HOST-4).
+    Gesture { time: u32, id: u32, begin: bool },
 }
 
 impl Event {
@@ -302,7 +305,8 @@ impl Event {
             | Event::NoteOff { time, .. }
             | Event::NoteChoke { time, .. }
             | Event::Tuning { time, .. }
-            | Event::Param { time, .. } => time,
+            | Event::Param { time, .. }
+            | Event::Gesture { time, .. } => time,
         }
     }
 }
