@@ -259,6 +259,10 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **The Mac's numbers for the one-sandbox-a-box layout are owed**: G7f's run, the footprint and the address space with two renderers (PLAT-1).
 - **A Sampler played far above its root sounds harsh**: it isn't band-limited, so high notes alias, and past 6 octaves up it plays no faster.
 - **A Sampler's files are held in memory**, decoded whole, once while the song plays them (clips now stream from disk). Kernels have no disk reader yet: `m2.asset_read` copies from memory.
+- **A kernel module built for a later ABI** that also adds an import or a 64-bit memory is refused for that, not by its version (ABI-3): the version is asked only after the module is made. Fix before v1 ships: a v1 app can't change later (the ab review's 2).
+- **A WAV dropped on a Sampler that then refuses it** (one with `zones` in its code) is still copied into assets/, though the page says "Nothing was changed"; while dragging, its card still says "Play it in Sampler" (the ab review's 3).
+- **A Sampler file that is in assets/ but won't decode** (`sample: "loop.mp3"`, a damaged WAV) plays silence with no message; a missing one is named (`asset.missing`) (the ab review's 4).
+- **A kernel that asks for memory while playing** is told it went over 256 MB, even when it asked for a few MB; the words should say kernels may not take memory while playing (the ab review's 5).
 - **A song asking for std "0.2" in an older app that has std 0.2.0** and calls the Sampler gets a missing import, not `pkg.unsatisfied`: a song's std requirement names no patch version. `examples/sampler` asks for "0.2.1".
 - **std's kernel test `odd_db_values` fails in a debug build**: a NaN's sign bit differs from the release build's. `ci/check.sh` runs those tests in release, where it passes.
 

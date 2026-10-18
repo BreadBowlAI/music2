@@ -10,13 +10,13 @@ for `polish` (the rest of the top ten), after its review and final check, and wh
 (the two rows the Mac's run at `85b069a` failed), after its review and final check; and for 8a's live half (on
 `8a`), after its review and final check; and for `studio` (audio, recording, MIDI files and stems, help), after its
 review and final check; and for `io` (step 9's audio: disk streaming and recording), after its review and
-final check; and for track `ab` (kernel ABI v1 and the sampler), after its final check.
+final check; and for track `ab` (kernel ABI v1 and the sampler), after its review and final check.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
-- **Track `ab` (kernel ABI v1 and the sampler) is ready on branch `ab`** (2026-10-18), not merged: Linux green at
-  `69350c1`; macOS owed. From `main` at `258275b` (`main` hasn't moved since). It adds:
+- **Track `ab` (kernel ABI v1 and the sampler) is ready to land** (2026-10-18), on branch `ab`: Linux green at
+  `7399cb8`; macOS owed. From `main` at `258275b`, with `main` at `3b447b2` (track `io`) merged in. It adds:
 
   | You can now | Where |
   |---|---|
@@ -29,11 +29,13 @@ whatever you pick up.
   `main`, 75 MB against 204, Linux numbers, information only), and kernel ABI v1 frozen
   ([kernel-abi.md](docs/kernel-abi.md): v0 refused by name, one import `m2.asset_read`, at most 3,999 sound parts
   a renderer). std 0.2.1, `@m2/core` 1.3.0. No existing render changed: 12 of 12 (2 new, the example's).
-  `ci/check.sh --gates` passed at `69350c1`: every row, nothing passed only on a retry (1,580 Rust tests, 67/67
-  browser suites, 12 of 12 renders, the 7 gate runs; 34 minutes). Its first run failed one check of
-  `sound-stops`: the suite loaded std.wasm in Node without the new import; fixed (`69350c1`). Pictures:
-  `~/m2-runs/app-shots/ab-sampler/`. Build notes `docs/designs/step9/build-notes-ab.md`; the plan `ab-plan.md`
-  beside it. Owed: a review; the Mac's check, with G7f's run of the new layout (its footprint and address space).
+  A review found 5 things. The big one came with the merge: a Sampler's file was decoded again at every edit; now
+  it is decoded once and kept (`7399cb8`, a test shown red first). The 4 small ones are one line each in
+  `docs/gaps.md`. Then `ci/check.sh --gates` passed at `7399cb8`: every row, nothing only on a retry (1,609 Rust
+  tests, 68/68 browser suites, 12 of 12 renders, the 7 gate runs; 36 minutes). Pictures:
+  `~/m2-runs/app-shots/ab-7399cb8/` (and `ab-sampler/`). Build notes `docs/designs/step9/build-notes-ab.md`; the
+  plan `ab-plan.md` beside it. Owed on the Mac: its `ci/check.sh`, G7f's run of the new layout (its footprint and
+  address space), and the by-ear steps 83 to 87.
 - **`io` is ready to land** (2026-10-18): Linux green at `64380e1`; macOS unverified since `eda5e77`. From `main` at
   `258275b` (`main` hasn't moved since). Step 9's audio turns 1 and 4 (plan: `docs/designs/step9/io-plan.md`; build
   notes: `build-notes-io.md` beside it). A review found 8 things: the 3 big ones fixed, each with a test shown red
@@ -260,7 +262,8 @@ whatever you pick up.
 | `macfix` | `ac5d8c0`, then docs only | From `main` at `85b069a`. Fixes the two rows the Mac's run at `85b069a` failed: G7f store (`std:gain` skips its `powf` while its dB holds still, the same bits) and `new_songs_go_where_settings_say` (the songs folder by its real path). Reviewed (2 findings, both fixed). Linux green at `ac5d8c0` (`ci/check.sh --gates`, nothing passed only on a retry); macOS owed. All on `main` (a fast-forward to `1cc7382`, 2026-10-17). Branch and worktree deleted. Build notes `docs/designs/step8/build-notes-macfix.md`. |
 | `studio` | `ad5f111`, then docs only | All on `main` (a fast-forward to `02ba4d3`, 2026-10-18). From `main` at `85b069a`. Audio in the app (#18), recording notes (#24) with the count-in (#19) and the MIDI keyboards setting (#31), MIDI files and stems (#36), help in plain words (#11), `m2 import` (#37). Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `ad5f111` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/studio-plan.md`; build notes `build-notes-studio.md`. |
 | `io` | `64380e1`, then docs only | **Ready to land.** From `main` at `258275b`. Step 9's audio turns 1 and 4: disk streaming (RENDER-30) and recording audio (RENDER-30a, MON-8). Reviewed (8 findings: 3 big ones fixed with tests, 2 small ones fixed, 3 in gaps.md). Linux green at `64380e1` (`ci/check.sh --gates`, nothing passed only on a retry), macOS unverified since `eda5e77`. Worktree `~/m2-runs/wt/io`. Plan `docs/designs/step9/io-plan.md`; build notes `build-notes-io.md`. |
-| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, and 73 to 82 once `io` is on `main`. |
+| `ab` | `7399cb8`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) merged in (`c68d203`). Kernel ABI v1 (ABI-2, ABI-3, ABI-5), one sandbox a box (RENDER-32), and std 0.2.1's Sampler. Reviewed (5 findings: the big one fixed with a test, 4 in gaps.md). Linux green at `7399cb8` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/ab`. Plan `docs/designs/step9/ab-plan.md`; build notes `build-notes-ab.md`. |
+| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, 73 to 82 once `io` is on `main`, and 83 to 87 once `ab` is. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -555,6 +558,11 @@ bar, its Ctrl-click, and the sound.
 | 80 | In System Settings ▸ Privacy & Security ▸ Microphone, turn music2 off. Back in music2, press R on the audio track. | A message: "music2 can't use the microphone. Allow it in System Settings ▸ Privacy & Security ▸ Microphone." Nothing records. Turn it back on. |
 | 81 | With a USB microphone picked in Settings, press Space, then R, and speak. While it records, unplug the microphone. | The song plays on. A message: "The sound input was unplugged: the take was kept up to here." A clip of your voice up to there. Plug it back in and press R: it records again. |
 | 82 | Tell the lead what you saw, heard and felt at 73 to 81. | |
+| 83 | Click **Open an Example**, then **Sampler**. Press Space. | Keys play a plucked sound, Drums a kick and a snare, in time. No clicks. |
+| 84 | Press Space to stop. + Track ▸ Sampler. In the Finder, drag a short WAV (one sound, like a drum hit) onto the Sampler's card in Device. | While you drag, the card says "Play it in Sampler". Let go: the card names the file. |
+| 85 | Press ⌘K. Press A, then S, D, F. | A plays the file as it is (A is middle C). S, D and F play it a little higher each time. |
+| 86 | Press ⌘K again, then ⌘Z. | The card says "Drop a WAV here" again. The file stays in the song's `assets` folder. |
+| 87 | Tell the lead what you saw, heard and felt at 83 to 86. | |
 
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in
@@ -612,6 +620,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | 8a's live half (live on several cores, a sound that breaks, G12) | `21a7a1b` (Linux checks), then docs only; on `main` at `44b104a` | owed: 8a's Mac sweep below, one paste, about 40 minutes. The same `ci/check.sh` covers its Mac tests and G12's minute |
 | `studio`: audio in the app, recording notes, MIDI files and stems, help in plain words | `ad5f111` (Linux checks), then docs only; on `main` at `02ba4d3` | owed: the same one more `ci/check.sh`, then the by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in another app) |
 | `io`: audio clips play from the disk; recording audio | `64380e1` (Linux checks), then docs only; ready to land (branch `io`) | macOS: unverified since `eda5e77`. Owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 73 to 82 (a long file from the disk, a real microphone, the permission question, the take against the click, hearing yourself in headphones, a USB microphone unplugged) |
+| `ab`: kernel ABI v1, one sandbox a box, the Sampler | `7399cb8` (Linux checks), then docs only; ready to land (branch `ab`) | owed once it is on `main`: one more `ci/check.sh` (G7f's run of the new layout: its footprint and address space, PLAT-1), then the by-ear steps 83 to 87 (the Sampler example, a WAV dropped on a Sampler, the keyboard piano, Undo) |
 
 **8a's Mac sweep (for the owner): offline and live, one paste.** `8a` is on `main`.
 
