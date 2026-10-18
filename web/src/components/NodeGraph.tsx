@@ -793,8 +793,11 @@ function NodeCard({
         : (node.effect ?? node.title ?? effects.find((e) => e.component === node.component)?.label ?? node.label);
   // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
   const off = !!node.bypassed;
-  // An instrument (it takes notes) or an effect of a component has Presets; a plugin's wait (#26).
-  const sound = node.kind === "call" && !!node.component && !node.plugin && !mixing && (node.inputs.some((i) => i.kind === "notes") || effects.some((e) => e.component === node.component));
+  // An instrument (it takes notes) or an effect of a component has Presets, and so does a plugin (HOST-8).
+  const sound =
+    node.kind === "call" &&
+    !mixing &&
+    (!!node.plugin || (!!node.component && (node.inputs.some((i) => i.kind === "notes") || effects.some((e) => e.component === node.component))));
   return (
     <div
       className="group/card absolute rounded-md bg-raised ring-1 ring-line flex flex-col"

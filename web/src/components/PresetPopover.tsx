@@ -1,13 +1,14 @@
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { keptWords, presetsApi, type PresetList } from "../lib/presets";
+import { keptWords, presetsApi, type PresetFrom, type PresetList } from "../lib/presets";
 import { useStore } from "../lib/store";
 import { undoAction } from "./GraphCanvas";
 import { Button, Popover } from "./ui";
 
 /**
- * A sound card's Presets (FMT-22, gaps #26): a search field; your presets, then music2's own; a row
- * loads on click, as one undoable edit. Save as preset… names the card's settings (the list makes
+ * A sound card's Presets (FMT-22, HOST-8, gaps #26): a search field; your presets, then music2's
+ * own, or a plugin's own ("m2 probe's") when it offers some; a row loads on click, as one undoable
+ * edit. Save as preset… names the card's settings (the list makes
  * way for the name) and keeps them in your Presets folder; a name that is there asks before it
  * replaces it.
  */
@@ -50,24 +51,20 @@ export default function PresetPopover({
   }, [session, revision, node]);
 
   const q = query.trim().toLowerCase();
-  const groups = useMemo(
-    () =>
-      list
-        ? (
-            [
-              ["Yours", "yours", list.yours],
-              ["music2", "std", list.std],
-            ] as const
-          ).map(([name, from, rows]) => ({
-            name,
-            from,
-            rows: rows.filter((r) => r.name.toLowerCase().includes(q)),
-          }))
-        : [],
-    [list, q],
-  );
+  const groups = useMemo(() => {
+    if (!list) return [];
+    const plugin = list.sound.startsWith("clap:");
+    const all: [string, PresetFrom, { name: string }[]][] = [["Yours", "yours", list.yours]];
+    if (!plugin) all.push(["music2", "std", list.std]);
+    else if (list.plugin.length > 0 || list.plugin_error) all.push([`${list.label}'s`, "plugin", list.plugin]);
+    return all.map(([name, from, rows]) => ({
+      name,
+      from,
+      rows: rows.filter((r) => r.name.toLowerCase().includes(q)),
+    }));
+  }, [list, q]);
 
-  const load = (from: "std" | "yours", name: string) => {
+  const load = (from: PresetFrom, name: string) => {
     onClose();
     presetsApi.load(session, revision, node, from, name).then(
       (r) => {
@@ -148,11 +145,13 @@ export default function PresetPopover({
                 </div>
                 {g.rows.length === 0 && (
                   <div className="px-3 pb-1 text-sm text-fg-faint">
-                    {q
-                      ? "None match."
-                      : g.from === "yours"
-                        ? "None yet. Save one below."
-                        : "None for this sound yet."}
+                    {g.from === "plugin" && list?.plugin_error
+                      ? list.plugin_error
+                      : q
+                        ? "None match."
+                        : g.from === "yours"
+                          ? "None yet. Save one below."
+                          : "None for this sound yet."}
                   </div>
                 )}
                 {g.rows.map((r) => (

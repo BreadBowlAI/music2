@@ -1,6 +1,7 @@
-// Presets (FMT-22, gaps #26): a sound's settings under a name. The card's Presets popover lists
-// yours (in ~/Music/music2/Presets) and music2's own (std's), loads one as one undoable edit, and
-// saves the card's settings as yours. Saving changes no song file, so it has no Undo.
+// Presets (FMT-22, HOST-8, gaps #26): a sound's settings under a name. The card's Presets popover
+// lists yours (in ~/Music/music2/Presets) and music2's own (std's), or a plugin's own for a plugin,
+// loads one as one undoable edit, and saves the card's settings as yours. Saving changes no song
+// file, so it has no Undo.
 
 import { readJson } from "./graph";
 import { recorded } from "./history";
@@ -12,14 +13,20 @@ export interface PresetName {
 
 /** A sound card's presets, each group by name. */
 export interface PresetList {
-  /** What they are for: the ComponentId (`std:synth-pluck`). */
+  /** What they are for: the ComponentId (`std:synth-pluck`), or a plugin's id (`clap:…`). */
   sound: string;
-  /** What the app calls the sound: "Synth pluck". */
+  /** What the app calls the sound: "Synth pluck", or the plugin's name. */
   label: string;
   std: PresetName[];
   yours: PresetName[];
+  /** A plugin's own (HOST-8): none when it offers none. */
   plugin: PresetName[];
+  /** Why a plugin's own couldn't be read, in words. */
+  plugin_error?: string;
 }
+
+/** Where a preset comes from: music2's own, yours, or the plugin's own. */
+export type PresetFrom = "std" | "yours" | "plugin";
 
 /** A control a preset left alone: what drives it (a lane, other code), or it is written in other units. */
 export interface Kept {
@@ -73,7 +80,7 @@ export const presetsApi = {
     session: number,
     at: number,
     node: string,
-    from: "std" | "yours",
+    from: PresetFrom,
     name: string,
   ) =>
     request<Loaded>("/api/graph/preset/load", {
