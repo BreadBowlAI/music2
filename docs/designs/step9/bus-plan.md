@@ -178,6 +178,21 @@ before writing when it would make a loop. Routes for them in `crates/server`.
 **Done when:** the tests pass; a new send or route plays within one activation (RENDER-25a fades, no click);
 `cargo test -p m2-editor -p m2-server` green.
 
+### Slice 2, as built
+
+**In short:** built as planned, with one change in core and one in what a Group is.
+
+| What changed from the plan | Why |
+|---|---|
+| **One core change.** `Confined` lets a node outside the ranges differ in edges to any node made inside them, as WRITE-8 already said. Before, only to nodes added or removed there | std's mixer numbers its nodes in order. A new send renames the sends after it, so the song export that feeds a bus (`bus:echo`) now names a renamed node. Core refused that as a rewire outside the ranges |
+| A Group is `gain(input)`, not `input` alone | A bus with no node of its own has no site, so mute and solo would do nothing to it (MON-3). A gain at 0 dB changes no bit. It shows a Gain knob in the graph view (logged) |
+| A send's level left out of its entry (`{ pre: true }`) is a knob too | `Insertion::plan` follows nested dictionaries (`channels.keys.sends.echo.db`). A send's lane is named "Hats send to Reverb" |
+| `/mix/send` takes `action`: `add`, `remove` or `pre` | One route for the three send edits, as the plan said |
+| The routes are in `routes_mix.rs` | Its router holds the Mix view's writes |
+| Deleting a bus lists each channel that sends to it as a `Send`, each that goes to it as an `Output` | The same `Dependent` list a track's delete asks with |
+| Two more tests: `a_send_level_is_automated_like_a_fader`, and `a_new_send_and_output_play_within_one_activation` in `crates/server/src/graph/tests.rs` | The plan's risk (automation on a nested id) and its "done when" (one activation) |
+| The planned call forms list the three `bus(…)` calls | So `tsc` checks the bus files add_bus writes |
+
 ## Slice 3: the Mix view
 
 **Goal.** A beginner adds a reverb and hears it, without code.

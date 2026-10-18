@@ -108,7 +108,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 20 | **Meters after the fader, and loudness for export.** Today's meters read each track before its fader, so a fader move doesn't move them: after-fader taps need the engine (`core/runtime`). | You can't see what a fader does to a track's level. | Partly (a meter on each track) | medium |
-| 27 | **Sends and buses in the app**: buses, sends and groups work in song code (`bus()` and std's mixer, [RENDER-34](architecture.md#buses)), but the app can't add a bus, a send or an output yet, and the Mix view shows no bus strips or send knobs. | Standard mixing, such as one reverb shared by every track, without writing code. | Yes | large |
+| 27 | **Sends and buses in the app**: buses, sends and groups work in song code (`bus()` and std's mixer, [RENDER-34](architecture.md#buses)), and the edits and their routes are built (add a bus, a send, an output), but the Mix view shows no bus strips, send knobs or output picker yet. | Standard mixing, such as one reverb shared by every track, without writing code. | Yes | large |
 
 - **Soloing a bus plays its tracks' dry sound too**: a wet-only solo needs a cell per path.
 - **A send has no pan of its own**, and can't be made mono.
@@ -117,6 +117,9 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A group's tracks don't fold under it** in the timeline.
 - **The graph view shows a bus's feed** as a song export named `bus:verb`.
 - **A bus channel must read the bus as it is** (`verb: verb.out`): one written `verb: eq(verb.out)` isn't seen as the bus's channel, so the bus is never fed, which the build says.
+- **A send's knob in the graph view is named by its id** (`hats.sends.verb.db`), not in words ("Hats send to Reverb", as its lane is).
+- **A send level written into `{ pre: true }` is a plain number** (`db: -6`), even where the other sends write `db(…)`.
+- **A Group bus shows a Gain knob** in the graph view: the 0 dB gain that gives the group a node of its own.
 
 ## Timeline and clips
 
