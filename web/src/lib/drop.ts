@@ -12,6 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { barAt, lockReason } from "./graph";
 import { native } from "./native";
+import type { SamplerTarget } from "./sampler";
 import { useStore } from "./store";
 import { zoomNow } from "./zoom";
 
@@ -23,11 +24,12 @@ export interface DropFile {
   file?: File;
 }
 
-/** Where a drop lands (Q6): a lane at a bar, a track (not on one of its lanes), below the tracks, or nowhere. */
+/** Where a drop lands (Q6): a lane at a bar, a track (not on one of its lanes), below the tracks, a Sampler's card in Device, or nowhere. */
 export type DropTarget =
   | { kind: "lane"; module: string; lane: string; beat: number }
   | { kind: "track"; module: string; beat: number }
   | { kind: "below"; beat: number }
+  | SamplerTarget
   | { kind: "none" };
 
 /** A kind of file the window takes: by extension (".wav") or by type ("audio/wav"). */
@@ -71,6 +73,9 @@ export const OPENS = "music2 opens WAV files";
 
 /** Where a drop at (`x`, `y`) on the page lands: the bar line at or before the pointer (D32). */
 export function target(x: number, y: number): DropTarget {
+  // A Sampler's card in Device (track ab): the file plays in it.
+  const card = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-sampler-call]");
+  if (card?.dataset.samplerCall) return { kind: "sampler", call: card.dataset.samplerCall, title: card.dataset.samplerTitle || "Sampler" };
   const ruler = document.querySelector<HTMLElement>("[data-testid=ruler]");
   const timeline = document.querySelector<HTMLElement>("[data-testid=timeline]");
   const graph = useStore.getState().graph;

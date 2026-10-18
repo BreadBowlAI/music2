@@ -126,6 +126,7 @@ export const SUITES = [
   ["pl-sounds", "fix", { expect: 45 }],
   ["pl-ids", "fix", { expect: 39 }],
   ["pc-keys", "fix", { expect: 37 }],
+  ["ab-sampler", "export", { expect: 23 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 

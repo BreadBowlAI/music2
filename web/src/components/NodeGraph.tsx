@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Clock,
   Ellipsis,
+  FileAudio,
   Hash,
   LogIn,
   LogOut,
@@ -276,6 +277,8 @@ const KNOB_H = 40;
 const VALUE_H = 48;
 
 const inputHeight = (p: InputPort) => (p.knob ? KNOB_H : p.readonly != null ? VALUE_H : ROW_H);
+/** A Sampler's file row, under its knobs: where a WAV is dropped. */
+const SAMPLE_H = 36;
 
 /**
  * A lane, an import or the time with its one output, or an export with its one input: the header
@@ -311,7 +314,7 @@ function geometry(n: ViewNode) {
     y += ROW_H;
   });
   const w = n.inputs.length && n.outputs.length ? NODE_W : SLIM_W;
-  return { w, h: n.outputs.length + n.inputs.length ? y + PAD : HEAD_H, ins, outs };
+  return { w, h: (n.outputs.length + n.inputs.length ? y + PAD : HEAD_H) + (n.sampler ? SAMPLE_H : 0), ins, outs };
 }
 
 interface Placed { node: ViewNode; x: number; y: number; w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }
@@ -787,6 +790,8 @@ function NodeCard({
       data-node={node.label}
       data-node-id={node.id}
       data-bypassed={off || undefined}
+      data-sampler-call={node.sampler ? node.id : undefined}
+      data-sampler-title={node.sampler ? titled : undefined}
       title={where ?? undefined}
     >
       <div className={clsx("h-10 shrink-0 pl-3 pr-1.5 flex items-center gap-2 min-w-0", !small && "border-b border-line")}>
@@ -914,6 +919,7 @@ function NodeCard({
           ))}
         </div>
       )}
+      {node.sampler && <SampleRow files={node.sampler.files} />}
       {node.outputs.map((o, j) => (
         <OutputPortView
           key={o.id}
@@ -927,6 +933,27 @@ function NodeCard({
           onCable={onCable}
         />
       ))}
+    </div>
+  );
+}
+
+/**
+ * A Sampler's file (track ab), under its knobs: "Drop a WAV here" until it has one. The whole card
+ * takes a dropped WAV (`data-sampler-call`), which it then plays.
+ */
+function SampleRow({ files }: { files: string[] }) {
+  const said = files.length === 0 ? "Drop a WAV here" : files.length === 1 ? files[0] : `${files.length} files, one for each range of notes`;
+  return (
+    <div
+      data-testid="sampler-file"
+      className={clsx(
+        "mx-2 mb-2 h-7 shrink-0 px-2 flex items-center gap-1.5 rounded-sm text-xs min-w-0",
+        files.length ? "bg-chrome text-fg" : "border border-dashed border-line-strong text-fg-muted",
+      )}
+      title={files.length ? `Plays ${files.join(", ")}. Drop another WAV on this card to play it instead.` : "Drop a WAV file from your computer on this card to play it"}
+    >
+      <FileAudio size={12} className="shrink-0" />
+      <span className="truncate">{said}</span>
     </div>
   );
 }

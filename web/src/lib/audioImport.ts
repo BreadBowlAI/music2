@@ -12,6 +12,7 @@ import { useShell } from "./shell";
 import { useStore } from "./store";
 import { trackMade } from "./events";
 import { undoAction } from "../components/GraphCanvas";
+import { dropOnSampler, samplerHint } from "./sampler";
 
 /** A file to bring in: its path on this computer (the app), or the file itself (a browser). */
 export type Incoming = { name: string; path: string } | { name: string; file: File };
@@ -205,7 +206,7 @@ const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-wave", "au
  */
 function audioTarget(t: DropTarget): Target | null {
   const graph = useStore.getState().graph;
-  if (!graph || t.kind === "none") return null;
+  if (!graph || t.kind === "none" || t.kind === "sampler") return null;
   if (t.kind === "below") return { kind: "below", beat: t.beat };
   const track = graph.timeline.tracks.find((x) => x.module === t.module);
   if (!track) return null;
@@ -217,6 +218,7 @@ function audioTarget(t: DropTarget): Target | null {
 
 onFiles(WAV, WAV_TYPES, {
   hint(files, t) {
+    if (t.kind === "sampler") return samplerHint(files, t);
     const graph = useStore.getState().graph;
     const to = audioTarget(t);
     if (!graph || !to) return null;
@@ -228,11 +230,13 @@ onFiles(WAV, WAV_TYPES, {
     return files.length > 1 ? `${files.length} new audio tracks · ${bar}` : `New audio track · ${bar}`;
   },
   where(t) {
+    if (t.kind === "sampler") return t;
     const to = audioTarget(t);
     if (!to) return { kind: "none" };
     return to.kind === "lane" ? { kind: "lane", module: to.module, lane: to.lane, beat: to.beat } : to;
   },
   drop(files, t) {
+    if (t.kind === "sampler") return void dropOnSampler(files, t);
     const to = audioTarget(t);
     if (!to) return;
     const incoming = files.flatMap((f): Incoming[] => (f.path ? [{ name: f.name, path: f.path }] : f.file ? [{ name: f.name, file: f.file }] : []));

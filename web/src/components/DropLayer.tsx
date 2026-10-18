@@ -12,6 +12,10 @@ import { zoomNow } from "../lib/zoom";
 
 /** Where `t` lands on screen, and whether it makes something new (dashed). */
 function outline(t: DropTarget): { left: number; top: number; width: number; height: number; dashed: boolean } | null {
+  if (t.kind === "sampler") {
+    const card = document.querySelector<HTMLElement>(`[data-sampler-call="${CSS.escape(t.call)}"]`)?.getBoundingClientRect();
+    return card ? { left: card.left, top: card.top, width: card.width, height: card.height, dashed: false } : null;
+  }
   const ruler = document.querySelector<HTMLElement>("[data-testid=ruler]")?.getBoundingClientRect();
   const graph = useStore.getState().graph;
   if (t.kind === "none" || !ruler || !graph) return null;
