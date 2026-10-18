@@ -10,8 +10,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
   71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
 - **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
-- **The transport works as in GarageBand** (branch `gb`, `9a40eb6` and `5707f46`): Space stops where the song is, and plays on from there; Return goes to bar 1. ⇧Space and Continue are gone. `ci/check.sh --gates` passed at `5707f46`: 1,718 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 37 minutes, nothing on a retry. Its first run caught the playhead moving a block after a stop; now a stop holds exactly there. By ear: mac-run step 28.
-- **Track `bus` is ready to land** (branch `bus`, `main` at `34dcfc4` merged in): buses, sends and groups, in song
+- **The transport works as in GarageBand** (landed `34dcfc4`): Space stops where the song is, and plays on from there; Return goes to bar 1. ⇧Space and Continue are gone. `ci/check.sh --gates` passed at `5707f46`: 1,718 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 37 minutes, nothing on a retry. Its first run caught the playhead moving a block after a stop; now a stop holds exactly there. By ear: mac-run step 28.
+- **Track `bus` landed** (`444a2d0`, 2026-10-19): buses, sends and groups, in song
   code (RENDER-34, `@m2/core` 1.5.0, std 0.4.0) and in the Mix view (Add bus, a send knob per bus, an output
   picker). Gap #27 is closed. No sound changed. A song asking for std "0.3" needs `std = "0.4"` (below). Its
   `ci/check.sh --gates` passed at `7bb44f3`: 1,770 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate
@@ -36,10 +36,9 @@ design for whatever you pick up. Older versions of this page, with each track's 
 | 4 | By ear, steps 7 to 132 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116), `br` (117–125), `bus` (126–132) | about 2 hours, in parts |
 | 5 | `ci/check.sh` on `main` (the same run as row 1's next one) | Also runs `br`'s plugin preset search and preset load on a Mac for the first time (HOST-8) | about 45 min |
 
-**Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main` once `mf2` is
-merged. It checks the two fixes (the plugin window's `closed` callback now runs on the next main-queue turn: run on
-a Mac for the first time) and judges G12 at its designed set-up. The sweep need not run again. Once `bus` has
-landed, the same run covers it too: it adds no Mac-only code. Its by-ear steps are 126 to 132.
+**Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main`. It checks the two fixes (the plugin window's `closed` callback now runs on the next main-queue turn: run on
+a Mac for the first time) and judges G12 at its designed set-up. The sweep need not run again. The same run covers
+`br`, `gb` and `bus` (`br`'s plugin presets touch the host process; `gb` and `bus` add no Mac-only code).
 
 After a green run the lead writes in the contract's PLAT-6 and the gates table: "macOS: green at <commit>", with
 G7f's numbers. If a row fails, fix it on Linux, check the mac lint, and ask for one more run. The Mac's pasted runs
@@ -177,7 +176,7 @@ invisible Xvfb screen, with pictures sent to the owner.
 | Pictures for the owner | `~/m2-runs/app-shots/<track>-<commit>/` |
 | Logs of long jobs | `~/m2-runs/logs/` |
 | The Mac's pasted runs | `~/m2-runs/mac-runs/` |
-| Branches | Everything is on `main` but `bus` (ready to land, worktree `~/m2-runs/wt/bus`). A track's branch and worktree are deleted once it lands. `origin/taste` and `origin/sounds` are old, all merged |
+| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. `origin/taste` and `origin/sounds` are old, all merged |
 
 Engine and tooling items left by steps 7 and 8 that are not user gaps are in each build notes' "Left" or "For the
 lead" sections. The ones a next session most needs:
