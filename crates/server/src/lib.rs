@@ -24,6 +24,7 @@ mod peaks;
 mod routes_record;
 mod routes_exchange;
 mod routes_plugins;
+mod routes_presets;
 pub mod stems;
 
 use std::net::SocketAddr;

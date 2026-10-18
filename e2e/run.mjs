@@ -132,6 +132,7 @@ export const SUITES = [
   ["ab-sampler", "export", { expect: 23 }],
   ["sx-follow", "fix", { expect: 22 }],
   ["br-plugins", "fix", { probe: true, expect: 19 }],
+  ["br-presets", "fix", { expect: 21 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 

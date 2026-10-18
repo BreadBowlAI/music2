@@ -63,6 +63,7 @@ pub mod record;
 mod take_audio;
 pub(crate) mod exchange;
 pub(crate) mod plugin_window;
+mod presets;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};

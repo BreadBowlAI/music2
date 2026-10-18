@@ -101,6 +101,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .merge(crate::routes_record::router(state.clone()))
         .merge(crate::routes_exchange::router(state.clone()))
         .merge(crate::routes_plugins::router(state.clone()))
+        .merge(crate::routes_presets::router(state.clone()))
         .route("/api/project/templates", get(project_templates))
         .route("/api/project/new", post(project_new))
         // An unknown API path is a clear error, not the UI's index.html.
@@ -125,7 +126,7 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
 }
 
 /// The routes that write the open project, or begin a gesture whose commit would.
-const WRITES: [&str; 26] = [
+const WRITES: [&str; 27] = [
     "/api/graph/preview",
     "/api/graph/set",
     "/api/graph/lease/begin",
@@ -144,6 +145,7 @@ const WRITES: [&str; 26] = [
     "/api/graph/track/duplicate",
     "/api/graph/track/delete",
     "/api/graph/mix/insert",
+    "/api/graph/preset/load",
     "/api/graph/layout",
     "/api/graph/tempo",
     "/api/graph/meter",

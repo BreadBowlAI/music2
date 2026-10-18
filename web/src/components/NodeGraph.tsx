@@ -61,6 +61,7 @@ import { focusNext, HomeMarker, KnobMenu, MiniKnob, useKnobDrag, useKnobGesture 
 import { MenuRow, Popover } from "./ui";
 import { undoAction } from "./GraphCanvas";
 import PointMenu, { unautomate } from "./ClipMenu";
+import PresetPopover from "./PresetPopover";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 const Locked = createContext<string | null>(null);
@@ -764,8 +765,13 @@ function NodeCard({
   // The effect card's ⋯ menu, open from this button. A card kept across an edit may show
   // another call now: its menu closes then.
   const [menu, setMenu] = useState<HTMLElement | null>(null);
+  // Its Presets popover (FMT-22), open from the header's Presets button.
+  const [presets, setPresets] = useState<HTMLElement | null>(null);
   const call = `${node.id} ${node.label}`;
-  useEffect(() => setMenu(null), [call]);
+  useEffect(() => {
+    setMenu(null);
+    setPresets(null);
+  }, [call]);
   const why = useContext(Locked);
   /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
   const edited = (p: Promise<{ revision: number }>, words: string) =>
@@ -787,6 +793,8 @@ function NodeCard({
         : (node.effect ?? node.title ?? effects.find((e) => e.component === node.component)?.label ?? node.label);
   // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
   const off = !!node.bypassed;
+  // An instrument (it takes notes) or an effect of a component has Presets; a plugin's wait (#26).
+  const sound = node.kind === "call" && !!node.component && !node.plugin && !mixing && (node.inputs.some((i) => i.kind === "notes") || effects.some((e) => e.component === node.component));
   return (
     <div
       className="group/card absolute rounded-md bg-raised ring-1 ring-line flex flex-col"
@@ -813,6 +821,25 @@ function NodeCard({
             {off ? `${titled} · Off` : titled}
           </div>
         </div>
+        {sound && (
+          <button
+            className={clsx(
+              "shrink-0 h-ctl-sm px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear",
+              presets && "bg-accent-soft text-accent-strong",
+            )}
+            data-presets={node.id}
+            title={`Presets for ${titled}: load one, or save these settings`}
+            aria-haspopup="dialog"
+            aria-expanded={!!presets}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              const button = e.currentTarget;
+              setPresets((p) => (p ? null : button));
+            }}
+          >
+            Presets
+          </button>
+        )}
         {node.effect && node.menu && (
           <button
             className={clsx(
@@ -866,6 +893,17 @@ function NodeCard({
       </div>
       {node.voices && !small && <VoicesLine words={node.voices} />}
       {node.plugin && <PluginRow node={node.plugin} title={titled} session={session} />}
+      {presets && (
+        <PresetPopover
+          node={node.id}
+          title={titled}
+          session={session}
+          revision={revision}
+          anchor={presets}
+          locked={why ?? (editable ? null : "This song can't be edited here")}
+          onClose={() => setPresets(null)}
+        />
+      )}
       {menu && node.menu && (
         <EffectMenuPopover node={node} title={titled} anchor={menu} locked={why ?? (editable ? null : "This song can't be edited here")} onClose={() => setMenu(null)} />
       )}
