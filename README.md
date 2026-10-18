@@ -18,7 +18,7 @@ Status (2026-10-18): every planned step is built and checked on Linux. The check
 | Edit clips: move, copy, trim, split, join, repeat | the timeline |
 | Turn knobs, add effects, connect cables | **Device** (⌥1) |
 | Mix: faders, pans, mute, solo, and meters | **Mix** (⌥3), and each track's header |
-| Save a sound's knobs as a preset, or load one | **Presets** on an instrument's or an effect's card in **Device**. Yours are in `~/Music/music2/Presets` |
+| Save a sound's knobs as a preset, or load one | **Presets** on an instrument's, an effect's or a plugin's card in **Device**. Yours are in `~/Music/music2/Presets`; a plugin's own are listed too |
 | Draw automation (knob moves over time) | right-click a knob ▸ **Automate**, then draw on the timeline |
 | Play live: the computer's keys, or a MIDI keyboard with its wheels | ⌘K; or plug a keyboard in |
 | Hear a click on each beat | K |

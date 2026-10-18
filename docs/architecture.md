@@ -693,10 +693,11 @@ MIDI files are converted at the edge, and never kept in the song. Since `studio`
 - `sound`: what it is for, a ComponentId (`std:synth-pluck`) or a plugin's id (`clap:<id>`). A preset's identity is its `sound` and its `name`, never its folder (P1): a file whose `sound` isn't the call's is left out of that call's list.
 - `values`: numbers by name: a std control by its slot, in base units (`{"brightness": 1800}`); a plugin's parameter by its CLAP id ([FMT-18](#plugin-state-and-parameters)).
 - Where: yours in `m2_os::dirs::presets()` (`~/Music/music2/Presets`, under `$HOME`, [PLAT-7](#platforms)), in a folder per sound named from its id, `<package>/<name>` (`std/synth-pluck`; every character outside `A–Z a–z 0–9 . _ -` turned to `_`). std's own in `std/presets/<component>/`, shipped with the app. A plugin's own come from the plugin, never from a file music2 writes.
-- Saving writes that file and no song file: no Tx, no Undo. It is written to a temporary file, then renamed. It holds every declared control of the call that holds a number (a dictionary's are left out): the numbers written, and the defaults of the ones the call leaves out. A control a lane or other code drives is left out, and named.
+- Saving writes that file and no song file: no Tx, no Undo. It is written to a temporary file, then renamed. It holds every declared control of the call that holds a number (a dictionary's are left out): the numbers written, and the defaults of the ones the call leaves out. A control a lane or other code drives is left out, and named. A plugin's holds the state its instance that plays saves now, and the parameters its code writes as numbers.
 - Loading is one `Values` Tx ([WRITE-6](#expectations-and-the-delta)), one Undo step. A number written in the call is rewritten through its lens, keeping its spelling (`khz(0.9)`). A control the call leaves out is written in ([PKG-3](#component-descriptors)), several as one insertion. A control the preset doesn't name keeps its value, so a preset from an older std still loads. A control a lane or other code drives, a value other calls share, and one written in other units keep what they have, and are named. A preset for another sound is refused in words, and nothing is written.
+- A plugin's loads as one `Confined` Tx: its state and sidecar ([FMT-17](#plugin-state-and-parameters)), and each parameter its code writes as a number rewritten. A parameter the code doesn't write is the state's. Then the usual state load reaches the instance that plays ([RENDER-26b](#plans-data-and-arrangement-swaps)). Its plugin needs a key (its state file, [HOME-6](#homes-of-values)), else it is refused in words. The plugin's own presets load the same way, made on an instance of their own ([HOST-8](#pluginhost)).
 - *Why:* one file to copy or share; a folder that is easy to find and back up, not hidden like `~/.music2`. A load is a gesture like a knob's, so its Undo and its checks are a knob's.
-- *Today:* matches for std's instruments and effects since track br (`crates/editor/src/presets.rs`; `GET /api/graph/presets`, `POST /api/graph/preset/save` and `/load` in `crates/server/src/routes_presets.rs`; the card's **Presets** in `web/src/components/PresetPopover.tsx`). std ships ten: two each for Synth pluck, Synth pad, Synth bass, Reverb and Delay (`every_factory_preset_loads`). A plugin's presets are not built yet (gaps #26).
+- *Today:* matches for std's instruments and effects since track br (`crates/editor/src/presets.rs`; `GET /api/graph/presets`, `POST /api/graph/preset/save` and `/load` in `crates/server/src/routes_presets.rs`; the card's **Presets** in `web/src/components/PresetPopover.tsx`). std ships ten: two each for Synth pluck, Synth pad, Synth bass, Reverb and Delay (`every_factory_preset_loads`). A plugin's since track br's slice 3: `capture_plugin` and `load_plugin` (`saving_a_plugin_preset_keeps_its_state_and_code_values`, `loading_a_plugin_preset_is_one_undo_step`, `a_preset_for_another_plugin_is_refused_in_words` in `crates/server/src/graph/presets_tests.rs`); a load's state writes are `data::plugin_state`'s. A plugin that marks itself dirty after a load makes no second Undo step, as long as the state it saves then is the one loaded (the probe's is).
 
 ## Writes
 
@@ -1223,6 +1224,8 @@ trait PluginHost {
     // the audio thread
     fn process(&self, h: Handle, io: &mut SharedBuffers, ev_in: &Events, ev_out: &mut Events, t: &Transport);
     fn reset(&self, h: Handle);                              // panic, and before an offline render: voices and tails cleared
+    // any thread but the audio thread
+    fn presets(&self, id: &PluginId) -> Vec<Offered>;        // the plugin's own presets (HOST-8)
 }
 ```
 
@@ -1237,7 +1240,8 @@ trait PluginHost: Send + Sync {
     fn load_state(&self, h: Handle, blob: Arc<Blob>) -> Result<bool>;  // skipped (false) when its hash equals the state the instance holds:
                                                                      // last saved or last loaded, creation included; none after a failed load (HOME-6)
     fn set_render_mode(&self, h: Handle, mode: RenderMode) -> Result<bool>;  // before activating; offline for every render that isn't live (RENDER-1)
-    fn main_call(&self, h: Handle, call: MainCall) -> Result<Reply>;  // a parameter's value or text, its info, its log
+    fn main_call(&self, h: Handle, call: MainCall) -> Result<Reply>;  // a parameter's value or text, its info, its log, its window,
+                                                                     // one of its own presets loaded (LoadPreset, HOST-8)
     fn destroy(&self, h: Handle);                                    // queued: never waits
     // queued to the host's main thread; the one result comes back on the reply each returns
     fn latency(&self, h: Handle) -> Pending<Result<u32, String>>;
@@ -1248,6 +1252,7 @@ trait PluginHost: Send + Sync {
     fn take_process_request(&self, h: Handle) -> bool;               // CLAP's request_process: wakes an idle engine
     // any thread but the audio thread
     fn scan(&self) -> (Vec<Found>, Vec<String>);                     // every plugin installed: the host loads them, never the app (HOST-3)
+    fn presets(&self, plugin: &Found) -> Result<Vec<Offered>>;       // its own presets, found where it runs (HOST-8)
     // any thread
     fn live(&self) -> u64;
     fn counts(&self) -> (u64, u64);                                  // created and destroyed so far (gates, tests)
@@ -1299,6 +1304,18 @@ trait PluginHost: Send + Sync {
 
 **HOST-7.** Plugin windows, VST3 and AU MUST be built only behind `PluginHost`.
 - *Today:* plugin windows since ph-2 (step 9): `MainCall::Window(WindowCall::Open { title } | Close)` answers `Reply::Window(open)`, and the person's close comes as `HostEvent::WindowClosed`. Inside the host, CLAP's `gui` is embedded (`is_api_supported`, `create`, `get_size`, `set_parent`, `show`; `hide`, `destroy`) in a window of `m2_os::window`: X11 through `libX11.so.6` opened at run time on Linux (a run without a screen never needs it; Wayland through XWayland only), an `NSWindow` through the Objective-C runtime on macOS (the host process an accessory app, its main loop pumping AppKit's events; lint-checked only), an `HWND` designed for Windows. A plugin's `request_resize` resizes it. `Info.gui` says whether a plugin has a window this OS can show. The app opens one from the plugin's box (`POST /api/graph/plugin/window {session, node, open}`; the graph state's `plugins` says `open`, `closed` or `none` for each node, by its name in the checked graph, which its view node gives as `plugin`); the windows float on their own (D12). Tested by `a_plugin_window_opens_on_the_host_process_main_loop` (`core/plugins/tests/window.rs`, on Xvfb; without a screen it says why) and `e2e/ph-window.mjs` (Surge XT's window from the lead's box). VST3 and AU are not built.
+
+**HOST-8.** A plugin's presets MUST reach it only through `PluginHost`. Its own presets are found, and loaded, where the plugin runs: in the host process, never in the app. One of them is loaded on an instance made for it, never on the instance that plays: that one changes only when the load's Tx commits, through the usual state load ([RENDER-26b](#plans-data-and-arrangement-swaps)).
+- *Why:* a preset load runs plugin code, which may be slow or crash ([HOST-3](#pluginhost)). Loading into the instance that plays would change the sound before the Tx is checked, so a refused Tx or an Undo would no longer be exact.
+- *Today:* matches since track br. In short:
+
+  | Part | How |
+  |---|---|
+  | Finding them | `PluginHost::presets(&Found)` answers `Offered { name, location, key }`, where `location` is `PresetAt::Plugin` (inside it) or `PresetAt::File(path)`. CLAP's preset-discovery factory, on the host's main thread: each provider's locations, a file location's folder walked for the file types it declared (2,000 files at most, `MAX_PRESET_FILES`). A preset that names other plugins is left out. Over the wire as `Req::Presets` (`core/plugins/src/presets.rs`) |
+  | Loading one | An instance made with no state, then `MainCall::LoadPreset { location, key }` (CLAP's `preset-load`, answers `Reply::Loaded`), `save_state`, the values of the parameters its code writes (`MainCall::Value`), and destroy. The state and those values then load as a preset of yours does: one Tx ([FMT-22](#presets)) |
+  | The app | The card's **Presets** has the plugin's own as a group named for it ("Surge XT's"), shown when it offers some. The list is kept per plugin for the app run (`crates/server/src/graph/presets.rs`) |
+
+  Tested by `the_probe_offers_its_presets_on_both_hosts` and `a_plugin_preset_loads_on_a_scratch_instance` (`core/plugins/tests/remote.rs`; the probe offers Bright and Dark), `the_plugins_own_preset_loads_on_a_scratch_instance` (`crates/server/src/graph/presets_tests.rs`) and `e2e/br-presets.mjs`. Surge XT on Linux, by hand: 1,974 presets listed in about 0.5 s, and one loads in about 0.1 s (information, [PLAT-1](#platforms)). A plugin with no discovery factory has no group; yours still work.
 
 ## Kernel ABI reservations
 

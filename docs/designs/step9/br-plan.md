@@ -171,6 +171,22 @@ A folder name is the id with every character outside `A–Z a–z 0–9 . _ -` t
 
 **Done when** as slice 2, and `m2-gates plugins` passes, and `ci/check.sh` passes once at the track's end (through `~/m2-runs/tw`). Surge XT on Xvfb `:95` is tried by hand: its own presets listed if it offers discovery, a saved preset loaded back (information only, a picture).
 
+### Slice 3 as built
+
+| Change from the plan | Why |
+|---|---|
+| The host's types are `Offered { name, location, key }` and `PresetAt::Plugin` or `PresetAt::File(path)`; `MainCall::LoadPreset { location, key }` | CLAP's location kind and path are one value: a file location always has a path |
+| The host tests are both in `core/plugins/tests/remote.rs` | That file runs each test on both hosts |
+| A plugin's card shows Yours, then the plugin's own ("m2 probe's"), and no music2 group | std has no presets for plugins. The plugin's group shows only when it offers some, or says why it couldn't be read |
+| A parameter the code doesn't write isn't written in by a plugin load | The state holds it (HOME-4) |
+| A sidecar written by a load names the preset's `plugin_version` | The sidecar says which plugin wrote the blob (FMT-17) |
+| No "dirty within three calls after a load is ignored" | Not needed: the probe's save after a load equals the file, so autosave writes nothing (`loading_a_plugin_preset_is_one_undo_step`). Listed in the contract as the condition |
+| The plugin card is found by the call's one plugin node, whatever frames are around it | A helper with two plugins in one call is refused ("isn't a sound whose settings can be saved") |
+| `data::plugin_state`'s writes are shared (`data::state_writes`) | The load writes the same two files |
+| A new server test, `the_plugins_own_preset_loads_on_a_scratch_instance` | Covers the list, the scratch instance (made, then destroyed, by the probe's records) and the Tx |
+
+Surge XT on Xvfb `:95`, by hand: it offers 1,974 presets through discovery, listed in about 0.5 s; one of them (Attacky) loads in about 0.1 s, and its saved state names it; a preset of yours (67 KB) saves and loads back. Picture and logs: `~/m2-runs/app-shots/br-3/`.
+
 ## Decisions
 
 | What | Chosen | Why |
