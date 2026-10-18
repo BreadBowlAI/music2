@@ -23,7 +23,7 @@ use std::io::Read;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::Waker;
 
 use anyhow::{Context, Result, bail};
@@ -159,13 +159,19 @@ impl Wav {
     }
 }
 
-/// A warped clip's render in the cache folder: interleaved 32-bit floats, little-endian, no header.
-/// Whole when it was found there or an offline cache made it. A live cache's is made by its stretch
-/// thread while it plays ([`crate::renders`], the sx plan's D10): read from its part file, which is
-/// renamed to its name once whole, its frames done so far counted, published only once they are in
-/// the file. A chunk is filled only once every frame it reads is done.
+/// A warped clip's render: interleaved 32-bit floats, in the cache folder (little-endian, no
+/// header), or in memory when there is no folder or it can't take the render (a full disk, no
+/// permission: review sx-r1). Whole when it was found there or an offline cache made it. A live
+/// cache's is made by its stretch thread while it plays ([`crate::renders`], the sx plan's D10):
+/// read from its part file, which is renamed to its name once whole, or from memory, its frames
+/// done so far counted, published only once they are there. A chunk is filled only once every
+/// frame it reads is done.
 pub(crate) struct Raw {
-    file: File,
+    /// Its file (its part file while it is made); none when it was made in memory from the start.
+    file: Option<File>,
+    /// Its frames in memory, read from here once set: set when it is made in memory, or when the
+    /// folder stopped taking it while it was made, after the frames in the file were copied in.
+    mem: OnceLock<Box<[AtomicU32]>>,
     channels: usize,
     frames: usize,
     /// Frames in the file that may be read: all of them once it is whole.
@@ -179,21 +185,34 @@ pub(crate) struct Raw {
 }
 
 impl Raw {
-    fn of(file: File, channels: usize, frames: usize, done: usize) -> Raw {
-        Raw { file, channels, frames, done: AtomicUsize::new(done), over: AtomicBool::new(false), stop: AtomicBool::new(false), wakers: Mutex::default() }
+    fn of(file: Option<File>, channels: usize, frames: usize, done: usize) -> Raw {
+        let (over, stop, wakers) = (AtomicBool::new(false), AtomicBool::new(false), Mutex::default());
+        Raw { file, mem: OnceLock::new(), channels, frames, done: AtomicUsize::new(done), over, stop, wakers }
     }
 
     /// The render at `path`, when it is there whole.
     pub(crate) fn open(path: &Path, channels: usize, frames: usize) -> Option<Raw> {
         let file = File::open(path).ok()?;
-        (file.metadata().ok()?.len() == (frames * channels * 4) as u64).then(|| Raw::of(file, channels, frames, frames))
+        (file.metadata().ok()?.len() == (frames * channels * 4) as u64).then(|| Raw::of(Some(file), channels, frames, frames))
     }
 
     /// The render `part` is making, read as it is made: none of it done yet. (Windows, later: the
     /// part file is opened with delete sharing in `m2-os`, so it can be renamed while read, PLAT-2.)
-    pub(crate) fn reading(part: &Part) -> Result<Raw> {
+    fn reading(part: &Part) -> Result<Raw> {
         let file = File::open(&part.part).with_context(|| format!("opening {}", part.part.display()))?;
-        Ok(Raw::of(file, part.channels, part.frames, 0))
+        Ok(Raw::of(Some(file), part.channels, part.frames, 0))
+    }
+
+    /// A render made in memory: none of it done yet.
+    fn in_memory(channels: usize, frames: usize) -> Raw {
+        let raw = Raw::of(None, channels, frames, 0);
+        drop(raw.mem.set((0..frames * channels).map(|_| AtomicU32::new(0)).collect()));
+        raw
+    }
+
+    /// Its channels and frames.
+    pub(crate) fn size(&self) -> (usize, usize) {
+        (self.channels, self.frames)
     }
 
     /// Whether its frames before `to` can be read: done, or never to be (then silence).
@@ -245,19 +264,28 @@ impl Raw {
 
     /// Frames `from..to` into `out`, a channel each; those not done (only when it is over) are
     /// silence.
-    fn read(&self, from: usize, to: usize, buf: &mut Vec<u8>, out: &mut [Vec<f32>]) -> Result<()> {
-        let frame = self.channels * 4;
+    pub(crate) fn read(&self, from: usize, to: usize, buf: &mut Vec<u8>, out: &mut [Vec<f32>]) -> Result<()> {
+        let (ch, frame) = (self.channels, self.channels * 4);
         let have = to.min(self.done.load(Ordering::Acquire)).max(from);
-        buf.resize((have - from) * frame, 0);
-        if m2_os::fs::read_full_at(&self.file, buf, (from * frame) as u64, READ)? < buf.len() {
-            bail!("the render is cut short");
-        }
-        for o in out[..self.channels].iter_mut() {
+        for o in out[..ch].iter_mut() {
             o.clear();
         }
-        for f in buf.chunks_exact(frame) {
-            for (c, s) in f.as_chunks::<4>().0.iter().enumerate() {
-                out[c].push(f32::from_le_bytes(*s));
+        if let Some(m) = self.mem.get() {
+            for f in m[from * ch..have * ch].chunks_exact(ch) {
+                for (o, s) in out.iter_mut().zip(f) {
+                    o.push(f32::from_bits(s.load(Ordering::Relaxed)));
+                }
+            }
+        } else {
+            let file = self.file.as_ref().context("the render has no file")?;
+            buf.resize((have - from) * frame, 0);
+            if m2_os::fs::read_full_at(file, buf, (from * frame) as u64, READ)? < buf.len() {
+                bail!("the render is cut short");
+            }
+            for f in buf.chunks_exact(frame) {
+                for (c, s) in f.as_chunks::<4>().0.iter().enumerate() {
+                    out[c].push(f32::from_le_bytes(*s));
+                }
             }
         }
         for o in out[..self.channels].iter_mut() {
@@ -270,12 +298,12 @@ impl Raw {
 /// A render being written to the cache folder, a piece at a time, never whole in memory: to a part
 /// file, renamed to its name once whole, so a reader never meets half of one. Two programs that
 /// render the same clip write the same bytes. A part left unfinished is removed.
-pub(crate) struct Part {
+struct Part {
     file: File,
     part: PathBuf,
     path: PathBuf,
-    pub(crate) channels: usize,
-    pub(crate) frames: usize,
+    channels: usize,
+    frames: usize,
     /// Frames put so far, and the bytes of those not yet written.
     put: usize,
     bytes: Vec<u8>,
@@ -284,7 +312,7 @@ pub(crate) struct Part {
 
 impl Part {
     /// A part file for the render at `path`: `frames` frames of `channels`, put in order.
-    pub(crate) fn create(path: &Path, channels: usize, frames: usize) -> Result<Part> {
+    fn create(path: &Path, channels: usize, frames: usize) -> Result<Part> {
         static N: AtomicUsize = AtomicUsize::new(0);
         m2_os::fs::make_dirs(m2_os::fs::folder_of(path))?;
         let part = path.with_extension(format!("f32.{}.{}.part", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
@@ -293,21 +321,14 @@ impl Part {
     }
 
     /// Frames in the file so far: those put, less those not yet written.
-    pub(crate) fn written(&self) -> usize {
+    fn written(&self) -> usize {
         self.put - self.bytes.len() / (4 * self.channels)
     }
 
-    /// Frames put so far.
-    pub(crate) fn frames_put(&self) -> usize {
-        self.put
-    }
-
-    /// The next frames, a slice a channel, all as long.
-    pub(crate) fn put(&mut self, block: &[&[f32]]) -> Result<()> {
+    /// The next frames, a slice a channel, all as long ([`Making::put`] checks them). A write that
+    /// fails keeps them, and every frame not yet written, in `bytes`.
+    fn put(&mut self, block: &[&[f32]]) -> Result<()> {
         let n = block.first().map_or(0, |c| c.len());
-        if self.put + n > self.frames || block.len() != self.channels {
-            bail!("a render of {} frames of {} channels was given {} of {}", self.frames, self.channels, self.put + n, block.len());
-        }
         for i in 0..n {
             for c in block {
                 self.bytes.extend_from_slice(&c[i].to_le_bytes());
@@ -320,19 +341,16 @@ impl Part {
         Ok(())
     }
 
-    pub(crate) fn flush(&mut self) -> Result<()> {
+    fn flush(&mut self) -> Result<()> {
         use std::io::Write;
-        self.file.write_all(&self.bytes)?;
+        self.file.write_all(&self.bytes).with_context(|| format!("writing {}", self.part.display()))?;
         self.bytes.clear();
         Ok(())
     }
 
     /// Done: the rest written, and the file renamed to its name. A reader of the part file reads
     /// on, the same file.
-    pub(crate) fn finish(mut self) -> Result<()> {
-        if self.put != self.frames {
-            bail!("a render of {} frames ended at {}", self.frames, self.put);
-        }
+    fn finish(&mut self) -> Result<()> {
         self.flush()?;
         std::fs::rename(&self.part, &self.path).with_context(|| format!("naming {}", self.path.display()))?;
         self.done = true;
@@ -344,6 +362,128 @@ impl Drop for Part {
     fn drop(&mut self) {
         if !self.done {
             drop(std::fs::remove_file(&self.part));
+        }
+    }
+}
+
+/// A render being made, a block at a time, and where it goes: its part file in the cache folder,
+/// or memory when there is no folder or the folder can't take it, at the start or partway (a full
+/// disk, no permission: review sx-r1). Its [`Raw`] reads it as it is made.
+pub(crate) struct Making {
+    part: Option<Part>,
+    /// Frames put so far, in memory.
+    put: usize,
+    raw: Arc<Raw>,
+}
+
+impl Making {
+    /// A render of `frames` frames of `channels` for `path` in the cache folder; none, in memory.
+    pub(crate) fn new(path: Option<&Path>, channels: usize, frames: usize) -> Making {
+        let file = path.map(|p| Part::create(p, channels, frames).and_then(|part| Ok((Raw::reading(&part)?, part))));
+        let (part, raw) = match file {
+            Some(Ok((raw, part))) => (Some(part), raw),
+            Some(Err(e)) => {
+                eprintln!("music2: the cache folder can't take a stretch ({e:#}): it is made in memory");
+                (None, Raw::in_memory(channels, frames))
+            }
+            None => (None, Raw::in_memory(channels, frames)),
+        };
+        Making { part, put: 0, raw: Arc::new(raw) }
+    }
+
+    /// What reads it as it is made.
+    pub(crate) fn raw(&self) -> &Arc<Raw> {
+        &self.raw
+    }
+
+    /// Frames there so far, which readers may be told of: those in the file, or in memory.
+    pub(crate) fn written(&self) -> usize {
+        self.part.as_ref().map_or(self.put, Part::written)
+    }
+
+    /// Frames put so far.
+    pub(crate) fn frames_put(&self) -> usize {
+        self.part.as_ref().map_or(self.put, |p| p.put)
+    }
+
+    /// The next frames, a slice a channel, all as long.
+    pub(crate) fn put(&mut self, block: &[&[f32]]) -> Result<()> {
+        let (ch, frames) = self.raw.size();
+        let n = block.first().map_or(0, |c| c.len());
+        let at = self.frames_put();
+        if at + n > frames || block.len() != ch {
+            bail!("a render of {frames} frames of {ch} channels was given {} of {}", at + n, block.len());
+        }
+        if let Some(p) = &mut self.part {
+            return match p.put(block) {
+                Ok(()) => Ok(()),
+                Err(e) => self.go_in_memory(e),
+            };
+        }
+        let m = self.raw.mem.get().context("a render with no file is in memory")?;
+        for (c, b) in block.iter().enumerate() {
+            for (i, x) in b.iter().enumerate() {
+                m[(at + i) * ch + c].store(x.to_bits(), Ordering::Relaxed);
+            }
+        }
+        self.put = at + n;
+        Ok(())
+    }
+
+    /// Every frame put is there, so [`Self::written`] counts them all.
+    pub(crate) fn flush(&mut self) -> Result<()> {
+        match self.part.as_mut().map(Part::flush) {
+            Some(Err(e)) => self.go_in_memory(e),
+            _ => Ok(()),
+        }
+    }
+
+    /// Done: every frame there, its file renamed to its name; readers may read it all.
+    pub(crate) fn finish(mut self) -> Result<()> {
+        let frames = self.raw.frames;
+        if self.frames_put() != frames {
+            bail!("a render of {frames} frames ended at {}", self.frames_put());
+        }
+        if let Some(Err(e)) = self.part.as_mut().map(Part::finish) {
+            self.go_in_memory(e)?;
+        }
+        self.raw.made(frames);
+        Ok(())
+    }
+
+    /// The folder stopped taking it (`why`): what is there so far goes to memory, the frames in
+    /// the file read back, then those not written yet; the part file goes, and the rest is made in
+    /// memory. A reader reads the same frames from either.
+    fn go_in_memory(&mut self, why: anyhow::Error) -> Result<()> {
+        let Some(part) = self.part.take() else { return Err(why) };
+        eprintln!("music2: the cache folder stopped taking a stretch ({why:#}): the rest is made in memory");
+        let (ch, written) = (part.channels, part.written());
+        let file = self.raw.file.as_ref().context("a render with a part file reads it")?;
+        let mut m: Vec<AtomicU32> = Vec::with_capacity(part.frames * ch);
+        let (mut buf, total) = (vec![0u8; READ], (written * ch * 4) as u64);
+        let mut at = 0;
+        while at < total {
+            let n = (total - at).min(READ as u64) as usize;
+            if m2_os::fs::read_full_at(file, &mut buf[..n], at, READ)? < n {
+                bail!("the part file is cut short");
+            }
+            m.extend(buf[..n].as_chunks::<4>().0.iter().map(|b| AtomicU32::new(u32::from_le_bytes(*b))));
+            at += n as u64;
+        }
+        m.extend(part.bytes.as_chunks::<4>().0.iter().map(|b| AtomicU32::new(u32::from_le_bytes(*b))));
+        m.resize_with(part.frames * ch, AtomicU32::default);
+        self.put = part.put;
+        if self.raw.mem.set(m.into_boxed_slice()).is_err() {
+            bail!("a render with a part file was in memory already");
+        }
+        Ok(())
+    }
+
+    /// A test seam: from now on, writing its part file fails, as on a full disk.
+    #[cfg(test)]
+    pub(crate) fn break_disk(&mut self) {
+        if let Some(p) = &mut self.part {
+            p.file = File::open(&p.part).unwrap();
         }
     }
 }
@@ -453,8 +593,8 @@ pub(crate) enum Source {
     Wav(Arc<Wav>, Shape),
     /// A warped clip's stretch in the cache folder, reversed, faded and gained in place.
     Render(Arc<Raw>, Shape),
-    /// A stretch in memory, reversed, faded and gained in place: a warped clip's with no cache
-    /// folder, and tests' renders.
+    /// A render given whole in memory, reversed, faded and gained in place: tests' renders
+    /// ([`AudioLane::of_renders`]).
     Mem(Arc<RenderedClip>, Shape),
 }
 

@@ -1215,6 +1215,73 @@ fn an_export_never_plays_a_render_half_made() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+// Review sx-r1 (RENDER-30, D10): a cache folder that can't be written never silences a warped clip.
+// Its stretch is made in memory instead. An export plays it as one with no cache folder does, bit
+// for bit; so does a live session, once its stretch is made. Nothing is left in the folder.
+#[test]
+fn a_cache_folder_that_cannot_be_written_still_plays_warped_clips() {
+    let src = sine(440.0, 3.0, SR);
+    let (ir, tl, dir) = audio_song(&[("a.wav", vec![src.clone(), src], SR)], json!([{"start": 1, "length": 6, "asset": "a.wav", "warp": [[0, 0], [3, 6]]}]));
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let (folder, owner) = (dir.join("renders"), m2_plugins::Owner::discard());
+    std::fs::create_dir_all(&folder).unwrap();
+    let read_only = |on: bool| {
+        let mut p = std::fs::metadata(&folder).unwrap().permissions();
+        p.set_readonly(on);
+        std::fs::set_permissions(&folder, p).unwrap();
+    };
+    read_only(true);
+    let play = |cache: &mut audio::Cache| {
+        let mut r = Renderer::prepare(&flat, &tl, &pk, SR, cache, &owner, Basis::Fresh).unwrap();
+        assert!(cache.settle_renders(std::time::Duration::from_secs(60)));
+        r.render(5.0).unwrap()
+    };
+    let cold = play(&mut audio::Cache::with_renders_in(None));
+    assert!(peak(&cold[SR as usize..4 * SR as usize]) > 0.2, "the warped clip plays");
+    let export = play(&mut audio::Cache::with_renders_in(Some(folder.clone())));
+    assert!(export == cold, "an export whose cache folder is read-only plays the clip, as one with no folder");
+    let live = play(&mut audio::Cache::live_in(folder.clone()));
+    assert!(live == cold, "so does a live session");
+    assert_eq!(renders_in(&folder), (0, 0), "nothing in the folder");
+    read_only(false);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// Review sx-r1 (RENDER-25's rule for a node): offline, a stretch that fails fails the build, naming
+// its clip, so an export never finishes without it. Here the stretch kernel traps. Its part file
+// goes. Live, the clip is silent alone, and the lane is built.
+#[test]
+fn an_export_whose_stretch_fails_names_the_clip() {
+    let trap = r#"(func (export "k_new") (param i32) (result i32) (i32.const 4096))
+        (func (export "k_ports") (result i32) (i32.const 1))
+        (func (export "k_reset") (param i32))
+        (func (export "k_active") (param i32) (result i32) (i32.const 0))
+        (func (export "k_process") (param i32 i32 i32 i32) unreachable)"#;
+    let pkg = package_with(&module_v1(trap), "outputs = [\"out: audio<2>\"]\noffline = true");
+    let mut pk = PackageSet::default();
+    pk.load(&pkg).unwrap();
+    let k = offline::Kernel::of(&pk, "t:k").expect("an offline kernel");
+    let dir = project(&[]);
+    audio::write_wav(&dir.join("a.wav"), &[sine(440.0, 1.0, SR)], SR).unwrap();
+    let clip: m2_song::AudioClip = serde_json::from_value(json!({"start": 2, "length": 4, "asset": "a.wav", "warp": [[0, 0], [1, 4]]})).unwrap();
+    let tempo = m2_song::TempoMap::constant(120.0);
+    let folder = dir.join("renders");
+    let build = |cache: &mut audio::Cache| audio::AudioLane::build_with(std::slice::from_ref(&clip), &|a| Some(dir.join(a)), cache, &tempo, SR as f64, 2, Some(&k));
+    let e = build(&mut audio::Cache::with_renders_in(Some(folder.clone()))).map(|_| ()).expect_err("the export fails");
+    let e = format!("{e:#}");
+    assert!(e.starts_with("the warped clip of a.wav at beat 2 can't be stretched: ") && e.contains("crashed"), "{e}");
+    assert_eq!(renders_in(&folder), (0, 0), "its part file went");
+    let mut live = audio::Cache::live_in(folder.clone());
+    let lane = build(&mut live).expect("live, the lane is built");
+    assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+    assert_eq!(renders_in(&folder), (0, 0));
+    drop((lane, live));
+    for d in [dir, pkg] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
 // The sx plan, slice 3 (D10): a render the cache's next prune drops stops, and leaves no part file;
 // one a kept lane plays goes on. Two warped clips are asked for, the first held at a second made,
 // the second waiting behind it, each in its part file. A rebuild of the same lane keeps both. A
@@ -1234,7 +1301,7 @@ fn a_dropped_render_stops_and_leaves_no_part_file() {
     let mut cache = audio::Cache::live_in(folder.clone());
     cache.hold_renders(Some(SR as usize));
     let mut build = |clips: &[m2_song::AudioClip]| {
-        let lane = audio::AudioLane::build_with(clips, &|a| Some(dir.join(a)), &mut cache, &tempo, SR as f64, 2, Some(&k));
+        let lane = audio::AudioLane::build_with(clips, &|a| Some(dir.join(a)), &mut cache, &tempo, SR as f64, 2, Some(&k)).unwrap();
         cache.prune();
         assert!(cache.settle_renders(std::time::Duration::from_secs(20)));
         lane
@@ -1281,7 +1348,7 @@ fn stretch_speed_report() {
     let mut cache = audio::Cache::with_renders_in(Some(dir.join("renders")));
     let t = std::time::Instant::now();
     let tempo = m2_song::TempoMap::constant(120.0);
-    let lane = audio::AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut cache, &tempo, SR as f64, 2, Some(&k));
+    let lane = audio::AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut cache, &tempo, SR as f64, 2, Some(&k)).unwrap();
     let secs = t.elapsed().as_secs_f64();
     assert_eq!(cache.work().1, 1);
     println!("std:stretch: 75 s of stereo in {secs:.2} s, {:.0} times faster than real time", 75.0 / secs);

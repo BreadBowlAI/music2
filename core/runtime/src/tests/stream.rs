@@ -8,7 +8,7 @@ use m2_song::{AudioClip, LaneData, LaneKind, TempoMap};
 
 use crate::audio::{self, AudioLane, Cache};
 use crate::offline::{self, Kernel};
-use crate::stream::{READ, SLOTS, chunk_frames};
+use crate::stream::{Making, READ, SLOTS, chunk_frames};
 
 const SR: f64 = 48_000.0;
 
@@ -98,7 +98,7 @@ fn a_streamed_lane_is_the_rendered_lane() {
     let assets = resample().join("assets");
     let len = (tempo.seconds_at(clips.iter().map(|c| c.start + c.length).fold(0.0, f64::max)) * SR) as usize + 1000;
     for channels in [2, 1] {
-        let lane = AudioLane::build_with(&clips, &|a| Some(assets.join(a)), &mut Cache::default(), &tempo, SR, channels, Some(&stretch()));
+        let lane = AudioLane::build_with(&clips, &|a| Some(assets.join(a)), &mut Cache::default(), &tempo, SR, channels, Some(&stretch())).unwrap();
         assert!(!lane.resident(), "the lane streams: more chunks than slots");
         let (want, got) = (rendered(&clips, &assets, &tempo, channels, len), streamed(&lane, channels, len));
         for c in 0..channels {
@@ -145,7 +145,7 @@ fn a_long_file_never_lives_in_memory() {
     let file = std::fs::metadata(dir.join("long.wav")).unwrap().len() as usize;
     let tempo = TempoMap::constant(120.0);
     let clip: AudioClip = serde_json::from_value(serde_json::json!({"start": 0, "length": 360, "asset": "long.wav"})).unwrap();
-    let lane = AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut Cache::default(), &tempo, SR, 2, None);
+    let lane = AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut Cache::default(), &tempo, SR, 2, None).unwrap();
     let chunk_bytes = chunk_frames(SR) as usize * 2 * 4;
     let slots = SLOTS * chunk_bytes;
     reads();
@@ -221,7 +221,7 @@ fn a_warped_render_holds_neither_file_whole() {
     let mut cache = Cache::with_renders_in(Some(dir.join("renders")));
     let k = stretch();
     reads();
-    let (lane, most) = super::alloc_count::largest(|| AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut cache, &tempo, SR, 2, Some(&k)));
+    let (lane, most) = super::alloc_count::largest(|| AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut cache, &tempo, SR, 2, Some(&k)).unwrap());
     let (largest, n) = reads();
     let render = 25 * SR as usize * 2 * 4;
     assert_eq!(cache.work().1, 1, "one render made");
@@ -254,7 +254,7 @@ fn built(clips: Vec<AudioClip>, dir: &Path, cache: Cache, tempo: &TempoMap) -> O
     let (dir, tempo, (tx, rx)) = (dir.to_path_buf(), tempo.clone(), std::sync::mpsc::channel());
     std::thread::spawn(move || {
         let mut cache = cache;
-        let lane = AudioLane::build_with(&clips, &|a| Some(dir.join(a)), &mut cache, &tempo, SR, 2, Some(&stretch()));
+        let lane = AudioLane::build_with(&clips, &|a| Some(dir.join(a)), &mut cache, &tempo, SR, 2, Some(&stretch())).unwrap();
         drop(tx.send((lane, cache)));
     });
     rx.recv_timeout(std::time::Duration::from_secs(20)).ok()
@@ -356,4 +356,35 @@ fn a_lane_plays_its_render_as_it_is_made() {
         drop((lane, cache));
         std::fs::remove_dir_all(&dir).ok();
     }
+}
+
+// Review sx-r1 (RENDER-30): a disk that fills while a render is made never cuts it short. What is in
+// its part file so far goes to memory, the rest is made there, and the part file goes. A reader
+// reads every frame as it was put.
+#[test]
+fn a_render_whose_disk_fills_goes_on_in_memory() {
+    let dir = folder("full");
+    let frames = 3 * READ;
+    let x = |c: usize, i: usize| (2 * i + c) as f32 * 1e-4;
+    let mut m = Making::new(Some(&dir.join("r.f32")), 2, frames);
+    let raw = m.raw().clone();
+    let put = |m: &mut Making, from: usize, to: usize| {
+        let b: [Vec<f32>; 2] = [0, 1].map(|c| (from..to).map(|i| x(c, i)).collect());
+        m.put(&[&b[0], &b[1]]).unwrap();
+    };
+    put(&mut m, 0, frames / 2);
+    m.flush().unwrap();
+    raw.made(m.written());
+    assert_eq!(m.written(), frames / 2, "half of it is in its part file");
+    m.break_disk();
+    put(&mut m, frames / 2, frames);
+    m.finish().unwrap();
+    assert!(raw.whole());
+    let (mut buf, mut out) = (vec![], vec![vec![]; 2]);
+    raw.read(0, frames, &mut buf, &mut out).unwrap();
+    for (c, o) in out.iter().enumerate() {
+        assert_eq!(o.iter().enumerate().position(|(i, &v)| v != x(c, i)), None, "channel {c}: every frame as put");
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "its part file went, and no render is named");
+    std::fs::remove_dir_all(&dir).ok();
 }

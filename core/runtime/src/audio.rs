@@ -11,7 +11,8 @@
 //!
 //! A warped clip is stretched by std's offline kernel `std:stretch` ([`crate::offline`]), once, in
 //! pieces, straight into a file in the cache folder, which then streams as any clip; its source is
-//! read from the disk. Gain, fades and reverse are the host's, worked out as the file is read, as
+//! read from the disk. When the folder can't take it (none, a full disk, no permission), it is made
+//! in memory instead (review sx-r1). Gain, fades and reverse are the host's, worked out as the file is read, as
 //! for a plain clip (the sx plan's D7): clips that differ only in them share one stretch.
 //!
 //! Its math goes through the `libm` crate, never the OS's library, so a clip renders the same bits
@@ -26,10 +27,10 @@ use m2_song::{AudioClip, DataSet, HashCache, Sha, TempoMap};
 
 use crate::BLOCK;
 use crate::fade::xfade;
-use crate::offline::{self, Kernel};
+use crate::offline::Kernel;
 use crate::renders::{self, Stretcher};
 use crate::sandbox::Held;
-use crate::stream::{self, Clip, Part, Raw, Ring, Shape, Source, Wav};
+use crate::stream::{self, Clip, Making, Raw, Ring, Shape, Source, Wav};
 use crate::transport::{Jump, Runs};
 
 /// Decoded audio, planar, at its own sample rate.
@@ -198,13 +199,6 @@ impl WarpKey {
     }
 }
 
-/// A warped clip's stretch, as its kernel made it: in the cache folder, or in memory without one.
-#[derive(Clone)]
-enum Stretched {
-    File(Arc<Raw>),
-    Mem(Arc<RenderedClip>),
-}
-
 /// What a lane plays: its clips' keys in order, its channels.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct LaneKey {
@@ -226,7 +220,7 @@ struct LaneKey {
 #[derive(Default)]
 pub struct Cache {
     wavs: HashMap<Sha, Option<Arc<Wav>>>,
-    warps: HashMap<WarpKey, Option<Stretched>>,
+    warps: HashMap<WarpKey, Arc<Raw>>,
     lanes: HashMap<LaneKey, Arc<AudioLane>>,
     /// The files kernels read (kernel ABI v1), decoded whole, kept while a build uses them.
     kernels: HashMap<Sha, Option<Arc<Asset>>>,
@@ -315,47 +309,39 @@ impl Cache {
 
     /// Warped clip `c`'s stretch, made by `stretch` from its file `wav`, the asset `asset` (D7),
     /// and its key: from the cache folder when it is there, else asked for now. A live cache's
-    /// stretch thread makes it in the background, straight into its file there, and lanes play it
-    /// as it is made (D10). An offline cache makes it here, block by block, into its file there (in
-    /// memory without a folder). None without a stretch kernel; a stretch that fails is silent (a
-    /// line in the log says why).
-    fn warp(&mut self, wav: &Arc<Wav>, asset: Sha, c: &AudioClip, tempo: &TempoMap, rate: f64, stretch: Option<&Kernel>) -> Option<(WarpKey, Option<Stretched>)> {
-        let k = stretch?;
+    /// stretch thread makes it in the background, and lanes play it as it is made (D10); one that
+    /// fails is silent (a line in the log says why). An offline cache makes it here, with the same
+    /// maker ([`renders::make_now`]); one that fails fails the build, naming the clip (RENDER-25's
+    /// rule for a node). Either makes it into its file in the folder, or in memory when there is no
+    /// folder or it can't take it (review sx-r1). None without a stretch kernel.
+    fn warp(&mut self, wav: &Arc<Wav>, asset: Sha, c: &AudioClip, tempo: &TempoMap, rate: f64, stretch: Option<&Kernel>) -> Result<Option<(WarpKey, Arc<Raw>)>> {
+        let Some(k) = stretch else { return Ok(None) };
         let map = time_map(c, tempo);
         let frames = stream::clip_len(c, tempo, rate);
         let key = WarpKey::of(asset, k.sha, &map, c.pitch, rate, frames);
         self.used_warps.insert(key.clone());
         if let Some(s) = self.warps.get(&key) {
-            return Some((key, s.clone()));
+            return Ok(Some((key, s.clone())));
         }
         let path = self.folder.0.as_deref().map(|f| stream::render_path(f, &key.bytes()));
-        let failed = |e: anyhow::Error| eprintln!("music2: a warped clip of {} plays silence: its stretch failed: {e:#}", c.asset);
-        let s = match (&mut self.live, path) {
-            (Some(live), Some(p)) => match Raw::open(&p, wav.channels(), frames) {
-                Some(whole) => Some(Stretched::File(Arc::new(whole))),
-                None => {
-                    self.renders += 1;
-                    let job = Part::create(&p, wav.channels(), frames).and_then(|part| {
-                        let raw = Arc::new(Raw::reading(&part)?);
-                        let source = Held::Disk(wav.clone());
-                        Ok(renders::Job { kernel: k.clone(), source, values: vec![c.pitch], map, rate, part, raw, asset: c.asset.clone() })
-                    });
-                    job.map_err(failed)
-                        .map(|j| {
-                            let raw = j.raw.clone();
-                            live.push(j);
-                            Stretched::File(raw)
-                        })
-                        .ok()
+        let ch = wav.channels();
+        let raw = match path.as_deref().and_then(|p| Raw::open(p, ch, frames)) {
+            Some(whole) => Arc::new(whole),
+            None => {
+                self.renders += 1;
+                let out = Making::new(path.as_deref(), ch, frames);
+                let raw = out.raw().clone();
+                let source = Held::Disk(wav.clone());
+                let job = renders::Job { kernel: k.clone(), source, values: vec![c.pitch], map, rate, out, asset: c.asset.clone() };
+                match &mut self.live {
+                    Some(live) => live.push(job),
+                    None => renders::make_now(job).with_context(|| format!("the warped clip of {} at beat {} can't be stretched", c.asset, c.start))?,
                 }
-            },
-            (_, path) => {
-                let run = offline::Run { source: Held::Disk(wav.clone()), values: &[c.pitch], map: &map, rate, channels: wav.channels(), frames };
-                make_warp(k, path.as_deref(), &run, &mut self.renders).map_err(failed).ok()
+                raw
             }
         };
-        self.warps.insert(key.clone(), s.clone());
-        Some((key, s))
+        self.warps.insert(key.clone(), raw.clone());
+        Ok(Some((key, raw)))
     }
 
     /// Keep only what the builds since the last call used: an edited lane's old ring goes once
@@ -368,9 +354,9 @@ impl Cache {
         self.wavs.retain(|k, _| wavs.contains(k));
         self.kernels.retain(|k, _| kernels.contains(k));
         // A stretch no build asked for any more stops, and its part file goes (D10).
-        self.warps.retain(|k, s| {
+        self.warps.retain(|k, r| {
             let keep = warps.contains(k);
-            if let (false, Some(Stretched::File(r))) = (keep, s) {
+            if !keep {
                 r.stop();
             }
             keep
@@ -465,29 +451,11 @@ pub(crate) fn time_map(c: &AudioClip, tempo: &TempoMap) -> Vec<[f64; 2]> {
     beats.into_iter().map(|b| [src_at_beat(b), tempo.seconds_at(c.start + b) - t0]).collect()
 }
 
-/// [`Cache::warp`]'s stretch: from `path` when it is there whole; else made by `k` as `run` says
-/// now, in pieces, into a part file there, renamed to `path` once whole; in memory without a path.
-fn make_warp(k: &Kernel, path: Option<&Path>, run: &offline::Run, renders: &mut usize) -> Result<Stretched> {
-    if let Some(raw) = path.and_then(|p| Raw::open(p, run.channels, run.frames)) {
-        return Ok(Stretched::File(Arc::new(raw)));
-    }
-    *renders += 1;
-    match path {
-        Some(p) => {
-            let mut part = Part::create(p, run.channels, run.frames)?;
-            offline::run(k, run, &mut |b| part.put(b))?;
-            part.finish()?;
-            let raw = Raw::open(p, run.channels, run.frames).with_context(|| format!("{} is not whole", p.display()))?;
-            Ok(Stretched::File(Arc::new(raw)))
-        }
-        None => Ok(Stretched::Mem(Arc::new(whole(k, run)?))),
-    }
-}
-
-/// What `k` makes as `run` says, whole in memory.
-fn whole(k: &Kernel, run: &offline::Run) -> Result<RenderedClip> {
+/// What `k` makes as `run` says, whole in memory (tests' reference).
+#[cfg(test)]
+fn whole(k: &Kernel, run: &crate::offline::Run) -> Result<RenderedClip> {
     let mut out: RenderedClip = vec![Vec::with_capacity(run.frames); run.channels];
-    offline::run(k, run, &mut |b| {
+    crate::offline::run(k, run, &mut |b| {
         for (o, x) in out.iter_mut().zip(b) {
             o.extend_from_slice(x);
         }
@@ -509,7 +477,7 @@ pub(crate) fn render_clip(clip: &AudioClip, asset: &Arc<Asset>, tempo: &TempoMap
     } else {
         let map = time_map(clip, tempo);
         let channels = asset.channels.len();
-        let run = offline::Run { source: Held::Whole(asset.clone()), values: &[clip.pitch], map: &map, rate: sample_rate, channels, frames: sh.len };
+        let run = crate::offline::Run { source: Held::Whole(asset.clone()), values: &[clip.pitch], map: &map, rate: sample_rate, channels, frames: sh.len };
         match stretch {
             Some(k) => whole(k, &run)?,
             None => vec![vec![0.0; sh.len]; channels],
@@ -557,7 +525,8 @@ impl AudioLane {
     /// always sum in one order), from `cache` when it holds it. A clip whose asset may not be
     /// played (`asset.missing`) or can't be decoded is silent; it never silences the rest
     /// (FMT-15). A lane short enough to stay whole is filled here. Warped clips are stretched by
-    /// `stretch` (the song's `std:stretch`); without it they are silent.
+    /// `stretch` (the song's `std:stretch`); without it they are silent. An error only offline: a
+    /// stretch that failed ([`Cache::warp`]).
     pub(crate) fn build(
         clips: &[AudioClip],
         data: &DataSet,
@@ -566,7 +535,7 @@ impl AudioLane {
         sample_rate: f64,
         channels: usize,
         stretch: Option<&Kernel>,
-    ) -> Arc<AudioLane> {
+    ) -> Result<Arc<AudioLane>> {
         AudioLane::build_with(clips, &|a| data.asset_path(a), cache, tempo, sample_rate, channels, stretch)
     }
 
@@ -579,7 +548,7 @@ impl AudioLane {
         sample_rate: f64,
         channels: usize,
         stretch: Option<&Kernel>,
-    ) -> Arc<AudioLane> {
+    ) -> Result<Arc<AudioLane>> {
         let mut found = vec![];
         for c in clips {
             let Some(path) = asset_path(&c.asset) else { continue };
@@ -590,7 +559,7 @@ impl AudioLane {
         cache.used_lanes.insert(key.clone());
         if let Some(l) = cache.lanes.get(&key) {
             cache.used_warps.extend(l.warps.iter().cloned());
-            return l.clone();
+            return Ok(l.clone());
         }
         let (mut out, mut warps) = (vec![], vec![]);
         for (c, k, w) in found {
@@ -599,13 +568,9 @@ impl AudioLane {
             let src = if c.warp.is_empty() {
                 Source::Wav(w.clone(), sh)
             } else {
-                let Some((key, made)) = cache.warp(&w, k.asset, c, tempo, sample_rate, stretch) else { continue };
+                let Some((key, raw)) = cache.warp(&w, k.asset, c, tempo, sample_rate, stretch)? else { continue };
                 warps.push(key);
-                match made {
-                    Some(Stretched::File(r)) => Source::Render(r, sh),
-                    Some(Stretched::Mem(m)) => Source::Mem(m, sh),
-                    None => continue,
-                }
+                Source::Render(raw, sh)
             };
             out.push(Clip::new(at, src, stream::clip_len(c, tempo, sample_rate)));
         }
@@ -613,7 +578,7 @@ impl AudioLane {
         lane.warps = warps;
         let lane = Arc::new(lane);
         cache.lanes.insert(key, lane.clone());
-        lane
+        Ok(lane)
     }
 
     fn of(clips: Vec<Clip>, channels: usize, tempo: TempoMap, rate: f64, key: Option<LaneKey>) -> AudioLane {

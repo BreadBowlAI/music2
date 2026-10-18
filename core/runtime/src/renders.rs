@@ -8,7 +8,9 @@
 //! and its part file goes.
 //!
 //! An offline cache (an export's, a range render's) has no stretch thread: it makes each render
-//! whole before its build returns, so its bits never depend on timing.
+//! whole before its build returns, with the same maker ([`make_now`]), so its bits never depend on
+//! timing. A render the cache folder can't take is made in memory instead ([`Making`], review
+//! sx-r1); one that still fails fails the build offline, naming its clip.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,17 +22,16 @@ use anyhow::{Result, bail};
 
 use crate::offline::{self, Kernel};
 use crate::sandbox::Held;
-use crate::stream::{Part, Raw};
+use crate::stream::{Making, Raw};
 
-/// One render to make: its kernel and what it is given, its part file, and the render lanes read.
+/// One render to make: its kernel and what it is given, and where it goes, which lanes read.
 pub(crate) struct Job {
     pub(crate) kernel: Kernel,
     pub(crate) source: Held,
     pub(crate) values: Vec<f64>,
     pub(crate) map: Vec<[f64; 2]>,
     pub(crate) rate: f64,
-    pub(crate) part: Part,
-    pub(crate) raw: Arc<Raw>,
+    pub(crate) out: Making,
     /// The clip's file, for the log when it fails.
     pub(crate) asset: String,
 }
@@ -83,7 +84,7 @@ impl Stretcher {
                 Ok(t) => self.thread = Some(t),
                 Err(e) => {
                     eprintln!("music2: no stretch thread ({e}): warped clips play silence");
-                    job.raw.end();
+                    job.out.raw().end();
                     return;
                 }
             }
@@ -97,12 +98,12 @@ impl Stretcher {
     pub(crate) fn forget_stopped(&self) {
         let dropped: Vec<Job> = {
             let mut q = self.shared.queue();
-            let (stopped, kept): (Vec<Job>, Vec<Job>) = q.jobs.drain(..).partition(|j| j.raw.stopped());
+            let (stopped, kept): (Vec<Job>, Vec<Job>) = q.jobs.drain(..).partition(|j| j.out.raw().stopped());
             q.jobs = kept.into();
             stopped
         };
         for j in dropped {
-            j.raw.end();
+            j.out.raw().end();
         }
         self.nudge();
     }
@@ -140,7 +141,7 @@ impl Drop for Stretcher {
         self.shared.closing.store(true, Ordering::Release);
         let jobs: Vec<Job> = self.shared.queue().jobs.drain(..).collect();
         for j in jobs {
-            j.raw.end();
+            j.out.raw().end();
         }
         self.shared.wake.notify_all();
         if let Some(t) = self.thread.take() {
@@ -152,7 +153,7 @@ impl Drop for Stretcher {
 /// The thread: each job in turn, till the cache is gone.
 fn work(shared: &Shared) {
     loop {
-        let job = {
+        let mut job = {
             let mut q = shared.queue();
             loop {
                 if shared.closing.load(Ordering::Acquire) {
@@ -165,52 +166,61 @@ fn work(shared: &Shared) {
                 q = shared.wait(q);
             }
         };
-        make(shared, job);
+        let (raw, asset) = (job.out.raw().clone(), std::mem::take(&mut job.asset));
+        if let Err(e) = make(shared, job)
+            && !raw.stopped()
+            && !shared.closing.load(Ordering::Acquire)
+        {
+            eprintln!("music2: a warped clip of {asset} plays silence: its stretch failed: {e:#}");
+        }
         shared.queue().busy = false;
         shared.wake.notify_all();
     }
 }
 
-/// Make one render into its part file, saying how much is done as it goes; renamed once whole. One
-/// that stops or fails is over: what it didn't make plays silence, and its part file goes.
-fn make(shared: &Shared, job: Job) {
-    let Job { kernel, source, values, map, rate, mut part, raw, asset } = job;
+/// Make `job` now, on this thread: an offline cache's render (review sx-r1: one maker for both).
+pub(crate) fn make_now(job: Job) -> Result<()> {
+    make(&Shared::default(), job)
+}
+
+/// Make one render, block by block, saying how much is done as it goes: into its part file, renamed
+/// once whole, or into memory. One that stops or fails is over: what it didn't make plays silence,
+/// and its part file goes.
+fn make(shared: &Shared, job: Job) -> Result<()> {
+    let Job { kernel, source, values, map, rate, mut out, asset: _ } = job;
+    let raw = out.raw().clone();
+    let (channels, frames) = raw.size();
     let stopped = || raw.stopped() || shared.closing.load(Ordering::Acquire);
-    let run = offline::Run { source, values: &values, map: &map, rate, channels: part.channels, frames: part.frames };
+    let run = offline::Run { source, values: &values, map: &map, rate, channels, frames };
     let mut sink = |b: &[&[f32]]| -> Result<()> {
         if shared.held.load(Ordering::Acquire) {
-            held(shared, &raw, &mut part, &stopped)?;
+            held(shared, &raw, &mut out, &stopped)?;
         }
         if stopped() {
             bail!("stopped");
         }
-        part.put(b)?;
-        let w = part.written();
+        out.put(b)?;
+        let w = out.written();
         if w > 0 && !raw.has(w) {
             raw.made(w);
         }
         Ok(())
     };
     let made = if stopped() { Err(anyhow::anyhow!("stopped")) } else { offline::run(&kernel, &run, &mut sink) };
-    let frames = part.frames;
-    match made.and_then(|()| part.finish()) {
-        Ok(()) => raw.made(frames),
-        Err(e) => {
-            if !stopped() {
-                eprintln!("music2: a warped clip of {asset} plays silence: its stretch failed: {e:#}");
-            }
-            raw.end();
-        }
+    let made = made.and_then(|()| out.finish());
+    if made.is_err() {
+        raw.end();
     }
+    made
 }
 
 /// While a hold is on and this render made all it allows: its frames put are in the file and said
 /// done, and it waits for the hold to change, or to be stopped.
-fn held(shared: &Shared, raw: &Raw, part: &mut Part, stopped: &dyn Fn() -> bool) -> Result<()> {
+fn held(shared: &Shared, raw: &Raw, out: &mut Making, stopped: &dyn Fn() -> bool) -> Result<()> {
     let mut q = shared.queue();
-    while q.hold.is_some_and(|n| part.frames_put() >= n) && !stopped() {
-        part.flush()?;
-        raw.made(part.written());
+    while q.hold.is_some_and(|n| out.frames_put() >= n) && !stopped() {
+        out.flush()?;
+        raw.made(out.written());
         q.waiting = true;
         shared.wake.notify_all();
         q = shared.wait(q);

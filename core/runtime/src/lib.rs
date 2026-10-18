@@ -2481,7 +2481,7 @@ impl Renderer {
         });
         let keep = keep.as_ref();
         let stretch = offline::Kernel::of(packages, offline::STRETCH);
-        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep, stretch.as_ref());
+        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep, stretch.as_ref())?;
         let used = used(flat);
         let mut shapes: Vec<Option<Shape>> =
             flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages, &assets) } else { None }).collect();

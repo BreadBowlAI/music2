@@ -241,7 +241,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A clip's own tempo isn't found from its file**: Follow tempo takes the clip as it plays when you turn it on.
 - **No `m2` command for Follow tempo**: agents use `POST /api/graph/clips` (`{"op": "audio", "follow": true}`).
 - **One stretch method for all clips** (`std:stretch`, WSOLA). No choice per clip (drums, voice, pads).
-- **A stretch that fails plays silence**, with a line in the log only.
+- **A stretch that fails plays silence** live, with a line in the log only (an export fails and names the clip). A stretch the cache folder can't take is made in memory, also with a line in the log only.
 - **The plugin host process** (HOST-3, since ph-1). Plugins run in a second program, so a crash no longer ends the app. What it doesn't do yet:
   - All plugins share one host process, so one crash silences them all (each comes back by itself). One process per plugin would silence only the one that crashed.
   - Its audio threads don't join the Mac output's audio workgroup (they ask for real time on their own).
