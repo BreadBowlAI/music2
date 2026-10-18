@@ -161,6 +161,10 @@ pub struct Flat {
     pub overlays: Vec<OverlaySite>,
     /// The tracks muted in the song (MON-5), by key, sorted: silent in every render.
     pub muted: Vec<String>,
+    /// Which track reaches which bus through the song (MON-3, RENDER-34), `(track, bus)`, sorted:
+    /// for each bus the song feeds, every track whose site into the song leads to the feed over
+    /// the song's own nodes. A sidechain input isn't a site, so it leads nowhere. Empty with no bus.
+    pub routes: Vec<(String, String)>,
 }
 
 /// One place a track's audio enters another module (MON-1): where an overlay goes.
@@ -338,6 +342,7 @@ impl<'a> Checker<'a> {
             ck.frames(m);
         }
         ck.state_paths(ir);
+        ck.buses(ir);
         ck
     }
 
@@ -556,7 +561,8 @@ impl<'a> Checker<'a> {
         let sidechain = self.sidechains(ir, &mut nodes);
         let overlays = self.overlays(ir, &nodes, &reach, out, out_kind);
         let muted = self.muted(ir);
-        Some(Flat { nodes, order, out, out_kind, sidechain, overlays, muted })
+        let routes = self.routes(ir, &nodes, &overlays);
+        Some(Flat { nodes, order, out, out_kind, sidechain, overlays, muted, routes })
     }
 
     /// The tracks muted in the song, sorted. `muted` only on a track: never on the root module,
@@ -574,6 +580,75 @@ impl<'a> Checker<'a> {
         }
         muted.sort();
         muted
+    }
+
+    /// Which track reaches which bus through the song (MON-3, RENDER-34): from each bus's import of
+    /// the song, back over the song's own nodes to the sites into the song. Sorted.
+    fn routes(&self, ir: &'a Ir, nodes: &[FNode], overlays: &[OverlaySite]) -> Vec<(String, String)> {
+        // Each site into the song, by the node that reads it and the node it reads.
+        let mut sites: HashMap<(usize, usize), &str> = HashMap::new();
+        for s in overlays.iter().filter(|s| s.into == ROOT) {
+            let reader = match s.consumer {
+                Consumer::Input { node, .. } | Consumer::Feedback { node } => node,
+                Consumer::Capture { poly, .. } => poly,
+                Consumer::Out => continue,
+            };
+            sites.insert((reader, s.src.node), s.module.as_str());
+        }
+        let mut routes = std::collections::BTreeSet::new();
+        for b in ir.modules.iter().filter(|m| m.bus) {
+            for n in &b.nodes {
+                let Op::Import { module, .. } = &n.op else { continue };
+                if module != ROOT {
+                    continue;
+                }
+                let Ok(feed) = self.resolve(&b.key, &n.id, 0) else { continue };
+                let (mut seen, mut stack) = (HashSet::new(), vec![feed.node]);
+                while let Some(i) = stack.pop() {
+                    if nodes[i].module != ROOT || !seen.insert(i) {
+                        continue;
+                    }
+                    let mut deps = nodes[i].op.deps();
+                    if let FOp::Feedback { input, .. } = nodes[i].op {
+                        deps.push(input.node);
+                    }
+                    for d in deps {
+                        match sites.get(&(i, d)) {
+                            Some(m) => {
+                                routes.insert((m.to_string(), b.key.clone()));
+                            }
+                            None => stack.push(d),
+                        }
+                    }
+                }
+            }
+        }
+        routes.into_iter().collect()
+    }
+
+    /// A bus is a track, and plays what the song feeds it: it has no notes or audio lanes (RENDER-34).
+    fn buses(&mut self, ir: &'a Ir) {
+        for m in ir.modules.iter().filter(|m| m.bus) {
+            if !m.track {
+                self.diags.push(diag(m, None, format!("`{}` is a bus, so it must be a track", m.key)));
+            }
+            for l in &m.lanes {
+                let what = match l.kind {
+                    Kind::Events(_) => "notes",
+                    Kind::Audio(_) => "audio",
+                    Kind::Control(_) => continue,
+                };
+                self.diags.push(diag(
+                    m,
+                    None,
+                    format!(
+                        "the bus `{}` declares the {what} lane `{}`: a bus plays what the song feeds it, so it has no notes or audio \
+                         lanes. A control lane, to automate it, is fine",
+                        m.key, l.key
+                    ),
+                ));
+            }
+        }
     }
 
     /// The signals the sidechain inputs of the frames around `frame` received (PKG-13): what an
@@ -798,11 +873,20 @@ impl<'a> Checker<'a> {
                     format!("{}/{}{}", m.key, node.id, what)
                 };
                 let path: Vec<String> = cycle.iter().map(|&i| describe(i)).collect();
+                // A loop across modules (a bus fed from its own output, RENDER-34) names them.
+                let mut through: Vec<&str> = cycle.iter().map(|&i| items[i].0.key.as_str()).collect();
+                through.push(through[0]);
+                through.dedup();
+                let modules = if through.len() > 2 { format!(" It goes through {}.", through.join(" → ")) } else { String::new() };
                 let (m, node) = items[cycle[0]];
                 self.diags.push(diag(
                     m,
                     Some(node),
-                    format!("these nodes form a loop: {} → {}. Break it with feedback(), which delays one block", path.join(" → "), path[0]),
+                    format!(
+                        "these nodes form a loop: {} → {}.{modules} Break it with feedback(), which delays one block",
+                        path.join(" → "),
+                        path[0]
+                    ),
                 ));
                 return None;
             }
@@ -1182,6 +1266,10 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>, plugin: 
 #[cfg(test)]
 #[path = "overlay_tests.rs"]
 mod overlay_tests;
+
+#[cfg(test)]
+#[path = "bus_tests.rs"]
+mod bus_tests;
 
 #[cfg(test)]
 mod tests {

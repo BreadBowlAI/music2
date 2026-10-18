@@ -96,6 +96,7 @@ impl Code {
             sidechain: vec![],
             overlays: vec![],
             muted: vec![],
+            routes: vec![],
         };
         Code {
             ir: Ir { ir: m2_ir::IR_VERSION, modules: vec![], root },

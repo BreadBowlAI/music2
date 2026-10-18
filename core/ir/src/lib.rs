@@ -63,6 +63,11 @@ pub struct Module {
     /// track has it. Written only when set, so an IR without it keeps its JSON and hash (ID-11).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub muted: bool,
+    /// A bus (RENDER-34): a track the song feeds, which reads what it is fed as its `input`, an
+    /// import of the song's export [`feed_export`]. It has no notes or audio lanes. Written only
+    /// when set, so an IR without it keeps its JSON and hash (ID-11).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bus: bool,
     #[serde(default)]
     pub lanes: Vec<LaneDecl>,
     pub nodes: Vec<Node>,
@@ -73,6 +78,11 @@ pub struct Module {
     /// order they opened (ID-15). Nodes and origins name them by index.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<Frame>,
+}
+
+/// The song's export that a bus keyed `bus` reads as its `input` (RENDER-34): `bus:<key>`.
+pub fn feed_export(bus: &str) -> String {
+    format!("bus:{bus}")
 }
 
 impl Module {
