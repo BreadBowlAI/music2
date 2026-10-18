@@ -126,6 +126,18 @@ fn the_probe_offers_its_presets_on_both_hosts() {
     assert!(r.process_id().is_some(), "the host process found them");
 }
 
+// HOST-8: the search runs on a thread of its own, never on the plugin main thread, which serves
+// every playing plugin's main-thread calls and windows: a slow search must not hold them up.
+#[test]
+fn a_preset_search_never_runs_on_the_main_thread() {
+    setup();
+    let offered = InProcess.presets(&the_probe(&InProcess)).unwrap();
+    assert_eq!(offered.len(), 2);
+    let (searches, on_main) = probe::searches();
+    assert!(searches > 0, "the probe was searched");
+    assert_eq!(on_main, 0, "{on_main} of {searches} searches ran on the plugin main thread");
+}
+
 // HOST-8: one of them loads on an instance made for it (CLAP's preset-load), whose saved state then
 // holds it; the instance is destroyed after, on both hosts.
 #[test]

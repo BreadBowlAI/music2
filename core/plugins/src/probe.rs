@@ -33,7 +33,7 @@
 //!
 //! It offers two presets of its own through CLAP's preset discovery, inside the plugin (HOST-8):
 //! Bright and Dark. Its `preset-load` loads one as a state with its gain and level, tagged
-//! `bright` or `dark`.
+//! `bright` or `dark`. [`searches`] counts its preset searches, and those on the main thread.
 
 use std::ffi::{CStr, c_char, c_void};
 use std::path::{Path, PathBuf};
@@ -1247,12 +1247,25 @@ unsafe extern "C" fn provider_destroy(p: *const clap_preset_discovery_provider) 
     drop(unsafe { Box::from_raw(p as *mut Providing) });
 }
 
+/// Its preset searches (`get_metadata` calls): how many, and how many ran on the plugin main thread.
+static SEARCHES: (AtomicU64, AtomicU64) = (AtomicU64::new(0), AtomicU64::new(0));
+
+/// How many preset searches it served in this process, and how many of them on the plugin main
+/// thread (HOST-8 wants none: a search must never hold up the main thread's other work).
+pub fn searches() -> (u64, u64) {
+    (SEARCHES.0.load(Ordering::Relaxed), SEARCHES.1.load(Ordering::Relaxed))
+}
+
 unsafe extern "C" fn provider_metadata(
     _: *const clap_preset_discovery_provider,
     kind: clap_preset_discovery_location_kind,
     _: *const c_char,
     r: *const clap_preset_discovery_metadata_receiver,
 ) -> bool {
+    SEARCHES.0.fetch_add(1, Ordering::Relaxed);
+    if crate::main_thread::main_thread().is_ok_and(|m| m.is_current()) {
+        SEARCHES.1.fetch_add(1, Ordering::Relaxed);
+    }
     if kind != CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN {
         return false;
     }

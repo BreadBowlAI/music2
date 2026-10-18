@@ -429,10 +429,12 @@ impl PluginHost for InProcess {
     }
 
     fn presets(&self, plugin: &Found) -> Result<Vec<Offered>> {
-        // Loaded here, never on the main thread (§3.3), as `create` does.
+        // Loaded here, never on the main thread (§3.3), as `create` does. The search runs here
+        // too, on the calling thread (HOST-8): CLAP's preset-discovery factory is thread-safe, and
+        // a search that reads many files must not hold up the main thread, which serves every
+        // playing plugin's main-thread calls and windows.
         let lib = library(&plugin.bundle)?;
-        let id = plugin.id.clone();
-        main_thread()?.run(move || crate::presets::discover(&lib, &id))?
+        crate::presets::discover(&lib, &plugin.id)
     }
 
     fn live(&self) -> u64 {

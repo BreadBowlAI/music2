@@ -1,5 +1,7 @@
 //! A plugin's own presets (HOST-8): CLAP's preset discovery, and `preset-load`. Both run where the
-//! plugin runs, on the host's main thread (HOST-2): in a program, inside the host process (HOST-3).
+//! plugin runs: in a program, inside the host process (HOST-3). The search runs on the calling
+//! thread, never the main thread (CLAP's discovery factory is thread-safe, and a long search must
+//! not hold up the main thread's other work); `preset-load` runs on the main thread (HOST-2).
 //!
 //! Discovery: each provider of the plugin's preset-discovery factory is made with an indexer that
 //! keeps the locations and file types it declares; then each location is read through the
