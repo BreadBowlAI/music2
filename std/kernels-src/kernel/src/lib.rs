@@ -30,6 +30,11 @@
 //! audio files in [`Cfg::assets`]; [`Asset::read`] reads a file through `m2.asset_read` (off wasm32,
 //! from the files [`native`] keeps, for tests).
 //!
+//! **An offline kernel** ([`Cfg::offline`]) is run by the host off the audio thread, never in a
+//! song's graph: to make a clip's render, say. Its source is its asset 0 and its time map
+//! [`Cfg::time_map`]; it has no inputs, and the host calls `process` again and again, each call
+//! the next `max_block` frames of its output (or fewer, at its end).
+//!
 //! **The port table** `io` holds one buffer address per port *channel*: the inputs first, then
 //! the outputs, each port's channels in order, each port with the channel count the settings give
 //! it. Each buffer holds `max_block` floats, indexed by the frame in the block. The kit maps a mono
@@ -56,6 +61,9 @@ use std::marker::PhantomData;
 
 pub const ABI: u32 = 1;
 
+/// [`Cfg::flags`] bit 0: the state is an offline kernel's ([`Cfg::offline`]).
+pub const OFFLINE: u32 = 1;
+
 /// The most channels a port has.
 pub const PORT_CHANNELS: usize = 2;
 
@@ -67,17 +75,34 @@ pub struct Cfg {
     pub max_block: usize,
     /// The channel count the host resolved for the kernel's `audio<*>` ports (1 or 2).
     pub channels: usize,
-    /// Reserved: bit 0 will say "offline".
+    /// Bit 0 ([`OFFLINE`]): an offline kernel's state. The rest are 0 in v1.
     pub flags: u32,
     /// The kernel's numbers, as the song's code gives them (`values`).
     pub values: &'static [f64],
     /// The audio files the kernel reads, as the song's code names them (`assets`), in order.
     pub assets: &'static [Asset],
+    /// An offline kernel's time map: pairs of (source seconds, output seconds), in order. Empty
+    /// for a live kernel. See [`Cfg::time_map`].
+    pub time_map: &'static [[f64; 2]],
 }
 
 impl Cfg {
     pub fn new(sample_rate: f32, max_block: usize, channels: usize) -> Cfg {
-        Cfg { sample_rate, max_block, channels: channels.clamp(1, PORT_CHANNELS), flags: 0, values: &[], assets: &[] }
+        Cfg { sample_rate, max_block, channels: channels.clamp(1, PORT_CHANNELS), flags: 0, values: &[], assets: &[], time_map: &[] }
+    }
+
+    /// Whether the host runs this state offline: off the audio thread, never in a song's graph, its
+    /// source its asset 0 and its time map [`Cfg::time_map`].
+    pub fn offline(&self) -> bool {
+        self.flags & OFFLINE != 0
+    }
+
+    /// An offline kernel's time map: pairs of (source seconds, output seconds from the output's
+    /// start), in order of output time. Between two pairs time runs in a straight line; before the
+    /// first and after the last, the nearest line goes on. One pair means speed 1 through it; none,
+    /// the source as it is.
+    pub fn time_map(&self) -> &'static [[f64; 2]] {
+        self.time_map
     }
 }
 
@@ -103,7 +128,8 @@ impl Asset {
 
     /// Channel `channel` from frame `frame` on, into all of `dst`, at the file's own rate: a mono
     /// file's channel 1 is its channel 0, and past its end is silence. Returns how many frames came
-    /// from the file. It allocates nothing and never waits, so `process` may call it.
+    /// from the file. For a live kernel it allocates nothing and never waits, so `process` may call
+    /// it; an offline kernel's host may read the file from the disk then, which waits.
     pub fn read(&self, channel: usize, frame: u32, dst: &mut [f32]) -> usize {
         read(self.handle, channel as u32, frame, dst)
     }
@@ -196,7 +222,8 @@ pub struct Settings {
     /// Reserved: a saved state for `k_load`.
     pub saved: usize,
     pub saved_len: u32,
-    /// Reserved: the offline time map.
+    /// An offline kernel's time map: `time_map_len` pairs of f64 (source seconds, output seconds),
+    /// 8-byte aligned. 0 and 0 for a live kernel.
     pub time_map: usize,
     pub time_map_len: u32,
 }
@@ -456,8 +483,8 @@ pub fn settings(cfg: &Cfg, channels: &[u32]) -> Settings {
         n_assets: cfg.assets.len() as u32,
         saved: 0,
         saved_len: 0,
-        time_map: 0,
-        time_map_len: 0,
+        time_map: cfg.time_map.as_ptr() as usize,
+        time_map_len: cfg.time_map.len() as u32,
     }
 }
 
@@ -474,6 +501,7 @@ pub unsafe fn born<K: Kernel>(cfg: *const Settings) -> *mut State<K> {
         // The block lives as long as the sandbox, so its lists outlive every state in it.
         let values = unsafe { list::<f64>(s.values, s.n_values) };
         let assets = unsafe { list::<Asset>(s.assets, s.n_assets) };
+        let time_map = unsafe { list::<[f64; 2]>(s.time_map, s.time_map_len) };
         let cfg = Cfg {
             sample_rate: s.sample_rate,
             max_block: s.max_block as usize,
@@ -481,6 +509,7 @@ pub unsafe fn born<K: Kernel>(cfg: *const Settings) -> *mut State<K> {
             flags: s.flags,
             values,
             assets,
+            time_map,
         };
         Box::into_raw(Box::new(State::<K>::new(cfg, channels)))
     })
