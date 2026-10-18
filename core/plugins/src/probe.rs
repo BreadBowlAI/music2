@@ -21,7 +21,10 @@
 //! call, as some plugins do (RENDER-2a). One whose tag is `crash-at-<n>` aborts its process at its
 //! n-th `process` call, and `hang-at-<n>` never returns from it, as broken plugins do (HOST-3: run
 //! it in the host process); `crash-at-<n>:<file>` and `hang-at-<n>:<file>` do so only when they
-//! make `<file>`, so once. With
+//! make `<file>`, so once. A tag with the word `latency-<n>` (n up to 4,096) reports `n` frames of
+//! latency and plays its output `n` frames late, as a look-ahead limiter does (RENDER-17); with
+//! `relatency-<m>-at-<k>` too, from its `k`-th `process` call it reports `m`, plays that late, and
+//! tells the host its latency changed. With
 //! [`Stats::defer_load`] set,
 //! a probe applies the parameters of a state it loads at the end of its next `process` call, after
 //! that call's events, ending every voice, as Surge XT does. With [`Stats::reset_keeps_voices`]
@@ -68,6 +71,8 @@ const MAGIC: &[u8] = b"m2probe\0";
 const VOICES: usize = 512;
 /// Note events it remembers.
 const EVENTS: usize = 1 << 16;
+/// The most latency it can have, in frames.
+pub const MAX_LATENCY: u32 = 4096;
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -484,6 +489,13 @@ struct Probe {
     /// The steady time after the last block processed.
     done_to: i64,
     calls: u64,
+    /// The latency it reports, and plays its output late by: its tag's `latency-<n>`.
+    latency: u32,
+    /// Its tag's `relatency-<m>-at-<k>`: (k, m).
+    relatency: Option<(u64, u32)>,
+    /// Its output, [`MAX_LATENCY`] frames of it, written at `at`.
+    late: Box<[[f32; 2]]>,
+    at: usize,
 }
 
 unsafe fn probe<'a>(p: *const clap_plugin) -> &'a mut Probe {
@@ -609,6 +621,10 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         voices: [Voice::default(); VOICES],
         done_to: i64::MIN,
         calls: 0,
+        latency: 0,
+        relatency: None,
+        late: vec![[0.0; 2]; MAX_LATENCY as usize].into_boxed_slice(),
+        at: 0,
     });
     let raw = Box::into_raw(p);
     unsafe { (*raw).clap.plugin_data = raw as *mut c_void };
@@ -670,6 +686,7 @@ unsafe extern "C" fn reset(p: *const clap_plugin) {
     me.stats.resets.fetch_add(1, Ordering::Relaxed);
     me.stats.reset_at.0.store(TICK.fetch_add(1, Ordering::AcqRel), Ordering::Relaxed);
     me.stats.reset_at.1.store(crate::main_thread::token(), Ordering::Relaxed);
+    me.late.fill([0.0; 2]);
     if me.stats.reset_keeps_voices.load(Ordering::Relaxed) {
         return;
     }
@@ -763,13 +780,22 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
             v.phase += step * 440.0 * 2f64.powf((v.key as f64 - 69.0) / 12.0);
         }
         if let Some(o) = &outs {
+            let (n, at) = (me.latency as usize, me.at);
             for c in 0..o.channel_count as usize {
                 let x = ins.filter(|i| i.channel_count > 0).map_or(0.0, |i| {
                     let ch = c.min(i.channel_count as usize - 1);
                     unsafe { *(*i.data32.add(ch)).add(f) }
                 });
-                unsafe { *(*o.data32.add(c)).add(f) = (x as f64 * me.gain + s) as f32 };
+                let mut y = (x as f64 * me.gain + s) as f32;
+                // Played `n` frames late (RENDER-17): what it made `n` frames ago.
+                if n > 0 && c < 2 {
+                    let len = me.late.len();
+                    me.late[at][c] = y;
+                    y = me.late[(at + len - n) % len][c];
+                }
+                unsafe { *(*o.data32.add(c)).add(f) = y };
             }
+            me.at = (at + 1) % me.late.len();
         }
     }
     while next < count {
@@ -781,6 +807,17 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
     }
     me.act(me.calls + 1, pr.out_events);
     me.calls += 1;
+    if let Some((k, m)) = me.relatency
+        && me.calls + 1 == k
+    {
+        // From the next call: as a plugin whose latency changed while active, it tells the host.
+        me.latency = m;
+        let get = unsafe { (*me.host).get_extension };
+        let ext = get.map_or(null(), |g| unsafe { g(me.host, CLAP_EXT_LATENCY.as_ptr()) }) as *const clap_host_latency;
+        if let Some(changed) = (!ext.is_null()).then(|| unsafe { (*ext).changed }).flatten() {
+            unsafe { changed(me.host) };
+        }
+    }
     if me.calls.is_multiple_of(10)
         && let Some(f) = unsafe { (*me.host).request_callback }
     {
@@ -1086,6 +1123,7 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
     me.sets_fz = tag.starts_with("sets-fz");
     me.stops_at = stops_at(&tag);
     me.scripts = scripts(&tag);
+    (me.latency, me.relatency) = latencies(&tag);
     *me.stats.tag.lock().unwrap_or_else(|e| e.into_inner()) = tag;
     true
 }
@@ -1211,8 +1249,19 @@ fn stops_at(tag: &str) -> Option<(u64, bool, Option<PathBuf>)> {
     Some((n.parse().ok()?, hang, file))
 }
 
-unsafe extern "C" fn latency(_: *const clap_plugin) -> u32 {
-    0
+unsafe extern "C" fn latency(p: *const clap_plugin) -> u32 {
+    unsafe { probe(p) }.latency
+}
+
+/// Its tag's `latency-<n>`, and `relatency-<m>-at-<k>` as (k, m); each at most [`MAX_LATENCY`].
+fn latencies(tag: &str) -> (u32, Option<(u64, u32)>) {
+    let fits = |n: u32| n.min(MAX_LATENCY - 1);
+    let n = tag.split_whitespace().find_map(|w| w.strip_prefix("latency-")?.parse::<u32>().ok()).map_or(0, fits);
+    let re = tag.split_whitespace().find_map(|w| {
+        let (m, k) = w.strip_prefix("relatency-")?.split_once("-at-")?;
+        Some((k.parse().ok()?, fits(m.parse().ok()?)))
+    });
+    (n, re)
 }
 
 unsafe extern "C" fn no(_: *const clap_plugin) -> bool {

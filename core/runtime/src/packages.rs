@@ -430,7 +430,8 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
 /// A plugin as typed ports: `in: audio<n>`, `notes: events<note>`, one control per
 /// parameter (in the plugin's own units, as `scalar`, optional), and `out: audio<n>`. Read from an
 /// instance created and activated through the host (on the plugin main thread), then destroyed:
-/// activating is what measures its latency (RENDER-21's check).
+/// activating is what measures its latency at its default state, which the check refuses inside a
+/// `poly` voice only (RENDER-21); a node's own instance measures its own (RENDER-17).
 fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plugins::Info)> {
     let Some(clap_id) = id.strip_prefix("clap:") else { bail!("plugin ids start with `clap:`, not `{id}`") };
     // Found by the host, which loads plugin code: the app never does (HOST-3).

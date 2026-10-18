@@ -670,3 +670,23 @@ fn renders_through_the_host_process_are_the_same_bits() {
         assert!(db.abs() < 1.0, "with-plugins, second {s}: {db:.2} dB apart");
     }
 }
+
+// RENDER-18: a song with no latency gets no delay, so its plan, and its bits, are what they were:
+// every fixture, p16, and `examples/with-plugins` when Surge XT and Airwindows are in CLAP_PATH
+// (neither has latency). Red with a 1-frame latency forced on every kernel.
+#[test]
+fn no_fixture_gets_a_delay() {
+    let mut songs: Vec<(String, Song)> =
+        ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"].map(|n| (n.to_string(), fixture(n))).into();
+    songs.push(("p16".into(), p16()));
+    let clap = std::env::var_os("CLAP_PATH").map(std::path::PathBuf::from);
+    match clap.is_some_and(|c| c.join("Surge XT.clap").exists() && c.join("Airwindows Consolidated.clap").exists()) {
+        true => songs.push(("examples/with-plugins".into(), fixture("examples/with-plugins"))),
+        false => eprintln!("no_fixture_gets_a_delay: no Surge XT and Airwindows in CLAP_PATH, so with-plugins wasn't planned"),
+    }
+    for (name, song) in &songs {
+        let r = song.renderer();
+        let info = r.info();
+        assert_eq!((r.latency(), r.stats().delays, info.played.is_some()), (0, 0, false), "{name} has no latency, so no delay");
+    }
+}

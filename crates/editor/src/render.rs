@@ -122,6 +122,10 @@ pub struct Render {
     float: bool,
 }
 
+/// What a render says when a plugin's latency changed while it rendered (RENDER-17).
+pub const LATENCY_CHANGED: &str = "a plugin's latency changed while the song rendered, so that plugin played out of time with \
+     the rest from then on. Render again: the next render makes up for the new latency (latency.changed).";
+
 /// What a render wrote.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rendered {
@@ -141,6 +145,9 @@ pub struct Rendered {
     pub threads: usize,
     /// Whether it hosts a plugin, so it rendered on one thread.
     pub hosts_plugins: bool,
+    /// Plugins whose latency changed while it rendered: it kept what each had at its start, so
+    /// they played misaligned from then on (RENDER-17, `latency.changed`).
+    pub latency_changed: usize,
 }
 
 impl Rendered {
@@ -438,6 +445,7 @@ impl Render {
             sample_rate: self.sample_rate,
             peak_db: 20.0 * (peak.max(1e-9) as f64).log10(),
             non_finite: self.renderer.non_finite(),
+            latency_changed: self.renderer.latency_moved().len(),
             exact: self.exact,
             reproducible: self.reproducible,
             threads: self.runner.threads(),

@@ -3214,6 +3214,19 @@ fn a_plugin_that_doesnt_come_back_after_an_export_is_replaced_as_playback_goes_o
     assert!(fresh.sounding.load(Ordering::Relaxed) == 2 && peak > 0.01, "it plays: peak {peak}");
 }
 
+// RENDER-17: a plugin whose latency changes while an export renders (the probe's, from 100 frames to
+// 200 at its 2000th call): the export keeps the `L` it started with and says so (`latency.changed`);
+// playback compensates the new latency at its next activation, made once the export is done.
+#[test]
+fn a_latency_change_during_an_export_is_said_and_compensated_after_it() {
+    let mut ex = Ex::tagged("latency-100 relatency-200-at-2000");
+    assert_eq!(ex.engine().current().unwrap().latency(), 100);
+    let (_, done) = export_now(&mut ex);
+    let problems = done["problems"].as_array().unwrap();
+    assert!(problems.iter().any(|p| p["code"] == "latency.changed"), "{done}");
+    ex.fill_until("playback compensates the new latency", |ex| ex.engine().current().unwrap().latency() == 200);
+}
+
 // RENDER-1 (plug-3 of the step 7 review): an export while what plays lags the accepted revision (the
 // renderer for a new state didn't build) doesn't borrow the instance whose committed state changed:
 // its node plays a new instance from the new state, and the live one holds what its plan says. So

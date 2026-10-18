@@ -148,6 +148,12 @@ pub(crate) struct Open {
     /// Plugin instances that asked to be restarted (`HostEvent::Restart`): the next activation,
     /// made at once, replaces each from its committed state (HOST-5).
     pub(crate) restarts: HashSet<Handle>,
+    /// A plugin's latency changed since what plays was planned (RENDER-17): the next activation,
+    /// made at once, compensates the new one.
+    pub(crate) relatent: bool,
+    /// The nodes last said to make a feedback loop longer (`latency.in-feedback`), by name: said
+    /// again only when they change.
+    told_feedback: Vec<String>,
     /// An export borrows the live plugin instances (RENDER-1): settles prepare nothing and send no
     /// activation until it gives them back, so no host call reaches them meanwhile.
     pub(crate) exporting: bool,
@@ -567,7 +573,7 @@ impl Open {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
             _ => false,
         });
-        if self.loaded(device) && self.playing == Some(number) && self.restarts.is_empty() && !refused && same_tempo {
+        if self.loaded(device) && self.playing == Some(number) && self.restarts.is_empty() && !self.relatent && !refused && same_tempo {
             return (Way::Same, Prepared::default());
         }
         // Opened with code that doesn't compile (WRITE-20): silent until it does, then loaded.
@@ -582,8 +588,9 @@ impl Open {
         }
         let kind = match self.plays.as_ref().filter(|p| p.epoch == device.epoch) {
             Some(p) if p.rate != rate || refused => Kind::Replace,
-            // A restart replaces instances: an activation, though nothing else changed.
-            Some(_) if !self.restarts.is_empty() => Kind::Activate,
+            // A restart replaces instances, and a new latency is compensated by a new plan: an
+            // activation, though nothing else changed (HOST-5, RENDER-17).
+            Some(_) if !self.restarts.is_empty() || self.relatent => Kind::Activate,
             // A tempo drag plays, or ends: only a plan carries a tempo map (RENDER-27a).
             Some(p) if p.tempo.is_some() || tempo.is_some() => Kind::Activate,
             Some(p) => self.reach(p).map_or(Kind::Activate, |r| Kind::Reach(p.generation, r)),
@@ -835,21 +842,27 @@ impl Actor {
             Err(e) => (Way::Failed(anyhow!("{e:#}")), Prepared::default()),
         };
         o.prepared = prepared;
-        // A state load that gave a plugin latency plays it uncompensated, and says so; one that
-        // failed leaves the plugin as it was, and says why (RENDER-26b). Each plugin is named as
-        // the user knows it. A refused state isn't loaded again, so it is said once.
+        // A state load that changed a plugin's latency has the next activation, made at once,
+        // compensate it (RENDER-17); one that failed leaves the plugin as it was, and says why
+        // (RENDER-26b). Each plugin is named as the user knows it. A refused state isn't loaded
+        // again, so it is said once. Latency on a feedback loop is said when it changes (RENDER-20).
+        let relatent = way.renderer().is_some_and(|r| !r.stats().relatent.is_empty());
         if let Some(r) = way.renderer() {
             let (rev, rate) = (o.session.accepted(), o.session.accepted().project.sample_rate() as f64);
             let named = |node: usize| plugin_named(rev, &o.session.packages, node);
             let mut notices = inner.notices.lock();
-            notices.extend(r.stats().latent.iter().map(|&(node, frames)| {
-                let ms = frames as f64 / rate * 1e3;
-                format!(
-                    "{}'s new settings make it play {ms:.1} ms late, and music2 can't make up for that yet \
-                     (plugin.latency-uncompensated).",
-                    named(node)
-                )
-            }));
+            let looped: Vec<String> = r.info().latency.in_feedback.iter().map(|&n| named(n)).collect();
+            if looped != o.told_feedback {
+                if !looped.is_empty() {
+                    let ms = r.latency() as f64 / rate * 1e3;
+                    notices.push(format!(
+                        "{} sits on a feedback loop and adds latency there, so the loop's repeats come later than written. \
+                         The rest of the song stays in time ({ms:.1} ms of latency in all) (latency.in-feedback).",
+                        looped.join(", ")
+                    ));
+                }
+                o.told_feedback = looped;
+            }
             notices.extend(r.stats().unloaded.iter().map(|(node, why)| {
                 format!("{} couldn't load its new settings, so it keeps the sound it had. (In detail: {why})", named(*node))
             }));
@@ -963,6 +976,7 @@ impl Actor {
                     o.sent = Some(player.activate(*r)?.1);
                     o.plays = Some(plays);
                     o.restarts.clear();
+                    o.relatent = relatent;
                     Ok(Sent::Renderer)
                 }
                 Way::Replace(r, plays) => {
@@ -972,6 +986,7 @@ impl Actor {
                     player.replace(*r)?;
                     o.plays = Some(plays);
                     o.restarts.clear();
+                    o.relatent = relatent;
                     Ok(Sent::Renderer)
                 }
                 Way::Load(r, plays) => {
@@ -981,6 +996,7 @@ impl Actor {
                     d.player.set_click(cp.open.as_ref().filter(|p| p.engine.token == token).is_some_and(|p| super::view_file::metronome(&p.local)));
                     o.load(d, *r, plays, d.resume, looping)?;
                     o.restarts.clear();
+                    o.relatent = relatent;
                     Ok(Sent::Renderer)
                 }
                 Way::Failed(e) | Way::Unbuilt(e) => Err(e),
@@ -1154,6 +1170,8 @@ impl Actor {
             codes: VecDeque::new(),
             types,
             restarts: HashSet::new(),
+            relatent: false,
+            told_feedback: vec![],
             exporting: false,
             told_unbuilt: None,
             revived: HashMap::new(),
@@ -1282,7 +1300,7 @@ impl Actor {
     /// instance fails too is left silent, and the user told that once. When the plugin host
     /// process crashed (HOST-3), its instances are all told in one notice, `plugin.crashed`.
     fn heard_plugins(&mut self) {
-        let (mut crashed, mut hung, mut dirty, mut closed) = (HashSet::new(), false, vec![], vec![]);
+        let (mut crashed, mut hung, mut dirty, mut closed, mut latent) = (HashSet::new(), false, vec![], vec![], vec![]);
         while let Ok(e) = self.events.try_recv() {
             match e {
                 HostEvent::Restart(h) => {
@@ -1290,8 +1308,7 @@ impl Actor {
                         o.restarts.insert(h);
                     }
                 }
-                // Latency compensation and state autosave come later (RENDER-17, HOME-6).
-                HostEvent::Latency(h, frames) => eprintln!("music2: plugin {h:?} reports {frames} frames of latency"),
+                HostEvent::Latency(h, frames) => latent.push((h, frames)),
                 HostEvent::Dirty(h) => dirty.push(h),
                 HostEvent::Crashed(h) => {
                     crashed.insert(h);
@@ -1308,6 +1325,15 @@ impl Actor {
         self.heard_windows(dirty, closed);
         let Some(o) = &mut self.open else { return };
         let Some(p) = &o.plays else { return };
+        // A latency measured again (RENDER-17), as the plugin said it changed or an export gave its
+        // instance back: kept in its instance, and compensated by the next activation, made at once
+        // (after an export that borrowed it gives it back).
+        for (h, frames) in latent {
+            if let Some(i) = p.info.plugins.iter().find(|a| a.handle == h).and_then(|a| a.inst.upgrade()) {
+                i.set_latency(frames);
+            }
+        }
+        o.relatent |= p.info.plugins.iter().any(|a| a.inst.upgrade().is_some_and(|i| !i.dead() && i.latency() != a.latency));
         // A crashed instance fails at its next call; one that isn't called now (asleep) is marked
         // here, so it is made again all the same.
         for at in p.info.plugins.iter().filter(|at| crashed.contains(&at.handle)) {
@@ -1715,7 +1741,8 @@ impl Actor {
             // An export's end settles what waited for it.
             Ok(_) if o.exporting => false,
             Ok(d) => {
-                has_code && (!o.loaded(&d) || o.playing != Some(o.session.accepted().number) || !o.restarts.is_empty() || o.refused(&d))
+                has_code
+                    && (!o.loaded(&d) || o.playing != Some(o.session.accepted().number) || !o.restarts.is_empty() || o.relatent || o.refused(&d))
             }
             // Let go of: the settle starts a new one, and loads the project into it where it was,
             // stopped. Let go of here, no action failed to say why: if it played, the user is told.

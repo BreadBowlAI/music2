@@ -44,6 +44,8 @@ pub struct PluginInstance {
     /// It holds a state its file doesn't record: changed in its window, not yet autosaved. An
     /// export doesn't borrow it (RENDER-1).
     unsaved: AtomicBool,
+    /// Its latency as last measured ([`Self::latency`]).
+    latency: AtomicU32,
 }
 
 /// How many parameters of one instance its window may hold or latch at once; a gesture on one
@@ -198,6 +200,7 @@ impl PluginInstance {
             reverted: Ring::new(),
             changed: AtomicBool::new(false),
             unsaved: AtomicBool::new(false),
+            latency: AtomicU32::new(0),
         }
     }
 
@@ -220,8 +223,19 @@ impl PluginInstance {
         if mode == RenderMode::Offline {
             host.set_render_mode(h, mode)?;
         }
-        host.activate(h, rate, BLOCK as u32)?;
+        inst.set_latency(host.activate(h, rate, BLOCK as u32)?);
         Ok(inst)
+    }
+
+    /// Its latency, in frames, as last measured: when it was activated, after a state load, or when
+    /// it said it changed (RENDER-17). What the next plan compensates.
+    pub fn latency(&self) -> u32 {
+        self.latency.load(Ordering::Acquire)
+    }
+
+    /// Its latency was measured again (RENDER-17).
+    pub fn set_latency(&self, frames: u32) {
+        self.latency.store(frames, Ordering::Release);
     }
 
     /// A new instance to play in its place in an export: the same plugin and shape, made from
