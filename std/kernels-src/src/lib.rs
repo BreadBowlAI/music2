@@ -726,5 +726,5 @@ mod voice;
 
 pub use drums::Drum;
 pub use fm::Fm;
-pub use notes::{DrumHit, HitCount, Mono, NoteCv};
+pub use notes::{DrumHit, HitCount};
 pub use synth::Synth;

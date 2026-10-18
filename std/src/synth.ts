@@ -16,7 +16,7 @@
 // `velSens` is how much velocity matters: the level follows velocity^(2 × velSens), so a
 // note at velocity 0 is silent, and at 0.5 one at 0.3 is 10 dB below one at 1.
 
-import { component, control, kernel, poly, port, setting, signature, withUnit, type Audio, type Control, type ControlKind, type Events, type Params, type Value } from "@m2/core";
+import { component, control, kernel, poly, port, setting, signature, type Audio, type Control, type Events, type Params, type Value } from "@m2/core";
 import { chorus } from "./fx";
 import { scale } from "./math";
 
@@ -24,21 +24,15 @@ import { scale } from "./math";
 export type Voice = { pitch: Control<"semitones">; gate: Control<"unit01">; velocity: Control<"unit01"> };
 
 /**
- * Play `voice` one note at a time, the way `poly` plays one per note. The latest note
- * wins. One that starts while another is still held slides to its pitch over `glide`
- * (seconds) and keeps the envelopes going (legato); notes that only touch start again.
- * When the note sounding ends while older ones are still held, the newest of those sounds
- * again, sliding back to it (an 808's slide up and back). Notes that start together count
- * as one, the last of them.
+ * Play `voice` one note at a time: `poly` in `"legato"` mode, without retriggering. The
+ * latest note wins. One that starts while another is still held slides to its pitch over
+ * `glide` (seconds) and keeps the envelopes going (legato); notes that only touch start
+ * again, their envelopes from where they are. When the note sounding ends while older ones
+ * are still held, the newest of those sounds again, sliding back to it (an 808's slide up
+ * and back). Notes that start together count as one, the last of them.
  */
 export function mono(notes: Events, voice: (note: Voice) => Audio, opts: { glide?: Value } = {}): Audio {
-  const cv = (n: Voice): Audio => kernel("std:notecv", { pitch: n.pitch, gate: n.gate, velocity: n.velocity });
-  // One voice holds the latest note; eight count how many are held, so a note that only
-  // touches the one before (one held) can be told from one that overlaps it (two), and say
-  // which notes end, so the one still held can sound again.
-  const m = kernel("std:mono", { last: poly(notes, cv, { voices: 1 }), held: poly(notes, cv, { voices: 8 }), glide: opts.glide ?? 0 });
-  const out = <U extends "semitones" | "unit01">(name: string, unit: U) => withUnit(m.port<ControlKind<U>>(name), unit);
-  return voice({ pitch: out("pitch", "semitones"), gate: out("gate", "unit01"), velocity: out("velocity", "unit01") });
+  return poly(notes, voice, { mode: "legato", retrigger: false, glide: opts.glide ?? 0 });
 }
 
 /** One note at a time with `glide` when `voices` is 1, else one voice per note. */

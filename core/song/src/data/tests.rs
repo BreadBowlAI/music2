@@ -5,7 +5,7 @@ use crate::Snapshot;
 use crate::diag::Severity;
 
 const MANIFEST: &str =
-    "[project]\nname = \"Test\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n";
+    "[project]\nname = \"Test\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.3\"\n";
 
 /// A project folder with `files`, removed when dropped.
 struct Dir(PathBuf);

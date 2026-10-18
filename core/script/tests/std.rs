@@ -610,10 +610,11 @@ const ENGINES: [&str; 13] = [
     "std:sampler",
 ];
 
-// PKG-3, PKG-4: every instrument builds bare, and every knob a call leaves out reaches a kernel:
-// none is left over (except the polysynth's `glide`, which only a voice at a time plays). The
-// engines' knobs default to their kernels' ports, to the f32. mono() hands its voice a pitch in
-// semitones, so an oscillator converts it.
+// PKG-3, PKG-4: every instrument builds bare, and every knob a call leaves out reaches a kernel,
+// or a glide reaches the poly that plays one note at a time: none is left over (except the
+// polysynth's `glide`, which only a voice at a time plays). The engines' knobs default to their
+// kernels' ports, to the f32. mono() hands its voice a pitch in semitones, so an oscillator
+// converts it.
 #[test]
 fn std_instruments_reach_their_kernels() {
     let calls: Vec<String> = INSTRUMENTS.iter().map(|(_, _, name)| format!("{name}(notes)")).collect();
@@ -636,6 +637,8 @@ fn std_instruments_reach_their_kernels() {
             }
         }
     }
+    let glides: BTreeSet<&str> =
+        ns.iter().filter_map(|n| if let Op::Poly { glide: Some(g), .. } = &n.op { Some(split_ref(g).0) } else { None }).collect();
     let defaults = port_defaults();
     let added: BTreeSet<&str> = INSTRUMENTS.iter().map(|e| e.0).collect();
     let mut checked = BTreeSet::new();
@@ -648,7 +651,11 @@ fn std_instruments_reach_their_kernels() {
         checked.insert(format!("{component}.{slot}"));
         let ports = readers.get(n.id.as_str()).cloned().unwrap_or_default();
         if (component, slot) == ("std:synth-custom", "glide") {
-            assert!(ports.is_empty(), "with a voice per note there is nothing to glide: {ports:?}");
+            assert!(ports.is_empty() && !glides.contains(n.id.as_str()), "with a voice per note there is nothing to glide: {ports:?}");
+            continue;
+        }
+        if slot == "glide" {
+            assert!(ports.is_empty() && glides.contains(n.id.as_str()), "{component}.glide reaches its poly");
             continue;
         }
         assert!(!ports.is_empty(), "{component}.{slot} reaches no kernel");
@@ -665,16 +672,47 @@ fn std_instruments_reach_their_kernels() {
             assert!(checked.contains(&format!("{id}.{}", c.name)), "{id}.{} was not checked", c.name);
         }
     }
-    let kernel_of = |r: &str| {
-        ns.iter()
-            .find(|n| n.id == split_ref(r).0)
-            .and_then(|n| if let Op::Kernel { kernel, .. } = &n.op { Some(kernel.as_str()) } else { None })
-    };
+    let pitch_field = |r: &str| ns.iter().any(|n| n.id == split_ref(r).0 && matches!(&n.op, Op::Lane { lane } if lane == "pitch"));
     let converted = ns.iter().any(|n| match &n.op {
-        Op::Kernel { kernel, inputs, .. } if kernel == "std:mtof" => {
-            inputs.get("pitch").is_some_and(|r| kernel_of(r) == Some("std:mono") && split_ref(r).1 == "pitch")
-        }
+        Op::Kernel { kernel, inputs, .. } if kernel == "std:mtof" => inputs.get("pitch").is_some_and(|r| pitch_field(r)),
         _ => false,
     });
     assert!(converted, "mono()'s pitch reaches the saw through mtof");
+}
+
+// RENDER-16, track pm: std's one-note sounds are one poly in "legato" mode, which slides over the
+// glide and doesn't retrigger, not two polys of `std:notecv` into `std:mono`. Its glide is the
+// instrument's knob, read by the poly. With more voices, a poly as before.
+#[test]
+fn std_one_note_sounds_are_one_poly() {
+    let b = build(
+        "import { song } from \"@m2/core\";\nimport { fm } from \"std/fm\";\nimport { mixer } from \"std/mix\";\n\
+         import { synth } from \"std/synth\";\n\
+         export default song(({ lane }) => mixer({ a: synth.lead(lane.notes(\"a\")), b: fm.keys(lane.notes(\"b\"), { voices: 1 }), \
+         c: synth.pad(lane.notes(\"c\")) }));\n",
+    );
+    let m = &b.ir.modules[0];
+    let ns = nodes(m);
+    let kernels: BTreeSet<&str> = ns.iter().filter_map(|n| if let Op::Kernel { kernel, .. } = &n.op { Some(kernel.as_str()) } else { None }).collect();
+    assert!(!kernels.contains("std:mono") && !kernels.contains("std:notecv"), "{kernels:?}");
+    let polys: Vec<(&str, u32, m2_ir::Alloc, Option<&Node>)> = ns
+        .iter()
+        .filter_map(|n| match &n.op {
+            Op::Poly { voices, alloc, glide, body, .. } => {
+                let engine = body.nodes.iter().find_map(|b| if let Op::Kernel { kernel, .. } = &b.op { Some(kernel.as_str()) } else { None });
+                let glide = glide.as_ref().map(|g| *ns.iter().find(|x| x.id == split_ref(g).0).expect("the glide's node"));
+                Some((engine.unwrap_or(""), *voices, *alloc, glide))
+            }
+            _ => None,
+        })
+        .collect();
+    let legato = m2_ir::Alloc { mode: m2_ir::Mode::Legato, retrigger: false, steal: m2_ir::Steal::Oldest };
+    assert_eq!(polys.len(), 3, "one poly each");
+    let (_, voices, alloc, glide) = polys[0];
+    assert_eq!((polys[0].0, voices, alloc), ("std:synth", 1, legato), "the lead");
+    let glide = glide.expect("the lead's glide");
+    assert!(matches!(glide.op, Op::Const { value, .. } if (value - 0.06).abs() < 1e-12), "{glide:?}");
+    assert_eq!(glide.origin.as_ref().and_then(|o| o.slot()), Some("glide"), "the lead's glide knob");
+    assert_eq!((polys[1].0, polys[1].1, polys[1].2, polys[1].3.is_none()), ("std:fm", 1, legato, true), "FM keys, one voice: no glide");
+    assert_eq!((polys[2].0, polys[2].1, polys[2].2, polys[2].3.is_none()), ("std:synth", 16, m2_ir::Alloc::default(), true), "the pad");
 }
