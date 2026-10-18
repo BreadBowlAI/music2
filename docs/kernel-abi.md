@@ -9,6 +9,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 - Memory is taken only while a sandbox is **born**. Then it is **sealed**: its memory never grows again.
 - The host writes each state's **settings block** before the state is made. The kernel reads its rate, its ports, its numbers and its audio files there.
 - The only thing a kernel may import is **`m2.asset_read`**: it copies part of an audio file into the kernel's memory.
+- An **offline kernel** is run by music2 off the audio thread, to make something from a file: `std:stretch` makes a warped clip's stretch. Song code can't call one.
 - A module says its version in a small part of its file named **`m2_abi`**: **1**. music2 reads it first, before it looks at anything else. It refuses a module built for any other version, and says which.
 - v1 only ever grows at the end: new optional exports, and new fields at the end of the settings block. Anything else is v2.
 
@@ -18,6 +19,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 | The settings block, byte by byte | [The settings block](#the-settings-block) |
 | Where the sound goes in and out | [The port table](#the-port-table) |
 | Reading an audio file | [The asset import](#the-asset-import) |
+| A kernel music2 runs to make a render | [Offline kernels](#offline-kernels) |
 | What every kernel must keep | [The five rules](#the-five-rules-abi-5) |
 | What is fixed now, built later | [Reserved shapes](#reserved-shapes) |
 
@@ -68,7 +70,7 @@ The host writes it into the state's block before `k_new`, and keeps it unchanged
 | 0 | `len` | u32 | bytes in the block: 60 in v1. Read a field only if `len` covers it |
 | 4 | `sample_rate` | f32 | the song's rate, in Hz |
 | 8 | `max_block` | u32 | the most frames one `k_process` call is given (128) |
-| 12 | `flags` | u32 | 0 in v1. Bit 0 is reserved: "offline" |
+| 12 | `flags` | u32 | bit 0: an offline kernel ([below](#offline-kernels)). The other bits are 0 in v1 |
 | 16 | `channels` | u32 | the channel count resolved for the kernel's `audio<*>` ports: 1 or 2 |
 | 20 | `ports` | address | the channel count of each port, `n_ports` u32s, inputs first |
 | 24 | `n_ports` | u32 | inputs + outputs |
@@ -78,8 +80,8 @@ The host writes it into the state's block before `k_new`, and keeps it unchanged
 | 40 | `n_assets` | u32 | |
 | 44 | `saved` | address | reserved: a saved state for `k_load`. 0 in v1 |
 | 48 | `saved_len` | u32 | reserved. 0 |
-| 52 | `time_map` | address | reserved: an offline kernel's time map. 0 |
-| 56 | `time_map_len` | u32 | reserved. 0 |
+| 52 | `time_map` | address | an offline kernel's time map: pairs of f64, 8-byte aligned. 0 for a live kernel |
+| 56 | `time_map_len` | u32 | how many pairs. 0 for a live kernel |
 
 - Every list is an address and a count, never written inline. So a field never moves when another is added.
 - An empty list has address 0 and count 0.
@@ -128,6 +130,23 @@ Where the host reads from is its choice, per sandbox. The kernel can't tell, and
 
 **Streaming live, later, still v1.** A live kernel may one day read a file the host streams. Then a frame the host has not loaded yet is given as silence (0.0), and counted as a **miss**, as a lane's chunk is. The count returned is the same as if the frame were there, so the kernel goes on the same. This never happens in an export or an offline render: those wait for every frame. A kernel must not try to tell a miss from silence.
 
+## Offline kernels
+
+A kernel music2 runs off the audio thread, to make something from a file, never in a song's graph. Built in track sx; its first is `std:stretch` (`std/kernels-src/src/stretch.rs`), which makes every warped clip's stretch. The host side is `core/runtime/src/offline.rs`; the kit has `Cfg::offline()` and `Cfg::time_map()`.
+
+| Part | Rule |
+|---|---|
+| Manifest | `offline = true` on its `[[kernel]]`. No inputs, one `audio` output. `audio<*>` gets the source's channels |
+| Song code | can't call it: the error `kernel.offline`, at the call. No song's graph has it |
+| `flags` | bit 0 set |
+| Source | its asset 0, read from the file on disk ([held as **disk**](#the-asset-import)), never whole |
+| `values` | its own numbers. `std:stretch`: `values[0]` is the pitch change in semitones |
+| Time map | `time_map_len` pairs of f64 at `time_map`: (source seconds, output seconds from the output's start), in order. Between two pairs, time runs in a straight line. Before the first and after the last, the nearest line goes on. One pair: speed 1 through it. None: the source as it is |
+| A run | one sandbox, born, sealed and prewarmed as any. Then `k_process(state, io, 0, n)` again and again, `n` at most `max_block`: each call writes the next `n` frames of the output. The host stops when it has the frames it wants |
+| Output | goes to its sink a block at a time. The host never holds the source or the output whole |
+
+The five rules hold for offline kernels too: memory only at birth, a reset that takes none, and the rest.
+
 ## The five rules (ABI-5)
 
 | # | Rule | Why |
@@ -142,14 +161,13 @@ The host checks rules 1 and 2 by construction (the seal and the prewarm). Debug 
 
 ## Reserved shapes
 
-Fixed now, so later work can't collide with v1. None is built yet. Each is built with the first kernel that needs it, as an optional export or a new settings field, so v1 modules keep working.
+Fixed now, so later work can't collide with v1. None is built yet. Each is built with the first kernel that needs it, as an optional export or a new settings field, so v1 modules keep working. Offline kernels were reserved here too; they are built now ([above](#offline-kernels)).
 
 | Shape | Fixed now | Built when |
 |---|---|---|
 | Event ports | a port of kind `events` has one port-table entry: the address of `{count: u32, cap: u32, events: address}`. Each event is 24 bytes: `kind` u32 (0 on, 1 off, 2 note expression, 3 param, 4 MIDI), `frame` u32, `id` u32, then three f32: on: pitch, velocity, `from_pitch` (NaN for none); off: release velocity; note expression: kind (0 pitch, 1 pressure, 2 timbre, as a u32), value; param: value; MIDI: the 3 bytes in the low bytes of the first. The host sets an input's `count`; a kernel writes up to `cap` events to an output and sets its `count`. RENDER-14's `Event`, in bytes | the first arpeggiator or event kernel |
 | `k_save`, `k_load` | `k_save(state, dst, cap) -> i32`: writes the state's bytes at `dst`, returns how many (more than `cap`: nothing written, that many needed). `k_load(state, src, len) -> i32`: 1 loaded, 0 refused. Both run off the audio thread, as a plugin's state load does. A loaded state is the one `k_reset` returns to; the settings block's `saved`/`saved_len` give it at birth | the first kernel with state worth saving |
 | `k_latency`, `k_tail` | `k_latency(state) -> i32` and `k_tail(state) -> i32`, in frames. Each depends only on the settings, so the host may ask once, after `k_new` | latency compensation; a kernel whose tail outlasts `k_active` |
-| Offline kernels | `flags` bit 0 says "offline". The time map is f64 pairs (source time, output time) at `time_map`. Input and output come in chunks through the same ports, never whole files: a 32-bit memory holds only about 93 minutes of stereo floats at 48 kHz | clip stretching as a package kernel |
 
 Not reserved: `k_drop`. One state is never freed alone; a sandbox drops whole. Languages with one garbage-collected heap per instance are out of scope for v1.
 

@@ -56,11 +56,11 @@ Branch `sx`, from `main` at `97b4cdf`, 2026-10-18. Step 9, audio and sample turn
 
 | Crate | Files | Change |
 |---|---|---|
-| std | `std/kernels-src/src/stretch.rs` (new), `lib.rs`, `std/m2pkg.toml` | the kernel: WSOLA ported from `audio.rs` ([D6](#decisions)), streaming: it reads the source through `asset_read` and writes `max_block` frames per call. Pitch as today: stretch, then cubic Hermite. `[[kernel]] name = "stretch"`, `offline = true`, `outputs = ["out: audio<*>"]` |
+| std | `std/kernels-src/src/stretch.rs` (new; its tests in `stretch/tests.rs`, as the sampler's), `lib.rs`, `std/m2pkg.toml` | the kernel: WSOLA ported from `audio.rs` ([D6](#decisions)), streaming: it reads the source through `asset_read` and writes `max_block` frames per call. Pitch as today: stretch, then cubic Hermite. `[[kernel]] name = "stretch"`, `offline = true`, `outputs = ["out: audio<*>"]` |
 | std kit | `kernel/src/lib.rs` | `Cfg::offline()` and `Cfg::time_map()` |
 | `m2-runtime` | `core/runtime/src/offline.rs` (new) | run one offline kernel: a sandbox with `flags` bit 0 and the time map, born, sealed, prewarmed as any sandbox; then `k_process` block by block into a sink |
-| `m2-runtime` | `audio.rs`, `stream.rs` | `Cache::warp` builds the time map from the warp markers and the tempo map ([D5](#decisions)) and writes the render to the part file block by block (gain, fades and reverse after, as today). `stretch` and `WARP_VERSION` go; the cache name holds the std module's hash ([D8](#decisions)) |
-| `m2-runtime` | `packages.rs`, the graph build | the manifest's `offline`. Song code that calls an offline kernel gets the error `kernel.offline` |
+| `m2-runtime` | `audio.rs`, `stream.rs` | `Cache::warp` builds the time map from the warp markers and the tempo map ([D5](#decisions)) and writes the kernel's output to the part file block by block. Gain, fades and reverse are worked out as the file is read, as for a plain clip ([D7](#decisions)). `stretch` and `WARP_VERSION` go; the cache name holds all the kernel is given, the std module's hash among them ([D8](#decisions)) |
+| `m2-runtime`, `m2-ir` | `packages.rs`, `core/ir/src/sig.rs`, `check.rs` | the manifest's `offline`: such a kernel is kept out of the kernels songs call. `Kernels` gains `offline(id)`, so the checker gives song code that calls one the error `kernel.offline` |
 | fixtures | `e2e/renders.sha256` | `examples-resample.wav` and `examples-resample-from4-for6.wav` change once ([D12](#decisions)) |
 
 **Tests, each shown red first.**
@@ -71,13 +71,20 @@ Branch `sx`, from `main` at `97b4cdf`, 2026-10-18. Step 9, audio and sample turn
 | `a_stretch_is_as_long_as_its_map_says`, `the_identity_map_gives_the_source_back` (over 40 dB clean, away from the ends), `a_stretch_has_no_clicks` (a sine's step between frames stays under a bound) | `stretch.rs` | the stub |
 | `pitch_with_a_map_transposes_and_keeps_time` | `stretch.rs` | the stub |
 | `a_warped_clip_is_stretched_by_std_stretch`: the runtime calls the kernel; a std without it plays the clip silent, not the old WSOLA | `core/runtime/src/tests.rs` | today's code |
-| `a_warped_render_holds_neither_file_whole`: nothing decoded whole, the sink takes blocks | `core/runtime/src/tests.rs` | today's code |
+| `a_warped_render_holds_neither_file_whole`: nothing decoded whole, the sink takes blocks | `core/runtime/src/tests/stream.rs`, beside its helpers | today's code (a stub of it: both whole) |
 | `song_code_cannot_call_an_offline_kernel` | `core/runtime/src/tests.rs` | before the check |
-| `the_resample_example_gives_the_same_bits_on_1_to_7_threads`, and an export with an empty cache folder equals one with a full one | `core/runtime/src/tests.rs` | the stub |
+| `the_resample_example_gives_the_same_bits_on_1_to_7_threads` | `core/play/tests/bit_identity.rs`, beside the sampler's: it builds the example's TypeScript | the stub |
+| `an_export_with_an_empty_cache_folder_equals_one_with_a_full_one` | `core/runtime/src/tests.rs` | the stub |
 
 The kept tests stay green: `pitch_without_warp_is_varispeed_and_with_warp_keeps_timing`, `a_streamed_lane_is_the_rendered_lane` (its reference for a warped clip becomes the kernel's whole run).
 
 **Done when:** all green; renders 10 of 12 unchanged, the 2 resample lines updated with the why in the commit. A by-ear step on the resample example's warped clip. Linux render speed of the stretch written down (information only, PLAT-1).
+
+**Built** (2026-10-18), with these changes to the plan:
+- The cache file holds only what the kernel made. Gain, fades and reverse are worked out as it is read, as for a plain clip. So its name is all the kernel is given (the source's hash, std's module hash, the time map, the pitch, the rate, the length), and clips that differ only in gain, fades or reverse share one stretch. Why: a red run with a silent stub left silent renders in a test's cache folder, under names that couldn't tell. A host change to how the map is made would have been as invisible. Now the map is in the name.
+- The first WSOLA frame lands half a frame early, so a stretch's start is no longer faded in over 21 ms.
+- A disk asset read keeps its last piece, both channels: a kernel reads the channels of the same frames in turn, so the file is read once, not once a channel.
+- Speed (Linux, information only): 75 s of stereo made in 0.25 s, about 300 times faster than real time (`stretch_speed_report`, ignored).
 
 ## Slice 3: Follow tempo, stretched in the background
 
@@ -117,8 +124,8 @@ The kept tests stay green: `pitch_without_warp_is_varispeed_and_with_warp_keeps_
 | D4 | Can live kernels stream later without v2? | Yes, written now: live, a frame the host has not loaded yet is given as silence and counted as a miss, like a lane's chunk. The count `asset_read` returns is the same as if it were there, so the kernel goes on the same. Never in an export or offline render |
 | D5 | The time map | Pairs of f64 (source seconds, output seconds from the clip's start); `time_map_len` counts pairs. Before the first pair and after the last, the nearest segment goes on; one pair means speed 1. The host builds it from the warp markers and the tempo map: one pair per marker and per tempo change inside the clip. `values[0]` is the pitch in semitones. The source is asset 0. Output only, `max_block` 128 frames per call |
 | D6 | Which method? | WSOLA, ported from today's runtime: channels share one alignment, so stereo stays put. Changed: the match is normalized by loudness. WSOLA keeps drum hits sharp; a phase vocoder smears them. Loops are what people stretch most |
-| D7 | Kernel or host? | The kernel does time, pitch and the change of sample rate. The host does gain, fades and reverse, as now |
-| D8 | The cache name | Holds the stretch module's hash (std.wasm's), not a hand-bumped number. A new std makes new renders |
+| D7 | Kernel or host? | The kernel does time, pitch and the change of sample rate. The host does gain, fades and reverse, as now, as the render is read (built so in slice 2) |
+| D8 | The cache name | Holds the stretch module's hash (std.wasm's) and the time map itself, not a hand-bumped number. A new std, or a new way of making the map, makes new renders |
 | D9 | Which kernel stretches? | Always `std:stretch`, from the song's std. A choice per clip goes to gaps |
 | D10 | Background order | One stretch thread per open song. Renders run in the order asked, each from the clip's start. Offline renders (export, range render) make their renders first, on their own thread |
 | D11 | What does Follow tempo set? | On: warp markers at the clip's start, its end and each tempo change inside it, from the tempo now. So nothing changes when you turn it on; later tempo changes keep its beats. Off: no markers; it plays at its own speed again. Words: **Follow tempo**, hint "Stretch this clip with the song's tempo. Its pitch stays the same." Undo: "Undo Follow tempo" |

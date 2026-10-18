@@ -232,7 +232,9 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A tempo drag in a song with an audio clip** is heard only when you let go: the clip's audio is timed in the tempo before the drag. Its tooltip says so.
 - **The output list on Linux** shows each card once, by its name, from the device a person means (the sound server's, else the card's shared one). An output that won't open plays on the default, and Settings says "the output chosen can't be used now".
 - **An output chosen in Settings that comes back** after it was unplugged isn't taken again by itself, and choosing it again while the default plays for it does nothing: choose another output, then it.
-- **A warped audio clip** is worked out whole in memory once, then kept in the cache folder and played from there. The stretching turn makes it stream too.
+- **A warped clip is stretched during the build**: a live edit or tempo change waits for its stretch (on Linux about 300 times faster than real time). Track sx's next slice moves it to a background thread.
+- **One stretch method for all clips** (`std:stretch`, WSOLA). No choice per clip (drums, voice, pads).
+- **A stretch that fails plays silence**, with a line in the log only.
 - **The cache folder is never trimmed**: warped clips' renders and waveforms stay in it until it is deleted by hand.
 - **A disk too slow for an audio clip** cuts it to silence for a moment, with a click; it doesn't fade. The status says "Disk too slow".
 - **A WAV another program changes while it plays** may play a mix of old and new for a moment, until the song is built again.
@@ -253,7 +255,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **Recording audio:** checks owed on a Mac: a real microphone, the permission question, the take's timing against the click, and hearing yourself in headphones (see HANDOFF).
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 - **An audio file a kernel reads** (kernel ABI v1) that changes on disk is heard at the next build, not at once: only files a lane names are watched by their hash. Its name in the code has no hash pin, unlike a clip's, and when it is missing no near name is offered.
-- **Kernel ABI v1's reserved parts aren't built**: event ports, `k_save`/`k_load`, `k_latency`/`k_tail` and offline kernels ([kernel-abi.md](kernel-abi.md#reserved-shapes)). Each comes with the first kernel that needs it.
+- **Kernel ABI v1's reserved parts aren't built**: event ports, `k_save`/`k_load` and `k_latency`/`k_tail` ([kernel-abi.md](kernel-abi.md#reserved-shapes)). Each comes with the first kernel that needs it.
 - **A sound part that crashed is reset when it starts again**, not built new. A crash can leave its memory wrong, so it may crash again sooner.
 - **Kernels from other people have no time limit**: one that loops forever stalls the sound (wasmtime's epochs would stop it). A song near the 3,999 sound parts limit has no cheaper way to run yet (a `sum` kernel, a checked engine).
 - **The Mac's numbers for the one-sandbox-a-box layout are owed**: G7f's run, the footprint and the address space with two renderers (PLAT-1).
