@@ -69,6 +69,8 @@ The red diffs and their logs are in `~/m2-runs/sph/red/`.
 | `m2-gates --server export` (G7e) | PASS |
 | clippy, the Mac lint | clean |
 | The app on Xvfb `:96`: with-plugins looping, `kill -9` of the host process | the app stayed open and kept playing; the toast said: "The plugin host crashed, so the plugins in it went quiet; the rest of the song plays on. music2 started Surge XT (Lead) and Airwindows Consolidated (Lead) again from the saved settings. (plugin.crashed)"; a new host process ran, and the engine load went back to its level with Surge XT playing (0.16). Pictures: `~/m2-runs/app-shots/ph-1/` (`app-after-kill.png` has the toast) |
+| `ci/check.sh` at `982c68c` | **PASS**: 1577 Rust tests, 66 of 66 browser suites, renders 10 of 10, the app (first-song and with-plugins), clippy, the Mac lint, std. Logs: `~/m2-runs/sph/check-982c68c` |
+| Disk at the slice's end | 2.2 TB free; this worktree's `target/` is 79 GB (kept for slices 2 and 3); no shared memory left in `/dev/shm` |
 | A call's round trip (release, Linux, loaded machine; `the_round_trip_is_measured`) | a probe call of 128 frames: 614 µs in process, 625 µs through the host process at the median (about 11 µs more), 670 µs at the 99th percentile (35 µs more), 986 µs at most |
 
 ### Decisions taken while building
