@@ -108,7 +108,15 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 20 | **Meters after the fader, and loudness for export.** Today's meters read each track before its fader, so a fader move doesn't move them: after-fader taps need the engine (`core/runtime`). | You can't see what a fader does to a track's level. | Partly (a meter on each track) | medium |
-| 27 | **Sends and buses**: a shared reverb bus, group buses, and sending a track to a bus. | Standard mixing, such as one reverb shared by every track. Each is a structural code edit in `song.ts`. | Yes | large |
+| 27 | **Sends and buses in the app**: buses, sends and groups work in song code (`bus()` and std's mixer, [RENDER-34](architecture.md#buses)), but the app can't add a bus, a send or an output yet, and the Mix view shows no bus strips or send knobs. | Standard mixing, such as one reverb shared by every track, without writing code. | Yes | large |
+
+- **Soloing a bus plays its tracks' dry sound too**: a wet-only solo needs a cell per path.
+- **A send has no pan of its own**, and can't be made mono.
+- **No solo-safe buses**, and no "solo in place" choice.
+- **A send starts at the track's output**: no send from inside a track's chain, before its effects.
+- **A group's tracks don't fold under it** in the timeline.
+- **The graph view shows a bus's feed** as a song export named `bus:verb`.
+- **A bus channel must read the bus as it is** (`verb: verb.out`): one written `verb: eq(verb.out)` isn't seen as the bus's channel, so the bus is never fed, which the build says.
 
 ## Timeline and clips
 

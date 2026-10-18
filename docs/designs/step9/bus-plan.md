@@ -73,7 +73,7 @@ What std's mixer does with it, inside the one `mixer` call:
 In the graph: the bus module imports the song's export `bus:verb` (or the nearest name the key rule allows). The
 song reads `verb.out` back. So `song` and `verb` read each other both ways. RENDER-2 already splits such modules by
 crossings: the strips run with their tracks, then the feed sums (song), then the buses (each its own partition, in
-parallel), then the master sum (song). No engine change is expected; slice 1's first test proves it.
+parallel), then the master sum (song). No engine change was expected; slice 1's first test found one (below).
 
 ## Slice 1: buses in song code
 
@@ -125,6 +125,19 @@ Hand-written buses that read tracks directly (`solo_keeps_a_bus_fed_and_its_sour
 **Done when:** the tests pass; every existing render, IR hash and `e2e/renders.sha256` line is unchanged
 (`fixture_renders_change_only_with_stds_version` re-recorded under 0.4.0 with the same hashes); the mac lint is
 clean; the contract's new rules are in, each with its *Today* line.
+
+### Slice 1, as built
+
+**In short:** built as planned, with one engine change the plan didn't expect.
+
+| What changed from the plan | Why |
+|---|---|
+| **One engine change.** R1 (a node whose inputs come from one other module runs with it) moves nothing into the song now | The partition test showed every bus folded into the song's serial tail, since a bus reads only the song. Now each bus has a partition of its own; a bus fed by one other bus alone runs with it. No other song changes schedule |
+| `busOf(x)` in `@m2/core` | How std's mixer finds a bus channel (`verb: verb.out`) and the bus to feed |
+| The feed export is `bus:<key>` | An export name isn't held to the key rule, so no "nearest name" is needed |
+| The mixer tests are in `core/session/src/bus_tests.rs`, the latency test in `core/play/tests/bit_identity.rs` | Their own file; the play test binary that already has the probe |
+| The fixture has no probe; the latency test puts one on its delay bus | The thread-count test needs a pure song: a song with a plugin runs every task on one thread |
+| `m2 graph --json` of every shipped song is the same, but for the call ids of std's own calls | Call ids are numbered over std's source, so they move at every std change; they are never saved |
 
 ## Slice 2: the edits
 
