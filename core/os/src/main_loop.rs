@@ -54,6 +54,9 @@ pub enum Where {
     Thread(&'static str),
 }
 
+/// Whether [`Loop::watch`] watches fds here (CLAP's `posix-fd-support`): not on Windows.
+pub const WATCHES_FDS: bool = cfg!(unix);
+
 /// Whether [`Where::AppMain`] is the process's main thread: true on macOS, false on Linux.
 pub const APP_ON_PROCESS_MAIN: bool = os::main_loop::APP_ON_PROCESS_MAIN;
 

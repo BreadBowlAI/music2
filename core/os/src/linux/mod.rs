@@ -7,6 +7,7 @@ pub(crate) mod rt;
 pub(crate) mod ipc;
 pub(crate) mod wake;
 pub(crate) mod watch;
+pub(crate) mod window;
 
 use std::ffi::OsString;
 use std::fs::File;

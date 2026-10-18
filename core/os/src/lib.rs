@@ -20,6 +20,7 @@ pub mod process;
 pub mod rt;
 pub mod thread;
 pub mod watch;
+pub mod window;
 
 #[cfg_attr(target_os = "macos", path = "mac/mod.rs")]
 #[cfg_attr(target_os = "linux", path = "linux/mod.rs")]

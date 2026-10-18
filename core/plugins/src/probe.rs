@@ -36,6 +36,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::*;
 use clap_sys::ext::audio_ports::*;
+use clap_sys::ext::gui::*;
+use clap_sys::ext::log::*;
 use clap_sys::ext::latency::*;
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
@@ -202,6 +204,8 @@ pub struct Stats {
     /// The transport each of the last [`TOLD`] calls was told, packed, in a ring.
     told: Box<[[AtomicU64; TOLD_WORDS]]>,
     next_told: AtomicUsize,
+    /// The window `gui.set_parent` was last given (HOST-7), 0 for none.
+    pub parent: AtomicU64,
 }
 
 impl Stats {
@@ -244,6 +248,7 @@ impl Stats {
             next_process: AtomicUsize::new(0),
             told: (0..TOLD).map(|_| std::array::from_fn(|_| AtomicU64::new(0))).collect(),
             next_told: AtomicUsize::new(0),
+            parent: AtomicU64::new(0),
         }
     }
 
@@ -459,6 +464,7 @@ struct Probe {
     clap: clap_plugin,
     host: *const clap_host,
     checks: Option<&'static clap_host_thread_check>,
+    log: Option<&'static clap_host_log>,
     fails_state: bool,
     /// Its state's tag starts with `fails-process`: every `process` call reports an error.
     fails_process: bool,
@@ -586,6 +592,7 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         },
         host,
         checks: None,
+        log: None,
         fails_state,
         fails_process: false,
         sets_fz: false,
@@ -610,6 +617,8 @@ unsafe extern "C" fn init(p: *const clap_plugin) -> bool {
     let get = unsafe { (*me.host).get_extension };
     let ext = get.map_or(null(), |g| unsafe { g(me.host, CLAP_EXT_THREAD_CHECK.as_ptr()) }) as *const clap_host_thread_check;
     me.checks = (!ext.is_null()).then(|| unsafe { &*ext });
+    let log = get.map_or(null(), |g| unsafe { g(me.host, CLAP_EXT_LOG.as_ptr()) }) as *const clap_host_log;
+    me.log = (!log.is_null()).then(|| unsafe { &*log });
     me.record("init");
     true
 }
@@ -834,6 +843,8 @@ unsafe extern "C" fn get_extension(_: *const clap_plugin, id: *const c_char) -> 
         &LATENCY as *const _ as *const c_void
     } else if id == CLAP_EXT_RENDER {
         &RENDER as *const _ as *const c_void
+    } else if id == CLAP_EXT_GUI {
+        &GUI as *const _ as *const c_void
     } else {
         null()
     }
@@ -852,6 +863,70 @@ static PARAMS: clap_plugin_params = clap_plugin_params {
 static STATE: clap_plugin_state = clap_plugin_state { save: Some(save), load: Some(load) };
 static LATENCY: clap_plugin_latency = clap_plugin_latency { get: Some(latency) };
 static RENDER: clap_plugin_render = clap_plugin_render { has_hard_realtime_requirement: Some(no), set: Some(render_set) };
+static GUI: clap_plugin_gui = clap_plugin_gui {
+    is_api_supported: Some(gui_api),
+    get_preferred_api: None,
+    create: Some(gui_create),
+    destroy: Some(gui_destroy),
+    set_scale: None,
+    get_size: Some(gui_size),
+    can_resize: Some(no),
+    get_resize_hints: None,
+    adjust_size: None,
+    set_size: None,
+    set_parent: Some(gui_parent),
+    set_transient: None,
+    suggest_title: None,
+    show: Some(gui_show),
+    hide: Some(gui_hide),
+};
+
+// Its window (HOST-7): a view it never draws, embedded in what the host gives it. It records each
+// call, and logs the window it was given (as a warning, so the host keeps it), which a test of the
+// host process reads with `MainCall::TakeLog`.
+unsafe extern "C" fn gui_api(_: *const clap_plugin, _: *const c_char, floating: bool) -> bool {
+    !floating
+}
+
+unsafe extern "C" fn gui_create(p: *const clap_plugin, _: *const c_char, floating: bool) -> bool {
+    unsafe { probe(p) }.record("gui.create");
+    !floating
+}
+
+unsafe extern "C" fn gui_destroy(p: *const clap_plugin) {
+    let me = unsafe { probe(p) };
+    me.record("gui.destroy");
+    me.stats.parent.store(0, Ordering::Release);
+}
+
+unsafe extern "C" fn gui_size(_: *const clap_plugin, w: *mut u32, h: *mut u32) -> bool {
+    unsafe { (*w, *h) = (320, 200) };
+    true
+}
+
+unsafe extern "C" fn gui_parent(p: *const clap_plugin, window: *const clap_window) -> bool {
+    let me = unsafe { probe(p) };
+    me.record("gui.set_parent");
+    let w = unsafe { &*window };
+    let handle = unsafe { w.specific.ptr } as usize as u64;
+    me.stats.parent.store(handle, Ordering::Release);
+    let api = unsafe { CStr::from_ptr(w.api) }.to_string_lossy().into_owned();
+    let line = format!("probe gui: set_parent {api} {handle} main={}", me.thread().0);
+    if let (Some(log), Ok(line)) = (me.log.and_then(|l| l.log), std::ffi::CString::new(line)) {
+        unsafe { log(me.host, CLAP_LOG_WARNING, line.as_ptr()) };
+    }
+    true
+}
+
+unsafe extern "C" fn gui_show(p: *const clap_plugin) -> bool {
+    unsafe { probe(p) }.record("gui.show");
+    true
+}
+
+unsafe extern "C" fn gui_hide(p: *const clap_plugin) -> bool {
+    unsafe { probe(p) }.record("gui.hide");
+    true
+}
 
 fn name<const N: usize>(s: &str) -> [c_char; N] {
     let mut out = [0 as c_char; N];

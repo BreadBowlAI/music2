@@ -129,7 +129,13 @@ unsafe extern "C" {
         ctx: *mut Context,
     ) -> CFRef;
     fn CFRunLoopTimerInvalidate(timer: CFRef);
-    fn CFFileDescriptorCreate(alloc: CFRef, fd: i32, close_on_invalidate: u8, callout: extern "C" fn(CFRef, usize, *mut c_void), ctx: *const Context) -> CFRef;
+    fn CFFileDescriptorCreate(
+        alloc: CFRef,
+        fd: i32,
+        close_on_invalidate: u8,
+        callout: extern "C" fn(CFRef, usize, *mut c_void),
+        ctx: *const Context,
+    ) -> CFRef;
     fn CFFileDescriptorEnableCallBacks(f: CFRef, types: usize);
     fn CFFileDescriptorDisableCallBacks(f: CFRef, types: usize);
     fn CFFileDescriptorCreateRunLoopSource(alloc: CFRef, f: CFRef, order: CFIndex) -> CFRef;
@@ -299,6 +305,10 @@ impl Loop {
     /// dispatch queue is drained there.
     pub(crate) fn run_for(&self, most: Duration) {
         assert!(self.own.is_none() && super::is_process_main(), "Loop::run_for runs a ProcessMain loop, on its own thread");
+        // Once a window was opened, AppKit's events too (the plugin host process).
+        if super::window::pump(most) {
+            return;
+        }
         // SAFETY: the main thread's run loop, on the main thread.
         unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, most.as_secs_f64(), 1) };
     }

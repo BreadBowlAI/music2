@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use crate::host::{Blob, HostEvent, MainCall, RenderMode, Reply};
+use crate::host::{Blob, HostEvent, MainCall, RenderMode, Reply, WindowCall};
 use crate::{Found, Handle, Info, Param};
 
 /// What both sides must agree on: a hash of this file and the slot's layout, so a host program
@@ -161,7 +161,7 @@ impl W {
     }
 
     pub(crate) fn info(&mut self, i: &Info) -> &mut W {
-        self.found(&i.found).opt_u32(i.audio_in).opt_u32(i.audio_out).bool(i.note_in).u32(i.latency).u32(i.params.len() as u32);
+        self.found(&i.found).opt_u32(i.audio_in).opt_u32(i.audio_out).bool(i.note_in).u32(i.latency).bool(i.gui).u32(i.params.len() as u32);
         for p in &i.params {
             self.u32(p.id).str(&p.name).str(&p.module).f64(p.min).f64(p.max).f64(p.default).bool(p.stepped);
         }
@@ -197,6 +197,8 @@ impl W {
                     MainCall::Text(id, v) => self.u8(1).u32(*id).f64(*v),
                     MainCall::Info => self.u8(2),
                     MainCall::TakeLog => self.u8(3),
+                    MainCall::Window(WindowCall::Open { title }) => self.u8(4).str(title),
+                    MainCall::Window(WindowCall::Close) => self.u8(5),
                 }
             }
             Req::Destroy { h } => self.u8(8).u64(*h),
@@ -223,6 +225,7 @@ impl W {
             }
             Reply::Info(i) => self.u8(2).info(i),
             Reply::Log(l) => self.u8(3).strs(l),
+            Reply::Window(open) => self.u8(4).bool(*open),
         }
     }
 
@@ -233,6 +236,7 @@ impl W {
             HostEvent::Latency(h, f) => self.u8(2).u64(h.0).u32(f),
             HostEvent::Crashed(h) => self.u8(3).u64(h.0),
             HostEvent::Hung(h) => self.u8(4).u64(h.0),
+            HostEvent::WindowClosed(h) => self.u8(5).u64(h.0),
         }
     }
 }
@@ -320,7 +324,7 @@ impl<'a> R<'a> {
 
     pub(crate) fn info(&mut self) -> Result<Info> {
         let found = self.found()?;
-        let (audio_in, audio_out, note_in, latency) = (self.opt_u32()?, self.opt_u32()?, self.bool()?, self.u32()?);
+        let (audio_in, audio_out, note_in, latency, gui) = (self.opt_u32()?, self.opt_u32()?, self.bool()?, self.u32()?, self.bool()?);
         let params = (0..self.u32()?)
             .map(|_| {
                 Ok(Param {
@@ -334,7 +338,7 @@ impl<'a> R<'a> {
                 })
             })
             .collect::<Result<_>>()?;
-        Ok(Info { found, audio_in, audio_out, note_in, params, latency })
+        Ok(Info { found, audio_in, audio_out, note_in, params, latency, gui })
     }
 
     pub(crate) fn req(&mut self) -> Result<(u64, Req)> {
@@ -368,6 +372,8 @@ impl<'a> R<'a> {
                     1 => MainCall::Text(self.u32()?, self.f64()?),
                     2 => MainCall::Info,
                     3 => MainCall::TakeLog,
+                    4 => MainCall::Window(WindowCall::Open { title: self.str()? }),
+                    5 => MainCall::Window(WindowCall::Close),
                     t => bail!("no main call {t}"),
                 };
                 Req::MainCall { h, call }
@@ -392,6 +398,7 @@ impl<'a> R<'a> {
             }),
             2 => Reply::Info(Box::new(self.info()?)),
             3 => Reply::Log(self.strs()?),
+            4 => Reply::Window(self.bool()?),
             t => bail!("no reply {t}"),
         })
     }
@@ -403,6 +410,7 @@ impl<'a> R<'a> {
             2 => HostEvent::Latency(Handle(self.u64()?), self.u32()?),
             3 => HostEvent::Crashed(Handle(self.u64()?)),
             4 => HostEvent::Hung(Handle(self.u64()?)),
+            5 => HostEvent::WindowClosed(Handle(self.u64()?)),
             t => bail!("no event {t}"),
         })
     }
@@ -452,6 +460,8 @@ mod tests {
             Req::SetRenderMode { h: 3, mode: RenderMode::Offline },
             Req::MainCall { h: 4, call: MainCall::Text(7, 0.25) },
             Req::MainCall { h: 4, call: MainCall::TakeLog },
+            Req::MainCall { h: 4, call: MainCall::Window(WindowCall::Open { title: "Surge XT (Lead)".into() }) },
+            Req::MainCall { h: 4, call: MainCall::Window(WindowCall::Close) },
             Req::Destroy { h: 9 },
             Req::Latency { h: 10 },
             Req::SaveState { h: 11 },
@@ -471,8 +481,9 @@ mod tests {
             note_in: true,
             params: vec![Param { id: 1, name: "Gain".into(), module: "m".into(), min: 0.0, max: 2.0, default: 1.0, stepped: false }],
             latency: 64,
+            gui: true,
         };
-        for r in [Reply::Value(Some(0.5)), Reply::Text(None), Reply::Info(Box::new(info)), Reply::Log(vec!["w".into()])] {
+        for r in [Reply::Value(Some(0.5)), Reply::Text(None), Reply::Info(Box::new(info)), Reply::Log(vec!["w".into()]), Reply::Window(true)] {
             let mut w = W::default();
             w.reply(&r);
             assert_eq!(format!("{:?}", R::new(&w.0).reply().unwrap()), format!("{r:?}"));

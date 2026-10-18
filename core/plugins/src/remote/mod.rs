@@ -404,7 +404,12 @@ fn read(s: Weak<Shared>, p: Arc<Proc>, out: std::process::ChildStdout) {
 
 fn event_handle(e: &HostEvent) -> Handle {
     match *e {
-        HostEvent::Restart(h) | HostEvent::Dirty(h) | HostEvent::Latency(h, _) | HostEvent::Crashed(h) | HostEvent::Hung(h) => h,
+        HostEvent::Restart(h)
+        | HostEvent::Dirty(h)
+        | HostEvent::Latency(h, _)
+        | HostEvent::Crashed(h)
+        | HostEvent::Hung(h)
+        | HostEvent::WindowClosed(h) => h,
     }
 }
 
@@ -415,6 +420,7 @@ fn with_handle(e: HostEvent, h: Handle) -> HostEvent {
         HostEvent::Latency(_, f) => HostEvent::Latency(h, f),
         HostEvent::Crashed(_) => HostEvent::Crashed(h),
         HostEvent::Hung(_) => HostEvent::Hung(h),
+        HostEvent::WindowClosed(_) => HostEvent::WindowClosed(h),
     }
 }
 

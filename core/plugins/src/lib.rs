@@ -21,6 +21,7 @@
 //! Plugins are impure: the runtime never caches their output.
 
 mod audio;
+mod gui;
 mod host;
 mod inprocess;
 mod main_thread;
@@ -39,6 +40,7 @@ use clap_sys::version::clap_version_is_compatible;
 
 pub use host::{
     Blob, Events, Handle, HostEvent, HostEvents, MAX_CALL_EVENTS, MainCall, Owner, Pending, PluginHost, RenderMode, Reply, SharedBuffers, Status,
+    WindowCall,
 };
 pub use inprocess::{InProcess, MAX_INSTANCES};
 pub use remote::child::serve as serve_host;
@@ -78,6 +80,8 @@ pub struct Info {
     pub params: Vec<Param>,
     /// Measured when it was last activated (0 before).
     pub latency: u32,
+    /// It has a window of its own this OS can show (CLAP's `gui`, embedded; HOST-7).
+    pub gui: bool,
 }
 
 #[derive(Clone, Debug)]

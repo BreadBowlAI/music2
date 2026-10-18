@@ -99,6 +99,8 @@ pub enum HostEvent {
     Crashed(Handle),
     /// The same, when the host process stopped answering a live call and was ended (D5).
     Hung(Handle),
+    /// The person closed its window (HOST-7): the plugin's view is gone, and the window with it.
+    WindowClosed(Handle),
 }
 
 /// Where an [`Owner`]'s events arrive.
@@ -193,9 +195,11 @@ pub enum RenderMode {
     Offline,
 }
 
-/// Other main-thread calls. GUI calls come with plugin windows (HOST-7).
+/// Other main-thread calls.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MainCall {
+    /// Its own window (HOST-7): CLAP's `gui`, embedded in a window of the host's.
+    Window(WindowCall),
     /// A parameter's current value (`params.get_value`).
     Value(u32),
     /// How the plugin displays `value` of a parameter (`params.value_to_text`).
@@ -206,8 +210,19 @@ pub enum MainCall {
     TakeLog,
 }
 
+/// What to do with a plugin's window.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WindowCall {
+    /// Open it, titled `title`, or bring it to the front when it is open. An error, in plain
+    /// words, when the plugin has no window this OS can show, or there is no screen.
+    Open { title: String },
+    Close,
+}
+
 #[derive(Clone, Debug)]
 pub enum Reply {
+    /// Whether its window is open now.
+    Window(bool),
     Value(Option<f64>),
     Text(Option<String>),
     Info(Box<Info>),

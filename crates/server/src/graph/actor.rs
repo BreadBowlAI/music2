@@ -1291,6 +1291,7 @@ impl Actor {
                     crashed.insert(h);
                     hung = true;
                 }
+                HostEvent::WindowClosed(_) => {}
             }
         }
         let Some(o) = &mut self.open else { return };

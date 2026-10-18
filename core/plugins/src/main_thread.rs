@@ -58,6 +58,11 @@ impl MainThread {
         self.main_loop.is_current()
     }
 
+    /// The OS's loop it runs: where plugins' timers, fds and windows go (HOST-3).
+    pub(crate) fn main_loop(&self) -> &Loop {
+        &self.main_loop
+    }
+
     /// Whether it has shut down: [`run_main`] drained it, and nothing runs there any more.
     pub fn closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)

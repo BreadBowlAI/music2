@@ -561,6 +561,7 @@ mod tests {
             note_in: false,
             params: params.iter().map(param).collect(),
             latency: 0,
+            gui: false,
         };
         set.plugins.insert(id.into(), Hosted::Installed(plugin_sig(id, &info).unwrap(), info));
     }
