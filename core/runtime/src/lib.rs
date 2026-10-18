@@ -53,6 +53,7 @@ mod plan;
 pub mod plugins;
 pub mod sched;
 mod stopped;
+pub mod stream;
 mod taps;
 pub mod threads;
 pub mod trace;
@@ -2004,6 +2005,10 @@ pub struct Renderer {
     /// Played by the live [`Engine`], which marks every renderer it plays: a node that fails stops
     /// alone (RENDER-25). Offline, every render fails, naming the node.
     live: bool,
+    /// Its audio lanes' rings are filled by a player's disk thread: marked before it is sent, so no
+    /// ring is ever filled on the sound thread (RENDER-30, D11). Unmarked, it fills them itself
+    /// before each block, as an offline render does (D10).
+    disk: bool,
     non_finite: u64,
     trace: Option<Trace>,
     dropped: u32,
@@ -2272,6 +2277,7 @@ impl Renderer {
             delivered: 0,
             strict: true,
             live: false,
+            disk: false,
             non_finite: 0,
             trace: None,
             dropped: 0,
@@ -2314,6 +2320,17 @@ impl Renderer {
         let mut r = Renderer::new(flat, data, packages, sample_rate)?;
         r.transport = Transport::starting(t0);
         Ok(r)
+    }
+
+    /// Its audio lanes are filled by a disk thread from now on, never by its own blocks: a player
+    /// marks every renderer before it sends it (RENDER-30, D11).
+    pub fn from_disk(&mut self) {
+        self.disk = true;
+    }
+
+    /// Its audio lanes, with the module each plays in: what a disk thread keeps filled.
+    pub fn audio_lanes(&self) -> Vec<(String, Arc<audio::AudioLane>)> {
+        self.plan.info.lanes.iter().filter_map(|l| Some((l.lane.module.clone(), l.audio()?.clone()))).collect()
     }
 
     /// Strict (the default): a NaN or infinity from any kernel is an error naming it.
@@ -2408,7 +2425,12 @@ impl Renderer {
         for l in &mut self.lanes.slots {
             match l {
                 LaneSlot::Notes(Some(s)) => s.run(&runs, &mut self.next_note),
-                LaneSlot::Audio(Some(p)) => p.fill(&runs),
+                LaneSlot::Audio(Some(p)) => {
+                    if !self.disk {
+                        p.prefetch(&runs);
+                    }
+                    p.fill(&runs)
+                }
                 _ => {}
             }
         }

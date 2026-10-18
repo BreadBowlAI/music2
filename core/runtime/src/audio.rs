@@ -1,10 +1,8 @@
-//! Audio lanes: clips rendered once, then played sample-exactly.
-//!
-//! Each clip is rendered to a buffer at the song's sample rate when the renderer is
-//! built (resampling, varispeed, warping, reverse, gain, fades), so playback is a copy
-//! and seeking is exact. Decoded assets and clip renders are kept in a [`Cache`] by content,
-//! so a live rebuild shares what it didn't change instead of decoding and warping it again
-//! (RENDER-27, RENDER-30 in part).
+//! Audio lanes: clips at the song's sample rate (resampling, varispeed, warping, reverse, gain,
+//! fades), played sample-exactly from the disk (RENDER-30, [`stream`]): playback is a copy from a
+//! ring the disk thread fills, and seeking is exact. Opened files, warped renders and whole lanes
+//! are kept in a [`Cache`] by content, so a live rebuild shares what it didn't change, its ring
+//! included (RENDER-27).
 //!
 //! Live, a lane crossfades over 5 ms from its old position to its new one at a seek or a loop
 //! wrap, fades out on stop, and fades in on play from inside a clip (RENDER-9); offline it is a
@@ -27,6 +25,7 @@ use m2_song::{AudioClip, DataSet, HashCache, Sha, TempoMap};
 
 use crate::BLOCK;
 use crate::fade::xfade;
+use crate::stream::{self, Clip, Ring, Shape, Source, Wav, gain_at};
 use crate::transport::{Jump, Runs};
 
 /// Decoded audio, planar, at its own sample rate.
@@ -120,81 +119,104 @@ impl ClipKey {
         let tempo = tempo.segments().iter().flat_map(|t| [t.beat, t.bpm]).map(f64::to_bits).collect();
         ClipKey { asset, clip: clip.into_iter().map(f64::to_bits).collect(), tempo, rate: rate.to_bits() }
     }
+
+    /// Its bytes, for a file name.
+    fn bytes(&self) -> Vec<u8> {
+        let mut b = self.asset.hex().into_bytes();
+        for n in [&[self.clip.len() as u64][..], &self.clip, &[self.tempo.len() as u64], &self.tempo, &[self.rate]] {
+            for x in n {
+                b.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+        b
+    }
 }
 
-/// Decoded assets, by content, and clip renders, by what they depend on. Rendering decodes;
-/// compiling never does (FMT-16). A live session keeps one per open project, so an edit
-/// shares every clip it didn't change with the renderer it replaces; an offline render uses
-/// one of its own.
+/// What a lane plays: its clips' keys in order, its channels.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct LaneKey {
+    clips: Vec<ClipKey>,
+    channels: usize,
+}
+
+/// Opened assets, by content; warped renders, by what they depend on; and lanes, by what they
+/// play. Building opens files and reads their headers, and fills the lanes short enough to stay
+/// whole; compiling never does (FMT-16). A live session keeps one per open project, so an edit
+/// shares every lane it didn't change with the renderer it replaces, and its ring with it; an
+/// offline render uses one of its own, so its rings are its own too.
 #[derive(Default)]
 pub struct Cache {
-    assets: HashMap<Sha, Option<Arc<Asset>>>,
-    clips: HashMap<ClipKey, Arc<RenderedClip>>,
-    used_assets: HashSet<Sha>,
-    used_clips: HashSet<ClipKey>,
+    wavs: HashMap<Sha, Option<Arc<Wav>>>,
+    warps: HashMap<ClipKey, Option<Arc<Source>>>,
+    lanes: HashMap<LaneKey, Arc<AudioLane>>,
+    /// Assets decoded whole for a warp's one render (D2), until the next prune.
+    decoded: HashMap<Sha, Option<Arc<Asset>>>,
+    used_wavs: HashSet<Sha>,
+    used_warps: HashSet<ClipKey>,
+    used_lanes: HashSet<LaneKey>,
     decodes: usize,
     renders: usize,
 }
 
 impl Cache {
-    /// The decoded file and its hash, or `None` when it can't be read, decoded, or holds no
+    /// The opened file and its hash, or `None` when it can't be read, decoded, or holds no
     /// audio. The hash is a stamp lookup: validating the data already hashed every asset.
-    fn asset(&mut self, path: &Path) -> Option<(Sha, Arc<Asset>)> {
+    fn wav(&mut self, path: &Path) -> Option<(Sha, Arc<Wav>)> {
         let sha = HashCache::global().hash(path).ok()?;
-        self.used_assets.insert(sha);
+        self.used_wavs.insert(sha);
         let decodes = &mut self.decodes;
-        let a = self.assets.entry(sha).or_insert_with(|| {
+        let w = self.wavs.entry(sha).or_insert_with(|| {
             *decodes += 1;
-            load_wav(path).ok().filter(|a| !a.is_empty()).map(Arc::new)
+            Wav::open(path).ok().filter(|w| w.frames() > 0).map(Arc::new)
         });
-        Some((sha, a.clone()?))
+        Some((sha, w.clone()?))
     }
 
-    fn clip(&mut self, sha: Sha, asset: &Asset, c: &AudioClip, tempo: &TempoMap, rate: f64) -> Arc<RenderedClip> {
-        let key = ClipKey::of(sha, c, tempo, rate);
-        self.used_clips.insert(key.clone());
-        let renders = &mut self.renders;
-        self.clips
-            .entry(key)
-            .or_insert_with(|| {
-                *renders += 1;
-                Arc::new(render_clip(c, asset, tempo, rate))
-            })
-            .clone()
+    /// A warped clip's render (D1): from the cache folder, else made once, there or in memory.
+    fn warp(&mut self, key: ClipKey, path: &Path, c: &AudioClip, tempo: &TempoMap, rate: f64) -> Option<Arc<Source>> {
+        self.used_warps.insert(key.clone());
+        if let Some(s) = self.warps.get(&key) {
+            return s.clone();
+        }
+        let frames = stream::clip_len(c, tempo, rate);
+        let (decoded, renders) = (&mut self.decoded, &mut self.renders);
+        let render = || {
+            let asset = decoded.entry(key.asset).or_insert_with(|| load_wav(path).ok().filter(|a| !a.is_empty()).map(Arc::new)).clone()?;
+            *renders += 1;
+            Some(render_clip(c, &asset, tempo, rate))
+        };
+        let channels = self.wavs.get(&key.asset).cloned().flatten().map_or(1, |w| w.channels());
+        let s = stream::warped(stream::render_path(&key.bytes()), render, channels, frames).map(Arc::new);
+        self.warps.insert(key, s.clone());
+        s
     }
 
-    /// Keep only what the builds since the last call used: an edited clip's old render goes
-    /// once the renderer that played it is built over.
+    /// Keep only what the builds since the last call used: an edited lane's old ring goes once
+    /// the renderer that played it is built over.
     pub fn prune(&mut self) {
-        let (assets, clips) = (std::mem::take(&mut self.used_assets), std::mem::take(&mut self.used_clips));
-        self.assets.retain(|k, _| assets.contains(k));
-        self.clips.retain(|k, _| clips.contains(k));
+        let wavs = std::mem::take(&mut self.used_wavs);
+        let warps = std::mem::take(&mut self.used_warps);
+        let lanes = std::mem::take(&mut self.used_lanes);
+        self.wavs.retain(|k, _| wavs.contains(k));
+        self.warps.retain(|k, _| warps.contains(k));
+        self.lanes.retain(|k, _| lanes.contains(k));
+        self.decoded.clear();
     }
 
-    /// Assets decoded and clips rendered since the cache was made.
+    /// Assets opened and warped clips rendered since the cache was made.
     pub fn work(&self) -> (usize, usize) {
         (self.decodes, self.renders)
     }
 
-    /// Every clip render it holds, weakly: tests check that what no plan plays any more is freed.
-    pub fn renders(&self) -> Vec<Weak<RenderedClip>> {
-        self.clips.values().map(Arc::downgrade).collect()
+    /// Every lane it holds, weakly: tests check that what no plan plays any more is freed.
+    pub fn lanes(&self) -> Vec<Weak<AudioLane>> {
+        self.lanes.values().map(Arc::downgrade).collect()
     }
 }
 
 /// Read `x` at fractional position `pos` (cubic Hermite); silence outside.
 fn read(x: &[f32], pos: f64) -> f32 {
-    if pos < 0.0 || pos > (x.len() as f64 - 1.0) {
-        return 0.0;
-    }
-    let i = pos.floor() as isize;
-    let t = (pos - i as f64) as f32;
-    let at = |k: isize| if k < 0 || k as usize >= x.len() { 0.0 } else { x[k as usize] };
-    let (y0, y1, y2, y3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
-    let c1 = 0.5 * (y2 - y0);
-    let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
-    let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
-    ((c3 * t + c2) * t + c1) * t + y1
+    stream::read_in(x, 0, x.len(), pos)
 }
 
 const FRAME: usize = 2048;
@@ -262,20 +284,19 @@ fn stretch(src: &[Vec<f32>], out_len: usize, map: impl Fn(f64) -> f64) -> Vec<Ve
     out
 }
 
-/// Render one clip at `sample_rate`: its samples from the clip's start, for its length.
+/// Render one clip at `sample_rate`: its samples from the clip's start, for its length. A warped
+/// clip is made this way, once (D2); a clip with no warp is worked out the same way piece by piece
+/// from its file as it plays ([`stream`]), and this is the reference its pieces must equal.
 pub fn render_clip(clip: &AudioClip, asset: &Asset, tempo: &TempoMap, sample_rate: f64) -> Vec<Vec<f32>> {
     let t0 = tempo.seconds_at(clip.start);
-    let out_len = ((tempo.seconds_at(clip.start + clip.length) - t0) * sample_rate).round() as usize;
-    // exp2 by name, so debug and release builds call one function: a release build turns
-    // `2f64.powf(x)` into exp2 where a debug build calls pow, and libm's two differ in the last bit.
-    let rate = libm::exp2(clip.pitch / 12.0);
     let src_rate = asset.sample_rate;
-    let offset = clip.offset * src_rate;
+    let sh = Shape::of(clip, src_rate, tempo, sample_rate);
+    let out_len = sh.len;
+    let rate = libm::exp2(clip.pitch / 12.0);
 
     let mut out: Vec<Vec<f32>> = if clip.warp.is_empty() {
         // Varispeed: source time runs `rate` times faster.
-        let step = rate * src_rate / sample_rate;
-        asset.channels.iter().map(|ch| (0..out_len).map(|i| read(ch, offset + i as f64 * step)).collect()).collect()
+        asset.channels.iter().map(|ch| (0..out_len).map(|i| read(ch, sh.offset + i as f64 * sh.step)).collect()).collect()
     } else {
         // Warp: output time → beat → source seconds, piecewise linear through the
         // markers (extended past the ends by their nearest segment).
@@ -295,35 +316,30 @@ pub fn render_clip(clip: &AudioClip, asset: &Asset, tempo: &TempoMap, sample_rat
         // `rate` times faster (which also converts to the song's sample rate).
         let z_len = (out_len as f64 * rate * src_rate / sample_rate).ceil() as usize + 4;
         let z = stretch(&asset.channels, z_len, |u| src_seconds(u / src_rate / rate) * src_rate);
-        let step = rate * src_rate / sample_rate;
-        z.iter().map(|ch| (0..out_len).map(|i| read(ch, i as f64 * step)).collect()).collect()
+        z.iter().map(|ch| (0..out_len).map(|i| read(ch, i as f64 * sh.step)).collect()).collect()
     };
-    let gain = libm::powf(10.0, clip.gain_db as f32 / 20.0);
-    let fade_in = (clip.fade_in * sample_rate) as usize;
-    let fade_out = (clip.fade_out * sample_rate) as usize;
     for ch in &mut out {
         if clip.reverse {
             ch.reverse();
         }
         let n = ch.len();
         for (i, x) in ch.iter_mut().enumerate() {
-            let mut g = gain;
-            if i < fade_in {
-                g *= 0.5 - 0.5 * libm::cosf(std::f32::consts::PI * i as f32 / fade_in as f32);
-            }
-            if n - i <= fade_out {
-                g *= 0.5 - 0.5 * libm::cosf(std::f32::consts::PI * (n - i) as f32 / fade_out as f32);
-            }
-            *x *= g;
+            *x *= gain_at(i, n, sh.gain, sh.fade_in, sh.fade_out);
         }
     }
     out
 }
 
-/// An audio lane, ready to play: rendered clips at their start samples.
+/// An audio lane, ready to play: its clips at their start samples, and the ring the sound thread
+/// copies them from ([`stream`]).
 pub struct AudioLane {
-    clips: Vec<(u64, Arc<RenderedClip>)>,
-    channels: usize,
+    /// What it plays, for [`AudioLane::same`]: none for a lane made from renders.
+    key: Option<LaneKey>,
+    pub(crate) clips: Vec<Clip>,
+    pub(crate) channels: usize,
+    pub(crate) ring: Ring,
+    pub(crate) tempo: TempoMap,
+    pub(crate) rate: f64,
 }
 
 impl std::fmt::Debug for AudioLane {
@@ -333,56 +349,106 @@ impl std::fmt::Debug for AudioLane {
 }
 
 impl AudioLane {
-    /// Whether it plays the very renders `o` plays, at the same samples: what a plan keeps.
+    /// Whether it plays what `o` plays, at the same samples: what a plan keeps.
     pub(crate) fn same(&self, o: &AudioLane) -> bool {
-        self.channels == o.channels
-            && self.clips.len() == o.clips.len()
-            && self.clips.iter().zip(&o.clips).all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1))
+        std::ptr::eq(self, o) || (self.key.is_some() && self.key == o.key)
     }
 
-    /// Render `clips`, in the order given (canonical: by start and id, so overlapping clips
-    /// always sum in one order). A clip whose asset may not be played (`asset.missing`) or
-    /// can't be decoded is silent; it never silences the rest (FMT-15).
-    pub fn build(clips: &[AudioClip], data: &DataSet, cache: &mut Cache, tempo: &TempoMap, sample_rate: f64, channels: usize) -> AudioLane {
-        let mut out = vec![];
+    /// The lane for `clips`, in the order given (canonical: by start and id, so overlapping clips
+    /// always sum in one order), from `cache` when it holds it. A clip whose asset may not be
+    /// played (`asset.missing`) or can't be decoded is silent; it never silences the rest
+    /// (FMT-15). A lane short enough to stay whole is filled here.
+    pub fn build(clips: &[AudioClip], data: &DataSet, cache: &mut Cache, tempo: &TempoMap, sample_rate: f64, channels: usize) -> Arc<AudioLane> {
+        AudioLane::build_with(clips, &|a| data.asset_path(a), cache, tempo, sample_rate, channels)
+    }
+
+    /// [`AudioLane::build`] with each asset's path from `asset_path` (tests and tools).
+    pub fn build_with(
+        clips: &[AudioClip],
+        asset_path: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+        cache: &mut Cache,
+        tempo: &TempoMap,
+        sample_rate: f64,
+        channels: usize,
+    ) -> Arc<AudioLane> {
+        let mut found = vec![];
         for c in clips {
-            let Some((sha, a)) = data.asset_path(&c.asset).and_then(|p| cache.asset(&p)) else { continue };
-            let start = (tempo.seconds_at(c.start) * sample_rate).round() as u64;
-            out.push((start, cache.clip(sha, &a, c, tempo, sample_rate)));
+            let Some(path) = asset_path(&c.asset) else { continue };
+            let Some((sha, w)) = cache.wav(&path) else { continue };
+            found.push((c, ClipKey::of(sha, c, tempo, sample_rate), w, path));
         }
-        AudioLane { clips: out, channels }
+        let key = LaneKey { clips: found.iter().map(|f| f.1.clone()).collect(), channels };
+        cache.used_lanes.insert(key.clone());
+        if let Some(l) = cache.lanes.get(&key) {
+            return l.clone();
+        }
+        let mut out = vec![];
+        for (c, k, w, path) in found {
+            let at = (tempo.seconds_at(c.start) * sample_rate).round() as u64;
+            let src = if c.warp.is_empty() {
+                Source::Wav(w.clone(), Shape::of(c, w.rate, tempo, sample_rate))
+            } else {
+                match cache.warp(k, &path, c, tempo, sample_rate) {
+                    Some(s) => match &*s {
+                        Source::Render(r) => Source::Render(r.clone()),
+                        Source::Mem(m) => Source::Mem(m.clone()),
+                        Source::Wav(..) => continue,
+                    },
+                    None => continue,
+                }
+            };
+            out.push(Clip::new(at, src, stream::clip_len(c, tempo, sample_rate)));
+        }
+        let lane = Arc::new(AudioLane::of(out, channels, tempo.clone(), sample_rate, Some(key.clone())));
+        cache.lanes.insert(key, lane.clone());
+        lane
+    }
+
+    fn of(clips: Vec<Clip>, channels: usize, tempo: TempoMap, rate: f64, key: Option<LaneKey>) -> AudioLane {
+        let ring = Ring::new(&clips, channels, rate);
+        let lane = AudioLane { key, clips, channels, ring, tempo, rate };
+        lane.fill_all();
+        lane
+    }
+
+    /// A lane of renders in memory at their start frames, in a song at `rate` with no tempo
+    /// change (tests).
+    #[doc(hidden)]
+    pub fn of_renders(clips: Vec<(u64, Arc<RenderedClip>)>, channels: usize, rate: f64) -> AudioLane {
+        let clips = clips.into_iter().map(|(at, r)| {
+            let len = r[0].len();
+            Clip::new(at, Source::Mem(r), len)
+        });
+        AudioLane::of(clips.collect(), channels, TempoMap::constant(120.0), rate, None)
     }
 
     /// Whether transport frame `pos` is strictly inside a clip: playing from there starts
     /// mid-sound.
     fn inside(&self, pos: u64) -> bool {
-        self.clips.iter().any(|(at, data)| *at < pos && pos < at + data[0].len() as u64)
+        self.clips.iter().any(|c| c.at < pos && pos < c.at + c.len)
     }
+}
 
-    /// Fill frames `off..off + n` of `out` (channel-major, `channels × block`) with the
-    /// lane's samples `start..start + n`. Overlapping clips are summed.
-    pub fn fill(&self, out: &mut [f32], block: usize, off: usize, start: u64, n: usize) {
-        for c in 0..self.channels {
-            out[c * block + off..c * block + off + n].fill(0.0);
-        }
-        let end = start + n as u64;
-        for (at, data) in &self.clips {
-            let len = data[0].len() as u64;
-            if *at >= end || at + len <= start {
-                continue;
-            }
-            let from = start.max(*at);
-            let to = end.min(at + len);
-            for c in 0..self.channels {
-                let src = &data[c.min(data.len() - 1)];
-                let mono_down = self.channels == 1 && data.len() > 1;
-                for t in from..to {
-                    let i = (t - at) as usize;
-                    let v = if mono_down { 0.5 * (data[0][i] + data[1][i]) } else { src[i] };
-                    out[c * block + off + (t - start) as usize] += v;
-                }
+
+/// The most places one block of a player reads: a fade's start, each fade, and its runs.
+const NEED: usize = 1 + TAPS + crate::transport::MAX_RUNS;
+
+/// Fill what `lane` doesn't hold of the frames `at` names, on this thread, never taking the slot of
+/// a chunk another of them reads.
+fn ensure(lane: &AudioLane, at: &[(u64, u64)]) {
+    let c = lane.chunk();
+    let mut block = [0u64; 2 * NEED];
+    let mut m = 0;
+    for &(a, len) in at {
+        for k in a / c..(a + len).div_ceil(c) {
+            if m < block.len() && !block[..m].contains(&k) {
+                block[m] = k;
+                m += 1;
             }
         }
+    }
+    for &(a, len) in at {
+        lane.ensure(a, len, &block[..m]);
     }
 }
 
@@ -439,6 +505,7 @@ impl AudioPlayer {
         let len = self.decl.len;
         if let Some(prev) = self.prev.as_ref().filter(|_| self.since < len) {
             let mut decl = self.decl;
+            decl.retime(self.shift);
             decl.process(prev, &runs.shifted(self.shift), &mut self.old);
             self.decl.process(&self.cur, runs, &mut self.out);
             for c in 0..self.cur.channels {
@@ -453,6 +520,32 @@ impl AudioPlayer {
         self.decl.process(&self.cur, runs, &mut self.out);
     }
 
+    /// Work out on this thread what this block of `runs` reads that the ring doesn't hold: an
+    /// offline render's fill before each block (D10). Live, the disk thread fills the ring and
+    /// this is never called.
+    pub(crate) fn prefetch(&self, runs: &Runs) {
+        // Where the block reads: its runs, the position a jump would fade out from, and each fade
+        // under way; the old renders too while a swap fades, all at their own position.
+        let mut at = [(0u64, 0u64); NEED];
+        at[0] = (self.decl.cont, BLOCK as u64);
+        let mut n = 1;
+        for t in &self.decl.taps[..self.decl.ntaps] {
+            at[n] = (t.pos, BLOCK as u64);
+            n += 1;
+        }
+        for r in runs.as_slice().iter().filter(|r| r.moving) {
+            at[n] = (r.at, r.n as u64);
+            n += 1;
+        }
+        ensure(&self.cur, &at[..n]);
+        if let Some(prev) = self.prev.as_ref().filter(|_| self.since < self.decl.len) {
+            for a in &mut at[..n] {
+                a.0 = a.0.saturating_add_signed(self.shift);
+            }
+            ensure(prev, &at[..n]);
+        }
+    }
+
     /// Play `lane` from the next block, crossfading from what it played over one window. `shift`
     /// is where the old renders play relative to the transport. Never allocates: the window it
     /// fades in is the plan's, so no other swap is still fading.
@@ -460,6 +553,8 @@ impl AudioPlayer {
         debug_assert!(self.prev.is_none(), "a swap while another fades");
         self.prev = Some(std::mem::replace(&mut self.cur, lane));
         (self.shift, self.since) = (shift, 0);
+        // A fade under way goes on where the new renders have its material.
+        self.decl.retime(-shift);
     }
 
     /// The renders a swap replaced, at the window's end.
@@ -512,6 +607,14 @@ impl Declick {
 
     fn reset(&mut self) {
         (self.ntaps, self.fade_in, self.prev_moving, self.cont) = (0, None, false, 0);
+    }
+
+    /// Its positions `by` frames on: into another tempo map's frames at a swap (RENDER-27).
+    fn retime(&mut self, by: i64) {
+        self.cont = self.cont.saturating_add_signed(by);
+        for t in &mut self.taps[..self.ntaps] {
+            t.pos = t.pos.saturating_add_signed(by);
+        }
     }
 
     fn gain_in(&self, k: u32) -> f32 {
@@ -630,7 +733,7 @@ mod tests {
     // old renders at its frame plus the shift to the new ones at its frame, then the new ones alone.
     #[test]
     fn a_swap_reads_the_old_renders_at_their_own_position() {
-        let ramp = |k: f32| Arc::new(AudioLane { clips: vec![(0, Arc::new(vec![(0..96_000).map(|i| k * i as f32).collect()]))], channels: 1 });
+        let ramp = |k: f32| Arc::new(AudioLane::of_renders(vec![(0, Arc::new(vec![(0..96_000).map(|i| k * i as f32).collect()]))], 1, 48_000.0));
         let (old, new) = (ramp(1e-5), ramp(-1e-5));
         let mut p = AudioPlayer::new(old, 48_000.0);
         let run = |at: u64| Runs::one(Run { off: 0, n: BLOCK as u32, at, moving: true, jump: Jump::None });
@@ -656,7 +759,7 @@ mod tests {
     fn jumps_never_outrun_the_taps() {
         for rate in [8_000u32, 44_100, 48_000, 96_000, 192_000, 384_000] {
             let material: Vec<f32> = (0..rate as usize).map(|i| (i as f32 * 0.01).sin()).collect();
-            let lane = AudioLane { clips: vec![(0, Arc::new(vec![material]))], channels: 1 };
+            let lane = AudioLane::of_renders(vec![(0, Arc::new(vec![material]))], 1, rate as f64);
             let mut node = Declick::new(rate as f64);
             let mut out = [0.0f32; BLOCK];
             node.process(&lane, &Runs::one(Run { off: 0, n: BLOCK as u32, at: 0, moving: true, jump: Jump::None }), &mut out);
