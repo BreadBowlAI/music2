@@ -14,8 +14,6 @@ design for whatever you pick up. Older versions of this page, with each track's 
   fixed both. Everything since then (step 8's later tracks and all of step 9) has never run on a Mac.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
-- **Before the owner's Mac run, one thing to fix** (lead work, on Linux): the G7f run on the old gain, as written
-  below, can't load its std any more. See [Mac runs owed](#mac-runs-owed).
 - Next: the Mac run, then fix what it finds. Then Windows, as its own step, or the top gaps.
 
 ## Mac runs owed
@@ -23,7 +21,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
 | # | Run | What it decides | Time |
 |---|---|---|---|
 | 1 | `ci/check.sh` on `main` | Every row on the Mac since `85b069a`: `macfix`, 8a's live half (G12's minute, the Mac's real-time code tested for the first time), `studio`, and step 9's six tracks (the plugin program's shared memory and wake, plugin windows and the microphone run on a Mac for the first time; G7f's run of one sandbox a box) | about 45 min |
-| 2 | G7f store on the old gain | Whether the Mac's +135 µs a block since step 7 is still there. **Blocked:** since track `ab` (kernel ABI v1), `main` refuses the `std.wasm` at `85b069a` (ABI v0, no `m2_abi` section). The lead must make an old-gain std for v1 (today's std with `std:gain`'s fast path taken out, rebuilt) and change the command before asking | about 10 min |
+| 2 | (dropped) G7f store on the old gain | Not needed any more. It asked whether the Mac's +135 µs a block since step 7 was the 32 MiB store layout (O1). Track `ab` replaced that layout with one sandbox per box, so run 1's G7f rows now judge the new layout. The old std (ABI v0) can't load on `main` anyway. | — |
 | 3 | 8a's Mac sweep, `ci/sweep.sh` | The live thread count (`live_count`) and park or spin (`BETWEEN`) in `core/play/src/engines.rs`; gate 8 (no dropout at 128 frames, p99 at most 70%) | about 40 min |
 | 4 | By ear, steps 7 to 116 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116) | about 2 hours, in parts |
 
@@ -33,7 +31,7 @@ are kept in `~/m2-runs/mac-runs/` (`check-85b069a.txt` is the last).
 
 ## The owner's Mac command
 
-**In short:** three pastes, one after another, in Terminal on the Mac itself. Then paste back what each says.
+**In short:** two pastes, one after another, in Terminal on the Mac itself. Then paste back what each says.
 
 **1. The check** (about 45 minutes, mostly waiting):
 
@@ -49,23 +47,7 @@ are kept in `~/m2-runs/mac-runs/` (`check-85b069a.txt` is the last).
 Before it, set the output to the built-in speakers at 48 kHz (Audio MIDI Setup): at another rate or buffer, G12
 says "not the designed set-up" and what to set.
 
-**2. G7f store once more, on the old gain** (after the check; about 10 minutes). macfix made the app's `std:gain`
-skip its `powf` while its dB holds still. S plays its own std, with the old gain. So G7f store's line now favours the
-app by about 250 µs a p50 block (on Linux), and would hide the Mac's +154 µs since step 7. This run puts the old gain
-back on the app's side. **As written it no longer works** (row 2 above): fix the std it points at first.
-
-```sh
-cd ~/dev/suite2/music2
-mkdir -p ~/m2-check/std-85b069a && git archive 85b069a std | tar -x -C ~/m2-check/std-85b069a
-export M2_GATES_S=$(crates/gates/s/build.sh | tail -1)
-M2_STD=~/m2-check/std-85b069a/std cargo run --locked --release -p m2-gates -- store --reference 50 2>&1 | tee ~/m2-g7f-old-gain.txt
-```
-
-Paste back `~/m2-g7f-old-gain.txt`. Its "block within S + 80 µs" line: about +135 again means the shift is still
-there, unexplained; near step 7's −19 means it is gone (`docs/designs/step8/build-notes-macfix.md`, "The Mac's next
-run").
-
-**3. 8a's Mac sweep** (about 40 minutes; it plays nothing aloud). Same set-up as the check (plugged in, lid open,
+**2. 8a's Mac sweep** (about 40 minutes; it plays nothing aloud). Same set-up as the check (plugged in, lid open,
 other apps quit, built-in speakers at 48 kHz):
 
 ```sh
