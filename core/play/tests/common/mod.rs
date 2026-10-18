@@ -265,3 +265,58 @@ pub fn lcg(seed: &mut u64) -> u64 {
     *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
     *seed >> 33
 }
+
+/// A stereo 16-bit WAV of `seconds` at 48 kHz, written fast: frame `i` holds `i` (mod 65536) on
+/// the left and its negative on the right, so where a sample came from can be told (RENDER-30).
+pub fn long_wav(path: &Path, seconds: f64) {
+    let frames = (seconds * SR as f64) as usize;
+    let data = (frames * 4) as u32;
+    let mut b = Vec::with_capacity(44 + data as usize);
+    for part in [&b"RIFF"[..], &(36 + data).to_le_bytes(), b"WAVEfmt ", &16u32.to_le_bytes(), &1u16.to_le_bytes(), &2u16.to_le_bytes()] {
+        b.extend_from_slice(part);
+    }
+    for part in [&SR.to_le_bytes()[..], &(SR * 4).to_le_bytes(), &4u16.to_le_bytes(), &16u16.to_le_bytes(), b"data", &data.to_le_bytes()] {
+        b.extend_from_slice(part);
+    }
+    for i in 0..frames {
+        let x = (i % 65536) as u16 as i16;
+        b.extend_from_slice(&x.to_le_bytes());
+        b.extend_from_slice(&x.wrapping_neg().to_le_bytes());
+    }
+    std::fs::write(path, b).unwrap();
+}
+
+/// What [`long_wav`] holds at frame `i`, as the engine reads it.
+pub fn long_wav_at(i: u64) -> [f32; 2] {
+    let x = (i % 65536) as u16 as i16;
+    [x as f32 / 32768.0, x.wrapping_neg() as f32 / 32768.0]
+}
+
+/// A song at `bpm` that plays one clip of a [`long_wav`] of `seconds` from beat 0, on a stereo audio
+/// lane `clips`: a lane that streams (RENDER-30).
+pub fn long_audio(seconds: f64, bpm: f64) -> Song {
+    let dir = temp("long-audio");
+    let beats = seconds * bpm / 60.0;
+    let files = [
+        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
+        ("song.ts", String::new()),
+        ("data/arrangement.json", json!({"tempo": [{"beat": 0, "bpm": bpm}]}).to_string()),
+        ("data/song/clips.json", json!({"clips": [{"start": 0, "length": beats, "asset": "long.wav"}]}).to_string()),
+    ];
+    for (name, text) in files {
+        let p = dir.join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    long_wav(&dir.join("assets/long.wav"), seconds);
+    let ir: Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
+        "modules": [{"key": "song", "nodes": [{"id": "out", "op": "lane", "lane": "clips"}], "exports": {"out": "out"},
+            "lanes": [{"key": "clips", "kind": "audio<2>"}]}]}))
+    .unwrap();
+    let packages = std_packages();
+    let flat = m2_ir::check(&ir, &packages).unwrap_or_else(|e| panic!("{e:?}"));
+    let (data, diags): (DataSet, _) = Project::open(&dir).unwrap().data(&m2_runtime::decls(&ir), None);
+    assert!(diags.iter().all(|d| !d.code.starts_with("lane.") && d.code != "asset.missing"), "{diags:?}");
+    Song { flat, data, packages, rate: SR, dir }
+}

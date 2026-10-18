@@ -74,6 +74,7 @@ fn a_cell_write_never_waits_for_the_queue() {
         next_seq: Arc::default(),
         cells: Arc::default(),
         alive: Arc::default(),
+        disk: crate::disk::Disk::start(Box::new(|| (0.0, 0.0)), std::sync::Weak::new()),
         device_rate: 48_000,
         device: "test".into(),
     };
@@ -139,6 +140,7 @@ fn a_full_queue_stalls_instead_of_hanging() {
         next_seq: Arc::default(),
         cells: Arc::default(),
         alive: Arc::default(),
+        disk: crate::disk::Disk::start(Box::new(|| (0.0, 0.0)), std::sync::Weak::new()),
         device_rate: 48_000,
         device: "test".into(),
     };

@@ -20,7 +20,7 @@ use std::sync::{Arc, mpsc};
 
 use common::*;
 use m2_ir::Origin;
-use m2_play::{DeviceError, DeviceErrorKind, Gone, Player, alloc};
+use m2_play::{DeviceError, DeviceErrorKind, Driver, Gone, Player, alloc};
 use m2_runtime::{BLOCK, CellTarget, Continues, LaneSwap, LiveEv, NotesData, Renderer, Retired};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
@@ -699,4 +699,57 @@ fn the_device_error_callback_never_allocates() {
     assert_eq!(n, 0);
     let e = player.device_errors();
     assert_eq!((e.xruns, e.changes, e.gone, e.other), (2, 1, 2, 0), "every one counted");
+}
+
+/// Reads made on a thread while it runs a callback (debug builds mark it).
+static CALLBACK_READS: AtomicUsize = AtomicUsize::new(0);
+
+fn on_read(_: usize) {
+    if alloc::in_callback() {
+        CALLBACK_READS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+// RENDER-30, RENDER-28: a lane that streams from the disk is only copied on the sound thread. Play,
+// a seek, a loop's wraps and a tempo activation over a long clip, under the trap: no callback
+// allocates, and none reads a file (the disk thread does).
+#[test]
+fn the_sound_thread_never_reads_a_file() {
+    m2_os::fs::watch_reads(on_read);
+    let (a, b) = (long_audio(30.0, 120.0), long_audio(30.0, 100.0));
+    let r = a.renderer();
+    let info = r.info();
+    let (player, mut d) = Player::driven(SR);
+    player.open(r).unwrap();
+    let mut buf = vec![0.0f32; 2 * 480];
+    let run = |d: &mut Driver, callbacks: usize, buf: &mut Vec<f32>| {
+        let mut n = 0;
+        for _ in 0..callbacks {
+            n += trapped(|| d.fill(buf, 2));
+            drop(d.drain_retired());
+        }
+        n
+    };
+    player.play();
+    let mut allocs = run(&mut d, 100, &mut buf);
+    player.seek(30.0).unwrap();
+    allocs += run(&mut d, 100, &mut buf);
+    player.set_loop(Some((32.0, 34.0))).unwrap();
+    player.seek(32.0).unwrap();
+    allocs += run(&mut d, 1000, &mut buf);
+    player.activate(b.after(&a, &info)).unwrap();
+    allocs += run(&mut d, 200, &mut buf);
+    assert!(player.status().pos > 0 && peak(&buf.chunks(2).map(|f| [f[0], f[1]]).collect::<Vec<_>>()) > 0.0, "it plays");
+    assert_eq!(player.disk_misses().iter().map(|m| m.1).sum::<u64>(), 0, "the disk kept up");
+    // A disk that never answers: a seek far off finds nothing, and the callback plays silence
+    // rather than read for itself.
+    player.set_loop(None).unwrap();
+    player.pause_disk(true);
+    player.seek(10.0).unwrap();
+    allocs += run(&mut d, 50, &mut buf);
+    if cfg!(debug_assertions) {
+        assert_eq!(CALLBACK_READS.load(Ordering::Relaxed), 0, "a callback read a file");
+    }
+    assert_eq!(allocs, 0, "the callback allocated");
+    assert!(player.disk_misses().iter().map(|m| m.1).sum::<u64>() > 0, "the lane missed");
 }

@@ -22,6 +22,7 @@
 
 pub mod alloc;
 mod cells;
+mod disk;
 mod engines;
 pub mod outputs;
 mod resample;
@@ -300,6 +301,42 @@ struct Shared {
 }
 
 impl Shared {
+    /// The last whole publication of the audio thread.
+    fn published(&self) -> Status {
+        let s = self;
+        loop {
+            let a = s.seq.load(Ordering::Acquire);
+            if a & 1 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let st = Status {
+                pos: s.pos.load(Ordering::Relaxed),
+                beats: f64::from_bits(s.beats.load(Ordering::Relaxed)),
+                seconds: f64::from_bits(s.seconds.load(Ordering::Relaxed)),
+                playing: s.playing.load(Ordering::Relaxed),
+                generation: s.generation.load(Ordering::Relaxed),
+                pending: None,
+            };
+            fence(Ordering::Acquire);
+            if s.seq.load(Ordering::Relaxed) == a {
+                return st;
+            }
+        }
+    }
+
+    /// Where playback is or is about to be, in beats: a load or a seek sent and not yet taken is
+    /// where it goes. What the disk thread reads around.
+    fn heading(&self) -> f64 {
+        if self.loads_sent.load(Ordering::Acquire) > self.loads_applied.load(Ordering::Acquire) {
+            return f64::from_bits(self.load_beat.load(Ordering::Relaxed));
+        }
+        if self.seeks_sent.load(Ordering::Acquire) > self.seeks_applied.load(Ordering::Acquire) {
+            return f64::from_bits(self.seek_target.load(Ordering::Relaxed));
+        }
+        self.published().beats
+    }
+
     /// cpal's error callback: count `e` by kind, and nothing else. On ALSA it runs on the audio
     /// thread, and CoreAudio's overloads come from its realtime thread, so it never allocates,
     /// locks or prints (RENDER-28): the stream's thread logs the counts. cpal makes an xrun's
@@ -711,21 +748,37 @@ pub struct Player {
     cells: Arc<Writer>,
     /// Held by every clone: once the last is let go, its stream stops and its threads end.
     alive: Arc<()>,
+    /// Its disk thread's side: the audio lanes it keeps filled (RENDER-30).
+    disk: Arc<disk::Disk>,
     /// The device's own rate. The engine runs at the project's.
     pub device_rate: u32,
     pub device: String,
 }
 
 /// Plays the audio thread's part for tests and tools: [`Driver::fill`] is the device callback.
+/// Paced (the default), each callback first lets the disk thread read what it will play, as a
+/// device's real time does: a driven player runs faster than real time.
 pub struct Driver {
     cb: Callback,
     retired: Receiver<Gone>,
+    disk: Arc<disk::Disk>,
+    paced: bool,
 }
 
 impl Driver {
-    /// One device callback, interleaved `channels`.
+    /// One device callback, interleaved `channels`: paced, once the disk thread holds what the
+    /// disk keeps for where playback is.
     pub fn fill(&mut self, data: &mut [f32], channels: usize) {
+        if self.paced {
+            self.disk.settle(Duration::from_secs(2));
+        }
         self.cb.fill(data, channels);
+    }
+
+    /// Callbacks that wait for the disk thread before they run, or not: an unpaced driver meets
+    /// the disk as a device does, which only real time keeps up with (tests).
+    pub fn set_paced(&mut self, on: bool) {
+        self.paced = on;
     }
 
     /// What the callback retired so far: drop it off the audio thread.
@@ -821,15 +874,10 @@ impl Player {
         let (retired_tx, retired) = bounded::<Gone>(RETIRED);
         let shared = Arc::new(Shared::default());
         let cb = Callback::new(rx, retired_tx, shared.clone(), device_rate);
-        let player = Player {
-            tx,
-            shared,
-            next_seq: Arc::default(),
-            cells: Arc::default(),
-            alive: Arc::default(),
-            device_rate,
-            device: device.into(),
-        };
+        let alive = Arc::new(());
+        let s = shared.clone();
+        let disk = disk::Disk::start(Box::new(move || (s.heading(), s.published().beats)), Arc::downgrade(&alive));
+        let player = Player { tx, shared, next_seq: Arc::default(), cells: Arc::default(), alive, disk, device_rate, device: device.into() };
         (player, cb, retired)
     }
 
@@ -984,7 +1032,8 @@ impl Player {
         let (player, cb, retired) = Player::parts(device_rate, "driven");
         // No device of its own: free at once.
         player.shared.freed.store(true, Ordering::Relaxed);
-        (player, Driver { cb, retired })
+        let disk = player.disk.clone();
+        (player, Driver { cb, retired, disk, paced: true })
     }
 
     /// [`Player::driven`], each block rendered on `runner`'s threads: tests keep their own pool.
@@ -1031,6 +1080,15 @@ impl Player {
         Ok(seq)
     }
 
+    /// A renderer about to be sent, to play from `at` (else where playback is): its rings are the
+    /// disk thread's to fill (D11), and its new lanes hold the next half second from there first,
+    /// or 500 ms passed (D9). A given `at` is read first until [`disk::Disk::sought`].
+    fn streaming(&self, renderer: &mut Renderer, at: Option<f64>) {
+        renderer.from_disk();
+        let new = self.disk.register(renderer.audio_lanes());
+        self.disk.prefill(&new, at);
+    }
+
     fn replace_with(&self, mut renderer: Renderer, keep: Keep) -> Result<()> {
         self.cells.sending(&mut renderer);
         self.shared.rate.store(renderer.sample_rate(), Ordering::Relaxed);
@@ -1049,7 +1107,10 @@ impl Player {
         renderer.set_strict(false);
         renderer.set_transport(Transport::new(0, false));
         self.loading(0, 0.0, false);
-        self.replace_with(renderer, Keep::Nothing)
+        self.streaming(&mut renderer, Some(0.0));
+        let sent = self.replace_with(renderer, Keep::Nothing);
+        self.disk.sought();
+        sent
     }
 
     /// A fresh engine for `renderer` (a rate change), at the same beat, play state and loop.
@@ -1060,7 +1121,10 @@ impl Player {
         let beat = now.pending.unwrap_or(now.beats);
         let pos = m2_runtime::transport::frame_of(renderer.tempo(), beat, renderer.sample_rate() as f64);
         self.loading(pos, beat, now.playing);
-        self.replace_with(renderer, Keep::Position)
+        self.streaming(&mut renderer, Some(beat));
+        let sent = self.replace_with(renderer, Keep::Position);
+        self.disk.sought();
+        sent
     }
 
     /// Where a load about to be sent starts, which [`Self::status`] reports until it is taken.
@@ -1080,6 +1144,7 @@ impl Player {
     /// its generation and the message's sequence number.
     pub fn activate(&self, mut renderer: Renderer) -> Result<(u64, u64)> {
         renderer.set_strict(false);
+        self.streaming(&mut renderer, None);
         self.cells.sending(&mut renderer);
         let generation = renderer.generation();
         Ok((generation, self.envelope(EngineMsg::Activate { renderer: Box::new(renderer) })?))
@@ -1120,12 +1185,29 @@ impl Player {
         if !beat.is_finite() {
             return Err(anyhow!("can't seek to beat {beat}"));
         }
-        self.transport(Cmd::Seek(beat))
+        // The target's audio first, for 30 ms at most (D8).
+        self.disk.seek(beat.max(0.0));
+        let sent = self.transport(Cmd::Seek(beat));
+        self.disk.sought();
+        sent
     }
 
-    /// Loop between two beats, or stop looping.
+    /// Loop between two beats, or stop looping. The loop start's audio is kept ready while it is on.
     pub fn set_loop(&self, beats: Option<(f64, f64)>) -> Result<u64> {
+        self.disk.set_loop(beats);
         self.transport(Cmd::Loop(beats))
+    }
+
+    /// The blocks the audio lanes of each module missed so far, for the plan sent last: each played
+    /// a moment of silence because the disk was too slow (RENDER-30, D7).
+    pub fn disk_misses(&self) -> Vec<(String, u64)> {
+        self.disk.misses()
+    }
+
+    /// The disk thread stops reading, or reads again: a disk that never answers (tests).
+    #[doc(hidden)]
+    pub fn pause_disk(&self, on: bool) {
+        self.disk.pause(on);
     }
 
     /// A live note's On or Off, or its source's release, for lane `slot` of the renderer
@@ -1205,26 +1287,7 @@ impl Player {
 
     /// The last whole publication of the audio thread.
     fn published(&self) -> Status {
-        let s = &self.shared;
-        loop {
-            let a = s.seq.load(Ordering::Acquire);
-            if a & 1 == 1 {
-                std::hint::spin_loop();
-                continue;
-            }
-            let st = Status {
-                pos: s.pos.load(Ordering::Relaxed),
-                beats: f64::from_bits(s.beats.load(Ordering::Relaxed)),
-                seconds: f64::from_bits(s.seconds.load(Ordering::Relaxed)),
-                playing: s.playing.load(Ordering::Relaxed),
-                generation: s.generation.load(Ordering::Relaxed),
-                pending: None,
-            };
-            fence(Ordering::Acquire);
-            if s.seq.load(Ordering::Relaxed) == a {
-                return st;
-            }
-        }
+        self.shared.published()
     }
 
     /// Where playback is. Never waits for anything: a project loaded, or a seek, a play or a stop
