@@ -40,12 +40,15 @@ CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP M2_HEADLESS=target/debug/examples/headle
   the browser (default: puppeteer's cached `chrome-headless-shell` 133.0.6943.141 for this OS). Off
   the Mac the suites start it through `chrome-as-mac.sh`, which gives pages a Mac user agent, so they
   test the Mac's keys on every OS (`chrome.mjs`). `E2E_TIMEOUT` (seconds, default 600) bounds a suite.
-- Hosted CLAP plugins: only `live3b` gets `CLAP_PATH`, and only when you set it. There is no
+- Hosted CLAP plugins: only `live3b` and `ph-window` get `CLAP_PATH`, and only when you set it. There is no
   default, so your own plugin folder is never used unasked; `CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP`
   uses it. Its with-plugins part needs Surge XT and Airwindows Consolidated in that folder. Without
-  them, live3b skips those 20 checks with one `SKIP` line and passes 40 of its 60, and `run.mjs`
-  reports it `PART` (with a note at the start when `CLAP_PATH` isn't set). Every other suite runs
-  **without** `CLAP_PATH`; `fx-fixes` must.
+  them, live3b skips those 20 checks with one `SKIP` line and passes 40 of its 60, ph-window skips
+  all of its 9, and `run.mjs` reports each `PART` (with a note at the start when `CLAP_PATH` isn't
+  set). Every other suite runs **without** `CLAP_PATH`; `fx-fixes` must.
+- Plugin windows: `ph-window` opens Surge XT's own window. On Linux it starts an invisible Xvfb of
+  its own for it (never your screen; `E2E_DISPLAY` names another), and skips without Xvfb; on macOS
+  the window flashes up on your screen for a moment.
 - MIDI: every suite's server and the suite itself get `M2_MIDI=inject`, so no server opens a MIDI
   device, and `POST /api/graph/midi/inject` plays what a keyboard would send. Sound input: they get
   `M2_AUDIO_INPUT=inject` and `M2_AUDIO_INPUTS="Test mic,USB mic"`, so `POST /api/graph/input/inject`
@@ -135,6 +138,7 @@ A commit from before the `sounds` merge has no `examples/sounds`: the script ski
 | `s4-meter` | fix | 8 | bars by the time signatures: a 7/8 and a tempo change from bar 5, in the timeline and the roll (FMT-13) |
 | `live3a` | fix | 49 | the live engine (step 3a): seeks and loops are transport jumps, notes and effects added while playing don't jump back, stop holds, the roll locks while its lane file doesn't read |
 | `live3b` | proj | 60 (40 without plugins) | gesture leases (step 3b), on the Mix strips' faders and pans: drags stay live through slow compiles, outside saves, a held knob, a closed window, broken code and renumbered calls; with `CLAP_PATH` (Surge XT and Airwindows), plugin instances carried across a rebuild, heard in a captured stream, and an export that borrows them: playback paused, "Paused for export" in the top bar's status pill, and play going on from there (step 7) |
+| `ph-window` | none | 9 (none without plugins or a screen) | plugin windows (HOST-7, track ph slice 2): on a server of its own on with-plugins, the lead's Surge XT box says Open window, opens Surge XT's own window in the plugin host process (the state says `open`, the box Close window), and closes it again |
 | `s5-knobs` | fix | 120 | descriptors (step 5): every declared control is a knob with its declared range and default (a mixer channel's `db` left out too; the mixer's levels and pans are drawn on their Mix strips); turning a left-out one inserts it, undo takes it out; the browser's categories and inserts; `import { delay as echo }`; the kick's fader written into its bare mixer entry as `db(…)` on its first move in the Mix view, and a channel's first pan through `/api/graph/mix/insert` (8b.3b) |
 | `s6-builders` | fix | 56 | the first step-6 builders: rename a track's label in place, automate a knob from its menu, move a renamed track's whole folder from Needs attention in the status pill's popover; each one Tx and one undo step |
 | `s6-write` | fix | 36 | the step-6 write path: an outside lane write taken in once it settles; a lane written in two halves never shows empty; a project another program holds opens read-only (said once, by the status pill; no edit offered) and writes after Retry; broken code opens in the code view, silent, its tracks shown greyed from `data/` (D2), and plays once a save compiles |

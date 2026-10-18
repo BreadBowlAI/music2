@@ -571,9 +571,9 @@ fn with_plugins(lab: &Lab, name: &str) -> Result<std::result::Result<(std::path:
     Ok(Ok((dir, graph)))
 }
 
-/// Plugin instances this process has created so far (`m2_plugins::InProcess`).
+/// Plugin instances this process has created so far, through its host (the host process).
 fn created() -> u64 {
-    m2_plugins::InProcess::counts().0
+    m2_plugins::host().counts().0
 }
 
 /// G8 on `examples/with-plugins`: a lease on the lead's channel level in song.ts, updated every

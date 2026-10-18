@@ -338,10 +338,19 @@ impl Engine {
 
     /// Where the transport is after the last frame handed out, and what plays.
     pub fn status(&self) -> Status {
-        let seconds = self.pos as f64 / self.rate;
+        // The position heard: the song's output is `L` frames late (RENDER-19), so it is where the
+        // transport was `L` frames before, while that is remembered.
+        let pos = match self.current.as_deref() {
+            Some(r) if r.latency() > 0 => {
+                let next = self.clock.saturating_sub(self.out.left() as u64);
+                next.checked_sub(r.latency() as u64).and_then(|t| r.position_at(t)).unwrap_or(self.pos)
+            }
+            _ => self.pos,
+        };
+        let seconds = pos as f64 / self.rate;
         match self.current.as_deref() {
             Some(r) => Status {
-                pos: self.pos,
+                pos,
                 beats: r.tempo().beat_at(seconds),
                 seconds,
                 playing: r.transport().playing(),

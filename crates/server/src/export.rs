@@ -230,6 +230,12 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                 // What the export carries: a plugin that isn't installed is silent in it (FMT-18a),
                 // and one it couldn't borrow played anew (RENDER-1).
                 Ok((path, r)) => {
+                    // A plugin whose latency changed while it rendered played out of time from then on
+                    // (RENDER-17).
+                    if r.latency_changed > 0 {
+                        let words = m2_editor::render::LATENCY_CHANGED;
+                        carried.push(Diagnostic::warning("latency.changed", format!("{}{}", words[..1].to_uppercase(), &words[1..])));
+                    }
                     json!({"done": true, "path": path, "seconds": r.seconds(), "peak_db": r.peak_db, "problems": carried})
                 }
                 Err(e) => json!({"error": format!("{e:#}"), "path": thread_path}),
@@ -391,9 +397,13 @@ impl Lent {
         // One that won't come back active is marked failed before playback resumes, so its node
         // plays silence and never calls it; the session replaces it from its committed state
         // (HOST-5) and says so.
-        if let Err(e) = host.activate(h, self.rate, BLOCK as u32) {
-            eprintln!("music2: a plugin didn't come back after the export: {e:#}");
-            inst.kill();
+        match host.activate(h, self.rate, BLOCK as u32) {
+            // Measured again (RENDER-17): the session compensates a change at its next activation.
+            Ok(frames) => inst.set_latency(frames),
+            Err(e) => {
+                eprintln!("music2: a plugin didn't come back after the export: {e:#}");
+                inst.kill();
+            }
         }
         inst.mark_reloaded();
     }

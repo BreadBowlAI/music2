@@ -84,6 +84,11 @@ pub enum FOp {
     NoteField(NoteField),
     /// Voice graphs only: an output of a node outside the voice.
     Capture(PortRef),
+    /// A delay of `frames` samples on an audio or control signal, which the runtime's planner
+    /// inserts so every path into a node arrives aligned (RENDER-18). Never in a checked graph.
+    Delay { input: PortRef, frames: u32 },
+    /// The notes of lane node `lane`, `frames` samples late (RENDER-18): inserted as [`FOp::Delay`].
+    NoteDelay { lane: usize, frames: u32 },
 }
 
 impl FOp {
@@ -106,6 +111,8 @@ impl FOp {
                 }));
                 d
             }
+            FOp::Delay { input, .. } => vec![input.node],
+            FOp::NoteDelay { lane, .. } => vec![*lane],
             _ => vec![],
         }
     }
@@ -821,8 +828,14 @@ impl<'a> Checker<'a> {
                         self.diags.push(diag(m, Some(node), format!("unknown {what} `{kernel}`")));
                         continue;
                     };
-                    if sig.latency > 0 {
-                        self.diags.push(diag(m, Some(node), format!("`{kernel}` adds {} samples of latency, and latency compensation isn't implemented yet", sig.latency)));
+                    // The planner compensates latency at the top level (RENDER-18), never inside a
+                    // voice, whose notes start at their own sample.
+                    if sig.latency > 0 && scope.in_voice() {
+                        self.diags.push(diag(
+                            m,
+                            Some(node),
+                            format!("`{kernel}` adds {} samples of latency, which can't be made up for inside poly; use it after the voices", sig.latency),
+                        ));
                         continue;
                     }
                     let mut typed_conns = HashMap::new();
@@ -1495,8 +1508,17 @@ mod tests {
                 "modules": [{"key": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": "x"}}]}))
             .unwrap()
         };
-        let e = check(&ir(json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "x", "op": "kernel", "kernel": "t:look", "inputs": {"in": "o"}}]), json!([])), &k).unwrap_err();
-        assert!(e[0].message.contains("latency compensation"), "{}", e[0]);
+        // Latency: compensated at the top level (RENDER-18), refused inside a voice.
+        assert!(check(&ir(json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "x", "op": "kernel", "kernel": "t:look", "inputs": {"in": "o"}}]), json!([])), &k).is_ok());
+        let voiced = json!([
+            {"id": "n", "op": "lane", "lane": "n"},
+            {"id": "x", "op": "poly", "events": "n", "voices": 2, "body": {"out": "l", "nodes": [
+                {"id": "o", "op": "kernel", "kernel": "t:saw"},
+                {"id": "l", "op": "kernel", "kernel": "t:look", "inputs": {"in": "o"}},
+            ]}},
+        ]);
+        let e = check(&ir(voiced, json!([{"key": "n", "kind": "events<note>"}])), &k).unwrap_err();
+        assert!(e[0].message.contains("inside poly"), "{}", e[0]);
         // Audio lanes are supported: a lane can be the song's output.
         assert!(check(&ir(json!([{"id": "x", "op": "lane", "lane": "vox"}]), json!([{"key": "vox", "kind": "audio<2>"}])), &k).is_ok());
         let e = check(

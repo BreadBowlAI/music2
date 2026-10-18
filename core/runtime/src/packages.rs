@@ -397,10 +397,16 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
 /// A plugin as typed ports: `in: audio<n>`, `notes: events<note>`, one control per
 /// parameter (in the plugin's own units, as `scalar`, optional), and `out: audio<n>`. Read from an
 /// instance created and activated through the host (on the plugin main thread), then destroyed:
-/// activating is what measures its latency (RENDER-21's check).
+/// activating is what measures its latency at its default state, which the check refuses inside a
+/// `poly` voice only (RENDER-21); a node's own instance measures its own (RENDER-17).
 fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plugins::Info)> {
     let Some(clap_id) = id.strip_prefix("clap:") else { bail!("plugin ids start with `clap:`, not `{id}`") };
-    let found = m2_plugins::find(clap_id)?;
+    // Found by the host, which loads plugin code: the app never does (HOST-3).
+    let (found, _) = host.scan();
+    let found = found
+        .into_iter()
+        .find(|f| f.id == clap_id)
+        .with_context(|| format!("no CLAP plugin `{clap_id}` is installed (looked in {:?})", m2_plugins::search_paths()))?;
     let (h, mut info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
     let latency = host.activate(h, 48_000, 128);
     host.destroy(h);
@@ -531,6 +537,7 @@ mod tests {
             note_in: false,
             params: params.iter().map(param).collect(),
             latency: 0,
+            gui: false,
         };
         set.plugins.insert(id.into(), Hosted::Installed(plugin_sig(id, &info).unwrap(), info));
     }

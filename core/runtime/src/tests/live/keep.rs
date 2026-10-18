@@ -14,6 +14,7 @@ use super::*;
 /// 120 bpm: a beat is 24 000 frames.
 const BEAT: u64 = 24_000;
 
+mod latency;
 mod plugins;
 
 fn probe_packages() -> PackageSet {

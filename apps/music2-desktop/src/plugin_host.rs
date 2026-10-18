@@ -1,3 +1,6 @@
+//! HOST-3 in the app: plugins run in the host process, this app run again with
+//! `--m2-plugin-host`, which [`install`] serves when it sees that flag; quit ends it.
+//!
 //! HOST-2 in the app: hosted plugins make their main-thread calls on the app's main loop. On macOS
 //! that is AppKit's main thread, through the main dispatch queue, which AppKit's run loop drains
 //! (Tauri runs `[NSApp run]` there). On Linux, where GTK owns the main thread and plugins never post
@@ -60,7 +63,10 @@ pub fn close_for_quit(server: &AppState) -> Teardown {
     while host.live() > 0 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
-    Teardown { destroyed: closed.destroyed, left: host.live() }
+    let left = host.live();
+    // The plugin host process ends with the app (HOST-3).
+    m2_plugins::end_host_process();
+    Teardown { destroyed: closed.destroyed, left }
 }
 
 /// Leave at once, without running exit handlers.

@@ -640,3 +640,80 @@ fn a_resampled_song_on_n_threads_matches_one_thread() {
     assert_eq!(first_diff(&four.out, &one.out), None, "resampled on 4 threads: one thread's bits");
     assert!(four.on_workers > 0);
 }
+
+/// The host process, as `m2-plugin-host` (built beside the tests).
+fn remote() -> Arc<dyn m2_plugins::PluginHost> {
+    Arc::new(m2_plugins::Remote::for_tests())
+}
+
+// HOST-3, RENDER-2a: an offline render through the host process is the in-process render, bit for
+// bit: a probe instrument on notes, its gain from a lane and its level a literal, beside a probe
+// tagged `sets-fz` in the subnormal chain, which leaves its thread flushing after every call (the
+// host process puts the one mode back, as the engine does). Red with that reset removed there.
+// With Surge XT and Airwindows in CLAP_PATH, `examples/with-plugins` too, each second of the song
+// within 1 dB (G7e's rule: Surge XT renders other bits each run, in either host).
+#[test]
+fn renders_through_the_host_process_are_the_same_bits() {
+    let track = "import { kernel, plugin, track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { sum } from \"std/math\";\n\n\
+                 const down = (x: any) => [1e-30, 1e-10].reduce((y, by) => kernel(\"std:scale\", { in: y, by }), x);\n\
+                 const up = (x: any) => [1e30, 1e10].reduce((y, by) => kernel(\"std:scale\", { in: y, by }), x);\n\n\
+                 export default track(\"t\", ({ lane }) => sum(\n  \
+                 up(plugin(\"clap:m2.probe\", { key: \"fz\", in: down(osc.sine(440)), gain_1: 1 })),\n  \
+                 plugin(\"clap:m2.probe\", { key: \"a\", notes: lane.notes(\"n\"), gain_1: lane.control(\"g\", \"scalar\", 0.5), level_2: 0.2 }),\n));\n";
+    let notes = json!({"clips": [{"id": "a", "start": 0, "length": 8, "notes": (0..16).map(|k| json!({"pitch": 57 + k % 5, "start": k as f64 * 0.25, "length": 0.5})).collect::<Vec<_>>()}]}).to_string();
+    let gain = r#"{"unit": "scalar", "clips": [{"id": "r", "start": 0, "length": 8, "points": [[0, 0.2], [2, 0.9], [4, 0.4]]}]}"#;
+    let files = [
+        ("song.ts", "import { song } from \"@m2/core\";\nimport t from \"./tracks/t\";\n\nexport default song(() => t.out);\n"),
+        ("tracks/t.ts", track),
+        ("data/t/fz.state", "sets-fz"),
+        ("data/t/fz.state.json", r#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#),
+        ("data/t/n.json", notes.as_str()),
+        ("data/t/g.json", gain),
+    ];
+    let frames = SR as usize;
+    let here = offline(&project("hp-here", &files), frames);
+    let there = offline(&project_on("hp-there", &files, Some(remote())), frames);
+    assert!(peak(&here) > 0.5, "the notes and the chain play: {}", peak(&here));
+    assert_eq!(first_diff(&here, &there), None, "the host process renders the same bits");
+
+    let clap = std::env::var_os("CLAP_PATH").map(std::path::PathBuf::from);
+    if !clap.is_some_and(|c| c.join("Surge XT.clap").exists() && c.join("Airwindows Consolidated.clap").exists()) {
+        eprintln!("renders_through_the_host_process_are_the_same_bits: no Surge XT and Airwindows in CLAP_PATH, so with-plugins wasn't rendered");
+        return;
+    }
+    let render = |host: Option<Arc<dyn m2_plugins::PluginHost>>| {
+        let dir = temp("hp-with-plugins");
+        copy(&repo().join("examples/with-plugins"), &dir);
+        let song = compile_on(dir, host);
+        offline(&song, (song.seconds() * SR as f64) as usize)
+    };
+    let (a, b) = (render(None), render(Some(remote())));
+    assert_eq!(a.len(), b.len());
+    let level = |x: &[[f32; 2]]| (x.iter().map(|f| (f[0] as f64).powi(2) + (f[1] as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt() + 1e-9;
+    // Each whole second of the song; the second past its end is a tail, Surge XT's own noise.
+    let song = a.len() / SR as usize - 1;
+    for (s, (x, y)) in a.chunks(SR as usize).zip(b.chunks(SR as usize)).take(song).enumerate() {
+        let db = 20.0 * (level(x) / level(y)).log10();
+        assert!(db.abs() < 1.0, "with-plugins, second {s}: {db:.2} dB apart");
+    }
+}
+
+// RENDER-18: a song with no latency gets no delay, so its plan, and its bits, are what they were:
+// every fixture, p16, and `examples/with-plugins` when Surge XT and Airwindows are in CLAP_PATH
+// (neither has latency). Red with a 1-frame latency forced on every kernel.
+#[test]
+fn no_fixture_gets_a_delay() {
+    let mut songs: Vec<(String, Song)> =
+        ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"].map(|n| (n.to_string(), fixture(n))).into();
+    songs.push(("p16".into(), p16()));
+    let clap = std::env::var_os("CLAP_PATH").map(std::path::PathBuf::from);
+    match clap.is_some_and(|c| c.join("Surge XT.clap").exists() && c.join("Airwindows Consolidated.clap").exists()) {
+        true => songs.push(("examples/with-plugins".into(), fixture("examples/with-plugins"))),
+        false => eprintln!("no_fixture_gets_a_delay: no Surge XT and Airwindows in CLAP_PATH, so with-plugins wasn't planned"),
+    }
+    for (name, song) in &songs {
+        let r = song.renderer();
+        let info = r.info();
+        assert_eq!((r.latency(), r.stats().delays, info.played.is_some()), (0, 0, false), "{name} has no latency, so no delay");
+    }
+}

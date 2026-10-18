@@ -1,5 +1,8 @@
-//! HOST-2 in the app, without launching it: the app's own hook ([`plugin_host`], the same file
-//! `main` uses) installed on the process's main thread. On macOS the main thread then runs AppKit's
+//! HOST-3 and HOST-2 in the app, without launching it: the app's own hook ([`plugin_host`], the
+//! same file `main` uses) installed on the process's main thread. Plugins run in the host
+//! process, this program run again with `--m2-plugin-host`, which `main` serves first thing as the
+//! app does; the probe's records stay there (its HOST-2 rule inside it is tested by
+//! `core/plugins/tests/main_thread.rs`). On macOS the main thread then runs AppKit's
 //! event loop, `[NSApp run]`, as Tauri does (with no window, no Dock icon and no menu bar), and the
 //! plugins' main thread is AppKit's, reached through the main dispatch queue. On Linux it is the
 //! app's loop thread of its own, and the main thread, which GTK would own, only waits. Meanwhile
@@ -7,10 +10,9 @@
 //! thread, plays it, rebuilds it (the instance carried, HOST-5), changes its state (loaded into
 //! the same instance, RENDER-26b), and closes it the way quit does.
 //!
-//! Every main-thread call the probe recorded must have run on the plugins' main thread, which is
-//! the process's main thread exactly when `APP_ON_PROCESS_MAIN`, with the host's thread checks
-//! answering truthfully; `on_main_thread` must run there and never inside `process`; and quit's
-//! close must leave no instance alive. libtest owns the main thread, so this test has no harness.
+//! The probe must be made in the host process, not here; carried across the rebuild and the state
+//! load; and quit's close must leave no instance alive and end the host process. libtest owns the
+//! main thread, so this test has no harness.
 
 // What the test doesn't call (`leave_now`) is the app's.
 #[allow(dead_code)]
@@ -19,7 +21,6 @@ mod plugin_host;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use m2_os::main_loop::APP_ON_PROCESS_MAIN;
@@ -156,26 +157,24 @@ fn eventually(what: &str, mut ok: impl FnMut() -> bool) {
 /// The app's server and project work, off the main thread as in the app. Returns what it saw.
 fn work(dir: PathBuf) -> String {
     probe::install();
-    let n = |a: &AtomicU64| a.load(Ordering::Relaxed);
     assert!(!m2_plugins::on_main_thread(), "the worker isn't the plugins' main thread");
-    // The executor is the app's main loop: a job posted there runs on the plugins' main thread,
-    // which is the process's main thread exactly when the OS says so.
-    let (on, process_main, main) = m2_plugins::main_thread()
-        .unwrap()
-        .run(|| (m2_plugins::on_main_thread(), m2_os::thread::is_process_main(), m2_os::thread::token()))
-        .unwrap();
-    assert!(on && process_main == APP_ON_PROCESS_MAIN, "a job ran on the plugins' main thread: {on}; on the process's: {process_main}");
-    let there = |c: &probe::Call| c.thread == main && c.process_main == APP_ON_PROCESS_MAIN;
+    // The app's main loop still runs jobs: on the process's main thread exactly when the OS says so.
+    let (on, process_main) = m2_plugins::main_thread().unwrap().run(|| (m2_plugins::on_main_thread(), m2_os::thread::is_process_main())).unwrap();
+    assert!(on && process_main == APP_ON_PROCESS_MAIN, "a job ran on the app's main loop: {on}; on the process's: {process_main}");
+    assert_eq!(m2_plugins::host_process(), None, "no host process before a plugin is needed");
 
     let running = m2_server::start(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "app".into() }).unwrap();
     let server = running.state.clone();
+    let created = || m2_plugins::host().counts().0;
     // The launch project, as `setup` opens it: off the main thread.
     plugin_host::open_off_main(server.clone(), dir.clone(), |_, dir, e| panic!("couldn't open {}: {e:#}", dir.display())).join().unwrap();
     server.graph.transport("play").unwrap();
-    let live = probe::tagged("desktop");
-    assert_eq!(live.len(), 1, "one probe instance plays the song");
-    let first = live[0].clone();
-    eventually("the probe plays", || n(&first.process) > 50);
+    let host = m2_plugins::host_process().expect("the app's hook started the host process (HOST-3)");
+    assert_ne!(host, std::process::id());
+    assert!(m2_plugins::probe::tagged("desktop").is_empty(), "the probe runs in the host process, not here");
+    let made = created();
+    assert!(made >= 1 && m2_plugins::host().live() >= 1, "the probe is made there");
+    eventually("the song plays", || server.graph.status().playing);
 
     // HOST-5: an outside save that rebuilds the song carries the instance: no second one is made.
     let revision = |s: &m2_server::AppState| s.graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
@@ -183,61 +182,23 @@ fn work(dir: PathBuf) -> String {
     std::fs::write(dir.join("tracks/a.ts"), format!("// a comment\n{A}")).unwrap();
     assert!(server.graph.poll());
     assert!(revision(&server) > before, "the save was taken in");
-    let played = n(&first.process);
-    eventually("the carried instance plays on", || n(&first.process) > played + 50);
-    assert_eq!(probe::tagged("desktop").len(), 1, "carried, not created again");
-    assert_eq!(first.main_calls().iter().filter(|c| c.what == "init").count(), 1, "initialised once");
-
-    // RENDER-26b: a changed state blob loads into the instance that plays, on the plugins' main
-    // thread (checked with every call below): none is made.
-    let loads = |s: &probe::Stats| s.main_calls().iter().filter(|c| c.what == "load").count();
-    let loaded = loads(&first);
+    // RENDER-26b: a changed state blob loads into the instance that plays: none is made.
     std::fs::write(dir.join("data/p/p.state"), probe::state("desktop-2", 0.5)).unwrap();
     assert!(server.graph.poll());
-    assert_eq!((first.tag.lock().unwrap().clone(), loads(&first)), ("desktop-2".to_string(), loaded + 1), "one load, into it");
-    assert!(probe::tagged("desktop").is_empty() && probe::tagged("desktop-2").len() == 1, "no instance made for the new state");
-    let played = n(&first.process);
-    eventually("it plays on", || n(&first.process) > played + 50);
-    eventually("the plugin's requested callbacks ran", || n(&first.callbacks) > 0);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(created(), made, "carried across the rebuild and the load, not created again");
+    assert!(server.graph.news()["problems"].as_array().unwrap().is_empty(), "{}", server.graph.news());
 
-    // Quit, from a thread of its own while the app's main loop serves the plugins.
+    // Quit, from a thread of its own while the app's main loop runs: the host process ends too.
     let quit = std::thread::spawn({
         let server = server.clone();
         move || plugin_host::close_for_quit(&server)
     });
     let teardown = quit.join().unwrap();
     assert!(teardown.left == 0 && teardown.destroyed >= 1, "quit left plugin instances alive: {teardown:?}");
-    assert!(first.main_calls().iter().any(|c| c.what == "destroy"), "quit destroyed the playing instance");
-
-    // HOST-2: every main-thread call, the describes made while compiling included, ran on the
-    // plugins' main thread, where the host's checks said main and not audio; `stop_processing`
-    // ran there with the audio role taken. `process` ran elsewhere, with the audio role, and
-    // `on_main_thread` never inside it.
-    let mut all = probe::tagged("desktop");
-    all.extend(probe::tagged("desktop-2"));
-    all.extend(probe::tagged(""));
-    let mut calls = 0;
-    for s in &all {
-        for c in s.main_calls() {
-            calls += 1;
-            if c.what == "stop_processing" {
-                assert!(there(&c) && c.says_audio, "stop_processing: {c:?}");
-            } else {
-                assert!(there(&c) && c.says_main && !c.says_audio, "{} ran off the main thread: {c:?}", c.what);
-            }
-        }
-        assert_eq!((n(&s.process_on_main), n(&s.process_says_main), n(&s.process_not_audio)), (0, 0, 0), "process's thread");
-        assert_eq!(n(&s.callbacks_in_process), 0, "on_main_thread ran inside process");
-        assert_eq!(n(&s.doubled), 0, "an instance was processed twice for one block");
-    }
+    eventually("quit ended the host process", || m2_plugins::host_process().is_none());
     let surge = with_plugins(&server, &dir);
-    format!(
-        "{} probe instances, {calls} main-thread calls on {WHERE}, {} callbacks; quit destroyed {} and left {}; {surge}",
-        all.len(),
-        n(&first.callbacks),
-        teardown.destroyed,
-        teardown.left
-    )
+    format!("{made} probe instances made in host process {host} from the app's hook; quit destroyed {} and left {}; {surge}", teardown.destroyed, teardown.left)
 }
 
 /// With `CLAP_PATH` naming a folder with Surge XT and Airwindows (tests never read the user's own):
@@ -251,7 +212,7 @@ fn with_plugins(server: &Arc<m2_server::AppState>, scratch: &Path) -> String {
     }
     let dir = scratch.with_file_name(format!("{}-with-plugins", scratch.file_name().unwrap().to_string_lossy()));
     copy(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/with-plugins")), &dir);
-    let created = || m2_plugins::InProcess::counts().0;
+    let created = || m2_plugins::host().counts().0;
     plugin_host::open_off_main(server.clone(), dir.clone(), |_, dir, e| panic!("couldn't open {}: {e:#}", dir.display())).join().unwrap();
     assert!(server.graph.news()["problems"].as_array().unwrap().iter().all(|p| p["code"] != "plugin.missing"));
     server.graph.transport("play").unwrap();
@@ -281,6 +242,10 @@ fn copy(from: &Path, to: &Path) {
 }
 
 fn main() {
+    // Run again as the host process (HOST-3): the app's hook serves, as the app's `main` does.
+    if std::env::args().nth(1).as_deref() == Some(m2_plugins::HOST_FLAG) {
+        plugin_host::install().expect("serves");
+    }
     let dir = std::env::temp_dir().join(format!("m2-app-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // Before any thread starts: the silent player, no MIDI keyboard, and a HOME of its own (never

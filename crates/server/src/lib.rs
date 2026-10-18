@@ -265,6 +265,7 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
                 if last.elapsed() >= Duration::from_millis(300) {
                     last = std::time::Instant::now();
                     changed |= state.graph.catch_up();
+                    changed |= state.graph.plugins_changed();
                 }
                 if changed {
                     state.graph_changed();

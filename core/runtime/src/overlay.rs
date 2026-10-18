@@ -84,6 +84,7 @@ fn ghost_reads(op: &FOp, e: Edge) -> Option<PortRef> {
             voice.nodes.iter().filter_map(|n| if let FOp::Capture(p) = n.op { Some(p) } else { None }).nth(k)
         }
         (FOp::Feedback { input, .. }, Edge::Feedback) => Some(*input),
+        (FOp::Delay { input, .. }, Edge::Input(0)) => Some(*input),
         _ => None,
     }
 }

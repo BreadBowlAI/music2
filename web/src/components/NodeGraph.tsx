@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import {
   ArrowLeft,
+  AppWindow,
   ArrowRight,
   AudioLines,
   Check,
@@ -303,7 +304,8 @@ function geometry(n: ViewNode) {
     return { w: SLIM_W, h: HEAD_H, ins, outs };
   }
   const rows: number[] = [];
-  let y = HEAD_H + (n.voices ? VOICES_H : 0) + PAD;
+  // Under the header: how an instrument plays (RENDER-16), and a hosted plugin's row: its window and latches (HOST-7).
+  let y = HEAD_H + (n.voices ? VOICES_H : 0) + (n.plugin ? ROW_H : 0) + PAD;
   for (const i of n.inputs) {
     const h = inputHeight(i);
     ins.set(i.id, y + h / 2);
@@ -863,6 +865,7 @@ function NodeCard({
         )}
       </div>
       {node.voices && !small && <VoicesLine words={node.voices} />}
+      {node.plugin && <PluginRow node={node.plugin} title={titled} session={session} />}
       {menu && node.menu && (
         <EffectMenuPopover node={node} title={titled} anchor={menu} locked={why ?? (editable ? null : "This song can't be edited here")} onClose={() => setMenu(null)} />
       )}
@@ -949,6 +952,62 @@ function VoicesLine({ words }: { words: string }) {
   return (
     <div data-testid="voices" className="h-6 shrink-0 px-3 flex items-center text-xs text-fg-muted min-w-0 border-b border-line" title={words} aria-label={words}>
       <span className="truncate">{first}</span>
+    </div>
+  );
+}
+
+/**
+ * A plugin's own window and its latches (HOST-7, MON-6), a row under its card's header: Open
+ * window or Close window, and what a gesture there latched, with Re-enable, which gives it back
+ * to its lane or cable.
+ */
+function PluginRow({ node, title, session }: { node: string; title: string; session: number }) {
+  const toast = useStore((s) => s.toast);
+  const box = useStore((s) => s.graph?.plugins?.[node]);
+  const [busy, setBusy] = useState(false);
+  const said = (p: Promise<unknown>) => void p.catch((error) => toast(error instanceof Error ? error.message : String(error)));
+  const open = box?.window === "open";
+  const latched = box?.latched ?? [];
+  return (
+    <div className="h-7 shrink-0 pl-1 pr-3 flex items-center gap-2 border-b border-line text-xs min-w-0" data-plugin={node}>
+      {box && box.window !== "none" ? (
+        <button
+          className="shrink-0 h-6 px-2 flex items-center gap-1.5 rounded-sm font-medium text-accent hover:text-accent-strong hover:bg-hover disabled:text-fg-off cursor-pointer transition-colors duration-80 ease-linear"
+          data-plugin-window={open ? "open" : "closed"}
+          title={open ? `Close ${title}'s own window` : `Open ${title}'s own window, to change its sound there`}
+          aria-label={open ? "Close window" : "Open window"}
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            said(graphApi.pluginWindow(session, node, !open).finally(() => setBusy(false)));
+          }}
+        >
+          <AppWindow size={14} />
+          {/* With a latch beside it, the icon alone: the row has room for one label. */}
+          {latched.length === 0 && (open ? "Close window" : "Open window")}
+        </button>
+      ) : (
+        <span className="pl-2 text-fg-faint truncate">{box ? "No window of its own" : ""}</span>
+      )}
+      {latched.length > 0 && (
+        <>
+          <span
+            className="ml-auto shrink-0 text-fg-muted"
+            data-latched={latched.map((l) => l.id).join(" ")}
+            title={`${latched.map((l) => l.name).join(", ")}: set in the window, so ${latched.length === 1 ? "it doesn't" : "they don't"} follow ${latched.length === 1 ? "its" : "their"} lane or cable now. Only while this song is open, never in an export.`}
+          >
+            {latched.length === 1 ? "Latched" : `${latched.length} latched`}
+          </span>
+          <button
+            className="shrink-0 font-medium text-accent hover:text-accent-strong cursor-pointer"
+            data-reenable
+            title={`Follow the lane or cable again: ${latched.map((l) => l.name).join(", ")}`}
+            onClick={() => said(graphApi.pluginReenable(session, node))}
+          >
+            Re-enable
+          </button>
+        </>
+      )}
     </div>
   );
 }

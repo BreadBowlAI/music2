@@ -33,6 +33,8 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/graph/automate/remove", post(automate_remove))
         .route("/api/graph/audition", post(graph_audition))
         .route("/api/graph/midi/inject", post(midi_inject))
+        .route("/api/graph/plugin/window", post(plugin_window))
+        .route("/api/graph/plugin/latch", post(plugin_latch))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -63,6 +65,41 @@ struct OverlayReq {
 async fn graph_overlay(State(s): S, Json(r): Json<OverlayReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.overlay(r.session, r.change)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct WindowReq {
+    session: u64,
+    /// The plugin node, by its name in the graph (`plugin` of its view node, the key of the graph
+    /// state's `plugins`).
+    node: String,
+    open: bool,
+}
+
+/// Open or close a plugin's own window (HOST-7): `{session, node, open}`. Not a write: it works
+/// read-only too. Answers `{window: "open" | "closed"}`, or why it can't open, in plain words.
+async fn plugin_window(State(s): S, Json(r): Json<WindowReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.plugin_window(r.session, &r.node, r.open)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct LatchReq {
+    session: u64,
+    node: String,
+    /// The latched parameter's CLAP id; all of the node's without one.
+    id: Option<u32>,
+}
+
+/// "Re-enable" (MON-6): `{session, node, id?}`. The lane or cable drives the latched parameter
+/// again. Not a write: a latch lasts for the session only.
+async fn plugin_latch(State(s): S, Json(r): Json<LatchReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.plugin_reenable(r.session, &r.node, r.id)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

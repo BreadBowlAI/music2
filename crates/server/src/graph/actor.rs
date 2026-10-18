@@ -58,7 +58,7 @@ pub(super) type Job = Box<dyn FnOnce(&mut Actor) + Send>;
 pub(super) type Hook = Box<dyn FnMut(&Inner) + Send>;
 
 pub(crate) struct Actor {
-    inner: Arc<Inner>,
+    pub(super) inner: Arc<Inner>,
     pub(crate) open: Option<Open>,
     /// What this Graph's plugin instances report unasked (its [`m2_plugins::Owner`]'s): no other
     /// session, test or rig sees them.
@@ -148,6 +148,12 @@ pub(crate) struct Open {
     /// Plugin instances that asked to be restarted (`HostEvent::Restart`): the next activation,
     /// made at once, replaces each from its committed state (HOST-5).
     pub(crate) restarts: HashSet<Handle>,
+    /// A plugin's latency changed since what plays was planned (RENDER-17): the next activation,
+    /// made at once, compensates the new one.
+    pub(crate) relatent: bool,
+    /// The nodes last said to make a feedback loop longer (`latency.in-feedback`), by name: said
+    /// again only when they change.
+    told_feedback: Vec<String>,
     /// An export borrows the live plugin instances (RENDER-1): settles prepare nothing and send no
     /// activation until it gives them back, so no host call reaches them meanwhile.
     pub(crate) exporting: bool,
@@ -162,9 +168,12 @@ pub(crate) struct Open {
     pub(super) prepared: Prepared,
     /// The timeline last published, whose lanes the next one shares where they are the same.
     timeline: Arc<super::Timeline>,
+    /// What plugin windows did that waits for the session: holds, autosaves (HOME-5, HOME-6).
+    pub(crate) windows: super::plugin_window::Windows,
 }
 
 /// The plan the engine plays: what it was built from, and how `SwapLane` reaches its lanes.
+#[derive(Clone)]
 pub(crate) struct Plays {
     /// The player it was loaded into ([`Device::epoch`]).
     pub(crate) epoch: u64,
@@ -390,10 +399,31 @@ pub(super) struct Prepared {
     pub(super) fresh: m2_runtime::Count,
 }
 
-fn packages() -> Result<PackageSet> {
-    let mut p = PackageSet::default();
+fn packages(inner: &Inner) -> Result<PackageSet> {
+    let mut p = PackageSet::default().with_host(inner.host.clone());
     p.load(&crate::resources::std_dir()).context("loading the std package")?;
     Ok(p)
+}
+
+/// The one notice of a plugin host crash (HOST-3, `plugin.crashed`): which plugins went quiet, and
+/// which music2 started again or left silent.
+fn crash_said(hung: bool, revived: &[String], again: &[String]) -> String {
+    let list = |v: &[String]| match v {
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        [] => String::new(),
+    };
+    let mut said = match hung {
+        true => String::from("The plugin host stopped answering, so music2 ended it. The plugins in it went quiet; the rest of the song plays on."),
+        false => String::from("The plugin host crashed, so the plugins in it went quiet; the rest of the song plays on."),
+    };
+    if !revived.is_empty() {
+        said += &format!(" music2 started {} again from the saved settings.", list(revived));
+    }
+    if !again.is_empty() {
+        said += &format!(" It stopped again soon after starting {}, so music2 left them silent: open the song again to give them another try.", list(again));
+    }
+    said + " (plugin.crashed)"
 }
 
 /// What of `from`'s graph each node of `to`'s continues (ID-15): every node itself for the same
@@ -407,7 +437,7 @@ fn continuing(from: &Revision, to: &Revision) -> Continues {
 
 /// How the user knows plugin node `node` of `rev`'s graph: its plugin's name and its track's, as
 /// the app shows them ("Surge XT (lead)").
-fn plugin_named(rev: &Revision, packages: &PackageSet, node: usize) -> String {
+pub(super) fn plugin_named(rev: &Revision, packages: &PackageSet, node: usize) -> String {
     let Some(n) = rev.compiled.flat.nodes.get(node) else { return "A plugin".into() };
     let plugin = match &n.op {
         FOp::Plugin { plugin, .. } => packages.plugin_info(plugin).map_or_else(|| plugin.clone(), |i| i.found.name.clone()),
@@ -448,6 +478,11 @@ fn build(session: &Session, audio: &mut audio::Cache, owner: &m2_plugins::Owner,
 }
 
 impl Open {
+    /// The accepted revision's controls, by id.
+    pub(crate) fn controls(&self) -> &HashMap<String, Control> {
+        &self.controls
+    }
+
     fn check_token(&self, token: u64) -> Result<()> {
         if token != self.token {
             return Err(anyhow!("the open project changed; refresh the graph before editing"));
@@ -536,7 +571,7 @@ impl Open {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
             _ => false,
         });
-        if self.loaded(device) && self.playing == Some(number) && self.restarts.is_empty() && !refused && same_tempo {
+        if self.loaded(device) && self.playing == Some(number) && self.restarts.is_empty() && !self.relatent && !refused && same_tempo {
             return (Way::Same, Prepared::default());
         }
         // Opened with code that doesn't compile (WRITE-20): silent until it does, then loaded.
@@ -551,8 +586,9 @@ impl Open {
         }
         let kind = match self.plays.as_ref().filter(|p| p.epoch == device.epoch) {
             Some(p) if p.rate != rate || refused => Kind::Replace,
-            // A restart replaces instances: an activation, though nothing else changed.
-            Some(_) if !self.restarts.is_empty() => Kind::Activate,
+            // A restart replaces instances, and a new latency is compensated by a new plan: an
+            // activation, though nothing else changed (HOST-5, RENDER-17).
+            Some(_) if !self.restarts.is_empty() || self.relatent => Kind::Activate,
             // A tempo drag plays, or ends: only a plan carries a tempo map (RENDER-27a).
             Some(p) if p.tempo.is_some() || tempo.is_some() => Kind::Activate,
             Some(p) => self.reach(p).map_or(Kind::Activate, |r| Kind::Reach(p.generation, r)),
@@ -804,21 +840,27 @@ impl Actor {
             Err(e) => (Way::Failed(anyhow!("{e:#}")), Prepared::default()),
         };
         o.prepared = prepared;
-        // A state load that gave a plugin latency plays it uncompensated, and says so; one that
-        // failed leaves the plugin as it was, and says why (RENDER-26b). Each plugin is named as
-        // the user knows it. A refused state isn't loaded again, so it is said once.
+        // A state load that changed a plugin's latency has the next activation, made at once,
+        // compensate it (RENDER-17); one that failed leaves the plugin as it was, and says why
+        // (RENDER-26b). Each plugin is named as the user knows it. A refused state isn't loaded
+        // again, so it is said once. Latency on a feedback loop is said when it changes (RENDER-20).
+        let relatent = way.renderer().is_some_and(|r| !r.stats().relatent.is_empty());
         if let Some(r) = way.renderer() {
             let (rev, rate) = (o.session.accepted(), o.session.accepted().project.sample_rate() as f64);
             let named = |node: usize| plugin_named(rev, &o.session.packages, node);
             let mut notices = inner.notices.lock();
-            notices.extend(r.stats().latent.iter().map(|&(node, frames)| {
-                let ms = frames as f64 / rate * 1e3;
-                format!(
-                    "{}'s new settings make it play {ms:.1} ms late, and music2 can't make up for that yet \
-                     (plugin.latency-uncompensated).",
-                    named(node)
-                )
-            }));
+            let looped: Vec<String> = r.info().latency.in_feedback.iter().map(|&n| named(n)).collect();
+            if looped != o.told_feedback {
+                if !looped.is_empty() {
+                    let ms = r.latency() as f64 / rate * 1e3;
+                    notices.push(format!(
+                        "{} sits on a feedback loop and adds latency there, so the loop's repeats come later than written. \
+                         The rest of the song stays in time ({ms:.1} ms of latency in all) (latency.in-feedback).",
+                        looped.join(", ")
+                    ));
+                }
+                o.told_feedback = looped;
+            }
             notices.extend(r.stats().unloaded.iter().map(|(node, why)| {
                 format!("{} couldn't load its new settings, so it keeps the sound it had. (In detail: {why})", named(*node))
             }));
@@ -942,6 +984,7 @@ impl Actor {
                     o.sent = Some(player.activate(*r)?.1);
                     o.plays = Some(plays);
                     o.restarts.clear();
+                    o.relatent = relatent;
                     Ok(Sent::Renderer)
                 }
                 Way::Replace(r, plays) => {
@@ -951,6 +994,7 @@ impl Actor {
                     player.replace(*r)?;
                     o.plays = Some(plays);
                     o.restarts.clear();
+                    o.relatent = relatent;
                     Ok(Sent::Renderer)
                 }
                 Way::Load(r, plays) => {
@@ -960,6 +1004,7 @@ impl Actor {
                     d.player.set_click(cp.open.as_ref().filter(|p| p.engine.token == token).is_some_and(|p| super::view_file::metronome(&p.local)));
                     o.load(d, *r, plays, d.resume, looping)?;
                     o.restarts.clear();
+                    o.relatent = relatent;
                     Ok(Sent::Renderer)
                 }
                 Way::Failed(e) | Way::Unbuilt(e) => Err(e),
@@ -1133,11 +1178,14 @@ impl Actor {
             codes: VecDeque::new(),
             types,
             restarts: HashSet::new(),
+            relatent: false,
+            told_feedback: vec![],
             exporting: false,
             told_unbuilt: None,
             revived: HashMap::new(),
             prepared: Prepared::default(),
             timeline: Arc::default(),
+            windows: Default::default(),
         };
         // The overlays saved for it, which its first renderer plays from its first block (A6).
         let accepted = o.session.accepted();
@@ -1213,9 +1261,9 @@ impl Actor {
         let said = |d: &[m2_ir::Diagnostic]| anyhow!(d.iter().map(|d| d.to_string().replace(&root, "")).collect::<Vec<_>>().join("\n"));
         #[cfg(test)]
         if let Some(disk) = &self.disk {
-            return Session::open_with_disk(dir, packages()?, "music2", disk()).map_err(|d| said(&d));
+            return Session::open_with_disk(dir, packages(&self.inner)?, "music2", disk()).map_err(|d| said(&d));
         }
-        Session::open_as(dir, packages()?, "music2").map_err(|d| said(&d))
+        Session::open_as(dir, packages(&self.inner)?, "music2").map_err(|d| said(&d))
     }
 
     /// Take the open project's lock if it is free now (the read-only banner's Retry), and publish
@@ -1257,36 +1305,10 @@ impl Actor {
     /// restart is replaced by the next activation, which the catch-up makes at once: a new
     /// instance from the committed state, which fades in as the old one rings out (HOST-5). So is
     /// one that failed (it plays silence meanwhile), once, and the user is told. One whose new
-    /// instance fails too is left silent, and the user told that once.
+    /// instance fails too is left silent, and the user told that once. When the plugin host
+    /// process crashed (HOST-3), its instances are all told in one notice, `plugin.crashed`.
     fn heard_plugins(&mut self) {
-        if let Some(o) = &mut self.open
-            && let Some(p) = &o.plays
-        {
-            for at in &p.info.plugins {
-                if !at.inst.upgrade().is_some_and(|i| i.dead()) || o.restarts.contains(&at.handle) {
-                    continue;
-                }
-                let Some(n) = p.revision.compiled.flat.nodes.get(at.node) else { continue };
-                let again = match o.revived.get(&n.name) {
-                    Some(None) => continue,
-                    Some(Some(t)) => t.elapsed() < REVIVED,
-                    None => false,
-                };
-                let who = plugin_named(&p.revision, &o.session.packages, at.node);
-                let (said, revived) = match again {
-                    true => (
-                        format!("{who} stopped working again, so music2 left it silent. Open the song again to give it another try."),
-                        None,
-                    ),
-                    false => {
-                        o.restarts.insert(at.handle);
-                        (format!("{who} stopped working, so music2 started it again from its saved settings."), Some(Instant::now()))
-                    }
-                };
-                o.revived.insert(n.name.clone(), revived);
-                self.inner.notices.lock().push(said);
-            }
-        }
+        let (mut crashed, mut hung, mut dirty, mut closed, mut latent) = (HashSet::new(), false, vec![], vec![], vec![]);
         while let Ok(e) = self.events.try_recv() {
             match e {
                 HostEvent::Restart(h) => {
@@ -1294,10 +1316,75 @@ impl Actor {
                         o.restarts.insert(h);
                     }
                 }
-                // Latency compensation and state autosave come later (RENDER-17, HOME-6).
-                HostEvent::Latency(h, frames) => eprintln!("music2: plugin {h:?} reports {frames} frames of latency"),
-                HostEvent::Dirty(_) => {}
+                HostEvent::Latency(h, frames) => latent.push((h, frames)),
+                HostEvent::Dirty(h) => dirty.push(h),
+                HostEvent::Crashed(h) => {
+                    crashed.insert(h);
+                    closed.push(h);
+                }
+                HostEvent::Hung(h) => {
+                    crashed.insert(h);
+                    closed.push(h);
+                    hung = true;
+                }
+                HostEvent::WindowClosed(h) => closed.push(h),
             }
+        }
+        self.heard_windows(dirty, closed);
+        let Some(o) = &mut self.open else { return };
+        let Some(p) = &o.plays else { return };
+        // A latency measured again (RENDER-17), as the plugin said it changed or an export gave its
+        // instance back: kept in its instance, and compensated by the next activation, made at once
+        // (after an export that borrowed it gives it back).
+        for (h, frames) in latent {
+            if let Some(i) = p.info.plugins.iter().find(|a| a.handle == h).and_then(|a| a.inst.upgrade()) {
+                i.set_latency(frames);
+            }
+        }
+        o.relatent |= p.info.plugins.iter().any(|a| a.inst.upgrade().is_some_and(|i| !i.dead() && i.latency() != a.latency));
+        // A crashed instance fails at its next call; one that isn't called now (asleep) is marked
+        // here, so it is made again all the same.
+        for at in p.info.plugins.iter().filter(|at| crashed.contains(&at.handle)) {
+            if let Some(i) = at.inst.upgrade() {
+                i.kill();
+            }
+        }
+        let (mut again_crashed, mut revived_crashed) = (vec![], vec![]);
+        for at in &p.info.plugins {
+            if !at.inst.upgrade().is_some_and(|i| i.dead()) || o.restarts.contains(&at.handle) {
+                continue;
+            }
+            let Some(n) = p.revision.compiled.flat.nodes.get(at.node) else { continue };
+            let again = match o.revived.get(&n.name) {
+                Some(None) => continue,
+                Some(Some(t)) => t.elapsed() < REVIVED,
+                None => false,
+            };
+            let who = plugin_named(&p.revision, &o.session.packages, at.node);
+            let revived = match again {
+                true => None,
+                false => {
+                    o.restarts.insert(at.handle);
+                    Some(Instant::now())
+                }
+            };
+            o.revived.insert(n.name.clone(), revived);
+            let said = match (crashed.contains(&at.handle), again) {
+                (true, true) => {
+                    again_crashed.push(who);
+                    continue;
+                }
+                (true, false) => {
+                    revived_crashed.push(who);
+                    continue;
+                }
+                (false, true) => format!("{who} stopped working again, so music2 left it silent. Open the song again to give it another try."),
+                (false, false) => format!("{who} stopped working, so music2 started it again from its saved settings."),
+            };
+            self.inner.notices.lock().push(said);
+        }
+        if !revived_crashed.is_empty() || !again_crashed.is_empty() {
+            self.inner.notices.lock().push(crash_said(hung, &revived_crashed, &again_crashed));
         }
     }
 
@@ -1318,6 +1405,8 @@ impl Actor {
     /// ([`Self::export_done`]). With none playing, it renders with instances of its own, beside
     /// playback.
     pub(super) fn export(&mut self, length: Length, jobs: mpsc::Sender<Job>) -> Result<super::Export> {
+        // A state changed in a plugin's window is saved first, so the export plays it (RENDER-1).
+        self.flush_autosaves();
         let device = self.inner.current_device();
         let o = self.open.as_mut().context("no project is open")?;
         let rev = o.session.accepted_arc();
@@ -1660,7 +1749,8 @@ impl Actor {
             // An export's end settles what waited for it.
             Ok(_) if o.exporting => false,
             Ok(d) => {
-                has_code && (!o.loaded(&d) || o.playing != Some(o.session.accepted().number) || !o.restarts.is_empty() || o.refused(&d))
+                has_code
+                    && (!o.loaded(&d) || o.playing != Some(o.session.accepted().number) || !o.restarts.is_empty() || o.relatent || o.refused(&d))
             }
             // Let go of: the settle starts a new one, and loads the project into it where it was,
             // stopped. Let go of here, no action failed to say why: if it played, the user is told.

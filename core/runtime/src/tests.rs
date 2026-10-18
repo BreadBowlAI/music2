@@ -9,6 +9,7 @@ use super::*;
 mod audition;
 mod cell;
 mod fpenv;
+mod latency;
 mod live;
 mod overlay;
 mod parts;

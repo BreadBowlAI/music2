@@ -127,12 +127,13 @@ fn edges(nodes: &[FNode], n: &FNode, packages: &PackageSet) -> Vec<(Edge, Input)
             at.and_then(|p| Some((Edge::Input(p), inputs.get(p)?.clone()))).into_iter().collect()
         }
         FOp::Feedback { input, .. } => vec![(Edge::Feedback, port(nodes, *input))],
+        FOp::Delay { input, .. } => vec![(Edge::Input(0), port(nodes, *input))],
         op => captures(op).into_iter().enumerate().map(|(k, p)| (Edge::Capture(k), port(nodes, p))).collect(),
     }
 }
 
-/// The notes lane a consumer reads.
-fn notes_lane<'a>(nodes: &'a [FNode], n: &FNode, packages: &PackageSet) -> Option<(&'a str, &'a str)> {
+/// The notes lane a consumer reads, and how late (RENDER-18): through a note delay, if it is.
+fn notes_lane<'a>(nodes: &'a [FNode], n: &FNode, packages: &PackageSet) -> Option<(&'a str, &'a str, u32)> {
     let src = match &n.op {
         FOp::Poly { lane, .. } => *lane,
         FOp::Plugin { plugin, inputs, .. } => {
@@ -144,10 +145,30 @@ fn notes_lane<'a>(nodes: &'a [FNode], n: &FNode, packages: &PackageSet) -> Optio
         }
         _ => return None,
     };
+    let (src, frames) = match nodes.get(src)?.op {
+        FOp::NoteDelay { lane, frames } => (lane, frames),
+        _ => (src, 0),
+    };
     match &nodes.get(src)?.op {
-        FOp::Lane { module, lane, .. } => Some((module, lane)),
+        FOp::Lane { module, lane, .. } => Some((module, lane, frames)),
         _ => None,
     }
+}
+
+/// The note delay a consumer reads its notes through, if it does.
+fn note_delay(nodes: &[FNode], n: &FNode, packages: &PackageSet) -> Option<usize> {
+    let src = match &n.op {
+        FOp::Poly { lane, .. } => *lane,
+        FOp::Plugin { plugin, inputs, .. } => {
+            let at = m2_ir::Kernels::plugin(packages, plugin)?.inputs.iter().position(|p| p.name == "notes")?;
+            match inputs.get(at)? {
+                Input::Port { src, .. } => src.node,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    matches!(nodes.get(src)?.op, FOp::NoteDelay { .. }).then_some(src)
 }
 
 /// Whether a pure node continues an old one: the same op, a cell whatever its value (cell carry
@@ -163,15 +184,14 @@ fn continues_pure(a: &FNode, b: &FNode, a_box: bool, b_box: bool) -> bool {
     }
 }
 
-/// Wire `new` against what `k` says plays. `shapes` are `new`'s nodes' shapes, and `blobs` the
-/// committed state each of its plugins loads. Lanes only ghosts read are added to `lanes`.
-pub(crate) fn wire(k: &Keep, new: &Flat, shapes: &[Option<Shape>], blobs: &[Option<Sha>], packages: &PackageSet, lanes: &mut LanePlan) -> Wiring {
+/// Matching (§6.2): for each node of `new`, whether its box is kept, and the old node it continues:
+/// kept boxes and continuing pure nodes, each old node once. Before any cycle a reorder makes.
+pub(crate) fn matching(k: &Keep, new: &Flat, shapes: &[Option<Shape>], blobs: &[Option<Sha>]) -> (Vec<bool>, Vec<Option<usize>>) {
     let (old, info) = (k.old, k.info);
     let (n, used_new, used_old) = (new.nodes.len(), used(new), used(old));
     let restarted = |j: usize| info.handle(j).is_some_and(|h| k.restarts.contains(&h));
     let lost_blob = |i: usize, j: usize| blobs[i].is_none() && info.plugin(j).is_some_and(|p| p.blob.is_some());
-    // Matching (§6.2): kept boxes and continuing pure nodes, each old node once.
-    let mut w = Wiring::fresh(new);
+    let (mut kept, mut same) = (vec![false; n], vec![None; n]);
     let mut claimed = vec![false; old.nodes.len()];
     for i in (0..n).filter(|&i| used_new[i]) {
         let Some(j) = k.cont.top.get(i).copied().flatten().map(|j| j as usize) else { continue };
@@ -184,9 +204,19 @@ pub(crate) fn wire(k: &Keep, new: &Flat, shapes: &[Option<Shape>], blobs: &[Opti
             None => continues_pure(&new.nodes[i], &old.nodes[j], false, was.is_some()),
         };
         if keep {
-            (w.kept[i], w.same[i], claimed[j]) = (shapes[i].is_some(), Some(j), true);
+            (kept[i], same[i], claimed[j]) = (shapes[i].is_some(), Some(j), true);
         }
     }
+    (kept, same)
+}
+
+/// Wire `new` against what `k` says plays. `shapes` are `new`'s nodes' shapes, and `blobs` the
+/// committed state each of its plugins loads. Lanes only ghosts read are added to `lanes`.
+pub(crate) fn wire(k: &Keep, new: &Flat, shapes: &[Option<Shape>], blobs: &[Option<Sha>], packages: &PackageSet, lanes: &mut LanePlan) -> Wiring {
+    let (old, info) = (k.old, k.info);
+    let n = new.nodes.len();
+    let mut w = Wiring::fresh(new);
+    (w.kept, w.same) = matching(k, new, shapes, blobs);
     // Edges, ghosts, fades and order, again for each cycle a reorder made (§6.3 to §6.6).
     loop {
         if let Some(cycle) = window(k, new, packages, &mut w) {
@@ -223,16 +253,19 @@ pub(crate) fn wire(k: &Keep, new: &Flat, shapes: &[Option<Shape>], blobs: &[Opti
             w.release.push((n + g) as u32);
         }
     }
-    // A kept consumer whose notes now come from another lane lets go of what it holds (§3.5).
+    // A kept consumer whose notes now come from another lane lets go of what it holds (§3.5); so
+    // does one whose note delay doesn't move into the new plan with the notes in flight in it.
     for i in (0..n).filter(|&i| w.kept[i]) {
         let j = w.same[i].expect("kept");
-        if notes_lane(&new.nodes, &new.nodes[i], packages) != notes_lane(&old.nodes, &old.nodes[j], packages) {
+        let lost = note_delay(&old.nodes, &old.nodes[j], packages)
+            .is_some_and(|d| note_delay(&new.nodes, &new.nodes[i], packages).is_none_or(|e| !w.kept[e] || w.same[e] != Some(d)));
+        if lost || notes_lane(&new.nodes, &new.nodes[i], packages) != notes_lane(&old.nodes, &old.nodes[j], packages) {
             w.release.push(i as u32);
         }
     }
     // The room the old plugin nodes had, which their notes move into.
     let old_room = |j: usize| {
-        let (m, l) = notes_lane(&old.nodes, &old.nodes[j], packages)?;
+        let (m, l, _) = notes_lane(&old.nodes, &old.nodes[j], packages)?;
         info.lanes.iter().find(|x| x.lane.module == m && x.lane.lane == l).and_then(|x| x.caps)
     };
     for i in (0..n).filter(|&i| w.kept[i] && matches!(new.nodes[i].op, FOp::Plugin { .. })) {
@@ -299,7 +332,7 @@ fn window(k: &Keep, new: &Flat, packages: &PackageSet, w: &mut Wiring) -> Option
     }
     // Ghosts: the old sources of changed edges that don't continue, and what they read that
     // doesn't (§6.4). Events lanes aren't ghosts: a ghost reads no notes.
-    let is_events = |j: usize| matches!(old.nodes[j].op, FOp::Lane { kind: Kind::Events(_), .. });
+    let is_events = |j: usize| matches!(old.nodes[j].op, FOp::Lane { kind: Kind::Events(_), .. } | FOp::NoteDelay { .. });
     let mut ghost_of: HashMap<usize, usize> = HashMap::new();
     let mut order_of_ghosts = vec![];
     let mut work: Vec<usize> =
@@ -338,6 +371,7 @@ fn window(k: &Keep, new: &Flat, packages: &PackageSet, w: &mut Wiring) -> Option
                     }
                 }
                 FOp::Feedback { input, .. } => *input = remap(*input).unwrap_or(*input),
+                FOp::Delay { input, .. } => *input = remap(*input).unwrap_or(*input),
                 FOp::Poly { lane, voice, glide, .. } => {
                     // A ghost reads no notes: its lane is never looked at.
                     *lane = usize::MAX;
@@ -395,6 +429,7 @@ fn window(k: &Keep, new: &Flat, packages: &PackageSet, w: &mut Wiring) -> Option
                         Some(Input::Port { src, .. }) => Some(src.node),
                         _ => None,
                     },
+                    FOp::Delay { input, .. } => Some(input.node),
                     _ => None,
                 },
                 Edge::Capture(k) => caps.get(k).map(|p| p.node),

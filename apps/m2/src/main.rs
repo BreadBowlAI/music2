@@ -415,6 +415,9 @@ fn run() -> Result<()> {
             if r.non_finite > 0 {
                 eprintln!("warning: {} samples were not numbers (NaN or infinite) and were silenced, as the app plays them", r.non_finite);
             }
+            if r.latency_changed > 0 {
+                eprintln!("warning: {}", m2_editor::render::LATENCY_CHANGED);
+            }
             println!(
                 "rendered {:.1}s to {} in {took:.2}s ({:.0}× real time) on {} thread{}, peak {:.1} dBFS",
                 r.seconds(),

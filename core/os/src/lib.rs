@@ -9,8 +9,10 @@
 //! the caller.
 
 pub mod dirs;
+pub mod fp;
 pub mod fs;
 pub mod host;
+pub mod ipc;
 pub mod main_loop;
 #[cfg(feature = "midi")]
 pub mod midi;
@@ -18,6 +20,7 @@ pub mod process;
 pub mod rt;
 pub mod thread;
 pub mod watch;
+pub mod window;
 
 #[cfg_attr(target_os = "macos", path = "mac/mod.rs")]
 #[cfg_attr(target_os = "linux", path = "linux/mod.rs")]

@@ -62,6 +62,18 @@ pub enum Shape {
     Feedback {
         channels: u8,
     },
+    /// The planner's delay (RENDER-18): its length and channels, and whether it is a control
+    /// signal's. Kept by its consumer, input and length ([`crate::latency::Delay`]).
+    Delay {
+        channels: u8,
+        frames: u32,
+        control: bool,
+    },
+    /// A notes lane's delay: its length and its room, per block, from its lane's.
+    NoteDelay {
+        frames: u32,
+        room: usize,
+    },
 }
 
 impl Shape {
@@ -84,7 +96,21 @@ impl Shape {
                 Some(Shape::Poly { voices: *voices, channels: *channels, alloc: *alloc, voice: blank(voice, packages, assets) })
             }
             FOp::Feedback { channels, .. } => Some(Shape::Feedback { channels: *channels }),
+            FOp::Delay { frames, .. } => {
+                let kind = n.outputs.first().copied().unwrap_or(Kind::Control(None));
+                Some(Shape::Delay { channels: kind.channels(), frames: *frames, control: matches!(kind, Kind::Control(_)) })
+            }
+            // Its room is its lane's: the plan sets it ([`Shape::with_room`]).
+            FOp::NoteDelay { frames, .. } => Some(Shape::NoteDelay { frames: *frames, room: 0 }),
             _ => None,
+        }
+    }
+
+    /// A note delay's shape, with the room its lane gives it.
+    pub(crate) fn with_room(self, per_block: usize) -> Shape {
+        match self {
+            Shape::NoteDelay { frames, .. } => Shape::NoteDelay { frames, room: per_block },
+            s => s,
         }
     }
 
@@ -170,6 +196,12 @@ pub struct PlanInfo {
     pub taps: Option<Arc<TapSlots>>,
     /// Its nodes that stopped while it played (RENDER-25), for the session to tell.
     pub stopped: Arc<Stopped>,
+    /// Its latencies (RENDER-17 to RENDER-20): each checked node's offset, the delays, the song's
+    /// latency `L`, and the nodes that make a feedback loop longer (`latency.in-feedback`).
+    pub latency: crate::latency::Latency,
+    /// The graph it plays when it has delays: the checked one with them (RENDER-18). The next
+    /// plan is wired against it.
+    pub played: Option<Arc<Flat>>,
 }
 
 /// One plugin node of a plan, as the next plan prepared against it, and an export, see it.
@@ -183,6 +215,8 @@ pub struct PluginAt {
     /// last loaded, None for its defaults. The next plan loads another (RENDER-26b). A blob it
     /// refused counts too: it isn't tried again until another is committed.
     pub blob: Option<Sha>,
+    /// The latency the plan compensates for it (RENDER-17): what its instance had then.
+    pub latency: u32,
 }
 
 /// One lane a plan plays.
@@ -229,7 +263,7 @@ impl PlanInfo {
             if blob(n, data) != at.blob {
                 continue;
             }
-            if let Some(inst) = at.inst.upgrade().filter(|i| !i.released() && !i.dead())
+            if let Some(inst) = at.inst.upgrade().filter(|i| i.lendable())
                 && !lent.values().any(|x| Arc::ptr_eq(x, &inst))
             {
                 lent.insert(i, inst);
@@ -319,7 +353,8 @@ impl Count {
             Shape::Kernel { .. } => self.kernels += 1,
             Shape::Poly { .. } => self.polys += 1,
             Shape::Plugin { .. } => self.plugins += 1,
-            Shape::Feedback { .. } => self.rings += 1,
+            // A delay's line is a ring too.
+            Shape::Feedback { .. } | Shape::Delay { .. } | Shape::NoteDelay { .. } => self.rings += 1,
         }
     }
 }
@@ -336,9 +371,11 @@ pub struct Stats {
     /// Committed state blobs loaded into kept plugin instances while it was prepared (RENDER-26b);
     /// a load the host skipped, as the instance held that state (HOME-6), isn't counted.
     pub loads: usize,
-    /// Plugins whose latency is nonzero after such a load, by top-level node, and how many frames:
-    /// they play uncompensated (`plugin.latency-uncompensated`).
-    pub latent: Vec<(usize, u32)>,
+    /// Kept plugins whose latency such a load changed, by top-level node, and how many frames now:
+    /// this plan compensates what each had before, and the next activation the new (RENDER-17).
+    pub relatent: Vec<(usize, u32)>,
+    /// The delays it inserted (RENDER-18).
+    pub delays: usize,
     /// Kept plugins whose new state didn't load, by top-level node, and why: each plays on as the
     /// plugin left it, and no plan tries that blob again; another committed blob loads (RENDER-26b).
     pub unloaded: Vec<(usize, String)>,
@@ -395,6 +432,8 @@ pub(crate) struct Plan {
     pub(crate) taps: Option<Taps>,
     /// Its top-level nodes that stopped live (RENDER-25), shared with [`PlanInfo::stopped`].
     pub(crate) stopped: Arc<Stopped>,
+    /// Its plugin nodes whose inputs arrive late: told the transport that much earlier (HOST-6).
+    pub(crate) late_plugins: Vec<usize>,
 }
 
 /// A lane a plan's nodes read. Empty only while it moves between plans: it plays nothing then.
@@ -605,6 +644,8 @@ impl Renderer {
                 (Exec::Poly(o), Exec::Poly(n)) => n.pool.is_none() && o.pool.as_ref().is_some_and(|p| p.shape == m.shape),
                 (Exec::Plugin(o), Exec::Plugin(n)) => n.inst.is_none() && o.inst.as_ref().is_some_and(|i| i.shape == m.shape),
                 (Exec::Feedback { ring: o, .. }, Exec::Feedback { ring: n, .. }) => o.len() == n.len(),
+                (Exec::Delay(o), Exec::Delay(_)) => o.line.shape == m.shape,
+                (Exec::NoteDelay(o), Exec::NoteDelay(_)) => o.line.shape == m.shape,
                 _ => false,
             }
         });
@@ -756,6 +797,8 @@ fn take_from(new: &mut Graph, to: usize, old: &mut Graph, from: usize) {
         (Exec::Kernel(n), Exec::Kernel(o)) => std::mem::swap(&mut n.inst, &mut o.inst),
         (Exec::Poly(n), Exec::Poly(o)) => std::mem::swap(&mut n.pool, &mut o.pool),
         (Exec::Feedback { ring: n, .. }, Exec::Feedback { ring: o, .. }) => std::mem::swap(n, o),
+        (Exec::Delay(n), Exec::Delay(o)) => std::mem::swap(&mut n.line, &mut o.line),
+        (Exec::NoteDelay(n), Exec::NoteDelay(o)) => std::mem::swap(&mut n.line, &mut o.line),
         (Exec::Plugin(n), Exec::Plugin(o)) => {
             std::mem::swap(&mut n.inst, &mut o.inst);
             for (to, from) in [(&mut n.keys, &o.keys), (&mut n.ended, &o.ended)] {

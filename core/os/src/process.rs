@@ -71,6 +71,28 @@ pub fn waited() -> Option<Duration> {
     os::waited()
 }
 
+/// Standard output, for this process's own use alone: what it was is returned, and standard output
+/// now goes to standard error. The plugin host process (HOST-3) speaks to the app on it, so a
+/// plugin that prints can't break a message. Windows (designed): `GetStdHandle` and
+/// `SetStdHandle`.
+pub fn take_stdout() -> std::io::Result<std::fs::File> {
+    os::take_stdout()
+}
+
+/// End the process at once with `code`, running no exit handler: a process whose plugin code may
+/// still run on other threads must not unload it under them.
+pub fn exit_now(code: i32) -> ! {
+    os::exit_now(code)
+}
+
+/// This process writes no core dump when it crashes, so it ends at once and its pipes close then:
+/// the plugin host process (HOST-3), whose crash the app must see in time. Linux: not dumpable
+/// (a crash handler such as apport would hold it until the dump is read). macOS: no core file
+/// (its crash report is written by another process). Never fatal.
+pub fn no_core_dump() {
+    os::no_core_dump()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

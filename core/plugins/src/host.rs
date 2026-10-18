@@ -51,9 +51,15 @@ pub trait PluginHost: Send + Sync {
     fn reset(&self, h: Handle);
     /// Whether the plugin asked to be processed since the last call: wakes an idle engine.
     fn take_process_request(&self, h: Handle) -> bool;
+    // Any thread but the audio thread.
+    /// Every plugin installed, and why each bundle that failed to load did: the host loads them,
+    /// so a program that hosts plugins in another process never loads plugin code (HOST-3).
+    fn scan(&self) -> (Vec<Found>, Vec<String>);
     // Any thread.
     /// Instances created and not yet destroyed, across every owner.
     fn live(&self) -> u64;
+    /// Instances created and destroyed so far, across every owner (gates and tests).
+    fn counts(&self) -> (u64, u64);
 }
 
 /// An instance, as the host names it. Copied freely; meaningless once destroyed (a stale handle
@@ -88,6 +94,13 @@ pub enum HostEvent {
     Dirty(Handle),
     /// `latency.changed`, measured again.
     Latency(Handle, u32),
+    /// The host process it ran in crashed (HOST-3): it plays silence, and its calls fail, until
+    /// the next activation makes it again.
+    Crashed(Handle),
+    /// The same, when the host process stopped answering a live call and was ended (D5).
+    Hung(Handle),
+    /// The person closed its window (HOST-7): the plugin's view is gone, and the window with it.
+    WindowClosed(Handle),
 }
 
 /// Where an [`Owner`]'s events arrive.
@@ -182,9 +195,11 @@ pub enum RenderMode {
     Offline,
 }
 
-/// Other main-thread calls. GUI calls come with plugin windows (HOST-7).
+/// Other main-thread calls.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MainCall {
+    /// Its own window (HOST-7): CLAP's `gui`, embedded in a window of the host's.
+    Window(WindowCall),
     /// A parameter's current value (`params.get_value`).
     Value(u32),
     /// How the plugin displays `value` of a parameter (`params.value_to_text`).
@@ -195,8 +210,19 @@ pub enum MainCall {
     TakeLog,
 }
 
+/// What to do with a plugin's window.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WindowCall {
+    /// Open it, titled `title`, or bring it to the front when it is open. An error, in plain
+    /// words, when the plugin has no window this OS can show, or there is no screen.
+    Open { title: String },
+    Close,
+}
+
 #[derive(Clone, Debug)]
 pub enum Reply {
+    /// Whether its window is open now.
+    Window(bool),
     Value(Option<f64>),
     Text(Option<String>),
     Info(Box<Info>),
@@ -233,6 +259,7 @@ pub(crate) union Raw {
     expr: clap_event_note_expression,
     param: clap_event_param_value,
     midi: clap_event_midi,
+    gesture: clap_event_param_gesture,
 }
 
 fn header(size: usize, time: u32, type_: u16) -> clap_event_header {
@@ -257,6 +284,16 @@ fn raw(e: &Event) -> Raw {
                 channel: 0,
                 key,
                 value: semitones,
+            },
+        },
+        Event::Gesture { time, id, begin } => Raw {
+            gesture: clap_event_param_gesture {
+                header: header(
+                    size_of::<clap_event_param_gesture>(),
+                    time,
+                    if begin { CLAP_EVENT_PARAM_GESTURE_BEGIN } else { CLAP_EVENT_PARAM_GESTURE_END },
+                ),
+                param_id: id,
             },
         },
         Event::Param { time, id, value } => Raw {
@@ -309,9 +346,18 @@ pub(crate) unsafe fn decode(h: *const clap_event_header) -> Option<Event> {
             let m = unsafe { &*(h as *const clap_event_midi) };
             Some(Event::Midi { time, bytes: m.data })
         }
+        CLAP_EVENT_PARAM_GESTURE_BEGIN | CLAP_EVENT_PARAM_GESTURE_END => {
+            let g = unsafe { &*(h as *const clap_event_param_gesture) };
+            Some(Event::Gesture { time, id: g.param_id, begin: hd.type_ == CLAP_EVENT_PARAM_GESTURE_BEGIN })
+        }
         _ => None,
     }
 }
+
+/// The most events one `process` call carries in: a call crosses to the host process in shared
+/// memory, which can't grow on the audio thread (HOST-3). A plan whose plugin node needs more is
+/// refused when it is built, naming the node.
+pub const MAX_CALL_EVENTS: usize = 16_384;
 
 /// One call's events, in CLAP's own layout, so the host hands them to the plugin as they are.
 /// Sized when built: [`Events::push`] never reallocates (RENDER-28); what doesn't fit is counted.
@@ -386,6 +432,24 @@ impl Events {
     pub(crate) fn sorted(&self) -> bool {
         // SAFETY: every entry starts with its header.
         self.raw.windows(2).all(|w| unsafe { w[0].header.time <= w[1].header.time })
+    }
+
+    /// Its events as they are, for a copy into shared memory (HOST-3).
+    pub(crate) fn raw(&self) -> &[Raw] {
+        &self.raw
+    }
+
+    /// Add events as they are, within its room; what doesn't fit is counted, with `dropped` more.
+    /// Never allocates.
+    pub(crate) fn append_raw(&mut self, src: &[Raw], dropped: u32) {
+        let fit = src.len().min(self.raw.capacity() - self.raw.len());
+        self.raw.extend_from_slice(&src[..fit]);
+        self.dropped = self.dropped.saturating_add((src.len() - fit) as u32).saturating_add(dropped);
+    }
+
+    /// The count of [`Events::dropped`], set back to 0.
+    pub(crate) fn take_dropped(&mut self) -> u32 {
+        std::mem::take(&mut self.dropped)
     }
 
     pub(crate) fn header(&self, i: usize) -> *const clap_event_header {
