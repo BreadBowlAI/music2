@@ -182,9 +182,10 @@ struct LaneKey {
     channels: usize,
 }
 
-/// Opened assets, by content; warped renders, by what they depend on; and lanes, by what they
-/// play. Building opens files and reads their headers, and fills the lanes short enough to stay
-/// whole; compiling never does (FMT-16). A live session keeps one per open project, so an edit
+/// Opened assets, by content; warped renders, by what they depend on; lanes, by what they play;
+/// and the files kernels read, decoded whole, by content. Building opens files and reads their
+/// headers, fills the lanes short enough to stay whole, and decodes kernels' files; compiling
+/// never does (FMT-16). A live session keeps one per open project, so an edit
 /// shares every lane it didn't change with the renderer it replaces, and its ring with it; an
 /// offline render uses one of its own, so its rings are its own too.
 #[derive(Default)]
@@ -194,7 +195,10 @@ pub struct Cache {
     lanes: HashMap<LaneKey, Arc<AudioLane>>,
     /// Assets decoded whole for a warp's one render (D2), until the next prune.
     decoded: HashMap<Sha, Option<Arc<Asset>>>,
+    /// The files kernels read (kernel ABI v1), decoded whole, kept while a build uses them.
+    kernels: HashMap<Sha, Option<Arc<Asset>>>,
     used_wavs: HashSet<Sha>,
+    used_kernels: HashSet<Sha>,
     used_warps: HashSet<ClipKey>,
     used_lanes: HashSet<LaneKey>,
     decodes: usize,
@@ -213,6 +217,21 @@ impl Cache {
             Wav::open(path).ok().filter(|w| w.frames() > 0).map(Arc::new)
         });
         Some((sha, w.clone()?))
+    }
+
+    /// The asset named `name` that a kernel reads (kernel ABI v1), decoded whole at its own rate,
+    /// once while builds use it: a live edit shares it with the renderer it replaces. `None` when
+    /// it may not be played (`asset.missing`) or can't be decoded, so the kernel reads silence.
+    pub(crate) fn kernel_asset(&mut self, data: &DataSet, name: &str) -> Option<(Sha, Arc<Asset>)> {
+        let path = data.asset_path(name)?;
+        let sha = HashCache::global().hash(&path).ok()?;
+        self.used_kernels.insert(sha);
+        let decodes = &mut self.decodes;
+        let a = self.kernels.entry(sha).or_insert_with(|| {
+            *decodes += 1;
+            load_wav(&path).ok().filter(|a| !a.is_empty()).map(Arc::new)
+        });
+        Some((sha, a.clone()?))
     }
 
     /// A warped clip's render (D1): from the cache folder, else made once, there or in memory.
@@ -240,13 +259,16 @@ impl Cache {
         let wavs = std::mem::take(&mut self.used_wavs);
         let warps = std::mem::take(&mut self.used_warps);
         let lanes = std::mem::take(&mut self.used_lanes);
+        let kernels = std::mem::take(&mut self.used_kernels);
         self.wavs.retain(|k, _| wavs.contains(k));
+        self.kernels.retain(|k, _| kernels.contains(k));
         self.warps.retain(|k, _| warps.contains(k));
         self.lanes.retain(|k, _| lanes.contains(k));
         self.decoded.clear();
     }
 
-    /// Assets opened and warped clips rendered since the cache was made.
+    /// Assets opened (kernels' files decoded included) and warped clips rendered since the cache
+    /// was made.
     pub fn work(&self) -> (usize, usize) {
         (self.decodes, self.renders)
     }
@@ -254,6 +276,47 @@ impl Cache {
     /// Every lane it holds, weakly: tests check that what no plan plays any more is freed.
     pub fn lanes(&self) -> Vec<Weak<AudioLane>> {
         self.lanes.values().map(Arc::downgrade).collect()
+    }
+}
+
+/// The assets a graph's kernels read, by name, each looked up once per build: its hash, which is
+/// part of its kernel's shape (RENDER-25), and its decoded audio, which its sandbox shares
+/// (`m2.asset_read`). `None` for one that is missing or can't be decoded: it reads silence.
+#[derive(Default)]
+pub(crate) struct KernelAssets(HashMap<String, Option<(Sha, Arc<Asset>)>>);
+
+impl KernelAssets {
+    /// Every asset a kernel of `flat` names, voices' kernels included, through `cache`.
+    pub(crate) fn of(flat: &m2_ir::Flat, data: &DataSet, cache: &mut Cache) -> KernelAssets {
+        let mut out = HashMap::new();
+        let mut add = |nodes: &[m2_ir::FNode]| {
+            for n in nodes {
+                if let m2_ir::FOp::Kernel { assets, .. } = &n.op {
+                    for a in assets {
+                        if !out.contains_key(a) {
+                            out.insert(a.clone(), cache.kernel_asset(data, a));
+                        }
+                    }
+                }
+            }
+        };
+        add(&flat.nodes);
+        for n in &flat.nodes {
+            if let m2_ir::FOp::Poly { voice, .. } = &n.op {
+                add(&voice.nodes);
+            }
+        }
+        KernelAssets(out)
+    }
+
+    /// The hash of the asset named `name`, when it plays.
+    pub(crate) fn sha(&self, name: &str) -> Option<Sha> {
+        self.0.get(name)?.as_ref().map(|(sha, _)| *sha)
+    }
+
+    /// Its decoded audio, when it plays.
+    pub(crate) fn get(&self, name: &str) -> Option<Arc<Asset>> {
+        self.0.get(name)?.as_ref().map(|(_, a)| a.clone())
     }
 }
 

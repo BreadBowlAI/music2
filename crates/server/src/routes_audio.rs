@@ -22,7 +22,7 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 
 /// The routes here that write the open project.
-pub const WRITES_AUDIO: &[&str] = &["/api/graph/audio/import", "/api/graph/audio/track"];
+pub const WRITES_AUDIO: &[&str] = &["/api/graph/audio/import", "/api/graph/audio/track", "/api/graph/sample"];
 
 /// The most one upload may be, all its files together: 1 GiB. A 15-minute stereo file of 32 bits at
 /// 96 kHz is 691 MB; a longer, wider or faster one, or several together, can be more, and the page
@@ -34,6 +34,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/graph/audio/peaks", get(audio_peaks))
         .route("/api/graph/audio/import", post(audio_import).layer(DefaultBodyLimit::max(UPLOAD)))
         .route("/api/graph/audio/track", post(audio_track))
+        .route("/api/graph/sample", post(sample).layer(DefaultBodyLimit::max(UPLOAD)))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -151,6 +152,49 @@ struct TrackReq {
 async fn audio_track(State(s): S, Json(r): Json<TrackReq>) -> Result<Json<Value>, ApiError> {
     let state = s.clone();
     let result = blocking(move || state.graph.add_audio_track(r.session, r.label, r.after)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct SampleJson {
+    session: u64,
+    at: u64,
+    call: String,
+    /// The WAV's path on this computer.
+    file: String,
+}
+
+#[derive(Deserialize)]
+struct SampleQuery {
+    session: Option<u64>,
+    at: Option<u64>,
+    call: Option<String>,
+    /// The file's own name: its bytes are the body.
+    name: Option<String>,
+}
+
+/// A WAV dropped on a sampler's card (track ab): JSON `{session, at, call, file}` (the app: a file
+/// on this computer, copied by the server), or the file's bytes as the body with
+/// `?session=&at=&call=&name=` (a browser's upload). The file comes into `assets/` (create-only),
+/// then one Tx writes `sample: "<name>"` into sampler call `call`. A write. Answers the edit with
+/// `name` (the undo step's, "setting Sampler to kick.wav") and `asset`.
+async fn sample(State(s): S, Query(q): Query<SampleQuery>, headers: HeaderMap, body: Bytes) -> Result<Json<Value>, ApiError> {
+    let json = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("application/json"));
+    let (session, at, call, source) = match json {
+        true => {
+            let r: SampleJson = serde_json::from_slice(&body).map_err(anyhow::Error::from)?;
+            (r.session, r.at, r.call, Source::Path(r.file.into()))
+        }
+        false => {
+            let missing = |what: &str| anyhow::anyhow!("an upload to a sampler names its {what}");
+            let (session, at) = (q.session.ok_or_else(|| missing("session"))?, q.at.ok_or_else(|| missing("revision"))?);
+            let (call, name) = (q.call.ok_or_else(|| missing("call"))?, q.name.ok_or_else(|| missing("file"))?);
+            (session, at, call, Source::Bytes { name, bytes: Vec::from(body) })
+        }
+    };
+    let state = s.clone();
+    let result = blocking(move || state.graph.set_sample(session, at, call, source)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

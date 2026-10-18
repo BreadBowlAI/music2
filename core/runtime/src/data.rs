@@ -1,9 +1,9 @@
-//! What a song's IR declares that reads data: its lanes, by module key and lane key, and its
-//! plugins with saved state. The project's data is read against these ([`m2_song::Project::data`]),
+//! What a song's IR declares that reads data: its lanes, by module key and lane key, its
+//! plugins with saved state, and the assets its kernels read. The project's data is read against these ([`m2_song::Project::data`]),
 //! and a renderer plays the result.
 
-use m2_ir::{Ir, Kind, Op};
-use m2_song::{Decls, Key, LaneAddr, LaneKind, StateDecl};
+use m2_ir::{Ir, Kind, Node, Op};
+use m2_song::{AssetDecl, Decls, Key, LaneAddr, LaneKind, StateDecl};
 
 /// The declarations of `ir`. A lane or plugin whose keys break the key rule declares nothing:
 /// the checker reports it as `key.invalid`.
@@ -13,6 +13,15 @@ pub fn decls(ir: &Ir) -> Decls {
         for l in &m.lanes {
             if let Ok(addr) = LaneAddr::new(&m.key, &l.key) {
                 d.lanes.push((addr, lane_kind(l.kind)));
+            }
+        }
+        if let Ok(module) = Key::new(&m.key) {
+            let mut kernels = vec![];
+            walk(&m.nodes, &mut |n| kernels.push(n));
+            for n in kernels {
+                if let Op::Kernel { assets, .. } = &n.op {
+                    d.assets.extend(assets.iter().map(|a| AssetDecl { module: module.clone(), name: a.clone() }));
+                }
             }
         }
         for n in &m.nodes {
@@ -25,6 +34,16 @@ pub fn decls(ir: &Ir) -> Decls {
         }
     }
     d
+}
+
+/// Every node of `nodes`, and of the voices of each `poly` among them.
+fn walk<'a>(nodes: &'a [Node], f: &mut impl FnMut(&'a Node)) {
+    for n in nodes {
+        f(n);
+        if let Op::Poly { body, .. } = &n.op {
+            walk(&body.nodes, f);
+        }
+    }
 }
 
 /// How a lane of `kind` reads its file. A control lane records its unit by its name.

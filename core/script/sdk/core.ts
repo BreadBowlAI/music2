@@ -284,15 +284,48 @@ function ref(v: Value, what: string): string {
 }
 
 /**
- * An instance of a package kernel, e.g. `kernel("std:svf", { in: x, cutoff: hz(800) })`.
- * Unset inputs use the kernel's defaults.
+ * A kernel's settings (kernel ABI v1, `docs/kernel-abi.md`), fixed when the song is built:
+ * `assets`, the files in the project's `assets/` it reads, by name, and `values`, numbers. Changing
+ * either makes the kernel new, as a new sample does.
  */
-export function kernel<K = unknown>(id: string, inputs: Record<string, Value | undefined> = {}): KernelNode<K> {
+export type KernelSettings = { assets?: readonly string[]; values?: readonly number[] };
+
+/**
+ * An instance of a package kernel, e.g. `kernel("std:svf", { in: x, cutoff: hz(800) })`.
+ * Unset inputs use the kernel's defaults. `settings` gives it the files it reads and numbers fixed
+ * at build: `kernel("std:sampler", { pitch }, { assets: ["kick.wav"], values: [60] })`.
+ */
+export function kernel<K = unknown>(id: string, inputs: Record<string, Value | undefined> = {}, settings: KernelSettings = {}): KernelNode<K> {
   const site = takeSite(arguments);
   const scope = need(`kernel("${id}")`);
   const ins: Record<string, string> = {};
   for (const [k, v] of Object.entries(inputs)) if (v !== undefined) ins[k] = ref(v, `${id} input "${k}"`);
-  return produced(site, new KernelNode<K>(push(scope, { op: "kernel", kernel: id, inputs: ins }, at(site)), scope));
+  const node: Record<string, unknown> = { op: "kernel", kernel: id, inputs: ins };
+  const what = `kernel("${id}")`;
+  for (const k of Object.keys(settings ?? {})) if (k !== "assets" && k !== "values") throw new Error(`${what}: unknown kernel setting "${k}" (settings: assets, values)`);
+  const assets = [...(settings?.assets ?? [])];
+  assets.forEach((a, i) => {
+    if (!assetName(a)) throw new Error(`${what}: asset ${i} must be a file name in assets/, not ${shown(a)}`);
+  });
+  const values = [...(settings?.values ?? [])];
+  values.forEach((v, i) => {
+    if (typeof v !== "number" || !Number.isFinite(v)) throw new Error(`${what}: value ${i} must be a finite number, not ${shown(v)}`);
+  });
+  // Written only when given, so a kernel without settings keeps its IR's bytes (ID-11).
+  if (assets.length > 0) node.assets = assets;
+  if (values.length > 0) node.values = values;
+  return produced(site, new KernelNode<K>(push(scope, node as any, at(site)), scope));
+}
+
+/** Whether `v` can name a file in the project's `assets/` (FMT-14): no empty name or folder, none starting with `.`, no `\`. */
+function assetName(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0 && !v.split("/").some((s) => s === "" || s.startsWith(".")) && !v.includes("\\");
+}
+
+/** Whether `v` maps MIDI notes (0 to 127) to file names in `assets/`: a keymap. */
+function keymap(v: unknown): boolean {
+  if (typeof v !== "object" || v === null || Array.isArray(v) || v instanceof Signal || v instanceof Quantity) return false;
+  return Object.entries(v).every(([k, a]) => /^(0|[1-9][0-9]*)$/.test(k) && Number(k) <= 127 && assetName(a));
 }
 
 /**
@@ -693,7 +726,13 @@ export const port = {
 };
 
 /** What a setting declaration holds. */
-type SettingSpec = { kind: "number" | "int" | "bool" | "choice"; options?: readonly string[]; default?: number | boolean | string };
+type SettingSpec = {
+  kind: "number" | "int" | "bool" | "choice" | "asset" | "keymap";
+  options?: readonly string[];
+  default?: number | boolean | string | Readonly<Record<number, string>>;
+  /** Left out, it is `undefined`: no call needs it, and it has no default. */
+  optional?: boolean;
+};
 
 /** A build-time value: changing one rebuilds the graph. Never a knob or a cell. `R` is whether a call must give it. */
 export class SettingDecl<T = unknown, R extends boolean = boolean> {
@@ -702,10 +741,20 @@ export class SettingDecl<T = unknown, R extends boolean = boolean> {
   constructor(spec: SettingSpec) {
     specs.set(this, spec);
   }
+  /** Left out, it is `undefined`, with no default: `setting.asset().optional()`, a sampler with no file yet. */
+  optional(): SettingDecl<T | undefined, false> {
+    return new SettingDecl<T | undefined, false>({ ...specOf<SettingSpec>(this), optional: true });
+  }
 }
 
-/** Declare a setting: `setting.int(12)`, `setting.choice(["sine", "tri"], "sine")`. */
+/**
+ * Declare a setting: `setting.int(12)`, `setting.choice(["sine", "tri"], "sine")`. `setting.asset()`
+ * names a file in the project's `assets/` (`"kick.wav"`), and `setting.keymap()` maps MIDI notes
+ * to such files (`{ 36: "kick.wav", 38: "snare.wav" }`; empty unless given): what a kernel reads.
+ */
 export const setting = {
+  asset: ((d?: string) => new SettingDecl({ kind: "asset", default: d })) as { (): SettingDecl<string, true>; (d: string): SettingDecl<string, false> },
+  keymap: (d: Readonly<Record<number, string>> = {}) => new SettingDecl<Readonly<Record<number, string>>, false>({ kind: "keymap", default: { ...d } }),
   number: ((d?: number) => new SettingDecl({ kind: "number", default: d })) as { (): SettingDecl<number, true>; (d: number): SettingDecl<number, false> },
   int: ((d?: number) => new SettingDecl({ kind: "int", default: d })) as { (): SettingDecl<number, true>; (d: number): SettingDecl<number, false> },
   bool: ((d?: boolean) => new SettingDecl({ kind: "bool", default: d })) as { (): SettingDecl<boolean, true>; (d: boolean): SettingDecl<boolean, false> },
@@ -1109,7 +1158,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   });
   const settings = record("settings", desc.settings).map(([name, d]): Set_ => {
     named("setting", name);
-    if (!(d instanceof SettingDecl)) fail(`the setting "${name}" must be declared with setting.number(), .int(), .bool() or .choice()`);
+    if (!(d instanceof SettingDecl)) fail(`the setting "${name}" must be declared with setting.number(), .int(), .bool(), .choice(), .asset() or .keymap()`);
     const s = specOf<SettingSpec>(d as object);
     if (s.default !== undefined) settingValue(s, s.default, (m) => fail(`the setting "${name}": its default ${m}`));
     if (s.kind === "choice" && (!s.options?.length || s.options.some((o) => typeof o !== "string"))) fail(`the setting "${name}": a choice needs a list of strings`);
@@ -1128,7 +1177,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     const c = controls.find((x) => x.name === n);
     if (c) return { name: n, kind: "control", required: !!c.each || (!c.spec.optional && c.spec.default === undefined), many: false, each: !!c.each };
     const s = settings.find((x) => x.name === n);
-    if (s) return { name: n, kind: "setting", required: s.spec.default === undefined, many: false, each: false };
+    if (s) return { name: n, kind: "setting", required: s.spec.default === undefined && !s.spec.optional, many: false, each: false };
     return fail(`positional names "${n}", which isn't an input, a control or a setting`);
   };
   if (new Set(positional).size !== positional.length) fail("positional names a slot twice");
@@ -1178,7 +1227,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (insert.length) fail("an instrument (editor.category, notes first) has no editor.insert: a new track writes none");
     const required = [
       ...controls.filter((c) => c.each || (!c.spec.optional && c.spec.default === undefined)).map((c) => c.name),
-      ...settings.filter((s) => s.spec.default === undefined).map((s) => s.name),
+      ...settings.filter((s) => s.spec.default === undefined && !s.spec.optional).map((s) => s.name),
     ];
     if (required.length) fail(`an instrument (editor.category, notes first) must build from its notes alone, which leaves out "${required[0]}"`);
   } else if (editor.category !== undefined) {
@@ -1189,7 +1238,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (output?.kind !== "audio") fail("an effect (editor.category) outputs audio");
     const required = [
       ...controls.filter((c) => c.each || (!c.spec.optional && c.spec.default === undefined)).map((c) => c.name),
-      ...settings.filter((s) => s.spec.default === undefined).map((s) => s.name),
+      ...settings.filter((s) => s.spec.default === undefined && !s.spec.optional).map((s) => s.name),
     ];
     const needed = required.filter((n) => !insert.some((x) => x.slot === n));
     if (needed.length) fail(`an effect (editor.category) must build from its insert alone, which leaves out "${needed[0]}"`);
@@ -1218,7 +1267,8 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     at,
     inputs: inputs.map((i) => ({ name: i.name, ...portJson(i.spec) })),
     controls: controls.map(ctlJson),
-    settings: settings.map((s) => ({ name: s.name, kind: s.spec.kind, default: s.spec.default ?? null, options: s.spec.options ?? null })),
+    // `optional` written only when true, so every other descriptor keeps its bytes.
+    settings: settings.map((s) => ({ name: s.name, kind: s.spec.kind, default: s.spec.default ?? null, options: s.spec.options ?? null, ...(s.spec.optional ? { optional: true } : {}) })),
     output: output ? portJson(output) : null,
     positional: [...positional],
     editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes },
@@ -1248,6 +1298,12 @@ function settingValue(s: SettingSpec, v: unknown, fail: (m: string) => never): u
       break;
     case "choice":
       if (typeof v !== "string" || !s.options?.includes(v)) fail(`must be one of ${(s.options ?? []).map((o) => JSON.stringify(o)).join(", ")}, not ${shown(v)}`);
+      break;
+    case "asset":
+      if (!assetName(v)) fail(`must be a file name in assets/, not ${shown(v)}`);
+      break;
+    case "keymap":
+      if (!keymap(v)) fail(`must map MIDI notes (0 to 127) to file names in assets/, as { 36: "kick.wav" }, not ${shown(v)}`);
       break;
   }
   return v;
@@ -1297,7 +1353,7 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
       const g = given.get(s.name);
       if (g !== undefined) params[s.name] = settingValue(s.spec, g.value, (msg) => fail(c.id, `${s.name} ${msg}`));
       else if (s.spec.default !== undefined) params[s.name] = s.spec.default;
-      else fail(c.id, `the setting ${s.name} is missing`);
+      else if (!s.spec.optional) fail(c.id, `the setting ${s.name} is missing`);
     }
     if (frame !== undefined) {
       const record = infoOf(m).table[frame];

@@ -16,7 +16,7 @@
 
 [package]
 name = "std"
-version = "0.2.0"
+version = "0.2.1"
 license = "MIT"
 description = "Oscillators, envelopes, filters, mixing, dynamics, and the instruments built from them"
 wasm = "kernels/std.wasm"
@@ -384,6 +384,21 @@ inputs = [
   "perc_level: control<db> = 0 in -24..12",
 ]
 outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "sampler"
+description = "Sampler voice: plays one of its audio files (its assets) from the start, picked when the note starts by the note ranges in its values (root, lowest, highest for each file; left out, 60, 0, 127), sped up by 2^((pitch + tune - root) / 12) and the file's rate over the song's, read with the cubic Hermite formula clips use. `mode` 0 plays to the file's end whatever the note does (one-shot); 1 stops with the note, over `release` (gated). The level follows velocity; stereo out"
+inputs = [
+  "pitch: control<semitones>",
+  "gate: control<unit01>",
+  "velocity: control<unit01> = 0.8",
+  "tune: control<semitones> = 0 in -24..24",
+  "level: control<db> = 0 in -24..12",
+  "attack: control<seconds> = 0 in 0..5",
+  "release: control<seconds> = 0.05 in 0..5",
+  "mode: control<scalar> = 0 in 0..1",
+]
+outputs = ["out: audio<2>"]
 
 [[kernel]]
 name = "notecv"

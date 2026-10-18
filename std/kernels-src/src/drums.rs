@@ -9,7 +9,7 @@
 //! its first sample), so no two hits are quite the same (as on an analog machine) while
 //! every render is, and so is live playback from 0, however long the engine sat stopped.
 
-use m2_kernel::{Io, Kernel, db_to_gain, export};
+use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
 use crate::voice::{Clip, DcBlock, Decay, Drive, Noise, Square, Steps, Svf, clampf, hash, pitch_of, sin2pi, soft};
 
@@ -604,7 +604,8 @@ impl Kernel for Drum {
     const INPUTS: usize = INPUTS;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         Drum {
             sr: sample_rate.max(1.0),
             t: 0,

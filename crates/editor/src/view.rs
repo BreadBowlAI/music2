@@ -28,6 +28,7 @@ use m2_session::{Home, Session};
 use crate::cable::{Inlet, Outlet, inlets, outlets};
 use crate::controls::{Control, Declared, controls, declared, not_insertable};
 use crate::effect::{Listens, bypass_refused, calls_of, effect_at, is_bypassed, listens, move_row};
+use crate::sampler::{self, SamplerCard};
 use crate::sites::{Params, fn_params};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -164,6 +165,9 @@ pub struct ViewNode {
     /// graph state's `plugins` and the plugin routes name it (HOST-7).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
+    /// A sampler's card: the files it plays. A WAV dropped on it sets its file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampler: Option<SamplerCard>,
 }
 
 /// An effect card's ⋯ menu (Next D1, D2): each row's words when it can't run here.
@@ -545,7 +549,7 @@ pub fn view(session: &Session) -> GraphView {
             homes.insert(key, home.clone());
             // Name it after its property, or the port it feeds, or its call.
             let consumer = all.iter().find_map(|k| match &k.op {
-                Op::Kernel { kernel, inputs } => {
+                Op::Kernel { kernel, inputs, .. } => {
                     inputs.iter().find(|(_, r)| split_ref(r).0 == n.id).map(|(p, _)| (session.packages.kernel(kernel), p.clone()))
                 }
                 Op::Plugin { plugin, inputs, .. } => {
@@ -768,6 +772,10 @@ pub fn view(session: &Session) -> GraphView {
                 Group::Site(s) if kind == "call" => listens(session, sites[s]),
                 _ => None,
             };
+            let sampler = match g {
+                Group::Site(s) if kind == "call" => sampler::card(&rev.compiled, *s),
+                _ => None,
+            };
             nodes.push(ViewNode {
                 id: id.clone(),
                 label,
@@ -788,6 +796,7 @@ pub fn view(session: &Session) -> GraphView {
                 menu,
                 listens,
                 plugin: plugins.get(g).cloned(),
+                sampler,
             });
             id
         };
@@ -892,6 +901,7 @@ pub fn view(session: &Session) -> GraphView {
                 menu: None,
                 listens: None,
                 plugin: None,
+                sampler: None,
             });
             // A track's output that an effect turned off gives on comes from its card.
             let (r, g) = match off.iter().find(|(_, _, input)| input.contains(r.as_str())) {

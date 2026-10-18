@@ -51,7 +51,7 @@ fn key(k: &str) -> Key {
 }
 
 fn lanes(decls: &[(&str, &str, LaneKind)]) -> Decls {
-    Decls { lanes: decls.iter().map(|(m, l, k)| (addr(m, l), k.clone())).collect(), states: vec![] }
+    Decls { lanes: decls.iter().map(|(m, l, k)| (addr(m, l), k.clone())).collect(), ..Decls::default() }
 }
 
 fn hz() -> LaneKind {
@@ -265,6 +265,7 @@ fn plugin_states_need_their_sidecar() {
     };
     let decls = Decls {
         lanes: vec![],
+        assets: vec![],
         states: vec![
             state("lead", &["lead"], surge),
             state("pad", &["pad"], surge),

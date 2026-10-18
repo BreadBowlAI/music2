@@ -7,7 +7,7 @@
 //! integer below 2^21, so it is exact in f32, and so are the sums a `poly` makes of eight of
 //! them and of its 0/1 gates.
 
-use m2_kernel::{Io, Kernel, export};
+use m2_kernel::{Cfg, Io, Kernel, export};
 
 use crate::drums::{Kind, kind_of};
 use crate::voice::{clampf, pitch_of, sane};
@@ -48,7 +48,7 @@ impl Kernel for NoteCv {
     const INPUTS: usize = 3;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         NoteCv { first: true, on: false, code: 0.0 }
     }
 
@@ -174,7 +174,8 @@ impl Kernel for Mono {
     const INPUTS: usize = 3;
     const OUTPUTS: usize = 3;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         Mono {
             sr: sample_rate.max(1.0),
             gate: false,
@@ -254,7 +255,7 @@ impl Kernel for DrumHit {
     const INPUTS: usize = 2;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         DrumHit { first: true }
     }
 
@@ -294,7 +295,7 @@ impl Kernel for HitCount {
     const INPUTS: usize = 1;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         HitCount { n: 0 }
     }
 

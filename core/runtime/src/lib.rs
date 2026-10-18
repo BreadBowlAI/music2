@@ -53,6 +53,7 @@ pub mod packages;
 mod parts;
 mod plan;
 pub mod plugins;
+mod sandbox;
 pub mod sched;
 mod stopped;
 pub mod stream;
@@ -63,14 +64,12 @@ pub mod transport;
 mod view;
 
 use std::collections::{HashMap, HashSet};
-use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
 use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, PortRef, TimeOf};
 use m2_song::{Arrangement, DataSet, LaneData, TempoMap};
-use wasmtime::{Instance, Memory, ResourceLimiter, Store, TypedFunc};
 
 pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
@@ -82,7 +81,7 @@ pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
 pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
-pub use stopped::{OutOfMemory, Stopped, Why};
+pub use stopped::{OutOfMemory, Stopped, TooManySounds, Why};
 pub use taps::{Peaks, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
@@ -92,6 +91,7 @@ use crate::fade::xfade;
 use crate::keep::{Edge, Wiring, used};
 use crate::parts::Schedule;
 use crate::plan::{Entry, LanePlan, LaneSlot, Lanes, Plan};
+use crate::sandbox::{Sandbox, State};
 use crate::taps::Taps;
 use crate::trace::Trace;
 use crate::view::{GraphView, Local, Own, Reads};
@@ -99,14 +99,26 @@ use crate::view::{GraphView, Local, Own, Reads};
 pub const BLOCK: usize = 128;
 
 /// Bytes of one kernel port buffer: `PORT_CHANNELS` (2) channels of [`BLOCK`] floats.
-const PORT_BYTES: usize = 2 * BLOCK * 4;
+pub(crate) const PORT_BYTES: usize = 2 * BLOCK * 4;
 
 /// A node's version when its output must be copied into the kernels it feeds at every call: it
 /// isn't a constant, or it is a cell that ramps this block.
 const COPY: u64 = u64::MAX;
 
-/// Memory one kernel instance may use.
-const KERNEL_MEMORY: usize = 32 << 20;
+/// Memory one sandbox may take while it is born (its birth cap, RENDER-32); once sealed it takes no
+/// more. std's largest state, a stereo delay at 384 kHz, takes 6.1 MB, so a voice pool of 12 such
+/// voices fits.
+pub(crate) const KERNEL_MEMORY: usize = 256 << 20;
+
+/// The birth cap in MB, as the app tells it.
+pub const SOUND_MEMORY_MB: usize = KERNEL_MEMORY >> 20;
+
+/// The most sandboxes one renderer holds (RENDER-32): one for each kernel outside an instrument,
+/// and one a package for each instrument's voices. Two renderers, the one that plays and the one
+/// an edit prepares, stay within 25% of the 128 TiB a process may address when each memory takes
+/// 4.097 GiB of it, as measured on the Mac (4.0625 on Linux): 16,384 GiB / 4.097 GiB = 3,999. The
+/// same number on every OS, so a song either fits or doesn't, everywhere.
+pub const SANDBOX_LIMIT: usize = 3_999;
 
 /// Output below this is "quiet" when deciding whether a voice has finished (-80 dB).
 const QUIET: f32 = 1e-4;
@@ -168,70 +180,19 @@ impl Seg {
 /// the block.
 type Buf = Vec<f32>;
 
-/// What a kernel's store may hold (RENDER-32): one instance, one memory of at most
-/// [`KERNEL_MEMORY`], one table. A grow past the memory's cap traps at once, so a kernel never runs
-/// on without what it asked for, and `refused` says why it stopped: [`OutOfMemory`], until that
-/// error is made.
-#[derive(Default)]
-struct Cap {
-    refused: bool,
-}
-
-impl ResourceLimiter for Cap {
-    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        if desired > KERNEL_MEMORY {
-            self.refused = true;
-            wasmtime::bail!("a kernel asked for {desired} bytes of memory, past its {KERNEL_MEMORY}");
-        }
-        // A module's own maximum is wasmtime's to keep.
-        Ok(true)
-    }
-
-    fn table_growing(&mut self, _current: usize, _desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        Ok(true)
-    }
-
-    fn instances(&self) -> usize {
-        1
-    }
-
-    fn tables(&self) -> usize {
-        1
-    }
-
-    fn memories(&self) -> usize {
-        1
-    }
-}
-
-/// `e`, from a call into kernel instance `name` in `store`: [`OutOfMemory`] when the call asked for
-/// more memory than a sound may use, else `e` itself. The refusal is taken: a later error of the
-/// same instance, once a panic or an activation made it play again, is its own.
-fn ran_out(store: &mut Store<Cap>, name: &str, e: impl Into<anyhow::Error>) -> anyhow::Error {
-    match std::mem::take(&mut store.data_mut().refused) {
-        true => OutOfMemory { node: name.to_string() }.into(),
-        false => e.into(),
-    }
-}
-
-/// One kernel instance, in a wasmtime `Store` of its own (RENDER-32): a box a plan activation can
-/// move into the next plan, whose memory goes when it drops.
+/// One kernel state (RENDER-32). Outside an instrument it is a box with a sandbox of its own, which
+/// a plan activation can move into the next plan, and whose memory goes when it drops. In a voice,
+/// its state is in its voice pool's sandbox for its package, [`VoicePool::sandboxes`]`[at]`.
 struct KernelInst {
-    store: Store<Cap>,
+    own: Option<Sandbox>,
+    at: usize,
+    state: State,
     /// The hash of the shape it was made for: what an activation checks before moving it.
     shape: u64,
     /// Live, it failed (RENDER-25): it plays silence and isn't called again until it is reset, as
     /// an activation moves it on or a panic.
     stopped: bool,
     name: String,
-    memory: Memory,
-    /// Where `memory` is, so a call needn't ask the store, one of thousands and cold (RENDER-32).
-    view: MemView,
-    reset: TypedFunc<(), ()>,
-    process: TypedFunc<u32, ()>,
-    active: TypedFunc<(), u32>,
-    in_ptrs: Vec<usize>,
-    out_ptrs: Vec<usize>,
     out_channels: Vec<u8>,
     /// Debug builds: input memory before a call into the kernel, to compare after (ABI-1), and
     /// the kernel id and its inputs' names, for the message.
@@ -242,18 +203,6 @@ struct KernelInst {
     #[cfg(debug_assertions)]
     in_names: Vec<String>,
 }
-
-/// A kernel memory's address and its size when its ports were checked, kept from its build. A
-/// memory never moves (RENDER-32): every layout reserves all of the 32 MiB a memory may grow to,
-/// and a memory never shrinks, so every port stays inside the first `len` bytes at `base`.
-struct MemView {
-    base: NonNull<u8>,
-    len: usize,
-}
-
-// SAFETY: `base` is dereferenced only in `KernelInst::ports`, which holds by `&mut` the instance, and
-// so the store that owns the memory; the memory goes to another thread only with that store.
-unsafe impl Send for MemView {}
 
 /// One call's view of a kernel's memory: its bytes, the ports in them, and the instance's name.
 struct Ports<'a> {
@@ -289,81 +238,70 @@ struct KernelNode {
     inst: Option<Box<KernelInst>>,
 }
 
-impl KernelInst {
-    /// Instantiate kernel `id` for node `n` in a store of its own, initialise it and check its ports;
-    /// constant inputs are written into its memory once.
-    fn new(packages: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64, shape: u64) -> Result<KernelInst> {
-        let (module, prefix) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
-        let mut store = Store::new(&packages.engine, Cap::default());
-        store.limiter(|c| c);
-        let failed = |store: &mut Store<Cap>, e: anyhow::Error| ran_out(store, &n.name, e);
-        let instance = Instance::new(&mut store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name)).map_err(|e| failed(&mut store, e))?;
-        let f = |name: &str| format!("{prefix}_{name}");
-        let init = instance.get_typed_func::<(f32, u32, u32), ()>(&mut store, &f("init"))?;
-        let ports = instance.get_typed_func::<(), u32>(&mut store, &f("ports"))?;
-        let port = instance.get_typed_func::<u32, u32>(&mut store, &f("port"))?;
-        let reset = instance.get_typed_func::<(), ()>(&mut store, &f("reset"))?;
-        let process = instance.get_typed_func::<u32, ()>(&mut store, &f("process"))?;
-        let active = instance.get_typed_func::<(), u32>(&mut store, &f("active"))?;
-        let memory = instance.get_memory(&mut store, "memory").context("kernel has no memory")?;
-        init.call(&mut store, (sample_rate as f32, BLOCK as u32, channels as u32)).map_err(|e| failed(&mut store, e.into()))?;
+/// The channel count of each port of kernel `sig` in node `n`, inputs first, as its port table has
+/// them: a connected input's own, else its kind's (`audio<*>` and `*` take the node's `channels`).
+fn port_channels(sig: &m2_ir::KernelSig, n: &FNode, channels: u8, inputs: &[Input]) -> Vec<u32> {
+    let input = |(p, i): (&m2_ir::PortSig, &Input)| match (i, &p.kind) {
+        (Input::Port { channels, .. }, _) => *channels,
+        (_, m2_ir::PortKind::Audio(Some(c))) => *c,
+        (_, m2_ir::PortKind::Audio(None) | m2_ir::PortKind::Any) => channels,
+        _ => 1,
+    };
+    sig.inputs.iter().zip(inputs).map(input).chain(n.outputs.iter().map(|k| k.channels())).map(|c| c.clamp(1, 2) as u32).collect()
+}
 
-        let (n_in, n_out) = (inputs.len(), n.outputs.len());
-        let declared = ports.call(&mut store, ()).map_err(|e| failed(&mut store, e.into()))?;
-        if declared != ((n_in as u32) << 8 | n_out as u32) {
-            bail!(
-                "{}: `{id}` has {} inputs and {} outputs, but its manifest declares {n_in} and {n_out}",
-                n.name,
-                declared >> 8,
-                declared & 0xff
-            );
-        }
-        let mut ptrs = vec![];
-        for i in 0..(n_in + n_out) as u32 {
-            let p = port.call(&mut store, i).map_err(|e| failed(&mut store, e.into()))? as usize;
-            if p == 0 || !p.is_multiple_of(4) || p + PORT_BYTES > memory.data_size(&store) {
-                bail!("{}: `{id}` returned a bad buffer for port {i}", n.name);
-            }
-            ptrs.push(p);
-        }
-        // ABI-1, in every build: a port that shared memory with another would let one write the
-        // other, so an input written once could change behind the host's back.
+impl KernelInst {
+    /// Kernel `k` for node `n` outside an instrument, in a sandbox of its own: born, and sealed.
+    fn new(packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
+        let id = k.id;
+        let (module, prefix, _) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
+        let mut sandbox = Sandbox::new(&packages.engine, module).with_context(|| format!("{}: `{id}`", n.name))?;
+        let mut k = KernelInst::born(&mut sandbox, 0, prefix, packages, n, k, shape)?;
+        sandbox.seal().with_context(|| n.name.clone())?;
+        k.own = Some(sandbox);
+        Ok(k)
+    }
+
+    /// Kernel `k` for node `n`, its state born in `sandbox`, a voice pool's `at`th, its constant
+    /// inputs written into its memory once.
+    fn born(sandbox: &mut Sandbox, at: usize, prefix: &str, packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
+        let (id, inputs) = (k.id, k.inputs);
         let sig = m2_ir::Kernels::kernel(packages, id).with_context(|| format!("{}: kernel `{id}` has no signature", n.name))?;
-        let names: Vec<&str> = sig.inputs.iter().chain(&sig.outputs).map(|p| p.name.as_str()).collect();
-        let mut by_start: Vec<(usize, usize)> = ptrs.iter().enumerate().map(|(i, &p)| (p, i)).collect();
-        by_start.sort_unstable();
-        if let Some(w) = by_start.windows(2).find(|w| w[0].0 + PORT_BYTES > w[1].0) {
-            let name = |i: usize| names.get(i).copied().unwrap_or("?");
-            bail!(
-                "{}: `{id}` returned overlapping buffers for ports `{}` and `{}` (ABI-1: each port has its own memory)",
-                n.name,
-                name(w[0].1),
-                name(w[1].1)
-            );
-        }
-        let out_ptrs = ptrs.split_off(n_in);
+        let (n_in, n_out) = (inputs.len(), n.outputs.len());
+        let ports = port_channels(sig, n, k.channels, inputs);
+        let spec = sandbox::Spec {
+            inputs: n_in,
+            outputs: n_out,
+            channels: &ports,
+            audio: k.channels,
+            sample_rate: k.sample_rate,
+            values: k.values,
+            assets: k.assets,
+        };
+        let state = match sandbox.state(prefix, &spec) {
+            Ok(s) => s,
+            Err(e) => {
+                let e = sandbox.ran_out(&n.name, e);
+                return Err(if e.is::<OutOfMemory>() { e } else { e.context(format!("{}: `{id}`", n.name)) });
+            }
+        };
         // Unconnected and constant inputs are written once; kernels never write inputs.
-        let data = memory.data_mut(&mut store);
-        for (inp, &ptr) in inputs.iter().zip(&ptrs) {
+        let data = sandbox.data_born();
+        for (inp, &ptr) in inputs.iter().zip(&state.ins) {
             if let Input::Const(v) = inp {
                 floats(data, ptr, 2 * BLOCK).fill(*v as f32);
             }
         }
-        let base = NonNull::new(memory.data_ptr(&store)).with_context(|| format!("{}: `{id}`'s memory has no address", n.name))?;
-        let view = MemView { base, len: memory.data_size(&store) };
+        #[cfg(debug_assertions)]
+        let names: Vec<&str> = sig.inputs.iter().map(|p| p.name.as_str()).collect();
         LIVE_KERNELS.fetch_add(1, Ordering::Relaxed);
         Ok(KernelInst {
-            store,
+            own: None,
+            at,
+            state,
             shape,
             stopped: false,
             name: n.name.clone(),
-            memory,
-            view,
-            reset,
-            process,
-            active,
-            in_ptrs: ptrs,
-            out_ptrs,
             out_channels: n.outputs.iter().map(|k| k.channels()).collect(),
             #[cfg(debug_assertions)]
             before: vec![0; n_in * PORT_BYTES],
@@ -374,82 +312,98 @@ impl KernelInst {
         })
     }
 
+    /// Its sandbox, and its state: its own, or the pool's in `pool` (a voice's).
+    fn sandbox<'a>(&'a mut self, pool: &'a mut [Sandbox]) -> (&'a mut Sandbox, &'a State) {
+        match &mut self.own {
+            Some(own) => (own, &self.state),
+            None => (&mut pool[self.at], &self.state),
+        }
+    }
+
     /// `k_process` for `frames` frames. Debug builds check it left its inputs alone (ABI-1).
-    fn process(&mut self, frames: usize) -> Result<()> {
+    fn process(&mut self, pool: &mut [Sandbox], frames: usize) -> Result<()> {
         #[cfg(debug_assertions)]
-        self.keep_inputs();
-        self.process.call(&mut self.store, frames as u32).wctx(|| format!("{} crashed", self.name)).map_err(|e| self.ran_out(e))?;
+        self.keep_inputs(pool);
+        let name = &self.name;
+        let (sb, state) = match &mut self.own {
+            Some(own) => (own, &self.state),
+            None => (&mut pool[self.at], &self.state),
+        };
+        let done = state.process(sb, frames).wctx(|| format!("{name} crashed"));
+        done.map_err(|e| sb.ran_out(name, e))?;
         #[cfg(debug_assertions)]
-        self.check_inputs(false)?;
+        self.check_inputs(pool, false)?;
         Ok(())
     }
 
     /// `k_reset`. Debug builds check it left its inputs alone (ABI-1).
-    fn reset(&mut self) -> Result<()> {
+    fn reset(&mut self, pool: &mut [Sandbox]) -> Result<()> {
         #[cfg(debug_assertions)]
-        self.keep_inputs();
-        self.reset.call(&mut self.store, ()).map_err(|e| self.ran_out(e))?;
+        self.keep_inputs(pool);
+        let name = &self.name;
+        let (sb, state) = match &mut self.own {
+            Some(own) => (own, &self.state),
+            None => (&mut pool[self.at], &self.state),
+        };
+        state.reset(sb).map_err(|e| sb.ran_out(name, e))?;
         #[cfg(debug_assertions)]
-        self.check_inputs(true)?;
+        self.check_inputs(pool, true)?;
         Ok(())
     }
 
     /// Whether it still holds sound that will come out later.
-    fn active(&mut self) -> Result<bool> {
-        Ok(self.active.call(&mut self.store, ()).map_err(|e| self.ran_out(e))? != 0)
+    fn active(&mut self, pool: &mut [Sandbox]) -> Result<bool> {
+        let name = &self.name;
+        let (sb, state) = match &mut self.own {
+            Some(own) => (own, &self.state),
+            None => (&mut pool[self.at], &self.state),
+        };
+        state.active(sb).map_err(|e| sb.ran_out(name, e))
     }
 
-    /// `e`, from a call into it: [`OutOfMemory`] when the call asked for more than a sound may use.
-    fn ran_out(&mut self, e: impl Into<anyhow::Error>) -> anyhow::Error {
-        ran_out(&mut self.store, &self.name, e)
-    }
-
-    /// Its first reset, while it is built: a reset may grow the memory (a kernel builds its new
-    /// state before dropping the old), never move it, which this checks in every build. It sees a
-    /// move in this reset only: what keeps a memory in place later is the layout and the 32 MiB cap
-    /// (RENDER-32), and debug builds check at every call ([`KernelInst::ports`]).
-    fn prewarm(&mut self) -> Result<()> {
-        self.reset()?;
-        if self.memory.data_ptr(&self.store) != self.view.base.as_ptr() {
-            bail!("{}: its kernel memory moved as it grew (RENDER-32: a kernel memory never moves)", self.name);
-        }
-        Ok(())
+    /// Its first reset, while it is built, after its sandbox is sealed: a reset that would take
+    /// memory fails here, at the build, naming its node, and never later on the audio thread.
+    fn prewarm(&mut self, pool: &mut [Sandbox]) -> Result<()> {
+        self.reset(pool)
     }
 
     /// Its memory's bytes for one call's copies, with its ports and its name, without asking the
-    /// store. Debug builds check the memory is still where it was built: one lookup in the store, as
-    /// each copy made before the address was kept.
-    fn ports(&mut self) -> Ports<'_> {
-        debug_assert_eq!(self.memory.data_ptr(&self.store), self.view.base.as_ptr(), "{}: a kernel memory moved (RENDER-32)", self.name);
-        // SAFETY: `base..base + len` is this instance's memory, which its store owns and which never
-        // moves or shrinks (RENDER-32). `&mut self` holds that store for as long as the slice lives,
-        // so no call into the kernel and no other view of the memory can happen meanwhile, as with
-        // `Memory::data_mut`.
-        let data = unsafe { std::slice::from_raw_parts_mut(self.view.base.as_ptr(), self.view.len) };
-        Ports { data, ins: &self.in_ptrs, outs: &self.out_ptrs, out_channels: &self.out_channels, name: &self.name }
+    /// store (RENDER-32).
+    fn ports<'a>(&'a mut self, pool: &'a mut [Sandbox]) -> Ports<'a> {
+        let (out_channels, name) = (&self.out_channels, &self.name);
+        let (sb, s) = match &mut self.own {
+            Some(own) => (own, &self.state),
+            None => (&mut pool[self.at], &self.state),
+        };
+        Ports { data: sb.data(), ins: &s.ins, outs: &s.outs, out_channels, name }
     }
 
     #[cfg(debug_assertions)]
-    fn keep_inputs(&mut self) {
-        let data = self.memory.data(&self.store);
-        for (k, &ptr) in self.in_ptrs.iter().enumerate() {
-            self.before[k * PORT_BYTES..(k + 1) * PORT_BYTES].copy_from_slice(&data[ptr..ptr + PORT_BYTES]);
+    fn keep_inputs(&mut self, pool: &mut [Sandbox]) {
+        let mut before = std::mem::take(&mut self.before);
+        let (sb, state) = self.sandbox(pool);
+        let data = sb.bytes();
+        for (k, &ptr) in state.ins.iter().enumerate() {
+            before[k * PORT_BYTES..(k + 1) * PORT_BYTES].copy_from_slice(&data[ptr..ptr + PORT_BYTES]);
         }
+        self.before = before;
     }
 
     #[cfg(debug_assertions)]
-    fn check_inputs(&self, reset: bool) -> Result<()> {
-        let data = self.memory.data(&self.store);
-        for (k, &ptr) in self.in_ptrs.iter().enumerate() {
-            if data[ptr..ptr + PORT_BYTES] != self.before[k * PORT_BYTES..(k + 1) * PORT_BYTES] {
-                let (kernel, port) = (&self.kernel, &self.in_names[k]);
-                let what = if reset {
-                    format!("`{kernel}`'s reset changed its input `{port}`")
-                } else {
-                    format!("`{kernel}` wrote its input `{port}`")
-                };
-                bail!("{}: {what} (ABI-1: kernel input memory is read-only)", self.name);
-            }
+    fn check_inputs(&mut self, pool: &mut [Sandbox], reset: bool) -> Result<()> {
+        let before = std::mem::take(&mut self.before);
+        let (sb, state) = self.sandbox(pool);
+        let data = sb.bytes();
+        let changed = state.ins.iter().enumerate().position(|(k, &ptr)| data[ptr..ptr + PORT_BYTES] != before[k * PORT_BYTES..(k + 1) * PORT_BYTES]);
+        self.before = before;
+        if let Some(k) = changed {
+            let (kernel, port) = (&self.kernel, &self.in_names[k]);
+            let what = if reset {
+                format!("`{kernel}`'s reset changed its input `{port}`")
+            } else {
+                format!("`{kernel}` wrote its input `{port}`")
+            };
+            bail!("{}: {what} (ABI-1: kernel input memory is read-only)", self.name);
         }
         Ok(())
     }
@@ -458,7 +412,7 @@ impl KernelInst {
 impl KernelNode {
     /// Frames `seg` of block `b`: its inputs copied into its memory as they change, the call, and
     /// its outputs copied out. Never allocates.
-    fn process(&mut self, b: &Block, seg: Seg, r: &impl Reads, out: &mut [Buf]) -> Result<()> {
+    fn process(&mut self, b: &Block, seg: Seg, r: &impl Reads, out: &mut [Buf], pool: &mut [Sandbox]) -> Result<()> {
         let n = seg.n;
         let Some(k) = self.inst.as_deref_mut().filter(|k| !k.stopped) else {
             for o in out.iter_mut() {
@@ -468,7 +422,7 @@ impl KernelNode {
             }
             return Ok(());
         };
-        let p = k.ports();
+        let p = k.ports(pool);
         for ((inp, &ptr), seen) in self.inputs.iter().zip(p.ins).zip(&mut self.seen) {
             if let Input::Port { src, src_channels, channels } = inp {
                 let s = r.buf(src.node, src.port);
@@ -486,8 +440,8 @@ impl KernelNode {
                 *seen = version;
             }
         }
-        k.process(n)?;
-        let p = k.ports();
+        k.process(pool, n)?;
+        let p = k.ports(pool);
         for (o, (&ptr, &ch)) in out.iter_mut().zip(p.outs.iter().zip(p.out_channels)) {
             for c in 0..ch as usize {
                 let dst = &mut o[seg.range(c)];
@@ -539,6 +493,9 @@ struct Planned {
 /// (RENDER-16).
 struct VoicePool {
     voices: Vec<VoiceSlot>,
+    /// Its voices' kernel states, one sandbox for each package they use (RENDER-32): born with the
+    /// pool, sealed, and dropped with it.
+    sandboxes: Vec<Sandbox>,
     born: u64,
     shape: u64,
     /// Live, a voice failed: the pool plays silence and calls no voice, as a stopped kernel
@@ -1126,6 +1083,25 @@ struct Graph {
     poisoned: Vec<bool>,
 }
 
+/// The sandboxes a renderer of `flat` holds, its top-level nodes `used` (RENDER-32): one for each
+/// kernel outside an instrument, and one for each package an instrument's voices run kernels of.
+fn sandboxes(flat: &Flat, used: &[bool], packages: &PackageSet) -> usize {
+    let one = |n: &FNode| match &n.op {
+        FOp::Kernel { .. } => 1,
+        FOp::Poly { voice, .. } => {
+            let mut of: Vec<&str> = voice.nodes.iter().filter_map(|n| match &n.op {
+                FOp::Kernel { kernel, .. } => packages.module_for(kernel).map(|(_, _, package)| package),
+                _ => None,
+            }).collect();
+            of.sort_unstable();
+            of.dedup();
+            of.len()
+        }
+        _ => 0,
+    };
+    flat.nodes.iter().zip(used).filter(|(_, u)| **u).map(|(n, _)| one(n)).sum()
+}
+
 /// Builds a graph's nodes, and the instances of those that get new ones.
 struct Builder<'a> {
     packages: &'a PackageSet,
@@ -1145,6 +1121,20 @@ struct Builder<'a> {
     offsets: &'a [u32],
     /// Plugin instances made before the graph, to measure their latency, by node (RENDER-17).
     made: HashMap<usize, Arc<PluginInstance>>,
+    /// While a voice pool is built: its sandboxes so far, by package (RENDER-32).
+    pool: Vec<(String, Sandbox)>,
+    /// The assets its kernels read, decoded and shared.
+    assets: &'a audio::KernelAssets,
+}
+
+/// A kernel node's kernel and settings, as its state is made from them.
+struct Kernel<'a> {
+    id: &'a str,
+    channels: u8,
+    inputs: &'a [Input],
+    values: &'a [f64],
+    assets: &'a [Option<Arc<audio::Asset>>],
+    sample_rate: f64,
 }
 
 /// What a node's box is made of.
@@ -1205,9 +1195,12 @@ impl Builder<'_> {
             FOp::Lane { module, lane, kind: Kind::Audio(_), .. } => Exec::Audio { slot: self.slot(module, lane)? },
             FOp::Time(t) => Exec::Time(*t),
             FOp::Const(v) => Exec::Const(*v as f32),
-            FOp::Kernel { kernel, channels, inputs } => {
+            FOp::Kernel { kernel, channels, inputs, assets, values } => {
+                let read: Vec<Option<Arc<audio::Asset>>> = assets.iter().map(|a| self.assets.get(a)).collect();
+                let k = Kernel { id: kernel, channels: *channels, inputs, values, assets: &read, sample_rate: self.sample_rate };
                 let inst = match boxed {
-                    Make::New(shape) => Some(Box::new(KernelInst::new(self.packages, n, kernel, *channels, inputs, self.sample_rate, shape)?)),
+                    Make::New(shape) if in_voice => Some(Box::new(self.in_pool(n, &k, shape)?)),
+                    Make::New(shape) => Some(Box::new(KernelInst::new(self.packages, n, &k, shape)?)),
                     _ => None,
                 };
                 Exec::Kernel(KernelNode { inputs: inputs.to_vec(), seen: vec![COPY; inputs.len()], inst })
@@ -1235,12 +1228,24 @@ impl Builder<'_> {
                 };
                 let pool = match boxed {
                     Make::New(shape) => {
-                        let mut slots = Vec::with_capacity(*voices as usize);
-                        for _ in 0..*voices {
-                            let graph = self.graph(&voice.nodes, &voice.order, true, &|_| Make::New(0), &HashMap::new()).with_context(|| format!("{}: voice", n.name))?;
-                            slots.push(VoiceSlot { graph, note: None, born: 0, dirty: false, last_peak: 0.0, taken: false });
+                        // Its voices' states are born in sandboxes of its own, sealed once all are born.
+                        let outer = std::mem::take(&mut self.pool);
+                        let mut built = || -> Result<Vec<VoiceSlot>> {
+                            let mut slots = Vec::with_capacity(*voices as usize);
+                            for _ in 0..*voices {
+                                let graph = self.graph(&voice.nodes, &voice.order, true, &|_| Make::New(0), &HashMap::new());
+                                let graph = graph.with_context(|| format!("{}: voice", n.name))?;
+                                slots.push(VoiceSlot { graph, note: None, born: 0, dirty: false, last_peak: 0.0, taken: false });
+                            }
+                            Ok(slots)
+                        };
+                        let slots = built();
+                        let mut sandboxes: Vec<Sandbox> = std::mem::replace(&mut self.pool, outer).into_iter().map(|(_, s)| s).collect();
+                        let slots = slots?;
+                        for sb in &mut sandboxes {
+                            sb.seal().with_context(|| n.name.clone())?;
                         }
-                        Some(Box::new(VoicePool { voices: slots, born: 0, shape, stopped: false }))
+                        Some(Box::new(VoicePool { voices: slots, sandboxes, born: 0, shape, stopped: false }))
                     }
                     _ => None,
                 };
@@ -1272,6 +1277,22 @@ impl Builder<'_> {
                 Exec::NoteDelay(Box::new(delay::NoteDelayNode { slot, line, out: Events::with_capacity(2 * per_block) }))
             }
         })
+    }
+
+    /// Kernel `k` for node `n` in a voice: its state born in the pool's sandbox for its package,
+    /// made when the pool's first kernel of that package is.
+    fn in_pool(&mut self, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
+        let id = k.id;
+        let (module, prefix, package) = self.packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
+        let at = match self.pool.iter().position(|(p, _)| p == package) {
+            Some(at) => at,
+            None => {
+                let sb = Sandbox::new(&self.packages.engine, module).with_context(|| format!("{}: `{id}`", n.name))?;
+                self.pool.push((package.to_string(), sb));
+                self.pool.len() - 1
+            }
+        };
+        KernelInst::born(&mut self.pool[at].1, at, prefix, self.packages, n, k, shape)
     }
 
     /// A plugin node, and with `boxed` its instance: created through the host, its verified state
@@ -1395,10 +1416,12 @@ fn make_plugin(
 /// Each checked node's latency (RENDER-17): a kernel's as its package declares it, a plugin's as its
 /// instance last measured it: the one it keeps, the one lent to it, or a new one made here, into
 /// `made`, for its node to play.
+#[allow(clippy::too_many_arguments)]
 fn latencies(
     flat: &Flat,
     packages: &PackageSet,
     data: &DataSet,
+    assets: &audio::KernelAssets,
     keep: Option<&Keep>,
     lent: Option<&HashMap<usize, Arc<PluginInstance>>>,
     made: &mut HashMap<usize, Arc<PluginInstance>>,
@@ -1406,7 +1429,7 @@ fn latencies(
 ) -> Result<Vec<u32>> {
     let mut lat = vec![0; flat.nodes.len()];
     let used = used(flat);
-    let shape = |i: usize| if used[i] { Shape::of(&flat.nodes[i], packages) } else { None };
+    let shape = |i: usize| if used[i] { Shape::of(&flat.nodes[i], packages, assets) } else { None };
     let kept = keep.map(|k| {
         let shapes: Vec<Option<Shape>> = (0..flat.nodes.len()).map(shape).collect();
         let blobs: Vec<Option<m2_song::Sha>> = flat.nodes.iter().map(|n| plan::blob(n, data)).collect();
@@ -1539,6 +1562,7 @@ fn fade(b: &Block, (old, new, wait): (&Input, &Input, u32), r: &impl Reads, had:
 /// read the graph around its `poly` through `outer`. At the top level (no `outer`) a live block
 /// marks a box whose output went non-finite, or that failed (RENDER-25). Never allocates while it
 /// succeeds.
+#[allow(clippy::too_many_arguments)]
 fn step<R: Reads>(
     own: Own,
     r: &R,
@@ -1547,6 +1571,7 @@ fn step<R: Reads>(
     outer: Option<(&dyn Reads, &[PortRef])>,
     note: Option<VoiceNote>,
     lanes: &[LaneSlot],
+    pool: &mut [Sandbox],
 ) -> Result<()> {
     let Own { exec, out, version, poisoned } = own;
     let n = seg.n;
@@ -1593,7 +1618,7 @@ fn step<R: Reads>(
             }
             Ok(())
         }
-        Exec::Kernel(k) => k.process(b, seg, r, out),
+        Exec::Kernel(k) => k.process(b, seg, r, out, pool),
         Exec::Poly(p) => p.process(b, r, &mut out[0], lanes),
         Exec::Plugin(p) => p.process(b, r, &mut out[0], lanes),
         Exec::Missing(input) => {
@@ -1705,7 +1730,7 @@ fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[
         // finished before: earlier in p, or in a partition p waits for (the pool runs a task after
         // its inputs complete, with Acquire).
         let own = unsafe { view.own(i) };
-        if let Err(e) = step(own, &view.reader(parts, p, i), b, Seg::WHOLE, None, None, lanes) {
+        if let Err(e) = step(own, &view.reader(parts, p, i), b, Seg::WHOLE, None, None, lanes, &mut []) {
             if !b.live {
                 // SAFETY: this is partition p's task.
                 unsafe { parts.fail(p, i, e) };
@@ -1756,12 +1781,25 @@ impl Graph {
         note: Option<VoiceNote>,
         lanes: &[LaneSlot],
     ) -> Result<()> {
+        self.process_in(b, seg, outer, note, lanes, &mut [])
+    }
+
+    /// [`Graph::process`] for a voice's graph, whose kernels' states are in its pool's sandboxes.
+    fn process_in(
+        &mut self,
+        b: &Block,
+        seg: Seg,
+        outer: Option<(&dyn Reads, &[PortRef])>,
+        note: Option<VoiceNote>,
+        lanes: &[LaneSlot],
+        pool: &mut [Sandbox],
+    ) -> Result<()> {
         for oi in 0..self.order.len() {
             let i = self.order[oi];
             let mut out = std::mem::take(&mut self.bufs[i]);
             let (mut version, mut poisoned) = (self.versions[i], self.poisoned[i]);
             let own = Own { exec: &mut self.exec[i], out: &mut out, version: &mut version, poisoned: &mut poisoned };
-            let done = step(own, &Local { bufs: &self.bufs, versions: &self.versions }, b, seg, outer, note, lanes);
+            let done = step(own, &Local { bufs: &self.bufs, versions: &self.versions }, b, seg, outer, note, lanes, pool);
             (self.bufs[i], self.versions[i], self.poisoned[i]) = (out, version, poisoned);
             done?;
         }
@@ -1788,11 +1826,16 @@ impl Graph {
 
     /// Back to the state right after building, every mark cleared (RENDER-10).
     fn reset(&mut self) -> Result<()> {
+        self.reset_in(&mut [])
+    }
+
+    /// [`Graph::reset`] for a voice's graph, whose kernels' states are in its pool's sandboxes.
+    fn reset_in(&mut self, pool: &mut [Sandbox]) -> Result<()> {
         // Counted here, so no path resets the graph unseen (RENDER-10).
         self.resets += 1;
         self.poisoned.iter_mut().for_each(|p| *p = false);
         for i in 0..self.exec.len() {
-            self.reset_node(i)?;
+            self.reset_node_in(i, pool)?;
         }
         Ok(())
     }
@@ -1821,9 +1864,14 @@ impl Graph {
     /// end, a ring zeroed. A node that stopped plays again once reset; one whose reset fails again
     /// stays stopped, and the rest goes on (RENDER-25). Never allocates while it succeeds.
     fn reset_node(&mut self, i: usize) -> Result<()> {
+        self.reset_node_in(i, &mut [])
+    }
+
+    /// [`Graph::reset_node`] in a voice's graph, whose kernels' states are in its pool's sandboxes.
+    fn reset_node_in(&mut self, i: usize, pool: &mut [Sandbox]) -> Result<()> {
         let stopped = self.exec[i].stopped();
         let done = match &mut self.exec[i] {
-            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.reset(),
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.reset(pool),
             Exec::Plugin(p) => p.reset(),
             Exec::Feedback { ring, .. } => {
                 ring.fill(0.0);
@@ -1907,16 +1955,23 @@ impl Graph {
         }
     }
 
-    /// Reset every kernel once, in voices too: a kernel's first reset may grow its memory
-    /// (it builds the new state before dropping the old), so it happens here, off the audio
-    /// thread, and never again later. A reset is the same as init, so nothing sounds different.
+    /// Reset every kernel once, in voices too, after its sandbox is sealed: a reset that would take
+    /// memory fails here, off the audio thread, naming its node (RENDER-28). A reset leaves a state
+    /// as it was born, so nothing sounds different.
     fn prewarm(&mut self) -> Result<()> {
+        self.prewarm_in(&mut [])
+    }
+
+    /// [`Graph::prewarm`] for a voice's graph, whose kernels' states are in its pool's sandboxes.
+    fn prewarm_in(&mut self, pool: &mut [Sandbox]) -> Result<()> {
         for e in &mut self.exec {
             match e {
-                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.prewarm()?,
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.prewarm(pool)?,
                 Exec::Poly(p) => {
-                    for v in p.pool.iter_mut().flat_map(|pool| &mut pool.voices) {
-                        v.graph.prewarm()?;
+                    if let Some(p) = p.pool.as_deref_mut() {
+                        for v in &mut p.voices {
+                            v.graph.prewarm_in(&mut p.sandboxes)?;
+                        }
                     }
                 }
                 _ => {}
@@ -1925,13 +1980,25 @@ impl Graph {
         Ok(())
     }
 
+    /// The kernel sandboxes it holds, in voices too (RENDER-32).
+    fn sandboxes(&self) -> usize {
+        self.exec
+            .iter()
+            .map(|e| match e {
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.own.is_some() as usize,
+                Exec::Poly(p) => p.pool.iter().map(|pool| pool.sandboxes.len() + pool.voices.iter().map(|v| v.graph.sandboxes()).sum::<usize>()).sum(),
+                _ => 0,
+            })
+            .sum()
+    }
+
     /// The memory every kernel instance holds, in bytes.
     fn kernel_memory(&self) -> usize {
         self.exec
             .iter()
             .map(|e| match e {
-                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.memory.data_size(&k.store),
-                Exec::Poly(p) => p.pool.iter().flat_map(|pool| &pool.voices).map(|v| v.graph.kernel_memory()).sum(),
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.own.as_ref().map_or(0, Sandbox::size),
+                Exec::Poly(p) => p.pool.iter().flat_map(|pool| &pool.sandboxes).map(Sandbox::size).sum(),
                 _ => 0,
             })
             .sum()
@@ -1992,10 +2059,15 @@ impl Graph {
 
     /// Whether any kernel still holds sound that will come out later.
     fn active(&mut self) -> Result<bool> {
+        self.active_in(&mut [])
+    }
+
+    /// [`Graph::active`] for a voice's graph, whose kernels' states are in its pool's sandboxes.
+    fn active_in(&mut self, pool: &mut [Sandbox]) -> Result<bool> {
         for e in &mut self.exec {
             let active = match e {
                 // One that stopped is never called again, and holds nothing that will sound.
-                Exec::Kernel(KernelNode { inst: Some(k), .. }) if !k.stopped => k.active()?,
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) if !k.stopped => k.active(pool)?,
                 Exec::Feedback { ring, .. } => ring.iter().any(|x| x.abs() > QUIET),
                 Exec::Delay(d) => d.line.active(),
                 Exec::NoteDelay(d) => d.line.active(),
@@ -2017,7 +2089,7 @@ impl PolyNode {
             pool.born = 0;
             for v in &mut pool.voices {
                 if v.dirty {
-                    v.graph.reset()?;
+                    v.graph.reset_in(&mut pool.sandboxes)?;
                 }
                 (v.note, v.born, v.dirty, v.last_peak, v.taken) = (None, 0, false, 0.0, false);
             }
@@ -2039,7 +2111,7 @@ impl PolyNode {
             out.fill(0.0);
             return Ok(());
         };
-        let VoicePool { voices, born, .. } = pool;
+        let VoicePool { voices, born, sandboxes, .. } = pool;
         // Offs for notes already in voices. A stolen note's Off finds nothing.
         for e in events {
             if let Event::Off { frame, id, .. } = *e
@@ -2054,7 +2126,7 @@ impl PolyNode {
             if let Some(n) = v.note
                 && n.off == start
                 && v.last_peak < QUIET
-                && !v.graph.active()?
+                && !v.graph.active_in(sandboxes)?
             {
                 v.note = None;
             }
@@ -2098,8 +2170,8 @@ impl PolyNode {
             let mut at = 0;
             let mut current = v.note;
             let mut peak = 0.0f32;
-            let mut segment = |v: &mut VoiceSlot, seg: Seg, note: VoiceNote, peak: &mut f32| -> Result<()> {
-                v.graph.process(b, seg, Some(outer), Some(note), &[])?;
+            let mut segment = |v: &mut VoiceSlot, seg: Seg, note: VoiceNote, peak: &mut f32, sandboxes: &mut [Sandbox]| -> Result<()> {
+                v.graph.process_in(b, seg, Some(outer), Some(note), &[], sandboxes)?;
                 let vo = &v.graph.bufs[voice_out.node][voice_out.port];
                 let v_ch = vo.len() / BLOCK;
                 for c in 0..out_ch {
@@ -2116,10 +2188,10 @@ impl PolyNode {
                 if let Some(c) = current
                     && off > at
                 {
-                    segment(v, Seg { off: at, n: off - at }, c, &mut peak)?;
+                    segment(v, Seg { off: at, n: off - at }, c, &mut peak, sandboxes)?;
                 }
                 if v.dirty {
-                    v.graph.reset()?;
+                    v.graph.reset_in(sandboxes)?;
                 }
                 v.dirty = true;
                 v.note = Some(p.note);
@@ -2128,11 +2200,11 @@ impl PolyNode {
                 at = off;
             }
             if let Some(c) = current {
-                segment(v, Seg { off: at, n: BLOCK - at }, c, &mut peak)?;
+                segment(v, Seg { off: at, n: BLOCK - at }, c, &mut peak, sandboxes)?;
             }
             if let Some(n) = v.note {
                 if n.off < end {
-                    if peak < QUIET && !v.graph.active()? {
+                    if peak < QUIET && !v.graph.active_in(sandboxes)? {
                         v.note = None;
                     }
                 } else {
@@ -2387,7 +2459,10 @@ impl Renderer {
         let checked = flat;
         let mut made = HashMap::new();
         let mk = |n: &FNode, found: &m2_plugins::Found, shape: u64| make_plugin(packages, data, owner, sample_rate, mode, n, found, shape);
-        let lat = latencies(checked, packages, data, keep, lent, &mut made, mk)?;
+        // The assets its kernels read: the delays below add no kernel, so the checked graph's are
+        // the played one's.
+        let assets = audio::KernelAssets::of(checked, data, cache);
+        let lat = latencies(checked, packages, data, &assets, keep, lent, &mut made, mk)?;
         let l = latency::plan(checked, &lat);
         let played = (!l.delays.is_empty()).then(|| Arc::new(latency::insert(checked, &l)));
         let flat: &Flat = played.as_deref().unwrap_or(checked);
@@ -2404,7 +2479,8 @@ impl Renderer {
         let keep = keep.as_ref();
         let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep);
         let used = used(flat);
-        let mut shapes: Vec<Option<Shape>> = flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages) } else { None }).collect();
+        let mut shapes: Vec<Option<Shape>> =
+            flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages, &assets) } else { None }).collect();
         // A note delay's room is its lane's.
         for (i, n) in flat.nodes.iter().enumerate() {
             if let FOp::NoteDelay { lane, .. } = n.op
@@ -2431,12 +2507,18 @@ impl Renderer {
             at: None,
             offsets: &l.offset,
             made,
+            pool: vec![],
+            assets: &assets,
         };
         let boxed = |i: usize| match (w.kept[i], lent.and_then(|l| l.get(&i))) {
             (true, _) => Make::Moved,
             (false, Some(inst)) => Make::Lent(inst.clone()),
             (false, None) => Make::New(shapes[i].as_ref().map_or(0, Shape::hash64)),
         };
+        let needed = sandboxes(flat, &used, packages);
+        if needed > SANDBOX_LIMIT {
+            return Err(TooManySounds { needed, limit: SANDBOX_LIMIT }.into());
+        }
         let mut graph = b.graph(&flat.nodes, &flat.order, false, &boxed, &w.room)?;
         graph.prewarm()?;
         // Ghosts, then fade nodes, after the new graph's nodes (RENDER-25a).
@@ -3302,6 +3384,11 @@ impl Renderer {
             Exec::Plugin(p) => (n + p.out.len(), d + p.out.dropped()),
             _ => (n, d),
         })
+    }
+
+    /// The kernel sandboxes it holds (RENDER-32).
+    pub fn sandboxes(&self) -> usize {
+        self.plan.graph.sandboxes()
     }
 
     /// The memory every kernel instance holds: unchanged by playing, or a reset grew it on the

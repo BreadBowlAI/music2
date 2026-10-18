@@ -1,5 +1,6 @@
 //! A revision's data, read against what the code declares: every lane's clips, the verified
-//! plugin states, and the problems found on the way (FMT-9, FMT-12, FMT-15, FMT-17, FMT-7).
+//! plugin states, the hashes of the assets kernels read, and the problems found on the way (FMT-9,
+//! FMT-12, FMT-15, FMT-17, FMT-7).
 //!
 //! Nothing here blocks the song. A lane whose file fails keeps the data the session last
 //! accepted for it, or plays empty; a clip whose asset is missing is silent; a state blob
@@ -20,11 +21,21 @@ use crate::path::{AssetName, DataPath, slashed};
 use crate::tx::{Base, Confined, Expect, Op, Payload, TxPath};
 use crate::{Project, Stored};
 
-/// What the code declares that reads data: lanes, and plugins with saved state.
+/// What the code declares that reads data: lanes, plugins with saved state, and the assets
+/// kernels read.
 #[derive(Clone, Debug, Default)]
 pub struct Decls {
     pub lanes: Vec<(LaneAddr, LaneKind)>,
     pub states: Vec<StateDecl>,
+    pub assets: Vec<AssetDecl>,
+}
+
+/// An asset a kernel reads (kernel ABI v1), by its name in `assets/`, and the module whose code
+/// names it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AssetDecl {
+    pub module: Key,
+    pub name: String,
 }
 
 /// A plugin whose state is saved, at `data/<module>/<path…>.state`.
@@ -70,6 +81,9 @@ pub struct DataSet {
     states: BTreeMap<(Key, Vec<Key>), (PathBuf, Option<Sha>)>,
     /// Assets clips may play, by exact name: shared by every revision with the same binaries.
     assets: Arc<BTreeSet<String>>,
+    /// The hash of each asset a kernel reads, as this revision read it (RENDER-2): what it plays.
+    /// A missing one isn't here, and its kernel reads silence (`asset.missing`).
+    kernel_assets: BTreeMap<String, Sha>,
     /// The binaries `assets` was listed from, so a revision whose binaries are these lists none
     /// again (thousands of assets beside a lane edit). Not data.
     assets_of: Option<Arc<BTreeMap<PathBuf, Stored>>>,
@@ -150,6 +164,11 @@ impl DataSet {
         let dir = self.dir.as_ref()?;
         let name = AssetName::new(name).ok().filter(|n| self.assets.contains(n.as_str()))?;
         Some(dir.join(DataPath::Asset(name).path()))
+    }
+
+    /// The hash of each asset a kernel reads, by name, as the revision read it.
+    pub fn kernel_assets(&self) -> &BTreeMap<String, Sha> {
+        &self.kernel_assets
     }
 
     /// The verified state blob of the plugin at `path` in `module`, if there is one: a blob
@@ -259,6 +278,7 @@ impl Project {
             }
         }
         let states = self.states(decls, &mut diags);
+        let kernel_assets = self.kernel_assets(decls, &mut diags);
         diags.extend(self.unread(decls));
         for p in self.unknown.iter().filter(|p| DataPath::parse(p).unknown_data()) {
             let file = slashed(p);
@@ -291,6 +311,7 @@ impl Project {
             lanes,
             states,
             assets,
+            kernel_assets,
             assets_of: Some(self.binaries.clone()),
             dir: Some(self.dir.clone()),
             end,
@@ -568,6 +589,38 @@ impl Project {
                     &repin(&unpinned, None),
                 )),
             );
+        }
+        out
+    }
+
+    /// The assets kernels read (kernel ABI v1), found by listing `assets/` as a clip's are
+    /// (FMT-15): the hash of each that may be played. One that may not is `asset.missing`, naming
+    /// the track whose code reads it; its kernel reads silence, and the rest plays on.
+    fn kernel_assets(&self, decls: &Decls, diags: &mut Vec<Diagnostic>) -> BTreeMap<String, Sha> {
+        let mut out = BTreeMap::new();
+        let read: BTreeSet<&AssetDecl> = decls.assets.iter().collect();
+        for d in read {
+            let name = &d.name;
+            let path = AssetName::new(name).ok().map(|a| DataPath::Asset(a).path());
+            let stored = path.as_ref().map(|p| (self.binaries.get(p), p));
+            let why = match stored {
+                Some((Some(Stored::Hash(sha)), _)) => {
+                    out.insert(name.clone(), *sha);
+                    continue;
+                }
+                Some((Some(Stored::Listed), p)) => match HashCache::global().hash(&self.dir.join(p)) {
+                    Ok(sha) => {
+                        out.insert(name.clone(), sha);
+                        continue;
+                    }
+                    Err(e) => format!("can't be read ({e})"),
+                },
+                Some((Some(Stored::Unreadable(e)), _)) => format!("can't be read ({e})"),
+                Some((None, _)) => "isn't in assets/".to_string(),
+                None => "isn't a file name inside assets/".to_string(),
+            };
+            let message = format!("`{name}` {why}, so the sound on track `{}` that plays it is silent. Put the file in assets/, or fix its name", d.module);
+            diags.push(Diagnostic::error("asset.missing", message).module(d.module.as_str()));
         }
         out
     }

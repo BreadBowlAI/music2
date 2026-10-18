@@ -68,7 +68,7 @@ const groups = await page.$$eval("[data-testid=instrument-list] [role=group]", (
 const options = await page.$$eval("[data-testid=instrument-list] [role=option]", (els) => els.map((e) => e.dataset.instrument));
 // std's ready-made sounds (T3): the drum kit, each drum and FM metal; the instruments; the two with every knob.
 // The last group is Audio: an audio track (studio lane A's Q8).
-check(!!list && same(groups, ["Drums", "Instruments", "Sound design", "Audio"]) && same(options, ["std:drum-kit", "std:drum-kick", "std:drum-snare", "std:drum-clap", "std:drum-hats", "std:drum-tom", "std:drum-rim", "std:drum-cowbell", "std:drum-cymbal", "std:drum-shaker", "std:fm-metal", "std:fm-keys", "std:fm-bell", "std:synth-supersaw", "std:synth-lead", "std:synth-pad", "std:synth-pluck", "std:synth-sub", "std:synth-bass", "std:synth-strings", "std:fm-custom", "std:synth-custom", "audio:track"]), `it opens the instrument list, drums first: ${options}`);
+check(!!list && same(groups, ["Drums", "Instruments", "Sampler", "Sound design", "Audio"]) && same(options, ["std:drum-kit", "std:drum-kick", "std:drum-snare", "std:drum-clap", "std:drum-hats", "std:drum-tom", "std:drum-rim", "std:drum-cowbell", "std:drum-cymbal", "std:drum-shaker", "std:fm-metal", "std:fm-keys", "std:fm-bell", "std:synth-supersaw", "std:synth-lead", "std:synth-pad", "std:synth-pluck", "std:synth-sub", "std:synth-bass", "std:synth-strings", "std:sampler", "std:fm-custom", "std:synth-custom", "audio:track"]), `it opens the instrument list, drums first: ${options}`);
 check((await page.$eval("[data-testid=instrument-list] [data-active]", (e) => e.dataset.instrument)) === "std:drum-kit", "in a new window, on its first row");
 await page.keyboard.type("plu");
 await sleep(150);

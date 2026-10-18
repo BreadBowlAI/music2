@@ -107,6 +107,9 @@ pub struct SettingDesc {
     pub kind: SettingKind,
     pub default: Option<serde_json::Value>,
     pub options: Option<Vec<String>>,
+    /// Left out, it is `undefined`: no call needs it, though it has no default (`.optional()`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +119,10 @@ pub enum SettingKind {
     Int,
     Bool,
     Choice,
+    /// A file in the project's `assets/`, by name: what a kernel reads (kernel ABI v1).
+    Asset,
+    /// MIDI notes (0 to 127) to files in `assets/`: a sampler's zones.
+    Keymap,
 }
 
 /// What an editor offers. A component with a category is an effect, added after any audio, when
@@ -185,7 +192,7 @@ impl Descriptor {
         matches!(&self.inputs[..], [i] if i.kind == PortKind::Notes)
             && self.output.as_ref().is_some_and(|o| o.kind == PortKind::Audio)
             && self.controls.iter().all(|c| c.each.is_none() && (c.optional || c.default.is_some()))
-            && self.settings.iter().all(|s| s.default.is_some())
+            && self.settings.iter().all(|s| s.default.is_some() || s.optional)
     }
 }
 

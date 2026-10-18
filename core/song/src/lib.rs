@@ -33,7 +33,7 @@ use std::ops::Bound;
 use std::sync::Arc;
 
 pub use arrangement::{Arrangement, Meter, Tempo, TempoMap};
-pub use data::{DataSet, Decls, Sidecar, StateDecl, Unused};
+pub use data::{AssetDecl, DataSet, Decls, Sidecar, StateDecl, Unused};
 pub use diag::{Diagnostic, Fix, Severity};
 pub use hash::{HashCache, Sha};
 pub use key::{ClipId, Key, LaneAddr, ROOT};

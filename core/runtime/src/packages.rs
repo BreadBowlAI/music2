@@ -70,8 +70,8 @@ impl Package {
 /// Every package a song can use, the kernels they declare, and the hosted plugins
 /// a song has asked about.
 pub struct PackageSet {
-    /// Always one of [`engine_with`]'s, whose memories never move: each kernel instance keeps its
-    /// memory's address from its build (RENDER-32), so no other engine may be put here.
+    /// Always [`engine`]'s, whose memories never move: each sandbox keeps its memory's address from
+    /// its seal (RENDER-32), so no other engine may be put here.
     pub(crate) engine: Engine,
     packages: BTreeMap<String, Package>,
     kernels: HashMap<String, (KernelSig, String)>,
@@ -89,63 +89,30 @@ enum Hosted {
     Missing(KernelSig),
 }
 
-/// How each kernel instance's memory is laid out in the address space (RENDER-32).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Layout {
-    /// The app's, the owner's choice: each memory reserves its 32 MiB and a 64 KiB guard and
-    /// never moves, so each access is bounds-checked against a constant. Two renderers of p50
-    /// hold well under 1% of the address space.
-    P2,
-    /// Step 7's first slice: wasmtime's defaults, 4 GiB reserved per memory plus guards, so no
-    /// access is checked; two renderers of p50 hold about 38% of the address space. Only G7f
-    /// builds it, to measure what the app's layout costs against it.
-    P1,
-}
-
 /// The engine every kernel runs in.
 ///
 /// WebAssembly floating point is bit-exact on every machine except for the bits
 /// inside NaNs. Canonicalising those costs about 4.6× in the M1 benchmark, so instead
 /// the renderer silences non-finite output (a NaN means a kernel is broken anyway).
 /// Relaxed SIMD is off because its results may differ between CPUs.
+///
+/// Memories take wasmtime's default reservation, 4 GiB with guards, so the hardware catches a
+/// stray access: no access is bounds-checked, and Cranelift's Spectre guard stays on, at no cost
+/// (RENDER-32). A sandbox has one memory, and a box one sandbox (one a package for a voice pool),
+/// so two renderers of p50 hold about 1.2% of the address space. A sealed memory never grows, so it
+/// never moves, and a sandbox keeps its address.
 pub fn engine() -> Engine {
-    engine_with(Layout::P2)
-}
-
-/// The engine, its kernels' memories laid out as `layout` says. Bounds checks don't change the
-/// arithmetic: every layout renders the same bits. In every layout a kernel memory never moves: P2
-/// refuses to move one, and P1 reserves 4 GiB, far more than the 32 MiB a memory may grow to.
-pub fn engine_with(layout: Layout) -> Engine {
     let mut config = wasmtime::Config::new();
     config.cranelift_nan_canonicalization(false);
     config.wasm_relaxed_simd(false);
-    if layout == Layout::P2 {
-        config.memory_reservation(crate::KERNEL_MEMORY as u64);
-        config.memory_guard_size(64 << 10);
-        config.memory_reservation_for_growth(0);
-        config.memory_may_move(false);
-        // Kernels import nothing, so they have no clock to time a speculative read with: the
-        // Spectre guard on each memory access would cost about 6% of block time for nothing.
-        // Revisit before kernels from other people's packages run.
-        // SAFETY: a documented Cranelift setting; it changes no result, only speculation.
-        unsafe {
-            config.cranelift_flag_set("enable_heap_access_spectre_mitigation", "false");
-        }
-    }
+    config.memory_may_move(false);
     Engine::new(&config).expect("wasmtime engine")
 }
 
 impl Default for PackageSet {
     fn default() -> Self {
-        PackageSet::laid_out(Layout::P2)
-    }
-}
-
-impl PackageSet {
-    /// A set whose kernels' memories are laid out as `layout` says; the default is the app's.
-    pub fn laid_out(layout: Layout) -> PackageSet {
         let (packages, kernels, plugins) = (BTreeMap::new(), HashMap::new(), HashMap::new());
-        PackageSet { engine: engine_with(layout), packages, kernels, plugins, host: m2_plugins::host() }
+        PackageSet { engine: engine(), packages, kernels, plugins, host: m2_plugins::host() }
     }
 }
 
@@ -324,11 +291,11 @@ impl PackageSet {
         self.packages.get(pkg)?.module_sha
     }
 
-    /// The compiled module holding kernel `id`, and the kernel's export prefix.
-    pub(crate) fn module_for<'a>(&'a self, id: &'a str) -> Option<(&'a Module, &'a str)> {
+    /// The compiled module holding kernel `id`, the kernel's export prefix, and its package's name.
+    pub(crate) fn module_for<'a>(&'a self, id: &'a str) -> Option<(&'a Module, &'a str, &'a str)> {
         let (_, pkg) = self.kernels.get(id)?;
         let module = self.packages.get(pkg)?.module.as_ref()?;
-        Some((module, id.split_once(':').map_or(id, |(_, k)| k)))
+        Some((module, id.split_once(':').map_or(id, |(_, k)| k), pkg))
     }
 }
 
@@ -473,14 +440,16 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
     Ok(sig)
 }
 
-/// The kernel ABI version this runtime speaks (see `m2-kernel`).
-pub const KERNEL_ABI: u32 = 0;
+/// The kernel ABI version this runtime speaks (`docs/kernel-abi.md`). Frozen: v1 only ever gains
+/// optional exports and fields at the end of the settings block.
+pub const KERNEL_ABI: u32 = 1;
 
-/// Kernels are sandboxed: no imports at all, the ABI exports, and the right ABI version.
+/// A package's module, checked before any kernel of it is made (ABI-3): its one import, if any, is
+/// `m2.asset_read`; its memory is a defined 32-bit memory of 64 KiB pages, not shared, which the
+/// hardware checks can guard (RENDER-32); it was built for this ABI, and a module built for
+/// another is refused naming its version, before any export of this one is asked for; and it has
+/// the ABI's exports, with their signatures.
 fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Result<()> {
-    if let Some(i) = module.imports().next() {
-        bail!("kernels can't import anything, but this module imports `{}::{}`", i.module(), i.name());
-    }
     let exports: HashMap<&str, ExternType> = module.exports().map(|e| (e.name(), e.ty())).collect();
     let func = |name: &str, params: &[ValType], results: &[ValType]| -> Result<()> {
         match exports.get(name) {
@@ -498,23 +467,29 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
         }
     };
     func("m2_abi", &[], &[ValType::I32])?;
-    if !matches!(exports.get("memory"), Some(ExternType::Memory(_))) {
-        bail!("missing export `memory`");
+    match exports.get("memory") {
+        Some(ExternType::Memory(m)) if m.is_64() || m.is_shared() || m.page_size() != 1 << 16 => {
+            bail!("its memory must be a 32-bit memory of 64 KiB pages, not shared (docs/kernel-abi.md)")
+        }
+        Some(ExternType::Memory(_)) => {}
+        _ => bail!("missing export `memory`"),
     }
-    let mut store = wasmtime::Store::new(engine, ());
-    let instance = wasmtime::Instance::new(&mut store, module, &[]).wctx(|| "instantiating")?;
+    let (mut store, instance, _) = crate::sandbox::instantiate(engine, module)?;
     let abi = instance.get_typed_func::<(), u32>(&mut store, "m2_abi")?.call(&mut store, ())?;
     if abi != KERNEL_ABI {
-        bail!("built for kernel ABI v{abi}, but this runtime speaks v{KERNEL_ABI}");
+        bail!(
+            "built for kernel ABI v{abi}, but this music2 speaks v{KERNEL_ABI} only. Rebuild the package with the v{KERNEL_ABI} kit \
+             (docs/kernel-abi.md)"
+        );
     }
+    func("m2_alloc", &[ValType::I32, ValType::I32], &[ValType::I32])?;
     for k in kernels {
         let n = &k.name;
-        func(&format!("{n}_init"), &[ValType::F32, ValType::I32, ValType::I32], &[])?;
         func(&format!("{n}_ports"), &[], &[ValType::I32])?;
-        func(&format!("{n}_port"), &[ValType::I32], &[ValType::I32])?;
-        func(&format!("{n}_reset"), &[], &[])?;
-        func(&format!("{n}_process"), &[ValType::I32], &[])?;
-        func(&format!("{n}_active"), &[], &[ValType::I32])?;
+        func(&format!("{n}_new"), &[ValType::I32], &[ValType::I32])?;
+        func(&format!("{n}_reset"), &[ValType::I32], &[])?;
+        func(&format!("{n}_process"), &[ValType::I32, ValType::I32, ValType::I32, ValType::I32], &[])?;
+        func(&format!("{n}_active"), &[ValType::I32], &[ValType::I32])?;
     }
     Ok(())
 }

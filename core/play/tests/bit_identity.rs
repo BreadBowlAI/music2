@@ -20,6 +20,9 @@ use m2_runtime::{BLOCK, Cmd, Continues, LaneSwap, PlanInfo, Pool, Renderer, Runn
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
+/// The fixtures made only of kernels, which render the same bits every time (RENDER-2).
+const PURE: [&str; 6] = ["examples/first-song", "examples/resample", "examples/sounds", "examples/sampler", "templates/starter", "templates/empty"];
+
 /// `song` live through the player, from 0 for `frames`, with a no-op swap of every lane at
 /// frame `swap_at` when given.
 fn live(song: &Song, frames: usize, swap_at: Option<usize>) -> Vec<[f32; 2]> {
@@ -59,7 +62,7 @@ fn check(name: &str, song: &Song, frames: usize, swap_at: Option<usize>) {
 // RENDER-33 on every pure fixture: their whole song and a second past it.
 #[test]
 fn live_is_the_export_on_every_pure_fixture() {
-    for name in ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"] {
+    for name in PURE {
         let song = fixture(name);
         let frames = (song.seconds() * song.rate as f64) as usize;
         check(name, &song, frames, None);
@@ -179,7 +182,7 @@ fn after_idle_songs() -> Vec<(String, Song)> {
     ] {
         out.push((format!("a held chord through {name}"), held(name, effect)));
     }
-    for name in ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"] {
+    for name in PURE {
         out.push((name.to_string(), fixture(name)));
     }
     out
@@ -274,7 +277,7 @@ fn points(song: &Song) -> Vec<usize> {
 
 /// The fixtures G7c plays: every pure one but the silent templates/empty, and p16.
 fn g7c() -> Vec<(String, Song)> {
-    let mut out: Vec<(String, Song)> = ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter"]
+    let mut out: Vec<(String, Song)> = ["examples/first-song", "examples/resample", "examples/sounds", "examples/sampler", "templates/starter"]
         .into_iter()
         .map(|n| (n.to_string(), fixture(n)))
         .collect();
@@ -415,7 +418,7 @@ fn on_threads(song: &Song, frames: usize, counts: &[usize], one: &[[f32; 2]]) ->
 fn every_pure_fixture_renders_the_same_bits_on_1_and_n_threads() {
     let t = std::time::Instant::now();
     let mut across = 0;
-    for name in ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"] {
+    for name in PURE {
         let song = fixture(name);
         let frames = (song.seconds() * song.rate as f64) as usize;
         let one = offline(&song, frames);
@@ -427,6 +430,30 @@ fn every_pure_fixture_renders_the_same_bits_on_1_and_n_threads() {
     }
     assert!(across > 0, "some reads crossed threads");
     eprintln!("every pure fixture on 1, 2, 3, 4 and 7 threads: {:.1} s", t.elapsed().as_secs_f64());
+}
+
+// RENDER-2 (track ab): std's sampler reads its files through the kernels' asset import, in the
+// voices of two tracks: one file for each note on the drums, one 44.1 kHz file pitched to every note
+// on the keys. Its example renders the same bits on 2, 3, 4 and 7 threads as on one, and each of its
+// tracks sounds on its own.
+#[test]
+fn the_sampler_example_gives_the_same_bits_on_1_to_7_threads() {
+    let song = fixture("examples/sampler");
+    let frames = (song.seconds() * song.rate as f64) as usize;
+    let one = offline(&song, frames);
+    assert!(peak(&one) > 0.1, "the sampler example sounds");
+    for (n, diff, on_workers, _) in on_threads(&song, frames, &[2, 3, 4, 7], &one) {
+        assert_eq!(diff, None, "the sampler example on {n} threads: the same bits");
+        assert!(on_workers > 0, "the sampler example on {n} threads: tasks ran on workers");
+    }
+    for track in ["drums", "keys"] {
+        let alone = format!(
+            "import {{ song }} from \"@m2/core\";\nimport {{ master, mixer }} from \"std/mix\";\nimport t from \"./tracks/{track}\";\n\
+             export default song(() => master(mixer({{ t: t.out }})));\n"
+        );
+        let song = fixture_with("examples/sampler", &[("song.ts", &alone)]);
+        assert!(peak(&offline(&song, frames)) > 0.05, "the {track} sound on their own");
+    }
 }
 
 // RENDER-2 (8a): 30 s of p16 render the same bits on 4 threads as on one, with tasks on workers
@@ -538,7 +565,7 @@ fn live_on_n_threads_is_the_export_on_1() {
     let _one_at_a_time = POOLS.lock().unwrap_or_else(|e| e.into_inner());
     let t = std::time::Instant::now();
     let mut across = 0;
-    for name in ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"] {
+    for name in PURE {
         let song = fixture(name);
         let frames = (song.seconds() * song.rate as f64) as usize;
         let export = offline(&song, frames);

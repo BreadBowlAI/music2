@@ -3,7 +3,7 @@
 //! own envelope, whose saturation would alias at 1×), decimated, then the amp envelope.
 //! Port order must match `std/m2pkg.toml`.
 
-use m2_kernel::{Io, Kernel, db_to_gain, export};
+use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
 use crate::voice::{
     Clip, DcBlock, Drive, Env, Glide, Halfband, Ladder, LadderCoefs, Memo, Noise, Ramp, Stage, Steps, TICK, clampf, hash, hz, one_pole,
@@ -439,7 +439,8 @@ impl Kernel for Synth {
     const INPUTS: usize = INPUTS;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         let sr = sample_rate.max(1.0);
         let rate = sr / TICK as f32;
         Synth {

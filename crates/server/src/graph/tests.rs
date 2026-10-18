@@ -3528,12 +3528,12 @@ fn running_out_of_memory_is_said_plainly() {
     assert_eq!(format!("{:#}", super::plainly(anyhow!("a plugin failed"))), "a plugin failed");
 }
 
-// A6 of the live plan's attack (D24): a sound over its own 32 MB says so in its own words. The
+// A6 of the live plan's attack (D24): a sound over its own memory says so in its own words. The
 // computer didn't run out, so the user is never told to close other apps for it.
 #[test]
 fn a_sound_over_its_memory_is_not_the_computer_running_out() {
     let e = || anyhow::Error::from(m2_runtime::OutOfMemory { node: "bass/delay".into() }).context("bass/delay: voice");
-    let words = "bass/delay: voice: bass/delay ran out of memory: a sound may use up to 32 MB";
+    let words = "bass/delay: voice: bass/delay ran out of memory: a sound may use up to 256 MB";
     assert_eq!(format!("{:#}", super::plainly(e())), words);
     let change = super::actor::unbuilt(&e());
     assert!(change.contains("couldn't get it ready to play") && change.contains(words) && !change.contains("computer"), "{change}");
@@ -3603,9 +3603,9 @@ fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
     let graph = fixture.open();
     let token = graph.state().unwrap()["session"].as_u64().unwrap();
     let names: Vec<String> = graph.state().unwrap()["instruments"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().into()).collect();
-    // std's ready-made sounds (T3): drums, instruments, then the two with every knob.
-    assert_eq!(names.len(), 22, "{names:?}");
-    assert_eq!((names[0].as_str(), names[10].as_str(), names[11].as_str(), names[21].as_str()), ("Drum kit", "FM metal", "FM keys", "Polysynth"));
+    // std's ready-made sounds (T3): drums, instruments, the sampler, then the two with every knob.
+    assert_eq!(names.len(), 23, "{names:?}");
+    assert_eq!((names[0].as_str(), names[10].as_str(), names[11].as_str(), names[20].as_str(), names[22].as_str()), ("Drum kit", "FM metal", "FM keys", "Sampler", "Polysynth"));
     assert_eq!(graph.state().unwrap()["palette"][0], "rose");
     let added = graph.add_track(token, "std:synth-pluck", None, None, Some("kick".into())).unwrap();
     assert_eq!(

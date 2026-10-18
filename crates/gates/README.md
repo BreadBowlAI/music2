@@ -34,7 +34,7 @@ CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP cargo run -p m2-gates --release -- --ser
 
 # G7f's two parts: what one wasmtime Store per kernel instance costs a block, then what step 7 costs
 # the callback, each against S (HEAD 8aa301e, the commit before step 7) measured in the same run, in
-# 5 rounds of the app's layout, P1 and S taking turns: each part about 8 minutes on the Mac (an
+# 5 rounds of the app's layout, its A/A control and S taking turns: each part about 8 minutes on the Mac (an
 # estimate). S plays in a runner of its own, built once from a clean copy of S (s/README.md).
 export M2_GATES_S=$(crates/gates/s/build.sh | tail -1)
 cargo run -p m2-gates --release -- store --reference 50

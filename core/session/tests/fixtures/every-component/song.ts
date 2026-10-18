@@ -10,6 +10,7 @@ import { bitcrush, chorus, compress, delay, drive, duck, eq3, limit, phaser, rev
 import { bass, hat, kick, pad, pluck } from "std/instruments";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
+import { sampler } from "std/sampler";
 import { mono, synth } from "std/synth";
 
 export default song(({ lane, time }) => {
@@ -58,5 +59,6 @@ export default song(({ lane, time }) => {
     drums.cymbal(lane.notes("crash")),
     drums.shaker(lane.notes("shaker")),
   );
-  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }));
+  const chops = sampler(lane.notes("chops"), { tune: 2, mode: "gate" });
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops }));
 });

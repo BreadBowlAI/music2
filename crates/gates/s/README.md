@@ -25,7 +25,7 @@ The copy is taken again only when the runner's code changes. On the owner's Linu
 
 ## How the two take turns
 
-m2-gates starts the runner, sends a command, and waits for the answer. So only one of them runs at a time. Each round, three players (or renderers) take turns of about 2 s each, over the same music: the app's layout and P1 in m2-gates, and S in the runner. The order changes every turn, and no side takes two turns in a row. A round is 18 turns of each side: three whole cycles of the six orders. So in every round each side follows each other side as often, and the app's layout and S wait alike for their turns. (Some side must come back sooner than the others; it is P1, which isn't judged.) Each side hashes what its judged callbacks or blocks played. The gate checks that all three played the same bits.
+m2-gates starts the runner, sends a command, and waits for the answer. So only one of them runs at a time. Each round, three players (or renderers) take turns of about 2 s each, over the same music: the app's layout and its A/A control (a second player of the same layout, printed only) in m2-gates, and S in the runner. The order changes every turn, and no side takes two turns in a row. A round is 18 turns of each side: three whole cycles of the six orders. So in every round each side follows each other side as often, and the app's layout and S wait alike for their turns. (Some side must come back sooner than the others; it is the A/A control, which isn't judged.) Each side hashes what its judged callbacks or blocks played. The gate checks that all three played the same bits.
 
 A turn starts on the caches the side before it left, so its first steps are slow. On Linux the first callback of a turn took 4 to 7 ms more than the rest, and the first block 2 to 3 ms more. That costs each side a different amount. Most of it is gone after a few steps, but not all. One look by position showed this, held on the 96 MB-cache die of the Linux server's CPU. The app's layout has bounds checks, which cost more once the caches are warm. So over a turn's first 50 callbacks, its cost over S rose from about 0 to +60 µs a callback (and to +11 µs a block over the first 200 blocks). So each turn starts with half a second (47 callbacks, or 188 blocks) that is timed but not judged. It is sent in the same command as the turn, so nothing runs between them.
 
@@ -33,7 +33,7 @@ At first, half a second was shown to be enough only on that die. It wasn't tried
 
 | Printed | What it says |
 |---|---|
-| of the judged steps, each turn's first half over its second, the app's layout's and P1's against S's | whether any start is left in the judged steps |
+| of the judged steps, each turn's first half over its second, the app's layout's and its control's against S's | whether any start is left in the judged steps |
 | each turn's first step, over the side's mean | what starting a turn costs each side (left out) |
 
 If a side's start lasted into its judged steps, its first half would be slower than its second. So a value under 0 means S's start lasted longer: the judged means then favour the app's layout, by about half the value (when the start is gone by the second half). Each half holds a thousand steps or more a round, so this is far steadier than one step. (The music differs from step to step, by far more than that, but alike on every side, so only the comparison with S tells.)

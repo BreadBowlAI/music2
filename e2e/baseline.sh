@@ -5,8 +5,8 @@
 #   e2e/baseline.sh --tree <checkout> <out-dir>     render with the checkout as it is on disk
 #   M2=<m2 binary> e2e/baseline.sh --tree <checkout> <out-dir>    ... with an m2 you already built
 #
-# Cases (ten): the full renders of examples/first-song, examples/resample, examples/sounds,
-# templates/starter and templates/empty, and `--from 4 --seconds 6` of each of them. A fixture the
+# Cases (twelve): the full renders of examples/first-song, examples/resample, examples/sounds,
+# examples/sampler, templates/starter and templates/empty, and `--from 4 --seconds 6` of each of them. A fixture the
 # commit doesn't have (examples/sounds before the sounds merge) is skipped, and the script says so.
 # Each fixture is rendered from a fresh copy, with a scratch HOME, M2_AUDIO=none and the checkout's
 # own std. <out-dir>/SHA256SUMS lists the WAVs; compare two folders with
@@ -50,7 +50,7 @@ if [[ -z ${M2:-} ]]; then
 fi
 
 HAVE=()
-for f in examples/first-song examples/resample examples/sounds templates/starter templates/empty; do
+for f in examples/first-song examples/resample examples/sounds examples/sampler templates/starter templates/empty; do
   if [[ ! -d $SRC/$f ]]; then echo "skipped $f: ${COMMIT:-$SRC} doesn't have it" >&2; continue; fi
   mkdir -p "$OUT/fx/$(dirname $f)"; cp -R "$SRC/$f" "$OUT/fx/$f"; HAVE+=("$f")
 done

@@ -242,10 +242,18 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unit: Option<Unit>,
     },
+    /// A package kernel. `assets` and `values` are its settings (kernel ABI v1): the names of the
+    /// project's audio files it reads, and numbers fixed at build. Both are part of its shape
+    /// (RENDER-25), so changing one makes it new. Written only when given, so an IR without them
+    /// keeps its JSON and hash (ID-11).
     Kernel {
         kernel: String,
         #[serde(default)]
         inputs: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        assets: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        values: Vec<f64>,
     },
     /// One copy of `body` per sounding note of `events`, summed.
     Poly { events: String, voices: u32, body: Body },

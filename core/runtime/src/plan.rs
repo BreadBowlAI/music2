@@ -19,7 +19,7 @@ use std::sync::{Arc, Weak};
 use m2_ir::{FNode, FOp, Flat, Kind, PortRef, Voice};
 use m2_song::{DataSet, LaneData, Sha, TempoMap};
 
-use crate::audio::{self, AudioLane, AudioPlayer};
+use crate::audio::{self, AudioLane, AudioPlayer, KernelAssets};
 use crate::cells::{CellId, CellMap, CellSlots, Cells};
 use crate::event::Event;
 use crate::sched::{Caps, LaneSwap, NoteScheduler};
@@ -33,11 +33,14 @@ use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, l
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Shape {
     /// The kernel, the SHA-256 of its package's wasm module (which fixes its state ABI), and its
-    /// channel count, its one setting in ABI v0.
+    /// settings (kernel ABI v1): its channel count, the hash of each asset it reads (`None`: it
+    /// reads silence), and its values, as bits.
     Kernel {
         id: String,
         wasm: Sha,
         channels: u8,
+        assets: Vec<Option<Sha>>,
+        values: Vec<u64>,
     },
     /// The plugin, its version and its channels. Not its state: a new committed blob is loaded
     /// into the instance (RENDER-26b), and a state path is the same for every pair the path pass
@@ -73,18 +76,22 @@ pub enum Shape {
 
 impl Shape {
     /// The shape of the box node `n` holds; None for a node that holds none.
-    pub(crate) fn of(n: &FNode, packages: &PackageSet) -> Option<Shape> {
+    pub(crate) fn of(n: &FNode, packages: &PackageSet, assets: &KernelAssets) -> Option<Shape> {
         match &n.op {
-            FOp::Kernel { kernel, channels, .. } => {
-                Some(Shape::Kernel { id: kernel.clone(), wasm: packages.module_sha(kernel)?, channels: *channels })
-            }
+            FOp::Kernel { kernel, channels, assets: names, values, .. } => Some(Shape::Kernel {
+                id: kernel.clone(),
+                wasm: packages.module_sha(kernel)?,
+                channels: *channels,
+                assets: names.iter().map(|a| assets.sha(a)).collect(),
+                values: values.iter().map(|v| v.to_bits()).collect(),
+            }),
             FOp::Plugin { plugin, .. } if packages.plugin_missing(plugin) => None,
             FOp::Plugin { plugin, channels, .. } => {
                 let info = packages.plugin_info(plugin)?;
                 Some(Shape::Plugin { id: info.found.id.clone(), version: info.found.version.clone(), channels: *channels })
             }
             FOp::Poly { voices, voice, channels, .. } => {
-                Some(Shape::Poly { voices: *voices, channels: *channels, voice: blank(voice, packages) })
+                Some(Shape::Poly { voices: *voices, channels: *channels, voice: blank(voice, packages, assets) })
             }
             FOp::Feedback { channels, .. } => Some(Shape::Feedback { channels: *channels }),
             FOp::Delay { frames, .. } => {
@@ -114,23 +121,27 @@ impl Shape {
 
 /// A voice graph's structure: its nodes with every cell's value, every origin, source and name,
 /// and every capture's target cleared (captures are the plan's, `PolyNode::captures`), with the
-/// wasm modules its kernels run. A plain number written inside the voice stays: it is in the
-/// kernels' memory, so editing it replaces the instrument; a declared control is a cell, carried.
-fn blank(voice: &Voice, packages: &PackageSet) -> Sha {
+/// wasm modules its kernels run and the hashes of the assets they read. A plain number written
+/// inside the voice stays: it is in the kernels' memory, so editing it replaces the instrument; a
+/// declared control is a cell, carried. So do kernels' settings: a new sample makes it new.
+fn blank(voice: &Voice, packages: &PackageSet, assets: &KernelAssets) -> Sha {
     let mut v = voice.clone();
-    let mut wasm = vec![];
+    let (mut wasm, mut read) = (vec![], vec![]);
     for n in &mut v.nodes {
         match &mut n.op {
             FOp::Const(x) if n.origin.is_some() => *x = 0.0,
             FOp::Capture(p) => *p = PortRef { node: 0, port: 0 },
-            FOp::Kernel { kernel, .. } => wasm.extend(packages.module_sha(kernel)),
+            FOp::Kernel { kernel, assets: names, .. } => {
+                wasm.extend(packages.module_sha(kernel));
+                read.extend(names.iter().map(|a| assets.sha(a)));
+            }
             _ => {}
         }
         (n.name, n.src, n.origin) = (String::new(), None, None);
     }
     wasm.sort_unstable();
     wasm.dedup();
-    Sha::of(format!("{v:?} {wasm:?}").as_bytes())
+    Sha::of(format!("{v:?} {wasm:?} {read:?}").as_bytes())
 }
 
 /// For each top-level node of a new graph, the node of the graph that plays that it continues
@@ -244,7 +255,7 @@ impl PlanInfo {
         let mut lent: HashMap<usize, Arc<PluginInstance>> = HashMap::new();
         for &i in &flat.order {
             let n = &flat.nodes[i];
-            let Some(shape @ Shape::Plugin { .. }) = Shape::of(n, packages) else { continue };
+            let Some(shape @ Shape::Plugin { .. }) = Shape::of(n, packages, &KernelAssets::default()) else { continue };
             let Some(j) = cont.top.get(i).copied().flatten().map(|j| j as usize) else { continue };
             let Some(at) = self.plugin(j).filter(|_| self.shapes.get(j) == Some(&Some(shape))) else { continue };
             if blob(n, data) != at.blob {

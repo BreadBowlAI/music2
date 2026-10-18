@@ -3,8 +3,8 @@
 //!
 //! - **The callback, playing:** 30 s from `o.at` (3:00 for the recorded run, after a second of
 //!   warm-up) with no edit, every callback timed, in 5 rounds of three players taking turns over
-//!   the same music: the app's layout (`m2_runtime::packages::Layout::P2`) and step 7's first, P1,
-//!   in this process, and S, HEAD `8aa301e`, the commit before step 7, in its runner's
+//!   the same music: the app's layout (one sandbox a box, RENDER-32) and a second player of it,
+//!   its A/A control, printed only, in this process, and S, HEAD `8aa301e`, the commit before step 7, in its runner's
 //!   (`baseline`). No player takes two turns in a row, and each turn's first callbacks, which meet
 //!   the caches the player before left, are timed apart and not judged. Each round, the three play
 //!   the same bits, and not silence, which the gate checks. Every run prints its own record line (`callback-record …`, the app's layout's
@@ -18,9 +18,9 @@
 //! median of the rounds' differences, the app's layout minus S, both measured here, and judged only
 //! on the reference Mac, the machine `callback-S.txt` names (PLAT-1); elsewhere it is printed, and on
 //! another Mac it also says what to do if it is the reference Mac now. The rule names the p99, but even paired it moves by far
-//! more than that between pairs, so the mean is judged and the p99's difference printed. What P1
-//! costs over S (step 7 with wasmtime's default layout) and the app's layout over P1 (the owner's
-//! layout alone) are printed, not judged. And the slowest activation block under half the device
+//! more than that between pairs, so the mean is judged and the p99's difference printed. The app's
+//! layout against its control, what noise alone gives, is printed, not judged: the app is judged
+//! against S only. And the slowest activation block under half the device
 //! buffer's period (5.3 ms), printed against the run's p99 callback. The bound is on the block, not
 //! the 512-frame callback around it: on p50 a plain callback at S already takes about 8.8 ms.
 
@@ -29,7 +29,6 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use m2_editor::Gestures;
 use m2_play::{Driver, Player};
-use m2_runtime::packages::Layout;
 use m2_runtime::{BLOCK, Basis, Keep, PackageSet, Renderer};
 
 use crate::baseline::{Runner, wire::Heard};
@@ -141,9 +140,10 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         "RENDER-32, RENDER-25",
         &format!("the player on {} from {:.0} s", o.reference.name(), o.at),
     );
-    // The callback, playing, in rounds: the app's layout and P1 here, and S in its runner, in turns
-    // over the same music (RENDER-32). One run's p99 varies by far more than the bound between runs.
-    let p1 = crate::load_std_laid_out(Layout::P1)?;
+    // The callback, playing, in rounds: the app's layout and its A/A control here, and S in its
+    // runner, in turns over the same music (RENDER-32). One run's p99 varies by far more than the
+    // bound between runs. The control, a second player of the app's layout, is printed only.
+    let control = crate::load_std()?;
     let mut s = Runner::start(&lab.work)?;
     out.info("S", s.about());
     let per_second = song.rate as usize / FRAMES;
@@ -152,7 +152,7 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let mut peak = 0.0f32;
     let mut starts: [Vec<(f64, f64)>; 3] = Default::default();
     for i in 0..ROUNDS {
-        let (mut app, mut old) = (Here::new(&lab.packages, &song, o.at)?, Here::new(&p1, &song, o.at)?);
+        let (mut app, mut old) = (Here::new(&lab.packages, &song, o.at)?, Here::new(&control, &song, o.at)?);
         s.player(&dir, o.at, FRAMES)?;
         let turns = in_turns(&mut [&mut app, &mut old, &mut s], per_second, n, TURN, LEAD, i)?;
         for (k, at) in starts.iter_mut().enumerate() {
@@ -166,7 +166,7 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         out.info(
             format!("round {}", i + 1),
             format!(
-                "the app's layout mean {:.0} µs, p99 {:.0}; P1 mean {:.0}, p99 {:.0}; S mean {:.0}, p99 {:.0}",
+                "the app's layout mean {:.0} µs, p99 {:.0}; its control mean {:.0}, p99 {:.0}; S mean {:.0}, p99 {:.0}",
                 r[0].1, r[0].0, r[1].1, r[1].0, r[2].1, r[2].0
             ),
         );
@@ -184,7 +184,7 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         format!("callback, playing, the app's layout (medians of {ROUNDS} runs)"),
         format!("mean {mean:.0} µs, p99 {p99:.0}, max {max:.0} over {} callbacks of {FRAMES} frames", runs[0][0].len()),
     );
-    for (k, name) in [(1, "P1"), (2, "S")] {
+    for (k, name) in [(1, "its A/A control"), (2, "S")] {
         out.info(
             format!("callback, playing, {name} (medians of {ROUNDS} runs)"),
             format!("mean {:.0} µs, p99 {:.0}, max {:.0}", med(&runs[k], |r| r.1), med(&runs[k], |r| r.0), med(&runs[k], |r| r.2)),
@@ -192,10 +192,9 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     }
     let against = |a: usize, b: usize| (Diffs::of(&runs[a], &runs[b], |t| record(t).1), Diffs::of(&runs[a], &runs[b], |t| record(t).0));
     let (dmean, d99) = against(0, 2);
-    let ((p1_mean, p1_99), (o1_mean, o1_99)) = (against(1, 2), against(0, 1));
+    let (aa_mean, aa_99) = against(0, 1);
     out.info("callback, the app's layout against S, pair by pair", format!("mean {dmean}; p99 {d99}"));
-    out.info("callback, P1 against S (step 7 with wasmtime's default layout)", format!("mean {p1_mean}; p99 {p1_99}"));
-    out.info("callback, the app's layout against P1 (the owner's layout alone)", format!("mean {o1_mean}; p99 {o1_99}"));
+    out.info("callback, the app's layout against its A/A control (noise alone)", format!("mean {aa_mean}; p99 {aa_99}"));
     out.info("callback, starting a turn", crate::paired::starting(&starts, LEAD, "callback"));
     let machine = m2_os::process::machine();
     out.info("record", format!("callback-record p99_us={p99:.3} mean_us={mean:.3} max_us={max:.3} machine={machine}"));

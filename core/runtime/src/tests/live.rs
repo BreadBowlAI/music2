@@ -525,9 +525,9 @@ fn retriggered() -> (Ir, DataSet) {
     (ir, with_notes(json!({"clips": [{"start": 0, "length": 4, "notes": ns}]}), at_bpm(120.0)))
 }
 
-// RENDER-28, §1.5 of the step 3a design: a kernel's first reset may grow its memory (a delay's
-// from 896 to 1664 KiB); building resets every kernel once, so stealing voices on the audio
-// thread later never grows memory.
+// RENDER-28, ABI v1: a kernel takes memory only as its sandbox is born, which is sealed then, so
+// neither the build's first reset of every kernel (its prewarm) nor stealing voices on the audio
+// thread later grows memory.
 #[test]
 fn prewarming_keeps_kernel_memory_flat() {
     let (ir, data) = retriggered();
@@ -537,7 +537,7 @@ fn prewarming_keeps_kernel_memory_flat() {
     let before = r.kernel_memory_bytes();
     r.render(2.5).unwrap();
     assert_eq!(r.kernel_memory_bytes(), before, "eight steals later");
-    // What pre-warming spares the audio thread: the first reset grows a fresh graph's memory.
+    // A fresh graph's first reset grows nothing either (before ABI v1 it grew a delay's memory).
     let slots = lane_slots(&flat);
     let owner = m2_plugins::Owner::discard();
     let mut g = Builder {
@@ -551,12 +551,14 @@ fn prewarming_keeps_kernel_memory_flat() {
         at: None,
         offsets: &[],
         made: HashMap::new(),
+        pool: vec![],
+        assets: &crate::audio::KernelAssets::default(),
     }
     .graph(&flat.nodes, &flat.order, false, &|_| Make::New(0), &HashMap::new())
     .unwrap();
     let fresh = g.kernel_memory();
     g.prewarm().unwrap();
-    assert!(g.kernel_memory() > fresh);
+    assert_eq!(g.kernel_memory(), fresh);
 }
 
 // RENDER-28: once a thread has rendered a block, rendering, the engine's messages, an activation

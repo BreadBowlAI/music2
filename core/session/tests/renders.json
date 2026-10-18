@@ -2,9 +2,10 @@
   "renders": {
     "examples/first-song": "f98fca3ff31fdc4d6b7c470131353f22ca42fdd959348bac79190e6df1873156",
     "examples/resample": "b3daee50ee7e7193fc6d240f02384fcda83ccbe33b5c20fbf5904005b4aeb58e",
+    "examples/sampler": "8b3f507f65629d60ae80e415c6335faef0f294c5d9a9873480e1aa26df4695e6",
     "examples/sounds": "76178757544f168188ef83e5ba7a459817af0573b844a4ea9d31567c09a62a8c",
     "templates/empty": "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
     "templates/starter": "bb198cc782fdd1f0eeb2d09be7d677a45dbc074fb46b65c9ac2a38821a1d92d2"
   },
-  "std": "0.2.0"
+  "std": "0.2.1"
 }

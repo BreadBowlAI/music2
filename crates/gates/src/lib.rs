@@ -130,13 +130,7 @@ pub fn fixture(rel: &str) -> PathBuf {
 }
 
 pub fn load_std() -> Result<PackageSet> {
-    load_std_laid_out(m2_runtime::packages::Layout::P2)
-}
-
-/// The std package, its kernels' memories laid out as `layout` says: G7f compares the app's layout
-/// with P1 in one process (RENDER-32).
-pub fn load_std_laid_out(layout: m2_runtime::packages::Layout) -> Result<PackageSet> {
-    let mut p = PackageSet::laid_out(layout);
+    let mut p = PackageSet::default();
     p.load(&std_dir()).with_context(|| format!("loading std from {}", std_dir().display()))?;
     Ok(p)
 }

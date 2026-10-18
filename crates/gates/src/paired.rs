@@ -3,9 +3,9 @@
 //! a record decides nothing. Instead each run measures the app's layout and S, the commit before
 //! step 7, in turns over the same music, so what disturbs one disturbs the other alike, and takes
 //! the median of the pairs' differences. S plays in a runner of its own (`baseline`), and the two
-//! take turns over a pipe as players in one process do. Step 7's first layout, P1, takes its turns
-//! here too, so each run also says what step 7 costs over S with wasmtime's default layout, and
-//! what the owner's layout costs over P1 (printed, not judged).
+//! take turns over a pipe as players in one process do. A second player of the app's layout, its
+//! A/A control, takes its turns here too, so each run also says what noise alone gives (printed,
+//! not judged), and three sides take turns (`cycle`).
 //!
 //! Even paired, the p99 moves too much to settle in the pairs the Mac's time allows: on Linux the
 //! p99's differences spread over hundreds of µs (a block) to thousands (a callback) between pairs on
@@ -168,8 +168,8 @@ pub fn orders(k: usize) -> Vec<Vec<usize>> {
 /// And the first side and the last, the two G7f compares, wait alike for their turns ([`waits`]):
 /// as many turns of one as of the other come with one other turn between it and its own before,
 /// as many with two, and so on. One side must come back sooner than the others (with three sides,
-/// four of its six turns with one other turn between), and so it is the middle one, P1 in G7f,
-/// which isn't judged. The sides are renamed to get that, which keeps all of the above, where some
+/// four of its six turns with one other turn between), and so it is the middle one, the A/A control
+/// in G7f, which isn't judged. The sides are renamed to get that, which keeps all of the above, where some
 /// naming can (with three sides, one can).
 pub fn cycle(k: usize) -> Option<Vec<Vec<usize>>> {
     /// Extend `path` (indices into `all`) to the whole cycle, `joins[a][b]` counting where `b`
@@ -309,9 +309,10 @@ pub fn in_turns(sides: &mut [&mut dyn Side], warm: usize, n: usize, turn: usize,
     Ok(out)
 }
 
-/// What starting a turn cost each side ([`Turns::starts`], one a round: the app's layout, P1 and S),
+/// What starting a turn cost each side ([`Turns::starts`], one a round: the app's layout, its A/A
+/// control and S),
 /// said in a line: the medians over the rounds of what is left of it in the judged steps, each
-/// turn's first half over its second, the app's layout's and P1's against S's; and of each turn's
+/// turn's first half over its second, the app's layout's and its control's against S's; and of each turn's
 /// first step, in µs over the side's mean. The music changes from step to step, by far more than
 /// that, but alike on every side, so only against S's does it tell. If a side's start lasted into
 /// its judged steps, its first half would be slower than its second: a value under 0 says S's
@@ -324,7 +325,7 @@ pub fn starting(starts: &[Vec<(f64, f64)>; 3], lead: usize, step: &str) -> Strin
     let first = |k: usize| median(&starts[k].iter().map(|s| s.0).collect::<Vec<_>>());
     let left = |k: usize| median(&starts[k].iter().zip(&starts[2]).map(|(a, s)| a.1 - s.1).collect::<Vec<_>>());
     format!(
-        "of the judged ones, each turn's first half over its second, against S's: {:+.0} µs (the app's layout), {:+.0} (P1); each turn's first {step} over the mean: {:+.0} µs, {:+.0}, {:+.0} (S); {lead} a turn not judged; medians of {}",
+        "of the judged ones, each turn's first half over its second, against S's: {:+.0} µs (the app's layout), {:+.0} (its control); each turn's first {step} over the mean: {:+.0} µs, {:+.0}, {:+.0} (S); {lead} a turn not judged; medians of {}",
         left(0),
         left(1),
         first(0),
@@ -338,12 +339,12 @@ pub fn starting(starts: &[Vec<(f64, f64)>; 3], lead: usize, step: &str) -> Strin
 /// same bits and time nothing worth comparing.
 const QUIET: f32 = 1e-4;
 
-/// Whether every side in every round played the same bits (the app's layout, P1 and S, in that
+/// Whether every side in every round played the same bits (the app's layout, its A/A control and S, in that
 /// order), and not silence, the app's layout's loudest sample being `peak`; and that said: the
 /// comparison means something only then. The same bits, so S was as loud.
 pub fn same_music(heard: &[[Heard; 3]], peak: f32) -> (bool, String) {
     let first = heard.first().map(|h| h[0]).unwrap_or_default();
-    let names = ["the app's layout", "P1", "S"];
+    let names = ["the app's layout", "its A/A control", "S"];
     let other = heard.iter().enumerate().find_map(|(i, h)| (0..3).find(|&k| h[k] != first).map(|k| (i, k, h[k])));
     let db = 20.0 * peak.max(1e-12).log10();
     match other {
@@ -352,7 +353,7 @@ pub fn same_music(heard: &[[Heard; 3]], peak: f32) -> (bool, String) {
         None => (
             true,
             format!(
-                "the same {} samples (hash {:016x}) from the app's layout, P1 and S in every round, peak {db:.1} dB",
+                "the same {} samples (hash {:016x}) from the app's layout, its control and S in every round, peak {db:.1} dB",
                 first.samples, first.hash
             ),
         ),
@@ -431,7 +432,7 @@ mod tests {
         assert!(same, "{said}");
         assert_eq!(
             said,
-            format!("the same 8 samples (hash {:016x}) from the app's layout, P1 and S in every round, peak -12.0 dB", a.hash)
+            format!("the same 8 samples (hash {:016x}) from the app's layout, its control and S in every round, peak -12.0 dB", a.hash)
         );
         let (same, said) = same_music(&[[a; 3], [a, a, b]], 0.25);
         assert!(!same);
@@ -514,7 +515,7 @@ mod tests {
         let cycle3 = cycle(3).unwrap();
         assert_eq!(cycle3, [[0, 2, 1], [0, 1, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0], [1, 0, 2]]);
         // The app's layout and S, the two compared, wait alike between their turns. One side must
-        // come back sooner, four of its six turns with one other turn between: P1, not judged.
+        // come back sooner, four of its six turns with one other turn between: the A/A control, not judged.
         assert_eq!(waits(&cycle3, 0), [1, 1, 1, 2, 3, 4]);
         assert_eq!(waits(&cycle3, 2), waits(&cycle3, 0));
         assert_eq!(waits(&cycle3, 1), [1, 1, 1, 1, 4, 4]);
@@ -633,7 +634,7 @@ mod tests {
         }
         assert_eq!(
             starting(&starts, 2, "callback"),
-            "of the judged ones, each turn's first half over its second, against S's: +0 µs (the app's layout), +0 (P1); each turn's first callback over the mean: +4400 µs, +5300, +6300 (S); 2 a turn not judged; medians of 6"
+            "of the judged ones, each turn's first half over its second, against S's: +0 µs (the app's layout), +0 (its control); each turn's first callback over the mean: +4400 µs, +5300, +6300 (S); 2 a turn not judged; medians of 6"
         );
         // But when S's start lasts past the lead, its first 20 judged callbacks 40 µs slow a turn,
         // S's first half comes out 17 µs slower than its second, against the others' none: twice
@@ -649,7 +650,7 @@ mod tests {
         let said = starting(&[vec![t.starts(0)], vec![t.starts(1)], vec![t.starts(2)]], 2, "callback");
         assert!(
             said.starts_with(
-                "of the judged ones, each turn's first half over its second, against S's: -17 µs (the app's layout), -17 (P1); "
+                "of the judged ones, each turn's first half over its second, against S's: -17 µs (the app's layout), -17 (its control); "
             ),
             "{said}"
         );
@@ -661,7 +662,7 @@ mod tests {
         let line = format!("{out}").lines().nth(1).unwrap().to_string();
         let kept = String::from_utf8_lossy(&line.as_bytes()[..220.min(line.len())]).to_string();
         assert!(
-            kept.contains("against S's: -108 µs (the app's layout), -123 (P1); each turn's first callback over the mean: +16182 µs"),
+            kept.contains("against S's: -108 µs (the app's layout), -123 (its control); each turn's first callback over the mean: +16182 µs"),
             "{kept}"
         );
     }

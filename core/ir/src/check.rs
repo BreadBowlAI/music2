@@ -67,8 +67,9 @@ pub enum FOp {
     Lane { module: String, lane: String, kind: Kind, default: f64 },
     Time(TimeOf),
     Const(f64),
-    /// `inputs` are in the kernel's declared order; `channels` is passed to `init`.
-    Kernel { kernel: String, channels: u8, inputs: Vec<Input> },
+    /// `inputs` are in the kernel's declared order; `channels` is the count resolved for its
+    /// `audio<*>` ports; `assets` and `values` are its settings, as the IR gives them.
+    Kernel { kernel: String, channels: u8, inputs: Vec<Input>, assets: Vec<String>, values: Vec<f64> },
     /// A hosted plugin; `inputs` are in its signature's order (`in`, `notes`, parameters).
     /// `state` is where its state is filed below its module, as keys ([`Op::state_path`]).
     Plugin { plugin: String, inputs: Vec<Input>, channels: u8, state: Option<Vec<String>> },
@@ -859,7 +860,10 @@ impl<'a> Checker<'a> {
                                     channels: outs.first().map_or(2, |k| k.channels()),
                                     state: node.op.state_path(),
                                 },
-                                _ => FOp::Kernel { kernel: kernel.clone(), channels, inputs },
+                                Op::Kernel { assets, values, .. } => {
+                                    FOp::Kernel { kernel: kernel.clone(), channels, inputs, assets: assets.clone(), values: values.clone() }
+                                }
+                                _ => unreachable!("a kernel or a plugin"),
                             };
                             (op, outs)
                         })

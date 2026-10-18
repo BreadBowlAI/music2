@@ -1,0 +1,4 @@
+# How the start screen lists this example. Not copied into the song.
+name = "Sampler"
+description = "Drums and a melody played from three short WAV files"
+order = 5
