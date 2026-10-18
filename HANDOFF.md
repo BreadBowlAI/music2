@@ -10,27 +10,33 @@ for `polish` (the rest of the top ten), after its review and final check, and wh
 (the two rows the Mac's run at `85b069a` failed), after its review and final check; and for 8a's live half (on
 `8a`), after its review and final check; and for `studio` (audio, recording, MIDI files and stems, help), after its
 review and final check; and for `io` (step 9's audio: disk streaming and recording), after its review and
-final check; and for track `ab` (kernel ABI v1 and the sampler), after its review and final check; and for track `sx` (stretching as an offline kernel, Follow tempo), when it was built.
+final check; and for track `ab` (kernel ABI v1 and the sampler), after its review and final check; and for track `sx` (stretching as an offline kernel, Follow tempo), after its review and final check.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
-- **Track `sx` (stretching as an offline kernel, Follow tempo) is built** (2026-10-18), on branch `sx`, from `main` at
-  `97b4cdf` (track `ab` on top of `io`). Not reviewed yet. It adds:
+- **`sx` is ready to land** (2026-10-18): Linux green at `000dd72`; macOS owed. From `main` at `97b4cdf`, with
+  `main` at `09a0687` (`ph`) merged in. Stretching as an offline kernel, and Follow tempo (plan:
+  `docs/designs/step9/sx-plan.md`; build notes: `build-notes-sx.md` beside it). It adds:
 
   | You can now | Where |
   |---|---|
   | Keep an audio clip in time when the tempo changes; its pitch stays | right-click the clip ▸ **Follow tempo** |
   | Change the tempo while followed clips play: nothing waits for their stretch | the tempo field |
 
-  Under the hood: kernel ABI v1 settled (the version read from the module's bytes first; a kernel may read its file
-  from the disk). Stretching moved out of the engine into std: `std:stretch`, the first offline kernel (std
-  0.2.2). A live session makes each new stretch in the background and plays it as it is made; an export makes its
-  stretches first. `examples/resample`'s 2 renders changed once (std 0.2.2's stretch, FMT-3); 10 of 12 keep their
-  bits. Plan and build notes: `docs/designs/step9/sx-plan.md`, `build-notes-sx.md`. `ci/check.sh --gates` passed at
-  `f1a90f5` (about 38 minutes): 1,624 Rust tests, 12 of 12 renders, the 7 gate runs, 69 browser suites; one
-  (`s8-clips`, a notes clip's edge drag) passed only on its retry, then 2 of 2 alone (Known flakes). Pictures:
-  `~/m2-runs/app-shots/sx-3/`. Owed on the Mac: its `ci/check.sh`, then the by-ear steps 96 to 102.
+  A review found 6 things. The big one is fixed, with tests shown red first:
+
+  | What happens | Before | Now |
+  |---|---|---|
+  | The cache folder can't be written (a full disk, no permission) | every stretched clip went silent, live and in exports; an export finished without them | the stretch is made in memory instead, with the same bits |
+  | A stretch fails in an export | the export finished without the clip | the export fails and names the clip |
+
+  1 small one fixed (a row in the contract's codes table), 4 are lines in `docs/gaps.md`. Under the hood: kernel ABI
+  v1 settled; `std:stretch` is the first offline kernel (std 0.2.2). `examples/resample`'s 2 renders changed once (std
+  0.2.2's stretch, FMT-3); 10 of 12 keep their bits. `ci/check.sh --gates` passed at `000dd72`: every row, nothing
+  only on a retry (1,663 Rust tests, 70/70 browser suites, 12 of 12 renders, the 7 gate runs; 36 minutes).
+  Pictures on Xvfb :98: `~/m2-runs/app-shots/sx-000dd72/` (an export with the cache folder read-only).
+  Owed on the Mac: its `ci/check.sh`, then the by-ear steps 96 to 102.
 - **`ph` is ready to land** (2026-10-18): Linux green at `d897cf0`; macOS unverified since `b0ebc74` (its shared
   memory, wake and plugin windows are lint-checked only). From `main` at `258275b`, with `main` at `3b447b2` (`io`)
   and at `97b4cdf` (`ab`) merged in. Step 9's first synth and plugin turns (plan: `docs/designs/step9/ph-plan.md`; build notes:
@@ -305,7 +311,8 @@ whatever you pick up.
 | `io` | `64380e1`, then docs only | **Ready to land.** From `main` at `258275b`. Step 9's audio turns 1 and 4: disk streaming (RENDER-30) and recording audio (RENDER-30a, MON-8). Reviewed (8 findings: 3 big ones fixed with tests, 2 small ones fixed, 3 in gaps.md). Linux green at `64380e1` (`ci/check.sh --gates`, nothing passed only on a retry), macOS unverified since `eda5e77`. Worktree `~/m2-runs/wt/io`. Plan `docs/designs/step9/io-plan.md`; build notes `build-notes-io.md`. |
 | `ph` | `d897cf0`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) and `97b4cdf` (`ab`) merged in. Step 9's first synth and plugin turns: the plugin host process (HOST-3), plugin windows (HOST-7, MON-6) and latency compensation (RENDER-17 to 21). Reviewed (4 findings: the big one fixed with tests, 2 small ones fixed, 1 in gaps.md). Linux green at `d897cf0` (`ci/check.sh --gates`, nothing passed only on a retry), macOS unverified since `b0ebc74`. Worktree `~/m2-runs/wt/ph`. Plan `docs/designs/step9/ph-plan.md`; build notes `build-notes-ph.md`. |
 | `ab` | `7399cb8`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) merged in (`c68d203`). Kernel ABI v1 (ABI-2, ABI-3, ABI-5), one sandbox a box (RENDER-32), and std 0.2.1's Sampler. Reviewed (5 findings: the big one fixed with a test, 4 in gaps.md). Linux green at `7399cb8` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/ab`. Plan `docs/designs/step9/ab-plan.md`; build notes `build-notes-ab.md`. |
-| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, 73 to 82 once `io` is on `main`, 83 to 87 once `ab` is, and 88 to 95 once `ph` is. |
+| `sx` | `000dd72`, then docs only | **Ready to land.** From `main` at `97b4cdf`, with `main` at `09a0687` (`ph`) merged in (`705f24a`). Step 9's stretching turn: kernel ABI v1 settled (ABI-3), `std:stretch` as the first offline kernel (ABI-2), stretches made in the background (RENDER-30), and Follow tempo. Reviewed (6 findings: the big one fixed with tests, 1 small one fixed, 4 in gaps.md). Linux green at `000dd72` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/sx`. Plan `docs/designs/step9/sx-plan.md`; build notes `build-notes-sx.md`. |
+| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, 73 to 82 once `io` is on `main`, 83 to 87 once `ab` is, 88 to 95 once `ph` is, and 96 to 102 once `sx` is. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -619,6 +626,18 @@ bar, its Ctrl-click, and the sound.
 | 94 | Click **Export**, then **Save**, while it plays. | "Paused for export" in the top bar, then it plays on. The file sounds like the song. |
 | 95 | Tell the lead what you saw, heard and felt at 88 to 94. | |
 
+**A check by ear of stretched clips and Follow tempo** (`sx`, about 5 minutes):
+
+| # | Do this | You should hear or see |
+|---|---|---|
+| 96 | Click **Open an Example**, then **Resample**. Press Space. Listen from 3 seconds in (bar 2, beat 3) to 5 seconds, then from 6 seconds (bar 4). | At 3 s the keys come back slower, stretched over 4 beats. Their pitch is the same as at the start. No wobble, no clicks, no echo. At 6 s they come back higher and stretched, still on the beat. |
+| 97 | Tell the lead what you heard at 96. | |
+| 98 | Open **Resample** again. Right-click the first clip on Chops (bar 1). Click **Follow tempo**. Press Space from the start. | It sounds as before. |
+| 99 | Double-click the tempo (120), type 90, press Return. Press Space from the start. | The first clip keeps in time with the kick, a little slower, at the same pitch. The second clip (not followed) plays more of its sound in the same time. |
+| 100 | While it plays, drag the tempo up and down a little, then let go. | The followed clip goes on in time. At most a short silence, no click, no wrong sound. |
+| 101 | Press ⌘Z twice. | The tempo is 120 again, and Follow tempo is off. |
+| 102 | Tell the lead what you heard at 98 to 101. | |
+
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in
 `~/m2-check/<commit>.tgz` on the Mac if needed.
@@ -677,7 +696,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | `io`: audio clips play from the disk; recording audio | `64380e1` (Linux checks), then docs only; ready to land (branch `io`) | macOS: unverified since `eda5e77`. Owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 73 to 82 (a long file from the disk, a real microphone, the permission question, the take against the click, hearing yourself in headphones, a USB microphone unplugged) |
 | `ph`: plugins in their own program, plugin windows, latency compensation | `d897cf0` (Linux checks), then docs only; ready to land (branch `ph`) | macOS: unverified since `b0ebc74` (shared memory, the wake across processes and plugin windows are lint-checked only). Owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 88 to 95 (two music2 programs, Surge XT's own window, a knob and its undo, the plugin program ended while it plays, an export) |
 | `ab`: kernel ABI v1, one sandbox a box, the Sampler | `7399cb8` (Linux checks), then docs only; ready to land (branch `ab`) | owed once it is on `main`: one more `ci/check.sh` (G7f's run of the new layout: its footprint and address space, PLAT-1), then the by-ear steps 83 to 87 (the Sampler example, a WAV dropped on a Sampler, the keyboard piano, Undo) |
-| `sx`: `std:stretch` (an offline kernel), stretches in the background, Follow tempo | `f1a90f5` (Linux checks), then docs only; built on branch `sx`, not reviewed | owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 96 to 102 (Resample's stretched clips; Follow tempo and a tempo change) |
+| `sx`: `std:stretch` (an offline kernel), stretches in the background, Follow tempo | `000dd72` (Linux checks), then docs only; ready to land (branch `sx`) | owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 96 to 102 (Resample's stretched clips; Follow tempo and a tempo change) |
 
 **8a's Mac sweep (for the owner): offline and live, one paste.** `8a` is on `main`.
 

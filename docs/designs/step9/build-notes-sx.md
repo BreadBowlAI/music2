@@ -5,9 +5,11 @@ Branch `sx`, from `main` at `97b4cdf`, 2026-10-18. The plan is [sx-plan.md](sx-p
 ## In short
 
 - **Slice 1, kernel ABI v1 settled:** music2 reads a module's ABI version from its bytes first. A kernel may read its audio file from the disk.
-- **Slice 2, `std:stretch`:** warped clips are stretched by a std kernel now, not by the engine. It is the first **offline kernel**: music2 runs it off the audio thread, in pieces. Neither the file nor the stretch is ever whole in memory.
+- **Slice 2, `std:stretch`:** warped clips are stretched by a std kernel now, not by the engine. It is the first **offline kernel**: music2 runs it off the audio thread, in pieces. Neither the file nor the stretch is ever whole in memory (unless the cache folder can't take the stretch: then it is made in memory).
 - **Slice 3, Follow tempo:** an audio clip's menu has **Follow tempo**. Turn it on, and the clip keeps its beats when the tempo changes. A live session never waits for a stretch: it is made in the background, and the clip plays it as it is made. An export makes its stretches first, so its bits never depend on timing.
 - One example sounds a little different: `examples/resample` (its 2 renders, slice 2). The other 10 renders keep their bits. Slice 3 changes no render.
+- **The review** found 6 things. The big one is fixed: a cache folder that can't be written no longer silences stretched clips; the stretch is made in memory. An export whose stretch fails now fails and names the clip.
+- `ci/check.sh --gates` passed at `000dd72`, after `main` (with `ph`) was merged in. Nothing passed only on a retry.
 - Linux timings are information only. The Mac's run is owed (PLAT-1).
 
 ## Slice 2, piece by piece
@@ -36,6 +38,52 @@ The engine's own WSOLA and `WARP_VERSION` are gone. A stretch's file is named by
 | The menu row and its hint; a warped clip's waveform drawn by its markers | `web/src/components/Wave.tsx`, `ClipMenu.tsx` | browser suite `sx-follow` (22 checks); `st-audio` knows the new row |
 
 Pictures (Linux, Xvfb): `~/m2-runs/app-shots/sx-3/`. `menu/app-10s.png` is the clip menu with Follow tempo and its hint. `followed/app-10s.png` is the song at 60 BPM after Follow tempo on its first clip: that clip shows the same part of its file as at 120, and the clip beside it, not followed, shows more. `followed/app-20s.png` is the menu again, Follow tempo checked.
+
+## The review
+
+| # | What | Size | Done |
+|---|---|---|---|
+| sx-r1 | A cache folder that can't be written (full disk, no permission) silenced every stretched clip, live and in exports | big | Fixed. A stretch the folder can't take is made in memory: from the start, or partway from what is in the file. One maker for both caches (`renders::make_now` offline). Offline, a stretch that still fails fails the build and names the clip (RENDER-25's rule for a node). Tests, red first: `a_cache_folder_that_cannot_be_written_still_plays_warped_clips`, `a_render_whose_disk_fills_goes_on_in_memory`, `an_export_whose_stretch_fails_names_the_clip` |
+| sx-r2 | Reverse with Follow tempo: edges and Split refused; silent until the whole stretch is made | small | a line in `docs/gaps.md` |
+| sx-r3 | The branch was behind `main` (`ph`) | small | Merged (`705f24a`). `ph`'s `LanePlan::new` call gets the stretch kernel. The by-ear steps are now 96 to 102 |
+| sx-r4 | `kernel.offline` was missing from the codes table (DIAG-2) | small | Fixed: its row |
+| sx-r5 | After a tempo change, stretches are made one at a time in build order | small | a line in `docs/gaps.md` |
+| sx-r6 | Follow tempo fills the cache folder fast | small | its size added to the gaps line |
+
+Decisions:
+
+- A render's reader (`Raw`) reads its file or its memory. The switch happens before more frames are published, so a reader never sees a gap.
+- A live cache with no folder now makes its stretch in the background too (it waited before).
+- Live, a stretch that fails is still silent, with a log line. Only an offline render fails.
+
+Picture (Linux, Xvfb :98): `~/m2-runs/app-shots/sx-000dd72/`. Resample exported with its cache folder read-only: "Exported out.wav", byte for byte the export made with a writable folder.
+
+## The final check
+
+At `000dd72` (36 minutes), word for word:
+
+```
+
+music2 check: PASS
+commit   000dd72c9054 on sx (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 36 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1663 passed, 0 failed
+clippy           PASS  
+pool models      PASS  29 passed, 0 failed
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  70/70 suites ok
+renders          PASS  12 of 12 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+```
 
 ## Renders (FMT-3)
 
