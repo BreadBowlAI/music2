@@ -111,6 +111,9 @@ struct InjectReq {
     /// Or a sine: its pitch, length and level (0.5 unless said).
     #[serde(default)]
     tone: Option<Tone>,
+    /// Then the input's device goes away, as a microphone unplugged (the review's io-r2).
+    #[serde(default)]
+    unplug: bool,
 }
 
 #[derive(Deserialize)]
@@ -125,15 +128,20 @@ fn half() -> f32 {
     0.5
 }
 
-/// `POST /api/graph/input/inject {samples?, tone?: {hz, seconds, gain?}}`: what the silent input
-/// hears next, one sample for each frame the engine renders from the next callback on (D24). Only
+/// `POST /api/graph/input/inject {samples?, tone?: {hz, seconds, gain?}, unplug?}`: what the silent
+/// input hears next, one sample for each frame the engine renders from the next callback on (D24);
+/// with `unplug`, then its device goes away, as a microphone unplugged. Only
 /// with `M2_AUDIO_INPUT=inject` (and in this crate's tests), as `M2_MIDI=inject` opens MIDI's.
 /// Not a write: it plays what a microphone would.
 async fn input_inject(State(s): S, Json(r): Json<InjectReq>) -> Result<Response, ApiError> {
     if !crate::input_injects() {
         return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "no such API"}))).into_response());
     }
-    blocking(move || s.graph.inject_input(&r.samples, r.tone.map(|t| (t.hz, t.seconds, t.gain)))).await?;
+    blocking(move || {
+        s.graph.inject_input(&r.samples, r.tone.map(|t| (t.hz, t.seconds, t.gain)))?;
+        if r.unplug { s.graph.unplug_input() } else { Ok(()) }
+    })
+    .await?;
     Ok(Json(json!({})).into_response())
 }
 

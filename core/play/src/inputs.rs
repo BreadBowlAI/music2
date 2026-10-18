@@ -323,7 +323,8 @@ impl Player {
         self.inputs.open.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|o| o.errors.read().gone > 0)
     }
 
-    /// An error the open input's device reported, counted as its error callback counts it (tests).
+    /// An error the open input's device reported, counted as its error callback counts it (tests,
+    /// and the inject API's unplug).
     #[doc(hidden)]
     pub fn input_error(&self, e: DeviceError) {
         if let Some(o) = self.inputs.open.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {

@@ -563,6 +563,14 @@ impl Graph {
         player.inject_input(&all)
     }
 
+    /// The open input's device goes away, as a microphone unplugged (the inject API): a take from it
+    /// ends with what it has (the review's io-r2).
+    pub fn unplug_input(&self) -> Result<()> {
+        let device = self.inner.current_device().context("Nothing is recording from the sound input.")?;
+        device.player.input_error(m2_play::DeviceErrorKind::DeviceNotAvailable.into());
+        Ok(())
+    }
+
     /// R while recording (Q19): the take ends where it is heard, and play goes on. Answers at once:
     /// the take thread writes it.
     pub fn record_stop(&self, token: u64) -> Result<Value> {

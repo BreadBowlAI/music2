@@ -207,6 +207,38 @@ fn an_audio_take_through_the_routes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// The review's io-r2 through the routes: `{"unplug": true}` plays a microphone unplugged. Every
+// window hears the take written with what it has, in words, and the song plays on.
+#[test]
+fn the_inject_api_unplugs_the_input() {
+    let dir = project("unplug");
+    std::fs::write(dir.join("song.ts"), VOX).unwrap();
+    std::fs::create_dir_all(dir.join("data/vox")).unwrap();
+    std::fs::write(dir.join("data/vox/clips.json"), "{\"clips\": []}\n").unwrap();
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let state = running.state.clone();
+    let session = state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let mut events = state.events.subscribe();
+    let (status, take) = post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "vox", "lane": "clips", "count_in": false}));
+    assert_eq!(status, 200, "{take:#}");
+    post(&running.url, "/api/graph/input/inject", &json!({"tone": {"hz": 440.0, "seconds": 0.5}}));
+    std::thread::sleep(Duration::from_millis(300));
+    let (status, answer) = post(&running.url, "/api/graph/input/inject", &json!({"unplug": true}));
+    assert_eq!(status, 200, "{answer:#}");
+    let t = Instant::now();
+    let mut written = None;
+    while written.is_none() && t.elapsed() < Duration::from_secs(5) {
+        match events.try_recv() {
+            Ok(m) => written = Some(serde_json::from_str::<Value>(&m).unwrap()).filter(|v| v["t"] == "take" && v.get("written").is_some()),
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    let written = written.expect("the windows hear the take written");
+    assert_eq!(written["written"]["note"], json!("The sound input was unplugged: the take was kept up to here."), "{written:#}");
+    assert!(state.graph.status().playing, "the song plays on");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // D24: the inject API takes samples or a tone, and says when no take has the input open.
 #[test]
 fn the_inject_api_needs_an_open_input() {
