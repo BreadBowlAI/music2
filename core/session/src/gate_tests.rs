@@ -395,6 +395,34 @@ fn fixture_renders_change_only_with_stds_version() {
     );
 }
 
+/// `tests/fixtures/mono-k127` as std's `mono()` played it, from two `std:notecv` polys into
+/// `std:mono` (std 0.2.1, `1bc5ac8`): recorded before std's one-note sounds moved onto the `poly`
+/// op's options (RENDER-16).
+const MONO_K127: &str = "c48c79a632d6833ce006de5f3b50abcff0102d11aaa25e776448f0ae75133cfd";
+
+// RENDER-16, FMT-3: std's one-note sounds (its lead, 808 sub and bass, FM keys and the whole synth
+// given `voices: 1`) play on one `poly` in `"legato"` mode, not through `std:mono`. Where every
+// velocity is one a keyboard sends (k/127, which `std:mono` rounded every velocity to), they
+// render the same bits as before: overlaps slide, touches start again, a trill glides over a held
+// note, and a note let go brings back the one still held.
+#[test]
+fn mono_sounds_keep_their_bits_on_keyboard_velocities() {
+    let f = Fixture::new();
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mono-k127");
+    for file in files_under(&from) {
+        f.write(file.strip_prefix(&from).unwrap().to_str().unwrap(), std::fs::read(&file).unwrap());
+    }
+    let s = f.open();
+    assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{:?} {:?}", s.draft_errors, s.problems());
+    let sound = render_song(&s);
+    assert!(peak(&sound) > 0.05, "the song plays");
+    assert_eq!(bits(&sound), MONO_K127, "std's one-note sounds changed their bits on keyboard velocities");
+}
+
+fn peak(x: &[[f32; 2]]) -> f32 {
+    x.iter().fold(0.0, |m, f| m.max(f[0].abs()).max(f[1].abs()))
+}
+
 /// std's mixer and master before every channel and the master had a gain (8b.3), as a project's
 /// own file: a channel's `db` optional, no master `db`, nothing to make the master stereo.
 const OLD_MIX: &str = r#"import { component, control, each, kernel, port, signature, type Audio, type Params, type Signal, type Value } from "@m2/core";
