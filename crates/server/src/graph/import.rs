@@ -126,6 +126,52 @@ impl Graph {
 }
 
 impl Graph {
+    /// A WAV dropped on a sampler's card (track ab): `source` is copied into the open song's
+    /// `assets/` (or the same bytes there used again), here, then one actor job writes its name into
+    /// sampler call `call` of revision `at` (one Tx, one undo step, "setting Sampler to kick.wav").
+    /// Undo takes the code back; the file stays. A file that isn't a WAV is refused in words, and
+    /// nothing is copied. Answers the edit with `name` (the step's) and `asset`.
+    pub fn set_sample(&self, token: u64, at: u64, call: String, source: Source) -> Result<Value> {
+        let dir = {
+            let cp = self.inner.control.lock();
+            let p = cp.open.as_ref().context("no project is open")?;
+            if p.engine.token != token {
+                bail!("the open project changed; refresh the graph before editing");
+            }
+            if let Some(why) = &p.shown.read_only {
+                bail!("{why}");
+            }
+            if !p.shown.state["view"]["draft_errors"].as_array().is_none_or(Vec::is_empty) {
+                bail!("The code doesn't compile, so the Sampler's file can't be set now. Fix the code first.");
+            }
+            p.shown.dir.clone()
+        };
+        let file = {
+            let _one = IMPORTING.lock();
+            let (f, decoded) = import::audio(&dir, source).map_err(|e| anyhow::anyhow!("{}", words(&e)))?;
+            match decoded {
+                Some(a) => drop(Store::global().put(f.hash, &a)),
+                None => drop(Store::global().of(&dir.join(m2_song::path::ASSETS).join(f.asset.as_str()))),
+            }
+            f
+        };
+        let name = format!("setting Sampler to {}", file.asset.as_str());
+        let asset = file.asset.as_str().to_string();
+        let mut done = self.call(move |a| {
+            a.edit_and(token, |s| {
+                let e = m2_editor::sampler::set_sample(s, at, &call, &file)?;
+                Ok((e, json!({})))
+            })
+        })?;
+        if let Some(revision) = done["revision"].as_u64() {
+            let named = self.name_step(token, revision, name.clone(), false)?;
+            done["undo_name"] = named["undo_name"].clone();
+        }
+        done["name"] = json!(name);
+        done["asset"] = json!(asset);
+        Ok(done)
+    }
+
     /// The + Track list's Audio track (Q8): an audio track named `label` (else "Audio"), after
     /// track `after` (else last), as one undo step named "adding Audio". Answers `{module, label,
     /// revision}`.

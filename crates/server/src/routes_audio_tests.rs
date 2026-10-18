@@ -189,6 +189,48 @@ fn an_audio_track_through_the_route() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The sampler card's node in the open song's view: its call's id and what it shows.
+fn sampler_node(graph: &Graph) -> (u64, String, serde_json::Value) {
+    let view = graph.state().unwrap()["view"].clone();
+    let nodes = view["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap().clone()).collect::<Vec<_>>();
+    let node = nodes.into_iter().find(|n| n["component"] == "std:sampler").expect("a sampler's card");
+    (view["revision"].as_u64().unwrap(), node["id"].as_str().unwrap().to_string(), node["sampler"].clone())
+}
+
+// Track ab: a WAV dropped on a sampler's card comes into assets/ and makes one Tx, one undo step
+// named "setting Sampler to kick.wav"; a file that isn't a WAV is refused in words, adding nothing.
+#[test]
+fn a_wav_dropped_on_a_sampler_sets_its_file_through_the_route() {
+    let dir = project("sample");
+    let song = "import { song, track } from '@m2/core';\nimport { sampler } from 'std/sampler';\n\
+                const s = track('s', ({ lane }) => sampler(lane.notes('notes')));\nexport default song(() => s.out);\n";
+    std::fs::write(dir.join("song.ts"), song).unwrap();
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let (at, call, card) = sampler_node(&running.state.graph);
+    assert_eq!(card, serde_json::json!({"files": []}), "no file yet");
+    let enc = |s: &str| s.bytes().map(|b| format!("%{b:02X}")).collect::<String>();
+    let mut kick = std::fs::read(dir.join("assets/tone.wav")).unwrap();
+    *kick.last_mut().unwrap() ^= 1;
+    let path = format!("/api/graph/sample?session={session}&at={at}&call={}&name=kick.wav", enc(&call));
+    let (status, done) = post(&running.url, &path, "application/octet-stream", &kick);
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!((done["asset"].as_str(), done["name"].as_str()), (Some("kick.wav"), Some("setting Sampler to kick.wav")), "{done:#}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("sampler(lane.notes('notes'), { sample: \"kick.wav\" })"));
+    assert_eq!(std::fs::read(dir.join("assets/kick.wav")).unwrap(), kick);
+    let state = running.state.graph.state().unwrap();
+    assert_eq!(state["undo_name"]["name"], "setting Sampler to kick.wav", "{:#}", state["undo_name"]);
+    let (at, call, card) = sampler_node(&running.state.graph);
+    assert_eq!(card, serde_json::json!({"files": ["kick.wav"]}));
+    // Not a WAV: refused in words; nothing is copied or written.
+    let path = format!("/api/graph/sample?session={session}&at={at}&call={}&name=notes.txt", enc(&call));
+    let (status, why) = post(&running.url, &path, "application/octet-stream", b"hello, not a sound");
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("notes.txt isn't a WAV file"), "{status} {why:#}");
+    assert!(!dir.join("assets/notes.txt").exists());
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("{ sample: \"kick.wav\" }"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn copy(from: &std::path::Path, to: &std::path::Path) {
     std::fs::create_dir_all(to).unwrap();
     for e in std::fs::read_dir(from).unwrap().flatten() {
