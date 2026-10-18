@@ -247,22 +247,30 @@ impl Drop for Growing {
     }
 }
 
-/// What a test watches: each step of each take's finish, by its `assets/` folder, and the Tx's.
+/// What a test watches: each step of each take's finish, by its `assets/` folder's real path, and
+/// the Tx's.
 static STEPS: Mutex<Vec<(PathBuf, &'static str)>> = Mutex::new(vec![]);
 static WATCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `p` by its real path, links followed (a Mac's temporary folder is reached through /var, a link
+/// to /private/var), or as given when it can't be read.
+fn real(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
 
 /// Note step `what` of a take in the `assets/` folder `folder`, while a test watches.
 pub fn seen(folder: &Path, what: &'static str) {
     if WATCHING.load(std::sync::atomic::Ordering::Relaxed) {
-        STEPS.lock().unwrap_or_else(|e| e.into_inner()).push((folder.to_path_buf(), what));
+        STEPS.lock().unwrap_or_else(|e| e.into_inner()).push((real(folder), what));
     }
 }
 
 /// The steps seen in `dir`'s `assets/` so far, in order, watching from now on (tests:
-/// `a_take_is_durable_before_the_song_names_it`).
+/// `a_take_is_durable_before_the_song_names_it`). Folders are compared by their real paths: `dir`
+/// may be spelled through a link.
 #[doc(hidden)]
 pub fn steps(dir: &Path) -> Vec<&'static str> {
     WATCHING.store(true, std::sync::atomic::Ordering::Relaxed);
-    let folder = dir.join(ASSETS);
+    let folder = real(dir).join(ASSETS);
     STEPS.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(f, _)| *f == folder).map(|(_, w)| *w).collect()
 }

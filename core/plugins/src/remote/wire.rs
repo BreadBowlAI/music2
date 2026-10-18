@@ -19,10 +19,13 @@ use crate::host::{Blob, HostEvent, MainCall, Offered, PresetAt, RenderMode, Repl
 use crate::{Found, Handle, Info, Param};
 
 /// What both sides must agree on: a hash of this file, the slot's layout and the types both use
-/// (`host.rs`: `Raw`, `MAX_CALL_EVENTS`, the calls), so a host program built from other sources is
-/// refused, not misread.
-pub(crate) const STAMP: u64 =
-    fnv(include_bytes!("wire.rs")) ^ fnv(include_bytes!("slot.rs")).rotate_left(1) ^ fnv(include_bytes!("../host.rs")).rotate_left(2);
+/// (`host.rs`: `Raw`, `MAX_CALL_EVENTS`, the calls), and whether debug builds' test-only calls are
+/// in (`WindowCall::Shown`, `WindowCall::AskToClose`), so a host program built from other sources
+/// or in the other profile is refused, not misread.
+pub(crate) const STAMP: u64 = fnv(include_bytes!("wire.rs"))
+    ^ fnv(include_bytes!("slot.rs")).rotate_left(1)
+    ^ fnv(include_bytes!("../host.rs")).rotate_left(2)
+    ^ cfg!(debug_assertions) as u64;
 
 const fn fnv(b: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
@@ -227,7 +230,11 @@ impl W {
                     MainCall::TakeLog => self.u8(3),
                     MainCall::Window(WindowCall::Open { title }) => self.u8(4).str(title),
                     MainCall::Window(WindowCall::Close) => self.u8(5),
-                    MainCall::LoadPreset { location, key } => self.u8(6).preset_at(location).opt_str(key.as_deref()),
+                    #[cfg(debug_assertions)]
+                    MainCall::Window(WindowCall::Shown) => self.u8(6),
+                    #[cfg(debug_assertions)]
+                    MainCall::Window(WindowCall::AskToClose) => self.u8(7),
+                    MainCall::LoadPreset { location, key } => self.u8(8).preset_at(location).opt_str(key.as_deref()),
                 }
             }
             Req::Destroy { h } => self.u8(8).u64(*h),
@@ -256,7 +263,15 @@ impl W {
             Reply::Info(i) => self.u8(2).info(i),
             Reply::Log(l) => self.u8(3).strs(l),
             Reply::Window(open) => self.u8(4).bool(*open),
-            Reply::Loaded => self.u8(5),
+            #[cfg(debug_assertions)]
+            Reply::Shown(w) => {
+                self.u8(5);
+                match w {
+                    Some((w, shown)) => self.u8(1).u64(w.0).bool(*shown),
+                    None => self.u8(0),
+                }
+            }
+            Reply::Loaded => self.u8(6),
         }
     }
 
@@ -423,7 +438,11 @@ impl<'a> R<'a> {
                     3 => MainCall::TakeLog,
                     4 => MainCall::Window(WindowCall::Open { title: self.str()? }),
                     5 => MainCall::Window(WindowCall::Close),
-                    6 => MainCall::LoadPreset { location: self.preset_at()?, key: self.opt_str()? },
+                    #[cfg(debug_assertions)]
+                    6 => MainCall::Window(WindowCall::Shown),
+                    #[cfg(debug_assertions)]
+                    7 => MainCall::Window(WindowCall::AskToClose),
+                    8 => MainCall::LoadPreset { location: self.preset_at()?, key: self.opt_str()? },
                     t => bail!("no main call {t}"),
                 };
                 Req::MainCall { h, call }
@@ -450,7 +469,12 @@ impl<'a> R<'a> {
             2 => Reply::Info(Box::new(self.info()?)),
             3 => Reply::Log(self.strs()?),
             4 => Reply::Window(self.bool()?),
-            5 => Reply::Loaded,
+            #[cfg(debug_assertions)]
+            5 => Reply::Shown(match self.u8()? {
+                0 => None,
+                _ => Some((m2_os::window::Native(self.u64()?), self.bool()?)),
+            }),
+            6 => Reply::Loaded,
             t => bail!("no reply {t}"),
         })
     }
@@ -550,5 +574,24 @@ mod tests {
         let mut w = W::default();
         w.offered(&offered);
         assert_eq!(R::new(&w.0).offered().unwrap(), offered);
+    }
+
+    // Debug builds' test-only window calls, asked of the host process that owns the window.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_test_only_window_calls_read_back_as_written() {
+        for (i, call) in [WindowCall::Shown, WindowCall::AskToClose].into_iter().enumerate() {
+            let r = Req::MainCall { h: 4, call: MainCall::Window(call) };
+            let mut w = W::frame();
+            w.req(i as u64, &r);
+            let b = w.done();
+            let (id, back) = R::new(&b[4..]).req().unwrap();
+            assert_eq!((id, format!("{back:?}")), (i as u64, format!("{r:?}")));
+        }
+        for r in [Reply::Shown(Some((m2_os::window::Native(0x7f00_1234_5678), true))), Reply::Shown(None)] {
+            let mut w = W::default();
+            w.reply(&r);
+            assert_eq!(format!("{:?}", R::new(&w.0).reply().unwrap()), format!("{r:?}"));
+        }
     }
 }

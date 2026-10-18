@@ -347,6 +347,10 @@ impl PluginHost for InProcess {
                     gui::close(c);
                     Reply::Window(false)
                 }
+                #[cfg(debug_assertions)]
+                MainCall::Window(WindowCall::Shown) => Reply::Shown(gui::shown(c)),
+                #[cfg(debug_assertions)]
+                MainCall::Window(WindowCall::AskToClose) => Reply::Window(gui::ask_to_close(c)),
                 MainCall::Value(id) => Reply::Value(param_value(c.plugin, id)),
                 MainCall::Text(id, v) => Reply::Text(value_text(c.plugin, id, v)),
                 MainCall::Info => {

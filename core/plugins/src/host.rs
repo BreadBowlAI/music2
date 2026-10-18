@@ -246,13 +246,23 @@ pub struct Offered {
 /// The most files [`PluginHost::presets`] reads for one plugin.
 pub const MAX_PRESET_FILES: usize = 2_000;
 
-/// What to do with a plugin's window.
+/// What to do with a plugin's window. The window belongs to the process that hosts the plugin:
+/// what tests ask of it is asked there too ([`WindowCall::Shown`], [`WindowCall::AskToClose`]),
+/// never of its handle in another process (on macOS a handle is a pointer into the host process).
 #[derive(Clone, Debug, PartialEq)]
 pub enum WindowCall {
     /// Open it, titled `title`, or bring it to the front when it is open. An error, in plain
     /// words, when the plugin has no window this OS can show, or there is no screen.
     Open { title: String },
     Close,
+    /// Tests (debug builds): its window as the process hosting it sees it ([`Reply::Shown`]).
+    #[cfg(debug_assertions)]
+    Shown,
+    /// Tests (debug builds): the person's close of its window, as the title bar's close button
+    /// does it, made by the process hosting it. Answers whether one was open; its owner hears
+    /// [`HostEvent::WindowClosed`] after.
+    #[cfg(debug_assertions)]
+    AskToClose,
 }
 
 #[derive(Clone, Debug)]
@@ -265,6 +275,10 @@ pub enum Reply {
     Log(Vec<String>),
     /// A preset loaded ([`MainCall::LoadPreset`]).
     Loaded,
+    /// Tests (debug builds): its window's handle, as the plugin was given it (to compare only),
+    /// and whether the window is shown; None when it has no window.
+    #[cfg(debug_assertions)]
+    Shown(Option<(m2_os::window::Native, bool)>),
 }
 
 /// What a `process` call reported (CLAP's process status). No error value: the audio thread can't
