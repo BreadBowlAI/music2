@@ -3988,9 +3988,11 @@ fn a_new_send_and_output_play_within_one_activation() {
     let edits: [fn(&Graph, u64) -> Result<Value>; 2] =
         [|g, t| g.mix_send(t, "bass", "verb", "add", false), |g, t| g.mix_route(t, "bass", Some("drums".into()))];
     for edit in edits {
-        let generation = dc.generation();
+        // The engine's own count: plan ids are drawn from one counter for the whole process, which
+        // other tests running beside this one move too.
+        let activations = dc.driver.engine().unwrap().activations();
         let heard = through(&mut dc, |g| drop(edit(g, token).unwrap()), 100);
-        assert_eq!(dc.generation(), generation + 1, "one activation");
+        assert_eq!(dc.driver.engine().unwrap().activations(), activations + 1, "one activation");
         assert!(heard.iter().all(|x| x.is_finite()) && heard.iter().any(|x| *x != 0.0), "it plays on");
     }
     let song = dc.fixture.read("song.ts");
