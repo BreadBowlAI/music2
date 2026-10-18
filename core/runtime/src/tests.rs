@@ -1173,6 +1173,92 @@ fn an_asset_read_allocates_nothing() {
     }
 }
 
+// D3 of track sx (ABI-2): a sandbox off the audio thread may hold an asset as its file on disk,
+// not decoded whole. A kernel reads the same bits either way: 16-bit and float files, mono, stereo
+// and 3 channels, each channel and one past them, in odd pieces (one longer than the host reads at
+// once) and past the end, with the same counts. Its settings entry says the same.
+#[test]
+fn an_asset_read_from_disk_is_the_decoded_asset() {
+    // Its state at 4096: its settings' address, the frame it is at, where it reads to (room it
+    // takes at birth), and what the last read returned. Its asset's channel is its first value.
+    let k = r#"
+  (func (export "k_new") (param $cfg i32) (result i32)
+    (i32.store (i32.const 4096) (local.get $cfg))
+    (i32.store (i32.const 4100) (i32.const 0))
+    (i32.store (i32.const 4104) (i32.shl (memory.grow (i32.const 4)) (i32.const 16)))
+    (i32.const 4096))
+  (func (export "k_ports") (result i32) (i32.const 1))
+  (func (export "k_reset") (param $s i32) (i32.store offset=4 (local.get $s) (i32.const 0)))
+  (func (export "k_active") (param i32) (result i32) (i32.const 0))
+  (func (export "k_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32) (local $cfg i32)
+    (local.set $cfg (i32.load (local.get $s)))
+    (i32.store offset=12 (local.get $s) (call $read
+      (i32.load (i32.load offset=36 (local.get $cfg)))
+      (i32.trunc_f64_u (f64.load (i32.load offset=28 (local.get $cfg))))
+      (i32.load offset=4 (local.get $s))
+      (i32.load offset=8 (local.get $s))
+      (i32.sub (local.get $to) (local.get $from))))
+    (i32.store offset=4 (local.get $s) (i32.add (i32.load offset=4 (local.get $s)) (i32.sub (local.get $to) (local.get $from)))))"#;
+    let import = r#"(module (import "m2" "asset_read" (func $read (param i32 i32 i32 i32 i32) (result i32)))"#;
+    let pkg = package(&module_v1(k).replacen("(module", import, 1));
+    let mut pk = PackageSet::default();
+    pk.load(&pkg).unwrap();
+    let (module, prefix, _) = pk.module_for("t:k").unwrap();
+    let frames = 50_000;
+    let sample = |c: usize, i: usize| (((i * (31 + 7 * c)) % 997) as f32 / 498.5 - 1.0) * 0.9;
+    let mut files = vec![];
+    for (channels, float) in [(1, false), (2, false), (3, false), (1, true), (2, true)] {
+        let path = pkg.join(format!("{channels}-{float}.wav"));
+        let (bits, format) = if float { (32, hound::SampleFormat::Float) } else { (16, hound::SampleFormat::Int) };
+        let spec = hound::WavSpec { channels, sample_rate: 44_100, bits_per_sample: bits, sample_format: format };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..frames {
+            for c in 0..channels as usize {
+                match float {
+                    true => w.write_sample(sample(c, i)).unwrap(),
+                    false => w.write_sample((sample(c, i) * 32767.0) as i16).unwrap(),
+                }
+            }
+        }
+        w.finalize().unwrap();
+        files.push(path);
+    }
+    // Each read, in turn: the count `asset_read` returned, and the floats' bits.
+    let reads = |held: sandbox::Held, channel: u32| -> Vec<(u32, Vec<u32>)> {
+        let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+        let values = [channel as f64];
+        let assets = [Some(held)];
+        let spec = sandbox::Spec { inputs: 0, outputs: 1, channels: &[1], audio: 1, sample_rate: SR as f64, values: &values, assets: &assets };
+        let s = sb.state(prefix, &spec).unwrap();
+        sb.seal().unwrap();
+        [1, 37, 128, 1_000, 20_000, 5, 30_000, 300]
+            .iter()
+            .map(|&n| {
+                s.process(&mut sb, n).unwrap();
+                let data = sb.data();
+                let word = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+                let dst = word(4104) as usize;
+                (word(4108), (0..n).map(|i| word(dst + 4 * i)).collect())
+            })
+            .collect()
+    };
+    for path in &files {
+        let whole = sandbox::Held::Whole(Arc::new(audio::load_wav(path).unwrap()));
+        let disk = sandbox::Held::Disk(Arc::new(crate::stream::Wav::open(path).unwrap()));
+        assert_eq!(whole.shape(), disk.shape(), "{}: the settings entry", path.display());
+        for channel in 0..3 {
+            let (w, d) = (reads(whole.clone(), channel), reads(disk.clone(), channel));
+            if channel < 2 {
+                assert!(w.iter().any(|(_, f)| f.iter().any(|&b| b != 0)), "it reads sound");
+            }
+            let counts = |r: &[(u32, Vec<u32>)]| r.iter().map(|(n, _)| *n).collect::<Vec<_>>();
+            assert_eq!(counts(&d), counts(&w), "{} channel {channel}: the counts", path.display());
+            assert!(w == d, "{} channel {channel}: the same bits", path.display());
+        }
+    }
+    std::fs::remove_dir_all(pkg).ok();
+}
+
 // RENDER-25: a kernel's assets are part of its shape, by their hashes, so a new sample under the
 // same name makes its box new; the same file keeps it.
 #[test]

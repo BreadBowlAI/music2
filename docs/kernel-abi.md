@@ -117,8 +117,16 @@ m2.asset_read(handle, channel, frame, dst, frames) -> frames read
 - Past the asset's end, and for a handle or channel it doesn't have, it writes silence (0.0).
 - It returns how many frames came from the asset: from 0 to `frames`.
 - `dst` to `dst + 4 × frames` must lie inside the memory, or the call traps.
-- The host decodes each file once, at its own rate, as 32-bit floats, and shares it with every sandbox that reads it. Nothing is copied into a sandbox ahead of time.
-- It never allocates and never waits, so a kernel may call it in `k_process` on the audio thread. Resampling is the kernel's own work (by the pitch ratio it wants).
+- The samples are the file's, at its own rate, as 32-bit floats, decoded the same way wherever they come from. Resampling is the kernel's own work (by the pitch ratio it wants).
+
+Where the host reads from is its choice, per sandbox. The kernel can't tell, and reads the same bits:
+
+| Held as | Who | A read |
+|---|---|---|
+| **whole**: decoded once, shared by every sandbox that reads it | live kernels (on the audio thread), such as `std:sampler` | copies. Never allocates, never waits |
+| **disk**: the file, read in pieces at each call | offline kernels (on their own thread) | reads the file, so it may wait. A file that can't be read traps |
+
+**Streaming live, later, still v1.** A live kernel may one day read a file the host streams. Then a frame the host has not loaded yet is given as silence (0.0), and counted as a **miss**, as a lane's chunk is. The count returned is the same as if the frame were there, so the kernel goes on the same. This never happens in an export or an offline render: those wait for every frame. A kernel must not try to tell a miss from silence.
 
 ## The five rules (ABI-5)
 

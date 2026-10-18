@@ -1003,7 +1003,7 @@ struct Kernel<'a> {
     channels: u8,
     inputs: &'a [Input],
     values: &'a [f64],
-    assets: &'a [Option<Arc<audio::Asset>>],
+    assets: &'a [Option<sandbox::Held>],
     sample_rate: f64,
 }
 
@@ -1059,7 +1059,7 @@ impl Builder<'_> {
             FOp::Time(t) => Exec::Time(*t),
             FOp::Const(v) => Exec::Const(*v as f32),
             FOp::Kernel { kernel, channels, inputs, assets, values } => {
-                let read: Vec<Option<Arc<audio::Asset>>> = assets.iter().map(|a| self.assets.get(a)).collect();
+                let read: Vec<Option<sandbox::Held>> = assets.iter().map(|a| self.assets.get(a).map(sandbox::Held::Whole)).collect();
                 let k = Kernel { id: kernel, channels: *channels, inputs, values, assets: &read, sample_rate: self.sample_rate };
                 let inst = match boxed {
                     Make::New(shape) if in_voice => Some(Box::new(self.in_pool(n, &k, shape)?)),

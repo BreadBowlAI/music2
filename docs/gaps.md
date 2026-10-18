@@ -258,7 +258,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **Kernels from other people have no time limit**: one that loops forever stalls the sound (wasmtime's epochs would stop it). A song near the 3,999 sound parts limit has no cheaper way to run yet (a `sum` kernel, a checked engine).
 - **The Mac's numbers for the one-sandbox-a-box layout are owed**: G7f's run, the footprint and the address space with two renderers (PLAT-1).
 - **A Sampler played far above its root sounds harsh**: it isn't band-limited, so high notes alias, and past 6 octaves up it plays no faster.
-- **A Sampler's files are held in memory**, decoded whole, once while the song plays them (clips now stream from disk). Kernels have no disk reader yet: `m2.asset_read` copies from memory.
+- **A Sampler's files are held in memory**, decoded whole, once while the song plays them (clips stream from disk; offline kernels read from disk). The ABI allows streaming them ([kernel-abi.md](kernel-abi.md#the-asset-import)); the host needs to load each file's start ahead and read ahead per voice.
 - **A WAV dropped on a Sampler that then refuses it** (one with `zones` in its code) is still copied into assets/, though the page says "Nothing was changed"; while dragging, its card still says "Play it in Sampler" (the ab review's 3).
 - **A Sampler file that is in assets/ but won't decode** (`sample: "loop.mp3"`, a damaged WAV) plays silence with no message; a missing one is named (`asset.missing`) (the ab review's 4).
 - **A kernel that asks for memory while playing** is told it went over 256 MB, even when it asked for a few MB; the words should say kernels may not take memory while playing (the ab review's 5).

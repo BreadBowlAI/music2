@@ -10,9 +10,10 @@
 //! Then the plan resets each state once (its prewarm): a reset that would take memory fails there,
 //! at the build, and names its node.
 //!
-//! The one import a kernel may have is `m2.asset_read` ([`asset_read`]): it copies decoded audio
-//! the host holds, shared and outside every sandbox, into the kernel's memory, and allocates
-//! nothing.
+//! The one import a kernel may have is `m2.asset_read` ([`asset_read`]): it copies an asset's
+//! audio into the kernel's memory, from where its sandbox holds it ([`Held`]): decoded whole,
+//! shared and outside every sandbox, which allocates nothing and never waits; or, for a sandbox off
+//! the audio thread, from its file on disk.
 //!
 //! The rest of the runtime sees states and their port buffers, and never a `Store`.
 
@@ -23,6 +24,7 @@ use anyhow::{Context, Result, bail};
 use wasmtime::{Caller, Engine, Extern, ExternType, Func, Instance, Memory, Module, ResourceLimiter, Store, TypedFunc, ValType};
 
 use crate::audio::Asset;
+use crate::stream::Wav;
 use crate::{BLOCK, KERNEL_MEMORY, OutOfMemory, PORT_BYTES, WasmContext};
 
 /// Bytes of a v1 settings block (`m2_kernel::Settings` on wasm32).
@@ -40,9 +42,44 @@ pub(crate) struct Spec<'a> {
     pub(crate) audio: u8,
     pub(crate) sample_rate: f64,
     pub(crate) values: &'a [f64],
-    /// Each asset it reads, decoded; `None` for one that is missing.
-    pub(crate) assets: &'a [Option<Arc<Asset>>],
+    /// Each asset it reads; `None` for one that is missing.
+    pub(crate) assets: &'a [Option<Held>],
 }
+
+/// Where a sandbox reads an asset from (`docs/kernel-abi.md`, The asset import): the host's choice,
+/// per sandbox. Either way a kernel reads the same samples, bit for bit.
+#[derive(Clone)]
+pub(crate) enum Held {
+    /// Decoded whole, shared with the [`crate::audio::Cache`] that decoded it: a read copies and
+    /// never waits, so a sandbox on the audio thread reads this kind only.
+    Whole(Arc<Asset>),
+    /// Its file, read at each call through [`Wav::read`] into the sandbox's own buffer, in pieces,
+    /// never decoded whole. A read may wait for the disk, so only a sandbox off the audio thread (an
+    /// offline kernel's) holds this kind.
+    #[cfg_attr(not(test), allow(dead_code))] // the first offline kernel's (track sx, slice 2)
+    Disk(Arc<Wav>),
+}
+
+impl Held {
+    fn same(&self, other: &Held) -> bool {
+        match (self, other) {
+            (Held::Whole(a), Held::Whole(b)) => Arc::ptr_eq(a, b),
+            (Held::Disk(a), Held::Disk(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
+    /// Its frames, channels and rate, as its settings entry gives them.
+    pub(crate) fn shape(&self) -> (u32, u32, f32) {
+        match self {
+            Held::Whole(a) => (a.len() as u32, a.channels.len() as u32, a.sample_rate as f32),
+            Held::Disk(w) => (w.frames() as u32, w.channels() as u32, w.rate as f32),
+        }
+    }
+}
+
+/// Frames a [`Held::Disk`] read decodes at a time, so its buffer stays small (128 KiB of stereo).
+const DISK_PIECE: usize = 16 * 1024;
 
 /// What the host keeps in a sandbox's store: its limits, and what `m2.asset_read` reads.
 ///
@@ -54,9 +91,11 @@ pub(crate) struct Host {
     refused: bool,
     /// Its memory, as a handle: `m2.asset_read` writes there without looking it up by name.
     memory: Option<Memory>,
-    /// The assets its states read, by handle: shared with the [`crate::audio::Cache`] that decoded
-    /// them, never copied in.
-    assets: Vec<Arc<Asset>>,
+    /// The assets its states read, by handle: never copied in.
+    assets: Vec<Held>,
+    /// What a [`Held::Disk`] read uses: the file's bytes and their samples, per channel.
+    buf: Vec<u8>,
+    pcm: [Vec<f32>; 2],
 }
 
 impl ResourceLimiter for Host {
@@ -99,7 +138,8 @@ pub(crate) const ASSET_READ: (&str, &str) = ("m2", "asset_read");
 /// from `frame` on, of channel `channel` of the asset `handle` names (a mono asset's channel 1 is
 /// its channel 0). Past the asset's end, and for a handle or channel it hasn't, it writes silence.
 /// It returns how many frames came from the asset. A `dst` whose floats aren't all in the memory
-/// traps. It allocates nothing: the asset and the memory are found by index (RENDER-28).
+/// traps. From a [`Held::Whole`] asset it allocates nothing: the asset and the memory are found by
+/// index (RENDER-28). From a [`Held::Disk`] one it reads the file, and a file it can't read traps.
 fn asset_read(mut caller: Caller<'_, Host>, handle: u32, channel: u32, frame: u32, dst: u32, frames: u32) -> wasmtime::Result<u32> {
     let Some(memory) = caller.data().memory else { wasmtime::bail!("m2.asset_read before its sandbox has a memory") };
     let (bytes, host) = memory.data_and_store_mut(&mut caller);
@@ -107,16 +147,43 @@ fn asset_read(mut caller: Caller<'_, Host>, handle: u32, channel: u32, frame: u3
     let Some(out) = at.checked_add(4 * n).and_then(|end| bytes.get_mut(at..end)) else {
         wasmtime::bail!("m2.asset_read: {frames} frames at {dst} lie past the kernel's memory")
     };
-    let src: &[f32] = match host.assets.get(handle as usize) {
-        Some(a) if a.channels.len() == 1 => &a.channels[0],
-        Some(a) => a.channels.get(channel as usize).map_or(&[], |c| &c[..]),
-        None => &[],
+    let got = match host.assets.get(handle as usize) {
+        Some(Held::Whole(a)) => {
+            let src: &[f32] = match a.channels.len() {
+                1 => &a.channels[0],
+                _ => a.channels.get(channel as usize).map_or(&[], |c| &c[..]),
+            };
+            let from = (frame as usize).min(src.len());
+            let got = (src.len() - from).min(n);
+            out[..4 * got].copy_from_slice(bytemuck::cast_slice(&src[from..from + got]));
+            got
+        }
+        Some(Held::Disk(w)) => read_disk(w, channel, frame, out, &mut host.buf, &mut host.pcm)?,
+        None => 0,
     };
-    let from = (frame as usize).min(src.len());
-    let got = (src.len() - from).min(n);
-    out[..4 * got].copy_from_slice(bytemuck::cast_slice(&src[from..from + got]));
     out[4 * got..].fill(0);
     Ok(got as u32)
+}
+
+/// [`asset_read`] from a file: the frames it has of `out`'s, from `frame` on, of `channel`, decoded
+/// as a whole decode decodes them, a piece at a time; how many.
+fn read_disk(w: &Wav, channel: u32, frame: u32, out: &mut [u8], buf: &mut Vec<u8>, pcm: &mut [Vec<f32>; 2]) -> wasmtime::Result<usize> {
+    let ch = if w.channels() == 1 { 0 } else { channel as usize };
+    if ch >= w.channels() {
+        return Ok(0);
+    }
+    let from = (frame as u64).min(w.frames());
+    let got = ((w.frames() - from) as usize).min(out.len() / 4);
+    let mut done = 0;
+    while done < got {
+        let n = (got - done).min(DISK_PIECE);
+        if let Err(e) = w.read(from + done as u64, from + (done + n) as u64, buf, pcm) {
+            wasmtime::bail!("m2.asset_read: its file can't be read: {e:#}")
+        }
+        out[4 * done..4 * (done + n)].copy_from_slice(bytemuck::cast_slice(&pcm[ch]));
+        done += n;
+    }
+    Ok(got)
 }
 
 /// What `module` imports, made in `store`: only [`ASSET_READ`], with its signature. Anything else
@@ -139,7 +206,8 @@ fn imports(store: &mut Store<Host>, module: &Module) -> Result<Vec<Extern>> {
 
 /// A store and an instance of `module` in it, with its limits and its imports, and its memory.
 pub(crate) fn instantiate(engine: &Engine, module: &Module) -> Result<(Store<Host>, Instance, Memory)> {
-    let mut store = Store::new(engine, Host { sealed: false, refused: false, memory: None, assets: vec![] });
+    let host = Host { sealed: false, refused: false, memory: None, assets: vec![], buf: vec![], pcm: [vec![], vec![]] };
+    let mut store = Store::new(engine, host);
     store.limiter(|l| l);
     let ext = imports(&mut store, module)?;
     let instance = Instance::new(&mut store, module, &ext).wctx(|| "instantiating")?;
@@ -205,13 +273,13 @@ impl Sandbox {
         let n = inputs + outputs;
         debug_assert_eq!(channels.len(), n);
         // Each asset's handle: its place in the sandbox's table, shared by every state that reads
-        // the same decoded audio. A missing one has none, and reads silence.
+        // the same audio. A missing one has none, and reads silence.
         let table = &mut self.store.data_mut().assets;
         let handles: Vec<u32> = spec
             .assets
             .iter()
             .map(|a| match a {
-                Some(a) => match table.iter().position(|t| Arc::ptr_eq(t, a)) {
+                Some(a) => match table.iter().position(|t| t.same(a)) {
                     Some(at) => at as u32,
                     None => {
                         table.push(a.clone());
@@ -263,7 +331,7 @@ impl Sandbox {
             data[block + values_at + 8 * i..][..8].copy_from_slice(&v.to_le_bytes());
         }
         for (i, (a, h)) in spec.assets.iter().zip(&handles).enumerate() {
-            let (frames, chans, rate) = a.as_ref().map_or((0, 0, 0.0), |a| (a.len() as u32, a.channels.len() as u32, a.sample_rate as f32));
+            let (frames, chans, rate) = a.as_ref().map_or((0, 0, 0.0), Held::shape);
             let entry = [*h, frames, chans, rate.to_bits()];
             data[block + assets_at + ASSET_BYTES * i..][..ASSET_BYTES].copy_from_slice(bytemuck::cast_slice(&entry));
         }
