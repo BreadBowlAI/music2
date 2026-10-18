@@ -172,6 +172,60 @@ fn a_hung_call_ends_its_process() {
     assert!(took >= Duration::from_millis(480) && took < Duration::from_secs(3), "ended after 500 ms: {took:?}");
 }
 
+/// `f`'s answer on a thread of its own, or None when it hasn't come in `most`.
+fn within<T: Send + 'static>(most: Duration, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(f()));
+    rx.recv_timeout(most).ok()
+}
+
+// HOST-3, D5: a main-thread call that waits the limit ends the process, said as a hang; its caller
+// hears why, and an answer the other instance awaits fails too.
+#[test]
+fn a_main_thread_call_that_hangs_ends_its_process() {
+    setup();
+    let r = remote();
+    r.set_limit(Duration::from_secs(1));
+    let found = the_probe(&r);
+    let (owner, events) = Owner::new();
+    let make = |tag: &str| r.create(&found, Some(Arc::new(Blob::new(probe::state(tag, 1.0)))), &owner).unwrap().0;
+    let (bad, good) = (make("hangs-activate"), make("fine"));
+    r.activate(good, SR, N as u32).unwrap();
+    let t = Instant::now();
+    let rr = r.clone();
+    let got = within(Duration::from_secs(10), move || rr.activate(bad, SR, N as u32).map_err(|e| format!("{e:#}")));
+    let took = t.elapsed();
+    let err = got.expect("the call never returned").expect_err("its activate never returns");
+    assert!(err.contains("stopped answering"), "{err}");
+    assert!(took >= Duration::from_millis(950) && took < Duration::from_secs(5), "ended after the limit: {took:?}");
+    let hung = heard(&events, 2, |e| matches!(e, HostEvent::Hung(_)));
+    assert_eq!(hung.len(), 2, "both instances of the process are said to have hung: {hung:?}");
+    assert!(r.latency(good).recv_timeout(Duration::from_secs(1)).expect("an answer").is_err());
+    r.destroy(bad);
+    r.destroy(good);
+}
+
+// HOST-3, D5: an offline call (an export) that waits the limit ends the process too.
+#[test]
+fn an_offline_call_that_hangs_ends_its_process() {
+    setup();
+    let r = remote();
+    r.set_limit(Duration::from_secs(1));
+    let found = the_probe(&r);
+    let (owner, events) = Owner::new();
+    let (h, _) = r.create(&found, Some(Arc::new(Blob::new(probe::state("hang-at-3", 1.0)))), &owner).unwrap();
+    r.activate(h, SR, N as u32).unwrap();
+    r.set_render_mode(h, RenderMode::Offline).unwrap();
+    let t = Instant::now();
+    let rr = r.clone();
+    let got = within(Duration::from_secs(10), move || play(&rr, h, 3).1);
+    let took = t.elapsed();
+    assert_eq!(got.expect("the call never returned"), [Status::Continue, Status::Continue, Status::Error]);
+    assert!(took >= Duration::from_millis(950) && took < Duration::from_secs(5), "ended after the limit: {took:?}");
+    assert_eq!(heard(&events, 1, |e| matches!(e, HostEvent::Hung(_))).len(), 1, "said as a hang");
+    r.destroy(h);
+}
+
 // HOST-3 (PLAT-1, information only): a call's round trip through the host process, against the
 // same call in this process. Run it in release: cargo test --release -p m2-plugins --test remote
 // -- --ignored --nocapture round_trip

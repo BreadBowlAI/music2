@@ -15,8 +15,11 @@
 //!   a fixed slab, as `InProcess`'s are.
 //! - When the process ends (a crash: its output closes), every one of its instances is marked
 //!   crashed: its calls fail (`Status::Error`, so the engine's fail-live path runs) and its owner
-//!   hears [`HostEvent::Crashed`] ([`HostEvent::Hung`] after the watchdog). A live call that waits [`HANG`] makes the watchdog end the
-//!   process, the same way. Offline calls wait with no limit, but end at a crash.
+//!   hears [`HostEvent::Crashed`] ([`HostEvent::Hung`] after the watchdog).
+//! - Every wait has a limit (D5). A live call that waits [`HANG`] makes the watchdog end the
+//!   process, the same way. So does an offline call, a main-thread call or an answer awaited that
+//!   waits [`LIMIT`] (a scan, which loads every library: four times as long). Then a plugin
+//!   stuck on the process's main loop can't hold up the session (or an export) for good.
 
 pub(crate) mod child;
 pub(crate) mod slot;
@@ -41,6 +44,9 @@ use wire::{R, Req, W};
 
 /// A live call that waits this long is a hang: the process is ended (RENDER-28's stall time).
 pub const HANG: Duration = Duration::from_millis(500);
+/// Any other call that waits this long is a hang too: offline, on the main thread, or an answer
+/// awaited ([`Remote::set_limit`] changes it).
+pub const LIMIT: Duration = Duration::from_secs(30);
 
 /// The flag that makes a program serve as the host process.
 pub const FLAG: &str = "--m2-plugin-host";
@@ -68,6 +74,8 @@ struct Shared {
     epoch: Instant,
     procs: AtomicU64,
     watchdog: Once,
+    /// [`LIMIT`] in ns, or what [`Remote::set_limit`] set.
+    limit: AtomicU64,
 }
 
 /// An instance, as this side knows it. The audio thread reads only its atomics.
@@ -79,7 +87,7 @@ struct Entry {
     /// Its process ended.
     dead: AtomicBool,
     offline: AtomicBool,
-    /// When the live call in flight began ([`slot::Waiter::since`]).
+    /// The call in flight on its slot, for the watchdog ([`slot::since`]); 0: none.
     since: AtomicU64,
     /// Its process's number (0: none).
     proc_id: AtomicU64,
@@ -102,8 +110,8 @@ struct Proc {
     id: u64,
     child: Mutex<Child>,
     stdin: Mutex<ChildStdin>,
-    /// Replies awaited, by request id.
-    pending: Mutex<HashMap<u64, Then>>,
+    /// Replies awaited, by request id: when each is late (ns since the epoch), and who hears it.
+    pending: Mutex<HashMap<u64, (u64, Then)>>,
     next: AtomicU64,
     dead: AtomicBool,
     /// Ended on purpose: its instances aren't said to have crashed.
@@ -155,6 +163,7 @@ impl Remote {
                 epoch: Instant::now(),
                 procs: AtomicU64::new(0),
                 watchdog: Once::new(),
+                limit: AtomicU64::new(LIMIT.as_nanos() as u64),
             }),
         }
     }
@@ -181,6 +190,12 @@ impl Remote {
     /// The host process's id while it runs (tests end it to play a crash).
     pub fn process_id(&self) -> Option<u32> {
         locked(&self.s.current).as_ref().filter(|p| !p.dead.load(Ordering::Acquire)).map(|p| locked(&p.child).id())
+    }
+
+    /// How long a call that isn't live may wait before its process is ended ([`LIMIT`]; a scan
+    /// four times as long). Tests make it short.
+    pub fn set_limit(&self, limit: Duration) {
+        self.s.limit.store(limit.as_nanos() as u64, Ordering::Relaxed);
     }
 
     /// End the host process: quit. Its instances aren't said to have crashed; their calls fail.
@@ -247,16 +262,20 @@ impl Remote {
         Ok(p)
     }
 
-    /// Send `req`; `then` hears its reply, or why none came: exactly once.
+    /// Send `req`; `then` hears its reply, or why none came: exactly once. A reply that doesn't
+    /// come in time ends the process (the watchdog), and so fails.
     fn send(&self, p: &Proc, req: &Req, then: Then) {
         let id = p.next.fetch_add(1, Ordering::AcqRel);
+        // A scan loads every plugin's library, which takes a while the first time (macOS checks each).
+        let limit = self.s.limit.load(Ordering::Relaxed) * if matches!(req, Req::Scan) { 4 } else { 1 };
+        let late = self.s.epoch.elapsed().as_nanos() as u64 + limit;
         {
             let mut pending = locked(&p.pending);
             if p.dead.load(Ordering::Acquire) {
                 drop(pending);
                 return then(Err(ended(p)));
             }
-            pending.insert(id, then);
+            pending.insert(id, (late, then));
         }
         let mut w = W::frame();
         w.req(id, req);
@@ -349,7 +368,7 @@ fn read(s: Weak<Shared>, p: Arc<Proc>, out: std::process::ChildStdout) {
         match r.u8() {
             Ok(wire::REPLY) => {
                 let Ok(id) = r.u64() else { break };
-                let Some(then) = locked(&p.pending).remove(&id) else { continue };
+                let Some((_, then)) = locked(&p.pending).remove(&id) else { continue };
                 then(match r.u8() {
                     Ok(1) => Ok(frame[r.at()..].to_vec()),
                     _ => Err(r.str().unwrap_or_else(|e| format!("{e:#}"))),
@@ -370,7 +389,7 @@ fn read(s: Weak<Shared>, p: Arc<Proc>, out: std::process::ChildStdout) {
     let waiting: Vec<Then> = {
         let mut pending = locked(&p.pending);
         p.dead.store(true, Ordering::Release);
-        pending.drain().map(|(_, t)| t).collect()
+        pending.drain().map(|(_, (_, t))| t).collect()
     };
     for then in waiting {
         then(Err(ended(&p)));
@@ -424,25 +443,32 @@ fn with_handle(e: HostEvent, h: Handle) -> HostEvent {
     }
 }
 
-/// Every 20 ms: a live call in flight for [`HANG`] or more ends its process (D5).
+/// Every 20 ms: a live call in flight for [`HANG`] or more ends its process (D5); so does an
+/// offline call in flight for the limit ([`LIMIT`]), or a reply that is late.
 fn watchdog(s: Weak<Shared>) {
     loop {
         std::thread::sleep(Duration::from_millis(20));
         let Some(s) = s.upgrade() else { return };
+        let ended = |p: &Arc<Proc>| p.dead.load(Ordering::Acquire) || p.hung.load(Ordering::Acquire);
+        let Some(p) = locked(&s.current).clone().filter(|p| !ended(p)) else { continue };
         let now = s.epoch.elapsed().as_nanos() as u64;
+        let limit = s.limit.load(Ordering::Relaxed);
         let used = s.used.load(Ordering::Acquire) as usize;
-        let hung = s.entries[..used].iter().find(|e| {
-            let since = e.since.load(Ordering::Relaxed);
-            since != 0 && now.saturating_sub(since) >= HANG.as_nanos() as u64 && !e.dead.load(Ordering::Acquire)
+        let call = s.entries[..used].iter().find_map(|e| {
+            let (at, live) = slot::began(e.since.load(Ordering::Relaxed));
+            let most = if live { HANG.as_nanos() as u64 } else { limit };
+            (at != 0 && now.saturating_sub(at) >= most && e.proc_id.load(Ordering::Acquire) == p.id).then_some(live)
         });
-        let Some(e) = hung else { continue };
-        let id = e.proc_id.load(Ordering::Acquire);
-        let cur = locked(&s.current).clone();
-        if let Some(p) = cur.filter(|p| p.id == id) {
-            p.hung.store(true, Ordering::Release);
-            eprintln!("music2: the plugin host stopped answering for {} ms, so it was ended", HANG.as_millis());
-            let _ = locked(&p.child).kill();
-        }
+        let late = locked(&p.pending).values().any(|(late, _)| now >= *late);
+        let why = match (call, late) {
+            (Some(true), _) => format!("a live call waited {} ms", HANG.as_millis()),
+            (Some(false), _) => format!("an offline call waited {} s", limit / 1_000_000_000),
+            (None, true) => "it didn't answer a call in time".to_string(),
+            (None, false) => continue,
+        };
+        p.hung.store(true, Ordering::Release);
+        eprintln!("music2: the plugin host stopped answering ({why}), so it was ended");
+        let _ = locked(&p.child).kill();
     }
 }
 

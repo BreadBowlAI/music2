@@ -21,7 +21,8 @@
 //! call, as some plugins do (RENDER-2a). One whose tag is `crash-at-<n>` aborts its process at its
 //! n-th `process` call, and `hang-at-<n>` never returns from it, as broken plugins do (HOST-3: run
 //! it in the host process); `crash-at-<n>:<file>` and `hang-at-<n>:<file>` do so only when they
-//! make `<file>`, so once. A tag with the word `latency-<n>` (n up to 4,096) reports `n` frames of
+//! make `<file>`, so once. One whose tag starts with `hangs-activate` never returns from
+//! `activate`, as a plugin stuck on the main thread does (HOST-3's limits). A tag with the word `latency-<n>` (n up to 4,096) reports `n` frames of
 //! latency and plays its output `n` frames late, as a look-ahead limiter does (RENDER-17); with
 //! `relatency-<m>-at-<k>` too, from its `k`-th `process` call it reports `m`, plays that late, and
 //! tells the host its latency changed. With
@@ -475,6 +476,8 @@ struct Probe {
     fails_process: bool,
     /// Its state's tag starts with `sets-fz`: every `process` call ends by setting flush-to-zero.
     sets_fz: bool,
+    /// Its state's tag starts with `hangs-activate`: `activate` never returns.
+    hangs_activate: bool,
     /// Its state's tag is `crash-at-<n>` or `hang-at-<n>`: the call, whether it hangs, and the
     /// file that makes it happen once.
     stops_at: Option<(u64, bool, Option<PathBuf>)>,
@@ -611,6 +614,7 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         fails_state,
         fails_process: false,
         sets_fz: false,
+        hangs_activate: false,
         stops_at: None,
         scripts: vec![],
         state_host: None,
@@ -657,6 +661,9 @@ unsafe extern "C" fn activate(p: *const clap_plugin, rate: f64, _: u32, _: u32) 
     me.record("activate");
     if me.stats.refuse_activate.swap(false, Ordering::Relaxed) {
         return false;
+    }
+    while me.hangs_activate {
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
     me.rate = rate;
     // A new activation is a new steady timeline: an export's starts at 0 (RENDER-1).
@@ -1121,6 +1128,7 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
     };
     me.fails_process = tag.starts_with("fails-process");
     me.sets_fz = tag.starts_with("sets-fz");
+    me.hangs_activate = tag.starts_with("hangs-activate");
     me.stops_at = stops_at(&tag);
     me.scripts = scripts(&tag);
     (me.latency, me.relatency) = latencies(&tag);

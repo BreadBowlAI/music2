@@ -126,11 +126,21 @@ fn unpack(w: &[u64; T_WORDS]) -> Transport {
 /// clock.
 pub(crate) struct Waiter<'a> {
     pub dead: &'a AtomicBool,
-    /// When this live call began (ns since `epoch`, never 0); 0 when none is in flight or the
-    /// call is offline, which waits with no limit.
+    /// The call in flight for the watchdog ([`since`]); 0 when none is.
     pub since: &'a AtomicU64,
     pub live: bool,
     pub epoch: Instant,
+}
+
+/// A call in flight as one word: when it began (ns since the epoch) and whether it is offline. The
+/// watchdog gives a live call [`super::HANG`] and an offline one the longer limit (D5).
+pub(crate) fn since(ns: u64, live: bool) -> u64 {
+    ns.max(1) << 1 | !live as u64
+}
+
+/// [`since`]'s word read back: (ns, live).
+pub(crate) fn began(word: u64) -> (u64, bool) {
+    (word >> 1, word & 1 == 0)
 }
 
 impl Waiter<'_> {
@@ -138,9 +148,7 @@ impl Waiter<'_> {
     fn ring(&self, v: &View) -> bool {
         let h = v.header();
         let c = h.call.load(Ordering::Relaxed).wrapping_add(1);
-        if self.live {
-            self.since.store((self.epoch.elapsed().as_nanos() as u64).max(1), Ordering::Relaxed);
-        }
+        self.since.store(since(self.epoch.elapsed().as_nanos() as u64, self.live), Ordering::Relaxed);
         h.call.store(c, Ordering::Release);
         ipc::wake(&h.call);
         let start = Instant::now();
