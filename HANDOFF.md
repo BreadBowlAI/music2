@@ -10,28 +10,34 @@ design for whatever you pick up. Older versions of this page, with each track's 
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
   71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
 - **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
-- **The Mac is owed.** It was last green at `cbac57c` (step 7). At `85b069a` it passed 11 of 13 rows, and `macfix`
-  fixed both. Everything since then (step 8's later tracks and all of step 9) has never run on a Mac.
+- **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
+  (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by
+  far. 8a's sweep is done. **One more `ci/check.sh` on the Mac is owed, with the output at 48 kHz.**
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
-- Next: the Mac run, then fix what it finds. Then Windows, as its own step, or the top gaps.
+- Next: that one Mac run (after `mf2` is merged), then fix what it finds. Then Windows, as its own step, or the top gaps.
 
 ## Mac runs owed
 
 | # | Run | What it decides | Time |
 |---|---|---|---|
-| 1 | `ci/check.sh` on `main` | Every row on the Mac since `85b069a`: `macfix`, 8a's live half (G12's minute, the Mac's real-time code tested for the first time), `studio`, and step 9's six tracks (the plugin program's shared memory and wake, plugin windows and the microphone run on a Mac for the first time; G7f's run of one sandbox a box) | about 45 min |
+| 1 | `ci/check.sh` on `main` | **Done at `e7518f4`** (2026-10-18), 11 of 13 rows. Two tests failed, fixed on `mf2`: a take's steps looked up by the folder's real path (`7482009`), and the plugin window test asks the host process that owns the window (`e505d0b`, the SIGBUS). G12 failed only its set-up (output at 44.1 kHz). G7f passed one sandbox a box: a block −1,018 µs over S, a callback −2,748 µs, 76 MB against 554, build 28 ms against 205 | 71 min |
 | 2 | (dropped) G7f store on the old gain | Not needed any more. It asked whether the Mac's +135 µs a block since step 7 was the 32 MiB store layout (O1). Track `ab` replaced that layout with one sandbox per box, so run 1's G7f rows now judge the new layout. The old std (ABI v0) can't load on `main` anyway. | — |
-| 3 | 8a's Mac sweep, `ci/sweep.sh` | The live thread count (`live_count`) and park or spin (`BETWEEN`) in `core/play/src/engines.rs`; gate 8 (no dropout at 128 frames, p99 at most 70%) | about 40 min |
+| 3 | 8a's Mac sweep, `ci/sweep.sh` | **Done at `e7518f4`.** It confirmed `live_count` 4 and `BETWEEN` = park (spin was far worse), so no code changed. Gate 8: 4 threads, 10 minutes, p99 1,308 µs (45%), 0 dropouts; provisional, at 44.1 kHz. Exports on 8 fast cores, 6.4× one thread | about 40 min |
 | 4 | By ear, steps 7 to 116 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116) | about 2 hours, in parts |
+
+**Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main` once `mf2` is
+merged. It checks the two fixes (the plugin window's `closed` callback now runs on the next main-queue turn: run on
+a Mac for the first time) and judges G12 at its designed set-up. The sweep need not run again.
 
 After a green run the lead writes in the contract's PLAT-6 and the gates table: "macOS: green at <commit>", with
 G7f's numbers. If a row fails, fix it on Linux, check the mac lint, and ask for one more run. The Mac's pasted runs
-are kept in `~/m2-runs/mac-runs/` (`check-85b069a.txt` is the last).
+are kept in `~/m2-runs/mac-runs/` (`check-and-sweep-e7518f4.txt` is the last).
 
 ## The owner's Mac command
 
-**In short:** two pastes, one after another, in Terminal on the Mac itself. Then paste back what each says.
+**In short:** next time only paste 1, the check, in Terminal on the Mac itself, with the output at 48 kHz. Then paste
+back what it says. (Paste 2, the sweep, is done.)
 
 **1. The check** (about 45 minutes, mostly waiting):
 
@@ -98,13 +104,16 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `st-errors` | waited over 30 s for the Needs attention row of a missing sound file | once, at load 9; alone it passes |
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
+| `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
+| `pl-arrange-fix` | failed once on the Mac at `e7518f4` | passed on its retry |
+| `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
 
 A test or suite that passed only on its retry is listed by `ci/check.sh`. The lead decides whether it is one of
 these or a real failure, and fixes the real ones (most were a read a moment too soon).
 
 ## What comes next
 
-1. **The Mac runs** (above), when the owner has time. First fix row 2's std. Fix on Linux what the runs find.
+1. **The Mac's one more `ci/check.sh`**, at 48 kHz (above), when the owner has time. Fix on Linux what it finds.
 2. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms), the contract's Deferred row):
    `core/os/src/windows/`, the Windows twin of every piece in `m2-os`, the tests' `cfg(unix)` fixes, and the build
    (MSVC, QuickJS under `cl.exe`, `llvm-rc` for the desktop app). Platform design §8 lists the Unix-only spots.
