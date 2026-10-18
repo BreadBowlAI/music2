@@ -718,6 +718,7 @@ pub use fx::{Bitcrush, Chorus, Compress, Eq3, Phaser, Reverb, Tremolo, Widen};
 mod drums;
 mod fm;
 mod notes;
+mod sampler;
 mod synth;
 #[cfg(test)]
 mod testkit;

@@ -30,7 +30,12 @@ impl Played {
 
 /// Kernel `K` over `frames` samples, processed `split` frames at a time, at `sr`.
 pub(crate) fn play_at<K: Kernel>(sr: f32, channels: usize, frames: usize, split: usize, input: Input<'_>) -> Played {
-    let mut host = Host::<K>::new(sr, BLOCK as u32, channels as u32);
+    play_cfg::<K>(m2_kernel::Cfg::new(sr, BLOCK, channels), frames, split, input)
+}
+
+/// Kernel `K` built from `cfg` (its values and assets included), as [`play_at`] plays it.
+pub(crate) fn play_cfg<K: Kernel>(cfg: m2_kernel::Cfg, frames: usize, split: usize, input: Input<'_>) -> Played {
+    let mut host = Host::<K>::of(cfg);
     let mut out = vec![Vec::with_capacity(frames); K::OUTPUTS];
     let mut active = Vec::with_capacity(frames);
     let mut t = 0;

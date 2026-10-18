@@ -25,7 +25,9 @@
 //!
 //! **The settings block** ([`Settings`]) is the host's, written before `k_new` and kept for as long
 //! as the sandbox lives. It starts with its own length, and fields are only ever added at the end.
-//! Each list in it is an address and a count.
+//! Each list in it is an address and a count. A kernel reads its numbers in [`Cfg::values`] and its
+//! audio files in [`Cfg::assets`]; [`Asset::read`] reads a file through `m2.asset_read` (off wasm32,
+//! from the files [`native`] keeps, for tests).
 //!
 //! **The port table** `io` holds one buffer address per port *channel*: the inputs first, then
 //! the outputs, each port's channels in order, each port with the channel count the settings give
@@ -66,11 +68,105 @@ pub struct Cfg {
     pub channels: usize,
     /// Reserved: bit 0 will say "offline".
     pub flags: u32,
+    /// The kernel's numbers, as the song's code gives them (`values`).
+    pub values: &'static [f64],
+    /// The audio files the kernel reads, as the song's code names them (`assets`), in order.
+    pub assets: &'static [Asset],
 }
 
 impl Cfg {
     pub fn new(sample_rate: f32, max_block: usize, channels: usize) -> Cfg {
-        Cfg { sample_rate, max_block, channels: channels.clamp(1, PORT_CHANNELS), flags: 0 }
+        Cfg { sample_rate, max_block, channels: channels.clamp(1, PORT_CHANNELS), flags: 0, values: &[], assets: &[] }
+    }
+}
+
+/// One audio file a kernel reads: an entry of the settings block's asset list (16 bytes).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Asset {
+    /// What `m2.asset_read` takes.
+    pub handle: u32,
+    /// Its length, in frames at its own rate: 0 for a file that is missing.
+    pub frames: u32,
+    /// 1 or 2; 0 for a file that is missing.
+    pub channels: u32,
+    /// Its own rate, in Hz; 0 for a file that is missing.
+    pub sample_rate: f32,
+}
+
+impl Asset {
+    /// Whether there is nothing to play: the file is missing, or empty.
+    pub fn missing(&self) -> bool {
+        self.channels == 0 || self.frames == 0
+    }
+
+    /// Channel `channel` from frame `frame` on, into all of `dst`, at the file's own rate: a mono
+    /// file's channel 1 is its channel 0, and past its end is silence. Returns how many frames came
+    /// from the file. It allocates nothing and never waits, so `process` may call it.
+    pub fn read(&self, channel: usize, frame: u32, dst: &mut [f32]) -> usize {
+        read(self.handle, channel as u32, frame, dst)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read(handle: u32, channel: u32, frame: u32, dst: &mut [f32]) -> usize {
+    #[link(wasm_import_module = "m2")]
+    unsafe extern "C" {
+        #[link_name = "asset_read"]
+        fn asset_read(handle: u32, channel: u32, frame: u32, dst: *mut f32, frames: u32) -> u32;
+    }
+    // SAFETY: `dst` is `dst.len()` floats of this module's memory, which is all the host writes.
+    unsafe { asset_read(handle, channel, frame, dst.as_mut_ptr(), dst.len() as u32) as usize }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read(handle: u32, channel: u32, frame: u32, dst: &mut [f32]) -> usize {
+    native::read(handle, channel, frame, dst)
+}
+
+/// Off wasm32, a stand-in for the host's audio files, for tests: files kept on the calling thread,
+/// read as `m2.asset_read` reads them.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native {
+    use std::cell::RefCell;
+
+    use crate::Asset;
+
+    thread_local! {
+        static FILES: RefCell<Vec<Vec<Vec<f32>>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// A file of `channels` (1 or 2, each as long) at `sample_rate`, kept on this thread: its entry,
+    /// as a host writes it.
+    pub fn asset(sample_rate: f32, channels: Vec<Vec<f32>>) -> Asset {
+        assert!(matches!(channels.len(), 1 | 2) && channels.iter().all(|c| c.len() == channels[0].len()), "1 or 2 channels, as long");
+        let frames = channels[0].len() as u32;
+        let n = channels.len() as u32;
+        let handle = FILES.with_borrow_mut(|f| {
+            f.push(channels);
+            f.len() as u32 - 1
+        });
+        Asset { handle, frames, channels: n, sample_rate }
+    }
+
+    /// The entry of a file that is missing.
+    pub fn missing() -> Asset {
+        Asset { handle: u32::MAX, frames: 0, channels: 0, sample_rate: 0.0 }
+    }
+
+    pub(crate) fn read(handle: u32, channel: u32, frame: u32, dst: &mut [f32]) -> usize {
+        FILES.with_borrow(|f| {
+            let src: &[f32] = match f.get(handle as usize) {
+                Some(c) if c.len() == 1 => &c[0],
+                Some(c) => c.get(channel as usize).map_or(&[], |c| &c[..]),
+                None => &[],
+            };
+            let from = (frame as usize).min(src.len());
+            let got = (src.len() - from).min(dst.len());
+            dst[..got].copy_from_slice(&src[from..from + got]);
+            dst[got..].fill(0.0);
+            got
+        })
     }
 }
 
@@ -300,7 +396,11 @@ pub struct Host<K: Kernel> {
 
 impl<K: Kernel> Host<K> {
     pub fn new(sample_rate: f32, max_block: u32, channels: u32) -> Self {
-        let cfg = Cfg::new(sample_rate, max_block as usize, channels as usize);
+        Self::of(Cfg::new(sample_rate, max_block as usize, channels as usize))
+    }
+
+    /// A host for a state built from `cfg`, its values and assets included.
+    pub fn of(cfg: Cfg) -> Self {
         let n = K::INPUTS + K::OUTPUTS;
         Host {
             state: State::new(cfg, &vec![PORT_CHANNELS as u32; n]),
@@ -349,10 +449,10 @@ pub fn settings(cfg: &Cfg, channels: &[u32]) -> Settings {
         channels: cfg.channels as u32,
         ports: channels.as_ptr() as usize,
         n_ports: channels.len() as u32,
-        values: 0,
-        n_values: 0,
-        assets: 0,
-        n_assets: 0,
+        values: cfg.values.as_ptr() as usize,
+        n_values: cfg.values.len() as u32,
+        assets: cfg.assets.as_ptr() as usize,
+        n_assets: cfg.assets.len() as u32,
         saved: 0,
         saved_len: 0,
         time_map: 0,
@@ -370,9 +470,32 @@ pub unsafe fn born<K: Kernel>(cfg: *const Settings) -> *mut State<K> {
         // SAFETY: as the caller promises; the host writes the block before it calls `k_new`.
         let s = unsafe { &*cfg };
         let channels = unsafe { std::slice::from_raw_parts(s.ports as *const u32, s.n_ports as usize) };
-        let cfg = Cfg { sample_rate: s.sample_rate, max_block: s.max_block as usize, channels: (s.channels as usize).clamp(1, PORT_CHANNELS), flags: s.flags };
+        // The block lives as long as the sandbox, so its lists outlive every state in it.
+        let values = unsafe { list::<f64>(s.values, s.n_values) };
+        let assets = unsafe { list::<Asset>(s.assets, s.n_assets) };
+        let cfg = Cfg {
+            sample_rate: s.sample_rate,
+            max_block: s.max_block as usize,
+            channels: (s.channels as usize).clamp(1, PORT_CHANNELS),
+            flags: s.flags,
+            values,
+            assets,
+        };
         Box::into_raw(Box::new(State::<K>::new(cfg, channels)))
     })
+}
+
+/// The list of `n` `T`s at `at` in a settings block: empty when there are none, or when the address
+/// isn't aligned for `T` (never from the host).
+///
+/// # Safety
+/// `n` `T`s at `at` are readable for as long as the sandbox lives.
+unsafe fn list<T>(at: usize, n: u32) -> &'static [T] {
+    if n == 0 || at == 0 || !at.is_multiple_of(std::mem::align_of::<T>()) {
+        return &[];
+    }
+    // SAFETY: as the caller promises; the address isn't null and is aligned.
+    unsafe { std::slice::from_raw_parts(at as *const T, n as usize) }
 }
 
 /// Export the ABI functions for kernel type `$ty` under the name `$name`.
