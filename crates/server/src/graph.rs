@@ -894,6 +894,11 @@ impl Graph {
         Graph::hosted(Some(Device { player, epoch: 0, resume: 0.0 }), output::Outputs::real(), host)
     }
 
+    /// Where its plugins run (the host process in a program, HOST-3): what lists the installed ones.
+    pub fn host(&self) -> Arc<dyn m2_plugins::PluginHost> {
+        self.inner.host.clone()
+    }
+
     /// Run `f` on the session's actor and wait for its answer. A request that panics answers
     /// with an error, and the actor serves the next.
     fn call<T: Send + 'static>(&self, f: impl FnOnce(&mut Actor) -> Result<T> + Send + 'static) -> Result<T> {

@@ -68,6 +68,18 @@ pub struct Found {
     pub bundle: PathBuf,
 }
 
+impl Found {
+    /// It plays notes: CLAP's `instrument` feature. What + Track lists (gaps #32).
+    pub fn is_instrument(&self) -> bool {
+        self.features.iter().any(|f| f == "instrument")
+    }
+
+    /// It goes after a sound: CLAP's `audio-effect` feature. What the effect lists list.
+    pub fn is_effect(&self) -> bool {
+        self.features.iter().any(|f| f == "audio-effect")
+    }
+}
+
 /// What a plugin instance offers, read after `init`.
 #[derive(Clone, Debug)]
 pub struct Info {
