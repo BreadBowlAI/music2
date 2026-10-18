@@ -1,7 +1,8 @@
 //! MIDI keyboards on the server (8b.10): a keyboard's keys play the lane a window named, at their
 //! velocity, by channel; Offs, the sustain pedal and All Notes Off; unplugging lets go; the watchdog
 //! never does; no target plays nothing; a new target leaves held notes where they sound; the target
-//! is its song's; nothing waits for a compile; an export has no live note. Keys come as
+//! is its song's; nothing waits for a compile; an export has no live note. The pitch wheel and the
+//! mod wheel reach the target lane, and go back to rest when the keyboard lets go. Keys come as
 //! `m2_os::midi` would give them: here MIDI can't be opened (`/dev/snd/seq` is EACCES).
 
 use std::time::{Duration, Instant};
@@ -75,7 +76,7 @@ fn velocity_is_the_keys() {
     assert_eq!(read(&[0xB2, 64, 64]), Said::Pedal(true));
     assert_eq!(read(&[0xB0, 123, 0]), Said::AllOff);
     assert_eq!(read(&[0xB0, 120, 0]), Said::AllOff);
-    for ignored in [&[0xE0, 0, 64][..], &[0xB0, 1, 64], &[0xD0, 30], &[0xC0, 5], &[0xF8], &[0x90, 60], &[]] {
+    for ignored in [&[0xB0, 7, 64][..], &[0xE0, 64], &[0xD0, 30], &[0xC0, 5], &[0xF8], &[0x90, 60], &[]] {
         assert_eq!(read(ignored), Said::Nothing, "{ignored:?}");
     }
 }
@@ -266,4 +267,67 @@ fn an_export_has_no_midi_note() {
     eventually("the key sounds", || live(&graph) == 1);
     let held = export("b.wav");
     assert!(plain == held, "the same bytes");
+}
+
+fn wheels(graph: &Graph) -> u32 {
+    graph.activity().wheels
+}
+
+// RENDER-14's Midi, D8: a keyboard's pitch wheel and mod wheel reach the lane it plays, live, on any
+// channel; centred, or reset by CC 121, the lane is at rest again. Read as they come.
+#[test]
+fn a_keyboards_bend_reaches_its_lane() {
+    assert_eq!(read(&[0xE5, 0x10, 0x50]), Said::Wheel([0xE5, 0x10, 0x50]));
+    assert_eq!(read(&[0xB2, 1, 0xFF]), Said::Wheel([0xB2, 1, 0x7F]));
+    assert_eq!(read(&[0xB0, 121, 0]), Said::Wheel([0xB0, 121, 0]));
+    let (_f, graph) = played();
+    send(&graph, &[0xE0, 0x7F, 0x7F]);
+    eventually("the bend reaches the kick's lane", || wheels(&graph) == 1);
+    send(&graph, &[0xE3, 0, 0x40]);
+    eventually("centred, on channel 4", || wheels(&graph) == 0);
+    send(&graph, &[0xB0, 1, 100]);
+    eventually("the mod wheel", || wheels(&graph) == 1);
+    send(&graph, &[0xB0, 121, 0]);
+    eventually("reset all controllers", || wheels(&graph) == 0);
+    graph.midi_target(None).unwrap();
+    send(&graph, &[0xE0, 0x7F, 0x7F]);
+    stays_still(&graph, "no target: no lane takes it");
+}
+
+/// Nothing changes for a while: no lane's wheels move.
+fn stays_still(graph: &Graph, why: &str) {
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(wheels(graph), 0, "{why}");
+}
+
+// D8: when a keyboard lets go, the lane whose wheels it moved is back at rest: All Notes Off,
+// another target (its held key sounds on where it is), ⌘. (a panic), turned off in Settings, and
+// unplugged.
+#[test]
+fn a_keyboard_let_go_centres_its_bend() {
+    let (_f, graph) = played();
+    let bend = |why: &str| {
+        send(&graph, &[0xE0, 0x7F, 0x7F]);
+        send(&graph, &[0xB0, 1, 127]);
+        eventually(why, || wheels(&graph) == 1);
+    };
+    bend("bent");
+    send(&graph, &[0xB0, 123, 0]);
+    eventually("All Notes Off", || wheels(&graph) == 0);
+    bend("bent again");
+    send(&graph, &[0x90, 36, 100]);
+    eventually("a key held", || live(&graph) == 1);
+    graph.midi_target(Some(("snare".into(), "hits".into()))).unwrap();
+    eventually("another target: the kick's wheels at rest", || wheels(&graph) == 0);
+    assert_eq!(live(&graph), 1, "the held key sounds on");
+    bend("the snare's");
+    graph.panic().unwrap();
+    eventually("a panic", || wheels(&graph) == 0);
+    bend("the snare's again");
+    graph.set_midi_off(&["Keys".into()]);
+    eventually("turned off in Settings", || wheels(&graph) == 0);
+    graph.set_midi_off(&[]);
+    bend("on again");
+    assert_eq!(graph.midi(Event::Unplugged("Keys")).as_deref(), Some("Keys was unplugged. Its notes stopped."));
+    eventually("unplugged", || wheels(&graph) == 0);
 }

@@ -267,6 +267,8 @@ struct Shared {
     dropped_ons: AtomicU64,
     /// Live notes held in the renderer playing (MON-7).
     live: AtomicU32,
+    /// Its lanes whose wheels live input left away from rest.
+    wheels: AtomicU32,
     /// The engine renders: a project plays, and it doesn't idle (RENDER-6a).
     running: AtomicBool,
     /// The metronome is on: each callback tells the engine (gaps #19).
@@ -782,6 +784,7 @@ impl Callback {
         s.loop_refused.store(st.loop_refused, Ordering::Relaxed);
         s.dropped_ons.store(st.dropped_ons as u64, Ordering::Relaxed);
         s.live.store(st.live, Ordering::Relaxed);
+        s.wheels.store(st.wheels, Ordering::Relaxed);
         s.running.store(self.live.as_ref().is_some_and(|l| !l.engine.is_idle()), Ordering::Relaxed);
         // After the position: a reader that sees a seek, a play or a stop, or a load taken sees
         // where it went.
@@ -1584,6 +1587,12 @@ impl Player {
     /// Live notes held in the renderer playing, after the last callback (MON-7).
     pub fn live_notes(&self) -> u32 {
         self.shared.live.load(Ordering::Relaxed)
+    }
+
+    /// Lanes of the renderer playing whose pitch wheel or mod wheel live input left away from
+    /// rest, after the last callback.
+    pub fn live_wheels(&self) -> u32 {
+        self.shared.wheels.load(Ordering::Relaxed)
     }
 
     /// The DSP load since the last call (8b.8): reading it starts the longest callback again, so

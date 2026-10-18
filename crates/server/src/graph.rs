@@ -196,6 +196,8 @@ pub struct Activity {
     pub device_errors: u64,
     /// Live notes sounding: audition's (MON-7).
     pub live: u32,
+    /// Lanes whose pitch wheel or mod wheel a MIDI keyboard left away from rest.
+    pub wheels: u32,
     /// The DSP load: the longest audio callback of the last second, as a share of the device's
     /// period, while the meters read it (8b.8).
     pub load: f32,
@@ -679,6 +681,7 @@ impl Inner {
             xruns: e.xruns,
             device_errors: e.changes + e.gone + e.other,
             live: device.as_ref().map_or(0, |d| d.player.live_notes()),
+            wheels: device.as_ref().map_or(0, |d| d.player.live_wheels()),
             load,
             late,
             output: device.as_ref().filter(|d| !self.output.standing_in(d.epoch)).map(|d| d.player.device.clone()),

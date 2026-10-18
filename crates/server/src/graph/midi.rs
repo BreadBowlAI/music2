@@ -10,7 +10,12 @@
 //!   nothing. A target changed while a key is held leaves that note where it sounds until its Off.
 //! - **Which messages:** Note On (velocity 0 is an Off) and Note Off; the sustain pedal (CC 64),
 //!   which holds back Offs until it lifts; All Notes Off and All Sound Off (CC 123, 120), which let
-//!   go of every note. The rest are ignored (pitch bend, the mod wheel, clock…).
+//!   go of every note; the pitch wheel (pitch bend), the mod wheel (CC 1) and reset all controllers
+//!   (CC 121), which reach the target lane live (RENDER-14's `Midi`, D8 of track pm). The rest are
+//!   ignored (aftertouch, other controllers, clock…).
+//! - **The wheels go back to rest** on the lane they moved when the keyboard lets go: unplugged, All
+//!   Notes Off, turned off in Settings, another target, or ⌘. (a panic, in the engine). A song
+//!   closed takes its lanes with it.
 //! - **A keyboard's notes** are an audition source of its own, `midi:<name>`, whose handles are
 //!   `note + 128 × channel`, so two channels never share a key. The watchdog never lets it go
 //!   (Q6): unplugging it, All Notes Off, ⌘. (a panic) or closing the song does.
@@ -68,6 +73,8 @@ enum Said {
     Off { h: u32 },
     Pedal(bool),
     AllOff,
+    /// A wheel: pitch bend, CC 1 or CC 121.
+    Wheel([u8; 3]),
     Nothing,
 }
 
@@ -79,6 +86,8 @@ fn read(bytes: &[u8]) -> Said {
         (0x90, Some(n), Some(v)) if v & 0x7F > 0 => Said::On { h: key(n), pitch: f64::from(n & 0x7F), velocity: f64::from(v & 0x7F) / 127.0 },
         (0x90 | 0x80, Some(n), Some(_)) => Said::Off { h: key(n) },
         (0xB0, Some(64), Some(v)) => Said::Pedal(v >= 64),
+        (0xE0, Some(l), Some(m)) => Said::Wheel([status, l & 0x7F, m & 0x7F]),
+        (0xB0, Some(c @ (1 | 121)), Some(v)) => Said::Wheel([status, c, v & 0x7F]),
         (0xB0, Some(120 | 123), _) => Said::AllOff,
         _ => Said::Nothing,
     }
@@ -164,6 +173,11 @@ impl Graph {
                     self.audition_gone(&client(name));
                     return;
                 }
+                Said::Wheel(bytes) => {
+                    drop(cp);
+                    self.wheel(&client(name), target.map(|t| (t.module, t.lane)), bytes);
+                    return;
+                }
                 Said::Nothing => return,
             }
         };
@@ -172,11 +186,20 @@ impl Graph {
     }
 
     /// What MIDI keyboards play from now on: lane `(module, lane)` of the open song, or nothing.
-    /// The last window to say wins (Q4).
+    /// The last window to say wins (Q4). The wheels a keyboard moved on another lane go back to
+    /// rest there; its held keys sound on where they are.
     pub fn midi_target(&self, target: Option<(String, String)>) -> Result<()> {
-        let mut cp = self.inner.control.lock();
-        let token = cp.open.as_ref().map(|p| p.engine.token).context("no project is open")?;
-        cp.midi.target = target.map(|(module, lane)| Target { token, module, lane });
+        let (keyboards, plays) = {
+            let mut cp = self.inner.control.lock();
+            let token = cp.open.as_ref().map(|p| p.engine.token).context("no project is open")?;
+            cp.midi.target = target.map(|(module, lane)| Target { token, module, lane });
+            // While a take records, keys play its lane (lane B, D8).
+            let plays = cp.record.lane(Some(token)).or_else(|| cp.midi.target.as_ref().map(|t| (t.module.clone(), t.lane.clone())));
+            (cp.midi.keyboards.iter().map(|k| client(&k.name)).collect::<Vec<_>>(), plays)
+        };
+        for k in keyboards {
+            self.wheels_rest(&k, plays.as_ref());
+        }
         Ok(())
     }
 
