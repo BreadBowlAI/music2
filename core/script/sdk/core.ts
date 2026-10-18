@@ -197,6 +197,8 @@ class ModuleBuild {
     readonly key: string,
     readonly track: boolean,
     readonly src: string | undefined,
+    /** A bus (RENDER-34): a track the song feeds. */
+    readonly bus = false,
   ) {
     this.root = new Scope(this, null);
   }
@@ -1807,6 +1809,13 @@ function declareLane(m: ModuleBuild, k: string, kind: string, fallback: number |
   }
 }
 
+/** A bus plays what it is fed: it has no lane to play or record (RENDER-34). */
+function busLane(m: ModuleBuild, word: string, key: unknown): void {
+  if (m.bus) {
+    throw new Error(`the bus "${m.key}" can't have a ${word} lane ("${String(key)}"): a bus plays what the song feeds it, its input. A control lane, to automate it, is fine`);
+  }
+}
+
 function ctxFor(m: ModuleBuild): Ctx {
   const laneNode = (id: string, unit?: Unit, site?: number) => new Signal<any>(push(m.root, { op: "lane", lane: id }, at(site)), m.root, unit);
   return {
@@ -1814,6 +1823,7 @@ function ctxFor(m: ModuleBuild): Ctx {
     lane: {
       notes(key, opts) {
         const site = takeSite(arguments);
+        busLane(m, "notes", key);
         declareLane(m, key, "events<note>", undefined, opts, site);
         return produced(site, laneNode(key, undefined, site));
       },
@@ -1830,6 +1840,7 @@ function ctxFor(m: ModuleBuild): Ctx {
       },
       audio(key, channels = 2, opts) {
         const site = takeSite(arguments);
+        busLane(m, "audio", key);
         declareLane(m, key, `audio<${channels}>`, undefined, opts, site);
         return produced(site, laneNode(key, undefined, site));
       },
@@ -1850,9 +1861,18 @@ export type TrackOptions = {
   muted?: boolean;
 };
 
-/** Registered tracks by key. Private: it holds labels, which song code must never see. */
-const tracks = new Map<string, { fn: TrackFn<any>; label?: string; muted: boolean; src?: string; at: Place }>();
+/** What a bus's function receives: a track's, and `input`, what the song feeds it (RENDER-34). */
+export type BusCtx = Ctx & {
+  /** What the song feeds the bus: `feed(bus, x)` in song code, or std's mixer's sends and outputs. */
+  readonly input: Audio;
+};
+
+/** Registered tracks (buses too) by key. Private: it holds labels, which song code must never see. */
+const tracks = new Map<string, { fn: TrackFn<any>; label?: string; muted: boolean; src?: string; at: Place; bus: boolean }>();
 const TRACK = Symbol("m2.track");
+
+/** Where each bus was fed (`feed`), by its key. */
+const fed = new Map<string, Place>();
 
 /**
  * A track: a module with lanes on the timeline, named by its key (ID-4):
@@ -1864,18 +1884,34 @@ const TRACK = Symbol("m2.track");
 export function track<E extends Exports>(key: string, fn: TrackFn<E>): Handle<E>;
 export function track<E extends Exports>(key: string, opts: TrackOptions, fn: TrackFn<E>): Handle<E>;
 export function track<E extends Exports>(key: string, a: TrackOptions | TrackFn<E>, b?: TrackFn<E>): Handle<E> {
-  const site = takeSite(arguments);
-  checkKey("the track key", key);
-  if (key === "song") throw new BuildError("key.invalid", `"song" is reserved for the root module; give the track another key`);
+  return declareTrack("track", key, a, b, takeSite(arguments));
+}
+
+/**
+ * A bus (RENDER-34): a track that plays what the song feeds it, such as a shared reverb or a group
+ * of drums: `bus("verb", { name: "Reverb" }, ({ input }) => reverb(input, { mix: 1 }))`. The song
+ * feeds it once, with `feed(verb, x)`; std's mixer does it for every bus channel (`verb: verb.out`).
+ * It has no notes or audio lanes; a control lane, to automate it, is fine. Read it as a track,
+ * `verb.out`.
+ */
+export function bus<E extends Exports>(key: string, fn: (ctx: BusCtx) => E): Handle<E>;
+export function bus<E extends Exports>(key: string, opts: TrackOptions, fn: (ctx: BusCtx) => E): Handle<E>;
+export function bus<E extends Exports>(key: string, a: TrackOptions | ((ctx: BusCtx) => E), b?: (ctx: BusCtx) => E): Handle<E> {
+  return declareTrack("bus", key, a as TrackOptions, b as TrackFn<E> | undefined, takeSite(arguments));
+}
+
+function declareTrack<E extends Exports>(word: "track" | "bus", key: string, a: TrackOptions | TrackFn<E>, b: TrackFn<E> | undefined, site: number | undefined): Handle<E> {
+  checkKey(`the ${word} key`, key);
+  if (key === "song") throw new BuildError("key.invalid", `"song" is reserved for the root module; give the ${word} another key`);
   const [opts, fn]: [unknown, unknown] = typeof a === "function" ? [undefined, a] : [a, b];
-  if (typeof fn !== "function") throw new Error(`track("${key}"): write track("${key}", fn), or track("${key}", { name: "…" }, fn)`);
-  const o = options(`track("${key}")`, opts, { name: "string", muted: "boolean" }) as TrackOptions;
+  if (typeof fn !== "function") throw new Error(`${word}("${key}"): write ${word}("${key}", fn), or ${word}("${key}", { name: "…" }, fn)`);
+  const o = options(`${word}("${key}")`, opts, { name: "string", muted: "boolean" }) as TrackOptions;
   const here = place(site);
   const first = tracks.get(key);
   if (first) {
     throw new BuildError("key.duplicate", `two tracks have the key "${key}": one at ${describe(first.at)}, another at ${describe(here)}. Track keys are unique in the project; rename one`, key);
   }
-  tracks.set(key, { fn: fn as TrackFn<E>, label: o.name, muted: o.muted === true, src: callsite(), at: here });
+  tracks.set(key, { fn: fn as TrackFn<E>, label: o.name, muted: o.muted === true, src: callsite(), at: here, bus: word === "bus" });
   return new Proxy({} as Handle<E>, {
     get(_, prop) {
       if (prop === TRACK) return key;
@@ -1888,6 +1924,28 @@ export function track<E extends Exports>(key: string, a: TrackOptions | TrackFn<
       return s;
     },
   });
+}
+
+/**
+ * Feed bus `b` with `x` (RENDER-34): what the bus's function reads as `input`. Song code only, and
+ * once per bus: sum what goes into it first. std's mixer feeds its bus channels for you.
+ */
+export function feed(b: object, x: Audio): void {
+  const site = takeSite(arguments);
+  const scope = need("feed()");
+  const k = trackOf(b);
+  if (k === undefined) throw new Error(`feed(): the first argument must be a bus, such as verb from bus("verb", …), not ${shown(b)}`);
+  const t = tracks.get(k);
+  if (!t?.bus) throw new Error(`feed(): "${k}" is ${k === "song" ? "the song" : "a track"}, not a bus. Only a bus is fed: make it with bus("${k}", …)`);
+  const m = scope.module;
+  if (m.track) throw new Error(`feed() is for song code, and "${m.key}" is a track: feed buses in song.ts`);
+  if (scope !== m.root) throw new Error(`feed(${k}, x): a bus can't be fed from inside a poly voice`);
+  const here = place(site);
+  const first = fed.get(k);
+  if (first) throw new Error(`the bus "${k}" is fed twice: at ${describe(first)} and at ${describe(here)}. Feed a bus once: sum what goes into it first`);
+  if (!(x instanceof Signal)) throw new Error(`feed(${k}, x): x must be a signal, its audio, not ${shown(x)}`);
+  m.exports[`bus:${k}`] = ref(x, `feed(${k}, x)`);
+  fed.set(k, here);
 }
 
 /** The root module: whatever it returns is the song's output. */
@@ -1906,12 +1964,22 @@ function exportsOf(m: ModuleBuild, value: unknown) {
   else throw new Error(`${m.key} must return a signal or an object of signals`);
 }
 
-function run(key: string, isTrack: boolean, fn: (ctx: Ctx) => unknown, src?: string): ModuleBuild {
-  const m = new ModuleBuild(key, isTrack, src);
+/** A bus's context: a track's, and `input`, an import of the song's feed, made when first read. */
+function busCtx(m: ModuleBuild): BusCtx {
+  const ctx = ctxFor(m);
+  let input: Signal | undefined;
+  return Object.defineProperty(ctx, "input", {
+    enumerable: true,
+    get: () => (input ??= new Signal(push(m.root, { op: "import", module: "song", export: `bus:${m.key}` }), m.root)),
+  }) as BusCtx;
+}
+
+function run(key: string, isTrack: boolean, fn: (ctx: any) => unknown, src?: string, isBus = false): ModuleBuild {
+  const m = new ModuleBuild(key, isTrack, src, isBus);
   const prev = current;
   current = m.root;
   try {
-    exportsOf(m, fn(ctxFor(m)));
+    exportsOf(m, fn(isBus ? busCtx(m) : ctxFor(m)));
   } finally {
     current = prev;
   }
@@ -1930,8 +1998,15 @@ export function __build(root: unknown): string {
   if (!r || r[TRACK] !== "song") throw new Error("song.ts must `export default song(...)`");
   outputs = [];
   const modules = [run("song", false, r.fn, r.src)];
-  for (const [key, t] of tracks) modules.push(run(key, true, t.fn, t.src));
+  for (const [key, t] of tracks) modules.push(run(key, true, t.fn, t.src, t.bus));
   if (firstError) throw firstError;
+  for (const [key, t] of tracks) {
+    if (t.bus && !fed.has(key)) {
+      throw new Error(
+        `the bus "${key}" is never fed, at ${describe(t.at)}: give it a channel in std's mixer (${key}: ${key}.out), or feed it in song code: feed(${key}, x)`,
+      );
+    }
+  }
   for (const f of feedbacks) {
     const n = f.node();
     if (n && n.input === null) throw new Error(`${f.module}: a feedback() was never given its input with .set()`);
@@ -1947,9 +2022,10 @@ export function __build(root: unknown): string {
       const t = tracks.get(m.key);
       const lanes = [...infoOf(m).lanes].map(([key, l]) => ({ key, kind: l.kind, default: l.default, label: l.label }));
       const frames = infoOf(m).table;
-      // `muted` only when true: every other IR keeps its bytes (ID-11).
+      // `muted` and `bus` only when true: every other IR keeps its bytes (ID-11).
       const muted = m.track && t?.muted ? true : undefined;
-      return { key: m.key, label: m.track ? t?.label : undefined, track: m.track, muted, lanes, nodes: m.root.nodes, exports: m.exports, src: m.src, frames: frames.length ? frames : undefined };
+      const bus = m.track && t?.bus ? true : undefined;
+      return { key: m.key, label: m.track ? t?.label : undefined, track: m.track, muted, bus, lanes, nodes: m.root.nodes, exports: m.exports, src: m.src, frames: frames.length ? frames : undefined };
     }),
   });
 }
