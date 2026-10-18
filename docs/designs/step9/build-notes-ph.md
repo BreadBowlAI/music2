@@ -223,6 +223,10 @@ compared with an offline one (they differ by `L` then), none a crash or an asser
 | Renders | 10 of 10 |
 | with-plugins against the base (G7e's rule) | worst second 0.47 dB apart |
 | `~/m2-runs/sph/check.sh` (runtime, ir, plugins, play, editor, server) | 1112 passed; clippy and the Mac lint clean |
+| `m2-gates plugins` (G1 to G5, G7) and `m2-gates --server export` (G7e) | PASS |
+| `ci/check.sh --gates` at `b0ebc74`, first run (load 9 to 10 from other tracks) | every row passed but the gates: G11 tx-data's session part was 5.9 ms at p95 (bound 5) with 5,000 assets. Alone, 3 runs of 3 passed it (p95 1.5 to 1.8 ms) |
+| `ci/check.sh --gates` at `b0ebc74`, second run (load 3 to 4) | **PASS**: 1597 Rust tests, 67 of 67 browser suites, renders 10 of 10, the app (first-song and with-plugins), clippy, the Mac lint, std, the 7 gate runs. Logs: `~/m2-runs/sph/check-b0ebc74.tgz` (the first run's: `check-b0ebc74-run1.tgz`) |
+| Disk at the track's end | 2.1 TB free; this worktree's `target/` is 105 GB; no shared memory left in `/dev/shm` |
 
 ### Decisions taken while building
 

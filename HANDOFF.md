@@ -14,6 +14,21 @@ Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **Track `ph` (step 9's first synth and plugin turns) is built on branch `ph`** (2026-10-18), not yet on `main`:
+  Linux green at `b0ebc74`. **macOS: unverified since `b0ebc74`** (its shared memory, wake and windows are
+  lint-checked only). From `main` at `258275b`. It adds:
+
+  | You can now | What you notice |
+  |---|---|
+  | Play plugins in a second program | a plugin that crashes or hangs goes quiet, the app says so once, and it comes back; the song plays on |
+  | Open a plugin's own window from its box | a knob turned there writes the code, latches a lane, or saves the plugin's settings (one Undo step) |
+  | Use a plugin that plays late (a look-ahead limiter) | every other track waits for it, live and in exports; a song with no such plugin is unchanged |
+
+  No render changed: 10 of 10. with-plugins is checked by G7e's 1 dB rule, as two of its base renders already differ
+  (Surge XT). `ci/check.sh --gates` passed at `b0ebc74`: every row (1,597 Rust tests, 67/67 browser suites, 10 of 10
+  renders, the 7 gate runs). Its first run failed only G11's timing under load from other jobs; alone it passed 3
+  times of 3, then the second full run passed. Owed: the owner's Mac. Build notes
+  `docs/designs/step9/build-notes-ph.md`, plan `ph-plan.md` beside them; what isn't done yet is in `docs/gaps.md`.
 - **`studio` is on `main`** (2026-10-18): Linux green at `ad5f111`; macOS owed. `main` fast-forwarded to it
   (`02ba4d3`). From `main` at `85b069a`, with `main` at `44b104a` (8a's live half and `macfix`) merged in. It added:
 
