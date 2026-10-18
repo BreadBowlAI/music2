@@ -116,6 +116,10 @@ pub enum SettingKind {
     Int,
     Bool,
     Choice,
+    /// A file in the project's `assets/`, by name: what a kernel reads (kernel ABI v1).
+    Asset,
+    /// MIDI notes (0 to 127) to files in `assets/`: a sampler's zones.
+    Keymap,
 }
 
 /// What an editor offers. A component with a category is an effect, added after any audio, when
