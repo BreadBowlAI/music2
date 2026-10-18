@@ -1445,6 +1445,32 @@ fn an_asset_read_allocates_nothing() {
     }
 }
 
+// RENDER-28, the ex plan's D1: a fault report never allocates, on any thread. 8 threads report
+// 10,000 faults at once while one reads; the ring is full at times. Each fault is read or counted
+// lost.
+#[test]
+fn a_fault_report_never_allocates_locks_or_waits() {
+    use crate::fault::{Code, Fault, Faults, Subject};
+    let faults = std::sync::Arc::new(Faults::default());
+    let writers: Vec<_> = (0..8u64)
+        .map(|t| {
+            let faults = faults.clone();
+            std::thread::spawn(move || {
+                let f = |n| Fault { code: Code::Stopped, plan: t, subject: Subject::Node(n) };
+                alloc_count::during(|| (0..1250).for_each(|n| faults.report(f(n)))).1
+            })
+        })
+        .collect();
+    let mut read = 0u64;
+    while writers.iter().any(|w| !w.is_finished()) {
+        read += std::iter::from_fn(|| faults.take()).count() as u64;
+    }
+    let heap: Vec<usize> = writers.into_iter().map(|w| w.join().unwrap()).collect();
+    read += std::iter::from_fn(|| faults.take()).count() as u64;
+    assert_eq!(heap, [0; 8], "no writer touched the heap");
+    assert_eq!((read + faults.lost(), faults.count()), (10_000, 10_000), "each read or counted lost");
+}
+
 // D3 of track sx (ABI-2): a sandbox off the audio thread may hold an asset as its file on disk,
 // not decoded whole. A kernel reads the same bits either way: 16-bit and float files, mono, stereo
 // and 3 channels, each channel and one past them, in odd pieces (one longer than the host reads at

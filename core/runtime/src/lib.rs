@@ -43,6 +43,7 @@ mod delay;
 pub mod engine;
 pub mod event;
 mod fade;
+pub mod fault;
 pub mod fpenv;
 #[doc(hidden)]
 pub mod gauge;
