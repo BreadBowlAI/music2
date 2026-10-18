@@ -10,10 +10,11 @@ design for whatever you pick up. Older versions of this page, with each track's 
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
   71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
 - **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
-- **Track `bus`** (branch `bus`, not landed yet): buses, sends and groups, in song code (RENDER-34, `@m2/core`
-  1.5.0, std 0.4.0) and in the Mix view (Add bus, a send knob per bus, an output picker). Gap #27 is closed. Its
-  plan and what each slice built: `docs/designs/step9/bus-plan.md`. Its `ci/check.sh --gates` passed first time at
-  `b56f54b`: 1,750 Rust tests, 72/72 browser suites, 12 of 12 renders, the 7 gate runs, 38 minutes.
+- **Track `bus` is ready to land** (branch `bus`, `main` at `c852cb3` merged in): buses, sends and groups, in song
+  code (RENDER-34, `@m2/core` 1.5.0, std 0.4.0) and in the Mix view (Add bus, a send knob per bus, an output
+  picker). Gap #27 is closed. No sound changed. A song asking for std "0.3" needs `std = "0.4"` (below). Its
+  `ci/check.sh --gates` passed at `9c985c3`: 1,751 Rust tests, 72/72 browser suites, 12 of 12 renders, the 7 gate
+  runs, 36 minutes. Notes: `docs/designs/step9/build-notes-bus.md`.
 - **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
   (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by
   far. 8a's sweep is done. **One more `ci/check.sh` on the Mac is owed, with the output at 48 kHz.**
@@ -32,7 +33,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 **Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main` once `mf2` is
 merged. It checks the two fixes (the plugin window's `closed` callback now runs on the next main-queue turn: run on
-a Mac for the first time) and judges G12 at its designed set-up. The sweep need not run again.
+a Mac for the first time) and judges G12 at its designed set-up. The sweep need not run again. Once `bus` has
+landed, the same run covers it too: it adds no Mac-only code. Its by-ear steps are 117 to 123.
 
 After a green run the lead writes in the contract's PLAT-6 and the gates table: "macOS: green at <commit>", with
 G7f's numbers. If a row fails, fix it on Linux, check the mac lint, and ask for one more run. The Mac's pasted runs
@@ -162,14 +164,14 @@ invisible Xvfb screen, with pictures sent to the owner.
 | What | Where |
 |---|---|
 | The contract, and the order of work | `docs/architecture.md` |
-| What each step and track built, decided and left | `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
+| What each step and track built, decided and left | `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`, `bus`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
 | Kernel ABI v1 | `docs/kernel-abi.md` |
 | The look | `docs/designs/step8/taste.md` |
-| Each check's logs and summary | `~/m2-runs/check-<label>/` and `.tgz` (step 9's finals: `check-io`, `-ab`, `-ph`, `-sx`, `-pm`, `-ex`) |
+| Each check's logs and summary | `~/m2-runs/check-<label>/` and `.tgz` (step 9's finals: `check-io`, `-ab`, `-ph`, `-sx`, `-pm`, `-ex`, `-bus`) |
 | Pictures for the owner | `~/m2-runs/app-shots/<track>-<commit>/` |
 | Logs of long jobs | `~/m2-runs/logs/` |
 | The Mac's pasted runs | `~/m2-runs/mac-runs/` |
-| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. `origin/taste` and `origin/sounds` are old, all merged |
+| Branches | Everything is on `main` but `bus` (ready to land, worktree `~/m2-runs/wt/bus`). A track's branch and worktree are deleted once it lands. `origin/taste` and `origin/sounds` are old, all merged |
 
 Engine and tooling items left by steps 7 and 8 that are not user gaps are in each build notes' "Left" or "For the
 lead" sections. The ones a next session most needs:
