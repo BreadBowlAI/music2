@@ -1,6 +1,9 @@
 //! RENDER-1 (the ex plan's slice 2): `m2 render` and `m2 bounce` never finish with a part silent. A
 //! fault that changed the sound stops them: they exit with an error, its words and its code, and
 //! write no file.
+//!
+//! Debug builds only: they play the probe plugin, which only a debug `m2` loads (`M2_PROBE`).
+#![cfg(debug_assertions)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

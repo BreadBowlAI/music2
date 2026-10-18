@@ -134,6 +134,8 @@ music2.app when m2 runs from there, or else in this source tree.
 fn main() -> ExitCode {
     // Tests: `M2_PROBE` set, songs may play the probe plugin (`clap:m2.probe`), in the host process
     // as any plugin, so a test can make a plugin fail or its host crash while `m2 render` plays it.
+    // Debug builds only: a release `m2` never loads it.
+    #[cfg(debug_assertions)]
     if std::env::var_os("M2_PROBE").is_some() {
         m2_plugins::probe::install();
     }

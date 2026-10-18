@@ -256,7 +256,6 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A clip is named by its place in its lane's data**: after a clip whose file is missing moves, a fault in that lane may name the clip beside it (ex-2).
 - **A sound or plugin that stops just as two edits come quickly** (a tempo drag, quick code changes) may never be told: the session names faults by the last two plans only (the ex review's r1).
 - **A plugin that fails a second time is left silent with no new message**; its listed words still say music2 starts it again. Open the song again to try it (the ex review's r3).
-- **`m2` loads the test plugin `probe` when `M2_PROBE` is set**, in the shipped program too; only the CLI's crash test uses it. A test-only build would leave it out (the ex review's r5).
 - **The plugin host process** (HOST-3, since ph-1). Plugins run in a second program, so a crash no longer ends the app. What it doesn't do yet:
   - All plugins share one host process, so one crash silences them all (each comes back by itself). One process per plugin would silence only the one that crashed.
   - Its audio threads don't join the Mac output's audio workgroup (they ask for real time on their own).
