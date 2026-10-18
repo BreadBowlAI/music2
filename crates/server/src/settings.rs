@@ -13,6 +13,10 @@
 //!   and snaps the take's notes to Notes' grid. Left out while both are the defaults.
 //! - `midi` (lane B, Q28): `{"off": ["Keystation 49"]}`: the MIDI keyboards turned off, by the names
 //!   `m2_os::midi` gives; they neither play nor record. Left out while none is.
+//! - `input` (the io plan's D13, D21): `{"device": "coreaudio:…", "name": "Scarlett 2i2", "monitor":
+//!   true}`: the sound input a take records, by its id (`m2_play::Input::id`; null is the output's
+//!   own device), its name as it was listed, and whether you hear yourself while recording (off by
+//!   default: speakers feed back into the microphone). Left out while all are the defaults.
 //!
 //! Written whole, through a temporary file renamed over it, one change at a time. A file that
 //! doesn't read is the defaults. The file is given, never found here: tests pass a temporary one,
@@ -22,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use m2_play::Choice;
+use m2_play::{Choice, InputChoice};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +44,33 @@ pub struct Kept {
     /// The MIDI keyboards turned off (lane B).
     #[serde(default, skip_serializing_if = "MidiKept::is_default")]
     pub midi: MidiKept,
+    /// The sound input, and hearing yourself while recording (io).
+    #[serde(default, skip_serializing_if = "InputKept::is_default")]
+    pub input: InputKept,
+}
+
+/// The sound input a take records, and whether you hear it while recording (MON-8).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputKept {
+    /// Its id; None: the output's own device.
+    #[serde(default)]
+    pub device: Option<String>,
+    /// Its name as it was listed when chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub monitor: bool,
+}
+
+impl InputKept {
+    fn is_default(&self) -> bool {
+        *self == InputKept::default()
+    }
+
+    /// What a player opens.
+    pub fn choice(&self) -> InputChoice {
+        InputChoice { device: self.device.clone() }
+    }
 }
 
 /// Record's options: count in one bar first (on by default), and snap the take's notes to the
@@ -213,6 +244,12 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         assert_eq!(json["record"], serde_json::json!({"count_in": false, "quantize": true}));
         assert_eq!(json["midi"], serde_json::json!({"off": ["Keystation 49"]}));
+        assert_eq!(json.get("input"), None, "the input's defaults aren't written");
+        let kept = s.change(|k| k.input = InputKept { device: Some("alsa:sysdefault:CARD=USB".into()), name: Some("USB mic".into()), monitor: true }).unwrap();
+        assert_eq!(kept.input.choice(), InputChoice { device: Some("alsa:sysdefault:CARD=USB".into()) });
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(json["input"], serde_json::json!({"device": "alsa:sysdefault:CARD=USB", "name": "USB mic", "monitor": true}));
+        assert_eq!(s.read().input, kept.input, "read back");
         // Half a record object reads with the other half's default.
         std::fs::write(&file, r#"{"record": {"quantize": true}}"#).unwrap();
         assert_eq!(s.read().record, RecordKept { count_in: true, quantize: true });

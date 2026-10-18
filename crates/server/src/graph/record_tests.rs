@@ -112,7 +112,7 @@ impl Rig {
     }
 
     fn start(&self, count_in: bool, quantize: Option<f64>) -> Value {
-        self.graph.record_start(self.token, "bass", "notes", Options { count_in, quantize }).unwrap()
+        self.graph.record_start(self.token, "bass", "notes", Options { count_in, quantize, ..Default::default() }).unwrap()
     }
 
     /// Keyboard "Keys" sends `bytes`: when it was heard.
@@ -639,7 +639,7 @@ fn record_is_refused_while_the_code_doesnt_compile() {
     let r = Rig::new();
     r.fixture.put("song.ts", "(");
     assert!(r.graph.poll());
-    let e = r.graph.record_start(r.token, "bass", "notes", Options { count_in: true, quantize: None }).unwrap_err();
+    let e = r.graph.record_start(r.token, "bass", "notes", Options { count_in: true, quantize: None, ..Default::default() }).unwrap_err();
     assert_eq!(e.to_string(), "Fix the code first: it doesn't compile right now.");
     assert!(!r.graph.recording() && !r.graph.status().playing, "nothing counts in, nothing plays");
 }
@@ -805,4 +805,263 @@ fn a_cancel_just_after_the_count_still_stops_the_song() {
     r.fill(10);
     assert!(!r.graph.status().playing, "nothing plays");
     assert!(!r.graph.recording());
+}
+
+/// Recording on an audio lane (the io plan's slice 2): a driven player at 48 kHz whose silent input
+/// the test feeds one callback at a time, so every sample's place is known. A callback of 480
+/// frames hands over 480 input frames, heard from two buffers (960 frames) before the first frame
+/// it renders (`m2_play`'s injected input).
+mod audio {
+    use super::*;
+    use m2_play::InputChoice;
+
+    const VOX: &str = "import { song, track } from '@m2/core';\n\
+                       const vox = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\
+                       export default song(() => vox.out);\n";
+    /// How long before the first frame a callback renders its input buffer was heard.
+    const LATE: u64 = 2 * CALLBACK as u64;
+
+    struct Rig {
+        fixture: Fixture,
+        graph: Graph,
+        player: Player,
+        d: Driver,
+        token: u64,
+        /// The engine clock where the transport is at beat 0 (or the take's start).
+        anchor: u64,
+        /// What the input hears at each engine clock.
+        sound: Box<dyn Fn(u64) -> f32>,
+    }
+
+    impl Rig {
+        fn new() -> Rig {
+            let fixture = Fixture::new();
+            fixture.put("song.ts", VOX);
+            fixture.put("data/vox/clips.json", "{\"clips\": []}\n");
+            let (player, d) = Player::driven(48_000);
+            let graph = Graph::with_player(player.clone());
+            let token = graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
+            let mut rig = Rig { fixture, graph, player, d, token, anchor: 0, sound: Box::new(|_| 0.0) };
+            rig.fill(4);
+            rig
+        }
+
+        /// `n` device callbacks, the input's buffer queued before each once a take opened it.
+        fn fill(&mut self, n: usize) {
+            let mut buf = [0.0f32; 2 * CALLBACK];
+            for k in 0..n {
+                if self.player.input().is_some() {
+                    let first = self.d.engine().map_or(0, |e| e.out_clock());
+                    let heard = first.saturating_sub(LATE);
+                    let samples: Vec<f32> = (0..CALLBACK as u64).map(|j| (self.sound)(heard + j)).collect();
+                    self.player.inject_input(&samples).unwrap();
+                }
+                self.d.fill(&mut buf, 2);
+                drop(self.d.drain_retired());
+                if k % 50 == 49 {
+                    self.graph.record_settle();
+                }
+            }
+            self.graph.record_settle();
+        }
+
+        /// The beat heard as the last callback began, by the engine clock.
+        fn by_clock(&self) -> f64 {
+            (self.graph.engine_clock().unwrap() as f64 - LATE as f64 - self.anchor as f64) / BEAT
+        }
+
+        fn to(&mut self, beat: f64) {
+            while self.by_clock() < beat {
+                self.fill(1);
+            }
+        }
+
+        fn start(&self, count_in: bool, hear: bool) -> Value {
+            let opts = Options { count_in, quantize: None, input: InputChoice::default(), hear };
+            self.graph.record_start(self.token, "vox", "clips", opts).unwrap()
+        }
+
+        fn written(&mut self) -> Value {
+            let t = std::time::Instant::now();
+            // The input hands over the take's last frames two buffers after they were heard.
+            self.fill(4);
+            loop {
+                let said = self.graph.record_tick();
+                if let Some(v) = said.into_iter().find(|v| v.get("written").is_some() || v.get("empty").is_some() || v.get("error").is_some()) {
+                    return v;
+                }
+                assert!(t.elapsed() < Duration::from_secs(10), "no take was written");
+                // The input delivers the take's last frames as the song plays on.
+                self.fill(2);
+            }
+        }
+
+        fn clips(&self) -> Vec<Value> {
+            let v: Value = serde_json::from_str(&self.fixture.read("data/vox/clips.json")).unwrap();
+            v["clips"].as_array().unwrap().clone()
+        }
+
+        /// The samples of the file clip `c` plays, its rate and channels.
+        fn samples(&self, c: &Value) -> (Vec<f32>, u32, u16) {
+            let path = self.fixture.0.join("assets").join(c["asset"].as_str().unwrap());
+            let mut r = hound::WavReader::open(&path).unwrap();
+            let spec = r.spec();
+            (r.samples::<f32>().map(Result::unwrap).collect(), spec.sample_rate, spec.channels)
+        }
+    }
+
+    /// A click on the clocks `at`, silence elsewhere.
+    fn clicks(at: Vec<u64>) -> Box<dyn Fn(u64) -> f32> {
+        Box::new(move |c| if at.contains(&c) { 1.0 } else { 0.0 })
+    }
+
+    // D20: a click train played at known engine clocks lands in the file where it was heard, to the
+    // sample: the file's first sample is the one heard at the take's start.
+    #[test]
+    fn an_injected_input_records_where_it_was_heard() {
+        let mut r = Rig::new();
+        r.anchor = r.graph.engine_clock().unwrap();
+        let at: Vec<u64> = (0..3).map(|b| r.anchor + b * BEAT as u64 + 37).collect();
+        r.sound = clicks(at);
+        let shown = r.start(false, false);
+        assert_eq!((&shown["phase"], &shown["start"]), (&json!("take"), &json!(0.0)));
+        r.to(2.5);
+        r.graph.transport("stop").unwrap();
+        let said = r.written();
+        assert_eq!(said["written"]["asset"], json!("Vox take.wav"), "{said}");
+        let c = &r.clips()[0];
+        assert_eq!(c["start"].as_f64(), Some(0.0), "{c}");
+        let (s, rate, channels) = r.samples(c);
+        assert_eq!((rate, channels), (48_000, 1), "the song's rate; a mono input makes a mono take");
+        let heard: Vec<usize> = s.iter().enumerate().filter(|(_, x)| **x != 0.0).map(|(i, _)| i).collect();
+        assert_eq!(heard, [37, 24_037, 48_037], "each click where it was heard");
+        let length = c["length"].as_f64().unwrap();
+        assert!((length - s.len() as f64 / BEAT).abs() < 1e-9, "as long as the take: {length} beats, {} frames", s.len());
+    }
+
+    // WRITE-1, FMT-14: the take's file is pushed, named and its folder synced before the Tx names it.
+    #[test]
+    fn a_take_is_durable_before_the_song_names_it() {
+        let mut r = Rig::new();
+        assert!(m2_editor::take::steps(&r.fixture.0).is_empty());
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|c| (c % 100) as f32 / 100.0);
+        r.start(false, false);
+        r.to(1.0);
+        r.graph.record_stop(r.token).unwrap();
+        assert!(r.written()["written"].is_object());
+        assert_eq!(m2_editor::take::steps(&r.fixture.0), ["push", "name", "sync", "tx"]);
+        let parts: Vec<String> = std::fs::read_dir(r.fixture.0.join("assets")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(parts, ["Vox take.wav"], "no part file is left");
+    }
+
+    // Q20 and D20: stopped at bar 2, a bar of clicks, then the take from bar 2. What was played
+    // during the count isn't in the file.
+    #[test]
+    fn a_count_in_keeps_nothing_before_the_start() {
+        let mut r = Rig::new();
+        r.graph.seek(4.0).unwrap();
+        r.fill(2);
+        // The song starts a bar after the count: 96,000 frames on.
+        r.anchor = r.graph.engine_clock().unwrap() + 96_000;
+        let anchor = r.anchor;
+        r.sound = Box::new(move |c| if c < anchor { 1.0 } else { 0.25 });
+        let shown = r.start(true, false);
+        assert_eq!(shown["phase"], json!("count"));
+        r.fill(150);
+        r.anchor -= (4.0 * BEAT) as u64;
+        r.to(5.0);
+        r.graph.transport("stop").unwrap();
+        r.written();
+        let c = &r.clips()[0];
+        assert_eq!(c["start"].as_f64(), Some(4.0), "on the start bar: {c}");
+        let (s, _, _) = r.samples(c);
+        assert!(s.len() >= BEAT as usize - 2 * 128, "to where the stop was heard: {} frames", s.len());
+        assert!(s.iter().all(|x| *x == 0.25), "nothing from the count: first {:?}", &s[..4]);
+    }
+
+    // D19: one Undo takes the recording back; the file stays (music2 never deletes an asset).
+    #[test]
+    fn one_undo_takes_the_recording_back() {
+        let mut r = Rig::new();
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|_| 0.5);
+        let before = r.graph.undo_names().0;
+        r.start(false, false);
+        r.to(1.5);
+        r.graph.transport("stop").unwrap();
+        let said = r.written();
+        assert_eq!(said["written"]["revision"].as_u64(), r.graph.state().unwrap()["view"]["revision"].as_u64(), "{said}");
+        assert_eq!(r.graph.undo_names().0.as_deref(), Some("recording on Vox"));
+        assert_eq!(r.clips().len(), 1);
+        r.graph.undo(r.token).unwrap();
+        assert!(r.clips().is_empty(), "one Undo takes it back");
+        assert_eq!(r.graph.undo_names().0, before, "one step");
+        assert!(r.fixture.0.join("assets/Vox take.wav").is_file(), "the file stays");
+    }
+
+    // Q27, D20: the first pass only, as a notes take: written at the loop's end, as long as the loop.
+    #[test]
+    fn a_take_ends_at_the_loop_end() {
+        let mut r = Rig::new();
+        r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|_| 0.5);
+        r.start(false, false);
+        r.to(4.2);
+        let said = r.written();
+        assert!(said["written"].is_object(), "{said}");
+        assert!(r.graph.status().playing && r.graph.status().beat < 1.0, "round the loop, playing on");
+        let c = &r.clips()[0];
+        assert_eq!((c["start"].as_f64(), c["length"].as_f64()), (Some(0.0), Some(4.0)), "{c}");
+        assert_eq!(r.samples(c).0.len(), 4 * BEAT as usize, "the first pass, to the sample");
+    }
+
+    // D22: a writer that falls more than the ring (4 s) behind writes silence for what the ring lost,
+    // so what comes after stays where it was heard, and the take says so.
+    #[test]
+    fn a_full_take_ring_writes_silence_and_keeps_time() {
+        let mut r = Rig::new();
+        r.anchor = r.graph.engine_clock().unwrap();
+        let at: Vec<u64> = (0..12).map(|b| r.anchor + b * BEAT as u64 + 5).collect();
+        r.sound = clicks(at);
+        r.start(false, false);
+        r.graph.record_pause(true);
+        // 6 s of input while the writer moves nothing: the ring keeps the last 4.
+        r.to(12.0);
+        r.graph.record_pause(false);
+        r.graph.record_stop(r.token).unwrap();
+        let said = r.written();
+        assert_eq!(said["written"]["note"], json!("The disk was too slow: part of the take is silent."), "{said}");
+        let (s, _, _) = r.samples(&r.clips()[0]);
+        let heard: Vec<usize> = s.iter().enumerate().filter(|(_, x)| **x != 0.0).map(|(i, _)| i).collect();
+        let kept: Vec<usize> = (0..12).map(|b| b * BEAT as usize + 5).filter(|i| heard.contains(i)).collect();
+        assert_eq!(heard, kept, "every click still where it was heard");
+        assert!(!heard.contains(&5) && heard.contains(&(11 * BEAT as usize + 5)), "the first lost, the last kept: {heard:?}");
+        assert!(s.len() >= 12 * BEAT as usize, "time kept: {} frames", s.len());
+    }
+
+    // MON-8: hearing yourself plays the input on the take's lane, live only: an export made while the
+    // take records has none of it.
+    #[test]
+    fn hearing_yourself_never_reaches_an_export() {
+        let mut r = Rig::new();
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|_| 0.5);
+        r.start(false, true);
+        r.to(1.0);
+        let mut buf = [0.0f32; 2 * CALLBACK];
+        let first = r.d.engine().unwrap().out_clock();
+        r.player.inject_input(&[0.5; CALLBACK]).unwrap();
+        r.d.fill(&mut buf, 2);
+        assert!(r.d.engine().unwrap().out_clock() > first);
+        assert!(buf.iter().all(|x| (*x - 0.5).abs() < 1e-6), "heard live: {:?}", &buf[..4]);
+        let e = r.graph.export(m2_editor::render::Length::Seconds(0.5)).unwrap();
+        let out = r.fixture.0.join("out.wav");
+        e.render.write_float(&out, |_| {}).unwrap();
+        let mut w = hound::WavReader::open(&out).unwrap();
+        assert!(w.samples::<f32>().map(Result::unwrap).all(|x| x == 0.0), "the export has none of it");
+        r.graph.transport("stop").unwrap();
+        r.written();
+    }
 }

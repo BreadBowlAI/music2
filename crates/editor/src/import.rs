@@ -129,7 +129,7 @@ fn read_up_to(r: &mut dyn Read, buf: &mut [u8]) -> usize {
 }
 
 /// Every file under `assets/` that could be an asset, by its name there.
-fn assets_in(folder: &Path) -> Vec<(String, PathBuf)> {
+pub(crate) fn assets_in(folder: &Path) -> Vec<(String, PathBuf)> {
     let mut out = vec![];
     let mut todo = vec![(String::new(), folder.to_path_buf())];
     while let Some((prefix, dir)) = todo.pop() {

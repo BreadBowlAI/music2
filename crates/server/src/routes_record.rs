@@ -73,7 +73,7 @@ async fn record_start(State(s): S, Json(r): Json<StartReq>) -> ApiResult {
             if state.exports.running() {
                 anyhow::bail!("Wait for the export to finish.");
             }
-            state.graph.record_start(r.session, &r.module, &r.lane, Options { count_in: r.count_in, quantize: r.quantize })
+            state.graph.record_start(r.session, &r.module, &r.lane, Options { count_in: r.count_in, quantize: r.quantize, ..Default::default() })
         })
         .await?,
     ))

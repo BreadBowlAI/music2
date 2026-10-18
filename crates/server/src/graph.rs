@@ -60,6 +60,7 @@ mod lanes;
 mod tempo_lease;
 mod import;
 pub mod record;
+mod take_audio;
 pub(crate) mod exchange;
 
 use std::collections::{HashMap, VecDeque};
@@ -869,6 +870,8 @@ impl Graph {
 
     pub fn open(&self, dir: &Path) -> Result<Value> {
         let dir = dir.to_path_buf();
+        // The sound input stays open while a song is (D14): another song opens it again.
+        self.close_input();
         let opened = self.call(move |a| a.open(&dir))?;
         // The loop it had when it was last open here (design-8b §2.2), set before anything plays.
         // One the song's tempo makes too short now is left off.
@@ -880,7 +883,15 @@ impl Graph {
 
     /// Close the project. Returns once its plugin instances are destroyed, or after 2 s.
     pub fn close(&self) -> Teardown {
+        self.close_input();
         self.call(|a| Ok(a.close())).unwrap_or_default()
+    }
+
+    /// Close the player's sound input, if one is open (D14).
+    fn close_input(&self) {
+        if let Some(d) = self.inner.current_device() {
+            d.player.close_input();
+        }
     }
 
     /// What every change to the open project is announced with: its session, the accepted
