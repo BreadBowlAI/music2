@@ -48,10 +48,12 @@ pub mod fpenv;
 pub mod gauge;
 mod keep;
 pub mod latency;
+mod offline;
 mod overlay;
 pub mod packages;
 mod parts;
 mod plan;
+mod renders;
 pub mod plugins;
 mod poly;
 mod sandbox;
@@ -278,6 +280,7 @@ impl KernelInst {
             sample_rate: k.sample_rate,
             values: k.values,
             assets: k.assets,
+            offline: None,
         };
         let state = match sandbox.state(prefix, &spec) {
             Ok(s) => s,
@@ -1157,7 +1160,7 @@ struct Kernel<'a> {
     channels: u8,
     inputs: &'a [Input],
     values: &'a [f64],
-    assets: &'a [Option<Arc<audio::Asset>>],
+    assets: &'a [Option<sandbox::Held>],
     sample_rate: f64,
 }
 
@@ -1220,7 +1223,7 @@ impl Builder<'_> {
             FOp::Time(t) => Exec::Time(*t),
             FOp::Const(v) => Exec::Const(*v as f32),
             FOp::Kernel { kernel, channels, inputs, assets, values } => {
-                let read: Vec<Option<Arc<audio::Asset>>> = assets.iter().map(|a| self.assets.get(a)).collect();
+                let read: Vec<Option<sandbox::Held>> = assets.iter().map(|a| self.assets.get(a).map(sandbox::Held::Whole)).collect();
                 let k = Kernel { id: kernel, channels: *channels, inputs, values, assets: &read, sample_rate: self.sample_rate };
                 let inst = match boxed {
                     Make::New(shape) if in_voice => Some(Box::new(self.in_pool(n, &k, shape)?)),
@@ -2590,7 +2593,8 @@ impl Renderer {
             restarts: k.restarts,
         });
         let keep = keep.as_ref();
-        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep);
+        let stretch = offline::Kernel::of(packages, offline::STRETCH);
+        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep, stretch.as_ref())?;
         let used = used(flat);
         let mut shapes: Vec<Option<Shape>> =
             flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages, &assets) } else { None }).collect();

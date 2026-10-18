@@ -113,6 +113,11 @@ impl KernelSig {
 /// Where the checker looks up kernels. Implemented by the runtime's package set.
 pub trait Kernels {
     fn kernel(&self, id: &str) -> Option<&KernelSig>;
+    /// Whether `id` is an offline kernel (kernel ABI v1, flags bit 0): one the host runs off the
+    /// audio thread to make a clip's render, which song code can't call (`kernel.offline`).
+    fn offline(&self, _id: &str) -> bool {
+        false
+    }
     /// The signature of an installed plugin, as ports: `in`, `notes`, parameters, `out`.
     fn plugin(&self, _id: &str) -> Option<&KernelSig> {
         None

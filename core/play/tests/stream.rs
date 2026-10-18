@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use common::*;
 use m2_play::{Driver, Player};
-use m2_runtime::Renderer;
+use m2_runtime::{Basis, Renderer, audio::Cache};
 
 static ALONE: Mutex<()> = Mutex::new(());
 /// Every read of the disk thread takes 200 ms more while this is set.
@@ -146,4 +146,32 @@ fn a_slow_disk_misses_but_never_waits() {
     assert!(before.max(after) < period, "a callback took {:?} of its {period:?}", before.max(after));
     let missed = player.disk_misses();
     assert!(matches!(missed.as_slice(), [(m, n)] if m == "song" && *n > 0), "{missed:?}");
+}
+
+// The sx plan, slice 3 (RENDER-30, D10): a live cache's stretch is made in the background while
+// its lane plays. Held back, the warped clip plays silence, counted as misses, and the callbacks
+// never wait. Let go, the render is made, and the disk thread fills the chunks it had to leave
+// empty: the clip plays, and misses no more.
+#[test]
+fn a_player_plays_a_render_as_it_is_made() {
+    let _alone = alone();
+    // 10 s of the file over 24 beats, 12 s at 120 BPM.
+    let song = long_audio_clip(10.0, 120.0, serde_json::json!({"start": 0, "length": 24, "asset": "long.wav", "warp": [[0, 0], [10, 24]]}));
+    let mut cache = Cache::live_in(song.dir.join("renders"));
+    cache.hold_renders(Some(0));
+    let owner = m2_plugins::Owner::discard();
+    let mut r = Renderer::prepare(&song.flat, &song.data, &song.packages, SR, &mut cache, &owner, Basis::Fresh).unwrap();
+    r.set_strict(false);
+    let (player, mut d) = device(r);
+    player.play();
+    let (held, longest) = real_time(&mut d, 480, 0.3);
+    assert!(peak(&held) == 0.0 && misses(&player) > 0, "held back, the clip is silent, and missed");
+    assert!(longest < Duration::from_secs_f64(480.0 / SR as f64), "no callback waits: the longest took {longest:?}");
+    cache.hold_renders(None);
+    assert!(cache.settle_renders(Duration::from_secs(30)));
+    real_time(&mut d, 480, 0.2);
+    let missed = misses(&player);
+    let (heard, _) = real_time(&mut d, 480, 0.5);
+    assert!(peak(&heard) > 0.1, "made, the clip plays");
+    assert_eq!(misses(&player), missed, "and misses no more");
 }

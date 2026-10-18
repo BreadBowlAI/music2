@@ -21,6 +21,7 @@ libm.workspace = true
 
 [dev-dependencies]
 wasmtime = { workspace = true, features = ["wat"] }
+wat.workspace = true
 serde_json.workspace = true
 m2-kernel.workspace = true
 m2-std-kernels = { path = "../../std/kernels-src" }

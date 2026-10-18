@@ -121,7 +121,8 @@ pub enum Gesture {
         ends: bool,
     },
     /// An audio clip's settings (lane A's A3): its volume (−48 to +12 dB), its fades (seconds, at
-    /// most the clip together) and its direction. Those not given stay.
+    /// most the clip together), its direction, and whether it follows the song's tempo (the sx
+    /// plan's D11). Those not given stay.
     Audio {
         clip: ClipRef,
         #[serde(default)]
@@ -132,6 +133,8 @@ pub enum Gesture {
         fade_out: Option<f64>,
         #[serde(default)]
         reverse: Option<bool>,
+        #[serde(default)]
+        follow: Option<bool>,
     },
     /// The general form, for agents: whole clips put (each replacing the clip with its id, or
     /// added) and clips deleted by id.
@@ -287,7 +290,7 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 w.lanes.get_mut(&target).expect("loaded").added.push((clip, true));
             }
         }
-        Gesture::Audio { clip, gain_db, fade_in, fade_out, reverse } => {
+        Gesture::Audio { clip, gain_db, fade_in, fade_out, reverse, follow } => {
             let (lane, i) = w.resolve(clip)?;
             let l = w.lanes.get_mut(&lane).expect("resolved");
             let Clip::Audio(mut c) = l.was[i].clone() else {
@@ -315,6 +318,12 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
             }
             if let Some(r) = reverse {
                 c.reverse = *r;
+            }
+            // On again keeps the markers it has: they hold its beats since it was turned on.
+            match follow {
+                Some(true) if c.warp.is_empty() => c.warp = follow_markers(&c, tempo),
+                Some(false) => c.warp.clear(),
+                _ => {}
             }
             l.keep[i] = Some(Clip::Audio(c));
         }
@@ -683,6 +692,19 @@ fn value_before(points: &[(f64, f64)], t: f64) -> Option<f64> {
         Some(0) => points.first().map(|p| p.1),
         _ => value_at(points, t),
     }
+}
+
+/// Follow tempo's warp markers for `c` (the sx plan's D11): at its start, its end and each tempo
+/// change inside it, each with the moment of its file that beat plays now, at the tempo now: its
+/// offset, on by the seconds from its start, at its pitch's speed. So it sounds the same now, and
+/// keeps its beats when the tempo changes.
+fn follow_markers(c: &AudioClip, tempo: &m2_song::TempoMap) -> Vec<(f64, f64)> {
+    let (t0, speed) = (tempo.seconds_at(c.start), (c.pitch / 12.0).exp2());
+    let mut beats = vec![0.0, c.length];
+    beats.extend(tempo.segments().iter().map(|t| t.beat - c.start).filter(|b| *b > 0.0 && *b < c.length));
+    beats.sort_by(f64::total_cmp);
+    beats.dedup();
+    beats.into_iter().map(|b| (c.offset + (tempo.seconds_at(c.start + b) - t0) * speed, b)).collect()
 }
 
 /// An audio clip whose `what` moves inside it: refused for a pitched clip, whose audio isn't read

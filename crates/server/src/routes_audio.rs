@@ -201,4 +201,4 @@ async fn sample(State(s): S, Query(q): Query<SampleQuery>, headers: HeaderMap, b
 
 #[cfg(test)]
 #[path = "routes_audio_tests.rs"]
-mod tests;
+pub(crate) mod tests;

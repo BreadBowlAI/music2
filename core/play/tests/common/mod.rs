@@ -308,13 +308,17 @@ pub fn long_wav_at(i: u64) -> [f32; 2] {
 /// A song at `bpm` that plays one clip of a [`long_wav`] of `seconds` from beat 0, on a stereo audio
 /// lane `clips`: a lane that streams (RENDER-30).
 pub fn long_audio(seconds: f64, bpm: f64) -> Song {
+    long_audio_clip(seconds, bpm, json!({"start": 0, "length": seconds * bpm / 60.0, "asset": "long.wav"}))
+}
+
+/// [`long_audio`]'s file, in a song at `bpm` whose one clip is `clip`.
+pub fn long_audio_clip(seconds: f64, bpm: f64, clip: Value) -> Song {
     let dir = temp("long-audio");
-    let beats = seconds * bpm / 60.0;
     let files = [
         ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
         ("song.ts", String::new()),
         ("data/arrangement.json", json!({"tempo": [{"beat": 0, "bpm": bpm}]}).to_string()),
-        ("data/song/clips.json", json!({"clips": [{"start": 0, "length": beats, "asset": "long.wav"}]}).to_string()),
+        ("data/song/clips.json", json!({"clips": [clip]}).to_string()),
     ];
     for (name, text) in files {
         let p = dir.join(name);

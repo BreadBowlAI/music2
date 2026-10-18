@@ -824,6 +824,13 @@ impl<'a> Checker<'a> {
                     let is_plugin = matches!(node.op, Op::Plugin { .. });
                     let sig = if is_plugin { self.kernels.plugin(kernel) } else { self.kernels.kernel(kernel) };
                     let Some(sig) = sig else {
+                        if !is_plugin && self.kernels.offline(kernel) {
+                            let message = format!(
+                                "`{kernel}` is an offline kernel: music2 runs it to make a clip's render, and song code can't call it"
+                            );
+                            self.diags.push(coded("kernel.offline", m, Some(node), message));
+                            continue;
+                        }
                         let what = if is_plugin { "plugin (is it installed?)" } else { "kernel" };
                         self.diags.push(diag(m, Some(node), format!("unknown {what} `{kernel}`")));
                         continue;

@@ -40,6 +40,9 @@ tower-http = { version = "0.7", features = ["fs"] }
 open = "5"
 toml = "1"
 wasmtime = { version = "49", default-features = false, features = ["anyhow", "cranelift", "runtime", "std"] }
+# Tests' hand-written kernels, text to wasm bytes: the version wasmtime's `wat` feature already
+# builds, so nothing new is compiled.
+wat = "1.261"
 rquickjs = { version = "0.14", features = ["loader"] }
 oxc = { version = "0.153", features = ["transformer", "codegen", "semantic", "ast_visit"] }
 bytemuck = "1"

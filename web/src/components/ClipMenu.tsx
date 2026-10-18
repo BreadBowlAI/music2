@@ -32,6 +32,8 @@ export interface MenuItem {
   label: string;
   /** A row that is on or off (Reverse): a check while on. */
   checked?: boolean;
+  /** A line under its words that says what it does, in plain words. */
+  detail?: string;
   shortcut?: string;
   /** Why it can't run now: the row is greyed and its tooltip says this. */
   off?: string | null;
@@ -69,6 +71,7 @@ export default function PointMenu({
                 {...(it.checked !== undefined ? { role: "menuitemcheckbox", "aria-checked": it.checked } : {})}
                 icon={checks ? <Check size={14} className={it.checked ? undefined : "invisible"} /> : undefined}
                 shortcut={it.shortcut}
+                detail={it.detail}
                 disabled={!!it.off}
                 title={it.off ?? undefined}
                 // The timeline keeps the keyboard: Q and the arrows still work after a row.

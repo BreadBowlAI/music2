@@ -456,6 +456,25 @@ fn the_sampler_example_gives_the_same_bits_on_1_to_7_threads() {
     }
 }
 
+// RENDER-2 (track sx): examples/resample's warped clips are stretched by std's `std:stretch`, made
+// before the render starts, so the example renders the same bits on 2, 3, 4 and 7 threads as on
+// one; and its chops track alone sounds in both warped clips (3 to 5 s, and from 6 s).
+#[test]
+fn the_resample_example_gives_the_same_bits_on_1_to_7_threads() {
+    let song = fixture("examples/resample");
+    let frames = (song.seconds() * song.rate as f64) as usize;
+    let one = offline(&song, frames);
+    for (n, diff, on_workers, _) in on_threads(&song, frames, &[2, 3, 4, 7], &one) {
+        assert_eq!(diff, None, "the resample example on {n} threads: the same bits");
+        assert!(on_workers > 0, "the resample example on {n} threads: tasks ran on workers");
+    }
+    let alone = "import { song } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport chops from \"./tracks/chops\";\n\
+                 export default song(() => master(mixer({ chops: chops.out })));\n";
+    let chops = offline(&fixture_with("examples/resample", &[("song.ts", alone)]), frames);
+    let at = |s: f64| (s * song.rate as f64) as usize;
+    assert!(peak(&chops[at(3.0)..at(5.0)]) > 0.05 && peak(&chops[at(6.0)..at(8.0)]) > 0.05, "the warped clips sound");
+}
+
 // RENDER-2 (8a): 30 s of p16 render the same bits on 4 threads as on one, with tasks on workers
 // and reads across threads.
 #[test]

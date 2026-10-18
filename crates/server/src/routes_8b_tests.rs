@@ -381,3 +381,33 @@ fn remove_automation_over_http() {
     drop(held);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// The sx plan, D11: Follow tempo through `POST /api/graph/clips`, as the clip menu sends it. On, the
+// resample example's first clip (2 beats at 120 BPM: a second of its file) gets warp markers at its
+// start and end; off, none. Each is one step; a notes clip has no tempo to follow.
+#[test]
+fn follow_tempo_through_the_clips_route() {
+    let dir = std::env::temp_dir().join(format!("m2-routes-8b-follow-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    crate::routes_audio::tests::copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/resample"), &dir);
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let follow = |on: bool, lane: &str, id: &str| {
+        let gesture = json!({"op": "audio", "clip": {"module": lane.split('/').next(), "lane": lane.split('/').nth(1), "id": id}, "follow": on});
+        post(&running.url, "/api/graph/clips", Some("t0k"), &json!({"session": session, "gesture": gesture}))
+    };
+    let line = || {
+        let file = std::fs::read_to_string(dir.join("data/chops/clips.json")).unwrap();
+        file.lines().find(|l| l.contains("a3s9vpxb")).unwrap().to_string()
+    };
+    let rev = |done: &Value| done["revision"].as_u64().unwrap();
+    let (status, on) = follow(true, "chops/clips", "a3s9vpxb");
+    assert_eq!(status, 200, "{on:#}");
+    assert!(line().contains(r#""warp": [[0, 0], [1, 2]]"#), "{}", line());
+    let (status, off) = follow(false, "chops/clips", "a3s9vpxb");
+    assert_eq!((status, rev(&off)), (200, rev(&on) + 1), "{off:#}");
+    assert!(line().contains(r#""warp": []"#), "{}", line());
+    let (status, why) = follow(true, "kick/hits", "my53vvkc");
+    assert_eq!(status, 400, "{why:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

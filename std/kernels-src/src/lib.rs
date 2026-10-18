@@ -724,6 +724,12 @@ mod synth;
 mod testkit;
 mod voice;
 
+// ---------------------------------------------------------------- offline kernels
+
+mod stretch;
+
+pub use stretch::Stretch;
+
 pub use drums::Drum;
 pub use fm::Fm;
 pub use notes::{DrumHit, HitCount};

@@ -283,7 +283,7 @@ const rows = async () => {
 };
 const listed = await rows();
 const at = (id) => listed.findIndex((r) => r[0] === id);
-check(at("volume") === at("split") + 1 && at("reverse") === at("volume") + 1 && at("unfade") === at("reverse") + 1, `Volume…, Reverse and Remove fades come after Split: ${listed.map((r) => r[0])}`);
+check(at("volume") === at("split") + 1 && at("reverse") === at("volume") + 1 && at("follow") === at("reverse") + 1 && at("unfade") === at("follow") + 1, `Volume…, Reverse, Follow tempo and Remove fades come after Split: ${listed.map((r) => r[0])}`);
 check(listed[at("reverse")]?.[1] === "false" && listed[at("unfade")]?.[2] === false, `Reverse unchecked, Remove fades on: ${JSON.stringify(listed.slice(at("volume"), at("unfade") + 1))}`);
 
 // Volume… −6: the label says it and the waveform halves.

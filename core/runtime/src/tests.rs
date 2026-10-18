@@ -29,31 +29,41 @@ mod alloc_count {
     thread_local! {
         static ON: Cell<bool> = const { Cell::new(false) };
         static N: Cell<usize> = const { Cell::new(0) };
+        static MOST: Cell<usize> = const { Cell::new(0) };
     }
 
-    fn count() {
+    /// Count one heap operation, of `size` bytes asked for (0 to free).
+    fn count(size: usize) {
         let _ = ON.try_with(|on| {
             if on.get() {
                 let _ = N.try_with(|n| n.set(n.get() + 1));
+                let _ = MOST.try_with(|m| m.set(m.get().max(size)));
             }
         });
     }
 
     unsafe impl GlobalAlloc for Counter {
         unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-            count();
+            count(l.size());
             unsafe { System.alloc(l) }
         }
 
         unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
-            count();
+            count(0);
             unsafe { System.dealloc(p, l) }
         }
 
         unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
-            count();
+            count(n);
             unsafe { System.realloc(p, l, n) }
         }
+    }
+
+    /// What `f` returns, and the largest block it took from the heap on this thread, in bytes.
+    pub fn largest<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        MOST.with(|m| m.set(0));
+        let (r, _) = during(f);
+        (r, MOST.with(|m| m.get()))
     }
 
     /// What `f` returns, and the heap operations it made on this thread.
@@ -411,7 +421,7 @@ fn play_state(sb: &mut sandbox::Sandbox, s: &sandbox::State, blocks: usize, x: i
 fn two_states_in_one_instance_play_independently() {
     let pk = std_packages();
     let (module, prefix, _) = pk.module_for("std:delay").unwrap();
-    let born = |sb: &mut sandbox::Sandbox| sb.state(prefix, &sandbox::Spec { inputs: 4, outputs: 1, channels: &[1; 5], audio: 1, sample_rate: SR as f64, values: &[], assets: &[] }).unwrap();
+    let born = |sb: &mut sandbox::Sandbox| sb.state(prefix, &sandbox::Spec { inputs: 4, outputs: 1, channels: &[1; 5], audio: 1, sample_rate: SR as f64, values: &[], assets: &[], offline: None }).unwrap();
     let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
     let controls = [0.01, 0.5, 0.5];
     let alone = |seed: usize| {
@@ -622,22 +632,29 @@ fn package_with(wat: &str, ports: &str) -> PathBuf {
     let dir =
         std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("k.wasm"), wat).unwrap();
+    std::fs::write(dir.join("k.wasm"), wasm(wat)).unwrap();
     let manifest = format!("[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\n{ports}\n");
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
     dir
 }
 
-/// A kernel module speaking ABI v`abi` around `kernels`, the exports of its kernel types: its one
-/// page of memory and its allocator (`m2_alloc`), which hands out room forward from 8 KiB, growing the
-/// memory as it must, as its sandbox is born. Below 8 KiB a hand-written kernel may keep one state
-/// of its own at a fixed place, as these tests do: they make one state in a sandbox.
+/// A module's text as the bytes a package ships.
+pub(crate) fn wasm(wat: &str) -> Vec<u8> {
+    wat::parse_str(wat).unwrap()
+}
+
+/// A kernel module speaking ABI v`abi` around `kernels`, the exports of its kernel types: its
+/// version in its `m2_abi` section, its one page of memory and its allocator (`m2_alloc`), which
+/// hands out room forward from 8 KiB, growing the memory as it must, as its sandbox is born. Below
+/// 8 KiB a hand-written kernel may keep one state of its own at a fixed place, as these tests do:
+/// they make one state in a sandbox.
 pub(crate) fn module_v(abi: u32, kernels: &str) -> String {
+    let section: String = abi.to_le_bytes().iter().map(|b| format!("\\{b:02x}")).collect();
     format!(
         r#"(module
+  (@custom "m2_abi" "{section}")
   (memory (export "memory") 1)
   (global $heap (mut i32) (i32.const 8192))
-  (func (export "m2_abi") (result i32) (i32.const {abi}))
   (func (export "m2_alloc") (param $size i32) (param $align i32) (result i32) (local $at i32) (local $end i32)
     (local.set $at (i32.and (i32.add (global.get $heap) (i32.sub (local.get $align) (i32.const 1))) (i32.sub (i32.const 0) (local.get $align))))
     (local.set $end (i32.add (local.get $at) (local.get $size)))
@@ -707,24 +724,51 @@ fn packages_must_be_sandboxed_and_speak_our_abi() {
     }
 }
 
-// ABI-3: a module built for kernel ABI v0 is refused, and the refusal names its version and says
-// what to do, before any v1 export is asked for.
+// ABI-3 (D1 of track sx): the version is read from the module's bytes, its `m2_abi` section,
+// before the module is compiled. So a module built for a later ABI is refused by its version,
+// whatever else it holds: here an import v1 doesn't know, and a 64-bit memory.
 #[test]
-fn a_v0_module_is_refused_naming_its_version() {
+fn a_later_abi_module_is_refused_by_its_version_first() {
+    let v2 = module_v(2, &kernel_v1("k", &out_v1("(local.get $x)")))
+        .replacen("(module", r#"(module (import "m2" "other" (func))"#, 1)
+        .replace(r#"(memory (export "memory") 1)"#, r#"(memory (export "memory") i64 1)"#);
+    let dir = package(&v2);
+    let e = PackageSet::default().load(&dir).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("built for kernel ABI v2, but this music2 speaks v1 only"), "{e:#}");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// The version has one place (D1, D2): std.wasm says v1 in its `m2_abi` section, and has no
+// `m2_abi()` export.
+#[test]
+fn std_wasm_says_v1_in_its_section() {
+    let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm")).unwrap();
+    assert_eq!(packages::abi_version(&bytes).unwrap(), Some(packages::KERNEL_ABI));
+    let module = wasmtime::Module::new(&wasmtime::Engine::default(), &bytes).unwrap();
+    assert!(module.exports().all(|e| e.name() != "m2_abi"), "no `m2_abi()` export");
+}
+
+// ABI-3 (D2): a module with no `m2_abi` section was built for kernel ABI v0, or isn't a music2
+// kernel. It is refused, saying so and what to do, whatever it exports: an `m2_abi()` that
+// returns 1 doesn't count.
+#[test]
+fn a_module_with_no_abi_section_is_refused_as_v0() {
     let v0 = r#"(module
       (memory (export "memory") 1)
-      (func (export "m2_abi") (result i32) (i32.const 0))
+      (func (export "m2_abi") (result i32) (i32.const 1))
       (func (export "k_init") (param f32 i32 i32))
       (func (export "k_ports") (result i32) (i32.const 1))
       (func (export "k_port") (param i32) (result i32) (i32.const 1024))
       (func (export "k_reset"))
       (func (export "k_process") (param i32))
       (func (export "k_active") (result i32) (i32.const 0)))"#;
-    let dir = package(v0);
-    let e = PackageSet::default().load(&dir).map(|_| ()).unwrap_err();
-    assert!(format!("{e:#}").contains("built for kernel ABI v0"), "{e:#}");
-    assert!(format!("{e:#}").contains("speaks v1"), "{e:#}");
-    std::fs::remove_dir_all(dir).ok();
+    for module in [v0, "(module)"] {
+        let dir = package(module);
+        let e = PackageSet::default().load(&dir).map(|_| ()).unwrap_err();
+        let said = "built for kernel ABI v0, or isn't a music2 kernel: it has no `m2_abi` section. Rebuild it with the v1 kit";
+        assert!(format!("{e:#}").contains(said), "{e:#}");
+        std::fs::remove_dir_all(dir).ok();
+    }
 }
 
 // ABI-2, ABI-3: the one import a kernel may have is `m2.asset_read`, with its signature. Any other
@@ -1052,6 +1096,267 @@ fn stretch_quality_report() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// The std package without its kernel `name` (a manifest entry cut out; the same module): its
+/// packages, and the folder to remove after.
+fn std_without(name: &str) -> (PackageSet, PathBuf) {
+    let std = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    let dir = project(&[]);
+    std::fs::create_dir_all(dir.join("kernels")).unwrap();
+    std::fs::copy(std.join("kernels/std.wasm"), dir.join("kernels/std.wasm")).unwrap();
+    let text = std::fs::read_to_string(std.join("m2pkg.toml")).unwrap();
+    let at = text.find(&format!("[[kernel]]\nname = \"{name}\"")).unwrap_or_else(|| panic!("std has {name}"));
+    let end = text[at + 1..].find("[[kernel]]").map_or(text.len(), |e| at + 1 + e);
+    std::fs::write(dir.join("m2pkg.toml"), format!("{}{}", &text[..at], &text[end..])).unwrap();
+    let mut pk = PackageSet::default();
+    pk.load(&dir).unwrap();
+    (pk, dir)
+}
+
+// The sx plan, D7 and D9: a warped clip is stretched by the song's `std:stretch`, run off the graph
+// to make its render: the lane plays the kernel's whole run at the clip's start, bit for bit. A std
+// without it plays the clip silent, as the runtime has no stretch of its own, and the clip beside it
+// still plays.
+#[test]
+fn a_warped_clip_is_stretched_by_std_stretch() {
+    let src = sine(440.0, 3.0, SR);
+    let (ir, tl, dir) = audio_song(
+        &[("a440.wav", vec![src.clone()], SR)],
+        json!([
+            {"start": 1, "length": 3, "asset": "a440.wav", "warp": [[0, 0], [1, 1], [2.5, 3]], "pitch": 3, "fade_out": 0.05},
+            {"start": 6, "length": 1, "asset": "a440.wav"}
+        ]),
+    );
+    let out = render_audio(&ir, &tl, 3.5);
+    let clip = tl.audio("song", "clips")[0].clone();
+    let asset = Arc::new(audio::Asset { channels: vec![src], sample_rate: SR as f64 });
+    let want = audio::render_clip(&clip, &asset, tl.tempo(), SR as f64, Some(&stream::stretch())).unwrap();
+    // 120 bpm: beat 1 is frame 24 000; the clip is 3 beats, 72 000 frames.
+    let (at, len) = (24_000, want[0].len());
+    assert_eq!(len, 72_000);
+    assert!(peak(&out[at..at + len]) > 0.3, "the warped clip plays");
+    let first = (0..len).find(|&i| out[at + i] != [want[0][i]; 2]);
+    assert_eq!(first, None, "the lane plays the kernel's run, bit for bit");
+    let (pk, std) = std_without("stretch");
+    let flat = check(&ir, &pk).unwrap();
+    let without = Renderer::new(&flat, &tl, &pk, SR).unwrap().render(3.5).unwrap();
+    assert!(without[at..at + len].iter().all(|f| *f == [0.0, 0.0]), "without std:stretch, the warped clip is silent");
+    assert!(peak(&without[3 * SR as usize..]) > 0.3, "the plain clip beside it plays");
+    for d in [dir, std] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+// The sx plan, slice 2 (RENDER-2, RENDER-30): an export with an empty cache folder equals one with
+// the renders already there, bit for bit: a render read back is the render made. The first cache
+// made both of examples/resample's warped clips, the second only read them.
+#[test]
+fn an_export_with_an_empty_cache_folder_equals_one_with_a_full_one() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/resample");
+    let clips: Value = serde_json::from_str(&std::fs::read_to_string(example.join("data/chops/clips.json")).unwrap()).unwrap();
+    let (ir, _, dir) = audio_song(&[], clips["clips"].clone());
+    std::fs::copy(example.join("assets/keys-bounce.wav"), dir.join("assets/keys-bounce.wav")).unwrap();
+    let tl = data(&ir, &dir);
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let folder = dir.join("renders");
+    let export = || {
+        let mut cache = audio::Cache::with_renders_in(Some(folder.clone()));
+        let owner = m2_plugins::Owner::discard();
+        let mut r = Renderer::prepare(&flat, &tl, &pk, SR, &mut cache, &owner, Basis::Fresh).unwrap();
+        (r.render(8.5).unwrap(), cache.work().1)
+    };
+    let (cold, made) = export();
+    let (warm, remade) = export();
+    assert_eq!((made, remade), (2, 0), "the first export made the two renders, the second read them");
+    assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 2, "two renders in the folder, no part file left");
+    // 120 bpm: the warped clips play from 3 s to 5 s and from 6 s.
+    assert!(peak(&cold[3 * SR as usize..5 * SR as usize]) > 0.05 && peak(&cold[6 * SR as usize..]) > 0.05, "the warped clips play");
+    assert!(cold == warm, "a full cache folder gives the same bits as an empty one");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The finished renders in `folder`, and its part files.
+fn renders_in(folder: &Path) -> (usize, usize) {
+    let names: Vec<String> = std::fs::read_dir(folder).map_or(vec![], |d| d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect());
+    let parts = names.iter().filter(|n| n.ends_with(".part")).count();
+    (names.len() - parts, parts)
+}
+
+// The sx plan, slice 3 (RENDER-1, RENDER-30, D10): an export never plays a render half made. A live
+// session's tempo change asks for a new stretch, and its stretch thread has made a second of it,
+// into a part file in the cache folder, when an export starts there. The export's cache is offline:
+// it makes its own render whole before it plays, so it equals an export with no live session and
+// no cache folder.
+#[test]
+fn an_export_never_plays_a_render_half_made() {
+    let src = sine(440.0, 3.0, SR);
+    let (ir, tl, dir) = audio_song(&[("a.wav", vec![src.clone(), src], SR)], json!([{"start": 1, "length": 6, "asset": "a.wav", "warp": [[0, 0], [3, 6]]}]));
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let (folder, owner) = (dir.join("renders"), m2_plugins::Owner::discard());
+    let mut live = audio::Cache::live_in(folder.clone());
+    live.hold_renders(Some(SR as usize));
+    drop(Renderer::prepare(&flat, &tl, &pk, SR, &mut live, &owner, Basis::Fresh).unwrap());
+    live.prune();
+    // The tempo goes from 120 to 90 BPM: the clip plays from 2/3 s for 4 s.
+    std::fs::write(dir.join("data/arrangement.json"), json!({"tempo": [{"beat": 0, "bpm": 90}]}).to_string()).unwrap();
+    let slower = data(&ir, &dir);
+    drop(Renderer::prepare(&flat, &slower, &pk, SR, &mut live, &owner, Basis::Fresh).unwrap());
+    live.prune();
+    assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+    assert_eq!(renders_in(&folder), (0, 1), "the new stretch is half made, in its part file");
+    let export = |cache: &mut audio::Cache| Renderer::prepare(&flat, &slower, &pk, SR, cache, &owner, Basis::Fresh).unwrap().render(5.0).unwrap();
+    let after = export(&mut audio::Cache::with_renders_in(Some(folder.clone())));
+    let cold = export(&mut audio::Cache::with_renders_in(None));
+    assert!(peak(&cold[SR as usize..4 * SR as usize]) > 0.2, "the warped clip plays");
+    let first = (0..cold.len()).find(|&i| after[i] != cold[i]);
+    assert_eq!(first, None, "the export beside a half-made render is the cold export, bit for bit");
+    drop(live);
+    assert_eq!(renders_in(&folder), (1, 0), "the export's render is whole in the folder; the live one's part went with its cache");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// Review sx-r1 (RENDER-30, D10): a cache folder that can't be written never silences a warped clip.
+// Its stretch is made in memory instead. An export plays it as one with no cache folder does, bit
+// for bit; so does a live session, once its stretch is made. Nothing is left in the folder.
+#[test]
+fn a_cache_folder_that_cannot_be_written_still_plays_warped_clips() {
+    let src = sine(440.0, 3.0, SR);
+    let (ir, tl, dir) = audio_song(&[("a.wav", vec![src.clone(), src], SR)], json!([{"start": 1, "length": 6, "asset": "a.wav", "warp": [[0, 0], [3, 6]]}]));
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let (folder, owner) = (dir.join("renders"), m2_plugins::Owner::discard());
+    std::fs::create_dir_all(&folder).unwrap();
+    let read_only = |on: bool| {
+        let mut p = std::fs::metadata(&folder).unwrap().permissions();
+        p.set_readonly(on);
+        std::fs::set_permissions(&folder, p).unwrap();
+    };
+    read_only(true);
+    let play = |cache: &mut audio::Cache| {
+        let mut r = Renderer::prepare(&flat, &tl, &pk, SR, cache, &owner, Basis::Fresh).unwrap();
+        assert!(cache.settle_renders(std::time::Duration::from_secs(60)));
+        r.render(5.0).unwrap()
+    };
+    let cold = play(&mut audio::Cache::with_renders_in(None));
+    assert!(peak(&cold[SR as usize..4 * SR as usize]) > 0.2, "the warped clip plays");
+    let export = play(&mut audio::Cache::with_renders_in(Some(folder.clone())));
+    assert!(export == cold, "an export whose cache folder is read-only plays the clip, as one with no folder");
+    let live = play(&mut audio::Cache::live_in(folder.clone()));
+    assert!(live == cold, "so does a live session");
+    assert_eq!(renders_in(&folder), (0, 0), "nothing in the folder");
+    read_only(false);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// Review sx-r1 (RENDER-25's rule for a node): offline, a stretch that fails fails the build, naming
+// its clip, so an export never finishes without it. Here the stretch kernel traps. Its part file
+// goes. Live, the clip is silent alone, and the lane is built.
+#[test]
+fn an_export_whose_stretch_fails_names_the_clip() {
+    let trap = r#"(func (export "k_new") (param i32) (result i32) (i32.const 4096))
+        (func (export "k_ports") (result i32) (i32.const 1))
+        (func (export "k_reset") (param i32))
+        (func (export "k_active") (param i32) (result i32) (i32.const 0))
+        (func (export "k_process") (param i32 i32 i32 i32) unreachable)"#;
+    let pkg = package_with(&module_v1(trap), "outputs = [\"out: audio<2>\"]\noffline = true");
+    let mut pk = PackageSet::default();
+    pk.load(&pkg).unwrap();
+    let k = offline::Kernel::of(&pk, "t:k").expect("an offline kernel");
+    let dir = project(&[]);
+    audio::write_wav(&dir.join("a.wav"), &[sine(440.0, 1.0, SR)], SR).unwrap();
+    let clip: m2_song::AudioClip = serde_json::from_value(json!({"start": 2, "length": 4, "asset": "a.wav", "warp": [[0, 0], [1, 4]]})).unwrap();
+    let tempo = m2_song::TempoMap::constant(120.0);
+    let folder = dir.join("renders");
+    let build = |cache: &mut audio::Cache| audio::AudioLane::build_with(std::slice::from_ref(&clip), &|a| Some(dir.join(a)), cache, &tempo, SR as f64, 2, Some(&k));
+    let e = build(&mut audio::Cache::with_renders_in(Some(folder.clone()))).map(|_| ()).expect_err("the export fails");
+    let e = format!("{e:#}");
+    assert!(e.starts_with("the warped clip of a.wav at beat 2 can't be stretched: ") && e.contains("crashed"), "{e}");
+    assert_eq!(renders_in(&folder), (0, 0), "its part file went");
+    let mut live = audio::Cache::live_in(folder.clone());
+    let lane = build(&mut live).expect("live, the lane is built");
+    assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+    assert_eq!(renders_in(&folder), (0, 0));
+    drop((lane, live));
+    for d in [dir, pkg] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+// The sx plan, slice 3 (D10): a render the cache's next prune drops stops, and leaves no part file;
+// one a kept lane plays goes on. Two warped clips are asked for, the first held at a second made,
+// the second waiting behind it, each in its part file. A rebuild of the same lane keeps both. A
+// build without them drops both: their part files go, neither is ever named in the folder, and
+// the next render is made.
+#[test]
+fn a_dropped_render_stops_and_leaves_no_part_file() {
+    let dir = project(&[]);
+    let src = sine(440.0, 3.0, SR);
+    audio::write_wav(&dir.join("a.wav"), &[src.clone(), src], SR).unwrap();
+    let k = offline::Kernel::of(&std_packages(), offline::STRETCH).unwrap();
+    let tempo = m2_song::TempoMap::constant(120.0);
+    let clip = |beats: f64| -> m2_song::AudioClip {
+        serde_json::from_value(json!({"start": 0, "length": beats, "asset": "a.wav", "warp": [[0, 0], [3, beats]]})).unwrap()
+    };
+    let folder = dir.join("renders");
+    let mut cache = audio::Cache::live_in(folder.clone());
+    cache.hold_renders(Some(SR as usize));
+    let mut build = |clips: &[m2_song::AudioClip]| {
+        let lane = audio::AudioLane::build_with(clips, &|a| Some(dir.join(a)), &mut cache, &tempo, SR as f64, 2, Some(&k)).unwrap();
+        cache.prune();
+        assert!(cache.settle_renders(std::time::Duration::from_secs(20)));
+        lane
+    };
+    let first = build(&[clip(6.0), clip(4.0)]);
+    assert_eq!(renders_in(&folder), (0, 2), "two renders asked for, each in its part file");
+    let again = build(&[clip(6.0), clip(4.0)]);
+    assert!(Arc::ptr_eq(&first, &again), "the same lane");
+    assert_eq!(renders_in(&folder), (0, 2), "a lane kept keeps its renders going");
+    let other = build(&[clip(5.0)]);
+    assert_eq!(renders_in(&folder), (0, 1), "the two dropped renders stopped, and their part files went");
+    cache.hold_renders(None);
+    assert!(cache.settle_renders(std::time::Duration::from_secs(60)));
+    assert_eq!(renders_in(&folder), (1, 0), "only the render a lane plays is made");
+    assert_eq!(cache.work().1, 3);
+    drop((first, again, other, cache));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// The sx plan, D9 (kernel ABI v1, flags bit 0): an offline kernel is run by music2 to make a clip's
+// render, never by song code. A song that calls one gets `kernel.offline` at its node; no graph
+// types it, and no list of the kernels songs call has it.
+#[test]
+fn song_code_cannot_call_an_offline_kernel() {
+    let ir = song(json!([{"id": "s", "op": "kernel", "kernel": "std:stretch", "src": "song.ts:3:5"}]), "s", json!([]));
+    let pk = std_packages();
+    let e = check(&ir, &pk).expect_err("refused");
+    assert_eq!(e.iter().map(|d| (d.code, d.src.as_deref())).collect::<Vec<_>>(), [("kernel.offline", Some("song.ts:3:5"))], "{e:?}");
+    assert!(e[0].message.starts_with("`std:stretch` is an offline kernel"), "{}", e[0].message);
+    assert!(m2_ir::Kernels::kernel(&pk, "std:stretch").is_none() && pk.kernel_sigs().all(|s| s.id != "std:stretch"));
+}
+
+// Information only (PLAT-1): how fast `std:stretch` makes a warped clip's render here. A minute of
+// stereo 44.1 kHz audio laid out over 75 s and up 3 semitones, in a 48 kHz song, into its file.
+#[test]
+#[ignore = "prints a measurement; run with --ignored --nocapture"]
+fn stretch_speed_report() {
+    let dir = project(&[]);
+    let wave = |k: f32| (0..60 * 44_100).map(|i| (i as f32 * k).sin() * 0.3).collect::<Vec<f32>>();
+    audio::write_wav(&dir.join("a.wav"), &[wave(0.031), wave(0.047)], 44_100).unwrap();
+    let clip: m2_song::AudioClip =
+        serde_json::from_value(json!({"start": 0, "length": 150, "asset": "a.wav", "warp": [[0, 0], [60, 150]], "pitch": 3})).unwrap();
+    let k = offline::Kernel::of(&std_packages(), offline::STRETCH).unwrap();
+    let mut cache = audio::Cache::with_renders_in(Some(dir.join("renders")));
+    let t = std::time::Instant::now();
+    let tempo = m2_song::TempoMap::constant(120.0);
+    let lane = audio::AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut cache, &tempo, SR as f64, 2, Some(&k)).unwrap();
+    let secs = t.elapsed().as_secs_f64();
+    assert_eq!(cache.work().1, 1);
+    println!("std:stretch: 75 s of stereo in {secs:.2} s, {:.0} times faster than real time", 75.0 / secs);
+    drop(lane);
+    std::fs::remove_dir_all(dir).ok();
+}
+
 // FMT-15: a clip whose asset is missing is silent; the lane's other clips still play.
 #[test]
 fn a_missing_asset_silences_only_its_clip() {
@@ -1139,6 +1444,92 @@ fn an_asset_read_allocates_nothing() {
     for d in [dir, pkg] {
         std::fs::remove_dir_all(d).ok();
     }
+}
+
+// D3 of track sx (ABI-2): a sandbox off the audio thread may hold an asset as its file on disk,
+// not decoded whole. A kernel reads the same bits either way: 16-bit and float files, mono, stereo
+// and 3 channels, each channel and one past them, in odd pieces (one longer than the host reads at
+// once) and past the end, with the same counts. Its settings entry says the same.
+#[test]
+fn an_asset_read_from_disk_is_the_decoded_asset() {
+    // Its state at 4096: its settings' address, the frame it is at, where it reads to (room it
+    // takes at birth), and what the last read returned. Its asset's channel is its first value.
+    let k = r#"
+  (func (export "k_new") (param $cfg i32) (result i32)
+    (i32.store (i32.const 4096) (local.get $cfg))
+    (i32.store (i32.const 4100) (i32.const 0))
+    (i32.store (i32.const 4104) (i32.shl (memory.grow (i32.const 4)) (i32.const 16)))
+    (i32.const 4096))
+  (func (export "k_ports") (result i32) (i32.const 1))
+  (func (export "k_reset") (param $s i32) (i32.store offset=4 (local.get $s) (i32.const 0)))
+  (func (export "k_active") (param i32) (result i32) (i32.const 0))
+  (func (export "k_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32) (local $cfg i32)
+    (local.set $cfg (i32.load (local.get $s)))
+    (i32.store offset=12 (local.get $s) (call $read
+      (i32.load (i32.load offset=36 (local.get $cfg)))
+      (i32.trunc_f64_u (f64.load (i32.load offset=28 (local.get $cfg))))
+      (i32.load offset=4 (local.get $s))
+      (i32.load offset=8 (local.get $s))
+      (i32.sub (local.get $to) (local.get $from))))
+    (i32.store offset=4 (local.get $s) (i32.add (i32.load offset=4 (local.get $s)) (i32.sub (local.get $to) (local.get $from)))))"#;
+    let import = r#"(module (import "m2" "asset_read" (func $read (param i32 i32 i32 i32 i32) (result i32)))"#;
+    let pkg = package(&module_v1(k).replacen("(module", import, 1));
+    let mut pk = PackageSet::default();
+    pk.load(&pkg).unwrap();
+    let (module, prefix, _) = pk.module_for("t:k").unwrap();
+    let frames = 50_000;
+    let sample = |c: usize, i: usize| (((i * (31 + 7 * c)) % 997) as f32 / 498.5 - 1.0) * 0.9;
+    let mut files = vec![];
+    for (channels, float) in [(1, false), (2, false), (3, false), (1, true), (2, true)] {
+        let path = pkg.join(format!("{channels}-{float}.wav"));
+        let (bits, format) = if float { (32, hound::SampleFormat::Float) } else { (16, hound::SampleFormat::Int) };
+        let spec = hound::WavSpec { channels, sample_rate: 44_100, bits_per_sample: bits, sample_format: format };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..frames {
+            for c in 0..channels as usize {
+                match float {
+                    true => w.write_sample(sample(c, i)).unwrap(),
+                    false => w.write_sample((sample(c, i) * 32767.0) as i16).unwrap(),
+                }
+            }
+        }
+        w.finalize().unwrap();
+        files.push(path);
+    }
+    // Each read, in turn: the count `asset_read` returned, and the floats' bits.
+    let reads = |held: sandbox::Held, channel: u32| -> Vec<(u32, Vec<u32>)> {
+        let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+        let values = [channel as f64];
+        let assets = [Some(held)];
+        let spec = sandbox::Spec { inputs: 0, outputs: 1, channels: &[1], audio: 1, sample_rate: SR as f64, values: &values, assets: &assets, offline: None };
+        let s = sb.state(prefix, &spec).unwrap();
+        sb.seal().unwrap();
+        [1, 37, 128, 1_000, 20_000, 5, 30_000, 300]
+            .iter()
+            .map(|&n| {
+                s.process(&mut sb, n).unwrap();
+                let data = sb.data();
+                let word = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+                let dst = word(4104) as usize;
+                (word(4108), (0..n).map(|i| word(dst + 4 * i)).collect())
+            })
+            .collect()
+    };
+    for path in &files {
+        let whole = sandbox::Held::Whole(Arc::new(audio::load_wav(path).unwrap()));
+        let disk = sandbox::Held::Disk(Arc::new(crate::stream::Wav::open(path).unwrap()));
+        assert_eq!(whole.shape(), disk.shape(), "{}: the settings entry", path.display());
+        for channel in 0..3 {
+            let (w, d) = (reads(whole.clone(), channel), reads(disk.clone(), channel));
+            if channel < 2 {
+                assert!(w.iter().any(|(_, f)| f.iter().any(|&b| b != 0)), "it reads sound");
+            }
+            let counts = |r: &[(u32, Vec<u32>)]| r.iter().map(|(n, _)| *n).collect::<Vec<_>>();
+            assert_eq!(counts(&d), counts(&w), "{} channel {channel}: the counts", path.display());
+            assert!(w == d, "{} channel {channel}: the same bits", path.display());
+        }
+    }
+    std::fs::remove_dir_all(pkg).ok();
 }
 
 // RENDER-25: a kernel's assets are part of its shape, by their hashes, so a new sample under the
