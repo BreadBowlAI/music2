@@ -678,6 +678,11 @@ impl Graph {
                         e.note = Some(take_audio::UNPLUGGED);
                     }
                     unplugged = Some(d.player.clone());
+                } else if t.audio.as_ref().and_then(|a| a.writer.as_ref()).is_some_and(Writer::stopped) {
+                    // Its writer stopped (a full disk, a file as long as a WAV can be): the take ends
+                    // with the file as written, which says why (the review's io-r3).
+                    let beat = t.last;
+                    r.end_at(beat);
                 } else if let Some(d) = same {
                     t.resolve(&d.player);
                     let heard = d.player.heard_frame();
@@ -820,7 +825,8 @@ impl Graph {
                     eprintln!("music2: couldn't name the recording's undo step: {err:#}");
                 }
                 let mut w = json!({"revision": revision, "made": v["made"], "module": e.module, "lane": e.lane, "asset": written.0.asset.as_str()});
-                let notes: Vec<&str> = e.note.into_iter().chain((written.1 > 0).then_some(take_audio::TOO_SLOW)).collect();
+                let notes: Vec<&str> =
+                    e.note.into_iter().chain(written.2.as_deref()).chain((written.1 > 0).then_some(take_audio::TOO_SLOW)).collect();
                 if !notes.is_empty() {
                     w["note"] = json!(notes.join(" "));
                 }
@@ -839,6 +845,15 @@ impl Graph {
         let cp = self.inner.control.lock();
         if let Some(w) = cp.record.take.as_ref().and_then(|t| t.audio.as_ref()).and_then(|a| a.writer.as_ref()) {
             w.pause(on);
+        }
+    }
+
+    /// The disk has room for `bytes` more of an audio take's file (tests).
+    #[cfg(test)]
+    pub(super) fn record_leave_room(&self, bytes: u64) {
+        let cp = self.inner.control.lock();
+        if let Some(w) = cp.record.take.as_ref().and_then(|t| t.audio.as_ref()).and_then(|a| a.writer.as_ref()) {
+            w.leave_room(bytes);
         }
     }
 

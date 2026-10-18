@@ -6,12 +6,15 @@
 //! write leaves a WAV whose header says what it holds so far. [`Growing::finish`] finishes the
 //! header, pushes the bytes to the disk, names the file create-only (`Vox take.wav`, numbered when
 //! taken in any capitals: `Vox take 2.wav`) and syncs the folder. Only then may a Tx name it. A
-//! take let go unfinished (cancelled, or its song closed) leaves nothing.
+//! take let go unfinished (cancelled, or its song closed) leaves nothing. After a failed write (a
+//! full disk), [`Growing::finish`] keeps what was written before it; and a take is never longer
+//! than a WAV can say ([`Growing::room`]).
 
 use std::fs::File;
-use std::io::{BufWriter, ErrorKind};
+use std::io::{BufWriter, ErrorKind, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use m2_song::path::ASSETS;
 use m2_song::{AssetName, Sha};
@@ -20,7 +23,41 @@ use crate::EditError;
 use crate::import::{Imported, assets_in};
 use crate::render::{name_new, part_path, sweep};
 
-type Writer = hound::WavWriter<BufWriter<File>>;
+type Writer = hound::WavWriter<BufWriter<Out>>;
+
+/// Bytes kept for the header under a WAV's 32-bit sizes.
+const HEADROOM: u64 = 4096;
+
+/// The part file as hound writes it: one that can't grow past `limit` bytes, as a full disk can't
+/// (tests set it; it is never reached otherwise).
+struct Out {
+    file: File,
+    at: u64,
+    limit: Arc<AtomicU64>,
+}
+
+impl Write for Out {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let room = self.limit.load(Ordering::Relaxed).saturating_sub(self.at);
+        if room == 0 && !buf.is_empty() {
+            return Err(ErrorKind::StorageFull.into());
+        }
+        let n = self.file.write(&buf[..buf.len().min(usize::try_from(room).unwrap_or(usize::MAX))])?;
+        self.at += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl Seek for Out {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        self.at = self.file.seek(to)?;
+        Ok(self.at)
+    }
+}
 
 /// A take's file while it records.
 pub struct Growing {
@@ -34,6 +71,9 @@ pub struct Growing {
     channels: u16,
     rate: u32,
     frames: u64,
+    limit: Arc<AtomicU64>,
+    /// A write failed: nothing more is added.
+    broken: bool,
 }
 
 fn io(e: impl std::fmt::Display) -> EditError {
@@ -58,26 +98,57 @@ impl Growing {
                 bits_per_sample: 32,
                 sample_format: hound::SampleFormat::Float,
             };
-            let writer = hound::WavWriter::new(BufWriter::new(file), spec).map_err(std::io::Error::other)?;
-            Ok::<_, std::io::Error>((lock, writer))
+            let limit = Arc::new(AtomicU64::new(u64::MAX));
+            let out = Out { file, at: 0, limit: limit.clone() };
+            let writer = hound::WavWriter::new(BufWriter::new(out), spec).map_err(std::io::Error::other)?;
+            Ok::<_, std::io::Error>((lock, writer, limit))
         })();
-        let (lock, writer) = made.map_err(|e| {
+        let (lock, writer, limit) = made.map_err(|e| {
             let _ = std::fs::remove_file(&part);
             io(e)
         })?;
-        Ok(Growing { folder, part, wanted, writer: Some(writer), _lock: lock, channels: channels.clamp(1, 2), rate, frames: 0 })
+        let channels = channels.clamp(1, 2);
+        Ok(Growing { folder, part, wanted, writer: Some(writer), _lock: lock, channels, rate, frames: 0, limit, broken: false })
+    }
+
+    /// The length its file can't grow past, in bytes: what a full disk does (tests).
+    #[doc(hidden)]
+    pub fn limit(&self) -> Arc<AtomicU64> {
+        self.limit.clone()
+    }
+
+    /// Frames it can still take: a WAV counts its bytes in 32 bits, header and all, so a take
+    /// ends a little before 4 GiB (about 3.1 hours of 48 kHz stereo, 6.2 of mono). Past that the
+    /// header would wrap, and the clip would play its start only (the review's io-r3).
+    pub fn room(&self) -> u64 {
+        (u32::MAX as u64 - HEADROOM) / (4 * self.channels as u64) - self.frames
     }
 
     /// Add `frames` (left and right; a mono take keeps the left), and leave the header saying so.
+    /// At most [`Self::room`] of them. Once a write fails (a full disk), nothing more is added:
+    /// [`Self::finish`] keeps what was added before it.
     pub fn append(&mut self, frames: &[[f32; 2]]) -> Result<(), EditError> {
-        let w = self.writer.as_mut().ok_or_else(|| io("it is finished"))?;
-        for f in frames {
-            w.write_sample(f[0]).map_err(io)?;
-            if self.channels == 2 {
-                w.write_sample(f[1]).map_err(io)?;
-            }
+        if self.broken {
+            return Err(io("a write failed before"));
         }
-        w.flush().map_err(io)?;
+        if frames.len() as u64 > self.room() {
+            return Err(io("a WAV file can't be that long"));
+        }
+        let w = self.writer.as_mut().ok_or_else(|| io("it is finished"))?;
+        let stereo = self.channels == 2;
+        let wrote = (|| {
+            for f in frames {
+                w.write_sample(f[0])?;
+                if stereo {
+                    w.write_sample(f[1])?;
+                }
+            }
+            w.flush()
+        })();
+        if let Err(e) = wrote {
+            self.broken = true;
+            return Err(io(e));
+        }
         self.frames += frames.len() as u64;
         Ok(())
     }
@@ -94,9 +165,18 @@ impl Growing {
 
     /// The finished file, ready for a Tx to name (WRITE-1): its header finished, its bytes pushed,
     /// named create-only, its folder synced, in that order. `name` is what the take is called.
+    /// After a failed write, it keeps the frames added before it: the bytes the failure left after
+    /// them are cut off, and the header says what is left. Should that fail too, the part file
+    /// stays, and a later sweep takes it.
     pub fn finish(mut self, name: &str) -> Result<Imported, EditError> {
         let w = self.writer.take().ok_or_else(|| io("it is finished"))?;
-        w.finalize().map_err(io)?;
+        if self.broken {
+            // hound writes its header again as it drops, failing or not: `cut` sets it right.
+            drop(w);
+            self.cut().map_err(io)?;
+        } else {
+            w.finalize().map_err(io)?;
+        }
         let file = File::open(&self.part).map_err(io)?;
         m2_os::fs::push(&file).map_err(io)?;
         seen(&self.folder, "push");
@@ -115,6 +195,40 @@ impl Growing {
         seen(&self.folder, "sync");
         let seconds = self.frames as f64 / self.rate as f64;
         Ok(Imported { asset, name: name.into(), hash, seconds, rate: self.rate, dropped_channels: 0, reused: false })
+    }
+
+    /// Cut the part file to the frames added whole, and set its header's two sizes to them. It
+    /// only shrinks the file and writes over 8 bytes of it: a full disk has room for that.
+    fn cut(&self) -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&self.part)?;
+        let mut head = [0u8; 512];
+        let mut n = 0;
+        while n < head.len() {
+            match std::io::Read::read(&mut f, &mut head[n..])? {
+                0 => break,
+                k => n += k,
+            }
+        }
+        // The data chunk: after "RIFF", the size and "WAVE", chunks of an id, a size and a body.
+        let mut at = 12;
+        let data = loop {
+            if at + 8 > n {
+                return Err(std::io::Error::new(ErrorKind::InvalidData, "the take's header is broken"));
+            }
+            let size = u32::from_le_bytes(head[at + 4..at + 8].try_into().unwrap_or_default()) as usize;
+            if &head[at..at + 4] == b"data" {
+                break at as u64;
+            }
+            at += 8 + size + size % 2;
+        };
+        let bytes = self.frames * 4 * self.channels as u64;
+        let len = data + 8 + bytes;
+        f.set_len(len)?;
+        f.seek(SeekFrom::Start(4))?;
+        f.write_all(&((len - 8) as u32).to_le_bytes())?;
+        f.seek(SeekFrom::Start(data + 4))?;
+        f.write_all(&(bytes as u32).to_le_bytes())?;
+        f.flush()
     }
 
     /// The part file, while it records (tests).

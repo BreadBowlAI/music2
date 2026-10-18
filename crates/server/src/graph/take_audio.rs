@@ -41,6 +41,8 @@ const LAST: Duration = Duration::from_secs(1);
 
 /// What the windows hear when part of a take is silence (D22).
 pub const TOO_SLOW: &str = "The disk was too slow: part of the take is silent.";
+/// What they hear when a write of the take failed (the review's io-r3).
+pub const DISK_FULL: &str = "The disk is full or stopped working: the take was kept up to here.";
 /// What they hear when the sound input went away while it recorded (the review's io-r2).
 pub const UNPLUGGED: &str = "The sound input was unplugged: the take was kept up to here.";
 
@@ -56,6 +58,8 @@ struct Shared {
     written: AtomicU64,
     /// The ring's head when the writer last moved frames.
     seen: AtomicU64,
+    /// It stopped before the take ended: a write failed, or the file is as long as a WAV can be.
+    stopped: AtomicBool,
     /// The writer moves nothing while a test fills its ring past what it holds.
     #[cfg(test)]
     paused: AtomicBool,
@@ -66,10 +70,14 @@ pub(super) struct Writer {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<Result<Option<Written>>>>,
     poke: mpsc::Sender<()>,
+    /// Its part file, and the length it can't grow past (tests: a full disk).
+    #[cfg(test)]
+    limit: (PathBuf, Arc<AtomicU64>),
 }
 
-/// A take's file, written: the asset, and how many of its frames are silence for want of the disk.
-pub(super) type Written = (Imported, u64);
+/// A take's file, written: the asset, how many of its frames are silence for want of the disk, and
+/// why it ended early, when it did (a full disk, a file as long as a WAV can be).
+pub(super) type Written = (Imported, u64, Option<String>);
 
 impl Writer {
     /// Start writing the input's `ring` into `file` once the anchor is known; `name` is what the
@@ -78,8 +86,16 @@ impl Writer {
         let shared = Arc::new(Shared::default());
         let s = shared.clone();
         let (poke, poked) = mpsc::channel();
+        #[cfg(test)]
+        let limit = (file.part().to_path_buf(), file.limit());
         let thread = std::thread::Builder::new().name("m2-take".into()).spawn(move || write(&ring, file, &name, channels, &s, &poked))?;
-        Ok(Writer { shared, thread: Some(thread), poke })
+        Ok(Writer {
+            shared,
+            thread: Some(thread),
+            poke,
+            #[cfg(test)]
+            limit,
+        })
     }
 
     /// The engine clock where the transport is at the take's start (its anchor).
@@ -91,6 +107,12 @@ impl Writer {
     pub(super) fn end(&self, frames: u64) {
         self.shared.end.store(frames + 1, Ordering::Release);
         let _ = self.poke.send(());
+    }
+
+    /// Whether it stopped before the take ended (a full disk, a file as long as a WAV can be): the
+    /// take thread ends the take, and [`Self::done`] says why.
+    pub(super) fn stopped(&self) -> bool {
+        self.shared.stopped.load(Ordering::Acquire)
     }
 
     /// The file written and named, or None for a take with no frame. Waits for the writer.
@@ -109,6 +131,7 @@ impl Writer {
         let head = ring.head();
         let t = Instant::now();
         while self.shared.anchor.load(Ordering::Acquire) > 0
+            && !self.stopped()
             && self.shared.seen.load(Ordering::Acquire) < head
             && t.elapsed() < Duration::from_secs(5)
         {
@@ -125,6 +148,12 @@ impl Writer {
         self.shared.paused.store(on, Ordering::Relaxed);
         let _ = self.poke.send(());
     }
+
+    /// The disk has room for `bytes` more of the take's file, and is full after.
+    pub(super) fn leave_room(&self, bytes: u64) {
+        let len = std::fs::metadata(&self.limit.0).map_or(0, |m| m.len());
+        self.limit.1.store(len + bytes, Ordering::Relaxed);
+    }
 }
 
 impl Drop for Writer {
@@ -138,7 +167,8 @@ impl Drop for Writer {
 }
 
 /// The writer's thread: from the frame heard at the anchor, move what the ring holds into `file`
-/// every 50 ms; at the end, finish it.
+/// every 50 ms; at the end, finish it. A write that fails (a full disk), or a file as long as a
+/// WAV can be, ends it at once with what it holds, and says why (the review's io-r3).
 fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, poked: &mpsc::Receiver<()>) -> Result<Option<Written>> {
     // The ring's number for the take's first frame: below 0 when it was heard before the input's
     // first frame (it opened a moment after).
@@ -147,6 +177,16 @@ fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, 
     let mut buf = vec![[0.0f32; 2]; PIECE];
     let mut planar = vec![Vec::with_capacity(PIECE); channels as usize];
     let mut ended: Option<Instant> = None;
+    let mut stopped: Option<String> = None;
+    let mut put = |file: &mut Growing, frames: &[[f32; 2]]| -> Option<String> {
+        let n = (frames.len() as u64).min(file.room()) as usize;
+        if let Err(e) = file.append(&frames[..n]) {
+            eprintln!("music2: {e}");
+            return Some(DISK_FULL.into());
+        }
+        add(&mut peaks, &mut planar, &frames[..n]);
+        (n < frames.len()).then(|| too_long(file.rate(), channels))
+    };
     loop {
         let _ = poked.recv_timeout(EVERY);
         if s.cancel.load(Ordering::Acquire) {
@@ -162,8 +202,7 @@ fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, 
         {
             let first = anchor as i64 - offset;
             let before = vec![[0.0f32; 2]; (-first).max(0) as usize];
-            file.append(&before).map_err(|e| anyhow!("{e}"))?;
-            add(&mut peaks, &mut planar, &before);
+            stopped = put(&mut file, &before);
             (start, at) = (Some(first), first.max(0) as u64);
         }
         let Some(first) = start else {
@@ -176,26 +215,29 @@ fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, 
         let head = ring.head();
         let until = end.map(|n| (first + n as i64).max(0) as u64);
         let to = until.map_or(head, |u| u.min(head));
-        while at < to {
+        while at < to && stopped.is_none() {
             let n = ((to - at) as usize).min(PIECE);
             let got = ring.read(at, &mut buf[..n]);
             gone += got.gone as u64;
-            file.append(&buf[..got.frames]).map_err(|e| anyhow!("{e}"))?;
-            add(&mut peaks, &mut planar, &buf[..got.frames]);
+            stopped = put(&mut file, &buf[..got.frames]);
             at += got.frames as u64;
         }
         s.written.store((at as i64 - first) as u64, Ordering::Release);
         s.seen.store(head, Ordering::Release);
-        let Some(until) = until else { continue };
-        // The input delivers the last frames a buffer late; a second on, silence stands in.
-        let since = *ended.get_or_insert_with(Instant::now);
-        if at < until && since.elapsed() >= LAST {
-            let silence = vec![[0.0f32; 2]; (until - at) as usize];
-            file.append(&silence).map_err(|e| anyhow!("{e}"))?;
-            add(&mut peaks, &mut planar, &silence);
-            at = until;
+        if stopped.is_none()
+            && let Some(until) = until
+        {
+            // The input delivers the last frames a buffer late; a second on, silence stands in.
+            let since = *ended.get_or_insert_with(Instant::now);
+            if at < until && since.elapsed() >= LAST {
+                let silence = vec![[0.0f32; 2]; (until - at) as usize];
+                stopped = put(&mut file, &silence);
+                at = until;
+            }
         }
-        if at >= until {
+        if stopped.is_some() || until.is_some_and(|u| at >= u) {
+            // The take thread ends a take whose writer stopped.
+            s.stopped.store(stopped.is_some(), Ordering::Release);
             if file.frames() == 0 {
                 return Ok(None);
             }
@@ -203,9 +245,15 @@ fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, 
             let made = file.finish(name).map_err(|e| anyhow!("{e}"))?;
             // Its waveform, from the frames as written (D31: no second decode).
             drop(Store::global().put(made.hash, peaks.done(rate)));
-            return Ok(Some((made, gone)));
+            return Ok(Some((made, gone, stopped)));
         }
     }
+}
+
+/// What the windows hear when a take of `channels` at `rate` is as long as a WAV file can be.
+fn too_long(rate: u32, channels: u16) -> String {
+    let hours = u32::MAX as f64 / (4.0 * channels as f64 * rate as f64) / 3600.0;
+    format!("The take reached the longest a WAV file can be ({hours:.1} hours): it was kept up to here.")
 }
 
 /// Frames into the waveform's builder, as its channels.

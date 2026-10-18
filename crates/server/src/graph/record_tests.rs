@@ -1101,6 +1101,46 @@ mod audio {
         r.graph.record_cancel(r.token).unwrap();
     }
 
+    // The review's io-r3: a write that fails (a full disk) ends the take with every frame written
+    // before it, as a whole WAV, said in words. Before, the whole take was lost.
+    #[test]
+    fn a_full_disk_keeps_the_take_up_to_there() {
+        let mut r = Rig::new();
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|_| 0.5);
+        r.start(false, false);
+        // The take thread finds the take's start: the writer writes as it records.
+        r.fill(2);
+        r.graph.record_tick();
+        r.to(1.0);
+        // Room for about a quarter of a second more of the mono take.
+        r.graph.record_leave_room(12_000 * 4 + 100);
+        r.to(3.0);
+        let said = r.written();
+        assert_eq!(said["written"]["note"], json!(take_audio::DISK_FULL), "{said}");
+        assert!(r.graph.status().playing, "the song plays on");
+        let (s, _, _) = r.samples(&r.clips()[0]);
+        assert!((BEAT as usize..2 * BEAT as usize).contains(&s.len()), "up to where the disk was full: {} frames", s.len());
+        assert!(s.iter().all(|x| *x == 0.5), "every frame whole");
+        let names: Vec<String> = std::fs::read_dir(r.fixture.0.join("assets")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["Vox take.wav"], "no part file is left");
+        r.graph.transport("stop").unwrap();
+    }
+
+    // The review's io-r3: a WAV counts its bytes in 32 bits, so a take ends before 4 GiB, at about
+    // 3.1 hours of 48 kHz stereo. Past that its header would wrap, and the clip would play its first
+    // minutes only.
+    #[test]
+    fn a_take_ends_before_its_wav_runs_out() {
+        let f = Fixture::new();
+        let stereo = m2_editor::take::Growing::new(&f.0, "Vox", 2, 48_000).unwrap();
+        let mono = m2_editor::take::Growing::new(&f.0, "Bass", 1, 48_000).unwrap();
+        let most = stereo.room();
+        assert!(most * 8 < u32::MAX as u64 - 64, "its data and header fit 32 bits: {most} frames");
+        assert!((most as f64 / 48_000.0 / 3600.0 - 3.1).abs() < 0.05, "about 3.1 hours: {most} frames");
+        assert!(mono.room().abs_diff(2 * most) < 2, "a mono take twice as long");
+    }
+
     // MON-8: hearing yourself plays the input on the take's lane, live only: an export made while the
     // take records has none of it.
     #[test]
