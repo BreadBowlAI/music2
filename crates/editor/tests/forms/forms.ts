@@ -13,7 +13,7 @@ import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
 import { sampler } from "std/sampler";
 import { mono, synth } from "std/synth";
-import { track } from "@m2/core";
+import { plugin, track } from "@m2/core";
 export default song(({ lane, time }) => {
   const sweep = lfo(time.beats, { period: 2 });
   const wobble = xrange(sweep, 300, 3000);
@@ -818,6 +818,8 @@ export default song(({ lane, time }) => {
     bitcrush(osc.saw(semis(60)), { bits: 8, rate: 12000, mix: 1 }),
     // std:widen added after a sound
     widen(osc.saw(semis(60)), { width: 1.5 }),
+    // clap:m2.probe added after a sound
+    plugin("clap:m2.probe", { in: osc.saw(semis(60)), key: "m2-probe" }),
     // std:drum-kit added as a track
     track("drum-kit", { name: "Drum kit" }, ({ lane }) => drums.kit(lane.notes("hits"))),
     // std:drum-kick added as a track
@@ -864,6 +866,8 @@ export default song(({ lane, time }) => {
     track("fm-synth", { name: "FM synth" }, ({ lane }) => fm.custom(lane.notes("notes"))),
     // std:synth-custom added as a track
     track("polysynth", { name: "Polysynth" }, ({ lane }) => synth.custom(lane.notes("notes"))),
+    // clap:m2.probe added as a track
+    track("m2-probe", { name: "m2 probe" }, ({ lane }) => plugin("clap:m2.probe", { notes: lane.notes("notes"), key: "m2-probe" })),
     // an audio track added
     track("audio", { name: "Audio" }, ({ lane }) => lane.audio("clips")),
   ];

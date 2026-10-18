@@ -100,6 +100,8 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .merge(crate::routes_audio::router(state.clone()))
         .merge(crate::routes_record::router(state.clone()))
         .merge(crate::routes_exchange::router(state.clone()))
+        .merge(crate::routes_plugins::router(state.clone()))
+        .merge(crate::routes_presets::router(state.clone()))
         .route("/api/project/templates", get(project_templates))
         .route("/api/project/new", post(project_new))
         // An unknown API path is a clear error, not the UI's index.html.
@@ -124,7 +126,7 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
 }
 
 /// The routes that write the open project, or begin a gesture whose commit would.
-const WRITES: [&str; 26] = [
+const WRITES: [&str; 27] = [
     "/api/graph/preview",
     "/api/graph/set",
     "/api/graph/lease/begin",
@@ -143,6 +145,7 @@ const WRITES: [&str; 26] = [
     "/api/graph/track/duplicate",
     "/api/graph/track/delete",
     "/api/graph/mix/insert",
+    "/api/graph/preset/load",
     "/api/graph/layout",
     "/api/graph/tempo",
     "/api/graph/meter",
@@ -455,7 +458,8 @@ struct EffectReq {
     session: u64,
     revision: u64,
     call: String,
-    /// The effect's ComponentId (`std:delay`), as the graph state's `effects` list it.
+    /// The effect's ComponentId (`std:delay`), as the graph state's `effects` list it; or an
+    /// installed plugin's id, `clap:<id>`, as `GET /api/plugins` lists it (gaps #32).
     #[serde(default)]
     component: String,
 }
@@ -579,7 +583,8 @@ async fn graph_automate(State(s): S, Json(r): Json<AutomateReq>) -> ApiResult {
 struct TrackAddReq {
     /// The open project. A `revision` sent with it is ignored: the builder plans on the accepted one.
     session: u64,
-    /// The instrument, by ComponentId (`std:synth-pluck`), as the graph state's `instruments` list it.
+    /// The instrument, by ComponentId (`std:synth-pluck`), as the graph state's `instruments` list it;
+    /// or an installed instrument plugin, `clap:<id>`, as `GET /api/plugins` lists it (gaps #32).
     component: String,
     #[serde(default)]
     label: Option<String>,

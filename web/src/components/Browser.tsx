@@ -1,12 +1,14 @@
 import clsx from "clsx";
 import { ChevronRight, Search } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { graphApi, lockReason, moduleName, type Effect, type GraphState, type Instrument, type ViewNode } from "../lib/graph";
+import { listedEffect, pluginEffects, pluginInstruments, PLUGINS, usePluginList, wantPlugins } from "../lib/plugins";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { category, NoMatch, search } from "./EffectBrowser";
 import { undoAction } from "./GraphCanvas";
 import Guide from "./Guide";
+import PluginsFoot from "./PluginsFoot";
 import { addTrack, INSTRUMENT_DRAG, instrumentGroups } from "./Tracks";
 
 /** A row of the browser's one keyboard list: an instrument or an effect. */
@@ -16,6 +18,8 @@ type Row = { instrument: Instrument } | { effect: Effect };
 export const EFFECT_DRAG = "application/x-m2-effect";
 
 const FOLDED_KEY = "m2.browser.folded";
+/** The Plugins groups opened: folded until opened, as opening one is what asks for the list. */
+const PLUGINS_KEY = "m2.browser.plugins";
 
 /**
  * Where an effect added to a track goes: after the last thing in its sound, the node whose audio
@@ -46,7 +50,8 @@ const title = (graph: GraphState, n: ViewNode) => n.effect ?? n.title ?? graph.e
 export function addEffectTo(module: string, component: string) {
   const { graph, connected, toast } = useStore.getState();
   if (!graph) return;
-  const effect = graph.effects.find((e) => e.component === component);
+  // A std effect, or an installed plugin (gaps #32).
+  const effect = graph.effects.find((e) => e.component === component) ?? listedEffect(component);
   const why = lockReason(graph, connected);
   if (!effect) return;
   if (why) return toast(`${why}.`);
@@ -58,7 +63,7 @@ export function addEffectTo(module: string, component: string) {
     graphApi
       .addEffect(graph.session, graph.view.revision, end.node.id, effect)
       .then((r) => toast(`Added ${effect.label} after ${after}`, undoAction(graph.session, r.revision)))
-      .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+      .catch((error) => toast((error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, "")));
   if (!end.also.length) return void add();
   toast(`${effect.label} after ${after} would reach ${end.also.join(" and ")} too`, {
     label: "Add anyway",
@@ -74,9 +79,9 @@ export function addEffectTo(module: string, component: string) {
 /** Whether a drag carries an effect from the browser. */
 export const dragsEffect = (e: React.DragEvent) => e.dataTransfer.types.includes(EFFECT_DRAG);
 
-function readFolded(): Set<string> {
+function readFolded(key = FOLDED_KEY): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]"));
+    return new Set(JSON.parse(localStorage.getItem(key) ?? "[]"));
   } catch {
     return new Set();
   }
@@ -86,12 +91,16 @@ function readFolded(): Set<string> {
  * The side browser (taste.md §3.6): what can be added, by its label, grouped by category. Typing
  * filters it; ↓ moves into the list and Enter adds the row to the selected track; a row can be
  * dragged onto a track or the Device view. Instruments add a track: Enter or a double-click, below
- * the selected one; dragged, below the tracks (BR-1).
+ * the selected one; dragged, below the tracks (BR-1). The installed plugins (gaps #32) are a Plugins
+ * group under the instruments and one under the effects, folded until opened: opening one asks for
+ * the list, which the plugin host process scans.
  */
 export default function Browser({ graph, module }: { graph: GraphState; module: string }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState<number | null>(null);
-  const [folded, setFolded] = useState(readFolded);
+  const [folded, setFolded] = useState(() => readFolded());
+  const [opened, setOpened] = useState(() => readFolded(PLUGINS_KEY));
+  const plugins = usePluginList();
   const list = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const connected = useStore((s) => s.connected);
@@ -101,10 +110,16 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
   // Folds hold while browsing; a search shows every match.
   const shown = groups.map((g) => ({ ...g, open: !!query.trim() || !folded.has(g.name) }));
   const playable = instruments.map((g) => ({ ...g, open: !!query.trim() || !folded.has(`instruments:${g.name}`) }));
-  // Instruments first, then effects: one keyboard list.
+  // The Plugins groups: open when opened, or searched once the list is there (a search doesn't scan).
+  const pluginsOpen = (k: string) => opened.has(k) || (!!query.trim() && plugins.state === "listed");
+  const fxPlugins = useMemo(() => search(pluginEffects(plugins.plugins), query).flatMap((g) => g.items.map((m) => m.effect)), [plugins.plugins, query]);
+  const insPlugins = useMemo(() => instrumentGroups(pluginInstruments(plugins.plugins), query).flatMap((g) => g.items), [plugins.plugins, query]);
+  // Instruments first, then effects, each with its plugins last: one keyboard list.
   const flat: Row[] = [
     ...playable.flatMap((g) => (g.open ? g.items.map((i) => ({ instrument: i })) : [])),
+    ...(pluginsOpen("instruments") ? insPlugins.map((i) => ({ instrument: i })) : []),
     ...shown.flatMap((g) => (g.open ? g.items.map((m) => ({ effect: m.effect })) : [])),
+    ...(pluginsOpen("effects") ? fxPlugins.map((e) => ({ effect: e })) : []),
   ];
   const current = active === null ? null : flat[Math.min(active, flat.length - 1)];
   const currentId = current && ("instrument" in current ? current.instrument.component : current.effect.component);
@@ -120,6 +135,23 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
       } catch {}
       return next;
     });
+  const openPlugins = (k: string) => {
+    if (query.trim()) return;
+    if (!opened.has(k)) wantPlugins();
+    setOpened((o) => {
+      const next = new Set(o);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      try {
+        localStorage.setItem(PLUGINS_KEY, JSON.stringify([...next]));
+      } catch {}
+      return next;
+    });
+  };
+  // A Plugins group opened in an earlier window asks for the list as this one opens.
+  useEffect(() => {
+    if (opened.size > 0) wantPlugins();
+  }, [opened]);
   const move = (step: number) => {
     if (!flat.length) return;
     const next = active === null ? (step > 0 ? 0 : flat.length - 1) : (Math.min(active, flat.length - 1) + step + flat.length) % flat.length;
@@ -134,6 +166,85 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
   };
 
   let index = 0;
+  const instrumentRow = (ins: Instrument) => {
+    const i = index++;
+    const on = currentId === ins.component;
+    return (
+      <div
+        key={ins.component}
+        id={`browser-${ins.component}`}
+        role="option"
+        aria-selected={on}
+        data-browser-instrument={ins.component}
+        data-active={on || undefined}
+        draggable={!locked}
+        title={`${ins.description}\n${ins.name}${locked ? `\n\n${locked}.` : "\n\nEnter or double-click adds a track with it; drag it below the tracks"}`}
+        onPointerDown={() => setActive(i)}
+        onDoubleClick={() => add({ instrument: ins })}
+        onDragStart={(ev) => {
+          ev.dataTransfer.setData(INSTRUMENT_DRAG, ins.component);
+          ev.dataTransfer.effectAllowed = "copy";
+        }}
+        className={clsx(
+          "h-ctl-sm pl-4 pr-2 flex items-center rounded-sm text-sm cursor-default transition-colors duration-80 ease-linear",
+          on ? "bg-accent-soft text-fg" : "text-fg hover:bg-hover",
+        )}
+      >
+        <span className="truncate">{ins.label}</span>
+      </div>
+    );
+  };
+  const effectRow = (e: Effect, indent = "pl-10") => {
+    const i = index++;
+    const on = currentId === e.component;
+    return (
+      <div
+        key={e.component}
+        id={`browser-${e.component}`}
+        role="option"
+        aria-selected={on}
+        data-browser-item={e.component}
+        data-active={on || undefined}
+        draggable={!locked}
+        title={`${e.description}\n${e.name}${locked ? `\n\n${locked}.` : `\n\nEnter or double-click adds it to ${target}; drag it onto a track`}`}
+        onPointerDown={() => setActive(i)}
+        onDoubleClick={() => add({ effect: e })}
+        onDragStart={(ev) => {
+          ev.dataTransfer.setData(EFFECT_DRAG, e.component);
+          ev.dataTransfer.effectAllowed = "copy";
+        }}
+        className={clsx(
+          // Its name under its category's (4 + 12 + 4 + 16 + 4 px in).
+          `h-ctl-sm ${indent} pr-2 flex items-center rounded-sm text-sm cursor-default transition-colors duration-80 ease-linear`,
+          on ? "bg-accent-soft text-fg" : "text-fg hover:bg-hover",
+        )}
+      >
+        <span className="truncate">{e.label}</span>
+      </div>
+    );
+  };
+  /** A Plugins group (gaps #32): its header opens it, which asks for the list; its foot says what it found, and Look again. */
+  const pluginGroup = (k: "instruments" | "effects", rows: () => ReactNode) => {
+    const open = pluginsOpen(k);
+    return (
+      <div role="group" aria-label={PLUGINS} data-browser-plugins={k} className="mt-2">
+        <button
+          aria-expanded={open}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => openPlugins(k)}
+          className={clsx(
+            "w-full h-ctl-sm px-1 flex items-center gap-1 rounded-sm text-sm font-semibold hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear",
+            k === "effects" ? "text-fg-muted" : "text-fg",
+          )}
+        >
+          <ChevronRight size={12} className={clsx("shrink-0 transition-transform duration-140 ease-out", open && "rotate-90")} />
+          {PLUGINS}
+        </button>
+        {open && rows()}
+        {open && <PluginsFoot kind={k === "effects" ? "effect" : "instrument"} className={k === "effects" ? "pl-10" : "pl-4"} />}
+      </div>
+    );
+  };
   return (
     <aside data-browser aria-label="Browser" className="w-side shrink-0 flex flex-col bg-chrome border-r border-line min-h-0">
       {/* Make Your First Song, when open (the studio plan's Q47): first, above the search. */}
@@ -195,37 +306,10 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
             >
               {g.name}
             </button>
-            {g.open &&
-              g.items.map((ins) => {
-                const i = index++;
-                const on = currentId === ins.component;
-                return (
-                  <div
-                    key={ins.component}
-                    id={`browser-${ins.component}`}
-                    role="option"
-                    aria-selected={on}
-                    data-browser-instrument={ins.component}
-                    data-active={on || undefined}
-                    draggable={!locked}
-                    title={`${ins.description}\n${ins.name}${locked ? `\n\n${locked}.` : "\n\nEnter or double-click adds a track with it; drag it below the tracks"}`}
-                    onPointerDown={() => setActive(i)}
-                    onDoubleClick={() => add({ instrument: ins })}
-                    onDragStart={(ev) => {
-                      ev.dataTransfer.setData(INSTRUMENT_DRAG, ins.component);
-                      ev.dataTransfer.effectAllowed = "copy";
-                    }}
-                    className={clsx(
-                      "h-ctl-sm pl-4 pr-2 flex items-center rounded-sm text-sm cursor-default transition-colors duration-80 ease-linear",
-                      on ? "bg-accent-soft text-fg" : "text-fg hover:bg-hover",
-                    )}
-                  >
-                    <span className="truncate">{ins.label}</span>
-                  </div>
-                );
-              })}
+            {g.open && g.items.map(instrumentRow)}
           </div>
         ))}
+        {pluginGroup("instruments", () => insPlugins.map(instrumentRow))}
         <div className={clsx("h-ctl-sm px-1 flex items-center text-sm font-semibold text-fg", playable.length > 0 && "mt-2")}>Effects</div>
         {flat.length === 0 && query && <NoMatch query={query} className="mt-2" />}
         {shown.map((g) => {
@@ -244,39 +328,11 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
                 </span>
                 {g.name}
               </button>
-              {g.open &&
-                g.items.map(({ effect: e }) => {
-                  const i = index++;
-                  const on = currentId === e.component;
-                  return (
-                    <div
-                      key={e.component}
-                      id={`browser-${e.component}`}
-                      role="option"
-                      aria-selected={on}
-                      data-browser-item={e.component}
-                      data-active={on || undefined}
-                      draggable={!locked}
-                      title={`${e.description}\n${e.name}${locked ? `\n\n${locked}.` : `\n\nEnter or double-click adds it to ${target}; drag it onto a track`}`}
-                      onPointerDown={() => setActive(i)}
-                      onDoubleClick={() => add({ effect: e })}
-                      onDragStart={(ev) => {
-                        ev.dataTransfer.setData(EFFECT_DRAG, e.component);
-                        ev.dataTransfer.effectAllowed = "copy";
-                      }}
-                      className={clsx(
-                        // Its name under its category's (4 + 12 + 4 + 16 + 4 px in).
-                        "h-ctl-sm pl-10 pr-2 flex items-center rounded-sm text-sm cursor-default transition-colors duration-80 ease-linear",
-                        on ? "bg-accent-soft text-fg" : "text-fg hover:bg-hover",
-                      )}
-                    >
-                      <span className="truncate">{e.label}</span>
-                    </div>
-                  );
-                })}
+              {g.open && g.items.map(({ effect: e }) => effectRow(e))}
             </div>
           );
         })}
+        {pluginGroup("effects", () => fxPlugins.map((e) => effectRow(e)))}
       </div>
     </aside>
   );

@@ -60,9 +60,12 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 32 | **Add an installed plugin from the app**: list installed CLAP plugins in the effect browser and in + Track, and put one on a track. | Today a plugin goes on a track only by writing `plugin("clap:…")` in its code, after finding its id with `m2 plugins`. | No | medium |
 | 33 | **VST3 and AU** plugins. | Many popular synths and mastering plugins come only as AU or VST3 on the Mac. | No | large |
 
+- **A plugin effect can't be removed, turned off or moved from its card**: only in code (Undo works right after adding it) (#32's leftover).
+- **A plugin installed while the app is open shows only after Look again** in a Plugins list.
+- **A plugin removed since the list was made is named by its id** ("org.example.reverb isn't installed…"), not its name, when adding it is refused.
+- **A plugin whose CLAP features say neither instrument nor effect** (an analyzer, a note effect) isn't listed; it can still be written in code.
 - **All plugins share one plugin program**, so one crash silences them all for a moment (each comes back by itself). One program per plugin would silence only the one that crashed.
 - **A plugin stuck in its window, its start or a settings load** holds up edits and saves for up to 30 seconds (2 minutes in a scan); then music2 ends the plugin program and says so (the ph review's r1).
 - **One broken `.clap` file that crashes the scan** makes every plugin say "not installed", and the bad file isn't named (the ph review's r4).
@@ -94,8 +97,23 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 22 | **The rest of the Sampler**: loop points, start and end, reverse, velocity layers, round robin and choke groups; zones made by dropping several WAVs (code only today); a waveform and a root picker on its card; files other than WAV. | Sampled drums and vocal chops are pop staples. | Yes | medium |
-| 26 | **Presets**: save and load an instrument's or an effect's settings by name, a preset browser, and presets for CLAP plugins. | Beginners start from presets, not from blank knobs. | No | medium |
 
+- **Your presets can't be renamed or deleted** in the app, and there is no Show in Finder: tidy the Presets folder by hand.
+- **A card doesn't say which preset it came from**, or that its knobs changed since.
+- **Presets hold a sound's numbers only**: not its settings (`voices`, `mode`, #35), and not whole tracks, chains or the mixer.
+- **music2's own presets are for five sounds** (Synth pluck, Synth pad, Synth bass, Reverb and Delay), two each.
+- **A preset is for one sound**: a Synth pluck's doesn't load into the older Pluck (`std:pluck`), nor the other way.
+- **A control a load can't write into its call** (its options are a variable) is left as it is without a word.
+- **A preset named as Windows reserves a name** (`CON`, `NUL`, …) isn't refused yet.
+- **The Presets list reads every file in its folder** each time it opens, a plugin preset's whole state too.
+- **A plugin call with no key can't save or load presets**: it has no state file. The app says to add a key; it could add one.
+- **A plugin's own presets show by name only**: not their tags, favourites, packs or authors. Two with one name: the first loads.
+- **A plugin's own presets are read once per app run** (2,000 files at most): new ones show after a restart. Look again doesn't read them again.
+- **A failed read of a plugin's own presets sticks until restart**, even a short one (the host process was restarting): the Presets popover says it couldn't read them, and its presets won't load.
+- **A plugin preset of yours keeps only the numbers its call's code wrote when you saved it**: load it into a call whose code writes another one, and the code's number stays, without a word.
+- **A plugin preset saved by another version of the plugin** loads without a word.
+- **A plugin whose own preset loads only once it plays** would give its old state (Surge XT's load at once).
+- **No `m2 preset` commands** (save, load, list) for agents (#37).
 - **A Sampler played far above its root sounds harsh**: it isn't band-limited, so high notes alias, and past 6 octaves up it plays no faster.
 - **A Sampler's files are held in memory**, decoded whole (clips stream from disk). The kernel ABI allows streaming them ([kernel-abi.md](kernel-abi.md#the-asset-import)).
 - **A WAV dropped on a Sampler that then refuses it** (one with `zones` in its code) is still copied into `assets/`, though the page says "Nothing was changed" (the ab review's 3).
@@ -154,7 +172,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 35 | **Knobs for more numbers**: a number held in a variable (`const cutoff = 800`) or worked out from others (`2 * 440`) shows **edit in code**; settings such as an instrument's `voices`, `mode` and `glide` aren't on its card (the card says how it plays, read-only). | A beginner who gives a number a name, as tutorials teach, loses its knob. | No | medium |
-| 1 | **The rest of changing an instrument**: a track whose instrument is built from parts, has two instruments or a plugin, or whose settings code works out, is refused in words. Adding a track to a song that mixes its own way, or picking a CLAP instrument (#32), still needs code. | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
+| 1 | **The rest of changing an instrument**: a track whose instrument is built from parts, has two instruments or a plugin, or whose settings code works out, is refused in words. Adding a track to a song that mixes its own way, or changing a track's instrument to a CLAP plugin, still needs code (+ Track can add a plugin track). | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
 | 10 | **The rest of changing a track's ID**: a track with a new ID restarts its sounds (its plugins' and instruments' state isn't carried over, design-8b §11.3), and the status popover has no Restore for a rename done by hand in code (DIAG-6). | A rename shouldn't cut a sound that is playing. | Yes | small |
 
 - **A knob let go while the code doesn't compile** keeps playing its new value, and is written once the code compiles; after 30 seconds it is dropped, with a message. Writing it at once, when the broken file is another one, is the owner's call (the step 6 design's C21).

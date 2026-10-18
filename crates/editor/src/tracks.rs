@@ -360,11 +360,13 @@ fn adds(checked: &Checked, made: &[(String, String)]) -> Result<(), EditError> {
     }
 }
 
-/// What a new track plays: an instrument (its ComponentId, `std:synth-pluck`) from a notes lane,
-/// or audio clips from an audio lane (lane A's A2).
+/// What a new track plays: an instrument (its ComponentId, `std:synth-pluck`) or an installed
+/// instrument plugin (`clap:<id>`, gaps #32) from a notes lane, or audio clips from an audio lane
+/// (lane A's A2).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Play {
     Instrument(String),
+    Plugin(String),
     Audio,
 }
 
@@ -388,11 +390,15 @@ pub(crate) fn audio_call_text(key: &str, label: &str) -> String {
     format!("track({}{options}, ({{ lane }}) => lane.audio({}))", quoted(key), quoted(AUDIO_LANE))
 }
 
-/// Add a track playing instrument `component` (a ComponentId), shown as `label` (else the
-/// instrument's), keyed `key` (else one proposed from the label, ID-2), placed after track
-/// `after` in the layout (else last).
+/// Add a track playing instrument `component` (a ComponentId, or an installed plugin's
+/// `clap:<id>`), shown as `label` (else the instrument's), keyed `key` (else one proposed from the
+/// label, ID-2), placed after track `after` in the layout (else last).
 pub fn add(s: &mut Session, component: &str, label: Option<&str>, key: Option<&str>, after: Option<&str>) -> Result<Made, EditError> {
-    let one = NewTrack { play: Play::Instrument(component.to_string()), label: label.map(str::to_string), key: key.map(str::to_string), clips: vec![] };
+    let play = match component.starts_with("clap:") {
+        true => Play::Plugin(component.to_string()),
+        false => Play::Instrument(component.to_string()),
+    };
+    let one = NewTrack { play, label: label.map(str::to_string), key: key.map(str::to_string), clips: vec![] };
     Ok(add_tracks(s, &[one], after, None)?.remove(0))
 }
 
@@ -405,6 +411,16 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
     ready(s)?;
     if tracks.is_empty() {
         return Err(EditError::Rejected("No track to add.".into()));
+    }
+    // Each plugin a new track plays, by its name: described through the host first, so one that
+    // isn't installed, or plays no notes, is refused in words (gaps #32).
+    let mut plugins: BTreeMap<String, String> = BTreeMap::new();
+    for t in tracks {
+        if let Play::Plugin(id) = &t.play
+            && !plugins.contains_key(id)
+        {
+            plugins.insert(id.clone(), crate::plugins::instrument(s, id)?);
+        }
     }
     let catalog = instruments(s);
     let rev = s.accepted();
@@ -420,11 +436,12 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
     let mut lanes = vec![];
     let mut ranges: BTreeMap<TxPath, Declared> = BTreeMap::new();
     for t in tracks {
-        let inst = match &t.play {
-            Play::Instrument(c) => Some(catalog.iter().find(|i| i.component == *c).ok_or_else(|| EditError::NotFound(c.clone()))?),
-            Play::Audio => None,
+        let (inst, plugin) = match &t.play {
+            Play::Instrument(c) => (Some(catalog.iter().find(|i| i.component == *c).ok_or_else(|| EditError::NotFound(c.clone()))?), None),
+            Play::Plugin(id) => (None, Some((id.as_str(), plugins[id].as_str()))),
+            Play::Audio => (None, None),
         };
-        let fallback = inst.map_or("Audio", |i| i.label.as_str());
+        let fallback = inst.map(|i| i.label.as_str()).or(plugin.map(|p| p.1)).unwrap_or("Audio");
         let label = match t.label.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
             Some(l) if l.chars().any(char::is_control) => return Err(EditError::Rejected("a name is one line of text".into())),
             Some(l) => unique_label_among(rev, l, &labels),
@@ -462,14 +479,19 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
         entries.push(format!("{}: {binding}.out", prop_key(&key)));
         imports.push(import_edit(&song_text, &mixer.file, &file, &binding));
         let k = Key::new(&key).map_err(EditError::Rejected)?;
-        let lane_key = inst.map_or(AUDIO_LANE, |i| i.lane.as_str());
+        let lane_key = match (inst, plugin) {
+            (Some(i), _) => i.lane.as_str(),
+            (None, Some(_)) => "notes",
+            (None, None) => AUDIO_LANE,
+        };
         let lane = LaneAddr { module: k.clone(), lane: Key::new(lane_key).map_err(EditError::Rejected)? };
-        let kind = if inst.is_some() { m2_song::LaneKind::Notes } else { m2_song::LaneKind::Audio };
+        let kind = if inst.is_some() || plugin.is_some() { m2_song::LaneKind::Notes } else { m2_song::LaneKind::Audio };
         let data = with_fresh_ids(&t.clips, &kind, &tx_id, &lane)?;
         let new_file = path(&file)?;
-        let text = match inst {
-            Some(i) => track_text(i, &key, &label, &file),
-            None => format!("import {{ track }} from \"@m2/core\";\n\nexport default {};\n", audio_call_text(&key, &label)),
+        let text = match (inst, plugin) {
+            (Some(i), _) => track_text(i, &key, &label, &file),
+            (None, Some((id, _))) => crate::plugins::track_text(id, &key, &label),
+            (None, None) => format!("import {{ track }} from \"@m2/core\";\n\nexport default {};\n", audio_call_text(&key, &label)),
         };
         writes.push(Op::Write { file: new_file.clone(), bytes: Payload::Text(text.into()) });
         writes.push(Op::Write { file: TxPath::lane(&lane), bytes: Payload::Text(m2_song::canonical(&data).into()) });
@@ -536,6 +558,9 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
     let made: Vec<(String, String)> = keys_made.iter().map(|k| (k.clone(), k.clone())).collect();
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;
+        for id in plugins.keys() {
+            crate::plugins::installed_in(checked, id)?;
+        }
         adds(checked, &made)
     })?;
     let edited = Edited { revision: done.number, file: files[0].clone(), before: String::new(), after: shown };

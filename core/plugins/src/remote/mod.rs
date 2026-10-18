@@ -266,8 +266,9 @@ impl Remote {
     /// come in time ends the process (the watchdog), and so fails.
     fn send(&self, p: &Proc, req: &Req, then: Then) {
         let id = p.next.fetch_add(1, Ordering::AcqRel);
-        // A scan loads every plugin's library, which takes a while the first time (macOS checks each).
-        let limit = self.s.limit.load(Ordering::Relaxed) * if matches!(req, Req::Scan) { 4 } else { 1 };
+        // A scan loads every plugin's library, which takes a while the first time (macOS checks
+        // each); finding a plugin's presets may read many files.
+        let limit = self.s.limit.load(Ordering::Relaxed) * if matches!(req, Req::Scan | Req::Presets { .. }) { 4 } else { 1 };
         let late = self.s.epoch.elapsed().as_nanos() as u64 + limit;
         {
             let mut pending = locked(&p.pending);
@@ -639,6 +640,11 @@ impl PluginHost for Remote {
             Ok((found, r.strs()?))
         });
         got.unwrap_or_else(|e| (vec![], vec![format!("{e:#}")]))
+    }
+
+    fn presets(&self, plugin: &Found) -> Result<Vec<Offered>> {
+        let b = self.running().and_then(|p| self.call(&p, &Req::Presets { found: plugin.clone() }))?;
+        R::new(&b).offered()
     }
 
     fn live(&self) -> u64 {

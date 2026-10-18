@@ -18,6 +18,7 @@ Status (2026-10-18): every planned step is built and checked on Linux. The check
 | Edit clips: move, copy, trim, split, join, repeat | the timeline |
 | Turn knobs, add effects, connect cables | **Device** (⌥1) |
 | Mix: faders, pans, mute, solo, and meters | **Mix** (⌥3), and each track's header |
+| Save a sound's knobs as a preset, or load one | **Presets** on an instrument's, an effect's or a plugin's card in **Device**. Yours are in `~/Music/music2/Presets`; a plugin's own are listed too |
 | Draw automation (knob moves over time) | right-click a knob ▸ **Automate**, then draw on the timeline |
 | Play live: the computer's keys, or a MIDI keyboard with its wheels | ⌘K; or plug a keyboard in |
 | Hear a click on each beat | K |
@@ -26,7 +27,7 @@ Status (2026-10-18): every planned step is built and checked on Linux. The check
 | Keep an audio clip in time when the tempo changes | right-click the clip ▸ **Follow tempo** |
 | Bring in a MIDI file as new tracks | File ▸ Import MIDI…, or drop the `.mid` file |
 | Play a WAV file as an instrument | + Track ▸ Sampler, then drop a WAV on its card |
-| Play CLAP plugins, and open their own windows | write `plugin(…)` in a track's code; **Open window** on its box |
+| Add a CLAP plugin, and open its own window | drag it from the browser's **Plugins** onto a track, or + Track ▸ **Plugins**; **Open window** on its box |
 | Export the song, each track (stems), or the notes as MIDI | **Export** (⇧⌘E) |
 | Edit the song's code, with type checks | **Code** (⌥4) |
 | See what's wrong, in plain words, with fixes | the status pill in the top bar |
@@ -582,6 +583,7 @@ music2 can play installed CLAP plugins, such as [Surge XT](https://surge-synthes
 const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("notes"), key: "lead", a_filter_1_cutoff_4092842705: 0.6 });
 ```
 
+- The app lists the installed plugins: the browser's **Plugins** groups (one under the instruments, one under the effects), the Device view's **+**, and **+ Track**. Drag an effect plugin onto a track, or double-click it, and it goes after the track's sound. Pick an instrument plugin in + Track, and you get a new track playing it. Each is one undo step, and writes the `plugin(…)` call with a `key`, so its settings are saved. A plugin installed while the app is open shows after **Look again**.
 - `m2 plugins` lists installed plugins; `m2 plugins clap:<id>` shows one plugin's inputs and knobs.
 - A parameter is written as its name, then its CLAP id: `a_filter_1_cutoff_4092842705`. Only the id says which parameter it is, so a plugin update that renames its parameters changes nothing (music2 notes the new name). Written without its id (`a_filter_1_cutoff`), it is an error that names the full address.
 - A song whose plugin isn't installed still plays: that plugin's node is silent (an instrument) or passes its audio through (an effect), and the song says which plugin is missing.

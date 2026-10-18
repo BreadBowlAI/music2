@@ -25,6 +25,7 @@ mod gui;
 mod host;
 mod inprocess;
 mod main_thread;
+mod presets;
 pub mod probe;
 mod remote;
 
@@ -39,8 +40,8 @@ use clap_sys::factory::plugin_factory::*;
 use clap_sys::version::clap_version_is_compatible;
 
 pub use host::{
-    Blob, Events, Handle, HostEvent, HostEvents, MAX_CALL_EVENTS, MainCall, Owner, Pending, PluginHost, RenderMode, Reply, SharedBuffers, Status,
-    WindowCall,
+    Blob, Events, Handle, HostEvent, HostEvents, MAX_CALL_EVENTS, MAX_PRESET_FILES, MainCall, Offered, Owner, Pending, PluginHost, PresetAt,
+    RenderMode, Reply, SharedBuffers, Status, WindowCall,
 };
 pub use inprocess::{InProcess, MAX_INSTANCES};
 pub use remote::child::serve as serve_host;
@@ -66,6 +67,18 @@ pub struct Found {
     pub version: String,
     pub features: Vec<String>,
     pub bundle: PathBuf,
+}
+
+impl Found {
+    /// It plays notes: CLAP's `instrument` feature. What + Track lists (gaps #32).
+    pub fn is_instrument(&self) -> bool {
+        self.features.iter().any(|f| f == "instrument")
+    }
+
+    /// It goes after a sound: CLAP's `audio-effect` feature. What the effect lists list.
+    pub fn is_effect(&self) -> bool {
+        self.features.iter().any(|f| f == "audio-effect")
+    }
 }
 
 /// What a plugin instance offers, read after `init`.
@@ -100,7 +113,7 @@ pub struct Param {
 pub(crate) struct Library {
     /// None for the probe, which is linked in.
     _lib: Option<libloading::Library>,
-    _entry: *const clap_plugin_entry,
+    entry: *const clap_plugin_entry,
     factory: *const clap_plugin_factory,
     bundle: PathBuf,
 }
@@ -175,7 +188,7 @@ fn load(bundle: &Path) -> Result<Arc<Library>> {
     if factory.is_null() {
         bail!("{} has no plugin factory", bundle.display());
     }
-    Ok(Arc::new(Library { _lib: Some(lib), _entry: entry, factory, bundle: bundle.to_path_buf() }))
+    Ok(Arc::new(Library { _lib: Some(lib), entry, factory, bundle: bundle.to_path_buf() }))
 }
 
 impl Library {

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use crate::host::{Blob, HostEvent, MainCall, RenderMode, Reply, WindowCall};
+use crate::host::{Blob, HostEvent, MainCall, Offered, PresetAt, RenderMode, Reply, WindowCall};
 use crate::{Found, Handle, Info, Param};
 
 /// What both sides must agree on: a hash of this file, the slot's layout and the types both use
@@ -87,6 +87,10 @@ pub(crate) enum Req {
     },
     SaveState {
         h: u64,
+    },
+    /// The presets a plugin offers itself (HOST-8; its library loads on a thread of its own first).
+    Presets {
+        found: Found,
     },
 }
 
@@ -173,6 +177,28 @@ impl W {
         self
     }
 
+    pub(crate) fn preset_at(&mut self, at: &PresetAt) -> &mut W {
+        match at {
+            PresetAt::Plugin => self.u8(0),
+            PresetAt::File(p) => self.u8(1).str(&p.to_string_lossy()),
+        }
+    }
+
+    pub(crate) fn opt_str(&mut self, v: Option<&str>) -> &mut W {
+        match v {
+            Some(s) => self.u8(1).str(s),
+            None => self.u8(0),
+        }
+    }
+
+    pub(crate) fn offered(&mut self, v: &[Offered]) -> &mut W {
+        self.u32(v.len() as u32);
+        for o in v {
+            self.str(&o.name).preset_at(&o.location).opt_str(o.key.as_deref());
+        }
+        self
+    }
+
     pub(crate) fn req(&mut self, id: u64, r: &Req) -> &mut W {
         self.u64(id);
         match r {
@@ -208,11 +234,13 @@ impl W {
                     MainCall::Window(WindowCall::Shown) => self.u8(6),
                     #[cfg(debug_assertions)]
                     MainCall::Window(WindowCall::AskToClose) => self.u8(7),
+                    MainCall::LoadPreset { location, key } => self.u8(8).preset_at(location).opt_str(key.as_deref()),
                 }
             }
             Req::Destroy { h } => self.u8(8).u64(*h),
             Req::Latency { h } => self.u8(9).u64(*h),
             Req::SaveState { h } => self.u8(10).u64(*h),
+            Req::Presets { found } => self.u8(11).found(found),
         }
     }
 
@@ -243,6 +271,7 @@ impl W {
                     None => self.u8(0),
                 }
             }
+            Reply::Loaded => self.u8(6),
         }
     }
 
@@ -358,6 +387,24 @@ impl<'a> R<'a> {
         Ok(Info { found, audio_in, audio_out, note_in, params, latency, gui })
     }
 
+    pub(crate) fn preset_at(&mut self) -> Result<PresetAt> {
+        Ok(match self.u8()? {
+            0 => PresetAt::Plugin,
+            _ => PresetAt::File(PathBuf::from(self.str()?)),
+        })
+    }
+
+    pub(crate) fn opt_str(&mut self) -> Result<Option<String>> {
+        Ok(match self.u8()? {
+            0 => None,
+            _ => Some(self.str()?),
+        })
+    }
+
+    pub(crate) fn offered(&mut self) -> Result<Vec<Offered>> {
+        (0..self.u32()?).map(|_| Ok(Offered { name: self.str()?, location: self.preset_at()?, key: self.opt_str()? })).collect()
+    }
+
     pub(crate) fn req(&mut self) -> Result<(u64, Req)> {
         let id = self.u64()?;
         let r = match self.u8()? {
@@ -395,6 +442,7 @@ impl<'a> R<'a> {
                     6 => MainCall::Window(WindowCall::Shown),
                     #[cfg(debug_assertions)]
                     7 => MainCall::Window(WindowCall::AskToClose),
+                    8 => MainCall::LoadPreset { location: self.preset_at()?, key: self.opt_str()? },
                     t => bail!("no main call {t}"),
                 };
                 Req::MainCall { h, call }
@@ -402,6 +450,7 @@ impl<'a> R<'a> {
             8 => Req::Destroy { h: self.u64()? },
             9 => Req::Latency { h: self.u64()? },
             10 => Req::SaveState { h: self.u64()? },
+            11 => Req::Presets { found: self.found()? },
             t => bail!("no request {t}"),
         };
         Ok((id, r))
@@ -425,6 +474,7 @@ impl<'a> R<'a> {
                 0 => None,
                 _ => Some((m2_os::window::Native(self.u64()?), self.bool()?)),
             }),
+            6 => Reply::Loaded,
             t => bail!("no reply {t}"),
         })
     }
@@ -491,6 +541,9 @@ mod tests {
             Req::Destroy { h: 9 },
             Req::Latency { h: 10 },
             Req::SaveState { h: 11 },
+            Req::MainCall { h: 4, call: MainCall::LoadPreset { location: PresetAt::Plugin, key: Some("dark".into()) } },
+            Req::MainCall { h: 4, call: MainCall::LoadPreset { location: PresetAt::File("/p/Lead.fxp".into()), key: None } },
+            Req::Presets { found: Found { id: "c".into(), name: "C".into(), vendor: "".into(), version: "".into(), features: vec![], bundle: "c".into() } },
         ];
         for (i, r) in reqs.iter().enumerate() {
             let mut w = W::frame();
@@ -509,11 +562,18 @@ mod tests {
             latency: 64,
             gui: true,
         };
-        for r in [Reply::Value(Some(0.5)), Reply::Text(None), Reply::Info(Box::new(info)), Reply::Log(vec!["w".into()]), Reply::Window(true)] {
+        for r in [Reply::Value(Some(0.5)), Reply::Text(None), Reply::Info(Box::new(info)), Reply::Log(vec!["w".into()]), Reply::Window(true), Reply::Loaded] {
             let mut w = W::default();
             w.reply(&r);
             assert_eq!(format!("{:?}", R::new(&w.0).reply().unwrap()), format!("{r:?}"));
         }
+        let offered = vec![
+            Offered { name: "Dark".into(), location: PresetAt::Plugin, key: Some("dark".into()) },
+            Offered { name: "Lead".into(), location: PresetAt::File("/p/Lead.fxp".into()), key: None },
+        ];
+        let mut w = W::default();
+        w.offered(&offered);
+        assert_eq!(R::new(&w.0).offered().unwrap(), offered);
     }
 
     // Debug builds' test-only window calls, asked of the host process that owns the window.

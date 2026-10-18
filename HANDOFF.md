@@ -14,6 +14,9 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
   (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by
   far. 8a's sweep is done. **One more `ci/check.sh` on the Mac is owed, with the output at 48 kHz.**
+- **Track `br` landed** (2026-10-18, `054e338`): add an installed plugin from the app (#32), and presets for std
+  sounds and plugins (#26, FMT-22, HOST-8). Linux green at `1fb6caa`; macOS owed (in the next Mac run). Build notes
+  `docs/designs/step9/build-notes-br.md`.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
 - Next: that one Mac run (after `mf2` is merged), then fix what it finds. Then Windows, as its own step, or the top gaps.
@@ -25,7 +28,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
 | 1 | `ci/check.sh` on `main` | **Done at `e7518f4`** (2026-10-18), 11 of 13 rows. Two tests failed, fixed on `mf2`: a take's steps looked up by the folder's real path (`7482009`), and the plugin window test asks the host process that owns the window (`e505d0b`, the SIGBUS). G12 failed only its set-up (output at 44.1 kHz). `pl-arrange-fix`'s retry (on Linux too) was a real race, fixed on `mf2`: a marker's Delete or Rename now finds it by its bar. G7f passed one sandbox a box: a block −1,018 µs over S, a callback −2,748 µs, 76 MB against 554, build 28 ms against 205 | 71 min |
 | 2 | (dropped) G7f store on the old gain | Not needed any more. It asked whether the Mac's +135 µs a block since step 7 was the 32 MiB store layout (O1). Track `ab` replaced that layout with one sandbox per box, so run 1's G7f rows now judge the new layout. The old std (ABI v0) can't load on `main` anyway. | — |
 | 3 | 8a's Mac sweep, `ci/sweep.sh` | **Done at `e7518f4`.** It confirmed `live_count` 4 and `BETWEEN` = park (spin was far worse), so no code changed. Gate 8: 4 threads, 10 minutes, p99 1,308 µs (45%), 0 dropouts; provisional, at 44.1 kHz. Exports on 8 fast cores, 6.4× one thread | about 40 min |
-| 4 | By ear, steps 7 to 116 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116) | about 2 hours, in parts |
+| 4 | By ear, steps 7 to 125 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116), `br` (117–125) | about 2 hours, in parts |
+| 5 | `ci/check.sh` on `main` (the same run as row 1's next one) | Also runs `br`'s plugin preset search and preset load on a Mac for the first time (HOST-8) | about 45 min |
 
 **Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main` once `mf2` is
 merged. It checks the two fixes (the plugin window's `closed` callback now runs on the next main-queue turn: run on
@@ -94,6 +98,7 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 |---|---|---|
 | G7f arena's slowest activation block | over 5,333 µs under load | can fail the gates row here beside other agents |
 | G3 (a note edit within compile + 20 ms) | p95 16–22 ms at n=10 | near its line under load |
+| G11 tx-data, 5,000 files in assets/ | p95 6.8 ms past its 5 ms | once, at load 4–10 while other tracks built (track `br`); the rerun passed at 1.6 ms |
 | G5 and G7a through the server | p95 past its bound | twice, at high load while other tracks built; alone they pass at about 111 ms |
 | `taste` | the Bass header's click didn't select it within 30 s | once, three suites at once beside other agents |
 | `live3b` | "its release writes db(-32) into song.ts" | once, at load 45–74, before step 7 |
@@ -119,7 +124,7 @@ these or a real failure, and fixes the real ones (most were a read a moment too 
    (MSVC, QuickJS under `cl.exe`, `llvm-rc` for the desktop app). Platform design §8 lists the Unix-only spots.
    Known already: `push_tree` opens files read-only, but `FlushFileBuffers` needs write access.
 3. **The top gaps**, if the owner asks for features ([docs/gaps.md](docs/gaps.md), most visible first): the rest of
-   recording (#24, #25), audio clips (#18), adding a plugin from the app (#32), the Sampler (#22), presets (#26),
+   recording (#24, #25), audio clips (#18), the Sampler (#22),
    meters after the fader (#20), buses (#27), sections (#23), scale help (#16).
 4. **Open owner decisions** (below): ask them, with the recommendation.
 
@@ -159,10 +164,10 @@ invisible Xvfb screen, with pictures sent to the owner.
 | What | Where |
 |---|---|
 | The contract, and the order of work | `docs/architecture.md` |
-| What each step and track built, decided and left | `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
+| What each step and track built, decided and left | `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
 | Kernel ABI v1 | `docs/kernel-abi.md` |
 | The look | `docs/designs/step8/taste.md` |
-| Each check's logs and summary | `~/m2-runs/check-<label>/` and `.tgz` (step 9's finals: `check-io`, `-ab`, `-ph`, `-sx`, `-pm`, `-ex`) |
+| Each check's logs and summary | `~/m2-runs/check-<label>/` and `.tgz` (step 9's finals: `check-io`, `-ab`, `-ph`, `-sx`, `-pm`, `-ex`, `-br`) |
 | Pictures for the owner | `~/m2-runs/app-shots/<track>-<commit>/` |
 | Logs of long jobs | `~/m2-runs/logs/` |
 | The Mac's pasted runs | `~/m2-runs/mac-runs/` |

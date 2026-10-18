@@ -16,6 +16,12 @@ pub fn songs() -> Option<PathBuf> {
     home().map(|h| h.join("Music").join("music2"))
 }
 
+/// Where your presets go (FMT-22): `~/Music/music2/Presets`, beside your songs, on every OS. It
+/// doesn't follow the "new songs go" setting. One folder per sound inside it.
+pub fn presets() -> Option<PathBuf> {
+    songs().map(|s| s.join("Presets"))
+}
+
 /// Where music2 keeps what it can always rebuild, outside every project: the hash cache (FMT-16),
 /// later decoded and warped renders (RENDER-30). `~/Library/Caches/music2` on macOS,
 /// `~/.cache/music2` on Linux: from `HOME` alone, so a test's scratch `HOME` holds it too.
@@ -41,6 +47,7 @@ mod tests {
         if let Some(home) = super::home() {
             assert_eq!(super::songs().unwrap(), home.join("Music/music2"));
             assert_eq!(super::cache().unwrap(), super::os::cache(&home));
+            assert_eq!(super::presets().unwrap(), home.join("Music/music2/Presets"));
         }
     }
 
