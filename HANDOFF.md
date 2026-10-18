@@ -9,6 +9,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - Each track was reviewed, its findings fixed or listed in [docs/gaps.md](docs/gaps.md), and `ci/check.sh --gates`
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
   71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
+- **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
 - **The Mac is owed.** It was last green at `cbac57c` (step 7). At `85b069a` it passed 11 of 13 rows, and `macfix`
   fixed both. Everything since then (step 8's later tracks and all of step 9) has never run on a Mac.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
