@@ -59,6 +59,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // WAV files onto the selected audio track at the playhead's bar, else a new audio track (lane
     // A's Q7). Logic's key.
     ("import_audio", "Import Audio…", Some("CmdOrCtrl+Shift+I")),
+    // A MIDI file's parts as new tracks at the end, from bar 1 (studio's C2b, Q36). No key.
+    ("import_midi", "Import MIDI…", None),
     // The Export dialog (studio C3): the song, its stems or its notes. ⌘E is Split.
     ("export", "Export…", Some("CmdOrCtrl+Shift+E")),
     ("reveal", REVEAL, None),
@@ -218,6 +220,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("save_as"),
         Line,
         Item("import_audio"),
+        Item("import_midi"),
         Line,
         Item("export"),
         Line,
@@ -641,6 +644,19 @@ mod tests {
             let file = &bar.iter().find(|m| m.0 == "File").expect("a File menu").1;
             let at = file.iter().position(|r| *r == Row::Item("save_as")).expect("Save As");
             assert_eq!(file[at + 1..at + 3], [Row::Line, Row::Item("import_audio")], "mac: {mac}");
+        }
+    }
+
+    /// Studio's C2b (Q36): File ▸ Import MIDI…, with no key, right after Import Audio… on both
+    /// menu bars.
+    #[test]
+    fn import_midi_follows_import_audio() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "import_midi").map(|i| (i.1, i.2)), Some(("Import MIDI…", None)));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let file = &bar.iter().find(|m| m.0 == "File").expect("a File menu").1;
+            let at = file.iter().position(|r| *r == Row::Item("import_audio")).expect("Import Audio");
+            assert_eq!(file[at + 1], Row::Item("import_midi"), "mac: {mac}");
         }
     }
 
