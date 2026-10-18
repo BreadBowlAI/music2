@@ -12,7 +12,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
 - **Track `bus`** (branch `bus`, not landed yet): buses, sends and groups, in song code (RENDER-34, `@m2/core`
   1.5.0, std 0.4.0) and in the Mix view (Add bus, a send knob per bus, an output picker). Gap #27 is closed. Its
-  plan and what each slice built: `docs/designs/step9/bus-plan.md`.
+  plan and what each slice built: `docs/designs/step9/bus-plan.md`. Its `ci/check.sh --gates` passed first time at
+  `b56f54b`: 1,750 Rust tests, 72/72 browser suites, 12 of 12 renders, the 7 gate runs, 38 minutes.
 - **The Mac is owed.** It was last green at `cbac57c` (step 7). At `85b069a` it passed 11 of 13 rows, and `macfix`
   fixed both. Everything since then (step 8's later tracks and all of step 9) has never run on a Mac.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
