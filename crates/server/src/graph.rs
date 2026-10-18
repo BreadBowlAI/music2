@@ -432,6 +432,8 @@ struct Inner {
     plugins: Mutex<Value>,
     /// The plugin instances whose window is open, by handle.
     open_windows: Mutex<HashSet<u64>>,
+    /// `plugins` changed since the watcher last asked.
+    plugins_changed: AtomicBool,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -570,6 +572,7 @@ impl Inner {
             output,
             plugins: Mutex::new(Value::Object(Default::default())),
             open_windows: Mutex::default(),
+            plugins_changed: AtomicBool::new(false),
         }
     }
 
@@ -1771,6 +1774,12 @@ impl Graph {
             eprintln!("music2: {e:#}");
             false
         })
+    }
+
+    /// Whether a plugin's window or latches changed since this was last asked (HOST-7, MON-6),
+    /// which the state's `plugins` says: the server's watcher then tells the windows.
+    pub fn plugins_changed(&self) -> bool {
+        self.inner.plugins_changed.swap(false, Ordering::AcqRel)
     }
 
     /// Take in what the project's folder says now, at once, without the settle rule: tests, and

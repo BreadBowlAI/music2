@@ -953,6 +953,7 @@ function PluginRow({ node, title, session }: { node: string; title: string; sess
           className="shrink-0 h-6 px-2 flex items-center gap-1.5 rounded-sm font-medium text-accent hover:text-accent-strong hover:bg-hover disabled:text-fg-off cursor-pointer transition-colors duration-80 ease-linear"
           data-plugin-window={open ? "open" : "closed"}
           title={open ? `Close ${title}'s own window` : `Open ${title}'s own window, to change its sound there`}
+          aria-label={open ? "Close window" : "Open window"}
           disabled={busy}
           onClick={() => {
             setBusy(true);
@@ -960,7 +961,8 @@ function PluginRow({ node, title, session }: { node: string; title: string; sess
           }}
         >
           <AppWindow size={14} />
-          {open ? "Close window" : "Open window"}
+          {/* With a latch beside it, the icon alone: the row has room for one label. */}
+          {latched.length === 0 && (open ? "Close window" : "Open window")}
         </button>
       ) : (
         <span className="pl-2 text-fg-faint truncate">{box ? "No window of its own" : ""}</span>
@@ -968,11 +970,11 @@ function PluginRow({ node, title, session }: { node: string; title: string; sess
       {latched.length > 0 && (
         <>
           <span
-            className="ml-auto truncate text-fg-muted"
+            className="ml-auto shrink-0 text-fg-muted"
             data-latched={latched.map((l) => l.id).join(" ")}
             title={`${latched.map((l) => l.name).join(", ")}: set in the window, so ${latched.length === 1 ? "it doesn't" : "they don't"} follow ${latched.length === 1 ? "its" : "their"} lane or cable now. Only while this song is open, never in an export.`}
           >
-            {latched.length === 1 ? `${latched[0].name} latched` : `${latched.length} latched`}
+            {latched.length === 1 ? "Latched" : `${latched.length} latched`}
           </span>
           <button
             className="shrink-0 font-medium text-accent hover:text-accent-strong cursor-pointer"

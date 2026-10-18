@@ -163,8 +163,14 @@ fn a_gesture_on_a_literal_commits_one_tx() {
 fn a_gesture_on_a_lane_driven_parameter_latches_it() {
     let mut r = Rig::new("lane.control('g', 'scalar', 0.5)", "gesture-at-20-30:1=0.9");
     assert_eq!(r.param(GAIN), 0.2f32, "the lane plays");
+    // The first tick publishes the boxes; then there's nothing new to tell.
+    r.tick();
+    r.graph().plugins_changed();
+    r.tick();
+    assert!(!r.graph().plugins_changed(), "nothing new to tell");
     r.fill_to(60);
     r.tick();
+    assert!(r.graph().plugins_changed(), "the watcher tells the windows the box changed");
     assert_eq!(r.param(GAIN), 0.9f32, "latched at the window's value after the gesture");
     let (node, plugin) = r.plugin();
     let latched = plugin["latched"].as_array().unwrap();

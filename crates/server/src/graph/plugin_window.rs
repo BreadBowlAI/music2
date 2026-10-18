@@ -389,7 +389,13 @@ impl Actor {
                 .collect();
             out.insert(n.name.clone(), json!({"window": window, "latched": latched}));
         }
-        *self.inner.plugins.lock() = Value::Object(out);
+        // A window or a latch changed: the watcher tells the windows to read the state again.
+        let out = Value::Object(out);
+        let mut was = self.inner.plugins.lock();
+        if *was != out {
+            *was = out;
+            self.inner.plugins_changed.store(true, std::sync::atomic::Ordering::Release);
+        }
     }
 }
 
