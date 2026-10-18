@@ -13,9 +13,10 @@ building is written there, under each slice ("Built, and where it differs").
 - **Slice 3, MIDI files in the app:** File ▸ Import MIDI…, or drop a `.mid` file. Each part becomes a new track
   with a fitting sound, after a question when the tempos differ. One Undo takes it all back.
 - **One render changed, on purpose:** `examples/sounds` (2 of 12 lines). Its one-note sounds now hear each note's
-  own velocity, not one rounded to 127 steps. So std is 0.3.0 and `@m2/core` 1.4.0 (FMT-3).
-- **Ready to land:** `main` (track `ph`) merged in, the review's big finding fixed, and `ci/check.sh --gates`
-  passed. See [Finishing the track](#finishing-the-track-2026-10-18).
+  own velocity, not one rounded to 127 steps. So std is 0.3.0 and `@m2/core` 1.4.0 (FMT-3). std 0.3.0 also holds
+  `sx`'s `std:stretch` (0.2.2 there).
+- **Ready to land:** `main` (tracks `ph` and `sx`) merged in, the review's big finding fixed, and
+  `ci/check.sh --gates` passed at `e6019bf`. See [Finishing the track](#finishing-the-track-2026-10-18).
 - Linux timings are information only. The Mac's run is owed (PLAT-1).
 
 ## What you can do now
@@ -56,32 +57,40 @@ Then `main` at `09a0687` (track `ph`: the plugin host process, plugin windows, l
 lane's two wheel events. One small thing it showed is a line in `docs/gaps.md`: a poly's glide isn't delayed with
 its notes behind a latent plugin.
 
-The first full check (at `e718140`) passed every test row, but one browser suite (`gestures`, an older one) passed
-only on a retry: it read the pan's words a moment too soon after an ⌥-click. Fixed in `73392de`: it waits for them.
-That run's "repo unchanged" row also failed, as these docs were being written during it. Then `ci/check.sh --gates`
-passed at `73392de`: every row, nothing only on a retry (1,680 Rust tests, 69/69 browser suites, 12 of 12 renders,
-the 7 gate runs; 33 minutes).
+Then `main` moved again: `83fa4e4` (track `sx`: `std:stretch` as an offline kernel, Follow tempo) was merged in
+(`e5be820`). std's version clashed: 0.3.0 (pm's, the higher) over 0.2.2 (sx's), as the plan says; `std.wasm` was
+rebuilt from the merged sources. `e2e/renders.sha256` keeps both tracks' changed lines (sounds from pm, resample
+from sx).
+
+Four full checks:
+
+| # | At | What happened |
+|---|---|---|
+| 1 | `e718140` | Every test row passed, but the `gestures` suite (an older one) passed only on a retry: it read the pan's words a moment too soon after an ⌥-click. Fixed in `73392de`: it waits. "Repo unchanged" failed too, as these docs were being written during the run |
+| 2 | `73392de` | Passed: every row, nothing only on a retry (33 minutes). Then `main` moved (`sx`) |
+| 3 | `e5be820` | The `st-audio` suite passed only on a retry: it read the revision before the undo's was published. Fixed in `e6019bf`. Gate G5/G7a through the server failed on timing alone (one slow edit of 10, p95 116 ms against 100) while other tracks built; it passed in runs 2 and 4 |
+| 4 | `e6019bf` | Passed: every row, nothing only on a retry (1,698 Rust tests, 70/70 browser suites, 12 of 12 renders, the 7 gate runs; 36 minutes) |
 
 **The check's summary, word for word:**
 
 ```
 music2 check: PASS
-commit   73392dedafaa on pm (clean)
+commit   e6019bfdecb3 on pm (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
-tools    rustc 1.99.0, node v24.21.0, 33 min
+tools    rustc 1.99.0, node v24.21.0, 36 min
 plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
 build            PASS  
 app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
-rust tests       PASS  1680 passed, 0 failed
+rust tests       PASS  1698 passed, 0 failed
 clippy           PASS  
 pool models      PASS  29 passed, 0 failed
 std kernels      PASS  tests and clippy
 std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
-browser suites   PASS  69/69 suites ok
+browser suites   PASS  70/70 suites ok
 renders          PASS  12 of 12 match e2e/renders.sha256
 old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
@@ -91,7 +100,7 @@ repo unchanged   PASS
 ## Pictures
 
 From the app on the invisible screen `:95`, in `~/m2-runs/app-shots/pm-73392de/` (captions in
-`captions.txt` there):
+`captions.txt` there). Taken before the `sx` merge, which changed nothing on these screens:
 
 | Picture | Shows |
 |---|---|

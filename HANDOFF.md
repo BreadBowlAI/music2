@@ -16,8 +16,8 @@ Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
-- **Track `pm` is ready to land** (2026-10-18), on branch `pm`: Linux green at `73392de`; macOS owed. From `main` at
-  `97b4cdf` (`ab`), with `main` at `09a0687` (`ph`) merged in. Step 9's synth turns 4 and 5, and gaps #36's app half
+- **Track `pm` is ready to land** (2026-10-18), on branch `pm`: Linux green at `e6019bf`; macOS owed. From `main` at
+  `97b4cdf` (`ab`), with `main` at `09a0687` (`ph`) and `83fa4e4` (`sx`) merged in. Step 9's synth turns 4 and 5, and gaps #36's app half
   (plan: `docs/designs/step9/pm-plan.md`; build notes: `build-notes-pm.md` beside it). It adds:
 
   | You can now | Where |
@@ -27,13 +27,15 @@ whatever you pick up.
   | Bend notes with a MIDI keyboard's pitch wheel; more vibrato with its mod wheel | any instrument it plays; the mod wheel on the polysynth sounds and plugins |
   | Bring in a MIDI file as new tracks, one Undo step | File ▸ Import MIDI…, or drop a `.mid` file |
 
-  **std is 0.3.0** (`@m2/core` 1.4.0): your own songs need one line changed (see [Your own songs](#your-own-songs-for-the-owner)).
+  **std is 0.3.0** (`@m2/core` 1.4.0; it holds `sx`'s `std:stretch` too): your own songs need one line changed (see [Your own songs](#your-own-songs-for-the-owner)).
   One render changed on purpose: `examples/sounds` (2 of 12 lines), as its one-note sounds now hear each note's own
   velocity. A review found 2 things. The big one: a one-note instrument moved to another lane kept its old note
   sounding for ever; now it lets go (`db11f90`, tests shown red first). The small one (the pitch wheel picks another
-  drum on a drum kit) is a line in `docs/gaps.md`. The first full check passed an older browser suite only on a retry
-  (fixed). Then `ci/check.sh --gates` passed at `73392de`: every row, nothing only on a retry (1,680 Rust tests,
-  69/69 browser suites, 12 of 12 renders, the 7 gate runs; 33 minutes). Pictures: `~/m2-runs/app-shots/pm-73392de/`.
+  drum on a drum kit) is a line in `docs/gaps.md`. Two older browser suites passed only on a retry in full checks
+  (each read a result a moment too soon: fixed), and G5/G7a through the server failed once on timing while other
+  tracks built. Then `ci/check.sh --gates` passed at `e6019bf`, after the `sx` merge: every row, nothing only on a
+  retry (1,698 Rust tests, 70/70 browser suites, 12 of 12 renders, the 7 gate runs; 36 minutes). Pictures:
+  `~/m2-runs/app-shots/pm-73392de/`.
   Owed on the Mac: the by-ear steps 103 to 110 (a real MIDI keyboard's wheels, a legato slide, a MIDI file from the
   Finder).
 - **`sx` is ready to land** (2026-10-18): Linux green at `000dd72`; macOS owed. From `main` at `97b4cdf`, with
@@ -332,7 +334,7 @@ whatever you pick up.
 | `io` | `64380e1`, then docs only | **Ready to land.** From `main` at `258275b`. Step 9's audio turns 1 and 4: disk streaming (RENDER-30) and recording audio (RENDER-30a, MON-8). Reviewed (8 findings: 3 big ones fixed with tests, 2 small ones fixed, 3 in gaps.md). Linux green at `64380e1` (`ci/check.sh --gates`, nothing passed only on a retry), macOS unverified since `eda5e77`. Worktree `~/m2-runs/wt/io`. Plan `docs/designs/step9/io-plan.md`; build notes `build-notes-io.md`. |
 | `ph` | `d897cf0`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) and `97b4cdf` (`ab`) merged in. Step 9's first synth and plugin turns: the plugin host process (HOST-3), plugin windows (HOST-7, MON-6) and latency compensation (RENDER-17 to 21). Reviewed (4 findings: the big one fixed with tests, 2 small ones fixed, 1 in gaps.md). Linux green at `d897cf0` (`ci/check.sh --gates`, nothing passed only on a retry), macOS unverified since `b0ebc74`. Worktree `~/m2-runs/wt/ph`. Plan `docs/designs/step9/ph-plan.md`; build notes `build-notes-ph.md`. |
 | `ab` | `7399cb8`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) merged in (`c68d203`). Kernel ABI v1 (ABI-2, ABI-3, ABI-5), one sandbox a box (RENDER-32), and std 0.2.1's Sampler. Reviewed (5 findings: the big one fixed with a test, 4 in gaps.md). Linux green at `7399cb8` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/ab`. Plan `docs/designs/step9/ab-plan.md`; build notes `build-notes-ab.md`. |
-| `pm` | `73392de`, then docs only | **Ready to land.** From `main` at `97b4cdf` (`ab`), with `main` at `09a0687` (`ph`) merged in (`e718140`). The poly op's options (RENDER-16: mono, legato, glide, steal), std 0.3.0; the pitch and mod wheels, live (RENDER-14's `Midi`); MIDI files in the app (#36). Reviewed (2 findings: the big one fixed with tests, 1 in gaps.md). Linux green at `73392de` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/pm`. Plan `docs/designs/step9/pm-plan.md`; build notes `build-notes-pm.md`. |
+| `pm` | `e6019bf`, then docs only | **Ready to land.** From `main` at `97b4cdf` (`ab`), with `main` at `09a0687` (`ph`, `e718140`) and `83fa4e4` (`sx`, `e5be820`) merged in. The poly op's options (RENDER-16: mono, legato, glide, steal), std 0.3.0; the pitch and mod wheels, live (RENDER-14's `Midi`); MIDI files in the app (#36). Reviewed (2 findings: the big one fixed with tests, 1 in gaps.md). Linux green at `e6019bf` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/pm`. Plan `docs/designs/step9/pm-plan.md`; build notes `build-notes-pm.md`. |
 | `sx` | `000dd72`, then docs only | **Ready to land.** From `main` at `97b4cdf`, with `main` at `09a0687` (`ph`) merged in (`705f24a`). Step 9's stretching turn: kernel ABI v1 settled (ABI-3), `std:stretch` as the first offline kernel (ABI-2), stretches made in the background (RENDER-30), and Follow tempo. Reviewed (6 findings: the big one fixed with tests, 1 small one fixed, 4 in gaps.md). Linux green at `000dd72` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/sx`. Plan `docs/designs/step9/sx-plan.md`; build notes `build-notes-sx.md`. |
 | Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, 73 to 82 once `io` is on `main`, 83 to 87 once `ab` is, 88 to 95 once `ph` is, 96 to 102 once `sx` is, and 103 to 110 once `pm` is. |
 
