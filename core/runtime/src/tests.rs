@@ -307,7 +307,7 @@ fn std_manifest_matches_its_kernels() {
     }
 }
 
-// O1, RENDER-32: every std kernel fits under the 32 MiB a kernel memory may grow to, at the highest
+// RENDER-32: every std kernel fits under the 256 MiB a sandbox may take at its birth, at the highest
 // rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they are born
 // (delay lines and reverbs sized by the rate), and never after, so born, one block played and reset
 // is the most an instance ever holds. A kernel added later is checked too. Prints the one that holds
@@ -749,6 +749,63 @@ fn only_the_asset_import_is_allowed() {
     }
 }
 
+// RENDER-32: a sandbox may take up to 256 MiB while it is born (its birth cap): a kernel that takes
+// 40 MiB in `k_new` builds and plays; one that asks for more than 256 MiB fails the build, naming
+// the node and the cap in plain words.
+#[test]
+fn a_kernel_past_its_birth_cap_says_it_ran_out() {
+    let taking = |pages: u32| {
+        let k = kernel_v1("k", &out_v1("(local.get $x)")).replacen(
+            "(f32.store (i32.const 4096) (f32.const 0)) (i32.const 4096))",
+            &format!("(f32.store (i32.const 4096) (f32.const 0)) (drop (memory.grow (i32.const {pages}))) (i32.const 4096))"),
+            1,
+        );
+        package_with(&module_v1(&k), "inputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]")
+    };
+    let ir = song(
+        json!([
+            {"id": "f", "op": "const", "value": 440, "unit": "hz"},
+            {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
+            {"id": "k", "op": "kernel", "kernel": "t:k", "inputs": {"in": "o"}},
+        ]),
+        "k",
+        json!([]),
+    );
+    let (big, huge) = (taking(640), taking(4097));
+    let mut pk = std_packages();
+    pk.load(&big).unwrap();
+    let out = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap().render(0.01).unwrap();
+    assert!(peak(&out) > 0.1, "40 MiB at birth is allowed");
+    let mut pk = std_packages();
+    pk.load(&huge).unwrap();
+    let e = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).map(drop).unwrap_err();
+    assert_eq!(format!("{e:#}"), "song/k ran out of memory: a sound may use up to 256 MB");
+    assert!(e.downcast_ref::<OutOfMemory>().is_some());
+    for d in [big, huge] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+// RENDER-32: a renderer holds at most SANDBOX_LIMIT sandboxes, so two stay within 25% of the
+// address space. A song that needs more is refused at its build, before any sandbox is made, in
+// plain words that say what to do.
+#[test]
+fn a_song_past_the_sandbox_limit_is_refused_in_plain_words() {
+    let n = SANDBOX_LIMIT + 1;
+    let mut nodes = vec![json!({"id": "g0", "op": "kernel", "kernel": "std:sine", "inputs": {}})];
+    nodes.extend((1..n).map(|i| json!({"id": format!("g{i}"), "op": "kernel", "kernel": "std:gain", "inputs": {"in": format!("g{}", i - 1)}})));
+    let ir = song(Value::Array(nodes), &format!("g{}", n - 1), json!([]));
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let e = Renderer::new(&flat, &DataSet::empty(), &pk, SR).map(drop).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "This song needs 4,000 sound parts that each run on their own (each effect or sound outside an instrument, and \
+         each instrument), and music2 can play 3,999 at once. Remove some effects or tracks"
+    );
+    assert!(e.downcast_ref::<TooManySounds>().is_some());
+}
+
 // RENDER-32, RENDER-28: a sealed sandbox never grows, so its memory never moves and the address it
 // keeps from its seal stays its memory's. This kernel copies its input to its output, and asks for
 // one more page at every call: once sealed, the ask fails at once and says it ran out of memory, and
@@ -782,7 +839,7 @@ fn a_sealed_sandbox_never_grows() {
     let sealed = at(&r);
     assert_eq!(sealed.0.0, sealed.0.1, "it keeps its memory's address");
     let e = r.render(0.01).map(drop).unwrap_err();
-    assert_eq!(format!("{e:#}"), "song/k ran out of memory: a sound may use up to 32 MB");
+    assert_eq!(format!("{e:#}"), "song/k ran out of memory: a sound may use up to 256 MB");
     assert_eq!(at(&r), sealed, "its memory didn't grow or move");
     std::fs::remove_dir_all(dir).ok();
 }

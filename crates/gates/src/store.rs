@@ -3,17 +3,18 @@
 //! rule written down before anything was measured (RENDER-32).
 //!
 //! The app's layout is one sandbox a box, each memory with wasmtime's 4 GiB reservation, unchecked
-//! (RENDER-32); "P1" below is the same layout now, printed only. Its build and memory are measured once. Its block time is measured in 5
-//! rounds of three renderers taking turns over the same music: the app's layout and step 7's first
-//! layout, P1 (4 GiB reserved per memory, unchecked), in this process, and S, HEAD `8aa301e`, one
-//! `Store` per renderer, in its runner's (`baseline`), which also times S's first build. No renderer
+//! (RENDER-32). Its build and memory are measured once. Its block time is measured in 5 rounds of
+//! three renderers taking turns over the same music: the app's layout and a second renderer of it,
+//! its A/A control, in this process, and S, HEAD `8aa301e`, one `Store` per renderer, in its
+//! runner's (`baseline`), which also times S's first build. The app is judged against S only; the
+//! control is printed, as what noise alone gives, and keeps three sides taking turns. No renderer
 //! takes two turns in a row, and each turn's first blocks, which meet the caches the renderer before
 //! left, are timed apart and not judged. Each round, the three render the same bits, and not
-//! silence, which the gate checks. The drop is measured in
-//! each round for the app's layout and P1, each while an audio-like thread renders beside it.
+//! silence, which the gate checks. The drop is measured in each round for the app's layout and its
+//! control, each while an audio-like thread renders beside it.
 //!
 //! What the runner can't measure, S's memory, comes from S's record, `store-S.txt` beside this
-//! crate's manifest or `$M2_STORE_S`, with P1's drop against S's from the same campaign; every run
+//! crate's manifest or `$M2_STORE_S`; every run
 //! prints its own record line (`store-record …`), which is what that file holds. A record names its
 //! machine, and is used only on the same machine (PLAT-1). The timings are judged only there, the
 //! reference Mac; elsewhere they are printed, and on another Mac they also say what to do if it is
@@ -30,9 +31,9 @@
 //!   first build, measured here.
 //!
 //! The two memory rules fail when the OS doesn't say what the process holds: they never pass
-//! unmeasured (`m2_os::process::memory`). Batched drops are needed only if the app's layout's drop
-//! raises an audio-like thread's p99 more than S's drop does, in every pair: the app's layout's
-//! raise over P1's here, plus P1's over S's as recorded.
+//! unmeasured (`m2_os::process::memory`). What the drop raises an audio-like thread's p99 is
+//! printed: S's drop is timed with no thread beside it, so the two aren't compared here, and the
+//! record's `store-p1` line holds only step 7's old layout against S.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -193,23 +194,6 @@ fn instances(nodes: &[FNode], order: &[usize]) -> usize {
         .sum()
 }
 
-/// What P1's drop raised an audio-like thread's p99 more than S's did, in µs, from the campaign
-/// of alternated runs on the machine of S's record (`store-p1` in `text`, RENDER-32): the estimate
-/// of S's drop the batched-drops verdict adds to what the app's layout's drop costs over P1's here.
-fn p1_raise(text: &str) -> Option<f64> {
-    let (values, machine) = crate::paired::line(text, "store-p1")?;
-    same_machine(&Record::parse(text)?.machine, &machine).then_some(())?;
-    crate::paired::value(&values, "raise_us")
-}
-
-/// Whether batched drops are needed (§11.3): only if the app's layout's drop raised the audio-like
-/// thread's p99 more than S's would, P1's estimated as its own plus `recorded`, in every pair. A
-/// raise of a few µs either way is the thread's own jitter, and every pair agreeing by chance is
-/// a 1 in 32 event with 5 pairs.
-fn needed(raises: &Diffs, recorded: f64) -> bool {
-    !raises.0.is_empty() && raises.0.iter().all(|r| r + recorded > 0.0)
-}
-
 /// S where this run judges against it: its first build, measured here, in ms, and its record from
 /// this machine for what its runner can't measure, its memory, or why there is none (PLAT-1). The
 /// record names the reference Mac: only there are the timings judged (`place`).
@@ -356,10 +340,10 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         ),
     );
 
-    // Block time and the drop, in rounds: the app's layout and P1 here and S in its runner, in turns
-    // over the same music, so what disturbs one disturbs the others alike (RENDER-32).
-    // P1 is the app's layout now, one sandbox a box with wasmtime's 4 GiB: its side is printed only.
-    let p1 = crate::load_std()?;
+    // Block time and the drop, in rounds: the app's layout and its A/A control here and S in its
+    // runner, in turns over the same music, so what disturbs one disturbs the others alike
+    // (RENDER-32). The control, a second renderer of the app's layout, is printed only.
+    let control = crate::load_std()?;
     let (mut runs, mut heard): ([Vec<Vec<f64>>; 3], Vec<[Heard; 3]>) = Default::default();
     let mut peak = 0.0f32;
     let mut drops: [Vec<Dropped>; 2] = Default::default();
@@ -367,7 +351,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let mut starts: [Vec<(f64, f64)>; 3] = Default::default();
     for i in 0..ROUNDS {
         let mut app = Blocks::new(&lab.packages, &song)?;
-        let mut old = Blocks::new(&p1, &song)?;
+        let mut old = Blocks::new(&control, &song)?;
         s.renderer(&dir, FROM_SECONDS)?;
         let turns = in_turns(&mut [&mut app, &mut old, &mut s], WARM, BLOCKS, TURN, LEAD, i)?;
         for (k, at) in starts.iter_mut().enumerate() {
@@ -379,7 +363,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         s_drops.push(s.drop_it()?);
         out.info(
             format!("round {}", i + 1),
-            format!("the app's layout {}; P1 {}; S {}", Run::of(&times[0]), Run::of(&times[1]), Run::of(&times[2])),
+            format!("the app's layout {}; its control {}; S {}", Run::of(&times[0]), Run::of(&times[1]), Run::of(&times[2])),
         );
         for (run, t) in runs.iter_mut().zip(times) {
             run.push(t);
@@ -403,26 +387,25 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let app = Run::median(&runs[0]);
     (rec.mean_us, rec.p99_us, rec.max_us) = (app.mean, app.p99, app.max);
     out.info(format!("block, the app's layout (medians of {ROUNDS} runs)"), format!("{app} over {BLOCKS} blocks from 3:01"));
-    out.info(format!("block, P1 (medians of {ROUNDS} runs)"), format!("{}", Run::median(&runs[1])));
+    out.info(format!("block, its A/A control (medians of {ROUNDS} runs)"), format!("{}", Run::median(&runs[1])));
     out.info(format!("block, S (medians of {ROUNDS} runs)"), format!("{}", Run::median(&runs[2])));
     let against = |a: usize, b: usize| {
         let mean = Diffs::of(&runs[a], &runs[b], |v| v.iter().sum::<f64>() / v.len().max(1) as f64);
         (mean, Diffs::of(&runs[a], &runs[b], |v| crate::paired::rank(v, 0.99)))
     };
     let (mean, p99) = against(0, 2);
-    let ((p1_mean, p1_99), (o1_mean, o1_99)) = (against(1, 2), against(0, 1));
+    let (aa_mean, aa_99) = against(0, 1);
     out.info("block, the app's layout against S, pair by pair", format!("mean {mean}; p99 {p99}"));
-    out.info("block, P1 against S (step 7 with wasmtime's default layout)", format!("mean {p1_mean}; p99 {p1_99}"));
-    out.info("block, the app's layout against P1 (the owner's layout alone)", format!("mean {o1_mean}; p99 {o1_99}"));
+    out.info("block, the app's layout against its A/A control (noise alone)", format!("mean {aa_mean}; p99 {aa_99}"));
     out.info("block, starting a turn", crate::paired::starting(&starts, LEAD, "block"));
     let med = |f: fn(&Dropped) -> f64, d: &[Dropped]| crate::paired::median(&d.iter().map(f).collect::<Vec<_>>());
     (rec.drop_ms, rec.audio_base_us, rec.audio_drop_us) =
         (med(|d| d.ms, &drops[0]), med(|d| d.base_us, &drops[0]), med(|d| d.during_us, &drops[0]));
-    let raises = Diffs(drops[0].iter().zip(&drops[1]).map(|(a, b)| a.raise() - b.raise()).collect());
+    let raises = Diffs(drops[0].iter().map(Dropped::raise).collect());
     out.info(
         "drop",
         format!(
-            "{:.1} ms (P1 {:.1}, S {:.1} with no thread beside it); the audio-like thread's p99 block {:.0} µs during it, {:.0} µs before (medians of {ROUNDS}); {}",
+            "{:.1} ms (its control {:.1}, S {:.1} with no thread beside it); the audio-like thread's p99 block {:.0} µs during it, {:.0} µs before (medians of {ROUNDS}); {}",
             rec.drop_ms,
             med(|d| d.ms, &drops[1]),
             crate::paired::median(&s_drops),
@@ -451,7 +434,6 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         }
         Some(r) => Ok(r),
     };
-    let recorded = record.is_ok();
     let line = layout(
         &mut out,
         &rec,
@@ -461,16 +443,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         measured.is_some() && two.is_some(),
         same,
     );
-    match p1_raise(&text).filter(|_| recorded) {
-        Some(raise) => out.info(
-            "batched drops",
-            format!(
-                "{}: the drop raises the audio-like thread's p99 {raises} more than P1's here, and P1's {raise:+.0} µs more than S's as recorded on this machine; needed only if more than S's in every pair",
-                if needed(&raises, raise) { "needed" } else { "not needed" },
-            ),
-        ),
-        None => out.info("batched drops", format!("the drop raises the audio-like thread's p99 {raises} more than P1's; not compared with S here")),
-    }
+    out.info("batched drops", format!("the drop raises the audio-like thread's p99 by {raises}, pair by pair; S's drop has no thread beside it, so not compared"));
     out.info("layout", line);
     Ok(out)
 }
@@ -816,15 +789,6 @@ mod tests {
         );
     }
 
-    // RENDER-32 (§11.3), rg-1: batched drops are needed only when the app's layout's drop raises the
-    // other thread's p99 more than S's in every pair, not on one pair's jitter.
-    #[test]
-    fn batched_drops_need_every_pair() {
-        assert!(!needed(&Diffs(vec![0.0, 0.0, 1.0, -2.0, 0.0]), 0.0));
-        assert!(!needed(&Diffs(vec![5.0, 6.0, 7.0, 8.0, -1.0]), 0.0));
-        assert!(needed(&Diffs(vec![5.0, 6.0, 7.0, 8.0, 1.0]), 0.0));
-        assert!(!needed(&Diffs(vec![]), 0.0));
-    }
 
     // PLAT-1: S's own record, as checked in, names the reference Mac.
     #[test]
@@ -832,11 +796,5 @@ mod tests {
         let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt")).unwrap();
         let s = Record::parse(&text).expect("store-S.txt holds a record");
         assert!(s.machine.starts_with("MacBookPro18,1, macOS "), "{}", s.machine);
-        // RENDER-32: and what P1's drop raised another thread's p99 over S's, from the same machine,
-        // which the batched-drops verdict adds.
-        assert_eq!(p1_raise(&text), Some(0.0));
-        let s_line = text.lines().find(|l| l.starts_with("store-record ")).unwrap();
-        let other = format!("{s_line}\nstore-p1 raise_us=9.000 machine=Mac14,2, macOS 26.6.2, Apple M2, aarch64, 8 threads\n");
-        assert_eq!(p1_raise(&other), None, "only from S's record's machine");
     }
 }

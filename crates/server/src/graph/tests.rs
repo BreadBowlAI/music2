@@ -3509,12 +3509,12 @@ fn running_out_of_memory_is_said_plainly() {
     assert_eq!(format!("{:#}", super::plainly(anyhow!("a plugin failed"))), "a plugin failed");
 }
 
-// A6 of the live plan's attack (D24): a sound over its own 32 MB says so in its own words. The
+// A6 of the live plan's attack (D24): a sound over its own memory says so in its own words. The
 // computer didn't run out, so the user is never told to close other apps for it.
 #[test]
 fn a_sound_over_its_memory_is_not_the_computer_running_out() {
     let e = || anyhow::Error::from(m2_runtime::OutOfMemory { node: "bass/delay".into() }).context("bass/delay: voice");
-    let words = "bass/delay: voice: bass/delay ran out of memory: a sound may use up to 32 MB";
+    let words = "bass/delay: voice: bass/delay ran out of memory: a sound may use up to 256 MB";
     assert_eq!(format!("{:#}", super::plainly(e())), words);
     let change = super::actor::unbuilt(&e());
     assert!(change.contains("couldn't get it ready to play") && change.contains(words) && !change.contains("computer"), "{change}");

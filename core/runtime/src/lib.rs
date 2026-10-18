@@ -77,7 +77,7 @@ pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
 pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
-pub use stopped::{OutOfMemory, Stopped, Why};
+pub use stopped::{OutOfMemory, Stopped, TooManySounds, Why};
 pub use taps::{Peaks, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
@@ -101,8 +101,20 @@ pub(crate) const PORT_BYTES: usize = 2 * BLOCK * 4;
 /// isn't a constant, or it is a cell that ramps this block.
 const COPY: u64 = u64::MAX;
 
-/// Memory one kernel instance may use.
-pub(crate) const KERNEL_MEMORY: usize = 32 << 20;
+/// Memory one sandbox may take while it is born (its birth cap, RENDER-32); once sealed it takes no
+/// more. std's largest state, a stereo delay at 384 kHz, takes 6.1 MB, so a voice pool of 12 such
+/// voices fits.
+pub(crate) const KERNEL_MEMORY: usize = 256 << 20;
+
+/// The birth cap in MB, as the app tells it.
+pub const SOUND_MEMORY_MB: usize = KERNEL_MEMORY >> 20;
+
+/// The most sandboxes one renderer holds (RENDER-32): one for each kernel outside an instrument,
+/// and one a package for each instrument's voices. Two renderers, the one that plays and the one
+/// an edit prepares, stay within 25% of the 128 TiB a process may address when each memory takes
+/// 4.097 GiB of it, as measured on the Mac (4.0625 on Linux): 16,384 GiB / 4.097 GiB = 3,999. The
+/// same number on every OS, so a song either fits or doesn't, everywhere.
+pub const SANDBOX_LIMIT: usize = 3_999;
 
 /// Output below this is "quiet" when deciding whether a voice has finished (-80 dB).
 const QUIET: f32 = 1e-4;
@@ -943,6 +955,25 @@ struct Graph {
     /// Live, by top-level node holding a box: its output had a non-finite sample in its last
     /// block, or it trapped. An activation resets such a box as it moves it (RENDER-25).
     poisoned: Vec<bool>,
+}
+
+/// The sandboxes a renderer of `flat` holds, its top-level nodes `used` (RENDER-32): one for each
+/// kernel outside an instrument, and one for each package an instrument's voices run kernels of.
+fn sandboxes(flat: &Flat, used: &[bool], packages: &PackageSet) -> usize {
+    let one = |n: &FNode| match &n.op {
+        FOp::Kernel { .. } => 1,
+        FOp::Poly { voice, .. } => {
+            let mut of: Vec<&str> = voice.nodes.iter().filter_map(|n| match &n.op {
+                FOp::Kernel { kernel, .. } => packages.module_for(kernel).map(|(_, _, package)| package),
+                _ => None,
+            }).collect();
+            of.sort_unstable();
+            of.dedup();
+            of.len()
+        }
+        _ => 0,
+    };
+    flat.nodes.iter().zip(used).filter(|(_, u)| **u).map(|(n, _)| one(n)).sum()
 }
 
 /// Builds a graph's nodes, and the instances of those that get new ones.
@@ -2122,6 +2153,10 @@ impl Renderer {
             (false, Some(inst)) => Make::Lent(inst.clone()),
             (false, None) => Make::New(shapes[i].as_ref().map_or(0, Shape::hash64)),
         };
+        let needed = sandboxes(flat, &used, packages);
+        if needed > SANDBOX_LIMIT {
+            return Err(TooManySounds { needed, limit: SANDBOX_LIMIT }.into());
+        }
         let mut graph = b.graph(&flat.nodes, &flat.order, false, &boxed, &w.room)?;
         graph.prewarm()?;
         // Ghosts, then fade nodes, after the new graph's nodes (RENDER-25a).

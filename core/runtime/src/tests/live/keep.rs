@@ -601,7 +601,7 @@ fn a_trap_still_fails_an_export_and_names_the_node() {
     assert!(format!("{e:#}").contains("a/lat crashed"), "{e:#}");
 }
 
-// RENDER-32, RENDER-25: a kernel that asks for more than its 32 MiB traps at once, and says it ran
+// RENDER-32, RENDER-25: a kernel that asks for memory once sealed traps at once, and says it ran
 // out of memory, naming the node and the cap, never "wasm trap". Offline the render fails so; live
 // the node stops alone, marked as out of memory, and the other track plays on.
 #[test]
@@ -610,10 +610,10 @@ fn a_kernel_over_its_memory_says_it_ran_out() {
     let mut ir = two_tracks("hog", false);
     ir.modules[0].nodes[0] = serde_json::from_value(json!({"id": "cue", "op": "const", "value": 1})).unwrap();
     let e = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap().render(0.01).map(drop).unwrap_err();
-    assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 32 MB");
+    assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 256 MB");
     assert!(e.downcast_ref::<OutOfMemory>().is_some());
     let e = exported("hog", &pk);
-    assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 32 MB", "an export");
+    assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 256 MB", "an export");
     let lat = named(&check(&two_tracks("hog", false), &pk).unwrap(), "a/lat");
     let (_, a, b, rig) = failing("hog", &pk, true, 6, None);
     let (_, _, clean_b, _) = failing("hog", &pk, false, 6, None);
@@ -637,7 +637,7 @@ fn a_crash_after_running_out_of_memory_is_told_as_a_crash() {
     assert_eq!(stopped.news(), [(lat, Why::Crashed)], "a plain trap is a crash");
 }
 
-// RENDER-32: a kernel that asks for more than its 32 MiB in its first reset, while it is built,
+// RENDER-32: a kernel that asks for memory in its first reset, after its seal, while it is built,
 // fails the build in the same words.
 #[test]
 fn a_kernel_over_its_memory_at_its_build_says_so() {
@@ -645,7 +645,7 @@ fn a_kernel_over_its_memory_at_its_build_says_so() {
     let mut ir = two_tracks("fat", false);
     ir.modules[0].nodes[0] = serde_json::from_value(json!({"id": "cue", "op": "const", "value": 1})).unwrap();
     let e = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).map(drop).unwrap_err();
-    assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 32 MB");
+    assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 256 MB");
 }
 
 // RENDER-10: a panic resets every box and clears every mark: the activation after it resets

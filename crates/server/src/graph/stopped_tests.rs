@@ -106,7 +106,7 @@ fn a_kernel_that_stops_is_told_once_by_sound_and_track() {
     assert!(rig.graph.status().playing, "the song plays on");
 }
 
-// RENDER-32, RENDER-25: a sound over its 32 MB is told as running out of memory, with the cap.
+// RENDER-32, RENDER-25: a sound over its memory is told as running out of memory, with the cap.
 #[test]
 fn out_of_memory_is_told_as_memory() {
     let rig = Rig::new();
@@ -115,7 +115,7 @@ fn out_of_memory_is_told_as_memory() {
     assert_eq!(
         rig.told(),
         [format!(
-            "The delay on Bass ran out of memory (a sound may use up to 32 MB), so music2 made it silent. The rest of the song plays on. {AGAIN}"
+            "The delay on Bass ran out of memory (a sound may use up to 256 MB), so music2 made it silent. The rest of the song plays on. {AGAIN}"
         )]
     );
 }
