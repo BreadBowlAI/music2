@@ -1,7 +1,9 @@
 import clsx from "clsx";
-import { AudioWaveform, ChartSpline, CornerDownLeft, Flame, Gauge, Orbit, Search, Sparkles, Waves, Wrench } from "lucide-react";
+import { AudioWaveform, ChartSpline, CornerDownLeft, Flame, Gauge, Orbit, Plug, Search, Sparkles, Waves, Wrench } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Effect } from "../lib/graph";
+import { isPlugin, pluginEffects, PLUGINS, usePluginList, wantPlugins } from "../lib/plugins";
+import PluginsFoot from "./PluginsFoot";
 import { EmptyState } from "./ui";
 
 /**
@@ -18,6 +20,8 @@ export const CATEGORIES: { name: string; Icon: typeof Waves }[] = [
   { name: "Delay & Reverb", Icon: Waves },
   { name: "Modulation", Icon: Orbit },
   { name: "Utility", Icon: Wrench },
+  // The installed plugins (gaps #32), last.
+  { name: PLUGINS, Icon: Plug },
 ];
 export const category = (name: string) => CATEGORIES.find((c) => c.name === name) ?? { name, Icon: Sparkles };
 
@@ -96,7 +100,8 @@ function place(anchor: HTMLElement) {
 
 /**
  * A searchable list of the effects that can go after `after` (the code's name for it, as the preview
- * writes it; `named`: what the screen calls it): type to filter, arrows to move, Enter to add.
+ * writes it; `named`: what the screen calls it): type to filter, arrows to move, Enter to add. The
+ * installed effect plugins are its last group (gaps #32), asked for as it opens.
  */
 export default function EffectBrowser({
   effects,
@@ -118,7 +123,9 @@ export default function EffectBrowser({
   const [pos, setPos] = useState(() => place(anchor));
   const panel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const groups = useMemo(() => search(effects, query), [effects, query]);
+  const plugins = usePluginList((s) => s.plugins);
+  useEffect(() => wantPlugins(), []);
+  const groups = useMemo(() => search([...effects, ...pluginEffects(plugins)], query), [effects, plugins, query]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const current = flat[Math.min(active, flat.length - 1)];
 
@@ -233,12 +240,15 @@ export default function EffectBrowser({
             </div>
           );
         })}
+        <PluginsFoot kind="effect" />
       </div>
       {/* Literally code: what adding it writes. Nothing listed, nothing to write: no empty band. */}
       {current && (
         <div className="h-ctl shrink-0 flex items-center px-3 border-t border-line bg-chrome text-xs text-fg-muted">
           <span data-code className="flex-1 min-w-0 truncate font-mono" title="What adding it writes in your code">
-            {`${current.effect.name}(${after}(…)${current.effect.insert})`}
+            {isPlugin(current.effect.component)
+              ? `plugin("${current.effect.component}", { in: ${after}(…) })`
+              : `${current.effect.name}(${after}(…)${current.effect.insert})`}
           </span>
         </div>
       )}

@@ -131,6 +131,7 @@ export const SUITES = [
   ["pc-keys", "fix", { expect: 37 }],
   ["ab-sampler", "export", { expect: 23 }],
   ["sx-follow", "fix", { expect: 22 }],
+  ["br-plugins", "fix", { probe: true, expect: 19 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 
@@ -251,10 +252,13 @@ function prepare(dir, kind) {
   return { home, open, args };
 }
 
-function envFor(home, clap) {
+function envFor(home, clap, probe) {
   const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "inject", M2_AUDIO_INPUT: "inject", M2_AUDIO_INPUTS: "Test mic,USB mic", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
   delete env.CLAP_PATH;
+  delete env.M2_PROBE;
   if (clap && clapPath) env.CLAP_PATH = clapPath;
+  // The probe plugin, which a debug server installs (br-plugins).
+  if (probe) env.M2_PROBE = "1";
   return env;
 }
 
@@ -263,7 +267,7 @@ async function runOne(suite, kind, o = {}, stream) {
   const dir = path.join(root, name);
   const logFile = path.join(root, `${name}.log`);
   const { home, open, args } = prepare(dir, kind);
-  const env = envFor(home, o.clap);
+  const env = envFor(home, o.clap, o.probe);
   const session = path.join(home, ".music2/session.json");
   const log = fs.openSync(logFile, "w");
   const say = (s) => {

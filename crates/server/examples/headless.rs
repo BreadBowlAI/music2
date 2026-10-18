@@ -8,6 +8,8 @@
 //! server build then serves another checkout's page. std, the templates and the examples still come
 //! from the tree it was built in.
 //!
+//! With `M2_PROBE` set (debug builds), the probe plugin is installed, as `m2` does for tests.
+//!
 //! With `M2_AUDIO_CAPTURE=<file>`, what the app plays goes into that file instead of a device, in
 //! real time, so a test can listen to it: interleaved stereo `f32` at 48 kHz, little-endian,
 //! appended a device buffer at a time (`M2_AUDIO_FRAMES` frames, 512 unless set) as each is played.
@@ -17,6 +19,12 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
+    // Tests: with `M2_PROBE` set, the probe plugin (`clap:m2.probe`) is installed, in the host
+    // process as any plugin (e2e/br-plugins.mjs). Debug builds only, as `m2`'s.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("M2_PROBE").is_some() {
+        m2_plugins::probe::install();
+    }
     // HOST-2: the server runs on a worker while the main thread serves plugins as their main
     // thread (the OS's main loop), and destroys what they created before the process exits.
     m2_plugins::run_main(serve)
