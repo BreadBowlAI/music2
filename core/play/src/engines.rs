@@ -383,6 +383,7 @@ mod tests {
     // when real time was granted: here, a user with no rtprio limit gets one thread, and says why.
     #[test]
     fn a_device_without_real_time_plays_on_one_thread() {
+        let _alone = crate::tests::WORKERS.lock().unwrap_or_else(|e| e.into_inner());
         let report = Report::default();
         let live = LiveThreads { count: Some(4), between: Between::Park };
         let e = for_device(None, 48_000, live, &|| 128, &report);
