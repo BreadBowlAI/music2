@@ -2421,7 +2421,9 @@ static GENERATION: AtomicU64 = AtomicU64::new(1);
 /// Then, in `order`, a plan node whose inputs all come from one other label, idle nodes and those
 /// outside the order aside, takes that label, and an overlay follows its source again (R1): a
 /// mixer strip (a channel's pan and fader) runs with its track, not in the song's serial tail. A
-/// node that reads a fade never moves: the fade took its label.
+/// node that reads a fade never moves: the fade took its label. Nothing moves into the song: a bus
+/// reads only what the song feeds it, and runs in a partition of its own, beside the other buses,
+/// not in the song's serial tail (RENDER-34).
 fn labels(
     flat: &Flat,
     w: &Wiring,
@@ -2480,6 +2482,7 @@ fn labels(
         });
         if let Some(Some(l)) = from.filter(|_| one)
             && Some(l) != label[i]
+            && l != m2_ir::key::ROOT
         {
             debug_assert!(
                 {

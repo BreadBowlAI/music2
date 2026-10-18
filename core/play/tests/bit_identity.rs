@@ -736,3 +736,60 @@ fn no_fixture_gets_a_delay() {
         assert_eq!((r.latency(), r.stats().delays, info.played.is_some()), (0, 0, false), "{name} has no latency, so no delay");
     }
 }
+
+/// The session's bus fixture: first-song's tracks into a drum group, a reverb and a delay that
+/// sends on to the reverb (RENDER-34).
+const BUSES: &str = "core/session/tests/fixtures/buses";
+
+// RENDER-2, RENDER-33, RENDER-34: the bus fixture, a song and buses that read each other both ways,
+// renders the same bits on 2, 3, 4 and 7 threads as on one, with tasks on workers, and plays live
+// what it exports.
+#[test]
+fn buses_give_the_same_bits_on_any_thread_count() {
+    let song = fixture(BUSES);
+    assert!(song.flat.routes.iter().any(|(t, b)| t == "keys" && b == "echo"), "the keys feed the delay: {:?}", song.flat.routes);
+    let frames = (song.seconds() * song.rate as f64) as usize;
+    let one = offline(&song, frames);
+    assert!(peak(&one) > 0.1);
+    for (n, diff, on_workers, _) in on_threads(&song, frames, &[2, 3, 4, 7], &one) {
+        assert_eq!(diff, None, "the bus fixture on {n} threads: the same bits");
+        assert!(on_workers > 0, "the bus fixture on {n} threads: tasks ran on workers");
+    }
+    check("buses", &song, song.rate as usize * 4, None);
+}
+
+// RENDER-17 to RENDER-19, RENDER-34: a latent plugin on a bus stays in time with the dry path. The
+// fixture's keys go to its delay bus (`to`), which plays them through the probe 100 frames late,
+// beside the keys inverted: the planner delays the dry path by 100 frames, so the two cancel to
+// exactly 0, offline and live.
+#[test]
+fn a_latent_plugin_on_a_bus_stays_aligned() {
+    let late = "import { bus, plugin } from \"@m2/core\";\n\
+                export default bus(\"echo\", ({ input }) => plugin(\"clap:m2.probe\", { key: \"late\", in: input, gain_1: 1 }));\n";
+    let song = |mix: &str| {
+        let code = format!(
+            "import {{ kernel, song }} from \"@m2/core\";\nimport {{ mixer }} from \"std/mix\";\n\
+             import echo from \"./tracks/echo\";\nimport keys from \"./tracks/keys\";\n\
+             export default song(() => mixer({mix}));\n"
+        );
+        fixture_with(
+            BUSES,
+            &[
+                ("song.ts", &code),
+                ("tracks/echo.ts", late),
+                ("data/echo/late.state", "latency-100"),
+                ("data/echo/late.state.json", r#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#),
+            ],
+        )
+    };
+    let cancel = song("{ keys: { in: keys.out, to: \"echo\" }, inv: kernel(\"std:scale\", { in: keys.out, by: -1 }), echo: echo.out }");
+    let wet = song("{ keys: { in: keys.out, to: \"echo\" }, echo: echo.out }");
+    let seconds = cancel.seconds();
+    let mut r = cancel.renderer();
+    assert_eq!(r.latency(), 100, "the probe's latency is the song's");
+    let out = r.render(seconds).unwrap();
+    assert!(peak(&wet.renderer().render(seconds).unwrap()) > 0.1, "the bus plays the keys");
+    assert_eq!(peak(&out), 0.0, "offline, the bus and the dry path inverted cancel exactly");
+    let heard = live(&cancel, cancel.rate as usize * 4, None);
+    assert_eq!(peak(&heard), 0.0, "live, the same");
+}

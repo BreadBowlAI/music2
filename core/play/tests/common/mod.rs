@@ -175,6 +175,7 @@ pub fn fixture_with(rel: &str, files: &[(&str, &str)]) -> Song {
     let dir = temp("fixture");
     copy(&repo().join(rel), &dir);
     for (path, text) in files {
+        std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
         std::fs::write(dir.join(path), text).unwrap();
     }
     compile(dir)

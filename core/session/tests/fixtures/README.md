@@ -18,3 +18,10 @@ it reads `follow(kick.out)`, written in `song.ts`, whose input is a sidechain in
 `core/play/tests/mute.rs` edits their `song.ts` by exact text: keep the
 `track("kick", { name: "Kick" }`, `mixer({ kick: kick.out, bass:` and sidechain
 expressions as written, or update the test with them.
+
+`buses` is first-song's tracks and data with three buses (RENDER-34): a drum group the
+kick and hats go to, a shared reverb and a shared delay, which sends on to the reverb;
+the keys send to the delay before their fader. `core/play/tests/bit_identity.rs` renders
+it on several thread counts, and puts a latent probe on its delay bus
+(`a_latent_plugin_on_a_bus_stays_aligned`): keep the `echo` bus, the `keys` track and
+their keys, or update the tests with them.

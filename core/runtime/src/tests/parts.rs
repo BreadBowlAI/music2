@@ -750,3 +750,88 @@ fn constants_run_in_no_partition() {
     assert!(g.order.iter().any(|&i| matches!(g.exec[i], Exec::Notes)), "a notes lane");
     whole(&g.order, &g.exec, &schedule(&r).parts);
 }
+
+/// Buses the song feeds (RENDER-34), as `@m2/core` and std's mixer build them: tracks `a` and `b`
+/// into the song, each with its strip; a send of each strip summed into the song's export
+/// `bus:verb`, which the bus `verb` reads; `verb` sent on to `echo`; the master sums the strips and
+/// both buses. Song and buses read each other both ways.
+fn bused() -> Ir {
+    let (a, b) = (sine_track(110.0, 1), sine_track(220.0, 6));
+    let bus = |key: &str, by: f64, kernels: usize| {
+        let mut nodes = vec![
+            json!({"id": "i", "op": "import", "module": "song", "export": m2_ir::feed_export(key)}),
+            json!({"id": "h", "op": "const", "value": by}),
+            json!({"id": "o0", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "i", "by": "h"}}),
+        ];
+        for k in 0..kernels {
+            nodes.push(json!({"id": format!("o{}", k + 1), "op": "kernel", "kernel": "std:scale", "inputs": {"in": format!("o{k}"), "by": "h"}}));
+        }
+        json!({"key": key, "track": true, "bus": true, "nodes": nodes, "exports": {"out": format!("o{kernels}")}})
+    };
+    let k = |id: &str, kernel: &str, inputs: Value| json!({"id": id, "op": "kernel", "kernel": kernel, "inputs": inputs});
+    let song = json!({"key": "song", "nodes": [
+        {"id": "a", "op": "import", "module": "a", "export": "out"},
+        {"id": "b", "op": "import", "module": "b", "export": "out"},
+        {"id": "v", "op": "import", "module": "verb", "export": "out"},
+        {"id": "e", "op": "import", "module": "echo", "export": "out"},
+        {"id": "g", "op": "const", "value": 0.7},
+        {"id": "s", "op": "const", "value": 0.25},
+        k("ga", "std:scale", json!({"in": "a", "by": "g"})),
+        k("gb", "std:scale", json!({"in": "b", "by": "g"})),
+        k("sa", "std:scale", json!({"in": "ga", "by": "s"})),
+        k("sb", "std:scale", json!({"in": "gb", "by": "s"})),
+        k("fv", "std:add", json!({"a": "sa", "b": "sb"})),
+        k("gv", "std:scale", json!({"in": "v", "by": "g"})),
+        k("fe", "std:scale", json!({"in": "gv", "by": "s"})),
+        k("ge", "std:scale", json!({"in": "e", "by": "g"})),
+        k("m1", "std:add", json!({"a": "ga", "b": "gb"})),
+        k("m2", "std:add", json!({"a": "m1", "b": "gv"})),
+        k("m3", "std:add", json!({"a": "m2", "b": "ge"}))],
+     "exports": {"out": "m3", "bus:verb": "fv", "bus:echo": "fe"}});
+    let modules = json!([
+        module("a", a.0, a.1),
+        module("b", b.0, b.1),
+        bus("verb", 0.9, 4),
+        bus("echo", 0.8, 2),
+        song,
+    ]);
+    serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": modules})).unwrap()
+}
+
+// RENDER-2, RENDER-34: a song and the buses it feeds read each other both ways, and split by
+// crossings: the strips and sends run with their tracks, the feed's sum in the song, then the bus
+// in a partition of its own (R1 moves nothing into the song), then the master's sums. echo, fed
+// by verb alone, runs with verb. The partitions have no cycle, every read is earlier in its
+// partition or in one it waits for, the checker's routes say which track reaches which bus, and
+// 1, 4 and 7 threads give the same bits.
+#[test]
+fn a_song_and_its_buses_split_into_partitions_with_no_cycle() {
+    let pk = std_packages();
+    let f = flat(&bused());
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+    assert_eq!(f.routes, [pair("a", "verb"), pair("b", "verb"), pair("verb", "echo")]);
+    let r = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
+    let g = &r.plan.graph;
+    let parts = &schedule(&r).parts;
+    whole(&g.order, &g.exec, parts);
+    assert!(acyclic(parts), "the partitions have no cycle");
+    let labels: Vec<(String, u16)> = shape(&r).into_iter().map(|(l, d, _, _)| (l, d)).collect();
+    let want: Vec<(String, u16)> = [("a", 0), ("b", 0), ("song", 0), ("song", 2), ("verb", 1)].map(|(l, d)| (l.to_string(), d)).to_vec();
+    assert_eq!(labels, want);
+    let at = |name: &str| {
+        let i = f.nodes.iter().position(|n| n.name == name).unwrap();
+        let (l, d) = parts.label(parts.part_of(i));
+        (l.to_string(), d)
+    };
+    for (node, part) in [("song/sa", ("a", 0)), ("song/sb", ("b", 0)), ("song/fv", ("song", 0)), ("verb/o4", ("verb", 1)), ("echo/o2", ("verb", 1)), ("song/m3", ("song", 2))] {
+        assert_eq!(at(node), (part.0.to_string(), part.1), "{node}");
+    }
+    let one = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render(1.0).unwrap();
+    assert!(peak(&one) > 0.1);
+    for threads in [4, 7] {
+        let mut t = spread(threads);
+        let out = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render_on(1.0, &mut t.runner).unwrap();
+        assert!(out == one, "{threads} threads: the same bits");
+        assert!(t.runner.spread_report().tasks_on_workers > 0, "{threads} threads: tasks ran on workers");
+    }
+}
