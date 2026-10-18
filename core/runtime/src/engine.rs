@@ -238,8 +238,10 @@ impl Engine {
         let mut e = Engine::new(renderer.sample_rate());
         e.clock = renderer.clock();
         e.pos = renderer.transport().pos();
-        // What an engine plays is live: a node that fails stops alone (RENDER-25).
+        // What an engine plays is live: a node that fails stops alone (RENDER-25). Its rings are
+        // a disk thread's to fill, never the sound thread's (RENDER-30, the review's io-r6).
         renderer.live = true;
+        renderer.disk = true;
         e.current = Some(renderer);
         e
     }
@@ -499,6 +501,7 @@ impl Engine {
                     return Ok(false);
                 }
                 renderer.live = true;
+                renderer.disk = true;
                 let took = match self.current.as_deref_mut() {
                     None => !renderer.has_entry(),
                     Some(old) => renderer.take_over(old, self.clock),

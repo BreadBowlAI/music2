@@ -209,7 +209,7 @@ impl Raw {
 /// Where a warped clip's render is kept: `<cache>/renders/<hash>.f32` (FMT-16's folder), named by
 /// everything it depends on. None without a cache folder.
 pub(crate) fn render_path(key: &[u8]) -> Option<PathBuf> {
-    let mut named = b"music2 warped render 1\n".to_vec();
+    let mut named = format!("music2 warped render {}\n", crate::audio::WARP_VERSION).into_bytes();
     named.extend_from_slice(key);
     Some(m2_os::dirs::cache()?.join("renders").join(format!("{}.f32", Sha::of(&named).hex())))
 }

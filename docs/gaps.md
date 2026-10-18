@@ -246,6 +246,9 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **Recording audio:** a crash during a take loses it: the part file is swept.
 - **Recording audio:** the input stays open (a Mac shows its microphone light) from the first take until the song closes; a new choice in Settings opens at the next take.
 - **Recording audio:** a Mac asks about the microphone at the first take; a take running while you click Don't Allow records silence. The next R says why.
+- **Recording audio:** with an output buffer more than about four times the input's (Settings' 2048 against a 128 input), hearing yourself drops out; the take is fine. Hearing should lag by the larger of the two buffers (the io review's r4).
+- **Recording audio:** an input chosen in Settings that is unplugged records from another input without saying so; outputs say so (the io review's r7).
+- **A streamed file that can't be read** (a drive unplugged, a file cut short) plays silence there with no message, live or in an export; the count is kept but nothing reads it (the io review's r8).
 - **Recording audio:** checks owed on a Mac: a real microphone, the permission question, the take's timing against the click, and hearing yourself in headphones (see HANDOFF).
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 

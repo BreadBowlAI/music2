@@ -266,6 +266,11 @@ const FRAME: usize = 2048;
 const HOP: usize = FRAME / 2;
 const SEARCH: isize = 384;
 
+/// The warp's version, in the name of every warped render kept in the cache folder
+/// ([`stream::render_path`]). Any change to what [`stretch`] or [`render_clip`] makes MUST bump it,
+/// or users' caches go on playing (and exporting) the old renders (the review's io-r5).
+pub(crate) const WARP_VERSION: u32 = 1;
+
 /// WSOLA time-stretch with an arbitrary monotonic time map: output sample `t` comes
 /// from around source position `map(t)`. Keeps pitch; channels share one alignment.
 fn stretch(src: &[Vec<f32>], out_len: usize, map: impl Fn(f64) -> f64) -> Vec<Vec<f32>> {
