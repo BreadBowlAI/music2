@@ -1161,6 +1161,27 @@ fn a_new_sample_makes_the_box_new() {
     }
 }
 
+// RENDER-27 for kernels: a live session decodes a kernel's file once. Each edit builds a new
+// renderer over the same cache and prunes it, as the session does at each settle; the file is
+// decoded again only when its bytes change.
+#[test]
+fn a_kernels_file_is_decoded_once_across_edits() {
+    let (ir, pk, tl, dir, pkg) = asset_song(&["hit.wav"], &[("hit.wav", sine(440.0, 0.5, SR))]);
+    let flat = check(&ir, &pk).unwrap();
+    let (mut cache, owner) = (audio::Cache::default(), m2_plugins::Owner::discard());
+    for _ in 0..3 {
+        drop(Renderer::prepare(&flat, &tl, &pk, SR, &mut cache, &owner, Basis::Fresh).unwrap());
+        cache.prune();
+    }
+    assert_eq!(cache.work().0, 1, "three builds, one decode");
+    audio::write_wav(&dir.join("assets/hit.wav"), &[sine(220.0, 0.7, SR)], SR).unwrap();
+    drop(Renderer::prepare(&flat, &data(&ir, &dir), &pk, SR, &mut cache, &owner, Basis::Fresh).unwrap());
+    assert_eq!(cache.work().0, 2, "new bytes, a new decode");
+    for d in [dir, pkg] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
 // FMT-15 for kernels: an asset a kernel reads that isn't in assets/ is `asset.missing`, naming it
 // and the track; the revision records no hash for it, and its kernel reads silence while the
 // render goes on.

@@ -258,7 +258,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **Kernels from other people have no time limit**: one that loops forever stalls the sound (wasmtime's epochs would stop it). A song near the 3,999 sound parts limit has no cheaper way to run yet (a `sum` kernel, a checked engine).
 - **The Mac's numbers for the one-sandbox-a-box layout are owed**: G7f's run, the footprint and the address space with two renderers (PLAT-1).
 - **A Sampler played far above its root sounds harsh**: it isn't band-limited, so high notes alias, and past 6 octaves up it plays no faster.
-- **A Sampler's files are held in memory**, decoded whole, as clips' are. Streaming them from disk waits for RENDER-30's reader.
+- **A Sampler's files are held in memory**, decoded whole, once while the song plays them (clips now stream from disk). Kernels have no disk reader yet: `m2.asset_read` copies from memory.
 - **A song asking for std "0.2" in an older app that has std 0.2.0** and calls the Sampler gets a missing import, not `pkg.unsatisfied`: a song's std requirement names no patch version. `examples/sampler` asks for "0.2.1".
 - **std's kernel test `odd_db_values` fails in a debug build**: a NaN's sign bit differs from the release build's. `ci/check.sh` runs those tests in release, where it passes.
 
