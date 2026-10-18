@@ -10,11 +10,32 @@ for `polish` (the rest of the top ten), after its review and final check, and wh
 (the two rows the Mac's run at `85b069a` failed), after its review and final check; and for 8a's live half (on
 `8a`), after its review and final check; and for `studio` (audio, recording, MIDI files and stems, help), after its
 review and final check; and for `io` (step 9's audio: disk streaming and recording), after its review and
-final check; and for track `ab` (kernel ABI v1 and the sampler), after its review and final check.
+final check; and for track `ab` (kernel ABI v1 and the sampler), after its review and final check; and for track `pm`
+(the poly op's options, the pitch and mod wheels, MIDI files in the app), after its review and final check.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **Track `pm` is ready to land** (2026-10-18), on branch `pm`: Linux green at `73392de`; macOS owed. From `main` at
+  `97b4cdf` (`ab`), with `main` at `09a0687` (`ph`) merged in. Step 9's synth turns 4 and 5, and gaps #36's app half
+  (plan: `docs/designs/step9/pm-plan.md`; build notes: `build-notes-pm.md` beside it). It adds:
+
+  | You can now | Where |
+  |---|---|
+  | Play one note at a time, sliding between notes | a track's code: `poly(…, { mode: "legato", glide })`; std's Lead, 808 sub and Synth bass do |
+  | See how an instrument plays | Device: a line under its name ("Plays one note at a time.") |
+  | Bend notes with a MIDI keyboard's pitch wheel; more vibrato with its mod wheel | any instrument it plays; the mod wheel on the polysynth sounds and plugins |
+  | Bring in a MIDI file as new tracks, one Undo step | File ▸ Import MIDI…, or drop a `.mid` file |
+
+  **std is 0.3.0** (`@m2/core` 1.4.0): your own songs need one line changed (see [Your own songs](#your-own-songs-for-the-owner)).
+  One render changed on purpose: `examples/sounds` (2 of 12 lines), as its one-note sounds now hear each note's own
+  velocity. A review found 2 things. The big one: a one-note instrument moved to another lane kept its old note
+  sounding for ever; now it lets go (`db11f90`, tests shown red first). The small one (the pitch wheel picks another
+  drum on a drum kit) is a line in `docs/gaps.md`. The first full check passed an older browser suite only on a retry
+  (fixed). Then `ci/check.sh --gates` passed at `73392de`: every row, nothing only on a retry (1,680 Rust tests,
+  69/69 browser suites, 12 of 12 renders, the 7 gate runs; 33 minutes). Pictures: `~/m2-runs/app-shots/pm-73392de/`.
+  Owed on the Mac: the by-ear steps 96 to 103 (a real MIDI keyboard's wheels, a legato slide, a MIDI file from the
+  Finder).
 - **`ph` is ready to land** (2026-10-18): Linux green at `d897cf0`; macOS unverified since `b0ebc74` (its shared
   memory, wake and plugin windows are lint-checked only). From `main` at `258275b`, with `main` at `3b447b2` (`io`)
   and at `97b4cdf` (`ab`) merged in. Step 9's first synth and plugin turns (plan: `docs/designs/step9/ph-plan.md`; build notes:
@@ -261,14 +282,14 @@ whatever you pick up.
 
 ## Your own songs (for the owner)
 
-**In short:** a song you made before std 0.2 needs one line changed. Then it plays as before.
+**In short:** a song you made before std 0.3 needs one line changed. Then it plays as before, or very nearly.
 
 | | |
 |---|---|
-| Which songs | Songs in `~/Music/music2` that you made before the `sounds` merge lands on `main`. |
-| What you see | The song opens but stays silent. The yellow bar at the top says the code doesn't compile. Its error starts: "This app has std 0.2. To use it, change the std line in music2.toml to std = "0.2". The song may sound a little different." To read all of it, hold the mouse over it. |
-| What to do | Open the song's `music2.toml` in a text editor. Change the std line to `std = "0.2"`. Save. The app takes the change in, as with any file. |
-| The sound | It doesn't change: std 0.2 changed no sound a song already had. The message says "may" because later std versions might. |
+| Which songs | Songs in `~/Music/music2` that ask for std "0.1" or "0.2" (made before `pm` lands on `main`). |
+| What you see | The song opens but stays silent. The yellow bar at the top says the code doesn't compile. Its error starts: "This app has std 0.3. To use it, change the std line in music2.toml to std = "0.3". The song may sound a little different." To read all of it, hold the mouse over it. |
+| What to do | Open the song's `music2.toml` in a text editor. Change the std line to `std = "0.3"`. Save. The app takes the change in, as with any file. |
+| The sound | Nearly the same. std 0.3 changed one thing: the Lead, 808 sub and Synth bass now hear each note's own loudness (velocity), not one rounded to 127 steps. Notes you play on a keyboard sound exactly as before. |
 
 ## Where everything is
 
@@ -289,7 +310,8 @@ whatever you pick up.
 | `io` | `64380e1`, then docs only | **Ready to land.** From `main` at `258275b`. Step 9's audio turns 1 and 4: disk streaming (RENDER-30) and recording audio (RENDER-30a, MON-8). Reviewed (8 findings: 3 big ones fixed with tests, 2 small ones fixed, 3 in gaps.md). Linux green at `64380e1` (`ci/check.sh --gates`, nothing passed only on a retry), macOS unverified since `eda5e77`. Worktree `~/m2-runs/wt/io`. Plan `docs/designs/step9/io-plan.md`; build notes `build-notes-io.md`. |
 | `ph` | `d897cf0`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) and `97b4cdf` (`ab`) merged in. Step 9's first synth and plugin turns: the plugin host process (HOST-3), plugin windows (HOST-7, MON-6) and latency compensation (RENDER-17 to 21). Reviewed (4 findings: the big one fixed with tests, 2 small ones fixed, 1 in gaps.md). Linux green at `d897cf0` (`ci/check.sh --gates`, nothing passed only on a retry), macOS unverified since `b0ebc74`. Worktree `~/m2-runs/wt/ph`. Plan `docs/designs/step9/ph-plan.md`; build notes `build-notes-ph.md`. |
 | `ab` | `7399cb8`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) merged in (`c68d203`). Kernel ABI v1 (ABI-2, ABI-3, ABI-5), one sandbox a box (RENDER-32), and std 0.2.1's Sampler. Reviewed (5 findings: the big one fixed with a test, 4 in gaps.md). Linux green at `7399cb8` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/ab`. Plan `docs/designs/step9/ab-plan.md`; build notes `build-notes-ab.md`. |
-| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, 73 to 82 once `io` is on `main`, 83 to 87 once `ab` is, and 88 to 95 once `ph` is. |
+| `pm` | `73392de`, then docs only | **Ready to land.** From `main` at `97b4cdf` (`ab`), with `main` at `09a0687` (`ph`) merged in (`e718140`). The poly op's options (RENDER-16: mono, legato, glide, steal), std 0.3.0; the pitch and mod wheels, live (RENDER-14's `Midi`); MIDI files in the app (#36). Reviewed (2 findings: the big one fixed with tests, 1 in gaps.md). Linux green at `73392de` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/pm`. Plan `docs/designs/step9/pm-plan.md`; build notes `build-notes-pm.md`. |
+| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, 73 to 82 once `io` is on `main`, 83 to 87 once `ab` is, 88 to 95 once `ph` is, and 96 to 103 once `pm` is. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -602,6 +624,20 @@ bar, its Ctrl-click, and the sound.
 | 93 | In the Terminal, type `pkill -9 -f -- --m2-plugin-host` while it plays. | The song plays on. The lead goes quiet for a moment, a message says "The plugin host crashed…", and the lead comes back by itself. Surge XT's window closes: open it again from the box. |
 | 94 | Click **Export**, then **Save**, while it plays. | "Paused for export" in the top bar, then it plays on. The file sounds like the song. |
 | 95 | Tell the lead what you saw, heard and felt at 88 to 94. | |
+
+**A check by ear of one-note sounds, the wheels and MIDI files** (`pm`, about 10 minutes, with a MIDI keyboard
+that has a pitch wheel and a mod wheel):
+
+| # | Do this | You should hear or see |
+|---|---|---|
+| 96 | Open an Example ▸ First song. Click the **Bass** track, then **Device**. | Its card says "Plays one note at a time." under its name. Hold the mouse over that line: the rest of the sentence. |
+| 97 | Plug in the MIDI keyboard. Keep Bass selected. Hold a low key. While holding it, press a higher key, then let it go. | One note at a time. The higher key slides up from the low one without starting again; let go, and it slides back to the low key. |
+| 98 | Hold a key and push the pitch wheel all the way up, then let it go. | The note bends up by two keys' worth (a whole step), and comes back when the wheel springs back. No click. |
+| 99 | Click the **Keys** track. Hold a chord and push the mod wheel up slowly, then back down. | The wobble in the pitch (vibrato) gets deeper as the wheel goes up, and is as before at the bottom. |
+| 100 | Click **Bass**. Hold a low key, then a higher one. While holding both, click the **Keys** track. Let go of both keys. | Bass stops when you click Keys; no Bass note keeps sounding, and the low one doesn't come back. The keyboard now plays Keys. |
+| 101 | File ▸ Import MIDI…. Pick a `.mid` file with drums and other parts (one made in another app). | If its tempo differs from the song's, a question: Return keeps the song's. Then a new track for each part, each with a sound. Space plays them in time. |
+| 102 | Press ⌘Z. | All the new tracks go, in one step. |
+| 103 | Drag the same `.mid` file from the Finder onto the empty space below the tracks, at bar 3. Then tell the lead what you saw, heard and felt at 96 to 102. | The new tracks start at bar 3. |
 
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in

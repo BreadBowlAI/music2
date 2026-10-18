@@ -314,6 +314,8 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A MIDI file's controllers, pitch bends and later program changes** are skipped when it is brought in: only notes, the first program, tempos and time signatures come in.
 - **The drop hint on a notes track says "Into Bass"** before it knows the file's parts: a file of several parts makes new tracks after Bass instead (the toast names them). A browser gives no file until the drop.
 - **One MIDI file at a time**: dropping several says so, and brings none in.
+- **The pitch wheel picks a different drum on a drum kit**: the bend is added to every voice's pitch, and std's kit picks the drum by its pitch, so a kick (36) bent 2 up plays the snare (38); a wheel resting a little off centre changes a hit's noise (the pm review's 2).
+- **A poly's glide isn't delayed with its notes** behind a latent plugin (RENDER-18): a glide read from such a path is a few ms early. A glide is almost always a number (found merging `ph`).
 
 ## Removed with the old version
 
