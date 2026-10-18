@@ -16,8 +16,9 @@ Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
-- **Track `ex` is built** (2026-10-18), on branch `ex`, from `main` at `83fa4e4`: one path for faults (plan:
-  `docs/designs/step9/ex-plan.md`; build notes: `build-notes-ex.md` beside it). Its review is next. It adds:
+- **Track `ex` is ready to land** (2026-10-18), on branch `ex`: Linux green at `6d212a8`; macOS owed. From `main` at
+  `83fa4e4`, with `main` at `98e1b09` (`pm`) merged in. One path for faults (plan:
+  `docs/designs/step9/ex-plan.md`; build notes: `build-notes-ex.md` beside it). It adds:
 
   | What happens | Before | Now |
   |---|---|---|
@@ -29,9 +30,12 @@ whatever you pick up.
 
   Under the hood: the fault ring (`core/runtime/src/fault.rs`): 24-byte records, 256 slots, never allocates, locks
   or waits. Eight codes in the contract's table (RENDER-1, RENDER-25, RENDER-30a). No render changed: 12 of 12.
-  `ci/check.sh --gates` passed at `9efece3`: every row, nothing only on a retry (1,682 Rust tests, 71/71 browser
-  suites, 12 of 12 renders, the 7 gate runs; 34 minutes).
-  Pictures on Xvfb :96: `~/m2-runs/app-shots/ex-9167e95/` (the popover naming a stopped sound on Hats). Owed on the
+  A review found 5 small things: one fixed with a test shown red first (another song opened no longer lists the
+  last song's input problems), dead code deleted (`fault::Once`), 3 lines in `docs/gaps.md`. After the `pm` merge one
+  CLI test still asked for std 0.2: fixed. Then `ci/check.sh --gates` passed at `6d212a8`: every row, nothing only
+  on a retry (1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs; 33 minutes).
+  Pictures on Xvfb :96: `~/m2-runs/app-shots/ex-9167e95/` and, after the merge, `ex-01c5dbc/` (the popover naming a
+  stopped sound on Hats). Owed on the
   Mac: its `ci/check.sh`, then the by-ear steps 111 to 116 (a USB microphone unplugged, and Don't Allow).
 - **Track `pm` is ready to land** (2026-10-18), on branch `pm`: Linux green at `e6019bf`; macOS owed. From `main` at
   `97b4cdf` (`ab`), with `main` at `09a0687` (`ph`) and `83fa4e4` (`sx`) merged in. Step 9's synth turns 4 and 5, and gaps #36's app half
@@ -352,8 +356,9 @@ whatever you pick up.
 | `ph` | `d897cf0`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) and `97b4cdf` (`ab`) merged in. Step 9's first synth and plugin turns: the plugin host process (HOST-3), plugin windows (HOST-7, MON-6) and latency compensation (RENDER-17 to 21). Reviewed (4 findings: the big one fixed with tests, 2 small ones fixed, 1 in gaps.md). Linux green at `d897cf0` (`ci/check.sh --gates`, nothing passed only on a retry), macOS unverified since `b0ebc74`. Worktree `~/m2-runs/wt/ph`. Plan `docs/designs/step9/ph-plan.md`; build notes `build-notes-ph.md`. |
 | `ab` | `7399cb8`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) merged in (`c68d203`). Kernel ABI v1 (ABI-2, ABI-3, ABI-5), one sandbox a box (RENDER-32), and std 0.2.1's Sampler. Reviewed (5 findings: the big one fixed with a test, 4 in gaps.md). Linux green at `7399cb8` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/ab`. Plan `docs/designs/step9/ab-plan.md`; build notes `build-notes-ab.md`. |
 | `pm` | `e6019bf`, then docs only | **Ready to land.** From `main` at `97b4cdf` (`ab`), with `main` at `09a0687` (`ph`, `e718140`) and `83fa4e4` (`sx`, `e5be820`) merged in. The poly op's options (RENDER-16: mono, legato, glide, steal), std 0.3.0; the pitch and mod wheels, live (RENDER-14's `Midi`); MIDI files in the app (#36). Reviewed (2 findings: the big one fixed with tests, 1 in gaps.md). Linux green at `e6019bf` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/pm`. Plan `docs/designs/step9/pm-plan.md`; build notes `build-notes-pm.md`. |
+| `ex` | `6d212a8`, then docs only | **Ready to land.** From `main` at `83fa4e4`, with `main` at `98e1b09` (`pm`) merged in (`01c5dbc`). One path for faults: the fault ring (RENDER-25, DIAG-4), offline renders that fail on any fault (RENDER-1), the sound input's three problems (RENDER-30a). Reviewed (5 findings, all small: 1 fixed with a test, 1 dead piece deleted, 3 in gaps.md). Linux green at `6d212a8` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/ex`. Plan `docs/designs/step9/ex-plan.md`; build notes `build-notes-ex.md`. |
 | `sx` | `000dd72`, then docs only | **Ready to land.** From `main` at `97b4cdf`, with `main` at `09a0687` (`ph`) merged in (`705f24a`). Step 9's stretching turn: kernel ABI v1 settled (ABI-3), `std:stretch` as the first offline kernel (ABI-2), stretches made in the background (RENDER-30), and Follow tempo. Reviewed (6 findings: the big one fixed with tests, 1 small one fixed, 4 in gaps.md). Linux green at `000dd72` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/sx`. Plan `docs/designs/step9/sx-plan.md`; build notes `build-notes-sx.md`. |
-| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, 73 to 82 once `io` is on `main`, 83 to 87 once `ab` is, 88 to 95 once `ph` is, 96 to 102 once `sx` is, and 103 to 110 once `pm` is. |
+| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, 73 to 82 once `io` is on `main`, 83 to 87 once `ab` is, 88 to 95 once `ph` is, 96 to 102 once `sx` is, 103 to 110 once `pm` is, and 111 to 116 once `ex` is. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -763,6 +768,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | `ph`: plugins in their own program, plugin windows, latency compensation | `d897cf0` (Linux checks), then docs only; ready to land (branch `ph`) | macOS: unverified since `b0ebc74` (shared memory, the wake across processes and plugin windows are lint-checked only). Owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 88 to 95 (two music2 programs, Surge XT's own window, a knob and its undo, the plugin program ended while it plays, an export) |
 | `ab`: kernel ABI v1, one sandbox a box, the Sampler | `7399cb8` (Linux checks), then docs only; ready to land (branch `ab`) | owed once it is on `main`: one more `ci/check.sh` (G7f's run of the new layout: its footprint and address space, PLAT-1), then the by-ear steps 83 to 87 (the Sampler example, a WAV dropped on a Sampler, the keyboard piano, Undo) |
 | `sx`: `std:stretch` (an offline kernel), stretches in the background, Follow tempo | `000dd72` (Linux checks), then docs only; ready to land (branch `sx`) | owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 96 to 102 (Resample's stretched clips; Follow tempo and a tempo change) |
+| `ex`: one path for faults (the fault ring, offline renders that fail on any fault, the sound input's problems) | `6d212a8` (Linux checks), then docs only; ready to land (branch `ex`) | owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 111 to 116 (a USB microphone unplugged, and Don't Allow) |
 
 **8a's Mac sweep (for the owner): offline and live, one paste.** `8a` is on `main`.
 

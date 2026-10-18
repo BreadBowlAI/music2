@@ -4,6 +4,7 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. The plan is [ex-plan.md](ex-p
 
 ## In short
 
+- **Ready to land** (2026-10-18). Linux green at `6d212a8` (`ci/check.sh --gates`); macOS owed. `main` at `98e1b09` (track `pm`) is merged in.
 - **One path for faults.** A part that breaks while sound is made puts a small record (24 bytes, numbers only) in one **fault ring**. The ring never allocates, locks or waits, so the audio thread uses it too.
 - **The session names each fault** and lists it as a problem in the status pill's popover, with its track. It is toasted once. It goes when the part plays again.
 - **Offline** (an export, `m2 render`, `m2 bounce`), any fault that changed the sound stops the render. The error names the part and the code. No file is written with a part silent.
@@ -61,6 +62,14 @@ From the desktop app on the invisible screen `:96`, first-song on a copy of std 
 | `pill-and-hats-mark.png` | playing: the pill says "1 problem", Hats' header has a red mark |
 | `popover-stopped-sound.png` | the pill clicked: "The instrument on Hats stopped working, so music2 made it silent. The rest of the song plays on. To start it again, choose Transport ▸ Stop All Sound." |
 
+After the merge of `main` (`~/m2-runs/app-shots/ex-01c5dbc/`, same setup):
+
+| File | Shows |
+|---|---|
+| `popover-after-merge.png` | the same popover and Hats' red mark, with pm's "Plays up to 2 notes at once." on Kick's card |
+
+The review's fix (r2) has no picture: it is something that no longer shows. Its test proves it.
+
 ## Renders
 
 12 of 12 match `e2e/renders.sha256` after each slice. No fault happens in them.
@@ -69,19 +78,54 @@ From the desktop app on the invisible screen `:96`, first-song on a copy of std 
 
 Not measured: how long making a `Namer` takes per plan. It clones one shared pointer and walks the nodes once to name the plugins.
 
+## The review
+
+It found 5 things, all small.
+
+| # | What it found | What was done |
+|---|---|---|
+| r1 | a stopped sound or plugin may go untold when two plans are sent within one 300 ms read | a line in `docs/gaps.md` |
+| r2 | another song opened without closing kept the last song's input problems listed | fixed (`bd4ab45`): `Told::sent` takes every listed problem away when the session changes. Test `another_song_lists_none_of_the_last_songs_problems`: red on the old code, then green |
+| r3 | a plugin that fails a second time is left silent with no new message | a line in `docs/gaps.md` |
+| r4 | `fault::Once` was dead code | deleted (`9569f8d`), with its test and the plan's mentions |
+| r5 | `m2` loads the test plugin `probe` when `M2_PROBE` is set, in the shipped program too | a line in `docs/gaps.md` |
+
+Contract settled: an input's problem is listed until the next take, **or until another song opens** (RENDER-30a, the three `input.*` rows).
+
+## The merge
+
+`main` at `98e1b09` (track `pm`: std 0.3.0, the wheels, MIDI files in the app) was merged in at `01c5dbc`. Three conflicts: `exchange.rs`'s imports, RENDER-10's Today line, and HANDOFF. `pm` took the by-ear steps 103 to 110, so this track's are now 111 to 116.
+
+The first full check after the merge failed one test: the CLI's crash test asked for std 0.2. `6d212a8` makes it ask for 0.3.
+
 ## The final check
 
-`ci/check.sh --gates` passed at `9efece3` (Linux, run with `~/m2-runs/tw`; 34 minutes). Nothing passed only on a retry.
+`ci/check.sh --gates` at `6d212a8` (Linux, run with `~/m2-runs/tw`). Nothing passed only on a retry. The summary, word for word:
 
-| Row | Result |
-|---|---|
-| Rust tests | 1,682 passed |
-| clippy, and the mac lint | pass |
-| browser suites | 71 of 71 (`ex-faults` new) |
-| renders | 12 of 12 |
-| gates | the 7 runs `ci/gates.txt` names |
+```
+music2 check: PASS
+commit   6d212a8405c9 on ex (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 33 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1717 passed, 0 failed
+clippy           PASS  
+pool models      PASS  29 passed, 0 failed
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  71/71 suites ok
+renders          PASS  12 of 12 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+gates            PASS  the 7 runs ci/gates.txt names
+repo unchanged   PASS  
+```
 
-Logs: `~/m2-runs/sex/check-9efece3.tgz`. The Mac's run is owed.
+Logs: `~/m2-runs/sex/check-6d212a8.tgz`. Before the review it passed at `9efece3` (1,682 Rust tests; logs `~/m2-runs/sex/check-9efece3.tgz`). The Mac's run is owed.
 
 ## A check by ear
 
