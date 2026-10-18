@@ -7,20 +7,30 @@
 //! (WRITE-10): each number written in the call is rewritten through its lens, keeping its
 //! spelling (`khz(0.9)`), and each control the call leaves out is written into it (PKG-3), several
 //! as one insertion. A control a lane or other code drives keeps what drives it, and is named.
+//!
+//! A plugin's preset (HOST-8) is its state and the parameters its code writes as numbers. Saving
+//! takes the live instance's state, which the session asks the host for. Loading is one
+//! `Confined` Tx: the state and its sidecar (FMT-17, as `data::plugin_state` writes them), and
+//! each parameter its code writes rewritten to the preset's value. The usual state load then
+//! reaches the instance that plays (RENDER-26b). A parameter a lane or other code drives keeps
+//! it, and is named; one the code doesn't give is the state's.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use m2_ir::{Op, split_ref};
 use m2_script::Descriptor;
 use m2_script::component::ControlDesc;
 use m2_script::sites::{Arg, Site};
 use m2_session::Session;
 use m2_session::text::Edits;
-use m2_song::tx::{Anchor, Expect, Range, Spot};
+use m2_song::tx::{Anchor, Confined, Declared, Expect, Range, Spot};
+use m2_song::{Key, Sidecar};
 use serde_json::Value;
 
-use crate::controls::{self, Control, Edit, options_of};
+use crate::controls::{self, Control, Edit, options_of, walk};
+use crate::effect::calls_of;
 use crate::lens::{self, Insertion};
 use crate::plan::{self, path};
 use crate::{EditError, Edited, ready};
@@ -64,6 +74,12 @@ impl Preset {
         }
         let text = |k: &str| o.get(k).and_then(Value::as_str).map(str::to_string);
         Ok(Preset { name: name.into(), sound: sound.into(), values, plugin_version: text("plugin_version"), state: text("state") })
+    }
+
+    /// A plugin preset's state, as bytes; why not in words.
+    pub fn blob(&self) -> Result<Vec<u8>, String> {
+        let bad = || format!("{}'s saved plugin state can't be read.", self.name);
+        m2_song::tx::unbase64(self.state.as_deref().ok_or_else(bad)?).ok_or_else(bad)
     }
 
     /// The file's text: two-space JSON, keys in the format's order, values by name.
@@ -432,6 +448,235 @@ pub fn load(s: &mut Session, at: u64, node: &str, preset: &Preset) -> Result<Loa
     let refused = |why: &str| EditError::Rejected(format!("loading the preset would change more than {}'s settings ({why})", sound.label));
     let done = plan::run_as(s, tx, refused, |_, _| Ok(()))?;
     Ok(Loaded { edited: Edited { revision: done.number, file: site.file, before: label.0, after: label.1 }, kept })
+}
+
+// ---------------------------------------------------------------- plugins (HOST-8)
+
+/// Why a plugin call's settings can't be saved or loaded: it has no key, so no state file.
+const NO_KEY: &str = "Give this plugin a key in its code to save its settings, such as key: \"lead\".";
+
+/// A plugin's call, whose settings a preset holds: its state, and the parameters its code writes.
+pub struct PluginCall {
+    /// The call, as the view names it (`tracks/keys.ts#3`), in the accepted revision.
+    pub node: String,
+    /// Its graph id (`clap:m2.probe`): a preset's `sound`.
+    pub plugin: String,
+    /// Its own name ("Surge XT"), else its id.
+    pub label: String,
+    /// The version installed; None when it isn't installed.
+    pub version: Option<String>,
+    /// Its node in the checked graph (`<module>/<node>`): where its live instance is (HOST-7).
+    pub flat: String,
+    /// Where its state is filed (ID-8): its module, then its frames and key. None without either.
+    state: Option<(Key, Vec<Key>)>,
+    /// Each parameter its code gives: its CLAP id, its name, and how it is written.
+    params: Vec<(u32, String, Slotted)>,
+    file: String,
+}
+
+impl PluginCall {
+    /// The CLAP ids of the parameters its code writes as numbers: what a preset holds beside the
+    /// state.
+    pub fn owned(&self) -> Vec<u32> {
+        self.params.iter().filter(|p| matches!(p.2, Slotted::Mine(_) | Slotted::Shared(_))).map(|p| p.0).collect()
+    }
+
+    /// Refused in words when it has no state file to save or load: no key.
+    pub fn keyed(&self) -> Result<(), EditError> {
+        match self.state {
+            Some(_) => Ok(()),
+            None => Err(EditError::Missing(NO_KEY.into())),
+        }
+    }
+}
+
+/// What a call is to presets: a component's instance, or a plugin.
+pub enum Of {
+    Sound(Sound),
+    Plugin(PluginCall),
+}
+
+impl Of {
+    /// Its `sound` (a ComponentId or a plugin's id) and what the app calls it.
+    pub fn named(&self) -> (String, String) {
+        match self {
+            Of::Sound(x) => (x.component.clone(), x.label.clone()),
+            Of::Plugin(p) => (p.plugin.clone(), p.label.clone()),
+        }
+    }
+}
+
+/// What call `node` (named at revision `at`) is to presets.
+pub fn of(s: &Session, at: u64, node: &str) -> Result<Of, EditError> {
+    match sound(s, at, node) {
+        Ok(x) => Ok(Of::Sound(x)),
+        Err(EditError::Missing(why)) => plugin_call(s, at, node).map(Of::Plugin).map_err(|_| EditError::Missing(why)),
+        Err(e) => Err(e),
+    }
+}
+
+/// The text of property `key` of call `site`'s options (an object argument).
+fn prop_text<'a>(site: &Site, key: &str, text: &'a str) -> Option<&'a str> {
+    let arg = site.args.iter().find_map(|a| match a {
+        Arg::Object { props, .. } => props.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+        _ => None,
+    })?;
+    let (start, end) = arg.span();
+    text.get(start as usize..end as usize)
+}
+
+/// The plugin call `node` (named at revision `at`) is: the one plugin it made.
+pub fn plugin_call(s: &Session, at: u64, node: &str) -> Result<PluginCall, EditError> {
+    let site = call_at(s, at, node)?;
+    let rev = s.accepted();
+    let mut made = vec![];
+    for m in &rev.compiled.ir.modules {
+        walk(&m.nodes, &mut |n| {
+            if matches!(n.op, Op::Plugin { .. }) && (n.origin.as_ref().is_some_and(|o| o.site == site.id) || calls_of(m, n).any(|f| f == site.id)) {
+                made.push((m, n.clone()));
+            }
+        });
+    }
+    let [(m, n)] = &made[..] else { return Err(EditError::Missing("This isn't a sound whose settings can be saved.".into())) };
+    let Op::Plugin { plugin, inputs, .. } = &n.op else { unreachable!("a plugin node") };
+    let info = s.packages.plugin_info(plugin);
+    let label = info.map_or_else(|| plugin.strip_prefix("clap:").unwrap_or(plugin).to_string(), |i| i.found.name.clone());
+    let state = n.op.state_path().and_then(|p| Some((Key::new(&m.key).ok()?, p.iter().map(|k| Key::new(k).ok()).collect::<Option<Vec<_>>>()?)));
+    let all = controls::controls(s);
+    let text = rev.snapshot.files.get(Path::new(&site.file)).map_or("", |t| &t[..]);
+    let mut params = vec![];
+    for (port, r) in inputs {
+        let Some((_, id)) = m2_runtime::packages::address(port) else { continue };
+        let name = info.and_then(|i| i.params.iter().find(|p| p.id == id)).map_or_else(|| port.clone(), |p| p.name.clone());
+        let mut src = None;
+        walk(&m.nodes, &mut |x| {
+            if x.id == split_ref(r).0 {
+                src = Some(x.clone());
+            }
+        });
+        let literal = src.and_then(|x| match (&x.op, &x.origin) {
+            (Op::Const { .. }, Some(origin)) => all.iter().find(|c| c.origin.same_value(origin)).cloned(),
+            _ => None,
+        });
+        let slotted = match literal {
+            Some(c) if c.unit.is_some() => Slotted::Kept(Why::Units),
+            Some(c) if c.uses == 1 && matches!(c.edit, Edit::Literal { .. }) => Slotted::Mine(c),
+            Some(c) => Slotted::Shared(c),
+            None if prop_text(&site, port, text).is_some_and(|w| w.contains("lane.")) => Slotted::Kept(Why::Lane),
+            None => Slotted::Kept(Why::Code),
+        };
+        params.push((id, name, slotted));
+    }
+    Ok(PluginCall {
+        node: format!("{}#{}", site.file, site.ordinal),
+        plugin: plugin.clone(),
+        label,
+        version: info.map(|i| i.found.version.clone()),
+        flat: format!("{}/{}", m.key, n.id),
+        state,
+        params,
+        file: site.file.clone(),
+    })
+}
+
+/// A plugin call's settings as a preset called `name`: `blob`, the state its live instance saved,
+/// and the number of each parameter its code writes, by CLAP id. One a lane or other code drives
+/// is left out, and named. Writes nothing.
+pub fn capture_plugin(call: &PluginCall, name: &str, blob: &[u8]) -> Result<Saved, EditError> {
+    if let Some(why) = name_error(name) {
+        return Err(EditError::Missing(format!("{}{}.", why[..1].to_uppercase(), &why[1..])));
+    }
+    call.keyed()?;
+    let mut values = BTreeMap::new();
+    let mut left = vec![];
+    for (id, label, slotted) in &call.params {
+        match slotted {
+            Slotted::Mine(c) | Slotted::Shared(c) => {
+                values.insert(id.to_string(), c.value);
+            }
+            Slotted::Kept(why) => left.push((label.clone(), *why)),
+            Slotted::Absent => {}
+        }
+    }
+    let preset = Preset {
+        name: name.into(),
+        sound: call.plugin.clone(),
+        values,
+        plugin_version: call.version.clone(),
+        state: Some(m2_song::tx::base64(blob)),
+    };
+    Ok(Saved { preset, left })
+}
+
+/// Load `preset`, with its state `blob`, into plugin call `node` (named at revision `at`): one
+/// `Confined` Tx that writes the state and its sidecar and rewrites each parameter the code writes
+/// as a number. A parameter a lane or other code drives keeps it, and is named. Refused in words
+/// for another plugin's preset, a plugin that isn't installed, or a call with no key.
+pub fn load_plugin(s: &mut Session, at: u64, node: &str, preset: &Preset, blob: Vec<u8>) -> Result<Loaded, EditError> {
+    ready(s)?;
+    let call = plugin_call(s, at, node)?;
+    if preset.sound != call.plugin {
+        let other = s.packages.plugin_info(&preset.sound).map(|i| i.found.name.clone());
+        let other = other.or_else(|| s.catalog().components.get(&preset.sound).map(|d| d.label.clone()));
+        let other = other.unwrap_or_else(|| preset.sound.strip_prefix("clap:").unwrap_or(&preset.sound).to_string());
+        return Err(EditError::Missing(format!("This preset is for {other}, not {}.", call.label)));
+    }
+    let Some(installed) = &call.version else {
+        return Err(EditError::Missing(format!("{} isn't installed on this computer, so its presets can't be loaded.", call.label)));
+    };
+    let Some((module, keys)) = &call.state else { return Err(EditError::Missing(NO_KEY.into())) };
+    let mut kept = vec![];
+    let mut edits: BTreeMap<String, Vec<(u32, u32, String)>> = BTreeMap::new();
+    for (id, label, slotted) in &call.params {
+        let Some(&value) = preset.values.get(&id.to_string()) else { continue };
+        let c = match slotted {
+            Slotted::Mine(c) => c,
+            Slotted::Shared(_) => {
+                kept.push((label.clone(), Why::Code));
+                continue;
+            }
+            Slotted::Kept(why) => {
+                kept.push((label.clone(), *why));
+                continue;
+            }
+            Slotted::Absent => continue,
+        };
+        let Edit::Literal { lens, .. } = &c.edit else { continue };
+        let edit = lens.propose(value)?;
+        if edit.value != c.value && edit.text != c.literal {
+            edits.entry(c.file.clone()).or_default().push((lens.start, lens.end, edit.text));
+        }
+    }
+    let version = preset.plugin_version.clone().unwrap_or_else(|| installed.clone());
+    let side = Sidecar { plugin: call.plugin.clone(), plugin_version: version };
+    let same = m2_song::Sha::of(&blob);
+    let w = crate::data::state_writes(s, module, keys, blob, &side)?;
+    let said = format!("{} preset {}", call.label, preset.name);
+    let state_changes = w.held != Some(same);
+    if !state_changes && edits.is_empty() {
+        let edited = Edited { revision: s.accepted().number, file: call.file.clone(), before: said.clone(), after: said };
+        return Ok(Loaded { edited, kept });
+    }
+    let mut ops = vec![];
+    let mut ranges = BTreeMap::new();
+    for (file, mut e) in edits {
+        e.sort_by_key(|x| (x.0, x.1));
+        let old = &s.accepted().snapshot.files[Path::new(&file)];
+        let tx_file = path(&file)?;
+        ops.push(plan::text_edit(&tx_file, old, &e));
+        ranges.insert(tx_file, Declared::Ranges(e.iter().map(|x| Range::bytes(x.0, x.1)).collect()));
+    }
+    if state_changes {
+        ops.extend(w.ops);
+    }
+    let label = (format!("{} settings", call.label), said);
+    let mut tx = plan::planned(s, label.clone(), ops, Expect::Confined(Confined { ranges, ..Confined::default() }));
+    if state_changes {
+        tx.base.extend(w.bases);
+    }
+    let refused = |why: &str| EditError::Rejected(format!("loading the preset would change more than {}'s settings ({why})", call.label));
+    let done = plan::run_as(s, tx, refused, |_, _| Ok(()))?;
+    Ok(Loaded { edited: Edited { revision: done.number, file: call.file, before: label.0, after: label.1 }, kept })
 }
 
 #[cfg(test)]

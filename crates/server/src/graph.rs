@@ -458,6 +458,9 @@ struct Inner {
     open_windows: Mutex<HashSet<u64>>,
     /// `plugins` changed since the watcher last asked.
     plugins_changed: AtomicBool,
+    /// The presets each plugin offers itself, by its id, as its host found them (HOST-8): kept for
+    /// the app run.
+    offered: Mutex<HashMap<String, Result<Vec<m2_plugins::Offered>, String>>>,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -608,6 +611,7 @@ impl Inner {
             plugins: Mutex::new(Value::Object(Default::default())),
             open_windows: Mutex::default(),
             plugins_changed: AtomicBool::new(false),
+            offered: Mutex::new(HashMap::new()),
         }
     }
 

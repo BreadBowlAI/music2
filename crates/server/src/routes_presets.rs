@@ -1,12 +1,14 @@
 //! Presets (FMT-22, gaps #26): a sound card's list, Save as preset… and loading one.
 //!
 //! - `GET /api/graph/presets?session&node[&revision]`: `{sound, label, std: [{name}], yours:
-//!   [{name}], plugin: []}`, each by name.
+//!   [{name}], plugin: [{name}]}`, each by name: `plugin` is the plugin's own (HOST-8), with
+//!   `plugin_error` in words when they couldn't be read.
 //! - `POST /api/graph/preset/save {session, node, name, replace, revision?}`: your preset from the
 //!   call's settings; no song file changes. `{name, left}`, or `{taken}` when a preset of that name
 //!   (in any capitals) is there and `replace` isn't set.
-//! - `POST /api/graph/preset/load {session, at, node, from: "std"|"yours", name}`: one Tx (a write
-//!   route: the lock applies). `{file, before, after, revision, changed, kept: [{label, why}]}`.
+//! - `POST /api/graph/preset/load {session, at, node, from: "std"|"yours"|"plugin", name}`: one
+//!   Tx (a write route: the lock applies). `{file, before, after, revision, changed, kept: [{label,
+//!   why}]}`.
 
 use std::sync::Arc;
 
@@ -69,7 +71,7 @@ struct LoadReq {
     /// The revision `node` was named at.
     at: u64,
     node: String,
-    /// `std` (std's own) or `yours`.
+    /// `std` (std's own), `yours`, or `plugin` (the plugin's own).
     from: String,
     name: String,
 }
