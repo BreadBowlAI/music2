@@ -1,7 +1,9 @@
 //! Faults found while sound is made, told (RENDER-25, DIAG-4). Every part reports into the app's
 //! one ring ([`m2_runtime::fault::Faults`], in [`Inner`]): the audio thread a sound that stopped
 //! (`sound.stopped`) or a plugin that failed (`plugin.failed`), the actor a plugin host that ended
-//! (`plugin.crashed`). Every 300 ms the server's notices thread reads it here ([`Told::hear`]).
+//! (`plugin.crashed`), a plan's build and the disk thread a file that can't be read
+//! (`asset.unreadable`), a lane a warped clip whose stretch failed (`stretch.failed`). Every 300 ms
+//! the server's notices thread reads it here ([`Told::hear`]).
 //! Each fault is named by the [`Namer`] of the plan it came from (the ex plan's D2), listed among
 //! the open song's problems until its part plays again, and toasted once (D3).
 
@@ -28,6 +30,9 @@ pub(super) struct Told {
     live: Vec<Live>,
     /// Each part told by a toast, by code, in the open song: once each (D3).
     toasted: HashSet<(&'static str, String)>,
+    /// Faults of a plan prepared but not sent yet, which its build reported (a file it can't
+    /// read): named once it is sent, dropped once a newer one is.
+    pending: Vec<Fault>,
     /// The ring's lost faults when it was last read.
     lost: u64,
     /// The list changed since the notices thread last read the ring.
@@ -59,7 +64,7 @@ impl Told {
     /// The song closed: nothing is listed or named.
     pub(super) fn closed(&mut self) {
         self.changed |= !self.live.is_empty();
-        (self.namers, self.live) = ([None, None], vec![]);
+        (self.namers, self.live, self.pending) = ([None, None], vec![], vec![]);
     }
 
     /// Stop All Sound: each sound that stopped plays again (RENDER-10), so it isn't listed. A
@@ -77,9 +82,17 @@ impl Told {
     pub(super) fn hear(&mut self, faults: &Faults) -> (Vec<String>, bool) {
         let mut before: Vec<Live> = vec![];
         let mut toast: Vec<(bool, usize)> = vec![];
-        for f in std::iter::from_fn(|| faults.take()) {
+        let pending = std::mem::take(&mut self.pending);
+        for f in pending.into_iter().chain(std::iter::from_fn(|| faults.take())) {
             let mine = |n: &Option<Arc<Namer>>| n.as_ref().is_some_and(|n| n.plan() == f.plan);
-            let Some(newest) = self.namers.iter().position(mine).map(|i| i == 0) else { continue };
+            let Some(newest) = self.namers.iter().position(mine).map(|i| i == 0) else {
+                // Plans are numbered as they are made: one newer than the plan sent last isn't
+                // sent yet.
+                if self.namers[0].as_ref().is_none_or(|n| f.plan > n.plan()) && self.pending.len() < m2_runtime::fault::SLOTS {
+                    self.pending.push(f);
+                }
+                continue;
+            };
             let namer = self.namers[usize::from(!newest)].clone().expect("found above");
             let list = if newest { &mut self.live } else { &mut before };
             let Some(at) = add(list, &namer, f) else { continue };

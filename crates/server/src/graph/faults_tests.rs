@@ -25,8 +25,14 @@ struct Rig {
 
 impl Rig {
     fn new() -> Rig {
+        Rig::with(SONG, |_| {})
+    }
+
+    /// `song` open and playing, the project's other files made by `files` first.
+    fn with(song: &str, files: impl FnOnce(&Fixture)) -> Rig {
         let fixture = Fixture::new();
-        fixture.put("song.ts", SONG);
+        fixture.put("song.ts", song);
+        files(&fixture);
         let (p, driver) = Player::driven(48_000);
         let graph = Graph::with_player(p);
         graph.open(&fixture.0).unwrap();
@@ -64,6 +70,20 @@ impl Rig {
         self.graph.hear_faults().0
     }
 
+    /// What it toasts within 10 s, while the song plays: the disk and stretch threads report in
+    /// their own time.
+    fn told_soon(&mut self) -> Vec<String> {
+        let t = std::time::Instant::now();
+        loop {
+            self.fill(8);
+            let told = self.told();
+            if !told.is_empty() || t.elapsed() > std::time::Duration::from_secs(10) {
+                return told;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     /// The problems the news lists that faults made, as (code, module, message).
     fn problems(&self) -> Vec<(String, Option<String>, String)> {
         let news = self.graph.news();
@@ -76,7 +96,7 @@ impl Rig {
 /// The problems in `problems` that faults made, as (code, module, message).
 pub(in crate::graph) fn listed(problems: &Value) -> Vec<(String, Option<String>, String)> {
     let text = |v: &Value| v.as_str().map(str::to_string);
-    let codes = ["sound.stopped", "plugin.failed", "plugin.crashed"];
+    let codes = ["sound.stopped", "plugin.failed", "plugin.crashed", "asset.unreadable", "stretch.failed"];
     let faults = problems.as_array().unwrap().iter().filter(|p| codes.contains(&p["code"].as_str().unwrap()));
     faults.map(|p| (text(&p["code"]).unwrap(), text(&p["module"]), text(&p["message"]).unwrap())).collect()
 }
@@ -175,4 +195,136 @@ fn a_fault_from_a_plan_gone_is_never_named_by_the_new_one() {
     rig.report(Code::Stopped, second);
     assert_eq!(rig.told(), [stopped("The delay on Bass")], "named by its own plan");
     assert_eq!(rig.problems(), [], "it plays again in the new plan");
+}
+
+/// Reads of a file on a thread that fail, as from a drive unplugged while it plays: the file, by
+/// what it is, and the thread's name (`watch_reads`). Tests that read other files run beside these.
+static UNPLUGGED: std::sync::Mutex<Vec<(m2_os::fs::FileId, &'static str)>> = std::sync::Mutex::new(vec![]);
+
+fn unplugged(f: &std::fs::File, _: usize) -> std::io::Result<()> {
+    let gone = UNPLUGGED.lock().unwrap_or_else(|e| e.into_inner());
+    let thread = std::thread::current();
+    if !gone.is_empty() && gone.iter().any(|&(id, t)| thread.name() == Some(t) && m2_os::fs::file_id_of(f).ok() == Some(id)) {
+        return Err(std::io::Error::other("the drive was unplugged"));
+    }
+    Ok(())
+}
+
+/// From now on, reads of `path` on the thread named `thread` fail.
+fn unplug(path: &std::path::Path, thread: &'static str) {
+    m2_os::fs::watch_reads(unplugged);
+    UNPLUGGED.lock().unwrap_or_else(|e| e.into_inner()).push((m2_os::fs::file_id(path).unwrap(), thread));
+}
+
+/// A track, Drums, playing its audio lane `loops`, which holds `clip`.
+fn drums(clip: &str) -> (&'static str, String) {
+    let song = "import { song, track } from '@m2/core';\n\
+                const d = track('drums', { name: 'Drums' }, ({ lane }) => lane.audio('loops'));\n\
+                export default song(() => d.out);\n";
+    (song, format!(r#"{{"clips": [{clip}]}}"#))
+}
+
+/// A WAV in the project's `assets/`: a stereo sine of `seconds`.
+fn wav(f: &Fixture, name: &str, seconds: f64) -> std::path::PathBuf {
+    let path = f.0.join("assets").join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let sine: Vec<f32> = (0..(seconds * 48_000.0) as usize).map(|i| (i as f32 * 0.03).sin() * 0.3).collect();
+    m2_runtime::audio::write_wav(&path, &[sine.clone(), sine], 48_000).unwrap();
+    path
+}
+
+// io r8, RENDER-25, D3: a streamed file whose reads fail while it plays (a drive unplugged) is one
+// problem, `asset.unreadable`, naming the file and its track, with the track's key; toasted once,
+// however many of its chunks fail. The song plays on. Before, each failed chunk was counted, and
+// nothing read the count.
+#[test]
+fn a_streamed_file_that_cant_be_read_is_told_once() {
+    let (song, clips) = drums(r#"{"id": "a", "start": 0, "length": 16, "asset": "loop.wav"}"#);
+    let mut rig = Rig::with(song, |f| {
+        // Eight seconds: more than a lane's slots hold, so the disk thread reads it as it plays.
+        let path = wav(f, "loop.wav", 8.0);
+        f.put("data/drums/loops.json", &clips);
+        unplug(&path, "m2-disk");
+    });
+    let said = "loop.wav on Drums can't be read, so it plays silent. It may be damaged, or on a drive that isn't plugged in. The rest of \
+                the song plays on.";
+    assert_eq!(rig.told_soon(), [said]);
+    assert_eq!(rig.problems(), [("asset.unreadable".into(), Some("drums".into()), said.into())]);
+    rig.graph.seek(12.0).unwrap();
+    rig.fill(40);
+    assert!(rig.told().is_empty() && rig.problems().len() == 1, "told once");
+    assert!(rig.graph.status().playing, "the song plays on");
+}
+
+// ab r4, RENDER-25, D3: a Sampler file that is in assets/ but won't decode is one problem,
+// `asset.unreadable`, naming the file, what plays it and its track, toasted once. Its build found
+// it, before the plan was sent. A new plan finds it again: listed again, with no toast. Before,
+// nothing was said.
+#[test]
+fn a_sampler_file_that_wont_decode_is_told_naming_it_and_its_track() {
+    let song = |zone: &str| {
+        format!(
+            "import {{ song, track }} from '@m2/core';\nimport {{ sampler }} from 'std/sampler';\n\
+             const d = track('drums', {{ name: 'Drums' }}, ({{ lane }}) => sampler(lane.notes('hits'), {{ zones: {{ {zone}: 'kick.wav' }} }}));\n\
+             export default song(() => d.out);\n"
+        )
+    };
+    let mut rig = Rig::with(&song("36"), |f| {
+        f.put("data/drums/hits.json", r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C2", "start": 0, "length": 1}]}]}"#);
+        f.put("assets/kick.wav", "RIFF\u{0}\u{0}\u{0}\u{0}WAVEnot a sound at all");
+    });
+    let said = "kick.wav, which the instrument on Drums plays, can't be read, so it plays silent. It may be damaged. The rest of the song \
+                plays on.";
+    assert_eq!(rig.told_soon(), [said]);
+    let listed = [("asset.unreadable".into(), Some("drums".into()), said.to_string())];
+    assert_eq!(rig.problems(), listed);
+    rig.fixture.put("song.ts", &song("38"));
+    assert!(rig.graph.poll());
+    rig.fill(2);
+    assert!(rig.told().is_empty(), "toasted once in the open song");
+    assert_eq!(rig.problems(), listed, "listed again: the new plan plays it silent too");
+}
+
+// sx, RENDER-25, RENDER-30: a warped clip whose stretch fails while the song plays (here its
+// source's reads fail on the stretch thread) is one problem, `stretch.failed`, naming the clip's
+// file and its track, toasted once. Before, a line in the log said so, and nothing else.
+#[test]
+fn a_stretch_that_fails_live_is_told_naming_the_clip() {
+    let (song, clips) = drums(r#"{"id": "w", "start": 0, "length": 6, "asset": "a.wav", "warp": [[0, 0], [3, 6]]}"#);
+    let mut rig = Rig::with(song, |f| {
+        let path = wav(f, "a.wav", 3.0);
+        f.put("data/drums/loops.json", &clips);
+        unplug(&path, "m2-stretch");
+    });
+    let said = "The warped clip of a.wav on Drums can't be stretched, so it plays silent. The rest of the song plays on.";
+    assert_eq!(rig.told_soon(), [said]);
+    assert_eq!(rig.problems(), [("stretch.failed".into(), Some("drums".into()), said.into())]);
+    rig.fill(40);
+    assert!(rig.told().is_empty() && rig.problems().len() == 1, "told once");
+}
+
+// D2 (as built in slice 2): a plan's build reports what it can't read before the plan is sent, and
+// the notices thread may read the ring in between. A fault of a plan newer than the one sent last
+// waits for it, and is named once it is sent; one of a plan made but never sent is dropped once a
+// newer plan is.
+#[test]
+fn a_fault_from_a_plan_not_sent_yet_waits_for_it() {
+    let rig = Rig::new();
+    let (plan, node) = rig.node("bass", delay);
+    let (token, namers) = rig.graph.inspect(move |a| {
+        let o = a.open.as_ref().unwrap();
+        let rev = o.plays.as_ref().unwrap().revision.clone();
+        let namer = |id| m2_editor::faults::Namer::new(id, rev.clone(), &o.session.packages);
+        (o.token, [namer(plan), namer(plan + 5)])
+    });
+    let [first, next] = namers;
+    let (mut told, faults) = (super::Told::default(), m2_runtime::fault::Faults::default());
+    told.sent(token, first);
+    let fault = |plan| Fault { code: Code::Stopped, plan, subject: Subject::Node(node) };
+    faults.report(fault(plan + 3));
+    faults.report(fault(plan + 5));
+    assert_eq!(told.hear(&faults).0, Vec::<String>::new(), "neither plan is sent yet");
+    told.sent(token, next);
+    assert_eq!(told.hear(&faults).0, [stopped("The delay on Bass")], "named once its plan is sent; the plan never sent is dropped");
+    assert!(told.hear(&faults).0.is_empty());
 }
