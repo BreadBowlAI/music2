@@ -943,7 +943,8 @@ impl Actor {
                     if was != now
                         && let Some(set) = cp.open.as_ref().filter(|q| q.engine.token == token).map(|q| &q.overlays.set)
                     {
-                        super::overlay::write_cells(&p.info, p.epoch, d, &super::overlay::tracks(&p.revision), (set, was), (set, now));
+                        let song = (&super::overlay::tracks(&p.revision)[..], &p.revision.compiled.flat.routes[..]);
+                        super::overlay::write_cells(&p.info, p.epoch, d, song, (set, was), (set, now));
                     }
                     let mut written = vec![];
                     for (cell, value) in reach.cells {
@@ -1023,6 +1024,7 @@ impl Actor {
             info: p.info.clone(),
             muted: p.revision.compiled.flat.muted.clone(),
             tracks: super::overlay::tracks(&p.revision),
+            routes: p.revision.compiled.flat.routes.clone(),
             origins: if o.playing == Some(number) {
                 None
             } else if failed {
@@ -1202,6 +1204,7 @@ impl Actor {
                     info: plays.info.clone(),
                     muted: plays.revision.compiled.flat.muted.clone(),
                     tracks: super::overlay::tracks(&plays.revision),
+                    routes: plays.revision.compiled.flat.routes.clone(),
                     origins: None,
                     tempo: None,
                 };

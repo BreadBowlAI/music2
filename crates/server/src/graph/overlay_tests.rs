@@ -32,31 +32,74 @@ fn four() -> Vec<String> {
 // direct way past it, which one value per track couldn't tell apart.
 #[test]
 fn solo_keeps_a_bus_fed_and_its_sources() {
-    assert_eq!(values(&bus(), &set(&[], &[]), &[], &four()), [1.0; 5]);
-    assert_eq!(values(&bus(), &set(&[], &["vox"]), &[], &four()), [1.0, 0.0, 1.0, 0.0, 1.0]);
-    assert_eq!(values(&bus(), &set(&[], &["bus"]), &[], &four()), [1.0, 1.0, 1.0, 0.0, 0.0]);
-    assert_eq!(values(&bus(), &set(&[], &["vox", "lead"]), &[], &four()), [1.0, 0.0, 1.0, 1.0, 1.0]);
+    assert_eq!(values(&bus(), &[], &set(&[], &[]), &[], &four()), [1.0; 5]);
+    assert_eq!(values(&bus(), &[], &set(&[], &["vox"]), &[], &four()), [1.0, 0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(values(&bus(), &[], &set(&[], &["bus"]), &[], &four()), [1.0, 1.0, 1.0, 0.0, 0.0]);
+    assert_eq!(values(&bus(), &[], &set(&[], &["vox", "lead"]), &[], &four()), [1.0, 0.0, 1.0, 1.0, 1.0]);
+}
+
+/// Buses the song feeds (RENDER-34): kick and hats go to the drums group, vox sends to verb, which
+/// sends on to echo, and bass is dry. Each track enters the song at one site; the routes say which
+/// bus each one's way into the song reaches.
+fn routed() -> (Vec<Site>, Vec<Site>) {
+    let sites = ["kick", "hats", "drums", "vox", "bass", "verb", "echo"].map(|m| site(m, "song")).to_vec();
+    (sites, vec![site("hats", "drums"), site("kick", "drums"), site("verb", "echo"), site("vox", "verb")])
+}
+
+/// The values of [`routed`]'s sites (kick, hats, drums, vox, bass, verb, echo) with `mute` and `solo`.
+fn heard(mute: &[&str], solo: &[&str]) -> Vec<f32> {
+    let (sites, routes) = routed();
+    let tracks = ["kick", "hats", "drums", "vox", "bass", "verb", "echo"].map(String::from).to_vec();
+    values(&sites, &routes, &set(mute, solo), &[], &tracks)
+}
+
+// MON-3, RENDER-34: soloing a track keeps it and every bus it feeds, through sends or `to`, and the
+// buses those feed; the other tracks into the same buses are silenced.
+#[test]
+fn solo_keeps_the_buses_a_track_feeds() {
+    assert_eq!(heard(&[], &[]), [1.0; 7]);
+    assert_eq!(heard(&[], &["vox"]), [0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0]);
+    assert_eq!(heard(&[], &["kick"]), [1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(heard(&[], &["kick", "bass"]), [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0]);
+}
+
+// MON-3: soloing a bus keeps it, every track that feeds it (their dry sound too: one cell serves
+// both ways) and the buses it feeds.
+#[test]
+fn soloing_a_bus_keeps_what_feeds_it() {
+    assert_eq!(heard(&[], &["drums"]), [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(heard(&[], &["verb"]), [0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0]);
+    assert_eq!(heard(&[], &["echo"]), [0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0]);
+}
+
+// MON-3: muting a track silences all of it, dry, sends and group, as all start after its one cell;
+// muting a group silences its tracks with it, and muting a bus leaves what feeds it heard dry.
+#[test]
+fn muting_a_track_silences_its_sends() {
+    assert_eq!(heard(&["vox"], &[]), [1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0]);
+    assert_eq!(heard(&["drums"], &[]), [1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(heard(&["vox"], &["vox"]), [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0]);
 }
 
 // MON-4: a solo of a track that is gone is ignored, alone or beside one that is there.
 #[test]
 fn a_solo_of_a_track_that_is_gone_is_ignored() {
-    assert_eq!(values(&bus(), &set(&[], &["gone"]), &[], &four()), [1.0; 5]);
-    assert_eq!(values(&bus(), &set(&[], &["gone", "vox"]), &[], &four()), values(&bus(), &set(&[], &["vox"]), &[], &four()));
+    assert_eq!(values(&bus(), &[], &set(&[], &["gone"]), &[], &four()), [1.0; 5]);
+    assert_eq!(values(&bus(), &[], &set(&[], &["gone", "vox"]), &[], &four()), values(&bus(), &[], &set(&[], &["vox"]), &[], &four()));
 }
 
 // MON-3: mute wins over solo on the same track, and a mute upstream silences only that track.
 #[test]
 fn mute_wins_over_solo() {
-    assert_eq!(values(&bus(), &set(&["vox"], &["vox"]), &[], &four()), [0.0, 0.0, 1.0, 0.0, 0.0]);
-    assert_eq!(values(&bus(), &set(&["backing"], &["bus"]), &[], &four()), [1.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(values(&bus(), &[], &set(&["vox"], &["vox"]), &[], &four()), [0.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(values(&bus(), &[], &set(&["backing"], &["bus"]), &[], &four()), [1.0, 0.0, 1.0, 0.0, 0.0]);
 }
 
 // MON-3, MON-5: a track muted in the song stays silent when soloed, and says so.
 #[test]
 fn a_track_muted_in_song_stays_silent_when_soloed() {
     let muted = ["vox".to_string()];
-    assert_eq!(values(&bus(), &set(&[], &["vox"]), &muted, &four()), [0.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(values(&bus(), &[], &set(&[], &["vox"]), &muted, &four()), [0.0, 0.0, 1.0, 0.0, 0.0]);
     let song = Song { tracks: ["vox", "backing", "bus", "lead"].map(String::from).to_vec(), sites: bus(), muted: muted.to_vec(), ..Song::default() };
     let m = Monitor { set: set(&["lead"], &["vox"]), version: 0, written: 0, dir: PathBuf::new(), writer: true, song: Arc::new(song) };
     let s = m.state();

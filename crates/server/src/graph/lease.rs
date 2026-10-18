@@ -378,6 +378,8 @@ pub struct PlaysView {
     pub muted: Vec<String>,
     /// The tracks of what it plays: a solo of any other is ignored (MON-4).
     pub tracks: Vec<String>,
+    /// Which bus each of its tracks reaches through the song (RENDER-34, MON-3).
+    pub routes: Vec<(String, String)>,
     /// Set only while what plays is built from older code than the accepted revision's (its
     /// build failed): the accepted control id → its constant's origin in what plays.
     pub origins: Option<Arc<HashMap<String, Origin>>>,
