@@ -512,7 +512,7 @@ fn a_keyboard_turned_off_neither_plays_nor_records() {
 fn record_needs_a_notes_lane() {
     let r = Rig::new();
     let e = r.graph.record_start(r.token, "bass", "nope", Options::default()).unwrap_err();
-    assert_eq!(e.to_string(), "Select a track with notes to record on it.");
+    assert_eq!(e.to_string(), "Select a notes track or an audio track to record on it.");
     assert!(!r.graph.recording());
     r.start(false, None);
     let e = r.graph.record_start(r.token, "bass", "notes", Options::default()).unwrap_err();

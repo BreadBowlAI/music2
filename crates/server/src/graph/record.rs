@@ -42,6 +42,8 @@ use super::lease::PlaysView;
 use super::take_audio::{self, Writer, Written};
 use super::{ControlPlane, Device, Graph, Inner};
 
+/// What Record says on a lane it can't record on.
+pub const NO_LANE: &str = "Select a notes track or an audio track to record on it.";
 /// The shortest note a take keeps, in beats.
 pub const SHORTEST: f64 = 1.0 / 64.0;
 /// A count whose song hasn't started this long after its bar ended was cancelled (D6).
@@ -128,8 +130,7 @@ struct AudioTake {
     writer: Option<Writer>,
     player: Player,
     hearing: bool,
-    /// The input's take ring (tests settle the writer by it).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The input's take ring: the meters read its level, and tests settle the writer by it.
     ring: std::sync::Arc<m2_play::ring::Ring>,
 }
 
@@ -316,9 +317,12 @@ impl Take {
             Phase::Count { beats, ms, .. } => json!({"beats": beats, "ms": ms}),
             _ => Value::Null,
         };
+        // An audio take says so, and whether its input is heard (the io plan's slice 3).
         json!({
             "phase": if counting { "count" } else { "take" },
             "module": self.module, "lane": self.lane,
+            "kind": if self.audio.is_some() { "audio" } else { "notes" },
+            "hear": self.audio.as_ref().is_some_and(|a| a.hearing),
             "start": self.start, "from": self.from, "until": self.until,
             "count_in": count, "notes": notes,
         })
@@ -326,6 +330,12 @@ impl Take {
 }
 
 impl Recorder {
+    /// The sound input's take ring while a take records on an audio lane: what the meters read
+    /// its level from.
+    pub(super) fn input(&self) -> Option<&std::sync::Arc<m2_play::ring::Ring>> {
+        self.take.as_ref().and_then(|t| t.audio.as_ref()).map(|a| &a.ring)
+    }
+
     /// The take's lane while it records song `token`: what MIDI keyboards play then (D8).
     pub(super) fn lane(&self, token: Option<u64>) -> Option<(String, String)> {
         self.take.as_ref().filter(|t| Some(t.token) == token).map(|t| (t.module.clone(), t.lane.clone()))
@@ -450,7 +460,7 @@ impl Graph {
         let plays = p.engine.plays.as_ref().filter(|pl| pl.epoch == device.epoch);
         let slot = plays.and_then(|pl| audio_slot(pl, module, lane));
         if !plays.is_some_and(|pl| plays_notes(pl, module, lane)) && (slot.is_none() || listen.is_none()) {
-            bail!("Select a track with notes to record on it.");
+            bail!("{NO_LANE}");
         }
         let generation = plays.map_or(0, |pl| pl.generation);
         let dir = p.shown.dir.clone();
@@ -524,6 +534,24 @@ impl Graph {
         cp.record.take = Some(take);
         cp.record.changed = true;
         Ok(shown)
+    }
+
+    /// What the silent input hears next (D24): `samples`, then a sine `tone` (pitch, seconds, gain),
+    /// mono at the song's rate. Says so when no take has opened the input.
+    pub fn inject_input(&self, samples: &[f32], tone: Option<(f32, f32, f32)>) -> Result<()> {
+        const NONE: &str = "Nothing is recording from the sound input.";
+        let device = self.inner.current_device().context(NONE)?;
+        let player = &device.player;
+        if player.input().is_none() {
+            bail!(NONE);
+        }
+        let mut all = samples.to_vec();
+        if let Some((hz, seconds, gain)) = tone {
+            let rate = player.rate() as f32;
+            let n = (seconds.clamp(0.0, 60.0) * rate) as usize;
+            all.extend((0..n).map(|i| gain * (std::f32::consts::TAU * hz * i as f32 / rate).sin()));
+        }
+        player.inject_input(&all)
     }
 
     /// R while recording (Q19): the take ends where it is heard, and play goes on. Answers at once:
