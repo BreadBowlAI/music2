@@ -27,8 +27,10 @@ whatever you pick up.
   from the disk). Stretching moved out of the engine into std: `std:stretch`, the first offline kernel (std
   0.2.2). A live session makes each new stretch in the background and plays it as it is made; an export makes its
   stretches first. `examples/resample`'s 2 renders changed once (std 0.2.2's stretch, FMT-3); 10 of 12 keep their
-  bits. Plan and build notes: `docs/designs/step9/sx-plan.md`, `build-notes-sx.md`. Owed on the Mac: its
-  `ci/check.sh`, then the by-ear steps 88 to 94.
+  bits. Plan and build notes: `docs/designs/step9/sx-plan.md`, `build-notes-sx.md`. `ci/check.sh --gates` passed at
+  `f1a90f5` (about 38 minutes): 1,624 Rust tests, 12 of 12 renders, the 7 gate runs, 69 browser suites; one
+  (`s8-clips`, a notes clip's edge drag) passed only on its retry, then 2 of 2 alone (Known flakes). Pictures:
+  `~/m2-runs/app-shots/sx-3/`. Owed on the Mac: its `ci/check.sh`, then the by-ear steps 88 to 94.
 - **Track `ab` (kernel ABI v1 and the sampler) is ready to land** (2026-10-18), on branch `ab`: Linux green at
   `7399cb8`; macOS owed. From `main` at `258275b`, with `main` at `3b447b2` (track `io`) merged in. It adds:
 
@@ -635,7 +637,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | `studio`: audio in the app, recording notes, MIDI files and stems, help in plain words | `ad5f111` (Linux checks), then docs only; on `main` at `02ba4d3` | owed: the same one more `ci/check.sh`, then the by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in another app) |
 | `io`: audio clips play from the disk; recording audio | `64380e1` (Linux checks), then docs only; ready to land (branch `io`) | macOS: unverified since `eda5e77`. Owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 73 to 82 (a long file from the disk, a real microphone, the permission question, the take against the click, hearing yourself in headphones, a USB microphone unplugged) |
 | `ab`: kernel ABI v1, one sandbox a box, the Sampler | `7399cb8` (Linux checks), then docs only; ready to land (branch `ab`) | owed once it is on `main`: one more `ci/check.sh` (G7f's run of the new layout: its footprint and address space, PLAT-1), then the by-ear steps 83 to 87 (the Sampler example, a WAV dropped on a Sampler, the keyboard piano, Undo) |
-| `sx`: `std:stretch` (an offline kernel), stretches in the background, Follow tempo | Linux checks: see the track's bullet above; built on branch `sx`, not reviewed | owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 88 to 94 (Resample's stretched clips; Follow tempo and a tempo change) |
+| `sx`: `std:stretch` (an offline kernel), stretches in the background, Follow tempo | `f1a90f5` (Linux checks), then docs only; built on branch `sx`, not reviewed | owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 88 to 94 (Resample's stretched clips; Follow tempo and a tempo change) |
 
 **8a's Mac sweep (for the owner): offline and live, one paste.** `8a` is on `main`.
 
@@ -733,6 +735,7 @@ Seen, not fixed:
 | `live3b` | "its release writes db(-32) into song.ts" | once, at load 45–74, before step 7; not seen since; watch for it |
 | `s5-knobs` | page detached after a double-click on a knob at its default (3 of 11 release runs) | from before the platform step; not seen in its checks |
 | `audition_never_waits_for_a_compile`, `midi_never_waits_for_a_compile` | "the compile's span" not found; "attempt to subtract with overflow" (a span ending before it began) | both once, in io's second final check, at load 9 to 10 beside another track's tests; they read spans on the player's clock, which a new player starts again; alone, 3 runs of 3 pass |
+| `s8-clips` | "the left edge dragged a bar right: 8+28" (a notes clip's left edge drag landed 4 beats short) | once, in sx's final check beside other tracks' builds; passed on its retry and 2 of 2 alone |
 
 Fixed in step 7 (of these, only `a_plugin_that_keeps_failing_is_started_again_once` was seen in a `ci/check.sh` run):
 

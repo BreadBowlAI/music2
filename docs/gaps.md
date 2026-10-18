@@ -236,6 +236,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A stretch is made from the clip's start**: after a tempo change deep inside a long followed clip, it is silent until its new stretch reaches the playhead (on Linux about 300 times faster than real time).
 - **A tempo change while a followed clip plays** may wait up to half a second before the new tempo is heard, while its new stretch reaches the playhead.
 - **A quarter second that holds a plain clip and a stretch being made** is silent, the plain clip too, until the stretch reaches it.
+- **A stretch being made reads as a slow disk**: while a followed clip's new stretch hasn't reached the playhead, the status may say "The disk was too slow" for its track.
 - **Warp markers can't be placed by hand** in the app: Follow tempo is the only way.
 - **A clip's own tempo isn't found from its file**: Follow tempo takes the clip as it plays when you turn it on.
 - **No `m2` command for Follow tempo**: agents use `POST /api/graph/clips` (`{"op": "audio", "follow": true}`).
