@@ -317,7 +317,9 @@ impl KernelInst {
         })
     }
 
-    /// Its sandbox, and its state: its own, or the pool's in `pool` (a voice's).
+    /// Its sandbox, and its state: its own, or the pool's in `pool` (a voice's). For debug builds'
+    /// input checks.
+    #[cfg(debug_assertions)]
     fn sandbox<'a>(&'a mut self, pool: &'a mut [Sandbox]) -> (&'a mut Sandbox, &'a State) {
         match &mut self.own {
             Some(own) => (own, &self.state),
