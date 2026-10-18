@@ -198,11 +198,13 @@ if (process.env.ST_SHOT) await page.screenshot({ path: `${process.env.ST_SHOT}/a
 await linted(lane, "the lane after an import");
 
 // ⌘Z takes both back; the files stay (music2 never deletes an asset).
+const imported = (await api("")).body.view.revision;
 await key("Meta+KeyZ");
 check(await until(() => laneClips().length === before), `one ⌘Z takes the import back: ${laneClips().length - before} left`);
 check(fs.existsSync(`${PROJ}/assets/hit.wav`), "the files stay in assets/");
 
-// Not a WAV: refused in words, nothing added.
+// Not a WAV: refused in words, nothing added. The undo's revision first: its files land before it.
+await until(async () => (await api("")).body.view.revision > imported);
 const revision = (await api("")).body.view.revision;
 await importVia("Meta+Shift+KeyI", [`${files}/song.mp3`]);
 check(await until(async () => (await toasts()).some((t) => t.includes("song.mp3 isn't a WAV file. music2 reads WAV files. Save it as a WAV first: most audio apps can (Export, then WAV)."))), `an MP3 says Q1's words: ${await toasts()}`);
