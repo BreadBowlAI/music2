@@ -70,6 +70,9 @@ now kept by note id instead of by codes summed through two polys.
 | 1f | Contract: RENDER-16's and RENDER-10's Today, the Deferred row marked built; README's sounds line | `docs/architecture.md`, `README.md` |
 
 **The card's words.** The glide is shown as "70 ms" when it is a number or a knob, else "the glide set in code".
+Built: the card shows the first sentence on one line under the name ("Plays one note at a time."), and the
+whole of it in the tooltip, so a card keeps its height (a gap line). Legato with no glide (FM keys at `voices: 1`)
+says "… carries on from it, without starting again."; a poly of one voice "A new note stops the one sounding."
 
 | Options | Words |
 |---|---|

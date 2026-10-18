@@ -265,6 +265,13 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A kernel that asks for memory while playing** is told it went over 256 MB, even when it asked for a few MB; the words should say kernels may not take memory while playing (the ab review's 5).
 - **A song asking for std "0.2" in an older app that has std 0.2.0** and calls the Sampler gets a missing import, not `pkg.unsatisfied`: a song's std requirement names no patch version. `examples/sampler` asks for "0.2.1".
 - **std's kernel test `odd_db_values` fails in a debug build**: a NaN's sign bit differs from the release build's. `ci/check.sh` runs those tests in release, where it passes.
+- **An instrument's voices, mode and glide can't be changed on its card**: the Device card says how it plays, read-only; they are set in its code (with #35).
+- **Glide in `"poly"` mode** isn't built: each new note sliding from the last on many voices. `glide` does nothing there.
+- **The Device card shows the first sentence** of how an instrument plays ("Plays one note at a time."); the rest is in its tooltip.
+- **`steal: "none"` waits for a voice to fall silent**, not for its key to be let go: a note with a long release keeps its voice until it ends.
+- **A song asking for std "0.2"** gets `pkg.unsatisfied` in an app with std 0.3.0; its message names the line to write (`std = "0.3"`). The song may sound a little different: notes in one-note sounds keep their own velocity.
+- **`a_second_session_is_read_only`** (core/session) failed once in a full test run under load (its `refresh` after the lock came back); alone, 3 runs of 3 pass.
+- **The `st-errors` browser suite** once waited over 30 s for the Needs attention row of a missing sound file, in a full run at load 9; alone it passes.
 
 ## Removed with the old version
 
