@@ -44,13 +44,23 @@ Nobody waits for an answer, and nobody asks the owner.
 | D3 | How files are read | `m2_os::fs::read_at` (Unix `pread`; Windows `seek_read` later), only on the disk thread or an offline render's own thread. `hound` decodes from a reader over it: the same decoder, so the same bits. **No memory map**: a mapped file cut short by another program kills the app (SIGBUS), and a read-ahead thread needs no map. RENDER-30 is amended to say so |
 | D4 | What the sound thread reads | Per audio lane, a ring of **slots**. Each slot holds one **chunk**: 0.25 s of the lane's summed samples (`rate / 4` frames), in canonical clip order, as `AudioLane::fill` sums them now. Each slot has an atomic tag (chunk number, or "being written"). The sound thread finds the tag, copies, and checks the tag again. Samples are `AtomicU32` bits (plain loads), so a torn read is never undefined |
 | D5 | How many slots | `min(16, chunks the lane has audio in)`. A chunk with no clip in it is silence and takes no slot. A short lane is wholly resident, as today. 16 slots of stereo at 48 kHz is 1.5 MB a lane |
-| D6 | What the disk thread keeps ready | One thread per player, `m2-disk`, at background priority. Around the playhead: the chunk before and 2 s ahead, **along the transport's path** (through a loop's wrap). While a loop is on: the loop start's first 0.5 s. Stopped: the same window, so Play starts at once |
+| D6 | What the disk thread keeps ready | One thread per player, `m2-disk`, at **normal** priority (changed while building: macOS's background class throttles disk reads). Around the playhead: the chunk before and 2 s ahead, **along the transport's path** (through a loop's wrap). While a loop is on: the loop start's first 0.5 s. Stopped: the same window, so Play starts at once. Also kept (added while building): where playback is now and where recent seeks left from, and the chunk after the loop's end, which a jump's 5 ms fade reads |
 | D7 | A miss | The sound thread never waits. A chunk not ready plays silence for that block, and the lane's miss count goes up. The status pill says "The disk was too slow: Vox skipped a moment." |
 | D8 | Seeks | `Player::seek` asks the disk thread for the target first. When it isn't ready, it waits up to **30 ms** (gate 3 allows 50 ms), then sends the seek anyway. A target already ready costs nothing |
 | D9 | Arrangement switches and edits | `Player::activate` registers the new plan's lanes with the disk thread and waits until each new ring holds the playhead's next 0.5 s, in the new tempo map, for up to **500 ms**. The old plan plays meanwhile (RENDER-27 allows it) |
 | D10 | Offline renders | No disk thread. The render's own thread fills the rings before each block, then the **same** fill code runs. Same samples, same sums, same bits (RENDER-1, RENDER-2) |
 | D11 | Who owns what | The ring and the chunk maths live in `m2-runtime` (`stream.rs`). The disk thread lives with the player (`m2-play`, `disk.rs`): it already knows the playhead and the loop. A renderer handed to a player is marked live before it is sent, so nothing ever fills a ring on the sound thread |
 | D12 | Import and waveforms | Import checks a file by decoding it in pieces, not whole. Its limit goes from 15 minutes to **3 hours**. Waveform peaks (`peaks.rs`) are made in pieces too |
+
+### Changed while building slice 1
+
+| What | Why |
+|---|---|
+| D6: normal priority, and the fade's chunks kept (above) | A seek's or a wrap's 5 ms fade reads where playback left; the disk thread had already let those chunks go, and the lane missed |
+| At a swap that retimes the transport (a tempo change), the lane's fades under way move into the new map's frames | The new lane was read at the old map's frames for 5 ms: wrong audio before, a miss now |
+| A driven player (`Player::driven`, tests only) lets the disk thread catch up before each callback; `Driver::set_paced(false)` turns that off | A driven player runs far faster than real time, which no disk keeps up with |
+| No read is over 64 KiB (`stream::READ`), not "one chunk's bytes" | A chunk's piece needs 3 frames more than the chunk for the cubic read |
+| Import hands each decoded piece to the caller, which makes the waveform from it | The decode stays once (D31), and in pieces |
 
 ### Recording audio (slices 2 and 3)
 

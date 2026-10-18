@@ -153,7 +153,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 18 | **The rest of audio in the app**: stretch an imported file to the song's tempo (warp: the engine has it, but there's no way to place its markers), join audio clips, clear out audio files no clip uses, import MP3, AIFF or FLAC, and play very long files from disk. (Importing WAV files, drops, audio tracks, waveforms, trims, fades, volume and reverse work: see [What works today](#what-works-today).) | A loop at another tempo has to be stretched by hand today, and every file stays in `assets/` until you delete it. | Yes | medium |
+| 18 | **The rest of audio in the app**: stretch an imported file to the song's tempo (warp: the engine has it, but there's no way to place its markers), join audio clips, clear out audio files no clip uses, and import MP3, AIFF or FLAC. (Importing WAV files up to 3 hours long, which play from the disk, drops, audio tracks, waveforms, trims, fades, volume and reverse work: see [What works today](#what-works-today).) | A loop at another tempo has to be stretched by hand today, and every file stays in `assets/` until you delete it. | Yes | medium |
 
 ### Recording and MIDI
 
@@ -230,6 +230,11 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A tempo drag in a song with an audio clip** is heard only when you let go: the clip's audio is timed in the tempo before the drag. Its tooltip says so.
 - **The output list on Linux** shows each card once, by its name, from the device a person means (the sound server's, else the card's shared one). An output that won't open plays on the default, and Settings says "the output chosen can't be used now".
 - **An output chosen in Settings that comes back** after it was unplugged isn't taken again by itself, and choosing it again while the default plays for it does nothing: choose another output, then it.
+- **A warped audio clip** is worked out whole in memory once, then kept in the cache folder and played from there. The stretching turn makes it stream too.
+- **The cache folder is never trimmed**: warped clips' renders and waveforms stay in it until it is deleted by hand.
+- **A disk too slow for an audio clip** cuts it to silence for a moment, with a click; it doesn't fade. The status says "Disk too slow".
+- **A WAV another program changes while it plays** may play a mix of old and new for a moment, until the song is built again.
+- **`m2-os`'s two `fake_sysfs` tests** share one temp folder, so run together they sometimes fail; alone they pass.
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 
 ## Removed with the old version
