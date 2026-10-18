@@ -148,14 +148,14 @@ invisible Xvfb screen, with pictures sent to the owner.
 
 ## Your own songs (for the owner)
 
-**In short:** a song you made before std 0.3 needs one line changed. Then it plays as before, or very nearly.
+**In short:** a song you made before std 0.4 needs one line changed. Then it plays as before, or very nearly.
 
 | | |
 |---|---|
-| Which songs | Songs in `~/Music/music2` that ask for std "0.1" or "0.2". |
-| What you see | The song opens but stays silent. The yellow bar at the top says the code doesn't compile: "This app has std 0.3. To use it, change the std line in music2.toml to std = "0.3". The song may sound a little different." |
-| What to do | Open the song's `music2.toml` in a text editor. Change the std line to `std = "0.3"`. Save. The app takes the change in. |
-| The sound | Nearly the same. The Lead, 808 sub and Synth bass now hear each note's own velocity. Notes you play on a keyboard sound exactly as before. |
+| Which songs | Songs in `~/Music/music2` that ask for std "0.1", "0.2" or "0.3". |
+| What you see | The song opens but stays silent. The yellow bar at the top says the code doesn't compile: "This app has std 0.4. To use it, change the std line in music2.toml to std = "0.4". The song may sound a little different." |
+| What to do | Open the song's `music2.toml` in a text editor. Change the std line to `std = "0.4"`. Save. The app takes the change in. |
+| The sound | A "0.3" song sounds exactly the same: std 0.4 only adds buses. A "0.1" or "0.2" song: nearly the same. The Lead, 808 sub and Synth bass now hear each note's own velocity. Notes you play on a keyboard sound exactly as before. |
 
 ## Where things are
 

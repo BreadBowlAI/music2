@@ -235,7 +235,7 @@ the Xvfb screen :98.
 | 1 | A bus is a track: `bus()` in `@m2/core`, `Module.bus` in the IR | Keys, files, rename, delete, layout, mute in song, mute and solo cells and its own partition all come free |
 | 2 | Routing lives in the song's one mixer, not in bus files | A send after the fader needs the fader, which is in the mixer. One place holds every fader and send, as the Mix view shows them |
 | 3 | The song feeds a bus (`feed`); the bus reads `input` | The graph still only pulls: the bus imports the song's export |
-| 4 | Sends and `to` name the bus by its channel key in the same mixer | Keys never change in the app (rename is labels only), so routes never break |
+| 4 | Sends and `to` name the bus by its channel key in the same mixer | Rename is labels only, so it never breaks a route. Change ID (ID-17) does: it leaves the other channels' `sends` and `to` on the old key, and the build refuses it (logged in gaps.md) |
 | 5 | A new send: after the fader, −12 dB (range −60 to +6) | You hear it at once, under the dry sound; most DAWs default to after the fader |
 | 6 | After the fader means after pan and fader; before means before both | One rule, said once |
 | 7 | A channel goes to one place: the master, or one bus. A bus may go to another bus | Groups of groups work; loops are refused |

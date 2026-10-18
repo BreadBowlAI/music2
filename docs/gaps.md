@@ -124,6 +124,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A bus strip doesn't show its effect**: its name says it (Reverb); its knobs are in the Device view.
 - **Many buses make the faders short**: each bus is a row on every strip, so a short dock with five buses leaves little fader.
 - **A new bus goes last** in the timeline, not near the tracks that feed it.
+- **Change ID on a bus breaks its routes**: the other channels' `sends` and `to` keep the old key, so the edit is refused with std's message, which names keys, not tracks.
+- **An automated send shows "—" in the Mix view, with no menu**: remove it, or change its before or after, in the code.
 
 ## Timeline and clips
 
@@ -215,7 +217,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **The dock and the browser panel start over at each launch** (which view the dock shows, and its height): the browser's storage starts empty, as the page gets a new address each time.
 - **Renaming a song's folder starts Undo over**: the song closes and opens again from there (Rename Song… says so).
-- **A song asking for std "0.2"** gets `pkg.unsatisfied` in this app (std 0.3.0); its message names the line to write (`std = "0.3"`). It may sound a little different: one-note sounds now keep each note's own velocity.
+- **A song asking for std "0.2" or "0.3"** gets `pkg.unsatisfied` in this app (std 0.4.0); its message names the line to write (`std = "0.4"`). A "0.2" song may sound a little different (one-note sounds now keep each note's own velocity); a "0.3" song sounds the same, though the message says it may not.
 - **A song's std line names no patch version**, so a song that needs a later patch (`examples/sampler` asks for "0.2.1") gets a missing import in an app with an earlier one, not `pkg.unsatisfied`.
 
 ## Code editor
@@ -251,6 +253,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **Tests that use the plugin program** need `m2-plugin-host` built first (`cargo build -p m2-plugins --bin m2-plugin-host`); `ci/check.sh` builds it.
 - **`m2-gates realtime --offline`'s step 7 loop** gives a late plugin or poly no notes (timing only).
 - **std's kernel test `odd_db_values` fails in a debug build** (a NaN's sign bit); `ci/check.sh` runs those tests in release, where it passes.
+- **The Confined check's rewire to a node made inside the edit** (WRITE-8, `core/session/src/tx/expect.rs` `made_inside`) has no test in `core/session`: only the editor's bus tests cover it.
 - **The browser logs an error with no song open**: `GET /api/graph` answers 400, which is how the window knows to show the start screen. Answering "no project" without an error status would be quieter.
 
 ## The old app's parts not back yet
