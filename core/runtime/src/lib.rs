@@ -1244,8 +1244,10 @@ impl Builder<'_> {
                 (name, _) => {
                     let (_, pid) = packages::address(name).with_context(|| format!("{}: `{name}` isn't a parameter address", n.name))?;
                     params.push((pid, input.clone(), None));
-                    // A value in code is a constant (a cell, or folded); anything else drives it.
-                    driven.push(matches!(input, Input::Port { src, .. } if !matches!(nodes[src.node].op, FOp::Const(_))));
+                    // A value in code is a constant (a cell, or folded); anything else drives it. A
+                    // ghost's inputs name the plan before's nodes, not `nodes`: it only plays out.
+                    let src_op = |src: &PortRef| nodes.get(src.node).map(|x| &x.op);
+                    driven.push(!ghost && matches!(input, Input::Port { src, .. } if !matches!(src_op(src), Some(FOp::Const(_)))));
                 }
             }
         }
