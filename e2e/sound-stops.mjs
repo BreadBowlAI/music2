@@ -44,7 +44,8 @@ const wasm = trapping(fs.readFileSync(`${REPO}/std/kernels/std.wasm`), "noise_pr
 fs.writeFileSync(`${std}/kernels/std.wasm`, wasm);
 let traps = false;
 try {
-  new WebAssembly.Instance(new WebAssembly.Module(wasm), {}).exports.noise_process(128);
+  // std imports one host call, `m2.asset_read` (kernel ABI v1): a stand-in that reads nothing.
+  new WebAssembly.Instance(new WebAssembly.Module(wasm), { m2: { asset_read: () => 0 } }).exports.noise_process(128);
 } catch (e) {
   traps = String(e).includes("unreachable");
 }
