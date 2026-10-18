@@ -179,7 +179,6 @@ export const canvas: {
   loop?: () => void;
   loopSelection?: () => void;
   play?: () => void;
-  continue?: () => void;
   home?: () => void;
   /** M, Track ▸ Mute (⌃M on a Mac): mute or unmute track `module` while listening. */
   mute?: (module: string) => void;

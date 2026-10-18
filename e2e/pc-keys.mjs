@@ -69,11 +69,11 @@ check(
 );
 const tabs = await page.$$eval("[data-view-tab]", (els) => els.map((e) => e.title));
 check(same(tabs, ["Device (Alt+1)", "Notes (Alt+2)", "Mix (Alt+3)", "Code (Alt+4)"]), `the dock's tabs say Alt+1 to Alt+4: ${tabs.join(" | ")}`);
-// The song bar (8b.2): the tempo's drag and Play's continue spell Shift.
+// The song bar (8b.2): the tempo's drag spells Shift; Play says Space, with no Shift+Space.
 const song = { tempo: await title("[data-testid=tempo-field]"), play: await title("[data-testid=play]") };
 check(
-  song.tempo?.includes("Drag up or down (Shift for fine)") && song.play === "Play (Space) · continue from where it stopped (Shift+Space)",
-  `the song bar's tooltips say Shift: ${song.tempo?.split("\n")[1]} | ${song.play}`,
+  song.tempo?.includes("Drag up or down (Shift for fine)") && song.play === "Play (Space)",
+  `the song bar's tooltips say Shift and Space: ${song.tempo?.split("\n")[1]} | ${song.play}`,
 );
 const knob = await page.$eval("[data-testid=graph] [data-knob-id]", (e) => e.title).catch(() => "");
 check(knob.includes("Drag (Shift for fine)") && knob.includes("Alt-click to reset"), `a knob's tooltip says Shift for fine and Alt-click: ${knob.split("\n").at(-1)}`);
@@ -95,7 +95,6 @@ const want = {
   "Keyboard shortcuts": "Alt+K",
   "Export": "Ctrl+Shift+E",
   "Go to start": "Enter",
-  "Continue from where it stopped": "Shift+Space",
   "Loop the selected clips, or the bar": "Ctrl+L",
   "Stop all sound": "Ctrl+.",
   "Fine adjust": "Shift-drag",
@@ -103,6 +102,8 @@ const want = {
   "Move notes by the grid / by a bar": "← → / Shift+← Shift+→",
 };
 const wrong = Object.entries(want).filter(([what, keys]) => rows[what] !== keys);
+// Space alone plays and stops: no Shift+Space row (taste.md §5.1).
+for (const [what, keys] of Object.entries(rows)) if (keys.includes("Shift+Space")) wrong.push([what, keys]);
 check(wrong.length === 0, `the sheet says Ctrl, Alt, Shift, Enter and Backspace${wrong.length ? `: ${wrong.map(([w]) => `${w} = ${rows[w]}`).join("; ")}` : ""}`);
 const cut = await page.$$eval("[data-testid=shortcuts] dl > div > *", (els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
 check(cut.length === 0, `no row of it is cut short, with a PC's longer keys${cut.length ? `: ${cut.join(" | ")}` : ""}`);

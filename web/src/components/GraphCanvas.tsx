@@ -16,7 +16,6 @@ import {
   type TimelineView,
 } from "../lib/graph";
 import { setClock } from "../lib/clock";
-import { continuePlay, playStop, resetTransport, startAt } from "../lib/transport";
 import { pickedIn, useClipSelection } from "../lib/clips";
 import { tookBack } from "../lib/history";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
@@ -64,14 +63,8 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     return () => clearInterval(t);
   }, [poll]);
   const failed = useCallback((error: unknown) => toast(error instanceof Error ? error.message : String(error)), [toast]);
-  // A seek moves where play starts, so a stop comes back there (taste.md §5.1).
-  const seek = useCallback(
-    (beat: number) => {
-      startAt(beat);
-      void graphApi.seek(beat).then(poll, failed);
-    },
-    [poll, failed],
-  );
+  // A seek moves the playhead; playing, it plays on from there (taste.md §5.1).
+  const seek = useCallback((beat: number) => void graphApi.seek(beat).then(poll, failed), [poll, failed]);
   // The loop: a range dragged on the ruler (which turns it on), or the toggle in the bar (C).
   const setLoop = useCallback(
     (req: { start?: number; end?: number; on?: boolean }) =>
@@ -82,14 +75,14 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   const latest = useRef({ status, graph });
   latest.current = { status, graph };
   useEffect(() => {
-    resetTransport();
     canvas.loop = () => toggleLoop(latest.current.graph.timeline.meter, latest.current.status, setLoop);
     canvas.loopSelection = () => loopSelection(latest.current.graph.timeline, latest.current.status.beat, setLoop);
-    canvas.play = () => void playStop().then(poll, failed);
-    canvas.continue = () => void continuePlay().then(poll, failed);
+    // Space and Play: stop leaves the playhead where it stopped, and play carries on from there
+    // (GarageBand, taste.md §5.1).
+    canvas.play = () => void graphApi.transport("toggle").then(poll, failed);
     canvas.home = () => seek(0);
     return () => {
-      for (const k of ["loop", "loopSelection", "play", "continue", "home"] as const) delete canvas[k];
+      for (const k of ["loop", "loopSelection", "play", "home"] as const) delete canvas[k];
     };
   }, [setLoop, poll, failed, seek]);
   // The window is called by the song (the desktop app's own title follows the server).

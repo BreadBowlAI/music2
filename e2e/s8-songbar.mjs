@@ -1,9 +1,9 @@
 // 8b.2 The song bar in the app (design-8b §4, taste.md §3.3, §5.1, TB-5): the tempo field (drag,
 // Shift-drag, type, no Alt-click reset, undo), the time signature picker that re-bars the ruler,
 // the ruler's marks and right-click menu, the song's name edited in place, the transport (Space
-// stops back where play started, Shift+Space continues, C, Cmd+L, Cmd+.), a click on empty lane
-// space, the loop kept on reopening and turned off by a fast tempo, the bar in the Mac app's
-// layout, and a read-only window.
+// stops where it is and plays on from there, Return goes to bar 1, C, Cmd+L, Cmd+.), a click on
+// empty lane space, the loop kept on reopening and turned off by a fast tempo, the bar in the Mac
+// app's layout, and a read-only window.
 //
 //   node e2e/s8-songbar.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { spawn } from "node:child_process";
@@ -278,10 +278,9 @@ await seekRuler(4);
 await key("Space");
 check(await until(async () => (await status()).playing), "Space plays");
 check(await until(async () => (await status()).beat > 5.5, 4000), "from where the ruler put the playhead");
-const playhead = () => page.$eval("[data-testid=playhead]", (e) => Number(e.dataset.beat));
 await key("Space");
-// The playhead, sampled every frame for 300 ms from the moment of the stop: at 4 at once, never
-// running on (the stop and the seek back are what the status says until the engine takes them).
+// The playhead, sampled every frame for 300 ms from the moment of the stop: it stays where it
+// stopped, never running on and never going back to where play started (GarageBand, taste.md §5.1).
 const trail = await page.evaluate(
   () =>
     new Promise((done) => {
@@ -295,18 +294,22 @@ const trail = await page.evaluate(
     }),
 );
 const st = await status();
-check(!st.playing && at(st.beat, 4) && (await page.$eval("[data-testid=position]", (e) => e.textContent)) === "2.1.1", `Space stops back where play started: beat ${st.beat}`);
-// It played past 5.5, so a beat between 4 and 5 is the playhead running on from 4 after the stop:
-// what a poll that still read "playing" did, for up to 200 ms, before the stop was said at once.
-const ranOn = trail.filter((b) => b > 4.001 && b < 5);
-check(trail.some((b) => at(b, 4)) && at(trail.at(-1), 4) && ranOn.length === 0, `and the playhead goes back and stays: ${[...new Set(trail.map((b) => b.toFixed(2)))].join(" ")}`);
-await key("Shift+Space");
-check(await until(async () => (await status()).playing && (await status()).beat > 6), `Shift+Space continues from where it stopped (${(await status()).beat.toFixed(2)})`);
-await sleep(300);
+check(!st.playing && st.beat > 5.5, `Space stops where it is, not back where play started: beat ${st.beat}`);
+const off = trail.filter((b) => b < 5.5 || b > st.beat + 0.1);
+check(at(trail.at(-1), st.beat) && off.length === 0, `and the playhead stays there: ${[...new Set(trail.map((b) => b.toFixed(2)))].join(" ")}`);
 await key("Space");
-check(await until(async () => !(await status()).playing && at((await status()).beat, 4)), "Space then stops back at 4 again: the start point stayed");
+check(await until(async () => (await status()).playing), "Space plays again");
+const again = await status();
+check(again.beat >= st.beat - 1e-3 && again.beat < st.beat + 0.5, `carrying on from where it stopped (${st.beat.toFixed(2)}): ${again.beat.toFixed(2)}`);
+await sleep(300);
+// Return goes to the song's start and, playing, plays on from there; Space then stops where it is.
+await key("Enter");
+check(await until(async () => { const s = await status(); return s.playing && s.beat > 0.5 && s.beat < 2; }), `Return goes to bar 1 and plays on from there: ${(await status()).beat.toFixed(2)}`);
+await key("Space");
+const home = await until(async () => !(await status()).playing) && (await status()).beat;
+check(home > 0.5 && home < 3, `and Space stops there, not back at bar 1: ${home}`);
 
-// A click on empty lane space moves where play starts, while stopped (taste.md §5.1).
+// A click on empty lane space moves the playhead, while stopped (taste.md §5.1).
 const stopped = () => until(() => page.$eval("[data-testid=play]", (e) => e.getAttribute("aria-label") === "Play"));
 await stopped();
 const kick = await box('[data-lane="kick.hits"] > div:last-child');
@@ -320,7 +323,7 @@ await sleep(300);
 const playingOn = await status();
 check(playingOn.playing && playingOn.beat > 40 && playingOn.beat < 43, `while playing it doesn't jump: ${playingOn.beat.toFixed(2)}`);
 await key("Space");
-check(await until(async () => !(await status()).playing && at((await status()).beat, 40)), "Space stops back at 40");
+check(await until(async () => !(await status()).playing && (await status()).beat >= playingOn.beat), `Space stops where it is: ${(await status()).beat.toFixed(2)}`);
 
 // ⌘. stops all sound: it calls panic, and playback goes on.
 await seekRuler(0);

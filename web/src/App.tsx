@@ -60,7 +60,7 @@ function key(e: KeyboardEvent): string | null {
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey) return e.key === "ArrowLeft" ? "prev_marker" : "next_marker";
     return e.code === "KeyK" ? "shortcuts" : null;
   }
-  if (e.code === "Space") return e.shiftKey ? "continue" : "play";
+  if (e.code === "Space" && !e.shiftKey) return "play";
   // ⇧Return renames the selected track, as in Logic; Return alone goes to the start.
   if (e.key === "Enter" && e.shiftKey) return "rename";
   if (e.key === "Enter" || e.key === "Home") return "home";
@@ -158,7 +158,7 @@ export default function App() {
       const id = key(e);
       if (!id) return;
       // ⌥← and ⌥→ never go back a page in WebKitGTK.
-      if (id === "play" || id === "continue" || id.startsWith("view_") || id === "shortcuts" || id.endsWith("_marker")) e.preventDefault();
+      if (id === "play" || id.startsWith("view_") || id === "shortcuts" || id.endsWith("_marker")) e.preventDefault();
       appCommand(id);
     };
     // Off the Mac, Ctrl+Backspace in a field deletes the word before, by the code the app's menu
@@ -318,8 +318,6 @@ export function appCommand(id: string) {
     }
     case "play":
       return canvas.play?.();
-    case "continue":
-      return canvas.continue?.();
     case "home":
       return canvas.home?.();
     case "loop":

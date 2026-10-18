@@ -258,9 +258,9 @@ fn a_seek_reports_its_target_until_taken() {
     assert!(player.applied(1).is_some_and(|a| a.clock == 128 && a.frame == 0), "{:?}", player.applied(1));
 }
 
-// RENDER-9, taste.md §5.1: a play or a stop is what the status says at once, as a seek is. So Stop
-// then a seek back to where play started (the song bar's Space) never reads as playing on from
-// there until the audio thread's next block; before, a poll in that block saw it play.
+// RENDER-9, taste.md §5.1: a play or a stop is what the status says at once, as a seek is. So a
+// stop, or a stop then a seek, never reads as playing on until the audio thread's next block;
+// before, a poll in that block saw it play.
 #[test]
 fn a_play_or_stop_reports_its_state_until_taken() {
     let (player, mut d) = Player::driven(48_000);
