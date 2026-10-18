@@ -10,7 +10,7 @@
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::OutOfMemory;
 
@@ -304,24 +304,6 @@ impl Reporter {
     }
 }
 
-/// A subject's flag, kept in its plan: it reports once per plan, however often it faults (a lane
-/// whose file can't be read at each chunk). A new plan has a new one.
-#[derive(Debug, Default)]
-pub struct Once(AtomicBool);
-
-impl Once {
-    /// Report `f` to `faults` unless this one did already. True when it did now. Never allocates,
-    /// locks or waits.
-    pub fn report(&self, faults: &Faults, f: Fault) -> bool {
-        // A load first: a part that faults at every block only reads the flag.
-        if self.0.load(Ordering::Relaxed) || self.0.swap(true, Ordering::Relaxed) {
-            return false;
-        }
-        faults.report(f);
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,19 +330,6 @@ mod tests {
             assert_eq!(faults.take(), Some(stopped(2, n)));
         }
         assert_eq!(faults.lost(), 10, "none lost since");
-    }
-
-    // D3: a part that faults again and again reports once per plan: its flag is the plan's, and a
-    // new plan's flag reports again.
-    #[test]
-    fn once_reports_once_per_plan() {
-        let faults = Faults::default();
-        let first = Once::default();
-        let told: Vec<bool> = (0..5).map(|_| first.report(&faults, stopped(1, 7))).collect();
-        assert_eq!(told, [true, false, false, false, false]);
-        let next = Once::default();
-        assert!(next.report(&faults, stopped(2, 7)) && !next.report(&faults, stopped(2, 7)));
-        assert_eq!(faults.drain(), [stopped(1, 7), stopped(2, 7)]);
     }
 
     // D1: many writers at once, one reader: every fault comes out once.

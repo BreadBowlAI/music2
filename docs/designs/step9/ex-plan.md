@@ -35,7 +35,7 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. Step 9.
 
 | Crate | Files | Change |
 |---|---|---|
-| `m2-runtime` | `core/runtime/src/fault.rs` (new) | `Fault`: `Copy`, 24 bytes: a code (a small enum), the plan's id, and a subject (node, lane and clip, asset slot, render, plugin handle, input) as numbers. `Faults`: a bounded ring of 256, many writers, one reader ([D1](#decisions)). `report` never allocates, locks or waits. A full ring counts what it lost. `Once`: an atomic flag a subject keeps, so a part that faults again and again reports once per plan |
+| `m2-runtime` | `core/runtime/src/fault.rs` (new) | `Fault`: `Copy`, 24 bytes: a code (a small enum), the plan's id, and a subject (node, lane and clip, asset slot, render, plugin handle, input) as numbers. `Faults`: a bounded ring of 256, many writers, one reader ([D1](#decisions)). `report` never allocates, locks or waits. A full ring counts what it lost |
 | `m2-runtime` | `lib.rs`, `plan.rs`, `stopped.rs` (goes) | the plan holds the ring (`Arc<Faults>`), given when it is prepared. `run_part` live reports `sound.stopped`; a plugin's error live reports `plugin.failed`. `Stopped` and its `news`, `seen`, `stops` go: the node's own `exec.stopped` keeps it silent |
 | `m2-editor` | `crates/editor/src/faults.rs` (new) | `Namer`: made from a compiled revision when its plan is prepared. It names a subject in plain words, with the track's key: "The delay on Bass", "loop.wav on Drums". `sound_named` moves here from the server |
 | `m2-server` | `graph.rs`, `graph/faults.rs` (new, replaces `stopped.rs`), `actor.rs`, `lib.rs` | one live ring per app, in `Inner`, given to each plan, the live `Cache` and the `Player`. The actor turns `HostEvent::Crashed`/`Hung` into `plugin.crashed` faults ([D9](#decisions)). The 300 ms notices thread drains the ring, names each fault with the namer of its plan ([D2](#decisions)), and adds it to the session's live problems. `news()` and `state()` list them after the revision's own. A new one is toasted once and sends `graph_changed`. `crash_said` and `heard_plugins`' notice strings go; its revive logic stays |
@@ -46,7 +46,7 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. Step 9.
 | Test | Where | Red on |
 |---|---|---|
 | `a_fault_report_never_allocates_locks_or_waits`: 8 threads report 10,000 faults under the counting allocator; none allocates | `core/runtime/src/tests.rs` (its `GlobalAlloc`) | `report` stubbed to push to a `Vec` |
-| `a_full_ring_counts_what_it_lost` and `once_reports_once_per_plan` | `core/runtime/src/fault.rs` tests | stubs |
+| `a_full_ring_counts_what_it_lost` | `core/runtime/src/fault.rs` tests | stubs |
 | `a_stopped_sound_is_a_problem_naming_it_and_its_track`: a trapping kernel live; `problems` holds `sound.stopped`, `module` the track's key; one toast | `crates/server/src/graph/faults_tests.rs` (from `stopped_tests.rs`) | today's code (a toast, no problem) |
 | `a_plugin_that_fails_live_is_one_problem` (probe tag `fails-process`) | `faults_tests.rs` | today's code |
 | `a_host_crash_is_one_plugin_crashed_problem` (probe tag `crash-at-<n>`, in the host process) | `faults_tests.rs`, from the crash test it replaces | today's code (a string) |
@@ -69,6 +69,7 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. Step 9.
 | `Code` has `OutOfMemory` and `PluginHung` beside the plan's codes | their words differ; they are `sound.stopped` and `plugin.crashed` in the table |
 | The plugin tests are in `crates/server/src/graph/tests.rs` | their rig (`Ex`, `two_probes`) lives there |
 | `e2e/sound-stops.mjs` now checks the problem is listed, and listed again after ⌘. with no second toast (13 checks) | D3 |
+| No `Once` flag in `m2-runtime` (it went in the ex review, r4) | a node reports once through its own `stopped` flag, a lane through its `Tell`; nothing used it |
 
 ## Slice 2: every fault, and offline renders fail
 
@@ -76,7 +77,7 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. Step 9.
 
 | Crate | Files | Change |
 |---|---|---|
-| `m2-runtime` | `stream.rs` | `fill_chunk` reports `asset.unreadable` once per lane per plan (`Once`). `Ring::errors` and its reader `errors()` go |
+| `m2-runtime` | `stream.rs` | `fill_chunk` reports `asset.unreadable` once per lane per plan. `Ring::errors` and its reader `errors()` go |
 | `m2-runtime` | `audio.rs` | `Cache` holds the ring. `wav` and `kernel_asset` report `asset.unreadable` for a file that is there but won't decode ([D6](#decisions)) |
 | `m2-runtime` | `renders.rs` | a stretch that fails reports `stretch.failed`, with the clip's lane and number. The `eprintln!` goes |
 | `m2-runtime` | `lib.rs` | a plugin's error, or a dead instance, fails the node when not live (`!b.live`), not when not strict ([D5](#decisions)) |
@@ -178,7 +179,7 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. Step 9.
 
 | Risk | What we do |
 |---|---|
-| A storm of faults fills the ring | `Once` per part per plan keeps it small. A full ring counts what it lost and says so (D3) |
+| A storm of faults fills the ring | Each part reports once per plan, which keeps it small. A full ring counts what it lost and says so (D3) |
 | An export now fails where it used to finish | That is the point. A test per case. Known problems still export (D7) |
 | Plugin errors offline flip from silence to failure, and older export tests expected silence | Read each failing test: change it only where silence was the bug. Say which in the commit |
 | The drain every 300 ms makes tests slow or flaky | Tests poll the news with a deadline, as the record tests do |
