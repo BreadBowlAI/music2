@@ -9,11 +9,30 @@ for `polish` (the rest of the top ten), after its review and final check, and wh
 8b.10 and the settings work), after its review and final check, and when it landed on `main`; for `macfix`
 (the two rows the Mac's run at `85b069a` failed), after its review and final check; and for 8a's live half (on
 `8a`), after its review and final check; and for `studio` (audio, recording, MIDI files and stems, help), after its
-review and final check.
+review and final check; and for track `ab` (kernel ABI v1 and the sampler), after its final check.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **Track `ab` (kernel ABI v1 and the sampler) is ready on branch `ab`** (2026-10-18), not merged: Linux green at
+  `69350c1`; macOS owed. From `main` at `258275b` (`main` hasn't moved since). It adds:
+
+  | You can now | Where |
+  |---|---|
+  | Add a Sampler: it plays a WAV file on every note, higher or lower by the note | + Track ▸ Sampler, or the side browser's Sampler group |
+  | Give it a file | drop a WAV on its card in Device; Undo takes the code back, the file stays |
+  | Play one file for each range of notes, or stop with the note | in its code: `zones`, `mode: "gate"` |
+  | Hear it | Open an Example ▸ Sampler |
+
+  Under the hood: one sandbox a box (RENDER-32; on p50, −211 µs a block and −1,080 µs a callback against
+  `main`, 75 MB against 204, Linux numbers, information only), and kernel ABI v1 frozen
+  ([kernel-abi.md](docs/kernel-abi.md): v0 refused by name, one import `m2.asset_read`, at most 3,999 sound parts
+  a renderer). std 0.2.1, `@m2/core` 1.3.0. No existing render changed: 12 of 12 (2 new, the example's).
+  `ci/check.sh --gates` passed at `69350c1`: every row, nothing passed only on a retry (1,580 Rust tests, 67/67
+  browser suites, 12 of 12 renders, the 7 gate runs; 43 minutes). Its first run failed one check of
+  `sound-stops`: the suite loaded std.wasm in Node without the new import; fixed (`69350c1`). Pictures:
+  `~/m2-runs/app-shots/ab-sampler/`. Build notes `docs/designs/step9/build-notes-ab.md`; the plan `ab-plan.md`
+  beside it. Owed: a review; the Mac's check, with G7f's run of the new layout (its footprint and address space).
 - **`studio` is on `main`** (2026-10-18): Linux green at `ad5f111`; macOS owed. `main` fast-forwarded to it
   (`02ba4d3`). From `main` at `85b069a`, with `main` at `44b104a` (8a's live half and `macfix`) merged in. It added:
 
