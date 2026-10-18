@@ -1740,15 +1740,22 @@ impl Graph {
     pub fn transport(&self, action: &str) -> Result<()> {
         let action = self.record_transport(action).unwrap_or(action);
         let player = self.inner.device()?.player;
+        let st = player.status();
         let cmd = match action {
             "play" => Cmd::Play,
             "stop" => Cmd::Stop,
-            "toggle" if player.status().playing => Cmd::Stop,
+            "toggle" if st.playing => Cmd::Stop,
             "toggle" => Cmd::Play,
             "restart" => return self.seek(0.0),
             other => bail!("unknown transport action {other}"),
         };
         player.transport(cmd)?;
+        // The status says stopped at once, but the engine takes the stop at its next block line, up
+        // to a block on. A seek back to where the status was, sent with it, keeps the playhead where
+        // it was seen to stop: it never moves after that.
+        if cmd == Cmd::Stop && st.playing {
+            player.seek(st.pending.unwrap_or(st.beats))?;
+        }
         Ok(())
     }
 

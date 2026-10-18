@@ -1209,9 +1209,10 @@ fn a_tempo_too_fast_for_the_loop_turns_it_off() {
     assert!(graph.set_loop(None, Some(true)).is_err(), "too short to turn on again at 250 BPM");
 }
 
-// taste.md §5.1 (GarageBand): Space (`toggle`) stops where playback is, and the status says it
-// stopped at once, so no read after it sees it play on; the playhead stays there, and the next
-// Space plays on from there. Nothing goes back to where play started.
+// taste.md §5.1 (GarageBand), RENDER-6a: Space (`toggle`) stops where playback is, and the status
+// says it stopped there at once. The playhead never moves after that, though the engine takes the
+// stop a block later, and the next Space plays on from there. Nothing goes back to where play
+// started. Five stops: one sent between two blocks would hold even without the seek back.
 #[test]
 fn a_stop_stays_where_it_stopped_and_play_carries_on_from_there() {
     let fixture = Fixture::new();
@@ -1219,20 +1220,19 @@ fn a_stop_stays_where_it_stopped_and_play_carries_on_from_there() {
     graph.seek(2.0).unwrap();
     graph.transport("toggle").unwrap();
     eventually("it plays past beat 3", || graph.status().beat > 3.0);
-    let before = graph.status().beat;
-    graph.transport("toggle").unwrap();
-    let s = graph.status();
-    // A block of 256 frames at 120 BPM and 48 kHz is 0.011 beats.
-    assert!(!s.playing && s.beat >= before && s.beat < before + 0.25, "stopped where it was, at once: {s:?} (it was at {before})");
-    std::thread::sleep(Duration::from_millis(100));
-    let held = graph.status();
-    assert!(!held.playing && held.beat >= s.beat && held.beat < s.beat + 0.05, "and stays there: {held:?}");
-    std::thread::sleep(Duration::from_millis(50));
-    assert_eq!(graph.status().beat, held.beat, "still there");
-    graph.transport("toggle").unwrap();
-    assert!(graph.status().playing);
-    eventually("it plays on from there", || graph.status().beat > held.beat + 0.1);
-    assert!(graph.status().beat < held.beat + 1.0, "from there, not from beat 2: {:?}", graph.status());
+    for _ in 0..5 {
+        let before = graph.status().beat;
+        graph.transport("toggle").unwrap();
+        let s = graph.status();
+        assert!(!s.playing && s.beat >= before && s.beat < before + 0.25, "stopped where it was, at once: {s:?} (it was at {before})");
+        std::thread::sleep(Duration::from_millis(100));
+        let held = graph.status();
+        assert!(!held.playing && held.beat == s.beat, "and stays exactly there: {held:?}, stopped at {}", s.beat);
+        graph.transport("toggle").unwrap();
+        assert!(graph.status().playing);
+        eventually("it plays on from there", || graph.status().beat > held.beat + 0.1);
+        assert!(graph.status().beat < held.beat + 1.0, "from there, not from beat 2: {:?}", graph.status());
+    }
 }
 
 /// A bass holding one note for 16 bars.
