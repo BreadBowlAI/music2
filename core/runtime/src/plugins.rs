@@ -110,10 +110,12 @@ impl Overrides {
         }
     }
 
-    /// The audio thread: the gesture on `id` ended; what it holds or latches stays.
+    /// The audio thread: the gesture on `id` ended; what it holds or latches stays, and a slot
+    /// left with no flag (released mid-gesture) is free.
     pub(crate) fn end(&self, id: u32) {
         if let Some(s) = self.slot(id) {
-            let _ = s.0.try_update(Ordering::AcqRel, Ordering::Acquire, |w| (w != EMPTY && (w >> 8) as u32 == id).then_some(w & !(GESTURE as u64)));
+            let left = |w: u64| if w & 0xff & !(GESTURE as u64) == 0 { EMPTY } else { w & !(GESTURE as u64) };
+            let _ = s.0.try_update(Ordering::AcqRel, Ordering::Acquire, |w| (w != EMPTY && (w >> 8) as u32 == id).then(|| left(w)));
         }
     }
 
@@ -357,5 +359,21 @@ impl Drop for PluginInstance {
 impl std::fmt::Debug for PluginInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("PluginInstance").field("h", &self.h).finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // MON-6 (review ph-r2): a hold released while its gesture goes on frees its slot when the
+    // gesture ends, so the instance can be lent again (`lendable`).
+    #[test]
+    fn a_hold_released_mid_gesture_frees_its_slot_at_the_end() {
+        let o = Overrides::new();
+        assert!(o.begin(7, HELD, 0.5));
+        o.release(7, HELD);
+        o.end(7);
+        assert!(!o.any(), "{:?}", o.list());
     }
 }
