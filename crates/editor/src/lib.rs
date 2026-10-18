@@ -27,6 +27,7 @@ pub mod notes;
 pub mod plan;
 pub mod rename;
 pub mod render;
+pub mod sampler;
 pub mod sites;
 pub mod song;
 pub mod songkey;
