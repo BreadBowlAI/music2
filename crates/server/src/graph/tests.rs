@@ -3904,6 +3904,44 @@ fn the_state_carries_the_mix_and_a_first_pan_names_its_knob() {
     drop(held);
 }
 
+// RENDER-34, the bus plan's slice 2: the bus routes, through a running server. Each answers with
+// the edit and the new Mix view: a Reverb added, a send to it from the kick, set before the fader,
+// the hats sent to it instead of the master, the send taken out and the hats back to the master;
+// a loop refused in words. Each is one undo step: six undos put every byte back.
+#[test]
+fn the_bus_routes_answer_with_the_new_view() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let song = fixture.read("song.ts");
+    let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t0k".into() };
+    let running = crate::start_with(options, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
+    let post = |path: &str, body: Value| crate::routes_8b::tests::post(&running.url, path, Some("t0k"), &body);
+    let strip = |answer: &Value, key: &str| {
+        answer["mix"]["strips"].as_array().unwrap_or_else(|| panic!("{answer:#}")).iter().find(|x| x["channel"] == key).cloned().unwrap()
+    };
+    let (status, made) = post("/api/graph/mix/bus", json!({"session": session, "kind": "reverb"}));
+    assert_eq!((status, &made["module"], &strip(&made, "reverb")["bus"]), (200, &json!("reverb"), &json!(true)), "{made:#}");
+    let (_, sent) = post("/api/graph/mix/send", json!({"session": session, "channel": "kick", "bus": "reverb", "action": "add"}));
+    let send = &strip(&sent, "kick")["sends"][0];
+    assert_eq!((&send["bus"], &send["pre"], send["knob"].is_string()), (&json!("reverb"), &json!(false), true), "{sent:#}");
+    let (_, pre) = post("/api/graph/mix/send", json!({"session": session, "channel": "kick", "bus": "reverb", "action": "pre", "pre": true}));
+    assert_eq!(strip(&pre, "kick")["sends"][0]["pre"], true, "{pre:#}");
+    let (_, routed) = post("/api/graph/mix/route", json!({"session": session, "channel": "hats", "to": "reverb"}));
+    assert_eq!(strip(&routed, "hats")["output"], "reverb", "{routed:#}");
+    let (status, refused) = post("/api/graph/mix/send", json!({"session": session, "channel": "reverb", "bus": "reverb", "action": "add"}));
+    assert!(status >= 400 && refused["error"].as_str().unwrap_or("").contains("Reverb can't send to itself."), "{status} {refused:#}");
+    let (_, removed) = post("/api/graph/mix/send", json!({"session": session, "channel": "kick", "bus": "reverb", "action": "remove"}));
+    assert_eq!(strip(&removed, "kick")["sends"], json!([]), "{removed:#}");
+    let (_, back) = post("/api/graph/mix/route", json!({"session": session, "channel": "hats", "to": null}));
+    assert_eq!(strip(&back, "hats")["output"], Value::Null, "{back:#}");
+    for _ in 0..6 {
+        running.state.graph.undo(session).unwrap();
+    }
+    assert_eq!(fixture.read("song.ts"), song);
+    assert!(!fixture.0.join("tracks/reverb.ts").exists());
+}
+
 /// `n` blocks of 128 frames, both channels, interleaved.
 fn stereo(dc: &mut Dc, n: usize) -> Vec<f32> {
     let mut out = vec![];
@@ -3937,6 +3975,26 @@ fn through(dc: &mut Dc, edit: impl FnOnce(&Graph), after: usize) -> Vec<f32> {
 fn apart(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
     a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
+}
+
+// RENDER-34, RENDER-25a, the bus plan's slice 2: a new send, and a track sent to a group, each
+// play within one activation while the song plays, as any structural edit does, and the song goes
+// on sounding through it.
+#[test]
+fn a_new_send_and_output_play_within_one_activation() {
+    let mut dc = example("core/session/tests/fixtures/buses");
+    let token = dc.graph.state().unwrap()["session"].as_u64().unwrap();
+    drop(stereo(&mut dc, 160));
+    let edits: [fn(&Graph, u64) -> Result<Value>; 2] =
+        [|g, t| g.mix_send(t, "bass", "verb", "add", false), |g, t| g.mix_route(t, "bass", Some("drums".into()))];
+    for edit in edits {
+        let generation = dc.generation();
+        let heard = through(&mut dc, |g| drop(edit(g, token).unwrap()), 100);
+        assert_eq!(dc.generation(), generation + 1, "one activation");
+        assert!(heard.iter().all(|x| x.is_finite()) && heard.iter().any(|x| *x != 0.0), "it plays on");
+    }
+    let song = dc.fixture.read("song.ts");
+    assert!(song.contains("bass: { in: duck(bass.out, kick.env, { depth: db(-9) }), sends: { verb: db(-12) }, to: \"drums\" },"), "{song}");
 }
 
 // design-8b §5.3, plan B4, lead decision T4: the first pan on first-song's Kick while it plays. Kick

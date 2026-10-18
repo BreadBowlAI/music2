@@ -1559,6 +1559,53 @@ impl Graph {
         })
     }
 
+    /// Add a bus of `kind` (`reverb`, `delay` or `group`), named `label` (else the kind's name),
+    /// after track `after` (RENDER-34). The answer: the edit, the bus's `module` and `label`, and
+    /// the Mix view after it (`mix`).
+    pub fn mix_bus(&self, token: u64, kind: &str, label: Option<String>, after: Option<String>) -> Result<Value> {
+        let kind = m2_editor::bus::BusKind::named(kind).ok_or_else(|| anyhow!("There's no bus kind `{kind}`: a bus is a reverb, a delay or a group."))?;
+        let made = self.call(move |a| {
+            a.edit_and(token, |s| {
+                let made = m2_editor::bus::add_bus(s, kind, label.as_deref(), after.as_deref())?;
+                Ok((made.edited, json!({"module": made.module, "label": made.label, "mix": s.mix()})))
+            })
+        })?;
+        self.forget_made(&made);
+        Ok(made)
+    }
+
+    /// Change channel `channel`'s send to bus channel `bus` (RENDER-34): `add` it (before the fader
+    /// with `pre`), `remove` it, or set it before the fader or after it (`pre`). The answer: the
+    /// edit, and the Mix view after it (`mix`).
+    pub fn mix_send(&self, token: u64, channel: &str, bus: &str, action: &str, pre: bool) -> Result<Value> {
+        if !matches!(action, "add" | "remove" | "pre") {
+            bail!("A send is added, removed or set before the fader (`add`, `remove`, `pre`), not `{action}`.");
+        }
+        let (channel, bus, action) = (channel.to_string(), bus.to_string(), action.to_string());
+        self.call(move |a| {
+            a.edit_and(token, |s| {
+                let done = match action.as_str() {
+                    "add" => m2_editor::bus::add_send(s, &channel, &bus, pre)?,
+                    "remove" => m2_editor::bus::remove_send(s, &channel, &bus)?,
+                    _ => m2_editor::bus::set_pre(s, &channel, &bus, pre)?,
+                };
+                Ok((done, json!({"mix": s.mix()})))
+            })
+        })
+    }
+
+    /// Send channel `channel` to bus channel `to` instead of the master, or with none, back to the
+    /// master (RENDER-34). The answer: the edit, and the Mix view after it (`mix`).
+    pub fn mix_route(&self, token: u64, channel: &str, to: Option<String>) -> Result<Value> {
+        let channel = channel.to_string();
+        self.call(move |a| {
+            a.edit_and(token, |s| {
+                let done = m2_editor::bus::route(s, &channel, to.as_deref())?;
+                Ok((done, json!({"mix": s.mix()})))
+            })
+        })
+    }
+
     /// Duplicate track `module`: its code, data and channel, below it in its colour.
     pub fn duplicate_track(&self, token: u64, module: &str) -> Result<Value> {
         let module = module.to_string();

@@ -11,7 +11,7 @@ use crate::graph::Graph;
 use crate::{ServeOptions, start_with};
 
 /// `POST path` with `body`, with the token or not: the status and the JSON answer.
-fn post(url: &str, path: &str, token: Option<&str>, body: &Value) -> (u16, Value) {
+pub(crate) fn post(url: &str, path: &str, token: Option<&str>, body: &Value) -> (u16, Value) {
     let addr = url.trim_start_matches("http://");
     let mut s = std::net::TcpStream::connect(addr).unwrap();
     let body = body.to_string();

@@ -260,4 +260,4 @@ pub(crate) async fn ws_text(state: &Arc<AppState>, client: Option<&str>, text: &
 
 #[cfg(test)]
 #[path = "routes_8b_tests.rs"]
-mod tests;
+pub(crate) mod tests;
