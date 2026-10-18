@@ -10,11 +10,26 @@ for `polish` (the rest of the top ten), after its review and final check, and wh
 (the two rows the Mac's run at `85b069a` failed), after its review and final check; and for 8a's live half (on
 `8a`), after its review and final check; and for `studio` (audio, recording, MIDI files and stems, help), after its
 review and final check; and for `io` (step 9's audio: disk streaming and recording), after its review and
-final check; and for track `ab` (kernel ABI v1 and the sampler), after its review and final check; and for track `sx` (stretching as an offline kernel, Follow tempo), after its review and final check.
+final check; and for track `ab` (kernel ABI v1 and the sampler), after its review and final check; and for track `sx` (stretching as an offline kernel, Follow tempo), after its review and final check; and for track `ex` (one path for faults), at the end of its build.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **Track `ex` is built** (2026-10-18), on branch `ex`, from `main` at `83fa4e4`: one path for faults (plan:
+  `docs/designs/step9/ex-plan.md`; build notes: `build-notes-ex.md` beside it). Its review is next. It adds:
+
+  | What happens | Before | Now |
+  |---|---|---|
+  | A sound, plugin, file or stretch breaks while the song plays | said in six ways, or not at all | one message, once; listed in the status pill's popover with its track until it plays again |
+  | The same during an export, `m2 render` or `m2 bounce` | often "Exported" with a part silent | the render fails, naming the part and the code; no file |
+  | The input chosen in Settings isn't plugged in | recorded from another, silently | records from another and says which (`input.missing`) |
+  | A Mac's Don't Allow during a take | kept a silent take | the take is dropped and the message says why (`input.refused`) |
+  | An input unplugged during a take | a note on the take | one problem, naming the input (`input.lost`) |
+
+  Under the hood: the fault ring (`core/runtime/src/fault.rs`): 24-byte records, 256 slots, never allocates, locks
+  or waits. Eight codes in the contract's table (RENDER-1, RENDER-25, RENDER-30a). No render changed: 12 of 12.
+  Pictures on Xvfb :96: `~/m2-runs/app-shots/ex-9167e95/` (the popover naming a stopped sound on Hats). Owed on the
+  Mac: its `ci/check.sh`, then the by-ear steps 103 to 108 (a USB microphone unplugged, and Don't Allow).
 - **`sx` is ready to land** (2026-10-18): Linux green at `000dd72`; macOS owed. From `main` at `97b4cdf`, with
   `main` at `09a0687` (`ph`) merged in. Stretching as an offline kernel, and Follow tempo (plan:
   `docs/designs/step9/sx-plan.md`; build notes: `build-notes-sx.md` beside it). It adds:
@@ -605,7 +620,7 @@ bar, its Ctrl-click, and the sound.
 | 78 | Put on headphones. Press ⌘, for Settings. Tick **Hear yourself while recording**. Close Settings, press R and speak. | You hear yourself in the headphones while it records, the count included. It sounds a little late at most, never like an echo. Untick it after. |
 | 79 | In Settings, under **Sound input**, pick another input (a USB microphone, if you have one). Record again. | It records from that input. |
 | 80 | In System Settings ▸ Privacy & Security ▸ Microphone, turn music2 off. Back in music2, press R on the audio track. | A message: "music2 can't use the microphone. Allow it in System Settings ▸ Privacy & Security ▸ Microphone." Nothing records. Turn it back on. |
-| 81 | With a USB microphone picked in Settings, press Space, then R, and speak. While it records, unplug the microphone. | The song plays on. A message: "The sound input was unplugged: the take was kept up to here." A clip of your voice up to there. Plug it back in and press R: it records again. |
+| 81 | With a USB microphone picked in Settings, press Space, then R, and speak. While it records, unplug the microphone. | The song plays on. A message (since track `ex`): "(the microphone) was unplugged, so the take ended there. It was kept up to then. The song plays on." A clip of your voice up to there. Plug it back in and press R: it records again. |
 | 82 | Tell the lead what you saw, heard and felt at 73 to 81. | |
 | 83 | Click **Open an Example**, then **Sampler**. Press Space. | Keys play a plucked sound, Drums a kick and a snare, in time. No clicks. |
 | 84 | Press Space to stop. + Track ▸ Sampler. In the Finder, drag a short WAV (one sound, like a drum hit) onto the Sampler's card in Device. | While you drag, the card says "Play it in Sampler". Let go: the card names the file. |
@@ -637,6 +652,17 @@ bar, its Ctrl-click, and the sound.
 | 100 | While it plays, drag the tempo up and down a little, then let go. | The followed clip goes on in time. At most a short silence, no click, no wrong sound. |
 | 101 | Press ⌘Z twice. | The tempo is 120 again, and Follow tempo is off. |
 | 102 | Tell the lead what you heard at 98 to 101. | |
+
+**A check by ear of the sound input's problems** (`ex`, about 10 minutes, with a USB microphone):
+
+| # | Do this | You should hear or see |
+|---|---|---|
+| 103 | Click **Open an Example**, then **First song**. **+ Track ▸ Audio track**. Press ⌘, for Settings. Under **Sound input**, pick the USB microphone. Close Settings. Unplug the USB microphone. Press R. | A message: "(the USB microphone) isn't plugged in, so this take records from (the Mac's microphone)…". It records. The pill says "1 problem"; click it: the same words. Press R to end the take. |
+| 104 | Plug the USB microphone back in. Press R, speak, press R. | It records from the USB microphone. No message. The problem is gone. |
+| 105 | Press R and speak. While it records, unplug the USB microphone. | The song plays on. One message: "(the USB microphone) was unplugged, so the take ended there. It was kept up to then. The song plays on." A clip of your voice up to there. |
+| 106 | Quit music2. In the Terminal type `tccutil reset Microphone com.suite2.music2` (started from the Terminal, macOS asks for the Terminal: then `tccutil reset Microphone com.apple.Terminal`). Open music2 again, open the song, click the audio track, press R. When macOS asks to use the microphone, click **Don't Allow**. | The take stops by itself within a moment. A message: "music2 can't use the microphone. Allow it in System Settings ▸ Privacy & Security ▸ Microphone. The take was only silence, so it wasn't kept." No clip. The song plays on. |
+| 107 | Press R again. | The same "music2 can't use the microphone…" words. Nothing records. Then turn music2 (or the Terminal) back on in System Settings ▸ Privacy & Security ▸ Microphone. |
+| 108 | Tell the lead what you saw and heard at 103 to 107. | |
 
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in

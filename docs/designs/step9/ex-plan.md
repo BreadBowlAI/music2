@@ -143,6 +143,21 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. Step 9.
 
 **Done when:** all green. `ci/check.sh --gates` passes, run with `~/m2-runs/tw`. The Mac lint passes. A picture of the popover from the app on `:96`. By-ear steps written, with one for the owner's Mac: click Don't Allow during the first take. Six gaps lines gone.
 
+**As built (slice 3).** Where the build went another way than the tables above:
+
+| What | Why |
+|---|---|
+| An input's fault is about `Subject::Input(n)`, its opening, with plan 0. Openings are counted for the whole app (`Listen::open`) | an input is of no plan; a new player starts no count again, so an old number never names a new input |
+| The session names it with an `InputNamer` per opening (the one used, and the one chosen when missing), kept for the take opened last and the one before, as plans' namers are. A fault of an opening not named yet waits | the player reports as it opens, before its take names it |
+| The player reports `input.missing`. The take thread reports `input.lost` and `input.refused` | "mid-take" is the take's to know; an input unplugged between takes is not a problem, the next R opens another |
+| An input's problems stay listed through a new plan, and go at the next take | an edit doesn't play the input again; the next take does (D3) |
+| While the input chosen is missing, each take opens the input again | it finds the one chosen once it is plugged in, and the next take is told again |
+| `InputChoice` carries the name Settings listed | a device that isn't there can only be named by what Settings kept |
+| The take's own note for an unplug ("The sound input was unplugged…") went; the problem says it, naming the input | two messages for one unplug otherwise |
+| A take refused is dropped as Cancel drops it (its part file goes), and the input closes | the next R asks the OS again, and is refused in words |
+| The tests name the silent inputs with `Player::name_inputs`, not `M2_AUDIO_INPUTS` | the environment is the whole test process's |
+| `ex-faults` was shown red with the session's list stubbed, not on the code before slice 1 | the same red (no problem listed, a toast only), without a second build of the old tree |
+
 ## Decisions
 
 | # | Question | Pick |
