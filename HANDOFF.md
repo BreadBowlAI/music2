@@ -21,7 +21,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 | # | Run | What it decides | Time |
 |---|---|---|---|
-| 1 | `ci/check.sh` on `main` | **Done at `e7518f4`** (2026-10-18), 11 of 13 rows. Two tests failed, fixed on `mf2`: a take's steps looked up by the folder's real path (`7482009`), and the plugin window test asks the host process that owns the window (`e505d0b`, the SIGBUS). G12 failed only its set-up (output at 44.1 kHz). G7f passed one sandbox a box: a block −1,018 µs over S, a callback −2,748 µs, 76 MB against 554, build 28 ms against 205 | 71 min |
+| 1 | `ci/check.sh` on `main` | **Done at `e7518f4`** (2026-10-18), 11 of 13 rows. Two tests failed, fixed on `mf2`: a take's steps looked up by the folder's real path (`7482009`), and the plugin window test asks the host process that owns the window (`e505d0b`, the SIGBUS). G12 failed only its set-up (output at 44.1 kHz). `pl-arrange-fix`'s retry (on Linux too) was a real race, fixed on `mf2`: a marker's Delete or Rename now finds it by its bar. G7f passed one sandbox a box: a block −1,018 µs over S, a callback −2,748 µs, 76 MB against 554, build 28 ms against 205 | 71 min |
 | 2 | (dropped) G7f store on the old gain | Not needed any more. It asked whether the Mac's +135 µs a block since step 7 was the 32 MiB store layout (O1). Track `ab` replaced that layout with one sandbox per box, so run 1's G7f rows now judge the new layout. The old std (ABI v0) can't load on `main` anyway. | — |
 | 3 | 8a's Mac sweep, `ci/sweep.sh` | **Done at `e7518f4`.** It confirmed `live_count` 4 and `BETWEEN` = park (spin was far worse), so no code changed. Gate 8: 4 threads, 10 minutes, p99 1,308 µs (45%), 0 dropouts; provisional, at 44.1 kHz. Exports on 8 fast cores, 6.4× one thread | about 40 min |
 | 4 | By ear, steps 7 to 116 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116) | about 2 hours, in parts |
@@ -105,7 +105,6 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
-| `pl-arrange-fix` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
 
 A test or suite that passed only on its retry is listed by `ci/check.sh`. The lead decides whether it is one of

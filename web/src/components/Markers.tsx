@@ -60,7 +60,9 @@ export function RulerMarkers({
     useMarkerEdit.setState({ editing: null });
     const n = name.trim();
     if (from) {
-      if (n && n !== from.name) write(list.map((m) => (m === from ? { ...m, name: n } : m)), `renaming ${from.name}`);
+      // By its bar: the list may have come back new since the field opened.
+      const own = markerAt(list, from.beat);
+      if (own && n && n !== own.name) write(list.map((m) => (m === own ? { ...m, name: n } : m)), `renaming ${own.name}`);
       return;
     }
     const made = { beat: editing.beat, name: n || nextName(list) };
@@ -139,7 +141,8 @@ export function RulerMarkers({
           onClose={() => setMenu(null)}
           items={[
             { id: "rename", label: "Rename", off: locked ? `${locked}.` : null, run: () => useMarkerEdit.setState({ editing: { beat: menu.marker.beat, from: menu.marker } }) },
-            { id: "delete", label: "Delete", off: locked ? `${locked}.` : null, run: () => write(list.filter((m) => m !== menu.marker), `deleting ${menu.marker.name}`) },
+            // By its bar: the list may have come back new since the menu opened.
+            { id: "delete", label: "Delete", off: locked ? `${locked}.` : null, run: () => write(list.filter((m) => m !== markerAt(list, menu.marker.beat)), `deleting ${menu.marker.name}`) },
             "line",
             { id: "loop", label: "Loop to next marker", run: () => loopFrom(menu.marker) },
           ]}

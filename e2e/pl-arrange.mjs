@@ -206,6 +206,35 @@ check(await until(async () => (await toasts()).some((t) => t.includes("layout.js
 write("layout.json", kept);
 check(await until(async () => !!(await flag("Chorus")), 5000), "put back, its markers show again");
 
+// A marker's menu or name field still acts on its marker after the song's markers come back as a
+// new list: once the window's own list gave way to the song's while the menu was open, and Delete
+// took nothing out (the Mac's and Linux's pl-arrange-fix retries).
+const withMarker = (m) => {
+  const l = JSON.parse(kept);
+  l.markers = [...(l.markers ?? []), m];
+  return JSON.stringify(l, null, 2);
+};
+f = await flag("Chorus");
+await page.mouse.click(f.x + 4, f.y + f.height / 2, { button: "right" });
+await page.waitForSelector("[data-testid=clip-menu]");
+write("layout.json", withMarker({ beat: 60, name: "Outro" }));
+await until(async () => !!(await flag("Outro")), 5000);
+await page.click('[data-testid=clip-menu] [data-menu-item="delete"]');
+check(await until(() => same(markers(), [{ beat: 40, name: "Big Verse" }, { beat: 60, name: "Outro" }])), `Delete from a menu opened before the list came back new takes out its marker: ${JSON.stringify(markers())}`);
+write("layout.json", kept);
+await until(async () => !!(await flag("Chorus")) && !(await flag("Outro")), 5000);
+f = await flag("Big Verse");
+await page.mouse.click(f.x + 6, f.y + f.height / 2, { clickCount: 2 });
+await page.waitForSelector("[data-testid=marker-field]");
+write("layout.json", withMarker({ beat: 60, name: "Outro" }));
+await until(async () => !!(await flag("Outro")), 5000);
+await page.$eval("[data-testid=marker-name]", (e) => (e.focus(), e.select()));
+await page.keyboard.type("Last Verse");
+await page.keyboard.press("Enter");
+check(await until(() => markers()[1]?.name === "Last Verse"), `and a rename begun before it renames its marker: ${JSON.stringify(markers())}`);
+write("layout.json", kept);
+check(await until(async () => !!(await flag("Chorus")) && !(await flag("Outro")), 5000), "put back again");
+
 // ---------------------------------------------------------------- B4: repeat a clip
 const bassStarts = () => JSON.parse(read("data/bass/notes.json")).clips.map((c) => c.start);
 const repeatFrom = async () => {
