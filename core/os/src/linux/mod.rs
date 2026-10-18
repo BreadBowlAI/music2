@@ -115,6 +115,11 @@ pub(crate) fn machine_id() -> Option<String> {
         .find(|id| !id.is_empty())
 }
 
+/// Linux has no per-program microphone switch: an input that opens can be read.
+pub(crate) fn microphone_refused() -> bool {
+    false
+}
+
 /// Linux has no class like macOS's QoS. A higher priority needs rights (`RLIMIT_NICE`,
 /// `RLIMIT_RTPRIO` or rtkit) that this server doesn't grant and 8a's realtime threads will ask for.
 pub(crate) fn interactive() -> io::Result<()> {

@@ -228,8 +228,14 @@ fn rings(rate: u32) -> (Arc<Ring>, Arc<Ring>) {
 impl Player {
     /// Open the input `choice` names, or keep the one open when it is that one at this rate:
     /// what a take reads. Under `M2_AUDIO=none` (or driven), the silent input, named after the
-    /// choice when `M2_AUDIO_INPUTS` lists it. Says [`NO_INPUT`] when there is none.
+    /// choice when `M2_AUDIO_INPUTS` lists it. Says [`NO_INPUT`] when there is none, and
+    /// [`NO_MICROPHONE`] when macOS doesn't let music2 use it. Plain words only: what the device
+    /// said is logged.
     pub fn open_input(&self, choice: &InputChoice) -> Result<Listen> {
+        // A Mac whose Privacy & Security says no gives silence, not an error: said in words (D23).
+        if self.input_kind == Kind::Device && m2_os::host::microphone_refused() {
+            return Err(anyhow!(NO_MICROPHONE));
+        }
         let rate = self.rate();
         let mut open = self.inputs.open.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(o) = open.as_ref().filter(|o| o.choice == *choice && o.listen.rate == rate) {
@@ -326,7 +332,7 @@ impl Player {
             .or_else(|| self.output_id.as_deref().and_then(by_id).filter(|d| d.default_input_config().is_ok()))
             .or_else(|| host.default_input_device())
             .ok_or_else(|| anyhow!(NO_INPUT))?;
-        let config = device.default_input_config().map_err(|e| anyhow!("{NO_INPUT} ({e})"))?;
+        let config = device.default_input_config().map_err(|e| no_input(&e))?;
         let name = outputs::name_of(&device).unwrap_or_else(|| "input".into());
         let channels = config.channels() as usize;
         let mut feed = Feed::new(engine, take, self.shared.clone(), config.sample_rate(), rate);
@@ -359,9 +365,15 @@ impl Player {
             }
             drop(stream);
         })?;
-        ready.recv().map_err(|_| anyhow!(NO_INPUT))?.map_err(|e| anyhow!("{NO_INPUT} ({e:#})"))?;
+        ready.recv().map_err(|_| anyhow!(NO_INPUT))?.map_err(|e| no_input(&e))?;
         Ok((name, channels.min(2) as u16, alive))
     }
+}
+
+/// [`NO_INPUT`], the device's own words logged.
+fn no_input(e: &dyn std::fmt::Display) -> anyhow::Error {
+    eprintln!("music2: the sound input didn't open: {e:#}");
+    anyhow!(NO_INPUT)
 }
 
 /// An input's callback driven by a test, as a device would call it: [`InputDriver::fill`].

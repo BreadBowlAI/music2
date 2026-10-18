@@ -1,6 +1,7 @@
 //! macOS: thread identity, the disk, this machine and this process, and the folders. The main loop
 //! and file-system events are in `main_loop.rs` and `watch.rs`.
 
+mod av;
 mod cf;
 pub(crate) mod main_loop;
 pub(crate) mod rt;
@@ -131,6 +132,8 @@ pub(crate) fn stored_name(p: &Path) -> Option<OsString> {
     let stored = buf.0.get(start..start + len.saturating_sub(1))?;
     Some(OsString::from_vec(stored.to_vec()))
 }
+
+pub(crate) use av::microphone_refused;
 
 /// The hardware UUID (`gethostuuid`).
 pub(crate) fn machine_id() -> Option<String> {
