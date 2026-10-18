@@ -10,7 +10,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
   71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
 - **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
-- **Track `bus` is ready to land** (branch `bus`, `main` at `163f7ee` merged in): buses, sends and groups, in song
+- **The transport works as in GarageBand** (branch `gb`, `9a40eb6` and `5707f46`): Space stops where the song is, and plays on from there; Return goes to bar 1. ⇧Space and Continue are gone. `ci/check.sh --gates` passed at `5707f46`: 1,718 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 37 minutes, nothing on a retry. Its first run caught the playhead moving a block after a stop; now a stop holds exactly there. By ear: mac-run step 28.
+- **Track `bus` is ready to land** (branch `bus`, `main` at `34dcfc4` merged in): buses, sends and groups, in song
   code (RENDER-34, `@m2/core` 1.5.0, std 0.4.0) and in the Mix view (Add bus, a send knob per bus, an output
   picker). Gap #27 is closed. No sound changed. A song asking for std "0.3" needs `std = "0.4"` (below). Its
   `ci/check.sh --gates` passed at `792d281`: 1,770 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate

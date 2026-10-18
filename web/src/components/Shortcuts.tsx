@@ -11,8 +11,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
   {
     name: "Transport",
     keys: [
-      ["Play / stop, back to where play started", "Space"],
-      ["Continue from where it stopped", shifted("Space")],
+      ["Play / stop", "Space"],
       ["Go to start", keyName("Enter")],
       ["Loop on / off", "C"],
       ["Loop the selected clips, or the bar", chord("L")],

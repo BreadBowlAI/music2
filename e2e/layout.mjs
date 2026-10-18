@@ -169,10 +169,11 @@ for (let i = 0; i < 8; i++) {
   samples.push(`${m.beat.toFixed(1)}: x ${m.x.toFixed(0)}, ruler to ${m.rulerRight.toFixed(0)}`);
 }
 check(last > drawnBeats + 2 && inside, `past the drawn width (${drawnBeats.toFixed(1)} beats) the playhead stays over the ruler and rows, headers in place (${samples.join("; ")})`);
-// Stop goes back to where play started (taste.md §5.1).
+// Stop leaves the playhead where it stopped (taste.md §5.1).
 await page.click('[data-testid=play]');
 check(await until(async () => !(await api("graph/status")).playing), "stopped again");
-check(await until(async () => Math.abs((await playheadBeat()) - from) < 0.01), `and back where play started (beat ${from}; the playhead at ${await playheadBeat()})`);
+const end = (await api("graph/status")).beat;
+check(end > drawnBeats + 2 && (await until(async () => Math.abs((await playheadBeat()) - end) < 0.01)), `and the playhead stays where it stopped (beat ${end.toFixed(2)}; the playhead at ${await playheadBeat()})`);
 
 // Notes that never play (before their clip, or of no length) are neither drawn nor counted, and don't stretch the clip's pitch range.
 const notesFile = `${proj}/data/bass/notes.json`;

@@ -1185,9 +1185,8 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 | Action | music2 | Today | Logic Pro | Ableton Live |
 |---|---|---|---|---|
 | **Transport** | | | | |
-| Play / stop (stop returns to where play started) | Space | Space (toggle) | Space | Space |
-| Continue from where it stopped | ⇧Space | — | — | ⇧Space |
-| Go to start | Return, Home | Enter, Home | Return | — |
+| Play / stop (stop leaves the playhead where it stopped) | Space | Space (toggle) | Space | Space |
+| Go to start (playing, it plays on from there) | Return, Home | Enter, Home | Return | — |
 | Loop on / off | C | button | C (Cycle) | — |
 | Loop the selection | ⌘L | ruler drag | ⌘U (locators from the selection) | ⌘L |
 | Metronome | K | — | K | — |
@@ -1249,9 +1248,10 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
   editor convention, which fits a code-first app.
 - **M and S mute and solo the selected track.** This is fast and one-handed. ⌃M and ⌃S also work for
   Logic hands, on a Mac only: elsewhere Ctrl stands for ⌘, and Ctrl+S saves. Live's M (computer keyboard) is covered by ⌘K.
-- **Stop returns to where play started (Live).** ⇧Space continues from where it stopped. A click in
-  the ruler moves the start point; so does a click on empty lane space, while stopped only (8b.2): a
-  click to deselect while playing never makes the song jump, and no start point moves unseen.
+- **Stop leaves the playhead where it stopped (GarageBand).** The next play carries on from there:
+  Space is one key with one behaviour, and there is no ⇧Space. Return and ⏮ go to bar 1; playing, it
+  plays on from there. A click in the ruler moves the playhead; so does a click on empty lane space,
+  while stopped only (8b.2): a click to deselect while playing never makes the song jump.
 - **No ⇧Tab:** it moves keyboard focus backwards, and focus traversal must keep working.
 
 ### 5.2 Gestures
@@ -1298,7 +1298,7 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 - Every icon button, toggle, tab, switch, slider, knob and fader has a tooltip in plain words, with
   its key when it has one; a text button that says its action needs none. `e2e/tiplib.mjs`' `tips`
   checks it, and every new suite runs it on what it adds (`studio`).
-- The Transport menu lists Play, Continue, Go to Start, Loop, Loop Selection, Metronome, Record and Follow.
+- The Transport menu lists Play, Go to Start, Loop, Loop Selection, Metronome, Record and Follow.
 - The View menu lists Zoom In, Zoom Out, Zoom to Selection, Track Height, Show Automation, the four
   dock views, Show Dock, Show Browser, Command Palette and, on a Mac, Full Screen.
 - The Track menu (new) lists New Track, Delete, Rename, Mute (⌃M on a Mac), Solo (⌃S on a Mac) and Mute

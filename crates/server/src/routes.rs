@@ -844,21 +844,13 @@ async fn graph_disconnect(State(s): S, Json(r): Json<DisconnectReq>) -> ApiResul
 #[derive(Deserialize)]
 struct GraphTransportReq {
     action: String,
-    /// With `stop`: the beat to go back to, where play started (taste.md §5.1). Sent with the stop,
-    /// so nothing in between sees it stopped where it was.
-    #[serde(default)]
-    to: Option<f64>,
 }
 
-/// The answer says where a stop with `to` stopped (`at`), for ⇧Space to continue from.
+/// A stop leaves the playhead where it stopped, and a play carries on from there (taste.md §5.1).
 async fn graph_transport(State(s): S, Json(r): Json<GraphTransportReq>) -> ApiResult {
     let state = s.clone();
-    let at = blocking(move || match (r.action.as_str(), r.to) {
-        ("stop", Some(to)) => state.graph.stop_to(to).map(Some),
-        _ => state.graph.transport(&r.action).map(|()| None),
-    })
-    .await?;
-    Ok(Json(json!({"at": at})))
+    blocking(move || state.graph.transport(&r.action)).await?;
+    Ok(Json(json!({})))
 }
 
 #[derive(Deserialize)]

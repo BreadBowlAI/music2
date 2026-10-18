@@ -75,7 +75,7 @@
 | 25 | Drag Kick's pan knob a little (it reads "C" in grey). | Nothing changes until it moves; then the kick moves left or right, with no click. Two ⌘Z put the code back. |
 | 26 | Still playing, drag the tempo in the top bar up by about 10. | The tempo changes when you let go, with no gap. |
 | 27 | Press ⌘. (Command and full stop). | All sound stops at once; play goes on, silent until the next notes. |
-| 28 | Press Space to stop, then Space again. | It plays the song again from where you started. Chorus and drum details may not match the export exactly then; the export is always right. |
+| 28 | Press Space to stop, then Space again. | It plays on from where it stopped. Chorus and drum details may not match the export exactly then; the export is always right. |
 | 29 | Right-click the ruler at bar 5, **Add tempo change at 5.1**, type 140, Return. | A mark "♩140" on the ruler; the song speeds up from bar 5. Click the mark, then **Remove this tempo change**. |
 | 30 | Open the example **With plugins** (it plays Surge XT), press Space, then click **Export**. | While it exports, the grey pill in the top bar says "Paused for export"; then a toast says where the file is, with **Show in Finder**. |
 | 31 | Tell the lead what you saw and heard at 22 to 30. | |

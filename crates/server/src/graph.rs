@@ -1791,36 +1791,29 @@ impl Graph {
         self.call(move |a| a.edit(token, edit))
     }
 
-    /// Play, stop, toggle between them, or go back to the start. Stop ends the notes, and the
-    /// engine plays on so tails decay (RENDER-6a). Never waits for an edit (RENDER-29).
+    /// Play, stop, toggle between them, or go back to the start. Stop ends the notes and leaves
+    /// the playhead where it stopped; play carries on from there (taste.md §5.1). The engine plays
+    /// on so tails decay (RENDER-6a). Never waits for an edit (RENDER-29).
     pub fn transport(&self, action: &str) -> Result<()> {
         let action = self.record_transport(action).unwrap_or(action);
         let player = self.inner.device()?.player;
+        let st = player.status();
         let cmd = match action {
             "play" => Cmd::Play,
             "stop" => Cmd::Stop,
-            "toggle" if player.status().playing => Cmd::Stop,
+            "toggle" if st.playing => Cmd::Stop,
             "toggle" => Cmd::Play,
             "restart" => return self.seek(0.0),
             other => bail!("unknown transport action {other}"),
         };
         player.transport(cmd)?;
-        Ok(())
-    }
-
-    /// Stop, and go back to `to`, where play started (taste.md §5.1): the stop, then a seek, sent
-    /// together, so the status says it stopped there at once ([`Player::status`] reports both as
-    /// done until the audio thread takes them). Answers where it stopped, for ⇧Space to continue
-    /// from: where playback was as the stop was sent, a block before it took it at most. Never
-    /// waits for an edit (RENDER-29).
-    pub fn stop_to(&self, to: f64) -> Result<f64> {
-        if !to.is_finite() {
-            bail!("can't go back to beat {to}");
+        // The status says stopped at once, but the engine takes the stop at its next block line, up
+        // to a block on. A seek back to where the status was, sent with it, keeps the playhead where
+        // it was seen to stop: it never moves after that.
+        if cmd == Cmd::Stop && st.playing {
+            player.seek(st.pending.unwrap_or(st.beats))?;
         }
-        let at = self.status().beat;
-        self.transport("stop")?;
-        self.seek(to)?;
-        Ok(at)
+        Ok(())
     }
 
     /// One tick of the watcher (WRITE-19): what file system events named, or a stat walk of the

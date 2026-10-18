@@ -767,8 +767,8 @@ export const graphApi = {
   /** Try the project's lock again (the read-only banner's Retry). Answers with the state. */
   retryLock: (session: number) => call<GraphState>("/lock/retry", { session }),
   redo: (session: number) => call<Edit>("/redo", { session }),
-  /** Play or stop. A stop with `to` goes back there (where play started) and answers where it stopped (`at`). */
-  transport: (action: "play" | "stop" | "toggle" | "restart", to?: number) => call<{ at: number | null }>("/transport", { action, to }),
+  /** Play, stop, or the one of them it isn't doing (Space). A stop leaves the playhead where it stopped. */
+  transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
   /**
    * The song bar's tempo (design-8b §4): the tempo in effect at beat `at` set to `bpm`; with `add`, a
    * change at `at`; with `remove`, the change at `at` taken out, and with `meter` too the time

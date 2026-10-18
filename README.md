@@ -111,7 +111,7 @@ From left to right: the browser's toggle, back to the start, play/stop, record, 
 
 Both fields change the tempo or time signature in effect where the playhead is. Each change is one Undo step, written in `data/arrangement.json` (the song's name in `music2.toml`). There is no Alt-click reset on the tempo: one stray click shouldn't change the song.
 
-Play and stop work as in Live: Space plays from the playhead, and Space again stops and goes back to where play started. ⇧Space plays on from where it stopped. Transport → Stop All Sound (⌘.) stops every note at once.
+Play and stop work as in GarageBand: Space plays from the playhead, and Space again stops and leaves the playhead where it stopped, so the next Space plays on from there. Return (or the ⏮ button) goes back to bar 1; while playing, it plays on from there. Transport → Stop All Sound (⌘.) stops every note at once.
 
 ### Playing live
 
@@ -262,9 +262,8 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 
 | Mac | Linux | What it does |
 |---|---|---|
-| Space | Space | Play, or stop and go back to where play started |
-| ⇧Space | Shift+Space | Play on from where it stopped |
-| Return or Home | Enter or Home | Back to the start |
+| Space | Space | Play, or stop where it is (the next play carries on from there) |
+| Return or Home | Enter or Home | Back to the start (playing, it plays on from there) |
 | C | C | Loop on or off |
 | K | K | Metronome on or off |
 | R | R | Record (again: stop recording) |
@@ -726,7 +725,7 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 | `POST /api/tx/commit` `{session?, tx}` | Write a Tx: `{committed: {revision, delta, hash, …}}`, or `{conflict}`, `{rejected}` or `{io}`. With `"expect": {"seen": hash}` it is written only while it makes the change its check showed |
 | `POST /api/graph/lock/retry` `{session}` | Try again to take a song that opened read-only; answers like `GET /api/graph` |
 | `POST /api/graph/undo`, `/api/graph/redo` `{session}` | Undo or redo |
-| `POST /api/graph/transport` `{action, to?}` | `play`, `stop`, `toggle` or `restart`. `stop` with `to` goes back there (where play started), and answers where it stopped (`at`) |
+| `POST /api/graph/transport` `{action}` | `play`, `stop`, `toggle` or `restart`. A stop leaves the playhead where it stopped |
 | `POST /api/graph/panic` | Stop all sound: every note off, at once. It changes nothing in the song |
 | `POST /api/graph/tempo` `{session, at, bpm?, add?, remove?, meter?}` | Set the tempo in effect at beat `at`; with `add`, a tempo change there; with `remove`, take out the change there, and with `meter` too the time signature change there, in one step. `loop_off` says when it turned the loop off |
 | `POST /api/graph/meter` `{session, at, beats?, unit?, add?, remove?}` | The same for the time signature; a new change lands on the bar line at or before `at`, and later changes keep their bar |

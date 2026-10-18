@@ -5,7 +5,7 @@ import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphSt
 import { exportSong, useExport } from "../lib/exporting";
 import { next } from "../lib/history";
 import { useMetronome, toggleMetronome } from "../lib/metronome";
-import { chord, keyName, shifted } from "../lib/native";
+import { chord, keyName } from "../lib/native";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { graphUndo } from "./GraphCanvas";
@@ -134,7 +134,7 @@ export default function TopBar({
         data-testid="play"
         onMouseDown={keepFocus}
         onClick={() => canvas.play?.()}
-        title={status.playing ? "Stop, back to where play started (Space)" : `Play (Space) · continue from where it stopped (${shifted("Space")})`}
+        title={status.playing ? "Stop (Space)" : "Play (Space)"}
         aria-label={status.playing ? "Stop" : "Play"}
         className={clsx(
           "ml-1 size-ctl rounded-sm grid place-items-center cursor-pointer transition-colors duration-80 ease-linear",

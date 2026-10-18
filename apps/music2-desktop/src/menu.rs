@@ -110,9 +110,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("taller", "Taller Tracks", Some("CmdOrCtrl+Down")),
     ("shorter", "Shorter Tracks", Some("CmdOrCtrl+Up")),
     // No Space accelerator: the menu would steal it from text fields. The UI handles Space, Return and C.
+    // Stop leaves the playhead where it stopped; play carries on from there (GarageBand).
     ("play", "Play / Stop", None),
-    // ⇧Space, the page's: from where it stopped, not where play started.
-    ("continue", "Continue", None),
     ("home", "Go to Start", None),
     ("loop", "Loop", None),
     // The selected clip's span, else the bar at the playhead.
@@ -263,7 +262,6 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     ];
     let transport = vec![
         Item("play"),
-        Item("continue"),
         Item("home"),
         Item("record"),
         Line,

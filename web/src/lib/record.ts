@@ -1,7 +1,7 @@
 // Record (lane B, gaps #24): what you play on a MIDI keyboard or the keyboard piano becomes a notes
 // clip; on an audio track, what the sound input hears becomes an audio clip (the io plan's slice 3:
 // the input and Hear yourself are Settings', which the server reads). R or the top bar's Record button: stopped, one bar of clicks first (unless the menu says
-// not), then the song plays and the take starts where play started; playing, it starts now. R
+// not), then the song plays and the take starts at the playhead; playing, it starts now. R
 // again, or Space, ends it: the server writes it as one clip over whole bars, one Undo step
 // ("Undo recording on Bass"), and the window selects it.
 //
@@ -21,8 +21,6 @@ import { holdTarget, currentRecordTarget } from "./playTarget";
 import { request } from "./projects";
 import { settingsApi } from "./settings";
 import { useStore } from "./store";
-import { playingNow } from "./clock";
-import { startAt } from "./transport";
 
 /** A note of the take, in song beats; `held`: its key is still down (it grows to the playhead). */
 export interface TakeNote {
@@ -142,7 +140,6 @@ export async function startRecording() {
   const t = currentRecordTarget();
   if (!t) return toast("Select a notes track or an audio track to record on it.");
   useRecord.setState({ asking: true });
-  const stopped = !playingNow();
   try {
     const o = await loadRecordOptions();
     const take = await request<Take>("/api/graph/record/start", {
@@ -152,8 +149,6 @@ export async function startRecording() {
       count_in: o.count_in,
       quantize: o.quantize ? notesGrid() : null,
     });
-    // Stopped, play starts where recording does: Space comes back there.
-    if (stopped) startAt(take.from);
     show(take);
   } catch (error) {
     toastError(error);
