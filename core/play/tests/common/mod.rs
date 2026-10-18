@@ -299,12 +299,6 @@ pub fn long_wav(path: &Path, seconds: f64) {
     std::fs::write(path, b).unwrap();
 }
 
-/// What [`long_wav`] holds at frame `i`, as the engine reads it.
-pub fn long_wav_at(i: u64) -> [f32; 2] {
-    let x = (i % 65536) as u16 as i16;
-    [x as f32 / 32768.0, x.wrapping_neg() as f32 / 32768.0]
-}
-
 /// A song at `bpm` that plays one clip of a [`long_wav`] of `seconds` from beat 0, on a stereo audio
 /// lane `clips`: a lane that streams (RENDER-30).
 pub fn long_audio(seconds: f64, bpm: f64) -> Song {
