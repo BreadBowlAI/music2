@@ -160,6 +160,88 @@ pub(crate) fn local_time(unix_secs: u64) -> Option<(u8, u8)> {
     Some((tm.tm_hour as u8, tm.tm_min as u8))
 }
 
+// ---------------------------------------------------------------- shared memory (`ipc.rs`)
+
+fn shm_name(name: &str) -> io::Result<CString> {
+    CString::new(name).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "a NUL in a shared memory name"))
+}
+
+/// Map `len` bytes of the shared memory object `fd`, then close it: the mapping keeps it.
+fn map_fd(fd: libc::c_int, len: usize) -> io::Result<*mut u8> {
+    // SAFETY: maps an object this process opened read-write; `fd` is closed once, here.
+    let p = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd, 0) };
+    let err = io::Error::last_os_error();
+    // SAFETY: closes the descriptor this function was given.
+    unsafe { libc::close(fd) };
+    if p == libc::MAP_FAILED { Err(err) } else { Ok(p as *mut u8) }
+}
+
+pub(crate) fn shm_create(name: &str, len: usize) -> io::Result<*mut u8> {
+    let c = shm_name(name)?;
+    let fd = crate::os::ipc::shm_open(&c, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL)?;
+    // SAFETY: sizes the object just made (zero-filled); on an error it is closed and removed.
+    if unsafe { libc::ftruncate(fd, len as libc::off_t) } != 0 {
+        let err = io::Error::last_os_error();
+        // SAFETY: the descriptor and the name made above.
+        unsafe {
+            libc::close(fd);
+            libc::shm_unlink(c.as_ptr());
+        }
+        return Err(err);
+    }
+    map_fd(fd, len).inspect_err(|_| {
+        // SAFETY: the name made above.
+        unsafe { libc::shm_unlink(c.as_ptr()) };
+    })
+}
+
+pub(crate) fn shm_open_mapped(name: &str, len: usize) -> io::Result<*mut u8> {
+    let fd = crate::os::ipc::shm_open(&shm_name(name)?, libc::O_RDWR)?;
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `st` outlives the call, which fills it.
+    if unsafe { libc::fstat(fd, &mut st) } != 0 || (st.st_size as u64) < len as u64 {
+        // SAFETY: the descriptor opened above.
+        unsafe { libc::close(fd) };
+        return Err(io::Error::new(ErrorKind::InvalidData, "the shared memory is smaller than asked"));
+    }
+    map_fd(fd, len)
+}
+
+pub(crate) fn shm_remove(name: &str) -> io::Result<()> {
+    let c = shm_name(name)?;
+    // SAFETY: a NUL-terminated name that outlives the call.
+    check(unsafe { libc::shm_unlink(c.as_ptr()) })
+}
+
+pub(crate) fn unmap(p: *mut u8, len: usize) {
+    // SAFETY: a mapping `map_fd` made, of this length, unmapped once (its `Shm` drops).
+    unsafe { libc::munmap(p as *mut libc::c_void, len) };
+}
+
+// ---------------------------------------------------------------- the process (`process.rs`)
+
+pub(crate) fn take_stdout() -> io::Result<File> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: duplicates standard output, then points it at standard error; the new descriptor
+    // is owned by the `File` alone.
+    unsafe {
+        let fd = libc::fcntl(1, libc::F_DUPFD_CLOEXEC, 3);
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let out = File::from_raw_fd(fd);
+        if libc::dup2(2, 1) < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(out)
+    }
+}
+
+pub(crate) fn exit_now(code: i32) -> ! {
+    // SAFETY: ends the process at once, running no exit handler.
+    unsafe { libc::_exit(code) }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::process::memory;

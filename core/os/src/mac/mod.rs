@@ -4,6 +4,7 @@
 mod cf;
 pub(crate) mod main_loop;
 pub(crate) mod rt;
+pub(crate) mod ipc;
 pub(crate) mod wake;
 pub(crate) mod watch;
 
@@ -20,7 +21,7 @@ use crate::process::Memory;
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
     c_numbers, change_and_inode, cpu_time, file_id, file_id_of, foreign, host_name, load_average, local_time, make_writable, push,
-    sync_dir, token,
+    sync_dir, exit_now, take_stdout, token,
 };
 use crate::unix::{check, cpath};
 
@@ -233,6 +234,12 @@ fn sysctl(name: &CStr) -> Option<String> {
     let got = &buf[..len.min(buf.len())];
     let end = got.iter().position(|b| *b == 0).unwrap_or(got.len());
     Some(String::from_utf8_lossy(&got[..end]).trim().to_string()).filter(|s| !s.is_empty())
+}
+
+pub(crate) fn no_core_dump() {
+    let none = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: `none` outlives the call.
+    unsafe { libc::setrlimit(libc::RLIMIT_CORE, &none) };
 }
 
 #[cfg(test)]
