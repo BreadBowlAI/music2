@@ -97,8 +97,17 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 22 | **The rest of the Sampler**: loop points, start and end, reverse, velocity layers, round robin and choke groups; zones made by dropping several WAVs (code only today); a waveform and a root picker on its card; files other than WAV. | Sampled drums and vocal chops are pop staples. | Yes | medium |
-| 26 | **Presets**: save and load an instrument's or an effect's settings by name, a preset browser, and presets for CLAP plugins. | Beginners start from presets, not from blank knobs. | No | medium |
+| 26 | **Presets for CLAP plugins**: save and load a plugin's settings by name, and list its own presets. (std's instruments and effects have presets.) | Beginners start from presets, not from blank knobs. | No | medium |
 
+- **Your presets can't be renamed or deleted** in the app, and there is no Show in Finder: tidy the Presets folder by hand (#26's leftover).
+- **A card doesn't say which preset it came from**, or that its knobs changed since.
+- **Presets hold a sound's numbers only**: not its settings (`voices`, `mode`, #35), and not whole tracks, chains or the mixer.
+- **music2's own presets are for five sounds** (Synth pluck, Synth pad, Synth bass, Reverb and Delay), two each.
+- **A preset is for one sound**: a Synth pluck's doesn't load into the older Pluck (`std:pluck`), nor the other way.
+- **A control a load can't write into its call** (its options are a variable) is left as it is without a word.
+- **A preset named as Windows reserves a name** (`CON`, `NUL`, …) isn't refused yet.
+- **The Presets list reads every file in its folder** each time it opens.
+- **No `m2 preset` commands** (save, load, list) for agents (#37).
 - **A Sampler played far above its root sounds harsh**: it isn't band-limited, so high notes alias, and past 6 octaves up it plays no faster.
 - **A Sampler's files are held in memory**, decoded whole (clips stream from disk). The kernel ABI allows streaming them ([kernel-abi.md](kernel-abi.md#the-asset-import)).
 - **A WAV dropped on a Sampler that then refuses it** (one with `zones` in its code) is still copied into `assets/`, though the page says "Nothing was changed" (the ab review's 3).

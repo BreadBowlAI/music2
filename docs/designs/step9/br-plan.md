@@ -77,7 +77,7 @@ The `key` is always written, so the plugin's settings can be saved (HOME-6 needs
 
 **Goal.** Save an instrument's or an effect's knobs by name, and load them back as one undoable Tx. Build the one preset format, its folders and the card's preset list.
 
-**The format (FMT-21, new).** One JSON file, `<name>.json`, two-space, keys in this order:
+**The format (FMT-22, new).** *As built:* FMT-22, since FMT-21 is taken (Conversion). One JSON file, `<name>.json`, two-space, keys in this order:
 
 | Key | Holds |
 |---|---|
@@ -102,19 +102,20 @@ A folder name is the id with every character outside `A–Z a–z 0–9 . _ -` t
 | Step | What | Files |
 |---|---|---|
 | 2a | `dirs::presets()` | `core/os/src/dirs.rs` |
-| 2b | The format: read, write (to a temporary file, then a rename), list a sound's presets (std's, then yours, each by name), the name rules. A name taken in other capitals is taken, as for songs | `crates/editor/src/presets.rs` (new) |
+| 2b | The format: read, write (to a temporary file, then a rename), list a sound's presets (std's, then yours, each by name), the name rules. A name taken in other capitals is taken, as for songs. *As built:* a name also has no space at either end and no dot at the end (a file name on every OS) | `crates/editor/src/presets.rs` (new) |
 | 2c | Save (std): every declared control of the call, each by its slot, from `controls()`. Not a Tx: it writes outside the song | `presets.rs` |
-| 2d | Load (std): one `Values` Tx with an anchor for each control. A written number is rewritten through its lens, keeping its spelling (`khz(0.9)`); a control the call leaves out is written in (PKG-3's inherited slot, as `value::insert`). Several left-out controls go into the call's options as one insertion. A control a lane or a cable drives is left alone and named. A preset for another sound is refused | `crates/editor/src/presets.rs`, `value.rs` (share the lens and insertion parts) |
-| 2e | Routes: `GET /api/graph/presets?session&node` → `{std: [...], yours: [...], plugin: [...]}`; `POST /api/graph/preset/save {session, node, name, replace}`; `POST /api/graph/preset/load {session, at, node, from: "std"\|"yours", name}` (a write route: the lock applies) | `crates/server/src/routes_presets.rs` (new), `routes.rs` (the write list) |
-| 2f | The card: a **Presets** button in the header of every instrument and effect card. A popover: a search field; groups "Yours" and "music2"; a row loads on click; **Save as preset…** asks for a name ("A preset called Soft is there. Replace it?") | `web/src/components/NodeGraph.tsx` (`PresetPopover`), `web/src/lib/presets.ts` (new) |
-| 2g | Factory presets: two each for Pluck, Pad, Bass, Reverb and Delay (10 files). The rest go to gaps.md | `std/presets/` |
-| 2h | The contract: FMT-21 (the format, the folders, load is one Tx, save writes no song file), PLAT-7 names the Presets folder, the Homes table's "the code is the preset" says how a preset gets there. gaps.md: #26 partly | `docs/architecture.md`, `docs/gaps.md`, `README.md` |
+| 2d | Load (std): one `Values` Tx with an anchor for each control. *As built:* the joined insertion is `lens::together`; each `Control` knows the calls whose slots it feeds (`Control::calls`), so a value other calls share is kept and named, as is one written in other units; a value the call plays already is not written, and a load that changes nothing makes no Undo step. A written number is rewritten through its lens, keeping its spelling (`khz(0.9)`); a control the call leaves out is written in (PKG-3's inherited slot, as `value::insert`). Several left-out controls go into the call's options as one insertion. A control a lane or a cable drives is left alone and named. A preset for another sound is refused | `crates/editor/src/presets.rs`, `value.rs` (share the lens and insertion parts) |
+| 2e | *As built:* the Graph side is `crates/server/src/graph/presets.rs` (new now, not in slice 3), files read and written off the actor's thread; the list takes `revision` too; save answers `{taken}` (not an error) when the name is there, so the app asks. Routes: `GET /api/graph/presets?session&node` → `{std: [...], yours: [...], plugin: [...]}`; `POST /api/graph/preset/save {session, node, name, replace}`; `POST /api/graph/preset/load {session, at, node, from: "std"\|"yours", name}` (a write route: the lock applies) | `crates/server/src/routes_presets.rs` (new), `routes.rs` (the write list) |
+| 2f | The card: a **Presets** button in the header of every instrument and effect card. A popover: a search field; groups "Yours" and "music2"; a row loads on click; **Save as preset…** asks for a name ("A preset called Soft is there. Replace it?"). *As built:* an instrument is a component's call that takes notes; an effect is one in the effects list; a plugin's card and the Song's mixer have none yet. The name field takes the list's place while it is open, so the popover stays on screen. The popover is its own file | `web/src/components/NodeGraph.tsx` (the button), `web/src/components/PresetPopover.tsx` (new), `web/src/lib/presets.ts` (new) |
+| 2g | Factory presets: two each for Pluck, Pad, Bass, Reverb and Delay (10 files). The rest go to gaps.md. *As built:* std/synth's Synth pluck, Synth pad and Synth bass (the ones + Track adds). The desktop bundle carries `std/presets` (`tauri.conf.json`) | `std/presets/` |
+| 2h | The contract: FMT-22 (the format, the folders, load is one Tx, save writes no song file), PLAT-7 names the Presets folder, the Homes table's "the code is the preset" says how a preset gets there. gaps.md: #26 partly | `docs/architecture.md`, `docs/gaps.md`, `README.md` |
 
 **Words the app says.**
 
 | When | Words |
 |---|---|
-| Loaded | "Loaded Soft into Pluck" with **Undo** |
+| Loaded | "Loaded Soft into Pluck" with **Undo** (*as built:* the card's title, "Loaded Soft into Synth pluck") |
+| Nothing to change | *As built:* "Synth pluck has Soft's settings already." (no Undo) |
 | A knob kept | "Loaded Soft into Pluck. Cutoff follows its lane, so it kept the lane." |
 | Saved | "Saved Pluck's settings as My Pluck" |
 | Another sound's | "This preset is for Pad, not Pluck." |
@@ -197,7 +198,7 @@ A folder name is the id with every character outside `A–Z a–z 0–9 . _ -` t
 | A plugin marks itself dirty after a load, so autosave makes a second Undo step | The test catches it; then a dirty within the three calls after a load is ignored, as HOME-5a's set-back already is |
 | Preset discovery is slow, or crashes the host process | It runs off the actor's thread with `remote::LIMIT`; a crash is HOST-3's `plugin.crashed` path; the list says "Couldn't read Surge XT's presets" |
 | Many plugins don't offer CLAP preset discovery | Their group isn't shown; saving and loading your own still works |
-| A large state (up to 50 MB) as base64 | Read and written off the actor's thread; noted in FMT-21 |
+| A large state (up to 50 MB) as base64 | Read and written off the actor's thread; noted in FMT-22. *As built (slice 2):* a list reads every file of its folder, so slice 3 should list without decoding states |
 | Other tracks change `NodeGraph.tsx`, `tracks.rs` or `routes.rs` at the same time | Small, separate edits; new code in new files; merge, never rebase |
 | Disk: this worktree's `target/` | Built in place, cleaned at the track's end (scratch-build-disk note) |
 
