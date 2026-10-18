@@ -121,7 +121,6 @@ pub fn lock_path(dir: &Path) -> PathBuf {
 
 /// Faults a test can inject into the locks taken on its thread.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum Fault {
     /// The volume can't lock (`Unsupported`).
     NoLock,
