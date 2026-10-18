@@ -18,9 +18,11 @@ use anyhow::{Result, bail};
 use crate::host::{Blob, HostEvent, MainCall, RenderMode, Reply, WindowCall};
 use crate::{Found, Handle, Info, Param};
 
-/// What both sides must agree on: a hash of this file and the slot's layout, so a host program
-/// built from other sources is refused, not misread.
-pub(crate) const STAMP: u64 = fnv(include_bytes!("wire.rs")) ^ fnv(include_bytes!("slot.rs")).rotate_left(1);
+/// What both sides must agree on: a hash of this file, the slot's layout and the types both use
+/// (`host.rs`: `Raw`, `MAX_CALL_EVENTS`, the calls), so a host program built from other sources is
+/// refused, not misread.
+pub(crate) const STAMP: u64 =
+    fnv(include_bytes!("wire.rs")) ^ fnv(include_bytes!("slot.rs")).rotate_left(1) ^ fnv(include_bytes!("../host.rs")).rotate_left(2);
 
 const fn fnv(b: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
