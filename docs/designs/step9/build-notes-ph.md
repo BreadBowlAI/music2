@@ -8,7 +8,7 @@ Written as the slices land. Plan: `ph-plan.md`. Worktree `~/m2-runs/wt/ph`, bran
 |---|---|---|
 | 1. The plugin host process (HOST-3) | Built | Plugins run in a second program. If one crashes, the app keeps playing; the plugins go quiet, the app says so, and they come back by themselves |
 | 2. Plugin windows | Built | A plugin's own window opens from its box. A knob turned there writes the code, latches a lane, or saves the plugin's settings (one Undo step) |
-| 3. Latency compensation | Not started | |
+| 3. Latency compensation | Built | A plugin that plays late (a look-ahead limiter) is allowed. Every other path waits for it, so tracks stay on the beat, live and in exports. A song with no latency gets no delay: the same plan, the same bits |
 
 ## Step 0: the base sound
 
@@ -169,3 +169,75 @@ The app on Xvfb `:96` (pictures in `~/m2-runs/app-shots/ph-2/`):
 
 - macOS: the run loop's timers and fds, the `NSWindow`, the accessory app and its event pump are lint-checked only.
 - The gaps this slice leaves are in `docs/gaps.md` (Loose ends, "Plugin windows").
+
+## Slice 3: latency compensation (RENDER-17 to 21, HOST-6)
+
+### In short
+
+- **What you get:** a plugin or kernel that plays late no longer has to be refused. music2 delays every other path by the
+  difference, so everything still lines up. An export starts at song time 0 and keeps its ending.
+- **Songs with no latency:** nothing changes. No delay is made, so the plan and the bits are what they were.
+- **Live:** a new latency (after a state load, or a plugin saying so) is made up for at the next activation, which the
+  session makes at once. The playhead shows the position you hear.
+- **Still refused:** latency inside a `poly` voice.
+
+### What was built
+
+| Part | Where |
+|---|---|
+| The planner: each node's offset (the latest arrival over its inputs), a delay on every other input, the song's latency `L`, and the nodes on a feedback loop that add latency | `core/runtime/src/latency.rs` |
+| Delay nodes in the graph that plays: `FOp::Delay` (audio, control) and `FOp::NoteDelay` (notes), after the checked nodes, so every index stays | `core/ir/src/check.rs` (the ops), `latency::insert` |
+| Their lines: a ring by the engine clock (a control's starts at its first value), a note ring sized from the lane's room; kept across activations by consumer, input and length | `core/runtime/src/delay.rs`, `plan.rs` (`Shape::Delay`, `Shape::NoteDelay`), `keep.rs`, `continue_delays` in `lib.rs` |
+| Each plugin's latency kept in its instance: at activation, after a load, when it says so, after an export | `core/runtime/src/plugins.rs`, `lib.rs` (`latencies`), `crates/server/src/graph/actor.rs`, `export.rs` |
+| A late plugin told the transport its offset earlier, from the transport's remembered runs | `delay.rs` (`Past`, `Told`), `PluginNode::process` |
+| Offline: the first `L` frames dropped, `L` more rendered; `latency.changed` when a plugin's latency moved | `Renderer::process_on`, `Renderer::latency_moved`, `crates/editor/src/render.rs`, `apps/m2` |
+| Live: the status says the position heard; a new latency makes the session activate again | `engine.rs` (`Engine::status`), `actor.rs` (`Open.relatent`) |
+| The check refuses latency only inside a voice; `plugin.latency-uncompensated` is gone; `latency.in-feedback` is said | `core/ir/src/check.rs`, `actor.rs` |
+| The probe's `latency-<n>` (plays `n` frames late) and `relatency-<m>-at-<k>` | `core/plugins/src/probe.rs` |
+
+### Tests, each red first
+
+The red diffs and their logs are in `~/m2-runs/sph/red/`.
+
+| Test | Red by | Red result |
+|---|---|---|
+| Planner: a chain, two paths, a diamond, a loop (`core/runtime/src/tests/latency.rs`) | planner stubbed (`planner-stubbed`) | 4 of 5 fail: no offsets, no delays |
+| `no_latency_makes_no_delay` (planner) | every node 1 frame late (`planner-forced-1`) | 1 delay and `L` 3 |
+| `a_latent_plugin_stays_aligned_offline` | compensation stubbed (`compensation-stubbed`) | `L` 0, the paths don't cancel |
+| `a_latent_plugin_stays_aligned_live` | same | same |
+| `lanes_notes_and_time_arrive_late_by_the_offset` | same; the plugin's offset not passed (`offset-not-passed`); the note delay not read (`notes-not-delayed`) | told the transport of now; the song differs |
+| `a_latency_change_applies_at_the_next_activation` | a load's change ignored (`change-ignored`) | no change listed |
+| `a_no_op_activation_keeps_every_delay` | delays never continue (`delays-not-kept`) | fresh lines and fades |
+| `delays_allocate_nothing_on_the_audio_thread` | a `Vec` in the delay line (`delay-allocates`) | the trap counted it |
+| `no_fixture_gets_a_delay` (`core/play/tests/bit_identity.rs`) | every kernel 1 frame late (`no-fixture-forced-1`) | first-song: `L` 11, 7 delays |
+| `a_latency_change_during_an_export_is_said_and_compensated_after_it` (`crates/server`) | the render's check stubbed (`export-change-ignored`); the session's scan removed (`live-change-ignored`) | no `latency.changed`; never activated again (timeout) |
+| `unsupported_things_are_rejected_at_check_time` (`core/ir`) | the old refusal (`check-refuses-all`) | a top-level latent kernel refused |
+
+A stress run with every std kernel 37 frames late ran the `m2-play` and runtime suites: every failure was a live render
+compared with an offline one (they differ by `L` then), none a crash or an assertion inside the engine.
+
+### Checks
+
+| Check | Result |
+|---|---|
+| Renders | 10 of 10 |
+| with-plugins against the base (G7e's rule) | worst second 0.47 dB apart |
+| `~/m2-runs/sph/check.sh` (runtime, ir, plugins, play, editor, server) | 1112 passed; clippy and the Mac lint clean |
+
+### Decisions taken while building
+
+| What | Why |
+|---|---|
+| A delay is a node of the graph that plays, after the checked nodes | Keeping, ghosts, fades, overlays and partitions then treat it as any node; every checked index stays, so the session's names and maps hold |
+| New plugin instances are made before the wiring | Their latency decides the delays, and is only known once one is activated |
+| `latency.changed` asks each plugin again when the render is written | `m2 render` hears no plugin events; asking works for every render |
+| A live latency change needs no restart | The session activates again with the kept instance; a plugin that asks for a restart (CLAP's way) is new at that activation anyway |
+| A control's delay holds its first value before it starts | A lane or `time` read late must not read 0 before the song starts (a gain lane would mute) |
+| The gates table's row "9" (D16) | Written here, for the track: G9a crash, G9b same bits, G9c alignment |
+
+### Owed
+
+- No installed plugin has latency (Surge XT and Airwindows have none), so the alignment was checked with the probe, exactly,
+  not by ear.
+- The gaps this slice leaves are in `docs/gaps.md` (Loose ends, "Latency compensation").
+

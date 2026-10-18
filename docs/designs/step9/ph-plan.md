@@ -187,6 +187,23 @@ The probe proves it. Songs with no latency keep their bits.
 - RENDER-21's refusals go in the same change: `core/ir/src/check.rs` (kernel latency), `describe_plugin`, and the
   `plugin.latency-uncompensated` notice (`plan.rs` `latent`, `actor.rs`).
 - The probe learns `latency-<n>`: it reports `n` and delays its output by `n` frames.
+- Built, beyond this plan (ph-3):
+  - A delay is a node of the graph that plays: `FOp::Delay` and `FOp::NoteDelay` in `m2-ir` (never in a
+    checked graph). `latency::insert` puts them after the checked nodes, so every node keeps its index, and
+    the next plan is wired against that graph (`PlanInfo.played`). So keeping, ghosts, fades, overlays and
+    partitions treat a delay as any other node. A delay continues the old one with the same consumer, input
+    and length (`continue_delays`).
+  - New plugin instances are made before the wiring, to measure their latency (`latencies`); a kept one
+    gives the latency its instance last measured.
+  - `latency.changed` comes from asking each plugin its latency again when the render is written
+    (`Renderer::latency_moved`), not from `HostEvent::Latency`: `m2 render` hears no events, and says it too.
+  - Live, `HostEvent::Latency` and an export's give-back measure the instance again; the session activates
+    at once when what plays compensates another latency (`Open.relatent`). No restart is needed.
+  - The probe also has `relatency-<m>-at-<k>`: from call `k` it reports `m` and tells the host.
+  - `latency.in-feedback` is a notice on the session, said when the nodes on the loop change.
+  - The runtime tests are in `core/runtime/src/tests/live/keep/latency.rs`, beside the probe's helpers, with
+    two more: `a_no_op_activation_keeps_every_delay` and `delays_allocate_nothing_on_the_audio_thread`.
+  - D16's gates row "9" is written here, for the track.
 
 | Crate | Files |
 |---|---|

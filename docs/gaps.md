@@ -168,7 +168,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 |---|---|---|---|---|
 | 21 | **The rest of the effect comforts**: effect presets, the old Pump (ducking in time with the beat, with no sidechain), and moving effects that aren't written one inside the other, or across files (refused in words today). (Turning an effect off and on, moving it next to its neighbour, and picking what a Duck listens to work: see [What works today](#what-works-today).) | Presets are how beginners start; Pump is a pop staple. | Yes | medium |
 | 32 | **Add an installed plugin from the app**: list installed CLAP plugins (such as Surge XT) in the effect browser and when adding a track, and put one on a track as an instrument or an effect. | Today a plugin goes on a track only by writing `plugin("clap:…")` into its code, after finding the plugin's id with `m2 plugins`. | No | medium |
-| 33 | **VST3 and AU** support, and **latency compensation** (plugins that report latency are refused today). (A CLAP plugin's own window opens from its box since ph-2: see Loose ends.) | Many popular synths and mastering plugins report latency, or come only as AU or VST3 on the Mac. | No | large |
+| 33 | **VST3 and AU** support. (A CLAP plugin's own window opens from its box since ph-2, and a plugin that reports latency is made up for since ph-3: see Loose ends.) | Many popular synths and mastering plugins come only as AU or VST3 on the Mac. | No | large |
 
 ### Safety and undo
 
@@ -250,6 +250,14 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
   - One plugin can hold or latch 32 parameters at once; a gesture on one more is set back.
   - A plugin's parameter knob in its box is labelled by its port name (`A_filter_1_cutoff_4092842705`), not the plugin's name for it.
   - A number written in a `plugin()` call now reaches the plugin as a 32-bit number, as a lane's value does.
+- **Latency compensation** (RENDER-17 to 21, since ph-3). A plugin that plays late (a look-ahead limiter) keeps every track on the beat, live and in exports. What it doesn't do yet:
+  - Latency inside a `poly` voice is still refused: put the latent plugin or kernel after the voices.
+  - Notes that a seek, a stop or a loop's wrap ends still reach a late plugin late, like a tail.
+  - The metronome isn't delayed by the song's latency, so with a latent plugin it clicks that much early.
+  - `time` read inside the voices of a `poly` that sits after a latent node isn't delayed (lanes and `time` outside voices are).
+  - Live keyboard notes into a late plugin arrive late by its offset too.
+  - `m2-gates realtime --offline`'s step 7 loop (`How::Old`) gives a late plugin or poly no notes (timing only).
+  - A plugin given back by an export, with notes to start again, starts them from its lane's notes, not the delayed ones.
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 
 ## Removed with the old version
