@@ -246,7 +246,14 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A problem from a sound or plugin that stopped can't be dismissed**: it stays in the status popover until the part plays again (a new plan, Stop All Sound, the plugin made again).
 - **A sound that stops in the moment between Stop All Sound and the reset it asks for** stays listed in the popover, though the reset starts it again (ex-1).
 - **Two sounds with the same words** ("The delay on Bass", twice on one track) share one toast in an open song; each is listed (ex-1).
-- **A stretch that fails plays silence** live, with a line in the log only (an export fails and names the clip). A stretch the cache folder can't take is made in memory, also with a line in the log only.
+- **A stretch the cache folder can't take** is made in memory, with a line in the log only (no sound changes).
+- **When the OS can't start the stretch thread or the disk thread**, warped or long clips are silent, with a line in the log only.
+- **A stretch that fails while the song plays** is told without why (the kernel's own words); the log line it had went (ex-2).
+- **An export whose sound had NaN or infinite samples** silences them; the app's export doesn't say so (`m2 render` warns).
+- **`m2 check` doesn't find a file in assets/ that won't decode**; only a build does, and tells it as `asset.unreadable`.
+- **A file that couldn't be read stays listed after it reads again** (a drive plugged back in): its lane keeps the silent chunks, and tells each new plan, until the clip is edited (ex-2).
+- **Two tracks whose audio lanes hold the very same clips** share one lane, so a file that can't be read there is told for one of them only (ex-2).
+- **A clip is named by its place in its lane's data**: after a clip whose file is missing moves, a fault in that lane may name the clip beside it (ex-2).
 - **The plugin host process** (HOST-3, since ph-1). Plugins run in a second program, so a crash no longer ends the app. What it doesn't do yet:
   - All plugins share one host process, so one crash silences them all (each comes back by itself). One process per plugin would silence only the one that crashed.
   - Its audio threads don't join the Mac output's audio workgroup (they ask for real time on their own).
@@ -258,7 +265,6 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
   - macOS: its shared memory and wake are lint-checked only, until the owner's Mac runs them.
   - A plugin stuck on the host's main loop (in its window, its start or a settings load) holds up edits and saves for up to 30 seconds (2 minutes in a scan); then music2 ends the host process and says so (the ph review's r1).
   - One broken `.clap` file that crashes the host while it scans makes every plugin say "not installed", and the bad file isn't named. Scanning one file at a time would name it and skip it (the ph review's r4).
-  - An export during which the host process crashes, or is ended for not answering, finishes with those plugins silent from there and says only "Exported" (seen in the ph review's pictures).
 - **Plugin windows** (HOST-7, since ph-2). A plugin's own window opens from its box; a knob turned there writes the code, latches a lane, or saves the plugin's settings (one Undo step). What it doesn't do yet:
   - A plugin's window floats on its own: it isn't tied to the app's window, its place isn't remembered, and you can't resize it by hand.
   - Linux: X11 only (Wayland through XWayland).
@@ -294,7 +300,6 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **Recording audio:** a Mac asks about the microphone at the first take; a take running while you click Don't Allow records silence. The next R says why.
 - **Recording audio:** with an output buffer more than about four times the input's (Settings' 2048 against a 128 input), hearing yourself drops out; the take is fine. Hearing should lag by the larger of the two buffers (the io review's r4).
 - **Recording audio:** an input chosen in Settings that is unplugged records from another input without saying so; outputs say so (the io review's r7).
-- **A streamed file that can't be read** (a drive unplugged, a file cut short) plays silence there with no message, live or in an export; the count is kept but nothing reads it (the io review's r8).
 - **Recording audio:** checks owed on a Mac: a real microphone, the permission question, the take's timing against the click, and hearing yourself in headphones (see HANDOFF).
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 - **An audio file a kernel reads** (kernel ABI v1) that changes on disk is heard at the next build, not at once: only files a lane names are watched by their hash. Its name in the code has no hash pin, unlike a clip's, and when it is missing no near name is offered.
@@ -305,7 +310,6 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A Sampler played far above its root sounds harsh**: it isn't band-limited, so high notes alias, and past 6 octaves up it plays no faster.
 - **A Sampler's files are held in memory**, decoded whole, once while the song plays them (clips stream from disk; offline kernels read from disk). The ABI allows streaming them ([kernel-abi.md](kernel-abi.md#the-asset-import)); the host needs to load each file's start ahead and read ahead per voice.
 - **A WAV dropped on a Sampler that then refuses it** (one with `zones` in its code) is still copied into assets/, though the page says "Nothing was changed"; while dragging, its card still says "Play it in Sampler" (the ab review's 3).
-- **A Sampler file that is in assets/ but won't decode** (`sample: "loop.mp3"`, a damaged WAV) plays silence with no message; a missing one is named (`asset.missing`) (the ab review's 4).
 - **A kernel that asks for memory while playing** is told it went over 256 MB, even when it asked for a few MB; the words should say kernels may not take memory while playing (the ab review's 5).
 - **A song asking for std "0.2" in an older app that has std 0.2.0** and calls the Sampler gets a missing import, not `pkg.unsatisfied`: a song's std requirement names no patch version. `examples/sampler` asks for "0.2.1".
 - **std's kernel test `odd_db_values` fails in a debug build**: a NaN's sign bit differs from the release build's. `ci/check.sh` runs those tests in release, where it passes.

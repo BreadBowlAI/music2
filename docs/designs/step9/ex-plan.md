@@ -102,6 +102,26 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. Step 9.
 
 **Done when:** all green. Renders 12 of 12 (no fault in them). `m2 render` of the crash case exits non-zero.
 
+**As built (slice 2).** Where the build went another way than the tables above:
+
+| What | Why |
+|---|---|
+| The runtime's offline `Renderer` reads its ring, before each block and after it (`Renderer::faulted`), not the editor's `Render` | every offline render gets the rule, `m2 bounce`'s own loop too. Only a renderer built with an offline cache reads its ring: a live one's is the app's |
+| A node's error offline is a `fault::Failed` (the fault, and the error as its words), not a second error type | its words stay what they were; `Render` turns any `Failed` into `Faulted` with the namer |
+| An offline stretch that fails still fails the build, as a `Failed` with `stretch.failed` | it fails at once, and keeps the kernel's words as the detail |
+| Live, the stretch thread only marks the render failed; each lane that plays it reports `stretch.failed` | the stretch thread knows no plan. A lane knows its plan, its place and the clip's, and reports once per plan |
+| A lane reports through a `Tell` (its plan's reporter and its place), set by each plan that builds or keeps it. It tells a new plan what it met at once | a lane is shared by plans; its failed chunks stay silent in its slots, so a new plan would hear nothing of them |
+| A plan's id is taken before its build | its build reports a file it can't read as that plan |
+| The session keeps a fault of a plan not sent yet until it is sent | a build reports before its plan is sent, and the notices thread may read between |
+| A file that is there but empty is silent, not a fault | it holds no audio; nothing changed |
+| A plugin's error offline is told even when the instance dies first: a dead instance fails the render too | a crash during an export kills the lent instances |
+| `Namer` names from any song (`faults::Song`: a revision, a compiled song, or a stem's parts); `Render::new`, `lending` and `range` take it in place of a graph and data | an offline render names its own faults; a stem's graph is rooted at a track |
+| The seam is `fn(&File, usize) -> io::Result<()>` | a test fails one file's reads on one thread (the disk or stretch thread), while other tests read theirs |
+| `m2` installs the probe plugin when `M2_PROBE` is set | the CLI test of the crash case needs a plugin it can crash; tests install it the same way |
+| The export also carries `lane.unit-mismatch` | it plays its last accepted data, as `lane.invalid` does |
+| The plugin and Sampler offline tests are in `crates/editor/src/render.rs`; the cut-short file's in `core/runtime/src/tests/stream.rs`, with `Renderer`; the missing clip's in `crates/server/src/export.rs` | each beside its rig |
+| A Sampler is named as "the instrument on Drums" | it is a `poly`, named as a stopped sound is |
+
 ## Slice 3: inputs, and closing
 
 **Goal.** The sound input reports through the same path. The contract, gaps and handoff are closed.
