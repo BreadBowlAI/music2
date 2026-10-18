@@ -16,7 +16,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, Weak};
 
-use m2_ir::{FNode, FOp, Flat, Kind, PortRef, Voice};
+use m2_ir::{Alloc, FNode, FOp, Flat, Kind, PortRef, Voice};
 use m2_song::{DataSet, LaneData, Sha, TempoMap};
 
 use crate::audio::{self, AudioLane, AudioPlayer, KernelAssets};
@@ -50,11 +50,13 @@ pub enum Shape {
         version: String,
         channels: u8,
     },
-    /// Its voices and channels, and its voice graph's structure with the cells' values, origins and
-    /// names left out, hashed with the wasm modules its kernels run (RENDER-16).
+    /// Its voices, channels and options, and its voice graph's structure with the cells' values,
+    /// origins and names left out, hashed with the wasm modules its kernels run (RENDER-16). Not its
+    /// glide, which is read from outside the voices: turning it keeps the pool.
     Poly {
         voices: u32,
         channels: u8,
+        alloc: Alloc,
         voice: Sha,
     },
     Feedback {
@@ -78,8 +80,8 @@ impl Shape {
                 let info = packages.plugin_info(plugin)?;
                 Some(Shape::Plugin { id: info.found.id.clone(), version: info.found.version.clone(), channels: *channels })
             }
-            FOp::Poly { voices, voice, channels, .. } => {
-                Some(Shape::Poly { voices: *voices, channels: *channels, voice: blank(voice, packages, assets) })
+            FOp::Poly { voices, voice, channels, alloc, .. } => {
+                Some(Shape::Poly { voices: *voices, channels: *channels, alloc: *alloc, voice: blank(voice, packages, assets) })
             }
             FOp::Feedback { channels, .. } => Some(Shape::Feedback { channels: *channels }),
             _ => None,

@@ -12,6 +12,7 @@ mod fpenv;
 mod live;
 mod overlay;
 mod parts;
+mod poly;
 mod stream;
 mod taps;
 

@@ -51,6 +51,7 @@ pub mod packages;
 mod parts;
 mod plan;
 pub mod plugins;
+mod poly;
 mod sandbox;
 pub mod sched;
 mod stopped;
@@ -66,7 +67,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
-use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, PortRef, TimeOf};
+use m2_ir::{Alloc, FNode, FOp, Flat, Input, Kind, Mode, NoteField, PortRef, TimeOf};
 use m2_song::{Arrangement, DataSet, LaneData, TempoMap};
 
 pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
@@ -455,14 +456,24 @@ impl KernelNode {
     }
 }
 
-/// The note a voice plays. `off` is the engine sample of its Off, `u64::MAX` until the Off
-/// arrives: the gate is open before it (RENDER-13).
+/// The note a voice plays. Its gate is open from engine sample `on` until `off`, the sample of its
+/// Off, `u64::MAX` until the Off arrives (RENDER-13). `on` is its On's sample, or the one after
+/// when the voice carried on from a note whose gate was open (`retrigger: false`).
 #[derive(Clone, Copy, Debug)]
 struct VoiceNote {
     id: u32,
     pitch: f32,
     velocity: f32,
+    on: u64,
     off: u64,
+}
+
+/// What a voice's note fields read: its note, or in a one-note poly (`"mono"`, `"legato"`) the
+/// pool's pitch, gate and velocity at each frame of the block.
+#[derive(Clone, Copy)]
+enum Voiced<'a> {
+    Note(VoiceNote),
+    Cv(&'a poly::Cv),
 }
 
 struct VoiceSlot {
@@ -472,8 +483,9 @@ struct VoiceSlot {
     born: u64,
     /// Whether the graph has run since its last reset.
     dirty: bool,
-    /// The voice's peak over its last block, for a note whose Off lands on the next block
-    /// line: it is freed there, exactly where it would have been at the end of the block.
+    /// The voice's peak over the last block it ran (since its note started, when that was in the
+    /// block): for a note whose Off lands on the next block line, which is freed there, exactly
+    /// where it would have been at the end of the block, and for `steal: "quietest"`.
     last_peak: f32,
     /// Given a note this block.
     taken: bool,
@@ -491,6 +503,10 @@ struct Planned {
 /// (RENDER-16).
 struct VoicePool {
     voices: Vec<VoiceSlot>,
+    /// How its voices are given notes (part of its shape).
+    alloc: Alloc,
+    /// `"mono"` and `"legato"`: the one note at a time its one voice plays.
+    mono: Option<Box<poly::Mono>>,
     /// Its voices' kernel states, one sandbox for each package they use (RENDER-32): born with the
     /// pool, sealed, and dropped with it.
     sandboxes: Vec<Sandbox>,
@@ -511,6 +527,8 @@ struct PolyNode {
     captures: Vec<PortRef>,
     /// This block's Ons, by voice: room for two runs of the lane's Ons.
     plan: Vec<Planned>,
+    /// What a slide's time is read from (RENDER-16): an output of the graph around it.
+    glide: Option<PortRef>,
     /// Empty only while it moves between plans: it plays silence then.
     pool: Option<Box<VoicePool>>,
     /// A replaced poly playing out an activation's window: it reads no notes.
@@ -916,7 +934,7 @@ impl Exec {
                 p.params.iter().for_each(|(_, i, _)| port(i));
             }
             Exec::Missing(input) => input.iter().for_each(&mut port),
-            Exec::Poly(p) => p.captures.iter().for_each(|c| f(c.node)),
+            Exec::Poly(p) => p.captures.iter().chain(&p.glide).for_each(|c| f(c.node)),
             Exec::Fade { old, new, .. } => {
                 port(old);
                 port(new);
@@ -1073,7 +1091,7 @@ impl Builder<'_> {
                 Exec::Missing(inputs.first().filter(|i| matches!(i, Input::Port { .. })).cloned())
             }
             FOp::Plugin { plugin, inputs, .. } => Exec::Plugin(Box::new(self.plugin(nodes, n, plugin, inputs, boxed, ghost, room)?)),
-            FOp::Poly { lane, voices, voice, .. } => {
+            FOp::Poly { lane, voices, voice, alloc, glide, .. } => {
                 if in_voice {
                     bail!("{}: poly inside poly", n.name);
                 }
@@ -1103,13 +1121,14 @@ impl Builder<'_> {
                         for sb in &mut sandboxes {
                             sb.seal().with_context(|| n.name.clone())?;
                         }
-                        Some(Box::new(VoicePool { voices: slots, sandboxes, born: 0, shape, stopped: false }))
+                        let mono = (alloc.mode != Mode::Poly).then(|| Box::new(poly::Mono::new(self.sample_rate)));
+                        Some(Box::new(VoicePool { voices: slots, alloc: *alloc, mono, sandboxes, born: 0, shape, stopped: false }))
                     }
                     _ => None,
                 };
                 let captures = voice.nodes.iter().filter_map(|n| if let FOp::Capture(p) = n.op { Some(p) } else { None }).collect();
                 let plan = Vec::with_capacity(if ghost { 0 } else { 2 * self.caps(slot).ons + sched::LIVE_ROOM });
-                Exec::Poly(Box::new(PolyNode { slot, out: voice.out, captures, plan, pool, ghost }))
+                Exec::Poly(Box::new(PolyNode { slot, out: voice.out, captures, plan, glide: *glide, pool, ghost }))
             }
             FOp::Feedback { input, channels } => Exec::Feedback { input: *input, ring: vec![0.0; *channels as usize * BLOCK] },
             FOp::NoteField(f) => Exec::NoteField(*f),
@@ -1295,7 +1314,7 @@ fn step<R: Reads>(
     b: &Block,
     seg: Seg,
     outer: Option<(&dyn Reads, &[PortRef])>,
-    note: Option<VoiceNote>,
+    note: Option<Voiced>,
     lanes: &[LaneSlot],
     pool: &mut [Sandbox],
 ) -> Result<()> {
@@ -1369,18 +1388,29 @@ fn step<R: Reads>(
             Ok(())
         }
         Exec::NoteField(field) => {
-            let note = note.expect("note fields only run in voices");
             let o = &mut out[0][seg.range(0)];
-            match field {
-                NoteField::Pitch => o.fill(note.pitch),
-                NoteField::Velocity => o.fill(note.velocity),
-                NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
-                NoteField::Gate => {
-                    // Open from the note's On until its Off, on the engine clock (RENDER-13).
-                    for (k, x) in o.iter_mut().enumerate() {
-                        *x = ((b.engine + (seg.off + k) as u64) < note.off) as u8 as f32;
+            match note.expect("note fields only run in voices") {
+                Voiced::Cv(cv) => {
+                    let at = seg.off..seg.off + n;
+                    match field {
+                        NoteField::Pitch => o.copy_from_slice(&cv.pitch[at]),
+                        NoteField::Gate => o.copy_from_slice(&cv.gate[at]),
+                        NoteField::Velocity => o.copy_from_slice(&cv.velocity[at]),
+                        NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
                     }
                 }
+                Voiced::Note(note) => match field {
+                    NoteField::Pitch => o.fill(note.pitch),
+                    NoteField::Velocity => o.fill(note.velocity),
+                    NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
+                    NoteField::Gate => {
+                        // Open from the note's On until its Off, on the engine clock (RENDER-13).
+                        for (k, x) in o.iter_mut().enumerate() {
+                            let t = b.engine + (seg.off + k) as u64;
+                            *x = (note.on <= t && t < note.off) as u8 as f32;
+                        }
+                    }
+                },
             }
             Ok(())
         }
@@ -1494,7 +1524,7 @@ impl Graph {
         b: &Block,
         seg: Seg,
         outer: Option<(&dyn Reads, &[PortRef])>,
-        note: Option<VoiceNote>,
+        note: Option<Voiced>,
         lanes: &[LaneSlot],
     ) -> Result<()> {
         self.process_in(b, seg, outer, note, lanes, &mut [])
@@ -1506,7 +1536,7 @@ impl Graph {
         b: &Block,
         seg: Seg,
         outer: Option<(&dyn Reads, &[PortRef])>,
-        note: Option<VoiceNote>,
+        note: Option<Voiced>,
         lanes: &[LaneSlot],
         pool: &mut [Sandbox],
     ) -> Result<()> {
@@ -1797,21 +1827,74 @@ impl PolyNode {
                 }
                 (v.note, v.born, v.dirty, v.last_peak, v.taken) = (None, 0, false, 0.0, false);
             }
+            if let Some(m) = &mut pool.mono {
+                m.reset();
+            }
         }
         Ok(())
     }
 
     /// One block. The lane's events say which notes start and end; voices are given notes in
-    /// event order, and a voice's graph is split where its note changes. Never allocates.
+    /// event order, as the pool's `alloc` says, and a voice's graph is split where its note
+    /// changes. Never allocates.
     fn process(&mut self, b: &Block, outer: &dyn Reads, out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
         let (start, end) = (b.engine, b.engine + BLOCK as u64);
         let events = if self.ghost { &[] } else { lanes[self.slot].events() };
-        let PolyNode { out: voice_out, captures, plan, pool, .. } = self;
+        let PolyNode { out: voice_out, captures, plan, pool, glide, .. } = self;
         let Some(pool) = pool.as_deref_mut().filter(|p| !p.stopped) else {
             out.fill(0.0);
             return Ok(());
         };
-        let VoicePool { voices, born, sandboxes, .. } = pool;
+        let VoicePool { voices, born, sandboxes, alloc, mono, .. } = pool;
+        let alloc = *alloc;
+        out.fill(0.0);
+        let out_ch = out.len() / BLOCK;
+        let glide = glide.map(|g| &outer.buf(g.node, g.port)[..BLOCK]);
+        let outer = (outer, &captures[..]);
+        // Sum the voice's frames `seg` into `out`, keeping their peak.
+        let segment = |v: &mut VoiceSlot, seg: Seg, note: Voiced, peak: &mut f32, out: &mut Buf, sandboxes: &mut [Sandbox]| -> Result<()> {
+            v.graph.process_in(b, seg, Some(outer), Some(note), &[], sandboxes)?;
+            let vo = &v.graph.bufs[voice_out.node][voice_out.port];
+            let v_ch = vo.len() / BLOCK;
+            for c in 0..out_ch {
+                let sc = if c < v_ch { c } else { 0 };
+                for (o, x) in out[seg.range(c)].iter_mut().zip(&vo[seg.range(sc)]) {
+                    *o += x;
+                    *peak = peak.max(x.abs());
+                }
+            }
+            Ok(())
+        };
+
+        // One note at a time: the pool's pitch, gate and velocity, frame by frame. Once started, the
+        // voice runs every block, reset where a note starts again when `retrigger` says so.
+        if let Some(m) = mono.as_deref_mut() {
+            let was = m.started;
+            m.block(events, glide, alloc);
+            if !m.started {
+                return Ok(());
+            }
+            let v = &mut voices[0];
+            // A voice starts at its first note.
+            let (mut at, mut peak) = (if was { 0 } else { m.first as usize }, 0.0f32);
+            for &f in &m.starts[..m.n_starts] {
+                let f = f as usize;
+                if f > at {
+                    segment(v, Seg { off: at, n: f - at }, Voiced::Cv(&m.cv), &mut peak, out, sandboxes)?;
+                    v.dirty = true;
+                }
+                if v.dirty {
+                    v.graph.reset_in(sandboxes)?;
+                    v.dirty = false;
+                }
+                at = f;
+            }
+            segment(v, Seg { off: at, n: BLOCK - at }, Voiced::Cv(&m.cv), &mut peak, out, sandboxes)?;
+            v.dirty = true;
+            v.last_peak = peak;
+            return Ok(());
+        }
+
         // Offs for notes already in voices. A stolen note's Off finds nothing.
         for e in events {
             if let Event::Off { frame, id, .. } = *e
@@ -1831,14 +1914,11 @@ impl PolyNode {
                 v.note = None;
             }
         }
-        // Give this block's notes voices, in event order: the first free voice, else the oldest.
+        // Give this block's notes voices, in event order: a free voice, else the one `steal` names.
         plan.clear();
         for e in events {
             if let Event::On { frame, id, pitch, velocity, .. } = *e {
-                let slot = match voices.iter().position(|v| v.note.is_none() && !v.taken) {
-                    Some(i) => i,
-                    None => (0..voices.len()).min_by_key(|&i| voices[i].born).expect("at least one voice"),
-                };
+                let Some(slot) = poly::pick(voices, alloc.steal) else { continue };
                 if plan.len() == plan.capacity() {
                     debug_assert!(false, "more notes start than the lane holds");
                     continue;
@@ -1846,7 +1926,8 @@ impl PolyNode {
                 *born += 1;
                 voices[slot].born = *born;
                 voices[slot].taken = true;
-                plan.push(Planned { voice: slot as u16, frame: frame as u16, note: VoiceNote { id, pitch, velocity, off: u64::MAX } });
+                let at = start + frame as u64;
+                plan.push(Planned { voice: slot as u16, frame: frame as u16, note: VoiceNote { id, pitch, velocity, on: at, off: u64::MAX } });
             }
         }
         // Offs for notes that started this block.
@@ -1858,9 +1939,6 @@ impl PolyNode {
             }
         }
 
-        out.fill(0.0);
-        let out_ch = out.len() / BLOCK;
-        let outer = (outer, &captures[..]);
         for (vi, v) in voices.iter_mut().enumerate() {
             let taken = std::mem::take(&mut v.taken);
             if v.note.is_none() && !taken {
@@ -1870,46 +1948,41 @@ impl PolyNode {
             let mut at = 0;
             let mut current = v.note;
             let mut peak = 0.0f32;
-            let mut segment = |v: &mut VoiceSlot, seg: Seg, note: VoiceNote, peak: &mut f32, sandboxes: &mut [Sandbox]| -> Result<()> {
-                v.graph.process_in(b, seg, Some(outer), Some(note), &[], sandboxes)?;
-                let vo = &v.graph.bufs[voice_out.node][voice_out.port];
-                let v_ch = vo.len() / BLOCK;
-                for c in 0..out_ch {
-                    let sc = if c < v_ch { c } else { 0 };
-                    for (o, x) in out[seg.range(c)].iter_mut().zip(&vo[seg.range(sc)]) {
-                        *o += x;
-                        *peak = peak.max(x.abs());
-                    }
-                }
-                Ok(())
-            };
             for p in plan.iter().filter(|p| p.voice as usize == vi) {
                 let off = p.frame as usize;
+                let mut note = p.note;
                 if let Some(c) = current
                     && off > at
                 {
-                    segment(v, Seg { off: at, n: off - at }, c, &mut peak, sandboxes)?;
+                    segment(v, Seg { off: at, n: off - at }, Voiced::Note(c), &mut peak, out, sandboxes)?;
                 }
-                if v.dirty {
-                    v.graph.reset_in(sandboxes)?;
+                if alloc.retrigger {
+                    if v.dirty {
+                        v.graph.reset_in(sandboxes)?;
+                    }
+                } else if let Some(c) = current
+                    && c.on <= note.on
+                    && note.on < c.off
+                {
+                    // Carried on from an open gate: it falls for one frame.
+                    note.on += 1;
                 }
                 v.dirty = true;
-                v.note = Some(p.note);
+                v.note = Some(note);
                 peak = 0.0;
-                current = Some(p.note);
+                current = Some(note);
                 at = off;
             }
             if let Some(c) = current {
-                segment(v, Seg { off: at, n: BLOCK - at }, c, &mut peak, sandboxes)?;
+                segment(v, Seg { off: at, n: BLOCK - at }, Voiced::Note(c), &mut peak, out, sandboxes)?;
             }
-            if let Some(n) = v.note {
-                if n.off < end {
-                    if peak < QUIET && !v.graph.active_in(sandboxes)? {
-                        v.note = None;
-                    }
-                } else {
-                    v.last_peak = peak;
-                }
+            v.last_peak = peak;
+            if let Some(n) = v.note
+                && n.off < end
+                && peak < QUIET
+                && !v.graph.active_in(sandboxes)?
+            {
+                v.note = None;
             }
         }
         Ok(())
