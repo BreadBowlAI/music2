@@ -727,6 +727,8 @@ type SettingSpec = {
   kind: "number" | "int" | "bool" | "choice" | "asset" | "keymap";
   options?: readonly string[];
   default?: number | boolean | string | Readonly<Record<number, string>>;
+  /** Left out, it is `undefined`: no call needs it, and it has no default. */
+  optional?: boolean;
 };
 
 /** A build-time value: changing one rebuilds the graph. Never a knob or a cell. `R` is whether a call must give it. */
@@ -735,6 +737,10 @@ export class SettingDecl<T = unknown, R extends boolean = boolean> {
   /** @internal */
   constructor(spec: SettingSpec) {
     specs.set(this, spec);
+  }
+  /** Left out, it is `undefined`, with no default: `setting.asset().optional()`, a sampler with no file yet. */
+  optional(): SettingDecl<T | undefined, false> {
+    return new SettingDecl<T | undefined, false>({ ...specOf<SettingSpec>(this), optional: true });
   }
 }
 
@@ -1168,7 +1174,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     const c = controls.find((x) => x.name === n);
     if (c) return { name: n, kind: "control", required: !!c.each || (!c.spec.optional && c.spec.default === undefined), many: false, each: !!c.each };
     const s = settings.find((x) => x.name === n);
-    if (s) return { name: n, kind: "setting", required: s.spec.default === undefined, many: false, each: false };
+    if (s) return { name: n, kind: "setting", required: s.spec.default === undefined && !s.spec.optional, many: false, each: false };
     return fail(`positional names "${n}", which isn't an input, a control or a setting`);
   };
   if (new Set(positional).size !== positional.length) fail("positional names a slot twice");
@@ -1218,7 +1224,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (insert.length) fail("an instrument (editor.category, notes first) has no editor.insert: a new track writes none");
     const required = [
       ...controls.filter((c) => c.each || (!c.spec.optional && c.spec.default === undefined)).map((c) => c.name),
-      ...settings.filter((s) => s.spec.default === undefined).map((s) => s.name),
+      ...settings.filter((s) => s.spec.default === undefined && !s.spec.optional).map((s) => s.name),
     ];
     if (required.length) fail(`an instrument (editor.category, notes first) must build from its notes alone, which leaves out "${required[0]}"`);
   } else if (editor.category !== undefined) {
@@ -1229,7 +1235,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (output?.kind !== "audio") fail("an effect (editor.category) outputs audio");
     const required = [
       ...controls.filter((c) => c.each || (!c.spec.optional && c.spec.default === undefined)).map((c) => c.name),
-      ...settings.filter((s) => s.spec.default === undefined).map((s) => s.name),
+      ...settings.filter((s) => s.spec.default === undefined && !s.spec.optional).map((s) => s.name),
     ];
     const needed = required.filter((n) => !insert.some((x) => x.slot === n));
     if (needed.length) fail(`an effect (editor.category) must build from its insert alone, which leaves out "${needed[0]}"`);
@@ -1258,7 +1264,8 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     at,
     inputs: inputs.map((i) => ({ name: i.name, ...portJson(i.spec) })),
     controls: controls.map(ctlJson),
-    settings: settings.map((s) => ({ name: s.name, kind: s.spec.kind, default: s.spec.default ?? null, options: s.spec.options ?? null })),
+    // `optional` written only when true, so every other descriptor keeps its bytes.
+    settings: settings.map((s) => ({ name: s.name, kind: s.spec.kind, default: s.spec.default ?? null, options: s.spec.options ?? null, ...(s.spec.optional ? { optional: true } : {}) })),
     output: output ? portJson(output) : null,
     positional: [...positional],
     editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes },
@@ -1343,7 +1350,7 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
       const g = given.get(s.name);
       if (g !== undefined) params[s.name] = settingValue(s.spec, g.value, (msg) => fail(c.id, `${s.name} ${msg}`));
       else if (s.spec.default !== undefined) params[s.name] = s.spec.default;
-      else fail(c.id, `the setting ${s.name} is missing`);
+      else if (!s.spec.optional) fail(c.id, `the setting ${s.name} is missing`);
     }
     if (frame !== undefined) {
       const record = infoOf(m).table[frame];

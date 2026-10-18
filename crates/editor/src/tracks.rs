@@ -51,11 +51,11 @@ pub struct Instrument {
 }
 
 /// Every instrument the packages and the project offer: each that a track can play and that has a
-/// category (PKG-7). Drums first, then Instruments, then any other category, each by where it is
-/// declared. One with no category is left out: code can still play it.
+/// category (PKG-7). Drums first, then Instruments, then the other categories by name, each by where
+/// it is declared. One with no category is left out: code can still play it.
 pub fn instruments(s: &Session) -> Vec<Instrument> {
     let catalog = s.catalog();
-    let mut found: Vec<(u8, String, u32, Instrument)> = catalog
+    let mut found: Vec<(u8, String, String, u32, Instrument)> = catalog
         .instruments()
         .filter_map(|d| {
             let category = d.editor.category.clone()?;
@@ -78,11 +78,11 @@ pub fn instruments(s: &Session) -> Vec<Instrument> {
                 category,
                 lane: lane.into(),
             };
-            Some((group, d.file.clone(), line, i))
+            Some((group, i.category.clone(), d.file.clone(), line, i))
         })
         .collect();
-    found.sort_by(|a, b| (a.0, &a.1, a.2).cmp(&(b.0, &b.1, b.2)));
-    found.into_iter().map(|f| f.3).collect()
+    found.sort_by(|a, b| (a.0, &a.1, &a.2, a.3).cmp(&(b.0, &b.1, &b.2, b.3)));
+    found.into_iter().map(|f| f.4).collect()
 }
 
 /// A track a builder made: its key and what it is called.

@@ -84,3 +84,51 @@ fn asset_and_keymap_settings_are_checked() {
         assert!(e.iter().any(|d| d.message.contains(says)), "{bad}: {e:?}");
     }
 }
+
+/// A kernel's assets and values.
+type Settings = (Vec<String>, Vec<f64>);
+
+/// The `std:sampler` kernel `sampler(<notes><call>)` makes in its voices: its assets and values.
+fn sampler_of(call: &str) -> Result<(Build, Settings), Vec<Diagnostic>> {
+    let b = build_of(&format!(
+        "import {{ song, track }} from \"@m2/core\";\nimport {{ sampler }} from \"std/sampler\";\n\
+         const s = track(\"s\", ({{ lane }}) => sampler(lane.notes(\"notes\"){call}));\nexport default song(() => s.out);\n"
+    ))?;
+    let voice = b.ir.modules.iter().flat_map(|m| &m.nodes).find_map(|n| match &n.op {
+        Op::Poly { body, .. } => body.nodes.iter().find_map(|n| match &n.op {
+            Op::Kernel { kernel, assets, values, .. } if kernel == "std:sampler" => Some((assets.clone(), values.clone())),
+            _ => None,
+        }),
+        _ => None,
+    });
+    let got = voice.expect("a std:sampler kernel in a voice");
+    Ok((b, got))
+}
+
+// std 0.2.1's sampler: its file and root, or its zones, reach its kernel as assets and values (a
+// root, a lowest and a highest note each). With no file it builds, from its notes alone, so + Track
+// can add it: `setting.asset().optional()`.
+#[test]
+fn the_sampler_gives_its_kernel_its_files() {
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    for (call, assets, values) in [
+        ("", s(&[]), vec![]),
+        (", { sample: \"kick.wav\" }", s(&["kick.wav"]), vec![60.0, 0.0, 127.0]),
+        (", { sample: \"bass.wav\", root: 36 }", s(&["bass.wav"]), vec![36.0, 0.0, 127.0]),
+        (
+            ", { sample: \"x.wav\", zones: { 38: \"snare.wav\", 36: \"kick.wav\", 42: \"hat.wav\" } }",
+            s(&["kick.wav", "snare.wav", "hat.wav"]),
+            vec![36.0, 0.0, 37.0, 38.0, 38.0, 41.0, 42.0, 42.0, 127.0],
+        ),
+    ] {
+        let (_, got) = sampler_of(call).unwrap_or_else(|e| panic!("{call}: {e:?}"));
+        assert_eq!(got, (assets, values), "{call}");
+    }
+    let (b, _) = sampler_of("").unwrap();
+    let d = b.components.iter().find(|d| d.id == "std:sampler").expect("its descriptor");
+    assert!(d.is_instrument() && d.editor.category.as_deref() == Some("Sampler"), "+ Track offers it");
+    let sample = d.settings.iter().find(|s| s.name == "sample").unwrap();
+    assert!(sample.optional && sample.default.is_none() && sample.kind == component::SettingKind::Asset);
+    let e = sampler_of(", { sample: \"../song.ts\" }").err().expect("a bad name is refused");
+    assert!(e.iter().any(|d| d.message.contains("must be a file name in assets/")), "{e:?}");
+}

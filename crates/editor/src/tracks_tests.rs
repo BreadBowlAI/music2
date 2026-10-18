@@ -100,14 +100,14 @@ fn every_listed_instrument_adds_confined_and_the_song_sounds_the_same() {
     let mut s = f.open();
     let before = render(&s, 2.0);
     let list = s.instruments();
-    assert_eq!(list.len(), 22);
+    assert_eq!(list.len(), 23);
     for i in &list {
         let made = s.add_track(&i.component, None, None, None).unwrap_or_else(|e| panic!("{}: {e}", i.component));
         let text = f.read(&made.edited.file);
         assert!(text.contains(&format!("{}(lane.notes(\"{}\"))", i.name, i.lane)), "{text}");
         assert!(f.0.join(format!("data/{}/{}.json", made.module, i.lane)).exists(), "{}", i.component);
     }
-    assert_eq!(order(&s).len(), 4 + 22);
+    assert_eq!(order(&s).len(), 4 + 23);
     assert_eq!(render(&s, 2.0), before);
 }
 
@@ -457,7 +457,8 @@ fn near(a: &str, b: &str) -> bool {
 }
 
 // T3, the + Track list: std's ready-made sounds first, in groups (drums from a `hits` lane): the
-// drum kit, then the single drums and FM metal; then the instruments; then the two with every knob.
+// drum kit, then the single drums and FM metal; then the instruments; then the sampler; then the two
+// with every knob.
 // std's first five instruments have fuller ones in std/drums and std/synth, so they have no
 // category and the list leaves them out. No two rows are hard to tell apart.
 #[test]
@@ -490,6 +491,7 @@ fn the_instruments_are_stds_sounds_in_order() {
         inst("std:synth-sub", "808 sub"),
         inst("std:synth-bass", "Synth bass"),
         inst("std:synth-strings", "Strings"),
+        ("std:sampler", "Sampler", "Sampler", "notes"),
         design("std:fm-custom", "FM synth"),
         design("std:synth-custom", "Polysynth"),
     ];

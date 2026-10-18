@@ -94,7 +94,7 @@ const EXPORTS: [(&str, &str, &str); 46] = [
 
 /// The instruments added since step 5, as `(ComponentId, module, name)`: one engine each for
 /// the synth, FM and drums, and the instruments voiced on them.
-const INSTRUMENTS: [(&str, &str, &str); 22] = [
+const INSTRUMENTS: [(&str, &str, &str); 23] = [
     ("std:synth-custom", "std/synth", "synth.custom"),
     ("std:synth-supersaw", "std/synth", "synth.supersaw"),
     ("std:synth-lead", "std/synth", "synth.lead"),
@@ -117,6 +117,7 @@ const INSTRUMENTS: [(&str, &str, &str); 22] = [
     ("std:drum-cowbell", "std/drums", "drums.cowbell"),
     ("std:drum-cymbal", "std/drums", "drums.cymbal"),
     ("std:drum-shaker", "std/drums", "drums.shaker"),
+    ("std:sampler", "std/sampler", "sampler"),
 ];
 
 // PKG-1, PKG-2, PKG-9: std declares every component with a descriptor, each export is in the
@@ -593,7 +594,7 @@ export default song(() => {
 /// The engines' own knobs and each drum's: left out, each is its kernel port's default, so an
 /// engine and its kernel agree on what a bare note sounds like. The other instruments are
 /// voiced: their defaults are their patches'.
-const ENGINES: [&str; 12] = [
+const ENGINES: [&str; 13] = [
     "std:synth-custom",
     "std:fm-custom",
     "std:drum-kit",
@@ -606,6 +607,7 @@ const ENGINES: [&str; 12] = [
     "std:drum-cowbell",
     "std:drum-cymbal",
     "std:drum-shaker",
+    "std:sampler",
 ];
 
 // PKG-3, PKG-4: every instrument builds bare, and every knob a call leaves out reaches a kernel:
@@ -618,6 +620,7 @@ fn std_instruments_reach_their_kernels() {
     let song = format!(
         "import {{ song }} from \"@m2/core\";\nimport {{ drums }} from \"std/drums\";\nimport {{ osc }} from \"std/dsp\";\n\
          import {{ fm }} from \"std/fm\";\nimport {{ mixer }} from \"std/mix\";\nimport {{ mono, synth }} from \"std/synth\";\n\
+         import {{ sampler }} from \"std/sampler\";\n\
          export default song(({{ lane }}) => {{\n  const notes = lane.notes(\"notes\");\n\
          const all = [{}, mono(notes, (n) => osc.saw(n.pitch))];\n  return mixer({{ a: all[0] }});\n}});\n",
         calls.join(", ")
