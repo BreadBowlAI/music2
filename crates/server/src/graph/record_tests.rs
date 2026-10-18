@@ -835,7 +835,8 @@ mod audio {
 
     impl Rig {
         fn new() -> Rig {
-            let fixture = Fixture::new();
+            // Through a link, as on a Mac: the song opens by its real path, not this one.
+            let fixture = Fixture::linked();
             fixture.put("song.ts", VOX);
             fixture.put("data/vox/clips.json", "{\"clips\": []}\n");
             let (player, d) = Player::driven(48_000);
