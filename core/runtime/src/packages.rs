@@ -468,7 +468,7 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
 }
 
 /// The kernel ABI version this runtime speaks (see `m2-kernel`).
-pub const KERNEL_ABI: u32 = 0;
+pub const KERNEL_ABI: u32 = 1;
 
 /// Kernels are sandboxed: no imports at all, the ABI exports, and the right ABI version.
 fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Result<()> {
@@ -492,6 +492,7 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
         }
     };
     func("m2_abi", &[], &[ValType::I32])?;
+    func("m2_alloc", &[ValType::I32, ValType::I32], &[ValType::I32])?;
     if !matches!(exports.get("memory"), Some(ExternType::Memory(_))) {
         bail!("missing export `memory`");
     }
@@ -503,12 +504,11 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
     }
     for k in kernels {
         let n = &k.name;
-        func(&format!("{n}_init"), &[ValType::F32, ValType::I32, ValType::I32], &[])?;
         func(&format!("{n}_ports"), &[], &[ValType::I32])?;
-        func(&format!("{n}_port"), &[ValType::I32], &[ValType::I32])?;
-        func(&format!("{n}_reset"), &[], &[])?;
-        func(&format!("{n}_process"), &[ValType::I32], &[])?;
-        func(&format!("{n}_active"), &[], &[ValType::I32])?;
+        func(&format!("{n}_new"), &[ValType::I32], &[ValType::I32])?;
+        func(&format!("{n}_reset"), &[ValType::I32], &[])?;
+        func(&format!("{n}_process"), &[ValType::I32, ValType::I32, ValType::I32, ValType::I32], &[])?;
+        func(&format!("{n}_active"), &[ValType::I32], &[ValType::I32])?;
     }
     Ok(())
 }

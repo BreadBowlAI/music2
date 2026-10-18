@@ -338,20 +338,17 @@ fn cell_heard_never_runs_ahead() {
 // ---------------------------------------------------------------- ABI-1
 
 /// std, and a package `t` holding one hand-written kernel `k` with one audio input and output,
-/// whose `k_port`, `k_reset` and `k_process` are given.
-fn with_kernel(port: &str, reset: &str, process: &str) -> (PackageSet, PathBuf) {
+/// whose `k_reset` and `k_process` (with `$io`, its port table) are given. Its sandbox's first block
+/// is its port buffers, so its input is at 8192 ([`crate::tests::module_v1`]).
+fn with_kernel(reset: &str, process: &str) -> (PackageSet, PathBuf) {
     let dir = project(&[]);
-    let wat = format!(
-        r#"(module
-  (memory (export "memory") 1)
-  (func (export "m2_abi") (result i32) (i32.const 0))
-  (func (export "k_init") (param f32 i32 i32))
+    let wat = crate::tests::module_v1(&format!(
+        r#"(func (export "k_new") (param i32) (result i32) (i32.const 4096))
   (func (export "k_ports") (result i32) (i32.const 257))
-  (func (export "k_port") (param i32) (result i32) {port})
-  (func (export "k_reset") {reset})
-  (func (export "k_process") (param i32) {process})
-  (func (export "k_active") (result i32) (i32.const 0)))"#
-    );
+  (func (export "k_reset") (param i32) {reset})
+  (func (export "k_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32) {process})
+  (func (export "k_active") (param i32) (result i32) (i32.const 0))"#
+    ));
     std::fs::write(dir.join("k.wasm"), wat).unwrap();
     std::fs::write(
         dir.join("m2pkg.toml"),
@@ -373,29 +370,12 @@ fn through_k(pk: &PackageSet) -> Result<Renderer> {
     Renderer::new(&check(&ir, pk).unwrap_or_else(|e| panic!("{e:?}")), &DataSet::empty(), pk, SR)
 }
 
-/// Each port its own 1 KiB: inputs first, then outputs.
-const OWN_PORTS: &str = "(i32.add (i32.const 1024) (i32.mul (local.get 0) (i32.const 1024)))";
-
-// ABI-1, in every build: a kernel whose ports share memory is refused when it is built, since one
-// port's writes would change another behind the host's back.
-#[test]
-fn a_kernel_with_overlapping_ports_is_refused() {
-    let (pk, dir) = with_kernel("(i32.const 1024)", "", "");
-    let e = through_k(&pk).map(drop).unwrap_err();
-    assert!(format!("{e:#}").contains("song/k: `t:k` returned overlapping buffers for ports `in` and `out` (ABI-1"), "{e:#}");
-    let (pk, ok) = with_kernel(OWN_PORTS, "", "");
-    through_k(&pk).unwrap().render(0.01).unwrap();
-    for d in [dir, ok] {
-        std::fs::remove_dir_all(d).ok();
-    }
-}
-
 // ABI-1, RENDER-24: debug builds check that a call into a kernel leaves its input memory as the
 // host wrote it: a kernel that writes an input fails the render, naming it.
 #[cfg(debug_assertions)]
 #[test]
 fn a_kernel_that_writes_its_input_fails() {
-    let (pk, dir) = with_kernel(OWN_PORTS, "", "(f32.store (i32.const 1024) (f32.const 12345))");
+    let (pk, dir) = with_kernel("", "(f32.store (i32.load (local.get $io)) (f32.const 12345))");
     let e = through_k(&pk).unwrap().render(0.01).unwrap_err();
     assert!(format!("{e:#}").contains("song/k: `t:k` wrote its input `in` (ABI-1: kernel input memory is read-only)"), "{e:#}");
     // An export (not strict) fails the same way (RENDER-25).
@@ -416,7 +396,7 @@ fn a_kernel_that_writes_its_input_fails() {
 #[cfg(debug_assertions)]
 #[test]
 fn a_reset_that_changes_its_input_fails() {
-    let (pk, dir) = with_kernel(OWN_PORTS, "(f32.store (i32.const 1028) (f32.const 7))", "");
+    let (pk, dir) = with_kernel("(f32.store (i32.const 8196) (f32.const 7))", "");
     let e = through_k(&pk).map(drop).unwrap_err();
     assert!(format!("{e:#}").contains("song/k: `t:k`'s reset changed its input `in` (ABI-1"), "{e:#}");
     std::fs::remove_dir_all(dir).ok();

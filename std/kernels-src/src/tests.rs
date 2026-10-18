@@ -58,7 +58,7 @@ impl Seen {
 /// blocks of `sizes` taken in turn, stereo or mono. Every output sample, and the smoother after
 /// every block, must be the same bits.
 fn compare(what: &str, frames: usize, sizes: &[usize], stereo: bool, db: impl Fn(usize) -> f32) -> Seen {
-    let mut gain = Gain::new(SR, if stereo { 2 } else { 1 });
+    let mut gain = Gain::new(&m2_kernel::Cfg::new(SR, BLOCK, if stereo { 2 } else { 1 }));
     let mut before = Smooth::new(0.005, SR);
     let mut seen = Seen(vec![]);
     let mut t = 0;
@@ -213,4 +213,73 @@ fn played_through_its_ports_it_gives_the_same_bits() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------- ABI v1
+
+/// One state's port buffers, each `BLOCK` floats, and the port table pointing at them: inputs
+/// first, one mono channel each.
+struct Ports {
+    bufs: Vec<Vec<f32>>,
+    table: Vec<*mut f32>,
+}
+
+impl Ports {
+    fn new(n: usize) -> Ports {
+        let mut bufs = vec![vec![0.0f32; BLOCK]; n];
+        let table = bufs.iter_mut().map(|b| b.as_mut_ptr()).collect();
+        Ports { bufs, table }
+    }
+}
+
+type DelayState = m2_kernel::State<crate::Delay>;
+
+/// A block of `std:delay` through its exports: its input `x(t)` from sample `t`, a 10 ms echo fed
+/// back by half, half wet. Returns its output.
+fn delay_block(state: *mut DelayState, ports: &mut Ports, t: usize, x: impl Fn(usize) -> f32) -> Vec<f32> {
+    for (k, v) in ports.bufs[0].iter_mut().enumerate() {
+        *v = x(t + k);
+    }
+    for (p, v) in [(1, 0.01), (2, 0.5), (3, 0.5)] {
+        ports.bufs[p].fill(v);
+    }
+    // SAFETY: `state` is one `new` returned, and the table points at this state's own buffers.
+    unsafe { crate::delay::process(state, ports.table.as_ptr(), 0, BLOCK as u32) };
+    ports.bufs[4].clone()
+}
+
+// ABI v1 (report §2.3): every call names its state, so one instance of a module holds many, and no
+// state lives in a static. Two delays made through the exports, fed different sounds in turns, each
+// play exactly what one plays alone: neither hears the other's echoes.
+#[test]
+fn two_states_in_one_instance_play_independently() {
+    let channels = [1u32; 5];
+    let settings = m2_kernel::settings(&m2_kernel::Cfg::new(SR, BLOCK, 1), &channels);
+    let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
+    let new = || unsafe { crate::delay::new(&settings) };
+    let alone = |seed: usize| {
+        let (state, mut ports) = (new(), Ports::new(5));
+        (0..20).flat_map(|b| delay_block(state, &mut ports, b * BLOCK, sound(seed))).collect::<Vec<f32>>()
+    };
+    let (a, b) = (new(), new());
+    let (mut pa, mut pb) = (Ports::new(5), Ports::new(5));
+    let (mut heard_a, mut heard_b) = (vec![], vec![]);
+    for block in 0..20 {
+        heard_a.extend(delay_block(a, &mut pa, block * BLOCK, sound(0)));
+        heard_b.extend(delay_block(b, &mut pb, block * BLOCK, sound(1)));
+    }
+    assert!(heard_a.iter().any(|&v| v != 0.0) && heard_a != heard_b, "they play different sounds");
+    assert!(heard_a == alone(0), "the first state plays as it does alone");
+    assert!(heard_b == alone(1), "the second state plays as it does alone");
+}
+
+// ABI v1: a kernel whose state holds a `Vec` clears it in place at a reset (a reset takes no
+// memory), and starts over exactly as a new one does.
+#[test]
+fn kernels_with_lines_reset_in_place_to_where_they_started() {
+    use crate::testkit::assert_reset_starts_over;
+    assert_reset_starts_over::<crate::Delay>(&[0.5, 0.01, 0.5, 0.5], 5_000);
+    assert_reset_starts_over::<crate::fx::Reverb>(&[0.5, 0.6, 0.5, 0.5], 5_000);
+    assert_reset_starts_over::<crate::fx::Chorus>(&[0.5, 1.0, 0.5, 0.5, 1.0], 5_000);
+    assert_reset_starts_over::<crate::fx::Widen>(&[0.5, 1.5], 5_000);
 }

@@ -64,6 +64,13 @@ Step 9, the audio-and-sample turn 2 (architecture.md, Order of work, item 9). Br
 
 The existing tests that guard live edits must pass unchanged: `keep.rs`, `no_alloc`, `churn`, G7b, G7c.
 
+**Changed while building** (2026-10-18):
+- `two_states_in_one_instance_play_independently` runs natively in `std/kernels-src/src/tests.rs` and in wasm in `core/runtime/src/tests.rs`: the kernels' crate has no wasm runner. Red with the kit's `k_new` stubbed to give one state per kernel type.
+- `p50_builds_200_sandboxes` lives in `core/session/src/gate_tests.rs`: p50 is written by `m2-session`, which `m2-runtime` can't use.
+- The settings block also holds `channels`, the count resolved for `audio<*>` ports: the kernels read it (`io.channels`), and the per-port list alone can't say it.
+- The hand-written test kernels in wat (`keep.rs`, `cell.rs`, `tests.rs`) are rewritten for v1; their checks are unchanged. `a_kernel_with_overlapping_ports_is_refused` goes with the overlap check. `a_kernel_memory_never_moves` becomes `a_sealed_sandbox_never_grows`. `prewarming_keeps_kernel_memory_flat` now says a first reset grows nothing.
+- In commit B a sandbox's birth cap stays 32 MiB (`KERNEL_MEMORY`, and its message); slice 2 makes it 256 MiB.
+
 **Done when:**
 - the numbers and the decision are in the contract: RENDER-32 rewritten (go, report §8's text) or its *Today* line extended with the numbers and the reason (no-go);
 - on go, commit B stays; on no-go, a revert commit takes it out (merges only, no rebase), and commit A is what ships;

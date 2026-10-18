@@ -51,6 +51,7 @@ pub mod packages;
 mod parts;
 mod plan;
 pub mod plugins;
+mod sandbox;
 pub mod sched;
 mod stopped;
 mod taps;
@@ -60,14 +61,12 @@ pub mod transport;
 mod view;
 
 use std::collections::{HashMap, HashSet};
-use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
 use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, PortRef, TimeOf};
 use m2_song::{Arrangement, DataSet, LaneData, TempoMap};
-use wasmtime::{Instance, Memory, ResourceLimiter, Store, TypedFunc};
 
 pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
@@ -88,6 +87,7 @@ use crate::fade::xfade;
 use crate::keep::{Edge, Wiring, used};
 use crate::parts::Schedule;
 use crate::plan::{Entry, LanePlan, LaneSlot, Lanes, Plan};
+use crate::sandbox::{Sandbox, State};
 use crate::taps::Taps;
 use crate::trace::Trace;
 use crate::view::{GraphView, Local, Own, Reads};
@@ -95,14 +95,14 @@ use crate::view::{GraphView, Local, Own, Reads};
 pub const BLOCK: usize = 128;
 
 /// Bytes of one kernel port buffer: `PORT_CHANNELS` (2) channels of [`BLOCK`] floats.
-const PORT_BYTES: usize = 2 * BLOCK * 4;
+pub(crate) const PORT_BYTES: usize = 2 * BLOCK * 4;
 
 /// A node's version when its output must be copied into the kernels it feeds at every call: it
 /// isn't a constant, or it is a cell that ramps this block.
 const COPY: u64 = u64::MAX;
 
 /// Memory one kernel instance may use.
-const KERNEL_MEMORY: usize = 32 << 20;
+pub(crate) const KERNEL_MEMORY: usize = 32 << 20;
 
 /// Output below this is "quiet" when deciding whether a voice has finished (-80 dB).
 const QUIET: f32 = 1e-4;
@@ -164,70 +164,17 @@ impl Seg {
 /// the block.
 type Buf = Vec<f32>;
 
-/// What a kernel's store may hold (RENDER-32): one instance, one memory of at most
-/// [`KERNEL_MEMORY`], one table. A grow past the memory's cap traps at once, so a kernel never runs
-/// on without what it asked for, and `refused` says why it stopped: [`OutOfMemory`], until that
-/// error is made.
-#[derive(Default)]
-struct Cap {
-    refused: bool,
-}
-
-impl ResourceLimiter for Cap {
-    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        if desired > KERNEL_MEMORY {
-            self.refused = true;
-            wasmtime::bail!("a kernel asked for {desired} bytes of memory, past its {KERNEL_MEMORY}");
-        }
-        // A module's own maximum is wasmtime's to keep.
-        Ok(true)
-    }
-
-    fn table_growing(&mut self, _current: usize, _desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        Ok(true)
-    }
-
-    fn instances(&self) -> usize {
-        1
-    }
-
-    fn tables(&self) -> usize {
-        1
-    }
-
-    fn memories(&self) -> usize {
-        1
-    }
-}
-
-/// `e`, from a call into kernel instance `name` in `store`: [`OutOfMemory`] when the call asked for
-/// more memory than a sound may use, else `e` itself. The refusal is taken: a later error of the
-/// same instance, once a panic or an activation made it play again, is its own.
-fn ran_out(store: &mut Store<Cap>, name: &str, e: impl Into<anyhow::Error>) -> anyhow::Error {
-    match std::mem::take(&mut store.data_mut().refused) {
-        true => OutOfMemory { node: name.to_string() }.into(),
-        false => e.into(),
-    }
-}
-
-/// One kernel instance, in a wasmtime `Store` of its own (RENDER-32): a box a plan activation can
-/// move into the next plan, whose memory goes when it drops.
+/// One kernel state, in a sandbox of its own (RENDER-32): a box a plan activation can move into
+/// the next plan, whose memory goes when it drops.
 struct KernelInst {
-    store: Store<Cap>,
+    sandbox: Sandbox,
+    state: State,
     /// The hash of the shape it was made for: what an activation checks before moving it.
     shape: u64,
     /// Live, it failed (RENDER-25): it plays silence and isn't called again until it is reset, as
     /// an activation moves it on or a panic.
     stopped: bool,
     name: String,
-    memory: Memory,
-    /// Where `memory` is, so a call needn't ask the store, one of thousands and cold (RENDER-32).
-    view: MemView,
-    reset: TypedFunc<(), ()>,
-    process: TypedFunc<u32, ()>,
-    active: TypedFunc<(), u32>,
-    in_ptrs: Vec<usize>,
-    out_ptrs: Vec<usize>,
     out_channels: Vec<u8>,
     /// Debug builds: input memory before a call into the kernel, to compare after (ABI-1), and
     /// the kernel id and its inputs' names, for the message.
@@ -238,18 +185,6 @@ struct KernelInst {
     #[cfg(debug_assertions)]
     in_names: Vec<String>,
 }
-
-/// A kernel memory's address and its size when its ports were checked, kept from its build. A
-/// memory never moves (RENDER-32): every layout reserves all of the 32 MiB a memory may grow to,
-/// and a memory never shrinks, so every port stays inside the first `len` bytes at `base`.
-struct MemView {
-    base: NonNull<u8>,
-    len: usize,
-}
-
-// SAFETY: `base` is dereferenced only in `KernelInst::ports`, which holds by `&mut` the instance, and
-// so the store that owns the memory; the memory goes to another thread only with that store.
-unsafe impl Send for MemView {}
 
 /// One call's view of a kernel's memory: its bytes, the ports in them, and the instance's name.
 struct Ports<'a> {
@@ -285,81 +220,51 @@ struct KernelNode {
     inst: Option<Box<KernelInst>>,
 }
 
+/// The channel count of each port of kernel `sig` in node `n`, inputs first, as its port table has
+/// them: a connected input's own, else its kind's (`audio<*>` and `*` take the node's `channels`).
+fn port_channels(sig: &m2_ir::KernelSig, n: &FNode, channels: u8, inputs: &[Input]) -> Vec<u32> {
+    let input = |(p, i): (&m2_ir::PortSig, &Input)| match (i, &p.kind) {
+        (Input::Port { channels, .. }, _) => *channels,
+        (_, m2_ir::PortKind::Audio(Some(c))) => *c,
+        (_, m2_ir::PortKind::Audio(None) | m2_ir::PortKind::Any) => channels,
+        _ => 1,
+    };
+    sig.inputs.iter().zip(inputs).map(input).chain(n.outputs.iter().map(|k| k.channels())).map(|c| c.clamp(1, 2) as u32).collect()
+}
+
 impl KernelInst {
-    /// Instantiate kernel `id` for node `n` in a store of its own, initialise it and check its ports;
-    /// constant inputs are written into its memory once.
+    /// Kernel `id` for node `n`, in a sandbox of its own: born, its constant inputs written into its
+    /// memory once, and sealed.
     fn new(packages: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64, shape: u64) -> Result<KernelInst> {
         let (module, prefix) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
-        let mut store = Store::new(&packages.engine, Cap::default());
-        store.limiter(|c| c);
-        let failed = |store: &mut Store<Cap>, e: anyhow::Error| ran_out(store, &n.name, e);
-        let instance = Instance::new(&mut store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name)).map_err(|e| failed(&mut store, e))?;
-        let f = |name: &str| format!("{prefix}_{name}");
-        let init = instance.get_typed_func::<(f32, u32, u32), ()>(&mut store, &f("init"))?;
-        let ports = instance.get_typed_func::<(), u32>(&mut store, &f("ports"))?;
-        let port = instance.get_typed_func::<u32, u32>(&mut store, &f("port"))?;
-        let reset = instance.get_typed_func::<(), ()>(&mut store, &f("reset"))?;
-        let process = instance.get_typed_func::<u32, ()>(&mut store, &f("process"))?;
-        let active = instance.get_typed_func::<(), u32>(&mut store, &f("active"))?;
-        let memory = instance.get_memory(&mut store, "memory").context("kernel has no memory")?;
-        init.call(&mut store, (sample_rate as f32, BLOCK as u32, channels as u32)).map_err(|e| failed(&mut store, e.into()))?;
-
-        let (n_in, n_out) = (inputs.len(), n.outputs.len());
-        let declared = ports.call(&mut store, ()).map_err(|e| failed(&mut store, e.into()))?;
-        if declared != ((n_in as u32) << 8 | n_out as u32) {
-            bail!(
-                "{}: `{id}` has {} inputs and {} outputs, but its manifest declares {n_in} and {n_out}",
-                n.name,
-                declared >> 8,
-                declared & 0xff
-            );
-        }
-        let mut ptrs = vec![];
-        for i in 0..(n_in + n_out) as u32 {
-            let p = port.call(&mut store, i).map_err(|e| failed(&mut store, e.into()))? as usize;
-            if p == 0 || !p.is_multiple_of(4) || p + PORT_BYTES > memory.data_size(&store) {
-                bail!("{}: `{id}` returned a bad buffer for port {i}", n.name);
-            }
-            ptrs.push(p);
-        }
-        // ABI-1, in every build: a port that shared memory with another would let one write the
-        // other, so an input written once could change behind the host's back.
         let sig = m2_ir::Kernels::kernel(packages, id).with_context(|| format!("{}: kernel `{id}` has no signature", n.name))?;
-        let names: Vec<&str> = sig.inputs.iter().chain(&sig.outputs).map(|p| p.name.as_str()).collect();
-        let mut by_start: Vec<(usize, usize)> = ptrs.iter().enumerate().map(|(i, &p)| (p, i)).collect();
-        by_start.sort_unstable();
-        if let Some(w) = by_start.windows(2).find(|w| w[0].0 + PORT_BYTES > w[1].0) {
-            let name = |i: usize| names.get(i).copied().unwrap_or("?");
-            bail!(
-                "{}: `{id}` returned overlapping buffers for ports `{}` and `{}` (ABI-1: each port has its own memory)",
-                n.name,
-                name(w[0].1),
-                name(w[1].1)
-            );
-        }
-        let out_ptrs = ptrs.split_off(n_in);
+        let mut sandbox = Sandbox::new(&packages.engine, module).with_context(|| format!("{}: `{id}`", n.name))?;
+        let (n_in, n_out) = (inputs.len(), n.outputs.len());
+        let ports = port_channels(sig, n, channels, inputs);
+        let state = match sandbox.state(prefix, n_in, n_out, &ports, channels, sample_rate) {
+            Ok(s) => s,
+            Err(e) => {
+                let e = sandbox.ran_out(&n.name, e);
+                return Err(if e.is::<OutOfMemory>() { e } else { e.context(format!("{}: `{id}`", n.name)) });
+            }
+        };
         // Unconnected and constant inputs are written once; kernels never write inputs.
-        let data = memory.data_mut(&mut store);
-        for (inp, &ptr) in inputs.iter().zip(&ptrs) {
+        let data = sandbox.data_born();
+        for (inp, &ptr) in inputs.iter().zip(&state.ins) {
             if let Input::Const(v) = inp {
                 floats(data, ptr, 2 * BLOCK).fill(*v as f32);
             }
         }
-        let base = NonNull::new(memory.data_ptr(&store)).with_context(|| format!("{}: `{id}`'s memory has no address", n.name))?;
-        let view = MemView { base, len: memory.data_size(&store) };
+        sandbox.seal().with_context(|| n.name.clone())?;
+        #[cfg(debug_assertions)]
+        let names: Vec<&str> = sig.inputs.iter().map(|p| p.name.as_str()).collect();
         LIVE_KERNELS.fetch_add(1, Ordering::Relaxed);
         Ok(KernelInst {
-            store,
+            sandbox,
+            state,
             shape,
             stopped: false,
             name: n.name.clone(),
-            memory,
-            view,
-            reset,
-            process,
-            active,
-            in_ptrs: ptrs,
-            out_ptrs,
             out_channels: n.outputs.iter().map(|k| k.channels()).collect(),
             #[cfg(debug_assertions)]
             before: vec![0; n_in * PORT_BYTES],
@@ -374,7 +279,8 @@ impl KernelInst {
     fn process(&mut self, frames: usize) -> Result<()> {
         #[cfg(debug_assertions)]
         self.keep_inputs();
-        self.process.call(&mut self.store, frames as u32).wctx(|| format!("{} crashed", self.name)).map_err(|e| self.ran_out(e))?;
+        let done = self.state.process(&mut self.sandbox, frames).wctx(|| format!("{} crashed", self.name));
+        done.map_err(|e| self.sandbox.ran_out(&self.name, e))?;
         #[cfg(debug_assertions)]
         self.check_inputs(false)?;
         Ok(())
@@ -384,7 +290,7 @@ impl KernelInst {
     fn reset(&mut self) -> Result<()> {
         #[cfg(debug_assertions)]
         self.keep_inputs();
-        self.reset.call(&mut self.store, ()).map_err(|e| self.ran_out(e))?;
+        self.state.reset(&mut self.sandbox).map_err(|e| self.sandbox.ran_out(&self.name, e))?;
         #[cfg(debug_assertions)]
         self.check_inputs(true)?;
         Ok(())
@@ -392,51 +298,34 @@ impl KernelInst {
 
     /// Whether it still holds sound that will come out later.
     fn active(&mut self) -> Result<bool> {
-        Ok(self.active.call(&mut self.store, ()).map_err(|e| self.ran_out(e))? != 0)
+        self.state.active(&mut self.sandbox).map_err(|e| self.sandbox.ran_out(&self.name, e))
     }
 
-    /// `e`, from a call into it: [`OutOfMemory`] when the call asked for more than a sound may use.
-    fn ran_out(&mut self, e: impl Into<anyhow::Error>) -> anyhow::Error {
-        ran_out(&mut self.store, &self.name, e)
-    }
-
-    /// Its first reset, while it is built: a reset may grow the memory (a kernel builds its new
-    /// state before dropping the old), never move it, which this checks in every build. It sees a
-    /// move in this reset only: what keeps a memory in place later is the layout and the 32 MiB cap
-    /// (RENDER-32), and debug builds check at every call ([`KernelInst::ports`]).
+    /// Its first reset, while it is built, after its sandbox is sealed: a reset that would take
+    /// memory fails here, at the build, naming its node, and never later on the audio thread.
     fn prewarm(&mut self) -> Result<()> {
-        self.reset()?;
-        if self.memory.data_ptr(&self.store) != self.view.base.as_ptr() {
-            bail!("{}: its kernel memory moved as it grew (RENDER-32: a kernel memory never moves)", self.name);
-        }
-        Ok(())
+        self.reset()
     }
 
     /// Its memory's bytes for one call's copies, with its ports and its name, without asking the
-    /// store. Debug builds check the memory is still where it was built: one lookup in the store, as
-    /// each copy made before the address was kept.
+    /// store (RENDER-32).
     fn ports(&mut self) -> Ports<'_> {
-        debug_assert_eq!(self.memory.data_ptr(&self.store), self.view.base.as_ptr(), "{}: a kernel memory moved (RENDER-32)", self.name);
-        // SAFETY: `base..base + len` is this instance's memory, which its store owns and which never
-        // moves or shrinks (RENDER-32). `&mut self` holds that store for as long as the slice lives,
-        // so no call into the kernel and no other view of the memory can happen meanwhile, as with
-        // `Memory::data_mut`.
-        let data = unsafe { std::slice::from_raw_parts_mut(self.view.base.as_ptr(), self.view.len) };
-        Ports { data, ins: &self.in_ptrs, outs: &self.out_ptrs, out_channels: &self.out_channels, name: &self.name }
+        let s = &self.state;
+        Ports { data: self.sandbox.data(), ins: &s.ins, outs: &s.outs, out_channels: &self.out_channels, name: &self.name }
     }
 
     #[cfg(debug_assertions)]
     fn keep_inputs(&mut self) {
-        let data = self.memory.data(&self.store);
-        for (k, &ptr) in self.in_ptrs.iter().enumerate() {
+        let data = self.sandbox.bytes();
+        for (k, &ptr) in self.state.ins.iter().enumerate() {
             self.before[k * PORT_BYTES..(k + 1) * PORT_BYTES].copy_from_slice(&data[ptr..ptr + PORT_BYTES]);
         }
     }
 
     #[cfg(debug_assertions)]
     fn check_inputs(&self, reset: bool) -> Result<()> {
-        let data = self.memory.data(&self.store);
-        for (k, &ptr) in self.in_ptrs.iter().enumerate() {
+        let data = self.sandbox.bytes();
+        for (k, &ptr) in self.state.ins.iter().enumerate() {
             if data[ptr..ptr + PORT_BYTES] != self.before[k * PORT_BYTES..(k + 1) * PORT_BYTES] {
                 let (kernel, port) = (&self.kernel, &self.in_names[k]);
                 let what = if reset {
@@ -1613,9 +1502,9 @@ impl Graph {
         }
     }
 
-    /// Reset every kernel once, in voices too: a kernel's first reset may grow its memory
-    /// (it builds the new state before dropping the old), so it happens here, off the audio
-    /// thread, and never again later. A reset is the same as init, so nothing sounds different.
+    /// Reset every kernel once, in voices too, after its sandbox is sealed: a reset that would take
+    /// memory fails here, off the audio thread, naming its node (RENDER-28). A reset leaves a state
+    /// as it was born, so nothing sounds different.
     fn prewarm(&mut self) -> Result<()> {
         for e in &mut self.exec {
             match e {
@@ -1636,7 +1525,7 @@ impl Graph {
         self.exec
             .iter()
             .map(|e| match e {
-                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.memory.data_size(&k.store),
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.sandbox.size(),
                 Exec::Poly(p) => p.pool.iter().flat_map(|pool| &pool.voices).map(|v| v.graph.kernel_memory()).sum(),
                 _ => 0,
             })

@@ -3,7 +3,7 @@
 //! sidebands fold into the decimator's stopband instead of back into the audio. Port order
 //! must match `std/m2pkg.toml`.
 
-use m2_kernel::{Io, Kernel, db_to_gain, export};
+use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
 use crate::voice::{DcBlock, Env, Glide, Halfband, Memo, Ramp, Stage, TICK, clampf, hash, hz, pitch_of, sin2pi};
 
@@ -173,7 +173,8 @@ impl Kernel for Fm {
     const INPUTS: usize = INPUTS;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         let sr = sample_rate.max(1.0);
         Fm {
             sr,

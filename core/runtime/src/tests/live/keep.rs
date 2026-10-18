@@ -276,39 +276,15 @@ fn an_activation_against_another_plan_is_refused() {
 /// state), `t:denan` (NaN and infinities to 0), `t:trap` (traps while its input is over 0.5,
 /// else outputs 1), `t:hog` (grows its memory by 600 pages, 37.5 MiB, while its input is over 0.5,
 /// trapping when the grow fails; traps plainly while its input is over 1.5; else outputs 1),
-/// `t:fat` (its reset grows its memory by 600 pages; outputs 1), `t:sore` (outputs 1; its reset
+/// `t:fat` (its reset grows its memory by 600 pages, which a sealed sandbox refuses; outputs 1), `t:sore` (outputs 1; its reset
 /// traps once its input went over 0.5) and `t:tiny` (its init and reset keep 1e-30 × 1e-10, a
 /// subnormal, which it outputs times 1e40: 1 where subnormals are kept, 0 where they were flushed;
 /// active while that product isn't 0).
 fn t_kernels() -> PathBuf {
     let dir = project(&[]).join("t");
     std::fs::create_dir_all(&dir).unwrap();
-    let port = |k: &str| {
-        format!(
-            r#"(func (export "{k}_port") (param i32) (result i32) (i32.add (i32.const 1024) (i32.mul (local.get 0) (i32.const 1024))))"#
-        )
-    };
-    let common = |k: &str| {
-        format!(
-            r#"(func (export "{k}_init") (param f32 i32 i32) (f32.store (i32.const 4096) (f32.const 0)))
-               (func (export "{k}_ports") (result i32) (i32.const 257)) {}
-               (func (export "{k}_reset") (f32.store (i32.const 4096) (f32.const 0)))
-               (func (export "{k}_active") (result i32) (i32.const 0))"#,
-            port(k)
-        )
-    };
-    let each = |k: &str, body: &str| {
-        format!(
-            r#"(func (export "{k}_process") (param $n i32) (local $i i32) (local $x f32)
-                 (block $done (loop $l
-                   (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
-                   (local.set $x (f32.load (i32.add (i32.const 1024) (i32.shl (local.get $i) (i32.const 2)))))
-                   {body}
-                   (local.set $i (i32.add (local.get $i) (i32.const 1)))
-                   (br $l))))"#
-        )
-    };
-    let out = |v: &str| format!("(f32.store (i32.add (i32.const 2048) (i32.shl (local.get $i) (i32.const 2))) {v})");
+    use crate::tests::{kernel_v1, module_v1, out_v1 as out, process_v1};
+    let each = |k: &str, body: &str| kernel_v1(k, body);
     let latch = format!(
         "(if (f32.gt (local.get $x) (f32.const 0.5)) (then (f32.store (i32.const 4096) (f32.const nan)))) {}",
         out("(f32.add (f32.load (i32.const 4096)) (f32.const 1))")
@@ -321,45 +297,35 @@ fn t_kernels() -> PathBuf {
         "(if (f32.gt (local.get $x) (f32.const 1.5)) (then (unreachable))) (if (f32.gt (local.get $x) (f32.const 0.5)) (then {grow})) {}",
         out("(f32.const 1)")
     );
-    let fat = format!(
-        r#"(func (export "fat_init") (param f32 i32 i32))
-           (func (export "fat_ports") (result i32) (i32.const 257)) {}
-           (func (export "fat_reset") (drop (memory.grow (i32.const 600))))
-           (func (export "fat_active") (result i32) (i32.const 0))"#,
-        port("fat")
-    ) + &each("fat", &out("(f32.const 1)"));
-    let sore = format!(
-        r#"(func (export "sore_init") (param f32 i32 i32) (f32.store (i32.const 4096) (f32.const 0)))
-           (func (export "sore_ports") (result i32) (i32.const 257)) {}
-           (func (export "sore_reset")
+    let fat = r#"(func (export "fat_new") (param i32) (result i32) (i32.const 4096))
+           (func (export "fat_ports") (result i32) (i32.const 257))
+           (func (export "fat_reset") (param i32) (drop (memory.grow (i32.const 600))))
+           (func (export "fat_active") (param i32) (result i32) (i32.const 0))"#
+        .to_string()
+        + &process_v1("fat", &out("(f32.const 1)"));
+    let sore = r#"(func (export "sore_new") (param i32) (result i32) (f32.store (i32.const 4096) (f32.const 0)) (i32.const 4096))
+           (func (export "sore_ports") (result i32) (i32.const 257))
+           (func (export "sore_reset") (param i32)
              (if (f32.gt (f32.load (i32.const 4096)) (f32.const 0.5)) (then (unreachable)))
              (f32.store (i32.const 4096) (f32.const 0)))
-           (func (export "sore_active") (result i32) (i32.const 0))"#,
-        port("sore")
-    ) + &each(
-        "sore",
-        &format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then (f32.store (i32.const 4096) (f32.const 1)))) {}", out("(f32.const 1)")),
-    );
+           (func (export "sore_active") (param i32) (result i32) (i32.const 0))"#
+        .to_string()
+        + &process_v1(
+            "sore",
+            &format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then (f32.store (i32.const 4096) (f32.const 1)))) {}", out("(f32.const 1)")),
+        );
     // The factors are loaded from memory, so no compiler multiplies them ahead of time.
     let product = "(f32.mul (f32.load (i32.const 4100)) (f32.load (i32.const 4104)))";
     let tiny = format!(
-        r#"(func (export "tiny_init") (param f32 i32 i32)
-             (f32.store (i32.const 4100) (f32.const 1e-30)) (f32.store (i32.const 4104) (f32.const 1e-10)) (call $tiny_reset))
-           (func (export "tiny_ports") (result i32) (i32.const 257)) {}
-           (func $tiny_reset (export "tiny_reset") (f32.store (i32.const 4096) {product}))
-           (func (export "tiny_active") (result i32) (f32.ne {product} (f32.const 0)))"#,
-        port("tiny")
-    ) + &each("tiny", &out("(f32.mul (f32.mul (f32.load (i32.const 4096)) (f32.const 1e30)) (f32.const 1e10))"));
-    let wat = format!(
-        r#"(module (memory (export "memory") 1) (func (export "m2_abi") (result i32) (i32.const 0)) {} {} {} {} {} {} {} {})"#,
-        common("latch") + &each("latch", &latch),
-        common("spike") + &each("spike", &spike),
-        common("denan") + &each("denan", &denan),
-        common("trap") + &each("trap", &trap),
-        common("hog") + &each("hog", &hog),
-        fat,
-        sore,
-        tiny,
+        r#"(func (export "tiny_new") (param i32) (result i32)
+             (f32.store (i32.const 4100) (f32.const 1e-30)) (f32.store (i32.const 4104) (f32.const 1e-10)) (call $tiny_reset (i32.const 4096))
+             (i32.const 4096))
+           (func (export "tiny_ports") (result i32) (i32.const 257))
+           (func $tiny_reset (export "tiny_reset") (param i32) (f32.store (i32.const 4096) {product}))
+           (func (export "tiny_active") (param i32) (result i32) (f32.ne {product} (f32.const 0)))"#
+    ) + &process_v1("tiny", &out("(f32.mul (f32.mul (f32.load (i32.const 4096)) (f32.const 1e30)) (f32.const 1e10))"));
+    let wat = module_v1(
+        &[each("latch", &latch), each("spike", &spike), each("denan", &denan), each("trap", &trap), each("hog", &hog), fat, sore, tiny].concat(),
     );
     std::fs::write(dir.join("k.wasm"), wat).unwrap();
     let kernel = |k: &str, input: &str| format!("[[kernel]]\nname = \"{k}\"\ninputs = [\"in: {input}\"]\noutputs = [\"out: audio<1>\"]\n");

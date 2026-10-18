@@ -17,7 +17,7 @@
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use m2_kernel::{Io, Kernel, db_to_gain, export};
+use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
 // ---------------------------------------------------------------- helpers
 
@@ -146,6 +146,7 @@ impl Filter {
 
 /// A delay line read at fractional delays with 4-point Hermite interpolation, which keeps
 /// the top end of a modulated delay that linear interpolation would dull.
+#[derive(Default)]
 struct Line {
     buf: Vec<f32>,
     pos: usize,
@@ -154,6 +155,12 @@ struct Line {
 impl Line {
     fn new(len: usize) -> Self {
         Line { buf: vec![0.0; len.max(4)], pos: 0 }
+    }
+
+    /// As `new` left it, in place.
+    fn clear(&mut self) {
+        self.buf.fill(0.0);
+        self.pos = 0;
     }
 
     fn push(&mut self, x: f32) {
@@ -265,19 +272,14 @@ pub struct Reverb {
     quiet: usize,
 }
 
-impl Kernel for Reverb {
-    const INPUTS: usize = 4;
-    const OUTPUTS: usize = 1;
-
-    fn new(sample_rate: f32, _: usize) -> Self {
-        let sr = sample_rate.max(1.0);
-        let len = |l: usize, spread: usize| (((l + spread) as f32 * sr / 44_100.0) as usize).max(1);
-        let combs = |spread| -> Vec<Comb> { COMBS.iter().map(|&l| Comb { buf: vec![0.0; len(l, spread)], pos: 0, store: 0.0 }).collect() };
-        let allpasses =
-            |spread| -> Vec<Allpass> { ALLPASSES.iter().map(|&l| Allpass { buf: vec![0.0; len(l, spread)], pos: 0 }).collect() };
+impl Reverb {
+    /// The state `new` makes, around zeroed lines of the lengths it gives them.
+    fn around(sr: f32, combs: [Vec<Comb>; 2], allpasses: [Vec<Allpass>; 2]) -> Self {
+        // The right side's longest comb and its allpasses.
+        let tail = combs[1][7].buf.len() + allpasses[1].iter().map(|a| a.buf.len()).sum::<usize>();
         Reverb {
-            combs: [combs(0), combs(SPREAD)],
-            allpasses: [allpasses(0), allpasses(SPREAD)],
+            combs,
+            allpasses,
             send: Filter::highpass(sr, REVERB_CUT, 0.707),
             send_state: [0.0; 2],
             size: Glide::new(0.05, sr),
@@ -285,9 +287,38 @@ impl Kernel for Reverb {
             mix: Glide::new(0.02, sr),
             gains: (1.0, 0.0),
             gains_at: f32::NAN,
-            tail: len(COMBS[7], SPREAD) + ALLPASSES.iter().map(|&l| len(l, SPREAD)).sum::<usize>(),
+            tail,
             quiet: usize::MAX,
         }
+    }
+}
+
+impl Kernel for Reverb {
+    const INPUTS: usize = 4;
+    const OUTPUTS: usize = 1;
+
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
+        let sr = sample_rate.max(1.0);
+        let len = |l: usize, spread: usize| (((l + spread) as f32 * sr / 44_100.0) as usize).max(1);
+        let combs = |spread| -> Vec<Comb> { COMBS.iter().map(|&l| Comb { buf: vec![0.0; len(l, spread)], pos: 0, store: 0.0 }).collect() };
+        let allpasses =
+            |spread| -> Vec<Allpass> { ALLPASSES.iter().map(|&l| Allpass { buf: vec![0.0; len(l, spread)], pos: 0 }).collect() };
+        Reverb::around(sr, [combs(0), combs(SPREAD)], [allpasses(0), allpasses(SPREAD)])
+    }
+
+    /// As `new` leaves it, its lines cleared in place: a reset takes no memory.
+    fn reset(&mut self, cfg: &Cfg) {
+        let (mut combs, mut allpasses) = (std::mem::take(&mut self.combs), std::mem::take(&mut self.allpasses));
+        for c in combs.iter_mut().flatten() {
+            c.buf.fill(0.0);
+            (c.pos, c.store) = (0, 0.0);
+        }
+        for a in allpasses.iter_mut().flatten() {
+            a.buf.fill(0.0);
+            a.pos = 0;
+        }
+        *self = Reverb::around(cfg.sample_rate.max(1.0), combs, allpasses);
     }
 
     fn process(&mut self, io: &mut Io) {
@@ -348,20 +379,29 @@ pub struct Chorus {
     mix: Glide,
 }
 
+impl Chorus {
+    /// The state `new` makes, around zeroed lines.
+    fn around(sr: f32, lines: [Line; 2]) -> Self {
+        Chorus { sr, lines, lfo: Phase { sr, at: 0.0 }, depth: Glide::new(0.05, sr), mix: Glide::new(0.02, sr) }
+    }
+}
+
 impl Kernel for Chorus {
     const INPUTS: usize = 5;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         let sr = sample_rate.max(1.0);
         let len = ((CHORUS_BASE + CHORUS_SWEEP) * sr) as usize + 8;
-        Chorus {
-            sr,
-            lines: [Line::new(len), Line::new(len)],
-            lfo: Phase { sr, at: 0.0 },
-            depth: Glide::new(0.05, sr),
-            mix: Glide::new(0.02, sr),
-        }
+        Chorus::around(sr, [Line::new(len), Line::new(len)])
+    }
+
+    /// As `new` leaves it, its lines cleared in place: a reset takes no memory.
+    fn reset(&mut self, cfg: &Cfg) {
+        let mut lines = std::mem::take(&mut self.lines);
+        lines.iter_mut().for_each(Line::clear);
+        *self = Chorus::around(cfg.sample_rate.max(1.0), lines);
     }
 
     fn process(&mut self, io: &mut Io) {
@@ -412,7 +452,8 @@ impl Kernel for Phaser {
     const INPUTS: usize = 6;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         let sr = sample_rate.max(1.0);
         Phaser {
             sr,
@@ -470,7 +511,8 @@ impl Kernel for Tremolo {
     const INPUTS: usize = 4;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         let sr = sample_rate.max(1.0);
         Tremolo { lfo: Phase { sr, at: 0.0 }, depth: Glide::new(0.02, sr) }
     }
@@ -510,7 +552,8 @@ impl Kernel for Compress {
     const INPUTS: usize = 6;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         let sr = sample_rate.max(1.0);
         Compress { sr, env: 0.0, attack: Coef::new(), release: Coef::new(), makeup: Glide::new(0.02, sr) }
     }
@@ -568,7 +611,8 @@ impl Kernel for Eq3 {
     const INPUTS: usize = 7;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         let sr = sample_rate.max(1.0);
         let flat = Filter::bell(sr, 1000.0, BELL_Q, 0.0);
         Eq3 { sr, params: std::array::from_fn(|_| Glide::new(0.03, sr)), at: [f32::NAN; 6], bands: [flat; 3], state: [[[0.0; 2]; 3]; 2] }
@@ -640,7 +684,8 @@ impl Kernel for Bitcrush {
     const INPUTS: usize = 5;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         let sr = sample_rate.max(1.0);
         Bitcrush { sr, clock: 1.0, kept: 1.0, playing: false, held: [0.0; 2], bits: f32::NAN, steps: 1.0, mix: Glide::new(0.02, sr) }
     }
@@ -699,15 +744,30 @@ pub struct Widen {
     width: Glide,
 }
 
+impl Widen {
+    /// The state `new` makes, around a zeroed line.
+    fn around(sr: f32, line: Line) -> Self {
+        let back = ((WIDEN_DELAY * sr) as usize).max(1);
+        let g = prewarp(WIDEN_CUT, sr);
+        Widen { line, back, cut: g / (1.0 + g), cut_state: 0.0, width: Glide::new(0.02, sr) }
+    }
+}
+
 impl Kernel for Widen {
     const INPUTS: usize = 2;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         let sr = sample_rate.max(1.0);
-        let back = ((WIDEN_DELAY * sr) as usize).max(1);
-        let g = prewarp(WIDEN_CUT, sr);
-        Widen { line: Line::new(back + 1), back, cut: g / (1.0 + g), cut_state: 0.0, width: Glide::new(0.02, sr) }
+        Widen::around(sr, Line::new(((WIDEN_DELAY * sr) as usize).max(1) + 1))
+    }
+
+    /// As `new` leaves it, its line cleared in place: a reset takes no memory.
+    fn reset(&mut self, cfg: &Cfg) {
+        let mut line = std::mem::take(&mut self.line);
+        line.clear();
+        *self = Widen::around(cfg.sample_rate.max(1.0), line);
     }
 
     fn process(&mut self, io: &mut Io) {

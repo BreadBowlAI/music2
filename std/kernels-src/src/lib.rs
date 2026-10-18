@@ -4,7 +4,7 @@
 
 use std::f32::consts::{PI, SQRT_2, TAU};
 
-use m2_kernel::{Io, Kernel, abi, db_to_gain, export};
+use m2_kernel::{Cfg, Io, Kernel, abi, db_to_gain, export};
 
 abi!();
 
@@ -58,7 +58,8 @@ impl<const W: u8> Kernel for Osc<W> {
     const INPUTS: usize = if W == 2 { 2 } else { 1 };
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _channels: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         Osc { sr: sample_rate, phase: 0.0 }
     }
 
@@ -85,7 +86,7 @@ impl Kernel for Noise {
     const INPUTS: usize = 1;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Noise(None)
     }
 
@@ -130,7 +131,8 @@ impl Kernel for Adsr {
     const INPUTS: usize = 5;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         Adsr { sr: sample_rate, stage: Stage::Idle, value: 0.0, gate: false }
     }
 
@@ -184,7 +186,8 @@ impl Kernel for Follow {
     const INPUTS: usize = 3;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         Follow { sr: sample_rate, env: 0.0 }
     }
 
@@ -212,7 +215,7 @@ impl Kernel for Lfo {
     const INPUTS: usize = 4;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Lfo
     }
 
@@ -241,7 +244,7 @@ impl Kernel for Scale {
     const INPUTS: usize = 2;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Scale
     }
 
@@ -264,7 +267,7 @@ impl Kernel for Add {
     const INPUTS: usize = 2;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Add
     }
 
@@ -287,7 +290,7 @@ impl Kernel for Blend {
     const INPUTS: usize = 3;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Blend
     }
 
@@ -310,7 +313,7 @@ impl Kernel for Mtof {
     const INPUTS: usize = 1;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Mtof
     }
 
@@ -332,7 +335,7 @@ impl<const EXP: bool> Kernel for Range<EXP> {
     const INPUTS: usize = 3;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Range
     }
 
@@ -436,7 +439,8 @@ impl Kernel for Gain {
     const INPUTS: usize = 2;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         // The dB kept starts as NaN, with NaN's own gain, so it always has its gain beside it.
         Gain { smooth: Smooth::new(0.005, sample_rate), db: f32::NAN, gain: db_to_gain(f32::NAN) }
     }
@@ -462,7 +466,7 @@ impl Kernel for Pan {
     const INPUTS: usize = 2;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Pan
     }
 
@@ -496,7 +500,7 @@ impl Kernel for Stereo {
     const INPUTS: usize = 1;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Stereo
     }
 
@@ -522,7 +526,8 @@ impl Kernel for Svf {
     const INPUTS: usize = 3;
     const OUTPUTS: usize = 3;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         Svf { sr: sample_rate, ic1: [0.0; 2], ic2: [0.0; 2] }
     }
 
@@ -569,9 +574,16 @@ impl Kernel for Delay {
     const INPUTS: usize = 4;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, channels: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let (sample_rate, channels) = (cfg.sample_rate, cfg.channels);
         let len = (MAX_DELAY * sample_rate) as usize + 2;
         Delay { sr: sample_rate, lines: vec![vec![0.0; len]; channels], pos: 0, quiet: usize::MAX }
+    }
+
+    /// As `new` leaves it, its lines cleared in place: a reset takes no memory.
+    fn reset(&mut self, _: &Cfg) {
+        self.lines.iter_mut().for_each(|l| l.fill(0.0));
+        (self.pos, self.quiet) = (0, usize::MAX);
     }
 
     fn process(&mut self, io: &mut Io) {
@@ -621,7 +633,7 @@ impl Kernel for Drive {
     const INPUTS: usize = 2;
     const OUTPUTS: usize = 1;
 
-    fn new(_: f32, _: usize) -> Self {
+    fn new(_: &Cfg) -> Self {
         Drive
     }
 
@@ -645,7 +657,8 @@ impl Kernel for Duck {
     const INPUTS: usize = 3;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         Duck(Smooth::new(0.001, sample_rate))
     }
 
@@ -672,7 +685,8 @@ impl Kernel for Limit {
     const INPUTS: usize = 2;
     const OUTPUTS: usize = 1;
 
-    fn new(sample_rate: f32, _: usize) -> Self {
+    fn new(cfg: &Cfg) -> Self {
+        let sample_rate = cfg.sample_rate;
         Limit { sr: sample_rate, env: 0.0 }
     }
 

@@ -308,9 +308,10 @@ fn std_manifest_matches_its_kernels() {
 }
 
 // O1, RENDER-32: every std kernel fits under the 32 MiB a kernel memory may grow to, at the highest
-// rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they start and
-// reset (delay lines and reverbs sized by the rate), so built, one block played and reset is the most
-// an instance ever holds. A kernel added later is checked too. Prints the one that holds the most.
+// rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they are born
+// (delay lines and reverbs sized by the rate), and never after, so born, one block played and reset
+// is the most an instance ever holds. A kernel added later is checked too. Prints the one that holds
+// the most.
 #[test]
 fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
     const RATE: f64 = 384_000.0;
@@ -331,7 +332,7 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
         k.prewarm().unwrap_or_else(|e| panic!("{id}: {e:#}"));
         k.process(BLOCK).unwrap_or_else(|e| panic!("{id}: {e:#}"));
         k.reset().unwrap_or_else(|e| panic!("{id}: {e:#}"));
-        held.push((k.memory.data_size(&k.store), id.clone()));
+        held.push((k.sandbox.size(), id.clone()));
     }
     assert!(held.len() >= 20, "{held:?}");
     held.sort();
@@ -340,6 +341,89 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
     println!("the most a std kernel holds at 384 kHz in stereo: {id}, {:.2} MiB of {} MiB", mib(*most), mib(KERNEL_MEMORY));
     // At the cap, the kernel's next allocation fails: it crashes as it plays.
     assert!(*most < KERNEL_MEMORY, "{id} holds {:.2} MiB at 384 kHz: all the {} MiB it may have", mib(*most), mib(KERNEL_MEMORY));
+}
+
+/// A std kernel `id` as a node of its own, its inputs at their defaults, stereo.
+fn std_kernel(pk: &PackageSet, id: &str, rate: f64) -> KernelInst {
+    let sig = m2_ir::Kernels::kernel(pk, id).unwrap();
+    let inputs: Vec<Input> = sig.inputs.iter().map(|p| Input::Const(p.default.unwrap_or(0.0))).collect();
+    let outputs = sig.outputs.iter().map(|_| Kind::Audio(2)).collect();
+    let node = FNode { name: id.to_string(), module: "t".into(), src: None, origin: None, op: FOp::Const(0.0), outputs };
+    KernelInst::new(pk, &node, id, 2, &inputs, rate, 0).unwrap_or_else(|e| panic!("{id}: {e:#}"))
+}
+
+// ABI v1 (rules 1 and 2), RENDER-28: every std kernel resets in its sealed sandbox, taking no
+// memory, back to where it was born: born and sealed, it plays a block, resets, and plays the same
+// block again, bit for bit, its memory as big as at its seal. A kernel whose state holds a `Vec` and
+// built it again at a reset would ask for memory there, and trap.
+#[test]
+fn every_std_kernel_resets_in_a_sealed_sandbox() {
+    let pk = std_packages();
+    let mut ids: Vec<String> = pk.kernel_sigs().map(|s| s.id.clone()).collect();
+    ids.sort();
+    assert!(ids.len() >= 20, "{ids:?}");
+    for id in ids {
+        let mut k = std_kernel(&pk, &id, SR as f64);
+        let sealed = k.sandbox.size();
+        let play = |k: &mut KernelInst| -> Vec<u8> {
+            k.process(BLOCK).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+            let p = k.ports();
+            p.outs.iter().flat_map(|&at| p.data[at..at + PORT_BYTES].to_vec()).collect()
+        };
+        let first = play(&mut k);
+        k.reset().unwrap_or_else(|e| panic!("{id}: its reset in a sealed sandbox: {e:#}"));
+        assert!(play(&mut k) == first, "{id}: a reset doesn't start over");
+        assert_eq!(k.sandbox.size(), sealed, "{id}: its memory grew");
+    }
+}
+
+/// Plays state `s` of sandbox `sb` for `blocks` blocks: input 0 is `x(t)`, inputs 1, 2 and 3 are
+/// `controls`, all mono. Returns output 0's channel 0.
+fn play_state(sb: &mut sandbox::Sandbox, s: &sandbox::State, blocks: usize, x: impl Fn(usize) -> f32, controls: [f32; 3]) -> Vec<f32> {
+    let mut out = vec![];
+    for b in 0..blocks {
+        let data = sb.data();
+        for (k, v) in floats(data, s.ins[0], BLOCK).iter_mut().enumerate() {
+            *v = x(b * BLOCK + k);
+        }
+        for (p, c) in controls.iter().enumerate() {
+            floats(data, s.ins[p + 1], BLOCK).fill(*c);
+        }
+        s.process(sb, BLOCK).unwrap();
+        out.extend_from_slice(floats(sb.data(), s.outs[0], BLOCK));
+    }
+    out
+}
+
+// ABI v1 (report §2.3), in wasm: every call names its state, so one sandbox holds many. Two delays
+// born in one sandbox of std.wasm, fed different sounds in turns, each play exactly what one plays in
+// a sandbox of its own: neither hears the other's echoes. (std/kernels-src's test of the same name
+// runs the kit natively.)
+#[test]
+fn two_states_in_one_instance_play_independently() {
+    let pk = std_packages();
+    let (module, prefix) = pk.module_for("std:delay").unwrap();
+    let born = |sb: &mut sandbox::Sandbox| sb.state(prefix, 4, 1, &[1; 5], 1, SR as f64).unwrap();
+    let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
+    let controls = [0.01, 0.5, 0.5];
+    let alone = |seed: usize| {
+        let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+        let s = born(&mut sb);
+        sb.seal().unwrap();
+        play_state(&mut sb, &s, 20, sound(seed), controls)
+    };
+    let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+    let (a, b) = (born(&mut sb), born(&mut sb));
+    sb.seal().unwrap();
+    let (mut heard_a, mut heard_b) = (vec![], vec![]);
+    for block in 0..20 {
+        let at = |seed: usize| move |t: usize| sound(seed)(block * BLOCK + t);
+        heard_a.extend(play_state(&mut sb, &a, 1, at(0), controls));
+        heard_b.extend(play_state(&mut sb, &b, 1, at(1), controls));
+    }
+    assert!(heard_a.iter().any(|&v| v != 0.0) && heard_a != heard_b, "they play different sounds");
+    assert!(heard_a == alone(0), "the first state plays as it does alone");
+    assert!(heard_b == alone(1), "the second state plays as it does alone");
 }
 
 // Regression tests for bugs reported in review (2026-10-11).
@@ -536,94 +620,125 @@ fn package_with(wat: &str, ports: &str) -> PathBuf {
     dir
 }
 
-const KERNEL_EXPORTS: &str = r#"
+/// A kernel module speaking ABI v`abi` around `kernels`, the exports of its kernel types: its one
+/// page of memory and its allocator (`m2_alloc`), which hands out room forward from 8 KiB, growing the
+/// memory as it must, as its sandbox is born. Below 8 KiB a hand-written kernel may keep one state
+/// of its own at a fixed place, as these tests do: they make one state in a sandbox.
+pub(crate) fn module_v(abi: u32, kernels: &str) -> String {
+    format!(
+        r#"(module
   (memory (export "memory") 1)
-  (func (export "k_init") (param f32 i32 i32))
-  (func (export "k_ports") (result i32) (i32.const 1))
-  (func (export "k_port") (param i32) (result i32) (i32.const 1024))
-  (func (export "k_reset"))
-  (func (export "k_process") (param i32))
-  (func (export "k_active") (result i32) (i32.const 0))"#;
+  (global $heap (mut i32) (i32.const 8192))
+  (func (export "m2_abi") (result i32) (i32.const {abi}))
+  (func (export "m2_alloc") (param $size i32) (param $align i32) (result i32) (local $at i32) (local $end i32)
+    (local.set $at (i32.and (i32.add (global.get $heap) (i32.sub (local.get $align) (i32.const 1))) (i32.sub (i32.const 0) (local.get $align))))
+    (local.set $end (i32.add (local.get $at) (local.get $size)))
+    (if (i32.gt_u (local.get $end) (i32.shl (memory.size) (i32.const 16)))
+      (then (if (i32.eq (memory.grow (i32.sub (i32.shr_u (i32.add (local.get $end) (i32.const 65535)) (i32.const 16)) (memory.size))) (i32.const -1))
+        (then (return (i32.const 0))))))
+    (global.set $heap (local.get $end))
+    (local.get $at))
+  {kernels})"#
+    )
+}
+
+/// [`module_v`] for ABI v1.
+pub(crate) fn module_v1(kernels: &str) -> String {
+    module_v(1, kernels)
+}
+
+/// The exports of a v1 kernel type `k` with one mono input and one mono output, its state at 4096,
+/// whose `k_process` runs `body` for each frame `$i`, with `$x` the input's sample: [`OUT`] writes the
+/// output's.
+pub(crate) fn kernel_v1(k: &str, body: &str) -> String {
+    format!(
+        r#"(func (export "{k}_new") (param i32) (result i32) (f32.store (i32.const 4096) (f32.const 0)) (i32.const 4096))
+           (func (export "{k}_ports") (result i32) (i32.const 257))
+           (func (export "{k}_reset") (param i32) (f32.store (i32.const 4096) (f32.const 0)))
+           (func (export "{k}_active") (param i32) (result i32) (i32.const 0))
+           {}"#,
+        process_v1(k, body)
+    )
+}
+
+/// The `k_process` of [`kernel_v1`]: `body` for each frame `$i` of `from..to`, with `$x` the input's
+/// sample, read through the port table `$io`.
+pub(crate) fn process_v1(k: &str, body: &str) -> String {
+    format!(
+        r#"(func (export "{k}_process") (param $s i32) (param $io i32) (param $i i32) (param $n i32) (local $x f32)
+             (block $done (loop $l
+               (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+               (local.set $x (f32.load (i32.add (i32.load (local.get $io)) (i32.shl (local.get $i) (i32.const 2)))))
+               {body}
+               (local.set $i (i32.add (local.get $i) (i32.const 1)))
+               (br $l))))"#
+    )
+}
+
+/// The output's sample `v` at frame `$i`, in [`kernel_v1`]'s body.
+pub(crate) fn out_v1(v: &str) -> String {
+    format!("(f32.store (i32.add (i32.load offset=4 (local.get $io)) (i32.shl (local.get $i) (i32.const 2))) {v})")
+}
 
 #[test]
 fn packages_must_be_sandboxed_and_speak_our_abi() {
-    let ok = package(&format!("(module (func (export \"m2_abi\") (result i32) (i32.const 0)) {KERNEL_EXPORTS})"));
+    let copy = kernel_v1("k", &out_v1("(local.get $x)"));
+    let ok = package(&module_v1(&copy));
     PackageSet::default().load(&ok).unwrap();
 
-    let wrong_abi = package(&format!("(module (func (export \"m2_abi\") (result i32) (i32.const 7)) {KERNEL_EXPORTS})"));
+    let wrong_abi = package(&module_v(7, &copy));
     let e = PackageSet::default().load(&wrong_abi).map(|_| ()).unwrap_err();
     assert!(format!("{e:#}").contains("ABI v7"), "{e:#}");
 
-    let imports = package(&format!(
-        "(module (import \"env\" \"now\" (func)) (func (export \"m2_abi\") (result i32) (i32.const 0)) {KERNEL_EXPORTS})"
-    ));
+    let imports = package(&module_v1(&copy).replacen("(module", "(module (import \"env\" \"now\" (func))", 1));
     let e = PackageSet::default().load(&imports).map(|_| ()).unwrap_err();
     assert!(format!("{e:#}").contains("can't import anything"), "{e:#}");
 
-    let missing = package("(module (func (export \"m2_abi\") (result i32) (i32.const 0)) (memory (export \"memory\") 1))");
+    let missing = package(&module_v1(""));
     let e = PackageSet::default().load(&missing).map(|_| ()).unwrap_err();
-    assert!(format!("{e:#}").contains("missing export `k_init`"), "{e:#}");
+    assert!(format!("{e:#}").contains("missing export `k_ports`"), "{e:#}");
 
     for d in [ok, wrong_abi, imports, missing] {
         std::fs::remove_dir_all(d).ok();
     }
 }
 
-// RENDER-32: a kernel memory never moves, in either layout, however it grows, so the address each
-// instance keeps from its build stays its memory's (`KernelInst::ports`). This kernel grows its
-// memory by a page at every call, up to the 32 MiB cap, and copies its input to its output: it plays
-// the sine it is given, bit for bit, every block, and its memory stays where it was built. It stops
-// growing at the cap: a grow past it traps (`a_kernel_over_its_memory_says_it_ran_out`).
+// RENDER-32, RENDER-28: a sealed sandbox never grows, so its memory never moves and the address it
+// keeps from its seal stays its memory's. This kernel copies its input to its output, and asks for
+// one more page at every call: once sealed, the ask fails at once and says it ran out of memory, and
+// the memory is where it was sealed, as big. A kernel that asks for nothing plays on.
 #[test]
-fn a_kernel_memory_never_moves() {
-    let wat = r#"(module
-      (func (export "m2_abi") (result i32) (i32.const 0))
-      (memory (export "memory") 1)
-      (func (export "k_init") (param f32 i32 i32))
-      (func (export "k_ports") (result i32) (i32.const 0x101))
-      (func (export "k_port") (param i32) (result i32) (select (i32.const 1024) (i32.const 4096) (i32.eqz (local.get 0))))
-      (func (export "k_reset"))
-      (func (export "k_process") (param i32)
-        (if (i32.lt_u (memory.size) (i32.const 512)) (then (drop (memory.grow (i32.const 1)))))
-        (memory.copy (i32.const 4096) (i32.const 1024) (i32.shl (local.get 0) (i32.const 2))))
-      (func (export "k_active") (result i32) (i32.const 0)))"#;
-    let dir = package_with(wat, "inputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]");
-    let nodes = |out: &str| {
-        song(
-            json!([
-                {"id": "f", "op": "const", "value": 440, "unit": "hz"},
-                {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
-                {"id": "k", "op": "kernel", "kernel": "t:k", "inputs": {"in": "o"}},
-            ]),
-            out,
-            json!([]),
-        )
-    };
+fn a_sealed_sandbox_never_grows() {
+    let grows = kernel_v1("k", &format!("(drop (memory.grow (i32.const 1))) {}", out_v1("(local.get $x)")));
+    let dir = package_with(&module_v1(&grows), "inputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]");
+    let ir = song(
+        json!([
+            {"id": "f", "op": "const", "value": 440, "unit": "hz"},
+            {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
+            {"id": "k", "op": "kernel", "kernel": "t:k", "inputs": {"in": "o"}},
+        ]),
+        "k",
+        json!([]),
+    );
     for layout in [packages::Layout::P2, packages::Layout::P1] {
         let mut pk = PackageSet::laid_out(layout);
         pk.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         pk.load(&dir).unwrap();
-        let mut copied = Renderer::new(&check(&nodes("k"), &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap();
-        let mut sine = Renderer::new(&check(&nodes("o"), &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap();
-        // Where the copying kernel's memory is, and how big: what its store says, and what it kept.
+        let mut r = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap();
+        // Where the kernel's memory is and how big: what its store says, and what it kept.
         let at = |r: &Renderer| {
             let k = r.plan.graph.exec.iter().find_map(|e| match e {
                 Exec::Kernel(KernelNode { inst: Some(k), .. }) if k.name == "song/k" => Some(k),
                 _ => None,
             });
-            let k = k.expect("the copying kernel");
-            (k.memory.data_ptr(&k.store), k.view.base.as_ptr(), k.memory.data_size(&k.store))
+            let k = k.expect("the kernel");
+            (k.sandbox.memory_at(), k.sandbox.size())
         };
-        let (built, ..) = at(&copied);
-        let (mut a, mut b) = ([[0.0; 2]; BLOCK], [[0.0; 2]; BLOCK]);
-        for block in 0..600 {
-            copied.process(&mut a).unwrap();
-            sine.process(&mut b).unwrap();
-            assert!(a == b, "{layout:?}: block {block} isn't the sine it was given");
-            let (now, kept, _) = at(&copied);
-            assert!(now == built && kept == built, "{layout:?}: the memory moved by block {block}");
-        }
-        assert_eq!(at(&copied).2, KERNEL_MEMORY, "{layout:?}: it grew to the cap");
+        let sealed = at(&r);
+        assert_eq!(sealed.0.0, sealed.0.1, "{layout:?}: it keeps its memory's address");
+        let e = r.render(0.01).map(drop).unwrap_err();
+        assert_eq!(format!("{e:#}"), "song/k ran out of memory: a sound may use up to 32 MB", "{layout:?}");
+        assert_eq!(at(&r), sealed, "{layout:?}: its memory didn't grow or move");
     }
     std::fs::remove_dir_all(dir).ok();
 }
