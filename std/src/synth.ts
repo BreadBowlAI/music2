@@ -20,8 +20,8 @@ import { component, control, kernel, poly, port, setting, signature, type Audio,
 import { chorus } from "./fx";
 import { scale } from "./math";
 
-/** What a voice plays: the note's pitch (in semitones), gate and velocity, as `poly` gives them. */
-export type Voice = { pitch: Control<"semitones">; gate: Control<"unit01">; velocity: Control<"unit01"> };
+/** What a voice plays: the note's pitch (in semitones, the pitch wheel in it), gate and velocity, and the mod wheel, as `poly` gives them. */
+export type Voice = { pitch: Control<"semitones">; gate: Control<"unit01">; velocity: Control<"unit01">; modWheel: Control<"unit01"> };
 
 /**
  * Play `voice` one note at a time: `poly` in `"legato"` mode, without retriggering. The
@@ -40,9 +40,9 @@ function play(notes: Events, voices: number, glide: Value, voice: (note: Voice) 
   return voices === 1 ? mono(notes, voice, { glide }) : poly(notes, voice, { voices });
 }
 
-/** The engine for a note, with a patch of kernel inputs (see `std:synth` in `m2pkg.toml`). */
+/** The engine for a note, with a patch of kernel inputs (see `std:synth` in `m2pkg.toml`). The mod wheel deepens its vibrato. */
 function engine(n: Voice, patch: Record<string, Value>): Audio {
-  return kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch });
+  return kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, wheel: n.modWheel, ...patch });
 }
 
 // Ranges every instrument here shares, so the same knob turns the same way everywhere.

@@ -41,7 +41,8 @@ const DRIVE: usize = 26;
 const VEL_AMOUNT: usize = 27;
 const LEVEL: usize = 28;
 const SEED: usize = 29;
-const INPUTS: usize = 30;
+const WHEEL: usize = 30;
+const INPUTS: usize = 31;
 
 /// Most unison voices.
 const UNISON_MAX: usize = 7;
@@ -77,6 +78,8 @@ const CUTOFF_MAX: f32 = 0.8;
 /// The vibrato's rate, and how long it takes to fade in after a note starts.
 const VIBRATO_HZ: f32 = 5.5;
 const VIBRATO_FADE: f32 = 0.3;
+/// The vibrato the mod wheel adds at the top, in semitones: there at once, not faded in.
+const WHEEL_DEPTH: f32 = 0.5;
 /// The ladder's feedback for a resonance: rising evenly to 4 (where it starts to sing),
 /// then a little past it at the top, so resonance 1 sings strongly as a sine.
 fn feedback(resonance: f32) -> f32 {
@@ -245,8 +248,14 @@ impl Synth {
         if drop > 0.0 {
             p += drop * (-3.0 * t / clampf(at(DROP_TIME), 0.001, 10.0)).exp();
         }
-        if vibrato > 0.0 {
-            p += vibrato * (t / VIBRATO_FADE).min(1.0) * sin2pi(self.vib_phase);
+        // The mod wheel deepens it; at 0 it changes no bit.
+        let wheel = clampf(at(WHEEL), 0.0, 1.0);
+        if vibrato > 0.0 || wheel > 0.0 {
+            let mut depth = vibrato * (t / VIBRATO_FADE).min(1.0);
+            if wheel > 0.0 {
+                depth += WHEEL_DEPTH * wheel;
+            }
+            p += depth * sin2pi(self.vib_phase);
         }
         self.vib_phase = (self.vib_phase + VIBRATO_HZ * TICK as f32 / self.sr).fract();
         let sr = self.sr;

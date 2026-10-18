@@ -285,7 +285,7 @@ outputs = ["out: audio<2>"]
 
 [[kernel]]
 name = "synth"
-description = "Polysynth voice: a unison saw and pulse stack, a sub sine and noise, driven into a 4-pole ladder lowpass with its own envelope, then an amp envelope; stereo. The level follows velocity^(2 × vel_amount), so velocity 0 is silent"
+description = "Polysynth voice: a unison saw and pulse stack, a sub sine and noise, driven into a 4-pole ladder lowpass with its own envelope, then an amp envelope; stereo. The level follows velocity^(2 × vel_amount), so velocity 0 is silent. `wheel` (the mod wheel) deepens the vibrato by up to half a semitone, at once"
 inputs = [
   "pitch: control<semitones>",
   "gate: control<unit01>",
@@ -317,6 +317,7 @@ inputs = [
   "vel_amount: control<unit01> = 0.5",
   "level: control<db> = 0 in -24..12",
   "seed: control<scalar> = 1",
+  "wheel: control<unit01> = 0",
 ]
 outputs = ["out: audio<2>"]
 

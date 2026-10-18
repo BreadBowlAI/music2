@@ -85,3 +85,35 @@ fn a_bad_poly_option_is_said_in_words() {
         assert!(e.iter().any(|d| d.message.contains(says)), "{bad}: {e:?}");
     }
 }
+
+/// The lanes the track's poly voice reads, in order.
+fn voice_lanes(ir: &Ir) -> Vec<String> {
+    let m = ir.modules.iter().find(|m| m.key == "t").expect("the track");
+    let body = m.nodes.iter().find_map(|n| if let Op::Poly { body, .. } = &n.op { Some(body) } else { None }).expect("a poly");
+    body.nodes.iter().filter_map(|n| if let Op::Lane { lane } = &n.op { Some(lane.clone()) } else { None }).collect()
+}
+
+/// A song of one poly whose voice is `voice`, an expression of `n`; `after` runs after the poly.
+fn voiced(voice: &str, after: &str) -> Result<Ir, Vec<Diagnostic>> {
+    build_of(&format!(
+        "import {{ song, track, poly, kernel }} from \"@m2/core\";\n\
+         let kept: any;\n\
+         const t = track(\"t\", ({{ lane }}) => {{ const p = poly(lane.notes(\"notes\"), (n) => {{ kept = n; return {voice}; }}); {after}; return p; }});\n\
+         export default song(() => t.out);\n"
+    ))
+}
+
+// RENDER-14, D8: `note.modWheel` is a note field (a `lane` node named `modWheel` in the voice), made
+// once, and only when the voice reads it: a voice that doesn't has the IR it had. Read after its
+// voice returned, it is an error in words.
+#[test]
+fn the_mod_wheel_is_a_node_only_when_read() {
+    let sine = "kernel(\"std:sine\", { freq: 440 })";
+    let plain = voiced(sine, "").unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(voice_lanes(&plain), ["pitch", "gate", "velocity", "pressure", "timbre"]);
+    let by = format!("kernel(\"std:scale\", {{ in: {sine}, by: kernel(\"std:scale\", {{ in: n.modWheel, by: n.modWheel }}) }})");
+    let read = voiced(&by, "").unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(voice_lanes(&read), ["pitch", "gate", "velocity", "pressure", "timbre", "modWheel"]);
+    let late = voiced(sine, "kept.modWheel").expect_err("read after its voice");
+    assert!(late.iter().any(|d| d.message.contains("a note's modWheel is read inside its poly's voice, not after it")), "{late:?}");
+}

@@ -165,13 +165,18 @@ function unitTable(): string {
 /** Anything that can feed an input: a signal, a plain number (fits any unit), or a quantity. */
 export type Value<K = unknown> = Signal<K> | number | Quantity;
 
-/** One sounding note, as seen by a voice inside `poly`. */
+/**
+ * One sounding note, as seen by a voice inside `poly`. `pitch` has the lane's pitch wheel in it
+ * (2 semitones at either end); `modWheel` is the lane's mod wheel, 0 to 1, the same for every
+ * voice. Both come from a MIDI keyboard played live; songs never record them yet.
+ */
 export type Note = {
   pitch: Control<"semitones">;
   gate: Control<"unit01">;
   velocity: Control<"unit01">;
   pressure: Control<"unit01">;
   timbre: Control<"unit01">;
+  modWheel: Control<"unit01">;
 };
 
 // ---------------------------------------------------------------- building
@@ -443,12 +448,20 @@ export function poly(notes: Events, voice: (note: Note) => Audio, opts: PolyOpti
     body.nodes.push({ id, op: "lane", lane });
     return new Signal<any>(id, body, unit);
   };
+  // The mod wheel's node is made only when the voice reads it, so a voice that doesn't has the
+  // IR it had before (1.4.0).
+  let open = true;
+  let modWheel: Signal<any> | undefined;
   const note: Note = {
     pitch: field("pitch", "semitones"),
     gate: field("gate", "unit01"),
     velocity: field("velocity", "unit01"),
     pressure: field("pressure", "unit01"),
     timbre: field("timbre", "unit01"),
+    get modWheel() {
+      if (!open) throw new Error("a note's modWheel is read inside its poly's voice, not after it");
+      return (modWheel ??= field("modWheel", "unit01"));
+    },
   };
   current = body;
   let out: string;
@@ -458,6 +471,7 @@ export function poly(notes: Events, voice: (note: Note) => Audio, opts: PolyOpti
     out = ref(sig, "poly voice output");
   } finally {
     current = outer;
+    open = false;
   }
   const op = { op: "poly", events, voices, ...(alloc ? { alloc } : {}), ...(glide ? { glide } : {}), body: { nodes: body.nodes, out } };
   const id = push(outer, op, at(site));
