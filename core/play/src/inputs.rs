@@ -15,13 +15,19 @@
 //! ([`Player::inject_input`]): the output's callback hands them over as it plays, one engine frame
 //! for each it renders, each buffer stamped as a device's would be. So a test knows where every
 //! injected sample lands, to the sample. `M2_AUDIO_INPUTS` names the inputs listed then.
+//!
+//! What goes wrong with the input is reported into the app's fault ring ([`Player::report_to`],
+//! RENDER-25), numbers only, about the input's opening ([`Listen::open`]): the input chosen isn't
+//! there (`input.missing`, here); the session reports a take's input that went away
+//! (`input.lost`) and one the OS refuses ([`Player::input_refused`], `input.refused`).
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use m2_runtime::fault::{Code, Fault, Faults, Subject};
 
 use crate::outputs::{self, Audio};
 use crate::ring::{Queue, Ring};
@@ -51,11 +57,24 @@ pub struct Input {
     pub channels: u16,
 }
 
-/// The input a player opens: None is the output's own device (the default in Settings, D13).
+/// The input a player opens: None is the output's own device (the default in Settings, D13). Its
+/// name, as it was listed when chosen, says which it was when it isn't there.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InputChoice {
     pub device: Option<String>,
+    pub name: Option<String>,
 }
+
+impl InputChoice {
+    /// How it is said: its name as listed, else its id.
+    fn said(&self) -> Option<String> {
+        self.name.clone().or_else(|| self.device.clone())
+    }
+}
+
+/// Each input opened in the app, counted: a fault names its input by this ([`Listen::open`]),
+/// whichever player opened it.
+static OPENED: AtomicU32 = AtomicU32::new(0);
 
 /// The inputs there are, the default first: the OS's input devices, or under `M2_AUDIO=none` those
 /// `M2_AUDIO_INPUTS` names (a comma list; one called "none" when it is unset), each mono at 48 kHz.
@@ -100,13 +119,17 @@ fn device_inputs() -> Vec<Input> {
 }
 
 /// What a take reads from the input a player has open: its ring, its channels (1 or 2), the rate
-/// its frames are at (the engine's when it opened) and its name.
+/// its frames are at (the engine's when it opened) and its name. `open` numbers this opening in the
+/// app (a fault about it says so); `missing` is the input chosen when it isn't there, so this is
+/// another (io r7).
 #[derive(Clone)]
 pub struct Listen {
     pub ring: Arc<Ring>,
     pub channels: u16,
     pub rate: u32,
     pub name: String,
+    pub open: u32,
+    pub missing: Option<String>,
 }
 
 /// The input callback's work: frames into both rings, stamped. Made whole when the input opens.
@@ -240,6 +263,12 @@ pub(crate) enum Kind {
 #[derive(Default)]
 pub(crate) struct Inputs {
     open: Mutex<Option<Opened>>,
+    /// The app's fault ring ([`Player::report_to`]).
+    faults: OnceLock<Arc<Faults>>,
+    /// The inject seam's Don't Allow ([`Player::refuse_input`]).
+    refused: AtomicBool,
+    /// The silent inputs, as `M2_AUDIO_INPUTS` names them, set for this player ([`Player::name_inputs`]).
+    names: Mutex<Option<Vec<String>>>,
 }
 
 fn rings(rate: u32) -> (Arc<Ring>, Arc<Ring>) {
@@ -248,32 +277,66 @@ fn rings(rate: u32) -> (Arc<Ring>, Arc<Ring>) {
 }
 
 impl Player {
+    /// Report what goes wrong with its input into `faults`, the app's fault ring (RENDER-25). Once:
+    /// a player belongs to one app.
+    pub fn report_to(&self, faults: Arc<Faults>) {
+        let _ = self.inputs.faults.set(faults);
+    }
+
+    /// Whether the OS refuses music2 the microphone now: a Mac whose Privacy & Security says no
+    /// (`m2_os::host::microphone_refused`), or the inject seam's Don't Allow. Its input gives
+    /// silence then, not an error. The session asks at each record tick (the ex plan's D11).
+    pub fn input_refused(&self) -> bool {
+        self.inputs.refused.load(Ordering::Relaxed) || (self.input_kind == Kind::Device && m2_os::host::microphone_refused())
+    }
+
+    /// The OS refuses the microphone from now, as a Mac's Don't Allow does, or allows it again
+    /// (tests, and the inject API's `refuse`).
+    #[doc(hidden)]
+    pub fn refuse_input(&self, on: bool) {
+        self.inputs.refused.store(on, Ordering::Relaxed);
+    }
+
+    /// The silent inputs this player lists, as `M2_AUDIO_INPUTS` names them (tests: the
+    /// environment is the whole process's).
+    #[doc(hidden)]
+    pub fn name_inputs(&self, names: &[&str]) {
+        *self.inputs.names.lock().unwrap_or_else(|e| e.into_inner()) = Some(names.iter().map(|n| n.to_string()).collect());
+    }
+
     /// Open the input `choice` names, or keep the one open when it is that one at this rate:
     /// what a take reads. Under `M2_AUDIO=none` (or driven), the silent input, named after the
     /// choice when `M2_AUDIO_INPUTS` lists it. Says [`NO_INPUT`] when there is none, and
     /// [`NO_MICROPHONE`] when macOS doesn't let music2 use it. Plain words only: what the device
-    /// said is logged.
+    /// said is logged. When the input chosen isn't there, it opens another, and reports
+    /// `input.missing` about it, each time ([`Listen::missing`], the ex plan's D8).
     pub fn open_input(&self, choice: &InputChoice) -> Result<Listen> {
         // A Mac whose Privacy & Security says no gives silence, not an error: said in words (D23).
-        if self.input_kind == Kind::Device && m2_os::host::microphone_refused() {
+        if self.input_refused() {
             return Err(anyhow!(NO_MICROPHONE));
         }
         let rate = self.rate();
         let mut open = self.inputs.open.lock().unwrap_or_else(|e| e.into_inner());
-        // The same input, unless its device went away: then it opens again.
-        if let Some(o) = open.as_ref().filter(|o| o.choice == *choice && o.listen.rate == rate && o.errors.read().gone == 0) {
+        // The same input, unless its device went away, or the one chosen wasn't there: then it
+        // opens again, and finds the one chosen once it is plugged in.
+        if let Some(o) =
+            open.as_ref().filter(|o| o.choice == *choice && o.listen.rate == rate && o.errors.read().gone == 0 && o.listen.missing.is_none())
+        {
             return Ok(o.listen.clone());
         }
         self.close_locked(&mut open);
         let (engine, take) = rings(rate);
         let errors = Arc::new(Errors::default());
+        let at = OPENED.fetch_add(1, Ordering::Relaxed) + 1;
         let opened = match self.input_kind {
             Kind::Silent => {
                 let names = match Audio::from_env() {
                     Audio::Fail => return Err(anyhow!(NO_INPUT)),
-                    _ => silent_names(),
+                    _ => self.inputs.names.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(silent_names),
                 };
-                let name = choice.device.clone().filter(|d| names.contains(d)).unwrap_or_else(|| names[0].clone());
+                let found = choice.device.clone().filter(|d| names.contains(d));
+                let missing = if found.is_none() { choice.said() } else { None };
+                let name = found.unwrap_or_else(|| names[0].clone());
                 let queue = Arc::new(Queue::new(QUEUED));
                 let silent = Silent {
                     engine: engine.clone(),
@@ -283,17 +346,23 @@ impl Player {
                     frames: vec![[0.0; 2]; BUFFER].into_boxed_slice(),
                 };
                 self.send(Msg::Input(Some(Box::new(silent))))?;
-                let listen = Listen { ring: take, channels: 1, rate, name };
+                let listen = Listen { ring: take, channels: 1, rate, name, open: at, missing };
                 Opened { choice: choice.clone(), listen, errors, engine, queue: Some(queue), _stream: None }
             }
             Kind::Device => {
-                let (name, channels, stream) = self.open_device(choice, engine.clone(), take.clone(), rate, errors.clone())?;
-                let listen = Listen { ring: take, channels, rate, name };
+                let (name, channels, stream, found) = self.open_device(choice, engine.clone(), take.clone(), rate, errors.clone())?;
+                let missing = if found { None } else { choice.said() };
+                let listen = Listen { ring: take, channels, rate, name, open: at, missing };
                 Opened { choice: choice.clone(), listen, errors, engine, queue: None, _stream: Some(stream) }
             }
         };
         let listen = opened.listen.clone();
         *open = Some(opened);
+        if listen.missing.is_some()
+            && let Some(faults) = self.inputs.faults.get()
+        {
+            faults.report(Fault { code: Code::InputMissing, plan: 0, subject: Subject::Input(listen.open) });
+        }
         Ok(listen)
     }
 
@@ -360,15 +429,15 @@ impl Player {
     }
 
     /// Open a device's input stream on a thread of its own (cpal streams can't move between threads
-    /// on every OS), its callback a [`Feed`]: its name, its channels (1 or 2), and what keeps it.
-    fn open_device(&self, choice: &InputChoice, engine: Arc<Ring>, take: Arc<Ring>, rate: u32, errors: Arc<Errors>) -> Result<(String, u16, Arc<()>)> {
+    /// on every OS), its callback a [`Feed`]: its name, its channels (1 or 2), what keeps it, and
+    /// whether it is the one chosen (always, when none is).
+    fn open_device(&self, choice: &InputChoice, engine: Arc<Ring>, take: Arc<Ring>, rate: u32, errors: Arc<Errors>) -> Result<(String, u16, Arc<()>, bool)> {
         let host = cpal::default_host();
         let by_id = |id: &str| host.device_by_id(&id.parse().ok()?);
         // The one chosen; else the output's own device, when it records; else the default input.
-        let device = choice
-            .device
-            .as_deref()
-            .and_then(by_id)
+        let chosen = choice.device.as_deref().and_then(by_id);
+        let found = choice.device.is_none() || chosen.is_some();
+        let device = chosen
             .or_else(|| self.output_id.as_deref().and_then(by_id).filter(|d| d.default_input_config().is_ok()))
             .or_else(|| host.default_input_device())
             .ok_or_else(|| anyhow!(NO_INPUT))?;
@@ -401,11 +470,12 @@ impl Player {
             };
             let _ = ready_tx.send(Ok(()));
             // What the input's device reported, logged here once a second, never by its callback.
+            // Its going away isn't: a take from it ends, and the session tells it (`input.lost`).
             let (mut seen, mut said) = (DeviceErrors::default(), Instant::now());
             while weak.strong_count() > 0 && player.strong_count() > 0 {
                 std::thread::sleep(Duration::from_millis(50));
                 if said.elapsed() >= Duration::from_secs(1) {
-                    let now = errors.read();
+                    let now = DeviceErrors { gone: 0, ..errors.read() };
                     if let Some(words) = now.since(seen) {
                         eprintln!("music2: the sound input: {words}");
                     }
@@ -415,7 +485,7 @@ impl Player {
             drop(stream);
         })?;
         ready.recv().map_err(|_| anyhow!(NO_INPUT))?.map_err(|e| no_input(&e))?;
-        Ok((name, channels.min(2) as u16, alive))
+        Ok((name, channels.min(2) as u16, alive, found))
     }
 }
 

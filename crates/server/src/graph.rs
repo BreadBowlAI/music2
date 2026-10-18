@@ -572,6 +572,10 @@ fn put_back(l: &Lease, device: Option<&Device>) {
 
 impl Inner {
     fn new(device: Option<Device>, owner: m2_plugins::Owner, output: output::Outputs, host: Arc<dyn m2_plugins::PluginHost>) -> Inner {
+        let faults: Arc<m2_runtime::fault::Faults> = Arc::default();
+        if let Some(d) = &device {
+            d.player.report_to(faults.clone());
+        }
         Inner {
             owner,
             host,
@@ -586,7 +590,7 @@ impl Inner {
             last_taken_in: Mutex::default(),
             busy: Mutex::default(),
             notices: Mutex::default(),
-            faults: Arc::default(),
+            faults,
             told: Mutex::default(),
             disk: Mutex::default(),
             saving: Mutex::default(),
@@ -654,12 +658,14 @@ impl Inner {
             let st = old.player.status();
             retire(old.player);
             let epoch = self.players.fetch_add(1, Ordering::Relaxed) + 1;
+            player.report_to(self.faults.clone());
             *d = Some(Device { player, epoch, resume: st.pending.unwrap_or(st.beats) });
             self.notices.lock().push(output::BACK.into());
         }
         if d.is_none() {
             let epoch = self.players.fetch_add(1, Ordering::Relaxed) + 1;
             let player = self.output.start(epoch)?;
+            player.report_to(self.faults.clone());
             *d = Some(Device { player, epoch, resume: std::mem::take(&mut *self.resume.lock()) });
         }
         Ok(d.clone().expect("started"))

@@ -2,15 +2,19 @@
 //! one ring ([`m2_runtime::fault::Faults`], in [`Inner`]): the audio thread a sound that stopped
 //! (`sound.stopped`) or a plugin that failed (`plugin.failed`), the actor a plugin host that ended
 //! (`plugin.crashed`), a plan's build and the disk thread a file that can't be read
-//! (`asset.unreadable`), a lane a warped clip whose stretch failed (`stretch.failed`). Every 300 ms
-//! the server's notices thread reads it here ([`Told::hear`]).
-//! Each fault is named by the [`Namer`] of the plan it came from (the ex plan's D2), listed among
-//! the open song's problems until its part plays again, and toasted once (D3).
+//! (`asset.unreadable`), a lane a warped clip whose stretch failed (`stretch.failed`), the player
+//! an input chosen that isn't there (`input.missing`), the take thread a take's input that went
+//! away (`input.lost`) or that the OS refuses (`input.refused`). Every 300 ms the server's notices
+//! thread reads it here ([`Told::hear`]).
+//! Each fault is named by the [`Namer`] of the plan it came from (the ex plan's D2), or an input's
+//! by the [`InputNamer`] of its opening, listed among the open song's problems until its part plays
+//! again (an input's: until the next take), and toasted once (D3).
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use m2_editor::faults::Namer;
+use m2_play::{Listen, NO_MICROPHONE};
 use m2_runtime::fault::{Code, Fault, Faults, Subject};
 use m2_song::Diagnostic;
 use serde_json::Value;
@@ -26,17 +30,86 @@ pub(super) struct Told {
     /// The namers of the plan sent last and the one before, newest first. A fault from an older
     /// plan is dropped: its part plays again in the plan that plays now.
     namers: [Option<Arc<Namer>>; 2],
+    /// The namers of the input a take opened last and the one before, newest first.
+    inputs: [Option<Arc<InputNamer>>; 2],
     /// What is listed now, oldest first.
     live: Vec<Live>,
     /// Each part told by a toast, by code, in the open song: once each (D3).
     toasted: HashSet<(&'static str, String)>,
     /// Faults of a plan prepared but not sent yet, which its build reported (a file it can't
-    /// read): named once it is sent, dropped once a newer one is.
+    /// read): named once it is sent, dropped once a newer one is. And an input's, reported as it
+    /// opened, before its take named it.
     pending: Vec<Fault>,
     /// The ring's lost faults when it was last read.
     lost: u64,
     /// The list changed since the notices thread last read the ring.
     changed: bool,
+}
+
+/// Names the faults of one opening of the sound input ([`Listen::open`]): what it records from,
+/// and the input chosen when that isn't there. The session's, as a plan's [`Namer`] is: the player
+/// reports numbers only.
+pub(super) struct InputNamer {
+    open: u32,
+    used: String,
+    missing: Option<String>,
+}
+
+impl InputNamer {
+    pub(super) fn of(l: &Listen) -> InputNamer {
+        InputNamer { open: l.open, used: l.name.clone(), missing: l.missing.clone() }
+    }
+
+    /// The input a fault of `code` is about: what a toast is once for.
+    fn part(&self, code: Code) -> String {
+        match (code, &self.missing) {
+            (Code::InputMissing, Some(chosen)) => chosen.clone(),
+            _ => self.used.clone(),
+        }
+    }
+
+    /// The problem `code` is, in plain words. None for a code not the input's.
+    fn problem(&self, code: Code) -> Option<Diagnostic> {
+        let used = &self.used;
+        Some(match code {
+            Code::InputMissing => Diagnostic::warning(
+                code.diag(),
+                format!(
+                    "{} isn't plugged in, so this take records from {used}. To record from another input, choose it in Settings ▸ Sound input.",
+                    self.missing.as_deref()?
+                ),
+            ),
+            Code::InputLost => Diagnostic::warning(
+                code.diag(),
+                format!("{used} was unplugged, so the take ended there. It was kept up to then. The song plays on."),
+            ),
+            Code::InputRefused => Diagnostic::error(code.diag(), format!("{NO_MICROPHONE} The take was only silence, so it wasn't kept.")),
+            _ => return None,
+        })
+    }
+}
+
+/// What names a fault: the namer of its plan, or of its input's opening.
+#[derive(Clone)]
+enum Who {
+    Plan(Arc<Namer>),
+    Input(Arc<InputNamer>),
+}
+
+impl Who {
+    fn part(&self, f: Fault) -> Option<String> {
+        match self {
+            Who::Plan(n) => n.part(f.subject),
+            Who::Input(i) => Some(i.part(f.code)),
+        }
+    }
+
+    fn problem(&self, code: Code, parts: &[Subject]) -> Option<Diagnostic> {
+        match self {
+            Who::Plan(n) => n.problem(code, parts),
+            Who::Input(i) => i.problem(code),
+        }
+    }
 }
 
 /// A problem listed: the plan, the code and the parts it is about, and how it is said.
@@ -51,20 +124,64 @@ struct Live {
 
 impl Told {
     /// `plays` was sent to the engine in session `token`: a new plan, whose parts all play.
-    /// What was listed goes; a fault of the plan before it is still named.
+    /// What was listed goes, but the input's (it goes at the next take); a fault of the plan before
+    /// it is still named.
     pub(super) fn sent(&mut self, token: u64, namer: Namer) {
         if token != self.token {
-            (self.token, self.toasted, self.namers) = (token, HashSet::new(), [None, None]);
+            (self.token, self.toasted, self.namers, self.inputs) = (token, HashSet::new(), [None, None], [None, None]);
         }
         self.namers = [Some(Arc::new(namer)), self.namers[0].take()];
-        self.changed |= !self.live.is_empty();
-        self.live.clear();
+        self.unlist(|code| !code.of_input());
+    }
+
+    /// A take of session `token` starts on the input opened as `namer` says: the input's problems
+    /// listed go, as the next take is the input playing again (D3). A fault of the input a take
+    /// opened before is still told.
+    pub(super) fn opened(&mut self, token: u64, namer: InputNamer) {
+        if token != self.token {
+            return;
+        }
+        if self.inputs[0].as_ref().is_none_or(|i| i.open != namer.open) {
+            self.inputs = [Some(Arc::new(namer)), self.inputs[0].take()];
+        }
+        self.unlist(Code::of_input);
+    }
+
+    /// The problems listed whose code is `gone`'s go.
+    fn unlist(&mut self, gone: impl Fn(Code) -> bool) {
+        let before = self.live.len();
+        self.live.retain(|l| !gone(l.code));
+        self.changed |= self.live.len() != before;
     }
 
     /// The song closed: nothing is listed or named.
     pub(super) fn closed(&mut self) {
         self.changed |= !self.live.is_empty();
-        (self.namers, self.live, self.pending) = ([None, None], vec![], vec![]);
+        (self.namers, self.inputs, self.live, self.pending) = ([None, None], [None, None], vec![], vec![]);
+    }
+
+    /// What names `f`, and whether it is the newest of its kind (a plan sent last, an input a take
+    /// opened last). None when it is older than the one before, or not named yet.
+    fn who(&self, f: Fault) -> Option<(bool, Who)> {
+        match f.subject {
+            Subject::Input(n) => {
+                let at = self.inputs.iter().position(|i| i.as_ref().is_some_and(|i| i.open == n))?;
+                Some((at == 0, Who::Input(self.inputs[at].clone()?)))
+            }
+            _ => {
+                let at = self.namers.iter().position(|x| x.as_ref().is_some_and(|x| x.plan() == f.plan))?;
+                Some((at == 0, Who::Plan(self.namers[at].clone()?)))
+            }
+        }
+    }
+
+    /// Whether `f`, which nothing names, will be: plans and inputs are numbered as they are made,
+    /// so one newer than the newest named isn't sent (or opened for a take) yet.
+    fn waits(&self, f: Fault) -> bool {
+        match f.subject {
+            Subject::Input(n) => self.inputs[0].as_ref().is_none_or(|i| n > i.open),
+            _ => self.namers[0].as_ref().is_none_or(|x| f.plan > x.plan()),
+        }
     }
 
     /// Stop All Sound: each sound that stopped plays again (RENDER-10), so it isn't listed. A
@@ -84,20 +201,16 @@ impl Told {
         let mut toast: Vec<(bool, usize)> = vec![];
         let pending = std::mem::take(&mut self.pending);
         for f in pending.into_iter().chain(std::iter::from_fn(|| faults.take())) {
-            let mine = |n: &Option<Arc<Namer>>| n.as_ref().is_some_and(|n| n.plan() == f.plan);
-            let Some(newest) = self.namers.iter().position(mine).map(|i| i == 0) else {
-                // Plans are numbered as they are made: one newer than the plan sent last isn't
-                // sent yet.
-                if self.namers[0].as_ref().is_none_or(|n| f.plan > n.plan()) && self.pending.len() < m2_runtime::fault::SLOTS {
+            let Some((newest, who)) = self.who(f) else {
+                if self.waits(f) && self.pending.len() < m2_runtime::fault::SLOTS {
                     self.pending.push(f);
                 }
                 continue;
             };
-            let namer = self.namers[usize::from(!newest)].clone().expect("found above");
             let list = if newest { &mut self.live } else { &mut before };
-            let Some(at) = add(list, &namer, f) else { continue };
+            let Some(at) = add(list, &who, f) else { continue };
             self.changed |= newest;
-            if let Some(part) = namer.part(f.subject)
+            if let Some(part) = who.part(f)
                 && self.toasted.insert((f.code.diag(), part))
                 && !toast.contains(&(newest, at))
             {
@@ -128,7 +241,7 @@ impl Told {
 /// Add fault `f` to `list`, named by `namer`: a new problem, or one more plugin of a plugin host
 /// that ended, as the plugins of one host are one problem. Where it is now; None when it is listed
 /// already (a part reports once while it is silent) or isn't of this plan's graph.
-fn add(list: &mut Vec<Live>, namer: &Namer, f: Fault) -> Option<usize> {
+fn add(list: &mut Vec<Live>, namer: &Who, f: Fault) -> Option<usize> {
     if list.iter().any(|l| l.plan == f.plan && l.code == f.code && l.parts.contains(&f.subject)) {
         return None;
     }

@@ -208,7 +208,8 @@ fn an_audio_take_through_the_routes() {
 }
 
 // The review's io-r2 through the routes: `{"unplug": true}` plays a microphone unplugged. Every
-// window hears the take written with what it has, in words, and the song plays on.
+// window hears the take written with what it has, the song plays on, and it is a problem. And
+// `{"refuse": true}` plays a Mac's Don't Allow (the ex plan's D11).
 #[test]
 fn the_inject_api_unplugs_the_input() {
     let dir = project("unplug");
@@ -234,8 +235,26 @@ fn the_inject_api_unplugs_the_input() {
         }
     }
     let written = written.expect("the windows hear the take written");
-    assert_eq!(written["written"]["note"], json!("The sound input was unplugged: the take was kept up to here."), "{written:#}");
+    assert!(written["written"].get("note").is_none(), "{written:#}");
     assert!(state.graph.status().playing, "the song plays on");
+    // The notices thread tells it: one problem, `input.lost` (the ex plan's slice 3).
+    let listed = |code: &str| state.graph.state().unwrap()["problems"].as_array().unwrap().iter().any(|p| p["code"] == code);
+    let t = Instant::now();
+    while !listed("input.lost") && t.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(listed("input.lost"), "the unplug is a problem");
+    // `{"refuse": true}` plays a Mac's Don't Allow: the take is dropped, and said.
+    state.graph.transport("stop").unwrap();
+    let (status, take) = post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "vox", "lane": "clips", "count_in": false}));
+    assert_eq!(status, 200, "{take:#}");
+    let (status, answer) = post(&running.url, "/api/graph/input/inject", &json!({"refuse": true}));
+    assert_eq!(status, 200, "{answer:#}");
+    let t = Instant::now();
+    while !listed("input.refused") && t.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(listed("input.refused") && !state.graph.recording(), "the take is dropped, and said");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

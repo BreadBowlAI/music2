@@ -27,6 +27,11 @@
 //!   where recording started (not on a bar line) and is as long as the take: one `Clips` Tx, once
 //!   the file is durable. Hearing yourself (MON-8) plays the input on the lane from Record to the
 //!   take's end, through the track's effects and fader.
+//! - **The input's problems** (the ex plan's slice 3) go through the fault ring (RENDER-25), named
+//!   by the input's [`InputNamer`]: an input chosen that isn't there (the player reports it as it
+//!   opens), an input gone during a take, and the OS refusing the microphone during one, which the
+//!   take thread asks at each tick ([`Player::input_refused`]): that take is only silence, so it
+//!   isn't kept.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -34,10 +39,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use m2_editor::clips::Gesture;
 use m2_play::{InputChoice, Player};
+use m2_runtime::fault::{Code, Fault, Subject};
 use m2_song::{Arrangement, LaneAddr, TempoMap};
 use serde_json::{Value, json};
 
 use super::clips::Refused;
+use super::faults::InputNamer;
 use super::lease::PlaysView;
 use super::take_audio::{self, Writer, Written};
 use super::{ControlPlane, Device, Graph, Inner};
@@ -132,6 +139,8 @@ struct AudioTake {
     hearing: bool,
     /// The input's take ring: the meters read its level, and tests settle the writer by it.
     ring: std::sync::Arc<m2_play::ring::Ring>,
+    /// The input's opening: what a fault of it is about.
+    input: u32,
 }
 
 impl Drop for AudioTake {
@@ -152,8 +161,6 @@ pub(super) struct Ended {
     clip: Option<Value>,
     /// An audio take: where it starts, and its file, being written or written.
     audio: Option<Box<(f64, Audio)>>,
-    /// Why it ended, when the windows should hear it: the input went away.
-    note: Option<&'static str>,
 }
 
 /// An audio take's file once the take ended.
@@ -283,7 +290,7 @@ impl Take {
             let writer = a.writer.take().expect("an audio take's writer");
             writer.end(frames);
             let audio = Some(Box::new((self.from, Audio::Writing(writer))));
-            return Ended { token: self.token, module: self.module, lane: self.lane, clip: None, audio, note: None };
+            return Ended { token: self.token, module: self.module, lane: self.lane, clip: None, audio };
         }
         for key in self.held.keys().copied().collect::<Vec<_>>() {
             self.off(key, beat);
@@ -304,7 +311,7 @@ impl Take {
                 .collect();
             json!({"start": self.start, "length": end - self.start, "notes": notes})
         });
-        Ended { token: self.token, module: self.module, lane: self.lane, clip, audio: None, note: None }
+        Ended { token: self.token, module: self.module, lane: self.lane, clip, audio: None }
     }
 
     /// What the windows see: its phase, lane, start, and its notes so far (a held one to `now`).
@@ -447,6 +454,8 @@ impl Graph {
         let (listen, writer) = match audio {
             Some((dir, label)) => {
                 let listen = device.player.open_input(&opts.input)?;
+                // Its faults are named from now; the input's problems listed go (D3).
+                self.inner.told.lock().opened(token, InputNamer::of(&listen));
                 let file = m2_editor::take::Growing::new(&dir, &label, listen.channels, listen.rate).map_err(|e| anyhow::anyhow!("{e}"))?;
                 let writer = Writer::start(listen.ring.clone(), file, format!("{label} take.wav"), listen.channels)?;
                 (Some(listen), Some(writer))
@@ -509,7 +518,7 @@ impl Graph {
         // An audio take's writer, and hearing yourself from now, the count included.
         if let (Some(listen), Some(slot), Some(writer)) = (listen, slot, writer) {
             let hearing = opts.hear && player.hear(generation, slot, true).is_ok();
-            take.audio = Some(AudioTake { writer: Some(writer), player: player.clone(), hearing, ring: listen.ring });
+            take.audio = Some(AudioTake { writer: Some(writer), player: player.clone(), hearing, ring: listen.ring, input: listen.open });
         }
         if st.playing {
             // From now, with no count.
@@ -568,6 +577,14 @@ impl Graph {
     pub fn unplug_input(&self) -> Result<()> {
         let device = self.inner.current_device().context("Nothing is recording from the sound input.")?;
         device.player.input_error(m2_play::DeviceErrorKind::DeviceNotAvailable.into());
+        Ok(())
+    }
+
+    /// The OS refuses the microphone from now, as a Mac's Don't Allow does (the inject API): a take
+    /// from it is dropped, and the next R is refused.
+    pub fn refuse_input(&self) -> Result<()> {
+        let device = self.inner.current_device().context("Nothing is recording from the sound input.")?;
+        device.player.refuse_input(true);
         Ok(())
     }
 
@@ -661,6 +678,8 @@ impl Graph {
     pub fn record_tick(&self) -> Vec<Value> {
         let mut said = vec![];
         let mut unplugged = None;
+        // A fault of the take's input, reported once no lock is held.
+        let mut fault = None;
         let (ended, labels) = {
             let device = self.inner.current_device();
             let mut cp = self.inner.control.lock();
@@ -676,15 +695,21 @@ impl Graph {
                     // ends where it was last heard.
                     let beat = t.last;
                     r.end_at(beat);
-                } else if let Some(d) = same.filter(|d| t.audio.is_some() && d.player.input_gone()) {
+                } else if let Some((d, a)) = same.zip(t.audio.as_ref()).filter(|(d, _)| d.player.input_refused()) {
+                    // The OS refuses the microphone (a Mac's Don't Allow, D11): the input gives
+                    // silence, so the take is dropped, its part file with it, and said once. The
+                    // song plays on.
+                    fault = Some((Code::InputRefused, a.input));
+                    unplugged = Some(d.player.clone());
+                    r.drop_take();
+                } else if let Some((d, input)) = same.zip(t.audio.as_ref().map(|a| a.input)).filter(|(d, _)| d.player.input_gone()) {
                     // The input went away (a microphone unplugged): the take ends where it is heard,
-                    // with what it has, and the song plays on (the review's io-r2).
+                    // with what it has, and the song plays on (the review's io-r2). Said once, as a
+                    // problem.
                     t.resolve(&d.player);
                     let beat = d.player.heard_frame().and_then(|h| t.beat_of(h)).unwrap_or(t.last);
                     r.end_at(beat);
-                    if let Some(e) = r.ended.last_mut() {
-                        e.note = Some(take_audio::UNPLUGGED);
-                    }
+                    fault = Some((Code::InputLost, input));
                     unplugged = Some(d.player.clone());
                 } else if t.audio.as_ref().and_then(|a| a.writer.as_ref()).is_some_and(Writer::stopped) {
                     // Its writer stopped (a full disk, a file as long as a WAV can be): the take ends
@@ -762,6 +787,9 @@ impl Graph {
         if let Some(p) = unplugged {
             p.close_input();
         }
+        if let Some((code, input)) = fault {
+            self.inner.faults.report(Fault { code, plan: 0, subject: Subject::Input(input) });
+        }
         for (e, label) in ended.into_iter().zip(labels) {
             match self.write_take(e, &label) {
                 Ok(v) => said.push(v),
@@ -833,8 +861,7 @@ impl Graph {
                     eprintln!("music2: couldn't name the recording's undo step: {err:#}");
                 }
                 let mut w = json!({"revision": revision, "made": v["made"], "module": e.module, "lane": e.lane, "asset": written.0.asset.as_str()});
-                let notes: Vec<&str> =
-                    e.note.into_iter().chain(written.2.as_deref()).chain((written.1 > 0).then_some(take_audio::TOO_SLOW)).collect();
+                let notes: Vec<&str> = written.2.as_deref().into_iter().chain((written.1 > 0).then_some(take_audio::TOO_SLOW)).collect();
                 if !notes.is_empty() {
                     w["note"] = json!(notes.join(" "));
                 }

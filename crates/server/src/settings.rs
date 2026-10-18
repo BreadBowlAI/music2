@@ -69,7 +69,7 @@ impl InputKept {
 
     /// What a player opens.
     pub fn choice(&self) -> InputChoice {
-        InputChoice { device: self.device.clone() }
+        InputChoice { device: self.device.clone(), name: self.name.clone() }
     }
 }
 
@@ -246,7 +246,7 @@ mod tests {
         assert_eq!(json["midi"], serde_json::json!({"off": ["Keystation 49"]}));
         assert_eq!(json.get("input"), None, "the input's defaults aren't written");
         let kept = s.change(|k| k.input = InputKept { device: Some("alsa:sysdefault:CARD=USB".into()), name: Some("USB mic".into()), monitor: true }).unwrap();
-        assert_eq!(kept.input.choice(), InputChoice { device: Some("alsa:sysdefault:CARD=USB".into()) });
+        assert_eq!(kept.input.choice(), InputChoice { device: Some("alsa:sysdefault:CARD=USB".into()), name: Some("USB mic".into()) });
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         assert_eq!(json["input"], serde_json::json!({"device": "alsa:sysdefault:CARD=USB", "name": "USB mic", "monitor": true}));
         assert_eq!(s.read().input, kept.input, "read back");

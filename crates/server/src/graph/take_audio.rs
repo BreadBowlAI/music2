@@ -43,8 +43,6 @@ const LAST: Duration = Duration::from_secs(1);
 pub const TOO_SLOW: &str = "The disk was too slow: part of the take is silent.";
 /// What they hear when a write of the take failed (the review's io-r3).
 pub const DISK_FULL: &str = "The disk is full or stopped working: the take was kept up to here.";
-/// What they hear when the sound input went away while it recorded (the review's io-r2).
-pub const UNPLUGGED: &str = "The sound input was unplugged: the take was kept up to here.";
 
 /// What the writer and the take share.
 #[derive(Default)]

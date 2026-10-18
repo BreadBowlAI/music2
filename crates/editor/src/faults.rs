@@ -126,6 +126,8 @@ impl Namer {
             }
             Subject::Clip { .. } => self.clip(s).map(|(file, place)| format!("{file} {place}")),
             Subject::Asset { node, .. } => self.asset(s).map(|file| format!("{file} {}", self.place(node as usize))),
+            // The session names the sound input: it is of no plan.
+            Subject::Input(_) => None,
         }
     }
 
@@ -227,6 +229,8 @@ impl Namer {
             },
             (Code::Unreadable, _) => format!("{part} can't be read, {not} It may be damaged, or on a drive that isn't plugged in."),
             (Code::Stopped, _) => format!("{part} stopped working, {not}{detail}"),
+            // No offline render reads the sound input.
+            (Code::InputMissing | Code::InputLost | Code::InputRefused, _) => format!("The sound input stopped, {not}"),
         }
     }
 
@@ -243,6 +247,7 @@ impl Namer {
         match s {
             Subject::Node(n) | Subject::Asset { node: n, .. } => Some(self.song.flat().nodes.get(n as usize)?.module.clone()),
             Subject::Clip { lane, .. } => Some(m2_runtime::lane_slots(self.song.flat()).get(lane as usize)?.module.clone()),
+            Subject::Input(_) => None,
         }
     }
 

@@ -114,6 +114,9 @@ struct InjectReq {
     /// Then the input's device goes away, as a microphone unplugged (the review's io-r2).
     #[serde(default)]
     unplug: bool,
+    /// Then the OS refuses the microphone, as a Mac's Don't Allow does (the ex plan's D11).
+    #[serde(default)]
+    refuse: bool,
 }
 
 #[derive(Deserialize)]
@@ -128,9 +131,10 @@ fn half() -> f32 {
     0.5
 }
 
-/// `POST /api/graph/input/inject {samples?, tone?: {hz, seconds, gain?}, unplug?}`: what the silent
-/// input hears next, one sample for each frame the engine renders from the next callback on (D24);
-/// with `unplug`, then its device goes away, as a microphone unplugged. Only
+/// `POST /api/graph/input/inject {samples?, tone?: {hz, seconds, gain?}, unplug?, refuse?}`: what
+/// the silent input hears next, one sample for each frame the engine renders from the next callback
+/// on (D24); with `unplug`, then its device goes away, as a microphone unplugged; with `refuse`, the
+/// OS refuses the microphone from then, as a Mac's Don't Allow. Only
 /// with `M2_AUDIO_INPUT=inject` (and in this crate's tests), as `M2_MIDI=inject` opens MIDI's.
 /// Not a write: it plays what a microphone would.
 async fn input_inject(State(s): S, Json(r): Json<InjectReq>) -> Result<Response, ApiError> {
@@ -139,7 +143,10 @@ async fn input_inject(State(s): S, Json(r): Json<InjectReq>) -> Result<Response,
     }
     blocking(move || {
         s.graph.inject_input(&r.samples, r.tone.map(|t| (t.hz, t.seconds, t.gain)))?;
-        if r.unplug { s.graph.unplug_input() } else { Ok(()) }
+        if r.unplug {
+            s.graph.unplug_input()?;
+        }
+        if r.refuse { s.graph.refuse_input() } else { Ok(()) }
     })
     .await?;
     Ok(Json(json!({})).into_response())

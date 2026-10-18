@@ -96,7 +96,7 @@ impl Rig {
 /// The problems in `problems` that faults made, as (code, module, message).
 pub(in crate::graph) fn listed(problems: &Value) -> Vec<(String, Option<String>, String)> {
     let text = |v: &Value| v.as_str().map(str::to_string);
-    let codes = ["sound.stopped", "plugin.failed", "plugin.crashed", "asset.unreadable", "stretch.failed"];
+    let codes = ["sound.stopped", "plugin.failed", "plugin.crashed", "asset.unreadable", "stretch.failed", "input.missing", "input.lost", "input.refused"];
     let faults = problems.as_array().unwrap().iter().filter(|p| codes.contains(&p["code"].as_str().unwrap()));
     faults.map(|p| (text(&p["code"]).unwrap(), text(&p["module"]), text(&p["message"]).unwrap())).collect()
 }

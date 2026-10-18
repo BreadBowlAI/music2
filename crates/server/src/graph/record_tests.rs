@@ -901,6 +901,19 @@ mod audio {
             v["clips"].as_array().unwrap().clone()
         }
 
+        /// What the notices thread toasts at its next read of the fault ring.
+        fn told(&self) -> Vec<String> {
+            self.graph.hear_faults().0
+        }
+
+        /// The problems the news lists that faults made, as (code, module, message), and the
+        /// input's severities.
+        fn problems(&self) -> Listed {
+            let problems = &self.graph.news()["problems"];
+            let input = problems.as_array().unwrap().iter().filter(|p| p["code"].as_str().unwrap().starts_with("input."));
+            (crate::graph::faults::tests::listed(problems), input.map(|p| p["severity"].as_str().unwrap().to_string()).collect())
+        }
+
         /// The samples of the file clip `c` plays, its rate and channels.
         fn samples(&self, c: &Value) -> (Vec<f32>, u32, u16) {
             let path = self.fixture.0.join("assets").join(c["asset"].as_str().unwrap());
@@ -909,6 +922,9 @@ mod audio {
             (r.samples::<f32>().map(Result::unwrap).collect(), spec.sample_rate, spec.channels)
         }
     }
+
+    /// The problems faults made, as (code, module, message), and the input's severities.
+    type Listed = (Vec<(String, Option<String>, String)>, Vec<String>);
 
     /// A click on the clocks `at`, silence elsewhere.
     fn clicks(at: Vec<u64>) -> Box<dyn Fn(u64) -> f32> {
@@ -1076,19 +1092,28 @@ mod audio {
         assert!(longest < Duration::from_millis(150), "the control plane's lock was held for {longest:?}");
     }
 
-    // The review's io-r2: the input's device going away (a USB microphone unplugged) is the
-    // input's, never the output's. The take ends with what it has, said in words; the song plays
-    // on through the same player; the next R opens the input again.
+    // The review's io-r2, and the ex plan's slice 3: the input's device going away (a USB
+    // microphone unplugged) is the input's, never the output's. The take ends with what it has. It
+    // is one problem, `input.lost`, naming the input, told once (the take's own words say nothing
+    // more), and listed until the next take. The song plays on through the same player; the next R
+    // opens the input again.
     #[test]
-    fn an_unplugged_input_ends_the_take_and_the_song_plays_on() {
+    fn an_input_unplugged_mid_take_is_one_problem() {
         let mut r = Rig::new();
+        r.player.name_inputs(&["Mic A"]);
         r.anchor = r.graph.engine_clock().unwrap();
         r.sound = Box::new(|_| 0.5);
         r.start(false, false);
         r.to(2.0);
         r.player.input_error(m2_play::DeviceErrorKind::DeviceNotAvailable.into());
         let said = r.written();
-        assert_eq!(said["written"]["note"], json!(take_audio::UNPLUGGED), "{said}");
+        assert!(said["written"].is_object() && said["written"].get("note").is_none(), "written, with nothing more said: {said}");
+        let words = "Mic A was unplugged, so the take ended there. It was kept up to then. The song plays on.";
+        assert_eq!(r.told(), [words]);
+        r.fill(4);
+        r.graph.record_tick();
+        assert!(r.told().is_empty(), "told once");
+        assert_eq!(r.problems(), (vec![("input.lost".into(), None, words.into())], vec!["warning".into()]), "one problem");
         assert!(!r.player.stalled(), "the output isn't gone");
         assert_eq!(r.player.device_errors(), m2_play::DeviceErrors::default(), "nothing counted as the output's");
         assert!(r.graph.status().playing, "the song plays on");
@@ -1098,7 +1123,77 @@ mod audio {
         r.fill(2);
         r.start(false, false);
         assert!(!r.player.input_gone(), "R opened the input again");
+        assert!(r.problems().0.is_empty(), "the next take: it isn't listed");
         r.graph.record_cancel(r.token).unwrap();
+    }
+
+    // io r7, the ex plan's D8: an input chosen in Settings that isn't there records from one that
+    // is, and says so, naming both, as outputs do: `input.missing`, a Warning, told once and listed
+    // until the next take. That take is told again: listed again, with no second toast. A choice
+    // that is there says nothing.
+    #[test]
+    fn a_chosen_input_that_isnt_there_is_told_naming_the_one_used() {
+        let mut r = Rig::new();
+        // As M2_AUDIO_INPUTS="Mic A,Mic B" lists them.
+        r.player.name_inputs(&["Mic A", "Mic B"]);
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|_| 0.5);
+        let chosen = |name: &str| Options { input: InputChoice { device: Some(name.into()), name: Some(name.into()) }, ..Default::default() };
+        r.graph.record_start(r.token, "vox", "clips", chosen("Mic C")).unwrap();
+        assert_eq!(r.player.input().map(|l| l.name).as_deref(), Some("Mic A"), "it records from the one there");
+        let words = "Mic C isn't plugged in, so this take records from Mic A. To record from another input, choose it in Settings ▸ Sound input.";
+        assert_eq!(r.told(), [words]);
+        let listed = (vec![("input.missing".to_string(), None, words.to_string())], vec!["warning".to_string()]);
+        assert_eq!(r.problems(), listed);
+        r.to(1.0);
+        r.graph.transport("stop").unwrap();
+        assert!(r.written()["written"].is_object(), "the take is kept");
+        assert_eq!(r.problems(), listed, "listed until the next take");
+        r.fill(2);
+        r.graph.record_start(r.token, "vox", "clips", chosen("Mic C")).unwrap();
+        assert!(r.told().is_empty(), "told once in the song");
+        assert_eq!(r.problems(), listed, "listed again for the next take");
+        r.graph.record_cancel(r.token).unwrap();
+        r.graph.transport("stop").unwrap();
+        r.fill(2);
+        r.graph.record_start(r.token, "vox", "clips", chosen("Mic B")).unwrap();
+        assert_eq!(r.player.input().map(|l| l.name).as_deref(), Some("Mic B"));
+        assert!(r.told().is_empty() && r.problems().0.is_empty(), "Mic B is there: nothing is said");
+        r.graph.record_cancel(r.token).unwrap();
+    }
+
+    // A Mac's Don't Allow during a take (the ex plan's D11): the OS refuses the microphone, and
+    // the input gives silence. The take thread asks at each tick: the take is dropped, so nothing
+    // is written and no file is left, and it is said once, in NO_MICROPHONE's words, as an Error.
+    // The song plays on, and the next R says why.
+    #[test]
+    fn a_take_the_os_refuses_is_dropped_and_said() {
+        let mut r = Rig::new();
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|_| 0.5);
+        r.start(false, false);
+        r.to(1.0);
+        r.graph.record_tick();
+        r.player.refuse_input(true);
+        let said = r.graph.record_tick();
+        assert!(said.contains(&json!({"t": "take", "phase": null})), "the take ended: {said:?}");
+        assert!(!r.graph.recording(), "nothing waits to be written");
+        let words = format!("{} The take was only silence, so it wasn't kept.", m2_play::NO_MICROPHONE);
+        assert_eq!(r.told(), std::slice::from_ref(&words));
+        assert_eq!(r.problems(), (vec![("input.refused".into(), None, words)], vec!["error".into()]));
+        r.fill(4);
+        assert!(r.graph.status().playing, "the song plays on");
+        assert!(r.clips().is_empty(), "no clip");
+        // Its part file goes with its writer's thread.
+        let files = || std::fs::read_dir(r.fixture.0.join("assets")).map_or(0, |d| d.count());
+        let t = Instant::now();
+        while files() > 0 && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(files(), 0, "no file is left");
+        let again = r.graph.record_start(r.token, "vox", "clips", Options::default()).map(|_| ());
+        assert_eq!(again.map_err(|e| e.to_string()), Err(m2_play::NO_MICROPHONE.to_string()), "the next R says why");
+        assert!(r.told().is_empty(), "said once");
     }
 
     // The review's io-r3: a write that fails (a full disk) ends the take with every frame written

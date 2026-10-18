@@ -33,6 +33,13 @@ pub enum Code {
     Unreadable,
     /// A warped clip's stretch failed (`stretch.failed`).
     StretchFailed,
+    /// The sound input chosen in Settings isn't there, so a take records from another
+    /// (`input.missing`).
+    InputMissing,
+    /// The sound input went away during a take, which ended with what it had (`input.lost`).
+    InputLost,
+    /// The OS refuses music2 the microphone during a take, which recorded silence (`input.refused`).
+    InputRefused,
 }
 
 impl Code {
@@ -55,7 +62,15 @@ impl Code {
             Code::PluginCrashed | Code::PluginHung => "plugin.crashed",
             Code::Unreadable => "asset.unreadable",
             Code::StretchFailed => "stretch.failed",
+            Code::InputMissing => "input.missing",
+            Code::InputLost => "input.lost",
+            Code::InputRefused => "input.refused",
         }
+    }
+
+    /// Whether it is the sound input's: of no plan ([`Subject::Input`]).
+    pub fn of_input(self) -> bool {
+        matches!(self, Code::InputMissing | Code::InputLost | Code::InputRefused)
     }
 }
 
@@ -70,6 +85,9 @@ pub enum Subject {
     /// A file a kernel reads: top-level node `node`, and the file's place among the names its
     /// kernels read ([`crate::audio::assets_of`]), its voice's for a `poly`.
     Asset { node: u32, slot: u32 },
+    /// The sound input, by its opening (`m2_play::Listen::open`, counted up for the whole app). It
+    /// is of no plan: its fault's `plan` is 0.
+    Input(u32),
 }
 
 /// A plugin that stopped working while an offline render played it: why the render fails
@@ -365,7 +383,7 @@ mod tests {
     impl Subject {
         fn node(self) -> u32 {
             match self {
-                Subject::Node(n) | Subject::Clip { clip: n, .. } | Subject::Asset { slot: n, .. } => n,
+                Subject::Node(n) | Subject::Clip { clip: n, .. } | Subject::Asset { slot: n, .. } | Subject::Input(n) => n,
             }
         }
     }
