@@ -1,10 +1,38 @@
 # music2
 
-music2 is a music studio for the Mac: a DAW (digital audio workstation), the kind of app people make songs in, like GarageBand or Logic Pro. In music2 a song is a folder. Code in it says how the song sounds: the instruments, the effects and the mix. Data files say what plays: the notes, the automation (knob moves over time) and the audio.
+music2 is a music studio for the Mac and Linux: a DAW (digital audio workstation), the kind of app people make songs in, like GarageBand or Logic Pro. In music2 a song is a folder. Code in it says how the song sounds: the instruments, the effects and the mix. Data files say what plays: the notes, the automation (knob moves over time) and the audio.
 
 The app shows that folder as a timeline, a graph of knobs and cables, a piano roll (a grid for drawing notes) and a code editor. Every change you make there is written into the files right away.
 
-There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: there's no sampler, and no mute or solo yet. See [What music2 can't do yet](docs/gaps.md).
+There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your computer to talk to the app). music2 is part of **suite2**, alongside film2 and dj2.
+
+Status (2026-10-18): every planned step is built and checked on Linux. The check on the Mac is owed. What is still missing is in [What music2 can't do yet](docs/gaps.md).
+
+## In short: what you can do
+
+| You can | Where |
+|---|---|
+| Start a song from a template, or open an example | the start screen: **New Song…**, **Open an Example** |
+| Add a track: 22 std sounds, a Sampler, or an empty audio track | **+ Track** (⌘T), or the browser on the left |
+| Draw and edit notes | **Notes** (⌥2), the piano roll |
+| Edit clips: move, copy, trim, split, join, repeat | the timeline |
+| Turn knobs, add effects, connect cables | **Device** (⌥1) |
+| Mix: faders, pans, mute, solo, and meters | **Mix** (⌥3), and each track's header |
+| Draw automation (knob moves over time) | right-click a knob ▸ **Automate**, then draw on the timeline |
+| Play live: the computer's keys, or a MIDI keyboard with its wheels | ⌘K; or plug a keyboard in |
+| Hear a click on each beat | K |
+| Record notes, or your voice or a guitar | R |
+| Bring in WAV files, long ones too | File ▸ Import Audio… (⇧⌘I), or drag them onto the window |
+| Keep an audio clip in time when the tempo changes | right-click the clip ▸ **Follow tempo** |
+| Bring in a MIDI file as new tracks | File ▸ Import MIDI…, or drop the `.mid` file |
+| Play a WAV file as an instrument | + Track ▸ Sampler, then drop a WAV on its card |
+| Play CLAP plugins, and open their own windows | write `plugin(…)` in a track's code; **Open window** on its box |
+| Export the song, each track (stems), or the notes as MIDI | **Export** (⇧⌘E) |
+| Edit the song's code, with type checks | **Code** (⌥4) |
+| See what's wrong, in plain words, with fixes | the status pill in the top bar |
+| Learn step by step | Help ▸ Make Your First Song |
+
+Every change is written into the song's files at once, and Undo (⌘Z) takes it back.
 
 ## Run the app
 
@@ -61,13 +89,15 @@ Things to try:
 4. **Draw notes.** Double-click the grid to add a note (or press B for Draw mode, where a click adds one and a drag paints), drag a note to move it, and drag its right edge to make it longer.
 5. **Add an effect.** Press ⌥1 (or click **Device**), then click **+** on a box that makes sound and pick an effect such as reverb, or drag one from the browser on the left onto a track.
 6. **Undo.** Press ⌘Z to take these back, one at a time.
-7. **Export it.** Click **Export** in the top bar (or File → Export Audio…, ⇧⌘E). The song is written to a WAV file you can play anywhere or share; click **Show in Finder** when it's done (**Show in Folder** on Linux).
+7. **Export it.** Click **Export** in the top bar (or File → Export…, ⇧⌘E), keep **Song**, and save. The song is written to a WAV file you can play anywhere or share; click **Show in Finder** when it's done (**Show in Folder** on Linux).
+
+To learn it step by step in the app, open **Help → Make Your First Song**.
 
 ## The window
 
 ### The top bar
 
-From left to right: the browser's toggle, back to the start, play/stop, loop, the metronome, where the song is (bar.beat.sixteenth, then minutes and seconds), the tempo, time signature and key, the song's name, a keyboard mark while a MIDI keyboard is plugged in, the status pill (only when something needs saying: see [Saving and undo](#saving-and-undo)), undo, redo, and **Export** (it shows how far along an export is). File → Close Song (⌘W) goes back to the start screen.
+From left to right: the browser's toggle, back to the start, play/stop, record, loop, the metronome, where the song is (bar.beat.sixteenth, then minutes and seconds), the tempo, time signature and key, the song's name, a keyboard mark while a MIDI keyboard is plugged in, the status pill (only when something needs saying: see [Saving and undo](#saving-and-undo)), undo, redo, and **Export** (it shows how far along an export is). File → Close Song (⌘W) goes back to the start screen.
 
 | To | Do this |
 |---|---|
@@ -85,7 +115,7 @@ Play and stop work as in Live: Space plays from the playhead, and Space again st
 
 - **The keyboard piano:** ⌘K (Ctrl+K off the Mac), from anywhere, or View → Keyboard Piano, or the keyboard button in Notes. The computer's keys then play the selected track: A S D F G H J K L ; ' are the white keys, W E T Y U O P the black ones, and A is middle C at first. Z goes down an octave, X up. A card at the lower right of the timeline shows the keys and what plays. While it is on, those keys only play notes (Space, C and M work as always); typing in a field never plays. ⌘K again turns it off.
 - **A MIDI keyboard:** plug one in, before or while the app runs. A message says it is connected, and a small keyboard mark shows in the top bar. Its keys play the selected track, as hard as you press them, and the sustain pedal holds notes. The pitch wheel bends the track's notes, up to 2 semitones each way; the mod wheel adds vibrato to the polysynth's sounds, and plugins hear both. Unplugged, its notes stop, the wheels go back to rest, and a message says so.
-- Nothing you play is recorded yet.
+- To record what you play, press R: see [Recording](#recording).
 
 Stop ends the notes, and echoes and reverb ring out as they would on a real instrument. Moving the playhead, looping, editing notes and adding an effect all happen while the song plays, without it starting over or jumping back. Notes already sounding where the playhead lands aren't picked up: playback starts with the next note.
 
@@ -107,7 +137,11 @@ Stop ends the notes, and echoes and reverb ring out as they would on a real inst
 - Double-click an empty spot in a notes lane to add a one-bar clip. Drag a clip to move it along its lane. Click a clip and press Delete to remove it. **Repeat…** in a clip's menu makes copies one after another (1 to 64), as one undo step.
 - Click a notes clip to select it (Notes shows it); double-click it to open it in Notes.
 - Double-click a track's name (or press ⌘R) to rename it: type, then press Enter (or click away) to save, or Escape to cancel. This changes only the name the app shows (the track's label, written in its `track()` call); its key, its data and its sound stay as they are, and Undo takes it back.
-- Automation and audio clips are shown, but they can't be edited in the app yet.
+- **Mute and solo** while you listen: **M** and **S** on each track's header (and on its Mix strip), or press M or S for the selected track; ⌥-click S hears only that track. A pill at the top counts them ("1 muted · 1 solo"); click it for the list and Clear all. They change only what you hear, so Export asks first while one is on. **Mute in song** in a track's menu writes `muted: true` into its code, so the export leaves it out too: its name is struck through.
+- **Meters:** a thin bar at the right of each track's name, and the Song row's, shows how loud it is. The status pill says **Heavy load** when the computer is near its limit, and **Sound dropped out** after a gap.
+- **Edit clips:** drag a clip to move it (onto another track too), ⌥-drag to copy it, drag an edge to resize it. ⇧-click, ⌘-click or a drag across empty lanes picks several. ⌘E splits at the playhead, ⌘J joins, ⌘X ⌘C ⌘V cut, copy and paste at the playhead, Q quantizes, ← → nudge. Each clip has a right-click menu. The timeline's grid is in its corner (Auto, Bar to 1/64, triplets; ⌘1 to ⌘4); hold ⌘ to place a clip off the grid.
+- **Draw automation** on the timeline: double-click an automation lane to make a clip, click its line to add a point, drag a point to move it, Delete removes it, and B paints. A frequency is drawn on a log scale. **Remove automation** in the lane's menu writes the value at the playhead back into the code.
+- **Audio clips** show their waveform: see [Audio, recording and MIDI files](#audio-recording-and-midi-files).
 
 ### The browser
 
@@ -130,6 +164,9 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - An effect card's ⋯ menu has **Turn off** (the sound goes on without it; the card stays, dimmed, "Reverb · Off", and `bypass: true` goes into its code) and **Turn on**, and **Move left** and **Move right**, which swap it with the effect next to it. Each is one undo step. A Duck's card says what it listens to ("Listens to: Kick ▾"): click it to pick another track.
   - **+** on a box that makes sound opens the effect browser: 17 effects in seven groups (Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility), as the effects themselves declare them. Type to search, then press Enter or click. The bin icon on an effect removes it.
   - Zoom with ⌘ and scroll, or pinch. The buttons at the bottom right zoom and fit the graph to the panel.
+  - An instrument's card says how it plays under its name, such as "Plays one note at a time." (the rest is in its tooltip).
+  - A **Sampler**'s card takes a WAV file: drop one on it (see [Sounds and effects](#sounds-and-effects-std)).
+  - A CLAP plugin's box has **Open window**, for the plugin's own window (see [CLAP plugins](#clap-plugins)).
 - **Mix** (⌥3, or X): a strip for each track, in the timeline's order, and Master on the right.
   - Each strip has the track's colour and name, a pan knob, **M** and **S** (as on the track's header; a strip shared by two tracks acts on both), and a fader with its level under it. Beside the fader, two bars (left and right) show how loud the track is. They read the track before its fader, as the header's meter does. A small red dot over them means the track went over the top: click it to clear it. Master's meter is the whole song.
   - Drag a fader to hear it; let go to write it into the code. 0 dB sits three quarters of the way up. Hold ⇧ to fine-tune; ⌥-click puts it back at 0 dB; the very bottom is silence ("−∞", written as −96 dB). Scroll up or down over a fader to move it 0.1 dB a notch (scrolling sideways moves the strips). Double-click the level to type one: `-3`, `-3 dB` or `-inf`. A fader you've clicked or tabbed to also takes ↑ and ↓ (with ⇧, 1 dB) and Return to type.
@@ -140,13 +177,34 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - A track that doesn't reach the mixer gets a strip that says so, with **Edit in code**. So does a song that mixes its tracks its own way.
 - **Code:** the selected track's TypeScript, with type checks. The list on the left shows the song's files. Right-click a track's file for **Change track ID…**: the ID is the name code and files use (`track("bass", …)`, `data/bass/`). Changing it moves both, and the track's view settings, as one undo step; the track's sounds restart. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and the status pill in the top bar says so; its popover offers **Show in code**. A song whose code doesn't compile when you open it still opens: in its code, at the error, with its tracks and clips greyed in the timeline and nothing to play until a save makes it compile, and then it plays.
 - **Notes:** the selected clip in a piano roll; with none selected, it says how to pick one.
-  - Pick a snap grid (1/4 to 1/32, or off): new notes are a grid step long. A click selects; a double-click adds a note; a drag across empty space selects with a box. In Draw mode (B, or the pencil) a click adds a note and a drag paints them. Drag a note to move it, its right edge to resize it.
+  - Pick a snap grid (1/4 to 1/64, triplets, or off): new notes are a grid step long. A click selects; a double-click adds a note; a drag across empty space selects with a box. In Draw mode (B, or the pencil) a click adds a note and a drag paints them. Drag a note to move it, its right edge to resize it.
   - The strip at the bottom sets velocity (how hard each note is played).
   - Set the clip's length in bars in the dock's header.
   - While the clip's data file doesn't read (the status pill lists it), the piano roll is read only, with a note in the dock's header saying which file: it shows the notes the lane played before, and editing them would overwrite the file. Fix the file and it can be edited again.
   - ⌘A selects all notes, ⌘D duplicates the selection, the arrow keys move it (with ⇧, by an octave or a bar), and Delete removes it. ⌘= and ⌘− zoom the roll while it has the keyboard.
   - Right-click a note (or empty grid) for the note menu: up or down a semitone or an octave, **Quantize** (Q: onto the grid), **Legato** (each note lasts until the next starts), **Humanize** (timing and loudness a little off, so it sounds played), **Swing** (Light, Medium, Heavy: every second note a little later), Duplicate and Delete. It acts on the selected notes, or with none, on every note of the clip, as one undo step.
   - A drum kit's rows say their drum (Kick, Snare, Closed hat) instead of C2, and so do its notes. With the song's key set, the rows not in the key are shaded (never on a drum kit).
+
+### Help
+
+- **Help → Make Your First Song** opens a guide at the top of the browser: seven steps that tick themselves as you do them.
+- Hold the mouse over any button, knob or fader: its tooltip says what it does, in plain words, with its key.
+- A mistake in the code is said in plain words with a fix, pointing at your own line: "Cutoff wants a frequency (Hz), but gets a level (dB). Write it in Hz, such as hz(800)." The original message is under **Details**.
+
+## Audio, recording and MIDI files
+
+- **Bring in audio:** File → Import Audio… (⇧⌘I), or drag WAV files onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). An outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` folder (the same file twice is kept once). Files up to 3 hours long play from the disk, never whole in memory.
+- **Edit an audio clip:** drag its edges to trim it, and the small squares at its top to fade it in or out. Its menu sets its volume, plays it backwards, or removes the fades. Each is one undo step.
+- **Follow tempo:** right-click an audio clip and turn on **Follow tempo**. Change the song's tempo later, and the clip stretches to keep its beats; its pitch stays the same. The stretch is made in the background while the song plays on. Turn it off and the clip plays at its own speed again.
+- **Bring in a MIDI file:** File → Import MIDI…, or drop a `.mid` file. Each part becomes a new track with a fitting sound (channel 10 plays the Drum kit), its notes in one clip. If the file's tempo differs from the song's, it asks: **Keep** the song's (Return) or **Use** the file's. One Undo takes the whole import back.
+
+### Recording
+
+- **Record notes:** select a track that plays notes and press R (or the red **Record** button after Play, or Transport → Record). Stopped, it counts in one bar of clicks (the button says 4, 3, 2, 1), then plays; playing, it starts at once. Play a MIDI keyboard or the keyboard piano: the notes show as you play. R again, or Space, ends it: one clip over whole bars, one undo step. Right-click the button for **Count in first** and **Snap notes to the grid**. While looping, the first time round is kept.
+- **Record your voice or a guitar:** select an audio track and press R. It counts in, then records from the sound input into a new file in `assets/` ("Vox take.wav"). The take grows as a red clip, with a bar showing how loud the input is. R again ends it: one clip, one undo step; the file stays if you undo.
+- **Settings → Sound input** picks the input. **Hear yourself while recording** plays the input through the track's effects and fader while it records. It is off at first: use headphones, as speakers feed back into the microphone. An export never has it.
+- **When the input has a problem**, a message says so, and the status pill lists it: an input chosen in Settings that isn't plugged in records from another and says which; one unplugged during a take keeps the take up to there; a Mac that doesn't allow the microphone drops the take (it is only silence) and says where to allow it. With the disk full, or a take over 3.1 hours, the take is kept up to there.
+- The song plays on through all of these.
 
 ## New songs, the songs folder and export
 
@@ -156,12 +214,17 @@ It shows the selected track (or the Song) in one of four views, picked with the 
 - New songs go in the **songs folder**, `~/Music/music2`, each in a folder named after the song. If the name is taken, the new one gets a number ("My song 2"): nothing is ever replaced. `Exports` there is taken by exports, so a song called "Exports" becomes "Exports 2". In the app, **Choose Folder…** in the New Song dialog saves it somewhere else.
 - The start screen lists the songs you opened last, newest first, with their tempo and when you opened them; so does File → Open Recent. A click opens one. A song whose folder was moved or deleted says so, with × to take it off the list. The song that was open when you quit opens again at the next launch (not after Close Song, ⌘W).
 - **Save As…** (File → Save As…, ⇧⌘S) saves a copy of the song under a new name and opens the copy; the song itself stays as it was. The copy has the song's files, but not its `.music2/` (mutes, view settings, undo). **Choose Folder…** puts it somewhere else (not inside the song's own folder).
-- **Settings** (⌘, on a Mac, Ctrl+, elsewhere; music2 → Settings… on a Mac, File → Settings… elsewhere) chooses the sound output and its buffer size, shows what plays now, and sets where new songs go (and their exports). A folder reached through a link is shown at its real place, as the songs made in it are. They are kept for this computer in `~/.music2/settings.json`, and apply at once: a change of output stops playback where it was. A song opens with no sound device too: it plays silently, and the status pill says **No sound output**. Plug one in, and within a few seconds the song moves to it and stops.
+- **Settings** (⌘, on a Mac, Ctrl+, elsewhere; music2 → Settings… on a Mac, File → Settings… elsewhere) chooses the sound output and its buffer size, the sound input and **Hear yourself while recording**, which MIDI keyboards play (untick one and it plays and records nothing), shows what plays now, and sets where new songs go (and their exports). A folder reached through a link is shown at its real place, as the songs made in it are. They are kept for this computer in `~/.music2/settings.json`, and apply at once: a change of output stops playback where it was. A song opens with no sound device too: it plays silently, and the status pill says **No sound output**. Plug one in, and within a few seconds the song moves to it and stops.
 - **Open an Example** on the start screen copies an example into the songs folder and opens the copy. An example that needs plugins you don't have (With plugins) says which, and nothing is copied.
-- **Export** (the button in the top bar, or File → Export Audio…, ⇧⌘E) writes the song to a WAV file: 24-bit, stereo, at the song's sample rate (48 kHz unless its `music2.toml` says otherwise). It starts at bar 1 and goes to the end of the last clip, then on until the sound has died away (silent for half a second, at most 10 seconds more). A song longer than 3 hours (most likely a clip far past the rest) isn't exported: the message says in which bar the last clip ends.
+- **Export** (the button in the top bar, or File → Export…, ⇧⌘E) asks what to make:
+  - **Song**: the whole song as one WAV file (below).
+  - **Stems**: each track as its own WAV file, before its volume and pan, in a new folder. Not yet for a song that plays plugins.
+  - **MIDI**: the notes, as a MIDI file other music apps open, with a fitting General MIDI sound for each part and drums on channel 10. A notes clip's menu has **Export as MIDI…** too.
+- **Song** writes a WAV file: 24-bit, stereo, at the song's sample rate (48 kHz unless its `music2.toml` says otherwise). It starts at bar 1 and goes to the end of the last clip, then on until the sound has died away (silent for half a second, at most 10 seconds more). A song longer than 3 hours (most likely a clip far past the rest) isn't exported: the message says in which bar the last clip ends.
   - The app asks where to save it, starting at `~/Music/music2/Exports/<song>.wav`. Opened in a browser, it saves there straight away, adding " 2", " 3"… rather than replacing a file, even one that appeared while it was exporting.
   - The button shows how far along it is, and you can keep playing and editing meanwhile. It exports the song as it was when you clicked. If you close the song or open another, the export carries on, and a message in the corner shows how far along it is.
   - A song with plugins pauses while it exports, as a tape would: the export borrows the plugins that play, so they don't need a second copy. The top bar says **Paused for export**. Afterwards play goes on where it paused, and a note held across the pause starts again. Edits made meanwhile are heard once the export is done.
+  - If any part breaks while it exports (a sound, a plugin that crashes or stays stuck for 30 seconds, a file that can't be read, a stretch), the export fails and names the part and its track. No file is written with a part silent. Playback goes on.
   - Quitting while a song is being exported asks first: quitting stops the export, and no file is saved.
   - The file is written under a hidden name and renamed when it's complete. A hidden file left by an export that was cut off (the app was killed) is removed by the next export into that folder.
   - When it's done, a message gives the file's name and length, with **Show in Finder** (**Show in Folder** on Linux; in a browser, it says which folder).
@@ -177,7 +240,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
 - If another program changes a clip while you're editing it in the piano roll, your edit of that clip is refused, saying which clip, and the other program's version stays. Edits to different clips of one lane both stay.
 - One program writes a song at a time. While the app has a song open, `m2` commands that write it stop without changing anything and say so; ones that only read it, render it or bounce a track work. A song that's open for writing elsewhere (another music2 window, say) opens read-only: the status pill says **Read only**, and its popover says where it is open, with **Retry** to take it over once it's free. You can play it and see its changes; nothing offers to edit it meanwhile.
 - The lock and the edits being written live in the song's `.music2/` folder, which git ignores. If the app or the Mac stops in the middle of writing an edit, the status pill says so when the song opens next, with **Finish** and **Discard**: either leaves every file as it was before the edit or after it, never half.
-- Problems that don't stop the song, such as data no lane reads after a key was renamed in code, a data file that doesn't read, or a missing sample or plugin, are counted by the status pill in the top bar ("2 problems"); click it for each one, with its fixes (and its code, under Details). A fix runs only when you click it, and Undo takes it back. When a track's key was renamed in code, **Move all to …** moves its whole data folder to the new key at once.
+- Problems that don't stop the song, such as data no lane reads after a key was renamed in code, a data file that doesn't read, or a missing sample or plugin, are counted by the status pill in the top bar ("2 problems"); click it for each one, with its fixes (and its code, under Details). So is a part that breaks while the song plays: a sound, a plugin, an audio file that can't be read, a stretch that failed, or the sound input. That part goes silent alone, the rest plays on, a message says so once, and it stays listed, with its track, until it plays again (Transport → Stop All Sound starts a stopped sound again). A fix runs only when you click it, and Undo takes it back. When a track's key was renamed in code, **Move all to …** moves its whole data folder to the new key at once.
 
 ## Shortcuts
 
@@ -189,6 +252,9 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⇧Space | Shift+Space | Play on from where it stopped |
 | Return or Home | Enter or Home | Back to the start |
 | C | C | Loop on or off |
+| K | K | Metronome on or off |
+| R | R | Record (again: stop recording) |
+| M / S | M / S | Mute / solo the selected track |
 | ⌘L | Ctrl+L | Loop the selected clips, or the bar the playhead is in (in the code editor, its own: select the line) |
 | ⌘. | Ctrl+. | Stop all sound (in the code editor, its own: quick fix) |
 | ⌘Z / ⇧⌘Z | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
@@ -197,14 +263,22 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⌘W | Ctrl+W | Close the song |
 | ⌘S | Ctrl+S | Save the code editor's files |
 | ⇧⌘S | Ctrl+Shift+S | Save a copy of the song (Save As) |
-| ⇧⌘E | Ctrl+Shift+E | Export the song as a WAV file |
+| ⇧⌘E | Ctrl+Shift+E | Export: the song, stems or MIDI |
+| ⇧⌘I | Ctrl+Shift+I | Import audio |
+| ⌘, | Ctrl+, | Settings |
+| ⌘K | Ctrl+K | The keyboard piano on or off |
 | ⌘Q | Ctrl+Q | Quit (on Linux, File → Quit) |
 | ⌘T | Ctrl+T | New track |
 | ⌘⌫ | Ctrl+Backspace | Delete the selected track. In a field or the code editor it edits the text instead: on a Mac up to the line's start, on Linux the word before |
 | ⌘R or ⇧Return | Ctrl+R or Shift+Enter | Rename the selected track |
 | ⌘D | Ctrl+D | Duplicate the selected notes, or with none, the selected track (in the code editor, its own: the next match) |
 | ⌘A | Ctrl+A | Select all notes in the open clip |
-| Arrow keys (⇧: further) | Arrow keys (Shift: further) | Move the selected notes (further: by an octave or a bar) |
+| ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste clips (at the playhead) |
+| ⌘E | Ctrl+E | Split the selected clips at the playhead |
+| ⌘J | Ctrl+J | Join the selected clips |
+| ← → (⇧: a bar) | ← → (Shift: a bar) | Move the selected clips or notes by the grid |
+| ↑ ↓ (⇧: an octave) | ↑ ↓ (Shift: an octave) | Move the selected notes a semitone |
+| ⌘1 / ⌘2 / ⌘3 / ⌘4 | Ctrl+1 / 2 / 3 / 4 | Narrower grid / wider grid / triplets / snap on or off |
 | Delete | Backspace | Remove the selected clip or notes |
 | Escape | Escape | Deselect |
 | ⌘= / ⌘− | Ctrl+= / Ctrl+− | Zoom in / out: the timeline, or the roll while it has the keyboard |
@@ -213,7 +287,7 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⇧⌘F | Ctrl+Shift+F | Follow the playhead on or off |
 | ⌥← / ⌥→ | Alt+← / Alt+→ | Go to the marker before / after |
 | Q | Q | Quantize: in Notes the selected notes (or with none, every note), else the selected clips' notes |
-| B | B | Draw mode in Notes |
+| B | B | Draw mode: notes, and automation points |
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Device / Notes / Mix / Code (X: Mix) |
 | E | E | Show or hide the dock |
@@ -245,6 +319,10 @@ New to music itself? [Music basics](docs/music-basics.md) explains notes, beats,
 - **Export:** rendering the whole song to a WAV file you can play anywhere or share.
 - **Template:** what a new song starts from, such as the Starter beat.
 - **Bounce:** rendering one track to an audio file in the song's `assets/`, often to chop it up again.
+- **Stems:** each track exported as its own audio file, to mix or share elsewhere.
+- **Take:** one recording, from Record to stop.
+- **Sampler:** an instrument that plays an audio file on each note, higher or lower by the note.
+- **Plugin:** an instrument or effect from another maker, installed on your computer (music2 plays CLAP plugins).
 
 ## How a song is written
 
@@ -278,7 +356,7 @@ sample_rate = 48000
 
 [dependencies]
 "@m2/core" = "1"
-std = "0.2"
+std = "0.3"
 ```
 
 `arrangement.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes, the first at beat 0) and `meter` (a list of `{ "beat", "beats", "unit" }` time signatures; empty is 4/4). A beat is a quarter note.
@@ -509,7 +587,10 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 - A parameter is written as its name, then its CLAP id: `a_filter_1_cutoff_4092842705`. Only the id says which parameter it is, so a plugin update that renames its parameters changes nothing (music2 notes the new name). Written without its id (`a_filter_1_cutoff`), it is an error that names the full address.
 - A song whose plugin isn't installed still plays: that plugin's node is silent (an instrument) or passes its audio through (an effect), and the song says which plugin is missing.
 - `m2 plugin-state <song> <track>/<key> clap:<id>` saves the plugin's default settings (not the values your code gives it) to `data/<track>/<key>.state`, which the plugin keyed `<key>` on that track loads. Beside it, `<key>.state.json` says which plugin wrote it; a state without it, or written by another plugin, isn't loaded.
-- Plugins can't go inside `poly` (an instrument plugin plays all the notes itself), and there are no plugin windows yet.
+- Plugins run in a second program, beside the app. If a plugin crashes or hangs, its sound goes quiet, the app says so once, and it comes back by itself; the song plays on. A plugin stuck for 30 seconds is ended the same way.
+- **Open window** on a plugin's box in Device opens the plugin's own window. A knob turned there writes its number into the code (one undo step); a knob a lane drives stays where you put it ("Latched"; **Re-enable** gives it back to the lane); any other change saves the plugin's settings a second later (one undo step).
+- A plugin that plays late (a look-ahead limiter, say) is made up for: every other track waits for it, live and in exports.
+- Plugins can't go inside `poly` (an instrument plugin plays all the notes itself).
 - See [`examples/with-plugins`](examples/with-plugins), which needs both plugins installed.
 
 ## The command line (`m2`)
@@ -520,7 +601,7 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 |---|---|
 | `m2 new <folder>` | Makes a new song in exactly that folder (it refuses one that exists) from a template: `--template starter` (the default) or `--template empty`. `--example first-song` copies an example instead. |
 | `m2 check <song> [--json]` | Runs the code and checks the graph and the timeline. `--json` prints the compiled graph. `m2 build` is the same. |
-| `m2 render <song> <out.wav>` | Renders the song to a 24-bit WAV, the same file the app's Export Audio writes: to the end of the last clip, then on until the sound has been silent for half a second (10 s past the end at most). It renders at the song's `sample_rate`, from `music2.toml`. `--from S` starts S seconds in (or `--from-bar N` at bar N, counted from 1), replaying the song up to there; `--seconds N` renders exactly N seconds. 3 hours at most. `--preroll P` starts only P seconds before instead of replaying: much faster late in a long song, for listening, but approximate, as it says (notes held from before then, and earlier tails, are missing), and never written into `assets/`. |
+| `m2 render <song> <out.wav>` | Renders the song to a 24-bit WAV, the same file the app's Export (Song) writes: to the end of the last clip, then on until the sound has been silent for half a second (10 s past the end at most). It renders at the song's `sample_rate`, from `music2.toml`. `--from S` starts S seconds in (or `--from-bar N` at bar N, counted from 1), replaying the song up to there; `--seconds N` renders exactly N seconds. 3 hours at most. `--preroll P` starts only P seconds before instead of replaying: much faster late in a long song, for listening, but approximate, as it says (notes held from before then, and earlier tails, are missing), and never written into `assets/`. `--threads N` renders on N threads, the same file on any number. If a part breaks while it renders, it fails and names it. |
 | `m2 kernels [--json]` | Every kernel and its typed ports. |
 | `m2 bounce <song> <name>` | Renders a track, named by its key (`--track keys`), or the whole song to a new `assets/<name>.wav`; it never replaces one that's there. `--place keys.lane@beat` also puts it on an audio lane. |
 | `m2 graph <song> [--json]` | The graph the app shows, as text. |
@@ -528,6 +609,10 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 set <song> <id> <value>` | Changes one, checked by the compiler. `--expect V` refuses unless it's V now. |
 | `m2 automate <song> <id>` | Gives a knob an automation lane of its own, as the app's Automate does: the knob's number becomes the lane's fallback, so the song sounds the same. |
 | `m2 label <song> <track> <name>` | Shows a track, named by its key, as `<name>`: only its `track()` call's name changes. |
+| `m2 import <song> <file.wav>… [--track key] [--at bar]` | Brings WAV files into `assets/` and places their clips: on a track's audio lane, or each on a new audio track. One undo step. |
+| `m2 mute-in-song <song> <track>… on\|off` | Mutes tracks in the song (every render and export), or unmutes them. |
+| `m2 clips <song> <gesture> <clip>…` | One clip edit: `create`, `move`, `resize`, `split`, `join`, `duplicate`, `quantize`, `delete`. A clip is `track/lane:id` or `track/lane@9.3.1` (where it starts). |
+| `m2 unautomate <song> <track>/<lane> [--at place]` | Takes a knob's automation out: the lane's value there goes back into the code. |
 | `m2 add-track <song> <instrument>` | Adds a track playing an instrument (`synth.pluck` or `std:synth-pluck`), as + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track. |
 | `m2 duplicate-track <song> <track>` | Copies a track, named by its key: its code, its clips (with new ids), its plugins' saved settings and its mixer channel. |
 | `m2 delete-track <song> <track> [--cascade]` | Takes a track out: its file, its imports, its channel, its data and its place in `layout.json`. When an effect elsewhere listens to it (a duck), it lists them and changes nothing; `--cascade` takes the track out of them too. |
@@ -548,7 +633,7 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 fix <song> <path> <fix>` | Applies a fix a problem offers, such as `assign-clip-ids` or `repin-asset`, or `finish-tx` and `discard-tx` for an edit that was cut off (its path is `.music2/tx/<id>.json`). Every command prints the problems it finds with the commands that fix them. |
 | `m2 tx <song> <tx.json \| -> [--check] [--seen HASH]` | A checked edit written as Tx JSON (see [Scripts and agents](#scripts-and-agents)). `--check` prints what it would change and that change's hash, writing nothing; without it, it is written, and `--seen HASH` writes it only while it still makes the change with that hash. The answer is JSON; the exit status is 1 when nothing was written. |
 
-While the app has a song open, the commands that write it (`set`, `automate`, `label`, `add-track`, `duplicate-track`, `delete-track`, `layout`, `tempo`, `meter`, `title`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `relink`, `delete-data`, `fix`, `tx`, `plugin-state` and `bounce --place`) stop at once, change nothing, and say which program has it. Make the edit in the app, or close the song there first. The other commands, and `bounce` without `--place` (it only makes a new file), work while it's open.
+While the app has a song open, the commands that write it (`set`, `automate`, `unautomate`, `label`, `add-track`, `import`, `mute-in-song`, `clips`, `duplicate-track`, `delete-track`, `layout`, `tempo`, `meter`, `title`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `relink`, `delete-data`, `fix`, `tx`, `plugin-state` and `bounce --place`) stop at once, change nothing, and say which program has it. Make the edit in the app, or close the song there first. The other commands, and `bounce` without `--place` (it only makes a new file), work while it's open.
 
 Commands that change a song write into its folder, so try them on a copy, not on the examples:
 
@@ -634,9 +719,11 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 | `PUT /api/graph/file` `{session?, path, base, text}` | Save one file, only if it still says `base` |
 | `GET /api/graph/types` | The SDK and package sources, for type checks |
 | `POST /api/graph/unsaved` `{session, files}` | Tell the app which files have unsaved edits in an editor |
-| `POST /api/graph/export` `{path?}` | Export Audio: render the song to a WAV file on a thread of its own, to `path` or to a new file in `~/Music/music2/Exports`. Answers `{path}` at once; one export at a time |
+| `POST /api/graph/export` `{path?}` | Export the song: render it to a WAV file on a thread of its own, to `path` or to a new file in `~/Music/music2/Exports`. Answers `{path}` at once; one export at a time |
 | `GET /api/project/templates` | What a new song can start from: `{templates, examples}` (each `{id, name, description}`), the songs folder (`songs`) and `home` |
 | `POST /api/project/new` `{name, template?, example?, dir?, tempo?}` | Make a song from a template (`starter` if neither is given) or a copy of an example, in a new folder named after it in `dir` (a full path; default `~/Music/music2`), and open it. A taken name gets " 2", " 3"…, and so does `Exports` in the songs folder. An example whose `example.toml` lists `[plugins]` that aren't installed is refused, naming them. Answers like `GET /api/graph`, for the song it made |
+
+The table lists the routes scripts use most. The rest (recording, imports, the Sampler, plugin windows, settings, the view, MIDI) are in `crates/server/src/routes*.rs`.
 
 `/api/ws` is a WebSocket with three events: `{"t":"toast","text":…}` for messages, `{"t":"graph"}` when the song changed and should be fetched again, and `{"t":"export",…}` while a song is exported, each with the `song`'s name and its folder (`dir`): `progress` (0 to 1, at most ten a second), then `done` with `path`, `seconds` and `peak_db`, or `error`. Toasts sent while nothing was connected, such as why the folder given at launch didn't open, go to the next client that connects.
 
@@ -644,7 +731,8 @@ Or just edit the files: the app takes the change in once it has settled (no file
 
 ## Building and testing
 
-- `cargo test --workspace` runs the tests.
+- `ci/check.sh` is the full check: every test, clippy, every browser suite and the renders, and on a Mac the timing gates too. It ends with a summary whose first line says `music2 check: PASS`. [HANDOFF.md](HANDOFF.md) says how to run it.
+- `cargo test --workspace` runs the tests. Tests that play plugins need the plugin program built first: `cargo build -p m2-plugins --bin m2-plugin-host`.
 - To test the UI with no window and no sound: `M2_AUDIO=none cargo run -p m2-server --example headless -- <song-folder | -> <session.json> <token>`, then point a headless browser at the URL in the session file. `-` opens no song, for the start screen. Outside the app, the UI reads its token from `window.__M2__ = {native: false, token}`.
 - The browser suites are in `e2e/`: each drives the UI in headless Chrome against the headless server, on a fresh copy of a song (see `e2e/README.md`).
 - `std/build.sh` rebuilds std's kernels (it needs the `wasm32-unknown-unknown` Rust target). The built `std/kernels/std.wasm` is checked in.
@@ -660,17 +748,21 @@ Or just edit the files: the app takes the change in once it has settled (no file
 | `core/runtime` | Loads packages, runs kernels (wasmtime), `poly`, `feedback`, audio clips; the renderer |
 | `core/script` | Runs the TypeScript (oxc + QuickJS) and the `@m2/core` SDK |
 | `core/session` | Compiling, revisions, and the write path every edit takes: checking and writing Tx (the change a Tx makes to the graph, what it may change, the journal), the code editor's saves, taking in outside changes once they settle, the project lock, and undo. It knows no gesture |
-| `crates/editor` | Every gesture as a Tx: knobs and their ids, cables, effects, notes, relinks and fixes, renames, automate; the views the app shows; and the offline render that Export Audio and `m2 render` share |
-| `core/plugins` | CLAP plugin hosting |
-| `core/play` | Plays a renderer on the audio device |
+| `crates/editor` | Every gesture as a Tx: knobs and their ids, cables, effects, notes, relinks and fixes, renames, automate; the views the app shows; and the offline render that Export and `m2 render` share |
+| `core/plugins` | CLAP plugin hosting, in a second program (`m2-plugin-host`) |
+| `core/play` | Plays a renderer on the audio device, on real-time threads; streams audio from disk; reads the sound input |
+| `core/pool` | The thread pool that renders on several cores |
+| `core/os` | Everything that differs between macOS, Linux and (later) Windows (`m2-os`) |
 | `std/`, `std/kernels-src` | The standard package, and its kernels' Rust source |
 | `apps/m2` | The command line |
-| `apps/music2-desktop` | The Mac app (Tauri): window, menus, dialogs |
-| `crates/server` | The app's local server: `graph.rs` (the open song), `files.rs` (the code editor's files), `project.rs` (new songs and the songs folder), `export.rs` (Export Audio), `resources.rs` (finding std, the templates and the examples), `routes.rs` (the API) |
+| `apps/music2-desktop` | The desktop app (Tauri), on the Mac and Linux: window, menus, dialogs |
+| `crates/server` | The app's local server: `graph.rs` (the open song), `files.rs` (the code editor's files), `project.rs` (new songs and the songs folder), `export.rs` (Export), `resources.rs` (finding std, the templates and the examples), `routes.rs` (the API) |
 | `web/` | The UI: `StartScreen`, `NewSongDialog`, `GraphCanvas` (the window's shell), `TopBar`, `Status`, `Browser`, `SongTimeline`, `Dock` (`NodeGraph`, `NoteView`, `CodeView`), `EffectBrowser`, `Shortcuts`; `lib/shell.ts` holds the dock's view and the selection |
 | `templates/` | What new songs start from: `starter` and `empty`, each a whole song plus a `template.toml` (its name and description) |
-| `examples/` | `first-song`, `resample`, `with-plugins` and `sounds`, each with an `example.toml` for the start screen (and the plugins it needs) |
+| `examples/` | `first-song`, `resample`, `with-plugins`, `sounds` and `sampler`, each with an `example.toml` for the start screen (and the plugins it needs) |
 | `e2e/` | The browser suites |
+| `crates/gates` | The timing gates (`m2-gates`) that `ci/check.sh` runs |
+| `ci/` | `check.sh` (the full check), `gates.txt`, `sweep.sh` (a Mac's thread sweep), `plugins.sh` (the test plugins) |
 | `docs/` | Design docs and the gap list |
 
 ## Design docs

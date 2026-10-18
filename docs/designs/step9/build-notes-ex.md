@@ -88,7 +88,7 @@ It found 5 things, all small.
 | r2 | another song opened without closing kept the last song's input problems listed | fixed (`bd4ab45`): `Told::sent` takes every listed problem away when the session changes. Test `another_song_lists_none_of_the_last_songs_problems`: red on the old code, then green |
 | r3 | a plugin that fails a second time is left silent with no new message | a line in `docs/gaps.md` |
 | r4 | `fault::Once` was dead code | deleted (`9569f8d`), with its test and the plan's mentions |
-| r5 | `m2` loads the test plugin `probe` when `M2_PROBE` is set, in the shipped program too | a line in `docs/gaps.md` |
+| r5 | `m2` loads the test plugin `probe` when `M2_PROBE` is set, in the shipped program too | a line in `docs/gaps.md`; later fixed by the finish tidy (`be4d407`): debug builds only |
 
 Contract settled: an input's problem is listed until the next take, **or until another song opens** (RENDER-30a, the three `input.*` rows).
 

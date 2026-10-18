@@ -262,7 +262,7 @@ There are only two, for problems. Success and information get no colour: quiet m
 
 | Token | Hex | Used for |
 |---|---|---|
-| `danger` | `#af3d36` | errors, clipping, "Reconnecting…", destructive menu rows |
+| `danger` | `#af3d36` | errors, clipping, "Reconnecting…", destructive menu rows; recording (the Record button while it counts in or records, a take as it grows: `studio`, D18) |
 | `danger-strong` | `#90302b` | danger text on `danger-soft` (6.8:1) |
 | `danger-soft` | `#ffe9e6` | the error pill; the code problems strip |
 | `warn` | `#b07a20` | warnings, the meter between −6 and 0 dBFS. Never put white text on it. |
@@ -722,6 +722,7 @@ Keep these rules that already follow the block in `index.css`, with these change
 | 0–80 | Traffic lights | `data-tauri-drag-region` across every empty part of the bar |
 | 80 | Go to start | 28 px ghost, `SkipBack`. Return. |
 | 112 | Play / Stop | 28 px. Stopped: ghost with a `Play` glyph in `gray-700`. Playing: `accent` fill with a white `Square`. It stops (and Space stops); there is no pause glyph. |
+| 144 | Record | Built by `studio` (lane B, D39): a 28 px ghost, `Circle`, right after Play. R, or Transport ▸ Record. `danger` while it counts in (4, 3, 2, 1) or records; right-click for Record options (Count in first, Snap notes to the grid). Everything to its right moves 32 px further than the x this table gives. |
 | 144 | Loop | 28 px ghost toggle, `Repeat`; `accent-soft` while on. C. |
 | 176 | Metronome | 28 px ghost toggle (K), `Metronome`; `accent-soft` while on. Built by `next` (B1): Transport ▸ Metronome too, kept per song (`.music2/view.json`), off in a new song. Everything to its right moves 32 px right. At the Mac app's narrowest (1100 px) the song's name goes (§3.8). |
 | 188 | Divider | 1 px `line`, 20 px tall, with 12 px on each side |
@@ -960,7 +961,8 @@ view at first launch.
 - In the Mac app the bar starts 80 px in, for the window's buttons, and the browser's toggle sits
   before Go to start, so the left side ends about 500 px in once the time shows. There the time
   shows from 1280 px (not 1180), and from 1280 px the name keeps 548 px clear on each side (the
-  480 plus the 68 px the window's buttons add). `fx-fixes` checks both bars at 1100, 1180, 1280
+  480 plus the 68 px the window's buttons add). Since `studio`'s Record button took 32 px more, the
+  time shows from 1212 px, and from 1312 px in the Mac app; there the name goes up to about 1200 px. `fx-fixes` checks both bars at 1100, 1180, 1280
   and 1440 px (the taste plan's attack, item C).
 - What the engine is busy with ("Paused for export", "Loading Surge XT…") is a neutral state of
   the status pill, ranked below every problem (ST-1): nothing sits under the song's name (lead
@@ -987,6 +989,10 @@ tools after Hear notes, 24 px like every Notes tool):
 - Rows with a 128 px label: Sound output, Buffer size (with the hint "Smaller is quicker to respond.
   Larger is safer if the sound drops out."), Now ("Headphones · 48 kHz · 256 samples (5.3 ms)"),
   New songs go in (Change… in the app, a field in a browser, and "Use the default").
+- Since `studio`: MIDI keyboards, one row with a tick for each keyboard plugged in ("No MIDI keyboard
+  is plugged in." when none is); unticked, it neither plays nor records (`settings.json` `midi.off`).
+- Since track io: Sound input ("Same device as the output" at first) and the tick **Hear yourself
+  while recording**, off at first.
 - Each list is a button that opens a menu (ST-4: no native select). A device that isn't connected
   says "(not connected)". While an export runs both lists are grey: "Wait for the export to finish."
 - One primary button, Done, in a `chrome` footer. Esc closes; Tab goes round.
@@ -1145,7 +1151,7 @@ new says "(new)".
 | EX-1 | KEEP | One-click Export with the progress ring in the button; you keep working while it renders | | `d13` | — |
 | EX-2 | CHANGE | The done toast reports the result | "Exported My Song.wav · 0:16 · peak −0.8 dB", with "Show in Finder" as its action (the event carries `peak_db`). | `d14` | UI |
 | EX-3 | CHANGE (new) | Warn before exporting with overlays on (MON-4) | A dialog: "Kick is muted only while you listen. It will be in the file." [Export anyway] [Mute Kick in the song, then export]. The second writes the MON-5 option on every muted track in one Tx, then exports; its done toast says Kick stays muted in the song and offers Unmute Kick. "Don't ask again for this song" (kept in `view.json`) skips the dialog, and the done toast then carries the warning. The export with monitoring mutes still carries `overlays.active`. | — | 8b:mixer |
-| EX-4 | CHANGE (new) | An "Export…" sheet | Range (song, loop, selection), stems, format, bit depth, normalize, tail. | — | later #36 |
+| EX-4 | CHANGE (new) | An "Export…" sheet | Range (song, loop, selection), stems, format, bit depth, normalize, tail. Built by `studio` as a dialog (⇧⌘E) with three choices: Song (the WAV, with EX-3's question first), Stems, MIDI. Only Song asks the question. The range, MP3 and the rest are gaps #36. | — | `studio`; the rest #36 |
 
 ### SS: The start screen (`a01`–`a03`, `g01`)
 
@@ -1185,7 +1191,7 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 | Loop on / off | C | button | C (Cycle) | — |
 | Loop the selection | ⌘L | ruler drag | ⌘U (locators from the selection) | ⌘L |
 | Metronome | K | — | K | — |
-| Record (reserved) | R | — | R | F9 |
+| Record (built by `studio`) | R | — | R | F9 |
 | Follow the playhead (on by default, kept per song) | ⇧⌘F | — | — | ⇧⌘F |
 | Stop all sound (panic) | ⌘. | — | — | — |
 | **Edit** | | | | |
@@ -1289,13 +1295,16 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
   type-in field, ⌘⌫, ⌘↑ and ⌘↓ do the field's edit. Everywhere else the chord is the menu's command.
 - Every ⌘ and ⌃ shortcut appears in its menu row. Every shortcut appears in its tooltip ("Loop (C)")
   and in the ⌥K sheet, grouped as in §5.1.
-- The Transport menu lists Play, Continue, Go to Start, Loop, Loop Selection, Metronome and Follow.
+- Every icon button, toggle, tab, switch, slider, knob and fader has a tooltip in plain words, with
+  its key when it has one; a text button that says its action needs none. `e2e/tiplib.mjs`' `tips`
+  checks it, and every new suite runs it on what it adds (`studio`).
+- The Transport menu lists Play, Continue, Go to Start, Loop, Loop Selection, Metronome, Record and Follow.
 - The View menu lists Zoom In, Zoom Out, Zoom to Selection, Track Height, Show Automation, the four
   dock views, Show Dock, Show Browser, Command Palette and, on a Mac, Full Screen.
 - The Track menu (new) lists New Track, Delete, Rename, Mute (⌃M on a Mac), Solo (⌃S on a Mac) and Mute
   in Song.
   Duplicate is one item, in Edit, and acts on whatever is selected (§5.1).
-- The Help menu lists Keyboard Shortcuts. Off the Mac there is no app menu: About ends Help, and Quit
+- The Help menu lists Make Your First Song first, then Keyboard Shortcuts (`studio`). Off the Mac there is no app menu: About ends Help, and Quit
   (Ctrl+Q) ends File. Only the Mac has a Window menu.
 
 ---
