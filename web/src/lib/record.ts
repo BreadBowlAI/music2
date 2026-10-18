@@ -246,7 +246,8 @@ function selectWritten(graph: GraphState | null) {
 }
 
 interface TakeMsg extends Partial<Take> {
-  written?: { revision: number; made: { module: string; lane: string; id: string }[]; module: string; lane: string };
+  /** `note`: what to say about an audio take (the disk was slow, the input went away). */
+  written?: { revision: number; made: { module: string; lane: string; id: string }[]; module: string; lane: string; note?: string };
   empty?: boolean;
   /** The code doesn't compile: the take is written once it does. */
   waiting?: string;
@@ -258,6 +259,7 @@ on<TakeMsg>("take", (m) => {
   if (m.written) {
     toSelect = m.written.made[0] ?? null;
     selectWritten(graph);
+    if (m.written.note) toast(m.written.note);
     return;
   }
   if (m.empty) return toast("Nothing was played, so nothing was recorded.");

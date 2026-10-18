@@ -152,6 +152,8 @@ pub(super) struct Ended {
     clip: Option<Value>,
     /// An audio take: where it starts, and its file, being written or written.
     audio: Option<Box<(f64, Audio)>>,
+    /// Why it ended, when the windows should hear it: the input went away.
+    note: Option<&'static str>,
 }
 
 /// An audio take's file once the take ended.
@@ -280,7 +282,8 @@ impl Take {
             let frames = ((self.tempo.seconds_at(beat) - self.tempo.seconds_at(self.from)) * self.rate).round().max(0.0) as u64;
             let writer = a.writer.take().expect("an audio take's writer");
             writer.end(frames);
-            return Ended { token: self.token, module: self.module, lane: self.lane, clip: None, audio: Some(Box::new((self.from, Audio::Writing(writer)))) };
+            let audio = Some(Box::new((self.from, Audio::Writing(writer))));
+            return Ended { token: self.token, module: self.module, lane: self.lane, clip: None, audio, note: None };
         }
         for key in self.held.keys().copied().collect::<Vec<_>>() {
             self.off(key, beat);
@@ -301,7 +304,7 @@ impl Take {
                 .collect();
             json!({"start": self.start, "length": end - self.start, "notes": notes})
         });
-        Ended { token: self.token, module: self.module, lane: self.lane, clip, audio: None }
+        Ended { token: self.token, module: self.module, lane: self.lane, clip, audio: None, note: None }
     }
 
     /// What the windows see: its phase, lane, start, and its notes so far (a held one to `now`).
@@ -649,6 +652,7 @@ impl Graph {
     /// each outcome.
     pub fn record_tick(&self) -> Vec<Value> {
         let mut said = vec![];
+        let mut unplugged = None;
         let (ended, labels) = {
             let device = self.inner.current_device();
             let mut cp = self.inner.control.lock();
@@ -664,6 +668,16 @@ impl Graph {
                     // ends where it was last heard.
                     let beat = t.last;
                     r.end_at(beat);
+                } else if let Some(d) = same.filter(|d| t.audio.is_some() && d.player.input_gone()) {
+                    // The input went away (a microphone unplugged): the take ends where it is heard,
+                    // with what it has, and the song plays on (the review's io-r2).
+                    t.resolve(&d.player);
+                    let beat = d.player.heard_frame().and_then(|h| t.beat_of(h)).unwrap_or(t.last);
+                    r.end_at(beat);
+                    if let Some(e) = r.ended.last_mut() {
+                        e.note = Some(take_audio::UNPLUGGED);
+                    }
+                    unplugged = Some(d.player.clone());
                 } else if let Some(d) = same {
                     t.resolve(&d.player);
                     let heard = d.player.heard_frame();
@@ -731,6 +745,10 @@ impl Graph {
             let labels: Vec<String> = ended.iter().map(|e| label_of(&cp, &e.module)).collect();
             (ended, labels)
         };
+        // Its stream stops; the next R opens it again.
+        if let Some(p) = unplugged {
+            p.close_input();
+        }
         for (e, label) in ended.into_iter().zip(labels) {
             match self.write_take(e, &label) {
                 Ok(v) => said.push(v),
@@ -802,8 +820,9 @@ impl Graph {
                     eprintln!("music2: couldn't name the recording's undo step: {err:#}");
                 }
                 let mut w = json!({"revision": revision, "made": v["made"], "module": e.module, "lane": e.lane, "asset": written.0.asset.as_str()});
-                if written.1 > 0 {
-                    w["note"] = json!(take_audio::TOO_SLOW);
+                let notes: Vec<&str> = e.note.into_iter().chain((written.1 > 0).then_some(take_audio::TOO_SLOW)).collect();
+                if !notes.is_empty() {
+                    w["note"] = json!(notes.join(" "));
                 }
                 Ok(json!({"t": "take", "written": w}))
             }

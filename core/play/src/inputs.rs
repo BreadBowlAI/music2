@@ -16,15 +16,16 @@
 //! for each it renders, each buffer stamped as a device's would be. So a test knows where every
 //! injected sample lands, to the sample. `M2_AUDIO_INPUTS` names the inputs listed then.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::outputs::{self, Audio};
 use crate::ring::{Queue, Ring};
-use crate::{Msg, Player, Resampler, Shared, now_ns};
+use crate::{DeviceError, DeviceErrors, DeviceEvent, Msg, Player, Resampler, Shared, now_ns};
 
 /// What a player says when there is no input to open (D23).
 pub const NO_INPUT: &str = "No sound input found. Plug in a microphone or an audio interface.";
@@ -195,10 +196,31 @@ impl Silent {
     }
 }
 
+/// What an input's device reported, counted by kind: the input's own, never the output's, so a
+/// microphone unplugged never stops playback, and its overruns are no dropouts of the output (the
+/// review's io-r2).
+#[derive(Default)]
+pub(crate) struct Errors([AtomicU64; 4]);
+
+impl Errors {
+    /// The input's error callback: count `e` by kind, and nothing else. It never allocates, locks
+    /// or prints (RENDER-28), as the output's doesn't: the input's thread logs the counts.
+    fn add(&self, e: &DeviceError) {
+        self.0[DeviceEvent::of(e.kind()) as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn read(&self) -> DeviceErrors {
+        let n = |e: DeviceEvent| self.0[e as usize].load(Ordering::Relaxed);
+        DeviceErrors { xruns: n(DeviceEvent::Xrun), changes: n(DeviceEvent::Changed), gone: n(DeviceEvent::Gone), other: n(DeviceEvent::Other) }
+    }
+}
+
 /// The input a player has open, on its control side.
 pub(crate) struct Opened {
     choice: InputChoice,
     listen: Listen,
+    /// What its device reported.
+    errors: Arc<Errors>,
     /// The engine's ring, for hearing.
     engine: Arc<Ring>,
     /// An injected input's samples.
@@ -238,11 +260,13 @@ impl Player {
         }
         let rate = self.rate();
         let mut open = self.inputs.open.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(o) = open.as_ref().filter(|o| o.choice == *choice && o.listen.rate == rate) {
+        // The same input, unless its device went away: then it opens again.
+        if let Some(o) = open.as_ref().filter(|o| o.choice == *choice && o.listen.rate == rate && o.errors.read().gone == 0) {
             return Ok(o.listen.clone());
         }
         self.close_locked(&mut open);
         let (engine, take) = rings(rate);
+        let errors = Arc::new(Errors::default());
         let opened = match self.input_kind {
             Kind::Silent => {
                 let names = match Audio::from_env() {
@@ -260,12 +284,12 @@ impl Player {
                 };
                 self.send(Msg::Input(Some(Box::new(silent))))?;
                 let listen = Listen { ring: take, channels: 1, rate, name };
-                Opened { choice: choice.clone(), listen, engine, queue: Some(queue), _stream: None }
+                Opened { choice: choice.clone(), listen, errors, engine, queue: Some(queue), _stream: None }
             }
             Kind::Device => {
-                let (name, channels, stream) = self.open_device(choice, engine.clone(), take.clone(), rate)?;
+                let (name, channels, stream) = self.open_device(choice, engine.clone(), take.clone(), rate, errors.clone())?;
                 let listen = Listen { ring: take, channels, rate, name };
-                Opened { choice: choice.clone(), listen, engine, queue: None, _stream: Some(stream) }
+                Opened { choice: choice.clone(), listen, errors, engine, queue: None, _stream: Some(stream) }
             }
         };
         let listen = opened.listen.clone();
@@ -290,6 +314,21 @@ impl Player {
     /// The input open, if one is: what a take reads.
     pub fn input(&self) -> Option<Listen> {
         self.inputs.open.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|o| o.listen.clone())
+    }
+
+    /// Whether the open input's device went away (unplugged, or its stream invalidated): a take
+    /// from it ends, and the next [`Self::open_input`] opens it again. The output plays on: it is
+    /// never [`Self::stalled`] for it (the review's io-r2).
+    pub fn input_gone(&self) -> bool {
+        self.inputs.open.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|o| o.errors.read().gone > 0)
+    }
+
+    /// An error the open input's device reported, counted as its error callback counts it (tests).
+    #[doc(hidden)]
+    pub fn input_error(&self, e: DeviceError) {
+        if let Some(o) = self.inputs.open.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            o.errors.add(&e);
+        }
     }
 
     /// Queue mono `samples` at the engine's rate for the silent input to deliver, in order, one for
@@ -321,7 +360,7 @@ impl Player {
 
     /// Open a device's input stream on a thread of its own (cpal streams can't move between threads
     /// on every OS), its callback a [`Feed`]: its name, its channels (1 or 2), and what keeps it.
-    fn open_device(&self, choice: &InputChoice, engine: Arc<Ring>, take: Arc<Ring>, rate: u32) -> Result<(String, u16, Arc<()>)> {
+    fn open_device(&self, choice: &InputChoice, engine: Arc<Ring>, take: Arc<Ring>, rate: u32, errors: Arc<Errors>) -> Result<(String, u16, Arc<()>)> {
         let host = cpal::default_host();
         let by_id = |id: &str| host.device_by_id(&id.parse().ok()?);
         // The one chosen; else the output's own device, when it records; else the default input.
@@ -340,7 +379,7 @@ impl Player {
         let weak: Weak<()> = Arc::downgrade(&alive);
         let player = Arc::downgrade(&self.alive);
         let (ready_tx, ready) = std::sync::mpsc::sync_channel::<Result<()>>(1);
-        let shared = self.shared.clone();
+        let counted = errors.clone();
         std::thread::Builder::new().name("m2-input".into()).spawn(move || {
             let stream = device.build_input_stream::<f32, _, _>(
                 config.config(),
@@ -349,7 +388,7 @@ impl Player {
                     let latency = t.callback.duration_since(t.capture);
                     feed.device(data, channels, latency)
                 },
-                move |e| shared.device_error(e),
+                move |e| counted.add(&e),
                 None,
             );
             let stream = match stream.map_err(anyhow::Error::from).and_then(|s| s.play().map(|()| s).map_err(anyhow::Error::from)) {
@@ -360,8 +399,17 @@ impl Player {
                 }
             };
             let _ = ready_tx.send(Ok(()));
+            // What the input's device reported, logged here once a second, never by its callback.
+            let (mut seen, mut said) = (DeviceErrors::default(), Instant::now());
             while weak.strong_count() > 0 && player.strong_count() > 0 {
                 std::thread::sleep(Duration::from_millis(50));
+                if said.elapsed() >= Duration::from_secs(1) {
+                    let now = errors.read();
+                    if let Some(words) = now.since(seen) {
+                        eprintln!("music2: the sound input: {words}");
+                    }
+                    (seen, said) = (now, Instant::now());
+                }
             }
             drop(stream);
         })?;

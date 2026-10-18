@@ -1076,6 +1076,31 @@ mod audio {
         assert!(longest < Duration::from_millis(150), "the control plane's lock was held for {longest:?}");
     }
 
+    // The review's io-r2: the input's device going away (a USB microphone unplugged) is the
+    // input's, never the output's. The take ends with what it has, said in words; the song plays
+    // on through the same player; the next R opens the input again.
+    #[test]
+    fn an_unplugged_input_ends_the_take_and_the_song_plays_on() {
+        let mut r = Rig::new();
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|_| 0.5);
+        r.start(false, false);
+        r.to(2.0);
+        r.player.input_error(m2_play::DeviceErrorKind::DeviceNotAvailable.into());
+        let said = r.written();
+        assert_eq!(said["written"]["note"], json!(take_audio::UNPLUGGED), "{said}");
+        assert!(!r.player.stalled(), "the output isn't gone");
+        assert_eq!(r.player.device_errors(), m2_play::DeviceErrors::default(), "nothing counted as the output's");
+        assert!(r.graph.status().playing, "the song plays on");
+        let (s, _, _) = r.samples(&r.clips()[0]);
+        assert!(s.len() >= 2 * BEAT as usize - 2 * CALLBACK, "kept up to where it was unplugged: {} frames", s.len());
+        r.graph.transport("stop").unwrap();
+        r.fill(2);
+        r.start(false, false);
+        assert!(!r.player.input_gone(), "R opened the input again");
+        r.graph.record_cancel(r.token).unwrap();
+    }
+
     // MON-8: hearing yourself plays the input on the take's lane, live only: an export made while the
     // take records has none of it.
     #[test]
