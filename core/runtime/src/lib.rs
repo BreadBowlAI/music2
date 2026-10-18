@@ -51,6 +51,7 @@ mod overlay;
 pub mod packages;
 mod parts;
 mod plan;
+mod renders;
 pub mod plugins;
 mod sandbox;
 pub mod sched;

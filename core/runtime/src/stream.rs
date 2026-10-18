@@ -22,8 +22,9 @@ use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
 use std::sync::{Arc, Mutex};
+use std::task::Waker;
 
 use anyhow::{Context, Result, bail};
 use hound::Sample;
@@ -159,21 +160,95 @@ impl Wav {
 }
 
 /// A warped clip's render in the cache folder: interleaved 32-bit floats, little-endian, no header.
+/// Whole when it was found there or an offline cache made it. A live cache's is made by its stretch
+/// thread while it plays ([`crate::renders`], the sx plan's D10): read from its part file, which is
+/// renamed to its name once whole, its frames done so far counted, published only once they are in
+/// the file. A chunk is filled only once every frame it reads is done.
 pub(crate) struct Raw {
     file: File,
     channels: usize,
+    frames: usize,
+    /// Frames in the file that may be read: all of them once it is whole.
+    done: AtomicUsize,
+    /// It will never be whole: stopped (a prune dropped it) or failed. What isn't done is silence.
+    over: AtomicBool,
+    /// Asked to stop: no lane the cache keeps plays it any more.
+    stop: AtomicBool,
+    /// Who to wake as more is done: the disk threads of the players that play it.
+    wakers: Mutex<Vec<Waker>>,
 }
 
 impl Raw {
+    fn of(file: File, channels: usize, frames: usize, done: usize) -> Raw {
+        Raw { file, channels, frames, done: AtomicUsize::new(done), over: AtomicBool::new(false), stop: AtomicBool::new(false), wakers: Mutex::default() }
+    }
+
     /// The render at `path`, when it is there whole.
     pub(crate) fn open(path: &Path, channels: usize, frames: usize) -> Option<Raw> {
         let file = File::open(path).ok()?;
-        (file.metadata().ok()?.len() == (frames * channels * 4) as u64).then_some(Raw { file, channels })
+        (file.metadata().ok()?.len() == (frames * channels * 4) as u64).then(|| Raw::of(file, channels, frames, frames))
     }
 
+    /// The render `part` is making, read as it is made: none of it done yet. (Windows, later: the
+    /// part file is opened with delete sharing in `m2-os`, so it can be renamed while read, PLAT-2.)
+    pub(crate) fn reading(part: &Part) -> Result<Raw> {
+        let file = File::open(&part.part).with_context(|| format!("opening {}", part.part.display()))?;
+        Ok(Raw::of(file, part.channels, part.frames, 0))
+    }
+
+    /// Whether its frames before `to` can be read: done, or never to be (then silence).
+    pub(crate) fn has(&self, to: usize) -> bool {
+        to <= self.done.load(Ordering::Acquire) || self.over.load(Ordering::Acquire)
+    }
+
+    /// Whether it is whole.
+    pub(crate) fn whole(&self) -> bool {
+        self.done.load(Ordering::Acquire) == self.frames
+    }
+
+    /// Its first `done` frames are in the file: readers may read them, and are woken.
+    pub(crate) fn made(&self, done: usize) {
+        self.done.store(done, Ordering::Release);
+        self.wake(done == self.frames);
+    }
+
+    /// It will never be whole: what isn't done plays silence from now on.
+    pub(crate) fn end(&self) {
+        self.over.store(true, Ordering::Release);
+        self.wake(true);
+    }
+
+    fn wake(&self, last: bool) {
+        let mut w = self.wakers.lock().unwrap_or_else(|e| e.into_inner());
+        w.iter().for_each(Waker::wake_by_ref);
+        if last {
+            w.clear();
+        }
+    }
+
+    /// Wake `w` as more of it is done, till it is whole or over.
+    pub(crate) fn watch(&self, w: &Waker) {
+        let mut ws = self.wakers.lock().unwrap_or_else(|e| e.into_inner());
+        if !self.whole() && !self.over.load(Ordering::Acquire) && !ws.iter().any(|x| x.will_wake(w)) {
+            ws.push(w.clone());
+        }
+    }
+
+    /// Ask it to stop: its stretch thread ends it, and removes its part file.
+    pub(crate) fn stop(&self) {
+        self.stop.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Acquire)
+    }
+
+    /// Frames `from..to` into `out`, a channel each; those not done (only when it is over) are
+    /// silence.
     fn read(&self, from: usize, to: usize, buf: &mut Vec<u8>, out: &mut [Vec<f32>]) -> Result<()> {
         let frame = self.channels * 4;
-        buf.resize((to - from) * frame, 0);
+        let have = to.min(self.done.load(Ordering::Acquire)).max(from);
+        buf.resize((have - from) * frame, 0);
         if m2_os::fs::read_full_at(&self.file, buf, (from * frame) as u64, READ)? < buf.len() {
             bail!("the render is cut short");
         }
@@ -184,6 +259,9 @@ impl Raw {
             for (c, s) in f.as_chunks::<4>().0.iter().enumerate() {
                 out[c].push(f32::from_le_bytes(*s));
             }
+        }
+        for o in out[..self.channels].iter_mut() {
+            o.resize(to - from, 0.0);
         }
         Ok(())
     }
@@ -196,8 +274,8 @@ pub(crate) struct Part {
     file: File,
     part: PathBuf,
     path: PathBuf,
-    channels: usize,
-    frames: usize,
+    pub(crate) channels: usize,
+    pub(crate) frames: usize,
     /// Frames put so far, and the bytes of those not yet written.
     put: usize,
     bytes: Vec<u8>,
@@ -212,6 +290,16 @@ impl Part {
         let part = path.with_extension(format!("f32.{}.{}.part", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let file = File::create(&part).with_context(|| format!("creating {}", part.display()))?;
         Ok(Part { file, part, path: path.to_path_buf(), channels, frames, put: 0, bytes: Vec::with_capacity(READ), done: false })
+    }
+
+    /// Frames in the file so far: those put, less those not yet written.
+    pub(crate) fn written(&self) -> usize {
+        self.put - self.bytes.len() / (4 * self.channels)
+    }
+
+    /// Frames put so far.
+    pub(crate) fn frames_put(&self) -> usize {
+        self.put
     }
 
     /// The next frames, a slice a channel, all as long.
@@ -232,22 +320,23 @@ impl Part {
         Ok(())
     }
 
-    fn flush(&mut self) -> Result<()> {
+    pub(crate) fn flush(&mut self) -> Result<()> {
         use std::io::Write;
         self.file.write_all(&self.bytes)?;
         self.bytes.clear();
         Ok(())
     }
 
-    /// Done: the rest written, and the file renamed to its name, opened to be read.
-    pub(crate) fn finish(mut self) -> Result<Raw> {
+    /// Done: the rest written, and the file renamed to its name. A reader of the part file reads
+    /// on, the same file.
+    pub(crate) fn finish(mut self) -> Result<()> {
         if self.put != self.frames {
             bail!("a render of {} frames ended at {}", self.frames, self.put);
         }
         self.flush()?;
         std::fs::rename(&self.part, &self.path).with_context(|| format!("naming {}", self.path.display()))?;
         self.done = true;
-        Raw::open(&self.path, self.channels, self.frames).with_context(|| format!("{} is not whole", self.path.display()))
+        Ok(())
     }
 }
 
@@ -385,6 +474,15 @@ impl Clip {
             Source::Mem(m, _) => m.len(),
         };
         Clip { at, len: len as u64, channels, src }
+    }
+
+    /// Whether its samples `i0..i1` can be worked out now: a render being made has made every
+    /// frame they read.
+    fn has(&self, i0: usize, i1: usize) -> bool {
+        match &self.src {
+            Source::Render(r, sh) => r.has(sh.span(i0, i1).1),
+            Source::Wav(..) | Source::Mem(..) => true,
+        }
     }
 
     /// Its samples `i0..i1` (from its start), each channel into `s.vals`, as the clip's whole
@@ -595,13 +693,35 @@ impl AudioLane {
         ring + self.ring.fill.lock().map_or(0, |s| s.bytes())
     }
 
+    /// Whether chunk `k` can be worked out now: every render being made that it reads has made
+    /// the frames it needs (the sx plan's D10). Till then it stays out of the ring: the sound thread
+    /// plays silence there and counts a miss.
+    pub fn can_fill(&self, k: u64) -> bool {
+        let chunk = self.ring.chunk;
+        let (start, end) = (k * chunk, (k + 1) * chunk);
+        self.clips.iter().all(|c| {
+            c.at >= end || c.at + c.len <= start || c.has((start.max(c.at) - c.at) as usize, (end.min(c.at + c.len) - c.at) as usize)
+        })
+    }
+
+    /// Wake `w` each time a render it plays makes more frames, till each is whole: a player's disk
+    /// thread then fills what it couldn't before.
+    pub fn watch(&self, w: &std::task::Waker) {
+        for c in &self.clips {
+            if let Source::Render(r, _) = &c.src {
+                r.watch(w);
+            }
+        }
+    }
+
     /// Work out chunk `k` and put it in a slot: an empty one, else one whose chunk `keep` doesn't
-    /// want (from the ring's cursor on). False when every slot holds a chunk it wants. A file that
-    /// can't be read gives silence, counted in [`Self::errors`]. Off the sound thread only: the
-    /// disk thread's, an offline render's, or a build's.
+    /// want (from the ring's cursor on). False when every slot holds a chunk it wants. A chunk that
+    /// can't be worked out yet ([`Self::can_fill`]) is left out. A file that can't be read gives
+    /// silence, counted in [`Self::errors`]. Off the sound thread only: the disk thread's, an
+    /// offline render's, or a build's.
     pub fn fill_chunk(&self, k: u64, keep: &dyn Fn(u64) -> bool) -> bool {
         let r = &self.ring;
-        if r.slots.is_empty() || !r.has_audio(k) {
+        if r.slots.is_empty() || !r.has_audio(k) || !self.can_fill(k) {
             return true;
         }
         let mut s = r.fill.lock().unwrap_or_else(|e| e.into_inner());

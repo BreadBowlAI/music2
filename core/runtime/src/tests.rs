@@ -1173,6 +1173,86 @@ fn an_export_with_an_empty_cache_folder_equals_one_with_a_full_one() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// The finished renders in `folder`, and its part files.
+fn renders_in(folder: &Path) -> (usize, usize) {
+    let names: Vec<String> = std::fs::read_dir(folder).map_or(vec![], |d| d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect());
+    let parts = names.iter().filter(|n| n.ends_with(".part")).count();
+    (names.len() - parts, parts)
+}
+
+// The sx plan, slice 3 (RENDER-1, RENDER-30, D10): an export never plays a render half made. A live
+// session's tempo change asks for a new stretch, and its stretch thread has made a second of it,
+// into a part file in the cache folder, when an export starts there. The export's cache is offline:
+// it makes its own render whole before it plays, so it equals an export with no live session and
+// no cache folder.
+#[test]
+fn an_export_never_plays_a_render_half_made() {
+    let src = sine(440.0, 3.0, SR);
+    let (ir, tl, dir) = audio_song(&[("a.wav", vec![src.clone(), src], SR)], json!([{"start": 1, "length": 6, "asset": "a.wav", "warp": [[0, 0], [3, 6]]}]));
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let (folder, owner) = (dir.join("renders"), m2_plugins::Owner::discard());
+    let mut live = audio::Cache::live_in(folder.clone());
+    live.hold_renders(Some(SR as usize));
+    drop(Renderer::prepare(&flat, &tl, &pk, SR, &mut live, &owner, Basis::Fresh).unwrap());
+    live.prune();
+    // The tempo goes from 120 to 90 BPM: the clip plays from 2/3 s for 4 s.
+    std::fs::write(dir.join("data/arrangement.json"), json!({"tempo": [{"beat": 0, "bpm": 90}]}).to_string()).unwrap();
+    let slower = data(&ir, &dir);
+    drop(Renderer::prepare(&flat, &slower, &pk, SR, &mut live, &owner, Basis::Fresh).unwrap());
+    live.prune();
+    assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+    assert_eq!(renders_in(&folder), (0, 1), "the new stretch is half made, in its part file");
+    let export = |cache: &mut audio::Cache| Renderer::prepare(&flat, &slower, &pk, SR, cache, &owner, Basis::Fresh).unwrap().render(5.0).unwrap();
+    let after = export(&mut audio::Cache::with_renders_in(Some(folder.clone())));
+    let cold = export(&mut audio::Cache::with_renders_in(None));
+    assert!(peak(&cold[SR as usize..4 * SR as usize]) > 0.2, "the warped clip plays");
+    let first = (0..cold.len()).find(|&i| after[i] != cold[i]);
+    assert_eq!(first, None, "the export beside a half-made render is the cold export, bit for bit");
+    drop(live);
+    assert_eq!(renders_in(&folder), (1, 0), "the export's render is whole in the folder; the live one's part went with its cache");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// The sx plan, slice 3 (D10): a render the cache's next prune drops stops, and leaves no part file;
+// one a kept lane plays goes on. Two warped clips are asked for, the first held at a second made,
+// the second waiting behind it, each in its part file. A rebuild of the same lane keeps both. A
+// build without them drops both: their part files go, neither is ever named in the folder, and
+// the next render is made.
+#[test]
+fn a_dropped_render_stops_and_leaves_no_part_file() {
+    let dir = project(&[]);
+    let src = sine(440.0, 3.0, SR);
+    audio::write_wav(&dir.join("a.wav"), &[src.clone(), src], SR).unwrap();
+    let k = offline::Kernel::of(&std_packages(), offline::STRETCH).unwrap();
+    let tempo = m2_song::TempoMap::constant(120.0);
+    let clip = |beats: f64| -> m2_song::AudioClip {
+        serde_json::from_value(json!({"start": 0, "length": beats, "asset": "a.wav", "warp": [[0, 0], [3, beats]]})).unwrap()
+    };
+    let folder = dir.join("renders");
+    let mut cache = audio::Cache::live_in(folder.clone());
+    cache.hold_renders(Some(SR as usize));
+    let mut build = |clips: &[m2_song::AudioClip]| {
+        let lane = audio::AudioLane::build_with(clips, &|a| Some(dir.join(a)), &mut cache, &tempo, SR as f64, 2, Some(&k));
+        cache.prune();
+        assert!(cache.settle_renders(std::time::Duration::from_secs(20)));
+        lane
+    };
+    let first = build(&[clip(6.0), clip(4.0)]);
+    assert_eq!(renders_in(&folder), (0, 2), "two renders asked for, each in its part file");
+    let again = build(&[clip(6.0), clip(4.0)]);
+    assert!(Arc::ptr_eq(&first, &again), "the same lane");
+    assert_eq!(renders_in(&folder), (0, 2), "a lane kept keeps its renders going");
+    let other = build(&[clip(5.0)]);
+    assert_eq!(renders_in(&folder), (0, 1), "the two dropped renders stopped, and their part files went");
+    cache.hold_renders(None);
+    assert!(cache.settle_renders(std::time::Duration::from_secs(60)));
+    assert_eq!(renders_in(&folder), (1, 0), "only the render a lane plays is made");
+    assert_eq!(cache.work().1, 3);
+    drop((first, again, other, cache));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 // The sx plan, D9 (kernel ABI v1, flags bit 0): an offline kernel is run by music2 to make a clip's
 // render, never by song code. A song that calls one gets `kernel.offline` at its node; no graph
 // types it, and no list of the kernels songs call has it.

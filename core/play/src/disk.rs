@@ -10,9 +10,14 @@
 //! A seek asks for its target first and waits for it up to 30 ms (D8); an activation waits up to
 //! 500 ms for each new lane's next half second, in the new tempo map (D9). Both are caps: what is
 //! ready already costs nothing.
+//!
+//! A warped clip's render may still be being made, by its live cache's stretch thread (the sx
+//! plan's D10): a chunk that reads frames not made yet is left empty, so it plays silence and
+//! counts a miss, and the thread fills it once they are made. Each render wakes it as it goes.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::task::{Wake, Waker};
 use std::time::{Duration, Instant};
 
 use m2_runtime::audio::AudioLane;
@@ -61,13 +66,36 @@ pub(crate) struct Disk {
     heading: Box<dyn Fn() -> (f64, f64) + Send + Sync>,
     /// A test seam: the thread fills nothing while it is set.
     paused: AtomicBool,
+    /// Wakes the thread: given to the renders its lanes play, which wake it as they are made.
+    waker: Waker,
+}
+
+/// What wakes a disk thread, while its disk is there.
+struct Nudge(Weak<Disk>);
+
+impl Wake for Nudge {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        if let Some(d) = self.0.upgrade() {
+            d.wake.notify_all();
+        }
+    }
 }
 
 impl Disk {
     /// A disk for a player whose playhead `heading` reads, and its thread, which ends once `alive`
     /// is gone.
     pub(crate) fn start(heading: Box<dyn Fn() -> (f64, f64) + Send + Sync>, alive: Weak<()>) -> Arc<Disk> {
-        let disk = Arc::new(Disk { state: Mutex::default(), wake: Condvar::new(), heading, paused: AtomicBool::new(false) });
+        let disk = Arc::new_cyclic(|d| Disk {
+            state: Mutex::default(),
+            wake: Condvar::new(),
+            heading,
+            paused: AtomicBool::new(false),
+            waker: Waker::from(Arc::new(Nudge(d.clone()))),
+        });
         let d = disk.clone();
         let spawned = std::thread::Builder::new().name("m2-disk".into()).spawn(move || d.run(alive));
         if let Err(e) = spawned {
@@ -129,6 +157,7 @@ impl Disk {
                     e.module = module;
                 }
                 None => {
+                    lane.watch(&self.waker);
                     st.lanes.push(Entry { module, lane: Arc::downgrade(&lane), left: None });
                     new.push(lane);
                 }
@@ -287,8 +316,9 @@ pub(crate) fn wanted(lane: &AudioLane, at: &At) -> Vec<u64> {
     out
 }
 
-/// The most urgent chunk a lane lacks: the lowest rank in its wanted list, lanes of the plan sent
-/// last first. With the lane and its whole wanted list, which its fill must not evict.
+/// The most urgent chunk a lane lacks and can fill now (a render being made may not have made its
+/// frames yet): the lowest rank in its wanted list, lanes of the plan sent last first. With the
+/// lane and its whole wanted list, which its fill must not evict.
 fn most_urgent(lanes: &[Arc<AudioLane>], at: &At) -> Option<(Arc<AudioLane>, u64, Vec<u64>)> {
     let wants: Vec<Vec<u64>> = lanes.iter().map(|l| wanted(l, at)).collect();
     let most = wants.iter().map(Vec::len).max().unwrap_or(0);
@@ -296,6 +326,7 @@ fn most_urgent(lanes: &[Arc<AudioLane>], at: &At) -> Option<(Arc<AudioLane>, u64
         for (l, w) in lanes.iter().zip(&wants) {
             if let Some(&k) = w.get(rank)
                 && !l.ready(k)
+                && l.can_fill(k)
             {
                 return Some((l.clone(), k, w.clone()));
             }

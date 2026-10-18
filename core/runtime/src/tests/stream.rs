@@ -235,3 +235,125 @@ fn a_warped_render_holds_neither_file_whole() {
     assert!(buf.iter().any(|&x| x.abs() > 0.1), "the lane plays it");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A new folder for one test.
+fn folder(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("m2-stream-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// A clip of `json`.
+fn clip(json: serde_json::Value) -> AudioClip {
+    serde_json::from_value(json).unwrap()
+}
+
+/// Build `clips` on another thread: the lane and the cache back, or None when it took over 20 s.
+fn built(clips: Vec<AudioClip>, dir: &Path, cache: Cache, tempo: &TempoMap) -> Option<(Arc<AudioLane>, Cache)> {
+    let (dir, tempo, (tx, rx)) = (dir.to_path_buf(), tempo.clone(), std::sync::mpsc::channel());
+    std::thread::spawn(move || {
+        let mut cache = cache;
+        let lane = AudioLane::build_with(&clips, &|a| Some(dir.join(a)), &mut cache, &tempo, SR, 2, Some(&stretch()));
+        drop(tx.send((lane, cache)));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(20)).ok()
+}
+
+// The sx plan, slice 3 (RENDER-30, D10): a live cache never waits for a stretch. With its stretch
+// thread held back, the lane of a newly warped clip (what a tempo change asks for) is built at
+// once. Where the clip is it plays silence, each block counted as a miss, never a wrong sample;
+// the plain clip before it plays. Let go, the render is made and the lane plays it: the offline
+// render, bit for bit.
+#[test]
+fn a_tempo_change_never_waits_for_a_stretch() {
+    let dir = folder("held");
+    long_wav(&dir.join("a.wav"), 4);
+    let tempo = TempoMap::constant(120.0);
+    // At 120 BPM: the plain clip plays 0 s to 1 s, the warped one 4 s of the file over 5 s from 1 s.
+    let clips = vec![
+        clip(serde_json::json!({"start": 0, "length": 2, "asset": "a.wav"})),
+        clip(serde_json::json!({"start": 2, "length": 10, "asset": "a.wav", "warp": [[0, 0], [4, 10]]})),
+    ];
+    let cache = Cache::live_in(dir.join("renders"));
+    cache.hold_renders(Some(0));
+    let (lane, cache) = built(clips.clone(), &dir, cache, &tempo).expect("the build never waits for the stretch");
+    assert!(cache.settle_renders(std::time::Duration::from_secs(20)), "the stretch waits at the hold");
+    let len = 7 * SR as usize;
+    let want = rendered(&clips, &dir, &tempo, 2, len);
+    let got = streamed(&lane, 2, len);
+    let clip_at = SR as usize;
+    for i in 0..len {
+        let w = if i < clip_at { [want[0][i], want[1][i]] } else { [0.0; 2] };
+        assert_eq!([got[0][i].to_bits(), got[1][i].to_bits()], w.map(f32::to_bits), "frame {i}: the plain clip, then silence");
+    }
+    assert!(want[0][..clip_at].iter().any(|&x| x != 0.0) && want[0][clip_at..].iter().any(|&x| x != 0.0), "both clips sound");
+    assert!(lane.misses() > 0, "the silence is counted");
+    cache.hold_renders(None);
+    assert!(cache.settle_renders(std::time::Duration::from_secs(60)), "the stretch is made");
+    let misses = lane.misses();
+    let got = streamed(&lane, 2, len);
+    for c in 0..2 {
+        let first = (0..len).find(|&i| want[c][i].to_bits() != got[c][i].to_bits());
+        assert_eq!(first, None, "channel {c}: the lane plays the render made, as the offline render");
+    }
+    assert_eq!(lane.misses(), misses, "no miss once made");
+    drop((lane, cache));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// The sx plan, slice 3 (RENDER-30, D10): a lane plays its render as it is made. A chunk fills only
+// once every frame of the render it reads is done: then it is the offline render's, bit for bit;
+// till then it stays empty. A short lane, filled whole as it is built, has holes where the render
+// isn't made, filled again later as the disk thread does. A reversed clip reads its render from
+// the end, so its chunks wait for the render's end.
+#[test]
+fn a_lane_plays_its_render_as_it_is_made() {
+    for reverse in [false, true] {
+        let dir = folder(&format!("made-{reverse}"));
+        long_wav(&dir.join("a.wav"), 2);
+        let tempo = TempoMap::constant(120.0);
+        // From 0.65 s, mid-chunk, 2 s of the file over 2.5 s: 120 000 frames.
+        let c = clip(serde_json::json!({"start": 1.3, "length": 5, "asset": "a.wav", "warp": [[0, 0], [2, 5]], "reverse": reverse}));
+        let cache = Cache::live_in(dir.join("renders"));
+        cache.hold_renders(Some(0));
+        let (lane, cache) = built(vec![c.clone()], &dir, cache, &tempo).expect("built at once");
+        assert!(lane.resident(), "a short lane");
+        let (at, n) = ((0.65 * SR) as usize, 120_000);
+        let len = at + n + 1000;
+        let want = rendered(std::slice::from_ref(&c), &dir, &tempo, 2, len);
+        let chunk = lane.chunk() as usize;
+        let mut filled = vec![];
+        for made in [0, 30_000, 61_000, 119_000, n] {
+            cache.hold_renders(Some(made));
+            assert!(cache.settle_renders(std::time::Duration::from_secs(60)));
+            let mut ready = 0;
+            for k in (0..len.div_ceil(chunk) as u64).filter(|&k| lane.has_audio(k)) {
+                lane.fill_chunk(k, &|_| true);
+                // The render's frames this chunk reads end at `needs`.
+                let (i0, i1) = ((k as usize * chunk).max(at) - at, ((k as usize + 1) * chunk).min(at + n) - at);
+                let needs = if reverse { n - i0 } else { i1 };
+                if needs <= made {
+                    assert!(lane.ready(k), "{reverse}: chunk {k} is made by {made} frames: it fills");
+                } else if needs > made + crate::BLOCK {
+                    assert!(!lane.ready(k), "{reverse}: chunk {k} needs frames to {needs}, {made} made: it waits");
+                }
+                if lane.ready(k) {
+                    ready += 1;
+                    let mut out = vec![0.0f32; 2 * chunk];
+                    lane.fill(&mut out, chunk, 0, k * chunk as u64, chunk);
+                    for ch in 0..2 {
+                        let from = k as usize * chunk;
+                        let first = (0..chunk).find(|&i| out[ch * chunk + i].to_bits() != want[ch].get(from + i).copied().unwrap_or(0.0).to_bits());
+                        assert_eq!(first, None, "{reverse}: chunk {k} filled with {made} frames made is the offline render's");
+                    }
+                }
+            }
+            filled.push(ready);
+        }
+        assert!(filled.windows(2).all(|w| w[0] <= w[1]) && filled[0] < filled[2] && filled[2] < filled[4], "{reverse}: chunks fill as it is made: {filled:?}");
+        assert_eq!(streamed(&lane, 2, len), want, "{reverse}: the whole lane is the offline render");
+        drop((lane, cache));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

@@ -27,6 +27,7 @@ use m2_song::{AudioClip, DataSet, HashCache, Sha, TempoMap};
 use crate::BLOCK;
 use crate::fade::xfade;
 use crate::offline::{self, Kernel};
+use crate::renders::{self, Stretcher};
 use crate::sandbox::Held;
 use crate::stream::{self, Clip, Part, Raw, Ring, Shape, Source, Wav};
 use crate::transport::{Jump, Runs};
@@ -212,12 +213,16 @@ struct LaneKey {
 }
 
 /// Opened assets, by content; warped clips' stretches, by what the kernel is given; lanes, by what
-/// they play;
-/// and the files kernels read, decoded whole, by content. Building opens files and reads their
-/// headers, fills the lanes short enough to stay whole, stretches warped clips and decodes kernels'
-/// files; compiling never does (FMT-16). A live session keeps one per open project, so an edit
-/// shares every lane it didn't change with the renderer it replaces, and its ring with it; an
-/// offline render uses one of its own, so its rings are its own too.
+/// they play; and the files kernels read, decoded whole, by content. Building opens files and reads
+/// their headers, fills the lanes short enough to stay whole, asks for warped clips' stretches and
+/// decodes kernels' files; compiling never does (FMT-16).
+///
+/// A live session keeps a [`Cache::live`] one per open project, so an edit shares every lane it
+/// didn't change with the renderer it replaces, and its ring with it; it never waits for a stretch:
+/// its stretch thread makes each new one in the background, and lanes play it as it is made
+/// ([`crate::renders`], the sx plan's D10). An offline render uses one of its own, the
+/// [`Default`] kind, so its rings are its own too, and it makes each stretch whole as it builds:
+/// its bits never depend on timing.
 #[derive(Default)]
 pub struct Cache {
     wavs: HashMap<Sha, Option<Arc<Wav>>>,
@@ -232,6 +237,8 @@ pub struct Cache {
     decodes: usize,
     renders: usize,
     folder: Renders,
+    /// A live cache's stretch thread; none offline.
+    live: Option<Stretcher>,
 }
 
 /// Where stretches are kept: `<cache>/renders` (FMT-16's folder); none, in memory.
@@ -272,32 +279,83 @@ impl Cache {
         Some((sha, a.clone()?))
     }
 
-    /// A cache whose warped renders are kept in `folder` (tests); none, in memory.
+    /// A live session's cache: warped clips' stretches are made in the background, and their lanes
+    /// play them as they are made.
+    pub fn live() -> Cache {
+        Cache { live: Some(Stretcher::default()), ..Cache::default() }
+    }
+
+    /// An offline cache whose warped renders are kept in `folder` (tests); none, in memory.
     #[doc(hidden)]
     pub fn with_renders_in(folder: Option<std::path::PathBuf>) -> Cache {
         Cache { folder: Renders(folder), ..Cache::default() }
     }
 
-    /// Warped clip `c`'s stretch, made by `stretch` from its file `wav`, the asset `asset` (D7):
-    /// from the cache folder when it is there, else made now, block by block, straight into its file
-    /// there (in memory without a folder). None without a stretch kernel, or when the stretch fails
-    /// (a line in the log says why): the clip is silent.
-    fn warp(&mut self, wav: &Arc<Wav>, asset: Sha, c: &AudioClip, tempo: &TempoMap, rate: f64, stretch: Option<&Kernel>) -> Option<Stretched> {
+    /// A live cache whose warped renders are kept in `folder` (tests).
+    #[doc(hidden)]
+    pub fn live_in(folder: std::path::PathBuf) -> Cache {
+        Cache { folder: Renders(Some(folder)), ..Cache::live() }
+    }
+
+    /// A test seam: a live cache's stretches each make at most `frames` frames, then wait until
+    /// this changes; none, all they need.
+    #[doc(hidden)]
+    pub fn hold_renders(&self, frames: Option<usize>) {
+        if let Some(s) = &self.live {
+            s.hold(frames);
+        }
+    }
+
+    /// Wait until a live cache's stretches are made, or wait at a hold, for `cap` at most (tests).
+    /// True when so.
+    #[doc(hidden)]
+    pub fn settle_renders(&self, cap: std::time::Duration) -> bool {
+        self.live.as_ref().is_none_or(|s| s.settle(cap))
+    }
+
+    /// Warped clip `c`'s stretch, made by `stretch` from its file `wav`, the asset `asset` (D7),
+    /// and its key: from the cache folder when it is there, else asked for now. A live cache's
+    /// stretch thread makes it in the background, straight into its file there, and lanes play it
+    /// as it is made (D10). An offline cache makes it here, block by block, into its file there (in
+    /// memory without a folder). None without a stretch kernel; a stretch that fails is silent (a
+    /// line in the log says why).
+    fn warp(&mut self, wav: &Arc<Wav>, asset: Sha, c: &AudioClip, tempo: &TempoMap, rate: f64, stretch: Option<&Kernel>) -> Option<(WarpKey, Option<Stretched>)> {
         let k = stretch?;
         let map = time_map(c, tempo);
         let frames = stream::clip_len(c, tempo, rate);
         let key = WarpKey::of(asset, k.sha, &map, c.pitch, rate, frames);
         self.used_warps.insert(key.clone());
         if let Some(s) = self.warps.get(&key) {
-            return s.clone();
+            return Some((key, s.clone()));
         }
         let path = self.folder.0.as_deref().map(|f| stream::render_path(f, &key.bytes()));
-        let run = offline::Run { source: Held::Disk(wav.clone()), values: &[c.pitch], map: &map, rate, channels: wav.channels(), frames };
-        let s = make_warp(k, path.as_deref(), &run, &mut self.renders)
-            .inspect_err(|e| eprintln!("music2: a warped clip of {} plays silence: its stretch failed: {e:#}", c.asset))
-            .ok();
-        self.warps.insert(key, s.clone());
-        s
+        let failed = |e: anyhow::Error| eprintln!("music2: a warped clip of {} plays silence: its stretch failed: {e:#}", c.asset);
+        let s = match (&mut self.live, path) {
+            (Some(live), Some(p)) => match Raw::open(&p, wav.channels(), frames) {
+                Some(whole) => Some(Stretched::File(Arc::new(whole))),
+                None => {
+                    self.renders += 1;
+                    let job = Part::create(&p, wav.channels(), frames).and_then(|part| {
+                        let raw = Arc::new(Raw::reading(&part)?);
+                        let source = Held::Disk(wav.clone());
+                        Ok(renders::Job { kernel: k.clone(), source, values: vec![c.pitch], map, rate, part, raw, asset: c.asset.clone() })
+                    });
+                    job.map_err(failed)
+                        .map(|j| {
+                            let raw = j.raw.clone();
+                            live.push(j);
+                            Stretched::File(raw)
+                        })
+                        .ok()
+                }
+            },
+            (_, path) => {
+                let run = offline::Run { source: Held::Disk(wav.clone()), values: &[c.pitch], map: &map, rate, channels: wav.channels(), frames };
+                make_warp(k, path.as_deref(), &run, &mut self.renders).map_err(failed).ok()
+            }
+        };
+        self.warps.insert(key.clone(), s.clone());
+        Some((key, s))
     }
 
     /// Keep only what the builds since the last call used: an edited lane's old ring goes once
@@ -309,12 +367,22 @@ impl Cache {
         let kernels = std::mem::take(&mut self.used_kernels);
         self.wavs.retain(|k, _| wavs.contains(k));
         self.kernels.retain(|k, _| kernels.contains(k));
-        self.warps.retain(|k, _| warps.contains(k));
+        // A stretch no build asked for any more stops, and its part file goes (D10).
+        self.warps.retain(|k, s| {
+            let keep = warps.contains(k);
+            if let (false, Some(Stretched::File(r))) = (keep, s) {
+                r.stop();
+            }
+            keep
+        });
+        if let Some(s) = &self.live {
+            s.forget_stopped();
+        }
         self.lanes.retain(|k, _| lanes.contains(k));
     }
 
-    /// Assets opened (kernels' files decoded included) and warped clips rendered since the cache
-    /// was made.
+    /// Assets opened (kernels' files decoded included) and warped clips rendered (or asked for, live)
+    /// since the cache was made.
     pub fn work(&self) -> (usize, usize) {
         (self.decodes, self.renders)
     }
@@ -408,7 +476,9 @@ fn make_warp(k: &Kernel, path: Option<&Path>, run: &offline::Run, renders: &mut 
         Some(p) => {
             let mut part = Part::create(p, run.channels, run.frames)?;
             offline::run(k, run, &mut |b| part.put(b))?;
-            Ok(Stretched::File(Arc::new(part.finish()?)))
+            part.finish()?;
+            let raw = Raw::open(p, run.channels, run.frames).with_context(|| format!("{} is not whole", p.display()))?;
+            Ok(Stretched::File(Arc::new(raw)))
         }
         None => Ok(Stretched::Mem(Arc::new(whole(k, run)?))),
     }
@@ -462,6 +532,8 @@ pub(crate) fn render_clip(clip: &AudioClip, asset: &Arc<Asset>, tempo: &TempoMap
 pub struct AudioLane {
     /// What it plays, for [`AudioLane::same`]: none for a lane made from renders.
     key: Option<LaneKey>,
+    /// Its warped clips' stretches: a build that keeps it keeps them too.
+    warps: Vec<WarpKey>,
     pub(crate) clips: Vec<Clip>,
     pub(crate) channels: usize,
     pub(crate) ring: Ring,
@@ -517,16 +589,19 @@ impl AudioLane {
         let key = LaneKey { clips: found.iter().map(|f| f.1.clone()).collect(), channels };
         cache.used_lanes.insert(key.clone());
         if let Some(l) = cache.lanes.get(&key) {
+            cache.used_warps.extend(l.warps.iter().cloned());
             return l.clone();
         }
-        let mut out = vec![];
+        let (mut out, mut warps) = (vec![], vec![]);
         for (c, k, w) in found {
             let at = (tempo.seconds_at(c.start) * sample_rate).round() as u64;
             let sh = Shape::of(c, w.rate, tempo, sample_rate);
             let src = if c.warp.is_empty() {
                 Source::Wav(w.clone(), sh)
             } else {
-                match cache.warp(&w, k.asset, c, tempo, sample_rate, stretch) {
+                let Some((key, made)) = cache.warp(&w, k.asset, c, tempo, sample_rate, stretch) else { continue };
+                warps.push(key);
+                match made {
                     Some(Stretched::File(r)) => Source::Render(r, sh),
                     Some(Stretched::Mem(m)) => Source::Mem(m, sh),
                     None => continue,
@@ -534,14 +609,16 @@ impl AudioLane {
             };
             out.push(Clip::new(at, src, stream::clip_len(c, tempo, sample_rate)));
         }
-        let lane = Arc::new(AudioLane::of(out, channels, tempo.clone(), sample_rate, Some(key.clone())));
+        let mut lane = AudioLane::of(out, channels, tempo.clone(), sample_rate, Some(key.clone()));
+        lane.warps = warps;
+        let lane = Arc::new(lane);
         cache.lanes.insert(key, lane.clone());
         lane
     }
 
     fn of(clips: Vec<Clip>, channels: usize, tempo: TempoMap, rate: f64, key: Option<LaneKey>) -> AudioLane {
         let ring = Ring::new(&clips, channels, rate);
-        let lane = AudioLane { key, clips, channels, ring, tempo, rate };
+        let lane = AudioLane { key, warps: vec![], clips, channels, ring, tempo, rate };
         lane.fill_all();
         lane
     }

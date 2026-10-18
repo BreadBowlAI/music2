@@ -132,7 +132,8 @@ pub(crate) struct Open {
     /// into the player.
     pub(crate) plays: Option<Plays>,
     /// Decoded assets and clip renders, shared by every renderer built for this project, so an
-    /// activation never decodes or warps them again (RENDER-27).
+    /// activation never decodes or warps them again (RENDER-27). The live kind: a warped clip's new
+    /// stretch is made in the background, and plays as it is made (the sx plan's D10).
     audio: audio::Cache,
     /// The engine message the last settle sent the new revision in (a swap or an activation).
     pub(crate) sent: Option<u64>,
@@ -1126,7 +1127,7 @@ impl Actor {
             session,
             playing: Some(number),
             plays: None,
-            audio: audio::Cache::default(),
+            audio: audio::Cache::live(),
             sent: None,
             code_rev,
             controls: controls.clone(),
