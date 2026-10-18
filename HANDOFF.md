@@ -10,6 +10,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
   71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
 - **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
+- **The transport works as in GarageBand** (branch `gb`, `9a40eb6` and `5707f46`): Space stops where the song is, and plays on from there; Return goes to bar 1. ⇧Space and Continue are gone. `ci/check.sh --gates` passed at `5707f46`: 1,718 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 37 minutes, nothing on a retry. Its first run caught the playhead moving a block after a stop; now a stop holds exactly there. By ear: mac-run step 28.
 - **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
   (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by
   far. 8a's sweep is done. **One more `ci/check.sh` on the Mac is owed, with the output at 48 kHz.**
