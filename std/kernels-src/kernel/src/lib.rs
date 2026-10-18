@@ -6,7 +6,8 @@
 //! several, so every call names its state, and no state lives in a static. Their one import is
 //! `m2.asset_read`: all else they know arrives through their settings and ports, time included.
 //!
-//! ABI v1, `docs/kernel-abi.md`. Exports: `memory`, `m2_abi() -> 1`, `m2_alloc(size, align) -> address`
+//! ABI v1, `docs/kernel-abi.md`. The version is the custom section `m2_abi`: 4 bytes, 1 as a
+//! little-endian u32, which [`abi!`] writes. Exports: `memory`, `m2_alloc(size, align) -> address`
 //! (0: no room), and for a kernel named `k`:
 //!
 //! | export | meaning |
@@ -542,14 +543,15 @@ macro_rules! export {
     };
 }
 
-/// Export `m2_abi` and `m2_alloc`. Call once per WebAssembly module.
+/// Write the module's `m2_abi` section (the ABI version, 4 bytes, little-endian) and export
+/// `m2_alloc`. Call once per WebAssembly module: a second call would make the section 8 bytes.
 #[macro_export]
 macro_rules! abi {
     () => {
-        #[unsafe(no_mangle)]
-        pub extern "C" fn m2_abi() -> u32 {
-            $crate::ABI
-        }
+        #[cfg(target_arch = "wasm32")]
+        #[used]
+        #[unsafe(link_section = "m2_abi")]
+        static M2_ABI: [u8; 4] = $crate::ABI.to_le_bytes();
 
         /// Room for the host's own blocks while the sandbox is born: 0 when there is none.
         #[unsafe(no_mangle)]

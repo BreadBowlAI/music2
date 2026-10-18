@@ -9,7 +9,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 - Memory is taken only while a sandbox is **born**. Then it is **sealed**: its memory never grows again.
 - The host writes each state's **settings block** before the state is made. The kernel reads its rate, its ports, its numbers and its audio files there.
 - The only thing a kernel may import is **`m2.asset_read`**: it copies part of an audio file into the kernel's memory.
-- `m2_abi()` returns **1**. music2 refuses a module built for any other version, and says which.
+- A module says its version in a small part of its file named **`m2_abi`**: **1**. music2 reads it first, before it looks at anything else. It refuses a module built for any other version, and says which.
 - v1 only ever grows at the end: new optional exports, and new fields at the end of the settings block. Anything else is v2.
 
 | Part | Where below |
@@ -41,7 +41,7 @@ All numbers are little-endian. An address is 4 bytes. Wasm types: `i32` (also us
 | Item | Shape | Rule |
 |---|---|---|
 | `memory` | exported, defined by the module (not imported), 32-bit, 64 KiB pages, not shared | checked at load. The hardware checks need it |
-| `m2_abi() -> i32` | returns 1 | checked first, before any other export. Any other value is refused: "built for kernel ABI v0, but this music2 speaks v1 only" |
+| custom section `m2_abi` | exactly 4 bytes: the version as a little-endian u32, so 1 | read from the module's bytes before it is compiled, so before its imports, memory and exports. Any other version is refused, naming it: "built for kernel ABI v2, but this music2 speaks v1 only". No section: "built for kernel ABI v0, or isn't a music2 kernel" |
 | `m2_alloc(size: i32, align: i32) -> i32` | an address of `size` bytes aligned to `align`, or 0 for "no room" | works only during birth. The host takes room for each state's block here |
 | imports | none, or `m2.asset_read` only | anything else is refused, naming it |
 
@@ -147,6 +147,7 @@ Not reserved: `k_drop`. One state is never freed alone; a sandbox drops whole. L
 
 ## The version rule
 
-- `m2_abi()` says the version. This music2 speaks v1 only. A v0 module is refused, and the message says to rebuild it with the v1 kit.
+- The `m2_abi` section says the version. This music2 speaks v1 only. A module with no section is taken as v0 and refused, and the message says to rebuild it with the v1 kit.
+- Every later ABI keeps the `m2_abi` section, as it is. So this music2 can always refuse a later module by its version, whatever else changed.
 - Adding an optional export, or a field at the end of the settings block, keeps v1.
 - Changing any shape above, or a rule, makes v2.

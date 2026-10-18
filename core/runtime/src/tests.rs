@@ -620,22 +620,29 @@ fn package_with(wat: &str, ports: &str) -> PathBuf {
     let dir =
         std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("k.wasm"), wat).unwrap();
+    std::fs::write(dir.join("k.wasm"), wasm(wat)).unwrap();
     let manifest = format!("[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\n{ports}\n");
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
     dir
 }
 
-/// A kernel module speaking ABI v`abi` around `kernels`, the exports of its kernel types: its one
-/// page of memory and its allocator (`m2_alloc`), which hands out room forward from 8 KiB, growing the
-/// memory as it must, as its sandbox is born. Below 8 KiB a hand-written kernel may keep one state
-/// of its own at a fixed place, as these tests do: they make one state in a sandbox.
+/// A module's text as the bytes a package ships.
+pub(crate) fn wasm(wat: &str) -> Vec<u8> {
+    wat::parse_str(wat).unwrap()
+}
+
+/// A kernel module speaking ABI v`abi` around `kernels`, the exports of its kernel types: its
+/// version in its `m2_abi` section, its one page of memory and its allocator (`m2_alloc`), which
+/// hands out room forward from 8 KiB, growing the memory as it must, as its sandbox is born. Below
+/// 8 KiB a hand-written kernel may keep one state of its own at a fixed place, as these tests do:
+/// they make one state in a sandbox.
 pub(crate) fn module_v(abi: u32, kernels: &str) -> String {
+    let section: String = abi.to_le_bytes().iter().map(|b| format!("\\{b:02x}")).collect();
     format!(
         r#"(module
+  (@custom "m2_abi" "{section}")
   (memory (export "memory") 1)
   (global $heap (mut i32) (i32.const 8192))
-  (func (export "m2_abi") (result i32) (i32.const {abi}))
   (func (export "m2_alloc") (param $size i32) (param $align i32) (result i32) (local $at i32) (local $end i32)
     (local.set $at (i32.and (i32.add (global.get $heap) (i32.sub (local.get $align) (i32.const 1))) (i32.sub (i32.const 0) (local.get $align))))
     (local.set $end (i32.add (local.get $at) (local.get $size)))
@@ -705,24 +712,51 @@ fn packages_must_be_sandboxed_and_speak_our_abi() {
     }
 }
 
-// ABI-3: a module built for kernel ABI v0 is refused, and the refusal names its version and says
-// what to do, before any v1 export is asked for.
+// ABI-3 (D1 of track sx): the version is read from the module's bytes, its `m2_abi` section,
+// before the module is compiled. So a module built for a later ABI is refused by its version,
+// whatever else it holds: here an import v1 doesn't know, and a 64-bit memory.
 #[test]
-fn a_v0_module_is_refused_naming_its_version() {
+fn a_later_abi_module_is_refused_by_its_version_first() {
+    let v2 = module_v(2, &kernel_v1("k", &out_v1("(local.get $x)")))
+        .replacen("(module", r#"(module (import "m2" "other" (func))"#, 1)
+        .replace(r#"(memory (export "memory") 1)"#, r#"(memory (export "memory") i64 1)"#);
+    let dir = package(&v2);
+    let e = PackageSet::default().load(&dir).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("built for kernel ABI v2, but this music2 speaks v1 only"), "{e:#}");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// The version has one place (D1, D2): std.wasm says v1 in its `m2_abi` section, and has no
+// `m2_abi()` export.
+#[test]
+fn std_wasm_says_v1_in_its_section() {
+    let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm")).unwrap();
+    assert_eq!(packages::abi_version(&bytes).unwrap(), Some(packages::KERNEL_ABI));
+    let module = wasmtime::Module::new(&wasmtime::Engine::default(), &bytes).unwrap();
+    assert!(module.exports().all(|e| e.name() != "m2_abi"), "no `m2_abi()` export");
+}
+
+// ABI-3 (D2): a module with no `m2_abi` section was built for kernel ABI v0, or isn't a music2
+// kernel. It is refused, saying so and what to do, whatever it exports: an `m2_abi()` that
+// returns 1 doesn't count.
+#[test]
+fn a_module_with_no_abi_section_is_refused_as_v0() {
     let v0 = r#"(module
       (memory (export "memory") 1)
-      (func (export "m2_abi") (result i32) (i32.const 0))
+      (func (export "m2_abi") (result i32) (i32.const 1))
       (func (export "k_init") (param f32 i32 i32))
       (func (export "k_ports") (result i32) (i32.const 1))
       (func (export "k_port") (param i32) (result i32) (i32.const 1024))
       (func (export "k_reset"))
       (func (export "k_process") (param i32))
       (func (export "k_active") (result i32) (i32.const 0)))"#;
-    let dir = package(v0);
-    let e = PackageSet::default().load(&dir).map(|_| ()).unwrap_err();
-    assert!(format!("{e:#}").contains("built for kernel ABI v0"), "{e:#}");
-    assert!(format!("{e:#}").contains("speaks v1"), "{e:#}");
-    std::fs::remove_dir_all(dir).ok();
+    for module in [v0, "(module)"] {
+        let dir = package(module);
+        let e = PackageSet::default().load(&dir).map(|_| ()).unwrap_err();
+        let said = "built for kernel ABI v0, or isn't a music2 kernel: it has no `m2_abi` section. Rebuild it with the v1 kit";
+        assert!(format!("{e:#}").contains(said), "{e:#}");
+        std::fs::remove_dir_all(dir).ok();
+    }
 }
 
 // ABI-2, ABI-3: the one import a kernel may have is `m2.asset_read`, with its signature. Any other

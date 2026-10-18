@@ -349,7 +349,7 @@ fn with_kernel(reset: &str, process: &str) -> (PackageSet, PathBuf) {
   (func (export "k_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32) {process})
   (func (export "k_active") (param i32) (result i32) (i32.const 0))"#
     ));
-    std::fs::write(dir.join("k.wasm"), wat).unwrap();
+    std::fs::write(dir.join("k.wasm"), crate::tests::wasm(&wat)).unwrap();
     std::fs::write(
         dir.join("m2pkg.toml"),
         "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\ninputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]\n",

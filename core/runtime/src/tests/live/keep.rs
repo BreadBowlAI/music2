@@ -327,7 +327,7 @@ fn t_kernels() -> PathBuf {
     let wat = module_v1(
         &[each("latch", &latch), each("spike", &spike), each("denan", &denan), each("trap", &trap), each("hog", &hog), fat, sore, tiny].concat(),
     );
-    std::fs::write(dir.join("k.wasm"), wat).unwrap();
+    std::fs::write(dir.join("k.wasm"), crate::tests::wasm(&wat)).unwrap();
     let kernel = |k: &str, input: &str| format!("[[kernel]]\nname = \"{k}\"\ninputs = [\"in: {input}\"]\noutputs = [\"out: audio<1>\"]\n");
     let manifest = format!(
         "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n{}{}{}{}{}{}{}{}",

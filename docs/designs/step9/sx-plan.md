@@ -35,7 +35,7 @@ Branch `sx`, from `main` at `97b4cdf`, 2026-10-18. Step 9, audio and sample turn
 |---|---|---|
 | `m2-runtime` | `core/runtime/src/packages.rs` | `abi_version(bytes)`: a small hand parser walks the module's sections and reads the custom section `m2_abi` (4 bytes, a u32). Called before `Module::new`. `verify_module` no longer needs `m2_abi()` |
 | `m2-runtime` | `core/runtime/src/sandbox.rs`, `stream.rs` | the host's asset list holds `Whole(Arc<Asset>)` or `Disk(Arc<Wav>)`. `Disk` reads the frames asked for with `read_at`, through `stream.rs`'s WAV reader, into a buffer the sandbox keeps. Only for sandboxes off the audio thread |
-| std kit | `std/kernels-src/kernel/src/lib.rs` | `export!` writes the `m2_abi` section (`#[link_section]`), and no longer exports `m2_abi()` |
+| std kit | `std/kernels-src/kernel/src/lib.rs` | `abi!` (once per module) writes the `m2_abi` section (`#[link_section]`, wasm32 only), and no longer exports `m2_abi()`. Not `export!`: it runs once per kernel, and the linker would join the copies into one longer section |
 | std | `std/kernels/std.wasm` | rebuilt. Every std kernel's hash changes; no sound changes |
 | docs | `docs/kernel-abi.md`, `architecture.md` (ABI-2, ABI-3), `gaps.md` | the version rule and the asset rule below ([D1](#decisions) to [D4](#decisions)) |
 
@@ -43,10 +43,10 @@ Branch `sx`, from `main` at `97b4cdf`, 2026-10-18. Step 9, audio and sample turn
 
 | Test | Where | Red on |
 |---|---|---|
-| `a_later_abi_module_is_refused_by_its_version_first`: a module whose section says 2, with an import `m2.other` and a 64-bit memory, is refused naming v2 | `packages.rs` tests | today's code (refused for the import) |
-| `a_module_with_no_abi_section_is_refused_as_v0` (replaces `a_v0_module_is_refused_naming_its_version`) | `packages.rs` tests | today's code (it calls `m2_abi()`) |
+| `a_later_abi_module_is_refused_by_its_version_first`: a module whose section says 2, with an import `m2.other` and a 64-bit memory, is refused naming v2 | `core/runtime/src/tests.rs`, next to the ABI tests it joins | today's code (refused as it compiles) |
+| `a_module_with_no_abi_section_is_refused_as_v0` (replaces `a_v0_module_is_refused_naming_its_version`); one of its modules exports an `m2_abi()` that returns 1 | `core/runtime/src/tests.rs` | today's code (it calls `m2_abi()`) |
 | `std_wasm_says_v1_in_its_section` | `core/runtime/src/tests.rs` | the old std.wasm |
-| `an_asset_read_from_disk_is_the_decoded_asset`: a kernel reads a 16-bit and a float WAV, mono and stereo, in odd pieces, past the end; same bits as `Whole`; nothing decoded whole (`Cache::work`) | `core/runtime/src/tests.rs` | `Disk` stubbed to silence |
+| `an_asset_read_from_disk_is_the_decoded_asset`: a kernel reads a 16-bit and a float WAV, mono, stereo and 3 channels, in odd pieces (one longer than the host's piece), past the end; same counts and bits as `Whole`, same settings entry. Nothing is decoded whole by its type: `Disk` holds a `Wav`, no samples (no `Cache` takes part until slice 2) | `core/runtime/src/tests.rs` | `Disk` stubbed to silence |
 
 **Done when:** the tests are green. `std/build.sh --check` gives the same bytes. Renders: 12 of 12 match. std's kernel tests pass in release. gaps.md loses "A kernel module built for a later ABI".
 
@@ -123,7 +123,7 @@ The kept tests stay green: `pitch_without_warp_is_varispeed_and_with_warp_keeps_
 | D10 | Background order | One stretch thread per open song. Renders run in the order asked, each from the clip's start. Offline renders (export, range render) make their renders first, on their own thread |
 | D11 | What does Follow tempo set? | On: warp markers at the clip's start, its end and each tempo change inside it, from the tempo now. So nothing changes when you turn it on; later tempo changes keep its beats. Off: no markers; it plays at its own speed again. Words: **Follow tempo**, hint "Stretch this clip with the song's tempo. Its pitch stays the same." Undo: "Undo Follow tempo" |
 | D12 | Which renders change, and why? (FMT-3) | std goes to 0.2.2 (as ab went to 0.2.1). Only `examples/resample` changes: it has one warped clip. Its stretch now runs in std, with the map given as pairs and the normalized match, so its samples differ slightly. No one has songs yet, so one bundled std stays enough (Deferred table) |
-| D13 | New crates? | None. The section parser is hand-written (about 30 lines) |
+| D13 | New crates? | None. The section parser is hand-written (about 30 lines). The runtime's tests take `wat` as a dev-dependency, the version wasmtime's `wat` feature already builds: test packages are now wasm bytes, since the version is read from bytes |
 
 ## Risks
 
