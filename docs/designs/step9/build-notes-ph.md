@@ -251,7 +251,7 @@ compared with an offline one (they differ by `L` then), none a crash or an asser
 ### In short
 
 A review found 4 things. The big one is fixed, with two tests shown red first. Two small ones are fixed (one line
-each). One is a line in `docs/gaps.md`. Then `main` (with `io`) was merged in, and `ci/check.sh --gates` passed.
+each). One is a line in `docs/gaps.md`. Then `main` (with `io`, then `ab`) was merged in, and `ci/check.sh --gates` passed at `d897cf0`.
 
 | Finding | Size | What was done |
 |---|---|---|
@@ -287,45 +287,51 @@ The red diffs and their logs are in `~/m2-runs/sph/red/`.
 clash the merge made: `io`'s `mac/av.rs` and this branch's `mac/window.rs` declared `sel_registerName` with two return
 types, which the mac lint refused. Fixed in `659037f`, with a clippy finding in the probe's new tag.
 
+`main` moved again while that check ran: `ab` (kernel ABI v1, one sandbox a box, the Sampler) landed. Merged in at
+`d897cf0`. Conflicts: `core/runtime/src/lib.rs` (the Builder holds both sides' fields; the plan's shapes take `ab`'s
+kernel assets, then this branch's note-delay room; `latencies()` now gets the kernel assets too, so its keep-matching
+shapes are the plan's), two tests' struct fields, `NodeGraph.tsx` (both rows) and `HANDOFF.md` (this branch's by-ear
+steps are now 88 to 95, after `ab`'s 83 to 87).
+
 ### The final check
 
 | Run | Result |
 |---|---|
 | First, at `dcf075d` | Failed 3 rows: clippy (the probe's new loop), the mac lint (the merge's clash), and "repo unchanged" (docs edited while it ran). Every other row passed: 1,628 Rust tests, 68/68 browser suites, renders 10 of 10, the 7 gate runs. Logs: `~/m2-runs/sph/check-dcf075d-run1.tgz` |
 | Second, at `659037f` | **PASS**; 1 passed only on a retry: the browser suite `st-audio-fix` (from `studio`, not this branch's code; Known flakes). 1,628 Rust tests, 68 browser suites, renders 10 of 10, the app, clippy, the mac lint, std, the 7 gate runs, the repo unchanged. 39 minutes. Logs: `~/m2-runs/sph/check-659037f.tgz` |
+| Third, at `d897cf0` (after the second merge) | Failed only a timing gate, under load from other tracks (load 8): G7f arena's slowest activation block, 7,450 µs (bound 5,333; Known flakes). The browser suite `nx-effects-fix` passed only on its retry (a tooltip read early). Every other row passed: 1,645 Rust tests, renders 12 of 12. Logs: `~/m2-runs/sph/check-d897cf0-run1.tgz` |
+| Fourth, at `d897cf0` | **PASS**: every row, nothing only on a retry. 1,645 Rust tests, 69/69 browser suites, renders 12 of 12, the 7 gate runs. 37 minutes. Logs: `~/m2-runs/sph/check-d897cf0.tgz` |
 
-The check's summary, word for word:
+The last check's summary, word for word:
 
 ```
-music2 check: PASS; 1 passed only on a retry
-commit   659037f929ac on ph (clean)
+music2 check: PASS
+commit   d897cf033dc7 on ph (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
-tools    rustc 1.99.0, node v24.21.0, 39 min
+tools    rustc 1.99.0, node v24.21.0, 37 min
 plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
 build            PASS  
 app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
-rust tests       PASS  1628 passed, 0 failed
+rust tests       PASS  1645 passed, 0 failed
 clippy           PASS  
 pool models      PASS  29 passed, 0 failed
 std kernels      PASS  tests and clippy
 std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
-browser suites   PASS  67/68 suites ok, 1 failed; passed on a retry
-renders          PASS  10 of 10 match e2e/renders.sha256
+browser suites   PASS  69/69 suites ok
+renders          PASS  12 of 12 match e2e/renders.sha256
 old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
 repo unchanged   PASS
-
-passed only on a retry:
-  suite st-audio-fix
 ```
 
 ### Pictures
 
-On Xvfb :96, 1440x900: `~/m2-runs/app-shots/ph-659037f/` (`captions.txt` says what each shows). The song was made
+On Xvfb :96, 1440x900: `~/m2-runs/app-shots/ph-659037f/` (`captions.txt` says what each shows), taken at `659037f`,
+before the second merge (which didn't touch the plugin host). The song was made
 20 minutes long so its export was still rendering when the plugin program was frozen (SIGSTOP,
 `~/m2-runs/sph/tools/hang-export.sh`). 30 s later music2 ended it and playback went on. The export then finished
 with the lead silent from the freeze and said only "Exported": a line in `docs/gaps.md`.
