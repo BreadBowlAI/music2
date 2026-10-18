@@ -13,20 +13,12 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
   (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by
   far. 8a's sweep is done. **One more `ci/check.sh` on the Mac is owed, with the output at 48 kHz.**
-- **Track `br` is ready to land** (2026-10-18), on branch `br`: Linux green at `1fb6caa`; macOS owed. From `main` at
-  `e7518f4`, with `main` at `c852cb3` (`mf2`) merged in. Gaps #32 and #26: add an installed plugin from the app, and
-  presets for std sounds and plugins (plan `docs/designs/step9/br-plan.md`, build notes `build-notes-br.md`). The
-  review's big finding is fixed: a plugin's own preset search no longer runs on the plugin program's main thread
-  (HOST-8). Two small ones are in `docs/gaps.md`. See [Branches not on main yet](#branches-not-on-main-yet).
+- **Track `br` landed** (2026-10-18, `054e338`): add an installed plugin from the app (#32), and presets for std
+  sounds and plugins (#26, FMT-22, HOST-8). Linux green at `1fb6caa`; macOS owed (in the next Mac run). Build notes
+  `docs/designs/step9/build-notes-br.md`.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
 - Next: that one Mac run (after `mf2` is merged), then fix what it finds. Then Windows, as its own step, or the top gaps.
-
-## Branches not on main yet
-
-| Branch | Checked at | State |
-|---|---|---|
-| `br` | `1fb6caa`, then docs only | **Ready to land.** From `main` at `e7518f4`, with `main` at `c852cb3` (`mf2`) merged in (`1fb6caa`). Add an installed plugin from the app (#32), presets for std sounds and plugins (#26, FMT-22, HOST-8). Reviewed (3 findings: the big one fixed with a test shown red first, 2 in gaps.md). Linux green at `1fb6caa` (`ci/check.sh --gates`; the first run failed only G11's timing under load, the second passed every row, nothing only on a retry), macOS owed. No render changed. Worktree `~/m2-runs/wt/br`. Pictures `~/m2-runs/app-shots/br-1fb6caa/` |
 
 ## Mac runs owed
 
@@ -35,8 +27,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
 | 1 | `ci/check.sh` on `main` | **Done at `e7518f4`** (2026-10-18), 11 of 13 rows. Two tests failed, fixed on `mf2`: a take's steps looked up by the folder's real path (`7482009`), and the plugin window test asks the host process that owns the window (`e505d0b`, the SIGBUS). G12 failed only its set-up (output at 44.1 kHz). `pl-arrange-fix`'s retry (on Linux too) was a real race, fixed on `mf2`: a marker's Delete or Rename now finds it by its bar. G7f passed one sandbox a box: a block −1,018 µs over S, a callback −2,748 µs, 76 MB against 554, build 28 ms against 205 | 71 min |
 | 2 | (dropped) G7f store on the old gain | Not needed any more. It asked whether the Mac's +135 µs a block since step 7 was the 32 MiB store layout (O1). Track `ab` replaced that layout with one sandbox per box, so run 1's G7f rows now judge the new layout. The old std (ABI v0) can't load on `main` anyway. | — |
 | 3 | 8a's Mac sweep, `ci/sweep.sh` | **Done at `e7518f4`.** It confirmed `live_count` 4 and `BETWEEN` = park (spin was far worse), so no code changed. Gate 8: 4 threads, 10 minutes, p99 1,308 µs (45%), 0 dropouts; provisional, at 44.1 kHz. Exports on 8 fast cores, 6.4× one thread | about 40 min |
-| 4 | By ear, steps 7 to 125 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116), `br` (117–125, once it is on `main`) | about 2 hours, in parts |
-| 5 | `ci/check.sh` once `br` is on `main` | `br`'s plugin preset search and preset load on a Mac for the first time (HOST-8): the same run as row 1's next one, if `br` lands first | about 45 min |
+| 4 | By ear, steps 7 to 125 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116), `br` (117–125) | about 2 hours, in parts |
+| 5 | `ci/check.sh` on `main` (the same run as row 1's next one) | Also runs `br`'s plugin preset search and preset load on a Mac for the first time (HOST-8) | about 45 min |
 
 **Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main` once `mf2` is
 merged. It checks the two fixes (the plugin window's `closed` callback now runs on the next main-queue turn: run on
