@@ -39,6 +39,7 @@ pub mod audio;
 pub mod cells;
 pub mod click;
 pub mod data;
+mod delay;
 pub mod engine;
 pub mod event;
 mod fade;
@@ -46,6 +47,7 @@ pub mod fpenv;
 #[doc(hidden)]
 pub mod gauge;
 mod keep;
+pub mod latency;
 mod offline;
 mod overlay;
 pub mod packages;
@@ -507,6 +509,8 @@ struct VoicePool {
 struct PolyNode {
     /// The notes lane it plays.
     slot: usize,
+    /// The note delay node it reads that lane's notes through, when it is late (RENDER-18).
+    late: Option<usize>,
     /// The voice graph's output.
     out: PortRef,
     /// What its voices' `Capture` nodes read, by index: outputs of the graph around it. Kept out of
@@ -528,6 +532,12 @@ struct PluginNode {
     audio_in: Option<Input>,
     /// The notes lane it plays, if any.
     notes: Option<usize>,
+    /// The note delay node it reads that lane's notes through, when it is late (RENDER-18).
+    late: Option<usize>,
+    /// How late its inputs arrive (RENDER-18): it is told the transport this many frames earlier
+    /// (HOST-6), as `told` holds it for this block.
+    offset: u32,
+    told: delay::Told,
     /// The key of each note sounding into it, by note id.
     keys: Vec<(u32, i16)>,
     /// The notes it was given before a reset (a panic), ended at its next call: a plugin may keep
@@ -540,8 +550,19 @@ struct PluginNode {
     release: Vec<(u32, i16)>,
     /// (parameter id, input, value last sent).
     params: Vec<(u32, Input, Option<f32>)>,
+    /// Beside each parameter: whether a lane or a cable drives it (a gesture latches it, MON-6),
+    /// rather than a value in code (a gesture holds it for a Tx, HOME-5).
+    driven: Vec<bool>,
+    /// Beside each parameter: the value its window holds or latched it at, while it does (live
+    /// only): what is sent in its place.
+    over: Vec<Option<f64>>,
+    /// Calls left in which a change outside a gesture is set back without a word: a plugin may
+    /// say what a state it loaded set (HOME-5a's notice is for the person's own changes).
+    quiet: u8,
     /// One call's events in and out, sized when built (RENDER-28). What comes out (parameter
-    /// gestures, HOST-4) is kept for one call: nothing consumes it before plugin windows.
+    /// gestures and values, HOST-4) is read after each live call: a gesture holds or latches a
+    /// code-owned parameter, a change outside one is set back, and one to a parameter code
+    /// doesn't set marks the state changed.
     events: m2_plugins::Events,
     out: m2_plugins::Events,
     /// What its last call reported: whether the engine may idle (RENDER-6a).
@@ -579,7 +600,9 @@ const OUT_EVENTS: usize = 256;
 /// at its first frame for each of `ended`, and a NoteOff for each of `release`; with `again` (the
 /// lane's scheduler, once an export gave the instance back), a NoteOn there for each of `keys` the
 /// scheduler still holds, and the others forgotten; then the lane's note events (already in order)
-/// from `*next` on, merged with `params` sampled every [`PARAM_STEP`] frames. At one frame
+/// from `*next` on, merged with `params` sampled every [`PARAM_STEP`] frames; one with a value in
+/// `over` (its window holds or latched it) gets that value, only when a send is due (`None`
+/// last sent), never its input's. At one frame
 /// parameters come after notes, the order a stable sort by time gave before. An On becomes a
 /// NoteOn (and a Tuning between keys), an Off a NoteOff for the key `keys` holds for it. Returns
 /// how many NoteOffs it sent, and the time of the last. Never allocates: `out` and `keys` keep
@@ -592,6 +615,7 @@ fn plugin_events(
     notes: &[Event],
     next: &mut usize,
     params: &mut [(u32, Input, Option<f32>)],
+    over: &[Option<f64>],
     r: &impl Reads,
     (lo, hi): (usize, usize),
     keys: &mut Vec<(u32, i16)>,
@@ -658,7 +682,14 @@ fn plugin_events(
         if f >= hi {
             break;
         }
-        for (id, input, last) in params.iter_mut() {
+        for (i, (id, input, last)) in params.iter_mut().enumerate() {
+            if let Some(&Some(v)) = over.get(i) {
+                if last.is_none() {
+                    out.push(P::Param { time: (f - lo) as u32, id: *id, value: v });
+                    *last = Some(v as f32);
+                }
+                continue;
+            }
             match input {
                 // Sent whenever it differs from the last value sent, as a port's sample is: an
                 // instance that outlives its plan may have been sent another (HOST-5).
@@ -695,7 +726,10 @@ impl PluginNode {
             self.status = m2_plugins::Status::Sleep;
             return Ok(());
         }
-        let notes = self.notes.map_or(&[][..], |s| lanes[s].events());
+        let notes = match self.late {
+            Some(d) => r.events(d),
+            None => self.notes.map_or(&[][..], |s| lanes[s].events()),
+        };
         let mut next = 0;
         let channels = out.len() / BLOCK;
         let (host, h) = (inst.host(), inst.handle());
@@ -705,7 +739,10 @@ impl PluginNode {
             for p in &mut self.params {
                 p.2 = None;
             }
+            self.quiet = 3;
         }
+        let quiet = self.quiet > 0;
+        self.quiet = self.quiet.saturating_sub(1);
         if std::mem::take(&mut self.reset_first) {
             host.reset(h);
             // A plugin may leave the thread flushing subnormals (RENDER-2a).
@@ -715,8 +752,17 @@ impl PluginNode {
             inst.mark_lent();
         }
         let mut again = std::mem::take(&mut self.again).then(|| self.notes.and_then(|s| lanes[s].scheduler())).flatten();
+        if b.live {
+            taken_over(&mut self.params, &mut self.over, inst);
+        }
         // One call per run: a call never spans a jump, and each gets its own transport (RENDER-9).
-        for (ri, run) in b.runs.as_slice().iter().enumerate() {
+        // One late by its offset is told the transport that much earlier (HOST-6, RENDER-18).
+        let told = (self.offset > 0).then_some(self.told);
+        let runs = match &told {
+            Some(t) => &t.runs[..t.len],
+            None => b.runs.as_slice(),
+        };
+        for (ri, run) in runs.iter().enumerate() {
             let (lo, hi) = (run.off as usize, (run.off + run.n) as usize);
             let (ended, release) = if ri == 0 { (&self.ended[..], &self.release[..]) } else { (&[][..], &[][..]) };
             let (offs, last) = plugin_events(
@@ -726,6 +772,7 @@ impl PluginNode {
                 notes,
                 &mut next,
                 &mut self.params,
+                &self.over,
                 r,
                 (lo, hi),
                 &mut self.keys,
@@ -748,10 +795,13 @@ impl PluginNode {
             let split = BLOCK.min(out.len());
             let (left, right) = out.split_at_mut(split);
             let outputs: [&mut [f32]; 2] = [&mut left[lo..hi], if channels > 1 { &mut right[lo..hi] } else { &mut [] }];
-            let info = b.info[ri];
+            let (info, beats, seconds) = match &told {
+                Some(t) => (t.info[ri], t.beats[ri], t.seconds[ri]),
+                None => (b.info[ri], b.beats64[lo], b.seconds[lo] as f64),
+            };
             let transport = m2_plugins::Transport {
-                beats: b.beats64[lo],
-                seconds: b.seconds[lo] as f64,
+                beats,
+                seconds,
                 bpm: info.bpm,
                 playing: run.moving,
                 looping: b.looping,
@@ -780,6 +830,9 @@ impl PluginNode {
                 self.ended.clear();
                 self.release.clear();
             }
+            if b.live {
+                heard(&self.out, &mut self.params, &mut self.over, &self.driven, inst, quiet);
+            }
         }
         if b.strict
             && let Some(at) = out.iter().position(|x| !x.is_finite())
@@ -805,6 +858,67 @@ impl PluginNode {
             p.2 = None;
         }
         Ok(())
+    }
+}
+
+/// What its window holds or latched, read before a live call (HOME-5a, MON-6). One no longer
+/// taken over gets its input's value again.
+fn taken_over(params: &mut [(u32, Input, Option<f32>)], over: &mut [Option<f64>], inst: &PluginInstance) {
+    let o = inst.overrides();
+    for (i, p) in params.iter_mut().enumerate() {
+        let now = o.get(p.0).filter(|(f, _)| f & (plugins::HELD | plugins::LATCHED) != 0).map(|(_, v)| v);
+        if over[i].is_some() && now.is_none() {
+            p.2 = None;
+        }
+        over[i] = now;
+    }
+}
+
+/// What a live call output (HOST-4): a gesture on a parameter code owns holds it (a value in
+/// code, HOME-5) or latches it (a lane or a cable, MON-6); a change outside one is set back at
+/// the next call (HOME-5a); a change to one code doesn't set changed its state (HOME-6).
+/// Atomics only: nothing here allocates or locks.
+fn heard(
+    out: &m2_plugins::Events,
+    params: &mut [(u32, Input, Option<f32>)],
+    over: &mut [Option<f64>],
+    driven: &[bool],
+    inst: &PluginInstance,
+    quiet: bool,
+) {
+    use m2_plugins::Event as P;
+    let o = inst.overrides();
+    for e in out.iter() {
+        let (id, at) = match e {
+            P::Gesture { id, .. } | P::Param { id, .. } => (id, params.iter().position(|p| p.0 == id)),
+            _ => continue,
+        };
+        match (e, at) {
+            (P::Gesture { begin: true, .. }, Some(i)) => {
+                let kind = if driven[i] { plugins::LATCHED } else { plugins::HELD };
+                let was = params[i].2.map_or(0.0, f64::from);
+                if o.begin(id, kind, was) {
+                    over[i] = Some(was);
+                }
+            }
+            (P::Gesture { begin: false, .. }, Some(_)) => o.end(id),
+            (P::Gesture { begin: false, .. }, None) => inst.state_changed(),
+            (P::Param { value, .. }, Some(i)) => match o.get(id) {
+                Some(_) => {
+                    o.value(id, value);
+                    over[i] = Some(value);
+                    params[i].2 = Some(value as f32);
+                }
+                None => {
+                    params[i].2 = None;
+                    if !quiet {
+                        inst.reverted(id);
+                    }
+                }
+            },
+            (P::Param { .. }, None) => inst.state_changed(),
+            _ => {}
+        }
     }
 }
 
@@ -883,6 +997,10 @@ enum Exec {
         cur: f32,
         step: f32,
     },
+    /// The planner's delay of an audio or control signal (RENDER-18).
+    Delay(delay::DelayNode),
+    /// The planner's delay of a notes lane (RENDER-18): its consumer reads its events.
+    NoteDelay(Box<delay::NoteDelayNode>),
 }
 
 impl Exec {
@@ -917,9 +1035,14 @@ impl Exec {
             Exec::Plugin(p) => {
                 p.audio_in.iter().for_each(&mut port);
                 p.params.iter().for_each(|(_, i, _)| port(i));
+                p.late.iter().for_each(|&d| f(d));
             }
             Exec::Missing(input) => input.iter().for_each(&mut port),
-            Exec::Poly(p) => p.captures.iter().for_each(|c| f(c.node)),
+            Exec::Poly(p) => {
+                p.captures.iter().for_each(|c| f(c.node));
+                p.late.iter().for_each(|&d| f(d));
+            }
+            Exec::Delay(d) => f(d.input.node),
             Exec::Fade { old, new, .. } => {
                 port(old);
                 port(new);
@@ -932,6 +1055,7 @@ impl Exec {
             | Exec::Time(_)
             | Exec::Const(_)
             | Exec::NoteField(_)
+            | Exec::NoteDelay(_)
             | Exec::Capture(_) => {}
         }
     }
@@ -994,6 +1118,12 @@ struct Builder<'a> {
     owner: &'a m2_plugins::Owner,
     /// What mode the plugin instances it creates are set to: realtime live, offline otherwise.
     mode: m2_plugins::RenderMode,
+    /// The top-level node it is building, if it is one.
+    at: Option<usize>,
+    /// By top-level node: how late its inputs arrive (RENDER-18).
+    offsets: &'a [u32],
+    /// Plugin instances made before the graph, to measure their latency, by node (RENDER-17).
+    made: HashMap<usize, Arc<PluginInstance>>,
     /// While a voice pool is built: its sandboxes so far, by package (RENDER-32).
     pool: Vec<(String, Sandbox)>,
     /// The assets its kernels read, decoded and shared.
@@ -1032,6 +1162,12 @@ impl Builder<'_> {
         self.caps.get(slot).copied().unwrap_or_default()
     }
 
+    /// A new instance for plugin node `n`, of shape `shape`: created with its committed state,
+    /// activated, its latency measured (RENDER-17), on the plugin main thread.
+    fn create(&self, n: &FNode, found: &m2_plugins::Found, shape: u64) -> Result<Arc<PluginInstance>> {
+        make_plugin(self.packages, self.data, self.owner, self.sample_rate as u32, self.mode, n, found, shape)
+    }
+
     /// The graph of `nodes` in `order`. `room` is the room some plugin nodes need beyond their lane's:
     /// what the node they take an instance from could hold.
     fn graph(&mut self, nodes: &[FNode], order: &[usize], in_voice: bool, boxed: Boxed, room: &HashMap<usize, Caps>) -> Result<Graph> {
@@ -1042,6 +1178,7 @@ impl Builder<'_> {
         for (i, n) in nodes.iter().enumerate() {
             let capture = captures;
             captures += matches!(n.op, FOp::Capture(_)) as usize;
+            self.at = (!in_voice).then_some(i);
             let e = match used.contains(&i) {
                 true => self.node(nodes, n, in_voice, boxed(i), false, room.get(&i).copied(), capture)?,
                 false => Exec::Const(0.0),
@@ -1080,11 +1217,16 @@ impl Builder<'_> {
                 if in_voice {
                     bail!("{}: poly inside poly", n.name);
                 }
-                let slot = match ghost {
-                    true => 0,
+                let (slot, late) = match ghost {
+                    true => (0, None),
                     false => {
-                        let FOp::Lane { module, lane: lane_id, .. } = &nodes[*lane].op else { bail!("{}: poly needs a notes lane", n.name) };
-                        self.slot(module, lane_id)?
+                        // Through a note delay when it is late (RENDER-18).
+                        let (src, late) = match nodes[*lane].op {
+                            FOp::NoteDelay { lane: l, .. } => (l, Some(*lane)),
+                            _ => (*lane, None),
+                        };
+                        let FOp::Lane { module, lane: lane_id, .. } = &nodes[src].op else { bail!("{}: poly needs a notes lane", n.name) };
+                        (self.slot(module, lane_id)?, late)
                     }
                 };
                 let pool = match boxed {
@@ -1112,11 +1254,31 @@ impl Builder<'_> {
                 };
                 let captures = voice.nodes.iter().filter_map(|n| if let FOp::Capture(p) = n.op { Some(p) } else { None }).collect();
                 let plan = Vec::with_capacity(if ghost { 0 } else { 2 * self.caps(slot).ons + sched::LIVE_ROOM });
-                Exec::Poly(Box::new(PolyNode { slot, out: voice.out, captures, plan, pool, ghost }))
+                Exec::Poly(Box::new(PolyNode { slot, late, out: voice.out, captures, plan, pool, ghost }))
             }
             FOp::Feedback { input, channels } => Exec::Feedback { input: *input, ring: vec![0.0; *channels as usize * BLOCK] },
             FOp::NoteField(f) => Exec::NoteField(*f),
             FOp::Capture(_) => Exec::Capture(capture),
+            FOp::Delay { input, frames } => {
+                let kind = n.outputs.first().copied().unwrap_or(Kind::Control(None));
+                let shape = match boxed {
+                    Make::New(shape) => shape,
+                    _ => 0,
+                };
+                let line = delay::Line::new(kind.channels(), *frames, matches!(kind, Kind::Control(_)), shape);
+                Exec::Delay(delay::DelayNode { input: *input, line: Box::new(line) })
+            }
+            FOp::NoteDelay { lane, frames } => {
+                let FOp::Lane { module, lane: id, .. } = &nodes[*lane].op else { bail!("{}: a note delay needs a notes lane", n.name) };
+                let slot = self.slot(module, id)?;
+                let shape = match boxed {
+                    Make::New(shape) => shape,
+                    _ => 0,
+                };
+                let per_block = note_delay_room(self.caps(slot));
+                let line = Box::new(delay::NoteLine::new(*frames, per_block, shape));
+                Exec::NoteDelay(Box::new(delay::NoteDelayNode { slot, line, out: Events::with_capacity(2 * per_block) }))
+            }
         })
     }
 
@@ -1151,26 +1313,33 @@ impl Builder<'_> {
         room: Option<Caps>,
     ) -> Result<PluginNode> {
         let info = self.packages.plugin_info(id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
-        let rate = self.sample_rate as u32;
         let reset_first = matches!(boxed, Make::Lent(_));
+        let made = self.at.and_then(|i| self.made.remove(&i));
         let inst = match boxed {
             Make::Lent(inst) => Some(inst),
-            Make::New(shape) => {
-                let blob = state_blob(self.data, n)?;
-                let host = self.packages.host();
-                Some(PluginInstance::create(host, &info.found, blob, self.owner, rate, shape, self.mode).with_context(|| n.name.clone())?)
-            }
+            Make::New(shape) => Some(match made {
+                Some(i) => i,
+                None => self.create(n, &info.found, shape)?,
+            }),
             Make::Moved => None,
         };
         // Inputs come in the order of the plugin's ports; a parameter is bound by the id in its
         // address, never by its place in the list (FMT-18).
         let sig = m2_ir::Kernels::plugin(self.packages, id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
-        let (mut audio_in, mut notes, mut params) = (None, None, vec![]);
+        let (mut audio_in, mut notes, mut late, mut params, mut driven) = (None, None, None, vec![], vec![]);
         for (port, input) in sig.inputs.iter().zip(inputs) {
             match (port.name.as_str(), input) {
                 ("in", _) => audio_in = Some(input.clone()),
                 ("notes", Input::Port { src, .. }) if !ghost => {
-                    if let FOp::Lane { module, lane, .. } = &nodes[src.node].op {
+                    // Through a note delay when it is late (RENDER-18).
+                    let lane = match nodes[src.node].op {
+                        FOp::NoteDelay { lane, .. } => {
+                            late = Some(src.node);
+                            lane
+                        }
+                        _ => src.node,
+                    };
+                    if let FOp::Lane { module, lane, .. } = &nodes[lane].op {
                         notes = Some(self.slot(module, lane)?);
                     }
                 }
@@ -1178,6 +1347,10 @@ impl Builder<'_> {
                 (name, _) => {
                     let (_, pid) = packages::address(name).with_context(|| format!("{}: `{name}` isn't a parameter address", n.name))?;
                     params.push((pid, input.clone(), None));
+                    // A value in code is a constant (a cell, or folded); anything else drives it. A
+                    // ghost's inputs name the plan before's nodes, not `nodes`: it only plays out.
+                    let src_op = |src: &PortRef| nodes.get(src.node).map(|x| &x.op);
+                    driven.push(!ghost && matches!(input, Input::Port { src, .. } if !matches!(src_op(src), Some(FOp::Const(_)))));
                 }
             }
         }
@@ -1190,15 +1363,30 @@ impl Builder<'_> {
         let held = |c: Caps| c.sounding + 2 * c.ons + 8 + sched::LIVE_ROOM;
         let held = held(caps).max(room.map_or(0, held));
         let events = caps.events() + caps.ons + 2 * sched::LIVE_ROOM + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
+        // A call crosses to the plugin host process in shared memory, which can't grow (HOST-3).
+        if events > m2_plugins::MAX_CALL_EVENTS {
+            bail!(
+                "{}: one call to this plugin may carry {events} events (notes and parameter changes), more than the {} a call can carry; \
+                 fewer notes at once on its lane, or fewer parameters driven, make it fit",
+                n.name,
+                m2_plugins::MAX_CALL_EVENTS
+            );
+        }
         Ok(PluginNode {
             name: n.name.clone(),
             inst,
             audio_in,
             notes,
+            late,
+            offset: if ghost { 0 } else { self.at.and_then(|i| self.offsets.get(i)).copied().unwrap_or(0) },
+            told: delay::Told::default(),
             keys: Vec::with_capacity(held),
             ended: Vec::with_capacity(held),
             release: Vec::with_capacity(held),
+            over: vec![None; params.len()],
+            quiet: 0,
             params,
+            driven,
             events: m2_plugins::Events::with_capacity(events),
             out: m2_plugins::Events::with_capacity(OUT_EVENTS),
             status: m2_plugins::Status::Continue,
@@ -1208,6 +1396,92 @@ impl Builder<'_> {
             again: false,
         })
     }
+}
+
+/// A new instance for plugin node `n` (of shape `shape`, its hash), reporting to `owner`: created with
+/// its committed state, set to `mode`, activated at `rate` and its latency measured (RENDER-17), on
+/// the plugin main thread.
+#[allow(clippy::too_many_arguments)]
+fn make_plugin(
+    packages: &PackageSet,
+    data: &DataSet,
+    owner: &m2_plugins::Owner,
+    rate: u32,
+    mode: m2_plugins::RenderMode,
+    n: &FNode,
+    found: &m2_plugins::Found,
+    shape: u64,
+) -> Result<Arc<PluginInstance>> {
+    let blob = state_blob(data, n)?;
+    PluginInstance::create(packages.host(), found, blob, owner, rate, shape, mode).with_context(|| n.name.clone())
+}
+
+/// Each checked node's latency (RENDER-17): a kernel's as its package declares it, a plugin's as its
+/// instance last measured it: the one it keeps, the one lent to it, or a new one made here, into
+/// `made`, for its node to play.
+#[allow(clippy::too_many_arguments)]
+fn latencies(
+    flat: &Flat,
+    packages: &PackageSet,
+    data: &DataSet,
+    assets: &audio::KernelAssets,
+    keep: Option<&Keep>,
+    lent: Option<&HashMap<usize, Arc<PluginInstance>>>,
+    made: &mut HashMap<usize, Arc<PluginInstance>>,
+    mk: impl Fn(&FNode, &m2_plugins::Found, u64) -> Result<Arc<PluginInstance>>,
+) -> Result<Vec<u32>> {
+    let mut lat = vec![0; flat.nodes.len()];
+    let used = used(flat);
+    let shape = |i: usize| if used[i] { Shape::of(&flat.nodes[i], packages, assets) } else { None };
+    let kept = keep.map(|k| {
+        let shapes: Vec<Option<Shape>> = (0..flat.nodes.len()).map(shape).collect();
+        let blobs: Vec<Option<m2_song::Sha>> = flat.nodes.iter().map(|n| plan::blob(n, data)).collect();
+        (k, keep::matching(k, flat, &shapes, &blobs))
+    });
+    for &i in &flat.order {
+        let n = &flat.nodes[i];
+        lat[i] = match &n.op {
+            FOp::Kernel { kernel, .. } => m2_ir::Kernels::kernel(packages, kernel).map_or(0, |s| s.latency),
+            FOp::Plugin { plugin, .. } if !packages.plugin_missing(plugin) => {
+                let had = match &kept {
+                    Some((k, (kept, same))) if kept[i] => same[i].and_then(|j| k.info.plugin(j)).and_then(|p| p.inst.upgrade()),
+                    _ => lent.and_then(|l| l.get(&i)).cloned(),
+                };
+                match had {
+                    Some(inst) => inst.latency(),
+                    None => {
+                        let info = packages.plugin_info(plugin).with_context(|| format!("{}: plugin `{plugin}` was not described", n.name))?;
+                        let inst = mk(n, &info.found, shape(i).as_ref().map_or(0, Shape::hash64))?;
+                        let frames = inst.latency();
+                        made.insert(i, inst);
+                        frames
+                    }
+                }
+            }
+            _ => 0,
+        };
+    }
+    Ok(lat)
+}
+
+/// `cont` for the graph that plays a checked graph of `checked` nodes with `l`'s delays: each delay
+/// continues the one the plan that plays (`old`) has on its consumer's old node, on the same input
+/// and as long (RENDER-25): its line moves, with what is in flight in it.
+fn continue_delays(cont: &Continues, checked: usize, l: &latency::Latency, old: &PlanInfo) -> Continues {
+    let mut top = cont.top.clone();
+    top.resize(checked, None);
+    let old_checked = old.played.as_ref().map_or(0, |p| p.nodes.len() - old.latency.delays.len());
+    for d in &l.delays {
+        let j = cont.top.get(d.consumer).copied().flatten().map(|j| j as usize);
+        let k = j.and_then(|j| old.latency.delays.iter().position(|o| o.consumer == j && o.at == d.at && o.frames == d.frames));
+        top.push(k.map(|k| (old_checked + k) as u32));
+    }
+    Continues { top }
+}
+
+/// Note events a note delay holds per block of its length: its lane's room, live notes too.
+fn note_delay_room(caps: Caps) -> usize {
+    caps.events() + sched::LIVE_ROOM
 }
 
 /// The verified state blob plugin node `n` loads, read: only a blob whose sidecar names its plugin
@@ -1404,6 +1678,16 @@ fn step<R: Reads>(
             overlay::process(r.buf(src.node, src.port), &mut out[0], *target, cur, *step);
             Ok(())
         }
+        Exec::Delay(d) => {
+            debug_assert_eq!((seg.off, seg.n), (0, BLOCK), "delays only play at the top level");
+            d.line.process(b.engine, r.buf(d.input.node, d.input.port), &mut out[0]);
+            Ok(())
+        }
+        Exec::NoteDelay(d) => {
+            let delay::NoteDelayNode { slot, line, out } = &mut **d;
+            line.process(b.engine, lanes[*slot].events(), out);
+            Ok(())
+        }
     };
     // RENDER-25: live, a box whose output went non-finite, or that trapped or stopped, is marked;
     // an activation resets it as it moves it. A finite block clears the mark.
@@ -1597,6 +1881,15 @@ impl Graph {
                 Ok(())
             }
             Exec::Poly(p) => p.reset(),
+            Exec::Delay(d) => {
+                d.line.reset();
+                Ok(())
+            }
+            Exec::NoteDelay(d) => {
+                d.line.reset();
+                d.out.clear();
+                Ok(())
+            }
             _ => Ok(()),
         };
         match done {
@@ -1651,6 +1944,7 @@ impl Graph {
             (Exec::Missing(m), Edge::Input(_)) => *m = Some(Input::Port { src, src_channels: ch, channels: ch }),
             (Exec::Poly(p), Edge::Capture(k)) => p.captures[k] = src,
             (Exec::Feedback { input, .. }, Edge::Feedback) => *input = src,
+            (Exec::Delay(d), Edge::Input(_)) => d.input = src,
             _ => debug_assert!(false, "node {i} has no input {edge:?}"),
         }
     }
@@ -1778,6 +2072,8 @@ impl Graph {
                 // One that stopped is never called again, and holds nothing that will sound.
                 Exec::Kernel(KernelNode { inst: Some(k), .. }) if !k.stopped => k.active(pool)?,
                 Exec::Feedback { ring, .. } => ring.iter().any(|x| x.abs() > QUIET),
+                Exec::Delay(d) => d.line.active(),
+                Exec::NoteDelay(d) => d.line.active(),
                 _ => false,
             };
             if active {
@@ -1808,7 +2104,11 @@ impl PolyNode {
     /// event order, and a voice's graph is split where its note changes. Never allocates.
     fn process(&mut self, b: &Block, outer: &dyn Reads, out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
         let (start, end) = (b.engine, b.engine + BLOCK as u64);
-        let events = if self.ghost { &[] } else { lanes[self.slot].events() };
+        let events = match (self.ghost, self.late) {
+            (true, _) => &[],
+            (false, Some(d)) => outer.events(d),
+            (false, None) => lanes[self.slot].events(),
+        };
         let PolyNode { out: voice_out, captures, plan, pool, .. } = self;
         let Some(pool) = pool.as_deref_mut().filter(|p| !p.stopped) else {
             out.fill(0.0);
@@ -2093,6 +2393,12 @@ pub struct Renderer {
     dropped: u32,
     /// The whole order as one partition, made when a gate first asks ([`gauge`]).
     whole: Option<Box<Schedule>>,
+    /// The song's latency `L` (RENDER-19): its output is that many frames late.
+    latency: u32,
+    /// Frames an offline render still drops from its start: `L`, so its sample 0 is song time 0.
+    lead: u64,
+    /// The transport over the last blocks, for plugins told it late (HOST-6).
+    past: delay::Past,
 }
 
 impl Renderer {
@@ -2150,19 +2456,64 @@ impl Renderer {
             Basis::Fresh | Basis::Lend(_) => None,
         };
         let lent = if let Basis::Lend(l) = &basis { Some(*l) } else { None };
+        // Latency (RENDER-17): each node's, its plugins' measured by their instances (new ones made
+        // here for that); then the delays that align every input (RENDER-18). With none, the
+        // checked graph plays as it is.
+        let checked = flat;
+        let mut made = HashMap::new();
+        let mk = |n: &FNode, found: &m2_plugins::Found, shape: u64| make_plugin(packages, data, owner, sample_rate, mode, n, found, shape);
+        // The assets its kernels read: the delays below add no kernel, so the checked graph's are
+        // the played one's.
+        let assets = audio::KernelAssets::of(checked, data, cache);
+        let lat = latencies(checked, packages, data, &assets, keep, lent, &mut made, mk)?;
+        let l = latency::plan(checked, &lat);
+        let played = (!l.delays.is_empty()).then(|| Arc::new(latency::insert(checked, &l)));
+        let flat: &Flat = played.as_deref().unwrap_or(checked);
+        // Wired against the graph the plan that plays plays, its delays kept by consumer, input and
+        // length.
+        let cont = keep.map(|k| continue_delays(k.cont, checked.nodes.len(), &l, k.info));
+        let keep = keep.zip(cont.as_ref()).map(|(k, cont)| Keep {
+            old: k.info.played.as_deref().unwrap_or(k.old),
+            old_data: k.old_data,
+            info: k.info,
+            cont,
+            restarts: k.restarts,
+        });
+        let keep = keep.as_ref();
         let stretch = offline::Kernel::of(packages, offline::STRETCH);
         let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep, stretch.as_ref());
-        let assets = audio::KernelAssets::of(flat, data, cache);
         let used = used(flat);
-        let shapes: Vec<Option<Shape>> =
+        let mut shapes: Vec<Option<Shape>> =
             flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages, &assets) } else { None }).collect();
+        // A note delay's room is its lane's.
+        for (i, n) in flat.nodes.iter().enumerate() {
+            if let FOp::NoteDelay { lane, .. } = n.op
+                && let FOp::Lane { module, lane: id, .. } = &flat.nodes[lane].op
+                && let Some(slot) = lanes.lanes.refs.iter().position(|r| r.module == *module && r.lane == *id)
+            {
+                let room = note_delay_room(lanes.caps.get(slot).copied().unwrap_or_default());
+                shapes[i] = shapes[i].take().map(|s| s.with_room(room));
+            }
+        }
         let blobs: Vec<Option<m2_song::Sha>> = flat.nodes.iter().map(|n| plan::blob(n, data)).collect();
         let w = match keep {
             Some(k) => keep::wire(k, flat, &shapes, &blobs, packages, &mut lanes),
             None => Wiring::fresh(flat),
         };
-        let mut b =
-            Builder { packages, data, sample_rate: rate, slots: &lanes.lanes.refs, caps: &lanes.caps, owner, mode, pool: vec![], assets: &assets };
+        let mut b = Builder {
+            packages,
+            data,
+            sample_rate: rate,
+            slots: &lanes.lanes.refs,
+            caps: &lanes.caps,
+            owner,
+            mode,
+            at: None,
+            offsets: &l.offset,
+            made,
+            pool: vec![],
+            assets: &assets,
+        };
         let boxed = |i: usize| match (w.kept[i], lent.and_then(|l| l.get(&i))) {
             (true, _) => Make::Moved,
             (false, Some(inst)) => Make::Lent(inst.clone()),
@@ -2176,6 +2527,7 @@ impl Renderer {
         graph.prewarm()?;
         // Ghosts, then fade nodes, after the new graph's nodes (RENDER-25a).
         let n = flat.nodes.len();
+        b.at = None;
         for (g, (_, node)) in w.ghosts.iter().enumerate() {
             let e = b.node(&flat.nodes, node, false, Make::Moved, true, w.room.get(&(n + g)).copied(), 0)?;
             graph.push(e, &node.outputs);
@@ -2229,7 +2581,7 @@ impl Renderer {
                     (None, Some(k), Some(j)) => k.info.plugin(j).map(|at| (at.handle, at.inst.clone()))?,
                     _ => return None,
                 };
-                Some(PluginAt { node: i, handle, inst, blob: blobs[i] })
+                Some(PluginAt { node: i, handle, inst, blob: blobs[i], latency: lat.get(i).copied().unwrap_or(0) })
             })
             .collect();
         // State loads into kept instances, last, once nothing else can fail (RENDER-26b): each
@@ -2266,12 +2618,13 @@ impl Renderer {
                     Ok(true) => {
                         stats.loads += 1;
                         inst.iter().for_each(|i| i.loaded());
-                        // Compensation isn't built, and the check refuses latency at default
-                        // state (RENDER-21): a patch that adds some plays uncompensated, and says so.
-                        if let Ok(Ok(frames)) = host.latency(p.handle).recv()
-                            && frames > 0
-                        {
-                            stats.latent.push((p.node, frames));
+                        // Measured again (RENDER-17): a new latency is compensated from the next
+                        // activation on, which the session makes at once.
+                        if let Ok(Ok(frames)) = host.latency(p.handle).recv() {
+                            inst.iter().for_each(|i| i.set_latency(frames));
+                            if frames != p.latency {
+                                stats.relatent.push((p.node, frames));
+                            }
                         }
                     }
                     Ok(false) => {}
@@ -2315,6 +2668,11 @@ impl Renderer {
             Taps::new(&sites)
         });
         let stopped = Arc::new(Stopped::new(n));
+        stats.delays = l.delays.len();
+        let late_plugins: Vec<usize> =
+            (0..checked.nodes.len()).filter(|&i| l.offset[i] > 0 && matches!(graph.exec[i], Exec::Plugin(_))).collect();
+        // The transport is remembered as far back as a plugin is told it (HOST-6).
+        let (total, reach) = (l.total, l.offset.iter().copied().max().unwrap_or(0));
         let info = Arc::new(PlanInfo {
             id,
             rate: sample_rate,
@@ -2326,6 +2684,8 @@ impl Renderer {
             overlays,
             taps: taps.as_ref().map(|t| t.slots().clone()),
             stopped: stopped.clone(),
+            latency: l,
+            played,
         });
         let plan = Plan {
             id,
@@ -2348,6 +2708,7 @@ impl Renderer {
             window_held,
             taps,
             stopped,
+            late_plugins,
         };
         Ok(Renderer {
             plan,
@@ -2369,6 +2730,9 @@ impl Renderer {
             trace: None,
             dropped: 0,
             whole: None,
+            latency: total,
+            lead: total as u64,
+            past: delay::Past::new(reach),
         })
     }
 
@@ -2529,6 +2893,13 @@ impl Renderer {
         if self.trace.is_some() {
             self.record(clock);
         }
+        // What a plugin late by its offset is told (HOST-6, RENDER-18).
+        self.past.push(clock, runs);
+        for &i in &self.plan.late_plugins {
+            if let Exec::Plugin(p) = &mut self.plan.graph.exec[i] {
+                p.told = self.past.told(p.offset, clock, &self.tempo, &self.arrangement, self.sample_rate);
+            }
+        }
         self.block(clock)
     }
 
@@ -2597,11 +2968,20 @@ impl Renderer {
     /// [`Renderer::process`] on `runner`'s threads: the same bits.
     pub fn process_on(&mut self, out: &mut [[f32; 2]], runner: &mut Runner) -> Result<()> {
         for frame in out.iter_mut() {
-            if self.pending.is_empty() {
-                self.render_block_on(self.clock, runner)?;
-                self.pending.load(&self.frames, &self.runs, self.transport.pos());
+            loop {
+                if self.pending.is_empty() {
+                    self.render_block_on(self.clock, runner)?;
+                    self.pending.load(&self.frames, &self.runs, self.transport.pos());
+                }
+                // Offline, the song's first `L` frames are dropped: they come before song time 0
+                // (RENDER-19).
+                let f = self.pending.pop().0;
+                if self.lead == 0 {
+                    *frame = f;
+                    break;
+                }
+                self.lead -= 1;
             }
-            *frame = self.pending.pop().0;
         }
         self.delivered += out.len() as u64;
         Ok(())
@@ -2652,6 +3032,7 @@ impl Renderer {
         self.clock = 0;
         self.pending.clear();
         self.delivered = 0;
+        self.lead = self.latency as u64;
         let mut scratch = vec![[0.0; 2]; 4096];
         while self.delivered < to {
             let n = (to - self.delivered).min(scratch.len() as u64) as usize;
@@ -2706,6 +3087,34 @@ impl Renderer {
         t.enter();
         self.transport = t;
         self.next_note = old.next_note;
+        self.past.take_from(&old.past);
+    }
+
+    /// The song's latency `L`, in frames (RENDER-19): its output is that late. Offline renders drop
+    /// it from their start; live, the position heard is the transport's `L` frames before.
+    pub fn latency(&self) -> u32 {
+        self.latency
+    }
+
+    /// Its plugin nodes whose latency, measured now, isn't what the plan compensates (RENDER-17):
+    /// an offline render keeps its `L`, so these played misaligned from their change on
+    /// (`latency.changed`). Off the audio thread: it asks each plugin on the plugin main thread.
+    pub fn latency_moved(&self) -> Vec<usize> {
+        let info = &self.plan.info;
+        info.plugins
+            .iter()
+            .filter(|at| {
+                let Some(inst) = at.inst.upgrade().filter(|i| !i.dead()) else { return false };
+                matches!(inst.host().latency(at.handle).recv(), Ok(Ok(f)) if f != at.latency)
+            })
+            .map(|at| at.node)
+            .collect()
+    }
+
+    /// The transport position at engine sample `t`, while it is remembered: what was heard at
+    /// `t + L` (RENDER-19).
+    pub fn position_at(&self, t: u64) -> Option<u64> {
+        self.past.position_at(t)
     }
 
     /// The lanes it plays, by slot.

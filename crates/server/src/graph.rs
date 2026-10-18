@@ -62,8 +62,9 @@ mod import;
 pub mod record;
 mod take_audio;
 pub(crate) mod exchange;
+pub(crate) mod plugin_window;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -424,6 +425,8 @@ struct Inner {
     /// Who creates this Graph's plugin instances: their events come to its actor alone, and their
     /// count is what closing waits on.
     owner: m2_plugins::Owner,
+    /// Where its plugins run: the process's host (the host process in a program, HOST-3).
+    host: Arc<dyn m2_plugins::PluginHost>,
     /// The open project's settle rule (WRITE-19): polled by the watcher, told by the actor what the
     /// session wrote itself. A leaf lock, never held over a call to the actor, nor over a stat.
     watch: Mutex<Option<watcher::Watch>>,
@@ -441,6 +444,12 @@ struct Inner {
     layout: Mutex<LayoutSeen>,
     /// How players start, and what is known of the sound output (gaps #13, #31).
     output: output::Outputs,
+    /// The graph state's `plugins` (HOST-7, MON-6), as the actor last published it.
+    plugins: Mutex<Value>,
+    /// The plugin instances whose window is open, by handle.
+    open_windows: Mutex<HashSet<u64>>,
+    /// `plugins` changed since the watcher last asked.
+    plugins_changed: AtomicBool,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -553,9 +562,10 @@ fn put_back(l: &Lease, device: Option<&Device>) {
 }
 
 impl Inner {
-    fn new(device: Option<Device>, owner: m2_plugins::Owner, output: output::Outputs) -> Inner {
+    fn new(device: Option<Device>, owner: m2_plugins::Owner, output: output::Outputs, host: Arc<dyn m2_plugins::PluginHost>) -> Inner {
         Inner {
             owner,
+            host,
             control: Mutex::default(),
             player: Mutex::new(device),
             timing: Mutex::default(),
@@ -577,6 +587,9 @@ impl Inner {
             export_hooks: Arc::default(),
             layout: Mutex::default(),
             output,
+            plugins: Mutex::new(Value::Object(Default::default())),
+            open_windows: Mutex::default(),
+            plugins_changed: AtomicBool::new(false),
         }
     }
 
@@ -728,6 +741,7 @@ impl Inner {
         state["local"] = local;
         state["midi"] = self.midi_state();
         state["record"] = self.record_state();
+        state["plugins"] = self.plugins.lock().clone();
         Some(state)
     }
 
@@ -819,12 +833,16 @@ impl Graph {
     }
 
     fn with_outputs(device: Option<Device>, outputs: output::Outputs) -> Graph {
+        Graph::hosted(device, outputs, m2_plugins::host())
+    }
+
+    fn hosted(device: Option<Device>, outputs: output::Outputs, host: Arc<dyn m2_plugins::PluginHost>) -> Graph {
         // Tests: plugins' main-thread calls run on a dedicated thread (HOST-2, C1), as libtest
         // owns the process's main thread.
         #[cfg(test)]
         m2_plugins::test_main_thread();
         let (owner, events) = m2_plugins::Owner::new();
-        let inner = Arc::new(Inner::new(device, owner, outputs));
+        let inner = Arc::new(Inner::new(device, owner, outputs, host));
         let (jobs, rx) = mpsc::channel::<Job>();
         let actor_inner = inner.clone();
         // QuickJS gets as much stack as it has on a main thread.
@@ -847,6 +865,12 @@ impl Graph {
     #[doc(hidden)]
     pub fn with_player(player: Player) -> Graph {
         Graph::with(Some(Device { player, epoch: 0, resume: 0.0 }))
+    }
+
+    /// Tests: one whose player is `player` and whose plugins run on `host` (the host process).
+    #[cfg(test)]
+    pub(crate) fn with_player_on(player: Player, host: Arc<dyn m2_plugins::PluginHost>) -> Graph {
+        Graph::hosted(Some(Device { player, epoch: 0, resume: 0.0 }), output::Outputs::real(), host)
     }
 
     /// Run `f` on the session's actor and wait for its answer. A request that panics answers
@@ -1791,6 +1815,12 @@ impl Graph {
             eprintln!("music2: {e:#}");
             false
         })
+    }
+
+    /// Whether a plugin's window or latches changed since this was last asked (HOST-7, MON-6),
+    /// which the state's `plugins` says: the server's watcher then tells the windows.
+    pub fn plugins_changed(&self) -> bool {
+        self.inner.plugins_changed.swap(false, Ordering::AcqRel)
     }
 
     /// Take in what the project's folder says now, at once, without the settle rule: tests, and

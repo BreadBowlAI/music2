@@ -347,7 +347,10 @@ export function plugin(id: string, inputs: { key?: string; [port: string]: Value
     else if (k === "state") throw new Error(`plugin("${id}"): \`state\` was replaced by \`key: "<key>"\`, which files the plugin's state in its track's data`);
     else {
       if (typeof v === "string") throw new Error(`plugin("${id}") input "${k}": expected a signal or a number, got a string`);
-      ins[k] = ref(v, `${id} input "${k}"`);
+      // A number written here is a value in code: its origin names the call and the argument, so
+      // it is a control, and a gesture in the plugin's window can write it (HOME-5).
+      const literal = typeof v === "number" && Number.isFinite(v) && site !== undefined;
+      ins[k] = literal ? push(scope, { op: "const", value: v }, { site, arg: ["1", k] }) : ref(v, `${id} input "${k}"`);
     }
   }
   const op: Record<string, unknown> = { op: "plugin", plugin: id, inputs: ins };

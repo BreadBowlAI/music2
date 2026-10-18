@@ -161,6 +161,10 @@ pub struct ViewNode {
     /// A Duck's "Listens to" row (D3): the track its side input hears, and the ones it could.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listens: Option<Listens>,
+    /// A hosted plugin's call: its node in the checked graph (`<module>/<node>`), by which the
+    /// graph state's `plugins` and the plugin routes name it (HOST-7).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
     /// A sampler's card: the files it plays. A WAV dropped on it sets its file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampler: Option<SamplerCard>,
@@ -692,6 +696,11 @@ pub fn view(session: &Session) -> GraphView {
         // Nodes, in order of first appearance.
         let mut nodes: Vec<ViewNode> = vec![];
         let mut ids: HashMap<Group, String> = HashMap::new();
+        let plugins: HashMap<Group, String> = all
+            .iter()
+            .filter(|n| matches!(n.op, Op::Plugin { .. }))
+            .filter_map(|n| call_group(n).map(|g| (g, format!("{}/{}", m.key, n.id))))
+            .collect();
         let mut add = |g: &Group, n: Option<&Node>, nodes: &mut Vec<ViewNode>| -> String {
             if let Some(id) = ids.get(g) {
                 return id.clone();
@@ -744,8 +753,10 @@ pub fn view(session: &Session) -> GraphView {
                 Group::Site(s) => m.frames.iter().find(|f| f.site == *s && f.component.is_some()).and_then(|f| f.component.clone()),
                 _ => None,
             };
-            let title = match &component {
-                Some(c) if kind == "call" => rev.compiled.components.get(c.as_str()).map(|d| d.label.clone()),
+            let title = match (&component, n.map(|n| &n.op)) {
+                (Some(c), _) if kind == "call" => rev.compiled.components.get(c.as_str()).map(|d| d.label.clone()),
+                // A hosted plugin by its own name ("Surge XT"), as its window is titled.
+                (None, Some(Op::Plugin { plugin, .. })) if kind == "call" => session.packages.plugin_info(plugin).map(|i| i.found.name.clone()),
                 _ => None,
             };
             let bypassed = matches!(g, Group::Site(s) if effect.is_some() && is_bypassed(&rev.compiled, *s));
@@ -784,6 +795,7 @@ pub fn view(session: &Session) -> GraphView {
                 bypassed,
                 menu,
                 listens,
+                plugin: plugins.get(g).cloned(),
                 sampler,
             });
             id
@@ -888,6 +900,7 @@ pub fn view(session: &Session) -> GraphView {
                 bypassed: false,
                 menu: None,
                 listens: None,
+                plugin: None,
                 sampler: None,
             });
             // A track's output that an effect turned off gives on comes from its card.

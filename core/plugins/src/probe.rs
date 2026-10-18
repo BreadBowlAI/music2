@@ -18,7 +18,14 @@
 //! 300 ms to load one that starts with `slow`, as a big patch does. One whose tag starts with
 //! `fails-process` reports an error from every `process` call, as a broken plugin does; one whose
 //! tag starts with `sets-fz` leaves its thread flushing subnormals to zero after every `process`
-//! call, as some plugins do (RENDER-2a). With
+//! call, as some plugins do (RENDER-2a). One whose tag is `crash-at-<n>` aborts its process at its
+//! n-th `process` call, and `hang-at-<n>` never returns from it, as broken plugins do (HOST-3: run
+//! it in the host process); `crash-at-<n>:<file>` and `hang-at-<n>:<file>` do so only when they
+//! make `<file>`, so once. One whose tag starts with `hangs-activate` never returns from
+//! `activate`, as a plugin stuck on the main thread does (HOST-3's limits). A tag with the word `latency-<n>` (n up to 4,096) reports `n` frames of
+//! latency and plays its output `n` frames late, as a look-ahead limiter does (RENDER-17); with
+//! `relatency-<m>-at-<k>` too, from its `k`-th `process` call it reports `m`, plays that late, and
+//! tells the host its latency changed. With
 //! [`Stats::defer_load`] set,
 //! a probe applies the parameters of a state it loads at the end of its next `process` call, after
 //! that call's events, ending every voice, as Surge XT does. With [`Stats::reset_keeps_voices`]
@@ -33,6 +40,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::*;
 use clap_sys::ext::audio_ports::*;
+use clap_sys::ext::gui::*;
+use clap_sys::ext::log::*;
 use clap_sys::ext::latency::*;
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
@@ -63,6 +72,8 @@ const MAGIC: &[u8] = b"m2probe\0";
 const VOICES: usize = 512;
 /// Note events it remembers.
 const EVENTS: usize = 1 << 16;
+/// The most latency it can have, in frames.
+pub const MAX_LATENCY: u32 = 4096;
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -199,6 +210,8 @@ pub struct Stats {
     /// The transport each of the last [`TOLD`] calls was told, packed, in a ring.
     told: Box<[[AtomicU64; TOLD_WORDS]]>,
     next_told: AtomicUsize,
+    /// The window `gui.set_parent` was last given (HOST-7), 0 for none.
+    pub parent: AtomicU64,
 }
 
 impl Stats {
@@ -241,6 +254,7 @@ impl Stats {
             next_process: AtomicUsize::new(0),
             told: (0..TOLD).map(|_| std::array::from_fn(|_| AtomicU64::new(0))).collect(),
             next_told: AtomicUsize::new(0),
+            parent: AtomicU64::new(0),
         }
     }
 
@@ -456,11 +470,20 @@ struct Probe {
     clap: clap_plugin,
     host: *const clap_host,
     checks: Option<&'static clap_host_thread_check>,
+    log: Option<&'static clap_host_log>,
     fails_state: bool,
     /// Its state's tag starts with `fails-process`: every `process` call reports an error.
     fails_process: bool,
     /// Its state's tag starts with `sets-fz`: every `process` call ends by setting flush-to-zero.
     sets_fz: bool,
+    /// Its state's tag starts with `hangs-activate`: `activate` never returns.
+    hangs_activate: bool,
+    /// Its state's tag is `crash-at-<n>` or `hang-at-<n>`: the call, whether it hangs, and the
+    /// file that makes it happen once.
+    stops_at: Option<(u64, bool, Option<PathBuf>)>,
+    /// Its tag's scripted acts ([`scripts`]).
+    scripts: Vec<Script>,
+    state_host: Option<&'static clap_host_state>,
     stats: Arc<Stats>,
     rate: f64,
     gain: f64,
@@ -469,6 +492,13 @@ struct Probe {
     /// The steady time after the last block processed.
     done_to: i64,
     calls: u64,
+    /// The latency it reports, and plays its output late by: its tag's `latency-<n>`.
+    latency: u32,
+    /// Its tag's `relatency-<m>-at-<k>`: (k, m).
+    relatency: Option<(u64, u32)>,
+    /// Its output, [`MAX_LATENCY`] frames of it, written at `at`.
+    late: Box<[[f32; 2]]>,
+    at: usize,
 }
 
 unsafe fn probe<'a>(p: *const clap_plugin) -> &'a mut Probe {
@@ -580,9 +610,14 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         },
         host,
         checks: None,
+        log: None,
         fails_state,
         fails_process: false,
         sets_fz: false,
+        hangs_activate: false,
+        stops_at: None,
+        scripts: vec![],
+        state_host: None,
         stats: stats.clone(),
         rate: 48_000.0,
         gain: 1.0,
@@ -590,6 +625,10 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         voices: [Voice::default(); VOICES],
         done_to: i64::MIN,
         calls: 0,
+        latency: 0,
+        relatency: None,
+        late: vec![[0.0; 2]; MAX_LATENCY as usize].into_boxed_slice(),
+        at: 0,
     });
     let raw = Box::into_raw(p);
     unsafe { (*raw).clap.plugin_data = raw as *mut c_void };
@@ -603,6 +642,10 @@ unsafe extern "C" fn init(p: *const clap_plugin) -> bool {
     let get = unsafe { (*me.host).get_extension };
     let ext = get.map_or(null(), |g| unsafe { g(me.host, CLAP_EXT_THREAD_CHECK.as_ptr()) }) as *const clap_host_thread_check;
     me.checks = (!ext.is_null()).then(|| unsafe { &*ext });
+    let log = get.map_or(null(), |g| unsafe { g(me.host, CLAP_EXT_LOG.as_ptr()) }) as *const clap_host_log;
+    me.log = (!log.is_null()).then(|| unsafe { &*log });
+    let st = get.map_or(null(), |g| unsafe { g(me.host, CLAP_EXT_STATE.as_ptr()) }) as *const clap_host_state;
+    me.state_host = (!st.is_null()).then(|| unsafe { &*st });
     me.record("init");
     true
 }
@@ -618,6 +661,11 @@ unsafe extern "C" fn activate(p: *const clap_plugin, rate: f64, _: u32, _: u32) 
     me.record("activate");
     if me.stats.refuse_activate.swap(false, Ordering::Relaxed) {
         return false;
+    }
+    if me.hangs_activate {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
     }
     me.rate = rate;
     // A new activation is a new steady timeline: an export's starts at 0 (RENDER-1).
@@ -647,6 +695,7 @@ unsafe extern "C" fn reset(p: *const clap_plugin) {
     me.stats.resets.fetch_add(1, Ordering::Relaxed);
     me.stats.reset_at.0.store(TICK.fetch_add(1, Ordering::AcqRel), Ordering::Relaxed);
     me.stats.reset_at.1.store(crate::main_thread::token(), Ordering::Relaxed);
+    me.late.fill([0.0; 2]);
     if me.stats.reset_keeps_voices.load(Ordering::Relaxed) {
         return;
     }
@@ -700,6 +749,17 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
         st.threads.fetch_add(1, Ordering::Relaxed);
     }
     me.done_to = pr.steady_time + pr.frames_count as i64;
+    if let Some((n, hang, once)) = &me.stops_at
+        && me.calls + 1 == *n
+        && once.as_ref().is_none_or(|f| std::fs::OpenOptions::new().write(true).create_new(true).open(f).is_ok())
+    {
+        match hang {
+            true => loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            },
+            false => std::process::abort(),
+        }
+    }
     if me.fails_process {
         st.in_process.store(0, Ordering::Release);
         return CLAP_PROCESS_ERROR;
@@ -729,13 +789,22 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
             v.phase += step * 440.0 * 2f64.powf((v.key as f64 - 69.0) / 12.0);
         }
         if let Some(o) = &outs {
+            let (n, at) = (me.latency as usize, me.at);
             for c in 0..o.channel_count as usize {
                 let x = ins.filter(|i| i.channel_count > 0).map_or(0.0, |i| {
                     let ch = c.min(i.channel_count as usize - 1);
                     unsafe { *(*i.data32.add(ch)).add(f) }
                 });
-                unsafe { *(*o.data32.add(c)).add(f) = (x as f64 * me.gain + s) as f32 };
+                let mut y = (x as f64 * me.gain + s) as f32;
+                // Played `n` frames late (RENDER-17): what it made `n` frames ago.
+                if n > 0 && c < 2 {
+                    let len = me.late.len();
+                    me.late[at][c] = y;
+                    y = me.late[(at + len - n) % len][c];
+                }
+                unsafe { *(*o.data32.add(c)).add(f) = y };
             }
+            me.at = (at + 1) % me.late.len();
         }
     }
     while next < count {
@@ -745,7 +814,19 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
         }
         next += 1;
     }
+    me.act(me.calls + 1, pr.out_events);
     me.calls += 1;
+    if let Some((k, m)) = me.relatency
+        && me.calls + 1 == k
+    {
+        // From the next call: as a plugin whose latency changed while active, it tells the host.
+        me.latency = m;
+        let get = unsafe { (*me.host).get_extension };
+        let ext = get.map_or(null(), |g| unsafe { g(me.host, CLAP_EXT_LATENCY.as_ptr()) }) as *const clap_host_latency;
+        if let Some(changed) = (!ext.is_null()).then(|| unsafe { (*ext).changed }).flatten() {
+            unsafe { changed(me.host) };
+        }
+    }
     if me.calls.is_multiple_of(10)
         && let Some(f) = unsafe { (*me.host).request_callback }
     {
@@ -816,6 +897,8 @@ unsafe extern "C" fn get_extension(_: *const clap_plugin, id: *const c_char) -> 
         &LATENCY as *const _ as *const c_void
     } else if id == CLAP_EXT_RENDER {
         &RENDER as *const _ as *const c_void
+    } else if id == CLAP_EXT_GUI {
+        &GUI as *const _ as *const c_void
     } else {
         null()
     }
@@ -834,6 +917,70 @@ static PARAMS: clap_plugin_params = clap_plugin_params {
 static STATE: clap_plugin_state = clap_plugin_state { save: Some(save), load: Some(load) };
 static LATENCY: clap_plugin_latency = clap_plugin_latency { get: Some(latency) };
 static RENDER: clap_plugin_render = clap_plugin_render { has_hard_realtime_requirement: Some(no), set: Some(render_set) };
+static GUI: clap_plugin_gui = clap_plugin_gui {
+    is_api_supported: Some(gui_api),
+    get_preferred_api: None,
+    create: Some(gui_create),
+    destroy: Some(gui_destroy),
+    set_scale: None,
+    get_size: Some(gui_size),
+    can_resize: Some(no),
+    get_resize_hints: None,
+    adjust_size: None,
+    set_size: None,
+    set_parent: Some(gui_parent),
+    set_transient: None,
+    suggest_title: None,
+    show: Some(gui_show),
+    hide: Some(gui_hide),
+};
+
+// Its window (HOST-7): a view it never draws, embedded in what the host gives it. It records each
+// call, and logs the window it was given (as a warning, so the host keeps it), which a test of the
+// host process reads with `MainCall::TakeLog`.
+unsafe extern "C" fn gui_api(_: *const clap_plugin, _: *const c_char, floating: bool) -> bool {
+    !floating
+}
+
+unsafe extern "C" fn gui_create(p: *const clap_plugin, _: *const c_char, floating: bool) -> bool {
+    unsafe { probe(p) }.record("gui.create");
+    !floating
+}
+
+unsafe extern "C" fn gui_destroy(p: *const clap_plugin) {
+    let me = unsafe { probe(p) };
+    me.record("gui.destroy");
+    me.stats.parent.store(0, Ordering::Release);
+}
+
+unsafe extern "C" fn gui_size(_: *const clap_plugin, w: *mut u32, h: *mut u32) -> bool {
+    unsafe { (*w, *h) = (320, 200) };
+    true
+}
+
+unsafe extern "C" fn gui_parent(p: *const clap_plugin, window: *const clap_window) -> bool {
+    let me = unsafe { probe(p) };
+    me.record("gui.set_parent");
+    let w = unsafe { &*window };
+    let handle = unsafe { w.specific.ptr } as usize as u64;
+    me.stats.parent.store(handle, Ordering::Release);
+    let api = unsafe { CStr::from_ptr(w.api) }.to_string_lossy().into_owned();
+    let line = format!("probe gui: set_parent {api} {handle} main={}", me.thread().0);
+    if let (Some(log), Ok(line)) = (me.log.and_then(|l| l.log), std::ffi::CString::new(line)) {
+        unsafe { log(me.host, CLAP_LOG_WARNING, line.as_ptr()) };
+    }
+    true
+}
+
+unsafe extern "C" fn gui_show(p: *const clap_plugin) -> bool {
+    unsafe { probe(p) }.record("gui.show");
+    true
+}
+
+unsafe extern "C" fn gui_hide(p: *const clap_plugin) -> bool {
+    unsafe { probe(p) }.record("gui.hide");
+    true
+}
 
 fn name<const N: usize>(s: &str) -> [c_char; N] {
     let mut out = [0 as c_char; N];
@@ -983,12 +1130,148 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
     };
     me.fails_process = tag.starts_with("fails-process");
     me.sets_fz = tag.starts_with("sets-fz");
+    me.hangs_activate = tag.starts_with("hangs-activate");
+    me.stops_at = stops_at(&tag);
+    me.scripts = scripts(&tag);
+    (me.latency, me.relatency) = latencies(&tag);
     *me.stats.tag.lock().unwrap_or_else(|e| e.into_inner()) = tag;
     true
 }
 
-unsafe extern "C" fn latency(_: *const clap_plugin) -> u32 {
-    0
+/// What its window does by itself, as a person would (HOST-4), from its tag's words:
+/// `gesture-at-<n>[-<m>]:<id>=<v>` turns parameter `id` to `v` in a gesture from call `n` to call
+/// `m` (begin and the value at `n`, the value again at each call up to `m`, the end at `m`);
+/// `preset-at-<n>:<id>=<v>` sets it with no gesture, as a preset loaded in its own browser does;
+/// `dirty-at-<n>[-<m>]` calls `mark_dirty` at each call from `n` to `m`.
+fn scripts(tag: &str) -> Vec<Script> {
+    let range = |r: &str| -> Option<(u64, u64)> {
+        let (a, b) = r.split_once('-').map_or((r, r), |(a, b)| (a, b));
+        Some((a.parse().ok()?, b.parse().ok()?))
+    };
+    let set = |rest: &str| -> Option<(u64, u64, u32, f64)> {
+        let (when, what) = rest.split_once(':')?;
+        let (id, v) = what.split_once('=')?;
+        let (from, to) = range(when)?;
+        Some((from, to, id.parse().ok()?, v.parse().ok()?))
+    };
+    tag.split_whitespace()
+        .filter_map(|w| {
+            if let Some(r) = w.strip_prefix("gesture-at-") {
+                let (from, to, id, value) = set(r)?;
+                Some(Script { what: Act::Gesture, from, to, id, value })
+            } else if let Some(r) = w.strip_prefix("preset-at-") {
+                let (from, to, id, value) = set(r)?;
+                Some(Script { what: Act::Preset, from, to, id, value })
+            } else if let Some(r) = w.strip_prefix("dirty-at-") {
+                let (from, to) = range(r)?;
+                Some(Script { what: Act::Dirty, from, to, id: 0, value: 0.0 })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Act {
+    Gesture,
+    Preset,
+    Dirty,
+}
+
+/// One of [`scripts`]'s words.
+#[derive(Clone, Copy, Debug)]
+struct Script {
+    what: Act,
+    from: u64,
+    to: u64,
+    id: u32,
+    value: f64,
+}
+
+impl Probe {
+    /// Call `call`'s scripted acts: its own value set, and what it outputs (on the audio thread:
+    /// events on the stack, no allocation).
+    fn act(&mut self, call: u64, out: *const clap_output_events) {
+        let push = |h: *const clap_event_header| {
+            if !out.is_null()
+                && let Some(f) = unsafe { (*out).try_push }
+            {
+                unsafe { f(out, h) };
+            }
+        };
+        let header = |size: usize, type_: u16| clap_event_header { size: size as u32, time: 0, space_id: CLAP_CORE_EVENT_SPACE_ID, type_, flags: 0 };
+        for i in 0..self.scripts.len() {
+            let s = self.scripts[i];
+            if call < s.from || call > s.to {
+                continue;
+            }
+            if s.what == Act::Dirty {
+                if let Some(f) = self.state_host.and_then(|x| x.mark_dirty) {
+                    unsafe { f(self.host) };
+                }
+                continue;
+            }
+            let gesture = |begin: bool| clap_event_param_gesture {
+                header: header(
+                    size_of::<clap_event_param_gesture>(),
+                    if begin { CLAP_EVENT_PARAM_GESTURE_BEGIN } else { CLAP_EVENT_PARAM_GESTURE_END },
+                ),
+                param_id: s.id,
+            };
+            if s.what == Act::Gesture && call == s.from {
+                push(&gesture(true).header);
+            }
+            let value = clap_event_param_value {
+                header: header(size_of::<clap_event_param_value>(), CLAP_EVENT_PARAM_VALUE),
+                param_id: s.id,
+                cookie: std::ptr::null_mut(),
+                note_id: -1,
+                port_index: -1,
+                channel: -1,
+                key: -1,
+                value: s.value,
+            };
+            push(&value.header);
+            match s.id {
+                GAIN => self.gain = s.value,
+                LEVEL => self.level = s.value,
+                _ => {}
+            }
+            if s.what == Act::Gesture && call == s.to {
+                push(&gesture(false).header);
+            }
+        }
+    }
+}
+
+/// `crash-at-<n>[:<file>]` or `hang-at-<n>[:<file>]`.
+fn stops_at(tag: &str) -> Option<(u64, bool, Option<PathBuf>)> {
+    let (hang, rest) = match (tag.strip_prefix("crash-at-"), tag.strip_prefix("hang-at-")) {
+        (Some(r), _) => (false, r),
+        (_, Some(r)) => (true, r),
+        _ => return None,
+    };
+    let (n, file) = match rest.split_once(':') {
+        Some((n, f)) => (n, Some(PathBuf::from(f))),
+        None => (rest, None),
+    };
+    Some((n.parse().ok()?, hang, file))
+}
+
+unsafe extern "C" fn latency(p: *const clap_plugin) -> u32 {
+    unsafe { probe(p) }.latency
+}
+
+/// Its tag's `latency-<n>`, and `relatency-<m>-at-<k>` as (k, m); each at most [`MAX_LATENCY`].
+fn latencies(tag: &str) -> (u32, Option<(u64, u32)>) {
+    let fits = |n: u32| n.min(MAX_LATENCY - 1);
+    let n = tag.split_whitespace().find_map(|w| w.strip_prefix("latency-")?.parse::<u32>().ok()).map_or(0, fits);
+    let re = tag.split_whitespace().find_map(|w| {
+        let (m, k) = w.strip_prefix("relatency-")?.split_once("-at-")?;
+        Some((k.parse().ok()?, fits(m.parse().ok()?)))
+    });
+    (n, re)
 }
 
 unsafe extern "C" fn no(_: *const clap_plugin) -> bool {

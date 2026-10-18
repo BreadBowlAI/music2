@@ -270,7 +270,7 @@ impl Rig for Live {
     }
 
     fn plugins(&mut self) -> Option<Plugins> {
-        let (created, destroyed) = m2_plugins::InProcess::counts();
+        let (created, destroyed) = m2_plugins::host().counts();
         let nodes = self.driver.engine()?.current()?.plugins();
         Some(Plugins { nodes, created, destroyed, idled: self.idled, owner: Some(self.owner.clone()) })
     }

@@ -61,6 +61,14 @@ export interface ViewNode {
   inputs: InputPort[];
   /** The signals it gives to other nodes, its own result first. */
   outputs: OutputPort[];
+  /** A hosted plugin's call: its node in the graph, the key of the state's `plugins` (HOST-7). */
+  plugin?: string;
+}
+
+/** A plugin's box (HOST-7, MON-6): its own window, and the parameters a gesture in it latched. */
+export interface PluginBox {
+  window: "open" | "closed" | "none";
+  latched: { id: number; name: string; value: number }[];
 }
 
 /** What flows through a port. */
@@ -441,6 +449,8 @@ export interface GraphState extends GraphStatus {
    * view names it: a save that inserts a call above a dragged knob in its file renumbers it.
    */
   leases?: GraphLease[];
+  /** Each hosted plugin by its node (`ViewNode.plugin`): its window, and what is latched. */
+  plugins?: Record<string, PluginBox>;
 }
 
 /** Why the open project is read-only here, with WRITE-18's message. */
@@ -635,6 +645,10 @@ type Edit = { file: string; before: string; after: string; revision: number };
 
 export const graphApi = {
   get: () => call<GraphState>(""),
+  /** Open or close a plugin's own window (HOST-7); a plugin without one, or no screen, says why. */
+  pluginWindow: (session: number, node: string, open: boolean) => call<{ window: string }>("/plugin/window", { session, node, open }),
+  /** Re-enable: the lane or cable drives a latched parameter again (every one without `id`, MON-6). */
+  pluginReenable: (session: number, node: string, id?: number) => call("/plugin/latch", { session, node, id }),
   open: (path: string) => call<GraphState>("/open", { path }),
   close: () => call("/close", {}),
   status: () => call<GraphStatus>("/status"),

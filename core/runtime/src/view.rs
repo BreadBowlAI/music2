@@ -9,6 +9,7 @@
 
 use std::marker::PhantomData;
 
+use crate::event::Event;
 use crate::parts::Parts;
 use crate::{Buf, Exec, Graph};
 
@@ -18,6 +19,8 @@ pub(crate) trait Reads {
     fn buf(&self, node: usize, port: usize) -> &[f32];
     /// Node `node`'s version ([`crate::COPY`] unless it is a constant).
     fn version(&self, node: usize) -> u64;
+    /// The note events of note delay node `node` this block (RENDER-18); none for any other node.
+    fn events(&self, node: usize) -> &[Event];
 }
 
 /// A voice graph's reads, inside its own graph: one thread runs it all.
@@ -35,6 +38,11 @@ impl Reads for Local<'_> {
     #[inline]
     fn version(&self, node: usize) -> u64 {
         self.versions[node]
+    }
+
+    /// A voice graph has no note delays: they sit at the top level.
+    fn events(&self, _: usize) -> &[Event] {
+        &[]
     }
 }
 
@@ -153,5 +161,15 @@ impl Reads for Reader<'_> {
         self.check(node);
         // SAFETY: as for `buf`.
         unsafe { *self.view.versions.add(node) }
+    }
+
+    fn events(&self, node: usize) -> &[Event] {
+        self.check(node);
+        // SAFETY: as for `buf`: node `node` finished before this read, and only its own task writes
+        // its exec; this `&` to one element aliases no `&mut`.
+        match unsafe { &*self.view.exec.add(node) } {
+            Exec::NoteDelay(d) => d.out.as_slice(),
+            _ => &[],
+        }
     }
 }

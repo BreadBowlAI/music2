@@ -15,6 +15,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap_sys::ext::audio_ports::*;
+use clap_sys::ext::gui::*;
+use clap_sys::ext::posix_fd_support::*;
+use clap_sys::ext::timer_support::*;
+use clap_sys::id::clap_id;
 use clap_sys::ext::latency::*;
 use clap_sys::ext::log::*;
 use clap_sys::ext::note_ports::*;
@@ -28,7 +32,7 @@ use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 use crossbeam_channel::bounded;
 
-use crate::audio;
+use crate::{audio, gui};
 use crate::host::*;
 use crate::main_thread::{main_thread, token};
 use crate::{Found, Info, Library, Param, Transport, cstr, fixed, library};
@@ -51,6 +55,16 @@ pub(crate) struct HostData {
     /// Messages logged while it held the audio role: counted, never kept (no lock, no allocation).
     pub logs_dropped: AtomicU32,
     log: Mutex<Vec<String>>,
+    /// The plugin, once the factory made it: what its timers and fds call.
+    pub(crate) plugin: AtomicPtr<clap_plugin>,
+    /// Its timers and watched fds on the main loop (HOST-3), by CLAP's ids and fds.
+    pub(crate) next_timer: AtomicU32,
+    pub(crate) timers: Mutex<Vec<(clap_id, m2_os::main_loop::Timer)>>,
+    pub(crate) fds: Mutex<Vec<(i32, m2_os::main_loop::Watch)>>,
+    /// A size it asked its window to be (width << 32 | height), 0 for none.
+    pub(crate) resize: AtomicU64,
+    /// Its window, while open (HOST-7): the main thread's.
+    pub(crate) window: Mutex<Option<m2_os::window::Window>>,
 }
 
 /// Raised by any instance's flag; the tick thread then has the main thread sweep them.
@@ -80,6 +94,12 @@ impl HostData {
             process_requested: AtomicBool::new(false),
             logs_dropped: AtomicU32::new(0),
             log: Mutex::new(vec![]),
+            plugin: AtomicPtr::new(null_mut()),
+            next_timer: AtomicU32::new(1),
+            timers: Mutex::new(vec![]),
+            fds: Mutex::new(vec![]),
+            resize: AtomicU64::new(0),
+            window: Mutex::new(None),
         });
         h.clap.host_data = &*h as *const HostData as *mut c_void;
         h
@@ -115,6 +135,12 @@ unsafe extern "C" fn host_get_extension(_: *const clap_host, id: *const c_char) 
         &HOST_PARAMS as *const _ as *const c_void
     } else if id == CLAP_EXT_LATENCY {
         &HOST_LATENCY as *const _ as *const c_void
+    } else if id == CLAP_EXT_TIMER_SUPPORT {
+        &HOST_TIMERS as *const _ as *const c_void
+    } else if id == CLAP_EXT_POSIX_FD_SUPPORT && m2_os::main_loop::WATCHES_FDS {
+        &HOST_FDS as *const _ as *const c_void
+    } else if id == CLAP_EXT_GUI {
+        &HOST_GUI as *const _ as *const c_void
     } else {
         null()
     }
@@ -127,6 +153,20 @@ static HOST_STATE: clap_host_state = clap_host_state { mark_dirty: Some(audio::m
 static HOST_PARAMS: clap_host_params =
     clap_host_params { rescan: Some(audio::params_rescan), clear: Some(audio::params_clear), request_flush: Some(audio::request_process) };
 static HOST_LATENCY: clap_host_latency = clap_host_latency { changed: Some(audio::latency_changed) };
+static HOST_TIMERS: clap_host_timer_support =
+    clap_host_timer_support { register_timer: Some(gui::register_timer), unregister_timer: Some(gui::unregister_timer) };
+static HOST_FDS: clap_host_posix_fd_support = clap_host_posix_fd_support {
+    register_fd: Some(gui::register_fd),
+    modify_fd: Some(gui::modify_fd),
+    unregister_fd: Some(gui::unregister_fd),
+};
+static HOST_GUI: clap_host_gui = clap_host_gui {
+    resize_hints_changed: Some(gui::resize_hints_changed),
+    request_resize: Some(gui::request_resize),
+    request_show: Some(gui::request_show),
+    request_hide: Some(gui::request_hide),
+    closed: Some(gui::gui_closed),
+};
 
 /// An instance. Its main side is touched only on the main thread; its audio side only by the
 /// thread holding its audio role (and by the main thread while inactive or once no renderer
@@ -135,7 +175,7 @@ pub(crate) struct Core {
     pub plugin: *const clap_plugin,
     pub host: Box<HostData>,
     _lib: Arc<Library>,
-    owner: Owner,
+    pub(crate) owner: Owner,
     main: UnsafeCell<MainSide>,
     pub audio: UnsafeCell<AudioSide>,
 }
@@ -174,6 +214,11 @@ impl Core {
 
     pub(crate) fn ext<T>(&self, id: &std::ffi::CStr) -> Option<&T> {
         ext(self.plugin, id)
+    }
+
+    /// Its name, as people know it (main thread).
+    pub(crate) fn name(&self) -> String {
+        self.main().info.found.name.clone()
     }
 }
 
@@ -228,12 +273,6 @@ pub(crate) fn live() -> u64 {
 /// The in-process host: a handle to the process's one set of instances.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InProcess;
-
-/// The process's plugin host.
-pub fn host() -> Arc<dyn PluginHost> {
-    static H: OnceLock<Arc<InProcess>> = OnceLock::new();
-    H.get_or_init(|| Arc::new(InProcess)).clone()
-}
 
 impl InProcess {
     /// Instances created and destroyed so far, in this process (gates and tests).
@@ -300,6 +339,14 @@ impl PluginHost for InProcess {
     fn main_call(&self, h: Handle, call: MainCall) -> Result<Reply> {
         on_main(h, move |c| {
             Ok(match call {
+                MainCall::Window(WindowCall::Open { title }) => {
+                    gui::open(c, h, &title)?;
+                    Reply::Window(true)
+                }
+                MainCall::Window(WindowCall::Close) => {
+                    gui::close(c);
+                    Reply::Window(false)
+                }
                 MainCall::Value(id) => Reply::Value(param_value(c.plugin, id)),
                 MainCall::Text(id, v) => Reply::Text(value_text(c.plugin, id, v)),
                 MainCall::Info => {
@@ -371,8 +418,16 @@ impl PluginHost for InProcess {
         core(h).is_some_and(|c| c.host.process_requested.swap(false, Ordering::Relaxed))
     }
 
+    fn scan(&self) -> (Vec<Found>, Vec<String>) {
+        crate::scan_here()
+    }
+
     fn live(&self) -> u64 {
         live()
+    }
+
+    fn counts(&self) -> (u64, u64) {
+        InProcess::counts()
     }
 }
 
@@ -406,6 +461,7 @@ fn create_main(lib: Arc<Library>, found: Found, state: Option<Arc<Blob>>, owner:
     if plugin.is_null() {
         bail!("`{}` could not be created", found.id);
     }
+    host.plugin.store(plugin as *mut clap_plugin, Ordering::Release);
     let made = (|| -> Result<(Info, u32)> {
         if !call!(plugin.init()) {
             bail!("`{}` failed to initialise", found.id);
@@ -513,10 +569,13 @@ fn stop(c: &Core) {
 
 fn destroy_main(h: Handle) {
     let Some(c) = core(h) else { return };
+    gui::close(c);
     stop(c);
     if let Some(f) = unsafe { (*c.plugin).destroy } {
         unsafe { f(c.plugin) };
     }
+    // What it left registered on the main loop calls it no more.
+    gui::forget(&c.host);
     let st = state();
     let index = (h.0 >> 32) as usize;
     let slot = &st.slots[index];
@@ -534,7 +593,9 @@ fn destroy_main(h: Handle) {
 }
 
 fn read_info(plugin: *const clap_plugin, found: Found) -> Info {
-    let mut info = Info { found, audio_in: None, audio_out: None, note_in: false, params: vec![], latency: 0 };
+    let api = CString::new(m2_os::window::API).unwrap_or_default();
+    let gui = ext::<clap_plugin_gui>(plugin, CLAP_EXT_GUI).and_then(|g| g.is_api_supported).is_some_and(|f| unsafe { f(plugin, api.as_ptr(), false) });
+    let mut info = Info { found, audio_in: None, audio_out: None, note_in: false, params: vec![], latency: 0, gui };
     if let Some(ap) = ext::<clap_plugin_audio_ports>(plugin, CLAP_EXT_AUDIO_PORTS)
         && let (Some(count), Some(get)) = (ap.count, ap.get)
     {
@@ -665,6 +726,7 @@ fn sweep() {
         let c = unsafe { &*p };
         let h = Handle((i as u64) << 32 | slot.generation.load(Ordering::Acquire) as u64);
         let hd = &c.host;
+        gui::resize_asked(hd);
         if hd.callback.swap(false, Ordering::Relaxed)
             && let Some(f) = unsafe { (*c.plugin).on_main_thread }
         {

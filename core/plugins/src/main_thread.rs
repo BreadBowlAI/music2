@@ -58,6 +58,11 @@ impl MainThread {
         self.main_loop.is_current()
     }
 
+    /// The OS's loop it runs: where plugins' timers, fds and windows go (HOST-3).
+    pub(crate) fn main_loop(&self) -> &Loop {
+        &self.main_loop
+    }
+
     /// Whether it has shut down: [`run_main`] drained it, and nothing runs there any more.
     pub fn closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
@@ -131,8 +136,21 @@ pub fn on_main_thread() -> bool {
 /// first thing in `main`, on the main thread, before anything touches a plugin. Calls queued
 /// before AppKit's run loop starts run once it does; the main thread itself must never wait on a
 /// thread that may be creating plugins.
+///
+/// Plugins themselves run in the host process (HOST-3), which is this program run again with
+/// [`crate::HOST_FLAG`]: when it was, this serves as that process and never returns.
 pub fn use_app_main_thread() -> Result<()> {
-    install(Where::AppMain).map(|_| ())
+    serve_if_asked();
+    install(Where::AppMain)?;
+    crate::use_remote(crate::Remote::this_program()?);
+    Ok(())
+}
+
+/// When this program was run as the host process: serve, for good.
+fn serve_if_asked() {
+    if std::env::args().nth(1).is_some_and(|a| a == crate::HOST_FLAG) {
+        crate::serve_host();
+    }
 }
 
 /// The plugin main thread, started at `at` the first time. Two calls for the same place are
@@ -163,8 +181,20 @@ pub fn test_main_thread() {
 /// When `work` returns, the loop keeps serving until every plugin instance is destroyed or
 /// [`DRAIN`] passes; then the executor shuts down, and later calls to it are errors. A panic in
 /// `work` resumes here after the drain. Call it on the main thread, from `main`.
+///
+/// Plugins themselves run in the host process (HOST-3), which is this program run again with
+/// [`crate::HOST_FLAG`]: when it was, this serves as that process and never returns.
 pub fn run_main<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     assert!(is_process_main(), "run_main must be called on the process's main thread");
+    serve_if_asked();
+    if let Ok(r) = crate::Remote::this_program() {
+        crate::use_remote(r);
+    }
+    serve_main(work)
+}
+
+/// [`run_main`]'s loop, with the host already chosen: the host process runs its requests under it.
+pub(crate) fn serve_main<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     let exec = install(Where::ProcessMain).unwrap_or_else(|e| panic!("{e:#}"));
     let (done_tx, done) = crossbeam_channel::bounded(1);
     let worker = std::thread::Builder::new()
@@ -186,13 +216,15 @@ pub fn run_main<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) ->
         exec.main_loop.run_for(Duration::from_millis(250));
     };
     let _ = worker.join();
-    // Instances the program dropped are destroyed here, on the main thread (HOST-2).
+    // Instances the program dropped are destroyed here, on the main thread (HOST-2), or in the
+    // host process.
+    let live = || crate::inprocess::live() + crate::remote_live();
     let deadline = Instant::now() + DRAIN;
-    while crate::inprocess::live() > 0 && Instant::now() < deadline {
+    while live() > 0 && Instant::now() < deadline {
         exec.main_loop.run_for(Duration::from_millis(10));
     }
     exec.closed.store(true, Ordering::Release);
-    let left = crate::inprocess::live();
+    let left = live();
     if left > 0 {
         eprintln!("music2: {left} plugin instance(s) still alive at exit");
     }

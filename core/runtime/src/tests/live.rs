@@ -409,7 +409,7 @@ fn a_changed_constant_is_sent() {
     let bufs: Vec<Vec<Buf>> = vec![];
     let (mut keys, mut out) = (Vec::with_capacity(1), m2_plugins::Events::with_capacity(16));
     let mut send = |params: &mut [(u32, Input, Option<f32>)]| {
-        plugin_events(&[], &[], None, &[], &mut 0, params, &reads(&bufs), (0, BLOCK), &mut keys, &mut out);
+        plugin_events(&[], &[], None, &[], &mut 0, params, &[], &reads(&bufs), (0, BLOCK), &mut keys, &mut out);
         out.iter().collect::<Vec<_>>()
     };
     // A kept instance was last sent 0.7; the code now says 0.5.
@@ -438,7 +438,7 @@ fn plugin_events_merge_as_a_stable_sort_did() {
     keys.extend([(1, 60), (2, 61)]);
     let mut out = m2_plugins::Events::with_capacity(64);
     let mut next = 0;
-    let (_, allocs) = during(|| plugin_events(&[], &[], None, &notes, &mut next, &mut params, &reads(&bufs), (0, BLOCK), &mut keys, &mut out));
+    let (_, allocs) = during(|| plugin_events(&[], &[], None, &notes, &mut next, &mut params, &[], &reads(&bufs), (0, BLOCK), &mut keys, &mut out));
     assert_eq!((allocs, out.capacity(), out.dropped(), next), (0, 64, 0, notes.len()));
     // Before: held notes' offs, then each new note's events, then parameters, stably sorted.
     let mut before = vec![P::NoteOff { time: 0, id: 1, key: 60 }, P::NoteOff { time: 16, id: 2, key: 61 }];
@@ -453,11 +453,7 @@ fn plugin_events_merge_as_a_stable_sort_did() {
         before.push(P::Param { time: f, id: 11, value: (f / 32) as f64 });
     }
     before.push(P::Param { time: 0, id: 10, value: 0.5 });
-    let time = |e: &P| match *e {
-        P::NoteOn { time, .. } | P::NoteOff { time, .. } | P::NoteChoke { time, .. } | P::Tuning { time, .. } | P::Param { time, .. } => {
-            time
-        }
-    };
+    let time = |e: &P| e.time();
     before.sort_by_key(time);
     assert_eq!(out.iter().collect::<Vec<_>>(), before);
     assert_eq!(keys, [(5, 61), (7, 64)], "held: the notes that started and didn't end");
@@ -467,7 +463,7 @@ fn plugin_events_merge_as_a_stable_sort_did() {
     // with no choke, after them.
     let (mut next, mut none) = (0, Vec::with_capacity(4));
     let release = [(3, 70)];
-    let (sent, allocs) = during(|| plugin_events(&keys, &release, None, &[], &mut next, &mut [], &reads(&bufs), (0, BLOCK), &mut none, &mut out));
+    let (sent, allocs) = during(|| plugin_events(&keys, &release, None, &[], &mut next, &mut [], &[], &reads(&bufs), (0, BLOCK), &mut none, &mut out));
     assert_eq!((allocs, sent), (0, (3, Some(0))));
     assert_eq!(
         out.iter().collect::<Vec<_>>(),
@@ -481,7 +477,7 @@ fn plugin_events_merge_as_a_stable_sort_did() {
     );
     // A full list counts what it can't hold, and never grows.
     let mut small = m2_plugins::Events::with_capacity(2);
-    let (_, allocs) = during(|| plugin_events(&keys, &[], None, &[], &mut next, &mut [], &reads(&bufs), (0, BLOCK), &mut none, &mut small));
+    let (_, allocs) = during(|| plugin_events(&keys, &[], None, &[], &mut next, &mut [], &[], &reads(&bufs), (0, BLOCK), &mut none, &mut small));
     assert_eq!((allocs, small.len(), small.dropped()), (0, 2, 2));
 }
 
@@ -552,6 +548,9 @@ fn prewarming_keeps_kernel_memory_flat() {
         caps: &[Caps::FLOOR],
         owner: &owner,
         mode: m2_plugins::RenderMode::Offline,
+        at: None,
+        offsets: &[],
+        made: HashMap::new(),
         pool: vec![],
         assets: &crate::audio::KernelAssets::default(),
     }

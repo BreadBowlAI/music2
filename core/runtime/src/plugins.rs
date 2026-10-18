@@ -6,7 +6,7 @@
 //! the plugin main thread (queued, never on the audio thread: plans are retired off it).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use anyhow::Result;
 use m2_plugins::{Blob, Found, Handle, Owner, PluginHost, RenderMode};
@@ -34,6 +34,152 @@ pub struct PluginInstance {
     /// node plays silence and never calls it again, and the session replaces it from its
     /// committed state (HOST-5).
     dead: AtomicBool,
+    /// Parameters its window took over from code (HOME-5, HOME-5a, MON-6).
+    overrides: Overrides,
+    /// Code-owned parameters its node set back, as the plugin changed them outside a gesture
+    /// (HOME-5a): what `plugin.param-reverted` lists.
+    reverted: Ring,
+    /// It changed a parameter code doesn't set (in its window): its state changed (HOME-6).
+    changed: AtomicBool,
+    /// It holds a state its file doesn't record: changed in its window, not yet autosaved. An
+    /// export doesn't borrow it (RENDER-1).
+    unsaved: AtomicBool,
+    /// Its latency as last measured ([`Self::latency`]).
+    latency: AtomicU32,
+}
+
+/// How many parameters of one instance its window may hold or latch at once; a gesture on one
+/// more is set back, as one outside a gesture is.
+pub const OVERRIDES: usize = 32;
+/// A gesture on it is under way in the plugin's window.
+pub const GESTURE: u8 = 1;
+/// A code literal held by a gesture: its code value isn't sent until the session lets it go,
+/// once the gesture's Tx is committed or refused (HOME-5, HOME-5a).
+pub const HELD: u8 = 2;
+/// A parameter a lane or a cable drives, latched by a gesture: the driven value isn't sent until
+/// "Re-enable" (MON-6). For the session only, and never in an export.
+pub const LATCHED: u8 = 4;
+const EMPTY: u64 = u64::MAX;
+
+/// The parameters a window took over, in a fixed table of words: `id << 8 | flags`, and the
+/// value the plugin set. The audio thread takes a slot and sets flags; the session clears them.
+/// No lock, no allocation (RENDER-28).
+pub struct Overrides {
+    slots: Box<[(AtomicU64, AtomicU64)]>,
+}
+
+impl Overrides {
+    fn new() -> Overrides {
+        Overrides { slots: (0..OVERRIDES).map(|_| (AtomicU64::new(EMPTY), AtomicU64::new(0))).collect() }
+    }
+
+    fn slot(&self, id: u32) -> Option<&(AtomicU64, AtomicU64)> {
+        self.slots.iter().find(|s| {
+            let w = s.0.load(Ordering::Acquire);
+            w != EMPTY && (w >> 8) as u32 == id
+        })
+    }
+
+    /// Its flags and the plugin's value, while any flag is set.
+    pub fn get(&self, id: u32) -> Option<(u8, f64)> {
+        let s = self.slot(id)?;
+        Some((s.0.load(Ordering::Acquire) as u8, f64::from_bits(s.1.load(Ordering::Acquire))))
+    }
+
+    /// The audio thread: a gesture began on `id`, which it holds or latches (`kind`) from now,
+    /// at `value` until the plugin says more. False when the table is full.
+    pub(crate) fn begin(&self, id: u32, kind: u8, value: f64) -> bool {
+        if let Some(s) = self.slot(id) {
+            let w = s.0.load(Ordering::Acquire);
+            if s.0.compare_exchange(w, w | (GESTURE | kind) as u64, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                return true;
+            }
+        }
+        // Only this thread takes a free slot, so one seen free stays free until taken.
+        let word = (id as u64) << 8 | (GESTURE | kind) as u64;
+        let Some(s) = self.slots.iter().find(|s| s.0.load(Ordering::Acquire) == EMPTY) else { return false };
+        s.1.store(value.to_bits(), Ordering::Release);
+        s.0.store(word, Ordering::Release);
+        true
+    }
+
+    /// The audio thread: the plugin set `id` to `value`.
+    pub(crate) fn value(&self, id: u32, value: f64) {
+        if let Some(s) = self.slot(id) {
+            s.1.store(value.to_bits(), Ordering::Release);
+        }
+    }
+
+    /// The audio thread: the gesture on `id` ended; what it holds or latches stays, and a slot
+    /// left with no flag (released mid-gesture) is free.
+    pub(crate) fn end(&self, id: u32) {
+        if let Some(s) = self.slot(id) {
+            let left = |w: u64| if w & 0xff & !(GESTURE as u64) == 0 { EMPTY } else { w & !(GESTURE as u64) };
+            let _ = s.0.try_update(Ordering::AcqRel, Ordering::Acquire, |w| (w != EMPTY && (w >> 8) as u32 == id).then(|| left(w)));
+        }
+    }
+
+    /// The session: clear `flags` of `id`; a slot left with none is free.
+    pub fn release(&self, id: u32, flags: u8) {
+        if let Some(s) = self.slot(id) {
+            let _ = s.0.try_update(Ordering::AcqRel, Ordering::Acquire, |w| {
+                if w == EMPTY || (w >> 8) as u32 != id {
+                    return None;
+                }
+                let left = w & !(flags as u64);
+                Some(if left & 0xff == 0 { EMPTY } else { left })
+            });
+        }
+    }
+
+    /// Every parameter taken over: `(id, flags, value)`.
+    pub fn list(&self) -> Vec<(u32, u8, f64)> {
+        self.slots
+            .iter()
+            .filter_map(|s| {
+                let w = s.0.load(Ordering::Acquire);
+                (w != EMPTY).then(|| ((w >> 8) as u32, w as u8, f64::from_bits(s.1.load(Ordering::Acquire))))
+            })
+            .collect()
+    }
+
+    /// Whether any parameter is taken over.
+    pub fn any(&self) -> bool {
+        self.slots.iter().any(|s| s.0.load(Ordering::Acquire) != EMPTY)
+    }
+}
+
+/// Parameter ids from the audio thread to the session, at most [`Ring::ROOM`] waiting; more are
+/// dropped (the session hears them on the next set-back).
+struct Ring {
+    ids: Box<[AtomicU32]>,
+    head: AtomicUsize,
+    tail: AtomicUsize,
+}
+
+impl Ring {
+    const ROOM: usize = 64;
+
+    fn new() -> Ring {
+        Ring { ids: (0..Ring::ROOM).map(|_| AtomicU32::new(0)).collect(), head: AtomicUsize::new(0), tail: AtomicUsize::new(0) }
+    }
+
+    /// The audio thread's: one producer.
+    fn push(&self, id: u32) {
+        let (h, t) = (self.head.load(Ordering::Relaxed), self.tail.load(Ordering::Acquire));
+        if h - t < Ring::ROOM {
+            self.ids[h % Ring::ROOM].store(id, Ordering::Relaxed);
+            self.head.store(h + 1, Ordering::Release);
+        }
+    }
+
+    /// The session's: one consumer.
+    fn drain(&self) -> Vec<u32> {
+        let (t, h) = (self.tail.load(Ordering::Relaxed), self.head.load(Ordering::Acquire));
+        let out = (t..h).map(|i| self.ids[i % Ring::ROOM].load(Ordering::Relaxed)).collect();
+        self.tail.store(h, Ordering::Release);
+        out
+    }
 }
 
 /// The calls after a state load that send every code-owned parameter again. Two: a plugin may
@@ -52,6 +198,11 @@ impl PluginInstance {
             lent: AtomicBool::new(false),
             released: AtomicBool::new(false),
             dead: AtomicBool::new(false),
+            overrides: Overrides::new(),
+            reverted: Ring::new(),
+            changed: AtomicBool::new(false),
+            unsaved: AtomicBool::new(false),
+            latency: AtomicU32::new(0),
         }
     }
 
@@ -74,8 +225,19 @@ impl PluginInstance {
         if mode == RenderMode::Offline {
             host.set_render_mode(h, mode)?;
         }
-        host.activate(h, rate, BLOCK as u32)?;
+        inst.set_latency(host.activate(h, rate, BLOCK as u32)?);
         Ok(inst)
+    }
+
+    /// Its latency, in frames, as last measured: when it was activated, after a state load, or when
+    /// it said it changed (RENDER-17). What the next plan compensates.
+    pub fn latency(&self) -> u32 {
+        self.latency.load(Ordering::Acquire)
+    }
+
+    /// Its latency was measured again (RENDER-17).
+    pub fn set_latency(&self, frames: u32) {
+        self.latency.store(frames, Ordering::Release);
     }
 
     /// A new instance to play in its place in an export: the same plugin and shape, made from
@@ -141,6 +303,46 @@ impl PluginInstance {
         self.h
     }
 
+    /// The parameters its window took over (HOME-5a, MON-6).
+    pub fn overrides(&self) -> &Overrides {
+        &self.overrides
+    }
+
+    /// The audio thread: its node set `id` back to the code's value (HOME-5a).
+    pub(crate) fn reverted(&self, id: u32) {
+        self.reverted.push(id);
+    }
+
+    /// The session: the parameters set back since it last asked.
+    pub fn take_reverted(&self) -> Vec<u32> {
+        self.reverted.drain()
+    }
+
+    /// The audio thread: its window changed a parameter code doesn't set.
+    pub(crate) fn state_changed(&self) {
+        self.changed.store(true, Ordering::Release);
+    }
+
+    /// The session: whether its window changed its state since it last asked (HOME-6).
+    pub fn take_changed(&self) -> bool {
+        self.changed.swap(false, Ordering::AcqRel)
+    }
+
+    /// The session: whether it holds a state its file doesn't record yet.
+    pub fn unsaved(&self) -> bool {
+        self.unsaved.load(Ordering::Acquire)
+    }
+
+    pub fn set_unsaved(&self, unsaved: bool) {
+        self.unsaved.store(unsaved, Ordering::Release);
+    }
+
+    /// Whether an export may borrow it: it holds its committed state and the values its code
+    /// sets, and plays (RENDER-1).
+    pub fn lendable(&self) -> bool {
+        !self.released() && !self.dead() && !self.unsaved() && !self.overrides.any()
+    }
+
     /// The host it lives in: what an export that borrows it calls (RENDER-1).
     pub fn host(&self) -> &dyn PluginHost {
         &*self.host
@@ -157,5 +359,21 @@ impl Drop for PluginInstance {
 impl std::fmt::Debug for PluginInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("PluginInstance").field("h", &self.h).finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // MON-6 (review ph-r2): a hold released while its gesture goes on frees its slot when the
+    // gesture ends, so the instance can be lent again (`lendable`).
+    #[test]
+    fn a_hold_released_mid_gesture_frees_its_slot_at_the_end() {
+        let o = Overrides::new();
+        assert!(o.begin(7, HELD, 0.5));
+        o.release(7, HELD);
+        o.end(7);
+        assert!(!o.any(), "{:?}", o.list());
     }
 }

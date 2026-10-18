@@ -104,8 +104,16 @@ impl Drop for Song {
 
 /// Compile the project in `dir`, which the song then owns.
 pub fn compile(dir: PathBuf) -> Song {
+    compile_on(dir, None)
+}
+
+/// [`compile`], its plugins on `host` when given (the host process, HOST-3).
+pub fn compile_on(dir: PathBuf, host: Option<std::sync::Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let project = Project::open(&dir).unwrap_or_else(|d| panic!("{d:?}"));
     let mut packages = std_packages();
+    if let Some(h) = host {
+        packages = packages.with_host(h);
+    }
     let c = m2_session::compile(&project, &mut packages).unwrap_or_else(|d| panic!("{d:?}"));
     Song { flat: c.flat.clone(), data: c.data, packages, rate: project.sample_rate(), dir }
 }
@@ -113,6 +121,11 @@ pub fn compile(dir: PathBuf) -> Song {
 /// A project in a temp folder: a manifest at 48 kHz that asks for std, and `files` (path, text),
 /// compiled.
 pub fn project(what: &str, files: &[(&str, &str)]) -> Song {
+    project_on(what, files, None)
+}
+
+/// [`project`], its plugins on `host` when given.
+pub fn project_on(what: &str, files: &[(&str, &str)], host: Option<std::sync::Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let dir = temp(what);
     let manifest =
         format!("[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n");
@@ -121,7 +134,7 @@ pub fn project(what: &str, files: &[(&str, &str)]) -> Song {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
-    compile(dir)
+    compile_on(dir, host)
 }
 
 /// What `new` continues of `old`, as the session names it: both compiled from their folders.

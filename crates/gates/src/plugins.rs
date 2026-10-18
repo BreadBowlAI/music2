@@ -743,7 +743,7 @@ fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome
     // Surge alone saves the bytes the fixture holds), and destroyed before anything is counted.
     let host = m2_plugins::host();
     let found = m2_plugins::find("org.surge-synth-team.surge-xt")?;
-    let gone = m2_plugins::InProcess::counts().1;
+    let gone = m2_plugins::host().counts().1;
     let (h, info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
     let volume = info.params.iter().find(|p| !p.stepped && p.name.contains("Volume")).context("Surge XT has a volume parameter")?;
     let want = volume.min + (volume.max - volume.min) * 0.3;
@@ -756,7 +756,7 @@ fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome
         host.save_state(h).recv()?.map_err(|e| anyhow!("{e}"))
     });
     host.destroy(h);
-    if !settled(|| m2_plugins::InProcess::counts().1 > gone) {
+    if !settled(|| m2_plugins::host().counts().1 > gone) {
         bail!("the patch's Surge was never destroyed");
     }
     std::fs::write(song.dir.join("data/lead/lead.state"), blob?.bytes)?;

@@ -73,6 +73,13 @@ impl Group {
         Group { period, asks: false, workgroup: os::rt::Workgroup::none(), missing }
     }
 
+    /// The plugin host process's audio threads (HOST-3): real time at `period`, as engine threads
+    /// ask, in no workgroup (joining the app's output workgroup from another process is a gap).
+    pub fn real_time(period: Duration) -> Group {
+        let missing = Some("another process's audio thread: real time, but in no workgroup".to_string());
+        Group { period: Some(period), asks: true, workgroup: os::rt::Workgroup::none(), missing }
+    }
+
     /// How often the device calls back.
     pub fn period(&self) -> Option<Duration> {
         self.period

@@ -4,8 +4,10 @@
 mod cores;
 pub(crate) mod main_loop;
 pub(crate) mod rt;
+pub(crate) mod ipc;
 pub(crate) mod wake;
 pub(crate) mod watch;
+pub(crate) mod window;
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -18,7 +20,7 @@ use crate::process::Memory;
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
     c_numbers, change_and_inode, cpu_time, file_id, file_id_of, foreign, host_name, load_average, local_time, make_writable, push,
-    read_at, sync_dir, token,
+    exit_now, read_at, sync_dir, take_stdout, token,
 };
 use crate::unix::{check, cpath};
 pub(crate) use cores::cores;
@@ -228,6 +230,11 @@ fn cpu_name(cpuinfo: &str) -> Option<String> {
         let (key, value) = l.split_once(':')?;
         (key.trim() == "model name" && !value.trim().is_empty()).then(|| value.trim().to_string())
     })
+}
+
+pub(crate) fn no_core_dump() {
+    // SAFETY: a plain prctl on this process.
+    unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
 }
 
 #[cfg(test)]
