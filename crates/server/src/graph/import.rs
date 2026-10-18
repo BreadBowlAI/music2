@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 
 use super::Graph;
-use crate::peaks::Store;
+use crate::peaks::{Peaks, Store};
 
 /// One import at a time in this server: two never share a part file (D2).
 static IMPORTING: Mutex<()> = Mutex::new(());
@@ -83,11 +83,12 @@ impl Graph {
             let _one = IMPORTING.lock();
             let mut files = vec![];
             for src in sources {
-                let (f, decoded) = import::audio(&dir, src).map_err(|e| anyhow::anyhow!("{}", words(&e)))?;
+                let mut peaks = Peaks::builder();
+                let f = import::audio(&dir, src, &mut |piece| peaks.add(piece)).map_err(|e| anyhow::anyhow!("{}", words(&e)))?;
                 // The peaks from the decode the import made (D31); a file used again has its own.
-                match decoded {
-                    Some(a) => drop(Store::global().put(f.hash, &a)),
-                    None => drop(Store::global().of(&dir.join(m2_song::path::ASSETS).join(f.asset.as_str()))),
+                match f.reused {
+                    false => drop(Store::global().put(f.hash, peaks.done(f.rate))),
+                    true => drop(Store::global().of(&dir.join(m2_song::path::ASSETS).join(f.asset.as_str()))),
                 }
                 files.push(f);
             }
@@ -148,10 +149,11 @@ impl Graph {
         };
         let file = {
             let _one = IMPORTING.lock();
-            let (f, decoded) = import::audio(&dir, source).map_err(|e| anyhow::anyhow!("{}", words(&e)))?;
-            match decoded {
-                Some(a) => drop(Store::global().put(f.hash, &a)),
-                None => drop(Store::global().of(&dir.join(m2_song::path::ASSETS).join(f.asset.as_str()))),
+            let mut peaks = Peaks::builder();
+            let f = import::audio(&dir, source, &mut |piece| peaks.add(piece)).map_err(|e| anyhow::anyhow!("{}", words(&e)))?;
+            match f.reused {
+                false => drop(Store::global().put(f.hash, peaks.done(f.rate))),
+                true => drop(Store::global().of(&dir.join(m2_song::path::ASSETS).join(f.asset.as_str()))),
             }
             f
         };

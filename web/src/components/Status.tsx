@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { CircleAlert, CodeXml, Gauge, Hourglass, Info, Lock, Pause, TriangleAlert, VolumeX, WifiOff } from "lucide-react";
+import { CircleAlert, CodeXml, Gauge, HardDrive, Hourglass, Info, Lock, Pause, TriangleAlert, VolumeX, WifiOff } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
 import { usePill } from "../lib/overlays";
@@ -11,7 +11,7 @@ import Attention from "./Attention";
 import { Button, Details, keepFocus, Popover } from "./ui";
 
 type Tone = "danger" | "warn" | "neutral";
-interface State { id: "offline" | "compile" | "problems" | "no-output" | "dropout" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
+interface State { id: "offline" | "compile" | "problems" | "no-output" | "dropout" | "disk" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
 
 // Hover darkens every tone, as it does a ghost button: the soft fill mixed toward its strong colour.
 const TONE: Record<Tone, string> = {
@@ -59,6 +59,8 @@ function states(graph: GraphState, status: GraphStatus | undefined, connected: b
   // No sound device started: the song plays silently until one does (gaps #13).
   if (status?.no_output) out.push({ id: "no-output", tone: "warn", label: "No sound output", Icon: VolumeX });
   if (status?.playing && dropouts.recent) out.push({ id: "dropout", tone: "warn", label: "Sound dropped out", Icon: TriangleAlert });
+  // An audio clip read from the disk too late played a moment of silence (RENDER-30).
+  if (status?.disk) out.push({ id: "disk", tone: "warn", label: "Disk too slow", Icon: HardDrive });
   if (status?.playing && (status.load ?? 0) >= HEAVY) out.push({ id: "load", tone: "warn", label: "Heavy load", Icon: Gauge });
   if (graph.read_only) out.push({ id: "read-only", tone: "neutral", label: "Read only", Icon: Lock });
   if (status?.paused === "exporting") out.push({ id: "paused", tone: "neutral", label: "Paused for export", Icon: Pause });
@@ -158,6 +160,11 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                 {s.id === "dropout" && (
                   <Item state={s} title="Sound dropped out">
                     {`The sound dropped out ${dropouts.since === 1 ? "once" : `${dropouts.since} times`} since play started. Closing other apps or removing a plugin helps.`}
+                  </Item>
+                )}
+                {s.id === "disk" && (
+                  <Item state={s} title="Disk too slow">
+                    {status?.disk}
                   </Item>
                 )}
                 {s.id === "load" && (

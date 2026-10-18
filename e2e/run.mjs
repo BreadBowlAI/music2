@@ -74,6 +74,7 @@ export const SUITES = [
   ["nx-piano", "fix", { expect: 39 }],
   ["nx-midi", "fix", { expect: 24 }],
   ["st-record", "fix", { expect: 66 }],
+  ["io-record", "fix", { expect: 38 }],
   ["pl-notes", "fix", { expect: 102 }],
   ["pl-lanes", "fix", { expect: 28 }],
   ["ports", "proj", { expect: 46 }],
@@ -248,7 +249,7 @@ function prepare(dir, kind) {
 }
 
 function envFor(home, clap) {
-  const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "inject", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
+  const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "inject", M2_AUDIO_INPUT: "inject", M2_AUDIO_INPUTS: "Test mic,USB mic", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
   delete env.CLAP_PATH;
   if (clap && clapPath) env.CLAP_PATH = clapPath;
   return env;

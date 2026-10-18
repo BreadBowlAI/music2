@@ -41,6 +41,7 @@ pub mod swap;
 pub mod note_names;
 pub mod rekey;
 pub mod import;
+pub mod take;
 pub mod smf;
 pub mod midifile;
 pub mod explain;

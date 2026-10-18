@@ -54,7 +54,7 @@ fn dropping_a_wav_sets_the_sample_and_undo_takes_it_back() {
     assert_eq!(shown(&s), Some(SamplerCard { files: vec![] }), "no file yet: its card says to drop one");
 
     // The drop: the file is imported (create-only), then one Tx writes its name into the call.
-    let (kick, _) = import::audio(&f.0, Source::Bytes { name: "Kick 1.wav".into(), bytes: tone(0.0) }).unwrap();
+    let kick = import::audio(&f.0, Source::Bytes { name: "Kick 1.wav".into(), bytes: tone(0.0) }, &mut |_| {}).unwrap();
     let name = kick.asset.as_str().to_string();
     let undo_before = s.accepted().number;
     let done = drop_on(&mut s, "sampler", &kick).unwrap();
@@ -67,7 +67,7 @@ fn dropping_a_wav_sets_the_sample_and_undo_takes_it_back() {
     assert!(s.problems().iter().all(|p| p.code != "asset.missing"), "{:?}", s.problems());
 
     // A second drop replaces the name written there.
-    let (snare, _) = import::audio(&f.0, Source::Bytes { name: "snare.wav".into(), bytes: tone(1.0) }).unwrap();
+    let snare = import::audio(&f.0, Source::Bytes { name: "snare.wav".into(), bytes: tone(1.0) }, &mut |_| {}).unwrap();
     drop_on(&mut s, "sampler", &snare).unwrap();
     assert!(f.read(&code).contains("{ sample: \"snare.wav\" }"), "{}", f.read(&code));
     assert_eq!(files(&s), ["snare.wav".to_string()]);
@@ -94,7 +94,7 @@ fn a_sampler_with_zones_or_another_call_is_refused_in_words() {
     let text = f.read(&code).replace("sampler(lane.notes(\"notes\"))", "sampler(lane.notes(\"notes\"), { zones: { 36: \"a.wav\" } })");
     f.write(&code, &text);
     assert!(s.refresh());
-    let (kick, _) = import::audio(&f.0, Source::Bytes { name: "kick.wav".into(), bytes: tone(0.0) }).unwrap();
+    let kick = import::audio(&f.0, Source::Bytes { name: "kick.wav".into(), bytes: tone(0.0) }, &mut |_| {}).unwrap();
     let e = drop_on(&mut s, "sampler", &kick).unwrap_err().to_string();
     assert!(e.contains("plays zones"), "{e}");
     let e = drop_on(&mut s, "lane.notes", &kick).unwrap_err().to_string();

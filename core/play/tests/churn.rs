@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use common::*;
 use m2_plugins::Owner;
-use m2_runtime::audio::{Cache, RenderedClip};
+use m2_runtime::audio::{AudioLane, Cache};
 use m2_runtime::{Basis, Keep, PlanInfo, Renderer, live_kernels};
 use m2_session::{Revision, Session};
 
@@ -58,7 +58,7 @@ fn churn(dir: &std::path::Path, edits: &[Edit], warm: usize) -> Left {
     let start = live_kernels();
     let footprint = || m2_os::process::memory().map_or(0, |m| m.footprint);
     let mut first = footprint();
-    let mut renders: Vec<Weak<RenderedClip>> = cache.renders();
+    let mut renders: Vec<Weak<AudioLane>> = cache.lanes();
     let originals: Vec<(String, String)> = edits.iter().map(|(f, _)| (f.to_string(), std::fs::read_to_string(dir.join(f)).unwrap())).collect();
     let mut last = vec![];
     for (k, (file, edit)) in edits.iter().enumerate() {
@@ -67,7 +67,7 @@ fn churn(dir: &std::path::Path, edits: &[Edit], warm: usize) -> Left {
         std::fs::write(dir.join(file), &text).unwrap();
         assert!(s.refresh(), "edit {k} of {file} changes the project");
         let r = prepare(&s, &plays, &info, &mut cache);
-        renders.extend(cache.renders());
+        renders.extend(cache.lanes());
         (plays, info) = (s.accepted_arc(), r.info());
         player.activate(r).unwrap();
         hear(&mut d, SR as usize / 10, &mut |_, _| {});
@@ -92,7 +92,7 @@ fn churn(dir: &std::path::Path, edits: &[Edit], warm: usize) -> Left {
     assert!(engine.refused_activations() == 0 && engine.activations() as usize >= edits.len(), "every edit an activation");
     let leaked = engine.leaked();
     // Only what the cache holds for the playing plan may be alive.
-    let held: Vec<Arc<RenderedClip>> = cache.renders().iter().filter_map(Weak::upgrade).collect();
+    let held: Vec<Arc<AudioLane>> = cache.lanes().iter().filter_map(Weak::upgrade).collect();
     let stray = renders.iter().filter_map(Weak::upgrade).filter(|r| !held.iter().any(|h| Arc::ptr_eq(h, r))).count();
     drop(info);
     Left { start, end: live_kernels(), leaked, stray, footprint: (first, footprint()) }

@@ -70,29 +70,54 @@ impl Resampler {
                 self.input.resize(n + CHUNK, [0.0; 2]);
                 pull(&mut self.input[n..])?;
             }
-            let at = (self.acc * PHASES as u64) as f64 / self.to as f64;
-            let p = at as usize;
-            let w = (at - p as f64) as f32;
-            let (a, b) = (&self.table[p * TAPS..(p + 1) * TAPS], &self.table[(p + 1).min(PHASES) * TAPS..][..TAPS]);
-            let x = &self.input[self.start..self.start + TAPS];
-            let (mut l, mut r) = (0.0f32, 0.0f32);
-            for k in 0..TAPS {
-                let h = a[k] + (b[k] - a[k]) * w;
-                l += x[k][0] * h;
-                r += x[k][1] * h;
-            }
-            *o = [l, r];
-            self.acc += self.from;
-            while self.acc >= self.to {
-                self.acc -= self.to;
-                self.start += 1;
-            }
-            if self.start >= KEEP {
-                // Within the memory reserved: draining never reallocates.
-                self.input.drain(..self.start);
-                self.start = 0;
-            }
+            *o = self.next();
         }
         Ok(())
+    }
+
+    /// The other way round, for an input (RENDER-30a): take `input`, the source's next frames, and
+    /// put as many converted frames as there are taps for into `out`; how many. What it can't use
+    /// yet it keeps for the next call. `out` holds `input`'s length at the new rate, plus 2. Never
+    /// allocates.
+    pub fn push(&mut self, input: &[[f32; 2]], out: &mut [[f32; 2]]) -> usize {
+        let (mut made, mut rest) = (0, input);
+        loop {
+            while made < out.len() && self.input.len() >= self.start + TAPS {
+                out[made] = self.next();
+                made += 1;
+            }
+            if rest.is_empty() || made == out.len() {
+                return made;
+            }
+            let n = rest.len().min(CHUNK);
+            self.input.extend_from_slice(&rest[..n]);
+            rest = &rest[n..];
+        }
+    }
+
+    /// The next frame out, from the taps at `start`; then on by one frame out.
+    fn next(&mut self) -> [f32; 2] {
+        let at = (self.acc * PHASES as u64) as f64 / self.to as f64;
+        let p = at as usize;
+        let w = (at - p as f64) as f32;
+        let (a, b) = (&self.table[p * TAPS..(p + 1) * TAPS], &self.table[(p + 1).min(PHASES) * TAPS..][..TAPS]);
+        let x = &self.input[self.start..self.start + TAPS];
+        let (mut l, mut r) = (0.0f32, 0.0f32);
+        for k in 0..TAPS {
+            let h = a[k] + (b[k] - a[k]) * w;
+            l += x[k][0] * h;
+            r += x[k][1] * h;
+        }
+        self.acc += self.from;
+        while self.acc >= self.to {
+            self.acc -= self.to;
+            self.start += 1;
+        }
+        if self.start >= KEEP {
+            // Within the memory reserved: draining never reallocates.
+            self.input.drain(..self.start);
+            self.start = 0;
+        }
+        [l, r]
     }
 }

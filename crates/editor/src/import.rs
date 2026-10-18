@@ -1,7 +1,7 @@
 //! Bringing audio files into a song (lane A's A2, FMT-14, WRITE-1).
 //!
 //! [`audio`] copies one file into the song's `assets/`: a WAV only (by its `RIFF`/`WAVE` header,
-//! not its name), up to 15 minutes, through a hidden part file that is locked at once, pushed,
+//! not its name), up to 3 hours, through a hidden part file that is locked at once, pushed,
 //! decoded once (so what imports is what plays), then named create-only and its folder synced
 //! (Q3, D2). Its name is the file's own, made safe ([`AssetName::for_import`]), with a number when
 //! taken in any capitals. The same bytes already in `assets/` are used again, with no copy (Q2).
@@ -17,7 +17,6 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
-use m2_runtime::audio::Asset;
 use m2_session::Session;
 use m2_song::path::ASSETS;
 use m2_song::{AssetName, HashCache, Key, LaneAddr, LaneKind, Sha, Snapshot, TempoMap};
@@ -29,8 +28,11 @@ use crate::render::{name_new, part_path, sweep};
 use crate::tracks::{self, AUDIO_LANE, NewTrack, Play};
 use crate::{EditError, Edited};
 
-/// The longest file an import takes, in seconds: audio is kept in memory for now (RENDER-30).
-pub const LONGEST: f64 = 15.0 * 60.0;
+/// The longest file an import takes, in seconds: audio plays from the disk (RENDER-30), so this
+/// only keeps an import's check and its waveform to a few minutes' work.
+pub const LONGEST: f64 = 3.0 * 3600.0;
+/// Frames an import's check decodes at a time: the file never sits whole in memory.
+const PIECE: u64 = 65_536;
 /// The sample rates an import takes.
 pub const RATES: std::ops::RangeInclusive<u32> = 8_000..=384_000;
 
@@ -59,6 +61,8 @@ pub struct Imported {
     pub name: String,
     pub hash: Sha,
     pub seconds: f64,
+    /// Its sample rate.
+    pub rate: u32,
     /// Channels past the first two, which nothing plays (Q1).
     pub dropped_channels: u16,
     /// Whether the same bytes were in `assets/` already, so nothing was copied.
@@ -87,7 +91,7 @@ pub fn is_wav(head: &[u8]) -> bool {
 }
 
 /// Everything an import can know from the file before copying it: a WAV, that reads, has sound,
-/// plays at a rate music2 takes and is at most 15 minutes long (D31).
+/// plays at a rate music2 takes and is at most 3 hours long (D31).
 fn header(name: &str, mut r: Box<dyn Read + '_>) -> Result<Header, EditError> {
     let mut head = [0u8; 12];
     let n = read_up_to(&mut r, &mut head);
@@ -105,7 +109,7 @@ fn header(name: &str, mut r: Box<dyn Read + '_>) -> Result<Header, EditError> {
     }
     if h.frames as f64 / h.rate as f64 > LONGEST {
         return Err(refused(format!(
-            "{name} is longer than 15 minutes: music2 keeps audio in memory for now, so it takes files up to 15 minutes."
+            "{name} is longer than 3 hours: music2 takes files up to 3 hours."
         )));
     }
     Ok(h)
@@ -125,7 +129,7 @@ fn read_up_to(r: &mut dyn Read, buf: &mut [u8]) -> usize {
 }
 
 /// Every file under `assets/` that could be an asset, by its name there.
-fn assets_in(folder: &Path) -> Vec<(String, PathBuf)> {
+pub(crate) fn assets_in(folder: &Path) -> Vec<(String, PathBuf)> {
     let mut out = vec![];
     let mut todo = vec![(String::new(), folder.to_path_buf())];
     while let Some((prefix, dir)) = todo.pop() {
@@ -146,10 +150,11 @@ fn assets_in(folder: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
-/// Copy the file `from` into `dir`'s `assets/` (Q2, Q3, D2): the asset it is now, and its decode
-/// (none when the same bytes were there: nothing was copied or decoded). Checks all it can before
-/// copying; a failure leaves nothing.
-pub fn audio(dir: &Path, from: Source) -> Result<(Imported, Option<Asset>), EditError> {
+/// Copy the file `from` into `dir`'s `assets/` (Q2, Q3, D2): the asset it is now. Its check
+/// decodes it in pieces (D12), each handed to `each` (its first two channels, in order), so a
+/// waveform is made from the same decode; none when the same bytes were there (`reused`: nothing
+/// was copied or decoded). Checks all it can before copying; a failure leaves nothing.
+pub fn audio(dir: &Path, from: Source, each: &mut dyn FnMut(&[Vec<f32>])) -> Result<Imported, EditError> {
     let name = from.name();
     let h = match &from {
         Source::Path(p) => header(&name, Box::new(File::open(p).map_err(|e| refused(format!("{name} can't be read ({e})")))?)),
@@ -176,21 +181,21 @@ pub fn audio(dir: &Path, from: Source) -> Result<(Imported, Option<Asset>), Edit
             && HashCache::global().hash(p).is_ok_and(|s| s == hash)
             && let Ok(asset) = AssetName::new(rel)
         {
-            return Ok((Imported { asset, name, hash, seconds, dropped_channels, reused: true }, None));
+            return Ok(Imported { asset, name, hash, seconds, rate: h.rate, dropped_channels, reused: true });
         }
     }
     let wanted = AssetName::for_import(&name);
     let part = part_path(&folder.join(wanted.as_str())).map_err(|e| EditError::Io(e.to_string()))?;
     sweep(&folder);
-    let copied = copy_in(&from, &part, &folder, &wanted, there.iter().map(|(n, _)| n.as_str()));
+    let copied = copy_in(&from, &part, &folder, &wanted, there.iter().map(|(n, _)| n.as_str()), each);
     if copied.is_err() {
         let _ = std::fs::remove_file(&part);
     }
-    let (asset, decoded, hash) = copied.map_err(|e| match e {
+    let (asset, hash) = copied.map_err(|e| match e {
         Copy::Io(e) => io(e),
         Copy::Decode(why) => refused(format!("{name} doesn't read as a WAV file ({why})")),
     })?;
-    Ok((Imported { asset, name, hash, seconds, dropped_channels, reused: false }, Some(decoded)))
+    Ok(Imported { asset, name, hash, seconds, rate: h.rate, dropped_channels, reused: false })
 }
 
 enum Copy {
@@ -205,8 +210,16 @@ impl From<std::io::Error> for Copy {
 }
 
 /// The copy itself: the part made create-only and locked at once (so no sweep takes it), filled,
-/// pushed, decoded, then named the first free name and its folder synced. The lock goes after.
-fn copy_in<'a>(from: &Source, part: &Path, folder: &Path, wanted: &AssetName, there: impl Iterator<Item = &'a str>) -> Result<(AssetName, Asset, Sha), Copy> {
+/// pushed, decoded in pieces (each to `each`), then named the first free name and its folder
+/// synced. The lock goes after.
+fn copy_in<'a>(
+    from: &Source,
+    part: &Path,
+    folder: &Path,
+    wanted: &AssetName,
+    there: impl Iterator<Item = &'a str>,
+    each: &mut dyn FnMut(&[Vec<f32>]),
+) -> Result<(AssetName, Sha), Copy> {
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(part)?;
     let _ = m2_os::fs::try_lock(&f);
     match from {
@@ -221,10 +234,7 @@ fn copy_in<'a>(from: &Source, part: &Path, folder: &Path, wanted: &AssetName, th
     let hash = Sha::of_file(part)?;
     #[cfg(test)]
     tests::DURING.with(|d| d.borrow().as_ref().map(|during| during(part)));
-    let decoded = m2_runtime::audio::load_wav(part).map_err(|e| Copy::Decode(e.root_cause().to_string()))?;
-    if decoded.is_empty() {
-        return Err(Copy::Decode("it holds no samples".into()));
-    }
+    decode(part, each).map_err(|e| Copy::Decode(e.root_cause().to_string()))?;
     let mut taken: Vec<String> = there.map(str::to_string).collect();
     let asset = loop {
         let name = wanted.untaken_folded(taken.iter().map(String::as_str));
@@ -237,7 +247,25 @@ fn copy_in<'a>(from: &Source, part: &Path, folder: &Path, wanted: &AssetName, th
     };
     m2_os::fs::sync_dir(folder)?;
     drop(f);
-    Ok((asset, decoded, hash))
+    Ok((asset, hash))
+}
+
+/// Decode the WAV at `path` in pieces, as it will play, each to `each`: its rate, once every
+/// sample read.
+pub fn decode(path: &Path, each: &mut dyn FnMut(&[Vec<f32>])) -> anyhow::Result<u32> {
+    let wav = m2_runtime::stream::Wav::open(path)?;
+    if wav.frames() == 0 {
+        anyhow::bail!("it holds no samples");
+    }
+    let (mut bytes, mut piece) = (vec![], vec![vec![]; wav.channels()]);
+    let mut at = 0;
+    while at < wav.frames() {
+        let to = wav.frames().min(at + PIECE);
+        wav.read(at, to, &mut bytes, &mut piece)?;
+        each(&piece);
+        at = to;
+    }
+    Ok(wav.rate as u32)
 }
 
 /// Where imported files go (Q6, Q7), as the drop layer says it: onto an audio lane at a beat; onto

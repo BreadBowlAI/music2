@@ -18,7 +18,7 @@ use crate::process::Memory;
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
     c_numbers, change_and_inode, cpu_time, file_id, file_id_of, foreign, host_name, load_average, local_time, make_writable, push,
-    sync_dir, token,
+    read_at, sync_dir, token,
 };
 use crate::unix::{check, cpath};
 pub(crate) use cores::cores;
@@ -113,6 +113,11 @@ pub(crate) fn machine_id() -> Option<String> {
         .filter_map(|f| std::fs::read_to_string(f).ok())
         .map(|id| id.trim().to_string())
         .find(|id| !id.is_empty())
+}
+
+/// Linux has no per-program microphone switch: an input that opens can be read.
+pub(crate) fn microphone_refused() -> bool {
+    false
 }
 
 /// Linux has no class like macOS's QoS. A higher priority needs rights (`RLIMIT_NICE`,

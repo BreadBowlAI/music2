@@ -919,3 +919,39 @@ fn p16_loops_ten_minutes_without_drift() {
 fn profile() -> &'static str {
     if cfg!(debug_assertions) { "debug assertions on: the dev profile" } else { "release" }
 }
+
+// MON-8: hearing yourself plays the sound input on the take's audio lane, so the track's effects and
+// fader play it: here a fader at half. An export renders without it, and once it stops, the lane is
+// silent again.
+#[test]
+fn hearing_yourself_plays_through_the_track_and_never_in_an_export() {
+    let nodes = json!([{"id": "a", "op": "lane", "lane": "clips"}, {"id": "h", "op": "const", "value": 0.5},
+        {"id": "g", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "a", "by": "h"}}]);
+    let s = song(nodes, "g", json!([{"key": "clips", "kind": "audio<1>"}]), DataSet::with_lanes(at_bpm(120.0), []));
+    let r = s.renderer();
+    let generation = r.generation();
+    let slot = r.info().lanes.iter().position(|l| l.lane.lane == "clips").unwrap() as u32;
+    let (player, mut d) = playing(r, SR);
+    player.open_input(&m2_play::InputChoice::default()).unwrap();
+    player.hear(generation, slot, true).unwrap();
+    let mut buf = vec![0.0f32; 2 * 480];
+    let mut heard = vec![];
+    for _ in 0..40 {
+        player.inject_input(&[0.8; 480]).unwrap();
+        d.fill(&mut buf, 2);
+        heard.extend_from_slice(&buf);
+    }
+    let late = &heard[heard.len() / 2..];
+    assert!(late.iter().all(|x| (x - 0.4).abs() < 1e-6), "the input at the track's fader: {:?}", &late[..4]);
+    // An export of the same song: none of it.
+    let mut offline = s.renderer();
+    for b in 0..40 {
+        assert!(offline.render_block(b * 128).unwrap().iter().all(|f| *f == [0.0; 2]), "the export hears nothing");
+    }
+    player.hear(generation, slot, false).unwrap();
+    for _ in 0..4 {
+        player.inject_input(&[0.8; 480]).unwrap();
+        d.fill(&mut buf, 2);
+    }
+    assert!(buf.iter().all(|x| *x == 0.0), "not heard once it stops");
+}

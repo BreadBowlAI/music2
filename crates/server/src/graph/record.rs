@@ -22,20 +22,28 @@
 //!   take that ends while it doesn't waits in the queue, said once, and is written once it does.
 //! - **The windows hear** `{"t": "take", …}`: the take's phase and notes when they change, then
 //!   `written`, `empty`, or `error`.
+//! - **An audio lane** (the io plan's slice 2): the same phases and ends; the player's sound input
+//!   is opened ([`Player::open_input`]) and written as it records ([`take_audio`]). The clip starts
+//!   where recording started (not on a bar line) and is as long as the take: one `Clips` Tx, once
+//!   the file is durable. Hearing yourself (MON-8) plays the input on the lane from Record to the
+//!   take's end, through the track's effects and fader.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use m2_editor::clips::Gesture;
-use m2_play::Player;
+use m2_play::{InputChoice, Player};
 use m2_song::{Arrangement, LaneAddr, TempoMap};
 use serde_json::{Value, json};
 
 use super::clips::Refused;
 use super::lease::PlaysView;
+use super::take_audio::{self, Writer, Written};
 use super::{ControlPlane, Device, Graph, Inner};
 
+/// What Record says on a lane it can't record on.
+pub const NO_LANE: &str = "Select a notes track or an audio track to record on it.";
 /// The shortest note a take keeps, in beats.
 pub const SHORTEST: f64 = 1.0 / 64.0;
 /// A count whose song hasn't started this long after its bar ended was cancelled (D6).
@@ -43,11 +51,15 @@ const LATE_COUNT: Duration = Duration::from_millis(300);
 /// A count the engine never took: dropped after this.
 const NEVER_COUNTED: Duration = Duration::from_secs(10);
 
-/// What a take is asked to do: count in first, and the grid its starts go to (beats).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// What a take is asked to do: count in first, and the grid its starts go to (beats). On an audio
+/// lane: the input to record (Settings' Sound input), and whether to hear it (Settings' Hear
+/// yourself while recording, MON-8).
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Options {
     pub count_in: bool,
     pub quantize: Option<f64>,
+    pub input: InputChoice,
+    pub hear: bool,
 }
 
 /// The take that runs, on the control plane, and the takes that ended, for the take thread.
@@ -109,6 +121,26 @@ struct Take {
     /// Notes sounding, by source and handle: where each started, its pitch and its velocity.
     held: BTreeMap<(u32, u32), (f64, f64, f64)>,
     began: Instant,
+    /// On an audio lane: the input's writer.
+    audio: Option<AudioTake>,
+}
+
+/// An audio take's writer, and the player that hears its input while it records (MON-8).
+struct AudioTake {
+    writer: Option<Writer>,
+    player: Player,
+    hearing: bool,
+    /// The input's take ring: the meters read its level, and tests settle the writer by it.
+    ring: std::sync::Arc<m2_play::ring::Ring>,
+}
+
+impl Drop for AudioTake {
+    /// The take ended or was dropped: the input isn't heard any more.
+    fn drop(&mut self) {
+        if self.hearing {
+            let _ = self.player.hear(0, 0, false);
+        }
+    }
 }
 
 /// A take that ended, to be written.
@@ -118,6 +150,16 @@ pub(super) struct Ended {
     lane: String,
     /// The clip, in the lane format; None when nothing was played.
     clip: Option<Value>,
+    /// An audio take: where it starts, and its file, being written or written.
+    audio: Option<Box<(f64, Audio)>>,
+    /// Why it ended, when the windows should hear it: the input went away.
+    note: Option<&'static str>,
+}
+
+/// An audio take's file once the take ended.
+pub(super) enum Audio {
+    Writing(Writer),
+    Written(Written),
 }
 
 /// The bar line at or before `beat`.
@@ -169,6 +211,14 @@ impl Take {
     /// Find the anchor: the block the count or the Play applied at; else, once the song plays,
     /// from where it is heard (the stamp was overtaken by later ones).
     fn resolve(&mut self, player: &Player) {
+        self.find_anchor(player);
+        // An audio take's writer starts from the frame heard there.
+        if let (Some(a), Some(w)) = (self.anchor, self.audio.as_ref().and_then(|t| t.writer.as_ref())) {
+            w.anchor(a);
+        }
+    }
+
+    fn find_anchor(&mut self, player: &Player) {
         if self.anchor.is_some() {
             return;
         }
@@ -227,6 +277,14 @@ impl Take {
     /// review's R6).
     fn end(mut self, beat: f64) -> Ended {
         let beat = self.until.map_or(beat, |u| beat.min(u)).max(self.from);
+        if let Some(mut a) = self.audio.take() {
+            // As long as it played, from where it started: whole frames.
+            let frames = ((self.tempo.seconds_at(beat) - self.tempo.seconds_at(self.from)) * self.rate).round().max(0.0) as u64;
+            let writer = a.writer.take().expect("an audio take's writer");
+            writer.end(frames);
+            let audio = Some(Box::new((self.from, Audio::Writing(writer))));
+            return Ended { token: self.token, module: self.module, lane: self.lane, clip: None, audio, note: None };
+        }
         for key in self.held.keys().copied().collect::<Vec<_>>() {
             self.off(key, beat);
         }
@@ -246,7 +304,7 @@ impl Take {
                 .collect();
             json!({"start": self.start, "length": end - self.start, "notes": notes})
         });
-        Ended { token: self.token, module: self.module, lane: self.lane, clip }
+        Ended { token: self.token, module: self.module, lane: self.lane, clip, audio: None, note: None }
     }
 
     /// What the windows see: its phase, lane, start, and its notes so far (a held one to `now`).
@@ -262,9 +320,12 @@ impl Take {
             Phase::Count { beats, ms, .. } => json!({"beats": beats, "ms": ms}),
             _ => Value::Null,
         };
+        // An audio take says so, and whether its input is heard (the io plan's slice 3).
         json!({
             "phase": if counting { "count" } else { "take" },
             "module": self.module, "lane": self.lane,
+            "kind": if self.audio.is_some() { "audio" } else { "notes" },
+            "hear": self.audio.as_ref().is_some_and(|a| a.hearing),
             "start": self.start, "from": self.from, "until": self.until,
             "count_in": count, "notes": notes,
         })
@@ -272,6 +333,12 @@ impl Take {
 }
 
 impl Recorder {
+    /// The sound input's take ring while a take records on an audio lane: what the meters read
+    /// its level from.
+    pub(super) fn input(&self) -> Option<&std::sync::Arc<m2_play::ring::Ring>> {
+        self.take.as_ref().and_then(|t| t.audio.as_ref()).map(|a| &a.ring)
+    }
+
     /// The take's lane while it records song `token`: what MIDI keyboards play then (D8).
     pub(super) fn lane(&self, token: Option<u64>) -> Option<(String, String)> {
         self.take.as_ref().filter(|t| Some(t.token) == token).map(|t| (t.module.clone(), t.lane.clone()))
@@ -337,7 +404,7 @@ impl Recorder {
 }
 
 /// The track's name as the timeline shows it, for the undo step.
-fn label_of(cp: &ControlPlane, module: &str) -> String {
+pub(super) fn label_of(cp: &ControlPlane, module: &str) -> String {
     cp.open
         .as_ref()
         .and_then(|p| p.shown.timeline.tracks.iter().find(|t| t.module == module).and_then(|t| t.head.get("label")?.as_str().map(String::from)))
@@ -347,6 +414,11 @@ fn label_of(cp: &ControlPlane, module: &str) -> String {
 /// Lane `(module, lane)` is a notes lane in what plays.
 fn plays_notes(plays: &PlaysView, module: &str, lane: &str) -> bool {
     plays.info.lanes.iter().any(|l| l.lane.module == module && l.lane.lane == lane && l.caps.is_some())
+}
+
+/// Lane `(module, lane)`'s slot in what plays, if it is an audio lane there.
+fn audio_slot(plays: &PlaysView, module: &str, lane: &str) -> Option<u32> {
+    plays.info.lanes.iter().position(|l| l.lane.module == module && l.lane.lane == lane && l.audio().is_some()).map(|s| s as u32)
 }
 
 impl Graph {
@@ -360,6 +432,27 @@ impl Graph {
             bail!("The grid is a number of beats above 0, such as 0.25 for sixteenths.");
         }
         let device = self.inner.device()?;
+        // An audio lane records from the sound input: it is opened, and the take's file made and
+        // its writer started, first, never under the control plane's lock (D14, the review's
+        // io-r1). A take refused below lets them go, and its part file with them.
+        let audio = {
+            let cp = self.inner.control.lock();
+            let p = cp.open.as_ref();
+            let plays = p.and_then(|p| p.engine.plays.as_ref()).filter(|pl| pl.epoch == device.epoch);
+            match (p, plays.is_some_and(|pl| audio_slot(pl, module, lane).is_some())) {
+                (Some(p), true) => Some((p.shown.dir.clone(), label_of(&cp, module))),
+                _ => None,
+            }
+        };
+        let (listen, writer) = match audio {
+            Some((dir, label)) => {
+                let listen = device.player.open_input(&opts.input)?;
+                let file = m2_editor::take::Growing::new(&dir, &label, listen.channels, listen.rate).map_err(|e| anyhow::anyhow!("{e}"))?;
+                let writer = Writer::start(listen.ring.clone(), file, format!("{label} take.wav"), listen.channels)?;
+                (Some(listen), Some(writer))
+            }
+            None => (None, None),
+        };
         let looped = {
             let timing = self.inner.timing.lock();
             let t = timing.as_ref().context("no project is open")?;
@@ -378,9 +471,11 @@ impl Graph {
             bail!("Fix the code first: it doesn't compile right now.");
         }
         let plays = p.engine.plays.as_ref().filter(|pl| pl.epoch == device.epoch);
-        if !plays.is_some_and(|pl| plays_notes(pl, module, lane)) {
-            bail!("Select a track with notes to record on it.");
+        let slot = plays.and_then(|pl| audio_slot(pl, module, lane));
+        if !plays.is_some_and(|pl| plays_notes(pl, module, lane)) && (slot.is_none() || listen.is_none()) {
+            bail!("{NO_LANE}");
         }
+        let generation = plays.map_or(0, |pl| pl.generation);
         let arrangement = p.engine.accepted.project.arrangement.clone();
         let tempo = plays.and_then(|pl| pl.tempo.as_deref().cloned()).unwrap_or_else(|| arrangement.tempo_map());
         let player = &device.player;
@@ -405,10 +500,16 @@ impl Graph {
             notes: vec![],
             held: BTreeMap::new(),
             began: Instant::now(),
+            audio: None,
         };
         if st.playing && st.pending.is_some() {
             // A jump the audio thread hasn't taken yet: where it is heard is about to change.
             bail!("The song is moving to another place. Press Record again.");
+        }
+        // An audio take's writer, and hearing yourself from now, the count included.
+        if let (Some(listen), Some(slot), Some(writer)) = (listen, slot, writer) {
+            let hearing = opts.hear && player.hear(generation, slot, true).is_ok();
+            take.audio = Some(AudioTake { writer: Some(writer), player: player.clone(), hearing, ring: listen.ring });
         }
         if st.playing {
             // From now, with no count.
@@ -433,10 +534,41 @@ impl Graph {
         take.start = bar_before(&take.arrangement, take.from);
         take.last = take.from;
         take.until = looped.filter(|(_, end)| take.from < *end).map(|(_, end)| end);
+        if take.audio.is_some() {
+            // The clip starts where recording starts (D19).
+            take.start = take.from;
+            take.resolve(player);
+        }
         let shown = take.shown(None);
         cp.record.take = Some(take);
         cp.record.changed = true;
         Ok(shown)
+    }
+
+    /// What the silent input hears next (D24): `samples`, then a sine `tone` (pitch, seconds, gain),
+    /// mono at the song's rate. Says so when no take has opened the input.
+    pub fn inject_input(&self, samples: &[f32], tone: Option<(f32, f32, f32)>) -> Result<()> {
+        const NONE: &str = "Nothing is recording from the sound input.";
+        let device = self.inner.current_device().context(NONE)?;
+        let player = &device.player;
+        if player.input().is_none() {
+            bail!(NONE);
+        }
+        let mut all = samples.to_vec();
+        if let Some((hz, seconds, gain)) = tone {
+            let rate = player.rate() as f32;
+            let n = (seconds.clamp(0.0, 60.0) * rate) as usize;
+            all.extend((0..n).map(|i| gain * (std::f32::consts::TAU * hz * i as f32 / rate).sin()));
+        }
+        player.inject_input(&all)
+    }
+
+    /// The open input's device goes away, as a microphone unplugged (the inject API): a take from it
+    /// ends with what it has (the review's io-r2).
+    pub fn unplug_input(&self) -> Result<()> {
+        let device = self.inner.current_device().context("Nothing is recording from the sound input.")?;
+        device.player.input_error(m2_play::DeviceErrorKind::DeviceNotAvailable.into());
+        Ok(())
     }
 
     /// R while recording (Q19): the take ends where it is heard, and play goes on. Answers at once:
@@ -528,6 +660,7 @@ impl Graph {
     /// each outcome.
     pub fn record_tick(&self) -> Vec<Value> {
         let mut said = vec![];
+        let mut unplugged = None;
         let (ended, labels) = {
             let device = self.inner.current_device();
             let mut cp = self.inner.control.lock();
@@ -541,6 +674,21 @@ impl Graph {
                 } else if same.is_none() {
                     // A new player (a crash, another output): its clock starts again (D29). The take
                     // ends where it was last heard.
+                    let beat = t.last;
+                    r.end_at(beat);
+                } else if let Some(d) = same.filter(|d| t.audio.is_some() && d.player.input_gone()) {
+                    // The input went away (a microphone unplugged): the take ends where it is heard,
+                    // with what it has, and the song plays on (the review's io-r2).
+                    t.resolve(&d.player);
+                    let beat = d.player.heard_frame().and_then(|h| t.beat_of(h)).unwrap_or(t.last);
+                    r.end_at(beat);
+                    if let Some(e) = r.ended.last_mut() {
+                        e.note = Some(take_audio::UNPLUGGED);
+                    }
+                    unplugged = Some(d.player.clone());
+                } else if t.audio.as_ref().and_then(|a| a.writer.as_ref()).is_some_and(Writer::stopped) {
+                    // Its writer stopped (a full disk, a file as long as a WAV can be): the take ends
+                    // with the file as written, which says why (the review's io-r3).
                     let beat = t.last;
                     r.end_at(beat);
                 } else if let Some(d) = same {
@@ -610,6 +758,10 @@ impl Graph {
             let labels: Vec<String> = ended.iter().map(|e| label_of(&cp, &e.module)).collect();
             (ended, labels)
         };
+        // Its stream stops; the next R opens it again.
+        if let Some(p) = unplugged {
+            p.close_input();
+        }
         for (e, label) in ended.into_iter().zip(labels) {
             match self.write_take(e, &label) {
                 Ok(v) => said.push(v),
@@ -628,7 +780,11 @@ impl Graph {
 
     /// Write a take that ended: one `Clips` Tx, its undo step named "recording on Bass". Answers what
     /// the windows hear, or the take again when the code doesn't compile, to wait for it.
-    fn write_take(&self, e: Ended, label: &str) -> Result<Value, Ended> {
+    fn write_take(&self, mut e: Ended, label: &str) -> Result<Value, Ended> {
+        if let Some(a) = e.audio.take() {
+            let (from, audio) = *a;
+            return self.write_audio(e, from, audio, label);
+        }
         let Some(clip) = e.clip.clone() else { return Ok(json!({"t": "take", "empty": true})) };
         let lost = |why: &str| json!({"t": "take", "error": format!("The recording couldn't be kept: {why}")});
         let open = self.inner.control.lock().open.as_ref().map(|p| p.engine.token);
@@ -648,6 +804,75 @@ impl Graph {
             (Err(_), Some(Refused::Missing)) => Ok(lost(&format!("{label} is gone."))),
             (Err(_), Some(Refused::ReadOnly)) => Ok(lost("this song is open for writing somewhere else.")),
             (Err(err), _) => Ok(lost(&format!("{err:#}"))),
+        }
+    }
+}
+
+impl Graph {
+    /// Write an audio take that ended: its file finished and durable first, then one `Clips` Tx
+    /// naming it, its undo step "recording on Vox" (WRITE-1). The file stays in `assets/` whatever
+    /// becomes of the Tx (music2 never deletes an asset).
+    fn write_audio(&self, e: Ended, from: f64, audio: Audio, label: &str) -> Result<Value, Ended> {
+        let lost = |why: &str| json!({"t": "take", "error": format!("The recording couldn't be kept: {why}")});
+        let written = match audio {
+            Audio::Written(w) => w,
+            Audio::Writing(w) => match w.done() {
+                Ok(Some(w)) => w,
+                Ok(None) => return Ok(json!({"t": "take", "empty": true})),
+                Err(err) => return Ok(lost(&format!("{err:#}"))),
+            },
+        };
+        let open = self.inner.control.lock().open.as_ref().map(|p| p.engine.token);
+        if open != Some(e.token) {
+            return Ok(lost("its song was closed."));
+        }
+        match self.place_take(e.token, &written.0, &e.module, &e.lane, from) {
+            (Ok(v), _) => {
+                let revision = v["revision"].as_u64().unwrap_or(0);
+                if let Err(err) = self.name_step(e.token, revision, format!("recording on {label}"), false) {
+                    eprintln!("music2: couldn't name the recording's undo step: {err:#}");
+                }
+                let mut w = json!({"revision": revision, "made": v["made"], "module": e.module, "lane": e.lane, "asset": written.0.asset.as_str()});
+                let notes: Vec<&str> =
+                    e.note.into_iter().chain(written.2.as_deref()).chain((written.1 > 0).then_some(take_audio::TOO_SLOW)).collect();
+                if !notes.is_empty() {
+                    w["note"] = json!(notes.join(" "));
+                }
+                Ok(json!({"t": "take", "written": w}))
+            }
+            (Err(_), Some(Refused::Draft)) => Err(Ended { audio: Some(Box::new((from, Audio::Written(written)))), ..e }),
+            (Err(_), Some(Refused::Missing)) => Ok(lost(&format!("{label} is gone."))),
+            (Err(_), Some(Refused::ReadOnly)) => Ok(lost("this song is open for writing somewhere else.")),
+            (Err(err), _) => Ok(lost(&format!("{err:#}"))),
+        }
+    }
+
+    /// An audio take's writer moves nothing, or moves again (tests).
+    #[cfg(test)]
+    pub(super) fn record_pause(&self, on: bool) {
+        let cp = self.inner.control.lock();
+        if let Some(w) = cp.record.take.as_ref().and_then(|t| t.audio.as_ref()).and_then(|a| a.writer.as_ref()) {
+            w.pause(on);
+        }
+    }
+
+    /// The disk has room for `bytes` more of an audio take's file (tests).
+    #[cfg(test)]
+    pub(super) fn record_leave_room(&self, bytes: u64) {
+        let cp = self.inner.control.lock();
+        if let Some(w) = cp.record.take.as_ref().and_then(|t| t.audio.as_ref()).and_then(|a| a.writer.as_ref()) {
+            w.leave_room(bytes);
+        }
+    }
+
+    /// Wait until an audio take's writer has moved everything its ring holds (tests).
+    #[cfg(test)]
+    pub(super) fn record_settle(&self) {
+        let cp = self.inner.control.lock();
+        if let Some(a) = cp.record.take.as_ref().and_then(|t| t.audio.as_ref())
+            && let Some(w) = &a.writer
+        {
+            w.settle(&a.ring);
         }
     }
 }

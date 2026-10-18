@@ -15,17 +15,19 @@ export default function Meter({
   title,
   bars = 1,
   className,
+  testid,
 }: {
   channels: string[];
   label: string;
   title?: string;
   bars?: 1 | 2;
   className?: string;
+  testid?: string;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const keys = channels.join(" ");
   useEffect(() => mount(keys.split(" "), ref.current!, bars), [keys, bars]);
-  return <canvas ref={ref} role="meter" aria-label={label} title={title} aria-valuemin={FLOOR} aria-valuemax={TOP} className={clsx("block", className)} />;
+  return <canvas ref={ref} data-testid={testid} role="meter" aria-label={label} title={title} aria-valuemin={FLOOR} aria-valuemax={TOP} className={clsx("block", className)} />;
 }
 
 /**

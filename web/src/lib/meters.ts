@@ -28,6 +28,8 @@ const FALL_DB_PER_S = 12;
 const ARIA_MS = 100;
 /** The meter of the song's output: the Song row's. A track may be called `out`, so the output has a name of its own. */
 export const OUT = "song";
+/** The sound input's meter, while a take records audio (io): no track's key has an `@`. */
+export const INPUT = "@input";
 /** The space between a two-bar meter's bars, in CSS pixels. */
 const GAP = 1;
 
@@ -94,13 +96,14 @@ function hear(key: string, peaks: number[], now: number) {
   if (!l) levels.set(key, (l = [0, 1, 2].map(() => ({ db: -Infinity, peak: -Infinity, at: now }))));
   const sides = l;
   [Math.max(left, right), left, right].forEach((x, i) => hearSide(sides[i], x, now));
-  if (key !== OUT && Math.max(left, right) >= 1) clip(key);
+  if (key !== OUT && key !== INPUT && Math.max(left, right) >= 1) clip(key);
 }
 
 function onMeters(msg: MetersIn) {
   const now = performance.now();
   for (const [key, peaks] of Object.entries(msg.tracks ?? {})) hear(key, peaks, now);
   if (msg.out) hear(OUT, msg.out, now);
+  if (msg.input) hear(INPUT, msg.input, now);
 }
 
 /** Every meter to the floor: what it was told is old news. */

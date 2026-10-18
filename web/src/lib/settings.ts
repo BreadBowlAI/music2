@@ -55,6 +55,24 @@ export interface Settings {
   record?: { count_in: boolean; quantize: boolean };
   /** The MIDI keyboards turned off, by name (lane B): they neither play nor record; and those plugged in. */
   midi?: { off: string[]; devices?: string[] };
+  /** The sound input a take records (an input's id and its name; null: the output's own device), and Hear yourself (io). */
+  input?: InputKept;
+}
+
+/** The sound input chosen, and whether you hear yourself while recording (off by default). */
+export interface InputKept {
+  device: string | null;
+  name?: string | null;
+  monitor: boolean;
+}
+
+/** A sound input there is (`GET /api/audio/inputs`): its id (what a choice names), its name, and whether it is the system's default. */
+export interface Input {
+  id: string;
+  name: string;
+  default: boolean;
+  rate: number;
+  channels: number;
 }
 
 export interface SettingsChange {
@@ -62,11 +80,14 @@ export interface SettingsChange {
   songs?: string | null;
   record?: { count_in: boolean; quantize: boolean };
   midi?: { off: string[] };
+  input?: { device: string | null; name?: string | null; monitor: boolean };
 }
 
 export const settingsApi = {
   get: () => request<Settings>("/api/settings"),
   set: (change: SettingsChange) => request<Settings>("/api/settings", change),
+  /** The sound inputs there are, the default first. */
+  inputs: () => request<{ inputs: Input[] }>("/api/audio/inputs").then((r) => r.inputs),
 };
 
 /** Whether the Settings window shows. */

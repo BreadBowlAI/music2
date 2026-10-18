@@ -1,5 +1,5 @@
 //! Lane C's routes, in a router of their own, merged into the API's: this machine's settings (gaps
-//! #31), and undo's names (gaps #29). Settings aren't a project write: no session, no undo; they
+//! #31) and the sound inputs there are (the io plan's D13), and undo's names (gaps #29). Settings aren't a project write: no session, no undo; they
 //! work with no song open and in a read-only window. Naming an undo step writes nothing either.
 
 use std::path::PathBuf;
@@ -12,14 +12,17 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 
 use crate::routes::ApiError;
-use crate::settings::{MidiKept, OutputKept, RecordKept};
+use crate::settings::{InputKept, MidiKept, OutputKept, RecordKept};
 use crate::{AppState, project};
 
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new().route("/api/settings", get(settings_get).post(settings_set)).route("/api/graph/step", post(graph_step))
+    Router::new()
+        .route("/api/settings", get(settings_get).post(settings_set))
+        .route("/api/audio/inputs", get(audio_inputs))
+        .route("/api/graph/step", post(graph_step))
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
@@ -30,8 +33,9 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Sen
 /// listed, or as kept while it isn't connected), the outputs there are (the default first), what
 /// plays now, where new songs go and the default for that, the home folder (the window writes paths
 /// in it as `~/…`), whether an export runs (the output can't change then), and the MIDI keyboards
-/// plugged in and turned off (with no song open too: the review's F3). `stopped`: the change just
-/// made stopped playback.
+/// plugged in and turned off (with no song open too: the review's F3), and the sound input a take
+/// records with whether you hear yourself (`input`, the io plan's D13 and D21; the inputs there are
+/// come from `GET /api/audio/inputs`). `stopped`: the change just made stopped playback.
 fn shown(s: &AppState, stopped: bool) -> Value {
     let choice = s.graph.output_choice();
     let listed = m2_play::outputs();
@@ -46,7 +50,7 @@ fn shown(s: &AppState, stopped: bool) -> Value {
     });
     let chosen = kept.as_ref().is_some_and(|k| k.songs.is_some());
     // Lane B: Record's options, and the MIDI keyboards turned off (the defaults where none are kept).
-    let (record, midi) = kept.map(|k| (k.record, k.midi)).unwrap_or_default();
+    let (record, midi, input) = kept.map(|k| (k.record, k.midi, k.input)).unwrap_or_default();
     json!({
         "output": {"device": choice.device, "name": name, "frames": choice.frames},
         "outputs": outputs,
@@ -59,7 +63,18 @@ fn shown(s: &AppState, stopped: bool) -> Value {
         "stopped": stopped,
         "record": {"count_in": record.count_in, "quantize": record.quantize},
         "midi": {"off": midi.off, "devices": s.graph.midi_state()["devices"]},
+        "input": {"device": input.device, "name": input.name, "monitor": input.monitor},
     })
+}
+
+/// `GET /api/audio/inputs`: `{inputs: [{id, name, default, rate, channels}]}`, the default first
+/// (D13). Opening an input at a take is what makes a Mac ask for the microphone, not this list (to
+/// be checked on the Mac).
+async fn audio_inputs() -> ApiResult {
+    let inputs = blocking(|| Ok(m2_play::inputs())).await?;
+    let inputs: Vec<Value> =
+        inputs.iter().map(|i| json!({"id": i.id, "name": i.name, "default": i.default, "rate": i.rate, "channels": i.channels})).collect();
+    Ok(Json(json!({"inputs": inputs})))
 }
 
 /// `GET /api/settings` (see [`shown`]).
@@ -87,10 +102,14 @@ struct SettingsReq {
     /// The MIDI keyboards turned off, by name (lane B).
     #[serde(default)]
     midi: Option<MidiKept>,
+    /// The sound input (by its id, null: the output's own device) and Hear yourself (io).
+    #[serde(default)]
+    input: Option<InputKept>,
 }
 
-/// `POST /api/settings {output?: {device, frames}, songs?, record?: {count_in, quantize}, midi?: {off}}` (`device`: an output's id): applied at once and kept in
-/// `~/.music2/settings.json`. A new output makes a new player where the song was, stopped. A songs
+/// `POST /api/settings {output?: {device, frames}, songs?, record?: {count_in, quantize}, midi?: {off},
+/// input?: {device, monitor}}` (`device`: an output's or an input's id): applied at once and kept in
+/// `~/.music2/settings.json`. The next take opens the input chosen (D14). A new output makes a new player where the song was, stopped. A songs
 /// folder must be a full path outside any song. Answers as `GET` does.
 async fn settings_set(State(s): S, Json(r): Json<SettingsReq>) -> ApiResult {
     let r_midi = r.midi.is_some();
@@ -129,6 +148,17 @@ async fn settings_set(State(s): S, Json(r): Json<SettingsReq>) -> ApiResult {
             if let Some(k) = state.settings() {
                 k.change(|kept| kept.midi = midi)?;
             }
+        }
+        // io: the input a take opens next, by its name as listed now (one not connected keeps its
+        // name), and Hear yourself.
+        if let (Some(mut input), Some(k)) = (r.input, state.settings()) {
+            let listed = input.device.as_ref().and_then(|id| m2_play::inputs().into_iter().find(|i| i.id == *id));
+            input.name = match (&input.device, listed) {
+                (None, _) => None,
+                (Some(_), Some(i)) => Some(i.name),
+                (Some(_), None) => input.name,
+            };
+            k.change(|kept| kept.input = input)?;
         }
         Ok(shown(&state, stopped))
     })

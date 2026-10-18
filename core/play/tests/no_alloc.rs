@@ -20,7 +20,7 @@ use std::sync::{Arc, mpsc};
 
 use common::*;
 use m2_ir::Origin;
-use m2_play::{DeviceError, DeviceErrorKind, Gone, Player, alloc};
+use m2_play::{DeviceError, DeviceErrorKind, Driver, Gone, Player, alloc};
 use m2_runtime::{BLOCK, CellTarget, Continues, LaneSwap, LiveEv, NotesData, Renderer, Retired};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
@@ -427,6 +427,57 @@ fn live_notes_never_allocate() {
     }
 }
 
+// RENDER-30a: a sound input's callback allocates and frees nothing: a device's at 44.1 kHz, stereo,
+// converted to the song's 48 kHz, in buffers of odd sizes; and the output's callback, as it hands
+// the silent input what was injected and the engine hears it on the audio lane (MON-8), across a
+// stop, the idle engine kept awake, a loop's wraps, and hearing stopped and started again.
+#[test]
+fn the_input_callback_never_allocates() {
+    let song = build(false, 120.0);
+    let r = song.renderer();
+    let (generation, info) = (r.generation(), r.info());
+    let slot = info.lanes.iter().position(|l| l.lane.lane == "clips").unwrap() as u32;
+    let (player, mut d) = Player::driven(SR);
+    player.open(r).unwrap();
+    player.open_input(&m2_play::InputChoice::default()).unwrap();
+    let (mut device, engine_ring, take_ring) = player.driven_input(44_100, 2);
+    let wave: Vec<f32> = (0..2 * 4096).map(|i| (i as f32 * 0.01).sin() * 0.25).collect();
+    let mut data = vec![0.0f32; 2 * 4096];
+    let (mut allocs, mut heard) = (0, 0.0f32);
+    let mut fill = |d: &mut m2_play::Driver, frames: usize| {
+        let mut done = 0;
+        for n in SIZES.iter().cycle() {
+            let n = (*n).min(frames - done);
+            if n == 0 {
+                break;
+            }
+            player.inject_input(&wave[..n]).unwrap();
+            allocs += trapped(|| device.fill(&wave[..2 * n], std::time::Duration::from_micros(700)));
+            allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
+            heard = heard.max(peak(&data[..2 * n].chunks(2).map(|f| [f[0], f[1]]).collect::<Vec<_>>()));
+            done += n;
+        }
+        drop(d.drain_retired());
+    };
+    fill(&mut d, 4096);
+    player.hear(generation, slot, true).unwrap();
+    player.play();
+    player.set_loop(Some((0.0, 1.0))).unwrap();
+    fill(&mut d, 60_000);
+    player.stop();
+    fill(&mut d, 48_000);
+    assert!(!player.idle(), "never idle while it hears");
+    player.hear(generation, slot, false).unwrap();
+    fill(&mut d, 4096);
+    player.hear(generation, slot, true).unwrap();
+    fill(&mut d, 4096);
+    assert_eq!(allocs, 0, "an input's callback or the engine's hearing allocated or freed");
+    assert!(heard > 0.1, "the input was heard: {heard}");
+    assert!(engine_ring.head() > 100_000 && take_ring.head() == engine_ring.head(), "the device's input reached both rings");
+    assert!(player.input_frames() > 100_000, "the silent input handed over what was injected");
+    assert!(!player.crashed());
+}
+
 // RENDER-28, 8b.8: a live plan's taps and the callback's timer allocate and free nothing, while
 // another thread reads and resets them as the server's meters do.
 #[test]
@@ -699,4 +750,57 @@ fn the_device_error_callback_never_allocates() {
     assert_eq!(n, 0);
     let e = player.device_errors();
     assert_eq!((e.xruns, e.changes, e.gone, e.other), (2, 1, 2, 0), "every one counted");
+}
+
+/// Reads made on a thread while it runs a callback (debug builds mark it).
+static CALLBACK_READS: AtomicUsize = AtomicUsize::new(0);
+
+fn on_read(_: usize) {
+    if alloc::in_callback() {
+        CALLBACK_READS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+// RENDER-30, RENDER-28: a lane that streams from the disk is only copied on the sound thread. Play,
+// a seek, a loop's wraps and a tempo activation over a long clip, under the trap: no callback
+// allocates, and none reads a file (the disk thread does).
+#[test]
+fn the_sound_thread_never_reads_a_file() {
+    m2_os::fs::watch_reads(on_read);
+    let (a, b) = (long_audio(30.0, 120.0), long_audio(30.0, 100.0));
+    let r = a.renderer();
+    let info = r.info();
+    let (player, mut d) = Player::driven(SR);
+    player.open(r).unwrap();
+    let mut buf = vec![0.0f32; 2 * 480];
+    let run = |d: &mut Driver, callbacks: usize, buf: &mut Vec<f32>| {
+        let mut n = 0;
+        for _ in 0..callbacks {
+            n += trapped(|| d.fill(buf, 2));
+            drop(d.drain_retired());
+        }
+        n
+    };
+    player.play();
+    let mut allocs = run(&mut d, 100, &mut buf);
+    player.seek(30.0).unwrap();
+    allocs += run(&mut d, 100, &mut buf);
+    player.set_loop(Some((32.0, 34.0))).unwrap();
+    player.seek(32.0).unwrap();
+    allocs += run(&mut d, 1000, &mut buf);
+    player.activate(b.after(&a, &info)).unwrap();
+    allocs += run(&mut d, 200, &mut buf);
+    assert!(player.status().pos > 0 && peak(&buf.chunks(2).map(|f| [f[0], f[1]]).collect::<Vec<_>>()) > 0.0, "it plays");
+    assert_eq!(player.disk_misses().iter().map(|m| m.1).sum::<u64>(), 0, "the disk kept up");
+    // A disk that never answers: a seek far off finds nothing, and the callback plays silence
+    // rather than read for itself.
+    player.set_loop(None).unwrap();
+    player.pause_disk(true);
+    player.seek(10.0).unwrap();
+    allocs += run(&mut d, 50, &mut buf);
+    if cfg!(debug_assertions) {
+        assert_eq!(CALLBACK_READS.load(Ordering::Relaxed), 0, "a callback read a file");
+    }
+    assert_eq!(allocs, 0, "the callback allocated");
+    assert!(player.disk_misses().iter().map(|m| m.1).sum::<u64>() > 0, "the lane missed");
 }

@@ -75,7 +75,7 @@ pub(super) enum Refused {
 }
 
 impl Refused {
-    fn of(e: &EditError) -> Refused {
+    pub(super) fn of(e: &EditError) -> Refused {
         match e {
             EditError::Changed(_) => Refused::Changed,
             EditError::Missing(_) => Refused::Missing,
