@@ -603,7 +603,7 @@ fn duck_of(compiled: &Compiled, site: u32) -> Option<(&Module, String, String)> 
     let m = compiled.ir.modules.iter().find(|m| m.key == module)?;
     let mut found = None;
     walk(&m.nodes, &mut |n| {
-        if let Op::Kernel { kernel, inputs } = &n.op
+        if let Op::Kernel { kernel, inputs, .. } = &n.op
             && kernel == "std:duck"
             && ids.contains(&n.id)
             && let (Some(a), Some(side)) = (inputs.get("in"), inputs.get("side"))
@@ -626,7 +626,7 @@ fn track_of(m: &Module, r: &str) -> Option<String> {
     });
     match found?.op {
         Op::Import { module, .. } => Some(module),
-        Op::Kernel { kernel, inputs } if kernel == "std:follow" => track_of(m, inputs.get("in")?),
+        Op::Kernel { kernel, inputs, .. } if kernel == "std:follow" => track_of(m, inputs.get("in")?),
         _ => None,
     }
 }

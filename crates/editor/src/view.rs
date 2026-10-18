@@ -541,7 +541,7 @@ pub fn view(session: &Session) -> GraphView {
             homes.insert(key, home.clone());
             // Name it after its property, or the port it feeds, or its call.
             let consumer = all.iter().find_map(|k| match &k.op {
-                Op::Kernel { kernel, inputs } => {
+                Op::Kernel { kernel, inputs, .. } => {
                     inputs.iter().find(|(_, r)| split_ref(r).0 == n.id).map(|(p, _)| (session.packages.kernel(kernel), p.clone()))
                 }
                 Op::Plugin { plugin, inputs, .. } => {

@@ -1037,7 +1037,7 @@ return lowpass(c, x);"#;
     let svfs: Vec<&BTreeMap<String, String>> = nodes
         .iter()
         .filter_map(|n| match &n.op {
-            Op::Kernel { kernel, inputs } if kernel == "std:svf" => Some(inputs),
+            Op::Kernel { kernel, inputs, .. } if kernel == "std:svf" => Some(inputs),
             _ => None,
         })
         .collect();
@@ -1072,7 +1072,7 @@ return sum(w, n, noise());"#,
     let seeds: Vec<f64> = nodes
         .iter()
         .filter_map(|n| match &n.op {
-            Op::Kernel { kernel, inputs } if kernel == "std:noise" => {
+            Op::Kernel { kernel, inputs, .. } if kernel == "std:noise" => {
                 let seed = nodes.iter().find(|c| c.id == inputs["seed"]).unwrap();
                 assert!(seed.origin.is_none(), "a setting is no knob");
                 match seed.op {

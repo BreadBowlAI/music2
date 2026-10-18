@@ -28,6 +28,22 @@ use crate::{BLOCK, KERNEL_MEMORY, OutOfMemory, PORT_BYTES, WasmContext};
 /// Bytes of a v1 settings block (`m2_kernel::Settings` on wasm32).
 const SETTINGS_BYTES: usize = 60;
 
+/// Bytes of one entry of a settings block's asset list: its handle, frames, channels and rate.
+const ASSET_BYTES: usize = 16;
+
+/// What a state is made from, besides its kernel: its ports, the channel count of each (inputs
+/// first) and the count resolved for its `audio<*>` ports, the song's rate, and its settings.
+pub(crate) struct Spec<'a> {
+    pub(crate) inputs: usize,
+    pub(crate) outputs: usize,
+    pub(crate) channels: &'a [u32],
+    pub(crate) audio: u8,
+    pub(crate) sample_rate: f64,
+    pub(crate) values: &'a [f64],
+    /// Each asset it reads, decoded; `None` for one that is missing.
+    pub(crate) assets: &'a [Option<Arc<Asset>>],
+}
+
 /// What the host keeps in a sandbox's store: its limits, and what `m2.asset_read` reads.
 ///
 /// While it is born its memory may grow up to its cap; once sealed nothing grows. A refused grow
@@ -170,11 +186,12 @@ impl Sandbox {
         Ok(Sandbox { store, instance, memory, alloc, base, len: 0 })
     }
 
-    /// A state of kernel `prefix` (the export names' prefix) with `inputs` and `outputs` ports, each
-    /// with the channel count `channels` gives, inputs first; `audio` is the count resolved for its
-    /// `audio<*>` ports. One block per state holds its port buffers, its settings and its port table.
-    pub(crate) fn state(&mut self, prefix: &str, inputs: usize, outputs: usize, channels: &[u32], audio: u8, sample_rate: f64) -> Result<State> {
+    /// A state of kernel `prefix` (the export names' prefix), as `spec` says. One block per state
+    /// holds its port buffers, its settings block and its lists, and its port table
+    /// (`docs/kernel-abi.md`).
+    pub(crate) fn state(&mut self, prefix: &str, spec: &Spec) -> Result<State> {
         debug_assert!(self.len == 0, "a state made in a sealed sandbox");
+        let (inputs, outputs, channels) = (spec.inputs, spec.outputs, spec.channels);
         let f = |name: &str| format!("{prefix}_{name}");
         let ports = self.instance.get_typed_func::<(), u32>(&mut self.store, &f("ports"))?;
         let new = self.instance.get_typed_func::<u32, u32>(&mut self.store, &f("new"))?;
@@ -187,37 +204,71 @@ impl Sandbox {
         }
         let n = inputs + outputs;
         debug_assert_eq!(channels.len(), n);
-        // The block: the port buffers, then the settings, the channel list and the port table.
+        // Each asset's handle: its place in the sandbox's table, shared by every state that reads
+        // the same decoded audio. A missing one has none, and reads silence.
+        let table = &mut self.store.data_mut().assets;
+        let handles: Vec<u32> = spec
+            .assets
+            .iter()
+            .map(|a| match a {
+                Some(a) => match table.iter().position(|t| Arc::ptr_eq(t, a)) {
+                    Some(at) => at as u32,
+                    None => {
+                        table.push(a.clone());
+                        table.len() as u32 - 1
+                    }
+                },
+                None => u32::MAX,
+            })
+            .collect();
+        // The block: the port buffers, then the settings, the channel list, the values, the
+        // assets and the port table.
+        let (nv, na) = (spec.values.len(), spec.assets.len());
         let table_len: usize = channels.iter().map(|&c| c as usize).sum();
         let settings_at = n * PORT_BYTES;
         let list_at = settings_at + SETTINGS_BYTES;
-        let table_at = list_at + 4 * n;
+        let values_at = (list_at + 4 * n).next_multiple_of(8);
+        let assets_at = values_at + 8 * nv;
+        let table_at = assets_at + ASSET_BYTES * na;
         let bytes = table_at + 4 * table_len;
         let block = self.alloc.call(&mut self.store, (bytes as u32, 16))? as usize;
         if block == 0 || !block.is_multiple_of(16) || block + bytes > self.memory.data_size(&self.store) {
             bail!("`{prefix}`'s module gave no room for a state's ports ({bytes} bytes)");
         }
         let bufs: Vec<usize> = (0..n).map(|p| block + p * PORT_BYTES).collect();
-        let mut table = Vec::with_capacity(table_len);
+        let mut io = Vec::with_capacity(table_len);
         for (p, &c) in channels.iter().enumerate() {
-            table.extend((0..c as usize).map(|ch| (bufs[p] + ch * BLOCK * 4) as u32));
+            io.extend((0..c as usize).map(|ch| (bufs[p] + ch * BLOCK * 4) as u32));
         }
-        let (settings, list) = ((block + settings_at) as u32, (block + list_at) as u32);
+        let at = |off: usize, len: usize| if len == 0 { 0 } else { (block + off) as u32 };
         let mut words: Vec<u32> = vec![
             SETTINGS_BYTES as u32,
-            (sample_rate as f32).to_bits(),
+            (spec.sample_rate as f32).to_bits(),
             BLOCK as u32,
             0,
-            audio.clamp(1, 2) as u32,
-            list,
+            spec.audio.clamp(1, 2) as u32,
+            at(list_at, n),
             n as u32,
+            at(values_at, nv),
+            nv as u32,
+            at(assets_at, na),
+            na as u32,
         ];
         words.resize(SETTINGS_BYTES / 4, 0);
         words.extend(channels);
-        words.extend(&table);
         let data = self.memory.data_mut(&mut self.store);
-        data[block + settings_at..block + bytes].copy_from_slice(bytemuck::cast_slice(&words));
-        let handle = new.call(&mut self.store, settings)?;
+        data[block + settings_at..block + values_at].fill(0);
+        data[block + settings_at..block + list_at + 4 * n].copy_from_slice(bytemuck::cast_slice(&words));
+        for (i, v) in spec.values.iter().enumerate() {
+            data[block + values_at + 8 * i..][..8].copy_from_slice(&v.to_le_bytes());
+        }
+        for (i, (a, h)) in spec.assets.iter().zip(&handles).enumerate() {
+            let (frames, chans, rate) = a.as_ref().map_or((0, 0, 0.0), |a| (a.len() as u32, a.channels.len() as u32, a.sample_rate as f32));
+            let entry = [*h, frames, chans, rate.to_bits()];
+            data[block + assets_at + ASSET_BYTES * i..][..ASSET_BYTES].copy_from_slice(bytemuck::cast_slice(&entry));
+        }
+        data[block + table_at..block + bytes].copy_from_slice(bytemuck::cast_slice(&io));
+        let handle = new.call(&mut self.store, (block + settings_at) as u32)?;
         if handle == 0 || handle as usize >= self.memory.data_size(&self.store) {
             bail!("`{prefix}_new` made no state");
         }

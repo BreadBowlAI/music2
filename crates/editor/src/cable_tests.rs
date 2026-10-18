@@ -68,7 +68,7 @@ fn readers(s: &Session, port: &str) -> Vec<String> {
     let mut found = vec![];
     for m in &s.accepted().compiled.ir.modules {
         walk(&m.nodes, &mut |n| {
-            if let Op::Kernel { kernel, inputs } = &n.op {
+            if let Op::Kernel { kernel, inputs, .. } = &n.op {
                 found.extend(inputs.iter().filter(|(_, r)| *r == port).map(|(p, _)| format!("{kernel}.{p}")));
             }
         });

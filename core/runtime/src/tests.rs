@@ -303,7 +303,7 @@ fn std_manifest_matches_its_kernels() {
             op: FOp::Const(0.0),
             outputs: sig.outputs.iter().map(|_| Kind::Audio(1)).collect(),
         };
-        KernelInst::new(&pk, &node, &id, 1, &inputs, 48_000.0, 0).unwrap_or_else(|e| panic!("{e:#}"));
+        plain_kernel(&pk, &node, &id, 1, &inputs, 48_000.0).unwrap_or_else(|e| panic!("{e:#}"));
     }
 }
 
@@ -328,7 +328,7 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
             outputs: sig.outputs.iter().map(|_| Kind::Audio(2)).collect(),
         };
         let id = &sig.id;
-        let mut k = KernelInst::new(&pk, &node, id, 2, &inputs, RATE, 0).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        let mut k = plain_kernel(&pk, &node, id, 2, &inputs, RATE).unwrap_or_else(|e| panic!("{id}: {e:#}"));
         k.prewarm(&mut []).unwrap_or_else(|e| panic!("{id}: {e:#}"));
         k.process(&mut [], BLOCK).unwrap_or_else(|e| panic!("{id}: {e:#}"));
         k.reset(&mut []).unwrap_or_else(|e| panic!("{id}: {e:#}"));
@@ -343,13 +343,18 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
     assert!(*most < KERNEL_MEMORY, "{id} holds {:.2} MiB at 384 kHz: all the {} MiB it may have", mib(*most), mib(KERNEL_MEMORY));
 }
 
+/// Kernel `id` for node `n`, with no settings, in a sandbox of its own.
+fn plain_kernel(pk: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64) -> Result<KernelInst> {
+    KernelInst::new(pk, n, &Kernel { id, channels, inputs, values: &[], assets: &[], sample_rate }, 0)
+}
+
 /// A std kernel `id` as a node of its own, its inputs at their defaults, stereo.
 fn std_kernel(pk: &PackageSet, id: &str, rate: f64) -> KernelInst {
     let sig = m2_ir::Kernels::kernel(pk, id).unwrap();
     let inputs: Vec<Input> = sig.inputs.iter().map(|p| Input::Const(p.default.unwrap_or(0.0))).collect();
     let outputs = sig.outputs.iter().map(|_| Kind::Audio(2)).collect();
     let node = FNode { name: id.to_string(), module: "t".into(), src: None, origin: None, op: FOp::Const(0.0), outputs };
-    KernelInst::new(pk, &node, id, 2, &inputs, rate, 0).unwrap_or_else(|e| panic!("{id}: {e:#}"))
+    plain_kernel(pk, &node, id, 2, &inputs, rate).unwrap_or_else(|e| panic!("{id}: {e:#}"))
 }
 
 // ABI v1 (rules 1 and 2), RENDER-28: every std kernel resets in its sealed sandbox, taking no
@@ -403,7 +408,7 @@ fn play_state(sb: &mut sandbox::Sandbox, s: &sandbox::State, blocks: usize, x: i
 fn two_states_in_one_instance_play_independently() {
     let pk = std_packages();
     let (module, prefix, _) = pk.module_for("std:delay").unwrap();
-    let born = |sb: &mut sandbox::Sandbox| sb.state(prefix, 4, 1, &[1; 5], 1, SR as f64).unwrap();
+    let born = |sb: &mut sandbox::Sandbox| sb.state(prefix, &sandbox::Spec { inputs: 4, outputs: 1, channels: &[1; 5], audio: 1, sample_rate: SR as f64, values: &[], assets: &[] }).unwrap();
     let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
     let controls = [0.01, 0.5, 0.5];
     let alone = |seed: usize| {
@@ -999,6 +1004,121 @@ fn a_missing_asset_silences_only_its_clip() {
     assert_eq!(out[1_000], [0.0, 0.0], "the missing asset's clip is silent");
     assert_eq!(out[30_000], [0.5, 0.5], "the other clip plays");
     std::fs::remove_dir_all(dir).ok();
+}
+
+// ---------------------------------------------------------------- assets kernels read (ABI v1)
+
+/// A package whose kernel `t:k`, with no input and one mono output, plays channel 0 of its first
+/// asset through `m2.asset_read`, one call a process call, written straight into its output. Its
+/// state at 4096 holds its settings block's address and the frame it is at.
+fn asset_player() -> PathBuf {
+    let k = r#"
+  (func (export "k_new") (param $cfg i32) (result i32)
+    (i32.store (i32.const 4096) (local.get $cfg)) (i32.store (i32.const 4100) (i32.const 0)) (i32.const 4096))
+  (func (export "k_ports") (result i32) (i32.const 1))
+  (func (export "k_reset") (param $s i32) (i32.store offset=4 (local.get $s) (i32.const 0)))
+  (func (export "k_active") (param i32) (result i32) (i32.const 0))
+  (func (export "k_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32)
+    (drop (call $read
+      (i32.load (i32.load offset=36 (i32.load (local.get $s))))
+      (i32.const 0)
+      (i32.load offset=4 (local.get $s))
+      (i32.add (i32.load (local.get $io)) (i32.shl (local.get $from) (i32.const 2)))
+      (i32.sub (local.get $to) (local.get $from))))
+    (i32.store offset=4 (local.get $s) (i32.add (i32.load offset=4 (local.get $s)) (i32.sub (local.get $to) (local.get $from)))))"#;
+    let import = r#"(module (import "m2" "asset_read" (func $read (param i32 i32 i32 i32 i32) (result i32)))"#;
+    package(&module_v1(k).replacen("(module", import, 1))
+}
+
+/// A song whose output is `t:k` of [`asset_player`] reading `names`, in a project whose `assets/`
+/// holds `files` (mono, at the song's rate): the song, its packages, its data, the project and
+/// the package.
+fn asset_song(names: &[&str], files: &[(&str, Vec<f32>)]) -> (Ir, PackageSet, DataSet, PathBuf, PathBuf) {
+    let ir = song(json!([{"id": "k", "op": "kernel", "kernel": "t:k", "assets": names}]), "k", json!([]));
+    let pkg = asset_player();
+    let mut pk = PackageSet::default();
+    pk.load(&pkg).unwrap();
+    let dir = project(&[]);
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    for (name, samples) in files {
+        audio::write_wav(&dir.join("assets").join(name), std::slice::from_ref(samples), SR).unwrap();
+    }
+    let tl = data(&ir, &dir);
+    (ir, pk, tl, dir, pkg)
+}
+
+// Kernel ABI v1 (ABI-2): a kernel reads the project's audio files through its one import. This one
+// plays its asset's own samples, bit for bit, then silence past its end; and the revision records
+// the hash of the file it reads (RENDER-2).
+#[test]
+fn a_kernel_reads_its_asset_through_the_import() {
+    let tone = sine(440.0, 0.5, SR);
+    let (ir, pk, tl, dir, pkg) = asset_song(&["tone.wav"], &[("tone.wav", tone.clone())]);
+    let out = Renderer::new(&check(&ir, &pk).unwrap(), &tl, &pk, SR).unwrap().render(0.6).unwrap();
+    let n = tone.len();
+    assert!(out[..n].iter().zip(&tone).all(|(o, t)| o[0] == *t), "it plays its asset's own samples");
+    assert!(out[n..].iter().all(|o| o[0] == 0.0), "and silence past its end");
+    let sha = m2_song::Sha::of(&std::fs::read(dir.join("assets/tone.wav")).unwrap());
+    assert_eq!(tl.kernel_assets().get("tone.wav"), Some(&sha), "the revision records its hash");
+    for d in [dir, pkg] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+// RENDER-28: a read through `m2.asset_read` allocates nothing: the asset and the memory are found
+// by index in the sandbox's own data, never by name.
+#[test]
+fn an_asset_read_allocates_nothing() {
+    let (ir, pk, tl, dir, pkg) = asset_song(&["tone.wav"], &[("tone.wav", sine(440.0, 0.5, SR))]);
+    let mut r = Renderer::new(&check(&ir, &pk).unwrap(), &tl, &pk, SR).unwrap();
+    r.render_block(0).unwrap();
+    let (peak, allocs) =
+        alloc_count::during(|| (1..100u64).map(|b| r.render_block(b * BLOCK as u64).unwrap()[0][0].abs()).fold(0.0f32, f32::max));
+    assert_eq!(allocs, 0, "no heap operation in 99 blocks of reads");
+    assert!(peak > 0.1, "it read its asset");
+    for d in [dir, pkg] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+// RENDER-25: a kernel's assets are part of its shape, by their hashes, so a new sample under the
+// same name makes its box new; the same file keeps it.
+#[test]
+fn a_new_sample_makes_the_box_new() {
+    let (ir, pk, tl, dir, pkg) = asset_song(&["hit.wav"], &[("hit.wav", sine(440.0, 0.5, SR))]);
+    let flat = check(&ir, &pk).unwrap();
+    let info = Renderer::new(&flat, &tl, &pk, SR).unwrap().info();
+    let kept = |now: &DataSet| {
+        let (cont, restarts) = (Continues::identity(&flat), HashSet::new());
+        let keep = Keep { old: &flat, old_data: &tl, info: &info, cont: &cont, restarts: &restarts };
+        let owner = m2_plugins::Owner::discard();
+        let r = Renderer::prepare(&flat, now, &pk, SR, &mut audio::Cache::default(), &owner, Basis::Keep(keep)).unwrap();
+        (r.stats().kept.kernels, r.stats().fresh.kernels)
+    };
+    assert_eq!(kept(&tl), (1, 0), "the same sample keeps its box");
+    audio::write_wav(&dir.join("assets/hit.wav"), &[sine(220.0, 0.7, SR)], SR).unwrap();
+    assert_eq!(kept(&data(&ir, &dir)), (0, 1), "a new sample under the same name makes it new");
+    for d in [dir, pkg] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+// FMT-15 for kernels: an asset a kernel reads that isn't in assets/ is `asset.missing`, naming it
+// and the track; the revision records no hash for it, and its kernel reads silence while the
+// render goes on.
+#[test]
+fn a_missing_asset_is_named_and_silent() {
+    let (ir, pk, _, dir, pkg) = asset_song(&["gone.wav"], &[]);
+    let (tl, diags) = Project::open(&dir).unwrap().data(&decls(&ir), None);
+    let d = diags.iter().find(|d| d.code == "asset.missing").expect("it is named");
+    assert!(d.message.starts_with("`gone.wav` isn't in assets/, so the sound on track `song`"), "{}", d.message);
+    assert_eq!(d.module.as_deref(), Some("song"));
+    assert!(tl.kernel_assets().is_empty());
+    let out = Renderer::new(&check(&ir, &pk).unwrap(), &tl, &pk, SR).unwrap().render(0.1).unwrap();
+    assert!(out.iter().all(|o| *o == [0.0, 0.0]), "it reads silence");
+    for d in [dir, pkg] {
+        std::fs::remove_dir_all(d).ok();
+    }
 }
 
 // FMT-8a: overlapping clips sum in canonical order, so permuting the file's clips renders the

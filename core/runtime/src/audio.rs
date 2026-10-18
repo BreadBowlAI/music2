@@ -150,6 +150,13 @@ impl Cache {
         Some((sha, a.clone()?))
     }
 
+    /// The asset named `name` that a kernel reads (kernel ABI v1), decoded at its own rate and
+    /// shared, by content, with every clip and kernel that plays the same bytes; `None` when it may
+    /// not be played (`asset.missing`) or can't be decoded, so the kernel reads silence.
+    pub(crate) fn kernel_asset(&mut self, data: &DataSet, name: &str) -> Option<(Sha, Arc<Asset>)> {
+        data.asset_path(name).and_then(|p| self.asset(&p))
+    }
+
     fn clip(&mut self, sha: Sha, asset: &Asset, c: &AudioClip, tempo: &TempoMap, rate: f64) -> Arc<RenderedClip> {
         let key = ClipKey::of(sha, c, tempo, rate);
         self.used_clips.insert(key.clone());
@@ -179,6 +186,47 @@ impl Cache {
     /// Every clip render it holds, weakly: tests check that what no plan plays any more is freed.
     pub fn renders(&self) -> Vec<Weak<RenderedClip>> {
         self.clips.values().map(Arc::downgrade).collect()
+    }
+}
+
+/// The assets a graph's kernels read, by name, each looked up once per build: its hash, which is
+/// part of its kernel's shape (RENDER-25), and its decoded audio, which its sandbox shares
+/// (`m2.asset_read`). `None` for one that is missing or can't be decoded: it reads silence.
+#[derive(Default)]
+pub(crate) struct KernelAssets(HashMap<String, Option<(Sha, Arc<Asset>)>>);
+
+impl KernelAssets {
+    /// Every asset a kernel of `flat` names, voices' kernels included, through `cache`.
+    pub(crate) fn of(flat: &m2_ir::Flat, data: &DataSet, cache: &mut Cache) -> KernelAssets {
+        let mut out = HashMap::new();
+        let mut add = |nodes: &[m2_ir::FNode]| {
+            for n in nodes {
+                if let m2_ir::FOp::Kernel { assets, .. } = &n.op {
+                    for a in assets {
+                        if !out.contains_key(a) {
+                            out.insert(a.clone(), cache.kernel_asset(data, a));
+                        }
+                    }
+                }
+            }
+        };
+        add(&flat.nodes);
+        for n in &flat.nodes {
+            if let m2_ir::FOp::Poly { voice, .. } = &n.op {
+                add(&voice.nodes);
+            }
+        }
+        KernelAssets(out)
+    }
+
+    /// The hash of the asset named `name`, when it plays.
+    pub(crate) fn sha(&self, name: &str) -> Option<Sha> {
+        self.0.get(name)?.as_ref().map(|(sha, _)| *sha)
+    }
+
+    /// Its decoded audio, when it plays.
+    pub(crate) fn get(&self, name: &str) -> Option<Arc<Asset>> {
+        self.0.get(name)?.as_ref().map(|(_, a)| a.clone())
     }
 }
 

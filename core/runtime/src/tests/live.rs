@@ -553,6 +553,7 @@ fn prewarming_keeps_kernel_memory_flat() {
         owner: &owner,
         mode: m2_plugins::RenderMode::Offline,
         pool: vec![],
+        assets: &crate::audio::KernelAssets::default(),
     }
     .graph(&flat.nodes, &flat.order, false, &|_| Make::New(0), &HashMap::new())
     .unwrap();

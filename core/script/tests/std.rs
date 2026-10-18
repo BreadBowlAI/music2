@@ -362,7 +362,7 @@ export default song(({ lane, time }) => {
     // What reads each node: `(kernel id, port)`.
     let mut readers: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     for n in &ns {
-        if let Op::Kernel { kernel, inputs } = &n.op {
+        if let Op::Kernel { kernel, inputs, .. } = &n.op {
             for (port, r) in inputs {
                 readers.entry(split_ref(r).0).or_default().push((kernel.clone(), port.clone()));
             }
@@ -413,7 +413,7 @@ export default song(({ lane, time }) => {
     let input = |kernel: &str, port: &str| -> Vec<(f64, bool)> {
         ns.iter()
             .filter_map(|n| match &n.op {
-                Op::Kernel { kernel: k, inputs } if k == kernel => inputs.get(port),
+                Op::Kernel { kernel: k, inputs, .. } if k == kernel => inputs.get(port),
                 _ => None,
             })
             .filter_map(|r| ns.iter().find(|n| n.id == split_ref(r).0))
@@ -627,7 +627,7 @@ fn std_instruments_reach_their_kernels() {
     let ns = nodes(m);
     let mut readers: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     for n in &ns {
-        if let Op::Kernel { kernel, inputs } = &n.op {
+        if let Op::Kernel { kernel, inputs, .. } = &n.op {
             for (port, r) in inputs {
                 readers.entry(split_ref(r).0).or_default().push((kernel.clone(), port.clone()));
             }
@@ -668,7 +668,7 @@ fn std_instruments_reach_their_kernels() {
             .and_then(|n| if let Op::Kernel { kernel, .. } = &n.op { Some(kernel.as_str()) } else { None })
     };
     let converted = ns.iter().any(|n| match &n.op {
-        Op::Kernel { kernel, inputs } if kernel == "std:mtof" => {
+        Op::Kernel { kernel, inputs, .. } if kernel == "std:mtof" => {
             inputs.get("pitch").is_some_and(|r| kernel_of(r) == Some("std:mono") && split_ref(r).1 == "pitch")
         }
         _ => false,

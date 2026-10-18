@@ -235,35 +235,34 @@ fn port_channels(sig: &m2_ir::KernelSig, n: &FNode, channels: u8, inputs: &[Inpu
 }
 
 impl KernelInst {
-    /// Kernel `id` for node `n` outside an instrument, in a sandbox of its own: born, and sealed.
-    fn new(packages: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64, shape: u64) -> Result<KernelInst> {
+    /// Kernel `k` for node `n` outside an instrument, in a sandbox of its own: born, and sealed.
+    fn new(packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
+        let id = k.id;
         let (module, prefix, _) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
         let mut sandbox = Sandbox::new(&packages.engine, module).with_context(|| format!("{}: `{id}`", n.name))?;
-        let mut k = KernelInst::born(&mut sandbox, 0, prefix, packages, n, id, channels, inputs, sample_rate, shape)?;
+        let mut k = KernelInst::born(&mut sandbox, 0, prefix, packages, n, k, shape)?;
         sandbox.seal().with_context(|| n.name.clone())?;
         k.own = Some(sandbox);
         Ok(k)
     }
 
-    /// Kernel `id` for node `n`, its state born in `sandbox`, a voice pool's `at`th, its constant
+    /// Kernel `k` for node `n`, its state born in `sandbox`, a voice pool's `at`th, its constant
     /// inputs written into its memory once.
-    #[allow(clippy::too_many_arguments)]
-    fn born(
-        sandbox: &mut Sandbox,
-        at: usize,
-        prefix: &str,
-        packages: &PackageSet,
-        n: &FNode,
-        id: &str,
-        channels: u8,
-        inputs: &[Input],
-        sample_rate: f64,
-        shape: u64,
-    ) -> Result<KernelInst> {
+    fn born(sandbox: &mut Sandbox, at: usize, prefix: &str, packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
+        let (id, inputs) = (k.id, k.inputs);
         let sig = m2_ir::Kernels::kernel(packages, id).with_context(|| format!("{}: kernel `{id}` has no signature", n.name))?;
         let (n_in, n_out) = (inputs.len(), n.outputs.len());
-        let ports = port_channels(sig, n, channels, inputs);
-        let state = match sandbox.state(prefix, n_in, n_out, &ports, channels, sample_rate) {
+        let ports = port_channels(sig, n, k.channels, inputs);
+        let spec = sandbox::Spec {
+            inputs: n_in,
+            outputs: n_out,
+            channels: &ports,
+            audio: k.channels,
+            sample_rate: k.sample_rate,
+            values: k.values,
+            assets: k.assets,
+        };
+        let state = match sandbox.state(prefix, &spec) {
             Ok(s) => s,
             Err(e) => {
                 let e = sandbox.ran_out(&n.name, e);
@@ -961,6 +960,18 @@ struct Builder<'a> {
     mode: m2_plugins::RenderMode,
     /// While a voice pool is built: its sandboxes so far, by package (RENDER-32).
     pool: Vec<(String, Sandbox)>,
+    /// The assets its kernels read, decoded and shared.
+    assets: &'a audio::KernelAssets,
+}
+
+/// A kernel node's kernel and settings, as its state is made from them.
+struct Kernel<'a> {
+    id: &'a str,
+    channels: u8,
+    inputs: &'a [Input],
+    values: &'a [f64],
+    assets: &'a [Option<Arc<audio::Asset>>],
+    sample_rate: f64,
 }
 
 /// What a node's box is made of.
@@ -1014,10 +1025,12 @@ impl Builder<'_> {
             FOp::Lane { module, lane, kind: Kind::Audio(_), .. } => Exec::Audio { slot: self.slot(module, lane)? },
             FOp::Time(t) => Exec::Time(*t),
             FOp::Const(v) => Exec::Const(*v as f32),
-            FOp::Kernel { kernel, channels, inputs } => {
+            FOp::Kernel { kernel, channels, inputs, assets, values } => {
+                let read: Vec<Option<Arc<audio::Asset>>> = assets.iter().map(|a| self.assets.get(a)).collect();
+                let k = Kernel { id: kernel, channels: *channels, inputs, values, assets: &read, sample_rate: self.sample_rate };
                 let inst = match boxed {
-                    Make::New(shape) if in_voice => Some(Box::new(self.in_pool(n, kernel, *channels, inputs, shape)?)),
-                    Make::New(shape) => Some(Box::new(KernelInst::new(self.packages, n, kernel, *channels, inputs, self.sample_rate, shape)?)),
+                    Make::New(shape) if in_voice => Some(Box::new(self.in_pool(n, &k, shape)?)),
+                    Make::New(shape) => Some(Box::new(KernelInst::new(self.packages, n, &k, shape)?)),
                     _ => None,
                 };
                 Exec::Kernel(KernelNode { inputs: inputs.to_vec(), seen: vec![COPY; inputs.len()], inst })
@@ -1071,9 +1084,10 @@ impl Builder<'_> {
         })
     }
 
-    /// Kernel `id` for node `n` in a voice: its state born in the pool's sandbox for its package,
+    /// Kernel `k` for node `n` in a voice: its state born in the pool's sandbox for its package,
     /// made when the pool's first kernel of that package is.
-    fn in_pool(&mut self, n: &FNode, id: &str, channels: u8, inputs: &[Input], shape: u64) -> Result<KernelInst> {
+    fn in_pool(&mut self, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
+        let id = k.id;
         let (module, prefix, package) = self.packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
         let at = match self.pool.iter().position(|(p, _)| p == package) {
             Some(at) => at,
@@ -1083,7 +1097,7 @@ impl Builder<'_> {
                 self.pool.len() - 1
             }
         };
-        KernelInst::born(&mut self.pool[at].1, at, prefix, self.packages, n, id, channels, inputs, self.sample_rate, shape)
+        KernelInst::born(&mut self.pool[at].1, at, prefix, self.packages, n, k, shape)
     }
 
     /// A plugin node, and with `boxed` its instance: created through the host, its verified state
@@ -2092,14 +2106,17 @@ impl Renderer {
         };
         let lent = if let Basis::Lend(l) = &basis { Some(*l) } else { None };
         let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep);
+        let assets = audio::KernelAssets::of(flat, data, cache);
         let used = used(flat);
-        let shapes: Vec<Option<Shape>> = flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages) } else { None }).collect();
+        let shapes: Vec<Option<Shape>> =
+            flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages, &assets) } else { None }).collect();
         let blobs: Vec<Option<m2_song::Sha>> = flat.nodes.iter().map(|n| plan::blob(n, data)).collect();
         let w = match keep {
             Some(k) => keep::wire(k, flat, &shapes, &blobs, packages, &mut lanes),
             None => Wiring::fresh(flat),
         };
-        let mut b = Builder { packages, data, sample_rate: rate, slots: &lanes.lanes.refs, caps: &lanes.caps, owner, mode, pool: vec![] };
+        let mut b =
+            Builder { packages, data, sample_rate: rate, slots: &lanes.lanes.refs, caps: &lanes.caps, owner, mode, pool: vec![], assets: &assets };
         let boxed = |i: usize| match (w.kept[i], lent.and_then(|l| l.get(&i))) {
             (true, _) => Make::Moved,
             (false, Some(inst)) => Make::Lent(inst.clone()),

@@ -240,7 +240,7 @@ fn declared_default(ir: &Ir, consts: &[(String, String, f64)], packages: &Packag
         walk(&m.nodes, &mut |n| {
             let reads = |r: &String| ids.contains(split_ref(r).0);
             match &n.op {
-                Op::Kernel { kernel, inputs } | Op::Plugin { plugin: kernel, inputs, .. } => {
+                Op::Kernel { kernel, inputs, .. } | Op::Plugin { plugin: kernel, inputs, .. } => {
                     let sig = match &n.op {
                         Op::Kernel { .. } => packages.kernel(kernel),
                         _ => packages.plugin(kernel),
