@@ -37,6 +37,7 @@ pub mod tracks;
 pub mod value;
 pub mod view;
 pub mod mute;
+pub mod plugins;
 pub mod clips;
 pub mod swap;
 pub mod note_names;
