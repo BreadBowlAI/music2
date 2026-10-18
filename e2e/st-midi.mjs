@@ -243,13 +243,18 @@ await page.click("[data-testid=midi-use]");
 check(await until(() => JSON.stringify(tempo()) === JSON.stringify([{ beat: 0, bpm: 124 }, { beat: 8, bpm: 128 }])), `"Use 128" writes it from bar 3: ${JSON.stringify(tempo())}`);
 await key("Meta+z");
 check(await until(() => JSON.stringify(tempo()) === JSON.stringify([{ beat: 0, bpm: 124 }])), "and ⌘Z takes the tempo back with the tracks");
-// Esc: nothing.
-const revAsk = await page.$eval("[data-revision]", (e) => e.dataset.revision);
+// Esc: nothing. The undo is on disk before the page hears of it, so first wait until the page's
+// revision is the server's: read sooner, the undo's own revision landed after the Esc, like a write.
+const pageRev = () => page.$eval("[data-revision]", (e) => e.dataset.revision);
+const serverRev = () => page.evaluate(async (token) => String((await (await fetch("/api/graph", { headers: { "x-m2-token": token } })).json()).view.revision), sess.token);
+await until(async () => (await serverRev()) === (await pageRev()));
+const revAsk = await pageRev();
 await dropBytes(xAt(9), await yBelow(), "groove.mid", groove);
 await page.waitForSelector("[data-testid=midi-ask]");
 await key("Escape");
+await until(async () => !(await askShown()));
 await sleep(300);
-check(!(await askShown()) && (await page.$eval("[data-revision]", (e) => e.dataset.revision)) === revAsk, "Esc writes nothing");
+check(!(await askShown()) && (await pageRev()) === revAsk && (await serverRev()) === revAsk, `Esc writes nothing: revision ${revAsk}, now ${await pageRev()} (the server's ${await serverRev()})`);
 // One part on Bass's notes at bar 3: into it, no question.
 const bassRow = await box('[data-lane="bass.notes"]');
 const onBass = await dropBytes(xAt(9), bassRow.y + bassRow.height / 2, "low.mid", smfBytes([{ name: "Low", bpm: 128, notes: [[40, 0, 1]] }]));
