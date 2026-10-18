@@ -132,6 +132,11 @@ music2.app when m2 runs from there, or else in this source tree.
 ";
 
 fn main() -> ExitCode {
+    // Tests: `M2_PROBE` set, songs may play the probe plugin (`clap:m2.probe`), in the host process
+    // as any plugin, so a test can make a plugin fail or its host crash while `m2 render` plays it.
+    if std::env::var_os("M2_PROBE").is_some() {
+        m2_plugins::probe::install();
+    }
     // HOST-2: the command runs on a worker while the main thread serves plugins as their main
     // thread, with its run loop; plugins it created are destroyed there before it exits.
     m2_plugins::run_main(|| {
@@ -139,7 +144,11 @@ fn main() -> ExitCode {
         match run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("error: {e:#}");
+                // A fault that stopped a render says its code too (RENDER-1, DIAG-2).
+                match m2_editor::faults::Faulted::of(&e) {
+                    Some(f) => eprintln!("error: {e:#} ({})", f.code),
+                    None => eprintln!("error: {e:#}"),
+                }
                 ExitCode::FAILURE
             }
         }
@@ -386,6 +395,7 @@ fn run() -> Result<()> {
             let mut pk = packages()?;
             let dir = PathBuf::from(arg(1)?);
             let (project, c) = compile(&dir, &mut pk)?;
+            let c = std::sync::Arc::new(c);
             let out = PathBuf::from(arg(2)?);
             let sr = render_rate(&args, &project)?;
             let from = match (flag(&args, "--from"), flag(&args, "--from-bar")) {
@@ -405,9 +415,9 @@ fn run() -> Result<()> {
             let t = Instant::now();
             let r = match preroll {
                 // The range render agents listen with (RENDER-4).
-                Some(p) => render::Render::range(&c.flat, &c.data, &pk, sr, from, p, length, threads)?,
+                Some(p) => render::Render::range(c.clone(), &pk, sr, from, p, length, threads)?,
                 // The same render as the app's Export Audio, so both write the same file.
-                None => render::Render::new(&c.flat, &c.data, &pk, sr, from, length, threads)?,
+                None => render::Render::new(c.clone(), &pk, sr, from, length, threads)?,
             };
             // Into the project's assets/ only exactly, and only as a new file (RENDER-5, WRITE-1).
             let r = r.write_for(&dir, &out, |_| {})?;
@@ -516,10 +526,13 @@ fn run() -> Result<()> {
                     bail!("{} exists, and assets are never replaced: bounce to a new name", p.display());
                 }
             }
-            let mut r = Renderer::new(&flat, &data, &pk, sr)?;
+            // A fault that changes its sound stops it, named (RENDER-1).
+            let song = render::Parts { ir: ir.clone(), flat: flat.clone(), data: data.clone() };
+            let namer = m2_editor::faults::Namer::new(0, std::sync::Arc::new(song), &pk);
+            let mut r = Renderer::new(&flat, &data, &pk, sr).map_err(|e| namer.faulted(e))?;
             let (mut runner, _pool) = render::threads_for(&r, threads);
-            r.seek_on((from * sr as f64).round() as u64, &mut runner)?;
-            let frames = r.render_on(seconds, &mut runner)?;
+            r.seek_on((from * sr as f64).round() as u64, &mut runner).map_err(|e| namer.faulted(e))?;
+            let frames = r.render_on(seconds, &mut runner).map_err(|e| namer.faulted(e))?;
             let folder = path.parent().expect("inside assets/");
             // `assets/`, and `vox/` in it for `vox/keys`, each synced in the one above as it is made.
             m2_os::fs::make_dirs(folder)?;

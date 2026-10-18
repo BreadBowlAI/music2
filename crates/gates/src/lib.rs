@@ -56,6 +56,19 @@ pub struct Song {
     pub code: Arc<(m2_session::Compiled, Snapshot)>,
 }
 
+/// What a render of it names its faults from (RENDER-1).
+impl m2_editor::faults::Song for Song {
+    fn ir(&self) -> &m2_ir::Ir {
+        &self.code.0.ir
+    }
+    fn flat(&self) -> &Flat {
+        &self.flat
+    }
+    fn data(&self) -> &DataSet {
+        &self.data
+    }
+}
+
 impl Song {
     /// A song of build `c`, read from `snapshot` of the project in `dir`.
     pub fn of(dir: &Path, c: m2_session::Compiled, snapshot: Snapshot, rate: u32, compile: Duration) -> Song {

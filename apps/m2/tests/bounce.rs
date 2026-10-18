@@ -47,9 +47,12 @@ fn bounce_of_a_track_still_writes_its_file() {
     let mut packages = m2_runtime::PackageSet::default();
     packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     let c = m2_session::compile(&m2_song::Project::open(&song).unwrap(), &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
-    let flat = m2_ir::check(&rooted(&c.ir, "bass", "out").unwrap(), &packages).unwrap();
+    let ir = rooted(&c.ir, "bass", "out").unwrap();
+    let flat = m2_ir::check(&ir, &packages).unwrap();
     let stem = temp.0.join("1 Bass.wav");
-    Render::new(&flat, &c.data, &packages, spec.sample_rate, 0.0, Length::Seconds(bounce_seconds(&c.data)), Threads::Exactly(1))
+    let seconds = bounce_seconds(&c.data);
+    let song = std::sync::Arc::new(m2_editor::render::Parts { ir, flat, data: c.data.clone() });
+    Render::new(song, &packages, spec.sample_rate, 0.0, Length::Seconds(seconds), Threads::Exactly(1))
         .unwrap()
         .write_float(&stem, |_| {})
         .unwrap();

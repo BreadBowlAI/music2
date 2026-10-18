@@ -109,7 +109,7 @@ pub fn folder_of(p: &Path) -> &Path {
 /// thread's, never the sound thread's.
 pub fn read_at(f: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
     if let Some(watch) = READS.get() {
-        watch(buf.len());
+        watch(f, buf.len())?;
     }
     os::read_at(f, buf, offset)
 }
@@ -130,12 +130,16 @@ pub fn read_full_at(f: &File, buf: &mut [u8], offset: u64, piece: usize) -> io::
     Ok(done)
 }
 
-static READS: std::sync::OnceLock<fn(usize)> = std::sync::OnceLock::new();
+/// A test's watcher of reads ([`watch_reads`]).
+pub type Watch = fn(&File, usize) -> io::Result<()>;
 
-/// Call `f` with each [`read_at`]'s size, on the reading thread, before it reads: tests see who
-/// reads, and how much, and slow the disk down. Set once per process.
+static READS: std::sync::OnceLock<Watch> = std::sync::OnceLock::new();
+
+/// Call `f` with each [`read_at`]'s file and size, on the reading thread, before it reads: tests
+/// see who reads, and how much, and slow the disk down. An error from `f` is the read's, as from
+/// a drive unplugged mid-read. Set once per process.
 #[doc(hidden)]
-pub fn watch_reads(f: fn(usize)) {
+pub fn watch_reads(f: Watch) {
     let _ = READS.set(f);
 }
 

@@ -1248,9 +1248,10 @@ fn a_cache_folder_that_cannot_be_written_still_plays_warped_clips() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-// Review sx-r1 (RENDER-25's rule for a node): offline, a stretch that fails fails the build, naming
-// its clip, so an export never finishes without it. Here the stretch kernel traps. Its part file
-// goes. Live, the clip is silent alone, and the lane is built.
+// Review sx-r1, RENDER-1: offline, a stretch that fails fails the build, naming its clip, so an
+// export never finishes without it: its error is the fault `stretch.failed` about that clip, which
+// the session names. Here the stretch kernel traps. Its part file goes. Live, the clip is silent
+// alone, the lane is built, and it reports `stretch.failed` as it plays the clip.
 #[test]
 fn an_export_whose_stretch_fails_names_the_clip() {
     let trap = r#"(func (export "k_new") (param i32) (result i32) (i32.const 4096))
@@ -1271,11 +1272,22 @@ fn an_export_whose_stretch_fails_names_the_clip() {
     let e = build(&mut audio::Cache::with_renders_in(Some(folder.clone()))).map(|_| ()).expect_err("the export fails");
     let e = format!("{e:#}");
     assert!(e.starts_with("the warped clip of a.wav at beat 2 can't be stretched: ") && e.contains("crashed"), "{e}");
+    let mut cache = audio::Cache::with_renders_in(Some(folder.clone()));
+    let e = build(&mut cache).map(drop).unwrap_err();
+    let fault = e.downcast_ref::<crate::fault::Failed>().map(|f| (f.fault.code, f.fault.subject));
+    let clip = crate::fault::Subject::Clip { lane: 0, clip: 0 };
+    assert_eq!(fault, Some((Code::StretchFailed, clip)), "the fault, with its code");
     assert_eq!(renders_in(&folder), (0, 0), "its part file went");
     let mut live = audio::Cache::live_in(folder.clone());
     let lane = build(&mut live).expect("live, the lane is built");
     assert!(live.settle_renders(std::time::Duration::from_secs(20)));
     assert_eq!(renders_in(&folder), (0, 0));
+    // The chunk that plays it: what a player's disk thread fills.
+    let k = lane.frame_of(2.0) / lane.chunk();
+    assert!(lane.can_fill(k) && lane.fill_chunk(k, &|_| true));
+    let told: Vec<_> = live.faults().drain().into_iter().map(|f| (f.code, f.subject)).collect();
+    assert_eq!(told, [(Code::StretchFailed, clip)], "live, told once");
+    assert!(lane.fill_chunk(k + 1, &|_| true) && live.faults().take().is_none(), "once");
     drop((lane, live));
     for d in [dir, pkg] {
         std::fs::remove_dir_all(d).ok();

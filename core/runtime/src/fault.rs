@@ -28,13 +28,21 @@ pub enum Code {
     PluginCrashed,
     /// The plugin host process stopped answering, and was ended (`plugin.crashed`).
     PluginHung,
+    /// A file that is there can't be read or decoded while it plays: a clip's, or one a kernel
+    /// reads (`asset.unreadable`).
+    Unreadable,
+    /// A warped clip's stretch failed (`stretch.failed`).
+    StretchFailed,
 }
 
 impl Code {
     /// Why `e`, a node's error, stopped it.
     pub fn of(e: &anyhow::Error) -> Code {
-        match e.downcast_ref::<OutOfMemory>() {
-            Some(_) => Code::OutOfMemory,
+        if e.downcast_ref::<OutOfMemory>().is_some() {
+            return Code::OutOfMemory;
+        }
+        match e.downcast_ref::<PluginStopped>() {
+            Some(p) => p.code,
             None => Code::Stopped,
         }
     }
@@ -45,6 +53,8 @@ impl Code {
             Code::Stopped | Code::OutOfMemory => "sound.stopped",
             Code::PluginFailed => "plugin.failed",
             Code::PluginCrashed | Code::PluginHung => "plugin.crashed",
+            Code::Unreadable => "asset.unreadable",
+            Code::StretchFailed => "stretch.failed",
         }
     }
 }
@@ -54,7 +64,65 @@ impl Code {
 pub enum Subject {
     /// A top-level node: a kernel, a `poly`, a plugin.
     Node(u32),
+    /// A clip: the plan's lane `lane` (its place in [`crate::lane_slots`]), and the clip's place
+    /// among that lane's clips in the song's data.
+    Clip { lane: u32, clip: u32 },
+    /// A file a kernel reads: top-level node `node`, and the file's place among the names its
+    /// kernels read ([`crate::audio::assets_of`]), its voice's for a `poly`.
+    Asset { node: u32, slot: u32 },
 }
+
+/// A plugin that stopped working while an offline render played it: why the render fails
+/// (`plugin.failed`, or `plugin.crashed` when its host process ended).
+#[derive(Debug)]
+pub struct PluginStopped {
+    pub code: Code,
+    /// The node's name.
+    pub name: String,
+}
+
+impl std::fmt::Display for PluginStopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code {
+            Code::PluginCrashed | Code::PluginHung => write!(f, "{}: its plugin host ended", self.name),
+            _ => write!(f, "{} reported a processing error", self.name),
+        }
+    }
+}
+
+impl std::error::Error for PluginStopped {}
+
+/// What stopped an offline render (RENDER-1): a fault that changed its sound, as numbers, and the
+/// error that said so, when one did (a node's). Its words are the error's, or the code's; the
+/// session names its part ([`Fault::subject`]) for the person.
+#[derive(Debug)]
+pub struct Failed {
+    pub fault: Fault,
+    why: Option<anyhow::Error>,
+}
+
+impl Failed {
+    pub fn new(fault: Fault, why: Option<anyhow::Error>) -> Failed {
+        Failed { fault, why }
+    }
+
+    /// The error that said so, when one did: the detail.
+    pub fn why(&self) -> Option<&anyhow::Error> {
+        self.why.as_ref()
+    }
+}
+
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The node's words as they were, its causes after them: what `{:#}` showed before.
+        match &self.why {
+            Some(e) => write!(f, "{e:#}"),
+            None => write!(f, "{:?} faulted ({})", self.fault.subject, self.fault.code.diag()),
+        }
+    }
+}
+
+impl std::error::Error for Failed {}
 
 /// One fault: what went wrong, in which plan ([`crate::PlanInfo::id`]), and what it is about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,7 +267,17 @@ impl Reporter {
 
     /// Report `code` about top-level node `node`. Never allocates, locks or waits.
     pub fn node(&self, code: Code, node: usize) {
-        self.faults.report(Fault { code, plan: self.plan, subject: Subject::Node(node as u32) });
+        self.report(code, Subject::Node(node as u32));
+    }
+
+    /// Report `code` about `subject`. Never allocates, locks or waits.
+    pub fn report(&self, code: Code, subject: Subject) {
+        self.faults.report(self.fault(code, subject));
+    }
+
+    /// The fault `code` about `subject`, as this plan's.
+    pub fn fault(&self, code: Code, subject: Subject) -> Fault {
+        Fault { code, plan: self.plan, subject }
     }
 
     /// The ring it reports to.
@@ -287,7 +365,7 @@ mod tests {
     impl Subject {
         fn node(self) -> u32 {
             match self {
-                Subject::Node(n) => n,
+                Subject::Node(n) | Subject::Clip { clip: n, .. } | Subject::Asset { slot: n, .. } => n,
             }
         }
     }

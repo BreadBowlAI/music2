@@ -4144,6 +4144,24 @@ fn a_hung_host_process_is_ended_and_said() {
     assert!(took >= HANG_SEEN && took < Duration::from_secs(3), "ended by the watchdog: {took:?}");
 }
 
+// RENDER-1, HOST-3 (the ex plan's slice 2): an export during which the plugin host process crashes
+// stops, and never says it is done: its `error` names the plugin, with the code `plugin.crashed`,
+// and no file is made. The probe's 40th call ends the host process, once: inside the export. Before,
+// the plugin played silence from there, and the export said it was done.
+#[test]
+fn an_export_during_a_host_crash_fails_naming_the_plugin() {
+    let once = std::env::temp_dir().join(format!("m2-export-crash-{}", std::process::id()));
+    let _ = std::fs::remove_file(&once);
+    let tag = format!("crash-at-40:{}", once.display());
+    let mut ex = Ex::hosted(&Ex::song("p.out"), &m2_plugins::probe::state(&tag, 1.0), remote());
+    let (out, done) = export_now(&mut ex);
+    assert!(once.exists(), "the host process ended");
+    assert_eq!(done["code"], "plugin.crashed", "{done}");
+    assert_eq!(done["error"], "The plugin host crashed while m2 probe (p) played, so the file wasn't made. Try again.", "{done}");
+    assert!(done.get("done").is_none() && !out.exists(), "no file: {done}");
+    std::fs::remove_file(&once).ok();
+}
+
 // RENDER-1, HOST-5, HOST-3: an export in the app borrows the live instances in the host process,
 // as it does in this one: none is made, nothing is said, and the file is the one new instances
 // render. Counted by the session's own owner.

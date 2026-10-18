@@ -105,7 +105,7 @@ fn start_in(state: &Arc<AppState>, token: u64, exports: &Path) -> Result<PathBuf
                     let _ = std::fs::remove_file(p);
                 }
                 let _ = std::fs::remove_dir(&folder);
-                json!({"error": format!("{e:#}"), "path": folder})
+                json!({"error": format!("{e:#}"), "code": m2_editor::faults::Faulted::of(&e).map(|f| f.code), "path": folder})
             }
         };
         // Free before saying so: a client may export again as soon as it hears.

@@ -20,13 +20,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{Context, Result};
 use m2_song::{AudioClip, DataSet, HashCache, Sha, TempoMap};
 
 use crate::BLOCK;
 use crate::fade::xfade;
+use crate::fault::{Code, Failed, Reporter, Subject};
 use crate::offline::Kernel;
 use crate::renders::{self, Stretcher};
 use crate::sandbox::Held;
@@ -219,11 +220,11 @@ struct LaneKey {
 /// its bits never depend on timing.
 #[derive(Default)]
 pub struct Cache {
-    wavs: HashMap<Sha, Option<Arc<Wav>>>,
+    wavs: HashMap<Sha, Found<Arc<Wav>>>,
     warps: HashMap<WarpKey, Arc<Raw>>,
     lanes: HashMap<LaneKey, Arc<AudioLane>>,
     /// The files kernels read (kernel ABI v1), decoded whole, kept while a build uses them.
-    kernels: HashMap<Sha, Option<Arc<Asset>>>,
+    kernels: HashMap<Sha, Found<Arc<Asset>>>,
     used_wavs: HashSet<Sha>,
     used_kernels: HashSet<Sha>,
     used_warps: HashSet<WarpKey>,
@@ -247,33 +248,60 @@ impl Default for Renders {
     }
 }
 
+/// What a file that may be played gave: its audio, none (it holds no audio), or an error (it is
+/// there, but can't be read or decoded: `asset.unreadable`).
+#[derive(Clone)]
+pub(crate) enum Found<T> {
+    Plays(T),
+    Empty,
+    Unreadable,
+}
+
+impl<T> Found<T> {
+    fn of(read: Result<T>, empty: impl FnOnce(&T) -> bool) -> Found<T> {
+        match read {
+            Ok(t) if empty(&t) => Found::Empty,
+            Ok(t) => Found::Plays(t),
+            Err(_) => Found::Unreadable,
+        }
+    }
+
+    fn map<U>(self, f: impl FnOnce(T) -> U) -> Found<U> {
+        match self {
+            Found::Plays(t) => Found::Plays(f(t)),
+            Found::Empty => Found::Empty,
+            Found::Unreadable => Found::Unreadable,
+        }
+    }
+}
+
 impl Cache {
-    /// The opened file and its hash, or `None` when it can't be read, decoded, or holds no
-    /// audio. The hash is a stamp lookup: validating the data already hashed every asset.
-    fn wav(&mut self, path: &Path) -> Option<(Sha, Arc<Wav>)> {
-        let sha = HashCache::global().hash(path).ok()?;
+    /// The opened file at `path` and its hash: it may be played. The hash is a stamp lookup:
+    /// validating the data already hashed every asset.
+    fn wav(&mut self, path: &Path) -> Found<(Sha, Arc<Wav>)> {
+        let Ok(sha) = HashCache::global().hash(path) else { return Found::Unreadable };
         self.used_wavs.insert(sha);
         let decodes = &mut self.decodes;
         let w = self.wavs.entry(sha).or_insert_with(|| {
             *decodes += 1;
-            Wav::open(path).ok().filter(|w| w.frames() > 0).map(Arc::new)
+            Found::of(Wav::open(path), |w| w.frames() == 0).map(Arc::new)
         });
-        Some((sha, w.clone()?))
+        w.clone().map(|w| (sha, w))
     }
 
     /// The asset named `name` that a kernel reads (kernel ABI v1), decoded whole at its own rate,
     /// once while builds use it: a live edit shares it with the renderer it replaces. `None` when
-    /// it may not be played (`asset.missing`) or can't be decoded, so the kernel reads silence.
-    pub(crate) fn kernel_asset(&mut self, data: &DataSet, name: &str) -> Option<(Sha, Arc<Asset>)> {
+    /// it may not be played (`asset.missing`, which validation finds), so the kernel reads silence.
+    pub(crate) fn kernel_asset(&mut self, data: &DataSet, name: &str) -> Option<Found<(Sha, Arc<Asset>)>> {
         let path = data.asset_path(name)?;
-        let sha = HashCache::global().hash(&path).ok()?;
+        let Ok(sha) = HashCache::global().hash(&path) else { return Some(Found::Unreadable) };
         self.used_kernels.insert(sha);
         let decodes = &mut self.decodes;
         let a = self.kernels.entry(sha).or_insert_with(|| {
             *decodes += 1;
-            load_wav(&path).ok().filter(|a| !a.is_empty()).map(Arc::new)
+            Found::of(load_wav(&path), Asset::is_empty).map(Arc::new)
         });
-        Some((sha, a.clone()?))
+        Some(a.clone().map(|a| (sha, a)))
     }
 
     /// A live session's cache: warped clips' stretches are made in the background, and their lanes
@@ -286,6 +314,11 @@ impl Cache {
     /// The ring the plans built with it report faults to.
     pub fn faults(&self) -> &Arc<crate::fault::Faults> {
         &self.faults
+    }
+
+    /// Whether it is a live session's: its ring is the app's, which the session reads.
+    pub fn is_live(&self) -> bool {
+        self.live.is_some()
     }
 
     /// An offline cache whose warped renders are kept in `folder` (tests); none, in memory.
@@ -319,11 +352,22 @@ impl Cache {
     /// Warped clip `c`'s stretch, made by `stretch` from its file `wav`, the asset `asset` (D7),
     /// and its key: from the cache folder when it is there, else asked for now. A live cache's
     /// stretch thread makes it in the background, and lanes play it as it is made (D10); one that
-    /// fails is silent (a line in the log says why). An offline cache makes it here, with the same
-    /// maker ([`renders::make_now`]); one that fails fails the build, naming the clip (RENDER-25's
-    /// rule for a node). Either makes it into its file in the folder, or in memory when there is no
-    /// folder or it can't take it (review sx-r1). None without a stretch kernel.
-    fn warp(&mut self, wav: &Arc<Wav>, asset: Sha, c: &AudioClip, tempo: &TempoMap, rate: f64, stretch: Option<&Kernel>) -> Result<Option<(WarpKey, Arc<Raw>)>> {
+    /// fails is silent, and each lane that plays it reports `stretch.failed`. An offline cache makes
+    /// it here, with the same maker ([`renders::make_now`]); one that fails fails the build with
+    /// that fault, `at` naming the clip (RENDER-1). Either makes it into its file in the folder, or
+    /// in memory when there is no folder or it can't take it (review sx-r1). None without a
+    /// stretch kernel.
+    #[allow(clippy::too_many_arguments)]
+    fn warp(
+        &mut self,
+        wav: &Arc<Wav>,
+        asset: Sha,
+        c: &AudioClip,
+        tempo: &TempoMap,
+        rate: f64,
+        stretch: Option<&Kernel>,
+        at: (&Tell, u32),
+    ) -> Result<Option<(WarpKey, Arc<Raw>)>> {
         let Some(k) = stretch else { return Ok(None) };
         let map = time_map(c, tempo);
         let frames = stream::clip_len(c, tempo, rate);
@@ -341,10 +385,13 @@ impl Cache {
                 let out = Making::new(path.as_deref(), ch, frames);
                 let raw = out.raw().clone();
                 let source = Held::Disk(wav.clone());
-                let job = renders::Job { kernel: k.clone(), source, values: vec![c.pitch], map, rate, out, asset: c.asset.clone() };
+                let job = renders::Job { kernel: k.clone(), source, values: vec![c.pitch], map, rate, out };
                 match &mut self.live {
                     Some(live) => live.push(job),
-                    None => renders::make_now(job).with_context(|| format!("the warped clip of {} at beat {} can't be stretched", c.asset, c.start))?,
+                    None => renders::make_now(job).map_err(|e| {
+                        let why = e.context(format!("the warped clip of {} at beat {} can't be stretched", c.asset, c.start));
+                        Failed::new(at.0.fault(Code::StretchFailed, at.1), Some(why))
+                    })?,
                 }
                 raw
             }
@@ -395,24 +442,25 @@ impl Cache {
 pub(crate) struct KernelAssets(HashMap<String, Option<(Sha, Arc<Asset>)>>);
 
 impl KernelAssets {
-    /// Every asset a kernel of `flat` names, voices' kernels included, through `cache`.
-    pub(crate) fn of(flat: &m2_ir::Flat, data: &DataSet, cache: &mut Cache) -> KernelAssets {
+    /// Every asset a kernel of `flat` names, voices' kernels included, through `cache`. One that is
+    /// there but can't be read or decoded is reported through `report`, once per build, as the
+    /// first node that reads it (`asset.unreadable`): it reads silence.
+    pub(crate) fn of(flat: &m2_ir::Flat, data: &DataSet, cache: &mut Cache, report: &Reporter) -> KernelAssets {
         let mut out = HashMap::new();
-        let mut add = |nodes: &[m2_ir::FNode]| {
-            for n in nodes {
-                if let m2_ir::FOp::Kernel { assets, .. } = &n.op {
-                    for a in assets {
-                        if !out.contains_key(a) {
-                            out.insert(a.clone(), cache.kernel_asset(data, a));
-                        }
-                    }
+        for (i, n) in flat.nodes.iter().enumerate() {
+            for (slot, a) in assets_of(n).into_iter().enumerate() {
+                if out.contains_key(a) {
+                    continue;
                 }
-            }
-        };
-        add(&flat.nodes);
-        for n in &flat.nodes {
-            if let m2_ir::FOp::Poly { voice, .. } = &n.op {
-                add(&voice.nodes);
+                let found = match cache.kernel_asset(data, a) {
+                    Some(Found::Plays(x)) => Some(x),
+                    Some(Found::Unreadable) => {
+                        report.report(Code::Unreadable, Subject::Asset { node: i as u32, slot: slot as u32 });
+                        None
+                    }
+                    Some(Found::Empty) | None => None,
+                };
+                out.insert(a.to_string(), found);
             }
         }
         KernelAssets(out)
@@ -427,6 +475,45 @@ impl KernelAssets {
     pub(crate) fn get(&self, name: &str) -> Option<Arc<Asset>> {
         self.0.get(name)?.as_ref().map(|(_, a)| a.clone())
     }
+}
+
+/// The names of the files top-level node `n`'s kernels read, in order: a kernel's own, a `poly`'s
+/// voice's kernels' (kernel ABI v1). A fault names one by its place here ([`Subject::Asset`]).
+pub fn assets_of(n: &m2_ir::FNode) -> Vec<&str> {
+    fn own(n: &m2_ir::FNode) -> Vec<&str> {
+        match &n.op {
+            m2_ir::FOp::Kernel { assets, .. } => assets.iter().map(String::as_str).collect(),
+            _ => vec![],
+        }
+    }
+    match &n.op {
+        m2_ir::FOp::Poly { voice, .. } => voice.nodes.iter().flat_map(own).collect(),
+        _ => own(n),
+    }
+}
+
+/// Where a lane reports its faults (RENDER-25): its plan's reporter, and its place among the
+/// plan's lanes ([`crate::lane_slots`]).
+#[derive(Clone, Debug)]
+pub(crate) struct Tell {
+    pub(crate) report: Reporter,
+    pub(crate) lane: u32,
+}
+
+impl Tell {
+    fn fault(&self, code: Code, clip: u32) -> crate::fault::Fault {
+        self.report.fault(code, Subject::Clip { lane: self.lane, clip })
+    }
+}
+
+/// What a lane told of its faults: the plan it tells them to now, what it told that plan, and every
+/// fault it met. A lane is shared by the plans that play it (RENDER-27): each new one is told again
+/// what the lane met, as a chunk that failed holds silence until it is worked out again.
+#[derive(Default)]
+struct Told {
+    tell: Option<Tell>,
+    said: Vec<(Code, u32)>,
+    met: Vec<(Code, u32)>,
 }
 
 /// Read `x` at fractional position `pos` (cubic Hermite); silence outside.
@@ -516,6 +603,8 @@ pub struct AudioLane {
     pub(crate) ring: Ring,
     pub(crate) tempo: TempoMap,
     pub(crate) rate: f64,
+    /// Where it reports its faults, and what it told: never locked on the sound thread.
+    told: Mutex<Told>,
 }
 
 impl std::fmt::Debug for AudioLane {
@@ -532,10 +621,13 @@ impl AudioLane {
 
     /// The lane for `clips`, in the order given (canonical: by start and id, so overlapping clips
     /// always sum in one order), from `cache` when it holds it. A clip whose asset may not be
-    /// played (`asset.missing`) or can't be decoded is silent; it never silences the rest
-    /// (FMT-15). A lane short enough to stay whole is filled here. Warped clips are stretched by
-    /// `stretch` (the song's `std:stretch`); without it they are silent. An error only offline: a
-    /// stretch that failed ([`Cache::warp`]).
+    /// played (`asset.missing`) or holds no audio is silent; it never silences the rest (FMT-15).
+    /// One whose file is there but can't be read or decoded is silent too, and reported through
+    /// `tell` (`asset.unreadable`), as the lane reports what it can't read later. A lane short
+    /// enough to stay whole is filled here. Warped clips are stretched by `stretch` (the song's
+    /// `std:stretch`); without it they are silent. An error only offline: a stretch that failed
+    /// ([`Cache::warp`]).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build(
         clips: &[AudioClip],
         data: &DataSet,
@@ -544,11 +636,14 @@ impl AudioLane {
         sample_rate: f64,
         channels: usize,
         stretch: Option<&Kernel>,
+        tell: &Tell,
     ) -> Result<Arc<AudioLane>> {
-        AudioLane::build_with(clips, &|a| data.asset_path(a), cache, tempo, sample_rate, channels, stretch)
+        AudioLane::make(clips, &|a| data.asset_path(a), cache, tempo, sample_rate, channels, stretch, tell)
     }
 
-    /// [`AudioLane::build`] with each asset's path from `asset_path` (tests).
+    /// [`AudioLane::build`] with each asset's path from `asset_path`, its faults reported to
+    /// `cache`'s ring as lane 0 of plan 0 (tests).
+    #[cfg(test)]
     pub(crate) fn build_with(
         clips: &[AudioClip],
         asset_path: &dyn Fn(&str) -> Option<std::path::PathBuf>,
@@ -558,43 +653,90 @@ impl AudioLane {
         channels: usize,
         stretch: Option<&Kernel>,
     ) -> Result<Arc<AudioLane>> {
+        let tell = Tell { report: Reporter::new(cache.faults().clone(), 0), lane: 0 };
+        AudioLane::make(clips, asset_path, cache, tempo, sample_rate, channels, stretch, &tell)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn make(
+        clips: &[AudioClip],
+        asset_path: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+        cache: &mut Cache,
+        tempo: &TempoMap,
+        sample_rate: f64,
+        channels: usize,
+        stretch: Option<&Kernel>,
+        tell: &Tell,
+    ) -> Result<Arc<AudioLane>> {
         let mut found = vec![];
-        for c in clips {
+        for (i, c) in clips.iter().enumerate() {
             let Some(path) = asset_path(&c.asset) else { continue };
-            let Some((sha, w)) = cache.wav(&path) else { continue };
-            found.push((c, ClipKey::of(sha, c, tempo, sample_rate, stretch), w));
+            match cache.wav(&path) {
+                Found::Plays((sha, w)) => found.push((i as u32, c, ClipKey::of(sha, c, tempo, sample_rate, stretch), w)),
+                Found::Empty => {}
+                Found::Unreadable => tell.report.faults().report(tell.fault(Code::Unreadable, i as u32)),
+            }
         }
-        let key = LaneKey { clips: found.iter().map(|f| f.1.clone()).collect(), channels };
+        let key = LaneKey { clips: found.iter().map(|f| f.2.clone()).collect(), channels };
         cache.used_lanes.insert(key.clone());
         if let Some(l) = cache.lanes.get(&key) {
             cache.used_warps.extend(l.warps.iter().cloned());
+            l.tell(tell.clone());
             return Ok(l.clone());
         }
         let (mut out, mut warps) = (vec![], vec![]);
-        for (c, k, w) in found {
+        for (i, c, k, w) in found {
             let at = (tempo.seconds_at(c.start) * sample_rate).round() as u64;
             let sh = Shape::of(c, w.rate, tempo, sample_rate);
             let src = if c.warp.is_empty() {
                 Source::Wav(w.clone(), sh)
             } else {
-                let Some((key, raw)) = cache.warp(&w, k.asset, c, tempo, sample_rate, stretch)? else { continue };
+                let Some((key, raw)) = cache.warp(&w, k.asset, c, tempo, sample_rate, stretch, (tell, i))? else { continue };
                 warps.push(key);
                 Source::Render(raw, sh)
             };
-            out.push(Clip::new(at, src, stream::clip_len(c, tempo, sample_rate)));
+            out.push(Clip::new(at, src, stream::clip_len(c, tempo, sample_rate), i));
         }
-        let mut lane = AudioLane::of(out, channels, tempo.clone(), sample_rate, Some(key.clone()));
+        let mut lane = AudioLane::of(out, channels, tempo.clone(), sample_rate, Some(key.clone()), Some(tell.clone()));
         lane.warps = warps;
         let lane = Arc::new(lane);
         cache.lanes.insert(key, lane.clone());
         Ok(lane)
     }
 
-    fn of(clips: Vec<Clip>, channels: usize, tempo: TempoMap, rate: f64, key: Option<LaneKey>) -> AudioLane {
+    fn of(clips: Vec<Clip>, channels: usize, tempo: TempoMap, rate: f64, key: Option<LaneKey>, tell: Option<Tell>) -> AudioLane {
         let ring = Ring::new(&clips, channels, rate);
-        let lane = AudioLane { key, warps: vec![], clips, channels, ring, tempo, rate };
+        let told = Mutex::new(Told { tell, ..Told::default() });
+        let lane = AudioLane { key, warps: vec![], clips, channels, ring, tempo, rate, told };
         lane.fill_all();
         lane
+    }
+
+    /// Report its faults to `tell` from now on: a new plan plays it. What it met before is told
+    /// to that plan at once.
+    fn tell(&self, tell: Tell) {
+        let mut t = self.told.lock().unwrap_or_else(|e| e.into_inner());
+        for &(code, clip) in &t.met {
+            tell.report.faults().report(tell.fault(code, clip));
+        }
+        t.said = t.met.clone();
+        t.tell = Some(tell);
+    }
+
+    /// `code` happened to clip `clip` (its place in the song's data): reported once to the plan
+    /// it tells. Off the sound thread only: it locks.
+    pub(crate) fn fault(&self, code: Code, clip: u32) {
+        let mut t = self.told.lock().unwrap_or_else(|e| e.into_inner());
+        if !t.met.contains(&(code, clip)) {
+            t.met.push((code, clip));
+        }
+        if t.said.contains(&(code, clip)) {
+            return;
+        }
+        if let Some(tell) = &t.tell {
+            tell.report.faults().report(tell.fault(code, clip));
+        }
+        t.said.push((code, clip));
     }
 
     /// A lane of renders in memory at their start frames, in a song at `rate` with no tempo
@@ -604,9 +746,9 @@ impl AudioLane {
         let clips = clips.into_iter().map(|(at, r)| {
             let len = r[0].len();
             let sh = Shape { offset: 0.0, step: 1.0, len, reverse: false, gain: 1.0, fade_in: 0, fade_out: 0 };
-            Clip::new(at, Source::Mem(r, sh), len)
+            Clip::new(at, Source::Mem(r, sh), len, 0)
         });
-        AudioLane::of(clips.collect(), channels, TempoMap::constant(120.0), rate, None)
+        AudioLane::of(clips.collect(), channels, TempoMap::constant(120.0), rate, None, None)
     }
 
     /// Whether transport frame `pos` is strictly inside a clip: playing from there starts

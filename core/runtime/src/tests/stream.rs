@@ -17,8 +17,9 @@ thread_local! {
     static READS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
 }
 
-fn watch(n: usize) {
+fn watch(_: &std::fs::File, n: usize) -> std::io::Result<()> {
     let _ = READS.try_with(|r| r.set((r.get().0.max(n), r.get().1 + 1)));
+    Ok(())
 }
 
 /// What this thread read since the last call.
@@ -387,4 +388,24 @@ fn a_render_whose_disk_fills_goes_on_in_memory() {
     }
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "its part file went, and no render is named");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+// io r8, RENDER-1 (the ex plan's slice 2): an export never finishes with a clip silent. A streamed
+// file cut short after the build can't be read where it ends: the render stops there, its error the
+// fault `asset.unreadable` about that clip (lane 0, its first clip), which the session names.
+// Before, that chunk played silence and the render said nothing.
+#[test]
+fn an_export_of_a_streamed_file_cut_short_fails_naming_it() {
+    use crate::fault::{Code, Failed, Subject};
+    // Six seconds: more chunks than a lane's slots, so it is read as it plays.
+    let (ir, tl, dir) = super::audio_song(&[("long.wav", vec![super::sine(220.0, 6.0, SR as u32); 2], SR as u32)], serde_json::json!([{"start": 0, "length": 12, "asset": "long.wav"}]));
+    let pk = super::std_packages();
+    let flat = super::check(&ir, &pk).unwrap();
+    let mut r = crate::Renderer::new(&flat, &tl, &pk, SR as u32).unwrap();
+    let file = std::fs::OpenOptions::new().write(true).open(dir.join("assets/long.wav")).unwrap();
+    file.set_len(file.metadata().unwrap().len() / 2).unwrap();
+    let e = r.render(6.0).map(drop).expect_err("the render stops");
+    let fault = e.downcast_ref::<Failed>().map(|f| (f.fault.code, f.fault.subject));
+    assert_eq!(fault, Some((Code::Unreadable, Subject::Clip { lane: 0, clip: 0 })), "{e:#}");
+    std::fs::remove_dir_all(dir).ok();
 }

@@ -513,8 +513,10 @@ impl LanePlan {
     /// it has moves in, with new data when its data or the tempo map changed (RENDER-27): notes
     /// rebuilt in the new map, in a bigger scheduler when they outgrew the old one, and every
     /// audio lane rendered through `cache` (which renders only what it doesn't hold), swapped in
-    /// when its renders differ. Other lanes are made here. An error only offline: a warped clip's
-    /// stretch failed ([`audio::Cache`]).
+    /// when its renders differ. Other lanes are made here. Each audio lane reports its faults
+    /// through `report`, as its place among them. An error only offline: a warped clip's stretch
+    /// failed ([`audio::Cache`]).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         flat: &Flat,
         data: &DataSet,
@@ -523,6 +525,7 @@ impl LanePlan {
         rate: f64,
         keep: Option<&Keep>,
         stretch: Option<&crate::offline::Kernel>,
+        report: &Reporter,
     ) -> Result<LanePlan> {
         let refs = lane_slots(flat);
         let mut p = LanePlan { lanes: Lanes { slots: vec![], refs: vec![], live: refs.len() }, caps: vec![], moves: vec![], audio: vec![] };
@@ -561,7 +564,8 @@ impl LanePlan {
                 }
                 (Kind::Control(_), None) => LaneSlot::Control(Some(Arc::new(data.control(m, l)))),
                 (Kind::Audio(ch), from) => {
-                    let lane = AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize, stretch)?;
+                    let tell = audio::Tell { report: report.clone(), lane: s as u32 };
+                    let lane = AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize, stretch, &tell)?;
                     match from.map(|(k, o)| (o, k.info.lanes[o].audio.clone())) {
                         Some((o, Some(was))) if was.same(&lane) => {
                             audio = Some(was);

@@ -1225,7 +1225,7 @@ pub fn range(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let from = song.data.tempo().seconds_at(BAR_64);
     let length = song.data.tempo().seconds_at(BAR_64 + 32.0) - from;
     // On one thread, as the step 7 records were (8a).
-    Render::new(&song.flat, &song.data, &lab.packages, song.rate, from, Length::Seconds(length), Threads::Exactly(1))?
+    Render::new(std::sync::Arc::new(song.clone()), &lab.packages, song.rate, from, Length::Seconds(length), Threads::Exactly(1))?
         .write(&file, |_| {})?;
     out.info("today's --from replay at bar 64, 8 bars", format!("{:.2} s", t.elapsed().as_secs_f64()));
     range_engine(lab, &song, &mut out)?;
@@ -1297,7 +1297,7 @@ fn range_labels(lab: &Lab, song: &Song, out: &mut Outcome, file: &std::path::Pat
     let seconds = |beat: f64| song.data.tempo().seconds_at(beat);
     let render = |from: f64| -> Result<m2_editor::render::Rendered> {
         let length = Length::Seconds(seconds(32.0));
-        let r = Render::range(&song.flat, &song.data, &lab.packages, song.rate, seconds(from), seconds(8.0), length, Threads::Exactly(1))?;
+        let r = Render::range(std::sync::Arc::new(song.clone()), &lab.packages, song.rate, seconds(from), seconds(8.0), length, Threads::Exactly(1))?;
         r.write(file, |_| {})
     };
     let (late, early) = (render(BAR_64)?, render(0.0)?);

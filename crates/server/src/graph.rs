@@ -484,9 +484,13 @@ pub struct Teardown {
 
 /// Whether `e` says the computer ran out of memory, or of address space: wasmtime's "mmap failed to
 /// reserve …" when a kernel instance's memory can't be reserved. Not a sound over its own memory
-/// ([`m2_runtime::OutOfMemory`]): that one says so itself, and closing other apps won't help.
+/// ([`m2_runtime::OutOfMemory`]), nor a fault that stopped a render ([`Faulted`]): those say so
+/// themselves, and closing other apps won't help.
+///
+/// [`Faulted`]: m2_editor::faults::Faulted
 pub(crate) fn out_of_memory(e: &anyhow::Error) -> bool {
-    e.downcast_ref::<m2_runtime::OutOfMemory>().is_none() && e.chain().any(|c| {
+    let own = e.downcast_ref::<m2_runtime::OutOfMemory>().is_some() || m2_editor::faults::Faulted::of(e).is_some();
+    !own && e.chain().any(|c| {
         let t = c.to_string();
         ["mmap failed", "Cannot allocate memory", "out of memory"].iter().any(|s| t.contains(s))
     })

@@ -10,7 +10,8 @@
 //! An offline cache (an export's, a range render's) has no stretch thread: it makes each render
 //! whole before its build returns, with the same maker ([`make_now`]), so its bits never depend on
 //! timing. A render the cache folder can't take is made in memory instead ([`Making`], review
-//! sx-r1); one that still fails fails the build offline, naming its clip.
+//! sx-r1); one that still fails fails the build offline, naming its clip (`stretch.failed`), and
+//! live is marked failed, so each lane that plays it reports so.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,8 +33,6 @@ pub(crate) struct Job {
     pub(crate) map: Vec<[f64; 2]>,
     pub(crate) rate: f64,
     pub(crate) out: Making,
-    /// The clip's file, for the log when it fails.
-    pub(crate) asset: String,
 }
 
 #[derive(Default)]
@@ -153,7 +152,7 @@ impl Drop for Stretcher {
 /// The thread: each job in turn, till the cache is gone.
 fn work(shared: &Shared) {
     loop {
-        let mut job = {
+        let job = {
             let mut q = shared.queue();
             loop {
                 if shared.closing.load(Ordering::Acquire) {
@@ -166,12 +165,10 @@ fn work(shared: &Shared) {
                 q = shared.wait(q);
             }
         };
-        let (raw, asset) = (job.out.raw().clone(), std::mem::take(&mut job.asset));
-        if let Err(e) = make(shared, job)
-            && !raw.stopped()
-            && !shared.closing.load(Ordering::Acquire)
-        {
-            eprintln!("music2: a warped clip of {asset} plays silence: its stretch failed: {e:#}");
+        let raw = job.out.raw().clone();
+        // One that failed is silent; each lane that plays it reports `stretch.failed` (RENDER-25).
+        if make(shared, job).is_err() && !raw.stopped() && !shared.closing.load(Ordering::Acquire) {
+            raw.fail();
         }
         shared.queue().busy = false;
         shared.wake.notify_all();
@@ -187,7 +184,7 @@ pub(crate) fn make_now(job: Job) -> Result<()> {
 /// once whole, or into memory. One that stops or fails is over: what it didn't make plays silence,
 /// and its part file goes.
 fn make(shared: &Shared, job: Job) -> Result<()> {
-    let Job { kernel, source, values, map, rate, mut out, asset: _ } = job;
+    let Job { kernel, source, values, map, rate, mut out } = job;
     let raw = out.raw().clone();
     let (channels, frames) = raw.size();
     let stopped = || raw.stopped() || shared.closing.load(Ordering::Acquire);

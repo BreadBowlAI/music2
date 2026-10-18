@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
 use m2_editor::midifile::ClipAt;
-use m2_editor::render::{Length, Render, Threads};
-use m2_ir::{FOp, Flat};
+use m2_editor::render::{Length, Parts, Render, Threads};
+use m2_ir::FOp;
 use m2_session::Revision;
 use serde_json::{Value, json};
 
@@ -41,8 +41,8 @@ impl Graph {
 /// ([`Graph::stem_render`]), all from the revision they were planned on.
 pub struct StemsPlan {
     pub song: String,
-    /// Each stem's track label and graph.
-    pub stems: Vec<(String, Flat)>,
+    /// Each stem's track label, and its song: its IR rooted at the track, its graph, the data.
+    pub stems: Vec<(String, Arc<Parts>)>,
     rev: Arc<Revision>,
     token: u64,
 }
@@ -102,7 +102,7 @@ impl Graph {
                     let why = d.first().map_or_else(String::new, |d| format!(": {}", d.message));
                     anyhow!("{}'s stem doesn't build{why}", t.label)
                 })?;
-                stems.push((t.label, flat));
+                stems.push((t.label, Arc::new(Parts { ir, flat, data: rev.compiled.data.clone() })));
             }
             if stems.is_empty() {
                 bail!("The song has no tracks to export as stems: each is muted in the song.");
@@ -114,16 +114,14 @@ impl Graph {
     /// Stem `i` of `plan`, ready to render: as `m2 bounce --track` renders it, from 0 to 2 s past
     /// the song's last clip, on an export's threads. Only building it waits for the session.
     pub fn stem_render(&self, plan: &StemsPlan, i: usize) -> Result<Render> {
-        let (rev, flat, token) = (plan.rev.clone(), plan.stems[i].1.clone(), plan.token);
+        let (rev, stem, token) = (plan.rev.clone(), plan.stems[i].1.clone(), plan.token);
         let idle = self.inner.current_device().is_none_or(|d| d.player.idle());
         let threads = crate::export::export_threads(Threads::from_env()?, idle, false);
         self.call(move |a| {
             let o = a.open.as_ref().filter(|o| o.token == token).ok_or_else(|| anyhow!("the song was closed"))?;
-            let data = &rev.compiled.data;
-            let seconds = m2_editor::render::bounce_seconds(data);
+            let seconds = m2_editor::render::bounce_seconds(&rev.compiled.data);
             // Offline renders run at the project's rate (RENDER-31a).
-            Render::new(&flat, data, &o.session.packages, rev.project.sample_rate(), 0.0, Length::Seconds(seconds), threads)
-                .map_err(super::plainly)
+            Render::new(stem, &o.session.packages, rev.project.sample_rate(), 0.0, Length::Seconds(seconds), threads).map_err(super::plainly)
         })
     }
 }

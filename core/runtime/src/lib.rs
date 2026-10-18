@@ -725,7 +725,12 @@ impl PluginNode {
             return Ok(());
         };
         // One that failed live plays silence and is never called again: the session replaces it.
+        // Offline its render fails (RENDER-1): an export lent it, and it failed or its host ended.
         if inst.dead() {
+            if !b.live {
+                let code = if inst.host().gone(inst.handle()) { Code::PluginCrashed } else { Code::PluginFailed };
+                return Err(fault::PluginStopped { code, name: self.name.clone() }.into());
+            }
             out.fill(0.0);
             self.status = m2_plugins::Status::Sleep;
             return Ok(());
@@ -820,8 +825,11 @@ impl PluginNode {
             // A plugin may leave the thread flushing subnormals (RENDER-2a).
             fpenv::canon();
             if self.status == m2_plugins::Status::Error {
-                if b.strict {
-                    bail!("{} reported a processing error", self.name);
+                // Offline the render fails, naming it (RENDER-1), strict or not: an export never
+                // leaves a plugin out.
+                if !b.live {
+                    let code = if host.gone(h) { Code::PluginCrashed } else { Code::PluginFailed };
+                    return Err(fault::PluginStopped { code, name: self.name.clone() }.into());
                 }
                 // Live, only this plugin goes silent, never the song: the session replaces it from
                 // its committed state (HOST-5), and tells it. Atomic stores: nothing here allocates.
@@ -1732,7 +1740,8 @@ fn run_graph(
 }
 
 /// Partition `p`'s task: its nodes in plan order, in the one floating-point mode. Offline (an
-/// export too, strict or not), false when a node failed, its error kept in `parts`. Live, played by
+/// export too, strict or not), false when a node failed, its error kept in `parts` as a
+/// [`fault::Failed`] naming the node (RENDER-1). Live, played by
 /// the [`Engine`], a node that fails stops alone (RENDER-25):
 /// it is silent from then on, what reads it reads silence, `sound.stopped` is reported for the
 /// session to tell, and the partition goes on.
@@ -1747,8 +1756,9 @@ fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[
         let own = unsafe { view.own(i) };
         if let Err(e) = step(own, &view.reader(parts, p, i), b, Seg::WHOLE, None, None, lanes, &mut []) {
             if !b.live {
+                let f = report.fault(Code::of(&e), fault::Subject::Node(i as u32));
                 // SAFETY: this is partition p's task.
-                unsafe { parts.fail(p, i, e) };
+                unsafe { parts.fail(p, i, fault::Failed::new(f, Some(e)).into()) };
                 return false;
             }
             // Its error allocated, and is dropped here: this path only.
@@ -2396,6 +2406,9 @@ pub struct Renderer {
     /// ring is ever filled on the sound thread (RENDER-30, D11). Unmarked, it fills them itself
     /// before each block, as an offline render does (D10).
     disk: bool,
+    /// Its ring is its own, an offline cache's: read before each block and after it, so the first
+    /// fault found while it renders (a file it can't read, a stretch) fails it (RENDER-1).
+    checks: bool,
     non_finite: u64,
     trace: Option<Trace>,
     dropped: u32,
@@ -2472,7 +2485,11 @@ impl Renderer {
         let mk = |n: &FNode, found: &m2_plugins::Found, shape: u64| make_plugin(packages, data, owner, sample_rate, mode, n, found, shape);
         // The assets its kernels read: the delays below add no kernel, so the checked graph's are
         // the played one's.
-        let assets = audio::KernelAssets::of(checked, data, cache);
+        // Its parts report to the cache's ring, as this plan: a live session's is the app's
+        // (RENDER-25). Its build reports too: a file it can't read.
+        let id = GENERATION.fetch_add(1, Ordering::Relaxed);
+        let report = Reporter::new(cache.faults().clone(), id);
+        let assets = audio::KernelAssets::of(checked, data, cache, &report);
         let lat = latencies(checked, packages, data, &assets, keep, lent, &mut made, mk)?;
         let l = latency::plan(checked, &lat);
         let played = (!l.delays.is_empty()).then(|| Arc::new(latency::insert(checked, &l)));
@@ -2489,7 +2506,7 @@ impl Renderer {
         });
         let keep = keep.as_ref();
         let stretch = offline::Kernel::of(packages, offline::STRETCH);
-        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep, stretch.as_ref())?;
+        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep, stretch.as_ref(), &report)?;
         let used = used(flat);
         let mut shapes: Vec<Option<Shape>> =
             flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages, &assets) } else { None }).collect();
@@ -2667,7 +2684,6 @@ impl Renderer {
             cells.reserve_carry(pairs.len() + voice_cells.len());
             Box::new(Entry { after: k.info.id, moves: w.moves, lanes: lanes.moves, cells: pairs, voice_cells, release: w.release })
         });
-        let id = GENERATION.fetch_add(1, Ordering::Relaxed);
         let overlays = flat.overlays.iter().enumerate().map(|(k, s)| (s.module.clone(), s.into.clone(), cells.overlay(k))).collect();
         // A live plan's meters (8b.8): its output, and each celled overlay by its track.
         let taps = (mode == m2_plugins::RenderMode::Realtime).then(|| {
@@ -2675,8 +2691,6 @@ impl Renderer {
                 flat.overlays.iter().enumerate().map(|(k, s)| (base + k, s.module.as_str(), placed.nodes[k].channels)).collect();
             Taps::new(&sites)
         });
-        // Its parts report to the cache's ring: a live session's is the app's (RENDER-25).
-        let report = Reporter::new(cache.faults().clone(), id);
         for (i, e) in graph.exec.iter_mut().enumerate().take(checked.nodes.len()) {
             if let Exec::Plugin(p) = e {
                 p.reports = Some((report.clone(), i));
@@ -2740,6 +2754,7 @@ impl Renderer {
             strict: true,
             live: false,
             disk: false,
+            checks: !cache.is_live(),
             non_finite: 0,
             trace: None,
             dropped: 0,
@@ -2873,10 +2888,25 @@ impl Renderer {
         let _mode = fpenv::Canon::enter();
         let alone = &mut Runner::one();
         let runner = if self.plan.plugins { alone } else { runner };
+        // A fault its build found fails it before its first block (RENDER-1).
+        self.faulted()?;
         let b = self.pre(clock, runner);
         let failed = run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner, &self.plan.report);
         self.post(&b, failed)?;
+        self.faulted()?;
         Ok(&self.frames)
+    }
+
+    /// Offline, with a ring of its own: the first fault in it, as the error that stops the render
+    /// (RENDER-1). Live, the session reads the ring, and the part goes silent alone.
+    fn faulted(&self) -> Result<()> {
+        if self.checks
+            && !self.live
+            && let Some(f) = self.plan.report.faults().take()
+        {
+            return Err(fault::Failed::new(f, None).into());
+        }
+        Ok(())
     }
 
     /// A block's pre-pass, on this thread: the transport, cell values, lanes, the trace and the

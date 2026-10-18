@@ -16,10 +16,11 @@ static ALONE: Mutex<()> = Mutex::new(());
 /// Every read of the disk thread takes 200 ms more while this is set.
 static SLOW: AtomicBool = AtomicBool::new(false);
 
-fn watch(_: usize) {
+fn watch(_: &std::fs::File, _: usize) -> std::io::Result<()> {
     if SLOW.load(Ordering::Relaxed) && std::thread::current().name() == Some("m2-disk") {
         std::thread::sleep(Duration::from_millis(200));
     }
+    Ok(())
 }
 
 fn alone() -> MutexGuard<'static, ()> {

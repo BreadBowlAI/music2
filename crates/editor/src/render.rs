@@ -15,6 +15,10 @@
 //! A render runs on as many threads as its [`Threads`] say, with the same bits on any number
 //! (RENDER-2). A song that hosts a plugin renders on one for now: plugins on worker threads come
 //! with live playback on all cores.
+//!
+//! A render never finishes with a part silent (RENDER-1): any fault that changed its sound stops
+//! it, a node's error or one its ring holds (a file it can't read, a stretch that failed), named by
+//! its [`Namer`] as one error, [`Faulted`].
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -28,6 +32,9 @@ use m2_ir::{FOp, Flat};
 use m2_os::process::Cores;
 use m2_runtime::{PackageSet, PluginInstance, Pool, Renderer, Runner};
 use m2_song::DataSet;
+
+pub use crate::faults::{Faulted, Parts, Song};
+use crate::faults::Namer;
 
 /// The longest render. A WAV file's sizes are 32-bit, so it can't hold much over 4 hours of
 /// 24-bit stereo at 48 kHz; and a song this long is most likely a clip put far past the rest.
@@ -105,6 +112,8 @@ pub fn threads_for(renderer: &Renderer, threads: Threads) -> (Runner, Option<Poo
 /// A song ready to render: one revision's renderer, at the start of what's rendered.
 pub struct Render {
     renderer: Renderer,
+    /// Names what stopped it, when a fault did.
+    namer: Namer,
     /// The threads it renders on; the pool's workers stop when it drops.
     runner: Runner,
     _pool: Option<Pool>,
@@ -196,28 +205,23 @@ fn bounds(data: &DataSet, sample_rate: u32, from: f64, length: Length) -> Result
 }
 
 impl Render {
-    /// Render a compiled revision (its graph and the data it plays) from `from` seconds in
-    /// (replaying up to there first), on `threads`: exact (RENDER-1).
-    pub fn new(
-        flat: &Flat,
-        data: &DataSet,
-        packages: &PackageSet,
-        sample_rate: u32,
-        from: f64,
-        length: Length,
-        threads: Threads,
-    ) -> Result<Render> {
+    /// Render a compiled song (its graph and the data it plays) from `from` seconds in (replaying
+    /// up to there first), on `threads`: exact (RENDER-1).
+    pub fn new(song: Arc<dyn Song>, packages: &PackageSet, sample_rate: u32, from: f64, length: Length, threads: Threads) -> Result<Render> {
+        let namer = Namer::new(0, song.clone(), packages);
+        let (flat, data) = (song.flat(), song.data());
         let (first, end) = bounds(data, sample_rate, from, length)?;
-        let mut renderer = Renderer::new(flat, data, packages, sample_rate)?;
+        let mut renderer = Renderer::new(flat, data, packages, sample_rate).map_err(|e| namer.faulted(e))?;
         renderer.set_strict(false);
         let (mut runner, pool) = threads_for(&renderer, threads);
-        renderer.seek_on(first, &mut runner)?;
-        Ok(Render::of(renderer, (runner, pool), sample_rate, (first, end), length, true, pure(flat)))
+        renderer.seek_on(first, &mut runner).map_err(|e| namer.faulted(e))?;
+        Ok(Render::of(renderer, namer, (runner, pool), sample_rate, (first, end), length, true, pure(flat)))
     }
 
     #[allow(clippy::too_many_arguments)]
     fn of(
         renderer: Renderer,
+        namer: Namer,
         (runner, pool): (Runner, Option<Pool>),
         sample_rate: u32,
         (first, end): (u64, u64),
@@ -225,7 +229,20 @@ impl Render {
         exact: bool,
         reproducible: bool,
     ) -> Render {
-        Render { renderer, runner, _pool: pool, sample_rate, first, end, length, stop: Arc::default(), exact, reproducible, float: false }
+        Render {
+            renderer,
+            namer,
+            runner,
+            _pool: pool,
+            sample_rate,
+            first,
+            end,
+            length,
+            stop: Arc::default(),
+            exact,
+            reproducible,
+            float: false,
+        }
     }
 
     /// An export from the song's start, as [`Render::new`] makes one, that plays the live engine's
@@ -234,19 +251,20 @@ impl Render {
     /// is created for it. The live engine must be held while it renders, and each lent instance
     /// loaded with its committed state, set to offline mode and activated first.
     pub fn lending(
-        flat: &Flat,
-        data: &DataSet,
+        song: Arc<dyn Song>,
         packages: &PackageSet,
         sample_rate: u32,
         length: Length,
         lent: &HashMap<usize, Arc<PluginInstance>>,
         threads: Threads,
     ) -> Result<Render> {
+        let namer = Namer::new(0, song.clone(), packages);
+        let (flat, data) = (song.flat(), song.data());
         let (first, end) = bounds(data, sample_rate, 0.0, length)?;
-        let mut renderer = Renderer::lending(flat, data, packages, sample_rate, lent)?;
+        let mut renderer = Renderer::lending(flat, data, packages, sample_rate, lent).map_err(|e| namer.faulted(e))?;
         renderer.set_strict(false);
         let threads = threads_for(&renderer, threads);
-        Ok(Render::of(renderer, threads, sample_rate, (first, end), length, true, pure(flat)))
+        Ok(Render::of(renderer, namer, threads, sample_rate, (first, end), length, true, pure(flat)))
     }
 
     /// Play `inst`, a new instance, at node `node` in place of the live one lent to this export
@@ -261,10 +279,8 @@ impl Render {
     /// as a live jump does: notes sounding there aren't chased, and tails from before it are
     /// missing, so it is approximate (RENDER-5). A preroll that reaches the song's start makes it
     /// the exact render. For listening only: an export or a bounce is always exact (RENDER-3).
-    #[allow(clippy::too_many_arguments)]
     pub fn range(
-        flat: &Flat,
-        data: &DataSet,
+        song: Arc<dyn Song>,
         packages: &PackageSet,
         sample_rate: u32,
         from: f64,
@@ -275,22 +291,24 @@ impl Render {
         if !(preroll >= 0.0 && preroll.is_finite()) {
             bail!("can't start {preroll} seconds before the range");
         }
-        let (first, end) = bounds(data, sample_rate, from, length)?;
+        let (first, end) = bounds(song.data(), sample_rate, from, length)?;
         let t0 = first.saturating_sub((preroll * sample_rate as f64).round() as u64);
         if t0 == 0 {
-            return Render::new(flat, data, packages, sample_rate, from, length, threads);
+            return Render::new(song, packages, sample_rate, from, length, threads);
         }
-        let mut renderer = Renderer::starting_at(flat, data, packages, sample_rate, t0)?;
+        let namer = Namer::new(0, song.clone(), packages);
+        let (flat, data) = (song.flat(), song.data());
+        let mut renderer = Renderer::starting_at(flat, data, packages, sample_rate, t0).map_err(|e| namer.faulted(e))?;
         renderer.set_strict(false);
         let (mut runner, pool) = threads_for(&renderer, threads);
         let mut scratch = vec![[0.0f32; 2]; CHUNK];
         let mut left = first - t0;
         while left > 0 {
             let n = left.min(CHUNK as u64) as usize;
-            renderer.process_on(&mut scratch[..n], &mut runner)?;
+            renderer.process_on(&mut scratch[..n], &mut runner).map_err(|e| namer.faulted(e))?;
             left -= n as u64;
         }
-        Ok(Render::of(renderer, (runner, pool), sample_rate, (first, end), length, false, pure(flat)))
+        Ok(Render::of(renderer, namer, (runner, pool), sample_rate, (first, end), length, false, pure(flat)))
     }
 
     /// Whether it renders what an export holds from where it starts (see [`Rendered::exact`]).
@@ -391,8 +409,12 @@ impl Render {
         if written.is_err() {
             let _ = std::fs::remove_file(&part);
         }
-        // Named by the file asked for: the one beside it is a detail.
-        written.with_context(|| format!("couldn't write {}", path.display()))
+        match written {
+            // A fault says what stopped it, and that the file wasn't made.
+            Err(e) if Faulted::of(&e).is_some() => Err(e),
+            // Named by the file asked for: the one beside it is a detail.
+            w => w.with_context(|| format!("couldn't write {}", path.display())),
+        }
     }
 
     /// Write the WAV to `part`. Returns the part's lock, held until it is named.
@@ -454,12 +476,12 @@ impl Render {
         Ok((lock, rendered))
     }
 
-    /// Render the next frames, unless asked to stop.
+    /// Render the next frames, unless asked to stop. A fault that stops it is named.
     fn process(&mut self, frames: &mut [[f32; 2]]) -> Result<()> {
         if self.stop.load(Ordering::Relaxed) {
             bail!("the render was stopped");
         }
-        self.renderer.process_on(frames, &mut self.runner)
+        self.renderer.process_on(frames, &mut self.runner).map_err(|e| self.namer.faulted(e))
     }
 
     /// Render `frames` frames straight into the file.
@@ -661,9 +683,9 @@ mod tests {
         fn render(&self, length: Length) -> (Rendered, Vec<f32>) {
             let project = Project::open(&self.0).unwrap();
             let mut packages = std_packages();
-            let compiled = m2_session::compile(&project, &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
+            let compiled = Arc::new(m2_session::compile(&project, &mut packages).unwrap_or_else(|e| panic!("{e:?}")));
             let out = self.0.join("out.wav");
-            let r = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, length, Threads::Exactly(1))
+            let r = Render::new(compiled.clone(), &packages, SAMPLE_RATE, 0.0, length, Threads::Exactly(1))
                 .unwrap()
                 .write(&out, |_| {})
                 .unwrap();
@@ -749,10 +771,10 @@ mod tests {
         assert_eq!(r.frames as usize, SR + SR / 4);
         let project = Project::open(&dir.0).unwrap();
         let mut packages = std_packages();
-        let compiled = m2_session::compile(&project, &mut packages).unwrap();
+        let compiled = Arc::new(m2_session::compile(&project, &mut packages).unwrap());
         for (from, length) in [(0.0, Length::Seconds(0.0)), (0.0, Length::Seconds(f64::NAN)), (-1.0, Length::Song)] {
             assert!(
-                Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, from, length, Threads::Exactly(1)).is_err(),
+                Render::new(compiled.clone(), &packages, SAMPLE_RATE, from, length, Threads::Exactly(1)).is_err(),
                 "{from} {length:?}"
             );
         }
@@ -763,12 +785,12 @@ mod tests {
         let dir = pad_song(r#"{"clips": []}"#);
         let project = Project::open(&dir.0).unwrap();
         let mut packages = std_packages();
-        let compiled = m2_session::compile(&project, &mut packages).unwrap();
-        let render = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, Length::Song, Threads::Exactly(1)).unwrap();
+        let compiled = Arc::new(m2_session::compile(&project, &mut packages).unwrap());
+        let render = Render::new(compiled.clone(), &packages, SAMPLE_RATE, 0.0, Length::Song, Threads::Exactly(1)).unwrap();
         let out = dir.0.join("no-such-folder/out.wav");
         assert!(render.write(&out, |_| {}).is_err());
         assert!(!out.exists());
-        let render = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, Length::Song, Threads::Exactly(1)).unwrap();
+        let render = Render::new(compiled.clone(), &packages, SAMPLE_RATE, 0.0, Length::Song, Threads::Exactly(1)).unwrap();
         let out = dir.0.join("out.wav");
         let mut reports = vec![];
         render.write(&out, |p| reports.push(p)).unwrap();
@@ -785,8 +807,8 @@ mod tests {
     fn render_of(dir: &Dir, length: Length) -> Result<Render> {
         let project = Project::open(&dir.0).unwrap();
         let mut packages = std_packages();
-        let compiled = m2_session::compile(&project, &mut packages).unwrap();
-        Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, length, Threads::Exactly(1))
+        let compiled = Arc::new(m2_session::compile(&project, &mut packages).unwrap());
+        Render::new(compiled.clone(), &packages, SAMPLE_RATE, 0.0, length, Threads::Exactly(1))
     }
 
     fn parts(dir: &Path) -> Vec<String> {
@@ -870,10 +892,10 @@ mod tests {
         assert!(is_part(".a.wav.12.part") && !is_part(".a.wav.part") && !is_part("a.wav.12.part") && !is_part("..12.part"));
     }
 
-    fn compiled(dir: &Dir) -> (m2_session::Compiled, PackageSet) {
+    fn compiled(dir: &Dir) -> (Arc<m2_session::Compiled>, PackageSet) {
         let mut packages = std_packages();
         let c = m2_session::compile(&Project::open(&dir.0).unwrap(), &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
-        (c, packages)
+        (Arc::new(c), packages)
     }
 
     // RENDER-4, RENDER-5: a range render starts a preroll before the range, as a live jump does.
@@ -896,12 +918,12 @@ mod tests {
             (rendered, std::fs::read(out).unwrap())
         };
         let range =
-            |from, preroll| Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, from, preroll, second, Threads::Exactly(1)).unwrap();
+            |from, preroll| Render::range(c.clone(), &packages, SAMPLE_RATE, from, preroll, second, Threads::Exactly(1)).unwrap();
         let (a, a_bytes) = write(range(4.0, 1.0), "a.wav");
         let (b, b_bytes) = write(range(4.0, 1.0), "b.wav");
         assert_eq!((a.exact, a.reproducible, a.frames), (false, true, SR as u64));
         assert!(a == b && a_bytes == b_bytes, "the same bits every time");
-        let exact = || Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, second, Threads::Exactly(1)).unwrap();
+        let exact = || Render::new(c.clone(), &packages, SAMPLE_RATE, 4.0, second, Threads::Exactly(1)).unwrap();
         let (x, x_bytes) = write(exact(), "x.wav");
         assert!(x.exact && x_bytes != a_bytes, "the held pad isn't chased, so it differs from the export");
         // A preroll back to the start is the exact render.
@@ -910,7 +932,7 @@ mod tests {
         assert!(range(4.0, 9.0).exact());
         for preroll in [-1.0, f64::NAN, f64::INFINITY] {
             assert!(
-                Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, preroll, second, Threads::Exactly(1)).is_err(),
+                Render::range(c.clone(), &packages, SAMPLE_RATE, 4.0, preroll, second, Threads::Exactly(1)).is_err(),
                 "{preroll}"
             );
         }
@@ -948,14 +970,14 @@ mod tests {
         let dir = pad_song(r#"{"clips": []}"#);
         let (c, packages) = compiled(&dir);
         let second = Length::Seconds(0.1);
-        let exact = || Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 0.0, second, Threads::Exactly(1)).unwrap();
+        let exact = || Render::new(c.clone(), &packages, SAMPLE_RATE, 0.0, second, Threads::Exactly(1)).unwrap();
         std::fs::create_dir_all(dir.0.join("assets")).unwrap();
         let wav = dir.0.join("assets/bounce.wav");
         assert!(exact().write_for(&dir.0, &wav, |_| {}).is_ok() && wav.exists(), "made new");
         let before = std::fs::read(&wav).unwrap();
         let again = exact().write_for(&dir.0, &wav, |_| {}).unwrap_err().to_string();
         assert!(again.contains("is there already") && std::fs::read(&wav).unwrap() == before, "{again}");
-        let approximate = Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, 1.0, second, Threads::Exactly(1)).unwrap();
+        let approximate = Render::range(c.clone(), &packages, SAMPLE_RATE, 4.0, 1.0, second, Threads::Exactly(1)).unwrap();
         let near = dir.0.join("assets/near.wav");
         assert!(approximate.write_for(&dir.0, &near, |_| {}).is_err() && !near.exists(), "never approximate");
         let elsewhere = dir.0.join("out.wav");
@@ -965,11 +987,11 @@ mod tests {
 
     /// `examples/first-song`, compiled: five tracks and the song, so a render has partitions to
     /// spread.
-    fn first_song() -> (m2_session::Compiled, PackageSet) {
+    fn first_song() -> (Arc<m2_session::Compiled>, PackageSet) {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song");
         let mut packages = std_packages();
         let c = m2_session::compile(&Project::open(&dir).unwrap(), &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
-        (c, packages)
+        (Arc::new(c), packages)
     }
 
     // RENDER-2 (8a): a render on 4 threads writes the same file as on one, and says how many it
@@ -980,7 +1002,7 @@ mod tests {
         let dir = Dir::new(&[]);
         let write = |threads: usize| {
             let out = dir.0.join(format!("on{threads}.wav"));
-            let r = Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 1.0, Length::Seconds(4.0), Threads::Exactly(threads)).unwrap();
+            let r = Render::new(c.clone(), &packages, SAMPLE_RATE, 1.0, Length::Seconds(4.0), Threads::Exactly(threads)).unwrap();
             let r = r.write(&out, |_| {}).unwrap();
             (r.threads, std::fs::read(out).unwrap())
         };
@@ -1001,10 +1023,68 @@ mod tests {
              export default song(() => plugin('clap:m2.probe', { in: osc.sine(440) }));\n",
         )]);
         let mut packages = std_packages();
-        let c = m2_session::compile(&Project::open(&dir.0).unwrap(), &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
-        let r = Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(4)).unwrap();
+        let c = Arc::new(m2_session::compile(&Project::open(&dir.0).unwrap(), &mut packages).unwrap_or_else(|e| panic!("{e:?}")));
+        let r = Render::new(c.clone(), &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(4)).unwrap();
         let r = r.write(&dir.0.join("out.wav"), |_| {}).unwrap();
         assert_eq!((r.threads, r.hosts_plugins), (1, true));
+    }
+
+    // RENDER-1 (the ex plan's slice 2, D5): a plugin that reports an error while a render plays it
+    // stops the render, strict or not (an export isn't strict): the error says `plugin.failed`,
+    // naming the plugin and its track, and no file is made. Before, it played silence there and
+    // the export said it was done.
+    #[test]
+    fn a_render_whose_plugin_fails_fails() {
+        m2_plugins::test_main_thread();
+        m2_plugins::probe::install();
+        let state = m2_plugins::probe::state("fails-process-render", 1.0);
+        let dir = Dir::new(&[
+            (
+                "song.ts",
+                "import { plugin, song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\n\
+                 const p = track('p', () => plugin('clap:m2.probe', { in: osc.sine(440), key: 'lead' }));\n\
+                 export default song(() => p.out);\n",
+            ),
+            ("data/p/lead.state.json", r#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#),
+        ]);
+        std::fs::write(dir.0.join("data/p/lead.state"), state).unwrap();
+        let (c, packages) = compiled(&dir);
+        let out = dir.0.join("out.wav");
+        let e = Render::new(c, &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(1)).unwrap().write(&out, |_| {}).unwrap_err();
+        let f = Faulted::of(&e).unwrap_or_else(|| panic!("a fault: {e:#}"));
+        assert_eq!(f.code, "plugin.failed");
+        assert_eq!(
+            format!("{e:#}"),
+            "m2 probe (p) stopped working, so the file wasn't made. Try again. If it stops again, the plugin may be broken."
+        );
+        assert!(!out.exists() && parts(&dir.0).is_empty(), "no file");
+    }
+
+    // ab r4, RENDER-1 (the ex plan's slice 2): a file in assets/ that a Sampler plays, there but
+    // damaged so it won't decode, stops the render before its first block: the error says
+    // `asset.unreadable`, naming the file and what plays it. Before, the Sampler played silence
+    // and the export said it was done.
+    #[test]
+    fn a_sampler_file_that_wont_decode_fails_the_export_naming_it() {
+        let dir = Dir::new(&[
+            (
+                "song.ts",
+                "import { song, track } from '@m2/core';\nimport { sampler } from 'std/sampler';\n\
+                 const d = track('drums', { name: 'Drums' }, ({ lane }) => sampler(lane.notes('hits'), { zones: { 36: 'kick.wav' } }));\n\
+                 export default song(() => d.out);\n",
+            ),
+            ("data/drums/hits.json", r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C2", "start": 0, "length": 1}]}]}"#),
+            ("assets/kick.wav", "RIFF\u{0}\u{0}\u{0}\u{0}WAVEnot a sound at all"),
+            TEMPO,
+        ]);
+        let (c, packages) = compiled(&dir);
+        let e = Render::new(c, &packages, SAMPLE_RATE, 0.0, Length::Song, Threads::Exactly(1))
+            .and_then(|r| r.write(&dir.0.join("out.wav"), |_| {}))
+            .map(drop)
+            .unwrap_err();
+        assert_eq!(Faulted::of(&e).map(|f| f.code), Some("asset.unreadable"), "{e:#}");
+        assert_eq!(format!("{e:#}"), "kick.wav, which the instrument on Drums plays, can't be read, so the file wasn't made. It may be damaged.");
+        assert!(parts(&dir.0).is_empty(), "no file");
     }
 
     // C3, RENDER-3: a stem is `m2 bounce --track`'s file, bit for bit: each of first-song's four
@@ -1017,9 +1097,11 @@ mod tests {
         let seconds = bounce_seconds(&c.data);
         assert!((seconds - (32.0 * 60.0 / 124.0 + 2.0)).abs() < 1e-9, "{seconds}");
         for track in ["kick", "hats", "bass", "keys"] {
-            let flat = m2_ir::check(&rooted(&c.ir, track, "out").unwrap(), &packages).unwrap();
+            let ir = rooted(&c.ir, track, "out").unwrap();
+            let flat = m2_ir::check(&ir, &packages).unwrap();
             let stem = dir.0.join(format!("{track}.wav"));
-            let r = Render::new(&flat, &c.data, &packages, SAMPLE_RATE, 0.0, Length::Seconds(seconds), Threads::Exactly(2))
+            let parts = Arc::new(Parts { ir, flat: flat.clone(), data: c.data.clone() });
+            let r = Render::new(parts, &packages, SAMPLE_RATE, 0.0, Length::Seconds(seconds), Threads::Exactly(2))
                 .unwrap()
                 .write_float(&stem, |_| {})
                 .unwrap();
@@ -1049,7 +1131,7 @@ mod tests {
              export default song(() => scale(osc.sine(hz(440)), 3));\n",
         )]);
         let (c, packages) = compiled(&dir);
-        let render = || Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(1)).unwrap();
+        let render = || Render::new(c.clone(), &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(1)).unwrap();
         let out = dir.0.join("loud.wav");
         let r = render().write_float(&out, |_| {}).unwrap();
         assert!(r.peak_db > 9.0, "{}", r.peak_db);

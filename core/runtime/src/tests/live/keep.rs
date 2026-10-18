@@ -472,6 +472,7 @@ fn trapped(pk: &PackageSet, trap: bool, blocks: usize, threads: Option<Spread>) 
 fn told(faults: &Faults) -> Vec<(usize, Code)> {
     faults.drain().into_iter().map(|f| match f.subject {
         Subject::Node(n) => (n as usize, f.code),
+        s => panic!("a fault about {s:?}, not a node"),
     }).collect()
 }
 
@@ -626,10 +627,12 @@ fn a_kernel_over_its_memory_says_it_ran_out() {
     ir.modules[0].nodes[0] = serde_json::from_value(json!({"id": "cue", "op": "const", "value": 1})).unwrap();
     let e = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap().render(0.01).map(drop).unwrap_err();
     assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 256 MB");
-    assert!(e.downcast_ref::<OutOfMemory>().is_some());
+    // RENDER-1: the render's error names the node, and why, as the fault it is.
+    let lat = named(&check(&two_tracks("hog", false), &pk).unwrap(), "a/lat");
+    let fault = e.downcast_ref::<crate::fault::Failed>().map(|f| (f.fault.code, f.fault.subject));
+    assert_eq!(fault, Some((Code::OutOfMemory, Subject::Node(lat as u32))));
     let e = exported("hog", &pk);
     assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 256 MB", "an export");
-    let lat = named(&check(&two_tracks("hog", false), &pk).unwrap(), "a/lat");
     let (_, a, b, rig) = failing("hog", &pk, true, 6, None);
     let (_, _, clean_b, _) = failing("hog", &pk, false, 6, None);
     assert!(a.iter().all(|&x| x == 0.0) && b == clean_b, "it alone goes silent");

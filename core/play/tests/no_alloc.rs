@@ -828,10 +828,11 @@ fn the_device_error_callback_never_allocates() {
 /// Reads made on a thread while it runs a callback (debug builds mark it).
 static CALLBACK_READS: AtomicUsize = AtomicUsize::new(0);
 
-fn on_read(_: usize) {
+fn on_read(_: &std::fs::File, _: usize) -> std::io::Result<()> {
     if alloc::in_callback() {
         CALLBACK_READS.fetch_add(1, Ordering::Relaxed);
     }
+    Ok(())
 }
 
 // RENDER-30, RENDER-28: a lane that streams from the disk is only copied on the sound thread. Play,

@@ -31,6 +31,7 @@ use hound::Sample;
 use m2_song::{AudioClip, Sha, TempoMap};
 
 use crate::audio::{AudioLane, RenderedClip};
+use crate::fault::Code;
 
 /// The most slots a lane has: 4 s of audio, 1.5 MB of stereo at 48 kHz.
 pub const SLOTS: usize = 16;
@@ -178,6 +179,8 @@ pub(crate) struct Raw {
     done: AtomicUsize,
     /// It will never be whole: stopped (a prune dropped it) or failed. What isn't done is silence.
     over: AtomicBool,
+    /// Its stretch failed: each lane that plays it reports `stretch.failed` (RENDER-25).
+    failed: AtomicBool,
     /// Asked to stop: no lane the cache keeps plays it any more.
     stop: AtomicBool,
     /// Who to wake as more is done: the disk threads of the players that play it.
@@ -186,8 +189,8 @@ pub(crate) struct Raw {
 
 impl Raw {
     fn of(file: Option<File>, channels: usize, frames: usize, done: usize) -> Raw {
-        let (over, stop, wakers) = (AtomicBool::new(false), AtomicBool::new(false), Mutex::default());
-        Raw { file, mem: OnceLock::new(), channels, frames, done: AtomicUsize::new(done), over, stop, wakers }
+        let (over, failed, stop, wakers) = (AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false), Mutex::default());
+        Raw { file, mem: OnceLock::new(), channels, frames, done: AtomicUsize::new(done), over, failed, stop, wakers }
     }
 
     /// The render at `path`, when it is there whole.
@@ -235,6 +238,16 @@ impl Raw {
     pub(crate) fn end(&self) {
         self.over.store(true, Ordering::Release);
         self.wake(true);
+    }
+
+    /// Its stretch failed: it ends, and the lanes that play it say so.
+    pub(crate) fn fail(&self) {
+        self.failed.store(true, Ordering::Release);
+        self.end();
+    }
+
+    pub(crate) fn failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
     }
 
     fn wake(&self, last: bool) {
@@ -604,16 +617,23 @@ pub(crate) struct Clip {
     pub(crate) len: u64,
     pub(crate) channels: usize,
     pub(crate) src: Source,
+    /// Its place among the lane's clips in the song's data: what a fault names ([`crate::fault::Subject::Clip`]).
+    pub(crate) index: u32,
 }
 
 impl Clip {
-    pub(crate) fn new(at: u64, src: Source, len: usize) -> Clip {
+    pub(crate) fn new(at: u64, src: Source, len: usize, index: u32) -> Clip {
         let channels = match &src {
             Source::Wav(w, _) => w.channels(),
             Source::Render(r, _) => r.channels,
             Source::Mem(m, _) => m.len(),
         };
-        Clip { at, len: len as u64, channels, src }
+        Clip { at, len: len as u64, channels, src, index }
+    }
+
+    /// Whether it plays a stretch that failed.
+    fn stretch_failed(&self) -> bool {
+        matches!(&self.src, Source::Render(r, _) if r.failed())
     }
 
     /// Whether its samples `i0..i1` can be worked out now: a render being made has made every
@@ -698,7 +718,6 @@ pub(crate) struct Ring {
     /// The next slot an offline filler takes when every slot holds a chunk.
     cursor: AtomicUsize,
     misses: AtomicU64,
-    errors: AtomicU64,
     /// The fillers' lock: never taken by the sound thread.
     fill: Mutex<Scratch>,
 }
@@ -728,7 +747,6 @@ impl Ring {
             audio_chunks,
             cursor: AtomicUsize::new(0),
             misses: AtomicU64::new(0),
-            errors: AtomicU64::new(0),
             fill: Mutex::new(Scratch::default()),
         }
     }
@@ -822,11 +840,6 @@ impl AudioLane {
         self.ring.misses.load(Ordering::Relaxed)
     }
 
-    /// Chunks whose files couldn't be read, in all: each holds silence.
-    pub fn errors(&self) -> u64 {
-        self.ring.errors.load(Ordering::Relaxed)
-    }
-
     /// The memory its samples take: the ring, and its filler's buffers.
     pub fn memory(&self) -> usize {
         let ring = self.ring.slots.iter().map(|s| s.data.len() * 4).sum::<usize>();
@@ -857,8 +870,9 @@ impl AudioLane {
     /// Work out chunk `k` and put it in a slot: an empty one, else one whose chunk `keep` doesn't
     /// want (from the ring's cursor on). False when every slot holds a chunk it wants. A chunk that
     /// can't be worked out yet ([`Self::can_fill`]) is left out. A file that can't be read gives
-    /// silence, counted in [`Self::errors`]. Off the sound thread only: the disk thread's, an
-    /// offline render's, or a build's.
+    /// silence there, and `asset.unreadable` is reported for its clip; a stretch that failed,
+    /// `stretch.failed` ([`Self::fault`]). Off the sound thread only: the disk thread's, an offline
+    /// render's, or a build's.
     pub fn fill_chunk(&self, k: u64, keep: &dyn Fn(u64) -> bool) -> bool {
         let r = &self.ring;
         if r.slots.is_empty() || !r.has_audio(k) || !self.can_fill(k) {
@@ -875,17 +889,21 @@ impl AudioLane {
         });
         let Some(i) = victim else { return false };
         r.cursor.store((i + 1) % n, Ordering::Relaxed);
-        if self.sum(k, &mut s).is_err() {
-            r.errors.fetch_add(1, Ordering::Relaxed);
+        if let Err(clip) = self.sum(k, &mut s) {
             s.chunk.fill(0.0);
+            self.fault(Code::Unreadable, clip);
+        }
+        let (start, end) = (k * r.chunk, (k + 1) * r.chunk);
+        for c in self.clips.iter().filter(|c| c.at < end && c.at + c.len > start && c.stretch_failed()) {
+            self.fault(Code::StretchFailed, c.index);
         }
         r.store(i, k, &s.chunk);
         true
     }
 
     /// Sum chunk `k` of every clip, in order, into `s.chunk` (channel-major): what the old copy
-    /// added up for each of its frames.
-    fn sum(&self, k: u64, s: &mut Scratch) -> Result<()> {
+    /// added up for each of its frames. Err: the place of the clip whose file couldn't be read.
+    fn sum(&self, k: u64, s: &mut Scratch) -> Result<(), u32> {
         let chunk = self.ring.chunk;
         let (start, end) = (k * chunk, (k + 1) * chunk);
         let mut acc = std::mem::take(&mut s.chunk);
@@ -897,7 +915,7 @@ impl AudioLane {
                     continue;
                 }
                 let (from, to) = (start.max(clip.at), end.min(clip.at + clip.len));
-                clip.piece((from - clip.at) as usize, (to - clip.at) as usize, s)?;
+                clip.piece((from - clip.at) as usize, (to - clip.at) as usize, s).map_err(|_| clip.index)?;
                 let data = &s.vals;
                 let mono_down = self.channels == 1 && clip.channels > 1;
                 for c in 0..self.channels {

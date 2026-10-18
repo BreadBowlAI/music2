@@ -150,7 +150,7 @@ impl Actor {
                 }
             }
             if !back.is_empty() {
-                let who = plugin_named(&p.revision, &o.session.packages, at.node);
+                let who = plugin_named(&*p.revision, &o.session.packages, at.node);
                 let it = if back.len() == 1 { "it" } else { "them" };
                 said.push(format!(
                     "{who} changed {} by itself (a preset?), but the song's code sets {it}, so music2 set {it} back. To change {it}, \
@@ -252,7 +252,7 @@ impl Actor {
             let n = &p.revision.compiled.flat.nodes[at.node];
             if !matches!(&n.op, FOp::Plugin { state: Some(_), .. }) {
                 if o.windows.unsaveable.insert(n.name.clone()) {
-                    let who = plugin_named(&p.revision, &o.session.packages, at.node);
+                    let who = plugin_named(&*p.revision, &o.session.packages, at.node);
                     self.inner.notices.lock().push(format!(
                         "{who}'s settings changed in its window, but music2 can't save them: give its plugin() call a key, such as key: \"lead\"."
                     ));
@@ -276,7 +276,7 @@ impl Actor {
         let Some(p) = o.plays.clone() else { return };
         let Some(at) = p.info.plugins.iter().find(|at| at.handle == h) else { return };
         let n = &p.revision.compiled.flat.nodes[at.node];
-        let who = plugin_named(&p.revision, &o.session.packages, at.node);
+        let who = plugin_named(&*p.revision, &o.session.packages, at.node);
         let blob = match r {
             Ok(b) => b,
             Err(e) => {
@@ -344,7 +344,7 @@ impl Actor {
         let p = o.plays.as_ref().context("the song isn't playing yet")?;
         let at = node_named(p, node).ok_or_else(|| anyhow!("no plugin plays as {node}"))?;
         let inst = p.info.plugin(at).and_then(|x| x.inst.upgrade()).ok_or_else(|| anyhow!("{node} isn't running now"))?;
-        Ok((inst, plugin_named(&p.revision, &o.session.packages, at)))
+        Ok((inst, plugin_named(&*p.revision, &o.session.packages, at)))
     }
 
     /// "Re-enable": the lane or the cable drives parameter `id` of plugin node `node` again (all of

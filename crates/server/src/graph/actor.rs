@@ -759,6 +759,16 @@ enum Clips {
 }
 
 /// A part of the timeline as a value, as `json!` makes it.
+/// The problems an export of `rev` carries, said with the file it made (the ex plan's D7): the
+/// revision's own errors that leave a part of it silent or not as written, known before it renders.
+/// A fault found while it renders fails it instead (RENDER-1).
+fn carried(rev: &Revision) -> Vec<m2_song::Diagnostic> {
+    let silences = |code: &str| {
+        matches!(code, "plugin.missing" | "asset.missing" | "lane.invalid" | "lane.unit-mismatch") || code.starts_with("state.")
+    };
+    rev.compiled.problems.iter().filter(|d| silences(d.code)).cloned().collect()
+}
+
 fn value(v: &impl serde::Serialize) -> Value {
     serde_json::to_value(v).expect("a timeline serialises")
 }
@@ -1350,12 +1360,10 @@ impl Actor {
 
     pub(super) fn render(&mut self, length: Length) -> Result<(String, PathBuf, Render, Vec<m2_song::Diagnostic>)> {
         let o = self.open.as_ref().context("no project is open")?;
-        let rev = o.session.accepted();
+        let rev = o.session.accepted_arc();
         // Offline renders run at the project's rate (RENDER-31a).
-        let r =
-            Render::new(&rev.compiled.flat, &rev.compiled.data, &o.session.packages, rev.project.sample_rate(), 0.0, length, Threads::Alone)?;
-        let carried = rev.compiled.problems.iter().filter(|d| d.code == "plugin.missing").cloned().collect();
-        Ok((rev.project.manifest.project.name.clone(), rev.project.dir.clone(), r, carried))
+        let r = Render::new(rev.clone(), &o.session.packages, rev.project.sample_rate(), 0.0, length, Threads::Alone)?;
+        Ok((rev.project.manifest.project.name.clone(), rev.project.dir.clone(), r, carried(&rev)))
     }
 
     /// The accepted revision ready to export (RENDER-1). A song whose plugins play borrows their
@@ -1371,7 +1379,7 @@ impl Actor {
         let o = self.open.as_mut().context("no project is open")?;
         let rev = o.session.accepted_arc();
         let (flat, data, rate, packages) = (&rev.compiled.flat, &rev.compiled.data, rev.project.sample_rate(), &o.session.packages);
-        let problems = rev.compiled.problems.iter().filter(|d| d.code == "plugin.missing").cloned().collect();
+        let problems = carried(&rev);
         let (song, dir) = (rev.project.manifest.project.name.clone(), rev.project.dir.clone());
         let lend = match (&device, &o.plays) {
             (Some(d), Some(p)) if p.epoch == d.epoch && p.rate == rate && !o.exporting => {
@@ -1387,18 +1395,18 @@ impl Actor {
         let Some(d) = device.filter(|_| !lend.is_empty()) else {
             // Offline renders run at the project's rate (RENDER-31a).
             let threads = crate::export::export_threads(env, idle, false);
-            let render = Render::new(flat, data, packages, rate, 0.0, length, threads).map_err(super::plainly)?;
+            let render = Render::new(rev.clone(), packages, rate, 0.0, length, threads).map_err(super::plainly)?;
             return Ok(super::Export { song, dir, render, problems, lent: None });
         };
         let threads = crate::export::export_threads(env, idle, true);
-        let render = Render::lending(flat, data, packages, rate, length, &lend, threads).map_err(super::plainly)?;
+        let render = Render::lending(rev.clone(), packages, rate, length, &lend, threads).map_err(super::plainly)?;
         let mut borrows = vec![];
         for (&node, inst) in &lend {
             let n = &flat.nodes[node];
             let FOp::Plugin { plugin, .. } = &n.op else { bail!("{}: lent to a node that isn't a plugin", n.name) };
             let found =
                 packages.plugin_info(plugin).with_context(|| format!("{}: plugin `{plugin}` was not described", n.name))?.found.clone();
-            let (blob, who) = (m2_runtime::state_blob(data, n)?, plugin_named(&rev, packages, node));
+            let (blob, who) = (m2_runtime::state_blob(data, n)?, plugin_named(&*rev, packages, node));
             borrows.push(crate::export::Borrow { node, inst: inst.clone(), blob, plugin: found, who });
         }
         // Nothing fails from here: the export's guard clears it, on every path, and tells the

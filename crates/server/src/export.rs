@@ -8,8 +8,10 @@
 //! it was once the file is written. One export runs at a time. Clients hear how it goes as `export`
 //! events, each naming the `song` and its project folder (`dir`), and whether playback is `paused`
 //! for it: `progress` (0..1, at most ten a second), then `done` with the file's `path`, `seconds`,
-//! `peak_db` and the `problems` it carries (a plugin that isn't installed, FMT-18a; one it couldn't
-//! borrow, `plugin.not-borrowed`), or an `error`.
+//! `peak_db` and the `problems` it carries (what the revision knows leaves a part silent: a plugin
+//! that isn't installed, FMT-18a, a missing file, a state or lane that doesn't load; one it couldn't
+//! borrow, `plugin.not-borrowed`), or an `error`, with the `code` of the fault that stopped it, when
+//! one did (RENDER-1).
 
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
@@ -240,7 +242,8 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                     }
                     json!({"done": true, "path": path, "seconds": r.seconds(), "peak_db": r.peak_db, "problems": carried})
                 }
-                Err(e) => json!({"error": format!("{e:#}"), "path": thread_path}),
+                // A fault that stopped it carries its code (RENDER-1).
+                Err(e) => json!({"error": format!("{e:#}"), "code": m2_editor::faults::Faulted::of(&e).map(|f| f.code), "path": thread_path}),
             };
             state.announce(with(&about, event).to_string());
         })?;
@@ -661,6 +664,26 @@ pub(crate) mod tests {
         assert_eq!(wav.duration() as f64, seconds * 48_000.0);
         assert!(!state.exports.running());
         assert!(!std::fs::read_dir(&project.0).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().ends_with(".part")));
+    }
+
+    // The ex plan's D7 (RENDER-1): what the revision knows leaves a part silent is said with the
+    // file the export made: a clip whose file is missing (`asset.missing`), not only a plugin
+    // that isn't installed. A fault found while it renders fails it instead. Before, only
+    // `plugin.missing` was carried, and this export said nothing.
+    #[test]
+    fn a_missing_clip_file_is_named_in_the_exports_problems() {
+        let project = Temp::new();
+        project.write("data/drums/loops.json", r#"{"clips": [{"id": "a", "start": 0, "length": 4, "asset": "gone.wav"}]}"#);
+        let song = "import { song, track } from '@m2/core';\n\
+                    const d = track('drums', { name: 'Drums' }, ({ lane }) => lane.audio('loops'));\nexport default song(() => d.out);\n";
+        let state = open(&project, song);
+        let mut events = state.events.subscribe();
+        start(&state, Some(project.0.join("out.wav"))).unwrap();
+        let done = until_finished(&mut events).pop().unwrap();
+        assert_eq!(done["done"], true, "{done}");
+        let problems: Vec<(&str, &str)> =
+            done["problems"].as_array().unwrap().iter().map(|p| (p["code"].as_str().unwrap(), p["module"].as_str().unwrap_or(""))).collect();
+        assert_eq!(problems, [("asset.missing", "drums")], "{done}");
     }
 
     #[test]
