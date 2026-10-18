@@ -28,6 +28,8 @@ whatever you pick up.
 
   Under the hood: the fault ring (`core/runtime/src/fault.rs`): 24-byte records, 256 slots, never allocates, locks
   or waits. Eight codes in the contract's table (RENDER-1, RENDER-25, RENDER-30a). No render changed: 12 of 12.
+  `ci/check.sh --gates` passed at `9efece3`: every row, nothing only on a retry (1,682 Rust tests, 71/71 browser
+  suites, 12 of 12 renders, the 7 gate runs; 34 minutes).
   Pictures on Xvfb :96: `~/m2-runs/app-shots/ex-9167e95/` (the popover naming a stopped sound on Hats). Owed on the
   Mac: its `ci/check.sh`, then the by-ear steps 103 to 108 (a USB microphone unplugged, and Don't Allow).
 - **`sx` is ready to land** (2026-10-18): Linux green at `000dd72`; macOS owed. From `main` at `97b4cdf`, with

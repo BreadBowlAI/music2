@@ -71,7 +71,17 @@ Not measured: how long making a `Namer` takes per plan. It clones one shared poi
 
 ## The final check
 
-FILLED BELOW AFTER THE RUN.
+`ci/check.sh --gates` passed at `9efece3` (Linux, run with `~/m2-runs/tw`; 34 minutes). Nothing passed only on a retry.
+
+| Row | Result |
+|---|---|
+| Rust tests | 1,682 passed |
+| clippy, and the mac lint | pass |
+| browser suites | 71 of 71 (`ex-faults` new) |
+| renders | 12 of 12 |
+| gates | the 7 runs `ci/gates.txt` names |
+
+Logs: `~/m2-runs/sex/check-9efece3.tgz`. The Mac's run is owed.
 
 ## A check by ear
 
