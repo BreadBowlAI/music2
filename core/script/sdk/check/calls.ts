@@ -125,6 +125,12 @@ export const ok = [
   scale(x, 0.5),
   osc.saw(110),
   mixer({ kick: x }),
+  // Sends and groups (PKG-6's nested entries): a bare level, or a level and `pre`; `to` a bus channel.
+  mixer({ kick: { in: x, to: "drums" }, vox: { in: x, sends: { verb: -12, echo: { db: -18, pre: true } } }, drums: x, verb: x, echo: x }),
+  // @ts-expect-error a send's level is a value, not a string
+  mixer({ vox: { in: x, sends: { verb: "loud" } } }),
+  // @ts-expect-error `to` names a channel by its key, a string
+  mixer({ vox: { in: x, to: 3 } }),
   // Turned off (Next D1): any call that takes audio first and gives audio.
   delay(x, { bypass: true }),
   delay(x, { time: 0.25, bypass: true }),

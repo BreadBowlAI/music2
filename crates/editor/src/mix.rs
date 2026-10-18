@@ -290,7 +290,8 @@ fn reached(rev: &Revision, song: &Module, frame: u32) -> Reached {
             let Input::Port { src, .. } = x else { return None };
             let c = &flat.nodes[src.node];
             let slot = c.origin.as_ref()?.control.as_ref().filter(|s| c.module == ROOT && s.frame == frame)?;
-            let (key, control) = slot.slot.strip_prefix("channels.")?.rsplit_once('.')?;
+            // A channel's own fader or pan; a send's level (`channels.vox.sends.verb.db`) names no channel here.
+            let (key, control) = slot.slot.strip_prefix("channels.")?.split_once('.')?;
             (matches!(c.op, FOp::Const(_)) && (control == "db" || control == "pan")).then(|| key.to_string())
         })
     };
@@ -531,7 +532,10 @@ fn strips(rev: &Revision, frame: u32) -> BTreeMap<(String, String), (f64, Vec<St
         let Some(slot) = n.origin.as_ref().and_then(|o| o.control.as_ref()).filter(|c| n.module == ROOT && c.frame == frame) else {
             continue;
         };
-        let Some((key, control)) = slot.slot.strip_prefix("channels.").and_then(|r| r.rsplit_once('.')) else { continue };
+        // A channel's own controls; a send's (`channels.vox.sends.verb.db`) waits for the Mix view's sends.
+        let Some((key, control)) = slot.slot.strip_prefix("channels.").and_then(|r| r.split_once('.')).filter(|(_, c)| !c.contains('.')) else {
+            continue;
+        };
         at.insert(i, (key.to_string(), control.to_string()));
         out.insert((key.to_string(), control.to_string()), (v, vec![]));
     }

@@ -1930,7 +1930,7 @@ export type BusCtx = Ctx & {
 };
 
 /** Registered tracks (buses too) by key. Private: it holds labels, which song code must never see. */
-const tracks = new Map<string, { fn: TrackFn<any>; label?: string; muted: boolean; src?: string; at: Place; bus: boolean }>();
+const tracks = new Map<string, { fn: TrackFn<any>; label?: string; muted: boolean; src?: string; at: Place; bus: boolean; handle: object }>();
 const TRACK = Symbol("m2.track");
 
 /** Where each bus was fed (`feed`), by its key. */
@@ -1973,8 +1973,7 @@ function declareTrack<E extends Exports>(word: "track" | "bus", key: string, a: 
   if (first) {
     throw new BuildError("key.duplicate", `two tracks have the key "${key}": one at ${describe(first.at)}, another at ${describe(here)}. Track keys are unique in the project; rename one`, key);
   }
-  tracks.set(key, { fn: fn as TrackFn<E>, label: o.name, muted: o.muted === true, src: callsite(), at: here, bus: word === "bus" });
-  return new Proxy({} as Handle<E>, {
+  const handle = new Proxy({} as Handle<E>, {
     get(_, prop) {
       if (prop === TRACK) return key;
       if (typeof prop !== "string" || prop === "then" || prop === "toJSON") return undefined;
@@ -1986,6 +1985,22 @@ function declareTrack<E extends Exports>(word: "track" | "bus", key: string, a: 
       return s;
     },
   });
+  tracks.set(key, { fn: fn as TrackFn<E>, label: o.name, muted: o.muted === true, src: callsite(), at: here, bus: word === "bus", handle });
+  return handle;
+}
+
+/**
+ * The bus `x` reads, when `x` is a bus's export read as it is (`verb.out`): its handle, to `feed`.
+ * Otherwise undefined. std's mixer asks it of each channel's input (RENDER-34).
+ */
+export function busOf(x: unknown): object | undefined {
+  if (!(x instanceof Signal)) return undefined;
+  for (const [id, s] of x.scope.module.imports) {
+    if (s !== x) continue;
+    const t = tracks.get(id.slice(0, id.indexOf(".")));
+    return t?.bus ? t.handle : undefined;
+  }
+  return undefined;
 }
 
 /**

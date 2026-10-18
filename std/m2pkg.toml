@@ -16,7 +16,7 @@
 
 [package]
 name = "std"
-version = "0.3.0"
+version = "0.4.0"
 license = "MIT"
 description = "Oscillators, envelopes, filters, mixing, dynamics, and the instruments built from them"
 wasm = "kernels/std.wasm"
