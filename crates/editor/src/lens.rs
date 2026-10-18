@@ -5,6 +5,7 @@
 
 use m2_ir::Origin;
 use m2_script::sites::{Arg, Site};
+use m2_script::component::EachDesc;
 use m2_script::{Descriptor, UnitCtor};
 
 use super::EditError;
@@ -139,9 +140,27 @@ impl Insertion {
                     _ => return Err("its dictionary isn't written in the call"),
                 },
             };
-            let (key, control) = rest.rsplit_once('.').ok_or("it isn't a control of a dictionary entry")?;
+            // `kick.db`, or a nested dictionary's entry: `vox.sends.verb.db` (PKG-6).
+            let parts: Vec<&str> = rest.split('.').collect();
+            if !parts.len().is_multiple_of(2) {
+                return Err("it isn't a control of a dictionary entry");
+            }
+            let mut each = desc.controls.iter().find(|c| c.name == dict).and_then(|c| c.each.as_deref()).ok_or("its dictionary isn't declared")?;
+            let mut written = written;
+            let mut at = 0;
+            while parts.len() - at > 2 {
+                let (key, sub) = (parts[at], parts[at + 1]);
+                let Arg::Object { props, .. } = written else { return Err("its dictionary isn't an object written in the call") };
+                let (_, value) = props.iter().find(|(k, _)| k == key).ok_or("its entry isn't written in the call")?;
+                let Arg::Object { props: fields, .. } = value else { return Err("its entry doesn't write its own dictionary") };
+                written = fields.iter().find(|(k, _)| k == sub).map(|(_, a)| a).ok_or("its entry's dictionary isn't written in the call")?;
+                each = each.controls.iter().find(|c| c.name == sub).and_then(|c| c.each.as_deref()).ok_or("its dictionary isn't declared")?;
+                path.extend([key.to_string(), sub.to_string()]);
+                at += 2;
+            }
+            let (key, control) = (parts[at], parts[at + 1]);
             path.extend([key.to_string(), control.to_string()]);
-            return entry(desc, dict, key, control, written, source, units, path);
+            return entry(each, key, control, written, source, units, path);
         }
         let after = |a: &Arg| a.span().1;
         if let Some(p) = params.iter().position(|x| *x == slot) {
@@ -286,14 +305,12 @@ fn indent_at(source: &str, at: u32) -> &str {
     &text[..text.len() - text.trim_start_matches([' ', '\t']).len()]
 }
 
-/// Plan writing control `control` into entry `key` of dictionary `dict` of `desc`, written in the
-/// call as `written` at argument path `path` (design-8b §5.2): into an object entry as one more
-/// property, or around a bare signal as `{ in: <signal>, <control>: … }`. Why not, when the
-/// dictionary isn't an object written in the call, the entry isn't in it, or names the control.
-#[allow(clippy::too_many_arguments)]
+/// Plan writing control `control` into entry `key` of a dictionary whose entries are `each`,
+/// written in the call as `written` at argument path `path` (design-8b §5.2): into an object entry
+/// as one more property, or around a bare signal as `{ in: <signal>, <control>: … }`. Why not, when
+/// the dictionary isn't an object written in the call, the entry isn't in it, or names the control.
 fn entry(
-    desc: &Descriptor,
-    dict: &str,
+    each: &EachDesc,
     key: &str,
     control: &str,
     written: &Arg,
@@ -301,7 +318,6 @@ fn entry(
     units: &[UnitCtor],
     path: Vec<String>,
 ) -> Result<Insertion, &'static str> {
-    let each = desc.controls.iter().find(|c| c.name == dict).and_then(|c| c.each.as_deref()).ok_or("its dictionary isn't declared")?;
     let declared = each.controls.iter().find(|c| c.name == control).ok_or("its entry declares no such control")?;
     let Arg::Object { props, .. } = written else { return Err("its dictionary isn't an object written in the call") };
     let (_, value) = props.iter().find(|(k, _)| k == key).ok_or("its entry isn't written in the call")?;

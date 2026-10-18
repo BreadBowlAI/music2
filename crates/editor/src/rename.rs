@@ -18,8 +18,9 @@ use crate::plan::{self, path};
 use crate::sites::properties;
 use crate::{EditError, Edited, ready};
 
-/// The `track()` call that made `m`: a call of the project's code named `track`, in the file the
-/// module was built from, whose first argument is the module's key written as a string.
+/// The `track()` call that made `m` (`bus()` for a bus, RENDER-34): a call of the project's code
+/// named so, in the file the module was built from, whose first argument is the module's key
+/// written as a string.
 pub(crate) fn track_call<'a>(sites: &'a [Site], files: &BTreeMap<PathBuf, std::sync::Arc<str>>, m: &Module) -> Option<&'a Site> {
     // `src` is `file:line:column` of the module's function.
     let file = m.src.as_deref().and_then(|s| s.rsplitn(3, ':').nth(2))?;
@@ -29,7 +30,7 @@ pub(crate) fn track_call<'a>(sites: &'a [Site], files: &BTreeMap<PathBuf, std::s
         let t = text.get(s as usize..e as usize).unwrap_or("");
         [format!("\"{}\"", m.key), format!("'{}'", m.key), format!("`{}`", m.key)].iter().any(|k| k == t)
     };
-    let mut calls = sites.iter().filter(|x| x.in_project && x.file == file && x.callee == "track" && x.args.first().is_some_and(written));
+    let mut calls = sites.iter().filter(|x| x.in_project && x.file == file && x.callee == if m.bus { "bus" } else { "track" } && x.args.first().is_some_and(written));
     let call = calls.next()?;
     calls.next().is_none().then_some(call)
 }

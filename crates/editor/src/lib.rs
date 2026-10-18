@@ -12,6 +12,7 @@
 //! and offline renders at host level.
 
 pub mod automate;
+pub mod bus;
 pub mod cable;
 pub mod controls;
 pub mod data;

@@ -49,6 +49,11 @@ fn name_of(c: &Control, m: &Module, sites: &[Site], channel: &dyn Fn(u32, &str) 
         let last = c.origin.arg.last().filter(|a| a.parse::<usize>().is_err());
         return ([Some(by), last.cloned()].into_iter().flatten().collect::<Vec<_>>().join(" "), None);
     };
+    // A send's level (`channels.hats.sends.verb.db`): Hats send to Reverb (RENDER-34).
+    if let [_, entry, "sends", to, _] = slot.slot.split('.').collect::<Vec<_>>()[..] {
+        let named = |k: &str| channel(slot.frame, k).unwrap_or_else(|| k.to_string());
+        return (format!("{} send to {}", named(entry), named(to)), None);
+    }
     if let [_, entry, control] = slot.slot.split('.').collect::<Vec<_>>()[..] {
         return match channel(slot.frame, entry) {
             // A level is Volume, never "db", which reads as a note (graph.ts' `controlLabel`).

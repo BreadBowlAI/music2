@@ -13,7 +13,7 @@ import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
 import { sampler } from "std/sampler";
 import { mono, synth } from "std/synth";
-import { track } from "@m2/core";
+import { bus, track } from "@m2/core";
 export default song(({ lane, time }) => {
   const sweep = lfo(time.beats, { period: 2 });
   const wobble = xrange(sweep, 300, 3000);
@@ -866,6 +866,12 @@ export default song(({ lane, time }) => {
     track("polysynth", { name: "Polysynth" }, ({ lane }) => synth.custom(lane.notes("notes"))),
     // an audio track added
     track("audio", { name: "Audio" }, ({ lane }) => lane.audio("clips")),
+    // a Reverb bus added
+    bus("bus", { name: "Reverb" }, ({ input }) => reverb(input, { mix: 1 })),
+    // a Delay bus added
+    bus("bus", { name: "Delay" }, ({ input }) => delay(input, { mix: 1 })),
+    // a Group bus added
+    bus("bus", { name: "Group" }, ({ input }) => gain(input)),
   ];
   void planned;
   return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops }));

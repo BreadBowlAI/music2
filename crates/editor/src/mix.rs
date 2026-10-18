@@ -380,6 +380,27 @@ pub struct Strip {
     pub db_lane: Option<LaneRef>,
     /// The automation lane its pan follows, likewise.
     pub pan_lane: Option<LaneRef>,
+    /// It is a bus's strip (RENDER-34): these come after the tracks'.
+    pub bus: bool,
+    /// Its sends to bus channels, as its entry writes them.
+    pub sends: Vec<StripSend>,
+    /// The bus channel it goes to instead of the master; none for the master.
+    pub output: Option<String>,
+    /// The bus channels it may send to or go to without a loop, by key, in the mixer's order.
+    pub may_use: Vec<String>,
+}
+
+/// A send to a bus channel, on a strip.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StripSend {
+    /// The bus channel's key.
+    pub bus: String,
+    /// Its level's knob id (`channels.vox.sends.verb.db`): none when code sets it (a signal).
+    pub knob: Option<String>,
+    /// Before the fader, or after it.
+    pub pre: bool,
+    /// The automation lane its level follows, when one is read there.
+    pub lane: Option<LaneRef>,
 }
 
 /// std's master: the knob ids of its fader and its ceiling.
@@ -445,6 +466,7 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
         }
         _ => None,
     };
+    let is_bus = |k: &str| rev.compiled.ir.modules.iter().any(|m| m.key == k && m.bus);
     let alone = |k: &str, why: Option<String>| Strip {
         modules: vec![k.to_string()],
         channel: None,
@@ -456,6 +478,10 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
         why,
         db_lane: None,
         pan_lane: None,
+        bus: is_bus(k),
+        sends: vec![],
+        output: None,
+        may_use: vec![],
     };
     let word = match &mixing {
         Mixing::One(_) => "ok",
@@ -465,9 +491,13 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
     };
     let message = mixing.levels();
     let Mixing::One(m) = &mixing else {
-        let strips = layout.order.iter().map(|k| alone(k, None)).collect();
+        let (buses, mut strips): (Vec<Strip>, Vec<Strip>) = layout.order.iter().map(|k| alone(k, None)).partition(|x| x.bus);
+        strips.extend(buses);
         return MixView { mixer: word, message, strips, master };
     };
+    let buses = crate::bus::bus_channels(rev, m);
+    let routes = crate::bus::routing(rev, m);
+    let feeds = crate::bus::feeds(rev);
     let channels = m.site(rev).and_then(|x| x.args.first());
     let lane = |c: &Channel, control: &str| lane_read(rev, song, &m.file, channels.and_then(|o| o.at(&[c.key.clone(), control.to_string()])));
     let strip = |c: &Channel| {
@@ -481,20 +511,61 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
             false => c.tracks.iter().map(|t| label(t)).collect::<Vec<_>>().join(" + "),
         };
         let colour = c.tracks.first().map_or_else(|| "graphite".to_string(), |t| colour(t));
-        Strip { modules: c.tracks.clone(), channel: Some(c.key.clone()), label, colour, db, pan, pan_insert, why: None, db_lane, pan_lane }
+        let route = routes.get(&c.key).cloned().unwrap_or_default();
+        let sends = route
+            .sends
+            .iter()
+            .map(|(b, pre)| {
+                let knob = ids.get(&(m.frame, format!("channels.{}.sends.{b}.db", c.key))).cloned();
+                // A bare send is its level; an object's is its `db`.
+                let written = channels.and_then(|o| o.at(&[c.key.clone(), "sends".into(), b.clone()]));
+                let level = match written {
+                    Some(Arg::Object { .. }) => written.and_then(|x| x.at(&["db".to_string()])),
+                    other => other,
+                };
+                let lane = knob.is_none().then(|| lane_read(rev, song, &m.file, level)).flatten();
+                StripSend { bus: b.clone(), knob, pre: *pre, lane }
+            })
+            .collect();
+        let may_use = m
+            .channels
+            .iter()
+            .filter_map(|x| buses.get(&x.key).map(|b| (&x.key, b)))
+            .filter(|(_, b)| crate::bus::looped(rev, &feeds, c, b, false).is_none())
+            .map(|(k, _)| k.clone())
+            .collect();
+        Strip {
+            modules: c.tracks.clone(),
+            channel: Some(c.key.clone()),
+            label,
+            colour,
+            db,
+            pan,
+            pan_insert,
+            why: None,
+            db_lane,
+            pan_lane,
+            bus: buses.contains_key(&c.key),
+            sends,
+            output: route.to,
+            may_use,
+        }
     };
-    let mut strips = vec![];
+    // The tracks' strips, then the channels no track reaches, then the buses' (RENDER-34).
+    let (mut strips, mut later) = (vec![], vec![]);
     let mut shown: BTreeSet<&str> = BTreeSet::new();
     for k in &layout.order {
         let reached: Vec<&Channel> = m.channels.iter().filter(|c| c.tracks.contains(k)).collect();
-        match reached[..] {
-            [c] if shown.insert(&c.key) => strips.push(strip(c)),
-            [_] => {}
-            [] => strips.push(alone(k, Some("Not in the mixer".into()))),
-            _ => strips.push(alone(k, Some(format!("In {} channels: set its level in code", reached.len())))),
-        }
+        let x = match reached[..] {
+            [c] if shown.insert(&c.key) => strip(c),
+            [_] => continue,
+            [] => alone(k, Some("Not in the mixer".into())),
+            _ => alone(k, Some(format!("In {} channels: set its level in code", reached.len()))),
+        };
+        if x.bus { later.push(x) } else { strips.push(x) }
     }
     strips.extend(m.channels.iter().filter(|c| c.tracks.is_empty()).map(strip));
+    strips.extend(later);
     MixView { mixer: word, message, strips, master }
 }
 

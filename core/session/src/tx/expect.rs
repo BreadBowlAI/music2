@@ -208,9 +208,13 @@ fn confined(c: &Confined, j: &Judge) -> Result<(), String> {
             _ => return Err(format!("{} is removed outside the ranges it may change", shown(&n.name))),
         }
     }
+    // A node outside the ranges may differ only in edges to nodes made inside them (WRITE-8): to one
+    // added or removed there, or to one made there in both, which a node added before it renamed (a
+    // song export std's mixer feeds a bus from, RENDER-34).
+    let made_inside = |n: &Name| moved.contains(n) || j.new.nodes.get(n).or(j.old.nodes.get(n)).is_some_and(|f| j.inside(c, f));
     for w in &d.rewired {
         let here = j.new.nodes.get(&w.node).or(j.old.nodes.get(&w.node)).is_some_and(|f| j.inside(c, f));
-        let to_moved = |r: &Option<super::delta::Ref>| r.as_ref().is_some_and(|r| moved.contains(&r.node));
+        let to_moved = |r: &Option<super::delta::Ref>| r.as_ref().is_some_and(|r| made_inside(&r.node));
         if !here && !to_moved(&w.from) && !to_moved(&w.to) {
             return Err(format!("{}'s `{}` is rewired outside the ranges it may change", shown(&w.node), w.input));
         }

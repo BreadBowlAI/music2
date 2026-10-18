@@ -111,6 +111,9 @@ pub struct Dependent {
     pub removable: bool,
     #[serde(skip)]
     site: Option<(u32, u32, u32, u32)>,
+    /// For a send to a bus or an output to it, in the mixer's file: the deletions taking it out.
+    #[serde(skip)]
+    cut: Vec<(u32, u32, String)>,
 }
 
 /// What a delete did, or why it waits.
@@ -156,7 +159,7 @@ fn unique_label(rev: &Revision, label: &str) -> String {
 
 /// A track file's path for `key`: `tracks/<key>.ts`, or `tracks/<key>-2.ts`… when that name is taken
 /// in any capitals.
-fn track_file(rev: &Revision, key: &str) -> String {
+pub(crate) fn track_file(rev: &Revision, key: &str) -> String {
     let free = |p: &str| rev.snapshot.taken(Path::new(p)).is_none();
     let first = format!("tracks/{key}.ts");
     if free(&first) {
@@ -179,7 +182,7 @@ pub(crate) fn prop_key(key: &str) -> String {
 /// in the object's style: on a line of its own at the properties' indentation when they are on
 /// lines, with a trailing comma when they have one; inline otherwise. In an object that holds only
 /// comments (the Empty template), before the closing brace at the comments' indentation.
-fn channel_edits(text: &str, mixer: &Mixer, entry: &str) -> Vec<(u32, u32, String)> {
+pub(crate) fn channel_edits(text: &str, mixer: &Mixer, entry: &str) -> Vec<(u32, u32, String)> {
     let (open, close) = (mixer.object.0 as usize, mixer.object.1 as usize - 1);
     let inner = &text[open + 1..close];
     let Some(last) = mixer.channels.last() else {
@@ -224,7 +227,7 @@ fn channel_edits(text: &str, mixer: &Mixer, entry: &str) -> Vec<(u32, u32, Strin
 }
 
 /// Where a default import of `target` goes in `file`'s `text`, and its text.
-fn import_edit(text: &str, file: &str, target: &str, binding: &str) -> (u32, String) {
+pub(crate) fn import_edit(text: &str, file: &str, target: &str, binding: &str) -> (u32, String) {
     let line = format!("import {binding} from {};", quoted(&specifier(file, target)));
     match import_place(text, file, target) {
         (at, false) => (at, format!("\n{line}")),
@@ -233,7 +236,7 @@ fn import_edit(text: &str, file: &str, target: &str, binding: &str) -> (u32, Str
 }
 
 /// Merge `edits` of one file, sorted; overlapping ones are a planner error.
-fn sorted(mut edits: Vec<(u32, u32, String)>) -> Result<Vec<(u32, u32, String)>, EditError> {
+pub(crate) fn sorted(mut edits: Vec<(u32, u32, String)>) -> Result<Vec<(u32, u32, String)>, EditError> {
     edits.sort_by_key(|e| (e.0, e.1));
     for w in edits.windows(2) {
         if w[0].1 > w[1].0 {
@@ -271,7 +274,7 @@ fn track_text(inst: &Instrument, key: &str, label: &str, file: &str) -> String {
 }
 
 /// The mixer, or why a track can't be added to it.
-fn the_mixer(rev: &Revision) -> Result<Mixer, EditError> {
+pub(crate) fn the_mixer(rev: &Revision) -> Result<Mixer, EditError> {
     match mix::mixer(rev) {
         Mixing::One(m) => Ok(m),
         other => Err(EditError::Rejected(other.refusal().expect("not one mixer"))),
@@ -280,7 +283,7 @@ fn the_mixer(rev: &Revision) -> Result<Mixer, EditError> {
 
 /// The layout after a builder's change, as the op that writes it; none while `layout.json` doesn't
 /// read, which the track builders leave as it is (R15).
-fn layout_write(
+pub(crate) fn layout_write(
     s: &Session,
     change: impl FnOnce(&layout::LayoutView) -> (Vec<String>, BTreeMap<String, &'static str>, Option<String>),
 ) -> Option<(Op, TxPath, m2_song::tx::Base)> {
@@ -295,7 +298,7 @@ fn layout_write(
 }
 
 /// `order` with `key` right after `after` (when it is listed), else at the end.
-fn placed(order: &[String], key: &str, after: Option<&str>) -> Vec<String> {
+pub(crate) fn placed(order: &[String], key: &str, after: Option<&str>) -> Vec<String> {
     let mut out = order.to_vec();
     match after.and_then(|a| out.iter().position(|k| k == a)) {
         Some(i) => out.insert(i + 1, key.to_string()),
@@ -305,7 +308,7 @@ fn placed(order: &[String], key: &str, after: Option<&str>) -> Vec<String> {
 }
 
 /// A planned Tx with `layout` written beside its ops, based on the disk.
-fn with_layout(
+pub(crate) fn with_layout(
     s: &Session,
     label: (String, String),
     mut ops: Vec<Op>,
@@ -326,7 +329,7 @@ fn with_layout(
 /// The planner's assertion shared by add and duplicate: exactly one module added, nothing of the
 /// song removed but an empty mixer's stand-in, no value changed, and the new track in a channel
 /// of its own (ID-18).
-fn adds_one(checked: &Checked, key: &str, channel: &str) -> Result<(), EditError> {
+pub(crate) fn adds_one(checked: &Checked, key: &str, channel: &str) -> Result<(), EditError> {
     adds(checked, &[(key.to_string(), channel.to_string())])
 }
 
@@ -551,7 +554,7 @@ fn rev_base(s: &Session, file: &TxPath) -> m2_song::tx::Base {
 }
 
 /// `label`, or `label 2`… free among the tracks and the names `also` already took in this Tx.
-fn unique_label_among(rev: &Revision, label: &str, also: &[String]) -> String {
+pub(crate) fn unique_label_among(rev: &Revision, label: &str, also: &[String]) -> String {
     let used: Vec<&str> = rev.compiled.ir.modules.iter().filter(|m| m.track).map(|m| m.label()).chain(also.iter().map(String::as_str)).collect();
     if !used.contains(&label) {
         return label.to_string();
@@ -791,6 +794,7 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
                     line,
                     removable: true,
                     site: Some((c.start, input.0, input.1, c.end)),
+                    cut: vec![],
                 }
             }
             _ => Dependent {
@@ -801,10 +805,21 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
                 line,
                 removable: false,
                 site: None,
+                cut: vec![],
             },
         };
         if !dependents.iter().any(|d| d.site.is_some() && d.site == dep.site && d.file == dep.file) {
             dependents.push(dep);
+        }
+    }
+    // A bus: the sends to its channel and the outputs to it go with it (RENDER-34). Those channels'
+    // tracks then go to the master.
+    if let (true, Some(mx), Some(c)) = (m.bus, &mixer, &channel) {
+        for (key, what, line, cut) in crate::bus::unrouted(rev, mx, &c.key)? {
+            let ch = mx.channels.iter().find(|x| x.key == key).expect("its channel");
+            let module = ch.tracks.first().cloned().unwrap_or_else(|| key.clone());
+            let label = crate::bus::named(rev, ch);
+            dependents.push(Dependent { module, label, component: what.into(), file: mx.file.clone(), line, removable: true, site: None, cut });
         }
     }
     if dependents.iter().any(|d| !d.removable) {
@@ -848,6 +863,11 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
         let t = &rev.snapshot.files[Path::new(&mx.file)];
         let removed = channel_removal(t, mx, c);
         add(&mut edits, &mut ranges, &mx.file, removed, mx.call);
+    }
+    for d in dependents.iter().filter(|d| !d.cut.is_empty()) {
+        let call = mixer.as_ref().map_or((0, 0), |mx| mx.call);
+        edits.entry(d.file.clone()).or_default().extend(d.cut.iter().cloned());
+        ranges.entry(d.file.clone()).or_default().push(Range::bytes(call.0, call.1));
     }
     for d in &dependents {
         let Some((start, i0, i1, end)) = d.site else { continue };
