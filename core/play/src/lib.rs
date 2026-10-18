@@ -24,8 +24,10 @@ pub mod alloc;
 mod cells;
 mod disk;
 mod engines;
+mod inputs;
 pub mod outputs;
 mod resample;
+pub mod ring;
 mod timing;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -38,6 +40,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 pub use cpal::{Error as DeviceError, ErrorKind as DeviceErrorKind};
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 pub use engines::{BETWEEN, Between, EngineThreads, Handover, LiveThreads, live_count};
+pub use inputs::{Input, InputChoice, InputDriver, Listen, NO_INPUT, NO_MICROPHONE, inputs};
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
 pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
 use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Runner, Transport, fpenv};
@@ -120,6 +123,8 @@ enum Msg {
     Unload,
     /// The player's engine threads (8a's live half), handed over once they are made.
     Threads(Box<Handover>),
+    /// The silent input the callback hands injected samples to, or none (RENDER-30a).
+    Input(Option<Box<inputs::Silent>>),
 }
 
 /// What leaves the audio thread, to be dropped elsewhere.
@@ -128,6 +133,8 @@ pub enum Gone {
     Live(Box<Live>),
     /// The handover, holding the runner the callback had before.
     Runner(Box<Handover>),
+    /// A silent input closed.
+    Input(Box<inputs::Silent>),
 }
 
 /// An error a sender returns when the audio thread hasn't taken a message for [`STALL`]: the
@@ -236,6 +243,10 @@ struct Shared {
     seconds: AtomicU64,
     playing: AtomicBool,
     generation: AtomicU64,
+    /// When the last callback began, on [`now_ns`]'s clock, and the engine clock after it: one
+    /// pair, so an input's callback places its stamps by one callback, never by two.
+    pair_ns: AtomicU64,
+    pair_clock: AtomicU64,
     applied: [AppliedSlot; APPLIED],
     applied_n: AtomicU64,
     heard: [HeardSlot; APPLIED],
@@ -345,6 +356,27 @@ impl Shared {
         self.device_errors[DeviceEvent::of(e.kind()) as usize].fetch_add(1, Ordering::Relaxed);
     }
 
+    /// The engine clock heard at `ns` on [`now_ns`]'s clock, as [`Player::heard_frame_at`] places
+    /// it, the engine at `rate` and the device at `device_rate`: None before the first callback.
+    /// Atomics only, read once each, never waiting (an input's callback asks).
+    /// None too while the output's callback publishes: that buffer goes unstamped.
+    fn heard_clock_at(&self, ns: u64, rate: u32, device_rate: u32) -> Option<u64> {
+        let a = self.seq.load(Ordering::Acquire);
+        if a & 1 == 1 {
+            return None;
+        }
+        let (then, clock) = (self.pair_ns.load(Ordering::Relaxed), self.pair_clock.load(Ordering::Relaxed));
+        fence(Ordering::Acquire);
+        let buffer = self.frames.load(Ordering::Relaxed) as f64;
+        if self.seq.load(Ordering::Relaxed) != a || then == 0 || buffer == 0.0 {
+            return None;
+        }
+        let rate = rate as f64;
+        let since = (ns as f64 - then as f64) * rate / 1e9;
+        let at = clock as f64 + since - 2.0 * buffer * rate / device_rate.max(1) as f64;
+        Some(at.round().max(0.0) as u64)
+    }
+
     fn device_errors(&self) -> DeviceErrors {
         let n = |e: DeviceEvent| self.device_errors[e as usize].load(Ordering::Relaxed);
         DeviceErrors {
@@ -411,6 +443,8 @@ struct Callback {
     /// before (8a's live half).
     runner: Runner,
     between: Between,
+    /// The silent input, handed what was injected as the engine plays (RENDER-30a).
+    input: Option<Box<inputs::Silent>>,
 }
 
 impl Callback {
@@ -434,6 +468,7 @@ impl Callback {
             loads: 0,
             runner: Runner::one(),
             between: BETWEEN,
+            input: None,
         }
     }
 
@@ -487,6 +522,7 @@ impl Callback {
         self.take_held();
         let channels = channels.max(1);
         let frames = data.len() / channels;
+        let first = self.live.as_ref().map(|l| l.engine.out_clock());
         let mut done = 0;
         while done < frames {
             let n = (frames - done).min(SCRATCH);
@@ -504,7 +540,16 @@ impl Callback {
             }
             done += n;
         }
-        self.publish();
+        // The silent input: one frame for each the engine rendered, each buffer heard two device
+        // buffers before the first frame rendered, as a device's input would be.
+        if let (Some(input), Some(first), Some(now)) = (&mut self.input, first, self.live.as_ref().map(|l| l.engine.out_clock()))
+            && now > first
+        {
+            let rate = self.shared.rate.load(Ordering::Relaxed).max(1) as f64;
+            let late = (2.0 * frames as f64 * rate / self.device_rate.max(1) as f64).round() as u64;
+            input.deliver((now - first) as usize, first.saturating_sub(late));
+        }
+        self.publish(ns);
         // The DSP load (8b.8): this callback's time against its period, by the clock alone.
         let took = now_ns().saturating_sub(ns);
         let period = frames as u64 * 1_000_000_000 / self.device_rate.max(1) as u64;
@@ -556,6 +601,11 @@ impl Callback {
                     self.shared.engines.device(m2_os::rt::on_device_thread(&h.group));
                     self.retire(Gone::Runner(h));
                 }
+                Msg::Input(input) => {
+                    if let Some(old) = std::mem::replace(&mut self.input, input) {
+                        self.retire(Gone::Input(old));
+                    }
+                }
                 Msg::Engine(env) => {
                     // Nothing plays: what the message carries is retired unapplied.
                     match env.msg {
@@ -584,7 +634,7 @@ impl Callback {
     }
 
     fn render(&mut self, n: usize, stamp: CallbackStamp) {
-        let Callback { live, fade, held, rx, retired, a, b, seeks, plays, shared, runner, .. } = self;
+        let Callback { live, fade, held, rx, retired, a, b, seeks, plays, shared, runner, input, gone, .. } = self;
         let mut retire = |r: Retired| match retired.try_send(Gone::Engine(r)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(Gone::Engine(r)) | TrySendError::Disconnected(Gone::Engine(r))) => Err(r),
@@ -593,24 +643,38 @@ impl Callback {
         match live {
             Some(l) => {
                 let mut inbox = || {
-                    if held.is_some() {
-                        return None;
-                    }
-                    match rx.try_recv() {
-                        Ok(Msg::Engine(env)) => {
-                            // Transport commands apply as soon as the engine reads them.
-                            match env.msg {
-                                EngineMsg::Transport(Cmd::Seek(_)) => *seeks += 1,
-                                EngineMsg::Transport(Cmd::Play | Cmd::Stop) => *plays += 1,
-                                _ => {}
+                    loop {
+                        if held.is_some() {
+                            return None;
+                        }
+                        match rx.try_recv() {
+                            Ok(Msg::Engine(env)) => {
+                                // Transport commands apply as soon as the engine reads them.
+                                match env.msg {
+                                    EngineMsg::Transport(Cmd::Seek(_)) => *seeks += 1,
+                                    EngineMsg::Transport(Cmd::Play | Cmd::Stop) => *plays += 1,
+                                    _ => {}
+                                }
+                                return Some(env);
                             }
-                            Some(env)
+                            // The input changes here: it waits for nothing, and nothing after it
+                            // waits for it (a Play sent with it applies in this callback).
+                            Ok(Msg::Input(i)) => {
+                                if let Some(old) = std::mem::replace(input, i)
+                                    && let Err(e) = retired.try_send(Gone::Input(old))
+                                {
+                                    match gone.iter_mut().find(|s| s.is_none()) {
+                                        Some(slot) => *slot = Some(e.into_inner()),
+                                        None => std::mem::forget(e.into_inner()),
+                                    }
+                                }
+                            }
+                            Ok(other) => {
+                                *held = Some(other);
+                                return None;
+                            }
+                            Err(_) => return None,
                         }
-                        Ok(other) => {
-                            *held = Some(other);
-                            None
-                        }
-                        Err(_) => None,
                     }
                 };
                 l.engine.set_click(shared.click.load(Ordering::Relaxed));
@@ -641,6 +705,7 @@ impl Callback {
             Msg::Engine(Envelope { msg: EngineMsg::SwapLane { data, .. }, .. }) => Some(Gone::Engine(Retired::Lane(data))),
             Msg::Engine(Envelope { msg: EngineMsg::Hear { input: Some(i), .. }, .. }) => Some(Gone::Engine(Retired::Input(i))),
             Msg::Threads(h) => Some(Gone::Runner(h)),
+            Msg::Input(i) => i.map(Gone::Input),
             Msg::Engine(_) | Msg::Unload => None,
         }
     }
@@ -657,7 +722,7 @@ impl Callback {
         }
     }
 
-    fn publish(&mut self) {
+    fn publish(&mut self, ns: u64) {
         let s = &self.shared;
         let st = self.live.as_ref().map(|l| l.engine.status()).unwrap_or_default();
         let seq = s.seq.load(Ordering::Relaxed);
@@ -668,6 +733,8 @@ impl Callback {
         s.seconds.store(st.seconds.to_bits(), Ordering::Relaxed);
         s.playing.store(st.playing, Ordering::Relaxed);
         s.generation.store(st.generation, Ordering::Relaxed);
+        s.pair_ns.store(ns, Ordering::Relaxed);
+        s.pair_clock.store(self.live.as_ref().map_or(0, |l| l.engine.clock()), Ordering::Relaxed);
         if let Some(l) = &self.live {
             let (stamps, n) = l.engine.applied();
             // Stamps of an engine replaced since are gone; the new engine counts from 0.
@@ -731,7 +798,7 @@ impl Drop for Callback {
     /// callback there (cpal's ALSA stream does). It is no callback any more: what the dropper has no
     /// room for is dropped here.
     fn drop(&mut self) {
-        let mut rest = vec![self.live.take().map(Gone::Live), self.fade.take().map(|f| Gone::Live(f.old))];
+        let mut rest = vec![self.live.take().map(Gone::Live), self.fade.take().map(|f| Gone::Live(f.old)), self.input.take().map(Gone::Input)];
         rest.extend(self.held.take().map(Callback::leftover));
         rest.extend(self.gone.iter_mut().map(Option::take));
         rest.extend(self.rx.try_iter().map(Callback::leftover));
@@ -753,6 +820,11 @@ pub struct Player {
     alive: Arc<()>,
     /// Its disk thread's side: the audio lanes it keeps filled (RENDER-30).
     disk: Arc<disk::Disk>,
+    /// The sound input it has open (RENDER-30a), and how it meets one.
+    inputs: Arc<inputs::Inputs>,
+    input_kind: inputs::Kind,
+    /// Its output's id, when a device's: the input it opens unless Settings names one (D13).
+    output_id: Option<String>,
     /// The device's own rate. The engine runs at the project's.
     pub device_rate: u32,
     pub device: String,
@@ -880,7 +952,19 @@ impl Player {
         let alive = Arc::new(());
         let s = shared.clone();
         let disk = disk::Disk::start(Box::new(move || (s.heading(), s.published().beats)), Arc::downgrade(&alive));
-        let player = Player { tx, shared, next_seq: Arc::default(), cells: Arc::default(), alive, disk, device_rate, device: device.into() };
+        let player = Player {
+            tx,
+            shared,
+            next_seq: Arc::default(),
+            cells: Arc::default(),
+            alive,
+            disk,
+            inputs: Arc::default(),
+            input_kind: inputs::Kind::Silent,
+            output_id: None,
+            device_rate,
+            device: device.into(),
+        };
         (player, cb, retired)
     }
 
@@ -931,7 +1015,8 @@ impl Player {
                 let mut config = supported.config();
                 config.buffer_size = outputs::buffer(choice.frames, supported.buffer_size());
                 let channels = config.channels as usize;
-                let (player, mut cb, retired) = Player::parts(config.sample_rate, &name);
+                let (mut player, mut cb, retired) = Player::parts(config.sample_rate, &name);
+                (player.input_kind, player.output_id) = (inputs::Kind::Device, outputs::id_of(&device));
                 player.shared.fell_back.store(fell_back, Ordering::Relaxed);
                 let shared = player.shared.clone();
                 let stream = device.build_output_stream::<f32, _, _>(
