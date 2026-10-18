@@ -240,6 +240,9 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
   - A plugin that fails in the same instant as a crash may be told as "stopped working" rather than in the crash's notice.
   - Tests that use it need `m2-plugin-host` built first (`cargo build -p m2-plugins --bin m2-plugin-host`); `ci/check.sh` builds it.
   - macOS: its shared memory and wake are lint-checked only, until the owner's Mac runs them.
+  - A plugin stuck on the host's main loop (in its window, its start or a settings load) holds up edits and saves for up to 30 seconds (2 minutes in a scan); then music2 ends the host process and says so (the ph review's r1).
+  - One broken `.clap` file that crashes the host while it scans makes every plugin say "not installed", and the bad file isn't named. Scanning one file at a time would name it and skip it (the ph review's r4).
+  - An export during which the host process crashes, or is ended for not answering, finishes with those plugins silent from there and says only "Exported" (seen in the ph review's pictures).
 - **Plugin windows** (HOST-7, since ph-2). A plugin's own window opens from its box; a knob turned there writes the code, latches a lane, or saves the plugin's settings (one Undo step). What it doesn't do yet:
   - A plugin's window floats on its own: it isn't tied to the app's window, its place isn't remembered, and you can't resize it by hand.
   - Linux: X11 only (Wayland through XWayland).

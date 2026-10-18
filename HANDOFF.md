@@ -15,9 +15,14 @@ Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
-- **Track `ph` (step 9's first synth and plugin turns) is built on branch `ph`** (2026-10-18), not yet on `main`:
-  Linux green at `b0ebc74`. **macOS: unverified since `b0ebc74`** (its shared memory, wake and windows are
-  lint-checked only). From `main` at `258275b`. It adds:
+- **`ph` is ready to land** (2026-10-18): Linux green at `659037f`; macOS unverified since `b0ebc74` (its shared
+  memory, wake and plugin windows are lint-checked only). From `main` at `258275b`, with `main` at `3b447b2` (`io`)
+  merged in. Step 9's first synth and plugin turns (plan: `docs/designs/step9/ph-plan.md`; build notes:
+  `build-notes-ph.md` beside it). A review found 4 things: the big one fixed, with two tests shown red first; 2 small
+  ones fixed (one line each, one with a test shown red first); 1 is a line in `docs/gaps.md`. The first full check
+  after the merge failed clippy and the mac lint on a clash the merge made (fixed). Then `ci/check.sh --gates` passed
+  at `659037f`: every row (1,628 Rust tests, 68 browser suites, 10 of 10 renders, the 7 gate runs); one browser suite,
+  `st-audio-fix` (from `studio`), passed only on its retry (Known flakes). It adds:
 
   | You can now | What you notice |
   |---|---|
@@ -25,11 +30,16 @@ whatever you pick up.
   | Open a plugin's own window from its box | a knob turned there writes the code, latches a lane, or saves the plugin's settings (one Undo step) |
   | Use a plugin that plays late (a look-ahead limiter) | every other track waits for it, live and in exports; a song with no such plugin is unchanged |
 
-  No render changed: 10 of 10. with-plugins is checked by G7e's 1 dB rule, as two of its base renders already differ
-  (Surge XT). `ci/check.sh --gates` passed at `b0ebc74`: every row (1,597 Rust tests, 67/67 browser suites, 10 of 10
-  renders, the 7 gate runs). Its first run failed only G11's timing under load from other jobs; alone it passed 3
-  times of 3, then the second full run passed. Owed: the owner's Mac. Build notes
-  `docs/designs/step9/build-notes-ph.md`, plan `ph-plan.md` beside them; what isn't done yet is in `docs/gaps.md`.
+  What the review changed that you may notice:
+
+  | What happens | Before | Now |
+  |---|---|---|
+  | A plugin gets stuck while it starts, loads its settings or works in its window | the app froze for good: no edit, no save, no message | after 30 seconds music2 ends the plugin program and says so; the song plays on |
+  | A plugin gets stuck during an export | "Paused for export" stayed until you quit | after 30 seconds music2 ends the plugin program and playback goes on; the export finishes with those plugins silent from there (a gap) |
+
+  No render changed: 10 of 10 (with-plugins by G7e's 1 dB rule, as two of its base renders already differ: Surge XT).
+  Pictures on Xvfb :96: `~/m2-runs/app-shots/ph-659037f/` (a frozen plugin program during an export, and after).
+  Owed on the Mac: the by-ear steps 83 to 90 (plugins in their own program, a plugin's own window, a crash, an export).
 - **`io` is ready to land** (2026-10-18): Linux green at `64380e1`; macOS unverified since `eda5e77`. From `main` at
   `258275b` (`main` hasn't moved since). Step 9's audio turns 1 and 4 (plan: `docs/designs/step9/io-plan.md`; build
   notes: `build-notes-io.md` beside it). A review found 8 things: the 3 big ones fixed, each with a test shown red
@@ -256,7 +266,8 @@ whatever you pick up.
 | `macfix` | `ac5d8c0`, then docs only | From `main` at `85b069a`. Fixes the two rows the Mac's run at `85b069a` failed: G7f store (`std:gain` skips its `powf` while its dB holds still, the same bits) and `new_songs_go_where_settings_say` (the songs folder by its real path). Reviewed (2 findings, both fixed). Linux green at `ac5d8c0` (`ci/check.sh --gates`, nothing passed only on a retry); macOS owed. All on `main` (a fast-forward to `1cc7382`, 2026-10-17). Branch and worktree deleted. Build notes `docs/designs/step8/build-notes-macfix.md`. |
 | `studio` | `ad5f111`, then docs only | All on `main` (a fast-forward to `02ba4d3`, 2026-10-18). From `main` at `85b069a`. Audio in the app (#18), recording notes (#24) with the count-in (#19) and the MIDI keyboards setting (#31), MIDI files and stems (#36), help in plain words (#11), `m2 import` (#37). Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `ad5f111` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/studio-plan.md`; build notes `build-notes-studio.md`. |
 | `io` | `64380e1`, then docs only | **Ready to land.** From `main` at `258275b`. Step 9's audio turns 1 and 4: disk streaming (RENDER-30) and recording audio (RENDER-30a, MON-8). Reviewed (8 findings: 3 big ones fixed with tests, 2 small ones fixed, 3 in gaps.md). Linux green at `64380e1` (`ci/check.sh --gates`, nothing passed only on a retry), macOS unverified since `eda5e77`. Worktree `~/m2-runs/wt/io`. Plan `docs/designs/step9/io-plan.md`; build notes `build-notes-io.md`. |
-| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, and 73 to 82 once `io` is on `main`. |
+| `ph` | `659037f`, then docs only | **Ready to land.** From `main` at `258275b`, with `main` at `3b447b2` (`io`) merged in. Step 9's first synth and plugin turns: the plugin host process (HOST-3), plugin windows (HOST-7, MON-6) and latency compensation (RENDER-17 to 21). Reviewed (4 findings: the big one fixed with tests, 2 small ones fixed, 1 in gaps.md). Linux green at `659037f` (`ci/check.sh --gates`), macOS unverified since `b0ebc74`. Worktree `~/m2-runs/wt/ph`. Plan `docs/designs/step9/ph-plan.md`; build notes `build-notes-ph.md`. |
+| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, 73 to 82 once `io` is on `main`, and 83 to 90 once `ph` is. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -552,6 +563,19 @@ bar, its Ctrl-click, and the sound.
 | 81 | With a USB microphone picked in Settings, press Space, then R, and speak. While it records, unplug the microphone. | The song plays on. A message: "The sound input was unplugged: the take was kept up to here." A clip of your voice up to there. Plug it back in and press R: it records again. |
 | 82 | Tell the lead what you saw, heard and felt at 73 to 81. | |
 
+**A check by ear of plugins in their own program** (`ph`, about 10 minutes):
+
+| # | Do this | You should hear or see |
+|---|---|---|
+| 83 | Quit the app. Type `cargo run --release -p music2-desktop`. Click **Open an Example**, then **With plugins**. Press Space. | It plays the Surge XT lead as before, with no clicks. |
+| 84 | Open Activity Monitor and type `music2` in its search box. | Two music2 programs: the app, and a second one that runs the plugins. |
+| 85 | Back in music2, click the **lead** track, then **Device** at the bottom. On the Surge XT box, click **Open window**. | Surge XT's own window opens. The button now says **Close window**. |
+| 86 | In Surge XT's window, turn the filter cutoff knob while it plays, and let go. | You hear the sound change as you turn. |
+| 87 | Press ⌘Z. | The sound goes back to how it was. |
+| 88 | In the Terminal, type `pkill -9 -f -- --m2-plugin-host` while it plays. | The song plays on. The lead goes quiet for a moment, a message says "The plugin host crashed…", and the lead comes back by itself. Surge XT's window closes: open it again from the box. |
+| 89 | Click **Export**, then **Save**, while it plays. | "Paused for export" in the top bar, then it plays on. The file sounds like the song. |
+| 90 | Tell the lead what you saw, heard and felt at 83 to 89. | |
+
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in
 `~/m2-check/<commit>.tgz` on the Mac if needed.
@@ -608,6 +632,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | 8a's live half (live on several cores, a sound that breaks, G12) | `21a7a1b` (Linux checks), then docs only; on `main` at `44b104a` | owed: 8a's Mac sweep below, one paste, about 40 minutes. The same `ci/check.sh` covers its Mac tests and G12's minute |
 | `studio`: audio in the app, recording notes, MIDI files and stems, help in plain words | `ad5f111` (Linux checks), then docs only; on `main` at `02ba4d3` | owed: the same one more `ci/check.sh`, then the by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in another app) |
 | `io`: audio clips play from the disk; recording audio | `64380e1` (Linux checks), then docs only; ready to land (branch `io`) | macOS: unverified since `eda5e77`. Owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 73 to 82 (a long file from the disk, a real microphone, the permission question, the take against the click, hearing yourself in headphones, a USB microphone unplugged) |
+| `ph`: plugins in their own program, plugin windows, latency compensation | `659037f` (Linux checks), then docs only; ready to land (branch `ph`) | macOS: unverified since `b0ebc74` (shared memory, the wake across processes and plugin windows are lint-checked only). Owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 83 to 90 (two music2 programs, Surge XT's own window, a knob and its undo, the plugin program ended while it plays, an export) |
 
 **8a's Mac sweep (for the owner): offline and live, one paste.** `8a` is on `main`.
 
@@ -705,6 +730,7 @@ Seen, not fixed:
 | `live3b` | "its release writes db(-32) into song.ts" | once, at load 45–74, before step 7; not seen since; watch for it |
 | `s5-knobs` | page detached after a double-click on a knob at its default (3 of 11 release runs) | from before the platform step; not seen in its checks |
 | `audition_never_waits_for_a_compile`, `midi_never_waits_for_a_compile` | "the compile's span" not found; "attempt to subtract with overflow" (a span ending before it began) | both once, in io's second final check, at load 9 to 10 beside another track's tests; they read spans on the player's clock, which a new player starts again; alone, 3 runs of 3 pass |
+| `st-audio-fix` | "and adds nothing": the song's revision moved after an MP3 was refused | once, passed on its retry, in ph's second final check (load low); probably the ⌘Z just before it still settling. Not seen in io's or studio's checks |
 
 Fixed in step 7 (of these, only `a_plugin_that_keeps_failing_is_started_again_once` was seen in a `ci/check.sh` run):
 

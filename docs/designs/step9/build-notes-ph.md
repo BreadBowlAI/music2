@@ -245,3 +245,87 @@ compared with an offline one (they differ by `L` then), none a crash or an asser
   not by ear.
 - The gaps this slice leaves are in `docs/gaps.md` (Loose ends, "Latency compensation").
 
+
+## The review, the merge and the final check
+
+### In short
+
+A review found 4 things. The big one is fixed, with two tests shown red first. Two small ones are fixed (one line
+each). One is a line in `docs/gaps.md`. Then `main` (with `io`) was merged in, and `ci/check.sh --gates` passed.
+
+| Finding | Size | What was done |
+|---|---|---|
+| ph-r1: only a live call had a limit. A main-thread call, an answer awaited or an offline call could wait for good, so one stuck plugin froze the session, or kept "Paused for export" until quit | big | Fixed (`46e32d4`): every wait has a limit (HOST-3's hang row) |
+| ph-r2: a hold released during a gesture kept its override slot, so the plugin was never lent to an export again | small | Fixed (`09d6489`): `Overrides::end` frees a slot left with no flag, as `release` does |
+| ph-r3: the host program's stamp didn't cover `host.rs`, which sets the slot's layout | small | Fixed (`5e44336`): `host.rs` is in the stamp |
+| ph-r4: one broken `.clap` file makes every plugin say "not installed" | small | A line in `docs/gaps.md` |
+
+### Decisions
+
+| What | Why |
+|---|---|
+| One limit, 30 s (`remote::LIMIT`), for every call that isn't live: offline, on the main thread, or an answer awaited | Long enough for a big plugin's start or settings load. Short enough that a stuck plugin can't freeze the session for good. The owner's Mac may move it |
+| A scan gets four times as long (2 minutes) | It loads every plugin's library; the first time, a Mac checks each one |
+| A reply's limit runs from when it was sent; the watchdog checks every reply awaited | One place for every hang: `call`, the answers awaited (`latency`, `save_state`) and calls nobody waits for all end the same way. No caller changed |
+| A stuck call ends the whole host process, as a live hang does | The call can't be taken back while the plugin holds the main loop. Every plugin comes back from its saved settings, and the person is told once (`plugin.crashed`, "stopped answering") |
+| The export's stop flag isn't read inside the wait | It is set only when the app quits, and quitting ends the host process, which ends any wait at once |
+
+### Tests, each red first
+
+The red diffs and their logs are in `~/m2-runs/sph/red/`.
+
+| Test | Red by | Red result |
+|---|---|---|
+| `a_main_thread_call_that_hangs_ends_its_process` (probe tag `hangs-activate`) | the watchdog's new checks stubbed (`limits-stubbed`) | the call never returned in 10 s |
+| `an_offline_call_that_hangs_ends_its_process` | the same | the same |
+| `a_hold_released_mid_gesture_frees_its_slot_at_the_end` | the old `Overrides::end` (`overrides-end-keeps`) | a slot still taken |
+
+### The merge of `main`
+
+`main` at `3b447b2` (`io`: disk streaming and recording audio) merged in at `dcf075d`. Conflicts: m2-os's re-exports
+(both sides' names kept), `HANDOFF.md` and `docs/gaps.md` (both sides' lines kept). The first full check found one
+clash the merge made: `io`'s `mac/av.rs` and this branch's `mac/window.rs` declared `sel_registerName` with two return
+types, which the mac lint refused. Fixed in `659037f`, with a clippy finding in the probe's new tag.
+
+### The final check
+
+| Run | Result |
+|---|---|
+| First, at `dcf075d` | Failed 3 rows: clippy (the probe's new loop), the mac lint (the merge's clash), and "repo unchanged" (docs edited while it ran). Every other row passed: 1,628 Rust tests, 68/68 browser suites, renders 10 of 10, the 7 gate runs. Logs: `~/m2-runs/sph/check-dcf075d-run1.tgz` |
+| Second, at `659037f` | **PASS**; 1 passed only on a retry: the browser suite `st-audio-fix` (from `studio`, not this branch's code; Known flakes). 1,628 Rust tests, 68 browser suites, renders 10 of 10, the app, clippy, the mac lint, std, the 7 gate runs, the repo unchanged. 39 minutes. Logs: `~/m2-runs/sph/check-659037f.tgz` |
+
+The check's summary, word for word:
+
+```
+music2 check: PASS; 1 passed only on a retry
+commit   659037f929ac on ph (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 39 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1628 passed, 0 failed
+clippy           PASS  
+pool models      PASS  29 passed, 0 failed
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  67/68 suites ok, 1 failed; passed on a retry
+renders          PASS  10 of 10 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+gates            PASS  the 7 runs ci/gates.txt names
+repo unchanged   PASS
+
+passed only on a retry:
+  suite st-audio-fix
+```
+
+### Pictures
+
+On Xvfb :96, 1440x900: `~/m2-runs/app-shots/ph-659037f/` (`captions.txt` says what each shows). The song was made
+20 minutes long so its export was still rendering when the plugin program was frozen (SIGSTOP,
+`~/m2-runs/sph/tools/hang-export.sh`). 30 s later music2 ended it and playback went on. The export then finished
+with the lead silent from the freeze and said only "Exported": a line in `docs/gaps.md`.
