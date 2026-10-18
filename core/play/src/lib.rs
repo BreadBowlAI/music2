@@ -1168,13 +1168,23 @@ impl Player {
         Ok(seq)
     }
 
-    /// A renderer about to be sent, to play from `at` (else where playback is): its rings are the
-    /// disk thread's to fill (D11), and its new lanes hold the next half second from there first,
-    /// or 500 ms passed (D9). A given `at` is read first until [`disk::Disk::sought`].
-    fn streaming(&self, renderer: &mut Renderer, at: Option<f64>) {
+    /// Make `renderer` ready to be sent, to play from `at` (else where playback is): its rings are
+    /// the disk thread's to fill from now on (D11), and this waits until its new lanes hold the
+    /// next half second from there, or 500 ms passed (D9). A given `at` is read first until the
+    /// renderer is sent. [`Self::open_at`], [`Self::replace`] and [`Self::activate`] do this for a
+    /// renderer not made ready; a caller holding a lock that live input waits on calls it first,
+    /// outside that lock, so only the send is left under it (the review's io-r1).
+    pub fn ready(&self, renderer: &mut Renderer, at: Option<f64>) {
         renderer.from_disk();
         let new = self.disk.register(renderer.audio_lanes());
         self.disk.prefill(&new, at);
+    }
+
+    /// [`Self::ready`], unless the renderer was made ready already.
+    fn streaming(&self, renderer: &mut Renderer, at: Option<f64>) {
+        if !renderer.is_from_disk() {
+            self.ready(renderer, at);
+        }
     }
 
     fn replace_with(&self, mut renderer: Renderer, keep: Keep) -> Result<()> {
@@ -1191,12 +1201,23 @@ impl Player {
 
     /// Play a newly opened project: a fresh engine for `renderer`, stopped at its start. What
     /// played before fades out.
-    pub fn open(&self, mut renderer: Renderer) -> Result<()> {
+    pub fn open(&self, renderer: Renderer) -> Result<()> {
+        self.open_at(renderer, 0.0)
+    }
+
+    /// [`Self::open`], then a seek to `beat` when it is past the start. The seek doesn't wait for
+    /// the disk ([`Self::seek`] does): the renderer's lanes were read from `beat` before it was
+    /// sent.
+    pub fn open_at(&self, mut renderer: Renderer, beat: f64) -> Result<()> {
         renderer.set_strict(false);
         renderer.set_transport(Transport::new(0, false));
         self.loading(0, 0.0, false);
-        self.streaming(&mut renderer, Some(0.0));
+        self.streaming(&mut renderer, Some(beat));
         let sent = self.replace_with(renderer, Keep::Nothing);
+        let sent = match beat > 0.0 {
+            true => sent.and_then(|()| self.transport(Cmd::Seek(beat)).map(drop)),
+            false => sent,
+        };
         self.disk.sought();
         sent
     }

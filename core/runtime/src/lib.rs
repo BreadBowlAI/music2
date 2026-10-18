@@ -2334,6 +2334,11 @@ impl Renderer {
         self.disk = true;
     }
 
+    /// Whether a disk thread fills its audio lanes ([`Self::from_disk`]).
+    pub fn is_from_disk(&self) -> bool {
+        self.disk
+    }
+
     /// Its audio lanes, with the module each plays in: what a disk thread keeps filled.
     pub fn audio_lanes(&self) -> Vec<(String, Arc<audio::AudioLane>)> {
         self.plan.info.lanes.iter().filter_map(|l| Some((l.lane.module.clone(), l.audio()?.clone()))).collect()

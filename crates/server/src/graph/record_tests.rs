@@ -1041,6 +1041,41 @@ mod audio {
         assert!(s.len() >= 12 * BEAT as usize, "time kept: {} frames", s.len());
     }
 
+    // The review's io-r1: a new audio lane's wait for the disk (up to 500 ms, D9) runs before the
+    // control plane's lock is taken. Live notes, the piano, the meters and Record take that lock, so
+    // they never wait for the disk.
+    #[test]
+    fn a_new_audio_lane_never_waits_for_the_disk_under_the_lock() {
+        let mut r = Rig::new();
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|_| 0.5);
+        r.start(false, false);
+        // Longer than the 4 s a lane keeps whole in memory: it streams.
+        r.to(12.0);
+        r.graph.transport("stop").unwrap();
+        r.written();
+        r.graph.undo(r.token).unwrap();
+        r.graph.seek(0.0).unwrap();
+        r.fill(4);
+        // A disk that never answers: the clip's new lane waits the whole 500 ms for it.
+        r.player.pause_disk(true);
+        let mut longest = Duration::ZERO;
+        std::thread::scope(|s| {
+            let redo = s.spawn(|| r.graph.redo(r.token));
+            let t = Instant::now();
+            while t.elapsed() < Duration::from_millis(900) {
+                let asked = Instant::now();
+                drop(r.graph.inner.control.lock());
+                longest = longest.max(asked.elapsed());
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            redo.join().unwrap().unwrap();
+        });
+        r.player.pause_disk(false);
+        assert_eq!(r.clips().len(), 1, "the redo put the clip back");
+        assert!(longest < Duration::from_millis(150), "the control plane's lock was held for {longest:?}");
+    }
+
     // MON-8: hearing yourself plays the input on the take's lane, live only: an export made while the
     // take records has none of it.
     #[test]

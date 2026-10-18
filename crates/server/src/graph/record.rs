@@ -429,16 +429,26 @@ impl Graph {
             bail!("The grid is a number of beats above 0, such as 0.25 for sixteenths.");
         }
         let device = self.inner.device()?;
-        // An audio lane records from the sound input: opened first, never under the control
-        // plane's lock (D14).
+        // An audio lane records from the sound input: it is opened, and the take's file made and
+        // its writer started, first, never under the control plane's lock (D14, the review's
+        // io-r1). A take refused below lets them go, and its part file with them.
         let audio = {
             let cp = self.inner.control.lock();
-            let plays = cp.open.as_ref().and_then(|p| p.engine.plays.as_ref()).filter(|pl| pl.epoch == device.epoch);
-            plays.is_some_and(|pl| audio_slot(pl, module, lane).is_some())
+            let p = cp.open.as_ref();
+            let plays = p.and_then(|p| p.engine.plays.as_ref()).filter(|pl| pl.epoch == device.epoch);
+            match (p, plays.is_some_and(|pl| audio_slot(pl, module, lane).is_some())) {
+                (Some(p), true) => Some((p.shown.dir.clone(), label_of(&cp, module))),
+                _ => None,
+            }
         };
-        let listen = match audio {
-            true => Some(device.player.open_input(&opts.input)?),
-            false => None,
+        let (listen, writer) = match audio {
+            Some((dir, label)) => {
+                let listen = device.player.open_input(&opts.input)?;
+                let file = m2_editor::take::Growing::new(&dir, &label, listen.channels, listen.rate).map_err(|e| anyhow::anyhow!("{e}"))?;
+                let writer = Writer::start(listen.ring.clone(), file, format!("{label} take.wav"), listen.channels)?;
+                (Some(listen), Some(writer))
+            }
+            None => (None, None),
         };
         let looped = {
             let timing = self.inner.timing.lock();
@@ -463,7 +473,6 @@ impl Graph {
             bail!("{NO_LANE}");
         }
         let generation = plays.map_or(0, |pl| pl.generation);
-        let dir = p.shown.dir.clone();
         let arrangement = p.engine.accepted.project.arrangement.clone();
         let tempo = plays.and_then(|pl| pl.tempo.as_deref().cloned()).unwrap_or_else(|| arrangement.tempo_map());
         let player = &device.player;
@@ -494,11 +503,8 @@ impl Graph {
             // A jump the audio thread hasn't taken yet: where it is heard is about to change.
             bail!("The song is moving to another place. Press Record again.");
         }
-        // An audio take's file and writer, and hearing yourself from now, the count included.
-        if let (Some(listen), Some(slot)) = (listen, slot) {
-            let label = label_of(&cp, module);
-            let file = m2_editor::take::Growing::new(&dir, &label, listen.channels, listen.rate).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let writer = Writer::start(listen.ring.clone(), file, format!("{label} take.wav"), listen.channels)?;
+        // An audio take's writer, and hearing yourself from now, the count included.
+        if let (Some(listen), Some(slot), Some(writer)) = (listen, slot, writer) {
             let hearing = opts.hear && player.hear(generation, slot, true).is_ok();
             take.audio = Some(AudioTake { writer: Some(writer), player: player.clone(), hearing, ring: listen.ring });
         }

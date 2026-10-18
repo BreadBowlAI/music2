@@ -502,12 +502,10 @@ impl Open {
     }
 
     /// Load `r` into `device`'s player as a fresh engine, stopped at `beat` and looping over
-    /// `looping`.
+    /// `looping`. Its lanes were read from `beat` first ([`Player::ready`]): nothing here waits
+    /// for the disk.
     fn load(&mut self, device: &Device, r: Renderer, plays: Plays, beat: f64, looping: Option<(f64, f64)>) -> Result<()> {
-        device.player.open(r)?;
-        if beat > 0.0 {
-            device.player.seek(beat)?;
-        }
+        device.player.open_at(r, beat)?;
         if looping.is_some() {
             device.player.set_loop(looping)?;
         }
@@ -854,6 +852,16 @@ impl Actor {
         };
         // What the overlay state reads of a new revision's code, worked out off the lock.
         let song = code_changed.then(|| super::overlay::Song::of(o.session.accepted()));
+
+        // A new renderer's lanes are read first, never under the control plane's lock: their wait
+        // for the disk (up to 500 ms, D9) holds back no live note, piano key or meter (the
+        // review's io-r1).
+        if let Ok(d) = &device {
+            let at = matches!(way, Way::Load(..)).then_some(d.resume);
+            if let Some(r) = way.renderer() {
+                d.player.ready(r, at);
+            }
+        }
 
         // Phase 1, under the control plane's lock: what `begin` and `update` need, with the
         // engine messages, so every lease's sends reach the queue in order.
