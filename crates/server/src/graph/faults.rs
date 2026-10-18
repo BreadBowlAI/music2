@@ -125,9 +125,10 @@ struct Live {
 impl Told {
     /// `plays` was sent to the engine in session `token`: a new plan, whose parts all play.
     /// What was listed goes, but the input's (it goes at the next take); a fault of the plan before
-    /// it is still named.
+    /// it is still named. In another song, the input's go too (the ex review's r2).
     pub(super) fn sent(&mut self, token: u64, namer: Namer) {
         if token != self.token {
+            self.unlist(|_| true);
             (self.token, self.toasted, self.namers, self.inputs) = (token, HashSet::new(), [None, None], [None, None]);
         }
         self.namers = [Some(Arc::new(namer)), self.namers[0].take()];

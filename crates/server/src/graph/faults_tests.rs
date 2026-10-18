@@ -328,3 +328,26 @@ fn a_fault_from_a_plan_not_sent_yet_waits_for_it() {
     assert_eq!(told.hear(&faults).0, [stopped("The delay on Bass")], "named once its plan is sent; the plan never sent is dropped");
     assert!(told.hear(&faults).0.is_empty());
 }
+
+// The ex review's r2: another song opened without closing this one (File ▸ Open) lists none of
+// this song's problems, an input's neither: they are of the song that was open.
+#[test]
+fn another_song_lists_none_of_the_last_songs_problems() {
+    let rig = Rig::new();
+    let (plan, _) = rig.node("bass", delay);
+    let (token, namers) = rig.graph.inspect(move |a| {
+        let o = a.open.as_ref().unwrap();
+        let rev = o.plays.as_ref().unwrap().revision.clone();
+        let namer = |id| m2_editor::faults::Namer::new(id, rev.clone(), &o.session.packages);
+        (o.token, [namer(plan), namer(plan + 1)])
+    });
+    let [first, next] = namers;
+    let (mut told, faults) = (super::Told::default(), m2_runtime::fault::Faults::default());
+    told.sent(token, first);
+    told.opened(token, super::InputNamer { open: 1, used: "Mic A".into(), missing: None });
+    faults.report(Fault { code: Code::InputLost, plan: 0, subject: Subject::Input(1) });
+    told.hear(&faults);
+    assert_eq!(told.problems(token).len(), 1, "listed in its song");
+    told.sent(token + 1, next);
+    assert!(told.problems(token + 1).is_empty(), "none in the next song");
+}
