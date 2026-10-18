@@ -7,7 +7,7 @@ Written as the slices land. Plan: `ph-plan.md`. Worktree `~/m2-runs/wt/ph`, bran
 | Slice | State | What it gives |
 |---|---|---|
 | 1. The plugin host process (HOST-3) | Built | Plugins run in a second program. If one crashes, the app keeps playing; the plugins go quiet, the app says so, and they come back by themselves |
-| 2. Plugin windows | Not started | |
+| 2. Plugin windows | Built | A plugin's own window opens from its box. A knob turned there writes the code, latches a lane, or saves the plugin's settings (one Undo step) |
 | 3. Latency compensation | Not started | |
 
 ## Step 0: the base sound
@@ -88,3 +88,84 @@ The red diffs and their logs are in `~/m2-runs/sph/red/`.
 
 - macOS: shared memory, the `__ulock` wake and the app's re-run as the host process are lint-checked only.
 - The gaps this slice leaves are in `docs/gaps.md` (Loose ends, "The plugin host process").
+
+## Slice 2: plugin windows, state autosave, output events
+
+### In short
+
+| You can now | How |
+|---|---|
+| Open a plugin's own window | **Open window** on its box. **Close window** closes it. The window floats on its own |
+| Turn a knob the code sets | The number in the code changes when you let go: one Undo step |
+| Turn a knob a lane drives | It stays where you put it ("Latched"). **Re-enable** gives it back to the lane. Only while the song is open; never in an export |
+| Turn any other knob | The plugin's settings save themselves a second later: one Undo step |
+| Load a preset in the plugin | Knobs the code sets go back to the code's values, and the app says so (`plugin.param-reverted`) |
+
+### What was built
+
+| Part | Where |
+|---|---|
+| The main loop watches fds and runs timers (Linux: a `poll` loop; macOS: `CFRunLoopTimer`, `CFFileDescriptor`; Windows designed) | `core/os/src/main_loop.rs`, `linux/main_loop.rs`, `mac/main_loop.rs` |
+| A plain window a plugin's view goes into (Linux: X11 through `libX11.so.6` opened at run time; macOS: `NSWindow` through the Objective-C runtime, the host process an accessory app; Windows designed) | `core/os/src/window.rs`, `linux/window.rs`, `mac/window.rs` |
+| CLAP's `gui` (embedded), `timer-support` and `posix-fd-support` on the host's side; `MainCall::Window`, `Reply::Window`, `HostEvent::WindowClosed`, `Info.gui`; forwarded by the host process | `core/plugins/src/gui.rs`, `inprocess.rs`, `host.rs`, `remote/` |
+| Gesture events in `Events`; the probe's window, and its scripted acts (`gesture-at`, `preset-at`, `dirty-at`) | `core/plugins/src/host.rs`, `probe.rs` |
+| After each live call the plugin node holds, latches or sets back, and marks a changed state; atomics only | `core/runtime/src/lib.rs` (`heard`, `taken_over`), `plugins.rs` (`Overrides`, the set-back ring) |
+| A number written in `plugin()` is a control (an origin, a cell, a knob) | `core/script/sdk/core.ts` |
+| The session's side: leases and one Tx for held literals, latches and Re-enable, the set-back notice, autosave, an export saving first, the state's `plugins` | `crates/server/src/graph/plugin_window.rs` |
+| Routes `POST /api/graph/plugin/window` and `/api/graph/plugin/latch` | `crates/server/src/routes_8b.rs` |
+| The box's row: Open window / Close window, Latched, Re-enable; boxes titled by the plugin's name | `web/src/components/NodeGraph.tsx`, `crates/editor/src/view.rs` |
+
+### Tests, each red first
+
+The red diffs and their logs are in `~/m2-runs/sph/red/`.
+
+| Test | Red by | Red result |
+|---|---|---|
+| `timers_and_fds_run_on_the_loop` (`core/os`) | timers and fds stubbed (`loop-stubbed`) | the timer fired 0 times |
+| `a_plugin_window_opens_on_the_host_process_main_loop` (Xvfb `:96`) | the gui not offered (`window-no-gui`) | the open failed |
+| `a_gesture_on_a_literal_commits_one_tx` | out events ignored (`literal-out-events-ignored`) | no lease |
+| `a_gesture_on_a_lane_driven_parameter_latches_it` | no latch (`latch-none`); then the watcher not told (`told-none`) | the lane's 0.2 played; the windows weren't told |
+| `a_dirty_plugin_autosaves_its_state_once` | no autosave (`autosave-none`) | never saved |
+| `a_preset_change_outside_a_gesture_is_set_back` | no set-back (`set-back-none`) | the preset's 0.9 stayed |
+| `an_export_commits_a_pending_autosave_first` | the export doesn't save first (`export-no-flush`) | the old state was on disk |
+| `e2e/ph-window.mjs` (9 checks) | the row naming no plugin (`e2e-window-button-missing`) | no Open window button |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| Renders | 10 of 10 |
+| `m2 render examples/with-plugins` | within G7e's 1 dB per second of the base (worst second 0.22 to 0.30 dB; 0.23 at `c658b5e`) |
+| `m2-gates plugins` (G1 to G5, G7), at `6888fd0` | PASS |
+| `m2-gates --server export` (G7e), at `6888fd0` | PASS |
+| clippy, the Mac lint | clean |
+| Browser suites `ph-window`, `live3b` (with the plugins), `graph`, `ports` | 9 of 9, 60 of 60, 19 of 19, 46 of 46 |
+| The app on Xvfb `:96`, examples/with-plugins | see below |
+| `ci/check.sh` at `c658b5e` | **PASS**: 1584 Rust tests, 67 of 67 browser suites (`ph-window` among them, on its own Xvfb), renders 10 of 10, the app (first-song and with-plugins), clippy, the Mac lint, std. Logs: `~/m2-runs/sph/check-c658b5e.tgz` |
+| Disk at the slice's end | 2.2 TB free; this worktree's `target/` is 96 GB (kept for slice 3); no shared memory left in `/dev/shm` |
+
+The app on Xvfb `:96` (pictures in `~/m2-runs/app-shots/ph-2/`):
+
+| Step | Result | Picture |
+|---|---|---|
+| Surge XT's window in the host process alone | draws, its LFO moving (timers work) | `surge-window-host-process.png` |
+| Click the lead's Surge XT box, then **Open window** | Surge XT's window opens; the box says Close window | `run4/app-10s.png` |
+| **Close window** | it closes; the box says Open window | `run4/app-20s.png` |
+| `xkey` drags Filter 1 Cutoff (a lane drives it), then Filter 1 Resonance (code doesn't set it) | the box says Latched, Re-enable; the state lists "A Filter 1 Cutoff" latched at 0.66; `data/lead/lead.state` changed (52,004 bytes); one Undo puts the old file back, and then nothing is left to undo | `run3/app-20s.png`, `run3/hook2.txt` |
+
+### Decisions taken while building
+
+| What | Why |
+|---|---|
+| A number written in `plugin()` gets an origin in `@m2/core` | It had none, so it was no control: no Tx could write it (HOME-5). Now it is a cell and a knob like any value in code. The plugin hears it as an f32. No new API, so the SDK stays 1.2.0 |
+| The "ring" is a fixed override table on the instance, a ring of set-back ids and a changed flag | The table is the truth for holds and latches, so a lost ring entry can never lose a gesture's end |
+| The view names a plugin call's graph node, and titles its box by the plugin's name | The route and the state need the node; "plugin" said nothing |
+| The watcher tells windows when the state's `plugins` changes | Found in the app: the box showed its row only after something else refreshed it |
+| A set-back in the 3 calls after a state load says nothing | A plugin may say what a loaded state set |
+| The e2e suite starts an invisible Xvfb of its own on Linux | Never a real screen; ci/check.sh's suites run with no `DISPLAY` |
+| A ghost (a replaced plugin node playing out) holds and latches nothing | `ci/check.sh` at `b5980cc` found building one read a parameter's source by the new plan's index, out of bounds (`an_engine_without_the_arena_fails_the_keep_checks`, m2-gates); fixed in `c658b5e` |
+
+### Owed
+
+- macOS: the run loop's timers and fds, the `NSWindow`, the accessory app and its event pump are lint-checked only.
+- The gaps this slice leaves are in `docs/gaps.md` (Loose ends, "Plugin windows").
