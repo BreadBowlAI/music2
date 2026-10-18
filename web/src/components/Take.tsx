@@ -43,7 +43,10 @@ export default function Take({ module, lane, color }: { module: string; lane: st
     >
       <span className="absolute left-1.5 top-0.5 text-xs font-medium text-danger-strong whitespace-nowrap">Recording</span>
       {audio ? (
-        <Meter channels={[INPUT]} label="Input level" title="The sound input's level" testid="take-level" className="absolute right-1 top-1 bottom-1 w-[3px]" />
+        // A canvas sizes to its own drawing unless told: the box gives it the take's height.
+        <span className="absolute right-1 top-1 bottom-1 w-[3px]">
+          <Meter channels={[INPUT]} label="Input level" title="The sound input's level" testid="take-level" className="w-full h-full" />
+        </span>
       ) : (
         /* Below the word, so a high note never runs through it. */
         <div className="absolute inset-x-0 top-3 bottom-0">

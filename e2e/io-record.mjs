@@ -112,10 +112,13 @@ check(await until(() => page.$(take), 2000), "the take shows in the audio track'
 const shown = await page.$eval(take, (e) => ({ kind: e.dataset.kind, text: e.textContent, outline: getComputedStyle(e).outlineColor })).catch(() => null);
 check(shown?.kind === "audio" && shown.text === "Recording" && shown.outline === "rgb(175, 61, 54)", `a red clip that says Recording (${JSON.stringify(shown)})`);
 const level = () => page.$eval(`${take} [data-testid=take-level]`, (e) => Number(e.getAttribute("aria-valuenow"))).catch(() => null);
+const [tb, lb] = [await box(take), await box(`${take} [data-testid=take-level]`)];
+check(!!tb && !!lb && lb.height >= 16 && lb.y >= tb.y && lb.y + lb.height <= tb.y + tb.height && lb.x + lb.width <= tb.x + tb.width, `the bar stands inside the take, at its growing edge (${JSON.stringify(lb)} in ${JSON.stringify(tb)})`);
 check(await until(async () => (await level()) === -60, 2000), `its input level bar reads silence (${await level()} dB)`);
 const tone = await inject({ tone: { hz: 440, seconds: 1.5, gain: 0.5 } });
 check(tone.status === 200, `a tone is injected (${tone.status} ${JSON.stringify(tone.body)})`);
 check(await until(async () => (await level()) === -6, 2000), `the bar shows the tone's level, −6 dB (${await level()} dB)`);
+await (await page.$(take))?.screenshot({ path: `${ROOT}/io-record-level.png` });
 const w1 = (await box(take))?.width ?? 0;
 await sleep(500);
 const w2 = (await box(take))?.width ?? 0;

@@ -74,7 +74,7 @@ export const SUITES = [
   ["nx-piano", "fix", { expect: 39 }],
   ["nx-midi", "fix", { expect: 24 }],
   ["st-record", "fix", { expect: 66 }],
-  ["io-record", "fix", { expect: 37 }],
+  ["io-record", "fix", { expect: 38 }],
   ["pl-notes", "fix", { expect: 102 }],
   ["pl-lanes", "fix", { expect: 28 }],
   ["ports", "proj", { expect: 46 }],
