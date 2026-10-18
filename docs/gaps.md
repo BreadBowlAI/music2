@@ -46,9 +46,10 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Turn on the metronome: the **Metronome** button after Loop, K, or Transport → Metronome. While the song plays it clicks each beat, higher on the first beat of a bar. Each song keeps its own setting, and an export never has the click.
 - Play the selected track live. ⌘K (Ctrl+K off the Mac) turns the computer's keys into a piano: A is middle C, the row above has the black keys, and Z and X change the octave; a card shows the keys. A MIDI keyboard plugged in plays it too, as hard as you press, with the sustain pedal, and a mark in the top bar says it is connected. **Settings → MIDI keyboards** turns one off: it then plays and records nothing.
 - Record what you play: R, the **Record** button after Play, or Transport → Record. Stopped, it counts in one bar of clicks (the button says 4, 3, 2, 1), then the song plays and the take starts; playing, it starts at once. The notes show in the track as you play them, from a MIDI keyboard or the keyboard piano. R again, or Space, ends it: it becomes one clip over whole bars, selected, as one undo step ("Undo recording on Bass"). Right-click the button for **Count in first** and **Snap notes to the grid**. While looping, the first time round is kept. While the code doesn't compile, R says to fix it first.
+- Record your voice or a guitar: select an audio track (+ Track → Audio track makes one) and press R, or the **Record** button. It counts in one bar, then records from the sound input into a new file in the song's `assets/` ("Vox take.wav"). The take grows on the track as a red clip, with a bar showing how loud the input is. R again, or Space, ends it: one clip, one undo step ("Undo recording on Vox"); the file stays if you undo. **Settings → Sound input** picks the input (the output's own device unless you choose one). **Hear yourself while recording** plays the input through the track's effects and fader while it records; it is off unless you turn it on, as speakers feed back into the microphone. An export never has it. With no input, or on a Mac that doesn't allow the microphone, R says so in plain words.
 - Turn an effect off and on, or move it before or after the effect next to it, from its card's ⋯ menu in the Device view; pick what a Duck listens to from its card. Each is one undo step, kept in the code (`bypass: true`).
 - Play and stop like Live: Space stops back where play started, and ⇧Space goes on from where it stopped. Click the ruler, or an empty spot in a lane while stopped, to start somewhere else. Loop with the loop button or C, a drag across the ruler, or ⌘L for the selected clips; the loop is kept for next time. ⌘. (Transport → Stop All Sound) stops every note at once.
-- Choose the sound output and its buffer size in **Settings** (⌘,), see what plays now, and set where new songs go. They are kept for this computer, in `~/.music2/settings.json`. A song opens with no sound device too: it plays silently, the status says "No sound output", and a device plugged in is used within a few seconds.
+- Choose the sound output and its buffer size, and the sound input, in **Settings** (⌘,), see what plays now, and set where new songs go. They are kept for this computer, in `~/.music2/settings.json`. A song opens with no sound device too: it plays silently, the status says "No sound output", and a device plugged in is used within a few seconds.
 - Export (the Export button, or File → Export…, ⇧⌘E) asks what to make: **Song**, one WAV file, the same file `m2 render` writes; **Stems**, each track as its own WAV file, before its volume and pan, in a new folder (not yet for a song that plays plugins); or **MIDI**, the notes as a MIDI file other music apps open, with a fitting General MIDI sound for each part and drums on channel 10. A notes clip's menu has **Export as MIDI…**. Files go in `~/Music/music2/Exports` unless you pick another place in the app's save window; then Show in Finder. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
 - Build `music2.app` and move it anywhere: std, the templates and the examples are inside it, so it no longer needs the source folder it was built from. It's signed ad hoc but not notarized, so on another Mac it opens only after **Open Anyway** in System Settings → Privacy & Security (and only on Apple silicon).
@@ -160,7 +161,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 24 | **The rest of recording notes**: pitch bend and the mod wheel; recording over a clip into it (overdub), and one clip for each time round a loop; the computer keyboard's velocity and sustain. (Recording from a MIDI keyboard or the computer's keys, with a count-in and snap, and choosing which keyboards play work: see [What works today](#what-works-today).) | Expressive parts use the pitch wheel; loop recording builds a part in layers. | No | medium |
-| 25 | **Record audio** (vocals, guitar) from an input into an audio clip, and hear yourself while recording. | Vocals are central to pop. It needs an input stream, a low-latency path for hearing yourself, and the audio clip work (#18). | No | large |
+| 25 | **The rest of recording audio**: an arm button (hear yourself without recording), takes stacked per loop pass, punch in and out, inputs 3 and 4, and a recording offset. (Recording from a sound input onto an audio track, and hearing yourself while recording, work: see [What works today](#what-works-today).) | Singers stack takes and fix one line by punching in. | No | medium |
 
 ### Effects and plugins
 
@@ -181,7 +182,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 31 | **The rest of Settings**: an input device (with #25), and view settings that hold for every song (today zoom, grids and the audition toggle are kept per song). (Choosing the output and buffer size, seeing what plays, where new songs go, and which MIDI keyboards play work: see [What works today](#what-works-today).) The sample rate stays the song's (`music2.toml`, [RENDER-31](architecture.md#sample-rate)). | Recording needs an input; most people want one zoom for every song. | Partly (it showed the device and the folders, with nothing to choose) | small |
+| 31 | **The rest of Settings**: view settings that hold for every song (today zoom, grids and the audition toggle are kept per song). (Choosing the output and buffer size, the sound input and hearing yourself, seeing what plays, where new songs go, and which MIDI keyboards play work: see [What works today](#what-works-today).) The sample rate stays the song's (`music2.toml`, [RENDER-31](architecture.md#sample-rate)). | Most people want one zoom for every song. | Partly (it showed the device and the folders, with nothing to choose) | small |
 
 ### Help
 
@@ -235,7 +236,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A disk too slow for an audio clip** cuts it to silence for a moment, with a click; it doesn't fade. The status says "Disk too slow".
 - **A WAV another program changes while it plays** may play a mix of old and new for a moment, until the song is built again.
 - **`m2-os`'s two `fake_sysfs` tests** share one temp folder, so run together they sometimes fail; alone they pass.
-- **Recording audio** (the engine half is built; the app's half is next): sound made during the count-in isn't kept in the take.
+- **Recording audio:** sound made during the count-in isn't kept in the take.
 - **Recording audio:** no arm button: you hear yourself only while recording.
 - **Recording audio:** one clip per take: no takes stacked per loop pass, no punch in and out.
 - **Recording audio:** an input on its own clock (not the output's device) can drift a little against the song in a long take.
@@ -243,7 +244,9 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **Recording audio:** no recording offset for a device that reports its latency wrongly; the output's latency is taken as two buffers.
 - **Recording audio:** the take shows no waveform until it is written.
 - **Recording audio:** a crash during a take loses it: the part file is swept.
-- **Recording audio:** on a Mac that doesn't allow the microphone, a take records silence; it doesn't say so yet.
+- **Recording audio:** the input stays open (a Mac shows its microphone light) from the first take until the song closes; a new choice in Settings opens at the next take.
+- **Recording audio:** a Mac asks about the microphone at the first take; a take running while you click Don't Allow records silence. The next R says why.
+- **Recording audio:** checks owed on a Mac: a real microphone, the permission question, the take's timing against the click, and hearing yourself in headphones (see HANDOFF).
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 
 ## Removed with the old version
@@ -254,7 +257,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 | The Song Library | Back as the recent list on the start screen and File → Open Recent. A picture of each song is #12 |
 | Import Audio | Back: File → Import Audio… (⇧⌘I) and dropping WAV files. Warp and other file types are #18 |
 | Export as WAV | Back: File → Export… (⇧⌘E): the song, stems or MIDI |
-| Settings | Back: Settings (⌘,) chooses the sound output and its buffer size, the songs folder, and which MIDI keyboards play. An input and view settings for every song are #31 |
+| Settings | Back: Settings (⌘,) chooses the sound output and its buffer size, the sound input, the songs folder, and which MIDI keyboards play. View settings for every song are #31 |
 | The Track inspector (volume, pan, output, sends, effects, sidechain) | Volume and pan: back in the Mix view. Effects on and off, and their order: back on the effect cards. The sidechain: back, as a Duck's "Listens to". Output and sends: sends and buses (#27) |
 | A level meter on each track | Back: a meter in every track header, on the Song row and on every Mix strip. Meters after the fader and loudness are #20 |
 | The Sounds panel | Audio files: back (File → Import Audio…, drops). The sampler is #22 |

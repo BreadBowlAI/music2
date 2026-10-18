@@ -95,6 +95,20 @@ Nobody waits for an answer, and nobody asks the owner.
 | The take thread's end waits up to 1 s for the input's last frames, then writes silence | The input hands them over a buffer or two late |
 | The server half of `hearing_yourself_…` is `hearing_yourself_never_reaches_an_export` in `record_tests.rs`, beside the audio rig, not in `graph/tests.rs` | It needs the rig that feeds the input |
 
+### Changed while building slice 3
+
+| What | Why |
+|---|---|
+| The input's level travels in the meters message (`"input": [peak]`, while a take records audio), read from the take's ring at a place of its own | It changes 30 times a second, as meters do; the take's own message is sent only when the take changes |
+| The record route reads Settings' input and Hear yourself itself; the page sends neither | Settings are this machine's, kept by the server: one place decides |
+| `POST /api/graph/input/inject` also takes `{tone: {hz, seconds, gain}}`, and answers in the server crate's own tests without `M2_AUDIO_INPUT` | A suite then needn't send 70,000 numbers; a route test can't set a process-wide variable safely |
+| D23: before an input opens, `m2_os::host::microphone_refused` asks macOS (AVFoundation's authorization status, in `core/os/src/mac/av.rs`). D26's "one new OS call" becomes two | Without it a Mac that says no records silence and says nothing. Not yet asked is not refused: opening the input asks |
+| An input that won't open says only D23's words; what the device said goes to the log | Plain words |
+| The Record button's menu gains "Sound input…" (opens Settings), after "MIDI keyboards…" | A beginner looks for the input where Record is |
+| R picks the lane by `recordTarget` (`playTarget.ts`): what keys play, else the selected track's audio lane. Keys never play an audio take's lane | An audio lane takes no notes |
+| `run.mjs` gives every suite's server `M2_AUDIO_INPUT=inject` and `M2_AUDIO_INPUTS="Test mic,USB mic"` | As `M2_MIDI=inject`: one way for every suite |
+| Build notes are kept here, in the plan's "Changed while building" tables, not in `build-notes-io.md` | As slices 1 and 2 did |
+
 ### Contract changes (with the slice that makes them)
 
 | Rule | Change |

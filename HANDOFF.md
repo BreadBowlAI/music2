@@ -14,6 +14,22 @@ Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **`io` is built on branch `io`** (2026-10-18): Linux green at `eda5e77`; macOS unverified since `eda5e77`. From
+  `main` at `258275b`. Step 9's audio turns 1 and 4 (plan: `docs/designs/step9/io-plan.md`; what changed while
+  building is in its "Changed while building" tables). `ci/check.sh` passed every row, nothing only on a retry
+  (1,587 Rust tests, 67/67 browser suites, 10 of 10 renders). It adds:
+
+  | You can now | Where |
+  |---|---|
+  | Play long audio files (up to 3 hours): they play from the disk, never whole in memory | drop or import them as before |
+  | Record your voice or a guitar on an audio track | select the audio track, R (or Record); R again stops |
+  | See the take grow as a red clip, with a bar for how loud the input is | the audio track's row |
+  | Pick the sound input, and hear yourself while recording (off: use headphones) | Settings (⌘,) ▸ Sound input |
+
+  No render changed: 10 of 10. A take is one clip and one undo step ("Undo recording on Vox"); the file stays.
+  Pictures on Xvfb :98: `~/m2-runs/app-shots/io-eda5e77/` (`take`, `clip`, `settings`). Owed on the Mac: the by-ear
+  steps 73 to 81 (a long file from the disk, a real microphone, the permission question, the take against the click,
+  hearing yourself in headphones).
 - **`studio` is on `main`** (2026-10-18): Linux green at `ad5f111`; macOS owed. `main` fast-forwarded to it
   (`02ba4d3`). From `main` at `85b069a`, with `main` at `44b104a` (8a's live half and `macfix`) merged in. It added:
 
@@ -211,7 +227,7 @@ whatever you pick up.
 | `next` | `1560a19`, then docs only | All on `main` (a fast-forward, 2026-10-17). From `main` at `70f9b61`, with `main` at `8a6d9e1` (8a's offline half) merged in. 8b.7 (heard while dragging: lanes and the tempo), 8b.10 (the metronome, the keyboard piano, a MIDI keyboard through `midir`), no sound device, Settings, undo names, effect bypass, order and the Duck picker, small fixes. Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `1560a19` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/next-plan.md`; build notes `build-notes-next.md`. |
 | `macfix` | `ac5d8c0`, then docs only | From `main` at `85b069a`. Fixes the two rows the Mac's run at `85b069a` failed: G7f store (`std:gain` skips its `powf` while its dB holds still, the same bits) and `new_songs_go_where_settings_say` (the songs folder by its real path). Reviewed (2 findings, both fixed). Linux green at `ac5d8c0` (`ci/check.sh --gates`, nothing passed only on a retry); macOS owed. All on `main` (a fast-forward to `1cc7382`, 2026-10-17). Branch and worktree deleted. Build notes `docs/designs/step8/build-notes-macfix.md`. |
 | `studio` | `ad5f111`, then docs only | All on `main` (a fast-forward to `02ba4d3`, 2026-10-18). From `main` at `85b069a`. Audio in the app (#18), recording notes (#24) with the count-in (#19) and the MIDI keyboards setting (#31), MIDI files and stems (#36), help in plain words (#11), `m2 import` (#37). Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `ad5f111` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/studio-plan.md`; build notes `build-notes-studio.md`. |
-| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72. |
+| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72, and 73 to 81 once `io` is on `main`. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -495,6 +511,16 @@ bar, its Ctrl-click, and the sound.
 | 70 | Press ⇧⌘E. Click **MIDI**, then **Export…**. Save. Open the file in GarageBand. | The Mac's own save window opens in Exports. In GarageBand the tracks and their notes are there. |
 | 71 | Click **Help**, then **Make Your First Song**. Click **Start from an empty song…**, and follow the steps. | Each step ticks itself when you do it. At the end, the card says where your song was saved. |
 | 72 | Tell the lead what you saw, heard and felt at 61 to 71. | |
+| | **`io`**: long audio from the disk, and recording your voice. Have headphones, and a WAV file 10 minutes or longer. Build the app: `(cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build --bundles app)`, then open `target/release/bundle/macos/music2.app` (the bundle, so macOS asks about the microphone in music2's own words). Open **First song**. | |
+| 73 | Drag the long WAV file onto the window, below the tracks. Press Space. Click the ruler near its end, then near its start. | It plays at once from each place you click: no gap, no click. The status pill never says "Disk too slow". |
+| 74 | Drag across the ruler over 4 bars of that clip to loop it. Let it go round 10 times. | No gap where the loop jumps back. |
+| 75 | Press Space to stop. + Track ▸ Audio track. Press R. | The first time, macOS asks to let music2 use the microphone: "music2 records from your microphone when you press Record on an audio track." Click Allow. The button counts 4, 3, 2, 1, with clicks. |
+| 76 | Press K (the click). Count "one, two, three, four" out loud on the clicks for 2 bars. Press R. | A red clip grows as you speak, with a thin bar at its right end that moves with your voice. R ends it: a clip "Audio take.wav" with your voice's waveform. Play it from bar 1: your words land on the clicks, not late. |
+| 77 | Press ⌘Z. | The clip goes. "Audio take.wav" stays in the song's `assets` folder. |
+| 78 | Put on headphones. Press ⌘, for Settings. Tick **Hear yourself while recording**. Close Settings, press R and speak. | You hear yourself in the headphones while it records, the count included. It sounds a little late at most, never like an echo. Untick it after. |
+| 79 | In Settings, under **Sound input**, pick another input (a USB microphone, if you have one). Record again. | It records from that input. |
+| 80 | In System Settings ▸ Privacy & Security ▸ Microphone, turn music2 off. Back in music2, press R on the audio track. | A message: "music2 can't use the microphone. Allow it in System Settings ▸ Privacy & Security ▸ Microphone." Nothing records. Turn it back on. |
+| 81 | Tell the lead what you saw, heard and felt at 73 to 80. | |
 
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in
@@ -551,6 +577,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | `macfix`: G7f store (the gain's fast path) and the songs folder by its real path | `ac5d8c0` (Linux checks), then docs only | owed: one more `ci/check.sh`, then G7f store once more on the old gain (below) |
 | 8a's live half (live on several cores, a sound that breaks, G12) | `21a7a1b` (Linux checks), then docs only; on `main` at `44b104a` | owed: 8a's Mac sweep below, one paste, about 40 minutes. The same `ci/check.sh` covers its Mac tests and G12's minute |
 | `studio`: audio in the app, recording notes, MIDI files and stems, help in plain words | `ad5f111` (Linux checks), then docs only; on `main` at `02ba4d3` | owed: the same one more `ci/check.sh`, then the by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in another app) |
+| `io`: audio clips play from the disk; recording audio | `eda5e77` (Linux checks), then docs only; not on `main` yet (branch `io`) | macOS: unverified since `eda5e77`. Owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 73 to 81 (a long file from the disk, a real microphone, the permission question, the take against the click, hearing yourself in headphones) |
 
 **8a's Mac sweep (for the owner): offline and live, one paste.** `8a` is on `main`.
 
