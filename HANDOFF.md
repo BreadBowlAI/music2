@@ -10,10 +10,10 @@ design for whatever you pick up. Older versions of this page, with each track's 
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
   71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
 - **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
-- **Track `bus` is ready to land** (branch `bus`, `main` at `c852cb3` merged in): buses, sends and groups, in song
+- **Track `bus` is ready to land** (branch `bus`, `main` at `163f7ee` merged in): buses, sends and groups, in song
   code (RENDER-34, `@m2/core` 1.5.0, std 0.4.0) and in the Mix view (Add bus, a send knob per bus, an output
   picker). Gap #27 is closed. No sound changed. A song asking for std "0.3" needs `std = "0.4"` (below). Its
-  `ci/check.sh --gates` passed at `9c985c3`: 1,751 Rust tests, 72/72 browser suites, 12 of 12 renders, the 7 gate
+  `ci/check.sh --gates` passed at `792d281`: 1,770 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate
   runs, 36 minutes. Notes: `docs/designs/step9/build-notes-bus.md`.
 - **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
   (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by

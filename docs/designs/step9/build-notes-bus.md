@@ -5,8 +5,8 @@ building is written there, under each slice ("As built").
 
 ## In short
 
-- **Ready to land** (2026-10-18). Linux green at `9c985c3` (`ci/check.sh --gates`); macOS owed. `main` at
-  `c852cb3` (the Mac run and `mf2`) is merged in.
+- **Ready to land** (2026-10-18). Linux green at `792d281` (`ci/check.sh --gates`); macOS owed. `main` at
+  `163f7ee` (the Mac run, `mf2` and track `br`) is merged in.
 - **Buses, sends and groups** (gap #27). A bus is a track that plays no notes. It plays what other tracks send it:
   a shared reverb, a delay, or a group (the drums through one fader).
 - **All routing is in one place: the mixer in `song.ts`.** A channel gets `sends` (a knob each, after the fader or
@@ -61,13 +61,15 @@ Four, all minor, so none was fixed now (the owner's rule): each is one line in [
 
 The first run, at `3a0f504`, passed but for one suite that passed only on its retry: `st-midi`'s "Esc writes
 nothing" read the page's revision before the page heard of the undo just before it. A test race, not the app's:
-fixed in `9c985c3` (it waits until the page's revision is the server's), 3 of 3 alone. The second run:
+fixed in `9c985c3` (it waits until the page's revision is the server's), 3 of 3 alone. The second run, at
+`9c985c3`, passed clean (1,751 Rust tests, 72/72 suites). Then `main` moved (track `br` landed) and was merged in
+again (`792d281`; bus's by-ear steps moved to 126 to 132). The last run:
 
-`ci/check.sh --gates` at `9c985c3` (`~/m2-runs/check-bus/summary.txt`), word for word:
+`ci/check.sh --gates` at `792d281` (`~/m2-runs/check-bus/summary.txt`), word for word:
 
 ```
 music2 check: PASS
-commit   9c985c3171ae on bus (clean)
+commit   792d281e7f8b on bus (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 36 min
 plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
@@ -76,13 +78,13 @@ toolchain        PASS  rustc 1.99.0
 web build        PASS  
 build            PASS  
 app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
-rust tests       PASS  1751 passed, 0 failed
+rust tests       PASS  1770 passed, 0 failed
 clippy           PASS  
 pool models      PASS  29 passed, 0 failed
 std kernels      PASS  tests and clippy
 std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
-browser suites   PASS  72/72 suites ok
+browser suites   PASS  74/74 suites ok
 renders          PASS  12 of 12 match e2e/renders.sha256
 old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
@@ -92,19 +94,19 @@ gates:
   machine: ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 threads
   === m2-gates --server tx-data watcher
   PASS  G11 tx-data (PLANE-5, PLANE-1, WRITE-15) on server on p16
-        ok    idle disk: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.0 ms, p95 1.4 ms, max 1.6 ms (n=200)
-        ok    idle disk: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.3 ms, p95 9.2 ms, max 10.9 ms (n=200)
-        ok    with another writer syncing 4 MB chunks: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.2 ms, p95 1.5 ms, max 1.9 ms (n=200)
-        ok    with another writer syncing 4 MB chunks: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.3 ms, p95 9.2 ms, max 10.9 ms (n=200)
-        ok    idle disk, 5,000 files in assets/: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.1 ms, p95 1.5 ms, max 2.9 ms (n=200)
-        ok    idle disk, 5,000 files in assets/: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.1 ms, p95 9.7 ms, max 10.5 ms (n=200)
+        ok    idle disk: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.0 ms, p95 1.3 ms, max 1.6 ms (n=200)
+        ok    idle disk: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.2 ms, p95 9.7 ms, max 10.6 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.1 ms, p95 1.4 ms, max 1.6 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 4.9 ms, p95 9.7 ms, max 10.8 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.1 ms, p95 1.4 ms, max 2.9 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.4 ms, p95 9.3 ms, max 10.7 ms (n=200)
   PASS  G11 watcher (WRITE-19) on server on p16 with 5,000 files in assets/
         ok    idle: the CPU its ticks used over 10 s, under 1% of a core: 0.10% of a core (199 ticks in 10 s)
   === m2-gates --server --reference 50 --at 180 add-effect
   PASS  G5 and G7a add effect, through the server (RENDER-8, RENDER-25, RENDER-25a) on server on p50 from 180 s
-        ok    audible within compile + 100 ms: past the session's work: p50 47.6 ms, p95 50.0 ms, max 50.0 ms (n=10)
-        ok    G7a: heard within 200 ms of the request, its compile included: p50 115.1 ms, p95 120.8 ms, max 120.8 ms (n=10)
-        ok    with-plugins: audible within compile + 100 ms: past the session's work: p50 14.5 ms, p95 18.5 ms, max 18.5 ms (n=2)
+        ok    audible within compile + 100 ms: past the session's work: p50 44.0 ms, p95 49.6 ms, max 49.6 ms (n=10)
+        ok    G7a: heard within 200 ms of the request, its compile included: p50 110.1 ms, p95 116.9 ms, max 116.9 ms (n=10)
+        ok    with-plugins: audible within compile + 100 ms: past the session's work: p50 12.8 ms, p95 15.4 ms, max 15.4 ms (n=2)
   === m2-gates --reference 50 --at 180 add-effect tails
   PASS  G5 add effect (RENDER-25, 25a, 8) on engine (step 7) on p50
   PASS  G7b tails of untouched tracks (RENDER-25, 25a) on engine (step 7) on p50
@@ -113,18 +115,18 @@ gates:
   === m2-gates store --reference 50
   PASS  G7f store (RENDER-32) on the runtime on p50
         ok    the same music: every renderer's timed blocks the same bits: the same 2880000 samples (hash 22cd1b3810530499) from the app's layout, its control and S in every round, peak -1.0 dB
-        info  block, starting a turn: of the judged ones, each turn's first half over its second, against S's: +7 µs (the app's layout), +18 (its control); each turn's first block over the mean: +1552 µs, +1538, +2531 (S
+        info  block, starting a turn: of the judged ones, each turn's first half over its second, against S's: +8 µs (the app's layout), +13 (its control); each turn's first block over the mean: +1566 µs, +1540, +2570 (S
         info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
-        skip  block within S + 80 µs, by the mean: would pass: -620 µs (5 pairs, -711 to -502) over S, measured here (bound 80). p99, not judged: -1788 µs (5 pairs, -2538 to -1412); not judged off the reference Mac (PLA
+        skip  block within S + 80 µs, by the mean: would pass: -490 µs (5 pairs, -494 to -465) over S, measured here (bound 80). p99, not judged: -1390 µs (5 pairs, -1468 to -1105); not judged off the reference Mac (PLA
         skip  footprint within S + 64 MB: recorded, not judged: S's record is from another machine (PLAT-1)
         skip  full build within 1.5 × S: would pass: 64 ms against S's 183 ms, each its process's first, measured here; not judged off the reference Mac (PLAT-1)
   === m2-gates arena --reference 50 --at 180
   PASS  G7f the arena's callback (RENDER-32, RENDER-25) on the player on p50 from 180 s
         ok    the same music: every player's timed callbacks the same bits: the same 2856960 samples (hash cdb85ca0bbb29381) from the app's layout, its control and S in every round, peak -1.0 dB
-        info  callback, starting a turn: of the judged ones, each turn's first half over its second, against S's: +2 µs (the app's layout), +43 (its control); each turn's first callback over the mean: +4132 µs, +4096, +5
+        info  callback, starting a turn: of the judged ones, each turn's first half over its second, against S's: +24 µs (the app's layout), +28 (its control); each turn's first callback over the mean: +4247 µs, +3928, +
         info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
-        skip  callback within S's + 320 µs, by the mean: would pass: -3503 µs (5 pairs, -3817 to -3300) over S, measured here (bound 320). p99, not judged: -7049 µs (5 pairs, -8996 to -6890); not judged off the referenc
-        ok    the slowest activation block under half the device buffer's period: 3221 µs, p50 1933; the block before it p50 2297, max 3421 (bound 5333 µs; the run's p99 callback 10969)
+        skip  callback within S's + 320 µs, by the mean: would pass: -1732 µs (5 pairs, -1833 to -1669) over S, measured here (bound 320). p99, not judged: -4476 µs (5 pairs, -4934 to -3897); not judged off the referenc
+        ok    the slowest activation block under half the device buffer's period: 2033 µs, p50 1428; the block before it p50 1853, max 2822 (bound 5333 µs; the run's p99 callback 8074)
   === m2-gates realtime --reference 50 --minutes 1
   PASS  G12 live (RENDER-28, RENDER-28a) on the silent clock on p50, 128 frames
 
