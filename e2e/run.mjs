@@ -92,6 +92,7 @@ export const SUITES = [
   ["nx-settings", "none", { expect: 42 }],
   ["nx-nodevice", "none", { expect: 11 }],
   ["sound-stops", "none", { expect: 13 }],
+  ["ex-faults", "none", { expect: 10 }],
   ["export", "export", { expect: 37 }],
   ["st-midi", "fix", { expect: 19 }],
   ["st-stems", "export", { expect: 49 }],
