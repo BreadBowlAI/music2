@@ -64,7 +64,3 @@ pub(crate) fn listed(host: &dyn m2_plugins::PluginHost) -> Value {
     });
     json!({"plugins": plugins, "errors": errors, "folder": folder})
 }
-
-#[cfg(test)]
-#[path = "routes_plugins_tests.rs"]
-mod tests;

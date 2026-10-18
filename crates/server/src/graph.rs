@@ -894,8 +894,8 @@ impl Graph {
     }
 
     /// Tests: one whose player is `player` and whose plugins run on `host` (the host process).
-    #[cfg(test)]
-    pub(crate) fn with_player_on(player: Player, host: Arc<dyn m2_plugins::PluginHost>) -> Graph {
+    #[doc(hidden)]
+    pub fn with_player_on(player: Player, host: Arc<dyn m2_plugins::PluginHost>) -> Graph {
         Graph::hosted(Some(Device { player, epoch: 0, resume: 0.0 }), output::Outputs::real(), host)
     }
 

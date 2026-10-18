@@ -63,7 +63,7 @@ The `key` is always written, so the plugin's settings can be saved (HOME-6 needs
 
 | Test | Where | Red by |
 |---|---|---|
-| `the_plugin_list_comes_from_the_host_scan` (the probe, as both kinds, through `Remote`; then no `.clap` mapped in the test process) | `crates/server/src/routes_plugins_tests.rs` | the route missing (404) |
+| `the_plugin_list_comes_from_the_host_scan` (the probe, as both kinds, through `Remote`; then no `.clap` mapped in the test process) | `crates/server/tests/plugin_list.rs` (*as built in slice 3:* a process of its own, as the unit tests' in-process plugins map `.clap` files) | the route missing (404) |
 | `adding_a_plugin_effect_wraps_the_call_in_one_tx` (the text above; one Undo gives the old bytes back) | `crates/editor/src/plugins_tests.rs` | `add_effect` refusing `clap:` ids, as today |
 | `a_second_plugin_in_one_frame_gets_a_free_key` | same | the key not numbered (`key.duplicate`) |
 | `a_plugin_instrument_track_is_one_tx` (file, channel, colour; one Undo takes all away) | `crates/editor/src/tracks_tests.rs` | `tracks::add` refusing `clap:` ids |

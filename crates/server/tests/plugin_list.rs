@@ -1,13 +1,14 @@
 //! The plugin list through a running server (gaps #32, HOST-3): the host process's scan, kept for
-//! the app run, scanned again on Look again.
+//! the app run, scanned again on Look again. In a process of its own: it checks that this process
+//! mapped no plugin library, which the unit tests' in-process plugins would.
 
 use std::io::{Read, Write};
 use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::graph::Graph;
-use crate::{ServeOptions, start_with};
+use m2_server::graph::Graph;
+use m2_server::{ServeOptions, start_with};
 
 /// `method path` with the token: the status and the JSON answer.
 fn ask(url: &str, method: &str, path: &str) -> (u16, Value) {
