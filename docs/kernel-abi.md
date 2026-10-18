@@ -144,6 +144,7 @@ A kernel music2 runs off the audio thread, to make something from a file, never 
 | Time map | `time_map_len` pairs of f64 at `time_map`: (source seconds, output seconds from the output's start), in order. Between two pairs, time runs in a straight line. Before the first and after the last, the nearest line goes on. One pair: speed 1 through it. None: the source as it is |
 | A run | one sandbox, born, sealed and prewarmed as any. Then `k_process(state, io, 0, n)` again and again, `n` at most `max_block`: each call writes the next `n` frames of the output. The host stops when it has the frames it wants |
 | Output | goes to its sink a block at a time. The host never holds the source or the output whole |
+| When | live, on the session's stretch thread, one run at a time in the order asked, while what it has made already plays; a run no longer wanted is stopped between calls. Offline (an export, a range render), before the render plays |
 
 The five rules hold for offline kernels too: memory only at birth, a reset that takes none, and the rest.
 

@@ -6,7 +6,8 @@ Branch `sx`, from `main` at `97b4cdf`, 2026-10-18. The plan is [sx-plan.md](sx-p
 
 - **Slice 1, kernel ABI v1 settled:** music2 reads a module's ABI version from its bytes first. A kernel may read its audio file from the disk.
 - **Slice 2, `std:stretch`:** warped clips are stretched by a std kernel now, not by the engine. It is the first **offline kernel**: music2 runs it off the audio thread, in pieces. Neither the file nor the stretch is ever whole in memory.
-- One example sounds a little different: `examples/resample` (its 2 renders). The other 10 renders keep their bits.
+- **Slice 3, Follow tempo:** an audio clip's menu has **Follow tempo**. Turn it on, and the clip keeps its beats when the tempo changes. A live session never waits for a stretch: it is made in the background, and the clip plays it as it is made. An export makes its stretches first, so its bits never depend on timing.
+- One example sounds a little different: `examples/resample` (its 2 renders, slice 2). The other 10 renders keep their bits. Slice 3 changes no render.
 - Linux timings are information only. The Mac's run is owed (PLAT-1).
 
 ## Slice 2, piece by piece
@@ -21,6 +22,20 @@ Branch `sx`, from `main` at `97b4cdf`, 2026-10-18. The plan is [sx-plan.md](sx-p
 | The example on many threads | `core/play/tests/bit_identity.rs` | `the_resample_example_gives_the_same_bits_on_1_to_7_threads` |
 
 The engine's own WSOLA and `WARP_VERSION` are gone. A stretch's file is named by all the kernel is given, std's module hash among them.
+
+## Slice 3, piece by piece
+
+| Piece | Where | Test (each red first) |
+|---|---|---|
+| A live cache's stretch thread: renders in the order asked; a dropped one stops and its part file goes | `core/runtime/src/renders.rs`, `audio.rs` | `a_tempo_change_never_waits_for_a_stretch`, `a_dropped_render_stops_and_leaves_no_part_file` |
+| A render knows its frames done; a chunk fills only once they are made | `core/runtime/src/stream.rs` | `a_lane_plays_its_render_as_it_is_made` |
+| An export makes its own renders first | `Cache::default()` is offline | `an_export_never_plays_a_render_half_made` |
+| The disk thread skips chunks not made yet, and is woken as renders go | `core/play/src/disk.rs` | `a_player_plays_a_render_as_it_is_made` |
+| The session's cache is the live kind | `crates/server/src/graph/actor.rs` | the server's tests |
+| Follow tempo: markers at the clip's start, end and each tempo change, from the tempo now; off clears them | `crates/editor/src/clips.rs` | `follow_tempo_keeps_the_clip_where_it_plays_and_undo_takes_it_back`, `follow_tempo_through_the_clips_route` |
+| The menu row and its hint; a warped clip's waveform drawn by its markers | `web/src/components/Wave.tsx`, `ClipMenu.tsx` | browser suite `sx-follow` (22 checks); `st-audio` knows the new row |
+
+Pictures (Linux, Xvfb): `~/m2-runs/app-shots/sx-3/`. `menu/app-10s.png` is the clip menu with Follow tempo and its hint. `followed/app-10s.png` is the song at 60 BPM after Follow tempo on its first clip: that clip shows the same part of its file as at 120, and the clip beside it, not followed, shows more. `followed/app-20s.png` is the menu again, Follow tempo checked.
 
 ## Renders (FMT-3)
 
@@ -37,9 +52,14 @@ The engine's own WSOLA and `WARP_VERSION` are gone. A stretch's file is named by
 
 ## A check by ear
 
-About 2 minutes. No test can do it, as the tests play no sound.
+About 5 minutes. No test can do it, as the tests play no sound.
 
 | # | Do | You should hear |
 |---|---|---|
 | 88 | Click **Open an Example**, then **Resample**. Press Space. Listen from 3 seconds in (bar 2, beat 3) to 5 seconds, then from 6 seconds (bar 4). | At 3 s the keys come back slower, stretched over 4 beats. Their pitch is the same as at the start. No wobble, no clicks, no echo. At 6 s they come back higher and stretched, still on the beat. |
 | 89 | Tell the lead what you heard at 88. | |
+| 90 | Open **Resample** again. Right-click the first clip on Chops (bar 1). Click **Follow tempo**. Press Space from the start. | It sounds as before. |
+| 91 | Double-click the tempo (120), type 90, press Return. Press Space from the start. | The first clip keeps in time with the kick, a little slower, at the same pitch. The second clip (not followed) plays more of its sound in the same time. |
+| 92 | While it plays, drag the tempo up and down a little, then let go. | The followed clip goes on in time. At most a short silence, no click, no wrong sound. |
+| 93 | Press ⌘Z twice. | The tempo is 120 again, and Follow tempo is off. |
+| 94 | Tell the lead what you heard at 90 to 93. | |

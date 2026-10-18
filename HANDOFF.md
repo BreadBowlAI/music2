@@ -10,11 +10,25 @@ for `polish` (the rest of the top ten), after its review and final check, and wh
 (the two rows the Mac's run at `85b069a` failed), after its review and final check; and for 8a's live half (on
 `8a`), after its review and final check; and for `studio` (audio, recording, MIDI files and stems, help), after its
 review and final check; and for `io` (step 9's audio: disk streaming and recording), after its review and
-final check; and for track `ab` (kernel ABI v1 and the sampler), after its review and final check.
+final check; and for track `ab` (kernel ABI v1 and the sampler), after its review and final check; and for track `sx` (stretching as an offline kernel, Follow tempo), when it was built.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **Track `sx` (stretching as an offline kernel, Follow tempo) is built** (2026-10-18), on branch `sx`, from `main` at
+  `97b4cdf` (track `ab` on top of `io`). Not reviewed yet. It adds:
+
+  | You can now | Where |
+  |---|---|
+  | Keep an audio clip in time when the tempo changes; its pitch stays | right-click the clip ▸ **Follow tempo** |
+  | Change the tempo while followed clips play: nothing waits for their stretch | the tempo field |
+
+  Under the hood: kernel ABI v1 settled (the version read from the module's bytes first; a kernel may read its file
+  from the disk). Stretching moved out of the engine into std: `std:stretch`, the first offline kernel (std
+  0.2.2). A live session makes each new stretch in the background and plays it as it is made; an export makes its
+  stretches first. `examples/resample`'s 2 renders changed once (std 0.2.2's stretch, FMT-3); 10 of 12 keep their
+  bits. Plan and build notes: `docs/designs/step9/sx-plan.md`, `build-notes-sx.md`. Owed on the Mac: its
+  `ci/check.sh`, then the by-ear steps 88 to 94.
 - **Track `ab` (kernel ABI v1 and the sampler) is ready to land** (2026-10-18), on branch `ab`: Linux green at
   `7399cb8`; macOS owed. From `main` at `258275b`, with `main` at `3b447b2` (track `io`) merged in. It adds:
 
@@ -27,7 +41,7 @@ whatever you pick up.
 
   Under the hood: one sandbox a box (RENDER-32; on p50, −211 µs a block and −1,080 µs a callback against
   `main`, 75 MB against 204, Linux numbers, information only), and kernel ABI v1 frozen
-  ([kernel-abi.md](docs/kernel-abi.md): v0 refused by name, one import `m2.asset_read`, at most 3,999 sound parts
+  ([kernel-abi.md](docs/kernel-abi.md): v0 refused by name, and since track `sx` a later version too, read from the module's bytes first, one import `m2.asset_read`, at most 3,999 sound parts
   a renderer). std 0.2.1, `@m2/core` 1.3.0. No existing render changed: 12 of 12 (2 new, the example's).
   A review found 5 things. The big one came with the merge: a Sampler's file was decoded again at every edit; now
   it is decoded once and kept (`7399cb8`, a test shown red first). The 4 small ones are one line each in
@@ -621,6 +635,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | `studio`: audio in the app, recording notes, MIDI files and stems, help in plain words | `ad5f111` (Linux checks), then docs only; on `main` at `02ba4d3` | owed: the same one more `ci/check.sh`, then the by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in another app) |
 | `io`: audio clips play from the disk; recording audio | `64380e1` (Linux checks), then docs only; ready to land (branch `io`) | macOS: unverified since `eda5e77`. Owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 73 to 82 (a long file from the disk, a real microphone, the permission question, the take against the click, hearing yourself in headphones, a USB microphone unplugged) |
 | `ab`: kernel ABI v1, one sandbox a box, the Sampler | `7399cb8` (Linux checks), then docs only; ready to land (branch `ab`) | owed once it is on `main`: one more `ci/check.sh` (G7f's run of the new layout: its footprint and address space, PLAT-1), then the by-ear steps 83 to 87 (the Sampler example, a WAV dropped on a Sampler, the keyboard piano, Undo) |
+| `sx`: `std:stretch` (an offline kernel), stretches in the background, Follow tempo | Linux checks: see the track's bullet above; built on branch `sx`, not reviewed | owed once it is on `main`: one more `ci/check.sh`, then the by-ear steps 88 to 94 (Resample's stretched clips; Follow tempo and a tempo change) |
 
 **8a's Mac sweep (for the owner): offline and live, one paste.** `8a` is on `main`.
 
