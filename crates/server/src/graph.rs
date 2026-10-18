@@ -408,6 +408,8 @@ struct Inner {
     /// Who creates this Graph's plugin instances: their events come to its actor alone, and their
     /// count is what closing waits on.
     owner: m2_plugins::Owner,
+    /// Where its plugins run: the process's host (the host process in a program, HOST-3).
+    host: Arc<dyn m2_plugins::PluginHost>,
     /// The open project's settle rule (WRITE-19): polled by the watcher, told by the actor what the
     /// session wrote itself. A leaf lock, never held over a call to the actor, nor over a stat.
     watch: Mutex<Option<watcher::Watch>>,
@@ -537,9 +539,10 @@ fn put_back(l: &Lease, device: Option<&Device>) {
 }
 
 impl Inner {
-    fn new(device: Option<Device>, owner: m2_plugins::Owner, output: output::Outputs) -> Inner {
+    fn new(device: Option<Device>, owner: m2_plugins::Owner, output: output::Outputs, host: Arc<dyn m2_plugins::PluginHost>) -> Inner {
         Inner {
             owner,
+            host,
             control: Mutex::default(),
             player: Mutex::new(device),
             timing: Mutex::default(),
@@ -788,12 +791,16 @@ impl Graph {
     }
 
     fn with_outputs(device: Option<Device>, outputs: output::Outputs) -> Graph {
+        Graph::hosted(device, outputs, m2_plugins::host())
+    }
+
+    fn hosted(device: Option<Device>, outputs: output::Outputs, host: Arc<dyn m2_plugins::PluginHost>) -> Graph {
         // Tests: plugins' main-thread calls run on a dedicated thread (HOST-2, C1), as libtest
         // owns the process's main thread.
         #[cfg(test)]
         m2_plugins::test_main_thread();
         let (owner, events) = m2_plugins::Owner::new();
-        let inner = Arc::new(Inner::new(device, owner, outputs));
+        let inner = Arc::new(Inner::new(device, owner, outputs, host));
         let (jobs, rx) = mpsc::channel::<Job>();
         let actor_inner = inner.clone();
         // QuickJS gets as much stack as it has on a main thread.
@@ -816,6 +823,12 @@ impl Graph {
     #[doc(hidden)]
     pub fn with_player(player: Player) -> Graph {
         Graph::with(Some(Device { player, epoch: 0, resume: 0.0 }))
+    }
+
+    /// Tests: one whose player is `player` and whose plugins run on `host` (the host process).
+    #[cfg(test)]
+    pub(crate) fn with_player_on(player: Player, host: Arc<dyn m2_plugins::PluginHost>) -> Graph {
+        Graph::hosted(Some(Device { player, epoch: 0, resume: 0.0 }), output::Outputs::real(), host)
     }
 
     /// Run `f` on the session's actor and wait for its answer. A request that panics answers

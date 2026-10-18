@@ -51,9 +51,15 @@ pub trait PluginHost: Send + Sync {
     fn reset(&self, h: Handle);
     /// Whether the plugin asked to be processed since the last call: wakes an idle engine.
     fn take_process_request(&self, h: Handle) -> bool;
+    // Any thread but the audio thread.
+    /// Every plugin installed, and why each bundle that failed to load did: the host loads them,
+    /// so a program that hosts plugins in another process never loads plugin code (HOST-3).
+    fn scan(&self) -> (Vec<Found>, Vec<String>);
     // Any thread.
     /// Instances created and not yet destroyed, across every owner.
     fn live(&self) -> u64;
+    /// Instances created and destroyed so far, across every owner (gates and tests).
+    fn counts(&self) -> (u64, u64);
 }
 
 /// An instance, as the host names it. Copied freely; meaningless once destroyed (a stale handle
@@ -88,6 +94,11 @@ pub enum HostEvent {
     Dirty(Handle),
     /// `latency.changed`, measured again.
     Latency(Handle, u32),
+    /// The host process it ran in crashed (HOST-3): it plays silence, and its calls fail, until
+    /// the next activation makes it again.
+    Crashed(Handle),
+    /// The same, when the host process stopped answering a live call and was ended (D5).
+    Hung(Handle),
 }
 
 /// Where an [`Owner`]'s events arrive.
@@ -305,6 +316,11 @@ pub(crate) unsafe fn decode(h: *const clap_event_header) -> Option<Event> {
     }
 }
 
+/// The most events one `process` call carries in: a call crosses to the host process in shared
+/// memory, which can't grow on the audio thread (HOST-3). A plan whose plugin node needs more is
+/// refused when it is built, naming the node.
+pub const MAX_CALL_EVENTS: usize = 16_384;
+
 /// One call's events, in CLAP's own layout, so the host hands them to the plugin as they are.
 /// Sized when built: [`Events::push`] never reallocates (RENDER-28); what doesn't fit is counted.
 pub struct Events {
@@ -378,6 +394,24 @@ impl Events {
     pub(crate) fn sorted(&self) -> bool {
         // SAFETY: every entry starts with its header.
         self.raw.windows(2).all(|w| unsafe { w[0].header.time <= w[1].header.time })
+    }
+
+    /// Its events as they are, for a copy into shared memory (HOST-3).
+    pub(crate) fn raw(&self) -> &[Raw] {
+        &self.raw
+    }
+
+    /// Add events as they are, within its room; what doesn't fit is counted, with `dropped` more.
+    /// Never allocates.
+    pub(crate) fn append_raw(&mut self, src: &[Raw], dropped: u32) {
+        let fit = src.len().min(self.raw.capacity() - self.raw.len());
+        self.raw.extend_from_slice(&src[..fit]);
+        self.dropped = self.dropped.saturating_add((src.len() - fit) as u32).saturating_add(dropped);
+    }
+
+    /// The count of [`Events::dropped`], set back to 0.
+    pub(crate) fn take_dropped(&mut self) -> u32 {
+        std::mem::take(&mut self.dropped)
     }
 
     pub(crate) fn header(&self, i: usize) -> *const clap_event_header {

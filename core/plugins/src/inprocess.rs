@@ -229,12 +229,6 @@ pub(crate) fn live() -> u64 {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InProcess;
 
-/// The process's plugin host.
-pub fn host() -> Arc<dyn PluginHost> {
-    static H: OnceLock<Arc<InProcess>> = OnceLock::new();
-    H.get_or_init(|| Arc::new(InProcess)).clone()
-}
-
 impl InProcess {
     /// Instances created and destroyed so far, in this process (gates and tests).
     pub fn counts() -> (u64, u64) {
@@ -371,8 +365,16 @@ impl PluginHost for InProcess {
         core(h).is_some_and(|c| c.host.process_requested.swap(false, Ordering::Relaxed))
     }
 
+    fn scan(&self) -> (Vec<Found>, Vec<String>) {
+        crate::scan_here()
+    }
+
     fn live(&self) -> u64 {
         live()
+    }
+
+    fn counts(&self) -> (u64, u64) {
+        InProcess::counts()
     }
 }
 

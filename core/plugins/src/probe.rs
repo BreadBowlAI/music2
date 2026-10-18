@@ -18,7 +18,10 @@
 //! 300 ms to load one that starts with `slow`, as a big patch does. One whose tag starts with
 //! `fails-process` reports an error from every `process` call, as a broken plugin does; one whose
 //! tag starts with `sets-fz` leaves its thread flushing subnormals to zero after every `process`
-//! call, as some plugins do (RENDER-2a). With
+//! call, as some plugins do (RENDER-2a). One whose tag is `crash-at-<n>` aborts its process at its
+//! n-th `process` call, and `hang-at-<n>` never returns from it, as broken plugins do (HOST-3: run
+//! it in the host process); `crash-at-<n>:<file>` and `hang-at-<n>:<file>` do so only when they
+//! make `<file>`, so once. With
 //! [`Stats::defer_load`] set,
 //! a probe applies the parameters of a state it loads at the end of its next `process` call, after
 //! that call's events, ending every voice, as Surge XT does. With [`Stats::reset_keeps_voices`]
@@ -461,6 +464,9 @@ struct Probe {
     fails_process: bool,
     /// Its state's tag starts with `sets-fz`: every `process` call ends by setting flush-to-zero.
     sets_fz: bool,
+    /// Its state's tag is `crash-at-<n>` or `hang-at-<n>`: the call, whether it hangs, and the
+    /// file that makes it happen once.
+    stops_at: Option<(u64, bool, Option<PathBuf>)>,
     stats: Arc<Stats>,
     rate: f64,
     gain: f64,
@@ -583,6 +589,7 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         fails_state,
         fails_process: false,
         sets_fz: false,
+        stops_at: None,
         stats: stats.clone(),
         rate: 48_000.0,
         gain: 1.0,
@@ -700,6 +707,17 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
         st.threads.fetch_add(1, Ordering::Relaxed);
     }
     me.done_to = pr.steady_time + pr.frames_count as i64;
+    if let Some((n, hang, once)) = &me.stops_at
+        && me.calls + 1 == *n
+        && once.as_ref().is_none_or(|f| std::fs::OpenOptions::new().write(true).create_new(true).open(f).is_ok())
+    {
+        match hang {
+            true => loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            },
+            false => std::process::abort(),
+        }
+    }
     if me.fails_process {
         st.in_process.store(0, Ordering::Release);
         return CLAP_PROCESS_ERROR;
@@ -983,8 +1001,23 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
     };
     me.fails_process = tag.starts_with("fails-process");
     me.sets_fz = tag.starts_with("sets-fz");
+    me.stops_at = stops_at(&tag);
     *me.stats.tag.lock().unwrap_or_else(|e| e.into_inner()) = tag;
     true
+}
+
+/// `crash-at-<n>[:<file>]` or `hang-at-<n>[:<file>]`.
+fn stops_at(tag: &str) -> Option<(u64, bool, Option<PathBuf>)> {
+    let (hang, rest) = match (tag.strip_prefix("crash-at-"), tag.strip_prefix("hang-at-")) {
+        (Some(r), _) => (false, r),
+        (_, Some(r)) => (true, r),
+        _ => return None,
+    };
+    let (n, file) = match rest.split_once(':') {
+        Some((n, f)) => (n, Some(PathBuf::from(f))),
+        None => (rest, None),
+    };
+    Some((n.parse().ok()?, hang, file))
 }
 
 unsafe extern "C" fn latency(_: *const clap_plugin) -> u32 {

@@ -2598,6 +2598,11 @@ impl Ex {
 
     /// [`Ex::new`] with `song` as song.ts, and `state` as its probe's saved state.
     fn with(song: &str, state: &[u8]) -> Ex {
+        Ex::hosted(song, state, m2_plugins::host())
+    }
+
+    /// [`Ex::with`], its plugins on `host`.
+    fn hosted(song: &str, state: &[u8], host: Arc<dyn m2_plugins::PluginHost>) -> Ex {
         m2_plugins::probe::install();
         let fixture = Fixture::new();
         fixture.put("song.ts", song);
@@ -2608,7 +2613,7 @@ impl Ex {
         );
         fixture.probe_state("p", "lead", state);
         let (p, driver) = Player::driven(48_000);
-        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p)));
+        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player_on(p, host)));
         state.graph.open(&fixture.0).unwrap();
         state.graph.transport("play").unwrap();
         let mut ex = Ex { fixture, state, driver };
@@ -3982,4 +3987,127 @@ fn a_first_pan_in_a_mono_mix_while_playing_is_inaudible() {
     assert!((peak - ceiling).abs() < 1e-3, "the limiter works: a peak of {peak}");
     let differs = apart(&heard, &alone);
     assert!(differs <= 1e-5, "the first pan is heard: {differs} from the song with no edit");
+}
+
+// ---------------------------------------------------------------- the plugin host process (HOST-3)
+
+/// The host process, as `m2-plugin-host` (built beside the tests).
+fn remote() -> Arc<dyn m2_plugins::PluginHost> {
+    Arc::new(m2_plugins::Remote::for_tests())
+}
+
+/// Two probe tracks, `p` and `q`, each keyed `lead`, playing a constant 0.25 and 0.5 through at
+/// gain 1 (so 0.75 while both play), on the host process. `p`'s saved state is tagged `tag`.
+fn two_probes(tag: &str) -> Dc {
+    m2_plugins::probe::install();
+    let fixture = Fixture::new();
+    fixture.put(
+        "song.ts",
+        "import { hz, plugin, song, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\nimport { sum } from 'std/math';\n\
+         const p = track('p', () => plugin('clap:m2.probe', { in: vca(osc.square(hz(0)), 0.25), key: 'lead' }));\n\
+         const q = track('q', () => plugin('clap:m2.probe', { in: vca(osc.square(hz(0)), 0.5), key: 'lead' }));\n\
+         export default song(() => sum(p.out, q.out));\n",
+    );
+    fixture.probe_state("p", "lead", &m2_plugins::probe::state(tag, 1.0));
+    fixture.probe_state("q", "lead", &m2_plugins::probe::state("fine", 1.0));
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player_on(p, remote());
+    graph.open(&fixture.0).unwrap();
+    graph.transport("play").unwrap();
+    Dc { fixture, graph, driver }
+}
+
+/// `p`'s 50th call ends the host process, once (`how` is `crash` or `hang`): both instances go
+/// silent while the song plays on, the session says so once, and the next activation makes both
+/// again from their saved states, in a new process. How long the block that ended it took.
+fn a_host_process_ends(how: &str) -> Duration {
+    let mut dc = two_probes("fine");
+    let once = dc.fixture.0.join(format!("{how}-once"));
+    let tag = format!("{how}-at-50:{}", once.display());
+    // A new state for `p`, loaded into it: the call count starts there.
+    dc.fixture.probe_state("p", "lead", &m2_plugins::probe::state(&tag, 1.0));
+    assert!(dc.graph.poll());
+    let committed = [m2_plugins::probe::state(&tag, 1.0), m2_plugins::probe::state("fine", 1.0)];
+    let host = dc.graph.inner.host.clone();
+    let saved = |h| host.save_state(h).recv().unwrap().unwrap().bytes;
+    assert_eq!(dc.blocks(8).last(), Some(&0.75), "both play");
+    let first = dc.handles();
+    assert_eq!(first.iter().map(|&h| saved(h)).collect::<Vec<_>>(), committed);
+    // Until its call ends the process: then both are silent.
+    let (mut slowest, mut silent) = (Duration::ZERO, 0);
+    for _ in 0..80 {
+        let t = Instant::now();
+        let block = dc.blocks(1)[0];
+        slowest = slowest.max(t.elapsed());
+        if block == 0.0 {
+            silent += 1;
+            if silent == 2 {
+                break;
+            }
+        }
+    }
+    assert!(once.exists() && silent == 2, "the host process ended, and both went silent: {silent} silent blocks");
+    // The session hears it, says so once, and makes both again at the next activation.
+    let t = Instant::now();
+    let mut told = vec![];
+    while t.elapsed() < Duration::from_secs(10) && dc.blocks(4).last() != Some(&0.75) {
+        dc.graph.inspect(|a| a.catch_up());
+        told.extend(dc.graph.expire().into_iter().filter(|t| t.contains("plugin")));
+    }
+    let now = dc.handles();
+    assert!(now.len() == 2 && now.iter().all(|h| !first.contains(h)), "both made again: {first:?} then {now:?}; told {told:?}");
+    assert_eq!(dc.blocks(4), [0.75; 4], "both play again");
+    assert_eq!(now.iter().map(|&h| saved(h)).collect::<Vec<_>>(), committed, "from their saved states");
+    dc.graph.inspect(|a| a.catch_up());
+    told.extend(dc.graph.expire().into_iter().filter(|t| t.contains("plugin")));
+    assert_eq!(told.len(), 1, "said once: {told:?}");
+    let ended = if how == "hang" { "stopped answering" } else { "crashed" };
+    assert!(
+        told[0].contains(ended) && told[0].contains("m2 probe (p)") && told[0].contains("m2 probe (q)") && told[0].ends_with("(plugin.crashed)"),
+        "{told:?}"
+    );
+    assert!(dc.graph.status().playing, "the song plays on");
+    slowest
+}
+
+// HOST-3, HOST-5: a crash of the host process silences its instances; the app plays on, says so
+// once, and makes them again from their saved states at the next activation, in a new process.
+// Red on the old code: the crash ends the test's own process.
+#[test]
+fn a_crash_silences_its_process_and_the_app_plays_on() {
+    let took = a_host_process_ends("crash");
+    assert!(took < HANG_SEEN, "a crash is seen at once: {took:?}");
+}
+
+/// A block that waits on a hung call ends after the watchdog's 500 ms, and within this.
+const HANG_SEEN: Duration = Duration::from_millis(480);
+
+// HOST-3, D5: a live call that hangs 500 ms makes the watchdog end the host process; the same
+// path follows, said as "stopped answering". Red with the watchdog stubbed: the test hangs.
+#[test]
+fn a_hung_host_process_is_ended_and_said() {
+    let took = a_host_process_ends("hang");
+    assert!(took >= HANG_SEEN && took < Duration::from_secs(3), "ended by the watchdog: {took:?}");
+}
+
+// RENDER-1, HOST-5, HOST-3: an export in the app borrows the live instances in the host process,
+// as it does in this one: none is made, nothing is said, and the file is the one new instances
+// render. Counted by the session's own owner.
+#[test]
+fn an_export_borrows_instances_in_the_host_process() {
+    let mut ex = Ex::hosted(&Ex::song("p.out"), &m2_plugins::probe::state("lead", 1.0), remote());
+    let first = ex.handles();
+    let made = ex.state.graph.inner.owner.made();
+    assert_eq!(made, 1);
+    let (out, done) = export_now(&mut ex);
+    assert_eq!(done["done"], true, "{done}");
+    assert!(done["problems"].as_array().is_none_or(|p| p.is_empty()), "nothing said: {done}");
+    ex.fill(4);
+    assert_eq!((ex.handles(), ex.state.graph.inner.owner.made()), (first, made), "the same instance, none made");
+    let (_, _, fresh, _) = ex.state.graph.render(Length::Song).unwrap();
+    let fresh_wav = ex.fixture.0.join("fresh.wav");
+    fresh.write(&fresh_wav, |_| {}).unwrap();
+    let samples = |p: &Path| hound::WavReader::open(p).unwrap().into_samples::<i32>().map(Result::unwrap).collect::<Vec<i32>>();
+    let (a, b) = (samples(&out), samples(&fresh_wav));
+    assert!(a.len() == b.len() && a == b, "the borrowed export is the export of new instances");
 }

@@ -25,6 +25,7 @@ mod host;
 mod inprocess;
 mod main_thread;
 pub mod probe;
+mod remote;
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
@@ -36,8 +37,12 @@ use clap_sys::entry::clap_plugin_entry;
 use clap_sys::factory::plugin_factory::*;
 use clap_sys::version::clap_version_is_compatible;
 
-pub use host::{Blob, Events, Handle, HostEvent, HostEvents, MainCall, Owner, Pending, PluginHost, RenderMode, Reply, SharedBuffers, Status};
-pub use inprocess::{InProcess, MAX_INSTANCES, host};
+pub use host::{
+    Blob, Events, Handle, HostEvent, HostEvents, MAX_CALL_EVENTS, MainCall, Owner, Pending, PluginHost, RenderMode, Reply, SharedBuffers, Status,
+};
+pub use inprocess::{InProcess, MAX_INSTANCES};
+pub use remote::child::serve as serve_host;
+pub use remote::{FLAG as HOST_FLAG, HANG, Remote};
 pub use main_thread::{DRAIN, MainThread, main_thread, on_main_thread, run_main, test_main_thread, use_app_main_thread};
 
 /// Where plugins are installed on this machine: `CLAP_PATH`, then the OS's CLAP folders.
@@ -202,9 +207,52 @@ impl Library {
     }
 }
 
-/// Every plugin in the search paths (and the probe, once installed). Bundles that fail to load are
-/// reported, not fatal.
+/// The process's plugin host: the host process ([`Remote`]) in every program, which `run_main` and
+/// `use_app_main_thread` install; [`InProcess`] where none was installed (tests, and inside the
+/// host process itself).
+pub fn host() -> Arc<dyn PluginHost> {
+    HOST.get_or_init(|| Arc::new(InProcess)).clone()
+}
+
+static HOST: OnceLock<Arc<dyn PluginHost>> = OnceLock::new();
+
+/// Make the host process the process's host, before anything asked for one.
+pub(crate) fn use_remote(r: Remote) {
+    if REMOTE.set(r.clone()).is_ok() {
+        let _ = HOST.set(Arc::new(r));
+    }
+}
+
+static REMOTE: OnceLock<Remote> = OnceLock::new();
+
+/// The host process's id while it runs (a program's, through [`run_main`] or
+/// [`use_app_main_thread`]).
+pub fn host_process() -> Option<u32> {
+    REMOTE.get().and_then(Remote::process_id)
+}
+
+/// The host process's instances alive (0 in a program that installed none).
+pub(crate) fn remote_live() -> u64 {
+    REMOTE.get().map_or(0, |r| r.live())
+}
+
+/// Quit: end the host process, once the program's instances are destroyed. Nothing when the
+/// program hosts none.
+pub fn end_host_process() {
+    if let Some(r) = REMOTE.get() {
+        r.shutdown();
+    }
+}
+
+/// Every plugin installed, through the process's host: in a program, the host process loads them,
+/// never this one (HOST-3). Bundles that fail to load are reported, not fatal.
 pub fn scan() -> (Vec<Found>, Vec<String>) {
+    host().scan()
+}
+
+/// Every plugin in the search paths (and the probe, once installed), loaded in this process.
+/// Bundles that fail to load are reported, not fatal.
+pub(crate) fn scan_here() -> (Vec<Found>, Vec<String>) {
     let (mut found, mut errors) = (vec![], vec![]);
     for dir in search_paths() {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
@@ -223,13 +271,8 @@ pub fn scan() -> (Vec<Found>, Vec<String>) {
     (found, errors)
 }
 
-/// Find a plugin by id.
+/// Find a plugin by id, through the process's host ([`scan`]).
 pub fn find(id: &str) -> Result<Found> {
-    if probe::installed()
-        && let Some(f) = probe::library().plugins().into_iter().find(|f| f.id == id)
-    {
-        return Ok(f);
-    }
     let (found, _) = scan();
     found.into_iter().find(|f| f.id == id).ok_or_else(|| anyhow!("no CLAP plugin `{id}` is installed (looked in {:?})", search_paths()))
 }

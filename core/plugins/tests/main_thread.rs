@@ -3,6 +3,9 @@
 //! on Linux), and every main-thread call reaches it there. libtest owns the main thread, so this
 //! test has no harness (`harness = false`).
 //!
+//! It runs the in-process host itself: that is what the host process runs under `run_main`
+//! (HOST-3), where the probe's records can't be read from here.
+//!
 //! It creates the probe from the worker, checks where each call ran, leaves one instance alive when
 //! the worker returns, and checks that `run_main` destroyed it before returning, and that the
 //! executor refuses work after. With `CLAP_PATH` naming a folder that holds Surge XT, it does the
@@ -10,7 +13,7 @@
 
 use std::sync::Arc;
 
-use m2_plugins::{Blob, Event, Events, Handle, InProcess, Owner, PluginHost, SharedBuffers, Status, Transport, host, probe};
+use m2_plugins::{Blob, Event, Events, Found, Handle, InProcess, Owner, PluginHost, SharedBuffers, Status, Transport, probe};
 
 const RATE: u32 = 48_000;
 const BLOCK: u32 = 128;
@@ -42,9 +45,9 @@ fn play(host: &dyn PluginHost, h: Handle, blocks: usize, events: &[Event]) -> f3
 fn main() {
     probe::install();
     let (left, surge) = m2_plugins::run_main(|| {
-        let host = host();
+        let host: Arc<dyn PluginHost> = Arc::new(InProcess);
         let (owner, _events) = Owner::new();
-        let found = m2_plugins::find(probe::ID).expect("the probe");
+        let found = find(probe::ID).expect("the probe");
         let (h, info) = host.create(&found, Some(Arc::new(Blob::new(probe::state("real-main", 1.0)))), &owner).expect("created");
         assert!(info.note_in && info.audio_out == Some(2));
         host.activate(h, RATE, BLOCK).expect("activated");
@@ -93,11 +96,16 @@ fn main() {
     println!("main_thread: ok ({})", surge.unwrap_or("Surge XT not on CLAP_PATH: skipped"));
 }
 
+/// A plugin installed, found in this process.
+fn find(id: &str) -> Option<Found> {
+    InProcess.scan().0.into_iter().find(|f| f.id == id)
+}
+
 /// Surge XT on the real main thread, played from the worker, destroyed. None when it isn't on
 /// `CLAP_PATH` (an explicit folder: tests never read the user's own).
 fn surge(host: &dyn PluginHost, owner: &Owner) -> Option<&'static str> {
     std::env::var_os("CLAP_PATH")?;
-    let found = m2_plugins::find("org.surge-synth-team.surge-xt").ok()?;
+    let found = find("org.surge-synth-team.surge-xt")?;
     let (h, info) = host.create(&found, None, owner).expect("Surge XT is created on the main thread");
     assert!(info.note_in);
     host.activate(h, RATE, BLOCK).expect("activated");

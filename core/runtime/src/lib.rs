@@ -1164,6 +1164,15 @@ impl Builder<'_> {
         let held = |c: Caps| c.sounding + 2 * c.ons + 8 + sched::LIVE_ROOM;
         let held = held(caps).max(room.map_or(0, held));
         let events = caps.events() + caps.ons + 2 * sched::LIVE_ROOM + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
+        // A call crosses to the plugin host process in shared memory, which can't grow (HOST-3).
+        if events > m2_plugins::MAX_CALL_EVENTS {
+            bail!(
+                "{}: one call to this plugin may carry {events} events (notes and parameter changes), more than the {} a call can carry; \
+                 fewer notes at once on its lane, or fewer parameters driven, make it fit",
+                n.name,
+                m2_plugins::MAX_CALL_EVENTS
+            );
+        }
         Ok(PluginNode {
             name: n.name.clone(),
             inst,

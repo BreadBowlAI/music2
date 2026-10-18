@@ -482,6 +482,11 @@ fn taps_and_the_load_never_allocate() {
 /// A probe instrument on 64 notes into a probe effect (step 3b, §6.5), `gain` on the instrument,
 /// a cell (written at [`cells`]'s first site).
 fn probes(gain: f64) -> Song {
+    probes_on(gain, None)
+}
+
+/// [`probes`], on `host` when given (the host process, HOST-3).
+fn probes_on(gain: f64, host: Option<Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let dir = temp("trap-plugins");
     let ns: Vec<Value> = (0..64).map(|k| json!({"pitch": 48 + (k % 7) * 3, "start": k as f64 * 0.25, "length": 1.5})).collect();
     for (name, text) in [
@@ -500,6 +505,9 @@ fn probes(gain: f64) -> Song {
             {"id": "fx", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"in": "p"}}]}]}))
     .unwrap();
     let mut packages = std_packages();
+    if let Some(h) = host {
+        packages = packages.with_host(h);
+    }
     let diags = packages.bind_plugins(&mut ir);
     assert!(diags.is_empty(), "{diags:?}");
     let flat = m2_ir::check(&ir, &packages).unwrap_or_else(|e| panic!("{e:?}"));
@@ -638,6 +646,71 @@ fn the_audio_thread_never_allocates_with_plugins() {
         assert_eq!((n(&s.doubled), n(&s.callbacks_in_process), n(&s.process_says_main), n(&s.process_not_audio)), (0, 0, 0, 0));
         assert!(n(&s.requested) > 0);
     }
+    assert_eq!(kept.iter().filter(|g| matches!(g, Gone::Engine(Retired::Renderer(_)))).count(), 1, "the old renderer was retired");
+    assert!(!player.crashed());
+}
+
+// RENDER-28, HOST-3: the callback never allocates or locks with plugins in the host process
+// either: two probes played through their shared-memory slots, an activation that moves both, a
+// hold and its resume, a cell write into a parameter, a panic (each probe reset there), and stop.
+// Red with an allocation in the slot's copy.
+#[test]
+fn the_audio_thread_never_allocates_with_plugins_in_the_host_process() {
+    let host: Arc<dyn m2_plugins::PluginHost> = Arc::new(m2_plugins::Remote::for_tests());
+    let (a, b) = (probes_on(1.0, Some(host.clone())), probes_on(0.5, Some(host)));
+    let owner = m2_plugins::Owner::discard();
+    let mut ra = Renderer::prepare(&a.flat, &a.data, &a.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, m2_runtime::Basis::Fresh).unwrap();
+    ra.set_strict(false);
+    let rb = b.after(&a, &ra.info());
+    let gain = CellTarget { slots: rb.cell_slots(), cells: rb.cell_map().cells(&cells()[0]).into() };
+    assert_eq!(rb.stats().kept.plugins, 2, "both kept");
+    let (player, d) = Player::driven(SR);
+    player.open(ra).unwrap();
+    let (steps, rx) = mpsc::channel::<usize>();
+    let (reports, back) = mpsc::channel::<(u64, f32)>();
+    let audio = std::thread::spawn(move || {
+        let mut d = d;
+        let mut kept: Vec<Gone> = vec![];
+        let mut buf = vec![0.0f32; 2 * 4096];
+        while let Ok(frames) = rx.recv() {
+            let (mut done, mut peak) = (0, 0.0f32);
+            let allocs = trapped(|| {
+                for n in SIZES.iter().cycle() {
+                    let n = (*n).min(frames - done);
+                    if n == 0 {
+                        break;
+                    }
+                    d.fill(&mut buf[..2 * n], 2);
+                    peak = buf[..2 * n].iter().fold(peak, |m, x| m.max(x.abs()));
+                    done += n;
+                }
+            });
+            kept.extend(d.drain_retired());
+            reports.send((allocs, peak)).unwrap();
+        }
+        kept
+    });
+    let step = |frames: usize| -> f32 {
+        steps.send(frames).unwrap();
+        let (allocs, peak) = back.recv().unwrap();
+        assert_eq!(allocs, 0, "the audio thread allocated with plugins in the host process; M2_TRAP_TRACE=1 shows where");
+        peak
+    };
+    player.play();
+    assert!(step(SR as usize / 2) > 0.01, "the probes play");
+    player.activate(rb).unwrap();
+    assert!(step(SR as usize / 2) > 0.01, "and play on, moved");
+    player.hold(true).unwrap();
+    step(SR as usize / 10);
+    player.hold(false).unwrap();
+    step(SR as usize / 10);
+    player.set_cells(&gain, 0.25);
+    player.panic().unwrap();
+    step(SR as usize / 4);
+    player.stop();
+    step(SR as usize / 4);
+    drop(steps);
+    let kept = audio.join().unwrap();
     assert_eq!(kept.iter().filter(|g| matches!(g, Gone::Engine(Retired::Renderer(_)))).count(), 1, "the old renderer was retired");
     assert!(!player.crashed());
 }

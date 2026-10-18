@@ -390,10 +390,31 @@ pub(super) struct Prepared {
     pub(super) fresh: m2_runtime::Count,
 }
 
-fn packages() -> Result<PackageSet> {
-    let mut p = PackageSet::default();
+fn packages(inner: &Inner) -> Result<PackageSet> {
+    let mut p = PackageSet::default().with_host(inner.host.clone());
     p.load(&crate::resources::std_dir()).context("loading the std package")?;
     Ok(p)
+}
+
+/// The one notice of a plugin host crash (HOST-3, `plugin.crashed`): which plugins went quiet, and
+/// which music2 started again or left silent.
+fn crash_said(hung: bool, revived: &[String], again: &[String]) -> String {
+    let list = |v: &[String]| match v {
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        [] => String::new(),
+    };
+    let mut said = match hung {
+        true => String::from("The plugin host stopped answering, so music2 ended it. The plugins in it went quiet; the rest of the song plays on."),
+        false => String::from("The plugin host crashed, so the plugins in it went quiet; the rest of the song plays on."),
+    };
+    if !revived.is_empty() {
+        said += &format!(" music2 started {} again from the saved settings.", list(revived));
+    }
+    if !again.is_empty() {
+        said += &format!(" It stopped again soon after starting {}, so music2 left them silent: open the song again to give them another try.", list(again));
+    }
+    said + " (plugin.crashed)"
 }
 
 /// What of `from`'s graph each node of `to`'s continues (ID-15): every node itself for the same
@@ -1205,9 +1226,9 @@ impl Actor {
         let said = |d: &[m2_ir::Diagnostic]| anyhow!(d.iter().map(|d| d.to_string().replace(&root, "")).collect::<Vec<_>>().join("\n"));
         #[cfg(test)]
         if let Some(disk) = &self.disk {
-            return Session::open_with_disk(dir, packages()?, "music2", disk()).map_err(|d| said(&d));
+            return Session::open_with_disk(dir, packages(&self.inner)?, "music2", disk()).map_err(|d| said(&d));
         }
-        Session::open_as(dir, packages()?, "music2").map_err(|d| said(&d))
+        Session::open_as(dir, packages(&self.inner)?, "music2").map_err(|d| said(&d))
     }
 
     /// Take the open project's lock if it is free now (the read-only banner's Retry), and publish
@@ -1249,36 +1270,10 @@ impl Actor {
     /// restart is replaced by the next activation, which the catch-up makes at once: a new
     /// instance from the committed state, which fades in as the old one rings out (HOST-5). So is
     /// one that failed (it plays silence meanwhile), once, and the user is told. One whose new
-    /// instance fails too is left silent, and the user told that once.
+    /// instance fails too is left silent, and the user told that once. When the plugin host
+    /// process crashed (HOST-3), its instances are all told in one notice, `plugin.crashed`.
     fn heard_plugins(&mut self) {
-        if let Some(o) = &mut self.open
-            && let Some(p) = &o.plays
-        {
-            for at in &p.info.plugins {
-                if !at.inst.upgrade().is_some_and(|i| i.dead()) || o.restarts.contains(&at.handle) {
-                    continue;
-                }
-                let Some(n) = p.revision.compiled.flat.nodes.get(at.node) else { continue };
-                let again = match o.revived.get(&n.name) {
-                    Some(None) => continue,
-                    Some(Some(t)) => t.elapsed() < REVIVED,
-                    None => false,
-                };
-                let who = plugin_named(&p.revision, &o.session.packages, at.node);
-                let (said, revived) = match again {
-                    true => (
-                        format!("{who} stopped working again, so music2 left it silent. Open the song again to give it another try."),
-                        None,
-                    ),
-                    false => {
-                        o.restarts.insert(at.handle);
-                        (format!("{who} stopped working, so music2 started it again from its saved settings."), Some(Instant::now()))
-                    }
-                };
-                o.revived.insert(n.name.clone(), revived);
-                self.inner.notices.lock().push(said);
-            }
-        }
+        let (mut crashed, mut hung) = (HashSet::new(), false);
         while let Ok(e) = self.events.try_recv() {
             match e {
                 HostEvent::Restart(h) => {
@@ -1289,7 +1284,60 @@ impl Actor {
                 // Latency compensation and state autosave come later (RENDER-17, HOME-6).
                 HostEvent::Latency(h, frames) => eprintln!("music2: plugin {h:?} reports {frames} frames of latency"),
                 HostEvent::Dirty(_) => {}
+                HostEvent::Crashed(h) => {
+                    crashed.insert(h);
+                }
+                HostEvent::Hung(h) => {
+                    crashed.insert(h);
+                    hung = true;
+                }
             }
+        }
+        let Some(o) = &mut self.open else { return };
+        let Some(p) = &o.plays else { return };
+        // A crashed instance fails at its next call; one that isn't called now (asleep) is marked
+        // here, so it is made again all the same.
+        for at in p.info.plugins.iter().filter(|at| crashed.contains(&at.handle)) {
+            if let Some(i) = at.inst.upgrade() {
+                i.kill();
+            }
+        }
+        let (mut again_crashed, mut revived_crashed) = (vec![], vec![]);
+        for at in &p.info.plugins {
+            if !at.inst.upgrade().is_some_and(|i| i.dead()) || o.restarts.contains(&at.handle) {
+                continue;
+            }
+            let Some(n) = p.revision.compiled.flat.nodes.get(at.node) else { continue };
+            let again = match o.revived.get(&n.name) {
+                Some(None) => continue,
+                Some(Some(t)) => t.elapsed() < REVIVED,
+                None => false,
+            };
+            let who = plugin_named(&p.revision, &o.session.packages, at.node);
+            let revived = match again {
+                true => None,
+                false => {
+                    o.restarts.insert(at.handle);
+                    Some(Instant::now())
+                }
+            };
+            o.revived.insert(n.name.clone(), revived);
+            let said = match (crashed.contains(&at.handle), again) {
+                (true, true) => {
+                    again_crashed.push(who);
+                    continue;
+                }
+                (true, false) => {
+                    revived_crashed.push(who);
+                    continue;
+                }
+                (false, true) => format!("{who} stopped working again, so music2 left it silent. Open the song again to give it another try."),
+                (false, false) => format!("{who} stopped working, so music2 started it again from its saved settings."),
+            };
+            self.inner.notices.lock().push(said);
+        }
+        if !revived_crashed.is_empty() || !again_crashed.is_empty() {
+            self.inner.notices.lock().push(crash_said(hung, &revived_crashed, &again_crashed));
         }
     }
 

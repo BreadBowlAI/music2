@@ -433,7 +433,12 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
 /// activating is what measures its latency (RENDER-21's check).
 fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plugins::Info)> {
     let Some(clap_id) = id.strip_prefix("clap:") else { bail!("plugin ids start with `clap:`, not `{id}`") };
-    let found = m2_plugins::find(clap_id)?;
+    // Found by the host, which loads plugin code: the app never does (HOST-3).
+    let (found, _) = host.scan();
+    let found = found
+        .into_iter()
+        .find(|f| f.id == clap_id)
+        .with_context(|| format!("no CLAP plugin `{clap_id}` is installed (looked in {:?})", m2_plugins::search_paths()))?;
     let (h, mut info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
     let latency = host.activate(h, 48_000, 128);
     host.destroy(h);
