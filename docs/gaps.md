@@ -230,6 +230,15 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A tempo drag in a song with an audio clip** is heard only when you let go: the clip's audio is timed in the tempo before the drag. Its tooltip says so.
 - **The output list on Linux** shows each card once, by its name, from the device a person means (the sound server's, else the card's shared one). An output that won't open plays on the default, and Settings says "the output chosen can't be used now".
 - **An output chosen in Settings that comes back** after it was unplugged isn't taken again by itself, and choosing it again while the default plays for it does nothing: choose another output, then it.
+- **The plugin host process** (HOST-3, since ph-1). Plugins run in a second program, so a crash no longer ends the app. What it doesn't do yet:
+  - All plugins share one host process, so one crash silences them all (each comes back by itself). One process per plugin would silence only the one that crashed.
+  - Its audio threads don't join the Mac output's audio workgroup (they ask for real time on their own).
+  - When the app and the host process die at the same moment, a plugin's shared memory can be left in `/dev/shm` until a restart.
+  - It writes no core dump when a plugin crashes, so there is no crash file to send to the plugin's maker.
+  - The app still starts its own plugin main loop, which now serves nothing: it can be folded away.
+  - A plugin that fails in the same instant as a crash may be told as "stopped working" rather than in the crash's notice.
+  - Tests that use it need `m2-plugin-host` built first (`cargo build -p m2-plugins --bin m2-plugin-host`); `ci/check.sh` builds it.
+  - macOS: its shared memory and wake are lint-checked only, until the owner's Mac runs them.
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 
 ## Removed with the old version

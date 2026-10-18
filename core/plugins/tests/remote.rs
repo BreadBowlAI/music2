@@ -171,3 +171,40 @@ fn a_hung_call_ends_its_process() {
     let took = crashed_by("hang-at-3");
     assert!(took >= Duration::from_millis(480) && took < Duration::from_secs(3), "ended after 500 ms: {took:?}");
 }
+
+// HOST-3 (PLAT-1, information only): a call's round trip through the host process, against the
+// same call in this process. Run it in release: cargo test --release -p m2-plugins --test remote
+// -- --ignored --nocapture round_trip
+#[test]
+#[ignore]
+fn the_round_trip_is_measured() {
+    setup();
+    let r = remote();
+    let found = the_probe(&r);
+    let (owner, _events) = Owner::new();
+    let mut times = vec![];
+    for host in [&InProcess as &dyn PluginHost, &r] {
+        let (h, _) = host.create(&found, None, &owner).unwrap();
+        host.activate(h, SR, N as u32).unwrap();
+        play(host, h, 200);
+        let mut each: Vec<Duration> = (0..2000)
+            .map(|_| {
+                let t = Instant::now();
+                play(host, h, 1);
+                t.elapsed()
+            })
+            .collect();
+        each.sort();
+        times.push((each[each.len() / 2], each[each.len() * 99 / 100], each[each.len() - 1]));
+        host.destroy(h);
+    }
+    let us = |d: Duration| d.as_secs_f64() * 1e6;
+    println!(
+        "a probe call of {N} frames: in this process {:.1} us (median), {:.1} us (99%); through the host process {:.1} us, {:.1} us, at most {:.1} us",
+        us(times[0].0),
+        us(times[0].1),
+        us(times[1].0),
+        us(times[1].1),
+        us(times[1].2)
+    );
+}

@@ -66,6 +66,11 @@ Offline renders give the same bits.
 - Finding plugins moves behind the host: the trait gains `scan()`, and `describe_plugin` and `m2 plugins` use it.
   The app never loads plugin code.
 - The probe learns tags `crash-at-<n>` (aborts its process at its n-th call) and `hang-at-<n>`, sent in its state.
+  Built: `:<file>` after either makes it happen once (only when it can make that file), so the next process lives.
+- Built, beyond this plan (ph-1): `HostEvent::Hung` beside `Crashed`, so the words can say "stopped answering" (D5);
+  the host process writes no core dump (`m2_os::process::no_core_dump`), as a crash handler such as apport held a
+  crashed process about 500 ms before its pipe closed. The base with-plugins render differs run to run (step 0), so
+  "the same bytes" for it is G7e's 1 dB per second.
 
 | Crate | Files |
 |---|---|
@@ -82,7 +87,7 @@ Offline renders give the same bits.
 | `a_crash_silences_its_process_and_the_app_plays_on`: two probes, one `crash-at-50`; both silent, one `plugin.crashed`, both sound again after the next activation, from their committed state | `crates/server/src/graph/tests.rs` | old code: the test process dies |
 | `a_hung_host_process_is_ended_and_said` (`hang-at-50`) | same | watchdog stubbed: times out |
 | `renders_through_the_host_process_are_the_same_bits`: a probe song (notes, a lane, literals, the `sets-fz` tag) offline on both hosts; with-plugins too when `CLAP_PATH` has it | `core/play/tests/bit_identity.rs` | float-mode reset removed in the child |
-| `the_app_never_loads_plugin_code` (Linux fixture: no `.clap` in `/proc/self/maps` after rendering with-plugins) | `core/plugins/tests/remote.rs` | old code maps Surge XT |
+| `the_app_never_loads_plugin_code` (Linux fixture: no `.clap` in `/proc/self/maps` after Surge XT and Airwindows played) | `core/plugins/tests/no_plugin_code.rs` (built: a binary of its own, as the suite's in-process half loads every `.clap`) | old code maps Surge XT |
 | the allocation and lock trap over two probes on `Remote`, through an activation that moves both | `core/play/tests/no_alloc.rs` | a `Vec::push` in the slot copy |
 | `an_export_borrows_instances_in_the_host_process`, counted by `Owner::made` | `crates/server/src/graph/tests.rs` | export path forced to make new ones |
 
