@@ -154,6 +154,17 @@ fn handle(id: u64, req: Req, owner: &Owner) {
                 }),
             );
         })),
+        Req::Presets { found } => drop(std::thread::spawn(move || {
+            let r = InProcess.presets(&found);
+            reply(
+                id,
+                r.map(|offered| {
+                    move |w: &mut W| {
+                        w.offered(&offered);
+                    }
+                }),
+            );
+        })),
         Req::Create { found, state } => {
             let owner = owner.clone();
             drop(std::thread::spawn(move || {

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use m2_plugins::{
-    Blob, Event, Events, Found, HostEvent, InProcess, MainCall, Owner, PluginHost, Remote, RenderMode, Reply, SharedBuffers, Status,
-    Transport, probe,
+    Blob, Event, Events, Found, HostEvent, InProcess, MainCall, Offered, Owner, PluginHost, PresetAt, Remote, RenderMode, Reply,
+    SharedBuffers, Status, Transport, probe,
 };
 
 const SR: u32 = 48_000;
@@ -110,6 +110,46 @@ fn the_host_suite_passes_on_both_hosts() {
     assert_eq!(here, there, "the host process answers as the in-process host does, the probe's bits too");
     assert!(r.process_id().is_some(), "a host process ran it");
     assert_eq!(r.counts(), (1, 1));
+}
+
+// HOST-8: a plugin's own presets are found where it runs, through CLAP's preset discovery: the
+// probe's Bright and Dark, inside it. The same on both hosts.
+#[test]
+fn the_probe_offers_its_presets_on_both_hosts() {
+    setup();
+    let r = remote();
+    for host in [&InProcess as &dyn PluginHost, &r] {
+        let offered = host.presets(&the_probe(host)).unwrap();
+        let at = |name: &str, key: &str| Offered { name: name.into(), location: PresetAt::Plugin, key: Some(key.into()) };
+        assert_eq!(offered, [at("Bright", "bright"), at("Dark", "dark")]);
+    }
+    assert!(r.process_id().is_some(), "the host process found them");
+}
+
+// HOST-8: one of them loads on an instance made for it (CLAP's preset-load), whose saved state then
+// holds it; the instance is destroyed after, on both hosts.
+#[test]
+fn a_plugin_preset_loads_on_a_scratch_instance() {
+    setup();
+    let r = remote();
+    for host in [&InProcess as &dyn PluginHost, &r] {
+        let found = the_probe(host);
+        let dark = host.presets(&found).unwrap().into_iter().find(|o| o.name == "Dark").expect("Dark");
+        let (owner, _events) = Owner::new();
+        let (h, _) = host.create(&found, None, &owner).unwrap();
+        let loaded = host.main_call(h, MainCall::LoadPreset { location: dark.location, key: dark.key }).unwrap();
+        assert!(matches!(loaded, Reply::Loaded), "{loaded:?}");
+        let blob = host.save_state(h).recv().unwrap().unwrap();
+        assert_eq!(blob.bytes, probe::state_with("dark", 0.5, 0.05), "its state holds Dark");
+        let missing = host.main_call(h, MainCall::LoadPreset { location: PresetAt::Plugin, key: Some("none".into()) });
+        assert!(missing.is_err(), "a preset it doesn't have is refused: {missing:?}");
+        host.destroy(h);
+        let t = Instant::now();
+        while owner.live() > 0 && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!((owner.made(), owner.live()), (1, 0), "as many instances after as before");
+    }
 }
 
 /// Wait for `owner` to hear `n` events that `want` takes.

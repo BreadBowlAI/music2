@@ -30,6 +30,10 @@
 //! a probe applies the parameters of a state it loads at the end of its next `process` call, after
 //! that call's events, ending every voice, as Surge XT does. With [`Stats::reset_keeps_voices`]
 //! set, `reset` ends no voice, as Surge XT's doesn't.
+//!
+//! It offers two presets of its own through CLAP's preset discovery, inside the plugin (HOST-8):
+//! Bright and Dark. Its `preset-load` loads one as a state with its gain and level, tagged
+//! `bright` or `dark`.
 
 use std::ffi::{CStr, c_char, c_void};
 use std::path::{Path, PathBuf};
@@ -45,16 +49,19 @@ use clap_sys::ext::log::*;
 use clap_sys::ext::latency::*;
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
+use clap_sys::ext::preset_load::*;
 use clap_sys::ext::render::*;
 use clap_sys::ext::state::*;
 use clap_sys::ext::thread_check::*;
 use clap_sys::factory::plugin_factory::*;
+use clap_sys::factory::preset_discovery::*;
 use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
 use clap_sys::host::clap_host;
 use clap_sys::id::{CLAP_INVALID_ID, clap_id};
 use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
 use clap_sys::process::*;
 use clap_sys::stream::{clap_istream, clap_ostream};
+use clap_sys::universal_plugin_id::clap_universal_plugin_id;
 use clap_sys::version::CLAP_VERSION;
 
 use crate::{Handle, InProcess, Library};
@@ -102,7 +109,7 @@ pub(crate) fn is_bundle(p: &Path) -> bool {
 pub(crate) fn library() -> Arc<Library> {
     static L: OnceLock<Arc<Library>> = OnceLock::new();
     L.get_or_init(|| {
-        Arc::new(Library { _lib: None, _entry: &ENTRY, factory: &FACTORY as *const clap_plugin_factory, bundle: PathBuf::from(BUNDLE) })
+        Arc::new(Library { _lib: None, entry: &ENTRY, factory: &FACTORY as *const clap_plugin_factory, bundle: PathBuf::from(BUNDLE) })
     })
     .clone()
 }
@@ -447,7 +454,14 @@ unsafe extern "C" fn entry_init(_: *const c_char) -> bool {
 unsafe extern "C" fn entry_deinit() {}
 
 unsafe extern "C" fn get_factory(id: *const c_char) -> *const c_void {
-    if unsafe { CStr::from_ptr(id) } == CLAP_PLUGIN_FACTORY_ID { &FACTORY as *const _ as *const c_void } else { null() }
+    let id = unsafe { CStr::from_ptr(id) };
+    if id == CLAP_PLUGIN_FACTORY_ID {
+        &FACTORY as *const _ as *const c_void
+    } else if id == CLAP_PRESET_DISCOVERY_FACTORY_ID {
+        &PRESET_FACTORY as *const _ as *const c_void
+    } else {
+        null()
+    }
 }
 
 unsafe extern "C" fn plugin_count(_: *const clap_plugin_factory) -> u32 {
@@ -907,6 +921,8 @@ unsafe extern "C" fn get_extension(_: *const clap_plugin, id: *const c_char) -> 
         &RENDER as *const _ as *const c_void
     } else if id == CLAP_EXT_GUI {
         &GUI as *const _ as *const c_void
+    } else if id == CLAP_EXT_PRESET_LOAD {
+        &PRESET_LOAD as *const _ as *const c_void
     } else {
         null()
     }
@@ -1120,35 +1136,157 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
         }
         bytes.extend_from_slice(&buf[..n as usize]);
     }
-    if me.fails_state && bytes.starts_with(b"fail") {
+    me.take(&bytes)
+}
+
+impl Probe {
+    /// Take state `bytes` as its own: false when it refuses them.
+    fn take(&mut self, bytes: &[u8]) -> bool {
+        let me = self;
+        if me.fails_state && bytes.starts_with(b"fail") {
+            return false;
+        }
+        if bytes.starts_with(b"slow") {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        let tag = if bytes.starts_with(MAGIC) && bytes.len() >= MAGIC.len() + 16 {
+            let f = |at: usize| f64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"));
+            let (gain, level) = (f(MAGIC.len()), f(MAGIC.len() + 8));
+            if me.stats.defer_load.load(Ordering::Relaxed) {
+                let d = &me.stats.deferred;
+                d.1.store(gain.to_bits(), Ordering::Relaxed);
+                d.2.store(level.to_bits(), Ordering::Relaxed);
+                d.0.store(true, Ordering::Release);
+            } else {
+                (me.gain, me.level) = (gain, level);
+            }
+            String::from_utf8_lossy(&bytes[MAGIC.len() + 16..]).into_owned()
+        } else {
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        me.fails_process = tag.starts_with("fails-process");
+        me.sets_fz = tag.starts_with("sets-fz");
+        me.hangs_activate = tag.starts_with("hangs-activate");
+        me.stops_at = stops_at(&tag);
+        me.scripts = scripts(&tag);
+        (me.latency, me.relatency) = latencies(&tag);
+        *me.stats.tag.lock().unwrap_or_else(|e| e.into_inner()) = tag;
+        true
+    }
+}
+
+// ---------------------------------------------------------------- its own presets (HOST-8)
+
+/// The presets it offers itself, inside the plugin: name, load key, gain, level. Each loads as a
+/// state with that gain and level, tagged with its key.
+const PRESETS: [(&CStr, &CStr, f64, f64); 2] = [(c"Bright", c"bright", 1.5, 0.3), (c"Dark", c"dark", 0.5, 0.05)];
+
+static PRESET_FACTORY: clap_preset_discovery_factory =
+    clap_preset_discovery_factory { count: Some(provider_count), get_descriptor: Some(provider_descriptor), create: Some(provider_create) };
+
+struct Provider(clap_preset_discovery_provider_descriptor);
+// SAFETY: pointers to static strings.
+unsafe impl Sync for Provider {}
+
+static PROVIDER: Provider = Provider(clap_preset_discovery_provider_descriptor {
+    clap_version: CLAP_VERSION,
+    id: c"m2.probe.presets".as_ptr(),
+    name: c"m2 probe's presets".as_ptr(),
+    vendor: c"music2".as_ptr(),
+});
+
+unsafe extern "C" fn provider_count(_: *const clap_preset_discovery_factory) -> u32 {
+    1
+}
+
+unsafe extern "C" fn provider_descriptor(_: *const clap_preset_discovery_factory, i: u32) -> *const clap_preset_discovery_provider_descriptor {
+    if i == 0 { &PROVIDER.0 } else { null() }
+}
+
+/// A provider, and the indexer it declares its location to.
+#[repr(C)]
+struct Providing {
+    clap: clap_preset_discovery_provider,
+    indexer: *const clap_preset_discovery_indexer,
+}
+
+unsafe extern "C" fn provider_create(
+    _: *const clap_preset_discovery_factory,
+    indexer: *const clap_preset_discovery_indexer,
+    id: *const c_char,
+) -> *const clap_preset_discovery_provider {
+    if unsafe { CStr::from_ptr(id) } != c"m2.probe.presets" {
+        return null();
+    }
+    let p = Box::new(Providing {
+        clap: clap_preset_discovery_provider {
+            desc: &PROVIDER.0,
+            provider_data: std::ptr::null_mut(),
+            init: Some(provider_init),
+            destroy: Some(provider_destroy),
+            get_metadata: Some(provider_metadata),
+            get_extension: Some(provider_extension),
+        },
+        indexer,
+    });
+    &Box::leak(p).clap
+}
+
+unsafe extern "C" fn provider_init(p: *const clap_preset_discovery_provider) -> bool {
+    let me = unsafe { &*(p as *const Providing) };
+    let inside = clap_preset_discovery_location {
+        flags: CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT,
+        name: c"m2 probe".as_ptr(),
+        kind: CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN,
+        location: null(),
+    };
+    unsafe { (*me.indexer).declare_location }.is_some_and(|f| unsafe { f(me.indexer, &inside) })
+}
+
+unsafe extern "C" fn provider_destroy(p: *const clap_preset_discovery_provider) {
+    drop(unsafe { Box::from_raw(p as *mut Providing) });
+}
+
+unsafe extern "C" fn provider_metadata(
+    _: *const clap_preset_discovery_provider,
+    kind: clap_preset_discovery_location_kind,
+    _: *const c_char,
+    r: *const clap_preset_discovery_metadata_receiver,
+) -> bool {
+    if kind != CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN {
         return false;
     }
-    if bytes.starts_with(b"slow") {
-        std::thread::sleep(std::time::Duration::from_millis(300));
-    }
-    let tag = if bytes.starts_with(MAGIC) && bytes.len() >= MAGIC.len() + 16 {
-        let f = |at: usize| f64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"));
-        let (gain, level) = (f(MAGIC.len()), f(MAGIC.len() + 8));
-        if me.stats.defer_load.load(Ordering::Relaxed) {
-            let d = &me.stats.deferred;
-            d.1.store(gain.to_bits(), Ordering::Relaxed);
-            d.2.store(level.to_bits(), Ordering::Relaxed);
-            d.0.store(true, Ordering::Release);
-        } else {
-            (me.gain, me.level) = (gain, level);
+    let r_ = unsafe { &*r };
+    let id = clap_universal_plugin_id { abi: c"clap".as_ptr(), id: c"m2.probe".as_ptr() };
+    for (name, key, ..) in PRESETS {
+        if !r_.begin_preset.is_some_and(|f| unsafe { f(r, name.as_ptr(), key.as_ptr()) }) {
+            return true;
         }
-        String::from_utf8_lossy(&bytes[MAGIC.len() + 16..]).into_owned()
-    } else {
-        String::from_utf8_lossy(&bytes).into_owned()
-    };
-    me.fails_process = tag.starts_with("fails-process");
-    me.sets_fz = tag.starts_with("sets-fz");
-    me.hangs_activate = tag.starts_with("hangs-activate");
-    me.stops_at = stops_at(&tag);
-    me.scripts = scripts(&tag);
-    (me.latency, me.relatency) = latencies(&tag);
-    *me.stats.tag.lock().unwrap_or_else(|e| e.into_inner()) = tag;
+        if let Some(f) = r_.add_plugin_id {
+            unsafe { f(r, &id) };
+        }
+        if let Some(f) = r_.set_flags {
+            unsafe { f(r, CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT) };
+        }
+    }
     true
+}
+
+unsafe extern "C" fn provider_extension(_: *const clap_preset_discovery_provider, _: *const c_char) -> *const c_void {
+    null()
+}
+
+static PRESET_LOAD: clap_plugin_preset_load = clap_plugin_preset_load { from_location: Some(from_location) };
+
+unsafe extern "C" fn from_location(p: *const clap_plugin, kind: clap_preset_discovery_location_kind, _: *const c_char, key: *const c_char) -> bool {
+    let me = unsafe { probe(p) };
+    me.record("preset-load");
+    if kind != CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN || key.is_null() {
+        return false;
+    }
+    let key = unsafe { CStr::from_ptr(key) };
+    let Some(&(_, k, gain, level)) = PRESETS.iter().find(|x| x.1 == key) else { return false };
+    me.take(&state_with(&k.to_string_lossy(), gain, level))
 }
 
 /// What its window does by itself, as a person would (HOST-4), from its tag's words:
