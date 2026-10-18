@@ -1945,6 +1945,12 @@ const TrackRows = memo(function TrackRows({
         }}
       >
         {grid}
+        {/* A bus has no lanes to fill: it plays what tracks send it (RENDER-34). */}
+        {!lane && opts.first && track.bus && (
+          <div data-testid="bus-lane" className="sticky left-0 h-full w-fit px-3 flex items-center text-xs text-fg-faint pointer-events-none">
+            Plays what tracks send it. Set the sends in Mix ({opt("3")}).
+          </div>
+        )}
         {lane && (
           <div className={clsx("absolute inset-0", waiting ? "opacity-50 grayscale" : heard !== "heard" && "opacity-40 grayscale-60")}>
             <Hatched.Provider value={heard === "muted-in-song"}>
@@ -1977,6 +1983,7 @@ const TrackRows = memo(function TrackRows({
   return (
     <div
       data-track={module}
+      data-bus={track.bus || undefined}
       data-selected={selected || undefined}
       className={clsx("group relative", !last && "border-b border-line", dy !== null && "z-30 shadow-lift")}
       style={dy !== null ? { transform: `translateY(${dy}px)` } : undefined}

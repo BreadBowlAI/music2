@@ -78,6 +78,11 @@ export default function TrackHeader({
           listen="header"
           className={clsx("text-base", selected ? "font-semibold" : "font-medium", tone)}
         />
+        {track.bus && (
+          <span data-testid="bus-tag" className="shrink-0 px-1 rounded-xs bg-hover text-xs text-fg-muted" title="A bus: it plays what other tracks send it">
+            Bus
+          </span>
+        )}
         {issues && <Issues issues={issues} />}
       </div>
       {mine && (

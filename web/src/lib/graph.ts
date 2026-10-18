@@ -184,6 +184,8 @@ export interface TimelineTrack {
   module: string;
   label: string;
   track: boolean;
+  /** It is a bus (RENDER-34): no notes or audio lanes; it plays what the tracks send it. */
+  bus?: boolean;
   /** Its colour by palette name (taste.md §2.7), from `layout.json` or by its place; `graphite` for the song. */
   colour?: string;
   lanes: TimelineLane[];
@@ -368,7 +370,28 @@ export interface MixStrip {
   db_lane: LaneRef | null;
   /** The automation lane its pan follows. */
   pan_lane: LaneRef | null;
+  /** It is a bus's strip (RENDER-34): these come after the tracks'. */
+  bus: boolean;
+  /** Its sends to bus channels, as its entry writes them. */
+  sends: StripSend[];
+  /** The bus channel it goes to instead of the master; null for the master. */
+  output: string | null;
+  /** The bus channels it may send to or go to without a loop, by key. */
+  may_use: string[];
+  /** The bus channels it can't use, each with why in words: for a send, and for its output. */
+  loops: { bus: string; send: string; to: string }[];
 }
+
+/** A strip's send to a bus channel: its level's knob id (null when code sets it), before the fader or not, the lane its level follows. */
+export interface StripSend {
+  bus: string;
+  knob: string | null;
+  pre: boolean;
+  lane: LaneRef | null;
+}
+
+/** What the Add bus menu makes (RENDER-34). */
+export type BusKind = "reverb" | "delay" | "group";
 
 /** A lane, by its module's key and its own. */
 export interface LaneRef { module: string; lane: string }
@@ -711,6 +734,14 @@ export const graphApi = {
    */
   mixInsert: (session: number, channel: string, control: string, value: number, step: Step) =>
     edit(session, step, call<Edit & { control: string }>("/mix/insert", { session, channel, control, value })),
+  /** Add a bus (RENDER-34): its file, its import and its mixer channel, last in the layout. One undoable edit. */
+  mixBus: (session: number, kind: BusKind, label: string) =>
+    edit(session, { name: `adding the ${label} bus`, structural: true }, call<Edit & { module: string; label: string }>("/mix/bus", { session, kind })),
+  /** Add channel `channel`'s send to bus channel `bus`, remove it, or set it before the fader (`pre`) or after it. One undoable edit. */
+  mixSend: (session: number, channel: string, bus: string, action: "add" | "remove" | "pre", pre: boolean, step: Step) =>
+    edit(session, step, call<Edit>("/mix/send", { session, channel, bus, action, pre })),
+  /** Send channel `channel` to bus channel `to` instead of the master, or (null) back to the master. One undoable edit. */
+  mixRoute: (session: number, channel: string, to: string | null, step: Step) => edit(session, step, call<Edit>("/mix/route", { session, channel, to })),
   /** Duplicate a track: its code, clips (with new ids) and channel, below it in its colour. */
   duplicateTrack: (session: number, module: string, name: string) =>
     edit(

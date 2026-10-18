@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowLeftRight, CodeXml, Pencil, VolumeX } from "lucide-react";
+import { ArrowLeftRight, Check, CodeXml, Merge, Pencil, Plus, Spline, Trash2, VolumeX } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { beatNow, onFrame } from "../lib/clock";
 import {
@@ -14,10 +14,12 @@ import {
   parseValue,
   stepValue,
   toUnit,
+  type BusKind,
   type GraphState,
   type Knob as KnobInfo,
   type LaneRef,
   type MixStrip,
+  type StripSend,
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
 import { OUT } from "../lib/meters";
@@ -129,12 +131,14 @@ export default function Mix({ graph }: { graph: GraphState }) {
   // Every knob of the view, by id: a strip names its fader and pan by them.
   const knobs = useMemo(() => new Map(graph.view.modules.flatMap((m) => m.nodes.flatMap((n) => n.knobs.map((k) => [k.id, k] as const)))), [graph.view.modules]);
   const mix = graph.mix;
+  // The bus channels, in the mixer's order: each strip has a row for each (RENDER-34).
+  const buses = useMemo(() => mix.strips.flatMap((s) => (s.bus && s.channel ? [{ key: s.channel, label: s.label }] : [])), [mix.strips]);
   if (!graph.view.modules.length) return <Empty>Nothing to mix until the code compiles.</Empty>;
   if (mix.mixer !== "ok") return <Empty at={null}>{mix.message}</Empty>;
   // Where the mixer is written: any strip's fader or pan says.
   const mixer = placeOf(mix.strips.map((s) => knobs.get(s.db ?? "") ?? knobs.get(s.pan ?? "")).find(Boolean));
   const master = mix.master?.db ? knobs.get(mix.master.db) : undefined;
-  const props = { knobs, session: graph.session, revision: graph.view.revision, locked, mixer };
+  const props = { knobs, session: graph.session, revision: graph.view.revision, locked, mixer, buses };
   return (
     <div data-testid="mix" className="flex-1 min-h-0 flex bg-canvas">
       {/* The strips scroll sideways when they don't fit; Master stays (taste.md §3.5). */}
@@ -142,6 +146,7 @@ export default function Mix({ graph }: { graph: GraphState }) {
         {mix.strips.map((s) => (
           <Strip key={s.channel ? `channel:${s.channel}` : `track:${s.modules[0]}`} strip={s} selected={!!selected && s.modules.includes(selected)} {...props} />
         ))}
+        <AddBus session={graph.session} locked={locked} />
       </div>
       {mix.master && <MasterStrip knob={master} lane={mix.master.db_lane} {...props} />}
     </div>
@@ -156,13 +161,24 @@ interface StripProps {
   locked: string | null;
   /** Where the mixer is written. */
   mixer: { file: string; line: number } | null;
+  /** The bus channels, in the mixer's order: a strip has a send row for each. */
+  buses: Bus[];
 }
+
+/** A bus channel, by its key, and what it is called. */
+interface Bus {
+  key: string;
+  label: string;
+}
+
+/** A send row's height: a strip has one for each bus. */
+const SEND_H = 20;
 
 /**
  * One strip: 76 px, its colour, name, pan, M and S, and its fader with its level and its meter. A
  * channel no track reaches has no M, S or meter.
  */
-const Strip = memo(function Strip({ strip, selected, knobs, session, revision, locked, mixer }: StripProps & { strip: MixStrip; selected: boolean }) {
+const Strip = memo(function Strip({ strip, selected, knobs, session, revision, locked, mixer, buses }: StripProps & { strip: MixStrip; selected: boolean }) {
   const one = strip.modules.length === 1 ? strip.modules[0] : null;
   const tracks = strip.modules.length > 0;
   const db = strip.db ? (knobs.get(strip.db) ?? null) : null;
@@ -176,8 +192,10 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
     <div
       data-strip={strip.channel ?? one ?? ""}
       data-selected={selected || undefined}
-      aria-label={strip.label}
-      className={clsx("w-[76px] shrink-0 flex flex-col border-r border-line", selected && "bg-accent-wash")}
+      data-bus={strip.bus || undefined}
+      aria-label={strip.bus ? `${strip.label} bus` : strip.label}
+      title={strip.bus ? `${strip.label} is a bus: it plays what other tracks send it.` : undefined}
+      className={clsx("w-[76px] shrink-0 flex flex-col border-r border-line", selected ? "bg-accent-wash" : strip.bus && "bg-chrome")}
       // Pressing a strip selects its track; the dock stays on Mix (taste.md §3.7).
       onPointerDownCapture={(e) => e.button === 0 && strip.modules.length > 0 && useShell.getState().select(strip.modules[0])}
       onContextMenu={(e) => {
@@ -186,7 +204,8 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
       }}
     >
       <div className="h-[3px] shrink-0" style={{ background: tones(strip.colour).bar }} />
-      <div ref={name} className="h-5 shrink-0 px-1.5 flex items-center justify-center min-w-0">
+      <div ref={name} className="h-5 shrink-0 px-1.5 flex items-center justify-center gap-1 min-w-0">
+        {strip.bus && <BusTag />}
         {one ? (
           <TrackName
             module={one}
@@ -212,6 +231,26 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
       <div data-slot="mute-solo" className="h-6 shrink-0 flex items-center justify-center">
         {tracks && <StripMuteSolo modules={strip.modules} name={strip.label} onSongMenu={() => setMenu(true)} />}
       </div>
+      <div data-slot="sends" className="shrink-0 flex flex-col" style={{ height: buses.length * SEND_H }}>
+        {strip.channel &&
+          buses.map((b) =>
+            b.key === strip.channel ? (
+              <div key={b.key} style={{ height: SEND_H }} />
+            ) : (
+              <SendRow
+                key={b.key}
+                strip={strip}
+                bus={b}
+                send={strip.sends.find((x) => x.bus === b.key) ?? null}
+                knobs={knobs}
+                session={session}
+                revision={revision}
+                locked={locked}
+                at={at}
+              />
+            ),
+          )}
+      </div>
       {db ? (
         <Fader knob={db} name={strip.label} session={session} revision={revision} editable={editable} locked={locked} meter={meter} />
       ) : strip.db_lane ? (
@@ -219,15 +258,18 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
       ) : (
         <NoFader why={strip.why ?? "Its level is set in code"} at={at} meter={meter} />
       )}
+      <div className="h-6 shrink-0 px-1.5 flex items-center justify-center">
+        {strip.channel && <Output strip={strip} buses={buses} session={session} locked={locked} />}
+      </div>
       {menu && name.current && (
-        <StripMenu name={strip.label} module={one} modules={strip.modules} anchor={name.current} at={at} locked={locked} onClose={() => setMenu(false)} />
+        <StripMenu name={strip.label} module={one} bus={strip.bus} modules={strip.modules} anchor={name.current} at={at} locked={locked} onClose={() => setMenu(false)} />
       )}
     </div>
   );
 });
 
 /** Master (MX-5): 96 px, graphite, pinned right after a 12 px gap; no pan, M or S (MON-1). */
-function MasterStrip({ knob, lane, session, revision, locked, mixer }: StripProps & { knob: KnobInfo | undefined; lane: LaneRef | null }) {
+function MasterStrip({ knob, lane, session, revision, locked, mixer, buses }: StripProps & { knob: KnobInfo | undefined; lane: LaneRef | null }) {
   const name = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState(false);
   const at = placeOf(knob) ?? mixer;
@@ -248,6 +290,7 @@ function MasterStrip({ knob, lane, session, revision, locked, mixer }: StripProp
       </div>
       <div className="h-[46px] shrink-0" />
       <div className="h-6 shrink-0" />
+      <div className="shrink-0" style={{ height: buses.length * SEND_H }} />
       {knob ? (
         <Fader knob={knob} name="Master" session={session} revision={revision} editable={!locked} locked={locked} meter={meter} />
       ) : lane ? (
@@ -255,7 +298,8 @@ function MasterStrip({ knob, lane, session, revision, locked, mixer }: StripProp
       ) : (
         <NoFader why="Its level is set in code" at={at} meter={meter} />
       )}
-      {menu && name.current && <StripMenu name="Master" module={null} modules={[]} anchor={name.current} at={at} locked={locked} onClose={() => setMenu(false)} />}
+      <div className="h-6 shrink-0" />
+      {menu && name.current && <StripMenu name="Master" module={null} bus={false} modules={[]} anchor={name.current} at={at} locked={locked} onClose={() => setMenu(false)} />}
     </div>
   );
 }
@@ -500,6 +544,7 @@ async function muteStripInSong(name: string, modules: string[], muted: boolean) 
 function StripMenu({
   name,
   module,
+  bus,
   modules,
   anchor,
   at,
@@ -509,6 +554,8 @@ function StripMenu({
   name: string;
   /** The track it is, when it is one track's. */
   module: string | null;
+  /** It is a bus's strip: it has no instrument to change. */
+  bus: boolean;
   /** The tracks it plays: none for Master and a channel no track reaches. */
   modules: string[];
   anchor: HTMLElement;
@@ -549,15 +596,17 @@ function StripMenu({
           <MenuRow icon={<Pencil size={14} />} disabled={!!locked} title={locked ?? undefined} onClick={run(() => useShell.getState().set({ renaming: { module, at: "strip" } }))}>
             Rename
           </MenuRow>
-          <MenuRow
-            icon={<ArrowLeftRight size={14} />}
-            disabled={!!locked}
-            title={locked ?? undefined}
-            data-testid="change-instrument"
-            onClick={run(() => openChangeInstrument(module, anchor))}
-          >
-            Change instrument…
-          </MenuRow>
+          {!bus && (
+            <MenuRow
+              icon={<ArrowLeftRight size={14} />}
+              disabled={!!locked}
+              title={locked ?? undefined}
+              data-testid="change-instrument"
+              onClick={run(() => openChangeInstrument(module, anchor))}
+            >
+              Change instrument…
+            </MenuRow>
+          )}
           <MenuRow
             icon={<span className="block size-3.5 rounded-xs" style={{ background: tones(current).bar }} />}
             disabled={!!locked}
@@ -1094,5 +1143,325 @@ function Pan({
         />
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- buses (RENDER-34)
+
+/** A bus strip's mark, before its name: tracks merge into it. Read as "Bus". */
+function BusTag() {
+  return (
+    <span data-testid="bus-tag" className="shrink-0 inline-flex text-fg-muted" title="A bus: it plays what other tracks send it">
+      <Merge size={12} aria-hidden />
+      <span className="sr-only">Bus</span>
+    </span>
+  );
+}
+
+/** What the Add bus menu makes, and what each is for, in words. */
+const BUS_KINDS: { kind: BusKind; label: string; detail: string }[] = [
+  { kind: "reverb", label: "Reverb", detail: "A shared room. Turn up a track's Reverb knob to send it there." },
+  { kind: "delay", label: "Delay", detail: "Shared echoes. Turn up a track's Delay knob to send it there." },
+  { kind: "group", label: "Group", detail: "One fader for several tracks. Set a track's output to it." },
+];
+
+/** After the strips: Add bus, and its menu (Reverb, Delay, Group). One undo step; a toast says what to do next. */
+function AddBus({ session, locked }: { session: number; locked: string | null }) {
+  const toast = useStore((s) => s.toast);
+  const [menu, setMenu] = useState<HTMLElement | null>(null);
+  const add = (k: (typeof BUS_KINDS)[number]) => {
+    setMenu(null);
+    graphApi
+      .mixBus(session, k.kind, k.label)
+      .then((r) => {
+        const next = k.kind === "group" ? "Set a track's output to it." : `Turn up a track's ${r.label} knob to send to it.`;
+        toast(`Added the ${r.label} bus. ${next}`, undoAction(session, r.revision));
+      })
+      .catch((error) => toast(message(error)));
+  };
+  return (
+    <div className="w-[76px] shrink-0 flex flex-col items-center pt-1">
+      <button
+        data-testid="add-bus"
+        disabled={!!locked}
+        aria-haspopup="menu"
+        aria-expanded={!!menu}
+        title={locked ? `${locked}.` : "Add a bus: a shared reverb, a delay, or a group"}
+        onClick={(e) => setMenu(menu ? null : e.currentTarget)}
+        className="h-5 px-1.5 rounded-sm inline-flex items-center gap-1 text-xs font-medium text-fg-muted enabled:hover:text-fg enabled:hover:bg-hover disabled:text-fg-off cursor-pointer disabled:cursor-default"
+      >
+        <Plus size={12} />
+        Add bus
+      </button>
+      {menu && (
+        <Popover anchor={menu} onClose={() => setMenu(null)} role="menu" aria-label="Add bus" data-testid="add-bus-menu" className="w-[280px]">
+          {BUS_KINDS.map((k) => (
+            <MenuRow key={k.kind} data-bus-kind={k.kind} detail={k.detail} onClick={() => add(k)}>
+              {k.label}
+            </MenuRow>
+          ))}
+        </Popover>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A strip's row for one bus: its send's knob when it has one (a dot on it when the send is before
+ * the fader), else a + that adds one, at −12 dB after the fader. A + that would make a loop is
+ * greyed and says why. A send whose level code sets reads "—".
+ */
+function SendRow({
+  strip,
+  bus,
+  send,
+  knobs,
+  session,
+  revision,
+  locked,
+  at,
+}: {
+  strip: MixStrip;
+  bus: Bus;
+  send: StripSend | null;
+  knobs: Map<string, KnobInfo>;
+  session: number;
+  revision: number;
+  locked: string | null;
+  at: { file: string; line: number } | null;
+}) {
+  const toast = useStore((s) => s.toast);
+  const loop = strip.loops.find((l) => l.bus === bus.key);
+  const name = `${strip.label} send to ${bus.label}`;
+  const knob = send?.knob ? (knobs.get(send.knob) ?? null) : null;
+  const add = () =>
+    graphApi.mixSend(session, strip.channel!, bus.key, "add", false, { name: `adding ${name}`, structural: true }).catch((error) => toast(message(error)));
+  return (
+    <div
+      data-send={bus.key}
+      data-state={send ? "on" : loop ? "loop" : "off"}
+      data-pre={send?.pre || undefined}
+      title={!send && loop ? loop.send : undefined}
+      className="shrink-0 px-1.5 flex items-center gap-1 min-w-0"
+      style={{ height: SEND_H }}
+    >
+      {send && knob ? (
+        <SendKnob knob={knob} name={name} send={send} strip={strip} bus={bus} session={session} revision={revision} locked={locked} at={at} />
+      ) : send ? (
+        <span className="w-4 shrink-0 text-center text-xs text-fg-faint" title={send.lane ? "Its level follows a lane" : "Its level is set in code"}>
+          —
+        </span>
+      ) : (
+        <button
+          data-send-add
+          disabled={!!locked || !!loop}
+          aria-disabled={!!locked || !!loop || undefined}
+          aria-label={`Send ${strip.label} to ${bus.label}`}
+          title={loop ? loop.send : locked ? `${locked}.` : `Send ${strip.label} to ${bus.label}: −12 dB, after its fader`}
+          onClick={add}
+          className="size-4 shrink-0 grid place-items-center rounded-xs text-fg-muted enabled:hover:text-fg enabled:hover:bg-hover disabled:text-fg-off cursor-pointer disabled:cursor-default"
+        >
+          <Plus size={12} />
+        </button>
+      )}
+      <span className={clsx("min-w-0 truncate text-xs", send ? "text-fg-muted" : "text-fg-faint")}>{bus.label}</span>
+    </div>
+  );
+}
+
+/**
+ * A send's level: a 16 px knob, heard while it turns and written once let go, one undo step, as a
+ * fader is. Right-click: Before the fader, Automate, Remove send, Edit in code.
+ */
+function SendKnob({
+  knob,
+  name,
+  send,
+  strip,
+  bus,
+  session,
+  revision,
+  locked,
+  at,
+}: {
+  knob: KnobInfo;
+  name: string;
+  send: StripSend;
+  strip: MixStrip;
+  bus: Bus;
+  session: number;
+  revision: number;
+  locked: string | null;
+  at: { file: string; line: number } | null;
+}) {
+  const toast = useStore((s) => s.toast);
+  const editable = !locked;
+  const g = useKnobGesture({ session, revision, knob, editable, name, label: name });
+  const k = g.descriptor;
+  const value = g.value;
+  const svg = useRef<SVGSVGElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState(false);
+  const disabled = (!editable && !g.dragging()) || g.saving;
+  const clamp = (u: number) => Math.min(1, Math.max(0, u));
+  const unit = clamp(toUnit(k, value));
+  const reset = clamp(toUnit(k, k.default ?? value));
+  const grip = useKnobDrag({
+    value: unit,
+    reset,
+    disabled,
+    onStart: () => g.start(),
+    onChange: (u) => g.change(fromUnit(k, u)),
+    onEnd: () => g.end(),
+    onCancel: () => g.abandon(),
+    focus: () => svg.current?.focus({ preventScroll: true }),
+  });
+  const send_ = (action: "remove" | "pre", pre: boolean, step: string) => {
+    setMenu(false);
+    graphApi.mixSend(session, strip.channel!, bus.key, action, pre, { name: step, structural: true }).catch((error) => toast(message(error)));
+  };
+  const where = send.pre ? `before ${strip.label}'s fader` : `after ${strip.label}'s fader`;
+  return (
+    <div
+      ref={root}
+      data-knob={k.label}
+      data-knob-id={editable ? knob.id : undefined}
+      data-value={value}
+      aria-disabled={disabled}
+      title={!editable ? `${locked}.` : `${name}, ${display(k, value)}, ${where}\nDrag (${mod.shift} for fine) · scroll · right-click for more`}
+      {...grip.handlers}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!g.dragging()) setMenu(true);
+      }}
+      className={clsx("relative shrink-0", !disabled && "cursor-ns-resize touch-none")}
+    >
+      <div inert={!editable && !g.dragging()} className={clsx(disabled && "pointer-events-none")}>
+        <MiniKnob
+          value={unit}
+          bipolar={false}
+          size={16}
+          vertical
+          disabled={disabled}
+          readout={display(k, value)}
+          label={name}
+          reset={reset}
+          svg={svg}
+          pointer={grip.pointer}
+          onChange={(u) => g.change(fromUnit(k, u))}
+          onStep={(n) => g.step((v, d) => fromUnit(d, clamp(toUnit(d, stepValue(d, v, n)))))}
+          onType={() => setMenu(true)}
+        />
+      </div>
+      {send.pre && <span data-testid="pre-dot" className="absolute -top-px -right-px size-[5px] rounded-full bg-fg-strong" title="Before the fader" />}
+      {menu && root.current && (
+        <Popover anchor={root.current} onClose={() => setMenu(false)} role="menu" aria-label={`${name} menu`} data-testid="send-menu" className="w-[260px]">
+          <div className="h-ctl px-2 flex items-center gap-2">
+            <span className="text-sm font-semibold text-fg truncate">{name}</span>
+            <span className="ml-auto shrink-0 text-xs text-fg-muted">{display(k, value)}</span>
+          </div>
+          <div role="separator" className="my-1 h-px bg-line" />
+          <MenuRow
+            role="menuitemcheckbox"
+            aria-checked={send.pre}
+            data-menu-item="pre"
+            icon={send.pre ? <Check size={14} className="text-fg" /> : <span className="block size-3.5" />}
+            disabled={!!locked}
+            title={locked ?? undefined}
+            detail={send.pre ? `${strip.label}'s fader doesn't change it` : `Now ${strip.label}'s fader turns it down too`}
+            onClick={() => send_("pre", !send.pre, `${name} ${send.pre ? "after" : "before"} the fader`)}
+          >
+            Before the fader
+          </MenuRow>
+          <MenuRow
+            icon={<Spline size={14} />}
+            data-menu-item="automate"
+            disabled={!!locked || !!knob.automate_refused}
+            title={locked ?? knob.automate_refused ?? undefined}
+            onClick={() => {
+              setMenu(false);
+              automate(session, revision, knob);
+            }}
+          >
+            Automate
+          </MenuRow>
+          <MenuRow icon={<Trash2 size={14} />} data-menu-item="remove" disabled={!!locked} title={locked ?? undefined} onClick={() => send_("remove", false, `removing ${name}`)}>
+            Remove send
+          </MenuRow>
+          <div role="separator" className="my-1 h-px bg-line" />
+          <MenuRow
+            icon={<CodeXml size={14} />}
+            detail={at ? <span data-code className="font-mono">{at.file}:{at.line}</span> : undefined}
+            onClick={() => {
+              setMenu(false);
+              editInCode(at);
+            }}
+          >
+            Edit in code
+          </MenuRow>
+        </Popover>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Where a strip's sound goes, under its fader: Master, or a bus. A choice that would make a loop is
+ * greyed and says why. One undo step.
+ */
+function Output({ strip, buses, session, locked }: { strip: MixStrip; buses: Bus[]; session: number; locked: string | null }) {
+  const toast = useStore((s) => s.toast);
+  const [menu, setMenu] = useState<HTMLElement | null>(null);
+  const named = (key: string | null) => (key ? (buses.find((b) => b.key === key)?.label ?? key) : "Master");
+  const here = named(strip.output);
+  const choose = (key: string | null) => {
+    setMenu(null);
+    if (key === strip.output) return;
+    graphApi.mixRoute(session, strip.channel!, key, { name: `${strip.label} to ${named(key)}`, structural: true }).catch((error) => toast(message(error)));
+  };
+  const tick = (on: boolean) => (on ? <Check size={14} className="text-fg" /> : <span className="block size-3.5" />);
+  return (
+    <>
+      <button
+        data-testid="strip-output"
+        aria-haspopup="menu"
+        aria-expanded={!!menu}
+        aria-label={`${strip.label} goes to ${here}`}
+        title={`${strip.label} goes to ${here}. Click to change where it goes`}
+        onClick={(e) => setMenu(menu ? null : e.currentTarget)}
+        className="max-w-full h-5 px-1.5 rounded-sm truncate text-xs text-fg-muted hover:text-fg hover:bg-hover cursor-pointer"
+      >
+        {here}
+      </button>
+      {menu && (
+        <Popover anchor={menu} onClose={() => setMenu(null)} role="menu" aria-label={`Where ${strip.label} goes`} data-testid="output-menu" className="w-[280px]">
+          <MenuRow role="menuitemradio" aria-checked={!strip.output} data-output="master" icon={tick(!strip.output)} disabled={!!locked} onClick={() => choose(null)}>
+            Master
+          </MenuRow>
+          {buses
+            .filter((b) => b.key !== strip.channel)
+            .map((b) => {
+              const loop = strip.loops.find((l) => l.bus === b.key);
+              return (
+                <MenuRow
+                  key={b.key}
+                  role="menuitemradio"
+                  aria-checked={strip.output === b.key}
+                  aria-disabled={!!loop || undefined}
+                  data-output={b.key}
+                  icon={tick(strip.output === b.key)}
+                  disabled={!!locked || !!loop}
+                  title={loop?.to}
+                  detail={loop?.to}
+                  onClick={() => choose(b.key)}
+                >
+                  {b.label}
+                </MenuRow>
+              );
+            })}
+        </Popover>
+      )}
+    </>
   );
 }

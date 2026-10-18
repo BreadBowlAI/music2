@@ -185,17 +185,18 @@ check(await songIs(entry("kick: kick.out,", "kick: { in: kick.out, db: db(-96) }
 await undo();
 await undo();
 await songIs(orig.song);
-// Tab: in a strip, its pan, its M and S, then its fader, then the next strip's pan.
+// Tab: in a strip, its pan, its M and S, then its fader and its output (RENDER-34), then the next strip's pan.
 await page.$eval(`${pan("kick")} svg`, (e) => e.focus());
 const focused = [];
-for (let i = 0; i < 4; i++) {
+for (let i = 0; i < 5; i++) {
   await key("Tab");
   focused.push(await page.evaluate(() => {
     const e = document.activeElement;
-    return `${e?.closest("[data-strip]")?.dataset.strip}:${e?.dataset.stripMute ? "M" : e?.dataset.stripSolo ? "S" : e?.closest("[data-knob]")?.dataset.knob}`;
+    const what = e?.dataset.stripMute ? "M" : e?.dataset.stripSolo ? "S" : e?.dataset.testid === "strip-output" ? "output" : e?.closest("[data-knob]")?.dataset.knob;
+    return `${e?.closest("[data-strip]")?.dataset.strip}:${what}`;
   }));
 }
-check(same(focused, ["kick:M", "kick:S", "kick:kick.db", "hats:hats.pan"]), `Tab goes from Kick's pan to its M, S and fader, then to Hats' pan: ${focused}`);
+check(same(focused, ["kick:M", "kick:S", "kick:kick.db", "kick:output", "hats:hats.pan"]), `Tab goes from Kick's pan to its M, S, fader and output, then to Hats' pan: ${focused}`);
 
 // ---------------------------------------------------------------- the first pan (design-8b §5.3)
 

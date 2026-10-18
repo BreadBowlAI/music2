@@ -126,6 +126,7 @@ export const SUITES = [
   ["nx-click", "fix", { expect: 20 }],
   ["s8-mix", "fix", { expect: 80 }],
   ["pl-mix", "fix", { expect: 47 }],
+  ["bus-mix", "fix", { expect: 37 }],
   ["pl-sounds", "fix", { expect: 46 }],
   ["pl-ids", "fix", { expect: 39 }],
   ["pc-keys", "fix", { expect: 37 }],

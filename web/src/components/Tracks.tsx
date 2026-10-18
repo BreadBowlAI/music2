@@ -501,15 +501,18 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
       >
         Rename
       </MenuRow>
-      <MenuRow
-        icon={<ArrowLeftRight size={14} />}
-        disabled={!!locked}
-        title={locked ?? undefined}
-        data-testid="change-instrument"
-        onClick={() => openChangeInstrument(module, anchor)}
-      >
-        Change instrument…
-      </MenuRow>
+      {/* A bus plays what it is sent: it has no instrument (RENDER-34). */}
+      {!track?.bus && (
+        <MenuRow
+          icon={<ArrowLeftRight size={14} />}
+          disabled={!!locked}
+          title={locked ?? undefined}
+          data-testid="change-instrument"
+          onClick={() => openChangeInstrument(module, anchor)}
+        >
+          Change instrument…
+        </MenuRow>
+      )}
       <MenuRow icon={<Copy size={14} />} shortcut={chord("D")} disabled={!!locked} onClick={run(() => void duplicateTrack(module))}>
         Duplicate
       </MenuRow>
