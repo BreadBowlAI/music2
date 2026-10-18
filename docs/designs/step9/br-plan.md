@@ -183,6 +183,7 @@ A folder name is the id with every character outside `A–Z a–z 0–9 . _ -` t
 | No "dirty within three calls after a load is ignored" | Not needed: the probe's save after a load equals the file, so autosave writes nothing (`loading_a_plugin_preset_is_one_undo_step`). Listed in the contract as the condition |
 | The plugin card is found by the call's one plugin node, whatever frames are around it | A helper with two plugins in one call is refused ("isn't a sound whose settings can be saved") |
 | `data::plugin_state`'s writes are shared (`data::state_writes`) | The load writes the same two files |
+| A plugin's own presets are searched on the calling thread, not the main thread (set by the review) | CLAP's discovery factory is thread-safe; a long search on the main thread froze plugin windows and held up autosave. Loading one stays on the main thread |
 | A new server test, `the_plugins_own_preset_loads_on_a_scratch_instance` | Covers the list, the scratch instance (made, then destroyed, by the probe's records) and the Tx |
 
 Surge XT on Xvfb `:95`, by hand: it offers 1,974 presets through discovery, listed in about 0.5 s; one of them (Attacky) loads in about 0.1 s, and its saved state names it; a preset of yours (67 KB) saves and loads back. Picture and logs: `~/m2-runs/app-shots/br-3/`.
