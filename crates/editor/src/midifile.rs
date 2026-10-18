@@ -17,9 +17,9 @@ use m2_script::component::PortKind;
 use m2_session::{Revision, Session};
 use m2_song::{Arrangement, Meter, Note, NoteClip, Tempo};
 
+use crate::EditError;
 use crate::smf::{self, Event, Smf, SmfNote, SmfTrack};
 use crate::timeline::{self, TimelineLane};
-use crate::EditError;
 
 /// Ticks a beat in the files music2 writes.
 pub const TICKS: u16 = 960;
@@ -74,7 +74,9 @@ pub fn sound_for(drums: bool, program: Option<u8>, average_pitch: f64) -> &'stat
         return DRUM_KIT;
     }
     match program {
-        Some(p) => SOUNDS.iter().find(|s| s.picked_by.iter().any(|&(lo, hi)| (lo..=hi).contains(&p))).map_or("std:fm-keys", |s| s.component),
+        Some(p) => {
+            SOUNDS.iter().find(|s| s.picked_by.iter().any(|&(lo, hi)| (lo..=hi).contains(&p))).map_or("std:fm-keys", |s| s.component)
+        }
         None if average_pitch < 48.0 => "std:synth-bass",
         None => "std:fm-keys",
     }
@@ -459,22 +461,62 @@ pub struct Asks {
     pub song_bpm: f64,
 }
 
-/// What a MIDI import writes into `data/arrangement.json` (Q35): into an empty song (no lane has
-/// a clip), the file's tempo map and time signatures; else nothing when the tempos are the same or
-/// the answer is Keep, the file's tempo map (the song's time signatures kept) when it is Use, and
-/// the question when there is no answer yet.
-pub fn tempo_plan(song_empty: bool, song: &Arrangement, file: &Arrangement, choice: Option<TempoChoice>) -> Result<Option<Arrangement>, Asks> {
+/// What a MIDI import from beat `at` writes into `data/arrangement.json` (Q35): into an empty song
+/// (no lane has a clip), the file's tempo map and time signatures from `at` on; else nothing when
+/// the tempos are the same or the answer is Keep, the file's tempo map from `at` on (the song's
+/// time signatures kept) when it is Use, and the question when there is no answer yet. Before
+/// `at`, the song's tempo stays.
+pub fn tempo_plan(
+    song_empty: bool,
+    song: &Arrangement,
+    file: &Arrangement,
+    at: f64,
+    choice: Option<TempoChoice>,
+) -> Result<Option<Arrangement>, Asks> {
+    let moved = from_beat(song, file, at, song_empty);
     if song_empty {
-        return Ok((song != file).then(|| file.clone()));
+        return Ok((moved != *song).then_some(moved));
     }
-    if song.tempo == file.tempo {
+    if moved.tempo == song.tempo {
         return Ok(None);
     }
     match choice {
-        None => Err(Asks { file_bpm: file.tempo[0].bpm, song_bpm: song.tempo[0].bpm }),
+        None => Err(Asks { file_bpm: file.tempo[0].bpm, song_bpm: song.tempo_map().bpm_at(at) }),
         Some(TempoChoice::Keep) => Ok(None),
-        Some(TempoChoice::Use) => Ok(Some(Arrangement { tempo: file.tempo.clone(), meter: song.meter.clone() })),
+        Some(TempoChoice::Use) => Ok(Some(moved)),
     }
+}
+
+/// The song's tempo map before beat `at` and the file's from it on; with `meters`, the file's time
+/// signatures from `at` too (when `at` is on one of the song's bar lines), else the song's.
+fn from_beat(song: &Arrangement, file: &Arrangement, at: f64, meters: bool) -> Arrangement {
+    let mut tempo: Vec<Tempo> = song.tempo.iter().filter(|t| t.beat < at).copied().collect();
+    for t in &file.tempo {
+        if tempo.last().is_none_or(|l| l.bpm != t.bpm) {
+            tempo.push(Tempo { beat: t.beat + at, bpm: t.bpm });
+        }
+    }
+    let on_line = song.bar_at(at).1.abs() < 1e-9;
+    if !meters || !on_line {
+        return Arrangement { tempo, meter: song.meter.clone() };
+    }
+    let mut meter: Vec<Meter> = song.meter.iter().filter(|m| m.beat < at).copied().collect();
+    let theirs = if file.meter.is_empty() { vec![Meter::COMMON] } else { file.meter.clone() };
+    for m in theirs {
+        let m = Meter { beat: m.beat + at, ..m };
+        let before = meter.last().copied().unwrap_or(Meter::COMMON);
+        if (before.beats, before.unit) == (m.beats, m.unit) {
+            continue;
+        }
+        if meter.is_empty() && m.beat > 0.0 {
+            meter.push(Meter::COMMON);
+        }
+        meter.push(m);
+    }
+    if meter == [Meter::COMMON] {
+        meter.clear();
+    }
+    Arrangement { tempo, meter }
 }
 
 /// The sounds' labels, as + Track lists them, by component.
@@ -487,7 +529,14 @@ fn labels(s: &Session) -> impl Fn(&str) -> String + use<> {
 /// one clip from `at` to the bar line after its last note, by the song's tempo and time signatures
 /// (its notes go by beats; no question). One `Clips` Tx, one undo step. Refused in words when the
 /// file has more than one part, or the lane isn't a notes lane.
-pub fn import_into(s: &mut Session, file: &Smf, name: &str, module: &str, lane: &str, at: f64) -> Result<crate::clips::ClipsEdited, EditError> {
+pub fn import_into(
+    s: &mut Session,
+    file: &Smf,
+    name: &str,
+    module: &str,
+    lane: &str,
+    at: f64,
+) -> Result<crate::clips::ClipsEdited, EditError> {
     if !(at >= 0.0 && at.is_finite()) {
         return Err(EditError::Rejected(format!("can't bring {name} in at beat {at}")));
     }
@@ -505,9 +554,85 @@ pub fn import_into(s: &mut Session, file: &Smf, name: &str, module: &str, lane: 
     };
     let length = clip_length(&s.accepted().project.arrangement, at, part.end());
     let clip = NoteClip { id: None, other_id: None, start: at, length, notes: part.notes.clone() };
-    let lane = m2_song::LaneAddr { module: m2_song::Key::new(module).map_err(EditError::Rejected)?, lane: m2_song::Key::new(lane).map_err(EditError::Rejected)? };
+    let lane = m2_song::LaneAddr {
+        module: m2_song::Key::new(module).map_err(EditError::Rejected)?,
+        lane: m2_song::Key::new(lane).map_err(EditError::Rejected)?,
+    };
     let put = serde_json::to_value(&clip).map_err(|e| EditError::Io(e.to_string()))?;
     crate::clips::edit(s, &crate::clips::Gesture::Set { lane, put: vec![put], delete: vec![] })
+}
+
+/// Where a MIDI file's new tracks go (Q36): after track `after` (else at the end), their clips
+/// from beat `at`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Place {
+    pub after: Option<String>,
+    pub at: f64,
+}
+
+/// New tracks a MIDI file made: the edit, each track's key and name, and their clips (to select).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TracksMade {
+    pub edited: crate::Edited,
+    pub tracks: Vec<(String, String)>,
+    pub made: Vec<(m2_song::LaneAddr, String)>,
+}
+
+/// What [`import_tracks`] did: asked the tempo question (nothing written), or made the tracks.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Imported {
+    Asks(Asks),
+    Tracks(TracksMade),
+}
+
+/// Bring a MIDI file in as new tracks at `place` (Q32 to Q36, D10): [`bring`], then
+/// [`tempo_plan`] from the place's beat; each part a notes track playing its sound, with one clip
+/// from that beat to the bar line after its last note; all of it one `tracks::add_tracks` Tx, one
+/// undo step, the tempo in it. Answers the question, writing nothing, when it is due and `choice`
+/// is None. Refused in words, nothing written: no notes, over 32 parts, a note past bar 9,999, the
+/// code doesn't compile.
+pub fn import_tracks(s: &mut Session, file: &Smf, name: &str, place: &Place, choice: Option<TempoChoice>) -> Result<Imported, EditError> {
+    let at = place.at;
+    if !(at >= 0.0 && at.is_finite()) {
+        return Err(EditError::Rejected(format!("can't bring {name} in at beat {at}")));
+    }
+    if !s.draft_errors.is_empty() {
+        return Err(EditError::Rejected("The code doesn't compile, so no track can be added now. Fix the code first.".into()));
+    }
+    let brought = bring(file, name, &labels(s)).map_err(EditError::Rejected)?;
+    let rev = s.accepted();
+    let song = &rev.project.arrangement;
+    let empty = rev.compiled.data.lanes().all(|(_, d)| d.ids().is_empty());
+    let arrangement = match tempo_plan(empty, song, &brought.arrangement, at, choice) {
+        Ok(a) => a,
+        Err(asks) => return Ok(Imported::Asks(asks)),
+    };
+    let timing = arrangement.as_ref().unwrap_or(song);
+    if brought.parts.iter().any(|p| timing.bar_at(at + p.end()).0 >= LAST_BAR) {
+        return Err(EditError::Rejected(format!("{name} has a note past bar 9,999: music2 brings in notes up to there.")));
+    }
+    let mut new = vec![];
+    for p in &brought.parts {
+        let clip = NoteClip { id: None, other_id: None, start: at, length: clip_length(timing, at, p.end()), notes: p.notes.clone() };
+        let clip = serde_json::to_value(&clip).map_err(|e| EditError::Io(e.to_string()))?;
+        new.push(crate::tracks::NewTrack {
+            play: crate::tracks::Play::Instrument(p.component.clone()),
+            label: Some(p.label.clone()),
+            key: None,
+            clips: vec![clip],
+        });
+    }
+    let written = arrangement.map(|a| a.canonical());
+    let made = crate::tracks::add_tracks(s, &new, place.after.as_deref(), written)?;
+    let data = &s.accepted().compiled.data;
+    let mut clips = vec![];
+    for m in &made {
+        for (addr, lane) in data.lanes().filter(|(a, _)| a.module.as_str() == m.module) {
+            clips.extend(lane.ids().into_iter().flatten().map(|id| (addr.clone(), id.to_string())));
+        }
+    }
+    let edited = made[0].edited.clone();
+    Ok(Imported::Tracks(TracksMade { edited, tracks: made.into_iter().map(|m| (m.module, m.label)).collect(), made: clips }))
 }
 
 #[cfg(test)]

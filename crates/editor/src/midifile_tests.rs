@@ -191,7 +191,8 @@ fn a_clip_round_trips() {
     assert_eq!(parts[1].name.as_deref(), Some("Bass"));
     assert_eq!(parts[1].programs, [(0, 38)]);
     // Every note back, as beats from the clip's start.
-    let want: Vec<(f64, f64, f64)> = m2_song::lane::notes(std::slice::from_ref(clip)).iter().map(|n| (n.pitch, n.start - clip.start, n.end - clip.start)).collect();
+    let want: Vec<(f64, f64, f64)> =
+        m2_song::lane::notes(std::slice::from_ref(clip)).iter().map(|n| (n.pitch, n.start - clip.start, n.end - clip.start)).collect();
     let got: Vec<(f64, f64, f64)> =
         parts[1].notes.iter().map(|n| (n.key as f64, n.start as f64 / TICKS as f64, n.end as f64 / TICKS as f64)).collect();
     assert_eq!(got, want);
@@ -283,7 +284,10 @@ fn each_track_and_channel_becomes_a_track() {
     two.extend(played(0, 40, 48, 96));
     let mut drums = played(9, 36, 0, 24);
     drums.extend(played(9, 38, 96, 24));
-    let f = file(1, vec![(Some("Tempo"), vec![(0, Event::Tempo(468_750))]), (Some("Drums"), drums), (Some("Band"), two), (Some("Empty"), vec![])]);
+    let f = file(
+        1,
+        vec![(Some("Tempo"), vec![(0, Event::Tempo(468_750))]), (Some("Drums"), drums), (Some("Band"), two), (Some("Empty"), vec![])],
+    );
     let b = bring(&f, "groove.mid", &label).unwrap();
     let got: Vec<(&str, &str, usize)> = b.parts.iter().map(|p| (p.label.as_str(), p.component.as_str(), p.notes.len())).collect();
     // The tempo track and the empty one have no notes; Band's two channels are two parts, named by
@@ -316,7 +320,20 @@ fn channel_10_plays_the_drum_kit() {
 
 #[test]
 fn programs_pick_std_sounds() {
-    let cases = [(0, "std:fm-keys"), (11, "std:fm-bell"), (19, "std:synth-pad"), (25, "std:synth-pluck"), (38, "std:synth-bass"), (48, "std:synth-strings"), (61, "std:synth-supersaw"), (80, "std:synth-lead"), (89, "std:synth-pad"), (105, "std:synth-pluck"), (114, "std:fm-metal"), (125, "std:synth-pad")];
+    let cases = [
+        (0, "std:fm-keys"),
+        (11, "std:fm-bell"),
+        (19, "std:synth-pad"),
+        (25, "std:synth-pluck"),
+        (38, "std:synth-bass"),
+        (48, "std:synth-strings"),
+        (61, "std:synth-supersaw"),
+        (80, "std:synth-lead"),
+        (89, "std:synth-pad"),
+        (105, "std:synth-pluck"),
+        (114, "std:fm-metal"),
+        (125, "std:synth-pad"),
+    ];
     for (program, want) in cases {
         let mut t = vec![(0, Event::Program { channel: 3, program })];
         t.extend(played(3, 60, 0, 96));
@@ -367,13 +384,26 @@ fn odd_tempos_and_meters_stay_in_range() {
     // What it is, music2 can hold.
     assert_eq!(Arrangement::read(&b.arrangement.canonical()).unwrap(), b.arrangement);
     // No tempo: 120; a first one later: 120 until it; 4/4 alone is none written.
-    let b = bring(&file(1, vec![(None, [vec![(96, Event::Tempo(400_000)), (0, Event::Meter { beats: 4, unit_pow: 2 })], played(0, 60, 0, 96)].concat())]), "late.mid", &label).unwrap();
+    let b = bring(
+        &file(
+            1,
+            vec![(None, [vec![(96, Event::Tempo(400_000)), (0, Event::Meter { beats: 4, unit_pow: 2 })], played(0, 60, 0, 96)].concat())],
+        ),
+        "late.mid",
+        &label,
+    )
+    .unwrap();
     assert_eq!(b.arrangement.tempo, [Tempo { beat: 0.0, bpm: 120.0 }, Tempo { beat: 1.0, bpm: 150.0 }]);
     assert!(b.arrangement.meter.is_empty());
     let b = bring(&file(1, vec![(None, played(0, 60, 0, 96))]), "plain.mid", &label).unwrap();
     assert_eq!(b.arrangement, Arrangement::default());
     // A meter change first found later starts from 4/4.
-    let b = bring(&file(1, vec![(None, [vec![(96 * 4, Event::Meter { beats: 3, unit_pow: 2 })], played(0, 60, 0, 96)].concat())]), "m.mid", &label).unwrap();
+    let b = bring(
+        &file(1, vec![(None, [vec![(96 * 4, Event::Meter { beats: 3, unit_pow: 2 })], played(0, 60, 0, 96)].concat())]),
+        "m.mid",
+        &label,
+    )
+    .unwrap();
     assert_eq!(b.arrangement.meter, [Meter::COMMON, Meter { beat: 4.0, beats: 3, unit: 4 }]);
 }
 
@@ -385,7 +415,10 @@ fn more_than_32_parts_is_refused() {
     let tracks: Vec<Track> = (0..32).map(|i| (None, played((i % 16) as u8, 60, 0, 96))).collect();
     assert_eq!(bring(&file(1, tracks), "groove.mid", &label).unwrap().parts.len(), 32);
     // No notes, and a note past bar 9,999 (4/4: beat 39,996 starts bar 10,000).
-    assert_eq!(bring(&file(1, vec![(Some("Tempo"), vec![(0, Event::Tempo(500_000))])]), "groove.mid", &label).unwrap_err(), "groove.mid has no notes.");
+    assert_eq!(
+        bring(&file(1, vec![(Some("Tempo"), vec![(0, Event::Tempo(500_000))])]), "groove.mid", &label).unwrap_err(),
+        "groove.mid has no notes."
+    );
     let far = file(1, vec![(None, played(0, 60, 96 * 39_996, 96))]);
     assert_eq!(bring(&far, "far.mid", &label).unwrap_err(), "far.mid has a note past bar 9,999: music2 brings in notes up to there.");
     let near = file(1, vec![(None, played(0, 60, 96 * 39_994, 96))]);
@@ -418,21 +451,24 @@ fn an_exported_song_imports_as_the_same_notes() {
 fn an_empty_song_takes_the_files_tempo() {
     let song = Arrangement::default();
     let file = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 128.0 }], meter: vec![Meter { beat: 0.0, beats: 3, unit: 4 }] };
-    assert_eq!(tempo_plan(true, &song, &file, None), Ok(Some(file.clone())), "tempo and meter, with no question");
-    assert_eq!(tempo_plan(true, &song, &song, None), Ok(None), "the same: nothing to write");
+    assert_eq!(tempo_plan(true, &song, &file, 0.0, None), Ok(Some(file.clone())), "tempo and meter, with no question");
+    assert_eq!(tempo_plan(true, &song, &song, 0.0, None), Ok(None), "the same: nothing to write");
 }
 
 #[test]
 fn a_song_with_clips_asks_then_keeps_or_takes_the_tempo() {
     let song = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }], meter: vec![Meter { beat: 0.0, beats: 6, unit: 8 }] };
     let file = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 128.0 }, Tempo { beat: 64.0, bpm: 140.0 }], meter: vec![] };
-    assert_eq!(tempo_plan(false, &song, &file, None), Err(Asks { file_bpm: 128.0, song_bpm: 120.0 }));
-    assert_eq!(tempo_plan(false, &song, &file, Some(TempoChoice::Keep)), Ok(None));
+    assert_eq!(tempo_plan(false, &song, &file, 0.0, None), Err(Asks { file_bpm: 128.0, song_bpm: 120.0 }));
+    assert_eq!(tempo_plan(false, &song, &file, 0.0, Some(TempoChoice::Keep)), Ok(None));
     // Use: the file's tempo map; the song's time signatures stay.
-    assert_eq!(tempo_plan(false, &song, &file, Some(TempoChoice::Use)), Ok(Some(Arrangement { tempo: file.tempo.clone(), meter: song.meter.clone() })));
+    assert_eq!(
+        tempo_plan(false, &song, &file, 0.0, Some(TempoChoice::Use)),
+        Ok(Some(Arrangement { tempo: file.tempo.clone(), meter: song.meter.clone() }))
+    );
     // The same tempos: no question.
     let same = Arrangement { tempo: song.tempo.clone(), meter: vec![] };
-    assert_eq!(tempo_plan(false, &song, &same, None), Ok(None));
+    assert_eq!(tempo_plan(false, &song, &same, 0.0, None), Ok(None));
 }
 
 #[test]
@@ -441,7 +477,10 @@ fn a_one_track_file_dropped_on_a_notes_lane_goes_into_it() {
     let mut s = f.open();
     let before = f.read("data/bass/notes.json");
     // Two notes, the last ending in the clip's second bar: the clip is two bars, from bar 9.
-    let one = file(1, vec![(Some("Riff"), [played(0, 45, 0, 48), played(0, 52, 96 * 4, 96 * 2)].concat()), (None, vec![(0, Event::Tempo(400_000))])]);
+    let one = file(
+        1,
+        vec![(Some("Riff"), [played(0, 45, 0, 48), played(0, 52, 96 * 4, 96 * 2)].concat()), (None, vec![(0, Event::Tempo(400_000))])],
+    );
     let done = import_into(&mut s, &one, "riff.mid", "bass", "notes", 32.0).unwrap();
     assert_eq!(done.made.len(), 1);
     let lane = s.accepted().compiled.data.lane("bass", "notes").unwrap().clone();
@@ -460,4 +499,213 @@ fn a_one_track_file_dropped_on_a_notes_lane_goes_into_it() {
     assert!(e.contains("two.mid has 2 parts: drop it below the tracks to bring each in as a track of its own."), "{e}");
     let e = import_into(&mut s, &one, "riff.mid", "bass", "cutoff", 0.0).unwrap_err().to_string();
     assert!(e.contains("Bass has no notes lane cutoff to bring riff.mid into."), "{e}");
+}
+
+// ---------------------------------------------------------------- new tracks from a MIDI file (C2b)
+
+/// groove.mid: a tempo track at `us` a beat; Drums on channel 10; Band with a bass (program 33,
+/// channel 1, beats 0 to 3) and keys (program 0, channel 2, beats 4 to 5).
+fn groove(us: u32) -> Smf {
+    let mut band = vec![(0, Event::Program { channel: 0, program: 33 }), (0, Event::Program { channel: 1, program: 0 })];
+    band.extend(played(0, 40, 0, 96 * 3));
+    band.extend(played(1, 72, 96 * 4, 96));
+    band.sort_by_key(|e| e.0);
+    let drums = [played(9, 36, 0, 24), played(9, 38, 96, 24)].concat();
+    file(1, vec![(Some("Tempo"), vec![(0, Event::Tempo(us))]), (Some("Drums"), drums), (Some("Band"), band)])
+}
+
+fn at(after: Option<&str>, beat: f64) -> Place {
+    Place { after: after.map(String::from), at: beat }
+}
+
+fn made(i: Imported) -> TracksMade {
+    match i {
+        Imported::Tracks(t) => t,
+        Imported::Asks(a) => panic!("asked {a:?}"),
+    }
+}
+
+/// The tracks' keys, in the timeline's order.
+fn order(s: &Session) -> Vec<String> {
+    timeline::timeline(s).tracks.into_iter().filter(|t| t.track).map(|t| t.module).collect()
+}
+
+/// Every file of the project but the session's own, with its bytes.
+fn files(f: &Fixture) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut all: Vec<_> = crate::testing::files_under(&f.0)
+        .into_iter()
+        .filter(|p| !p.strip_prefix(&f.0).unwrap().starts_with(".music2"))
+        .map(|p| (p.clone(), std::fs::read(&p).unwrap()))
+        .collect();
+    all.sort();
+    all
+}
+
+// Q32, Q33, Q34, Q36: each part a new track with its sound and one clip, after the track asked
+// for, from the bar asked for; at the song's own tempo there is no question.
+#[test]
+fn an_import_makes_a_track_for_each_part() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let number = s.accepted().number;
+    // 483,871 µs a beat is the song's 124 BPM.
+    let t = made(import_tracks(&mut s, &groove(483_871), "groove.mid", &at(Some("kick"), 8.0), None).unwrap());
+    assert_eq!(s.accepted().number, number + 1, "one Tx");
+    let names: Vec<&str> = t.tracks.iter().map(|t| t.1.as_str()).collect();
+    assert_eq!(names, ["Drums", "Synth bass", "FM keys"]);
+    let keys: Vec<String> = t.tracks.iter().map(|t| t.0.clone()).collect();
+    assert_eq!(order(&s), ["kick", &keys[0], &keys[1], &keys[2], "hats", "bass", "keys"], "right after Kick");
+    let rev = s.accepted();
+    let sounds: Vec<Option<String>> = keys.iter().zip(["hits", "notes", "notes"]).map(|(k, l)| player_of(rev, k, l)).collect();
+    assert_eq!(sounds, [Some(DRUM_KIT.to_string()), Some("std:synth-bass".into()), Some("std:fm-keys".into())]);
+    // One clip each, from bar 3 to the bar line after its last note.
+    assert_eq!(t.made.len(), 3);
+    for ((k, l), len) in keys.iter().zip(["hits", "notes", "notes"]).zip([4.0, 4.0, 8.0]) {
+        let lane = rev.compiled.data.lane(k, l).unwrap().clone();
+        let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
+        assert_eq!(clips.iter().map(|c| (c.start, c.length)).collect::<Vec<_>>(), [(8.0, len)], "{k}");
+        assert!(t.made.iter().any(|(a, id)| a.module.as_str() == k && clips[0].id.as_deref() == Some(id.as_str())), "{k}");
+    }
+    let bass: Vec<(f64, f64, f64)> = rev.compiled.data.notes(&keys[1], "notes").iter().map(|n| (n.pitch, n.start, n.end)).collect();
+    assert_eq!(bass, [(40.0, 8.0, 11.0)]);
+    assert_eq!(rev.project.arrangement.tempo, [Tempo { beat: 0.0, bpm: 124.0 }], "no tempo written");
+    // Below the tracks: at the end.
+    let t = made(import_tracks(&mut s, &groove(483_871), "groove.mid", &at(None, 0.0), None).unwrap());
+    assert_eq!(order(&s).last(), Some(&t.tracks[2].0));
+    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums 2", "Synth bass 2", "FM keys 2"]);
+}
+
+// Q35: a song with no clips takes the file's tempo and time signatures, in the same Tx, with no
+// question; the new clips end on its bar lines.
+#[test]
+fn an_import_into_an_empty_song_takes_the_files_tempo() {
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    let mut g = groove(468_750);
+    g.tracks[0].events.push((0, Event::Meter { beats: 3, unit_pow: 2 }));
+    let t = made(import_tracks(&mut s, &g, "groove.mid", &at(None, 0.0), None).unwrap());
+    let a = &s.accepted().project.arrangement;
+    assert_eq!((a.tempo.clone(), a.meter.clone()), (vec![Tempo { beat: 0.0, bpm: 128.0 }], vec![Meter { beat: 0.0, beats: 3, unit: 4 }]));
+    // Keys' last note ends at beat 5: two bars of 3/4.
+    let lane = s.accepted().compiled.data.lane(&t.tracks[2].0, "notes").unwrap().clone();
+    let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
+    assert_eq!((clips[0].start, clips[0].length), (0.0, 6.0));
+    crate::undo(&mut s).unwrap();
+    assert_eq!(s.accepted().project.arrangement.tempo[0].bpm, 120.0, "one undo takes the tempo back with the tracks");
+}
+
+// Q35: a song with clips asks first, writing nothing; Keep keeps its tempo, Use writes the file's.
+#[test]
+fn an_import_asks_then_keeps_or_uses_the_tempo() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let number = s.accepted().number;
+    let asked = import_tracks(&mut s, &groove(468_750), "groove.mid", &at(None, 0.0), None).unwrap();
+    assert_eq!(asked, Imported::Asks(Asks { file_bpm: 128.0, song_bpm: 124.0 }));
+    assert_eq!(s.accepted().number, number, "nothing written");
+    made(import_tracks(&mut s, &groove(468_750), "groove.mid", &at(None, 0.0), Some(TempoChoice::Keep)).unwrap());
+    assert_eq!(s.accepted().project.arrangement.tempo, [Tempo { beat: 0.0, bpm: 124.0 }]);
+    crate::undo(&mut s).unwrap();
+    made(import_tracks(&mut s, &groove(468_750), "groove.mid", &at(None, 0.0), Some(TempoChoice::Use)).unwrap());
+    assert_eq!(s.accepted().project.arrangement.tempo, [Tempo { beat: 0.0, bpm: 128.0 }]);
+}
+
+// D10: Use at a later bar is the file's tempo map from that bar on, the song's before it; the
+// song's time signatures stay. Into an empty song, the file's time signatures from that bar too.
+#[test]
+fn use_at_a_later_bar_keeps_the_songs_tempo_before_it() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let mut g = groove(468_750);
+    // 140 BPM from the file's beat 8.
+    g.tracks[0].events.push((96 * 8, Event::Tempo(428_571)));
+    let t = made(import_tracks(&mut s, &g, "groove.mid", &at(None, 16.0), Some(TempoChoice::Use)).unwrap());
+    let a = &s.accepted().project.arrangement;
+    assert_eq!(a.tempo, [Tempo { beat: 0.0, bpm: 124.0 }, Tempo { beat: 16.0, bpm: 128.0 }, Tempo { beat: 24.0, bpm: 140.0 }]);
+    assert!(a.meter.is_empty());
+    let lane = s.accepted().compiled.data.lane(&t.tracks[1].0, "notes").unwrap().clone();
+    let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
+    assert_eq!(clips[0].start, 16.0);
+    // The question at a later bar names the song's tempo there.
+    let song = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }, Tempo { beat: 8.0, bpm: 90.0 }], meter: vec![] };
+    let file = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 128.0 }], meter: vec![Meter { beat: 0.0, beats: 3, unit: 4 }] };
+    assert_eq!(tempo_plan(false, &song, &file, 16.0, None), Err(Asks { file_bpm: 128.0, song_bpm: 90.0 }));
+    // The file's tempo where the song already has it: no question.
+    let same = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 90.0 }], meter: vec![] };
+    assert_eq!(tempo_plan(false, &song, &same, 16.0, None), Ok(None));
+    // An empty song: the song's before the bar, the file's tempo and meter from it.
+    let plain = Arrangement::default();
+    let want = Arrangement {
+        tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }, Tempo { beat: 8.0, bpm: 128.0 }],
+        meter: vec![Meter::COMMON, Meter { beat: 8.0, beats: 3, unit: 4 }],
+    };
+    assert_eq!(tempo_plan(true, &plain, &file, 8.0, None), Ok(Some(want.clone())));
+    assert_eq!(Arrangement::read(&want.canonical()).unwrap(), want, "one music2 can hold");
+}
+
+// WRITE-10, Q36: the tracks, their clips, the mixer's lines and the tempo are one undo step.
+#[test]
+fn one_undo_step_takes_the_import_back() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let before = files(&f);
+    made(import_tracks(&mut s, &groove(468_750), "groove.mid", &at(Some("bass"), 4.0), Some(TempoChoice::Use)).unwrap());
+    assert_ne!(files(&f), before);
+    crate::undo(&mut s).unwrap();
+    let after = files(&f);
+    let names = |v: &[(std::path::PathBuf, Vec<u8>)]| v.iter().map(|x| x.0.display().to_string()).collect::<Vec<_>>();
+    assert_eq!(names(&after), names(&before));
+    assert!(after == before, "every byte back");
+    assert_eq!(order(&s), ["kick", "hats", "bass", "keys"]);
+}
+
+// Q37 then Q32: a song written as a MIDI file comes back into an empty song as its tracks, with
+// every note as beats, its sounds and its tempo.
+#[test]
+fn an_exported_song_imports_back_as_tracks() {
+    let from = fixture("examples/first-song");
+    let song = from.open();
+    let smf = smf::read(&export_song(&song).unwrap()).unwrap();
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    let t = made(import_tracks(&mut s, &smf, "first-song.mid", &at(None, 0.0), None).unwrap());
+    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Kick", "Hats", "Bass", "Keys"]);
+    assert_eq!(s.accepted().project.arrangement.tempo, [Tempo { beat: 0.0, bpm: 124.0 }]);
+    let (a, b) = (&song.accepted().compiled.data, &s.accepted().compiled.data);
+    for ((module, _), (old, lane)) in t.tracks.iter().zip([("kick", "hits"), ("hats", "hits"), ("bass", "notes"), ("keys", "chords")]) {
+        let new_lane = if lane == "hits" { "hits" } else { "notes" };
+        let want: Vec<(f64, f64, f64)> = a.notes(old, lane).iter().map(|n| (n.pitch, n.start, n.end)).collect();
+        let got: Vec<(f64, f64, f64)> = b.notes(module, new_lane).iter().map(|n| (n.pitch, n.start, n.end)).collect();
+        assert_eq!(got.len(), want.len(), "{old}");
+        assert!(got.iter().zip(&want).all(|(g, w)| g.0 == w.0 && (g.1 - w.1).abs() < 1e-9 && (g.2 - w.2).abs() < 1e-9), "{old}: {got:?}");
+    }
+}
+
+// Q32, D10: refused in words, and nothing written: no notes, over 32 parts, a note past bar 9,999
+// where it lands, the code doesn't compile.
+#[test]
+fn a_refused_file_writes_nothing() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let number = s.accepted().number;
+    let before = files(&f);
+    let refused = |s: &mut Session, file: &Smf, name: &str, place: &Place| {
+        import_tracks(s, file, name, place, Some(TempoChoice::Use)).unwrap_err().to_string()
+    };
+    let none = file(1, vec![(Some("Tempo"), vec![(0, Event::Tempo(500_000))])]);
+    assert!(refused(&mut s, &none, "groove.mid", &at(None, 0.0)).ends_with("groove.mid has no notes."));
+    let many = file(1, (0..40).map(|i| (None, played((i % 16) as u8, 60, 0, 96))).collect());
+    assert!(refused(&mut s, &many, "groove.mid", &at(None, 0.0)).ends_with("groove.mid has 40 parts: music2 brings in 32 at most."));
+    // Bar 9,998 from the file's start, but past bar 9,999 from bar 11.
+    let far = file(1, vec![(None, played(0, 60, 96 * 39_988, 96))]);
+    let e = refused(&mut s, &far, "far.mid", &at(None, 40.0));
+    assert!(e.ends_with("far.mid has a note past bar 9,999: music2 brings in notes up to there."), "{e}");
+    assert_eq!((s.accepted().number, files(&f)), (number, before.clone()));
+    // Code that doesn't compile.
+    f.write("song.ts", "export default song(;\n");
+    s.refresh();
+    assert!(!s.draft_errors.is_empty());
+    let e = refused(&mut s, &groove(468_750), "groove.mid", &at(None, 0.0));
+    assert!(e.ends_with("The code doesn't compile, so no track can be added now. Fix the code first."), "{e}");
+    assert_eq!(s.accepted().number, number);
 }
