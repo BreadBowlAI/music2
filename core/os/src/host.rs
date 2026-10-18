@@ -20,6 +20,13 @@ pub fn local_time(unix_secs: u64) -> Option<(u8, u8)> {
     os::local_time(unix_secs)
 }
 
+/// Whether the OS refuses this program the microphone: on macOS, when System Settings ▸ Privacy &
+/// Security ▸ Microphone says no (or a policy does). False when it hasn't asked yet (opening an
+/// input asks), and on Linux, which has no such switch.
+pub fn microphone_refused() -> bool {
+    os::microphone_refused()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

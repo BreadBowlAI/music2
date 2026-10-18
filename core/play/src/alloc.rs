@@ -27,6 +27,11 @@ pub fn set_in_callback(on: bool) {
     let _ = IN_CALLBACK.try_with(|c| c.set(on));
 }
 
+/// Whether the calling thread runs a device callback now (debug builds only mark it).
+pub fn in_callback() -> bool {
+    IN_CALLBACK.try_with(Cell::get).unwrap_or(false)
+}
+
 /// What this thread's callbacks allocated, freed or reallocated so far.
 pub fn here() -> u64 {
     HERE.try_with(Cell::get).unwrap_or(0)

@@ -3,6 +3,16 @@ use m2_runtime::BLOCK;
 
 use super::*;
 
+/// Held by every test here that starts live engine workers or counts them: the count is the
+/// process's, and tests run side by side (`a_device_player_let_go_stops_its_stream_and_frees_its_engine_elsewhere`
+/// passed only on a retry in io's final check, beside `a_device_without_real_time_plays_on_one_thread`).
+static WORKERS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// [`WORKERS`], held until the guard drops.
+pub(crate) fn alone() -> std::sync::MutexGuard<'static, ()> {
+    WORKERS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn build(nodes: serde_json::Value, out: &str, rate: u32) -> Renderer {
     let ir: m2_ir::Ir = serde_json::from_value(serde_json::json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
         "modules": [{"key": "song", "nodes": nodes, "exports": {"out": out},
@@ -74,6 +84,10 @@ fn a_cell_write_never_waits_for_the_queue() {
         next_seq: Arc::default(),
         cells: Arc::default(),
         alive: Arc::default(),
+        disk: crate::disk::Disk::start(Box::new(|| (0.0, 0.0)), std::sync::Weak::new()),
+        inputs: Arc::default(),
+        input_kind: crate::inputs::Kind::Silent,
+        output_id: None,
         device_rate: 48_000,
         device: "test".into(),
     };
@@ -139,6 +153,10 @@ fn a_full_queue_stalls_instead_of_hanging() {
         next_seq: Arc::default(),
         cells: Arc::default(),
         alive: Arc::default(),
+        disk: crate::disk::Disk::start(Box::new(|| (0.0, 0.0)), std::sync::Weak::new()),
+        inputs: Arc::default(),
+        input_kind: crate::inputs::Kind::Silent,
+        output_id: None,
         device_rate: 48_000,
         device: "test".into(),
     };
@@ -529,6 +547,7 @@ fn a_player_let_go_stops_its_stream_after_its_fade_out() {
 // go, with the project it sent never taken). Before, the thread parked for good, holding the stream.
 #[test]
 fn a_device_player_let_go_stops_its_stream_and_frees_its_engine_elsewhere() {
+    let _alone = alone();
     let before = m2_runtime::threads::live_workers();
     for calls_back in [true, false] {
         let (player, cb, retired) = Player::parts(48_000, "test");

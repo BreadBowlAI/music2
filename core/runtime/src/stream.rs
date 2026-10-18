@@ -1,0 +1,647 @@
+//! Disk streaming (RENDER-30): an audio lane's samples, worked out from its files off the sound
+//! thread, a little ahead of where they play.
+//!
+//! A lane's time is cut into **chunks** of a quarter second (`rate / 4` frames). A chunk with a clip
+//! in it is worked out whole by a **filler**: the player's disk thread live (`m2-play`'s `disk.rs`),
+//! the render's own thread offline. The filler sums the lane's clips in their canonical order, each
+//! read from its WAV in place (plain, pitched, reversed, faded) or from its warped render in the
+//! cache folder, exactly as [`render_clip`](crate::audio::render_clip) and the old copy did, so
+//! every sample keeps its bits (RENDER-1, RENDER-2). Files are read with `m2_os::fs::read_at` alone,
+//! never mapped: a mapped file another program cuts short kills the app.
+//!
+//! The sound thread only copies, from a ring of **slots** that each hold one chunk. A slot's tag
+//! says which chunk it holds, or that it is being written; its samples are `AtomicU32` bits, so a
+//! read torn by a write is never undefined. The reader checks the tag before and after it copies:
+//! a chunk that isn't there whole plays silence for that block and counts as a **miss**. The sound
+//! thread never waits, locks or reads a file.
+//!
+//! A lane has `min(16, chunks with audio)` slots. A chunk with no clip in it is silence and takes no
+//! slot, so a short lane is wholly resident, filled when it is built, as its renders were.
+
+use std::fs::File;
+use std::io::Read;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Result, bail};
+use hound::Sample;
+use m2_song::{AudioClip, Sha, TempoMap};
+
+use crate::audio::{AudioLane, RenderedClip};
+
+/// The most slots a lane has: 4 s of audio, 1.5 MB of stereo at 48 kHz.
+pub const SLOTS: usize = 16;
+
+/// The largest single read: a disk reads well in pieces of this size, and a piece never holds much.
+pub const READ: usize = 64 * 1024;
+
+/// A slot's tag while it holds no chunk, and while it is being written.
+const EMPTY: u64 = u64::MAX;
+const BUSY: u64 = u64::MAX - 1;
+
+/// Frames in one chunk at `rate`: a quarter second.
+pub fn chunk_frames(rate: f64) -> u64 {
+    ((rate / 4.0).round() as u64).max(1)
+}
+
+/// A WAV file opened to be read in place: where its samples start, and how each is stored.
+pub struct Wav {
+    file: File,
+    data: u64,
+    frames: u64,
+    channels: usize,
+    bytes: u16,
+    bits: u16,
+    format: hound::SampleFormat,
+    pub rate: f64,
+}
+
+/// A reader at a position of a file, through `read_at`: what `hound` parses a header from.
+struct At<'a> {
+    file: &'a File,
+    pos: u64,
+}
+
+impl Read for At<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = m2_os::fs::read_at(self.file, buf, self.pos)?;
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl Wav {
+    /// Open `path` and read its header. A file shorter than its header says is refused, as a
+    /// whole decode refused it.
+    pub fn open(path: &Path) -> Result<Wav> {
+        let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        let r = hound::WavReader::new(At { file: &file, pos: 0 }).with_context(|| format!("reading {}", path.display()))?;
+        let spec = r.spec();
+        let (frames, samples) = (r.duration() as u64, r.len() as u64);
+        let data = r.into_inner().pos;
+        // The data chunk's size is the 4 bytes before its first: each sample's width comes from it,
+        // as hound works it out.
+        let mut size = [0u8; 4];
+        if data < 4 || m2_os::fs::read_full_at(&file, &mut size, data - 4, 4)? != 4 {
+            bail!("{} has no data", path.display());
+        }
+        let data_len = u32::from_le_bytes(size) as u64;
+        let bytes = data_len.checked_div(samples).unwrap_or(spec.bits_per_sample.div_ceil(8) as u64);
+        if file.metadata()?.len() < data + data_len {
+            bail!("{} is cut short", path.display());
+        }
+        Ok(Wav {
+            file,
+            data,
+            frames,
+            channels: spec.channels.max(1) as usize,
+            bytes: bytes as u16,
+            bits: spec.bits_per_sample,
+            format: spec.sample_format,
+            rate: spec.sample_rate as f64,
+        })
+    }
+
+    /// Frames in the file.
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    /// The channels it plays: its first two.
+    pub fn channels(&self) -> usize {
+        self.channels.min(2)
+    }
+
+    /// Frames `from..to` decoded as [`load_wav`](crate::audio::load_wav) decodes them, by hound's
+    /// own sample reader, into the first [`Self::channels`] of `out` (each cleared first). `buf`
+    /// holds the bytes; it grows to the largest piece asked for.
+    pub fn read(&self, from: u64, to: u64, buf: &mut Vec<u8>, out: &mut [Vec<f32>]) -> Result<()> {
+        let frame = self.channels * self.bytes as usize;
+        let n = to.saturating_sub(from) as usize;
+        buf.resize(n * frame, 0);
+        if m2_os::fs::read_full_at(&self.file, buf, self.data + from * frame as u64, READ)? < buf.len() {
+            bail!("the file is cut short");
+        }
+        let keep = self.channels();
+        for o in out[..keep].iter_mut() {
+            o.clear();
+        }
+        let mut cur: &[u8] = buf;
+        let (format, bytes, bits) = (self.format, self.bytes, self.bits);
+        // Each frame's samples in turn: its first two kept, the rest read past.
+        match format {
+            hound::SampleFormat::Float => {
+                for _ in 0..n {
+                    for o in out[..keep].iter_mut() {
+                        o.push(<f32 as Sample>::read(&mut cur, format, bytes, bits)?);
+                    }
+                    for _ in keep..self.channels {
+                        <f32 as Sample>::read(&mut cur, format, bytes, bits)?;
+                    }
+                }
+            }
+            hound::SampleFormat::Int => {
+                let scale = 1.0 / (1u64 << (bits - 1)) as f32;
+                for _ in 0..n {
+                    for o in out[..keep].iter_mut() {
+                        o.push(<i32 as Sample>::read(&mut cur, format, bytes, bits)? as f32 * scale);
+                    }
+                    for _ in keep..self.channels {
+                        <i32 as Sample>::read(&mut cur, format, bytes, bits)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A warped clip's render in the cache folder: interleaved 32-bit floats, little-endian, no header.
+pub(crate) struct Raw {
+    file: File,
+    channels: usize,
+}
+
+impl Raw {
+    /// The render at `path`, when it is there whole.
+    fn open(path: &Path, channels: usize, frames: usize) -> Option<Raw> {
+        let file = File::open(path).ok()?;
+        (file.metadata().ok()?.len() == (frames * channels * 4) as u64).then_some(Raw { file, channels })
+    }
+
+    /// Write `render` to `path`: a part file first, then renamed, so a reader never meets half of
+    /// one. Two programs that render the same clip write the same bytes.
+    fn write(path: &Path, render: &RenderedClip) -> Result<()> {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let folder = m2_os::fs::folder_of(path);
+        m2_os::fs::make_dirs(folder)?;
+        let part = path.with_extension(format!("f32.{}.{}.part", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let mut bytes = Vec::with_capacity(render.len() * render.first().map_or(0, Vec::len) * 4);
+        for i in 0..render.first().map_or(0, Vec::len) {
+            for c in render {
+                bytes.extend_from_slice(&c[i].to_le_bytes());
+            }
+        }
+        std::fs::write(&part, &bytes).and_then(|()| std::fs::rename(&part, path)).inspect_err(|_| drop(std::fs::remove_file(&part)))?;
+        Ok(())
+    }
+
+    fn read(&self, from: usize, to: usize, buf: &mut Vec<u8>, out: &mut [Vec<f32>]) -> Result<()> {
+        let frame = self.channels * 4;
+        buf.resize((to - from) * frame, 0);
+        if m2_os::fs::read_full_at(&self.file, buf, (from * frame) as u64, READ)? < buf.len() {
+            bail!("the render is cut short");
+        }
+        for o in out[..self.channels].iter_mut() {
+            o.clear();
+        }
+        for f in buf.chunks_exact(frame) {
+            for (c, s) in f.as_chunks::<4>().0.iter().enumerate() {
+                out[c].push(f32::from_le_bytes(*s));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Where a warped clip's render is kept: `<cache>/renders/<hash>.f32` (FMT-16's folder), named by
+/// everything it depends on. None without a cache folder.
+pub(crate) fn render_path(key: &[u8]) -> Option<PathBuf> {
+    let mut named = format!("music2 warped render {}\n", crate::audio::WARP_VERSION).into_bytes();
+    named.extend_from_slice(key);
+    Some(m2_os::dirs::cache()?.join("renders").join(format!("{}.f32", Sha::of(&named).hex())))
+}
+
+/// A warped clip's render: from the cache folder when it can be kept there, else in memory.
+pub(crate) fn warped(
+    path: Option<PathBuf>,
+    render: impl FnOnce() -> Option<RenderedClip>,
+    channels: usize,
+    frames: usize,
+) -> Option<Source> {
+    if let Some(p) = &path
+        && let Some(raw) = Raw::open(p, channels, frames)
+    {
+        return Some(Source::Render(Arc::new(raw)));
+    }
+    let r = render()?;
+    if let Some(p) = &path
+        && Raw::write(p, &r).is_ok()
+        && let Some(raw) = Raw::open(p, r.len(), frames)
+    {
+        return Some(Source::Render(Arc::new(raw)));
+    }
+    Some(Source::Mem(Arc::new(r)))
+}
+
+/// How a clip with no warp is worked out from its file: [`render_clip`]'s numbers.
+///
+/// [`render_clip`]: crate::audio::render_clip
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Shape {
+    pub(crate) offset: f64,
+    pub(crate) step: f64,
+    pub(crate) len: usize,
+    pub(crate) reverse: bool,
+    pub(crate) gain: f32,
+    pub(crate) fade_in: usize,
+    pub(crate) fade_out: usize,
+}
+
+impl Shape {
+    pub(crate) fn of(clip: &AudioClip, src_rate: f64, tempo: &TempoMap, sample_rate: f64) -> Shape {
+        // exp2 by name, so debug and release builds call one function: a release build turns
+        // `2f64.powf(x)` into exp2 where a debug build calls pow, and libm's two differ in the last bit.
+        let rate = libm::exp2(clip.pitch / 12.0);
+        Shape {
+            offset: clip.offset * src_rate,
+            step: rate * src_rate / sample_rate,
+            len: clip_len(clip, tempo, sample_rate),
+            reverse: clip.reverse,
+            gain: libm::powf(10.0, clip.gain_db as f32 / 20.0),
+            fade_in: (clip.fade_in * sample_rate) as usize,
+            fade_out: (clip.fade_out * sample_rate) as usize,
+        }
+    }
+
+    /// The source position output sample `j` (before reversing) reads.
+    fn pos(&self, j: usize) -> f64 {
+        self.offset + j as f64 * self.step
+    }
+}
+
+/// A clip's length in frames at `sample_rate`.
+pub(crate) fn clip_len(clip: &AudioClip, tempo: &TempoMap, sample_rate: f64) -> usize {
+    let t0 = tempo.seconds_at(clip.start);
+    ((tempo.seconds_at(clip.start + clip.length) - t0) * sample_rate).round() as usize
+}
+
+/// The gain of output sample `i` of `n`: the clip's gain and its fades.
+pub(crate) fn gain_at(i: usize, n: usize, gain: f32, fade_in: usize, fade_out: usize) -> f32 {
+    let mut g = gain;
+    if i < fade_in {
+        g *= 0.5 - 0.5 * libm::cosf(std::f32::consts::PI * i as f32 / fade_in as f32);
+    }
+    if n - i <= fade_out {
+        g *= 0.5 - 0.5 * libm::cosf(std::f32::consts::PI * (n - i) as f32 / fade_out as f32);
+    }
+    g
+}
+
+/// Read a signal of `len` samples at fractional position `pos` (cubic Hermite), silence outside,
+/// from `x`, its samples from `base` on: every sample the read needs must be in `x`.
+pub(crate) fn read_in(x: &[f32], base: usize, len: usize, pos: f64) -> f32 {
+    if pos < 0.0 || pos > (len as f64 - 1.0) {
+        return 0.0;
+    }
+    let i = pos.floor() as isize;
+    let t = (pos - i as f64) as f32;
+    let at = |k: isize| if k < 0 || k as usize >= len { 0.0 } else { x[k as usize - base] };
+    let (y0, y1, y2, y3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+    let c1 = 0.5 * (y2 - y0);
+    let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
+    let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+    ((c3 * t + c2) * t + c1) * t + y1
+}
+
+/// Where a clip's samples come from.
+pub(crate) enum Source {
+    /// Its WAV, worked out in place.
+    Wav(Arc<Wav>, Shape),
+    /// A warped render in the cache folder.
+    Render(Arc<Raw>),
+    /// A render in memory: a warped one with no cache folder, and tests'.
+    Mem(Arc<RenderedClip>),
+}
+
+/// One clip of a lane: where it starts, in the lane's frames, how long it is and what it reads.
+pub(crate) struct Clip {
+    pub(crate) at: u64,
+    pub(crate) len: u64,
+    pub(crate) channels: usize,
+    pub(crate) src: Source,
+}
+
+impl Clip {
+    pub(crate) fn new(at: u64, src: Source, len: usize) -> Clip {
+        let channels = match &src {
+            Source::Wav(w, _) => w.channels(),
+            Source::Render(r) => r.channels,
+            Source::Mem(m) => m.len(),
+        };
+        Clip { at, len: len as u64, channels, src }
+    }
+
+    /// Its samples `i0..i1` (from its start), each channel into `s.vals`, as the clip's whole
+    /// render has them.
+    fn piece(&self, i0: usize, i1: usize, s: &mut Scratch) -> Result<()> {
+        let ch = self.channels;
+        match &self.src {
+            Source::Mem(d) => {
+                for (v, d) in s.vals.iter_mut().zip(d.iter()) {
+                    v.clear();
+                    v.extend_from_slice(&d[i0..i1]);
+                }
+            }
+            Source::Render(r) => r.read(i0, i1, &mut s.bytes, &mut s.vals)?,
+            Source::Wav(w, sh) => {
+                let n = sh.len;
+                let (j0, j1) = if sh.reverse { (n - i1, n - i0) } else { (i0, i1) };
+                // The source frames the cubic reads at these positions touch, within the file.
+                let frames = w.frames as i64;
+                let lo = (sh.pos(j0).floor() as i64).saturating_sub(1).clamp(0, frames);
+                let hi = (sh.pos(j1 - 1).floor() as i64).saturating_add(3).clamp(lo, frames);
+                w.read(lo as u64, hi as u64, &mut s.bytes, &mut s.win)?;
+                for (win, out) in s.win.iter().zip(s.vals.iter_mut()).take(ch) {
+                    out.clear();
+                    for i in i0..i1 {
+                        let j = if sh.reverse { n - 1 - i } else { i };
+                        let x = read_in(win, lo as usize, w.frames as usize, sh.pos(j));
+                        out.push(x * gain_at(i, n, sh.gain, sh.fade_in, sh.fade_out));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A filler's working buffers: one lane's, kept between chunks.
+#[derive(Default)]
+pub(crate) struct Scratch {
+    bytes: Vec<u8>,
+    win: [Vec<f32>; 2],
+    vals: [Vec<f32>; 2],
+    chunk: Vec<f32>,
+}
+
+impl Scratch {
+    fn bytes(&self) -> usize {
+        self.bytes.capacity() + 4 * (self.win.iter().chain(&self.vals).map(Vec::capacity).sum::<usize>() + self.chunk.capacity())
+    }
+}
+
+/// One chunk's room in the ring.
+struct Slot {
+    tag: AtomicU64,
+    /// Channel-major, `channels × chunk`.
+    data: Box<[AtomicU32]>,
+}
+
+/// A lane's ring of slots, and what the sound thread and the fillers share about it.
+pub(crate) struct Ring {
+    chunk: u64,
+    channels: usize,
+    slots: Box<[Slot]>,
+    /// The chunks with audio, as ranges of chunk numbers in order.
+    spans: Vec<Range<u64>>,
+    audio_chunks: u64,
+    /// The next slot an offline filler takes when every slot holds a chunk.
+    cursor: AtomicUsize,
+    misses: AtomicU64,
+    errors: AtomicU64,
+    /// The fillers' lock: never taken by the sound thread.
+    fill: Mutex<Scratch>,
+}
+
+impl Ring {
+    pub(crate) fn new(clips: &[Clip], channels: usize, rate: f64) -> Ring {
+        let chunk = chunk_frames(rate);
+        let mut spans: Vec<Range<u64>> = clips.iter().filter(|c| c.len > 0).map(|c| c.at / chunk..(c.at + c.len).div_ceil(chunk)).collect();
+        spans.sort_by_key(|r| r.start);
+        let mut merged: Vec<Range<u64>> = vec![];
+        for s in spans {
+            match merged.last_mut() {
+                Some(m) if s.start <= m.end => m.end = m.end.max(s.end),
+                _ => merged.push(s),
+            }
+        }
+        let audio_chunks = merged.iter().map(|r| r.end - r.start).sum::<u64>();
+        let n = (audio_chunks as usize).min(SLOTS);
+        let slots = (0..n)
+            .map(|_| Slot { tag: AtomicU64::new(EMPTY), data: (0..channels * chunk as usize).map(|_| AtomicU32::new(0)).collect() })
+            .collect();
+        Ring {
+            chunk,
+            channels,
+            slots,
+            spans: merged,
+            audio_chunks,
+            cursor: AtomicUsize::new(0),
+            misses: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            fill: Mutex::new(Scratch::default()),
+        }
+    }
+
+    pub(crate) fn has_audio(&self, k: u64) -> bool {
+        let i = self.spans.partition_point(|r| r.end <= k);
+        self.spans.get(i).is_some_and(|r| r.start <= k)
+    }
+
+    pub(crate) fn resident(&self) -> bool {
+        self.audio_chunks as usize <= SLOTS
+    }
+
+    fn slot_of(&self, k: u64) -> Option<&Slot> {
+        self.slots.iter().find(|s| s.tag.load(Ordering::Acquire) == k)
+    }
+
+    /// Copy frames `from..from + n` of chunk `k` into `out` (channel-major, `block` frames a
+    /// channel) at frame `off`. False, with what it copied left to be cleared, when the chunk
+    /// isn't there whole. Never waits, locks or allocates.
+    fn copy(&self, k: u64, from: usize, n: usize, out: &mut [f32], block: usize, off: usize) -> bool {
+        let Some(slot) = self.slot_of(k) else { return false };
+        let chunk = self.chunk as usize;
+        for c in 0..self.channels {
+            let src = &slot.data[c * chunk + from..c * chunk + from + n];
+            for (o, s) in out[c * block + off..c * block + off + n].iter_mut().zip(src) {
+                *o = f32::from_bits(s.load(Ordering::Relaxed));
+            }
+        }
+        fence(Ordering::Acquire);
+        slot.tag.load(Ordering::Relaxed) == k
+    }
+
+    /// Put `samples` (channel-major) in slot `i` as chunk `k`: marked busy first, so a reader that
+    /// meets it mid-write sees a miss.
+    fn store(&self, i: usize, k: u64, samples: &[f32]) {
+        let slot = &self.slots[i];
+        slot.tag.store(BUSY, Ordering::Relaxed);
+        fence(Ordering::Release);
+        for (d, s) in slot.data.iter().zip(samples) {
+            d.store(s.to_bits(), Ordering::Relaxed);
+        }
+        slot.tag.store(k, Ordering::Release);
+    }
+}
+
+impl AudioLane {
+    /// Frames in a chunk.
+    pub fn chunk(&self) -> u64 {
+        self.ring.chunk
+    }
+
+    /// Whether chunk `k` has a clip in it: one without is silence, and never takes a slot.
+    pub fn has_audio(&self, k: u64) -> bool {
+        self.ring.has_audio(k)
+    }
+
+    /// Whether every chunk with audio fits its slots: the whole lane stays.
+    pub fn resident(&self) -> bool {
+        self.ring.resident()
+    }
+
+    /// How many chunks it can hold at once.
+    pub fn slots(&self) -> usize {
+        self.ring.slots.len()
+    }
+
+    /// Whether chunk `k` can be played: silence, or in a slot whole.
+    pub fn ready(&self, k: u64) -> bool {
+        !self.has_audio(k) || self.ring.slot_of(k).is_some()
+    }
+
+    /// Whether frames `start..start + n` can be played.
+    pub fn ready_for(&self, start: u64, n: u64) -> bool {
+        let c = self.ring.chunk;
+        (start / c..(start + n).div_ceil(c)).all(|k| self.ready(k))
+    }
+
+    /// Lane frame of `beat`, in the tempo map it was built in.
+    pub fn frame_of(&self, beat: f64) -> u64 {
+        crate::transport::frame_of(&self.tempo, beat, self.rate)
+    }
+
+    /// The rate it plays at.
+    pub fn rate(&self) -> f64 {
+        self.rate
+    }
+
+    /// Blocks that met a chunk not there, in all: each played silence (D7).
+    pub fn misses(&self) -> u64 {
+        self.ring.misses.load(Ordering::Relaxed)
+    }
+
+    /// Chunks whose files couldn't be read, in all: each holds silence.
+    pub fn errors(&self) -> u64 {
+        self.ring.errors.load(Ordering::Relaxed)
+    }
+
+    /// The memory its samples take: the ring, and its filler's buffers.
+    pub fn memory(&self) -> usize {
+        let ring = self.ring.slots.iter().map(|s| s.data.len() * 4).sum::<usize>();
+        ring + self.ring.fill.lock().map_or(0, |s| s.bytes())
+    }
+
+    /// Work out chunk `k` and put it in a slot: an empty one, else one whose chunk `keep` doesn't
+    /// want (from the ring's cursor on). False when every slot holds a chunk it wants. A file that
+    /// can't be read gives silence, counted in [`Self::errors`]. Off the sound thread only: the
+    /// disk thread's, an offline render's, or a build's.
+    pub fn fill_chunk(&self, k: u64, keep: &dyn Fn(u64) -> bool) -> bool {
+        let r = &self.ring;
+        if r.slots.is_empty() || !r.has_audio(k) {
+            return true;
+        }
+        let mut s = r.fill.lock().unwrap_or_else(|e| e.into_inner());
+        if r.slot_of(k).is_some() {
+            return true;
+        }
+        let n = r.slots.len();
+        let victim = r.slots.iter().position(|s| s.tag.load(Ordering::Relaxed) == EMPTY).or_else(|| {
+            let from = r.cursor.load(Ordering::Relaxed);
+            (0..n).map(|d| (from + d) % n).find(|&i| !keep(r.slots[i].tag.load(Ordering::Relaxed)))
+        });
+        let Some(i) = victim else { return false };
+        r.cursor.store((i + 1) % n, Ordering::Relaxed);
+        if self.sum(k, &mut s).is_err() {
+            r.errors.fetch_add(1, Ordering::Relaxed);
+            s.chunk.fill(0.0);
+        }
+        r.store(i, k, &s.chunk);
+        true
+    }
+
+    /// Sum chunk `k` of every clip, in order, into `s.chunk` (channel-major): what the old copy
+    /// added up for each of its frames.
+    fn sum(&self, k: u64, s: &mut Scratch) -> Result<()> {
+        let chunk = self.ring.chunk;
+        let (start, end) = (k * chunk, (k + 1) * chunk);
+        let mut acc = std::mem::take(&mut s.chunk);
+        acc.clear();
+        acc.resize(self.channels * chunk as usize, 0.0);
+        let summed = (|| {
+            for clip in &self.clips {
+                if clip.at >= end || clip.at + clip.len <= start {
+                    continue;
+                }
+                let (from, to) = (start.max(clip.at), end.min(clip.at + clip.len));
+                clip.piece((from - clip.at) as usize, (to - clip.at) as usize, s)?;
+                let data = &s.vals;
+                let mono_down = self.channels == 1 && clip.channels > 1;
+                for c in 0..self.channels {
+                    let src = &data[c.min(clip.channels - 1)];
+                    let out = &mut acc[c * chunk as usize..];
+                    for t in from..to {
+                        let i = (t - from) as usize;
+                        let v = if mono_down { 0.5 * (data[0][i] + data[1][i]) } else { src[i] };
+                        out[(t - start) as usize] += v;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        s.chunk = acc;
+        summed
+    }
+
+    /// Make sure frames `start..start + n` are in the ring, working out what isn't, on this thread:
+    /// an offline render's fill before each block (D10). A chunk taken for it is one no other
+    /// part of the block reads (`block`).
+    pub(crate) fn ensure(&self, start: u64, n: u64, block: &[u64]) {
+        let c = self.ring.chunk;
+        for k in start / c..(start + n).div_ceil(c) {
+            if self.has_audio(k) && self.ring.slot_of(k).is_none() {
+                self.fill_chunk(k, &|x| block.contains(&x));
+            }
+        }
+    }
+
+    /// Fill every chunk with audio: a resident lane, as it is built.
+    pub(crate) fn fill_all(&self) {
+        if !self.resident() {
+            return;
+        }
+        for r in self.ring.spans.clone() {
+            for k in r {
+                self.fill_chunk(k, &|_| true);
+            }
+        }
+    }
+
+    /// Fill frames `off..off + n` of `out` (channel-major, `channels × block`) with the lane's
+    /// samples `start..start + n`: copied from the ring, silence where a chunk isn't there (a
+    /// miss). Never waits, locks, reads a file or allocates.
+    pub fn fill(&self, out: &mut [f32], block: usize, off: usize, start: u64, n: usize) {
+        for c in 0..self.channels {
+            out[c * block + off..c * block + off + n].fill(0.0);
+        }
+        let chunk = self.ring.chunk;
+        let end = start + n as u64;
+        let mut t = start;
+        while t < end {
+            let k = t / chunk;
+            let to = end.min((k + 1) * chunk);
+            let (o, m) = (off + (t - start) as usize, (to - t) as usize);
+            if self.has_audio(k) && !self.ring.copy(k, (t - k * chunk) as usize, m, out, block, o) {
+                for c in 0..self.channels {
+                    out[c * block + o..c * block + o + m].fill(0.0);
+                }
+                self.ring.misses.fetch_add(1, Ordering::Relaxed);
+            }
+            t = to;
+        }
+    }
+}

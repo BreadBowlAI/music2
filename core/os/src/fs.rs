@@ -103,6 +103,42 @@ pub fn folder_of(p: &Path) -> &Path {
     p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."))
 }
 
+/// Read into `buf` from byte `offset` of `f`, without moving its position: `pread` on Unix (and
+/// `seek_read` on Windows later). Returns the bytes read, fewer at the file's end. The one way
+/// music2 reads audio as it plays (RENDER-30): a disk thread's, or an offline render's own
+/// thread's, never the sound thread's.
+pub fn read_at(f: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+    if let Some(watch) = READS.get() {
+        watch(buf.len());
+    }
+    os::read_at(f, buf, offset)
+}
+
+/// [`read_at`] until `buf` is full or the file ends, in reads of at most `piece` bytes. Returns
+/// the bytes read.
+pub fn read_full_at(f: &File, buf: &mut [u8], offset: u64, piece: usize) -> io::Result<usize> {
+    let mut done = 0;
+    while done < buf.len() {
+        let end = (done + piece.max(1)).min(buf.len());
+        match read_at(f, &mut buf[done..end], offset + done as u64) {
+            Ok(0) => break,
+            Ok(n) => done += n,
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(done)
+}
+
+static READS: std::sync::OnceLock<fn(usize)> = std::sync::OnceLock::new();
+
+/// Call `f` with each [`read_at`]'s size, on the reading thread, before it reads: tests see who
+/// reads, and how much, and slow the disk down. Set once per process.
+#[doc(hidden)]
+pub fn watch_reads(f: fn(usize)) {
+    let _ = READS.set(f);
+}
+
 /// Swap two existing names, or rename only where nothing is (macOS `renamex_np`, Linux
 /// `renameat2`). `Unsupported` when the volume can't; `AlreadyExists` for [`Rename::Excl`] onto a
 /// taken name.
@@ -189,6 +225,28 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    // RENDER-30: a read at an offset reads those bytes, leaves the file's position alone, and
+    // reads short at the end.
+    #[test]
+    fn read_at_reads_where_asked() {
+        let t = Temp::new("read-at");
+        let p = t.0.join("f");
+        std::fs::write(&p, (0..=255u8).collect::<Vec<_>>()).unwrap();
+        let f = File::open(&p).unwrap();
+        let mut buf = [0u8; 4];
+        assert_eq!(read_at(&f, &mut buf, 100).unwrap(), 4);
+        assert_eq!(buf, [100, 101, 102, 103]);
+        assert_eq!(read_at(&f, &mut buf, 254).unwrap(), 2, "short at the end");
+        assert_eq!(&buf[..2], &[254, 255]);
+        let mut big = vec![0u8; 300];
+        assert_eq!(read_full_at(&f, &mut big, 10, 7).unwrap(), 246, "in pieces, to the end");
+        assert_eq!(big[..246], (10..=255u8).collect::<Vec<_>>()[..]);
+        use std::io::Read;
+        let mut first = [0u8; 1];
+        (&f).read_exact(&mut first).unwrap();
+        assert_eq!(first, [0], "the file's own position never moved");
     }
 
     // PLAT-3 (§2.2 of the platform design): each OS's lists, fed by name. On Linux ENOTSUP and EOPNOTSUPP

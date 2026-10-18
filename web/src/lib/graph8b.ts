@@ -41,6 +41,8 @@ declare module "./graph" {
     late?: number;
     /** Dropouts the device reported since the player started. */
     xruns?: number;
+    /** For 10 s after an audio lane missed its audio: what to say (RENDER-30). */
+    disk?: string;
     /** The device's other errors since the player started. */
     device_errors?: number;
   }
@@ -95,6 +97,8 @@ export interface MetersIn {
   tracks: Record<string, Peaks>;
   /** The song's output. */
   out: Peaks;
+  /** The sound input's loudest sample, while a take records on an audio lane (io). */
+  input?: number[];
   dsp: { load: number; dropouts: number };
 }
 

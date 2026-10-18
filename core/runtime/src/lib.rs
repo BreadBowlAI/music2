@@ -55,6 +55,7 @@ mod plan;
 pub mod plugins;
 pub mod sched;
 mod stopped;
+pub mod stream;
 mod taps;
 pub mod threads;
 pub mod trace;
@@ -73,6 +74,7 @@ use wasmtime::{Instance, Memory, ResourceLimiter, Store, TypedFunc};
 
 pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
+pub use audio::LiveInput;
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
 pub use m2_pool::{Counters, ENTRY_BUCKETS, Meter, Pool, Runner, Setup, Trip};
@@ -2307,6 +2309,10 @@ pub struct Renderer {
     /// Played by the live [`Engine`], which marks every renderer it plays: a node that fails stops
     /// alone (RENDER-25). Offline, every render fails, naming the node.
     live: bool,
+    /// Its audio lanes' rings are filled by a player's disk thread: marked before it is sent, so no
+    /// ring is ever filled on the sound thread (RENDER-30, D11). Unmarked, it fills them itself
+    /// before each block, as an offline render does (D10).
+    disk: bool,
     non_finite: u64,
     trace: Option<Trace>,
     dropped: u32,
@@ -2633,6 +2639,7 @@ impl Renderer {
             delivered: 0,
             strict: true,
             live: false,
+            disk: false,
             non_finite: 0,
             trace: None,
             dropped: 0,
@@ -2678,6 +2685,22 @@ impl Renderer {
         let mut r = Renderer::new(flat, data, packages, sample_rate)?;
         r.transport = Transport::starting(t0);
         Ok(r)
+    }
+
+    /// Its audio lanes are filled by a disk thread from now on, never by its own blocks: a player
+    /// marks every renderer before it sends it (RENDER-30, D11).
+    pub fn from_disk(&mut self) {
+        self.disk = true;
+    }
+
+    /// Whether a disk thread fills its audio lanes ([`Self::from_disk`]).
+    pub fn is_from_disk(&self) -> bool {
+        self.disk
+    }
+
+    /// Its audio lanes, with the module each plays in: what a disk thread keeps filled.
+    pub fn audio_lanes(&self) -> Vec<(String, Arc<audio::AudioLane>)> {
+        self.plan.info.lanes.iter().filter_map(|l| Some((l.lane.module.clone(), l.audio()?.clone()))).collect()
     }
 
     /// Strict (the default): a NaN or infinity from any kernel is an error naming it.
@@ -2772,7 +2795,12 @@ impl Renderer {
         for l in &mut self.lanes.slots {
             match l {
                 LaneSlot::Notes(Some(s)) => s.run(&runs, &mut self.next_note),
-                LaneSlot::Audio(Some(p)) => p.fill(&runs),
+                LaneSlot::Audio(Some(p)) => {
+                    if !self.disk {
+                        p.prefetch(&runs);
+                    }
+                    p.fill(&runs)
+                }
                 _ => {}
             }
         }
@@ -3122,6 +3150,34 @@ impl Renderer {
         }
     }
 
+    /// Hear `input` on audio lane `slot` (MON-8), or with None stop hearing on every lane: Ok with
+    /// what was heard before, to retire; Err with `input` back for a slot that isn't one of its
+    /// audio lanes. Only one lane hears at a time. Never allocates.
+    #[allow(clippy::type_complexity)]
+    pub fn hear(&mut self, slot: usize, input: Option<Arc<dyn LiveInput>>) -> Result<Option<Arc<dyn LiveInput>>, Option<Arc<dyn LiveInput>>> {
+        let lanes = &mut self.lanes.slots[..self.lanes.live];
+        if input.is_some() && !matches!(lanes.get(slot), Some(LaneSlot::Audio(Some(_)))) {
+            return Err(input);
+        }
+        let mut old = None;
+        for l in lanes.iter_mut() {
+            if let LaneSlot::Audio(Some(p)) = l
+                && p.hearing()
+            {
+                old = p.hear(None);
+            }
+        }
+        if let Some(LaneSlot::Audio(Some(p))) = lanes.get_mut(slot).filter(|_| input.is_some()) {
+            p.hear(input);
+        }
+        Ok(old)
+    }
+
+    /// Whether an audio lane hears a live input (MON-8).
+    pub fn hearing(&self) -> bool {
+        self.lanes.slots.iter().any(|l| matches!(l, LaneSlot::Audio(Some(p)) if p.hearing()))
+    }
+
     /// Live notes held, across every lane (MON-7).
     pub fn live_notes(&self) -> usize {
         self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.live_held() } else { 0 }).sum()
@@ -3184,6 +3240,7 @@ impl Renderer {
         !self.in_window()
             && self.active_voices() == 0
             && self.live_notes() == 0
+            && !self.hearing()
             && self.plugins_sleep()
             && !self.plan.graph.active().unwrap_or(true)
     }

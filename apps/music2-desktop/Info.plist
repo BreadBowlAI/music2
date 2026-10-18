@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into music2.app's Info.plist by `tauri build` (and embedded for `cargo run`): macOS asks
+     before the app may use the microphone, with these words (the io plan's D25). -->
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>music2 records from your microphone when you press Record on an audio track.</string>
+</dict>
+</plist>

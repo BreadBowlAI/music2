@@ -19,6 +19,19 @@ thread_local! {
     pub(super) static DURING: RefCell<During> = const { RefCell::new(None) };
 }
 
+/// [`super::audio`], with the pieces its check decoded put together (none when nothing was).
+fn audio(dir: &Path, from: Source) -> Result<(Imported, Option<m2_runtime::audio::Asset>), EditError> {
+    let mut channels: Vec<Vec<f32>> = vec![];
+    let i = super::audio(dir, from, &mut |piece| {
+        channels.resize(piece.len(), vec![]);
+        for (c, p) in channels.iter_mut().zip(piece) {
+            c.extend_from_slice(p);
+        }
+    })?;
+    let decoded = (!i.reused).then_some(m2_runtime::audio::Asset { channels, sample_rate: i.rate as f64 });
+    Ok((i, decoded))
+}
+
 /// A 16-bit WAV of `channels` at `rate`, `seconds` long, each sample from `f(frame, channel)`.
 fn wav_bytes(channels: u16, rate: u32, seconds: f64, f: impl Fn(usize, u16) -> f32) -> Vec<u8> {
     let spec = hound::WavSpec { channels, sample_rate: rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
@@ -147,10 +160,10 @@ fn a_wav_that_doesnt_decode_leaves_nothing() {
 }
 
 #[test]
-fn a_file_over_15_minutes_is_refused() {
+fn a_file_over_3_hours_is_refused() {
     let song = fixture("examples/resample");
-    // A header that says 16 minutes of 8 kHz mono 8-bit; the bytes themselves are few.
-    let frames: u32 = 16 * 60 * 8_000;
+    // A header that says 3 hours and a minute of 8 kHz mono 8-bit; the bytes themselves are few.
+    let frames: u32 = 181 * 60 * 8_000;
     let mut b = vec![];
     b.extend_from_slice(b"RIFF");
     b.extend_from_slice(&(36 + frames).to_le_bytes());
@@ -164,7 +177,7 @@ fn a_file_over_15_minutes_is_refused() {
     b.extend_from_slice(&frames.to_le_bytes());
     b.extend_from_slice(&[128; 64]);
     let words = refusal(audio(&song.0, bytes("long.wav", b)));
-    assert_eq!(words, "long.wav is longer than 15 minutes: music2 keeps audio in memory for now, so it takes files up to 15 minutes.");
+    assert_eq!(words, "long.wav is longer than 3 hours: music2 takes files up to 3 hours.");
     assert_eq!(assets(&song), ["keys-bounce.wav", "keys-bounce.wav.json"]);
 }
 
@@ -284,7 +297,7 @@ fn the_clip_is_the_files_length_at_the_tempo_there() {
 
 #[test]
 fn a_file_name_makes_a_track_name() {
-    let i = |name: &str| Imported { asset: AssetName::new("x.wav").unwrap(), name: name.into(), hash: m2_song::Sha::of(b""), seconds: 1.0, dropped_channels: 0, reused: false };
+    let i = |name: &str| Imported { asset: AssetName::new("x.wav").unwrap(), name: name.into(), hash: m2_song::Sha::of(b""), seconds: 1.0, rate: 48_000, dropped_channels: 0, reused: false };
     assert_eq!(track_label(&i("lead vox.wav")), "Lead vox");
     assert_eq!(track_label(&i("ベース.wav")), "ベース");
     assert_eq!(track_label(&i(".wav")), "Audio");

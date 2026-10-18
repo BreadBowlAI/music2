@@ -215,6 +215,13 @@ pub struct LaneInfo {
     audio: Option<Arc<AudioLane>>,
 }
 
+impl LaneInfo {
+    /// An audio lane's clips and ring.
+    pub fn audio(&self) -> Option<&Arc<AudioLane>> {
+        self.audio.as_ref()
+    }
+}
+
 impl PlanInfo {
     /// Top-level node `node`'s plugin, if it hosts one.
     pub fn plugin(&self, node: usize) -> Option<&PluginAt> {
@@ -533,7 +540,7 @@ impl LanePlan {
                 }
                 (Kind::Control(_), None) => LaneSlot::Control(Some(Arc::new(data.control(m, l)))),
                 (Kind::Audio(ch), from) => {
-                    let lane = Arc::new(AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize));
+                    let lane = AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize);
                     match from.map(|(k, o)| (o, k.info.lanes[o].audio.clone())) {
                         Some((o, Some(was))) if was.same(&lane) => {
                             audio = Some(was);

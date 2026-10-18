@@ -5,7 +5,7 @@ import { useExport } from "../lib/exporting";
 import { tilde } from "../lib/graph";
 import { useModalKeys } from "../lib/modal";
 import { native, nativeAction } from "../lib/native";
-import { BUFFERS, bufferWords, rateWords, settingsApi, useSettings, type Settings, type SettingsChange } from "../lib/settings";
+import { BUFFERS, bufferWords, rateWords, settingsApi, useSettings, type Input, type Settings, type SettingsChange } from "../lib/settings";
 import { Button, MenuRow, Popover } from "./ui";
 import { useMidi } from "../lib/midi";
 
@@ -19,12 +19,15 @@ export default function SettingsDialog() {
 
 /**
  * This machine's settings, applied at once and kept by the server, with no undo: the sound output,
- * its buffer size, what plays now, and where new songs go. Done or Esc closes it; Tab goes round
+ * its buffer size, the sound input an audio track records and Hear yourself (io), the MIDI
+ * keyboards, what plays now, and where new songs go. Done or Esc closes it; Tab goes round
  * (`useModalKeys`). A change of output or buffer makes a new player where the song was, stopped:
  * the Now row follows, and says when play stopped. While an export runs, the output can't change.
  */
 function Dialog({ onClose }: { onClose: () => void }) {
   const [s, setS] = useState<Settings | null>(null);
+  // The sound inputs there are (io); none listed until they are read.
+  const [inputs, setInputs] = useState<Input[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,6 +48,10 @@ function Dialog({ onClose }: { onClose: () => void }) {
         if (got.midi?.devices) useMidi.setState({ devices: got.midi.devices });
       })
       .catch((e) => setError(message(e)));
+    settingsApi
+      .inputs()
+      .then(setInputs)
+      .catch(() => {});
   }, []);
 
   // An export runs: as the page hears it, which follows its end, or as the server said when the
@@ -159,6 +166,11 @@ function Dialog({ onClose }: { onClose: () => void }) {
   const buffers = BUFFERS.filter((n) => !range || (n >= range[0] && n <= range[1]));
   const bufferLabel = (frames: number | null) => (frames === null ? "System default" : bufferWords(frames, rate));
   const exporting = exportRuns || !!s?.exporting;
+  // The sound input (io, D13): the output's own device, or one listed; one chosen and gone keeps its name.
+  const input = s?.input ?? { device: null, name: null, monitor: false };
+  const inputLabel = (id: string | null) =>
+    id === null ? "Same device as the output" : (inputs.find((i) => i.id === id)?.name ?? `${input.name ?? id} (not connected)`);
+  const inputGone = input.device !== null && !inputs.some((i) => i.id === input.device);
 
   return (
     <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && void done()}>
@@ -209,6 +221,37 @@ function Dialog({ onClose }: { onClose: () => void }) {
             />
             <p className="mt-1.5 text-sm text-fg-muted">Smaller is quicker to respond. Larger is safer if the sound drops out.</p>
             {exporting && <p className="mt-1 text-sm text-fg-muted">Wait for the export to finish.</p>}
+          </Row>
+
+          {/* What an audio track records (io, D13), and hearing it while recording (D21: off by default). */}
+          <Row label="Sound input" id="settings-input">
+            <Choose
+              id="settings-input"
+              menu={menu}
+              setMenu={setMenu}
+              testid="settings-input"
+              label={inputLabel(input.device)}
+              disabled={!s || busy}
+              rows={[
+                { key: "default", label: inputLabel(null), on: input.device === null, pick: () => void change({ input: { ...input, device: null, name: null } }) },
+                ...(inputGone ? [{ key: input.device!, label: inputLabel(input.device), on: true, pick: () => {} }] : []),
+                ...inputs.map((i) => ({ key: i.id, label: i.name, on: input.device === i.id, pick: () => void change({ input: { ...input, device: i.id, name: i.name } }) })),
+              ]}
+            />
+            <label className="mt-2 flex items-center gap-2 text-base text-fg cursor-pointer select-none w-fit">
+              <input
+                type="checkbox"
+                checked={input.monitor}
+                disabled={!s || busy}
+                data-testid="settings-hear"
+                onChange={(e) => void change({ input: { ...input, monitor: e.target.checked } })}
+                className="size-3.5 accent-accent cursor-pointer"
+              />
+              Hear yourself while recording
+            </label>
+            <p data-testid="settings-hear-note" className="mt-1 text-sm text-fg-muted">
+              Use headphones: speakers feed back into the microphone.
+            </p>
           </Row>
 
           {/* Which MIDI keyboards play (studio lane B, Q28): each one plugged in, or turned off before. */}

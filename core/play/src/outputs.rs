@@ -156,7 +156,7 @@ fn device_outputs() -> Vec<Output> {
 /// the default (`default`, an id) first: of the devices a name has, the one a person means
 /// ([`rank`]) whose config reads (`opens`, which opens the device: tried best first, and no
 /// further than the first that opens). Devices nobody means as an output aren't listed.
-fn listed(seen: &[(String, String)], default: Option<&str>, mut opens: impl FnMut(usize) -> Option<Opens>) -> Vec<Output> {
+pub(crate) fn listed(seen: &[(String, String)], default: Option<&str>, mut opens: impl FnMut(usize) -> Option<Opens>) -> Vec<Output> {
     let mut names: Vec<&str> = vec![];
     for (id, name) in seen {
         if rank(id).is_some() && !names.contains(&name.as_str()) {

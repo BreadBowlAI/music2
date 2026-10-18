@@ -13,6 +13,7 @@ mod latency;
 mod live;
 mod overlay;
 mod parts;
+mod stream;
 mod taps;
 
 const SR: u32 = 48_000;

@@ -1,5 +1,6 @@
 // Record (lane B, gaps #24): what you play on a MIDI keyboard or the keyboard piano becomes a notes
-// clip. R or the top bar's Record button: stopped, one bar of clicks first (unless the menu says
+// clip; on an audio track, what the sound input hears becomes an audio clip (the io plan's slice 3:
+// the input and Hear yourself are Settings', which the server reads). R or the top bar's Record button: stopped, one bar of clicks first (unless the menu says
 // not), then the song plays and the take starts where play started; playing, it starts now. R
 // again, or Space, ends it: the server writes it as one clip over whole bars, one Undo step
 // ("Undo recording on Bass"), and the window selects it.
@@ -16,7 +17,7 @@ import { on } from "./events";
 import { useClipSelection } from "./clips";
 import { findLane, clipIndex, lockReason, type GraphState } from "./graph";
 import { useGrid } from "./grid";
-import { holdTarget, currentTarget } from "./playTarget";
+import { holdTarget, currentRecordTarget } from "./playTarget";
 import { request } from "./projects";
 import { settingsApi } from "./settings";
 import { useStore } from "./store";
@@ -37,6 +38,9 @@ export interface Take {
   phase: "count" | "take";
   module: string;
   lane: string;
+  /** A notes take, or an audio take from the sound input (io); `hear`: the input plays on the track while it records. */
+  kind?: "notes" | "audio";
+  hear?: boolean;
   /** The bar line the clip starts on, and where recording started. */
   start: number;
   from: number;
@@ -111,12 +115,12 @@ function notesGrid() {
   return typeof g.pick === "number" && g.step > 0 ? g.step : 0.25;
 }
 
-/** Set the take as heard; the take's lane is what keys play while it runs (D8). */
+/** Set the take as heard; a notes take's lane is what keys play while it runs (D8). */
 function show(take: Take | null) {
   const was = useRecord.getState();
   const counted = take?.phase === "count" ? (was.take?.phase === "count" ? was.counted : performance.now()) : null;
   useRecord.setState({ take, counted });
-  holdTarget(take ? { module: take.module, lane: take.lane } : null);
+  holdTarget(take && take.kind !== "audio" ? { module: take.module, lane: take.lane } : null);
   listen(take?.phase === "count");
 }
 
@@ -129,14 +133,14 @@ export function toggleRecord() {
   void startRecording();
 }
 
-/** Start a take on the lane keys play (Q21). */
+/** Start a take on the lane keys play (Q21), or on the selected audio track (io). */
 export async function startRecording() {
   const { graph, toast, connected } = useStore.getState();
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return toast(`${why}.`);
-  const t = currentTarget();
-  if (!t) return toast("Select a track with notes to record on it.");
+  const t = currentRecordTarget();
+  if (!t) return toast("Select a notes track or an audio track to record on it.");
   useRecord.setState({ asking: true });
   const stopped = !playingNow();
   try {
@@ -242,7 +246,8 @@ function selectWritten(graph: GraphState | null) {
 }
 
 interface TakeMsg extends Partial<Take> {
-  written?: { revision: number; made: { module: string; lane: string; id: string }[]; module: string; lane: string };
+  /** `note`: what to say about an audio take (the disk was slow, the input went away). */
+  written?: { revision: number; made: { module: string; lane: string; id: string }[]; module: string; lane: string; note?: string };
   empty?: boolean;
   /** The code doesn't compile: the take is written once it does. */
   waiting?: string;
@@ -254,6 +259,7 @@ on<TakeMsg>("take", (m) => {
   if (m.written) {
     toSelect = m.written.made[0] ?? null;
     selectWritten(graph);
+    if (m.written.note) toast(m.written.note);
     return;
   }
   if (m.empty) return toast("Nothing was played, so nothing was recorded.");

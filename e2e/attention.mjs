@@ -175,6 +175,11 @@ await until(async () => (await pop(), !!(await page.$(`${likely}:not([disabled])
 await page.click(likely);
 check(await until(() => exists(NEW) && !exists(OLD)), "moved again");
 // One toast shows at a time, so the other change is one made outside the app, which makes none.
+// The move's own revision first: its files are on the disk a moment before the server publishes it,
+// and a revision read before that would let the move's own revision pass for the outside edit's
+// (io's final check: the toast's Undo then undid the move, once).
+const undoTitle = () => page.$eval('button[aria-label="Undo"]', (b) => b.title);
+await until(async () => (await undoTitle()) === "Undo “Move all to Kick (kicks)” (⌘Z)");
 const songBefore = read("song.ts");
 const revBefore = (await state()).view.revision;
 // The page too (D7): a toast's Undo judges by the revision the page shows, so the page must have the
@@ -187,7 +192,6 @@ write("song.ts", `${songBefore}// an edit made outside the app\n`);
 await until(async () => (await state()).view.revision > revBefore);
 const shown = await until(async () => Number(await page.$eval("[data-revision]", (e) => e.dataset.revision).catch(() => 0)) > revBefore);
 // The outside edit is no undo step (gaps #29: the server names the steps): Undo still takes back the move, and says so.
-const undoTitle = () => page.$eval('button[aria-label="Undo"]', (b) => b.title);
 check(!!(await fresh) && shown && (await undoTitle()) === "Undo “Move all to Kick (kicks)” (⌘Z)", `the page has the outside edit; its Undo still names the move (${await undoTitle()})`);
 const clicked = await page.evaluate(() => {
   const moved = [...document.querySelectorAll("[data-testid=toast]")].filter((t) => t.textContent.startsWith("Moved data/kick to data/kicks."));

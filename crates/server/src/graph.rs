@@ -60,6 +60,7 @@ mod lanes;
 mod tempo_lease;
 mod import;
 pub mod record;
+mod take_audio;
 pub(crate) mod exchange;
 pub(crate) mod plugin_window;
 
@@ -68,7 +69,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::render::{Length, Render};
@@ -203,6 +204,9 @@ pub struct Activity {
     pub late: u64,
     /// The sound output's name (gaps #31); None with no player, or while none plays.
     pub output: Option<String>,
+    /// For 10 s after an audio lane missed its audio, the words that say so: "The disk was too
+    /// slow: Vox skipped a moment." (RENDER-30, D7).
+    pub disk: Option<String>,
     /// No output started, so the silent player stands in: the song plays silently (gaps #13).
     pub no_output: bool,
 }
@@ -215,6 +219,16 @@ impl Activity {
         }
     }
 }
+
+/// What the status said about the disk: each module's misses as last seen, and the last words.
+#[derive(Default)]
+struct DiskSeen {
+    misses: HashMap<String, u64>,
+    said: Option<(Instant, String)>,
+}
+
+/// How long the status says the disk was too slow.
+const DISK_SAID: Duration = Duration::from_secs(10);
 
 /// What `begin` and `update` read: the accepted revision's controls and what plays. Published by
 /// the actor's first phase, before the view.
@@ -404,6 +418,8 @@ struct Inner {
     busy: Mutex<Busy>,
     /// What the actor ended or saved on its own (a pending commit), for the watcher to toast.
     notices: Mutex<Vec<String>>,
+    /// Each module's audio lanes' misses as last seen, and the last words about one (D7).
+    disk: Mutex<DiskSeen>,
     /// The commit being made durable after its preview, if one is (PLANE-5).
     saving: Mutex<Option<Saving>>,
     /// Who creates this Graph's plugin instances: their events come to its actor alone, and their
@@ -561,6 +577,7 @@ impl Inner {
             last_taken_in: Mutex::default(),
             busy: Mutex::default(),
             notices: Mutex::default(),
+            disk: Mutex::default(),
             saving: Mutex::default(),
             watch: Mutex::default(),
             ticking: Mutex::default(),
@@ -678,8 +695,22 @@ impl Inner {
             load,
             late,
             output: device.as_ref().filter(|d| !self.output.standing_in(d.epoch)).map(|d| d.player.device.clone()),
+            disk: device.as_ref().and_then(|d| self.disk_words(&d.player)),
             no_output: device.as_ref().is_some_and(|d| self.output.standing_in(d.epoch)),
         }
+    }
+
+    /// The words for a lane that missed its audio lately (D7): the track whose lane missed last.
+    fn disk_words(&self, player: &m2_play::Player) -> Option<String> {
+        let mut seen = self.disk.lock();
+        for (module, n) in player.disk_misses() {
+            let was = seen.misses.insert(module.clone(), n).unwrap_or(n);
+            if n > was {
+                let label = record::label_of(&self.control.lock(), &module);
+                seen.said = Some((Instant::now(), format!("The disk was too slow: {label} skipped a moment.")));
+            }
+        }
+        seen.said.as_ref().filter(|(t, _)| t.elapsed() < DISK_SAID).map(|(_, w)| w.clone())
     }
 
     /// The view, the timeline, the project's name and folder, the transport as it is now, and the
@@ -863,6 +894,8 @@ impl Graph {
 
     pub fn open(&self, dir: &Path) -> Result<Value> {
         let dir = dir.to_path_buf();
+        // The sound input stays open while a song is (D14): another song opens it again.
+        self.close_input();
         let opened = self.call(move |a| a.open(&dir))?;
         // The loop it had when it was last open here (design-8b §2.2), set before anything plays.
         // One the song's tempo makes too short now is left off.
@@ -874,7 +907,15 @@ impl Graph {
 
     /// Close the project. Returns once its plugin instances are destroyed, or after 2 s.
     pub fn close(&self) -> Teardown {
+        self.close_input();
         self.call(|a| Ok(a.close())).unwrap_or_default()
+    }
+
+    /// Close the player's sound input, if one is open (D14).
+    fn close_input(&self) {
+        if let Some(d) = self.inner.current_device() {
+            d.player.close_input();
+        }
     }
 
     /// What every change to the open project is announced with: its session, the accepted

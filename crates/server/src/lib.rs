@@ -380,6 +380,12 @@ pub(crate) fn midi_injects() -> bool {
     std::env::var("M2_MIDI").as_deref() == Ok("inject")
 }
 
+/// Whether `POST /api/graph/input/inject` answers: only with `M2_AUDIO_INPUT=inject`, and in this
+/// crate's own tests (the io plan's D24).
+pub(crate) fn input_injects() -> bool {
+    cfg!(test) || std::env::var("M2_AUDIO_INPUT").as_deref() == Ok("inject")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
