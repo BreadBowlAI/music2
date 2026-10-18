@@ -62,6 +62,11 @@ pub trait PluginHost: Send + Sync {
     /// Every plugin installed, and why each bundle that failed to load did: the host loads them,
     /// so a program that hosts plugins in another process never loads plugin code (HOST-3).
     fn scan(&self) -> (Vec<Found>, Vec<String>);
+    /// The presets `plugin` offers itself, through CLAP's preset discovery (HOST-8): each
+    /// provider's locations inside the plugin, and its files (at most [`MAX_PRESET_FILES`] read).
+    /// Found where the plugin runs, on the host's main thread. None for a plugin with no such
+    /// factory; an error, in words, when its library doesn't load.
+    fn presets(&self, plugin: &Found) -> Result<Vec<Offered>>;
     // Any thread.
     /// Instances created and not yet destroyed, across every owner.
     fn live(&self) -> u64;
@@ -215,7 +220,31 @@ pub enum MainCall {
     Info,
     /// Warnings and errors it logged since the last call.
     TakeLog,
+    /// Load one of its own presets ([`PluginHost::presets`], CLAP's `preset-load`): only on an
+    /// instance made for it (HOST-8), whose state is then saved. Answers [`Reply::Loaded`].
+    LoadPreset { location: PresetAt, key: Option<String> },
 }
+
+/// Where a plugin's own preset is (CLAP's preset discovery).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PresetAt {
+    /// Inside the plugin.
+    Plugin,
+    /// In this file.
+    File(std::path::PathBuf),
+}
+
+/// A preset a plugin offers itself (HOST-8): its name, and where `preset-load` finds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Offered {
+    pub name: String,
+    pub location: PresetAt,
+    /// Which of the location's presets, when it holds several (CLAP's `load_key`).
+    pub key: Option<String>,
+}
+
+/// The most files [`PluginHost::presets`] reads for one plugin.
+pub const MAX_PRESET_FILES: usize = 2_000;
 
 /// What to do with a plugin's window. The window belongs to the process that hosts the plugin:
 /// what tests ask of it is asked there too ([`WindowCall::Shown`], [`WindowCall::AskToClose`]),
@@ -244,6 +273,8 @@ pub enum Reply {
     Text(Option<String>),
     Info(Box<Info>),
     Log(Vec<String>),
+    /// A preset loaded ([`MainCall::LoadPreset`]).
+    Loaded,
     /// Tests (debug builds): its window's handle, as the plugin was given it (to compare only),
     /// and whether the window is shown; None when it has no window.
     #[cfg(debug_assertions)]

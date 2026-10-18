@@ -71,7 +71,7 @@ pub(crate) fn calls_of<'a>(m: &'a Module, n: &Node) -> impl Iterator<Item = u32>
 }
 
 /// The nodes call `site` made, and the module they are in.
-fn made_by(compiled: &Compiled, site: u32) -> Option<(String, BTreeSet<String>)> {
+pub(crate) fn made_by(compiled: &Compiled, site: u32) -> Option<(String, BTreeSet<String>)> {
     let output = compiled.outputs.iter().find(|o| o.site == site)?;
     let mut ids = BTreeSet::new();
     let m = compiled.ir.modules.iter().find(|m| m.key == output.module)?;
@@ -219,9 +219,12 @@ fn joined(mut imports: Vec<(u32, String)>) -> Vec<(u32, String)> {
     out
 }
 
-/// Put effect `component` (a ComponentId, `std:delay`) after call `call` (`file#ordinal` at
-/// revision `at`).
+/// Put effect `component` (a ComponentId, `std:delay`, or an installed plugin, `clap:<id>`) after
+/// call `call` (`file#ordinal` at revision `at`).
 pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Result<Edited, EditError> {
+    if component.starts_with("clap:") {
+        return crate::plugins::add_effect(s, at, call, component);
+    }
     ready(s)?;
     let effect = effects(s).into_iter().find(|e| e.component == component).ok_or_else(|| EditError::NotFound(component.to_string()))?;
     let desc = s.catalog().components[component].clone();
@@ -230,9 +233,7 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
         return Err(EditError::NotFound(call.to_string()));
     }
     let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
-    let written = &text[site.start as usize..site.end as usize];
     let (args, ctors) = insert_args(&desc, &s.accepted().compiled.units);
-    let wrapped = format!("{}({written}{args})", effect.name);
     let mut imports = vec![];
     if let Some(i) = import_insertion(&text, &effect.module, &effect.name) {
         imports.push(i);
@@ -242,12 +243,39 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
             imports.extend(import_insertion(&text, "@m2/core", ctor));
         }
     }
-    let imports = joined(imports);
+    let wrap = Wrap { open: format!("{}(", effect.name), close: format!("{args})"), imports, callee: effect.name, label: effect.label };
+    wrap_call(s, &site, wrap, |_, _, _| Ok(()))
+}
+
+/// How a call is wrapped: the text written before it and after it, the imports that text needs,
+/// the new call's callee (how the candidate's site is found), and what is added, in words.
+pub(crate) struct Wrap {
+    pub open: String,
+    pub close: String,
+    pub imports: Vec<(u32, String)>,
+    pub callee: String,
+    pub label: String,
+}
+
+/// Wrap call `site` of the accepted revision as `w` says, as one `TextEdit` Tx confined to the call:
+/// two insertions around it (R5), so its characters stay as they are, and the imports. The planner
+/// asserts `check` on the new call's site in the candidate, then that the new call wraps the old
+/// one and nothing else changed (WRITE-9).
+pub(crate) fn wrap_call(
+    s: &mut Session,
+    site: &Site,
+    w: Wrap,
+    check: impl FnOnce(&Session, &Checked, u32) -> Result<(), EditError>,
+) -> Result<Edited, EditError> {
+    let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
+    let written = &text[site.start as usize..site.end as usize];
+    let wrapped = format!("{}{written}{}", w.open, w.close);
+    let imports = joined(w.imports);
     let shift: u32 = imports.iter().filter(|(at, _)| *at <= site.start).map(|(_, line)| line.len() as u32).sum();
     // Two insertions around the call (R5): an import at the call's own start goes before the
-    // effect's name, in the same edit.
+    // wrapping text, in the same edit.
     let mut edits: Vec<(u32, u32, String)> = vec![];
-    let mut opening = format!("{}(", effect.name);
+    let mut opening = w.open;
     let mut ranges = vec![Range::bytes(site.start, site.end)];
     for (at, line) in &imports {
         if *at == site.start {
@@ -258,27 +286,28 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
         }
     }
     edits.push((site.start, site.start, opening));
-    edits.push((site.end, site.end, format!("{args})")));
+    edits.push((site.end, site.end, w.close));
     edits.sort_by_key(|e| e.0);
     let file = path(&site.file)?;
     let expect = Expect::Confined(Confined { ranges: [(file.clone(), Ranges::Ranges(ranges))].into(), ..Confined::default() });
     let label = (written.to_string(), wrapped.clone());
     let tx = plan::planned(s, label.clone(), vec![plan::text_edit(&file, &text, &edits)], expect);
-    let refused = || EditError::Rejected(format!("adding {} here would change more than putting it after this sound", effect.label));
-    let said =
-        |why: &str| EditError::Rejected(format!("adding {} here would change more than putting it after this sound ({why})", effect.label));
+    let what = w.label;
+    let refused = || EditError::Rejected(format!("adding {what} here would change more than putting it after this sound"));
+    let said = |why: &str| EditError::Rejected(format!("adding {what} here would change more than putting it after this sound ({why})"));
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;
         // The planner's assertion (WRITE-9): the new call wraps the old one, and nothing else changed.
         let candidate = &checked.candidate().compiled;
-        let new = candidate.sites.iter().find(|x| x.file == site.file && x.start == site.start + shift && x.callee == effect.name);
+        let new = candidate.sites.iter().find(|x| x.file == site.file && x.start == site.start + shift && x.callee == w.callee);
         let new = new.ok_or_else(refused)?.id;
+        check(s, checked, new)?;
         match wraps(candidate, &checked.baseline().compiled.ir, new) {
             true => Ok(()),
             false => Err(refused()),
         }
     })?;
-    Ok(Edited { revision: done.number, file: site.file, before: label.0, after: label.1 })
+    Ok(Edited { revision: done.number, file: site.file.clone(), before: label.0, after: label.1 })
 }
 
 /// Take out effect call `call`, leaving what it was applied to.

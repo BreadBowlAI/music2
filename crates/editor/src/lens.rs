@@ -298,6 +298,45 @@ impl Insertion {
     }
 }
 
+/// The edits writing several declared controls a call leaves out into it at once, each
+/// `(insertion, written)` as [`Insertion::edits`] takes it, in the file's order: where several
+/// share a place (a preset's load, FMT-22), one insertion writes them all, so two never collide.
+/// A positional one goes first, and the others join the first one's options as more properties.
+/// None when they can't be joined: a dictionary entry's, or options planned inside empty
+/// parentheses after a positional one.
+pub(crate) fn together(items: &[(Insertion, String)]) -> Option<Vec<(u32, u32, String)>> {
+    let mut places: std::collections::BTreeMap<(u32, u32), Vec<&(Insertion, String)>> = Default::default();
+    for item in items {
+        places.entry((item.0.start, item.0.end)).or_default().push(item);
+    }
+    let mut out = vec![];
+    for ((start, end), group) in places {
+        if let [(one, written)] = group[..] {
+            out.extend(one.edits(written));
+            continue;
+        }
+        if group.iter().any(|(i, _)| i.open.is_some() || i.entry.is_some()) {
+            return None;
+        }
+        let positional = |i: &Insertion| i.path.len() == 1;
+        let mut text: String = group.iter().filter(|(i, _)| positional(i)).map(|(i, w)| format!("{}{w}{}", i.prefix, i.suffix)).collect();
+        let mut rest = group.iter().filter(|(i, _)| !positional(i));
+        if let Some((first, written)) = rest.next() {
+            if !text.is_empty() && !first.prefix.starts_with([',', '\n']) {
+                return None;
+            }
+            text += &first.prefix;
+            text += written;
+            for (i, w) in rest {
+                text += &format!(", {}: {w}", i.path.last()?);
+            }
+            text += &first.suffix;
+        }
+        out.push((start, end, text));
+    }
+    Some(out)
+}
+
 /// The blanks that start the line byte `at` of `source` is on: its indent.
 fn indent_at(source: &str, at: u32) -> &str {
     let line = source.get(..at as usize).and_then(|t| t.rfind('\n')).map_or(0, |i| i + 1);

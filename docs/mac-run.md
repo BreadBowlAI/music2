@@ -5,13 +5,13 @@
 - Do them after the check in [HANDOFF.md](../HANDOFF.md) ("The owner's Mac command") has passed.
 - About two hours in all. You can do one part at a time, on different days.
 - After each part, tell the lead what you saw and heard. That is the last step of each part.
-- The steps are numbered 7 to 123, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
+- The steps are numbered 7 to 132, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
 
 **What you need**
 
 | Thing | For steps |
 |---|---|
-| The test plugins (Surge XT and Airwindows), as the check uses them | 8 to 10, 30, 88 to 94 |
+| The test plugins (Surge XT and Airwindows), as the check uses them | 8 to 10, 30, 88 to 94, 117 to 124 |
 | Headphones (or AirPods) | 11, 12, 58, 59, 78 |
 | A MIDI keyboard with a sustain pedal, a pitch wheel and a mod wheel | 51 to 53, 65 to 68, 103 to 107 |
 | A USB microphone | 79, 81, 111 to 115 |
@@ -35,7 +35,8 @@
 | 96 to 102 | stretched clips, Follow tempo | track `sx` |
 | 103 to 110 | one-note sounds, the wheels, MIDI files | track `pm` |
 | 111 to 116 | the sound input's problems | track `ex` |
-| 117 to 123 | buses: a shared reverb, a send before the fader, a group | track `bus` |
+| 117 to 125 | adding an installed plugin, and presets | track `br` |
+| 126 to 132 | buses: a shared reverb, a send before the fader, a group | track `bus` |
 
 ---
 
@@ -199,14 +200,28 @@ that has a pitch wheel and a mod wheel):
 | 115 | Press R again. | The same "music2 can't use the microphone…" words. Nothing records. Then turn music2 (or the Terminal) back on in System Settings ▸ Privacy & Security ▸ Microphone. |
 | 116 | Tell the lead what you saw and heard at 111 to 115. | |
 
+**A check by ear of plugins from the app, and presets** (`br`, about 15 minutes, with Surge XT and Airwindows installed):
+
+| # | Do this | You should hear or see |
+|---|---|---|
+| 117 | Click **Open an Example**, then **First song**. In the side browser, under **Effects**, open **Plugins**. | After a moment it lists the installed effect plugins, Airwindows among them. **Look again** is at its foot. |
+| 118 | Drag Airwindows onto the **Bass** track. Press Space. | A message says it was added after the bass, with **Undo**. Its card shows under **Device**. The song plays on, with no click. |
+| 119 | Press ⌘Z. | The plugin goes, in one step. |
+| 120 | **+ Track ▸ Plugins ▸ Surge XT**. Click the new track, then **Device**. On the Surge XT card, click **Open window**. | A new track named Surge XT. Surge XT's own window opens. |
+| 121 | On the Surge XT card in music2, click **Presets**. While its list loads, turn a knob in Surge XT's window. | The knob moves at once: the window never freezes. Within a second or two the list shows "Surge XT's", about 2,000 names. |
+| 122 | Click one of them. Play a few notes (a MIDI keyboard, or the keyboard piano). Then press ⌘Z and play again. | A message "Loaded … into Surge XT". You hear that preset. After ⌘Z, the old sound. |
+| 123 | **Presets ▸ Save as preset…**, type `My Surge`, press Return. Change a knob in Surge XT's window. Then **Presets ▸ My Surge**. | "Saved…". After the load you hear the sound you saved. `~/Music/music2/Presets` has the file. |
+| 124 | **+ Track ▸ Synth pluck**. On its card, **Presets ▸ Glass**. Play notes. Press ⌘Z. | You hear the glassy pluck, then the old one after ⌘Z. |
+| 125 | Tell the lead what you saw and heard at 117 to 124. | |
+
 **A check by ear of buses** (`bus`, about 10 minutes):
 
 | # | Do this | You should see and hear |
 |---|---|---|
-| 117 | Click **Open an Example**, then **First song**. Press ⌥3 for Mix. Click **Add bus**, then **Reverb**. | A Reverb strip after Keys, with a merge mark before its name. Every other strip has a row "+ Reverb". A message says to turn up a track's Reverb knob. |
-| 118 | Press Space. On the Keys strip, click the **+** beside Reverb. | Within a moment the keys sound like they are in a room. No click. The Reverb strip's meter moves. |
-| 119 | While it plays, drag that small Reverb knob on Keys up, then down, and let go. | More room as it goes up, less as it goes down. No clicks, no crackle. |
-| 120 | Drag the Keys fader down to the bottom. Then right-click the Reverb knob on Keys and click **Before the fader**. | With the fader down, the keys and their room both go. After **Before the fader**, only the room comes back: a ghostly keys sound. A small dot on the knob. Press ⌘Z twice: as before. |
-| 121 | Click **Add bus**, then **Group**. Under the Kick fader, click **Master** and pick **Group**. Do the same under Hats. Then drag the Group fader down and up. | Kick and Hats go quieter and louder together. Bass and Keys don't change. Kick's strip says Group under its fader. |
-| 122 | On the Group strip, click the **+** beside Reverb. Then, under the Reverb fader, click **Master**. | In the list, Group is grey and says "Group already feeds Reverb, so Reverb can't go to Group." |
-| 123 | Tell the lead what you saw and heard at 117 to 122. | |
+| 126 | Click **Open an Example**, then **First song**. Press ⌥3 for Mix. Click **Add bus**, then **Reverb**. | A Reverb strip after Keys, with a merge mark before its name. Every other strip has a row "+ Reverb". A message says to turn up a track's Reverb knob. |
+| 127 | Press Space. On the Keys strip, click the **+** beside Reverb. | Within a moment the keys sound like they are in a room. No click. The Reverb strip's meter moves. |
+| 128 | While it plays, drag that small Reverb knob on Keys up, then down, and let go. | More room as it goes up, less as it goes down. No clicks, no crackle. |
+| 129 | Drag the Keys fader down to the bottom. Then right-click the Reverb knob on Keys and click **Before the fader**. | With the fader down, the keys and their room both go. After **Before the fader**, only the room comes back: a ghostly keys sound. A small dot on the knob. Press ⌘Z twice: as before. |
+| 130 | Click **Add bus**, then **Group**. Under the Kick fader, click **Master** and pick **Group**. Do the same under Hats. Then drag the Group fader down and up. | Kick and Hats go quieter and louder together. Bass and Keys don't change. Kick's strip says Group under its fader. |
+| 131 | On the Group strip, click the **+** beside Reverb. Then, under the Reverb fader, click **Master**. | In the list, Group is grey and says "Group already feeds Reverb, so Reverb can't go to Group." |
+| 132 | Tell the lead what you saw and heard at 126 to 131. | |

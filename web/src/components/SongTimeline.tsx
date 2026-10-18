@@ -61,6 +61,7 @@ import { chord, keyName, mod, opt } from "../lib/native";
 import { followNow, roundZoom, setFollow, setZoom, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
 import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
+import { listedInstrument } from "../lib/plugins";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, useReorder } from "./Tracks";
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { RulerMarkers } from "./Markers";
@@ -1777,7 +1778,7 @@ const Tracks = memo(function Tracks({
         }}
         onDrop={(e) => {
           const component = e.dataTransfer.getData(INSTRUMENT_DRAG);
-          const instrument = useStore.getState().graph?.instruments?.find((i) => i.component === component);
+          const instrument = useStore.getState().graph?.instruments?.find((i) => i.component === component) ?? listedInstrument(component);
           if (!instrument) return;
           e.preventDefault();
           void addTrack(instrument, rows.filter((r) => r.track).at(-1)?.module ?? null);

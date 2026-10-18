@@ -306,26 +306,51 @@ pub fn delete_data(s: &mut Session, at: u64, path: &Path) -> Result<Edited, Edit
 /// it, together, as one Tx on their current hashes (or absent). It may replace a state that is
 /// there, as one undoable step. The state it loads is its own write (C1).
 pub fn plugin_state(s: &mut Session, module: &Key, path: &[Key], blob: Vec<u8>, sidecar: &Sidecar) -> Result<Edited, EditError> {
+    let w = state_writes(s, module, path, blob, sidecar)?;
+    let place = format!("{module} › {}", path.iter().map(Key::as_str).collect::<Vec<_>>().join("/"));
+    let was = if s.accepted().snapshot.binaries.contains_key(&w.blob) { "saved state" } else { "no saved state" };
+    let mut tx = plan::planned(
+        s,
+        (format!("{place}: {was}"), format!("{place}: {}", sidecar.plugin)),
+        w.ops,
+        Expect::Confined(Confined::default()),
+    );
+    tx.base.extend(w.bases);
+    commit(s, tx, &w.blob, |_, _| Ok(()))
+}
+
+/// A plugin state's two writes (FMT-17): the blob and its sidecar, and their bases.
+pub(crate) struct StateWrites {
+    pub ops: Vec<Op>,
+    /// Each file as it is on disk now, so a state saved here replaces what is there (one step
+    /// undo puts back).
+    pub bases: Vec<(TxPath, Base)>,
+    pub blob: PathBuf,
+    /// The blob there now, by its hash; None when there is none.
+    pub held: Option<m2_song::Sha>,
+}
+
+/// The writes that save `blob` as the state of the plugin at `path` of `module`, with its sidecar.
+pub(crate) fn state_writes(s: &Session, module: &Key, path: &[Key], blob: Vec<u8>, sidecar: &Sidecar) -> Result<StateWrites, EditError> {
     let at = |sidecar| DataPath::PluginState { module: module.clone(), path: path.to_vec(), sidecar }.path();
     let (blob_path, side_path) = (at(false), at(true));
     let ops = vec![
         Op::Write { file: tx_path(&blob_path)?, bytes: Payload::Bytes(blob.into()) },
         Op::Write { file: tx_path(&side_path)?, bytes: Payload::Text(sidecar.canonical().into()) },
     ];
-    let place = format!("{module} › {}", path.iter().map(Key::as_str).collect::<Vec<_>>().join("/"));
-    let was = if s.accepted().snapshot.binaries.contains_key(&blob_path) { "saved state" } else { "no saved state" };
-    let mut tx =
-        plan::planned(s, (format!("{place}: {was}"), format!("{place}: {}", sidecar.plugin)), ops, Expect::Confined(Confined::default()));
-    // Based on the files as they are now, so a state saved here replaces what is there (one
-    // step undo puts back).
+    let mut bases = vec![];
+    let mut held = None;
     for p in [&blob_path, &side_path] {
         let base = match std::fs::read(s.accepted().project.dir.join(p)) {
             Ok(bytes) => Base::Sha(m2_song::Sha::of(&bytes)),
             Err(_) => Base::Absent,
         };
-        tx.base.insert(tx_path(p)?, base);
+        if let (true, Base::Sha(sha)) = (p == &blob_path, &base) {
+            held = Some(*sha);
+        }
+        bases.push((tx_path(p)?, base));
     }
-    commit(s, tx, &blob_path, |_, _| Ok(()))
+    Ok(StateWrites { ops, bases, blob: blob_path, held })
 }
 
 /// Put one clip on audio lane `addr` (WRITE-1's `m2 bounce --place`): a `Clips` op when the lane

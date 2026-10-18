@@ -23,6 +23,8 @@ mod routes_audio;
 mod peaks;
 mod routes_record;
 mod routes_exchange;
+mod routes_plugins;
+mod routes_presets;
 pub mod stems;
 
 use std::net::SocketAddr;
@@ -64,6 +66,9 @@ pub struct AppState {
     settings: OnceLock<settings::Settings>,
     /// Listening to MIDI keyboards (8b.10), unless `M2_MIDI` says not to ([`spawn_midi`]).
     midi: OnceLock<m2_os::midi::Listening>,
+    /// The installed plugins as the app lists them (gaps #32), once a list was asked for: kept for
+    /// the app run, until Look again. Held through a scan, so two asks scan once.
+    plugins: Mutex<Option<serde_json::Value>>,
 }
 
 impl AppState {
@@ -79,7 +84,19 @@ impl AppState {
             recent: OnceLock::new(),
             settings: OnceLock::new(),
             midi: OnceLock::new(),
+            plugins: Mutex::default(),
         }
+    }
+
+    /// The installed plugins, as the side browser and + Track list them: the host process's scan
+    /// (HOST-3), made on the first ask, or now when `again` (Look again), and kept. It waits for a
+    /// scan, up to 2 minutes: call it off the async threads.
+    pub fn plugins(&self, again: bool) -> serde_json::Value {
+        let mut kept = self.plugins.lock();
+        if again || kept.is_none() {
+            *kept = Some(routes_plugins::listed(&*self.graph.host()));
+        }
+        kept.clone().unwrap_or_default()
     }
 
     /// Keep this machine's settings in `file` (`~/.music2/settings.json`) from now on, and apply

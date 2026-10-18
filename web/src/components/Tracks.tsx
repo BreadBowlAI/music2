@@ -8,12 +8,14 @@ import { changeInstrument, currentInstrument, notesLane } from "../lib/instrumen
 import { chord, opt } from "../lib/native";
 import { muteInSongCall } from "../lib/overlays";
 import { DEFAULT_ORDER, TRACK_COLORS, type TrackColorName } from "../lib/palette";
+import { isPlugin, pluginInstruments, usePluginList, wantPlugins } from "../lib/plugins";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import DeleteDialog from "./DeleteDialog";
 import { undoAction } from "./GraphCanvas";
 import { MenuRow, Popover } from "./ui";
 import { addAudioTrack, AUDIO_TRACK } from "../lib/audioImport";
+import PluginsFoot from "./PluginsFoot";
 
 // Tracks (design-8b §3, taste.md §3.4, TL-2, TL-3): + Track and its instrument list, the header
 // menu, duplicate, delete with its dialog, reorder by dragging a header, and colours by name.
@@ -289,6 +291,9 @@ export function instrumentGroups(list: Instrument[], query: string) {
  *
  * To change a track's instrument (`swap`, polish A3): titled for the track, the instrument it plays
  * ticked and active, and Enter changes it.
+ *
+ * + Track's last group is Plugins (gaps #32): the installed instrument plugins, asked for as the
+ * list opens. Change Instrument has none: changing a track's instrument to a plugin is gaps #1.
  */
 function InstrumentPicker({
   graph,
@@ -304,9 +309,13 @@ function InstrumentPicker({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  // + Track's last group is Audio (lane A's Q8); Change Instrument has none.
+  // + Track's groups end with Audio (lane A's Q8), then Plugins (gaps #32); Change Instrument has neither.
   const listed = graph.instruments;
-  const all = useMemo(() => [...(listed ?? []), ...(swap ? [] : [AUDIO_TRACK])], [listed, swap]);
+  const plugins = usePluginList((s) => s.plugins);
+  useEffect(() => {
+    if (!swap) wantPlugins();
+  }, [swap]);
+  const all = useMemo(() => [...(listed ?? []), ...(swap ? [] : [AUDIO_TRACK, ...pluginInstruments(plugins)])], [listed, swap, plugins]);
   const groups = useMemo(() => instrumentGroups(all, query), [all, query]);
   const flat = groups.flatMap((g) => g.items);
   const playing = swap ? currentInstrument(graph, swap) : undefined;
@@ -406,6 +415,7 @@ function InstrumentPicker({
             })}
           </div>
         ))}
+        {!swap && <PluginsFoot kind="instrument" />}
       </div>
       {/* Literally code: what adding it writes (BR-5). */}
       {current && (
@@ -415,7 +425,9 @@ function InstrumentPicker({
               ? `${fileOf(graph, swap) ?? "its code"} · ${current.name}(lane.notes("${notesLane(graph, swap)}"))`
               : current === AUDIO_TRACK
                 ? `tracks/${proposed("Audio", taken)}.ts · lane.audio("clips")`
-                : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
+                : isPlugin(current.component)
+                  ? `tracks/${proposed(current.label, taken)}.ts · plugin("${current.component}", { notes: lane.notes("notes") })`
+                  : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
           </span>
         </div>
       )}

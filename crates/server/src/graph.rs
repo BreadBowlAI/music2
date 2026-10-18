@@ -63,6 +63,7 @@ pub mod record;
 mod take_audio;
 pub(crate) mod exchange;
 pub(crate) mod plugin_window;
+mod presets;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -457,6 +458,9 @@ struct Inner {
     open_windows: Mutex<HashSet<u64>>,
     /// `plugins` changed since the watcher last asked.
     plugins_changed: AtomicBool,
+    /// The presets each plugin offers itself, by its id, as its host found them (HOST-8): kept for
+    /// the app run.
+    offered: Mutex<HashMap<String, Result<Vec<m2_plugins::Offered>, String>>>,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -607,6 +611,7 @@ impl Inner {
             plugins: Mutex::new(Value::Object(Default::default())),
             open_windows: Mutex::default(),
             plugins_changed: AtomicBool::new(false),
+            offered: Mutex::new(HashMap::new()),
         }
     }
 
@@ -889,9 +894,14 @@ impl Graph {
     }
 
     /// Tests: one whose player is `player` and whose plugins run on `host` (the host process).
-    #[cfg(test)]
-    pub(crate) fn with_player_on(player: Player, host: Arc<dyn m2_plugins::PluginHost>) -> Graph {
+    #[doc(hidden)]
+    pub fn with_player_on(player: Player, host: Arc<dyn m2_plugins::PluginHost>) -> Graph {
         Graph::hosted(Some(Device { player, epoch: 0, resume: 0.0 }), output::Outputs::real(), host)
+    }
+
+    /// Where its plugins run (the host process in a program, HOST-3): what lists the installed ones.
+    pub fn host(&self) -> Arc<dyn m2_plugins::PluginHost> {
+        self.inner.host.clone()
     }
 
     /// Run `f` on the session's actor and wait for its answer. A request that panics answers

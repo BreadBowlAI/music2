@@ -360,6 +360,12 @@ impl PluginHost for InProcess {
                     m.info.latency = latency;
                     Reply::Info(Box::new(m.info.clone()))
                 }
+                MainCall::LoadPreset { location, key } => {
+                    // What it holds is known no more: the next load of any blob isn't skipped.
+                    c.main().holds = None;
+                    crate::presets::load(c.plugin, &location, key.as_deref()).with_context(|| c.main().info.found.name.clone())?;
+                    Reply::Loaded
+                }
                 MainCall::TakeLog => {
                     let mut log = std::mem::take(&mut *c.host.log.lock().unwrap_or_else(|e| e.into_inner()));
                     let quiet = c.host.logs_dropped.swap(0, Ordering::Relaxed);
@@ -424,6 +430,15 @@ impl PluginHost for InProcess {
 
     fn scan(&self) -> (Vec<Found>, Vec<String>) {
         crate::scan_here()
+    }
+
+    fn presets(&self, plugin: &Found) -> Result<Vec<Offered>> {
+        // Loaded here, never on the main thread (§3.3), as `create` does. The search runs here
+        // too, on the calling thread (HOST-8): CLAP's preset-discovery factory is thread-safe, and
+        // a search that reads many files must not hold up the main thread, which serves every
+        // playing plugin's main-thread calls and windows.
+        let lib = library(&plugin.bundle)?;
+        crate::presets::discover(&lib, &plugin.id)
     }
 
     fn live(&self) -> u64 {

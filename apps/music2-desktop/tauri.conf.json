@@ -34,6 +34,7 @@
       "../../std/m2pkg.toml": "std/m2pkg.toml",
       "../../std/kernels/*.wasm": "std/kernels/",
       "../../std/src/": "std/src/",
+      "../../std/presets/": "std/presets/",
       "../../templates/": "templates/",
       "../../examples/": "examples/"
     },

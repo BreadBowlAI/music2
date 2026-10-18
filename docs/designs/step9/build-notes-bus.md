@@ -145,4 +145,4 @@ From the desktop app on the invisible screen `:98` (the window 1440x900), the bu
 
 ## For the owner's Mac
 
-By ear: [mac-run.md](../../mac-run.md) steps 117 to 123.
+By ear: [mac-run.md](../../mac-run.md) steps 126 to 132.

@@ -224,6 +224,34 @@ fn undo_removes_everything_add_wrote() {
     assert!(!f.0.join("data/synth-bass").exists() && !f.0.join("layout.json").exists());
 }
 
+// Gaps #32, WRITE-10: + Track with an installed instrument plugin writes a track playing it from a
+// notes lane, keyed as the track (HOME-6 files its settings there, as examples/with-plugins does),
+// with its channel and its colour: one Tx, and one Undo takes all of it away.
+#[test]
+fn a_plugin_instrument_track_is_one_tx() {
+    m2_plugins::test_main_thread();
+    m2_plugins::probe::install();
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let before = tree(&f);
+    let at = s.accepted().number;
+    let made = s.add_track("clap:m2.probe", None, None, None).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((made.module.as_str(), made.label.as_str(), made.edited.file.as_str()), ("m2-probe", "m2 probe", "tracks/m2-probe.ts"));
+    assert_eq!(
+        f.read("tracks/m2-probe.ts"),
+        "import { plugin, track } from \"@m2/core\";\n\n\
+         export default track(\"m2-probe\", { name: \"m2 probe\" }, ({ lane }) => \
+         plugin(\"clap:m2.probe\", { notes: lane.notes(\"notes\"), key: \"m2-probe\" }));\n"
+    );
+    assert_eq!(f.read("data/m2-probe/notes.json"), m2_song::canonical(&LaneData::Notes(vec![])));
+    assert_eq!(f.read("song.ts").matches("\"m2-probe\": m2Probe.out").count(), 1);
+    assert!(colours(&s).contains_key("m2-probe"), "it has a colour");
+    assert_eq!(s.accepted().number, at + 1, "one Tx");
+    assert!(s.accepted().compiled.problems.iter().all(|d| d.code != "plugin.missing"));
+    s.undo().unwrap();
+    assert_eq!(tree(&f), before, "one Undo takes it all away");
+}
+
 // FMT-12, ID-18: a duplicate copies the code under its new key and name, every clip with a new
 // id, and the channel with what it does: the bass's duck stays. It goes below its original, in its
 // colour.
