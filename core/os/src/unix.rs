@@ -89,6 +89,11 @@ pub(crate) fn check(ret: libc::c_int) -> io::Result<()> {
     if ret == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
 }
 
+/// `pread`, through std's own wrapper: the position stays where it was.
+pub(crate) fn read_at(f: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+    std::os::unix::fs::FileExt::read_at(f, buf, offset)
+}
+
 pub(crate) fn push(f: &File) -> io::Result<()> {
     // SAFETY: an fsync on a descriptor the caller owns.
     check(unsafe { libc::fsync(f.as_raw_fd()) })

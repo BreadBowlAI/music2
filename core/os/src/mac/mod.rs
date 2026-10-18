@@ -20,7 +20,7 @@ use crate::process::Memory;
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
     c_numbers, change_and_inode, cpu_time, file_id, file_id_of, foreign, host_name, load_average, local_time, make_writable, push,
-    sync_dir, token,
+    read_at, sync_dir, token,
 };
 use crate::unix::{check, cpath};
 
