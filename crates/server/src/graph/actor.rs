@@ -707,7 +707,7 @@ impl Open {
         ] {
             head.insert(k.into(), v);
         }
-        let tracks = tracks.into_iter().map(|TimelineTrack { module, label, track, colour, lanes }| {
+        let tracks = tracks.into_iter().map(|TimelineTrack { module, label, track, bus, colour, lanes }| {
             let lanes = lanes.into_iter().map(|mut lane| {
                 let key = lane.key().to_string();
                 let shown = data.lane(&module, &key).cloned();
@@ -740,7 +740,7 @@ impl Open {
                 super::TimelineLaneJson { key, data: shown, head: rest, json }
             });
             let lanes = lanes.collect();
-            let mut head = match value(&TimelineTrack { module: module.clone(), label, track, colour, lanes: vec![] }) {
+            let mut head = match value(&TimelineTrack { module: module.clone(), label, track, bus, colour, lanes: vec![] }) {
                 Value::Object(m) => m,
                 _ => unreachable!("a track is an object"),
             };

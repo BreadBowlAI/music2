@@ -60,7 +60,7 @@ pub use automate::Automated;
 pub use cable::{Inlet, Outlet};
 pub use controls::{Audition, Control, Declared};
 pub use effect::EffectInfo;
-pub use mix::{Inserted, MasterStrip, MixView, Strip};
+pub use mix::{Inserted, Loop, MasterStrip, MixView, Strip};
 pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
 pub use tracks::{Deleted, Dependent, Instrument, Made};
 pub use view::{GraphView, Knob, ModuleView, ReadOnly, ViewNode};

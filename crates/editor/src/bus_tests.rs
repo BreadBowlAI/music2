@@ -330,3 +330,26 @@ fn the_mix_view_lists_buses_sends_and_outputs() {
         assert_eq!(strip(&v, key).may_use, may, "{key}");
     }
 }
+
+// The Mix view says why a bus is greyed on a strip, in the words a send or an output there would be
+// refused with (its own bus too); and the timeline marks a bus's row, which has no lanes.
+#[test]
+fn the_mix_view_says_why_a_bus_would_make_a_loop() {
+    let f = fixture(BUSES);
+    let s = f.open();
+    let v = s.mix();
+    let loops = |key: &str| -> Vec<(String, String, String)> { strip(&v, key).loops.into_iter().map(|l| (l.bus, l.send, l.to)).collect() };
+    let said = |b: &str, send: &str, to: &str| (b.to_string(), send.to_string(), to.to_string());
+    assert_eq!(
+        loops("verb"),
+        [
+            said("verb", "Reverb can't send to itself.", "Reverb can't go to itself."),
+            said("echo", "Echo already feeds Reverb, so Reverb can't send to Echo.", "Echo already feeds Reverb, so Reverb can't go to Echo."),
+        ]
+    );
+    assert_eq!(loops("drums"), [said("drums", "Drums can't send to itself.", "Drums can't go to itself.")]);
+    assert!(loops("kick").is_empty() && loops("keys").is_empty());
+    let rows: Vec<(String, bool, usize)> = crate::timeline::timeline(&s).tracks.into_iter().map(|t| (t.module, t.bus, t.lanes.len())).collect();
+    let bus_rows: Vec<&(String, bool, usize)> = rows.iter().filter(|r| r.1).collect();
+    assert_eq!(bus_rows.iter().map(|r| (r.0.as_str(), r.2)).collect::<Vec<_>>(), [("drums", 0), ("verb", 0), ("echo", 0)], "{rows:?}");
+}

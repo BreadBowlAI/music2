@@ -388,6 +388,20 @@ pub struct Strip {
     pub output: Option<String>,
     /// The bus channels it may send to or go to without a loop, by key, in the mixer's order.
     pub may_use: Vec<String>,
+    /// The bus channels it can't use, in the mixer's order, each with why: what a send or an
+    /// output there would be refused with. The Mix view greys them and says so.
+    pub loops: Vec<Loop>,
+}
+
+/// A bus channel a strip can't send to or go to, and why, in words that name the tracks.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Loop {
+    /// The bus channel's key.
+    pub bus: String,
+    /// Why it can't send there: "Echo already feeds Reverb, so Reverb can't send to Echo."
+    pub send: String,
+    /// Why it can't go there: "… so Reverb can't go to Echo."
+    pub to: String,
 }
 
 /// A send to a bus channel, on a strip.
@@ -482,6 +496,7 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
         sends: vec![],
         output: None,
         may_use: vec![],
+        loops: vec![],
     };
     let word = match &mixing {
         Mixing::One(_) => "ok",
@@ -527,13 +542,17 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
                 StripSend { bus: b.clone(), knob, pre: *pre, lane }
             })
             .collect();
-        let may_use = m
-            .channels
-            .iter()
-            .filter_map(|x| buses.get(&x.key).map(|b| (&x.key, b)))
-            .filter(|(_, b)| crate::bus::looped(rev, &feeds, c, b, false).is_none())
-            .map(|(k, _)| k.clone())
-            .collect();
+        // Each bus channel, and why this one can't use it, if it can't.
+        let (mut may_use, mut loops) = (vec![], vec![]);
+        for (k, b) in m.channels.iter().filter_map(|x| buses.get(&x.key).map(|b| (&x.key, b))) {
+            match crate::bus::looped(rev, &feeds, c, b, false) {
+                None => may_use.push(k.clone()),
+                Some(send) => {
+                    let to = crate::bus::looped(rev, &feeds, c, b, true).unwrap_or_default();
+                    loops.push(Loop { bus: k.clone(), send, to });
+                }
+            }
+        }
         Strip {
             modules: c.tracks.clone(),
             channel: Some(c.key.clone()),
@@ -549,6 +568,7 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
             sends,
             output: route.to,
             may_use,
+            loops,
         }
     };
     // The tracks' strips, then the channels no track reaches, then the buses' (RENDER-34).

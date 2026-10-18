@@ -36,6 +36,10 @@ pub struct TimelineTrack {
     /// What to show for it, never an address (ID-10).
     pub label: String,
     pub track: bool,
+    /// It is a bus (RENDER-34): a track with no notes or audio lanes, which plays what the song
+    /// feeds it. Written only when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bus: bool,
     /// Its colour by palette name (taste.md §2.7), from `layout.json` or by its place; `graphite`
     /// for a module that isn't a track (the song's own lanes).
     pub colour: String,
@@ -114,6 +118,7 @@ pub fn timeline(s: &Session) -> TimelineView {
             module: m.key.clone(),
             label: m.label().to_string(),
             track: m.track,
+            bus: m.bus,
             colour: colour_of(&layout, &m.key, m.track),
             lanes: m.lanes.iter().map(|l| lane(rev, data, &m.key, l)).collect(),
         })
@@ -187,7 +192,7 @@ fn last_known(rev: &Revision) -> TimelineView {
         .into_iter()
         .map(|(module, lanes)| {
             let track = module != m2_song::ROOT;
-            TimelineTrack { label: sentence(&module), track, colour: colour_of(&layout, &module, track), module, lanes }
+            TimelineTrack { label: sentence(&module), track, bus: false, colour: colour_of(&layout, &module, track), module, lanes }
         })
         .collect();
     in_order(&mut tracks, &layout);
