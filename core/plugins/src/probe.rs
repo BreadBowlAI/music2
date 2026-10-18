@@ -662,8 +662,10 @@ unsafe extern "C" fn activate(p: *const clap_plugin, rate: f64, _: u32, _: u32) 
     if me.stats.refuse_activate.swap(false, Ordering::Relaxed) {
         return false;
     }
-    while me.hangs_activate {
-        std::thread::sleep(std::time::Duration::from_secs(1));
+    if me.hangs_activate {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
     }
     me.rate = rate;
     // A new activation is a new steady timeline: an export's starts at 0 (RENDER-1).
