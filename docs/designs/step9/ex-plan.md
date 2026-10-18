@@ -55,6 +55,21 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. Step 9.
 
 **Done when:** all green. The kept stop and crash tests pass through the new path. Renders 12 of 12. No `notices` push is left for these faults.
 
+**As built (slice 1).** Where the build went another way than the table above:
+
+| What | Why |
+|---|---|
+| The live `audio::Cache` holds the ring; each plan takes it from the cache it is built with. `prepare` keeps its arguments | the cache is already given to every live plan; an offline render's cache makes its own ring |
+| The `Player` doesn't get the ring yet | nothing in it reports until slice 3 (inputs) |
+| `PluginHost::gone(h)` is new in `m2-plugins` (an atomic load) | a crashed host makes `process` fail too; the audio thread asks, so a crash is told once, as `plugin.crashed`, never also as `plugin.failed` |
+| The export's give-back reports `plugin.failed` for a plugin that won't come back | the old notice told it; nothing on the audio thread sees it fail |
+| A toast is once per code and per part's words ("The delay on Bass") in the open song | a node's name is its number in its file (`bass/n5`), which an edit changes |
+| A fault of the plan before the newest is told, not listed | its part plays again in the new plan (a stopped sound is reset as it moves; a plugin is made again) |
+| A plugin left silent is reported again in each new plan | it plays on silent there, so it stays listed |
+| `Code` has `OutOfMemory` and `PluginHung` beside the plan's codes | their words differ; they are `sound.stopped` and `plugin.crashed` in the table |
+| The plugin tests are in `crates/server/src/graph/tests.rs` | their rig (`Ex`, `two_probes`) lives there |
+| `e2e/sound-stops.mjs` now checks the problem is listed, and listed again after ⌘. with no second toast (13 checks) | D3 |
+
 ## Slice 2: every fault, and offline renders fail
 
 **Goal.** The producers that say nothing today report into the ring. Each offline render has a ring of its own. It reads it before its first block and after each block. The first fault stops the render, with the namer's words and the code.

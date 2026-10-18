@@ -243,6 +243,9 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **One stretch method for all clips** (`std:stretch`, WSOLA). No choice per clip (drums, voice, pads).
 - **Stretches after a tempo change are made one at a time**, in build order (lane, then clip), each from its clip's start: with several long followed clips, the one under the playhead may stay silent until those before it are done. Later: make the one nearest the playhead first.
 - **Reverse with Follow tempo** (the clip menu allows both): the clip's edges and Split are refused ("Change that in its lane file"), and after a tempo change it is silent from its start until its whole stretch is made.
+- **A problem from a sound or plugin that stopped can't be dismissed**: it stays in the status popover until the part plays again (a new plan, Stop All Sound, the plugin made again).
+- **A sound that stops in the moment between Stop All Sound and the reset it asks for** stays listed in the popover, though the reset starts it again (ex-1).
+- **Two sounds with the same words** ("The delay on Bass", twice on one track) share one toast in an open song; each is listed (ex-1).
 - **A stretch that fails plays silence** live, with a line in the log only (an export fails and names the clip). A stretch the cache folder can't take is made in memory, also with a line in the log only.
 - **The plugin host process** (HOST-3, since ph-1). Plugins run in a second program, so a crash no longer ends the app. What it doesn't do yet:
   - All plugins share one host process, so one crash silences them all (each comes back by itself). One process per plugin would silence only the one that crashed.
