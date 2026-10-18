@@ -21,7 +21,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 | What every kernel must keep | [The five rules](#the-five-rules-abi-5) |
 | What is fixed now, built later | [Reserved shapes](#reserved-shapes) |
 
-The Rust kit (`std/kernels-src/kernel`) writes all of this for you. Write a `struct`, implement `Kernel`, and call `export!`.
+The Rust kit (`std/kernels-src/kernel`) writes all of this for you. Write a `struct`, implement `Kernel`, and call `export!`. In `Kernel::new`, `cfg.values` holds your numbers and `cfg.assets` your audio files; `asset.read(channel, frame, &mut buf)` reads one. `std:sampler` (`std/kernels-src/src/sampler.rs`) is a whole example.
 
 ## Words used here
 

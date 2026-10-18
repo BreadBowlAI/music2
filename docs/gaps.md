@@ -58,6 +58,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Bring in audio: File → Import Audio… (⇧⌘I), or drag WAV files from the Finder onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). While you drag, an outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` (the same file twice is kept once), and its clip shows its waveform. Drag a clip's edges to trim it and the small squares at its top to fade it; its menu sets its volume, plays it backwards, or removes the fades. Each is one undo step. The same from `m2 import`. The engine also plays pitch and warp, written by hand in JSON.
 - Learn as you go: **Help → Make Your First Song** opens a guide at the top of the side browser, seven steps that tick themselves as you do them. Every button, knob and fader has a tooltip in plain words, with its key. A mistake in the code is said in plain words with a fix, pointing at your own line ("Cutoff wants a frequency (Hz), but gets a level (dB). Write it in Hz, such as hz(800)."); the original message is under Details. [Music basics](music-basics.md) explains the words.
 - Play pop sounds from std: a supersaw, a gliding lead, a pad, a pluck, an 808 sub, a synth bass and strings on one polysynth (`std/synth`), FM keys, bells and metal (`std/fm`), and an 808/909 drum machine whose kit plays kick, snare, clap, hats, toms and more from one lane by General MIDI note, with an open hat cut off by the next hat and a level for each group of drums (`std/drums`). Each has a few named knobs; `synth.custom` and `fm.custom` have every one. One note at a time, a note still held sounds again when the one over it ends, as on a monosynth ([Sounds and effects](../README.md#sounds-and-effects-std)).
+- Play a WAV file as an instrument with std's **Sampler** (+ Track ▸ Sampler): every note plays the file, higher or lower by how far the note is from its root (C4 unless the code says). Drop a WAV on its card in Device and it plays that file, as one undo step. In code it can play one file for each range of notes (`zones`), stop with the note (`mode: "gate"`), and be tuned and faded in and out. The example **Sampler** plays drums and a melody from three short files.
 - Hear a song as it exports. std's chorus, phaser and tremolo wobble only while the song plays, and the drums' noise follows the hits, so they sound as in the export when you press Play, however long the song sat first. An oscillator or noise written straight into a track's code, outside a voice, or a plugin, may still run on while stopped. Going back to bar 1 after playing is a jump: the wobble and the drums' noise carry on from where they were, so that play may differ a little from the export.
 
 ## The top ten
@@ -106,7 +107,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 3 | **Drum rows folded to the drums a clip uses**, and the piano roll's zoom up and down (taste.md NT-5). The names are done: an instrument names its notes in its descriptor (`editor.notes`), and Notes shows them. | A kit has 30 rows; a beat uses five. | Yes | small |
-| 22 | **A sampler**: play a recording or a one-shot as an instrument, with a root note, plus drum samples. Kernels can't read assets yet, so the core needs work first. | Sampled drums and vocal chops are pop staples. | Yes | large |
+| 22 | **The rest of the sampler** (std's Sampler is done: see What works today): loop points, start and end, reverse, velocity layers, round robin and choke groups; zones made by dropping several WAVs (they are code only), and a waveform and a root picker on its card; files other than WAV. | Sampled drums and vocal chops are pop staples. | Yes | medium |
 | 26 | **Presets**: save and load an instrument's or an effect's settings by name, a preset browser, and presets for CLAP plugins. | Beginners start from presets, not from blank knobs. | No | medium |
 
 ### Mixing
@@ -236,6 +237,10 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A sound part that crashed is reset when it starts again**, not built new. A crash can leave its memory wrong, so it may crash again sooner.
 - **Kernels from other people have no time limit**: one that loops forever stalls the sound (wasmtime's epochs would stop it). A song near the 3,999 sound parts limit has no cheaper way to run yet (a `sum` kernel, a checked engine).
 - **The Mac's numbers for the one-sandbox-a-box layout are owed**: G7f's run, the footprint and the address space with two renderers (PLAT-1).
+- **A Sampler played far above its root sounds harsh**: it isn't band-limited, so high notes alias, and past 6 octaves up it plays no faster.
+- **A Sampler's files are held in memory**, decoded whole, as clips' are. Streaming them from disk waits for RENDER-30's reader.
+- **A song asking for std "0.2" in an older app that has std 0.2.0** and calls the Sampler gets a missing import, not `pkg.unsatisfied`: a song's std requirement names no patch version. `examples/sampler` asks for "0.2.1".
+- **std's kernel test `odd_db_values` fails in a debug build**: a NaN's sign bit differs from the release build's. `ci/check.sh` runs those tests in release, where it passes.
 
 ## Removed with the old version
 
@@ -248,7 +253,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 | Settings | Back: Settings (⌘,) chooses the sound output and its buffer size, the songs folder, and which MIDI keyboards play. An input and view settings for every song are #31 |
 | The Track inspector (volume, pan, output, sends, effects, sidechain) | Volume and pan: back in the Mix view. Effects on and off, and their order: back on the effect cards. The sidechain: back, as a Duck's "Listens to". Output and sends: sends and buses (#27) |
 | A level meter on each track | Back: a meter in every track header, on the Song row and on every Mix strip. Meters after the fader and loudness are #20 |
-| The Sounds panel | Audio files: back (File → Import Audio…, drops). The sampler is #22 |
+| The Sounds panel | Audio files: back (File → Import Audio…, drops). A sampler: back, std's Sampler; the rest of it is #22 |
 | Drawing automation | Back: drawn on the timeline, a frequency on a log scale. Curves are #14 |
 | Loop | Back: the loop button or C, a drag across the ruler, or ⌘L for the selected clips |
 | Hearing notes as you draw them | Back: audition in Notes |

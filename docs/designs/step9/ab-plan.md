@@ -150,6 +150,21 @@ The existing tests that guard live edits must pass unchanged: `keep.rs`, `no_all
 
 **Done when:** all of the above pass; 12 of 12 renders match (10 old, 2 new); a picture of the sampler's card from the app on Xvfb `:95` (`app-shot.sh`); `ci/check.sh --gates` once at the end of the track, through `tw`: PASS; short build notes `docs/designs/step9/build-notes-ab.md` and the HANDOFF lines.
 
+**Changed while building** (2026-10-18):
+- **The kernel takes more inputs**: `pitch, gate, velocity, tune, level, attack, release, mode`. A one-shot plays past the note's end, so an envelope outside the kernel (std:adsr on the gate) would cut it off: the fades and the level are the kernel's own. `mode` is an input read when a note starts, not a value, so the values are only the zones: a root, a lowest and a highest note for each file (left out: 60, 0, 127).
+- **The kit's calls**: `Cfg::values`, `Cfg::assets` (`&'static` slices into the settings block, which lives as long as the sandbox) and `Asset::read`. Off wasm32, `m2_kernel::native` keeps test files on the test's thread.
+- **The kernel's tests** are in `std/kernels-src/src/sampler/tests.rs`, as each instrument's are, with one more: `no_control_breaks_it`.
+- **A Sampler with no file must build** from its notes alone (+ Track's rule), so `@m2/core` 1.3.0 (not yet released) gains `SettingDecl.optional()`: left out, a setting is `undefined`. The descriptor says `optional: true` only when it is, so no other descriptor changes.
+- **Zones**: the lowest zone also plays the notes below its root, so every note plays something.
+- **+ Track's order**: Drums, Instruments, then the other categories by name, so a new category never splits a group. Sampler comes before Sound design.
+- **More lists than the 3 fixture lists**: `renders.json` (std 0.2.1, and the example's render), `every-component` (it calls every std component) and the planners' call forms, std's catalog tests, the server's list test and `s8-tracks`.
+- **The example** has three files, made by `examples/make-sampler-wavs.mjs` (Node), outside the example's folder so "Open an Example" never copies it into a song. One file is at 44.1 kHz and one is stereo, so the rate and both channels are covered.
+- **The route** takes a path (`{session, at, call, file}`, the app) or the bytes (`?session=&at=&call=&name=`, a browser), as the audio import does. Its undo step is "setting Sampler to kick.wav".
+- **The builder refuses** a Sampler whose code gives `zones`, a file picked by code, and the file it plays already, in words.
+- **The card**: a row under its knobs ("Drop a WAV here", the file, or "2 files: …"); the whole card takes the drop. The view's node says `sampler: {files}`.
+- **The browser suite** uses the `export` kind, to render with the command line. first-song isn't silent, so it checks that the export changes with the drop and comes back with Undo.
+- **The pictures** were taken with a copy of `app-shot.sh` whose scratch HOME is under `~/m2-runs/sab`.
+
 ## Decisions
 
 Defaults chosen here, so no one waits. The owner can change any of them.
