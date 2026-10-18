@@ -29,6 +29,7 @@ use crate::cable::{Inlet, Outlet, inlets, outlets};
 use crate::controls::{Control, Declared, controls, declared, not_insertable};
 use crate::effect::{Listens, bypass_refused, calls_of, effect_at, is_bypassed, listens, move_row};
 use crate::sampler::{self, SamplerCard};
+use crate::voices;
 use crate::sites::{Params, fn_params};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -164,6 +165,9 @@ pub struct ViewNode {
     /// A sampler's card: the files it plays. A WAV dropped on it sets its file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampler: Option<SamplerCard>,
+    /// An instrument's card: how it plays its notes, in plain words (RENDER-16). Read-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voices: Option<String>,
 }
 
 /// An effect card's ⋯ menu (Next D1, D2): each row's words when it can't run here.
@@ -765,6 +769,10 @@ pub fn view(session: &Session) -> GraphView {
                 Group::Site(s) if kind == "call" => sampler::card(&rev.compiled, *s),
                 _ => None,
             };
+            let voices = match g {
+                Group::Site(s) if kind == "call" => voices::card(&rev.compiled, *s),
+                _ => None,
+            };
             nodes.push(ViewNode {
                 id: id.clone(),
                 label,
@@ -785,6 +793,7 @@ pub fn view(session: &Session) -> GraphView {
                 menu,
                 listens,
                 sampler,
+                voices,
             });
             id
         };
@@ -892,6 +901,7 @@ pub fn view(session: &Session) -> GraphView {
                 menu: None,
                 listens: None,
                 sampler: None,
+                voices: None,
             });
             // A track's output that an effect turned off gives on comes from its card.
             let (r, g) = match off.iter().find(|(_, _, input)| input.contains(r.as_str())) {

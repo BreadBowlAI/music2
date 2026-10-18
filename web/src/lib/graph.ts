@@ -61,6 +61,8 @@ export interface ViewNode {
   inputs: InputPort[];
   /** The signals it gives to other nodes, its own result first. */
   outputs: OutputPort[];
+  /** An instrument's card: how it plays its notes, in plain words ("Plays one note at a time. …"). Read-only. */
+  voices?: string;
 }
 
 /** What flows through a port. */

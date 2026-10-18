@@ -279,6 +279,8 @@ const VALUE_H = 48;
 const inputHeight = (p: InputPort) => (p.knob ? KNOB_H : p.readonly != null ? VALUE_H : ROW_H);
 /** A Sampler's file row, under its knobs: where a WAV is dropped. */
 const SAMPLE_H = 36;
+/** An instrument's line under its name: how it plays its notes. */
+const VOICES_H = 24;
 
 /**
  * A lane, an import or the time with its one output, or an export with its one input: the header
@@ -301,7 +303,7 @@ function geometry(n: ViewNode) {
     return { w: SLIM_W, h: HEAD_H, ins, outs };
   }
   const rows: number[] = [];
-  let y = HEAD_H + PAD;
+  let y = HEAD_H + (n.voices ? VOICES_H : 0) + PAD;
   for (const i of n.inputs) {
     const h = inputHeight(i);
     ins.set(i.id, y + h / 2);
@@ -314,7 +316,7 @@ function geometry(n: ViewNode) {
     y += ROW_H;
   });
   const w = n.inputs.length && n.outputs.length ? NODE_W : SLIM_W;
-  return { w, h: (n.outputs.length + n.inputs.length ? y + PAD : HEAD_H) + (n.sampler ? SAMPLE_H : 0), ins, outs };
+  return { w, h: (n.outputs.length + n.inputs.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0)) + (n.sampler ? SAMPLE_H : 0), ins, outs };
 }
 
 interface Placed { node: ViewNode; x: number; y: number; w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }
@@ -860,6 +862,7 @@ function NodeCard({
           </button>
         )}
       </div>
+      {node.voices && !small && <VoicesLine words={node.voices} />}
       {menu && node.menu && (
         <EffectMenuPopover node={node} title={titled} anchor={menu} locked={why ?? (editable ? null : "This song can't be edited here")} onClose={() => setMenu(null)} />
       )}
@@ -933,6 +936,19 @@ function NodeCard({
           onCable={onCable}
         />
       ))}
+    </div>
+  );
+}
+
+/**
+ * How an instrument plays its notes (RENDER-16), under its name: its first sentence ("Plays one
+ * note at a time."), and all of it in the tooltip. Read-only: its code sets it.
+ */
+function VoicesLine({ words }: { words: string }) {
+  const first = words.split(/(?<=\.) /)[0];
+  return (
+    <div data-testid="voices" className="h-6 shrink-0 px-3 flex items-center text-xs text-fg-muted min-w-0 border-b border-line" title={words} aria-label={words}>
+      <span className="truncate">{first}</span>
     </div>
   );
 }

@@ -45,6 +45,7 @@ pub mod take;
 pub mod smf;
 pub mod midifile;
 pub mod explain;
+pub mod voices;
 
 use std::collections::HashMap;
 use std::path::Path;
