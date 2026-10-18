@@ -27,7 +27,7 @@ This is the most important difference in music software.
 | Can you change it? | Completely: any note, or the whole instrument | Mostly as a whole: cut, move, stretch |
 | Makes sound by | Being played by an **instrument** | Just playing back |
 
-**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. Recording a microphone isn't in the app yet ([gap #25](gaps.md#recording-and-midi)).
+**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. To record your voice or a guitar, select an audio track and press R. Stacked takes and punch in are still to come ([gap #25](gaps.md#recording-and-playing-live)).
 
 ## Time: tempo, beats, bars and the grid
 
@@ -71,7 +71,7 @@ Most instruments in music2 are **synthesizers**: they build sound from scratch. 
 
 A **sampler** is the other kind of instrument: instead of building sound, it plays a **recording** (a **sample**) at different pitches.
 
-**In music2:** these blocks are in `std/dsp` (`osc.sine`, `osc.saw`, `osc.square`, `osc.tri`, `adsr`, `svf`), `std/filter` and `std/control` (`lfo`). `synth.custom` has them all in one synth, with unison (up to seven stacked voices), a ladder filter with its own envelope, and drive; `fm.custom` builds sound by FM instead (one sine bending another's pitch, which gives bells and electric pianos). There's no sampler yet ([gap #22](gaps.md#sounds)). Each std instrument is a short function you can read and copy.
+**In music2:** these blocks are in `std/dsp` (`osc.sine`, `osc.saw`, `osc.square`, `osc.tri`, `adsr`, `svf`), `std/filter` and `std/control` (`lfo`). `synth.custom` has them all in one synth, with unison (up to seven stacked voices), a ladder filter with its own envelope, and drive; `fm.custom` builds sound by FM instead (one sine bending another's pitch, which gives bells and electric pianos). std's **Sampler** plays a WAV file on each note, higher or lower by the note; loop points and velocity layers are still to come ([gap #22](gaps.md#sounds)). Each std instrument is a short function you can read and copy.
 
 ## Effects: changing a sound
 
@@ -86,7 +86,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Compressor** | Turns loud moments down, so everything is more even and punchy | `compress` |
 | **Limiter** | A very strict compressor at the end that stops anything getting too loud | `limit` |
 
-**In music2:** add an effect with **+** on a box in the Device view (⌥1), or drag one from the side browser onto a track. Its **⋯** menu turns it off and on, or moves it before or after its neighbour. There are also `phaser`, `tremolo`, `widen`, `gain` and `pan`. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`. Pump (ducking on every beat) isn't back yet ([gap #21](gaps.md#effects-and-plugins)).
+**In music2:** add an effect with **+** on a box in the Device view (⌥1), or drag one from the side browser onto a track. Its **⋯** menu turns it off and on, or moves it before or after its neighbour. There are also `phaser`, `tremolo`, `widen`, `gain` and `pan`. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`. Pump (ducking on every beat) isn't back yet ([gap #21](gaps.md#effects)).
 
 ## Mixing: making the parts fit together
 
@@ -122,5 +122,5 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Warp** | Stretching parts of a recording so it lines up with the beat | `warp` markers on audio clips |
 | **Chop** or **slice** | Cut a recording into short pieces and replay them as a new rhythm | Audio clips with an `offset` into the file |
 | **Formant** | The "vowel" character of a voice; shifting it makes a voice sound smaller or bigger without changing the note | Not in music2 |
-| **Latency** | A delay some effects add; the software has to make up for it so everything stays in time | Plugins that add latency are refused for now ([gap #33](gaps.md#effects-and-plugins)) |
+| **Latency** | A delay some effects add; the software has to make up for it so everything stays in time | music2 makes up for a plugin's latency, so every track stays in time, live and in exports |
 | **True peak** | The real loudest point of the audio, which streaming services check | Not measured yet. The meters show each track's level, red at 0 dB ([gap #20](gaps.md#mixing)) |
