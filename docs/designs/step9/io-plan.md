@@ -107,7 +107,7 @@ Nobody waits for an answer, and nobody asks the owner.
 | The Record button's menu gains "Sound input…" (opens Settings), after "MIDI keyboards…" | A beginner looks for the input where Record is |
 | R picks the lane by `recordTarget` (`playTarget.ts`): what keys play, else the selected track's audio lane. Keys never play an audio take's lane | An audio lane takes no notes |
 | `run.mjs` gives every suite's server `M2_AUDIO_INPUT=inject` and `M2_AUDIO_INPUTS="Test mic,USB mic"` | As `M2_MIDI=inject`: one way for every suite |
-| Build notes are kept here, in the plan's "Changed while building" tables, not in `build-notes-io.md` | As slices 1 and 2 did |
+| Build notes are kept here, in the plan's "Changed while building" tables; the review's fixes and the final check are in `build-notes-io.md` | As slices 1 and 2 did |
 
 ### Contract changes (with the slice that makes them)
 
