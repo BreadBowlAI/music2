@@ -52,7 +52,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Export (the Export button, or File → Export…, ⇧⌘E) asks what to make: **Song**, one WAV file, the same file `m2 render` writes; **Stems**, each track as its own WAV file, before its volume and pan, in a new folder (not yet for a song that plays plugins); or **MIDI**, the notes as a MIDI file other music apps open, with a fitting General MIDI sound for each part and drums on channel 10. A notes clip's menu has **Export as MIDI…**. Files go in `~/Music/music2/Exports` unless you pick another place in the app's save window; then Show in Finder. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
 - Build `music2.app` and move it anywhere: std, the templates and the examples are inside it, so it no longer needs the source folder it was built from. It's signed ad hoc but not notarized, so on another Mac it opens only after **Open Anyway** in System Settings → Privacy & Security (and only on Apple silicon).
-- Play CLAP plugins such as Surge XT, with automation and saved settings. A plugin is added by writing it into a track's code (#32). A song whose plugin isn't installed still plays: only that plugin's node is silent, or passes its audio through.
+- Play CLAP plugins such as Surge XT, with automation and saved settings. A plugin is added by writing it into a track's code (#32). A song whose plugin isn't installed still plays: only that plugin's node is silent, or passes its audio through. Open a plugin's own window from its box (**Open window**). A knob turned there changes the number in the code (one Undo step); a knob a lane drives stays where you put it ("Latched", **Re-enable** gives it back to the lane); any other change saves the plugin's settings a second later (one Undo step). A preset the plugin loads by itself can't overrule the code: music2 sets those knobs back and says so.
 - Keep playing when one sound breaks. If a sound fails while the song plays (a bug in it, or it asks for more than the 32 MB a sound may use), only that sound goes silent. The rest plays on, and a message says which sound, on which track, and that Transport → Stop All Sound starts it again. An export never leaves such a sound out: it stops, and names it.
 - Play and export big songs on several cores. Playback uses the fast cores that share a cache (4 on an M1 Pro) as real-time audio threads; where the computer refuses real time (some Linux setups), it plays on one core. An export with nothing playing uses every fast core. Either sounds exactly as on one core. `M2_THREADS`, or `--threads` on `m2 render` and `m2 bounce`, sets how many. A song with CLAP plugins plays on one core for now.
 - Bring in audio: File → Import Audio… (⇧⌘I), or drag WAV files from the Finder onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). While you drag, an outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` (the same file twice is kept once), and its clip shows its waveform. Drag a clip's edges to trim it and the small squares at its top to fade it; its menu sets its volume, plays it backwards, or removes the fades. Each is one undo step. The same from `m2 import`. The engine also plays pitch and warp, written by hand in JSON.
@@ -168,7 +168,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 |---|---|---|---|---|
 | 21 | **The rest of the effect comforts**: effect presets, the old Pump (ducking in time with the beat, with no sidechain), and moving effects that aren't written one inside the other, or across files (refused in words today). (Turning an effect off and on, moving it next to its neighbour, and picking what a Duck listens to work: see [What works today](#what-works-today).) | Presets are how beginners start; Pump is a pop staple. | Yes | medium |
 | 32 | **Add an installed plugin from the app**: list installed CLAP plugins (such as Surge XT) in the effect browser and when adding a track, and put one on a track as an instrument or an effect. | Today a plugin goes on a track only by writing `plugin("clap:…")` into its code, after finding the plugin's id with `m2 plugins`. | No | medium |
-| 33 | **Plugin windows** for CLAP plugins, **VST3 and AU** support, and **latency compensation** (plugins that report latency are refused today). | Many popular synths and mastering plugins report latency, or come only as AU or VST3 on the Mac. | No | large |
+| 33 | **VST3 and AU** support, and **latency compensation** (plugins that report latency are refused today). (A CLAP plugin's own window opens from its box since ph-2: see Loose ends.) | Many popular synths and mastering plugins report latency, or come only as AU or VST3 on the Mac. | No | large |
 
 ### Safety and undo
 
@@ -239,6 +239,17 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
   - A plugin that fails in the same instant as a crash may be told as "stopped working" rather than in the crash's notice.
   - Tests that use it need `m2-plugin-host` built first (`cargo build -p m2-plugins --bin m2-plugin-host`); `ci/check.sh` builds it.
   - macOS: its shared memory and wake are lint-checked only, until the owner's Mac runs them.
+- **Plugin windows** (HOST-7, since ph-2). A plugin's own window opens from its box; a knob turned there writes the code, latches a lane, or saves the plugin's settings (one Undo step). What it doesn't do yet:
+  - A plugin's window floats on its own: it isn't tied to the app's window, its place isn't remembered, and you can't resize it by hand.
+  - Linux: X11 only (Wayland through XWayland).
+  - macOS: the window, the accessory app and its event pump are lint-checked only, until the owner's Mac runs them.
+  - A window closes when its plugin is made again (a restart, a crash, a change of shape): open it again from the box.
+  - Latches last for the session: none in `.music2/` yet, no "Write to code", no latch on std's knobs.
+  - A gesture in a plugin's window isn't recorded as automation.
+  - A plugin with no key can't have its settings saved: the app says so once.
+  - One plugin can hold or latch 32 parameters at once; a gesture on one more is set back.
+  - A plugin's parameter knob in its box is labelled by its port name (`A_filter_1_cutoff_4092842705`), not the plugin's name for it.
+  - A number written in a `plugin()` call now reaches the plugin as a 32-bit number, as a lane's value does.
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 
 ## Removed with the old version

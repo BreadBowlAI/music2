@@ -131,6 +131,12 @@ an override latch. A changed state becomes the song's state file and sidecar thr
 - Autosave (HOME-6): `HostEvent::Dirty`, or a gesture's end on a state parameter, starts a 1 s quiet timer per
   instance. Then `save_state`, and `m2_editor::data::plugin_state` writes blob and sidecar as one Tx (FMT-17), one
   Undo step. The load that follows is skipped by hash. An export first commits any pending autosave (RENDER-1).
+- Built, beyond this plan (ph-2): a number written in `plugin()` had no origin, so it was no control and no Tx could
+  write it: `@m2/core` now gives it one (a cell and a knob; the plugin hears it as an f32; SDK stays 1.2.0). The
+  "ring" is the instance's fixed override table (the truth for holds and latches, so a lost entry never loses a
+  gesture's end), a ring of set-back ids and a changed flag. The view names a plugin call's graph node (`plugin`) and
+  titles its box by the plugin's name. The watcher tells windows when `plugins` changes. The probe also has
+  `dirty-at-<n>[-<m>]`, and logs what `set_parent` got, which the host-process window test reads.
 
 | Crate | Files |
 |---|---|
