@@ -474,7 +474,15 @@ impl LanePlan {
     /// rebuilt in the new map, in a bigger scheduler when they outgrew the old one, and every
     /// audio lane rendered through `cache` (which renders only what it doesn't hold), swapped in
     /// when its renders differ. Other lanes are made here.
-    pub(crate) fn new(flat: &Flat, data: &DataSet, cache: &mut audio::Cache, tempo: &TempoMap, rate: f64, keep: Option<&Keep>) -> LanePlan {
+    pub(crate) fn new(
+        flat: &Flat,
+        data: &DataSet,
+        cache: &mut audio::Cache,
+        tempo: &TempoMap,
+        rate: f64,
+        keep: Option<&Keep>,
+        stretch: Option<&crate::offline::Kernel>,
+    ) -> LanePlan {
         let refs = lane_slots(flat);
         let mut p = LanePlan { lanes: Lanes { slots: vec![], refs: vec![], live: refs.len() }, caps: vec![], moves: vec![], audio: vec![] };
         for (s, r) in refs.iter().enumerate() {
@@ -512,7 +520,7 @@ impl LanePlan {
                 }
                 (Kind::Control(_), None) => LaneSlot::Control(Some(Arc::new(data.control(m, l)))),
                 (Kind::Audio(ch), from) => {
-                    let lane = AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize);
+                    let lane = AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize, stretch);
                     match from.map(|(k, o)| (o, k.info.lanes[o].audio.clone())) {
                         Some((o, Some(was))) if was.same(&lane) => {
                             audio = Some(was);

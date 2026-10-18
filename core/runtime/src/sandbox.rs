@@ -44,6 +44,9 @@ pub(crate) struct Spec<'a> {
     pub(crate) values: &'a [f64],
     /// Each asset it reads; `None` for one that is missing.
     pub(crate) assets: &'a [Option<Held>],
+    /// An offline kernel's time map (`flags` bit 0): pairs of (source seconds, output seconds).
+    /// `None` for a live kernel.
+    pub(crate) offline: Option<&'a [[f64; 2]]>,
 }
 
 /// Where a sandbox reads an asset from (`docs/kernel-abi.md`, The asset import): the host's choice,
@@ -56,7 +59,6 @@ pub(crate) enum Held {
     /// Its file, read at each call through [`Wav::read`] into the sandbox's own buffer, in pieces,
     /// never decoded whole. A read may wait for the disk, so only a sandbox off the audio thread (an
     /// offline kernel's) holds this kind.
-    #[cfg_attr(not(test), allow(dead_code))] // the first offline kernel's (track sx, slice 2)
     Disk(Arc<Wav>),
 }
 
@@ -93,9 +95,11 @@ pub(crate) struct Host {
     memory: Option<Memory>,
     /// The assets its states read, by handle: never copied in.
     assets: Vec<Held>,
-    /// What a [`Held::Disk`] read uses: the file's bytes and their samples, per channel.
+    /// What a [`Held::Disk`] read uses: the file's bytes and their samples, per channel, and which
+    /// asset's frames those are: a read of the other channel of the same frames needs no new one.
     buf: Vec<u8>,
     pcm: [Vec<f32>; 2],
+    piece: Option<(u32, u64, u64)>,
 }
 
 impl ResourceLimiter for Host {
@@ -158,16 +162,24 @@ fn asset_read(mut caller: Caller<'_, Host>, handle: u32, channel: u32, frame: u3
             out[..4 * got].copy_from_slice(bytemuck::cast_slice(&src[from..from + got]));
             got
         }
-        Some(Held::Disk(w)) => read_disk(w, channel, frame, out, &mut host.buf, &mut host.pcm)?,
+        Some(Held::Disk(w)) => read_disk(w, (handle, channel, frame), out, &mut host.buf, &mut host.pcm, &mut host.piece)?,
         None => 0,
     };
     out[4 * got..].fill(0);
     Ok(got as u32)
 }
 
-/// [`asset_read`] from a file: the frames it has of `out`'s, from `frame` on, of `channel`, decoded
-/// as a whole decode decodes them, a piece at a time; how many.
-fn read_disk(w: &Wav, channel: u32, frame: u32, out: &mut [u8], buf: &mut Vec<u8>, pcm: &mut [Vec<f32>; 2]) -> wasmtime::Result<usize> {
+/// [`asset_read`] from a file: the frames it has of `out`'s, from `frame` on, of `channel` of asset
+/// `handle`, decoded as a whole decode decodes them, a piece at a time; how many. `piece` says which
+/// frames `pcm` holds, both channels: a kernel reads the channels of the same frames in turn.
+fn read_disk(
+    w: &Wav,
+    (handle, channel, frame): (u32, u32, u32),
+    out: &mut [u8],
+    buf: &mut Vec<u8>,
+    pcm: &mut [Vec<f32>; 2],
+    piece: &mut Option<(u32, u64, u64)>,
+) -> wasmtime::Result<usize> {
     let ch = if w.channels() == 1 { 0 } else { channel as usize };
     if ch >= w.channels() {
         return Ok(0);
@@ -177,8 +189,13 @@ fn read_disk(w: &Wav, channel: u32, frame: u32, out: &mut [u8], buf: &mut Vec<u8
     let mut done = 0;
     while done < got {
         let n = (got - done).min(DISK_PIECE);
-        if let Err(e) = w.read(from + done as u64, from + (done + n) as u64, buf, pcm) {
-            wasmtime::bail!("m2.asset_read: its file can't be read: {e:#}")
+        let want = (handle, from + done as u64, from + (done + n) as u64);
+        if *piece != Some(want) {
+            *piece = None;
+            if let Err(e) = w.read(want.1, want.2, buf, pcm) {
+                wasmtime::bail!("m2.asset_read: its file can't be read: {e:#}")
+            }
+            *piece = Some(want);
         }
         out[4 * done..4 * (done + n)].copy_from_slice(bytemuck::cast_slice(&pcm[ch]));
         done += n;
@@ -206,7 +223,7 @@ fn imports(store: &mut Store<Host>, module: &Module) -> Result<Vec<Extern>> {
 
 /// A store and an instance of `module` in it, with its limits and its imports, and its memory.
 pub(crate) fn instantiate(engine: &Engine, module: &Module) -> Result<(Store<Host>, Instance, Memory)> {
-    let host = Host { sealed: false, refused: false, memory: None, assets: vec![], buf: vec![], pcm: [vec![], vec![]] };
+    let host = Host { sealed: false, refused: false, memory: None, assets: vec![], buf: vec![], pcm: [vec![], vec![]], piece: None };
     let mut store = Store::new(engine, host);
     store.limiter(|l| l);
     let ext = imports(&mut store, module)?;
@@ -290,14 +307,16 @@ impl Sandbox {
             })
             .collect();
         // The block: the port buffers, then the settings, the channel list, the values, the
-        // assets and the port table.
-        let (nv, na) = (spec.values.len(), spec.assets.len());
+        // assets, the time map and the port table.
+        let map = spec.offline.unwrap_or_default();
+        let (nv, na, nm) = (spec.values.len(), spec.assets.len(), map.len());
         let table_len: usize = channels.iter().map(|&c| c as usize).sum();
         let settings_at = n * PORT_BYTES;
         let list_at = settings_at + SETTINGS_BYTES;
         let values_at = (list_at + 4 * n).next_multiple_of(8);
         let assets_at = values_at + 8 * nv;
-        let table_at = assets_at + ASSET_BYTES * na;
+        let map_at = (assets_at + ASSET_BYTES * na).next_multiple_of(8);
+        let table_at = map_at + 16 * nm;
         let bytes = table_at + 4 * table_len;
         let block = self.alloc.call(&mut self.store, (bytes as u32, 16))? as usize;
         if block == 0 || !block.is_multiple_of(16) || block + bytes > self.memory.data_size(&self.store) {
@@ -313,7 +332,7 @@ impl Sandbox {
             SETTINGS_BYTES as u32,
             (spec.sample_rate as f32).to_bits(),
             BLOCK as u32,
-            0,
+            spec.offline.is_some() as u32,
             spec.audio.clamp(1, 2) as u32,
             at(list_at, n),
             n as u32,
@@ -321,8 +340,12 @@ impl Sandbox {
             nv as u32,
             at(assets_at, na),
             na as u32,
+            0,
+            0,
+            at(map_at, nm),
+            nm as u32,
         ];
-        words.resize(SETTINGS_BYTES / 4, 0);
+        debug_assert_eq!(words.len(), SETTINGS_BYTES / 4);
         words.extend(channels);
         let data = self.memory.data_mut(&mut self.store);
         data[block + settings_at..block + values_at].fill(0);
@@ -334,6 +357,11 @@ impl Sandbox {
             let (frames, chans, rate) = a.as_ref().map_or((0, 0, 0.0), Held::shape);
             let entry = [*h, frames, chans, rate.to_bits()];
             data[block + assets_at + ASSET_BYTES * i..][..ASSET_BYTES].copy_from_slice(bytemuck::cast_slice(&entry));
+        }
+        for (i, pair) in map.iter().enumerate() {
+            for (j, v) in pair.iter().enumerate() {
+                data[block + map_at + 16 * i + 8 * j..][..8].copy_from_slice(&v.to_le_bytes());
+            }
         }
         data[block + table_at..block + bytes].copy_from_slice(bytemuck::cast_slice(&io));
         let handle = new.call(&mut self.store, (block + settings_at) as u32)?;

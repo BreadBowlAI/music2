@@ -7,6 +7,7 @@ use std::sync::Arc;
 use m2_song::{AudioClip, LaneData, LaneKind, TempoMap};
 
 use crate::audio::{self, AudioLane, Cache};
+use crate::offline::{self, Kernel};
 use crate::stream::{READ, SLOTS, chunk_frames};
 
 const SR: f64 = 48_000.0;
@@ -30,13 +31,19 @@ fn resample() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/resample")
 }
 
-/// The old way: every clip rendered whole, then the old copy's sum (by clip, in order, mono-down
-/// per clip), over `0..len`.
+/// std's `std:stretch`.
+pub(super) fn stretch() -> Kernel {
+    Kernel::of(&super::std_packages(), offline::STRETCH).expect("std has std:stretch")
+}
+
+/// The old way: every clip rendered whole (a warped one by the stretch kernel's whole run), then
+/// the old copy's sum (by clip, in order, mono-down per clip), over `0..len`.
 fn rendered(clips: &[AudioClip], assets: &Path, tempo: &TempoMap, channels: usize, len: usize) -> Vec<Vec<f32>> {
     let mut out = vec![vec![0.0f32; len]; channels];
+    let k = stretch();
     for c in clips {
-        let asset = audio::load_wav(&assets.join(&c.asset)).unwrap();
-        let data = audio::render_clip(c, &asset, tempo, SR);
+        let asset = Arc::new(audio::load_wav(&assets.join(&c.asset)).unwrap());
+        let data = audio::render_clip(c, &asset, tempo, SR, Some(&k)).unwrap();
         let at = (tempo.seconds_at(c.start) * SR).round() as usize;
         for (ch, o) in out.iter_mut().enumerate() {
             let mono_down = channels == 1 && data.len() > 1;
@@ -91,7 +98,7 @@ fn a_streamed_lane_is_the_rendered_lane() {
     let assets = resample().join("assets");
     let len = (tempo.seconds_at(clips.iter().map(|c| c.start + c.length).fold(0.0, f64::max)) * SR) as usize + 1000;
     for channels in [2, 1] {
-        let lane = AudioLane::build_with(&clips, &|a| Some(assets.join(a)), &mut Cache::default(), &tempo, SR, channels);
+        let lane = AudioLane::build_with(&clips, &|a| Some(assets.join(a)), &mut Cache::default(), &tempo, SR, channels, Some(&stretch()));
         assert!(!lane.resident(), "the lane streams: more chunks than slots");
         let (want, got) = (rendered(&clips, &assets, &tempo, channels, len), streamed(&lane, channels, len));
         for c in 0..channels {
@@ -138,7 +145,7 @@ fn a_long_file_never_lives_in_memory() {
     let file = std::fs::metadata(dir.join("long.wav")).unwrap().len() as usize;
     let tempo = TempoMap::constant(120.0);
     let clip: AudioClip = serde_json::from_value(serde_json::json!({"start": 0, "length": 360, "asset": "long.wav"})).unwrap();
-    let lane = AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut Cache::default(), &tempo, SR, 2);
+    let lane = AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut Cache::default(), &tempo, SR, 2, None);
     let chunk_bytes = chunk_frames(SR) as usize * 2 * 4;
     let slots = SLOTS * chunk_bytes;
     reads();
@@ -195,4 +202,36 @@ fn a_torn_chunk_is_never_heard() {
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     filler.join().unwrap();
     assert!(heard > 0 && missed > 0, "{heard} heard, {missed} missed");
+}
+
+// The sx plan, slice 2 (RENDER-30): a warped clip's render is made in pieces. Its source is read
+// from the disk a piece at a time, about once, and never decoded whole; the render goes to its file
+// in the cache folder a piece at a time. No block the build takes from the heap comes near the size
+// of either file.
+#[test]
+fn a_warped_render_holds_neither_file_whole() {
+    let dir = std::env::temp_dir().join(format!("m2-stream-warp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    long_wav(&dir.join("long.wav"), 20);
+    let file = std::fs::metadata(dir.join("long.wav")).unwrap().len() as usize;
+    let tempo = TempoMap::constant(120.0);
+    // 20 s of source laid out over 50 beats, 25 s: a render of 9.6 MB.
+    let clip: AudioClip =
+        serde_json::from_value(serde_json::json!({"start": 0, "length": 50, "asset": "long.wav", "warp": [[0, 0], [20, 50]]})).unwrap();
+    let mut cache = Cache::with_renders_in(Some(dir.join("renders")));
+    let k = stretch();
+    reads();
+    let (lane, most) = super::alloc_count::largest(|| AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut cache, &tempo, SR, 2, Some(&k)));
+    let (largest, n) = reads();
+    let render = 25 * SR as usize * 2 * 4;
+    assert_eq!(cache.work().1, 1, "one render made");
+    assert!(most < 1 << 20, "a block of {most} bytes taken while the source is {file} bytes and its render {render}");
+    assert!(largest <= READ && n * largest >= file && n * largest < 2 * file, "{n} reads of up to {largest} bytes read the source about once");
+    let rendered = std::fs::read_dir(dir.join("renders")).unwrap().map(|e| e.unwrap().metadata().unwrap().len() as usize).collect::<Vec<_>>();
+    assert_eq!(rendered, [render], "its render is in the cache folder, whole");
+    lane.ensure(10 * SR as u64, 4096, &[]);
+    let mut buf = vec![0.0f32; 2 * 4096];
+    lane.fill(&mut buf, 4096, 0, 10 * SR as u64, 4096);
+    assert!(buf.iter().any(|&x| x.abs() > 0.1), "the lane plays it");
+    std::fs::remove_dir_all(&dir).ok();
 }

@@ -46,6 +46,7 @@ pub mod fpenv;
 #[doc(hidden)]
 pub mod gauge;
 mod keep;
+mod offline;
 mod overlay;
 pub mod packages;
 mod parts;
@@ -275,6 +276,7 @@ impl KernelInst {
             sample_rate: k.sample_rate,
             values: k.values,
             assets: k.assets,
+            offline: None,
         };
         let state = match sandbox.state(prefix, &spec) {
             Ok(s) => s,
@@ -2147,7 +2149,8 @@ impl Renderer {
             Basis::Fresh | Basis::Lend(_) => None,
         };
         let lent = if let Basis::Lend(l) = &basis { Some(*l) } else { None };
-        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep);
+        let stretch = offline::Kernel::of(packages, offline::STRETCH);
+        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep, stretch.as_ref());
         let assets = audio::KernelAssets::of(flat, data, cache);
         let used = used(flat);
         let shapes: Vec<Option<Shape>> =

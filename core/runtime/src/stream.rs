@@ -166,26 +166,9 @@ pub(crate) struct Raw {
 
 impl Raw {
     /// The render at `path`, when it is there whole.
-    fn open(path: &Path, channels: usize, frames: usize) -> Option<Raw> {
+    pub(crate) fn open(path: &Path, channels: usize, frames: usize) -> Option<Raw> {
         let file = File::open(path).ok()?;
         (file.metadata().ok()?.len() == (frames * channels * 4) as u64).then_some(Raw { file, channels })
-    }
-
-    /// Write `render` to `path`: a part file first, then renamed, so a reader never meets half of
-    /// one. Two programs that render the same clip write the same bytes.
-    fn write(path: &Path, render: &RenderedClip) -> Result<()> {
-        static N: AtomicUsize = AtomicUsize::new(0);
-        let folder = m2_os::fs::folder_of(path);
-        m2_os::fs::make_dirs(folder)?;
-        let part = path.with_extension(format!("f32.{}.{}.part", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-        let mut bytes = Vec::with_capacity(render.len() * render.first().map_or(0, Vec::len) * 4);
-        for i in 0..render.first().map_or(0, Vec::len) {
-            for c in render {
-                bytes.extend_from_slice(&c[i].to_le_bytes());
-            }
-        }
-        std::fs::write(&part, &bytes).and_then(|()| std::fs::rename(&part, path)).inspect_err(|_| drop(std::fs::remove_file(&part)))?;
-        Ok(())
     }
 
     fn read(&self, from: usize, to: usize, buf: &mut Vec<u8>, out: &mut [Vec<f32>]) -> Result<()> {
@@ -206,37 +189,88 @@ impl Raw {
     }
 }
 
-/// Where a warped clip's render is kept: `<cache>/renders/<hash>.f32` (FMT-16's folder), named by
-/// everything it depends on. None without a cache folder.
-pub(crate) fn render_path(key: &[u8]) -> Option<PathBuf> {
-    let mut named = format!("music2 warped render {}\n", crate::audio::WARP_VERSION).into_bytes();
-    named.extend_from_slice(key);
-    Some(m2_os::dirs::cache()?.join("renders").join(format!("{}.f32", Sha::of(&named).hex())))
-}
-
-/// A warped clip's render: from the cache folder when it can be kept there, else in memory.
-pub(crate) fn warped(
-    path: Option<PathBuf>,
-    render: impl FnOnce() -> Option<RenderedClip>,
+/// A render being written to the cache folder, a piece at a time, never whole in memory: to a part
+/// file, renamed to its name once whole, so a reader never meets half of one. Two programs that
+/// render the same clip write the same bytes. A part left unfinished is removed.
+pub(crate) struct Part {
+    file: File,
+    part: PathBuf,
+    path: PathBuf,
     channels: usize,
     frames: usize,
-) -> Option<Source> {
-    if let Some(p) = &path
-        && let Some(raw) = Raw::open(p, channels, frames)
-    {
-        return Some(Source::Render(Arc::new(raw)));
-    }
-    let r = render()?;
-    if let Some(p) = &path
-        && Raw::write(p, &r).is_ok()
-        && let Some(raw) = Raw::open(p, r.len(), frames)
-    {
-        return Some(Source::Render(Arc::new(raw)));
-    }
-    Some(Source::Mem(Arc::new(r)))
+    /// Frames put so far, and the bytes of those not yet written.
+    put: usize,
+    bytes: Vec<u8>,
+    done: bool,
 }
 
-/// How a clip with no warp is worked out from its file: [`render_clip`]'s numbers.
+impl Part {
+    /// A part file for the render at `path`: `frames` frames of `channels`, put in order.
+    pub(crate) fn create(path: &Path, channels: usize, frames: usize) -> Result<Part> {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        m2_os::fs::make_dirs(m2_os::fs::folder_of(path))?;
+        let part = path.with_extension(format!("f32.{}.{}.part", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let file = File::create(&part).with_context(|| format!("creating {}", part.display()))?;
+        Ok(Part { file, part, path: path.to_path_buf(), channels, frames, put: 0, bytes: Vec::with_capacity(READ), done: false })
+    }
+
+    /// The next frames, a slice a channel, all as long.
+    pub(crate) fn put(&mut self, block: &[&[f32]]) -> Result<()> {
+        let n = block.first().map_or(0, |c| c.len());
+        if self.put + n > self.frames || block.len() != self.channels {
+            bail!("a render of {} frames of {} channels was given {} of {}", self.frames, self.channels, self.put + n, block.len());
+        }
+        for i in 0..n {
+            for c in block {
+                self.bytes.extend_from_slice(&c[i].to_le_bytes());
+            }
+        }
+        self.put += n;
+        if self.bytes.len() >= READ {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        use std::io::Write;
+        self.file.write_all(&self.bytes)?;
+        self.bytes.clear();
+        Ok(())
+    }
+
+    /// Done: the rest written, and the file renamed to its name, opened to be read.
+    pub(crate) fn finish(mut self) -> Result<Raw> {
+        if self.put != self.frames {
+            bail!("a render of {} frames ended at {}", self.frames, self.put);
+        }
+        self.flush()?;
+        std::fs::rename(&self.part, &self.path).with_context(|| format!("naming {}", self.path.display()))?;
+        self.done = true;
+        Raw::open(&self.path, self.channels, self.frames).with_context(|| format!("{} is not whole", self.path.display()))
+    }
+}
+
+impl Drop for Part {
+    fn drop(&mut self) {
+        if !self.done {
+            drop(std::fs::remove_file(&self.part));
+        }
+    }
+}
+
+/// Where a warped clip's stretch is kept in `folder` (`<cache>/renders`, FMT-16's), named by
+/// everything the kernel was given: its key holds the stretch kernel's module hash (the sx plan's
+/// D8), so a new std makes new renders, and the time map itself, so a new way of making the map
+/// does too.
+pub(crate) fn render_path(folder: &Path, key: &[u8]) -> PathBuf {
+    let mut named = b"music2 stretch\n".to_vec();
+    named.extend_from_slice(key);
+    folder.join(format!("{}.f32", Sha::of(&named).hex()))
+}
+
+/// How a clip is worked out from its file, or from its stretch: [`render_clip`]'s numbers (a
+/// stretch reads only its length, reverse, gain and fades).
 ///
 /// [`render_clip`]: crate::audio::render_clip
 #[derive(Clone, Copy, Debug)]
@@ -269,6 +303,24 @@ impl Shape {
     /// The source position output sample `j` (before reversing) reads.
     fn pos(&self, j: usize) -> f64 {
         self.offset + j as f64 * self.step
+    }
+
+    /// The frames of a made render (a stretch) its samples `i0..i1` read: from its end, reversed.
+    fn span(&self, i0: usize, i1: usize) -> (usize, usize) {
+        if self.reverse { (self.len - i1, self.len - i0) } else { (i0, i1) }
+    }
+
+    /// Its samples `at` into `out`, a channel each, from `win`, the render's frames from `j0` on:
+    /// reversed, faded and gained, as a whole render would have them.
+    fn place(&self, win: &[Vec<f32>], j0: usize, at: Range<usize>, out: &mut [Vec<f32>]) {
+        let n = self.len;
+        for (win, out) in win.iter().zip(out.iter_mut()) {
+            out.clear();
+            for i in at.clone() {
+                let j = if self.reverse { n - 1 - i } else { i };
+                out.push(win[j - j0] * gain_at(i, n, self.gain, self.fade_in, self.fade_out));
+            }
+        }
     }
 }
 
@@ -310,10 +362,11 @@ pub(crate) fn read_in(x: &[f32], base: usize, len: usize, pos: f64) -> f32 {
 pub(crate) enum Source {
     /// Its WAV, worked out in place.
     Wav(Arc<Wav>, Shape),
-    /// A warped render in the cache folder.
-    Render(Arc<Raw>),
-    /// A render in memory: a warped one with no cache folder, and tests'.
-    Mem(Arc<RenderedClip>),
+    /// A warped clip's stretch in the cache folder, reversed, faded and gained in place.
+    Render(Arc<Raw>, Shape),
+    /// A stretch in memory, reversed, faded and gained in place: a warped clip's with no cache
+    /// folder, and tests' renders.
+    Mem(Arc<RenderedClip>, Shape),
 }
 
 /// One clip of a lane: where it starts, in the lane's frames, how long it is and what it reads.
@@ -328,8 +381,8 @@ impl Clip {
     pub(crate) fn new(at: u64, src: Source, len: usize) -> Clip {
         let channels = match &src {
             Source::Wav(w, _) => w.channels(),
-            Source::Render(r) => r.channels,
-            Source::Mem(m) => m.len(),
+            Source::Render(r, _) => r.channels,
+            Source::Mem(m, _) => m.len(),
         };
         Clip { at, len: len as u64, channels, src }
     }
@@ -339,13 +392,19 @@ impl Clip {
     fn piece(&self, i0: usize, i1: usize, s: &mut Scratch) -> Result<()> {
         let ch = self.channels;
         match &self.src {
-            Source::Mem(d) => {
-                for (v, d) in s.vals.iter_mut().zip(d.iter()) {
-                    v.clear();
-                    v.extend_from_slice(&d[i0..i1]);
-                }
+            Source::Render(r, sh) => {
+                let (j0, j1) = sh.span(i0, i1);
+                r.read(j0, j1, &mut s.bytes, &mut s.win)?;
+                sh.place(&s.win[..ch], j0, i0..i1, &mut s.vals);
             }
-            Source::Render(r) => r.read(i0, i1, &mut s.bytes, &mut s.vals)?,
+            Source::Mem(d, sh) => {
+                let (j0, j1) = sh.span(i0, i1);
+                for (w, d) in s.win.iter_mut().zip(d.iter()) {
+                    w.clear();
+                    w.extend_from_slice(&d[j0..j1]);
+                }
+                sh.place(&s.win[..ch], j0, i0..i1, &mut s.vals);
+            }
             Source::Wav(w, sh) => {
                 let n = sh.len;
                 let (j0, j1) = if sh.reverse { (n - i1, n - i0) } else { (i0, i1) };

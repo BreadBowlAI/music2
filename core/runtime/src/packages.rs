@@ -43,6 +43,10 @@ struct KernelDecl {
     outputs: Vec<String>,
     #[serde(default)]
     latency: u32,
+    /// An offline kernel (kernel ABI v1, flags bit 0): run by the host to make a clip's render, off
+    /// the audio thread, never by song code. No inputs; one `audio` output; its source is asset 0.
+    #[serde(default)]
+    offline: bool,
 }
 
 pub struct Package {
@@ -75,6 +79,9 @@ pub struct PackageSet {
     pub(crate) engine: Engine,
     packages: BTreeMap<String, Package>,
     kernels: HashMap<String, (KernelSig, String)>,
+    /// The offline kernels, by id, and the package of each: kept apart from `kernels`, so no
+    /// song's graph types or runs one (`kernel.offline`).
+    offline: HashMap<String, String>,
     plugins: HashMap<String, Hosted>,
     /// How plugins are reached (P11): the process's in-process host unless set.
     host: Arc<dyn PluginHost>,
@@ -112,7 +119,7 @@ pub fn engine() -> Engine {
 impl Default for PackageSet {
     fn default() -> Self {
         let (packages, kernels, plugins) = (BTreeMap::new(), HashMap::new(), HashMap::new());
-        PackageSet { engine: engine(), packages, kernels, plugins, host: m2_plugins::host() }
+        PackageSet { engine: engine(), packages, kernels, offline: HashMap::new(), plugins, host: m2_plugins::host() }
     }
 }
 
@@ -160,6 +167,11 @@ impl PackageSet {
         };
         for k in &m.kernel {
             let id = format!("{name}:{}", k.name);
+            if k.offline {
+                check_offline(&id, k)?;
+                self.offline.insert(id, name.clone());
+                continue;
+            }
             let sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).map_err(anyhow::Error::msg)?;
             self.kernels.insert(id, (sig, name.clone()));
         }
@@ -286,15 +298,16 @@ impl PackageSet {
         diags
     }
 
-    /// The SHA-256 of the wasm module holding kernel `id`.
+    /// The SHA-256 of the wasm module holding kernel `id` (an offline one too).
     pub fn module_sha(&self, id: &str) -> Option<m2_song::Sha> {
-        let (_, pkg) = self.kernels.get(id)?;
+        let pkg = self.kernels.get(id).map(|(_, p)| p).or_else(|| self.offline.get(id))?;
         self.packages.get(pkg)?.module_sha
     }
 
-    /// The compiled module holding kernel `id`, the kernel's export prefix, and its package's name.
+    /// The compiled module holding kernel `id` (an offline one too), the kernel's export prefix,
+    /// and its package's name.
     pub(crate) fn module_for<'a>(&'a self, id: &'a str) -> Option<(&'a Module, &'a str, &'a str)> {
-        let (_, pkg) = self.kernels.get(id)?;
+        let pkg = self.kernels.get(id).map(|(_, p)| p).or_else(|| self.offline.get(id))?;
         let module = self.packages.get(pkg)?.module.as_ref()?;
         Some((module, id.split_once(':').map_or(id, |(_, k)| k), pkg))
     }
@@ -303,6 +316,10 @@ impl PackageSet {
 impl Kernels for PackageSet {
     fn kernel(&self, id: &str) -> Option<&KernelSig> {
         self.kernels.get(id).map(|(s, _)| s)
+    }
+
+    fn offline(&self, id: &str) -> bool {
+        self.offline.contains_key(id)
     }
 
     fn plugin(&self, id: &str) -> Option<&KernelSig> {
@@ -433,6 +450,18 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
         latency: info.latency,
     };
     Ok(sig)
+}
+
+/// An offline kernel's ports, as kernel ABI v1 has them (`docs/kernel-abi.md`, Offline kernels):
+/// no inputs, since its source is its asset 0, and one output of audio, each port written as any
+/// port is.
+fn check_offline(id: &str, k: &KernelDecl) -> Result<()> {
+    let outputs = k.outputs.iter().map(|o| m2_ir::PortSig::parse(o).map_err(|e| anyhow::anyhow!("kernel `{id}`: {e}")));
+    let outputs = outputs.collect::<Result<Vec<_>>>()?;
+    if !k.inputs.is_empty() || k.latency > 0 || !matches!(outputs[..], [PortSig { kind: PortKind::Audio(_), .. }]) {
+        bail!("kernel `{id}` is offline: it takes no inputs (its source is its asset 0) and has one audio output");
+    }
+    Ok(())
 }
 
 /// The kernel ABI version this runtime speaks (`docs/kernel-abi.md`). Frozen: v1 only ever gains

@@ -9,9 +9,10 @@
 //! plain copy. Its player persists across plan activations, and one that brings new renders (an
 //! edited clip, a tempo change) crossfades linearly from the old renders to them (RENDER-27).
 //!
-//! Time-stretching (WSOLA) lives here for now. The design makes stretching a package
-//! kernel so better algorithms can replace it; that needs an offline-kernel ABI
-//! (whole buffers in, whole buffers out), which is the next step for this code.
+//! A warped clip is stretched by std's offline kernel `std:stretch` ([`crate::offline`]), once, in
+//! pieces, straight into a file in the cache folder, which then streams as any clip; its source is
+//! read from the disk. Gain, fades and reverse are the host's, worked out as the file is read, as
+//! for a plain clip (the sx plan's D7): clips that differ only in them share one stretch.
 //!
 //! Its math goes through the `libm` crate, never the OS's library, so a clip renders the same bits
 //! on every OS (PLAT-4; `tests/host_math.rs` keeps it so).
@@ -25,7 +26,9 @@ use m2_song::{AudioClip, DataSet, HashCache, Sha, TempoMap};
 
 use crate::BLOCK;
 use crate::fade::xfade;
-use crate::stream::{self, Clip, Ring, Shape, Source, Wav, gain_at};
+use crate::offline::{self, Kernel};
+use crate::sandbox::Held;
+use crate::stream::{self, Clip, Part, Raw, Ring, Shape, Source, Wav};
 use crate::transport::{Jump, Runs};
 
 /// Decoded audio, planar, at its own sample rate.
@@ -146,33 +149,59 @@ impl Hearing {
 pub type RenderedClip = Vec<Vec<f32>>;
 
 /// What a clip's render depends on: the asset's bytes, every field that shapes the sound, the
-/// tempo map and the rate.
+/// tempo map and the rate; and for a warped clip, the module of the kernel that stretches it (D8).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ClipKey {
     asset: Sha,
     clip: Vec<u64>,
     tempo: Vec<u64>,
     rate: u64,
+    stretch: Option<Sha>,
 }
 
 impl ClipKey {
-    fn of(asset: Sha, c: &AudioClip, tempo: &TempoMap, rate: f64) -> ClipKey {
+    fn of(asset: Sha, c: &AudioClip, tempo: &TempoMap, rate: f64, stretch: Option<&Kernel>) -> ClipKey {
         let mut clip = vec![c.start, c.length, c.offset, c.gain_db, c.fade_in, c.fade_out, c.pitch, c.reverse as u8 as f64];
         clip.extend(c.warp.iter().flat_map(|&(a, b)| [a, b]));
         let tempo = tempo.segments().iter().flat_map(|t| [t.beat, t.bpm]).map(f64::to_bits).collect();
-        ClipKey { asset, clip: clip.into_iter().map(f64::to_bits).collect(), tempo, rate: rate.to_bits() }
+        let stretch = stretch.filter(|_| !c.warp.is_empty()).map(|k| k.sha);
+        ClipKey { asset, clip: clip.into_iter().map(f64::to_bits).collect(), tempo, rate: rate.to_bits(), stretch }
+    }
+
+}
+
+/// What a warped clip's stretch depends on: everything its kernel is given (D8). The source's
+/// bytes, the kernel's module, the time map, the pitch, the rate and the length; never the clip's
+/// gain, fades or reverse, which are worked out as it is read.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct WarpKey {
+    asset: Sha,
+    stretch: Sha,
+    numbers: Vec<u64>,
+}
+
+impl WarpKey {
+    fn of(asset: Sha, stretch: Sha, map: &[[f64; 2]], pitch: f64, rate: f64, frames: usize) -> WarpKey {
+        let mut numbers = vec![pitch.to_bits(), rate.to_bits(), frames as u64, map.len() as u64];
+        numbers.extend(map.iter().flatten().map(|v| v.to_bits()));
+        WarpKey { asset, stretch, numbers }
     }
 
     /// Its bytes, for a file name.
     fn bytes(&self) -> Vec<u8> {
-        let mut b = self.asset.hex().into_bytes();
-        for n in [&[self.clip.len() as u64][..], &self.clip, &[self.tempo.len() as u64], &self.tempo, &[self.rate]] {
-            for x in n {
-                b.extend_from_slice(&x.to_le_bytes());
-            }
+        let mut b = format!("{} {}\n", self.asset.hex(), self.stretch.hex()).into_bytes();
+        for n in &self.numbers {
+            b.extend_from_slice(&n.to_le_bytes());
         }
         b
     }
+}
+
+/// A warped clip's stretch, as its kernel made it: in the cache folder, or in memory without one.
+#[derive(Clone)]
+enum Stretched {
+    File(Arc<Raw>),
+    Mem(Arc<RenderedClip>),
 }
 
 /// What a lane plays: its clips' keys in order, its channels.
@@ -182,27 +211,36 @@ struct LaneKey {
     channels: usize,
 }
 
-/// Opened assets, by content; warped renders, by what they depend on; lanes, by what they play;
+/// Opened assets, by content; warped clips' stretches, by what the kernel is given; lanes, by what
+/// they play;
 /// and the files kernels read, decoded whole, by content. Building opens files and reads their
-/// headers, fills the lanes short enough to stay whole, and decodes kernels' files; compiling
-/// never does (FMT-16). A live session keeps one per open project, so an edit
+/// headers, fills the lanes short enough to stay whole, stretches warped clips and decodes kernels'
+/// files; compiling never does (FMT-16). A live session keeps one per open project, so an edit
 /// shares every lane it didn't change with the renderer it replaces, and its ring with it; an
 /// offline render uses one of its own, so its rings are its own too.
 #[derive(Default)]
 pub struct Cache {
     wavs: HashMap<Sha, Option<Arc<Wav>>>,
-    warps: HashMap<ClipKey, Option<Arc<Source>>>,
+    warps: HashMap<WarpKey, Option<Stretched>>,
     lanes: HashMap<LaneKey, Arc<AudioLane>>,
-    /// Assets decoded whole for a warp's one render (D2), until the next prune.
-    decoded: HashMap<Sha, Option<Arc<Asset>>>,
     /// The files kernels read (kernel ABI v1), decoded whole, kept while a build uses them.
     kernels: HashMap<Sha, Option<Arc<Asset>>>,
     used_wavs: HashSet<Sha>,
     used_kernels: HashSet<Sha>,
-    used_warps: HashSet<ClipKey>,
+    used_warps: HashSet<WarpKey>,
     used_lanes: HashSet<LaneKey>,
     decodes: usize,
     renders: usize,
+    folder: Renders,
+}
+
+/// Where stretches are kept: `<cache>/renders` (FMT-16's folder); none, in memory.
+struct Renders(Option<std::path::PathBuf>);
+
+impl Default for Renders {
+    fn default() -> Renders {
+        Renders(m2_os::dirs::cache().map(|c| c.join("renders")))
+    }
 }
 
 impl Cache {
@@ -234,21 +272,30 @@ impl Cache {
         Some((sha, a.clone()?))
     }
 
-    /// A warped clip's render (D1): from the cache folder, else made once, there or in memory.
-    fn warp(&mut self, key: ClipKey, path: &Path, c: &AudioClip, tempo: &TempoMap, rate: f64) -> Option<Arc<Source>> {
+    /// A cache whose warped renders are kept in `folder` (tests); none, in memory.
+    #[doc(hidden)]
+    pub fn with_renders_in(folder: Option<std::path::PathBuf>) -> Cache {
+        Cache { folder: Renders(folder), ..Cache::default() }
+    }
+
+    /// Warped clip `c`'s stretch, made by `stretch` from its file `wav`, the asset `asset` (D7):
+    /// from the cache folder when it is there, else made now, block by block, straight into its file
+    /// there (in memory without a folder). None without a stretch kernel, or when the stretch fails
+    /// (a line in the log says why): the clip is silent.
+    fn warp(&mut self, wav: &Arc<Wav>, asset: Sha, c: &AudioClip, tempo: &TempoMap, rate: f64, stretch: Option<&Kernel>) -> Option<Stretched> {
+        let k = stretch?;
+        let map = time_map(c, tempo);
+        let frames = stream::clip_len(c, tempo, rate);
+        let key = WarpKey::of(asset, k.sha, &map, c.pitch, rate, frames);
         self.used_warps.insert(key.clone());
         if let Some(s) = self.warps.get(&key) {
             return s.clone();
         }
-        let frames = stream::clip_len(c, tempo, rate);
-        let (decoded, renders) = (&mut self.decoded, &mut self.renders);
-        let render = || {
-            let asset = decoded.entry(key.asset).or_insert_with(|| load_wav(path).ok().filter(|a| !a.is_empty()).map(Arc::new)).clone()?;
-            *renders += 1;
-            Some(render_clip(c, &asset, tempo, rate))
-        };
-        let channels = self.wavs.get(&key.asset).cloned().flatten().map_or(1, |w| w.channels());
-        let s = stream::warped(stream::render_path(&key.bytes()), render, channels, frames).map(Arc::new);
+        let path = self.folder.0.as_deref().map(|f| stream::render_path(f, &key.bytes()));
+        let run = offline::Run { source: Held::Disk(wav.clone()), values: &[c.pitch], map: &map, rate, channels: wav.channels(), frames };
+        let s = make_warp(k, path.as_deref(), &run, &mut self.renders)
+            .inspect_err(|e| eprintln!("music2: a warped clip of {} plays silence: its stretch failed: {e:#}", c.asset))
+            .ok();
         self.warps.insert(key, s.clone());
         s
     }
@@ -264,7 +311,6 @@ impl Cache {
         self.kernels.retain(|k, _| kernels.contains(k));
         self.warps.retain(|k, _| warps.contains(k));
         self.lanes.retain(|k, _| lanes.contains(k));
-        self.decoded.clear();
     }
 
     /// Assets opened (kernels' files decoded included) and warped clips rendered since the cache
@@ -321,113 +367,83 @@ impl KernelAssets {
 }
 
 /// Read `x` at fractional position `pos` (cubic Hermite); silence outside.
+#[cfg(test)]
 fn read(x: &[f32], pos: f64) -> f32 {
     stream::read_in(x, 0, x.len(), pos)
 }
 
-const FRAME: usize = 2048;
-const HOP: usize = FRAME / 2;
-const SEARCH: isize = 384;
-
-/// The warp's version, in the name of every warped render kept in the cache folder
-/// ([`stream::render_path`]). Any change to what [`stretch`] or [`render_clip`] makes MUST bump it,
-/// or users' caches go on playing (and exporting) the old renders (the review's io-r5).
-pub(crate) const WARP_VERSION: u32 = 1;
-
-/// WSOLA time-stretch with an arbitrary monotonic time map: output sample `t` comes
-/// from around source position `map(t)`. Keeps pitch; channels share one alignment.
-fn stretch(src: &[Vec<f32>], out_len: usize, map: impl Fn(f64) -> f64) -> Vec<Vec<f32>> {
-    let window: Vec<f32> = (0..FRAME).map(|i| 0.5 - 0.5 * libm::cosf(std::f32::consts::TAU * i as f32 / FRAME as f32)).collect();
-    let mono: Vec<f32> = (0..src[0].len()).map(|i| src.iter().map(|c| c[i]).sum::<f32>()).collect();
-    let mut out = vec![vec![0.0f32; out_len + FRAME]; src.len()];
-    let mut prev: Option<isize> = None;
-    let mut k = 0usize;
-    while k * HOP < out_len {
-        let t = (k * HOP) as f64;
-        let nominal = map(t + FRAME as f64 / 2.0) as isize - FRAME as isize / 2;
-        let pos = match prev {
-            None => nominal,
-            Some(p) => {
-                // The natural continuation of the previous frame, and the candidate near
-                // `nominal` that resembles it most (cross-correlation over the overlap).
-                let cont = p + HOP as isize;
-                let score = |cand: isize| -> f32 {
-                    let mut s = 0.0;
-                    for i in (0..HOP).step_by(2) {
-                        let (a, b) = (cont + i as isize, cand + i as isize);
-                        if a >= 0 && b >= 0 && (a as usize) < mono.len() && (b as usize) < mono.len() {
-                            s += mono[a as usize] * mono[b as usize];
-                        }
-                    }
-                    s
-                };
-                let mut best = (nominal, f32::MIN);
-                for d in (-SEARCH..=SEARCH).step_by(8) {
-                    let sc = score(nominal + d);
-                    if sc > best.1 {
-                        best = (nominal + d, sc);
-                    }
-                }
-                let coarse = best.0;
-                for d in -8..=8 {
-                    let sc = score(coarse + d);
-                    if sc > best.1 {
-                        best = (coarse + d, sc);
-                    }
-                }
-                best.0
-            }
-        };
-        for (c, ch) in src.iter().enumerate() {
-            for i in 0..FRAME {
-                let s = pos + i as isize;
-                if s >= 0 && (s as usize) < ch.len() {
-                    out[c][k * HOP + i] += ch[s as usize] * window[i];
-                }
-            }
+/// A warped clip's time map (D5), for `std:stretch`: pairs of (source seconds, output seconds from
+/// the clip's start) at its start, its end, and each warp marker and tempo change inside it. Source
+/// time runs in a straight line between markers in beats, and output time between tempo changes,
+/// so between two pairs both do, and the map is exact. Past the markers, their nearest segment goes
+/// on, in beats; one marker pins a moment, and the audio runs at its own speed around it.
+pub(crate) fn time_map(c: &AudioClip, tempo: &TempoMap) -> Vec<[f64; 2]> {
+    let t0 = tempo.seconds_at(c.start);
+    let w = &c.warp;
+    let src_at_beat = |b: f64| -> f64 {
+        if w.len() == 1 {
+            return w[0].0 + tempo.seconds_at(c.start + b) - tempo.seconds_at(c.start + w[0].1);
         }
-        prev = Some(pos);
-        k += 1;
-    }
-    for c in &mut out {
-        c.truncate(out_len);
-    }
-    out
+        let i = w.partition_point(|m| m.1 <= b).clamp(1, w.len() - 1);
+        let (a, z) = (w[i - 1], w[i]);
+        a.0 + (b - a.1) * (z.0 - a.0) / (z.1 - a.1)
+    };
+    let inside = |b: &f64| *b > 0.0 && *b < c.length;
+    let mut beats = vec![0.0, c.length.max(0.0)];
+    beats.extend(w.iter().map(|m| m.1).filter(inside));
+    beats.extend(tempo.segments().iter().map(|t| t.beat - c.start).filter(inside));
+    beats.sort_by(f64::total_cmp);
+    beats.dedup();
+    beats.into_iter().map(|b| [src_at_beat(b), tempo.seconds_at(c.start + b) - t0]).collect()
 }
 
-/// Render one clip at `sample_rate`: its samples from the clip's start, for its length. A warped
-/// clip is made this way, once (D2); a clip with no warp is worked out the same way piece by piece
-/// from its file as it plays ([`stream`]), and this is the reference its pieces must equal.
-pub fn render_clip(clip: &AudioClip, asset: &Asset, tempo: &TempoMap, sample_rate: f64) -> Vec<Vec<f32>> {
-    let t0 = tempo.seconds_at(clip.start);
-    let src_rate = asset.sample_rate;
-    let sh = Shape::of(clip, src_rate, tempo, sample_rate);
-    let out_len = sh.len;
-    let rate = libm::exp2(clip.pitch / 12.0);
+/// [`Cache::warp`]'s stretch: from `path` when it is there whole; else made by `k` as `run` says
+/// now, in pieces, into a part file there, renamed to `path` once whole; in memory without a path.
+fn make_warp(k: &Kernel, path: Option<&Path>, run: &offline::Run, renders: &mut usize) -> Result<Stretched> {
+    if let Some(raw) = path.and_then(|p| Raw::open(p, run.channels, run.frames)) {
+        return Ok(Stretched::File(Arc::new(raw)));
+    }
+    *renders += 1;
+    match path {
+        Some(p) => {
+            let mut part = Part::create(p, run.channels, run.frames)?;
+            offline::run(k, run, &mut |b| part.put(b))?;
+            Ok(Stretched::File(Arc::new(part.finish()?)))
+        }
+        None => Ok(Stretched::Mem(Arc::new(whole(k, run)?))),
+    }
+}
 
-    let mut out: Vec<Vec<f32>> = if clip.warp.is_empty() {
+/// What `k` makes as `run` says, whole in memory.
+fn whole(k: &Kernel, run: &offline::Run) -> Result<RenderedClip> {
+    let mut out: RenderedClip = vec![Vec::with_capacity(run.frames); run.channels];
+    offline::run(k, run, &mut |b| {
+        for (o, x) in out.iter_mut().zip(b) {
+            o.extend_from_slice(x);
+        }
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+/// Render one clip at `sample_rate`: its samples from the clip's start, for its length, worked out
+/// whole. A clip with no warp is worked out the same way piece by piece from its file as it plays
+/// ([`stream`]); a warped one is stretched whole by `stretch` (silent without it), then reversed,
+/// faded and gained as its file is when read. This is the reference their pieces must equal (tests).
+#[cfg(test)]
+pub(crate) fn render_clip(clip: &AudioClip, asset: &Arc<Asset>, tempo: &TempoMap, sample_rate: f64, stretch: Option<&Kernel>) -> Result<RenderedClip> {
+    let sh = Shape::of(clip, asset.sample_rate, tempo, sample_rate);
+    let mut out: RenderedClip = if clip.warp.is_empty() {
         // Varispeed: source time runs `rate` times faster.
-        asset.channels.iter().map(|ch| (0..out_len).map(|i| read(ch, sh.offset + i as f64 * sh.step)).collect()).collect()
+        asset.channels.iter().map(|ch| (0..sh.len).map(|i| read(ch, sh.offset + i as f64 * sh.step)).collect()).collect()
     } else {
-        // Warp: output time → beat → source seconds, piecewise linear through the
-        // markers (extended past the ends by their nearest segment).
-        let w = &clip.warp;
-        let src_at_beat = |b: f64| -> f64 {
-            if w.len() == 1 {
-                // One marker pins a moment; the audio runs at its own speed around it.
-                return w[0].0 + tempo.seconds_at(clip.start + b) - tempo.seconds_at(clip.start + w[0].1);
-            }
-            let i = w.partition_point(|m| m.1 <= b).clamp(1, w.len() - 1);
-            let (a, z) = (w[i - 1], w[i]);
-            a.0 + (b - a.1) * (z.0 - a.0) / (z.1 - a.1)
-        };
-        let src_seconds = |out_sec: f64| src_at_beat(tempo.beat_at(t0 + out_sec) - clip.start);
-        // The stretch copies source frames, so its output runs at the source's sample
-        // rate. Pitch with warp: stretch to `rate` × the duration, then read it back
-        // `rate` times faster (which also converts to the song's sample rate).
-        let z_len = (out_len as f64 * rate * src_rate / sample_rate).ceil() as usize + 4;
-        let z = stretch(&asset.channels, z_len, |u| src_seconds(u / src_rate / rate) * src_rate);
-        z.iter().map(|ch| (0..out_len).map(|i| read(ch, i as f64 * sh.step)).collect()).collect()
+        let map = time_map(clip, tempo);
+        let channels = asset.channels.len();
+        let run = offline::Run { source: Held::Whole(asset.clone()), values: &[clip.pitch], map: &map, rate: sample_rate, channels, frames: sh.len };
+        match stretch {
+            Some(k) => whole(k, &run)?,
+            None => vec![vec![0.0; sh.len]; channels],
+        }
     };
     for ch in &mut out {
         if clip.reverse {
@@ -435,10 +451,10 @@ pub fn render_clip(clip: &AudioClip, asset: &Asset, tempo: &TempoMap, sample_rat
         }
         let n = ch.len();
         for (i, x) in ch.iter_mut().enumerate() {
-            *x *= gain_at(i, n, sh.gain, sh.fade_in, sh.fade_out);
+            *x *= stream::gain_at(i, n, sh.gain, sh.fade_in, sh.fade_out);
         }
     }
-    out
+    Ok(out)
 }
 
 /// An audio lane, ready to play: its clips at their start samples, and the ring the sound thread
@@ -468,25 +484,35 @@ impl AudioLane {
     /// The lane for `clips`, in the order given (canonical: by start and id, so overlapping clips
     /// always sum in one order), from `cache` when it holds it. A clip whose asset may not be
     /// played (`asset.missing`) or can't be decoded is silent; it never silences the rest
-    /// (FMT-15). A lane short enough to stay whole is filled here.
-    pub fn build(clips: &[AudioClip], data: &DataSet, cache: &mut Cache, tempo: &TempoMap, sample_rate: f64, channels: usize) -> Arc<AudioLane> {
-        AudioLane::build_with(clips, &|a| data.asset_path(a), cache, tempo, sample_rate, channels)
+    /// (FMT-15). A lane short enough to stay whole is filled here. Warped clips are stretched by
+    /// `stretch` (the song's `std:stretch`); without it they are silent.
+    pub(crate) fn build(
+        clips: &[AudioClip],
+        data: &DataSet,
+        cache: &mut Cache,
+        tempo: &TempoMap,
+        sample_rate: f64,
+        channels: usize,
+        stretch: Option<&Kernel>,
+    ) -> Arc<AudioLane> {
+        AudioLane::build_with(clips, &|a| data.asset_path(a), cache, tempo, sample_rate, channels, stretch)
     }
 
-    /// [`AudioLane::build`] with each asset's path from `asset_path` (tests and tools).
-    pub fn build_with(
+    /// [`AudioLane::build`] with each asset's path from `asset_path` (tests).
+    pub(crate) fn build_with(
         clips: &[AudioClip],
         asset_path: &dyn Fn(&str) -> Option<std::path::PathBuf>,
         cache: &mut Cache,
         tempo: &TempoMap,
         sample_rate: f64,
         channels: usize,
+        stretch: Option<&Kernel>,
     ) -> Arc<AudioLane> {
         let mut found = vec![];
         for c in clips {
             let Some(path) = asset_path(&c.asset) else { continue };
             let Some((sha, w)) = cache.wav(&path) else { continue };
-            found.push((c, ClipKey::of(sha, c, tempo, sample_rate), w, path));
+            found.push((c, ClipKey::of(sha, c, tempo, sample_rate, stretch), w));
         }
         let key = LaneKey { clips: found.iter().map(|f| f.1.clone()).collect(), channels };
         cache.used_lanes.insert(key.clone());
@@ -494,17 +520,15 @@ impl AudioLane {
             return l.clone();
         }
         let mut out = vec![];
-        for (c, k, w, path) in found {
+        for (c, k, w) in found {
             let at = (tempo.seconds_at(c.start) * sample_rate).round() as u64;
+            let sh = Shape::of(c, w.rate, tempo, sample_rate);
             let src = if c.warp.is_empty() {
-                Source::Wav(w.clone(), Shape::of(c, w.rate, tempo, sample_rate))
+                Source::Wav(w.clone(), sh)
             } else {
-                match cache.warp(k, &path, c, tempo, sample_rate) {
-                    Some(s) => match &*s {
-                        Source::Render(r) => Source::Render(r.clone()),
-                        Source::Mem(m) => Source::Mem(m.clone()),
-                        Source::Wav(..) => continue,
-                    },
+                match cache.warp(&w, k.asset, c, tempo, sample_rate, stretch) {
+                    Some(Stretched::File(r)) => Source::Render(r, sh),
+                    Some(Stretched::Mem(m)) => Source::Mem(m, sh),
                     None => continue,
                 }
             };
@@ -528,7 +552,8 @@ impl AudioLane {
     pub fn of_renders(clips: Vec<(u64, Arc<RenderedClip>)>, channels: usize, rate: f64) -> AudioLane {
         let clips = clips.into_iter().map(|(at, r)| {
             let len = r[0].len();
-            Clip::new(at, Source::Mem(r), len)
+            let sh = Shape { offset: 0.0, step: 1.0, len, reverse: false, gain: 1.0, fade_in: 0, fade_out: 0 };
+            Clip::new(at, Source::Mem(r, sh), len)
         });
         AudioLane::of(clips.collect(), channels, TempoMap::constant(120.0), rate, None)
     }

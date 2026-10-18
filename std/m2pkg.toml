@@ -16,7 +16,7 @@
 
 [package]
 name = "std"
-version = "0.2.1"
+version = "0.2.2"
 license = "MIT"
 description = "Oscillators, envelopes, filters, mixing, dynamics, and the instruments built from them"
 wasm = "kernels/std.wasm"
@@ -423,3 +423,14 @@ name = "hitcount"
 description = "How many drum hits a lane has played, from the hits drumhit marks (a poly of it), this sample's included, wrapping at 2^24: read on a hit's first sample, a seed that changes from hit to hit, the same in every render and in live playback from 0. It counts notes, never samples"
 inputs = ["hits: audio<1>"]
 outputs = ["out: audio<1>"]
+
+# ---------------------------------------------------------------- offline kernels
+# Run by music2 off the audio thread to make something from a file, never by song code
+# (`kernel.offline`): no inputs, the source is the kernel's asset 0, and the time map and the
+# values are the host's (docs/kernel-abi.md, Offline kernels).
+
+[[kernel]]
+name = "stretch"
+description = "Time-stretch (WSOLA), the stretch of every warped clip: asset 0 laid out by the time map, its pitch kept, then transposed by values[0] semitones and brought to the song's rate. Channels share one alignment; the match is normalized by loudness"
+offline = true
+outputs = ["out: audio<*>"]
