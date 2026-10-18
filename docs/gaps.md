@@ -109,6 +109,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A plugin call with no key can't save or load presets**: it has no state file. The app says to add a key; it could add one.
 - **A plugin's own presets show by name only**: not their tags, favourites, packs or authors. Two with one name: the first loads.
 - **A plugin's own presets are read once per app run** (2,000 files at most): new ones show after a restart. Look again doesn't read them again.
+- **A failed read of a plugin's own presets sticks until restart**, even a short one (the host process was restarting): the Presets popover says it couldn't read them, and its presets won't load.
+- **A plugin preset of yours keeps only the numbers its call's code wrote when you saved it**: load it into a call whose code writes another one, and the code's number stays, without a word.
 - **A plugin preset saved by another version of the plugin** loads without a word.
 - **A plugin whose own preset loads only once it plays** would give its old state (Surge XT's load at once).
 - **No `m2 preset` commands** (save, load, list) for agents (#37).
