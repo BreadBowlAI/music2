@@ -1838,3 +1838,86 @@ fn the_host_names_a_files_package_and_module() {
     assert_eq!(home(&dir.join("src/gen/index.ts"))["module"], "std/gen");
     assert_eq!(st.home("./lib/fx.ts"), serde_json::json!({"package": null, "module": "lib/fx.ts", "file": "lib/fx.ts"}));
 }
+
+/// A component whose channels hold a dictionary of sends (each a level and a setting) and a
+/// setting naming where they go: PKG-6's nested entries, as std's mixer has them.
+const ROUTED: &str = r#"import { component, control, db, each, kernel, port, setting, song, type Audio, type Params } from "@m2/core";
+const routed = component(
+  {
+    id: "routed",
+    controls: {
+      channels: each({
+        in: port.audio(),
+        db: control.db(0),
+        sends: each({ db: control.db(-12).range(-60, 6), pre: setting.bool(false) }),
+        to: setting.key().optional(),
+      }),
+    },
+    output: port.audio(),
+    positional: ["channels"],
+  },
+  ({ channels }: Params) => {
+    const xs: Audio[] = [];
+    for (const c of Object.values(channels) as any[]) {
+      const strip = kernel("std:gain", { in: c.in, db: c.db });
+      xs.push(c.to === undefined ? strip : kernel("std:scale", { in: strip, by: c.to.length }));
+      for (const s of Object.values(c.sends) as any[]) xs.push(kernel("std:gain", { in: s.pre ? c.in : strip, db: s.db }));
+    }
+    return xs.reduce((a, b) => kernel("std:add", { a, b }));
+  },
+);
+export default song(() => {
+  const vox = kernel("std:sine", { freq: 220 });
+  const keys = kernel("std:saw", { freq: 110 });
+  return routed(CHANNELS);
+});
+"#;
+
+fn routed(channels: &str) -> Result<Build, Vec<Diagnostic>> {
+    build_full(&options(&[("song.ts", &ROUTED.replace("CHANNELS", channels))]))
+}
+
+// PKG-6: an entry may hold a dictionary of its own and settings. Its controls are named by their
+// whole path, `channels.vox.sends.verb.db`, and found by it; a bare value is an entry with no input
+// and one control; a `key` setting follows the key rule.
+#[test]
+fn a_nested_dictionary_control_is_found() {
+    let channels = r#"{ vox: { in: vox, sends: { verb: db(-12), echo: -18 } }, keys: { in: keys, to: "verb", sends: { verb: { db: -6, pre: true } } } }"#;
+    let b = routed(channels).unwrap_or_else(|e| panic!("{e:?}"));
+    let ctl = controls_of(&b);
+    let slots: Vec<(&str, f64, Vec<&str>)> = ctl.iter().map(|c| (c.1.as_str(), c.2, c.4.arg.iter().map(String::as_str).collect())).collect();
+    assert_eq!(slots, [
+        ("channels.vox.db", 0.0, vec![]),
+        ("channels.vox.sends.verb.db", -12.0, vec!["0"]),
+        ("channels.vox.sends.echo.db", -18.0, vec!["0", "vox", "sends", "echo"]),
+        ("channels.keys.db", 0.0, vec![]),
+        ("channels.keys.sends.verb.db", -6.0, vec!["0", "keys", "sends", "verb", "db"]),
+    ]);
+    // The settings reach the body: keys goes to "verb" (4 letters), and its send reads its input.
+    let nodes = song_nodes(&b);
+    assert!(nodes.iter().any(|n| matches!(n.op, Op::Const { value, unit: None } if value == 4.0)), "to: \"verb\"");
+    let saw = nodes.iter().find(|n| matches!(&n.op, Op::Kernel { kernel, .. } if kernel == "std:saw")).unwrap();
+    let reads_saw = |n: &m2_ir::Node| matches!(&n.op, Op::Kernel { kernel, inputs, .. } if kernel == "std:gain" && inputs["in"] == saw.id);
+    assert_eq!(nodes.iter().filter(|n| reads_saw(n)).count(), 2, "the strip and the send before it");
+
+    let d = b.components.iter().find(|d| d.id == "routed").unwrap();
+    let send = d.control("channels.vox.sends.verb.db").expect("a five-part id");
+    assert_eq!((send.unit, send.range), (Some(m2_ir::Unit::Db), Some((-60.0, 6.0))));
+    assert!(d.control("channels.vox.sends").is_some_and(|c| c.each.is_some()));
+    assert!(d.control("channels.vox.sends.verb").is_none() && d.control("channels.vox.sends.verb.pre").is_none());
+    let entry = d.controls[0].each.as_ref().unwrap();
+    let settings = |e: &component::EachDesc| e.settings.iter().map(|s| (s.name.clone(), s.kind, s.default.clone(), s.optional)).collect::<Vec<_>>();
+    assert_eq!(settings(entry), [("to".into(), component::SettingKind::Key, None, true)]);
+    let sends = entry.controls.iter().find(|c| c.name == "sends").unwrap().each.as_ref().unwrap();
+    assert_eq!(settings(sends), [("pre".into(), component::SettingKind::Bool, Some(serde_json::json!(false)), false)]);
+
+    for (channels, want) in [
+        (r#"{ vox: { in: vox, to: "Verb" } }"#, "channels.vox.to must be a key such as \"drums\""),
+        (r#"{ vox: { in: vox, sends: { verb: { pre: "yes" } } } }"#, "channels.vox.sends.verb.pre must be true or false"),
+        (r#"{ vox: { in: vox, sends: { verb: { db: -6, gain: 1 } } } }"#, "channels.vox.sends.verb has no \"gain\" (it has db, pre)"),
+        (r#"{ vox: { in: vox, sends: { Verb: -6 } } }"#, "the channels.vox.sends key \"Verb\""),
+    ] {
+        let e = routed(channels).err().unwrap_or_else(|| panic!("{channels}: expected an error"));
+        assert!(e.len() == 1 && e[0].message.contains(want), "{channels}: {e:?}");
+    }
+}

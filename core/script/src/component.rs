@@ -77,11 +77,15 @@ pub struct ControlDesc {
     pub each: Option<Box<EachDesc>>,
 }
 
-/// One entry of a dictionary slot: its inputs and controls.
+/// One entry of a dictionary slot: its inputs, its controls (a control may be a dictionary slot of
+/// its own: `channels.vox.sends`) and its settings (PKG-6).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EachDesc {
     pub inputs: Vec<PortDesc>,
     pub controls: Vec<ControlDesc>,
+    /// Written only when there are some, so every other descriptor keeps its bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<SettingDesc>,
 }
 
 /// A number as a descriptor wrote it: its value in base units, and the spelling and argument it
@@ -123,6 +127,8 @@ pub enum SettingKind {
     Asset,
     /// MIDI notes (0 to 127) to files in `assets/`: a sampler's zones.
     Keymap,
+    /// A string that follows the key rule (ID-1), such as the channel a mixer channel goes to.
+    Key,
 }
 
 /// What an editor offers. A component with a category is an effect, added after any audio, when
@@ -157,16 +163,17 @@ pub struct UnitCtor {
 }
 
 impl Descriptor {
-    /// The control at `slot`, following `<slot>.<key>.<control>` into a dictionary slot.
+    /// The control at `slot`, following `<slot>.<key>.<control>` into a dictionary slot, and on
+    /// into one inside an entry: `channels.vox.sends.verb.db` (PKG-6).
     pub fn control(&self, slot: &str) -> Option<&ControlDesc> {
         let mut parts = slot.split('.');
         let name = parts.next()?;
-        let c = self.controls.iter().find(|c| c.name == name)?;
-        match (parts.next(), parts.next(), parts.next()) {
-            (None, ..) => Some(c),
-            (Some(_key), Some(name), None) => c.each.as_ref()?.controls.iter().find(|x| x.name == name),
-            _ => None,
+        let mut c = self.controls.iter().find(|c| c.name == name)?;
+        while let Some(_key) = parts.next() {
+            let name = parts.next()?;
+            c = c.each.as_ref()?.controls.iter().find(|x| x.name == name)?;
         }
+        Some(c)
     }
 
     /// The range and log a value of `unit` shows with at `slot`: the declared ones for the

@@ -805,7 +805,7 @@ export const port = {
 
 /** What a setting declaration holds. */
 type SettingSpec = {
-  kind: "number" | "int" | "bool" | "choice" | "asset" | "keymap";
+  kind: "number" | "int" | "bool" | "choice" | "asset" | "keymap" | "key";
   options?: readonly string[];
   default?: number | boolean | string | Readonly<Record<number, string>>;
   /** Left out, it is `undefined`: no call needs it, and it has no default. */
@@ -829,10 +829,13 @@ export class SettingDecl<T = unknown, R extends boolean = boolean> {
  * Declare a setting: `setting.int(12)`, `setting.choice(["sine", "tri"], "sine")`. `setting.asset()`
  * names a file in the project's `assets/` (`"kick.wav"`), and `setting.keymap()` maps MIDI notes
  * to such files (`{ 36: "kick.wav", 38: "snare.wav" }`; empty unless given): what a kernel reads.
+ * `setting.key()` is a string that follows the key rule (ID-1), such as the channel a mixer channel
+ * goes to (`to: "drums"`).
  */
 export const setting = {
   asset: ((d?: string) => new SettingDecl({ kind: "asset", default: d })) as { (): SettingDecl<string, true>; (d: string): SettingDecl<string, false> },
   keymap: (d: Readonly<Record<number, string>> = {}) => new SettingDecl<Readonly<Record<number, string>>, false>({ kind: "keymap", default: { ...d } }),
+  key: ((d?: string) => new SettingDecl({ kind: "key", default: d })) as { (): SettingDecl<string, true>; (d: string): SettingDecl<string, false> },
   number: ((d?: number) => new SettingDecl({ kind: "number", default: d })) as { (): SettingDecl<number, true>; (d: number): SettingDecl<number, false> },
   int: ((d?: number) => new SettingDecl({ kind: "int", default: d })) as { (): SettingDecl<number, true>; (d: number): SettingDecl<number, false> },
   bool: ((d?: boolean) => new SettingDecl({ kind: "bool", default: d })) as { (): SettingDecl<boolean, true>; (d: boolean): SettingDecl<boolean, false> },
@@ -842,9 +845,12 @@ export const setting = {
   },
 };
 
-type EntryDecl = Record<string, PortDecl<any, false> | ControlDecl<any>>;
+type EntryDecl = Record<string, PortDecl<any, false> | ControlDecl<any> | EachDecl<any> | SettingDecl<any, boolean>>;
 
-/** A dictionary slot: one entry per key the caller writes, each with these inputs and controls (PKG-6). */
+/**
+ * A dictionary slot: one entry per key the caller writes, each with these inputs, controls,
+ * dictionaries of its own and settings (PKG-6).
+ */
 export class EachDecl<E extends EntryDecl = EntryDecl> {
   declare readonly [PHANTOM]?: E;
   /** @internal */
@@ -856,8 +862,11 @@ export class EachDecl<E extends EntryDecl = EntryDecl> {
 /**
  * A dictionary slot, such as the mixer's channels: `each({ in: port.audio(), db: control.db(0).optional() })`.
  * The caller's keys are identity on purpose (ID-18) and follow the key rule (ID-1), since they
- * name slots such as `channels.hats.db`. An entry may be a bare signal when the entry declares
- * exactly one input: `kick: kick.out` is `{ in: kick.out }`.
+ * name slots such as `channels.hats.db`. An entry may hold a dictionary of its own (`sends:
+ * each({ db: control.db(-12) })`, whose controls are `channels.vox.sends.verb.db`), left out when
+ * empty, and settings (`to: setting.key().optional()`). An entry may be a bare signal when it
+ * declares exactly one input (`kick: kick.out` is `{ in: kick.out }`), or a bare value when it
+ * declares no input and one control (`verb: db(-12)` is `{ db: db(-12) }`).
  */
 export function each<const E extends EntryDecl>(entry: E): EachDecl<E> {
   return new EachDecl(entry);
@@ -922,8 +931,20 @@ type Pos<D> = D extends { positional: infer P extends readonly string[] } ? P : 
 type InArg<P> = P extends PortDecl<infer S, any> ? (S extends Audio | Events ? S : Value) : never;
 type PortKeys<E> = { [K in keyof E]: E[K] extends PortDecl<any, any> ? K : never }[keyof E];
 type CtlKeys<E> = { [K in keyof E]: E[K] extends ControlDecl<any> ? K : never }[keyof E];
-type EntryObject<E> = { [K in PortKeys<E>]: InArg<E[K]> } & { [K in CtlKeys<E>]?: Value };
-type EntryArg<E> = [PortKeys<E>] extends [never] ? EntryObject<E> : IsUnion<PortKeys<E>> extends true ? EntryObject<E> : InArg<E[PortKeys<E>]> | EntryObject<E>;
+type EachKeys<E> = { [K in keyof E]: E[K] extends EachDecl<infer _> ? K : never }[keyof E];
+type SetKeys<E> = { [K in keyof E]: E[K] extends SettingDecl<any, any> ? K : never }[keyof E];
+type EntryObject<E> = { [K in PortKeys<E>]: InArg<E[K]> } & { [K in CtlKeys<E>]?: Value } & {
+  [K in EachKeys<E>]?: E[K] extends EachDecl<infer F> ? Record<string, EntryArg<F>> : never;
+} & { [K in SetKeys<E>]?: SetArg<E[K]> };
+type EntryArg<E> = [PortKeys<E>] extends [never]
+  ? [CtlKeys<E>] extends [never]
+    ? EntryObject<E>
+    : IsUnion<CtlKeys<E>> extends true
+      ? EntryObject<E>
+      : Value | EntryObject<E>
+  : IsUnion<PortKeys<E>> extends true
+    ? EntryObject<E>
+    : InArg<E[PortKeys<E>]> | EntryObject<E>;
 type CtlArg<C> = C extends EachDecl<infer E> ? Record<string, EntryArg<E>> : Value;
 type SetArg<S> = S extends SettingDecl<infer T, any> ? T : never;
 type ArgOf<D, K> = K extends keyof Ins<D>
@@ -1092,8 +1113,10 @@ function controlAt(v: unknown, rest: string[], path: string[], site: number, sco
 
 /** A checked input. */
 type In = { name: string; spec: PortSpec };
-/** A checked control; a dictionary slot's entry has inputs and controls of its own. */
-type Ctl = { name: string; spec: ControlSpec; each?: { inputs: In[]; controls: Ctl[] } };
+/** A checked control; a dictionary slot's entry has inputs, controls and settings of its own. */
+type Ctl = { name: string; spec: ControlSpec; each?: Entry };
+/** A dictionary slot's entry, checked (PKG-6). */
+type Entry = { inputs: In[]; controls: Ctl[]; settings: Set_[] };
 /** A checked setting. */
 type Set_ = { name: string; spec: SettingSpec };
 /** A call's slot, in call order. */
@@ -1215,33 +1238,43 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     return { name, spec: s };
   };
 
+  // Its problems are found here, not through a callback: QuickJS keeps 10 frames of a stack, and
+  // the error's place in the project is the last of them.
+  const setting_ = (name: string, d: unknown, what: string): Set_ => {
+    if (!(d instanceof SettingDecl)) fail(`${what} "${name}" must be declared with setting.number(), .int(), .bool(), .choice(), .asset(), .keymap() or .key()`);
+    const s = specOf<SettingSpec>(d as object);
+    const wrong = s.default === undefined ? undefined : settingProblem(s, s.default);
+    if (wrong) fail(`${what} "${name}": its default ${wrong}`);
+    if (s.kind === "choice" && (!s.options?.length || s.options.some((o) => typeof o !== "string"))) fail(`${what} "${name}": a choice needs a list of strings`);
+    return { name, spec: s };
+  };
+  // A dictionary slot's entry (PKG-6): `path` names the slot, as `channels` or `channels.sends`.
+  const entryOf = (path: string, d: EachDecl): Ctl => {
+    const ins: In[] = [];
+    const ctls: Ctl[] = [];
+    const sets: Set_[] = [];
+    const seen = new Set<string>();
+    for (const [k, e] of record(`the entry of "${path}"`, specOf<EntryDecl>(d))) {
+      if (!NAME.test(k) || seen.has(k)) fail(`the entry of "${path}" has a bad or repeated name "${k}"`);
+      seen.add(k);
+      if (e instanceof PortDecl) {
+        const i = input(k, e, `the entry input of "${path}"`);
+        if (i.spec.many) fail(`the entry input "${path}.${k}" can't take many signals`);
+        ins.push(i);
+      } else if (e instanceof EachDecl) ctls.push({ ...entryOf(`${path}.${k}`, e), name: k });
+      else if (e instanceof SettingDecl) sets.push(setting_(k, e, `the entry setting of "${path}"`));
+      else ctls.push(ctl(k, e, `the entry control of "${path}"`));
+    }
+    const name = path.slice(path.lastIndexOf(".") + 1);
+    return { name, spec: { scale: 1, log: false, strict: false, accepts: [], smooth: false, optional: false }, each: { inputs: ins, controls: ctls, settings: sets } };
+  };
+
   const inputs = record("inputs", desc.inputs).map(([name, d]) => (named("input", name), input(name, d, "the input")));
   const controls = record("controls", desc.controls).map(([name, d]): Ctl => {
     named("control", name);
-    if (!(d instanceof EachDecl)) return ctl(name, d, "the control");
-    const entry = specOf<EntryDecl>(d);
-    const ins: In[] = [];
-    const ctls: Ctl[] = [];
-    const seen = new Set<string>();
-    for (const [k, e] of record(`the entry of "${name}"`, entry)) {
-      if (!NAME.test(k) || seen.has(k)) fail(`the entry of "${name}" has a bad or repeated name "${k}"`);
-      seen.add(k);
-      if (e instanceof PortDecl) {
-        const i = input(k, e, `the entry input of "${name}"`);
-        if (i.spec.many) fail(`the entry input "${name}.${k}" can't take many signals`);
-        ins.push(i);
-      } else ctls.push(ctl(k, e, `the entry control of "${name}"`));
-    }
-    return { name, spec: { scale: 1, log: false, strict: false, accepts: [], smooth: false, optional: false }, each: { inputs: ins, controls: ctls } };
+    return d instanceof EachDecl ? entryOf(name, d) : ctl(name, d, "the control");
   });
-  const settings = record("settings", desc.settings).map(([name, d]): Set_ => {
-    named("setting", name);
-    if (!(d instanceof SettingDecl)) fail(`the setting "${name}" must be declared with setting.number(), .int(), .bool(), .choice(), .asset() or .keymap()`);
-    const s = specOf<SettingSpec>(d as object);
-    if (s.default !== undefined) settingValue(s, s.default, (m) => fail(`the setting "${name}": its default ${m}`));
-    if (s.kind === "choice" && (!s.options?.length || s.options.some((o) => typeof o !== "string"))) fail(`the setting "${name}": a choice needs a list of strings`);
-    return { name, spec: s };
-  });
+  const settings = record("settings", desc.settings).map(([name, d]): Set_ => (named("setting", name), setting_(name, d, "the setting")));
   if (desc.output !== undefined && !(desc.output instanceof PortDecl)) fail("its output must be declared with port.audio(), port.control(), …");
   const output = desc.output && input("output", desc.output, "the output").spec;
   if (output?.many) fail("its output is one signal, not many");
@@ -1324,6 +1357,8 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
 
   const cid = home.package === null ? desc.id : `${home.package}:${desc.id}`;
   const portJson = (s: PortSpec) => ({ kind: s.kind, unit: s.unit ?? null, sidechain: s.sidechain, many: s.many });
+  // `optional` written only when true, so every other descriptor keeps its bytes.
+  const setJson = (s: Set_) => ({ name: s.name, kind: s.spec.kind, default: s.spec.default ?? null, options: s.spec.options ?? null, ...(s.spec.optional ? { optional: true } : {}) });
   const ctlJson = (c: Ctl): unknown => ({
     name: c.name,
     unit: c.spec.unit ?? null,
@@ -1335,7 +1370,14 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     smooth: c.spec.smooth,
     optional: c.spec.optional,
     label: c.spec.label ?? null,
-    each: c.each ? { inputs: c.each.inputs.map((i) => ({ name: i.name, ...portJson(i.spec) })), controls: c.each.controls.map(ctlJson) } : null,
+    // An entry's `settings` written only when it has some, so every other descriptor keeps its bytes.
+    each: c.each
+      ? {
+          inputs: c.each.inputs.map((i) => ({ name: i.name, ...portJson(i.spec) })),
+          controls: c.each.controls.map(ctlJson),
+          ...(c.each.settings.length ? { settings: c.each.settings.map(setJson) } : {}),
+        }
+      : null,
   });
   const json = JSON.stringify({
     id: cid,
@@ -1345,8 +1387,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     at,
     inputs: inputs.map((i) => ({ name: i.name, ...portJson(i.spec) })),
     controls: controls.map(ctlJson),
-    // `optional` written only when true, so every other descriptor keeps its bytes.
-    settings: settings.map((s) => ({ name: s.name, kind: s.spec.kind, default: s.spec.default ?? null, options: s.spec.options ?? null, ...(s.spec.optional ? { optional: true } : {}) })),
+    settings: settings.map(setJson),
     output: output ? portJson(output) : null,
     positional: [...positional],
     editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes },
@@ -1364,27 +1405,29 @@ function spelled(s: ControlSpec, written: number): { value: number; spelled: Spe
 
 /** Check a setting's value against its kind; `fail` gets what is wrong. */
 function settingValue(s: SettingSpec, v: unknown, fail: (m: string) => never): unknown {
+  const wrong = settingProblem(s, v);
+  if (wrong) fail(wrong);
+  return v;
+}
+
+/** What is wrong with a setting's value for its kind, if anything. */
+function settingProblem(s: SettingSpec, v: unknown): string | undefined {
   switch (s.kind) {
     case "number":
-      if (typeof v !== "number" || !Number.isFinite(v)) fail(`must be a finite number, not ${shown(v)}`);
-      break;
+      return typeof v !== "number" || !Number.isFinite(v) ? `must be a finite number, not ${shown(v)}` : undefined;
     case "int":
-      if (typeof v !== "number" || !Number.isInteger(v)) fail(`must be a whole number, not ${shown(v)}`);
-      break;
+      return typeof v !== "number" || !Number.isInteger(v) ? `must be a whole number, not ${shown(v)}` : undefined;
     case "bool":
-      if (typeof v !== "boolean") fail(`must be true or false, not ${shown(v)}`);
-      break;
+      return typeof v !== "boolean" ? `must be true or false, not ${shown(v)}` : undefined;
     case "choice":
-      if (typeof v !== "string" || !s.options?.includes(v)) fail(`must be one of ${(s.options ?? []).map((o) => JSON.stringify(o)).join(", ")}, not ${shown(v)}`);
-      break;
+      return typeof v !== "string" || !s.options?.includes(v) ? `must be one of ${(s.options ?? []).map((o) => JSON.stringify(o)).join(", ")}, not ${shown(v)}` : undefined;
     case "asset":
-      if (!assetName(v)) fail(`must be a file name in assets/, not ${shown(v)}`);
-      break;
+      return !assetName(v) ? `must be a file name in assets/, not ${shown(v)}` : undefined;
     case "keymap":
-      if (!keymap(v)) fail(`must map MIDI notes (0 to 127) to file names in assets/, as { 36: "kick.wav" }, not ${shown(v)}`);
-      break;
+      return !keymap(v) ? `must map MIDI notes (0 to 127) to file names in assets/, as { 36: "kick.wav" }, not ${shown(v)}` : undefined;
+    case "key":
+      return typeof v !== "string" || host.__m2_key("the key", v) ? `must be a key such as "drums" (lowercase letters, digits and dashes), not ${shown(v)}` : undefined;
   }
-  return v;
 }
 
 function shown(v: unknown): string {
@@ -1425,7 +1468,7 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
     const params: Record<string, unknown> = {};
     for (const ctl of c.controls) {
       const g = given.get(ctl.name);
-      params[ctl.name] = ctl.each ? normaliseEach(made, ctl, g) : normalise(made, ctl.name, ctl.spec, g);
+      params[ctl.name] = ctl.each ? normaliseEach(made, ctl.name, ctl, g) : normalise(made, ctl.name, ctl.spec, g);
     }
     for (const s of c.settings) {
       const g = given.get(s.name);
@@ -1447,13 +1490,13 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
       };
       for (const i of c.inputs.filter((i) => i.spec.sidechain)) listens(i.name, inputs.get(i.name));
       // A dictionary entry's, named by its path as its controls are: `others.hats.side` (PKG-6).
-      for (const ctl of c.controls) {
-        for (const i of ctl.each?.inputs.filter((i) => i.spec.sidechain) ?? []) {
-          for (const [key, entry] of Object.entries(params[ctl.name] as Record<string, Record<string, unknown>>)) {
-            listens(`${ctl.name}.${key}.${i.name}`, entry[i.name]);
-          }
+      const entries = (path: string, ctl: Ctl, given: Record<string, Record<string, unknown>>) => {
+        for (const [key, entry] of Object.entries(given)) {
+          for (const i of ctl.each!.inputs.filter((i) => i.spec.sidechain)) listens(`${path}.${key}.${i.name}`, entry[i.name]);
+          for (const n of ctl.each!.controls.filter((x) => x.each)) entries(`${path}.${key}.${n.name}`, n, entry[n.name] as Record<string, Record<string, unknown>>);
         }
-      }
+      };
+      for (const ctl of c.controls.filter((x) => x.each)) entries(ctl.name, ctl, params[ctl.name] as Record<string, Record<string, unknown>>);
     }
     const out = produced(site, body(...c.inputs.map((i) => inputs.get(i.name)), params));
     // Turned off (Next D1, Q24): the body ran as always, so its frame and knobs are there to set,
@@ -1613,39 +1656,58 @@ function normalise(made: Made, slot: string, s: ControlSpec, g: Given | undefine
   return fail(made.id, `${slot}: expected a number, a quantity like hz(440) or a signal, not ${shown(v)}`);
 }
 
-/** A dictionary slot (PKG-6): each entry's inputs pass through and its controls are normalised, in the caller's key order. */
-function normaliseEach(made: Made, c: Ctl, g: Given | undefined): Record<string, Record<string, unknown>> {
-  const { inputs, controls } = c.each!;
-  if (g === undefined) return fail(made.id, `${c.name} is missing`);
+/**
+ * A dictionary slot (PKG-6), named `path` (`channels`, or `channels.vox.sends` inside an entry):
+ * each entry's inputs pass through, its controls are normalised and its settings checked, in the
+ * caller's key order. A dictionary inside an entry is normalised the same way, and left out it is
+ * empty.
+ */
+function normaliseEach(made: Made, path: string, c: Ctl, g: Given | undefined, nested = false): Record<string, Record<string, unknown>> {
+  const { inputs, controls, settings } = c.each!;
+  if (g === undefined) return nested ? {} : fail(made.id, `${path} is missing`);
   if (!isPlain(g.value) || trackOf(g.value) !== undefined) {
-    return fail(made.id, `${c.name} must be an object of entries such as { kick: kick.out }, not ${shown(g.value)}`);
+    return fail(made.id, `${path} must be an object of entries such as ${nested ? "{ verb: db(-12) }" : "{ kick: kick.out }"}, not ${shown(g.value)}`);
   }
+  const plain = controls.filter((x) => !x.each);
   const out: Record<string, Record<string, unknown>> = {};
   for (const key of Object.keys(g.value)) {
-    const bad: string | undefined = host.__m2_key(`the ${c.name} key`, key);
+    const bad: string | undefined = host.__m2_key(`the ${path} key`, key);
     if (bad) fail(made.id, bad);
     const raw = g.value[key];
+    const at = `${path}.${key}`;
     const k = trackOf(raw);
-    if (k !== undefined) fail(made.id, `${c.name}.${key}: \`${k}\` is a track; use \`${k}.out\` (or another of its exports)`);
+    if (k !== undefined) fail(made.id, `${at}: \`${k}\` is a track; use \`${k}.out\` (or another of its exports)`);
+    // A bare value is where its one input or control would be: its path is the entry's.
     let entry: Record<string, unknown>;
+    let bare = false;
     if (isPlain(raw)) entry = raw;
     else if (inputs.length === 1) entry = { [inputs[0].name]: raw };
-    else return fail(made.id, `${c.name}.${key} must be an object with ${inputs.map((i) => i.name).join(", ")}`);
+    else if (inputs.length === 0 && plain.length === 1) [entry, bare] = [{ [plain[0].name]: raw }, true];
+    else return fail(made.id, `${at} must be an object with ${[...inputs, ...plain].map((i) => i.name).join(", ")}`);
+    const names = [...inputs, ...controls, ...settings].map((x) => x.name);
     for (const f of Object.keys(entry)) {
-      if (!inputs.some((i) => i.name === f) && !controls.some((x) => x.name === f)) {
-        fail(made.id, `${c.name}.${key} has no "${f}" (it has ${[...inputs, ...controls].map((x) => x.name).join(", ")})`);
-      }
+      if (!names.includes(f)) fail(made.id, `${at} has no "${f}" (it has ${names.join(", ")})`);
     }
     const normal: Record<string, unknown> = {};
     for (const i of inputs) {
-      if (entry[i.name] === undefined) fail(made.id, `${c.name}.${key}: the input ${i.name} is missing`);
-      normal[i.name] = inputValue(made.id, `${c.name}.${key}.${i.name}`, entry[i.name]);
+      if (entry[i.name] === undefined) fail(made.id, `${at}: the input ${i.name} is missing`);
+      normal[i.name] = inputValue(made.id, `${at}.${i.name}`, entry[i.name]);
     }
     for (const x of controls) {
       const v = entry[x.name];
-      const given = v === undefined ? undefined : { value: v, path: [...g.path, key, x.name] };
-      const signal = normalise(made, `${c.name}.${key}.${x.name}`, x.spec, given);
+      const given = v === undefined ? undefined : { value: v, path: bare ? [...g.path, key] : [...g.path, key, x.name] };
+      if (x.each) {
+        normal[x.name] = normaliseEach(made, `${at}.${x.name}`, x, given, true);
+        continue;
+      }
+      const signal = normalise(made, `${at}.${x.name}`, x.spec, given);
       if (signal !== undefined) normal[x.name] = signal;
+    }
+    for (const s of settings) {
+      const v = entry[s.name];
+      if (v !== undefined) normal[s.name] = settingValue(s.spec, v, (msg) => fail(made.id, `${at}.${s.name} ${msg}`));
+      else if (s.spec.default !== undefined) normal[s.name] = s.spec.default;
+      else if (!s.spec.optional) fail(made.id, `${at}: the setting ${s.name} is missing`);
     }
     out[key] = normal;
   }
