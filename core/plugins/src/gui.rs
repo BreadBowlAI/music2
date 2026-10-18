@@ -1,7 +1,8 @@
 //! Plugin windows (HOST-7), and the main-loop services plugins need for them (HOST-3): CLAP's
 //! `gui` embedded in a window of `m2_os::window`, and the host's `timer-support` and
 //! `posix-fd-support`, served by the plugin main thread's loop. Everything here runs on the plugin
-//! main thread; only the host process opens windows.
+//! main thread; only the host process opens windows, and only it asks anything of them (tests'
+//! `shown` and `ask_to_close` too: a window's handle is a pointer into this process on macOS).
 
 use std::ffi::{CString, c_void};
 use std::sync::atomic::Ordering;
@@ -84,6 +85,24 @@ pub(crate) fn close(c: &Core) {
         }
     }
     drop(window);
+}
+
+/// Tests: `c`'s window, asked here, in the process that owns it: its handle and whether it is
+/// shown, or None when it has none.
+#[cfg(debug_assertions)]
+pub(crate) fn shown(c: &Core) -> Option<(m2_os::window::Native, bool)> {
+    c.host.window.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|w| (w.native(), w.shown()))
+}
+
+/// Tests: the person's close of `c`'s window, made here, in the process that owns it. Whether it
+/// had one open: then `closed_by_person` runs after, on this thread.
+#[cfg(debug_assertions)]
+pub(crate) fn ask_to_close(c: &Core) -> bool {
+    let window = c.host.window.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(w) = window.as_ref() {
+        w.ask_to_close();
+    }
+    window.is_some()
 }
 
 /// The person closed `h`'s window: it closes, and its owner hears it.

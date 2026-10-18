@@ -146,6 +146,13 @@ fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Run `job` on the main dispatch queue, in a later turn of the main thread's run loop.
+pub(crate) fn on_main_queue(job: Job) {
+    let ctx = Box::into_raw(Box::new(job)) as *mut c_void;
+    // SAFETY: the main queue lives for the whole process; the trampoline takes the box back.
+    unsafe { dispatch_async_f(&_dispatch_main_q, ctx, trampoline) };
+}
+
 extern "C" fn trampoline(ctx: *mut c_void) {
     // SAFETY: `post` boxed the job and gave up ownership of it.
     let job = unsafe { Box::from_raw(ctx as *mut Job) };
@@ -278,11 +285,7 @@ impl Loop {
 
     pub(crate) fn post(&self, job: Job) {
         match &self.own {
-            None => {
-                let ctx = Box::into_raw(Box::new(job)) as *mut c_void;
-                // SAFETY: the main queue lives for the whole process; the trampoline takes the box back.
-                unsafe { dispatch_async_f(&_dispatch_main_q, ctx, trampoline) };
-            }
+            None => on_main_queue(job),
             Some(o) => {
                 locked(&o.jobs).push_back(job);
                 // SAFETY: the loop thread's source and run loop, alive while the loop is.

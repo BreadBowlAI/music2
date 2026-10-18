@@ -1,8 +1,9 @@
 //! macOS: `NSWindow`s, through the Objective-C runtime (no crate). The first window makes the
 //! process an accessory app (no Dock icon, no menu bar of its own) and has the main loop pump
 //! AppKit's events ([`pump`]). The person's close reaches `windowShouldClose:` of a delegate class
-//! made at run time, which calls the window's `closed` and keeps the window: its owner drops it.
-//! Lint-checked only.
+//! made at run time, which keeps the window and has the window's `closed` run next on the main
+//! queue, outside AppKit's call: its owner drops the window there, and AppKit never finds it gone
+//! under its own feet. Every pointer here is this process's, used on its main thread only.
 
 use std::ffi::{CString, c_char, c_void};
 use std::io;
@@ -95,16 +96,23 @@ fn closers() -> MutexGuard<'static, Closers> {
     CLOSERS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// `windowShouldClose:`: the person's close. The window stays; its owner drops it.
+/// `windowShouldClose:`: the person's close. The window stays; its `closed` runs next on the main
+/// queue (its owner drops the window there).
 extern "C" fn should_close(_: Id, _: Sel, window: Id) -> bool {
-    let f = closers().get_mut(window as usize).and_then(Option::take);
+    let w = window as usize;
+    super::main_loop::on_main_queue(Box::new(move || closed(w)));
+    false
+}
+
+/// Call the `closed` of the window `w`, if it is still open, with no lock held.
+fn closed(w: usize) {
+    let f = closers().get_mut(w).and_then(Option::take);
     if let Some(mut f) = f {
         f();
-        if let Some(slot) = closers().get_mut(window as usize) {
+        if let Some(slot) = closers().get_mut(w) {
             *slot = Some(f);
         }
     }
-    false
 }
 
 /// The delegate class, made once.
@@ -211,6 +219,16 @@ impl Window {
             f(self.window, sel("setContentSize:"), Size { w: width as f64, h: height as f64 });
         }
     }
+
+    pub(crate) fn shown(&self) -> bool {
+        // SAFETY: this process's window, alive while `self` is, asked on the main thread.
+        unsafe { send_bool(self.window, "isVisible") }
+    }
+
+    pub(crate) fn ask_to_close(&self) {
+        // SAFETY: as `shown`: the title bar's close button's action, which asks the delegate.
+        unsafe { send1(self.window, "performClose:", std::ptr::null_mut()) };
+    }
 }
 
 impl Drop for Window {
@@ -228,23 +246,4 @@ impl Drop for Window {
 
 pub(crate) fn available() -> Result<(), String> {
     Ok(())
-}
-
-pub(crate) fn shown(w: Native) -> Option<bool> {
-    let view = w.0 as Id;
-    // SAFETY: the view's window, asked on the main thread (tests).
-    unsafe {
-        let window = send0(view, "window");
-        (!window.is_null()).then(|| send_bool(window, "isVisible"))
-    }
-}
-
-pub(crate) fn ask_to_close(w: Native) {
-    // SAFETY: as `shown`; the title bar's close button's action.
-    unsafe {
-        let window = send0(w.0 as Id, "window");
-        if !window.is_null() {
-            send1(window, "performClose:", std::ptr::null_mut());
-        }
-    }
 }
