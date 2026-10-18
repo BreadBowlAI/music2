@@ -70,6 +70,11 @@ The existing tests that guard live edits must pass unchanged: `keep.rs`, `no_all
 - The settings block also holds `channels`, the count resolved for `audio<*>` ports: the kernels read it (`io.channels`), and the per-port list alone can't say it.
 - The hand-written test kernels in wat (`keep.rs`, `cell.rs`, `tests.rs`) are rewritten for v1; their checks are unchanged. `a_kernel_with_overlapping_ports_is_refused` goes with the overlap check. `a_kernel_memory_never_moves` becomes `a_sealed_sandbox_never_grows`. `prewarming_keeps_kernel_memory_flat` now says a first reset grows nothing.
 - In commit B a sandbox's birth cap stays 32 MiB (`KERNEL_MEMORY`, and its message); slice 2 makes it 256 MiB.
+- `p50_builds_200_sandboxes` became `p50_builds_202_sandboxes`: since the report, std's master has two more kernels outside instruments (`stereo` and a gain), so p50 has 152 of them and 50 pools.
+- The Deferred row "Spectre guard" is marked done with the decision (it was slice 2's): the guard is on since commit B.
+- Commit A touches every page at its seal too (the sandbox code is shared). So A alone would not ship: its footprint was 839 MB against `main`'s 204. On a no-go, A's page touch would have had to go with B.
+
+**The decision (2026-10-18): go.** The numbers are in RENDER-32. B against `main`, mean of 3 pairs: −211 µs a block, −1,080 µs a callback; footprint 75 MB against 204; build 62 ms against 222; the same bits everywhere. Commit B stays.
 
 **Done when:**
 - the numbers and the decision are in the contract: RENDER-32 rewritten (go, report §8's text) or its *Today* line extended with the numbers and the reason (no-go);
