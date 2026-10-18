@@ -1,5 +1,6 @@
 //! Events (RENDER-12, RENDER-14): what reaches instruments, per block, stamped with the frame
-//! in the block. The shape is reserved whole; only note on and note off are produced so far.
+//! in the block. The shape is reserved whole; note on and note off are produced, and `Midi` for a
+//! lane's pitch wheel and mod wheel from live input (D8 of track pm).
 
 /// What a note expression changes (reserved: MPE and per-note pitch come later).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,15 +54,21 @@ impl Event {
         }
     }
 
-    /// At one frame, offs come first, so a key can be struck again at the frame it was let go.
+    /// At one frame, the wheels come first (RENDER-14: before the notes), then offs, so a key can
+    /// be struck again at the frame it was let go.
     fn rank(&self) -> u8 {
-        if matches!(self, Event::Off { .. }) { 0 } else { 1 }
+        match self {
+            Event::Midi { .. } => 0,
+            Event::Off { .. } => 1,
+            _ => 2,
+        }
     }
 }
 
 /// One block's events, in time order. Its capacity is fixed when it is made: pushing never
-/// allocates (RENDER-28). A full buffer refuses an On and counts it; Offs always have room,
-/// because a scheduler sizes the buffer for one Off per note it can hold.
+/// allocates (RENDER-28). A full buffer refuses an On and counts it; Offs and the wheels always
+/// have room, because a scheduler sizes the buffer for one Off per note it can hold, and one event
+/// per wheel.
 #[derive(Debug)]
 pub struct Events {
     buf: Vec<Event>,
@@ -85,7 +92,7 @@ impl Events {
     /// Add `e`; false when there is no room (an On is then counted as dropped).
     pub fn push(&mut self, e: Event) -> bool {
         if !self.room(1) {
-            debug_assert!(matches!(e, Event::On { .. }), "an Off must always have room");
+            debug_assert!(matches!(e, Event::On { .. }), "an Off or a wheel must always have room");
             self.drop_on();
             return false;
         }

@@ -17,7 +17,7 @@ use std::ops::Range;
 use std::sync::{Arc, Weak};
 
 use anyhow::Result;
-use m2_ir::{FNode, FOp, Flat, Kind, PortRef, Voice};
+use m2_ir::{Alloc, FNode, FOp, Flat, Kind, PortRef, Voice};
 use m2_song::{DataSet, LaneData, Sha, TempoMap};
 
 use crate::audio::{self, AudioLane, AudioPlayer, KernelAssets};
@@ -51,11 +51,13 @@ pub enum Shape {
         version: String,
         channels: u8,
     },
-    /// Its voices and channels, and its voice graph's structure with the cells' values, origins and
-    /// names left out, hashed with the wasm modules its kernels run (RENDER-16).
+    /// Its voices, channels and options, and its voice graph's structure with the cells' values,
+    /// origins and names left out, hashed with the wasm modules its kernels run (RENDER-16). Not its
+    /// glide, which is read from outside the voices: turning it keeps the pool.
     Poly {
         voices: u32,
         channels: u8,
+        alloc: Alloc,
         voice: Sha,
     },
     Feedback {
@@ -91,8 +93,8 @@ impl Shape {
                 let info = packages.plugin_info(plugin)?;
                 Some(Shape::Plugin { id: info.found.id.clone(), version: info.found.version.clone(), channels: *channels })
             }
-            FOp::Poly { voices, voice, channels, .. } => {
-                Some(Shape::Poly { voices: *voices, channels: *channels, voice: blank(voice, packages, assets) })
+            FOp::Poly { voices, voice, channels, alloc, .. } => {
+                Some(Shape::Poly { voices: *voices, channels: *channels, alloc: *alloc, voice: blank(voice, packages, assets) })
             }
             FOp::Feedback { channels, .. } => Some(Shape::Feedback { channels: *channels }),
             FOp::Delay { frames, .. } => {
@@ -728,6 +730,10 @@ impl Renderer {
                 std::mem::swap(&mut self.lanes.slots[to], &mut slot);
                 // The small one goes back with `old`, into the empty slot the first swap left.
                 std::mem::swap(&mut old.lanes.slots[from], &mut slot);
+            }
+            // A new consumer of the lane hears its wheels where they are (D8 of track pm).
+            if let LaneSlot::Notes(Some(s)) = &mut self.lanes.slots[to] {
+                s.resend_wheels();
             }
         }
         self.plan.cells.carry(&self.plan.graph, &old.plan.cells, &e.cells, &e.voice_cells);

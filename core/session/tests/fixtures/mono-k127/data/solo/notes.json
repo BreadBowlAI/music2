@@ -1,0 +1,14 @@
+{"clips": [
+  {"id": "c0000001", "start": 0, "length": 16, "notes": [
+    {"pitch": 55, "start": 2.0, "length": 0.5, "velocity": 0.31496062992125984},
+    {"pitch": 57, "start": 2.375, "length": 0.5, "velocity": 0.3543307086614173},
+    {"pitch": 59, "start": 2.75, "length": 0.5, "velocity": 0.3937007874015748},
+    {"pitch": 57, "start": 3.125, "length": 0.5, "velocity": 0.4330708661417323},
+    {"pitch": 62, "start": 3.5, "length": 0.5, "velocity": 0.47244094488188976},
+    {"pitch": 60, "start": 3.875, "length": 0.5, "velocity": 0.5118110236220472},
+    {"pitch": 59, "start": 4.25, "length": 0.5, "velocity": 0.5511811023622047},
+    {"pitch": 55, "start": 4.625, "length": 0.5, "velocity": 0.5905511811023622},
+    {"pitch": 67, "start": 5.0, "length": 0.5, "velocity": 0.6299212598425197},
+    {"pitch": 62, "start": 5.375, "length": 0.5, "velocity": 0.6692913385826772}
+  ]}
+]}

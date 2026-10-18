@@ -451,7 +451,8 @@ impl Lent {
 /// Take `b`'s instance offline for the export: deactivated, its committed blob loaded (skipped
 /// where it holds it), set to offline mode and activated. Then one call on this thread, before the
 /// render, ends every note playback left sounding: a choke and a NoteOff for every key, as a panic
-/// sends them, since CLAP's `reset` doesn't end them in every plugin (Surge XT keeps its voices,
+/// sends them, since CLAP's `reset` doesn't end them in every plugin, with the wheels put back at
+/// rest (Surge XT keeps its voices,
 /// and its NoteOffs match the note's id, which the export doesn't know). The same call lets a
 /// plugin that applies a loaded state at its next call, ending every voice and setting every
 /// parameter (Surge XT does), apply it here and not over the export's first notes and the code's
@@ -464,10 +465,14 @@ fn offline(b: &Borrow, rate: u32) -> Result<()> {
     }
     host.set_render_mode(h, RenderMode::Offline)?;
     host.activate(h, rate, BLOCK as u32)?;
-    let mut end = m2_plugins::Events::with_capacity(2 * 128);
+    let mut end = m2_plugins::Events::with_capacity(2 * 128 + 3);
     for key in 0..128 {
         end.push(m2_plugins::Event::NoteChoke { time: 0, id: -1, key });
         end.push(m2_plugins::Event::NoteOff { time: 0, id: -1, key });
+    }
+    // And the wheels a keyboard moved go back to rest: the export never hears them (RENDER-1).
+    for bytes in [[0xE0, 0, 0x40], [0xB0, 1, 0], [0xB0, 121, 0]] {
+        end.push(m2_plugins::Event::Midi { time: 0, bytes });
     }
     let (mut l, mut r, silence) = ([0.0f32; BLOCK], [0.0f32; BLOCK], [0.0f32; BLOCK]);
     let mut io =
@@ -575,7 +580,7 @@ pub(crate) mod tests {
     fn open(project: &Temp, song: &str) -> Arc<AppState> {
         project.write(
             "music2.toml",
-            "[project]\nname = \"untitled\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n",
+            "[project]\nname = \"untitled\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.3\"\n",
         );
         project.write("song.ts", song);
         let notes: Vec<String> = [45, 52, 57, 60, 64].iter().map(|p| format!(r#"{{"pitch": {p}, "start": 0, "length": 120}}"#)).collect();

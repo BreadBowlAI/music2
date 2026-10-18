@@ -6,7 +6,7 @@ use m2_play::{DeviceErrorKind, Driver};
 use super::*;
 use m2_editor::Gestures;
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.3\"\n";
 
 pub(super) struct Fixture(pub(super) PathBuf);
 
@@ -2745,6 +2745,10 @@ fn an_export_borrows_and_gives_back_the_live_instances() {
     let (from, to) = (tick("deactivate", false), tick("activate", true));
     let inside: Vec<(u64, usize)> = stats.process_calls().into_iter().filter(|(t, _)| *t > from && *t < to).collect();
     assert!(!inside.is_empty() && inside.iter().all(|(_, th)| *th != audio), "the export processed it, the audio thread didn't");
+    // D8: before the render, the wheels a keyboard may have moved go back to rest in it.
+    let midi = |b: [u8; 3]| i32::from_le_bytes([b[0], b[1], b[2], 0]);
+    let wheels: Vec<i32> = stats.notes().iter().filter(|n| n.1 == m2_plugins::probe::Note::Midi).map(|n| n.2).collect();
+    assert_eq!(wheels, [midi([0xE0, 0, 0x40]), midi([0xB0, 1, 0]), midi([0xB0, 121, 0])], "the wheels at rest for the export");
     let (at, on) = (stats.reset_at.0.load(Ordering::Relaxed), stats.reset_at.1.load(Ordering::Relaxed));
     assert_eq!(stats.resets.load(Ordering::Relaxed), resets + 1, "reset once");
     assert!(at > tick("activate", false) && at < to && on == inside[0].1, "reset on the export's thread, at its first call");

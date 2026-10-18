@@ -1,0 +1,18 @@
+{"clips": [
+  {"id": "c0000001", "start": 0, "length": 16, "notes": [
+    {"pitch": 76, "start": 0, "length": 1.25, "velocity": 0.7874015748031497},
+    {"pitch": 79, "start": 1, "length": 1, "velocity": 0.7086614173228346},
+    {"pitch": 81, "start": 2, "length": 1, "velocity": 1.0},
+    {"pitch": 84, "start": 3, "length": 1, "velocity": 0.5039370078740157},
+    {"pitch": 72, "start": 4, "length": 4, "velocity": 0.7559055118110236},
+    {"pitch": 74, "start": 4.25, "length": 0.25, "velocity": 0.8661417322834646},
+    {"pitch": 76, "start": 4.5, "length": 0.25, "velocity": 0.5511811023622047},
+    {"pitch": 74, "start": 4.75, "length": 0.25, "velocity": 0.8740157480314961},
+    {"pitch": 76, "start": 5, "length": 0.25, "velocity": 0.5590551181102362},
+    {"pitch": 79, "start": 6, "length": 1.5, "velocity": 0.6929133858267716},
+    {"pitch": 67, "start": 8.5, "length": 0.5, "velocity": 0.007874015748031496},
+    {"pitch": 69, "start": 9, "length": 1, "velocity": 0.9921259842519685},
+    {"pitch": 71, "start": 9.75, "length": 0.5, "velocity": 0.25984251968503935},
+    {"pitch": 72, "start": 10, "length": 0.75, "velocity": 0.3543307086614173}
+  ]}
+]}

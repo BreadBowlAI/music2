@@ -6,14 +6,15 @@
 // code doesn't compile the row is off and says why; a PC page's keys; the lint with the list open.
 // Then drum names: a Drum kit track's clip in Notes names its rows (Kick, Snare, Closed hat) in an
 // 88 px key column, its notes say their drum, a key set for the song never shades its rows (X26),
-// a short note keeps its name on one line inside it, and Keys' roll still says C3 in 56 px.
+// a short note keeps its name on one line inside it, and Keys' roll still says C3 in 56 px. A Lead's
+// card in Device says it plays one note at a time (track pm).
 //
 //   node e2e/pl-sounds.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, check, done, open, read, ROOT, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { browser, page, errors, api, state, toasts, key } = await open(1440, 900);
+const { browser, page, errors, api, state, toasts, key, view } = await open(1440, 900);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 const orig = { hats: read("tracks/hats.ts"), bass: read("tracks/bass.ts"), keys: read("tracks/keys.ts"), song: read("song.ts") };
 const LIST = "[data-testid=instrument-list]";
@@ -209,6 +210,22 @@ check(await until(async () => (await shading()) === "1,3,5,8,10"), `Keys' roll i
 if (layoutWas === null) fs.rmSync(`${PROJ}/layout.json`);
 else write("layout.json", layoutWas);
 check((await keyLabel(48)) === "C3" && (await keyLabel(36)) === "C2" && (await keysWidth()) === 56, `Keys' roll still says C3, in 56 px (${await keyLabel(48)}, ${await keysWidth()})`);
+
+// ---------------------------------------------------------------- how an instrument plays (track pm)
+
+// A Lead plays one note at a time: its card in Device says so under its name, all of it in the tooltip.
+const s2 = await state();
+const lead = await post("/track/add", { session: s2.session, component: "std:synth-lead" });
+await view("graph");
+await until(async () => !!(await page.$(`[data-module-tab="${lead.body.module}"]`)));
+await page.click(`[data-module-tab="${lead.body.module}"] [data-testid=track-label]`);
+const plays = `[data-module="${lead.body.module}"] [data-testid=voices]`;
+await until(async () => !!(await page.$(plays)));
+const line = await page.$eval(plays, (e) => ({ text: e.textContent, title: e.getAttribute("title") })).catch(() => null);
+check(
+  lead.status === 200 && line?.text === "Plays one note at a time." && !!line?.title?.includes("slides to it over 60 ms, without starting again"),
+  `Device shows "Plays one note at a time" on a Lead's card, its glide in the tooltip (${JSON.stringify(line)})`,
+);
 
 // ---------------------------------------------------------------- a PC page's keys
 

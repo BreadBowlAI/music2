@@ -14,7 +14,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use crate::key::{self, ROOT};
 use crate::kind::{EventType, Kind, PortKind, Unit};
 use crate::sig::{KernelSig, Kernels};
-use crate::{Body, Diagnostic, Ir, Module, Node, Op, Origin, TimeOf, split_ref};
+use crate::{Alloc, Body, Diagnostic, Ir, Mode, Module, Node, Op, Origin, TimeOf, split_ref};
 
 /// Output `port` of node `node` in a [`Flat`] or [`Voice`] graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -30,15 +30,18 @@ pub enum NoteField {
     Velocity,
     Pressure,
     Timbre,
+    /// The lane's mod wheel, 0 to 1, the same for every voice (RENDER-14's `Midi`, from live input).
+    ModWheel,
 }
 
 impl NoteField {
-    pub const ALL: [(&'static str, NoteField); 5] = [
+    pub const ALL: [(&'static str, NoteField); 6] = [
         ("pitch", NoteField::Pitch),
         ("gate", NoteField::Gate),
         ("velocity", NoteField::Velocity),
         ("pressure", NoteField::Pressure),
         ("timbre", NoteField::Timbre),
+        ("modWheel", NoteField::ModWheel),
     ];
 
     pub fn kind(self) -> Kind {
@@ -73,8 +76,9 @@ pub enum FOp {
     /// A hosted plugin; `inputs` are in its signature's order (`in`, `notes`, parameters).
     /// `state` is where its state is filed below its module, as keys ([`Op::state_path`]).
     Plugin { plugin: String, inputs: Vec<Input>, channels: u8, state: Option<Vec<String>> },
-    /// `lane` is the notes lane node feeding the voices.
-    Poly { lane: usize, voices: u32, voice: Box<Voice>, channels: u8 },
+    /// `lane` is the notes lane node feeding the voices; `alloc` how they are given notes, and
+    /// `glide` what a slide's time is read from (RENDER-16).
+    Poly { lane: usize, voices: u32, voice: Box<Voice>, channels: u8, alloc: Alloc, glide: Option<PortRef> },
     Feedback { input: PortRef, channels: u8 },
     /// Voice graphs only: a field of the voice's note.
     NoteField(NoteField),
@@ -98,8 +102,9 @@ impl FOp {
                     Input::Const(_) | Input::Unset => None,
                 })
                 .collect(),
-            FOp::Poly { lane, voice, .. } => {
+            FOp::Poly { lane, voice, glide, .. } => {
                 let mut d = vec![*lane];
+                d.extend(glide.map(|g| g.node));
                 d.extend(voice.nodes.iter().filter_map(|n| match n.op {
                     FOp::Capture(p) => Some(p.node),
                     _ => None,
@@ -256,7 +261,7 @@ impl<'a> Scope<'a> for VoiceScope<'a, '_> {
         let (_, f) = NoteField::ALL
             .iter()
             .find(|(n, _)| *n == lane)
-            .ok_or_else(|| format!("inside poly, lanes are note fields (pitch, gate, velocity, pressure, timbre), not `{lane}`"))?;
+            .ok_or_else(|| format!("inside poly, lanes are note fields (pitch, gate, velocity, pressure, timbre, modWheel), not `{lane}`"))?;
         Ok((FOp::NoteField(*f), f.kind()))
     }
 
@@ -281,7 +286,7 @@ type Checked = (Vec<FNode>, Vec<usize>, Vec<Option<Vec<Kind>>>);
 enum Res {
     None,
     Kernel(Vec<(String, PortRef)>),
-    Poly { events: PortRef, captures: Vec<PortRef> },
+    Poly { events: PortRef, captures: Vec<PortRef>, glide: Option<PortRef> },
     Feedback(PortRef),
     Broken,
 }
@@ -715,8 +720,16 @@ impl<'a> Checker<'a> {
                     self.diags.push(diag(m, Some(node), "poly can't be used inside another poly"));
                     Res::Broken
                 }
-                Op::Poly { events, body, .. } => {
+                Op::Poly { events, body, glide, .. } => {
                     let events = scope.resolve(self, m, events);
+                    let glide = match glide.as_deref().map(|g| scope.resolve(self, m, g)) {
+                        None => Some(None),
+                        Some(Ok(p)) => Some(Some(p)),
+                        Some(Err(e)) => {
+                            self.diags.push(diag(m, Some(node), format!("glide: {e}")));
+                            None
+                        }
+                    };
                     let mut captures = vec![];
                     let local: HashSet<&str> = body.nodes.iter().map(|b| b.id.as_str()).collect();
                     for r in body_refs(body) {
@@ -729,9 +742,10 @@ impl<'a> Checker<'a> {
                             Err(e) => self.diags.push(diag(m, Some(node), format!("voice reads `{r}`: {e}"))),
                         }
                     }
-                    match events {
-                        Ok(events) => Res::Poly { events, captures },
-                        Err(e) => {
+                    match (events, glide) {
+                        (Ok(events), Some(glide)) => Res::Poly { events, captures, glide },
+                        (Ok(_), None) => Res::Broken,
+                        (Err(e), _) => {
                             self.diags.push(diag(m, Some(node), format!("events: {e}")));
                             Res::Broken
                         }
@@ -759,7 +773,9 @@ impl<'a> Checker<'a> {
             .map(|r| {
                 let mut d: Vec<usize> = match r {
                     Res::Kernel(v) => v.iter().map(|(_, p)| p.node).collect(),
-                    Res::Poly { events, captures } => std::iter::once(events.node).chain(captures.iter().map(|c| c.node)).collect(),
+                    Res::Poly { events, captures, glide } => {
+                        std::iter::once(events.node).chain(captures.iter().map(|c| c.node)).chain(glide.map(|g| g.node)).collect()
+                    }
                     _ => vec![],
                 };
                 d.retain(|&x| x < n);
@@ -876,17 +892,24 @@ impl<'a> Checker<'a> {
                         })
                     }
                 }
-                (Op::Poly { voices, body, .. }, Res::Poly { events, .. }) => {
+                (Op::Poly { voices, body, alloc, .. }, Res::Poly { events, glide, .. }) => {
                     let lane_ok = matches!(ops.get(events.node), Some(Some(FOp::Lane { .. })));
+                    let seconds = Kind::Control(Some(Unit::Seconds));
                     match kind_of(&kinds, *events) {
                         None => continue,
                         Some(Kind::Events(EventType::Note)) if lane_ok => {
+                            let glide_kind = glide.and_then(|g| kind_of(&kinds, g));
                             if !(1..=128).contains(voices) {
                                 Err(format!("voices must be 1..128, not {voices}"))
+                            } else if alloc.mode != Mode::Poly && *voices != 1 {
+                                Err(format!("a poly in {:?} mode has one voice, not {voices}", alloc.mode).to_lowercase())
+                            } else if let Some(k) = glide_kind.filter(|&k| !fits(k, seconds)) {
+                                Err(format!("glide must be a time in seconds, not {k}"))
                             } else {
                                 match self.check_voice(m, body, &kinds) {
                                     Some((voice, Kind::Audio(c))) => {
-                                        Ok((FOp::Poly { lane: events.node, voices: *voices, voice: Box::new(voice), channels: c }, vec![Kind::Audio(c)]))
+                                        let (voice, alloc, glide) = (Box::new(voice), *alloc, *glide);
+                                        Ok((FOp::Poly { lane: events.node, voices: *voices, voice, channels: c, alloc, glide }, vec![Kind::Audio(c)]))
                                     }
                                     Some((_, k)) => Err(format!("a voice must output audio, not {k}")),
                                     None => continue,
@@ -1543,6 +1566,49 @@ mod tests {
         let e = check(&bad, &kernels()).unwrap_err();
         assert!(e[0].message.contains("note fields"), "{}", e[0]);
     }
+    // RENDER-16: a poly's options. Left out, they leave its JSON as before (ID-11); written, they
+    // reach the flat graph, its glide read from outside the voice and ordered before it.
+    #[test]
+    fn poly_options_reach_the_flat_graph() {
+        let poly = |extra: serde_json::Value| {
+            let mut v = json!({"id": "v", "op": "poly", "events": "n", "voices": 1, "body": {"out": "o", "nodes": [
+                {"id": "p", "op": "lane", "lane": "pitch"},
+                {"id": "hz", "op": "kernel", "kernel": "t:mtof", "inputs": {"pitch": "p"}},
+                {"id": "o", "op": "kernel", "kernel": "t:saw", "inputs": {"freq": "hz"}}]}});
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
+                {"key": "song", "lanes": [{"key": "notes", "kind": "events<note>"}],
+                 "nodes": [{"id": "n", "op": "lane", "lane": "notes"}, v, {"id": "g", "op": "const", "value": 0.07, "unit": "seconds"},
+                    {"id": "f", "op": "const", "value": 3, "unit": "hz"}],
+                 "exports": {"out": "v"}}]}))
+        };
+        let plain = poly(json!({}));
+        let Op::Poly { alloc, glide, .. } = &plain.modules[0].nodes[1].op else { panic!() };
+        assert_eq!((*alloc, glide.clone()), (Alloc::default(), None));
+        let text = serde_json::to_string(&plain.modules[0].nodes[1]).unwrap();
+        assert!(!text.contains("alloc") && !text.contains("glide"), "{text}");
+
+        let legato = poly(json!({"alloc": {"mode": "legato", "retrigger": false}, "glide": "g"}));
+        let f = check(&legato, &kernels()).unwrap_or_else(|e| panic!("{e:?}"));
+        let at = f.nodes.iter().position(|n| n.name == "song/v").unwrap();
+        let FOp::Poly { alloc, glide, .. } = &f.nodes[at].op else { panic!() };
+        assert_eq!(*alloc, Alloc { mode: Mode::Legato, retrigger: false, steal: crate::Steal::Oldest });
+        let g = glide.expect("a glide");
+        assert_eq!(f.nodes[g.node].name, "song/g");
+        let pos = |i: usize| f.order.iter().position(|&j| j == i).unwrap();
+        assert!(pos(g.node) < pos(at), "the glide is ordered before the poly");
+        assert_eq!(serde_json::to_value(&legato.modules[0].nodes[1]).unwrap()["alloc"], json!({"mode": "legato", "retrigger": false}));
+
+        for (extra, says) in [
+            (json!({"alloc": {"mode": "mono"}, "voices": 4}), "a poly in mono mode has one voice, not 4"),
+            (json!({"glide": "f"}), "glide must be a time in seconds, not control<hz>"),
+            (json!({"glide": "nope"}), "glide:"),
+        ] {
+            let e = check(&poly(extra.clone()), &kernels()).unwrap_err();
+            assert!(e[0].message.contains(says), "{extra}: {}", e[0]);
+        }
+    }
+
     // RENDER-7: a `time` node reads song time in its own unit. `playing` is 0..1, and reaches a
     // kernel at the top level and in a voice; beats and seconds don't fit where it goes.
     #[test]

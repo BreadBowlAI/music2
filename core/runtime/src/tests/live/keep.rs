@@ -1470,13 +1470,32 @@ fn sleeping_plugins_let_the_engine_idle_and_wake_it() {
 
 // ---------------------------------------------------------------- RENDER-26a: consumers
 
+/// `ir` with its poly `v` playing one note at a time, legato, when `mono`: as std's lead, sub and
+/// bass do.
+fn legato_if(mut ir: Ir, mono: bool) -> Ir {
+    if mono {
+        let v = ir.modules[0].nodes.iter_mut().find(|n| n.id == "v").unwrap();
+        let mut op = serde_json::to_value(&v.op).unwrap();
+        (op["voices"], op["alloc"]) = (json!(1), json!({"mode": "legato"}));
+        v.op = serde_json::from_value(op).unwrap();
+    }
+    ir
+}
+
 // RENDER-26a: a replaced instrument plays out the window as a ghost with its notes let go at the
 // activation (its voices go into their release); the new one chases nothing, and nothing is held.
+// A legato one too: its one voice's gate falls at the activation.
 #[test]
 fn a_replaced_instrument_releases_its_notes() {
+    for mono in [false, true] {
+        a_replaced_instrument_releases(mono);
+    }
+}
+
+fn a_replaced_instrument_releases(mono: bool) {
     let pk = std_packages();
     let long = with_notes(json!({"clips": [{"start": 0, "length": 16, "notes": [{"pitch": 69, "start": 0, "length": 8}]}]}), at_bpm(120.0));
-    let (a, b) = (flat(&synth(0.2, json!([]), "v")), flat(&synth(0.3, json!([]), "v")));
+    let (a, b) = (flat(&legato_if(synth(0.2, json!([]), "v"), mono)), flat(&legato_if(synth(0.3, json!([]), "v"), mono)));
     let mut rig = playing(&a, &long, &pk, BEAT as usize);
     let r = rig.prepare(&b, &long, &pk);
     let at = rig.e.clock();
@@ -1491,16 +1510,24 @@ fn a_replaced_instrument_releases_its_notes() {
     let ghost = rig.retired.iter().find_map(|r| if let Retired::Nodes(l) = r { l.exec.first() } else { None });
     let Some(Exec::Poly(p)) = ghost else { panic!("the ghost poly left with the window") };
     let offs: Vec<u64> = p.pool.iter().flat_map(|pool| &pool.voices).filter_map(|v| v.note).map(|n| n.off).collect();
-    assert_eq!(offs, [at], "its note was let go at the activation");
+    assert_eq!(offs, [at], "its note was let go at the activation (mono: {mono})");
 }
 
 // RENDER-26a (§3.5): a kept poly whose notes now come from another lane lets go of what it holds:
-// its voices release and ring out, nothing sticks, and the other lane's notes play on it.
+// its voices release and ring out, nothing sticks, and the other lane's notes play on it. The old
+// lane's pitch wheel stays with the old lane. A legato poly too: its held notes are dropped, so
+// none comes back when the other lane's note ends.
 #[test]
 fn a_rewired_poly_is_kept_and_releases_its_notes() {
+    for mono in [false, true] {
+        a_rewired_poly_releases(mono);
+    }
+}
+
+fn a_rewired_poly_releases(mono: bool) {
     let pk = std_packages();
     let lanes = |lane: &str| {
-        let mut ir = synth(0.1, json!([]), "v");
+        let mut ir = legato_if(synth(0.1, json!([]), "v"), mono);
         ir.modules[0].nodes[0].op = serde_json::from_value(json!({"op": "lane", "lane": lane})).unwrap();
         ir.modules[0].lanes =
             serde_json::from_value(json!([{"key": "a", "kind": "events<note>"}, {"key": "b", "kind": "events<note>"}])).unwrap();
@@ -1515,17 +1542,32 @@ fn a_rewired_poly_is_kept_and_releases_its_notes() {
         ],
     );
     let (a, b) = (lanes("a"), lanes("b"));
-    let mut rig = playing(&a, &data, &pk, BEAT as usize);
+    let mut rig = playing(&a, &data, &pk, BEAT as usize - BLOCK);
+    let generation = rig.e.current().unwrap().generation();
+    rig.send(Msg::Live { generation, slot: 0, ev: LiveEv::Midi { source: 1, bytes: [0xE0, 0x7F, 0x7F] } });
+    rig.run(BLOCK);
+    let bend = |rig: &Rig| {
+        let cur = rig.e.current().unwrap();
+        cur.top().iter().find_map(|e| if let Exec::Poly(p) = e { p.pool.as_ref().map(|p| p.wheels.bend) } else { None })
+    };
+    assert_eq!(bend(&rig), Some(2.0), "lane a's bend");
+    assert_eq!((rig.e.current().unwrap().held_notes(), rig.e.current().unwrap().active_voices()), (1, 1), "the note is held");
     let r = rig.prepare(&b, &data, &pk);
     rig.send(Msg::Activate { renderer: Box::new(r) });
     let tail = rig.run(BEAT as usize / 2);
     let cur = rig.e.current().unwrap();
     assert_eq!((cur.stats().kept.polys, cur.stats().ghosts), (1, 0));
     assert_eq!(cur.held_notes(), 0, "let go at the activation");
-    assert!(peak(&tail[..200]) > 0.5 && peak(&tail[tail.len() - 1000..]) < 1e-3, "it rings out its release");
+    assert_eq!(bend(&rig), Some(0.0), "lane b's wheel is at rest");
+    assert!(peak(&tail[..200]) > 0.5 && peak(&tail[tail.len() - 1000..]) < 1e-3, "it rings out its release (mono: {mono})");
     let next = rig.run(BEAT as usize);
     assert!(peak(&next[BEAT as usize / 2..]) > 0.5, "the other lane's note plays on it");
     assert!(rig.e.current().unwrap().gates_are_owned());
+    // Lane b's note ended a beat and a half ago: nothing comes back.
+    let after = rig.run(2 * BEAT as usize);
+    assert!(peak(&after[BEAT as usize..]) < 1e-3, "silent once lane b's note rang out (mono: {mono})");
+    let cur = rig.e.current().unwrap();
+    assert_eq!((cur.held_notes(), cur.active_voices()), (0, 0), "nothing held or sounding");
 }
 
 // RENDER-26a (§3.5), HOST-5: a kept plugin whose notes now come from another lane gets a NoteOff

@@ -90,7 +90,7 @@ await page.keyboard.down("Alt");
 await page.mouse.click(c.x, c.y);
 await page.keyboard.up("Alt");
 check(await until(() => hatsLine()?.[2] === "0"), `⌥-click puts the pan back at its default, centre (${hatsLine()?.[2]})`);
-check((await revision()) === rev + 1 && (await reads(hatsPan)) === "C", "as one edit, and it reads C");
+check(await until(async () => (await revision()) === rev + 1 && (await reads(hatsPan)) === "C"), "as one edit, and it reads C");
 
 // ---------------------------------------------------------------- type
 rev = await revision();

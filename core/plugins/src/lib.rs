@@ -293,6 +293,9 @@ pub enum Event {
     /// Tuning in semitones for one note (for pitches between keys).
     Tuning { time: u32, id: i32, key: i16, semitones: f64 },
     Param { time: u32, id: u32, value: f64 },
+    /// A MIDI message, sent as `CLAP_EVENT_MIDI` on the note port: the lane's pitch wheel and mod
+    /// wheel (RENDER-14's `Midi`).
+    Midi { time: u32, bytes: [u8; 3] },
     /// The person began (or ended) changing a parameter in the plugin's window: what a plugin
     /// outputs around the values it sets (CLAP's gesture events, HOST-4).
     Gesture { time: u32, id: u32, begin: bool },
@@ -306,6 +309,7 @@ impl Event {
             | Event::NoteChoke { time, .. }
             | Event::Tuning { time, .. }
             | Event::Param { time, .. }
+            | Event::Midi { time, .. }
             | Event::Gesture { time, .. } => time,
         }
     }

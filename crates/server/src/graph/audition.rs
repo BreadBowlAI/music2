@@ -12,7 +12,8 @@
 //!   WebSocket closing; or the watchdog, when it said nothing for [`QUIET`] (the window sends a
 //!   keepalive every 2 s while a key is held). The last two let go of all its notes at once.
 //! - **A MIDI keyboard** is a source too (`midi:<name>`, `graph/midi.rs`). It sends no keepalive:
-//!   a key held down says nothing, so the watchdog never lets it go (Q6).
+//!   a key held down says nothing, so the watchdog never lets it go (Q6). It moves its lane's pitch
+//!   wheel and mod wheel too ([`Graph::wheel`]); when it lets go, they go back to rest there.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -82,6 +83,20 @@ struct Source {
     held: BTreeMap<u32, (String, String)>,
     /// When the window last said anything.
     heard: Instant,
+    /// The lane whose wheels a keyboard last moved, in the song open then (its token).
+    wheels: Option<(u64, String, String)>,
+}
+
+impl Sources {
+    /// `client`'s source, numbered when it is new.
+    fn source(&mut self, client: &str) -> &mut Source {
+        let next = &mut self.next;
+        self.by_client.entry(client.to_string()).or_insert_with(|| {
+            *next += 1;
+            let keyboard = super::midi::is_keyboard(client);
+            Source { id: *next, keyboard, held: BTreeMap::new(), heard: Instant::now(), wheels: None }
+        })
+    }
 }
 
 /// Lane `(module, lane)`'s slot in what plays, if it is a notes lane there.
@@ -96,10 +111,11 @@ fn playing<'a>(plays: Option<&'a PlaysView>, device: Option<&'a Device>) -> Opti
     (p.epoch == d.epoch).then_some((p, d))
 }
 
-/// Let go of every note `source` holds: one release, which reaches every lane. A take ends them
-/// where they are heard (lane B).
+/// Let go of every note `source` holds: one release, which reaches every lane, and puts back at
+/// rest the wheels it moved. A take ends them where they are heard (lane B).
 fn release(plays: Option<&PlaysView>, device: Option<&Device>, source: &mut Source, record: &mut Recorder) {
-    if std::mem::take(&mut source.held).is_empty() {
+    let moved = source.wheels.take().is_some();
+    if std::mem::take(&mut source.held).is_empty() && !moved {
         return;
     }
     record.release(device, source.id);
@@ -107,6 +123,18 @@ fn release(plays: Option<&PlaysView>, device: Option<&Device>, source: &mut Sour
         && let Err(e) = d.player.live(p.generation, 0, LiveEv::Release { source: source.id })
     {
         eprintln!("music2: couldn't let go of a window's notes: {e:#}");
+    }
+}
+
+/// Put back at rest the wheels `source` moved (reset all controllers, on their lane), when that lane
+/// is in the song open now (`token`).
+fn rest(token: u64, plays: Option<(&PlaysView, &Device)>, source: &mut Source) {
+    let Some((t, m, l)) = source.wheels.take() else { return };
+    if let Some((p, d)) = plays.filter(|_| t == token)
+        && let Some(slot) = slot_of(p, &m, &l)
+        && let Err(e) = d.player.live(p.generation, slot, LiveEv::Midi { source: source.id, bytes: [0xB0, 121, 0] })
+    {
+        eprintln!("music2: couldn't put a keyboard's wheels back: {e:#}");
     }
 }
 
@@ -135,11 +163,7 @@ impl Graph {
         let plays = playing(open.engine.plays.as_ref(), device.as_ref());
         // What a take records: a keyboard's notes, and a window's marked so (lane B).
         let records = a.record || super::midi::is_keyboard(client);
-        let next = &mut audition.next;
-        let source = audition.by_client.entry(client.to_string()).or_insert_with(|| {
-            *next += 1;
-            Source { id: *next, keyboard: super::midi::is_keyboard(client), held: BTreeMap::new(), heard: Instant::now() }
-        });
+        let source = audition.source(client);
         source.heard = Instant::now();
         let id = source.id;
         // A handle struck again is let go first, wherever it sounds.
@@ -165,6 +189,42 @@ impl Graph {
             }
         }
         Ok(None)
+    }
+
+    /// Move a wheel of lane `(module, lane)` of the open song, from the keyboard `client` (RENDER-14's
+    /// `Midi`, D8): pitch bend, the mod wheel or reset all controllers, as `bytes`. The wheels it
+    /// moved on another lane go back to rest there first. A lane nothing plays takes nothing. Never
+    /// waits for the session.
+    pub(super) fn wheel(&self, client: &str, lane: Option<(String, String)>, bytes: [u8; 3]) {
+        let device = self.inner.current_device();
+        let mut cp = self.inner.control.lock();
+        let ControlPlane { open, audition, .. } = &mut *cp;
+        let Some(open) = open.as_ref() else { return };
+        let (token, plays) = (open.engine.token, playing(open.engine.plays.as_ref(), device.as_ref()));
+        let source = audition.source(client);
+        let to = lane.map(|(m, l)| (token, m, l));
+        if source.wheels != to {
+            rest(token, plays, source);
+        }
+        let Some((p, d, slot)) = to.as_ref().and_then(|(_, m, l)| plays.and_then(|(p, d)| Some((p, d, slot_of(p, m, l)?)))) else { return };
+        match d.player.live(p.generation, slot, LiveEv::Midi { source: source.id, bytes }) {
+            Ok(_) => source.wheels = to,
+            Err(e) => eprintln!("music2: couldn't move a keyboard's wheel: {e:#}"),
+        }
+    }
+
+    /// The wheels the keyboard `client` moved go back to rest, unless they are on `keep`, the lane
+    /// it plays now.
+    pub(super) fn wheels_rest(&self, client: &str, keep: Option<&(String, String)>) {
+        let device = self.inner.current_device();
+        let mut cp = self.inner.control.lock();
+        let ControlPlane { open, audition, .. } = &mut *cp;
+        let Some(open) = open.as_ref() else { return };
+        let Some(source) = audition.by_client.get_mut(client) else { return };
+        if source.wheels.as_ref().is_some_and(|(t, m, l)| *t == open.engine.token && Some((m, l)) == keep.map(|(m, l)| (m, l))) {
+            return;
+        }
+        rest(open.engine.token, playing(open.engine.plays.as_ref(), device.as_ref()), source);
     }
 
     /// The window `client` closed: every note it holds is let go.

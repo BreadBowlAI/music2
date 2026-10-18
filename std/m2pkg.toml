@@ -16,7 +16,7 @@
 
 [package]
 name = "std"
-version = "0.2.2"
+version = "0.3.0"
 license = "MIT"
 description = "Oscillators, envelopes, filters, mixing, dynamics, and the instruments built from them"
 wasm = "kernels/std.wasm"
@@ -285,7 +285,7 @@ outputs = ["out: audio<2>"]
 
 [[kernel]]
 name = "synth"
-description = "Polysynth voice: a unison saw and pulse stack, a sub sine and noise, driven into a 4-pole ladder lowpass with its own envelope, then an amp envelope; stereo. The level follows velocity^(2 × vel_amount), so velocity 0 is silent"
+description = "Polysynth voice: a unison saw and pulse stack, a sub sine and noise, driven into a 4-pole ladder lowpass with its own envelope, then an amp envelope; stereo. The level follows velocity^(2 × vel_amount), so velocity 0 is silent. `wheel` (the mod wheel) deepens the vibrato by up to half a semitone, at once"
 inputs = [
   "pitch: control<semitones>",
   "gate: control<unit01>",
@@ -317,6 +317,7 @@ inputs = [
   "vel_amount: control<unit01> = 0.5",
   "level: control<db> = 0 in -24..12",
   "seed: control<scalar> = 1",
+  "wheel: control<unit01> = 0",
 ]
 outputs = ["out: audio<2>"]
 
@@ -399,18 +400,6 @@ inputs = [
   "mode: control<scalar> = 0 in 0..1",
 ]
 outputs = ["out: audio<2>"]
-
-[[kernel]]
-name = "notecv"
-description = "A note as audio, for std's mono: its gate on the left; on the right, a code holding its pitch and velocity on the note's first sample, and the code negated on the sample its gate falls"
-inputs = ["pitch: control<semitones>", "gate: control<unit01>", "velocity: control<unit01> = 0.8"]
-outputs = ["out: audio<2>"]
-
-[[kernel]]
-name = "mono"
-description = "One note at a time, from two notecv polys: the latest note's gate, pitch and velocity; a note that starts while another is held slides to its pitch over `glide` seconds without restarting the envelopes, and when it ends the newest note still held sounds again, sliding back"
-inputs = ["last: audio<2>", "held: audio<2>", "glide: control<seconds> = 0 in 0..2"]
-outputs = ["gate: control<unit01>", "pitch: control<semitones>", "velocity: control<unit01>"]
 
 [[kernel]]
 name = "drumhit"

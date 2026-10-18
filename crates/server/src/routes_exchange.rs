@@ -16,7 +16,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use m2_editor::midifile::ClipAt;
+use m2_editor::midifile::{ClipAt, TempoChoice};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -184,6 +184,9 @@ struct ImportJson {
     session: u64,
     path: PathBuf,
     to: MidiTarget,
+    /// The tempo question's answer (Q35).
+    #[serde(default)]
+    tempo: Option<TempoChoice>,
 }
 
 #[derive(Deserialize)]
@@ -193,28 +196,34 @@ struct ImportQuery {
     name: Option<String>,
     /// Where it goes, as JSON.
     to: Option<String>,
+    /// The tempo question's answer: `keep` or `use`.
+    tempo: Option<TempoChoice>,
 }
 
-/// Bring a MIDI file in (C2, Q36, D11), as one undo step: JSON `{session, path, to}` (the app: a
-/// file on this computer, read by the server), or the file's bytes as the body with
-/// `?session=&name=&to=` (a browser's upload, up to 16 MB). `to` is `{kind: "lane", module, lane,
-/// beat}`. A write. Answers the edit with `made`, `name` (the undo step's) and `undo_name`.
+/// Bring a MIDI file in (C2, Q32 to Q36, D11), as one undo step: JSON `{session, path, to,
+/// tempo?}` (the app: a file on this computer, read by the server), or the file's bytes as the
+/// body with `?session=&name=&to=&tempo=` (a browser's upload, up to 16 MB). `to` is `{kind:
+/// "lane", module, lane, beat}`, `{kind: "track", module, beat}` or `{kind: "below", beat}`;
+/// `tempo` answers the tempo question, `keep` or `use`. A write. Answers `{asks: {file_bpm,
+/// song_bpm}}` when the question is due (nothing written), else the edit with `made`, `tracks`,
+/// `name` (the undo step's) and `undo_name`.
 async fn midifile_import(State(s): S, Query(q): Query<ImportQuery>, headers: HeaderMap, body: Bytes) -> ApiResult {
     let json = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("application/json"));
-    let (session, source, to) = match json {
+    let (session, source, to, tempo) = match json {
         true => {
             let r: ImportJson = serde_json::from_slice(&body).map_err(anyhow::Error::from)?;
-            (r.session, MidiSource::Path(r.path), r.to)
+            (r.session, MidiSource::Path(r.path), r.to, r.tempo)
         }
         false => {
             let session = q.session.ok_or_else(|| anyhow::anyhow!("an upload names its session"))?;
             let name = q.name.filter(|n| !n.is_empty()).ok_or_else(|| anyhow::anyhow!("an upload names its file"))?;
-            let to: MidiTarget = serde_json::from_str(q.to.as_deref().unwrap_or("")).map_err(|e| anyhow::anyhow!("where the file goes doesn't read: {e}"))?;
-            (session, MidiSource::Bytes { name, bytes: body.to_vec() }, to)
+            let to: MidiTarget = serde_json::from_str(q.to.as_deref().unwrap_or(""))
+                .map_err(|e| anyhow::anyhow!("where the file goes doesn't read: {e}"))?;
+            (session, MidiSource::Bytes { name, bytes: body.to_vec() }, to, q.tempo)
         }
     };
     let state = s.clone();
-    let result = blocking(move || state.graph.import_midi(session, source, to)).await;
+    let result = blocking(move || state.graph.import_midi(session, source, to, tempo)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

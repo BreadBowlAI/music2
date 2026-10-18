@@ -23,6 +23,8 @@ import { togglePiano } from "./lib/piano";
 import "./lib/midi";
 import KeyboardPiano from "./components/KeyboardPiano";
 import { importAudio } from "./lib/audioImport";
+import { importMidi } from "./lib/midiFiles";
+import MidiTempoAsk from "./components/MidiTempoAsk";
 import DropLayer from "./components/DropLayer";
 import { stopThen, toggleRecord } from "./lib/record";
 import ExportDialog from "./components/ExportDialog";
@@ -204,6 +206,7 @@ export default function App() {
         <SaveAsDialog />
         <RenameSongDialog />
         <ExportDialog />
+        <MidiTempoAsk />
         <Shortcuts />
         <SettingsDialog />
         <Toasts />
@@ -423,6 +426,8 @@ export function appCommand(id: string) {
       return togglePiano();
     case "import_audio":
       return void importAudio();
+    case "import_midi":
+      return void importMidi();
     case "record":
       // R, Transport ▸ Record (lane B): start, stop, or cancel the count.
       return toggleRecord();

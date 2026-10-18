@@ -6,10 +6,11 @@
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
-use m2_editor::midifile::ClipAt;
+use m2_editor::midifile::{ClipAt, TempoChoice};
 use m2_editor::render::{Length, Parts, Render, Threads};
 use m2_ir::FOp;
 use m2_session::Revision;
+use parking_lot::Mutex;
 use serde_json::{Value, json};
 
 use super::Graph;
@@ -134,11 +135,14 @@ pub enum MidiSource {
 }
 
 /// Where a MIDI file goes (Q36): into a notes lane at a beat (a one-part file dropped on a notes
-/// track's row, D11).
+/// track's row, D11; a file of more parts there makes new tracks after that track), new tracks
+/// after a track, or new tracks at the end (below the tracks, and File ▸ Import MIDI…).
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum MidiTarget {
     Lane { module: String, lane: String, beat: f64 },
+    Track { module: String, beat: f64 },
+    Below { beat: f64 },
 }
 
 /// A MIDI file's name and bytes, read: refused in words over 16 MB (D10), before reading it whole.
@@ -159,29 +163,69 @@ fn midi_bytes(source: MidiSource) -> Result<(String, Vec<u8>)> {
 }
 
 impl Graph {
-    /// Bring a MIDI file into the open song at `target` (Q36, D11): read on the calling thread
-    /// (refused in words when it isn't one music2 reads), then one actor job, one undo step named
-    /// "importing groove.mid" on the server. Answers the edit with `made` (the clip, to select),
-    /// `name` and `undo_name`.
-    pub fn import_midi(&self, token: u64, source: MidiSource, target: MidiTarget) -> Result<Value> {
+    /// Bring a MIDI file into the open song at `target` (Q32 to Q36, D11): read on the calling
+    /// thread (refused in words when it isn't one music2 reads), then one actor job, one undo step
+    /// named "importing groove.mid" on the server. New tracks ask the tempo question first when it
+    /// is due and `tempo` doesn't answer it: then `{asks: {file_bpm, song_bpm}}`, and nothing is
+    /// written. Else the edit, with `made` (the clips, to select), `tracks` (any added: `{module,
+    /// label}`), `name` and `undo_name`.
+    pub fn import_midi(&self, token: u64, source: MidiSource, target: MidiTarget, tempo: Option<TempoChoice>) -> Result<Value> {
+        use m2_editor::midifile::{self, Imported, Place};
         let (name, bytes) = midi_bytes(source)?;
         let file = m2_editor::smf::read(&bytes).map_err(|e| anyhow!("{name} {e}"))?;
         let step = format!("importing {name}");
-        let mut done = self.call(move |a| {
-            a.edit_and(token, |s| match &target {
-                MidiTarget::Lane { module, lane, beat } => {
-                    let done = m2_editor::midifile::import_into(s, &file, &name, module, lane, *beat)?;
-                    let made: Vec<Value> =
-                        done.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();
-                    Ok((done.edited, json!({"made": made, "tracks": []})))
+        // Into the lane only a file of one part; anything else is new tracks (Q36).
+        let one_part = midifile::bring(&file, &name, &|c| c.to_string()).is_ok_and(|b| b.parts.len() == 1);
+        let place = match &target {
+            MidiTarget::Lane { .. } if one_part => None,
+            MidiTarget::Lane { module, beat, .. } | MidiTarget::Track { module, beat } => {
+                Some(Place { after: Some(module.clone()), at: *beat })
+            }
+            MidiTarget::Below { beat } => Some(Place { after: None, at: *beat }),
+        };
+        let structural = place.is_some();
+        // The question, kept beside the edit, which wrote nothing.
+        let asked: Arc<Mutex<Option<midifile::Asks>>> = Arc::default();
+        let found = asked.clone();
+        let done = self.call(move |a| {
+            a.edit_and(token, |s| match (&target, &place) {
+                (MidiTarget::Lane { module, lane, beat }, None) => {
+                    let done = midifile::import_into(s, &file, &name, module, lane, *beat)?;
+                    Ok((done.edited, json!({"made": made_json(&done.made), "tracks": []})))
                 }
+                (_, Some(place)) => match midifile::import_tracks(s, &file, &name, place, tempo)? {
+                    Imported::Tracks(t) => {
+                        let tracks: Vec<Value> = t.tracks.iter().map(|(m, l)| json!({"module": m, "label": l})).collect();
+                        Ok((t.edited, json!({"made": made_json(&t.made), "tracks": tracks})))
+                    }
+                    Imported::Asks(q) => {
+                        *found.lock() = Some(q);
+                        Err(m2_editor::EditError::Rejected("the tempo question waits for an answer".into()))
+                    }
+                },
+                (_, None) => unreachable!("only a lane takes a file without new tracks"),
             })
-        })?;
+        });
+        if let Some(q) = asked.lock().take() {
+            return Ok(json!({"asks": {"file_bpm": q.file_bpm, "song_bpm": q.song_bpm}}));
+        }
+        let mut done = done?;
         if let Some(revision) = done["revision"].as_u64() {
-            let named = self.name_step(token, revision, step.clone(), false)?;
+            let named = self.name_step(token, revision, step.clone(), structural)?;
             done["undo_name"] = named["undo_name"].clone();
+        }
+        // A new track under a key a gone track's mute or solo was kept for starts heard (Q7).
+        let keys: Vec<String> =
+            done["tracks"].as_array().into_iter().flatten().filter_map(|t| t["module"].as_str().map(String::from)).collect();
+        if !keys.is_empty() {
+            self.forget_overlays(&keys);
         }
         done["name"] = json!(step);
         Ok(done)
     }
+}
+
+/// Clips made, as the page selects them.
+fn made_json(made: &[(m2_song::LaneAddr, String)]) -> Vec<Value> {
+    made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect()
 }

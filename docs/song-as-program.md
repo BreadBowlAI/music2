@@ -107,11 +107,12 @@ The **note** type is defined by the core, because both the timeline and `poly` d
 
 ```ts
 type Note = {
-  pitch: Control<Semitones>;    // includes per-note bends (MPE)
+  pitch: Control<Semitones>;    // includes the lane's pitch wheel; per-note bends (MPE) later
   velocity: Control<Unit01>;    // 0..1
   gate: Control<Unit01>;        // 1 while held
   pressure: Control<Unit01>;
   timbre: Control<Unit01>;
+  modWheel: Control<Unit01>;    // the lane's mod wheel, 0..1, from a keyboard played live
 };
 ```
 

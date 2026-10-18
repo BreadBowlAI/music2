@@ -35,6 +35,7 @@ const NAMES: [&str; INPUTS] = [
     "vel_amount",
     "level",
     "seed",
+    "wheel",
 ];
 
 /// The manifest's defaults, with `changes` applied.
@@ -438,6 +439,31 @@ fn drop_and_vibrato_bend_the_pitch() {
     assert!((depth - 1.0).abs() < 0.15, "vibrato ±{depth:.2} semitones");
     let (lo, hi) = crossings(&out.left()[..s(0.03)]);
     assert!(12.0 * (hi / lo).log2() < 0.2, "vibrato at the start");
+}
+
+/// The vibrato's depth over `x`, in semitones each way: from the highest and lowest frequency
+/// between upward zero crossings.
+fn vibrato_depth(x: &[f32]) -> f64 {
+    let ups: Vec<f64> =
+        (1..x.len()).filter(|&i| x[i - 1] < 0.0 && x[i] >= 0.0).map(|i| i as f64 - x[i] as f64 / (x[i] - x[i - 1]) as f64).collect();
+    let f: Vec<f64> = ups.windows(2).map(|w| SR as f64 / (w[1] - w[0])).collect();
+    let (lo, hi) = (f.iter().cloned().fold(f64::MAX, f64::min), f.iter().cloned().fold(0.0, f64::max));
+    12.0 * (hi / lo).log2() / 2.0
+}
+
+// The mod wheel (RENDER-14's Midi, D8 of track pm) deepens the vibrato by up to half a semitone,
+// at once, not faded in as the vibrato is; on top of a vibrato, the two add. At 0 it is no
+// vibrato at all.
+#[test]
+fn the_wheel_deepens_the_synths_vibrato() {
+    let sine = [(SAW, 0.0), (SUB, 1.0), (SUB_OCTAVE, 0.0), (SUSTAIN, 1.0), (CUTOFF, 20_000.0)];
+    let with = |more: &[(usize, f32)]| patch(&[&sine[..], more].concat());
+    let depth = vibrato_depth(&held(&with(&[(WHEEL, 1.0)]), 69.0, 1.0).left()[s(0.05)..s(0.5)]);
+    assert!((depth - 0.5).abs() < 0.05, "the wheel alone: ±{depth:.3} semitones, from the start");
+    let depth = vibrato_depth(&held(&with(&[(WHEEL, 1.0), (VIBRATO, 1.0)]), 69.0, 2.0).left()[s(1.0)..s(2.0)]);
+    assert!((depth - 1.5).abs() < 0.15, "with a vibrato of 1: ±{depth:.2}");
+    let depth = vibrato_depth(&held(&with(&[(WHEEL, 0.0)]), 69.0, 1.0).left()[s(0.05)..s(0.5)]);
+    assert!(depth < 0.01, "at 0: ±{depth:.4}");
 }
 
 #[test]

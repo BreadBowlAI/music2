@@ -16,8 +16,8 @@
 // "Added Audio"; "Undo adding Audio"); WAV files dropped (as a browser drops them) below the tracks
 // make a new audio track at the bar with its waveform, on Kick (notes) one right after it, on an
 // audio lane they land there; the hints say so while dragging, with an outline; an MP3 says what
-// music2 opens and writes nothing; so does a MIDI file, which can't be dropped yet (the review's
-// R3); an instrument's drag shows no file hint; a browser's file too big to upload says so and sends
+// music2 opens and writes nothing; a MIDI file is MIDI's (new tracks), and one that isn't really a
+// MIDI file says so; an instrument's drag shows no file hint; a browser's file too big to upload says so and sends
 // nothing (the review's R9); each state linted.
 //
 //   node e2e/st-audio.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
@@ -198,11 +198,13 @@ if (process.env.ST_SHOT) await page.screenshot({ path: `${process.env.ST_SHOT}/a
 await linted(lane, "the lane after an import");
 
 // ⌘Z takes both back; the files stay (music2 never deletes an asset).
+const imported = (await api("")).body.view.revision;
 await key("Meta+KeyZ");
 check(await until(() => laneClips().length === before), `one ⌘Z takes the import back: ${laneClips().length - before} left`);
 check(fs.existsSync(`${PROJ}/assets/hit.wav`), "the files stay in assets/");
 
-// Not a WAV: refused in words, nothing added.
+// Not a WAV: refused in words, nothing added. The undo's revision first: its files land before it.
+await until(async () => (await api("")).body.view.revision > imported);
 const revision = (await api("")).body.view.revision;
 await importVia("Meta+Shift+KeyI", [`${files}/song.mp3`]);
 check(await until(async () => (await toasts()).some((t) => t.includes("song.mp3 isn't a WAV file. music2 reads WAV files. Save it as a WAV first: most audio apps can (Export, then WAV)."))), `an MP3 says Q1's words: ${await toasts()}`);
@@ -437,13 +439,13 @@ check(!(await page.$("[data-testid=drop-hint]")), "the hint is gone after the dr
 // Not a WAV: says what music2 opens, writes nothing.
 const rev = (await api("")).body.view.revision;
 const mp3 = await dropFiles(xAt(9), await yBelow(), [{ name: "song.mp3", path: `${files}/song.mp3`, type: "audio/mpeg" }]);
-check(mp3.hint === "music2 opens WAV files" && mp3.outline === null, `an MP3's hint: ${JSON.stringify(mp3)}`);
+check(mp3.hint === "music2 opens WAV and MIDI files" && mp3.outline === null, `an MP3's hint: ${JSON.stringify(mp3)}`);
 await sleep(400);
 check((await api("")).body.view.revision === rev && !fs.existsSync(`${PROJ}/assets/song.mp3`), "and nothing is written");
-// A MIDI file: no drop takes it yet, and the words never say one does.
+// A MIDI file is MIDI's to take (st-midi): new tracks, and one that isn't a MIDI file says so.
 const mid = await dropFiles(xAt(9), await yBelow(), [{ name: "riff.mid", path: `${files}/song.mp3`, type: "audio/midi" }]);
-check(mid.hint === "music2 opens WAV files" && mid.outline === null, `a MIDI file's hint: ${JSON.stringify(mid)}`);
-check(await until(async () => (await toasts()).includes("music2 opens WAV files.")), `its drop's toast says the same: ${await toasts()}`);
+check(mid.hint === "New tracks · bar 3" && mid.outline === "below", `a MIDI file's hint: ${JSON.stringify(mid)}`);
+check(await until(async () => (await toasts()).includes("Nothing was added to the song: riff.mid isn't a MIDI file: it doesn't start with MThd.")), `its drop's toast says what it is: ${await toasts()}`);
 // An instrument dragged from the browser is no file: no hint.
 const instrument = await page.evaluate(async (x, y) => {
   const dt = new DataTransfer();

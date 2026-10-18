@@ -147,6 +147,8 @@ pub enum Note {
     On,
     Off,
     Choke,
+    /// A MIDI message: its three bytes are the id, the first in the low byte.
+    Midi,
 }
 
 /// One instance's record. Kept after it is destroyed.
@@ -325,6 +327,7 @@ impl Stats {
                 let kind = match k >> 32 {
                     1 => Note::On,
                     2 => Note::Off,
+                    4 => Note::Midi,
                     _ => Note::Choke,
                 };
                 (t.load(Ordering::Relaxed) as i64, kind, k as u32 as i32)
@@ -344,6 +347,7 @@ impl Stats {
                 Note::On => 1u64,
                 Note::Off => 2,
                 Note::Choke => 3,
+                Note::Midi => 4,
             };
             t.store(at as u64, Ordering::Relaxed);
             k.store(code << 32 | id as u32 as u64, Ordering::Relaxed);
@@ -568,6 +572,10 @@ impl Probe {
                     // A choke follows its Off after a reset: nothing left to end.
                     None => {}
                 }
+            }
+            CLAP_EVENT_MIDI => {
+                let m = unsafe { &*(h as *const clap_event_midi) };
+                self.stats.note(at, Note::Midi, i32::from_le_bytes([m.data[0], m.data[1], m.data[2], 0]));
             }
             CLAP_EVENT_PARAM_VALUE => {
                 let p = unsafe { &*(h as *const clap_event_param_value) };
@@ -1020,7 +1028,12 @@ unsafe extern "C" fn note_get(_: *const clap_plugin, i: u32, is_input: bool, inf
         return false;
     }
     unsafe {
-        *info = clap_note_port_info { id: 0, supported_dialects: CLAP_NOTE_DIALECT_CLAP, preferred_dialect: CLAP_NOTE_DIALECT_CLAP, name: name("notes") }
+        *info = clap_note_port_info {
+            id: 0,
+            supported_dialects: CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI,
+            preferred_dialect: CLAP_NOTE_DIALECT_CLAP,
+            name: name("notes"),
+        }
     };
     true
 }

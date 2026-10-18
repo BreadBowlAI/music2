@@ -61,6 +61,8 @@ export interface ViewNode {
   inputs: InputPort[];
   /** The signals it gives to other nodes, its own result first. */
   outputs: OutputPort[];
+  /** An instrument's card: how it plays its notes, in plain words ("Plays one note at a time. …"). Read-only. */
+  voices?: string;
   /** A hosted plugin's call: its node in the graph, the key of the state's `plugins` (HOST-7). */
   plugin?: string;
 }

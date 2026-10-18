@@ -10,6 +10,11 @@
 //! A scheduler also holds the notes played on its lane live (MON-7): audition today. They aren't
 //! in the data. Each is sent at a block's first frame, and ends only by its Off, its source's
 //! release or a panic: a jump or a swap never touches them.
+//!
+//! And its lane's pitch wheel and mod wheel, as live input last set them (RENDER-14, D8 of track
+//! pm): one slot each, the latest wins, sent at the next block's first frame before the notes. A
+//! source's release or a panic puts back at rest what it moved; a new plan's consumers hear them
+//! again at its first block.
 
 use std::sync::Arc;
 
@@ -204,14 +209,59 @@ pub const LIVE: usize = 16;
 /// and a consumer holds no more of them.
 pub const LIVE_ROOM: usize = 2 * LIVE;
 
-/// A note played on a lane live, not from its data (MON-7): audition today, a MIDI keyboard
-/// later. Each belongs to a source (a window), which names its own notes by handle.
+/// A note played on a lane live, not from its data (MON-7): audition, a MIDI keyboard. Each
+/// belongs to a source (a window, a keyboard), which names its own notes by handle.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LiveEv {
     On { source: u32, handle: u32, pitch: f32, velocity: f32 },
     Off { source: u32, handle: u32 },
-    /// Every note of the source, on every lane.
+    /// Every note of the source, on every lane, and the wheels it moved back at rest.
     Release { source: u32 },
+    /// A wheel of the lane (RENDER-14's `Midi`, D8): pitch bend, the mod wheel (CC 1) or reset all
+    /// controllers (CC 121), on any channel; [`is_wheel`] says which bytes are one.
+    Midi { source: u32, bytes: [u8; 3] },
+}
+
+/// The wheels a lane keeps: the pitch wheel and the mod wheel. A block sends at most one event for
+/// each, so a buffer has this much more room.
+pub const WHEELS: usize = 2;
+
+/// Whether `bytes` is a wheel a lane keeps (D8): pitch bend, CC 1 or CC 121, on any channel, with
+/// 7-bit data.
+pub fn is_wheel([status, d1, d2]: [u8; 3]) -> bool {
+    (d1 | d2) < 0x80 && (status & 0xF0 == 0xE0 || (status & 0xF0 == 0xB0 && matches!(d1, 1 | 121)))
+}
+
+/// A wheel as live input last set it, and the source that did: its raw value (pitch bend's 14 bits,
+/// centred at 8192; the mod wheel's 7, at rest at 0).
+#[derive(Clone, Copy, Debug)]
+struct Wheel {
+    value: u16,
+    rest: u16,
+    source: u32,
+    /// Moved: sent at the next block.
+    send: bool,
+}
+
+impl Wheel {
+    const AT_REST: [Wheel; WHEELS] =
+        [Wheel { value: 8192, rest: 8192, source: 0, send: false }, Wheel { value: 0, rest: 0, source: 0, send: false }];
+
+    fn set(&mut self, source: u32, value: u16) {
+        (self.value, self.source, self.send) = (value, source, true);
+    }
+
+    fn moved(&self) -> bool {
+        self.value != self.rest
+    }
+
+    /// The event wheel `k` sends: on channel 1, as a lane's notes are (D8: every channel).
+    fn bytes(&self, k: usize) -> [u8; 3] {
+        match k {
+            0 => [0xE0, (self.value & 0x7F) as u8, (self.value >> 7) as u8],
+            _ => [0xB0, 1, self.value as u8],
+        }
+    }
 }
 
 /// A live note the scheduler holds, from its On until its Off is sent.
@@ -239,6 +289,8 @@ pub struct NoteScheduler {
     caps: Caps,
     /// Notes played live (MON-7). Boxed: a lane slot stays small.
     live: Box<[Option<LiveNote>; LIVE_ROOM]>,
+    /// The pitch wheel and the mod wheel, as live input last set them.
+    wheels: [Wheel; WHEELS],
 }
 
 impl NoteScheduler {
@@ -250,9 +302,10 @@ impl NoteScheduler {
             cursor: 0,
             sounding: Vec::with_capacity(caps.sounding),
             swapped: false,
-            events: Events::with_capacity(caps.events() + LIVE_ROOM),
+            events: Events::with_capacity(caps.events() + LIVE_ROOM + WHEELS),
             caps,
             live: Box::new([None; LIVE_ROOM]),
+            wheels: Wheel::AT_REST,
         }
     }
 
@@ -279,6 +332,19 @@ impl NoteScheduler {
         self.live.iter().flatten().count()
     }
 
+    /// Whether a wheel is away from rest: the bend off centre, or the mod wheel above 0.
+    pub fn wheels_moved(&self) -> bool {
+        self.wheels.iter().any(Wheel::moved)
+    }
+
+    /// The wheels away from rest are sent again at the next block: a new plan's consumers hear
+    /// them, and those that kept them hear what they have.
+    pub(crate) fn resend_wheels(&mut self) {
+        for w in self.wheels.iter_mut().filter(|w| w.moved()) {
+            w.send = true;
+        }
+    }
+
     /// Take a live note's On or Off, or its source's release (MON-7), sent at the next block's
     /// first frame. A struck note takes the id `next` holds: the engine's, so a live note's id never
     /// meets a scheduled one's. A key struck again before its Off ends first. With [`LIVE`] notes
@@ -298,7 +364,22 @@ impl NoteScheduler {
                 }
             }
             LiveEv::Off { source, handle } => self.end_live(|n| n.source == source && n.handle == handle),
-            LiveEv::Release { source } => self.end_live(|n| n.source == source),
+            LiveEv::Release { source } => {
+                self.end_live(|n| n.source == source);
+                for w in self.wheels.iter_mut().filter(|w| w.source == source && w.moved()) {
+                    w.set(source, w.rest);
+                }
+            }
+            LiveEv::Midi { source, bytes: [status, d1, d2] } => match (status & 0xF0, d1) {
+                (0xE0, _) => self.wheels[0].set(source, u16::from(d1) | u16::from(d2) << 7),
+                (0xB0, 1) => self.wheels[1].set(source, u16::from(d2)),
+                (0xB0, 121) => {
+                    for w in &mut self.wheels {
+                        w.set(source, w.rest);
+                    }
+                }
+                _ => debug_assert!(false, "not a wheel: `Renderer::live` refuses it"),
+            },
         }
     }
 
@@ -309,11 +390,16 @@ impl NoteScheduler {
         }
     }
 
-    /// This block's live events, at its first frame: the On of each note struck since the last
-    /// block, and the Off of each let go. One struck and let go since then sends its On now and its
+    /// This block's live events, at its first frame: each wheel moved since the last block, the On
+    /// of each note struck since then, and the Off of each let go. One struck and let go since then sends its On now and its
     /// Off at the next block: at one frame an Off sorts first, and would leave the note on.
     fn send_live(&mut self) {
-        let Self { live, events, .. } = self;
+        let Self { live, events, wheels, .. } = self;
+        for (k, w) in wheels.iter_mut().enumerate() {
+            if std::mem::take(&mut w.send) {
+                events.push(Event::Midi { frame: 0, bytes: w.bytes(k) });
+            }
+        }
         for slot in live.iter_mut() {
             let Some(n) = slot else { continue };
             if n.on {
@@ -344,6 +430,7 @@ impl NoteScheduler {
     /// come as they are (MON-7). Never allocates: it is the bigger of the two.
     pub(crate) fn take_state(&mut self, small: &NoteScheduler) {
         *self.live = *small.live;
+        self.wheels = small.wheels;
         for s in &small.sounding {
             if self.sounding.len() == self.sounding.capacity() {
                 debug_assert!(false, "a grown scheduler has less room than the one it replaces");
@@ -365,11 +452,15 @@ impl NoteScheduler {
     }
 
     /// Back to the state after building, without Offs: the voices they would reach were reset.
-    /// Live notes end too (a panic, A10). Ids are the engine's, so none is reused.
+    /// Live notes end too (a panic, A10). Ids are the engine's, so none is reused. A wheel away
+    /// from rest goes back, and says so at the next block: a plugin may keep it through a reset.
     pub fn reset(&mut self) {
         self.cursor = 0;
         self.sounding.clear();
         *self.live = [None; LIVE_ROOM];
+        for w in &mut self.wheels {
+            (w.send, w.value) = (w.moved(), w.rest);
+        }
         self.swapped = false;
         self.events.clear();
     }

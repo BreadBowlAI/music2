@@ -372,9 +372,10 @@ fn window(k: &Keep, new: &Flat, packages: &PackageSet, w: &mut Wiring) -> Option
                 }
                 FOp::Feedback { input, .. } => *input = remap(*input).unwrap_or(*input),
                 FOp::Delay { input, .. } => *input = remap(*input).unwrap_or(*input),
-                FOp::Poly { lane, voice, .. } => {
+                FOp::Poly { lane, voice, glide, .. } => {
                     // A ghost reads no notes: its lane is never looked at.
                     *lane = usize::MAX;
+                    *glide = glide.and_then(remap);
                     for v in &mut voice.nodes {
                         if let FOp::Capture(p) = &mut v.op {
                             *p = remap(*p).unwrap_or(*p);

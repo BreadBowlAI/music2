@@ -52,7 +52,7 @@ fn a_kernel_takes_its_settings() {
         let e = one_kernel(bad).err().unwrap_or_else(|| panic!("{bad} builds"));
         assert!(e.iter().any(|d| d.message.contains(says)), "{bad}: {e:?}");
     }
-    assert_eq!(SDK_VERSION, "1.3.0", "an addition to @m2/core (FMT-2)");
+    assert_eq!(SDK_VERSION, "1.4.0", "additions to @m2/core (FMT-2): kernel settings in 1.3.0, the poly op's options in 1.4.0");
 }
 
 /// A song whose component `player` declares a sample and a keymap, and gives its kernel every

@@ -411,7 +411,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("m2-plug-{}", std::process::id()));
         let song = dir.join("song");
         std::fs::create_dir_all(&song).unwrap();
-        std::fs::write(song.join("music2.toml"), "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n").unwrap();
+        std::fs::write(song.join("music2.toml"), "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.3\"\n").unwrap();
         std::fs::write(song.join("song.ts"), "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n").unwrap();
         let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t".into() }, graph).unwrap();
         let state = running.state.clone();
@@ -480,7 +480,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("data/kick")).unwrap();
         let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
-        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.3\"\n";
         std::fs::write(dir.join("music2.toml"), manifest).unwrap();
         std::fs::write(dir.join("song.ts"), song).unwrap();
         std::fs::write(dir.join("data/kick/old.json"), r#"{"clips": []}"#).unwrap();

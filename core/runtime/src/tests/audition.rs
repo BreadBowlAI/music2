@@ -306,3 +306,84 @@ fn held_for_an_export_an_on_is_refused_and_an_off_waits() {
     rig.run(BLOCK);
     assert_eq!(held(&rig), (0, 0), "sent at the resume");
 }
+
+fn wheel(generation: u64, source: u32, bytes: [u8; 3]) -> Msg {
+    Msg::Live { generation, slot: 0, ev: LiveEv::Midi { source, bytes } }
+}
+
+/// The lane's events in the last block.
+fn events(rig: &Rig) -> Vec<Event> {
+    rig.e.current().unwrap().lane_events(0).to_vec()
+}
+
+// RENDER-14, MON-7, D8: the wheels merge into their lane's buffer at the block line, at its first
+// frame, before every note there: a live On, the song's On and an Off. Each is sent once, on channel
+// 1 whatever channel moved it; the latest of each wins. Anything but the wheels is refused.
+#[test]
+fn a_live_bend_merges_before_the_notes() {
+    let data = with_notes(json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 0.5}]}]}), at_bpm(120.0));
+    let (mut rig, g) = rig(&synth(0.0, json!([]), "v"), &data);
+    rig.cmd(Cmd::Play);
+    rig.send(wheel(g, 1, [0xE4, 0, 0x60]));
+    rig.send(wheel(g, 1, [0xE4, 0x7F, 0x7F]));
+    rig.send(wheel(g, 1, [0xB2, 1, 90]));
+    rig.send(on(g, 1, 7, 69.0));
+    rig.run(BLOCK);
+    let ev = events(&rig);
+    assert_eq!(ev[..2], [Event::Midi { frame: 0, bytes: [0xE0, 0x7F, 0x7F] }, Event::Midi { frame: 0, bytes: [0xB0, 1, 90] }], "{ev:?}");
+    assert!(matches!(ev[2..], [Event::On { frame: 0, pitch: 69.0, .. }, Event::On { frame: 0, pitch: 60.0, .. }]), "{ev:?}");
+    rig.run(BLOCK);
+    assert!(events(&rig).is_empty(), "sent once");
+    rig.send(off(g, 1, 7));
+    rig.send(wheel(g, 1, [0xE0, 0, 0x40]));
+    rig.run(BLOCK);
+    assert!(matches!(events(&rig)[..], [Event::Midi { frame: 0, bytes: [0xE0, 0, 0x40] }, Event::Off { frame: 0, .. }]), "{:?}", events(&rig));
+    for bad in [[0xB0, 7, 100], [0x90, 60, 100], [0xE0, 0x80, 0], [0xF8, 0, 0]] {
+        rig.send(wheel(g, 1, bad));
+    }
+    rig.send(Msg::Live { generation: g, slot: 3, ev: LiveEv::Midi { source: 1, bytes: [0xE0, 0, 0] } });
+    rig.run(BLOCK);
+    assert!(events(&rig).is_empty() && rig.e.refused_live() == 5);
+}
+
+// MON-7, RENDER-1 (M4), D8: held for an export, a wheel is not refused, as an On is: the latest
+// waits in its lane's slot and is sent at the resume. Refused, a wheel let go while an export ran
+// would stay bent. A source's release puts back at rest the wheels it moved, and only those.
+#[test]
+fn held_for_an_export_a_wheel_waits_for_the_resume() {
+    let (mut rig, g) = rig(&synth(0.0, json!([]), "v"), &DataSet::empty());
+    rig.send(wheel(g, 1, [0xE0, 0x7F, 0x7F]));
+    rig.run(BLOCK);
+    rig.send(Msg::Hold(true));
+    rig.run(4 * BLOCK);
+    assert!(rig.e.is_held());
+    rig.send(wheel(g, 1, [0xE0, 0, 0x40]));
+    rig.send(wheel(g, 2, [0xB0, 1, 50]));
+    rig.run(4 * BLOCK);
+    assert_eq!((rig.e.refused_live(), rig.e.status().wheels), (0, 1), "taken: the bend is centred, the mod wheel up");
+    rig.send(Msg::Hold(false));
+    rig.run(BLOCK);
+    assert_eq!(events(&rig), [Event::Midi { frame: 0, bytes: [0xE0, 0, 0x40] }, Event::Midi { frame: 0, bytes: [0xB0, 1, 50] }], "sent at the resume");
+    rig.send(Msg::Live { generation: g, slot: 0, ev: LiveEv::Release { source: 1 } });
+    rig.run(BLOCK);
+    assert!(events(&rig).is_empty() && rig.e.status().wheels == 1, "source 1's bend was at rest already, and 2's wheel is 2's");
+    rig.send(Msg::Live { generation: g, slot: 0, ev: LiveEv::Release { source: 2 } });
+    rig.run(BLOCK);
+    assert_eq!((events(&rig), rig.e.status().wheels), (vec![Event::Midi { frame: 0, bytes: [0xB0, 1, 0] }], 0));
+}
+
+// RENDER-14, D8: a plugin on the lane hears its wheels as CLAP MIDI events, on channel 1, at the
+// block's first frame and before the notes there.
+#[test]
+fn a_plugin_hears_the_bend_as_midi() {
+    let (mut rig, g, h) = probed(&DataSet::empty());
+    rig.send(wheel(g, 1, [0xE2, 0x7F, 0x7F]));
+    rig.send(wheel(g, 1, [0xB0, 1, 100]));
+    rig.send(on(g, 1, 7, 60.0));
+    rig.run(BLOCK);
+    let notes = probe::stats(h).unwrap().notes();
+    let midi = |b: [u8; 3]| i32::from_le_bytes([b[0], b[1], b[2], 0]);
+    let kinds: Vec<(i64, Note)> = notes.iter().map(|n| (n.0, n.1)).collect();
+    assert_eq!(kinds, [(0, Note::Midi), (0, Note::Midi), (0, Note::On)], "{notes:?}");
+    assert_eq!((notes[0].2, notes[1].2), (midi([0xE0, 0x7F, 0x7F]), midi([0xB0, 1, 100])));
+}

@@ -10,7 +10,7 @@
 
 use std::f32::consts::{PI, SQRT_2};
 
-pub(crate) use crate::fx::{Coef, Filter, Glide, clampf, flush, prewarp, sane};
+pub(crate) use crate::fx::{Coef, Filter, Glide, clampf, flush, prewarp};
 
 /// Samples between control ticks. Values read at a tick are interpolated to the next.
 pub(crate) const TICK: u32 = 16;

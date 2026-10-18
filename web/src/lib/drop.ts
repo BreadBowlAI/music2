@@ -68,8 +68,8 @@ const KNOWN = ["audio/", "video/", "image/", "text/", "application/pdf", "applic
 /** The one kind that takes every file, or none. */
 const takerOf = (files: DropFile[]) => (files.length ? takers.find((t) => files.every((f) => takes(t, f))) : undefined);
 
-/** What music2 opens, said when a drag carries something else. MIDI files join once a drop takes them (C2b). */
-export const OPENS = "music2 opens WAV files";
+/** What music2 opens, said when a drag carries something else. */
+export const OPENS = "music2 opens WAV and MIDI files";
 
 /** Where a drop at (`x`, `y`) on the page lands: the bar line at or before the pointer (D32). */
 export function target(x: number, y: number): DropTarget {
