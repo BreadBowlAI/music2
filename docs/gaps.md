@@ -231,6 +231,11 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **The output list on Linux** shows each card once, by its name, from the device a person means (the sound server's, else the card's shared one). An output that won't open plays on the default, and Settings says "the output chosen can't be used now".
 - **An output chosen in Settings that comes back** after it was unplugged isn't taken again by itself, and choosing it again while the default plays for it does nothing: choose another output, then it.
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
+- **An audio file a kernel reads** (kernel ABI v1) that changes on disk is heard at the next build, not at once: only files a lane names are watched by their hash. Its name in the code has no hash pin, unlike a clip's, and when it is missing no near name is offered.
+- **Kernel ABI v1's reserved parts aren't built**: event ports, `k_save`/`k_load`, `k_latency`/`k_tail` and offline kernels ([kernel-abi.md](kernel-abi.md#reserved-shapes)). Each comes with the first kernel that needs it.
+- **A sound part that crashed is reset when it starts again**, not built new. A crash can leave its memory wrong, so it may crash again sooner.
+- **Kernels from other people have no time limit**: one that loops forever stalls the sound (wasmtime's epochs would stop it). A song near the 3,999 sound parts limit has no cheaper way to run yet (a `sum` kernel, a checked engine).
+- **The Mac's numbers for the one-sandbox-a-box layout are owed**: G7f's run, the footprint and the address space with two renderers (PLAT-1).
 
 ## Removed with the old version
 

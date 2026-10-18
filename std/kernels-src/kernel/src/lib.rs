@@ -3,10 +3,10 @@
 //! A kernel is a small piece of DSP compiled to WebAssembly. A package's module runs in
 //! *sandboxes*: one wasmtime store with one instance of the module and its one memory. A sandbox
 //! may hold many *states* (one per graph node, one per voice inside `poly`), of one kernel type or
-//! several, so every call names its state, and no state lives in a static. Kernels have no
-//! imports: everything they know arrives through their settings and their ports, including time.
+//! several, so every call names its state, and no state lives in a static. Their one import is
+//! `m2.asset_read`: all else they know arrives through their settings and ports, time included.
 //!
-//! ABI v1. The module exports `memory`, `m2_abi() -> 1` and `m2_alloc(size, align) -> address`
+//! ABI v1, `docs/kernel-abi.md`. Exports: `memory`, `m2_abi() -> 1`, `m2_alloc(size, align) -> address`
 //! (0: no room), and for a kernel named `k`:
 //!
 //! | export | meaning |
@@ -90,10 +90,10 @@ pub struct Settings {
     /// The channel count of each port, inputs first: `n_ports` u32s at `ports`.
     pub ports: usize,
     pub n_ports: u32,
-    /// Reserved: settings that size the state (numbers).
+    /// The kernel's numbers (`values`): `n_values` f64s at `values`.
     pub values: usize,
     pub n_values: u32,
-    /// Reserved: the state's assets.
+    /// The kernel's audio files: `n_assets` entries of 16 bytes (handle, frames, channels, rate).
     pub assets: usize,
     pub n_assets: u32,
     /// Reserved: a saved state for `k_load`.

@@ -113,6 +113,16 @@ The existing tests that guard live edits must pass unchanged: `keep.rs`, `no_all
 
 **Done when:** `m2_abi()` is 1 and v0 is refused; the 10 renders match; `std.wasm` rebuilds to its bytes in another folder (PLAT-5), and the commit says the kernel hashes changed; std's version stays 0.2.0 in this slice (no render changed, FMT-3); the mac lint passes; `docs/kernel-abi.md` and the contract say the same.
 
+**Changed while building** (2026-10-18):
+- `an_asset_read_allocates_nothing` is red with the read stubbed to copy through a `Vec` (198 heap operations in 99 blocks). Looking the memory up by name, the plan's stub, allocates nothing in wasmtime 49, so it can't show red.
+- The settings block keeps slice 1's layout. Values are f64s; an asset entry is 16 bytes: handle, frames, channels, rate. A missing asset has 0 frames and 0 channels, and reads silence. `m2.asset_read` writes silence past the end and returns the frames it read.
+- The revision records kernel assets' hashes in its data (`DataSet::kernel_assets`), not in the snapshot: the snapshot is read before the code says which files kernels read. A file a kernel reads that changes on disk is heard at the next build (gaps).
+- `setting.keymap()` is empty unless given, so it is never required.
+- The Rust kit gains no asset call in this slice (its docs only point to `docs/kernel-abi.md`, with the line count kept, so `std.wasm` keeps its bytes). The call comes with the sampler in slice 3, which changes `std.wasm` anyway.
+- The sandbox limit is 3,999, the same on every OS (the Mac's 4.097 GiB a memory; Linux would allow 4,033).
+- G7f keeps three sides. "P1" was already the app's layout since commit B; it is now named the A/A control and printed as what noise alone gives. Two sides would need a new turn order (`paired::cycle` needs three).
+- `a_kernel_past_its_birth_cap_says_it_ran_out` is new in `core/runtime/src/tests.rs` (40 MiB at birth plays; past 256 MiB fails). The keep tests over memory stay, with 256 MB in their words: after the seal any grow fails, whatever the cap.
+
 ## Slice 3: the sampler
 
 **Goal.** A std instrument plays one audio file, or one file per range of notes, through ABI v1's asset import. It shows in the app's browser. Dropping a WAV on its card sets its sample through a Tx. It renders the same bits on every thread count (RENDER-2).
