@@ -81,6 +81,20 @@ Nobody waits for an answer, and nobody asks the owner.
 | D25 | macOS | The desktop bundle gets `NSMicrophoneUsageDescription`: "music2 records from your microphone when you press Record on an audio track." By-ear check on the Mac owed |
 | D26 | Code rules | cpal stays in `m2-play` (it hides each OS, as `outputs.rs` uses it). `read_at` is the one new OS call, in `core/os/src/unix.rs` (PLAT-2) |
 
+### Changed while building slice 2
+
+| What | Why |
+|---|---|
+| D16: one ring type (`m2_play::ring::Ring`), made twice. Its reader keeps its own place, and the writer never waits: frames a reader falls too far behind on are gone, and it plays or writes silence for them (D22 holds) | A ring that waits for its reader would make the input's callback wait. Each frame is one `AtomicU64`, so a torn read is never undefined |
+| The engine reads the input through a trait, `m2_runtime::LiveInput` | `m2-runtime` can't depend on `m2-play`, where the ring lives |
+| `Msg::Hear` sets the hearing on the lane's audio player, which moves with the lane across an activation. Hear off names no lane: it stops hearing on every lane | An edit during a take must not stop it, and an off sent after an edit must still reach it |
+| D20: the stamp a take uses is the median of the input's last 32. A device's is its capture time (cpal's timestamps) placed on the output's clock as `Player::heard_frame` places a key: the output's latency is two buffers, not what the device reports | One torn or late stamp must not move a take. Keys and audio then agree |
+| D24: the silent input hands over injected samples from the output's callback, one engine frame for each it renders, each buffer stamped two device buffers before the first frame rendered. A message that changes the input never holds back the messages after it | So a Play sent with the input applies in the same callback, and a test knows each sample's place |
+| D19: the clip starts at the take's start beat, not its bar line. The Tx takes the file in first (`import::place`), so a take makes two revisions (the take-in and the Tx) and one undo step | "As long as the take"; a file taken in plays at once, as an import's does |
+| The waveform is made from the frames as they are written | No second decode (D31) |
+| The take thread's end waits up to 1 s for the input's last frames, then writes silence | The input hands them over a buffer or two late |
+| The server half of `hearing_yourself_…` is `hearing_yourself_never_reaches_an_export` in `record_tests.rs`, beside the audio rig, not in `graph/tests.rs` | It needs the rig that feeds the input |
+
 ### Contract changes (with the slice that makes them)
 
 | Rule | Change |

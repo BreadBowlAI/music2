@@ -235,6 +235,15 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A disk too slow for an audio clip** cuts it to silence for a moment, with a click; it doesn't fade. The status says "Disk too slow".
 - **A WAV another program changes while it plays** may play a mix of old and new for a moment, until the song is built again.
 - **`m2-os`'s two `fake_sysfs` tests** share one temp folder, so run together they sometimes fail; alone they pass.
+- **Recording audio** (the engine half is built; the app's half is next): sound made during the count-in isn't kept in the take.
+- **Recording audio:** no arm button: you hear yourself only while recording.
+- **Recording audio:** one clip per take: no takes stacked per loop pass, no punch in and out.
+- **Recording audio:** an input on its own clock (not the output's device) can drift a little against the song in a long take.
+- **Recording audio:** only the input's first two channels: no choosing inputs 3 and 4.
+- **Recording audio:** no recording offset for a device that reports its latency wrongly; the output's latency is taken as two buffers.
+- **Recording audio:** the take shows no waveform until it is written.
+- **Recording audio:** a crash during a take loses it: the part file is swept.
+- **Recording audio:** on a Mac that doesn't allow the microphone, a take records silence; it doesn't say so yet.
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 
 ## Removed with the old version
