@@ -50,6 +50,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Turn an effect off and on, or move it before or after the effect next to it, from its card's ⋯ menu in the Device view; pick what a Duck listens to from its card. Each is one undo step, kept in the code (`bypass: true`).
 - Play and stop like Live: Space stops back where play started, and ⇧Space goes on from where it stopped. Click the ruler, or an empty spot in a lane while stopped, to start somewhere else. Loop with the loop button or C, a drag across the ruler, or ⌘L for the selected clips; the loop is kept for next time. ⌘. (Transport → Stop All Sound) stops every note at once.
 - Choose the sound output and its buffer size, and the sound input, in **Settings** (⌘,), see what plays now, and set where new songs go. They are kept for this computer, in `~/.music2/settings.json`. A song opens with no sound device too: it plays silently, the status says "No sound output", and a device plugged in is used within a few seconds.
+- Bring a MIDI file in: File → Import MIDI…, or drop a `.mid` file. Each part becomes a new track with a fitting sound (channel 10 plays the Drum kit), its notes in one clip. Dropped below the tracks, the new tracks go at the end; on a track, right after it; a one-part file dropped on a notes track goes into it. An empty song takes the file's tempo; otherwise a question: "groove.mid is at 128 BPM. The song is at 120 BPM." **Keep 120** (Return) or **Use 128**. One Undo takes the whole import back.
 - Export (the Export button, or File → Export…, ⇧⌘E) asks what to make: **Song**, one WAV file, the same file `m2 render` writes; **Stems**, each track as its own WAV file, before its volume and pan, in a new folder (not yet for a song that plays plugins); or **MIDI**, the notes as a MIDI file other music apps open, with a fitting General MIDI sound for each part and drums on channel 10. A notes clip's menu has **Export as MIDI…**. Files go in `~/Music/music2/Exports` unless you pick another place in the app's save window; then Show in Finder. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
 - Build `music2.app` and move it anywhere: std, the templates and the examples are inside it, so it no longer needs the source folder it was built from. It's signed ad hoc but not notarized, so on another Mac it opens only after **Open Anyway** in System Settings → Privacy & Security (and only on Apple silicon).
@@ -94,7 +95,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 36 | **The rest of MIDI files and export**: bring a MIDI file in as new tracks (File → Import MIDI…, or a drop), with a question when its tempo differs from the song's; MP3 or AAC export; stems of a song that plays plugins. (Saving the song or a clip as a MIDI file, stems, and the Export dialog work: see [What works today](#what-works-today). The server can already bring a one-part MIDI file into a notes lane, but nothing in the app calls it yet.) | Sharing ideas with other apps and people. | No | medium |
+| 36 | **The rest of export**: MP3 or AAC export, and stems of a song that plays plugins. (Saving the song or a clip as a MIDI file, bringing a MIDI file in as new tracks, stems, and the Export dialog work: see [What works today](#what-works-today).) | Sharing ideas with other apps and people. | No | medium |
 
 ### Tracks and instruments
 
@@ -227,7 +228,6 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **Renaming a song's folder starts Undo over**: the song closes and opens again from the new folder (Rename Song… says so). Renaming only the name is one undo step.
 - **Checks owed on a Mac**: a trackpad pinch to zoom, Open Recent in the menu bar, reopening at launch, ⇧⌘S, and a Ctrl-click on a marker (a right-click there); a real MIDI keyboard (plug, play, the pedal, unplug, and recording from it), the metronome and the count-in against the beat, switching the sound output in Settings; dropping files from the Finder, the Mac's own open and save windows (Import Audio, Export MIDI), and stems opened in another app. They are checked on Linux and in the browser suites, with notes posted as a keyboard would send them (see HANDOFF).
 - **A recording waits while the code doesn't compile.** A take that ends then is kept, and written once the code compiles; closing the song before that loses it (a message says so).
-- **Dropping a MIDI file** says "music2 opens WAV files": bringing a MIDI file in from the app comes with #36.
 - **A nudged clip is heard once it lands** (← →), and so is a dragged audio clip (it needs renders); a dragged notes or automation clip is heard while it moves.
 - **A tempo drag in a song with an audio clip** is heard only when you let go: the clip's audio is timed in the tempo before the drag. Its tooltip says so.
 - **The output list on Linux** shows each card once, by its name, from the device a person means (the sound server's, else the card's shared one). An output that won't open plays on the default, and Settings says "the output chosen can't be used now".
@@ -280,6 +280,9 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **Only the polysynth hears the mod wheel**: FM, the Sampler and the drums don't.
 - **A track chosen while the wheel is held** starts with it at rest, until the wheel next moves.
 - **A plugin that takes only CLAP's own note events** may not hear the wheels: they are sent as MIDI messages to every plugin.
+- **A MIDI file's controllers, pitch bends and later program changes** are skipped when it is brought in: only notes, the first program, tempos and time signatures come in.
+- **The drop hint on a notes track says "Into Bass"** before it knows the file's parts: a file of several parts makes new tracks after Bass instead (the toast names them). A browser gives no file until the drop.
+- **One MIDI file at a time**: dropping several says so, and brings none in.
 
 ## Removed with the old version
 

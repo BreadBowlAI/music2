@@ -187,6 +187,21 @@ A picture on Xvfb :95 (`app-shot.sh`): the question, and the new tracks.
 
 **Done when** these pass, Undo takes a whole import back in one step, no render changes, and gaps.md says what is left.
 
+**Built, and where it differs from the plan above.**
+
+| What | Why |
+|---|---|
+| `import_tracks(s, file, name, &Place { after, at }, choice)` answers `Imported::Asks` or `Imported::Tracks` (the edit, each track's key and name, its clip) | one call for the menu, a drop below and a drop on a track's row |
+| The editor tests are named for the import: `an_import_makes_a_track_for_each_part`, `an_import_into_an_empty_song_takes_the_files_tempo`, `an_import_asks_then_keeps_or_uses_the_tempo`, `use_at_a_later_bar_keeps_the_songs_tempo_before_it`, `one_undo_step_takes_the_import_back`, `an_exported_song_imports_back_as_tracks`, `a_refused_file_writes_nothing` | studio's C2 already used three of the planned names, for `bring()` and `tempo_plan()` alone |
+| `tempo_plan` takes the beat: before it the song's tempo stays. The question names the song's tempo at that beat. Into an empty song, the file's time signatures start there too (when it is on a bar line) | Use at a later bar (D10) |
+| The server, not the page, decides a drop on a notes lane: a file of one part goes into it, a file of more makes new tracks after that track. The hint says "Into Bass · bar 3" (a gap line) | a browser gives no file until the drop, so the page can't count parts while dragging |
+| The route keeps the question beside the edit, which writes nothing, as Delete Track's question is kept | one actor job: the song can't change between the question and the edit |
+| "The code doesn't compile, so no track can be added now. Fix the code first." | the words Import Audio uses |
+| Several MIDI files dropped at once: "One MIDI file at a time", none brought in (a gap line); a browser's file over 16 MB is refused on the page | each file may ask its own question |
+| A file that isn't WAV or MIDI now says "music2 opens WAV and MIDI files"; st-audio's MIDI drop check now expects MIDI's hint | MIDI files are taken now |
+| st-midi's empty-song part opens a copy of `templates/empty` in the same server (`/api/graph/open`), on an app page whose file chooser answers | the suite's kind is `fix`; Import MIDI… has no key, so it goes through the menu as the app sends it |
+| The pictures: the app on Xvfb :95, File ▸ Import MIDI…, the GTK chooser, the question over first-song, then Drums, Bass line and Keys 2 after Return | as planned |
+
 ## Decisions
 
 | # | Decision | Why |
