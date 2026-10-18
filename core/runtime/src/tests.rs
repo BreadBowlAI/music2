@@ -690,15 +690,56 @@ fn packages_must_be_sandboxed_and_speak_our_abi() {
     let e = PackageSet::default().load(&wrong_abi).map(|_| ()).unwrap_err();
     assert!(format!("{e:#}").contains("ABI v7"), "{e:#}");
 
-    let imports = package(&module_v1(&copy).replacen("(module", "(module (import \"env\" \"now\" (func))", 1));
-    let e = PackageSet::default().load(&imports).map(|_| ()).unwrap_err();
-    assert!(format!("{e:#}").contains("can't import anything"), "{e:#}");
-
     let missing = package(&module_v1(""));
     let e = PackageSet::default().load(&missing).map(|_| ()).unwrap_err();
     assert!(format!("{e:#}").contains("missing export `k_ports`"), "{e:#}");
 
-    for d in [ok, wrong_abi, imports, missing] {
+    for d in [ok, wrong_abi, missing] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+// ABI-3: a module built for kernel ABI v0 is refused, and the refusal names its version and says
+// what to do, before any v1 export is asked for.
+#[test]
+fn a_v0_module_is_refused_naming_its_version() {
+    let v0 = r#"(module
+      (memory (export "memory") 1)
+      (func (export "m2_abi") (result i32) (i32.const 0))
+      (func (export "k_init") (param f32 i32 i32))
+      (func (export "k_ports") (result i32) (i32.const 1))
+      (func (export "k_port") (param i32) (result i32) (i32.const 1024))
+      (func (export "k_reset"))
+      (func (export "k_process") (param i32))
+      (func (export "k_active") (result i32) (i32.const 0)))"#;
+    let dir = package(v0);
+    let e = PackageSet::default().load(&dir).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("built for kernel ABI v0"), "{e:#}");
+    assert!(format!("{e:#}").contains("speaks v1"), "{e:#}");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// ABI-2, ABI-3: the one import a kernel may have is `m2.asset_read`, with its signature. Any other
+// import is refused, naming it, and so is a memory a sandbox can't hold.
+#[test]
+fn only_the_asset_import_is_allowed() {
+    let copy = kernel_v1("k", &out_v1("(local.get $x)"));
+    let with = |import: &str| package(&module_v1(&copy).replacen("(module", &format!("(module {import}"), 1));
+    let reads = with(r#"(import "m2" "asset_read" (func (param i32 i32 i32 i32 i32) (result i32)))"#);
+    PackageSet::default().load(&reads).unwrap();
+
+    let clock = with(r#"(import "env" "clock" (func (result f64)))"#);
+    let e = PackageSet::default().load(&clock).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("may import only `m2.asset_read`, but this module imports `env.clock`"), "{e:#}");
+
+    let wrong = with(r#"(import "m2" "asset_read" (func (param i32) (result i32)))"#);
+    let e = PackageSet::default().load(&wrong).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("`m2.asset_read` has the wrong signature"), "{e:#}");
+
+    let shared = package(&module_v1(&copy).replace(r#"(memory (export "memory") 1)"#, r#"(memory (export "memory") 1 2 shared)"#));
+    let e = PackageSet::default().load(&shared).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("shared"), "{e:#}");
+    for d in [reads, clock, wrong, shared] {
         std::fs::remove_dir_all(d).ok();
     }
 }

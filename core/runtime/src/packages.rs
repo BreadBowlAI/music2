@@ -434,14 +434,16 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
     Ok(sig)
 }
 
-/// The kernel ABI version this runtime speaks (see `m2-kernel`).
+/// The kernel ABI version this runtime speaks (`docs/kernel-abi.md`). Frozen: v1 only ever gains
+/// optional exports and fields at the end of the settings block.
 pub const KERNEL_ABI: u32 = 1;
 
-/// Kernels are sandboxed: no imports at all, the ABI exports, and the right ABI version.
+/// A package's module, checked before any kernel of it is made (ABI-3): its one import, if any, is
+/// `m2.asset_read`; its memory is a defined 32-bit memory of 64 KiB pages, not shared, which the
+/// hardware checks can guard (RENDER-32); it was built for this ABI, and a module built for
+/// another is refused naming its version, before any export of this one is asked for; and it has
+/// the ABI's exports, with their signatures.
 fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Result<()> {
-    if let Some(i) = module.imports().next() {
-        bail!("kernels can't import anything, but this module imports `{}::{}`", i.module(), i.name());
-    }
     let exports: HashMap<&str, ExternType> = module.exports().map(|e| (e.name(), e.ty())).collect();
     let func = |name: &str, params: &[ValType], results: &[ValType]| -> Result<()> {
         match exports.get(name) {
@@ -459,16 +461,22 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
         }
     };
     func("m2_abi", &[], &[ValType::I32])?;
-    func("m2_alloc", &[ValType::I32, ValType::I32], &[ValType::I32])?;
-    if !matches!(exports.get("memory"), Some(ExternType::Memory(_))) {
-        bail!("missing export `memory`");
+    match exports.get("memory") {
+        Some(ExternType::Memory(m)) if m.is_64() || m.is_shared() || m.page_size() != 1 << 16 => {
+            bail!("its memory must be a 32-bit memory of 64 KiB pages, not shared (docs/kernel-abi.md)")
+        }
+        Some(ExternType::Memory(_)) => {}
+        _ => bail!("missing export `memory`"),
     }
-    let mut store = wasmtime::Store::new(engine, ());
-    let instance = wasmtime::Instance::new(&mut store, module, &[]).wctx(|| "instantiating")?;
+    let (mut store, instance, _) = crate::sandbox::instantiate(engine, module)?;
     let abi = instance.get_typed_func::<(), u32>(&mut store, "m2_abi")?.call(&mut store, ())?;
     if abi != KERNEL_ABI {
-        bail!("built for kernel ABI v{abi}, but this runtime speaks v{KERNEL_ABI}");
+        bail!(
+            "built for kernel ABI v{abi}, but this music2 speaks v{KERNEL_ABI} only. Rebuild the package with the v{KERNEL_ABI} kit \
+             (docs/kernel-abi.md)"
+        );
     }
+    func("m2_alloc", &[ValType::I32, ValType::I32], &[ValType::I32])?;
     for k in kernels {
         let n = &k.name;
         func(&format!("{n}_ports"), &[], &[ValType::I32])?;

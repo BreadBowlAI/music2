@@ -1,5 +1,6 @@
-//! Kernel sandboxes (RENDER-32, kernel ABI v1): one wasmtime `Store` holding one instance of a
-//! package's module and its one memory, the only bytes that code can touch.
+//! Kernel sandboxes (RENDER-32, kernel ABI v1, `docs/kernel-abi.md`): one wasmtime `Store`
+//! holding one instance of a package's module and its one memory, the only bytes that code can
+//! touch.
 //!
 //! A sandbox is *born* off the audio thread: the host asks the module's allocator for each state's
 //! block (`m2_alloc`), writes the state's settings and port table there, and builds the state
@@ -9,28 +10,40 @@
 //! Then the plan resets each state once (its prewarm): a reset that would take memory fails there,
 //! at the build, and names its node.
 //!
+//! The one import a kernel may have is `m2.asset_read` ([`asset_read`]): it copies decoded audio
+//! the host holds, shared and outside every sandbox, into the kernel's memory, and allocates
+//! nothing.
+//!
 //! The rest of the runtime sees states and their port buffers, and never a `Store`.
 
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use wasmtime::{Engine, Instance, Memory, Module, ResourceLimiter, Store, TypedFunc};
+use wasmtime::{Caller, Engine, Extern, ExternType, Func, Instance, Memory, Module, ResourceLimiter, Store, TypedFunc, ValType};
 
+use crate::audio::Asset;
 use crate::{BLOCK, KERNEL_MEMORY, OutOfMemory, PORT_BYTES, WasmContext};
 
 /// Bytes of a v1 settings block (`m2_kernel::Settings` on wasm32).
 const SETTINGS_BYTES: usize = 60;
 
-/// What a sandbox's store may hold: one instance, one memory and one table. While it is born its
-/// memory may grow up to its cap; once sealed nothing grows. A refused grow traps at once, so a
-/// kernel never runs on without what it asked for, and `refused` says why it stopped:
-/// [`OutOfMemory`], until that error is made.
-struct Limits {
+/// What the host keeps in a sandbox's store: its limits, and what `m2.asset_read` reads.
+///
+/// While it is born its memory may grow up to its cap; once sealed nothing grows. A refused grow
+/// traps at once, so a kernel never runs on without what it asked for, and `refused` says why it
+/// stopped: [`OutOfMemory`], until that error is made.
+pub(crate) struct Host {
     sealed: bool,
     refused: bool,
+    /// Its memory, as a handle: `m2.asset_read` writes there without looking it up by name.
+    memory: Option<Memory>,
+    /// The assets its states read, by handle: shared with the [`crate::audio::Cache`] that decoded
+    /// them, never copied in.
+    assets: Vec<Arc<Asset>>,
 }
 
-impl ResourceLimiter for Limits {
+impl ResourceLimiter for Host {
     fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
         if self.sealed || desired > KERNEL_MEMORY {
             self.refused = true;
@@ -63,9 +76,65 @@ impl ResourceLimiter for Limits {
     }
 }
 
+/// The one import kernel code may have (ABI-2).
+pub(crate) const ASSET_READ: (&str, &str) = ("m2", "asset_read");
+
+/// `m2.asset_read(handle, channel, frame, dst, frames) -> frames read`: `frames` floats at `dst`,
+/// from `frame` on, of channel `channel` of the asset `handle` names (a mono asset's channel 1 is
+/// its channel 0). Past the asset's end, and for a handle or channel it hasn't, it writes silence.
+/// It returns how many frames came from the asset. A `dst` whose floats aren't all in the memory
+/// traps. It allocates nothing: the asset and the memory are found by index (RENDER-28).
+fn asset_read(mut caller: Caller<'_, Host>, handle: u32, channel: u32, frame: u32, dst: u32, frames: u32) -> wasmtime::Result<u32> {
+    let Some(memory) = caller.data().memory else { wasmtime::bail!("m2.asset_read before its sandbox has a memory") };
+    let (bytes, host) = memory.data_and_store_mut(&mut caller);
+    let (at, n) = (dst as usize, frames as usize);
+    let Some(out) = at.checked_add(4 * n).and_then(|end| bytes.get_mut(at..end)) else {
+        wasmtime::bail!("m2.asset_read: {frames} frames at {dst} lie past the kernel's memory")
+    };
+    let src: &[f32] = match host.assets.get(handle as usize) {
+        Some(a) if a.channels.len() == 1 => &a.channels[0],
+        Some(a) => a.channels.get(channel as usize).map_or(&[], |c| &c[..]),
+        None => &[],
+    };
+    let from = (frame as usize).min(src.len());
+    let got = (src.len() - from).min(n);
+    out[..4 * got].copy_from_slice(bytemuck::cast_slice(&src[from..from + got]));
+    out[4 * got..].fill(0);
+    Ok(got as u32)
+}
+
+/// What `module` imports, made in `store`: only [`ASSET_READ`], with its signature. Anything else
+/// is refused, naming it.
+fn imports(store: &mut Store<Host>, module: &Module) -> Result<Vec<Extern>> {
+    let mut out = vec![];
+    for i in module.imports() {
+        if (i.module(), i.name()) != ASSET_READ {
+            bail!("a kernel may import only `m2.asset_read`, but this module imports `{}.{}`", i.module(), i.name());
+        }
+        let ExternType::Func(f) = i.ty() else { bail!("`m2.asset_read` must be imported as a function") };
+        let same = f.params().len() == 5 && f.params().all(|p| matches!(p, ValType::I32)) && matches!(f.results().collect::<Vec<_>>()[..], [ValType::I32]);
+        if !same {
+            bail!("`m2.asset_read` has the wrong signature: it is (i32, i32, i32, i32, i32) -> i32 (docs/kernel-abi.md)");
+        }
+        out.push(Func::wrap(&mut *store, asset_read).into());
+    }
+    Ok(out)
+}
+
+/// A store and an instance of `module` in it, with its limits and its imports, and its memory.
+pub(crate) fn instantiate(engine: &Engine, module: &Module) -> Result<(Store<Host>, Instance, Memory)> {
+    let mut store = Store::new(engine, Host { sealed: false, refused: false, memory: None, assets: vec![] });
+    store.limiter(|l| l);
+    let ext = imports(&mut store, module)?;
+    let instance = Instance::new(&mut store, module, &ext).wctx(|| "instantiating")?;
+    let memory = instance.get_memory(&mut store, "memory").context("missing export `memory`")?;
+    store.data_mut().memory = Some(memory);
+    Ok((store, instance, memory))
+}
+
 /// One sandbox: a store, its instance of one package's module, and its memory.
 pub(crate) struct Sandbox {
-    store: Store<Limits>,
+    store: Store<Host>,
     instance: Instance,
     memory: Memory,
     alloc: TypedFunc<(u32, u32), u32>,
@@ -95,10 +164,7 @@ pub(crate) struct State {
 impl Sandbox {
     /// A sandbox of `module`, to be born: states may be made in it until it is sealed.
     pub(crate) fn new(engine: &Engine, module: &Module) -> Result<Sandbox> {
-        let mut store = Store::new(engine, Limits { sealed: false, refused: false });
-        store.limiter(|l| l);
-        let instance = Instance::new(&mut store, module, &[]).wctx(|| "instantiating")?;
-        let memory = instance.get_memory(&mut store, "memory").context("kernel has no memory")?;
+        let (mut store, instance, memory) = instantiate(engine, module)?;
         let alloc = instance.get_typed_func::<(u32, u32), u32>(&mut store, "m2_alloc")?;
         let base = NonNull::new(memory.data_ptr(&store)).context("the kernel memory has no address")?;
         Ok(Sandbox { store, instance, memory, alloc, base, len: 0 })
