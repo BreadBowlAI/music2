@@ -85,8 +85,8 @@ check(b0?.phase === "off" && b0.color === DANGER && b0.bg === "rgba(0, 0, 0, 0)"
 check(await openMenu(), "a right-click opens its menu");
 const rows0 = await menuRows();
 check(
-  rows0.join("|") === "Count in first (one bar of clicks) ✓|Snap notes to the grid|—|MIDI keyboards…",
-  `its rows: count in (ticked), snap (not), a line, MIDI keyboards (${rows0.join(" | ")})`,
+  rows0.join("|") === "Count in first (one bar of clicks) ✓|Snap notes to the grid|—|MIDI keyboards…|Sound input…",
+  `its rows: count in (ticked), snap (not), a line, MIDI keyboards, Sound input (${rows0.join(" | ")})`,
 );
 const bad0 = await page.evaluate(lint, "[data-testid=record-menu]");
 check(bad0.length === 0, `the lint finds nothing in the menu${bad0.length ? `: ${bad0.slice(0, 6).join(" | ")}` : ""}`);

@@ -57,5 +57,25 @@ export function usePlayTarget(): PlayTarget | null {
   return useMemo(() => held(graph, take) ?? playTarget(graph, selected, clips), [graph, selected, clips, take]);
 }
 
+/**
+ * The lane R records on (the io plan's slice 3): what plays (a notes lane), else the selected
+ * track's audio lane: the one of the clip it shows, else its first. A take's lane while one records.
+ */
+export function recordTarget(graph: GraphState | null, selected: string | null, clips: Record<string, ClipRef>): PlayTarget | null {
+  const notes = playTarget(graph, selected, clips);
+  if (notes || !graph || !selected || selected === "song") return notes;
+  const track = graph.timeline.tracks.find((t) => t.module === selected && t.track);
+  const audio = track?.lanes.filter((l) => l.kind === "audio") ?? [];
+  const clip = clips[selected];
+  const lane = (clip?.module === selected ? audio.find((l) => l.key === clip.lane) : undefined) ?? audio[0];
+  return track && lane ? { module: selected, lane: lane.key, label: track.label, colour: track.colour } : null;
+}
+
+/** The lane R records on now, outside React. */
+export const currentRecordTarget = () => {
+  const { selected, clips } = useShell.getState();
+  return recordTarget(useStore.getState().graph, selected, clips);
+};
+
 /** Two targets are the same lane of the same track. */
 export const sameTarget = (a: PlayTarget | null, b: PlayTarget | null) => a?.module === b?.module && a?.lane === b?.lane;

@@ -1,7 +1,8 @@
 // The top bar's Record button (lane B, Q17, Q18): right after Play / Stop. At rest a ghost with a
 // red circle (the record sign everyone knows; taste.md §2.6 gains it, D18); counting in, the beats
 // left (4, 3, 2, 1) on `danger-soft`; recording, a white circle on `danger`. No animation. A
-// right-click (or Ctrl-click on a Mac) opens its options, kept on this machine.
+// right-click (or Ctrl-click on a Mac) opens its options, kept on this machine, and Settings for the
+// MIDI keyboards or the sound input an audio track records from (io).
 
 import clsx from "clsx";
 import { Check, Circle } from "lucide-react";
@@ -100,6 +101,17 @@ export default function RecordButton() {
             }}
           >
             MIDI keyboards…
+          </MenuRow>
+          <MenuRow
+            data-menu-item="input"
+            icon={<span className="block size-3.5" />}
+            onMouseDown={keepFocus}
+            onClick={() => {
+              close();
+              openSettings();
+            }}
+          >
+            Sound input…
           </MenuRow>
         </Popover>
       )}

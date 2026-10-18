@@ -233,11 +233,12 @@ check(bad.length === 0, `the Settings window passes the taste lint: ${bad.slice(
 // Tab goes round the window, never behind it; a menu's own keys.
 await page.focus("[data-testid=settings-done]");
 const order = [];
-for (let i = 0; i < 6; i++) {
+for (let i = 0; i < 8; i++) {
   await page.keyboard.press("Tab");
   order.push(await page.evaluate(() => document.activeElement?.dataset?.testid ?? document.activeElement?.tagName));
 }
-const wantOrder = ["settings-output", "settings-buffer", "settings-songs", "settings-songs-default", "settings-done", "settings-output"];
+// The sound input and Hear yourself (io) come after the buffer.
+const wantOrder = ["settings-output", "settings-buffer", "settings-input", "settings-hear", "settings-songs", "settings-songs-default", "settings-done", "settings-output"];
 check(JSON.stringify(order) === JSON.stringify(wantOrder), `Tab goes round: ${order.join(" → ")}`);
 await page.keyboard.press("Enter");
 await page.waitForSelector("[data-testid=settings-output-menu]", { timeout: 2000 }).catch(() => null);

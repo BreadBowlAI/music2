@@ -97,6 +97,8 @@ export interface MetersIn {
   tracks: Record<string, Peaks>;
   /** The song's output. */
   out: Peaks;
+  /** The sound input's loudest sample, while a take records on an audio lane (io). */
+  input?: number[];
   dsp: { load: number; dropouts: number };
 }
 

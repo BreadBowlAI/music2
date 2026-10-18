@@ -2351,7 +2351,7 @@ function LaneClips({
       )}
       {own}
       {ghosts}
-      {lane.kind === "notes" && <Take module={module} lane={lane.key} color={color} />}
+      {(lane.kind === "notes" || lane.kind === "audio") && <Take module={module} lane={lane.key} color={color} />}
     </>
   );
 }
