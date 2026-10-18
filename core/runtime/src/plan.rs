@@ -24,7 +24,7 @@ use crate::audio::{self, AudioLane, AudioPlayer, KernelAssets};
 use crate::cells::{CellId, CellMap, CellSlots, Cells};
 use crate::event::Event;
 use crate::sched::{Caps, LaneSwap, NoteScheduler};
-use crate::stopped::{Stopped, Why};
+use crate::fault::{Code, Faults, Reporter};
 use crate::taps::{TapSlots, Taps};
 use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, lane_slots, notes_data};
 
@@ -193,8 +193,8 @@ pub struct PlanInfo {
     /// What its meters read (8b.8): the song's output and each track, after its mute. Only a live
     /// plan has them.
     pub taps: Option<Arc<TapSlots>>,
-    /// Its nodes that stopped while it played (RENDER-25), for the session to tell.
-    pub stopped: Arc<Stopped>,
+    /// The ring its parts report faults to (RENDER-25): a live plan's is the app's.
+    pub faults: Arc<Faults>,
     /// Its latencies (RENDER-17 to RENDER-20): each checked node's offset, the delays, the song's
     /// latency `L`, and the nodes that make a feedback loop longer (`latency.in-feedback`).
     pub latency: crate::latency::Latency,
@@ -429,8 +429,8 @@ pub(crate) struct Plan {
     pub(crate) window_held: Vec<(usize, usize)>,
     /// Its taps, written after each block: a live plan's only.
     pub(crate) taps: Option<Taps>,
-    /// Its top-level nodes that stopped live (RENDER-25), shared with [`PlanInfo::stopped`].
-    pub(crate) stopped: Arc<Stopped>,
+    /// What its parts report faults through (RENDER-25): [`PlanInfo::faults`], as this plan.
+    pub(crate) report: Reporter,
     /// Its plugin nodes whose inputs arrive late: told the transport that much earlier (HOST-6).
     pub(crate) late_plugins: Vec<usize>,
 }
@@ -696,7 +696,7 @@ impl Renderer {
                 self.plan.stats.resets += 1;
                 if let Err(e) = self.plan.graph.reset_node(to) {
                     self.plan.graph.stop(to);
-                    self.plan.stopped.stop(to, Why::of(&e));
+                    self.plan.report.node(Code::of(&e), to);
                 }
             }
         }

@@ -21,6 +21,7 @@ use m2_editor::{Control, EditError, Edited, Gestures};
 use m2_ir::{FOp, Flat, Kind, Origin};
 use m2_plugins::{Handle, HostEvent, HostEvents};
 use m2_runtime::cells::{CellAt, CellId, CellTarget};
+use m2_runtime::fault::{Code, Fault, Reporter, Subject};
 use m2_runtime::{Basis, CellMap, Continues, Keep, LaneSwap, PackageSet, PlanInfo, Renderer, audio, notes_data};
 use m2_session::{Revision, Session};
 use m2_song::Snapshot;
@@ -92,7 +93,6 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         let start = actor.inner.now_ns();
         actor.inner.busy.lock().since = start.max(1);
         actor.heard_plugins();
-        super::stopped::heard(&actor.inner, actor.open.as_ref());
         // A request that panics answers with an error (its reply is dropped unsent), and the
         // actor serves the next.
         if catch_unwind(AssertUnwindSafe(|| job(&mut actor))).is_err() {
@@ -406,27 +406,6 @@ fn packages(inner: &Inner) -> Result<PackageSet> {
     Ok(p)
 }
 
-/// The one notice of a plugin host crash (HOST-3, `plugin.crashed`): which plugins went quiet, and
-/// which music2 started again or left silent.
-fn crash_said(hung: bool, revived: &[String], again: &[String]) -> String {
-    let list = |v: &[String]| match v {
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-        [] => String::new(),
-    };
-    let mut said = match hung {
-        true => String::from("The plugin host stopped answering, so music2 ended it. The plugins in it went quiet; the rest of the song plays on."),
-        false => String::from("The plugin host crashed, so the plugins in it went quiet; the rest of the song plays on."),
-    };
-    if !revived.is_empty() {
-        said += &format!(" music2 started {} again from the saved settings.", list(revived));
-    }
-    if !again.is_empty() {
-        said += &format!(" It stopped again soon after starting {}, so music2 left them silent: open the song again to give them another try.", list(again));
-    }
-    said + " (plugin.crashed)"
-}
-
 /// What of `from`'s graph each node of `to`'s continues (ID-15): every node itself for the same
 /// build, else the names of what changed. An activation keeps by it, and an export borrows by it.
 fn continuing(from: &Revision, to: &Revision) -> Continues {
@@ -436,17 +415,7 @@ fn continuing(from: &Revision, to: &Revision) -> Continues {
     }
 }
 
-/// How the user knows plugin node `node` of `rev`'s graph: its plugin's name and its track's, as
-/// the app shows them ("Surge XT (lead)").
-pub(super) fn plugin_named(rev: &Revision, packages: &PackageSet, node: usize) -> String {
-    let Some(n) = rev.compiled.flat.nodes.get(node) else { return "A plugin".into() };
-    let plugin = match &n.op {
-        FOp::Plugin { plugin, .. } => packages.plugin_info(plugin).map_or_else(|| plugin.clone(), |i| i.found.name.clone()),
-        _ => n.name.clone(),
-    };
-    let track = rev.compiled.ir.modules.iter().find(|m| m.key == n.module).map_or(n.module.as_str(), |m| m.label());
-    format!("{plugin} ({track})")
-}
+pub(super) use m2_editor::faults::plugin_named;
 
 /// What the user is told when the accepted revision's renderer didn't build: that the change is
 /// saved, that the version before it plays on, why, and what to do.
@@ -983,6 +952,7 @@ impl Actor {
                     let player = &device.as_ref().map_err(|e| anyhow!("{e:#}"))?.player;
                     // Where the engine is, with no jump back (RENDER-25a); what restarted is new.
                     o.sent = Some(player.activate(*r)?.1);
+                    super::faults::sent(&inner, o, &plays);
                     o.plays = Some(plays);
                     o.restarts.clear();
                     o.relatent = relatent;
@@ -993,6 +963,7 @@ impl Actor {
                     // A manifest edit changed the rate, or the engine refused an activation: a
                     // fresh engine at the same beat (RENDER-31, RENDER-28).
                     player.replace(*r)?;
+                    super::faults::sent(&inner, o, &plays);
                     o.plays = Some(plays);
                     o.restarts.clear();
                     o.relatent = relatent;
@@ -1004,6 +975,7 @@ impl Actor {
                     // A new player clicks as the song's window says, a read-only one's included.
                     d.player.set_click(cp.open.as_ref().filter(|p| p.engine.token == token).is_some_and(|p| super::view_file::metronome(&p.local)));
                     o.load(d, *r, plays, d.resume, looping)?;
+                    super::faults::sent(&inner, o, o.plays.as_ref().expect("loaded"));
                     o.restarts.clear();
                     o.relatent = relatent;
                     Ok(Sent::Renderer)
@@ -1172,7 +1144,7 @@ impl Actor {
             session,
             playing: Some(number),
             plays: None,
-            audio: audio::Cache::live(),
+            audio: audio::Cache::live(self.inner.faults.clone()),
             sent: None,
             code_rev,
             controls: controls.clone(),
@@ -1224,6 +1196,7 @@ impl Actor {
                     tempo: None,
                 };
                 o.load(&device, r, plays, 0.0, None)?;
+                super::faults::sent(&self.inner, &o, o.plays.as_ref().expect("loaded"));
                 Some(view)
             }
             None => {
@@ -1293,6 +1266,7 @@ impl Actor {
         }
         *self.inner.watch.lock() = None;
         self.open = None;
+        self.inner.told.lock().closed();
         *self.inner.timing.lock() = None;
         let owner = &self.inner.owner;
         let (before, t) = (owner.live(), Instant::now());
@@ -1305,9 +1279,10 @@ impl Actor {
     /// Take in what the session's plugin instances reported unasked. An instance that asked for a
     /// restart is replaced by the next activation, which the catch-up makes at once: a new
     /// instance from the committed state, which fades in as the old one rings out (HOST-5). So is
-    /// one that failed (it plays silence meanwhile), once, and the user is told. One whose new
-    /// instance fails too is left silent, and the user told that once. When the plugin host
-    /// process crashed (HOST-3), its instances are all told in one notice, `plugin.crashed`.
+    /// one that failed (it plays silence meanwhile), once; one whose new instance fails too is left
+    /// silent. Its node told the user, `plugin.failed`. When the plugin host process crashed
+    /// (HOST-3), each of its instances is reported here, `plugin.crashed`, and the session tells
+    /// them as one problem.
     fn heard_plugins(&mut self) {
         let (mut crashed, mut hung, mut dirty, mut closed, mut latent) = (HashSet::new(), false, vec![], vec![], vec![]);
         while let Ok(e) = self.events.try_recv() {
@@ -1345,12 +1320,13 @@ impl Actor {
         o.relatent |= p.info.plugins.iter().any(|a| a.inst.upgrade().is_some_and(|i| !i.dead() && i.latency() != a.latency));
         // A crashed instance fails at its next call; one that isn't called now (asleep) is marked
         // here, so it is made again all the same.
+        let code = if hung { Code::PluginHung } else { Code::PluginCrashed };
         for at in p.info.plugins.iter().filter(|at| crashed.contains(&at.handle)) {
             if let Some(i) = at.inst.upgrade() {
                 i.kill();
             }
+            self.inner.faults.report(Fault { code, plan: p.info.id, subject: Subject::Node(at.node as u32) });
         }
-        let (mut again_crashed, mut revived_crashed) = (vec![], vec![]);
         for at in &p.info.plugins {
             if !at.inst.upgrade().is_some_and(|i| i.dead()) || o.restarts.contains(&at.handle) {
                 continue;
@@ -1361,7 +1337,6 @@ impl Actor {
                 Some(Some(t)) => t.elapsed() < REVIVED,
                 None => false,
             };
-            let who = plugin_named(&p.revision, &o.session.packages, at.node);
             let revived = match again {
                 true => None,
                 false => {
@@ -1370,22 +1345,6 @@ impl Actor {
                 }
             };
             o.revived.insert(n.name.clone(), revived);
-            let said = match (crashed.contains(&at.handle), again) {
-                (true, true) => {
-                    again_crashed.push(who);
-                    continue;
-                }
-                (true, false) => {
-                    revived_crashed.push(who);
-                    continue;
-                }
-                (false, true) => format!("{who} stopped working again, so music2 left it silent. Open the song again to give it another try."),
-                (false, false) => format!("{who} stopped working, so music2 started it again from its saved settings."),
-            };
-            self.inner.notices.lock().push(said);
-        }
-        if !revived_crashed.is_empty() || !again_crashed.is_empty() {
-            self.inner.notices.lock().push(crash_said(hung, &revived_crashed, &again_crashed));
         }
     }
 
@@ -1445,7 +1404,11 @@ impl Actor {
         // Nothing fails from here: the export's guard clears it, on every path, and tells the
         // session here, so a job that fails after this one returns still clears it.
         o.exporting = true;
-        let mut lent = crate::export::Lent::new(d.player, borrows, rate);
+        // One that won't come back after the export is reported as the plan that plays it (HOST-5).
+        let p = o.plays.as_ref().context("what plays lent them")?;
+        let live = p.info.plugins.iter().map(|a| (a.handle, a.node)).collect();
+        let report = (Reporter::new(self.inner.faults.clone(), p.info.id), live);
+        let mut lent = crate::export::Lent::new(d.player, borrows, rate, report);
         let token = o.token;
         lent.done = Some(Box::new(move || {
             let _ = jobs.send(Box::new(move |a: &mut Actor| a.export_done(token)));

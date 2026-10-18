@@ -233,6 +233,9 @@ pub struct Cache {
     folder: Renders,
     /// A live cache's stretch thread; none offline.
     live: Option<Stretcher>,
+    /// The ring the plans built with it report faults to (RENDER-25): a live session's is the
+    /// app's; an offline cache has its own.
+    faults: Arc<crate::fault::Faults>,
 }
 
 /// Where stretches are kept: `<cache>/renders` (FMT-16's folder); none, in memory.
@@ -274,9 +277,15 @@ impl Cache {
     }
 
     /// A live session's cache: warped clips' stretches are made in the background, and their lanes
-    /// play them as they are made.
-    pub fn live() -> Cache {
-        Cache { live: Some(Stretcher::default()), ..Cache::default() }
+    /// play them as they are made. The plans built with it report faults to `faults`, the app's
+    /// ring.
+    pub fn live(faults: Arc<crate::fault::Faults>) -> Cache {
+        Cache { live: Some(Stretcher::default()), faults, ..Cache::default() }
+    }
+
+    /// The ring the plans built with it report faults to.
+    pub fn faults(&self) -> &Arc<crate::fault::Faults> {
+        &self.faults
     }
 
     /// An offline cache whose warped renders are kept in `folder` (tests); none, in memory.
@@ -288,7 +297,7 @@ impl Cache {
     /// A live cache whose warped renders are kept in `folder` (tests).
     #[doc(hidden)]
     pub fn live_in(folder: std::path::PathBuf) -> Cache {
-        Cache { folder: Renders(Some(folder)), ..Cache::live() }
+        Cache { folder: Renders(Some(folder)), ..Cache::live(Arc::default()) }
     }
 
     /// A test seam: a live cache's stretches each make at most `frames` frames, then wait until

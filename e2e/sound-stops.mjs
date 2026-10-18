@@ -3,8 +3,9 @@
 // of its own, on a copy of first-song, with a copy of std whose `noise` kernel traps at once (a
 // kernel with a bug: e2e/trapwasm.mjs), so only Hats' instrument uses it. Play: the toast names it
 // ("The instrument on Hats stopped working…") in words that fit on screen; the song plays on, Kick
-// sounding, Hats silent; it is said once; Stop All Sound (⌘.) starts it again, and it stops again,
-// said again.
+// sounding, Hats silent; it is said once, and listed among the song's problems (`sound.stopped`,
+// with Hats' key: the status popover's list); Stop All Sound (⌘.) starts it again, and it stops
+// again: listed again, with no second toast (the ex plan's D3).
 //
 //   node e2e/sound-stops.mjs <root> <home>     (the `none` kind: no project open)
 import puppeteer from "puppeteer-core";
@@ -113,6 +114,13 @@ check(await playing(), "the song plays on");
 check(levels.some(([k]) => k > FLOOR) && levels.every(([, h]) => h === FLOOR), `Kick sounds and Hats is silent (${levels.map(([k, h]) => `${k}/${h}`).join(" ")})`);
 // A toast said again replaces the one showing (one at a time): the first is still the one there.
 check(await page.evaluate((e) => e?.isConnected && document.querySelector("[data-testid=toast]") === e, first), "it is said once");
+// The status popover lists it until it plays again (RENDER-25, DIAG-4).
+const problems = async () => ((await api("")).problems ?? []).filter((p) => p.code === "sound.stopped");
+const listed = async () => {
+  const p = await problems();
+  return p.length === 1 && p[0].module === "hats" && p[0].message === SAID;
+};
+check(await until(listed, 4000), `it is one of the song's problems, sound.stopped, with Hats' key: ${JSON.stringify(await problems())}`);
 
 // Stop All Sound resets every sound: the hats' instrument starts again, and stops again at once.
 await page.mouse.move(700, 120);
@@ -121,7 +129,8 @@ check(!(await toasts()).includes(SAID), "the toast goes after a while");
 await page.keyboard.down("Meta");
 await page.keyboard.press(".");
 await page.keyboard.up("Meta");
-check(await until(async () => (await toasts()).includes(SAID), 8000), "after Stop All Sound (⌘.) it plays again, stops again, and is said again");
+await sleep(2000);
+check((await listed()) && !(await toasts()).includes(SAID), "after Stop All Sound (⌘.) it plays again and stops again: listed again, with no second toast");
 await page.screenshot({ path: `${ROOT}/sound-stops.png` });
 
 check(errors.length === 0, `no console errors ${errors.slice(0, 3).join(" | ")}`);

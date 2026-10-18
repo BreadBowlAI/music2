@@ -3199,8 +3199,8 @@ fn a_plugin_that_doesnt_come_back_after_an_export_is_replaced_as_playback_goes_o
     ex.fill_until("a new instance plays", |ex| synced(&ex.state.graph) && ex.handles() != first);
     ex.fill(8);
     assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "playback went on, with no crash");
-    let told = ex.state.graph.expire();
-    assert!(told.iter().any(|t| t == "m2 probe (p) stopped working, so music2 started it again from its saved settings."), "{told:?}");
+    let told = ex.state.graph.hear_faults().0;
+    assert_eq!(told, [FAILED], "told once, as its node would");
     // From the start its two notes sound in the new instance.
     ex.state.graph.seek(0.0).unwrap();
     let mut peak = 0.0f32;
@@ -3414,7 +3414,7 @@ fn a_plugin_that_keeps_failing_is_started_again_once() {
     });
     rounds(&mut ex, 20);
     let made = m2_plugins::probe::tagged("fails-process");
-    let told: Vec<String> = ex.state.graph.expire().into_iter().filter(|t| t.starts_with("m2 probe (p)")).collect();
+    let told = ex.state.graph.hear_faults().0;
     // What was made, and what was said, if not.
     assert!(
         made.len() == 3 && made.iter().all(|s| s.process.load(Ordering::Relaxed) > 0),
@@ -3422,9 +3422,38 @@ fn a_plugin_that_keeps_failing_is_started_again_once() {
         made.len(),
         made.iter().map(|s| s.process.load(Ordering::Relaxed)).collect::<Vec<_>>()
     );
-    let again = "m2 probe (p) stopped working, so music2 started it again from its saved settings.";
-    let silent = "m2 probe (p) stopped working again, so music2 left it silent. Open the song again to give it another try.";
-    assert_eq!(told, [again, again, silent]);
+    // Toasted once in the open song; the last, left silent, is listed (`plugin.failed`, D3).
+    assert_eq!(told, [FAILED]);
+    let listed = || super::faults::tests::listed(&ex.state.graph.news()["problems"]);
+    let failed = [("plugin.failed".to_string(), Some("p".to_string()), FAILED.to_string())];
+    assert_eq!(listed(), failed);
+    // An edit that makes a new plan: it plays on silent there, so it is still listed, untoasted.
+    ex.fixture.put("song.ts", &Ex::song("vca(p.out, 1)"));
+    assert!(ex.state.graph.poll());
+    assert!(ex.state.graph.hear_faults().0.is_empty());
+    assert_eq!(listed(), failed, "still listed");
+    assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "the song plays on");
+}
+
+/// What is said of the probe on track p when it fails live (`plugin.failed`).
+const FAILED: &str = "m2 probe (p) stopped working, so music2 made it silent. The rest of the song plays on. music2 starts it again from \
+                      its saved settings. If it stops again soon after, it stays silent until you open the song again.";
+
+// RENDER-25, HOST-5, DIAG-4: a plugin that fails live is one problem, `plugin.failed`, named by its
+// plugin and its track, with the track's key, and toasted once. The song plays on. When it is made
+// again, the problem goes: it plays again.
+#[test]
+fn a_plugin_that_fails_live_is_one_problem() {
+    // A tag of its own: tests that count the instances made run beside it.
+    let mut ex = Ex::tagged("fails-process-live");
+    ex.fill(4);
+    let problems = || super::faults::tests::listed(&ex.state.graph.news()["problems"]);
+    assert_eq!(ex.state.graph.hear_faults().0, [FAILED]);
+    assert_eq!(problems(), [("plugin.failed".into(), Some("p".into()), FAILED.into())]);
+    assert!(ex.state.graph.hear_faults().0.is_empty(), "toasted once");
+    ex.state.graph.inspect(|a| a.catch_up());
+    assert_eq!(m2_plugins::probe::tagged("fails-process-live").len(), 2, "made again");
+    assert_eq!(problems(), [], "it plays again");
     assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "the song plays on");
 }
 
@@ -4061,34 +4090,45 @@ fn a_host_process_ends(how: &str) -> Duration {
         }
     }
     assert!(once.exists() && silent == 2, "the host process ended, and both went silent: {silent} silent blocks");
-    // The session hears it, says so once, and makes both again at the next activation.
+    // The actor hears it at its next job and reports each of its plugins, `plugin.crashed`: one
+    // problem, naming both, toasted once.
     let t = Instant::now();
     let mut told = vec![];
+    while told.is_empty() && t.elapsed() < Duration::from_secs(10) {
+        dc.graph.inspect(|_| ());
+        told = dc.graph.hear_faults().0;
+    }
+    let ended = if how == "hang" { "The plugin host stopped answering, so music2 ended it." } else { "The plugin host crashed." };
+    let said = format!(
+        "{ended} m2 probe (p) and m2 probe (q) went silent. The rest of the song plays on. music2 starts them again from their saved \
+         settings. If they stop again soon after, they stay silent until you open the song again."
+    );
+    assert_eq!(told, std::slice::from_ref(&said));
+    let problems = |g: &Graph| super::faults::tests::listed(&g.news()["problems"]);
+    assert_eq!(problems(&dc.graph), [("plugin.crashed".into(), None, said)]);
+    // The next activation makes both again.
     while t.elapsed() < Duration::from_secs(10) && dc.blocks(4).last() != Some(&0.75) {
         dc.graph.inspect(|a| a.catch_up());
-        told.extend(dc.graph.expire().into_iter().filter(|t| t.contains("plugin")));
+        told.extend(dc.graph.hear_faults().0);
     }
     let now = dc.handles();
     assert!(now.len() == 2 && now.iter().all(|h| !first.contains(h)), "both made again: {first:?} then {now:?}; told {told:?}");
     assert_eq!(dc.blocks(4), [0.75; 4], "both play again");
     assert_eq!(now.iter().map(|&h| saved(h)).collect::<Vec<_>>(), committed, "from their saved states");
     dc.graph.inspect(|a| a.catch_up());
-    told.extend(dc.graph.expire().into_iter().filter(|t| t.contains("plugin")));
+    told.extend(dc.graph.hear_faults().0);
     assert_eq!(told.len(), 1, "said once: {told:?}");
-    let ended = if how == "hang" { "stopped answering" } else { "crashed" };
-    assert!(
-        told[0].contains(ended) && told[0].contains("m2 probe (p)") && told[0].contains("m2 probe (q)") && told[0].ends_with("(plugin.crashed)"),
-        "{told:?}"
-    );
+    assert_eq!(problems(&dc.graph), [], "they play again");
     assert!(dc.graph.status().playing, "the song plays on");
     slowest
 }
 
-// HOST-3, HOST-5: a crash of the host process silences its instances; the app plays on, says so
-// once, and makes them again from their saved states at the next activation, in a new process.
-// Red on the old code: the crash ends the test's own process.
+// HOST-3, HOST-5, DIAG-4: a crash of the host process silences its instances; the app plays on,
+// tells it as one problem, `plugin.crashed`, naming both, and makes them again from their saved
+// states at the next activation, in a new process. Red on the old code: the crash ends the test's
+// own process; then, before the fault ring, a toast with no problem.
 #[test]
-fn a_crash_silences_its_process_and_the_app_plays_on() {
+fn a_host_crash_is_one_plugin_crashed_problem() {
     let took = a_host_process_ends("crash");
     assert!(took < HANG_SEEN, "a crash is seen at once: {took:?}");
 }

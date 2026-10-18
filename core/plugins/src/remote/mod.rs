@@ -621,6 +621,10 @@ impl PluginHost for Remote {
         }
     }
 
+    fn gone(&self, h: Handle) -> bool {
+        self.entry(h).is_some_and(|e| e.dead.load(Ordering::Acquire))
+    }
+
     fn take_process_request(&self, h: Handle) -> bool {
         let Some(e) = self.entry(h) else { return false };
         let mem = e.mem.load(Ordering::Acquire);

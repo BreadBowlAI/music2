@@ -25,7 +25,7 @@ use wasmtime::{Caller, Engine, Extern, ExternType, Func, Instance, Memory, Modul
 
 use crate::audio::Asset;
 use crate::stream::Wav;
-use crate::{BLOCK, KERNEL_MEMORY, OutOfMemory, PORT_BYTES, WasmContext};
+use crate::{BLOCK, KERNEL_MEMORY, PORT_BYTES, WasmContext};
 
 /// Bytes of a v1 settings block (`m2_kernel::Settings` on wasm32).
 const SETTINGS_BYTES: usize = 60;
@@ -452,4 +452,55 @@ impl State {
     pub(crate) fn active(&self, sb: &mut Sandbox) -> wasmtime::Result<bool> {
         Ok(self.active.call(&mut sb.store, self.handle)? != 0)
     }
+}
+
+/// A kernel asked for more memory than a sound may use: [`crate::KERNEL_MEMORY`], 256 MiB, while
+/// its sandbox was born, or any at all after it was sealed (RENDER-32).
+#[derive(Debug)]
+pub struct OutOfMemory {
+    /// The node, `<module>/<id>`.
+    pub node: String,
+}
+
+impl std::fmt::Display for OutOfMemory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ran out of memory: a sound may use up to {} MB", self.node, crate::KERNEL_MEMORY >> 20)
+    }
+}
+
+impl std::error::Error for OutOfMemory {}
+
+/// A song needs more sandboxes than a renderer may hold, [`crate::SANDBOX_LIMIT`] (RENDER-32): told
+/// at its build, before any is made, in words that say what to do.
+#[derive(Debug)]
+pub struct TooManySounds {
+    pub needed: usize,
+    pub limit: usize,
+}
+
+impl std::fmt::Display for TooManySounds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "This song needs {} sound parts that each run on their own (each effect or sound outside an instrument, and each \
+             instrument), and music2 can play {} at once. Remove some effects or tracks",
+            thousands(self.needed),
+            thousands(self.limit)
+        )
+    }
+}
+
+impl std::error::Error for TooManySounds {}
+
+/// `n` with a comma between thousands: 4,000.
+fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }

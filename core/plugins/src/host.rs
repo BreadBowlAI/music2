@@ -51,6 +51,13 @@ pub trait PluginHost: Send + Sync {
     fn reset(&self, h: Handle);
     /// Whether the plugin asked to be processed since the last call: wakes an idle engine.
     fn take_process_request(&self, h: Handle) -> bool;
+    /// Whether the process `h` ran in ended (HOST-3): its calls fail, and its owner hears
+    /// [`HostEvent::Crashed`] or [`HostEvent::Hung`]. An atomic load: the audio thread asks, to
+    /// tell such a failure from the plugin's own. Never, for plugins in this process.
+    fn gone(&self, h: Handle) -> bool {
+        let _ = h;
+        false
+    }
     // Any thread but the audio thread.
     /// Every plugin installed, and why each bundle that failed to load did: the host loads them,
     /// so a program that hosts plugins in another process never loads plugin code (HOST-3).

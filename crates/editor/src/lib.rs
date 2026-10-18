@@ -16,6 +16,7 @@ pub mod cable;
 pub mod controls;
 pub mod data;
 pub mod effect;
+pub mod faults;
 pub mod json;
 pub mod keys;
 pub mod label;

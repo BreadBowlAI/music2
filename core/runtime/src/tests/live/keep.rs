@@ -10,6 +10,7 @@ use m2_plugins::{Handle, Owner};
 
 use super::super::cell::{framed, origin, smooth_const, step_const};
 use super::*;
+use crate::fault::{Code, Faults, Subject};
 
 /// 120 bpm: a beat is 24 000 frames.
 const BEAT: u64 = 24_000;
@@ -467,6 +468,18 @@ fn trapped(pk: &PackageSet, trap: bool, blocks: usize, threads: Option<Spread>) 
     failing("trap", pk, trap, blocks, threads)
 }
 
+/// What `faults` was told since the last look, by node, oldest first (RENDER-25).
+fn told(faults: &Faults) -> Vec<(usize, Code)> {
+    faults.drain().into_iter().map(|f| match f.subject {
+        Subject::Node(n) => (n as usize, f.code),
+    }).collect()
+}
+
+/// What the plan that plays in `rig` reported since the last look.
+fn reported(rig: &Rig) -> Vec<(usize, Code)> {
+    told(&rig.e.current().unwrap().info().faults)
+}
+
 /// [`trapped`] with `t:<kind>` on `a`, cued to fail at the second block when `fail`.
 fn failing(kind: &str, pk: &PackageSet, fail: bool, blocks: usize, threads: Option<Spread>) -> (Vec<[f32; 2]>, Vec<f32>, Vec<f32>, Rig) {
     let f = check(&two_tracks(kind, false), pk).unwrap();
@@ -495,8 +508,8 @@ fn a_trapped_kernel_goes_silent_alone() {
     assert!(a.iter().all(|&x| x == 0.0), "its track is silent");
     assert_eq!(b, clean_b, "the other track plays on bit for bit");
     assert!(cur.transport().playing() && rig.e.crashes() == 0, "the song plays on");
-    assert_eq!(cur.info().stopped.why(lat), Some(Why::Crashed));
-    assert_eq!(clean_rig.e.current().unwrap().info().stopped.why(lat), None);
+    assert_eq!(reported(&rig), [(lat, Code::Stopped)], "reported once");
+    assert_eq!(reported(&clean_rig), [], "nothing stopped");
     // The song is the other track alone now, and before the trap both.
     let last: Vec<f32> = out[out.len() - BLOCK..].iter().map(|f| f[0]).collect();
     assert_eq!(last, b, "what plays is the other track, exactly");
@@ -516,7 +529,7 @@ fn a_stopped_kernel_starts_again_at_the_next_activation() {
     let cur = rig.e.current().unwrap();
     assert_eq!(cur.stats().resets, 1, "it was reset as it moved");
     assert!(cur.output_of(named(&b, "a/lat")).iter().all(|&x| x == 1.0), "it plays again");
-    assert_eq!(cur.info().stopped.why(named(&b, "a/lat")), None, "the new plan has no mark");
+    assert_eq!(reported(&rig), [], "the new plan reported nothing");
     assert!(peak(&out) > 0.5);
 }
 
@@ -528,16 +541,17 @@ fn stop_all_sound_starts_a_stopped_kernel_again() {
     let f = check(&two_tracks("trap", false), &pk).unwrap();
     let lat = named(&f, "a/lat");
     let (_, _, _, mut rig) = trapped(&pk, true, 4, None);
-    let stopped = rig.e.current().unwrap().info().stopped.clone();
-    assert_eq!(stopped.news(), [(lat, Why::Crashed)]);
+    let faults = rig.e.current().unwrap().info().faults.clone();
+    assert_eq!(told(&faults), [(lat, Code::Stopped)]);
     rig.send(Msg::Panic);
     rig.run(2 * BLOCK);
     assert!(rig.e.current().unwrap().output_of(lat).iter().all(|&x| x == 1.0), "it plays again");
-    assert_eq!((stopped.why(lat), stopped.news()), (None, vec![]));
+    assert_eq!(told(&faults), []);
     cue(&rig, 1.0, 3);
     rig.run(BLOCK);
-    assert_eq!(stopped.news(), [(lat, Why::Crashed)], "stopped again, and told again");
-    assert!(stopped.news().is_empty(), "once");
+    assert_eq!(told(&faults), [(lat, Code::Stopped)], "stopped again, and told again");
+    rig.run(BLOCK);
+    assert!(told(&faults).is_empty(), "once");
 }
 
 // RENDER-10, RENDER-25: Stop All Sound always works. A kernel whose own reset traps stops alone,
@@ -551,19 +565,19 @@ fn a_reset_that_traps_stops_its_sound_alone_and_the_panic_goes_on() {
     // and `b/d`'s.
     let panicked = |sore: bool| {
         let (_, _, _, mut rig) = failing("sore", &pk, sore, 4, None);
-        let stopped = rig.e.current().unwrap().info().stopped.clone();
-        assert!(stopped.news().is_empty(), "nothing stopped before the panic");
+        let faults = rig.e.current().unwrap().info().faults.clone();
+        assert!(told(&faults).is_empty(), "nothing stopped before the panic");
         rig.send(Msg::Panic);
         let out = rig.run(2 * BLOCK);
         let last: Vec<f32> = out[out.len() - BLOCK..].iter().map(|f| f[0]).collect();
         let b = rig.e.current().unwrap().output_of(d).to_vec();
-        (last, b, rig, stopped)
+        (last, b, rig, faults)
     };
-    let (last, b, rig, stopped) = panicked(true);
+    let (last, b, rig, faults) = panicked(true);
     let (_, clean_b, ..) = panicked(false);
     let cur = rig.e.current().unwrap();
     assert!(cur.transport().playing(), "the song plays on");
-    assert_eq!(stopped.news(), [(lat, Why::Crashed)], "it stopped alone, and is told");
+    assert_eq!(told(&faults), [(lat, Code::Stopped)], "it stopped alone, and is told");
     assert!(cur.output_of(lat).iter().all(|&x| x == 0.0), "it is silent");
     assert_eq!(b, clean_b, "the other track was reset as without the trap, and plays on");
     assert_eq!(last, b, "what plays is the other track, exactly");
@@ -578,7 +592,7 @@ fn a_trap_on_any_thread_count_gives_the_same_bits() {
     let (one, ..) = trapped(&pk, true, 8, None);
     let (four, _, _, rig) = trapped(&pk, true, 8, Some(spread(4)));
     assert!(one == four, "the same bits on 1 and 4 threads");
-    assert_eq!(rig.e.current().unwrap().info().stopped.why(lat), Some(Why::Crashed));
+    assert_eq!(reported(&rig), [(lat, Code::Stopped)]);
 }
 
 /// [`two_tracks`] with `t:<kind>` failing from the first block, rendered offline as an export
@@ -590,7 +604,7 @@ fn exported(kind: &str, pk: &PackageSet) -> anyhow::Error {
     r.set_strict(false);
     match r.render(0.01) {
         Err(e) => e,
-        Ok(_) => anyhow::anyhow!("the export finished, with {:?} stopped", r.info().stopped.news()),
+        Ok(_) => anyhow::anyhow!("the export finished, with {:?} stopped", r.info().faults.drain()),
     }
 }
 
@@ -619,7 +633,7 @@ fn a_kernel_over_its_memory_says_it_ran_out() {
     let (_, a, b, rig) = failing("hog", &pk, true, 6, None);
     let (_, _, clean_b, _) = failing("hog", &pk, false, 6, None);
     assert!(a.iter().all(|&x| x == 0.0) && b == clean_b, "it alone goes silent");
-    assert_eq!(rig.e.current().unwrap().info().stopped.why(lat), Some(Why::OutOfMemory));
+    assert_eq!(reported(&rig), [(lat, Code::OutOfMemory)]);
 }
 
 // RENDER-32, RENDER-25: a kernel that ran out of memory once, then played again after Stop All
@@ -629,13 +643,13 @@ fn a_crash_after_running_out_of_memory_is_told_as_a_crash() {
     let pk = t_packages();
     let lat = named(&check(&two_tracks("hog", false), &pk).unwrap(), "a/lat");
     let (_, _, _, mut rig) = failing("hog", &pk, true, 4, None);
-    let stopped = rig.e.current().unwrap().info().stopped.clone();
-    assert_eq!(stopped.news(), [(lat, Why::OutOfMemory)]);
+    let faults = rig.e.current().unwrap().info().faults.clone();
+    assert_eq!(told(&faults), [(lat, Code::OutOfMemory)]);
     rig.send(Msg::Panic);
     rig.run(BLOCK);
     cue(&rig, 2.0, 3);
     rig.run(BLOCK);
-    assert_eq!(stopped.news(), [(lat, Why::Crashed)], "a plain trap is a crash");
+    assert_eq!(told(&faults), [(lat, Code::Stopped)], "a plain trap is a crash");
 }
 
 // RENDER-32: a kernel that asks for memory in its first reset, after its seal, while it is built,

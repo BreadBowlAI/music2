@@ -58,7 +58,6 @@ mod renders;
 pub mod plugins;
 mod sandbox;
 pub mod sched;
-mod stopped;
 pub mod stream;
 mod taps;
 pub mod threads;
@@ -84,12 +83,13 @@ pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
 pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
-pub use stopped::{OutOfMemory, Stopped, TooManySounds, Why};
+pub use sandbox::{OutOfMemory, TooManySounds};
 pub use taps::{Peaks, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
 use crate::cells::{Cells, Write};
+use crate::fault::{Code, Reporter};
 use crate::fade::xfade;
 use crate::keep::{Edge, Wiring, used};
 use crate::parts::Schedule;
@@ -577,6 +577,9 @@ struct PluginNode {
     /// Its instance is back from an export, which ended its notes: at its next call, each note it
     /// holds that its lane still holds starts again, and the others are forgotten (RENDER-1).
     again: bool,
+    /// Where it reports that its plugin failed (`plugin.failed`, RENDER-25): its plan's reporter
+    /// and its node. A top-level node's, once its plan has its id.
+    reports: Option<(Reporter, usize)>,
 }
 
 /// A top-level plugin node, as the gates and tests see it.
@@ -821,8 +824,15 @@ impl PluginNode {
                     bail!("{} reported a processing error", self.name);
                 }
                 // Live, only this plugin goes silent, never the song: the session replaces it from
-                // its committed state (HOST-5). An atomic store: nothing here allocates.
+                // its committed state (HOST-5), and tells it. Atomic stores: nothing here allocates.
+                // One whose host process ended is the session's to tell, as `plugin.crashed`
+                // (HOST-3).
                 inst.kill();
+                if let Some((report, node)) = &self.reports
+                    && !host.gone(h)
+                {
+                    report.node(Code::PluginFailed, *node);
+                }
                 out.fill(0.0);
                 self.status = m2_plugins::Status::Sleep;
                 return Ok(());
@@ -1395,6 +1405,7 @@ impl Builder<'_> {
             last_off: None,
             reset_first,
             again: false,
+            reports: None,
         })
     }
 }
@@ -1700,20 +1711,20 @@ fn step<R: Reads>(
 
 /// Block `b`'s graph: each partition of `sched` a task on `runner`, its nodes in plan order.
 /// Offline, the error first in plan order, if a node failed: what reads a failed node is skipped, the
-/// rest runs. Live, a node that fails stops alone, marked in `stopped`. A panic in a task is raised
-/// again here, once the block is done.
+/// rest runs. Live, a node that fails stops alone, reported through `report`. A panic in a task is
+/// raised again here, once the block is done.
 fn run_graph(
     graph: &mut Graph,
     sched: &mut Schedule,
     lanes: &[LaneSlot],
     b: &Block,
     runner: &mut Runner,
-    stopped: &Stopped,
+    report: &Reporter,
 ) -> Option<anyhow::Error> {
     let Schedule { tasks, parts } = sched;
     let view = GraphView::new(graph);
     let shared = &*parts;
-    let task = |p: u32| run_part(&view, shared, p, b, lanes, stopped);
+    let task = |p: u32| run_part(&view, shared, p, b, lanes, report);
     if let Err(payload) = runner.run(tasks, &task) {
         std::panic::resume_unwind(payload);
     }
@@ -1723,9 +1734,9 @@ fn run_graph(
 /// Partition `p`'s task: its nodes in plan order, in the one floating-point mode. Offline (an
 /// export too, strict or not), false when a node failed, its error kept in `parts`. Live, played by
 /// the [`Engine`], a node that fails stops alone (RENDER-25):
-/// it is silent from then on, what reads it reads silence, its mark in `stopped` tells the session,
-/// and the partition goes on.
-fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[LaneSlot], stopped: &Stopped) -> bool {
+/// it is silent from then on, what reads it reads silence, `sound.stopped` is reported for the
+/// session to tell, and the partition goes on.
+fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[LaneSlot], report: &Reporter) -> bool {
     // Whatever ran on this thread before, this partition computes in the one mode.
     fpenv::canon();
     for &i in parts.nodes(p) {
@@ -1741,7 +1752,7 @@ fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[
                 return false;
             }
             // Its error allocated, and is dropped here: this path only.
-            stopped.stop(i, Why::of(&e));
+            report.node(Code::of(&e), i);
             // SAFETY: as above; the step's own ended with it.
             let own = unsafe { view.own(i) };
             silence(own.exec, own.out);
@@ -1845,20 +1856,16 @@ impl Graph {
     }
 
     /// [`Graph::reset`] for a panic (RENDER-10, RENDER-25): a node whose reset fails stops alone,
-    /// marked in `stopped`, and the rest is reset all the same. A node that plays again loses its
-    /// mark. Never allocates while every reset succeeds.
-    fn panic(&mut self, stopped: &Stopped) {
+    /// reported through `report`, and the rest is reset all the same. Never allocates while every
+    /// reset succeeds.
+    fn panic(&mut self, report: &Reporter) {
         self.resets += 1;
         self.poisoned.iter_mut().for_each(|p| *p = false);
         for i in 0..self.exec.len() {
-            match self.reset_node(i) {
-                Ok(()) if !self.exec[i].stopped() => stopped.clear(i),
-                Ok(()) => {}
-                // Its error allocated: this path only.
-                Err(e) => {
-                    self.stop(i);
-                    stopped.stop(i, Why::of(&e));
-                }
+            // Its error allocated: this path only.
+            if let Err(e) = self.reset_node(i) {
+                self.stop(i);
+                report.node(Code::of(&e), i);
             }
         }
     }
@@ -2668,7 +2675,13 @@ impl Renderer {
                 flat.overlays.iter().enumerate().map(|(k, s)| (base + k, s.module.as_str(), placed.nodes[k].channels)).collect();
             Taps::new(&sites)
         });
-        let stopped = Arc::new(Stopped::new(n));
+        // Its parts report to the cache's ring: a live session's is the app's (RENDER-25).
+        let report = Reporter::new(cache.faults().clone(), id);
+        for (i, e) in graph.exec.iter_mut().enumerate().take(checked.nodes.len()) {
+            if let Exec::Plugin(p) = e {
+                p.reports = Some((report.clone(), i));
+            }
+        }
         stats.delays = l.delays.len();
         let late_plugins: Vec<usize> =
             (0..checked.nodes.len()).filter(|&i| l.offset[i] > 0 && matches!(graph.exec[i], Exec::Plugin(_))).collect();
@@ -2684,7 +2697,7 @@ impl Renderer {
             cell_map: cells.map().clone(),
             overlays,
             taps: taps.as_ref().map(|t| t.slots().clone()),
-            stopped: stopped.clone(),
+            faults: cache.faults().clone(),
             latency: l,
             played,
         });
@@ -2708,7 +2721,7 @@ impl Renderer {
             window_overlays,
             window_held,
             taps,
-            stopped,
+            report,
             late_plugins,
         };
         Ok(Renderer {
@@ -2861,7 +2874,7 @@ impl Renderer {
         let alone = &mut Runner::one();
         let runner = if self.plan.plugins { alone } else { runner };
         let b = self.pre(clock, runner);
-        let failed = run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner, &self.plan.stopped);
+        let failed = run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner, &self.plan.report);
         self.post(&b, failed)?;
         Ok(&self.frames)
     }
@@ -3299,7 +3312,7 @@ impl Renderer {
     pub fn panic(&mut self) {
         // Plugins are reset here, between blocks (RENDER-2a).
         let _mode = fpenv::Canon::enter();
-        self.plan.graph.panic(&self.plan.stopped);
+        self.plan.graph.panic(&self.plan.report);
         self.reset_lanes();
         self.transport.enter();
     }
@@ -3439,9 +3452,9 @@ impl Renderer {
         self.non_finite
     }
 
-    /// Its nodes' stops live (RENDER-25): G12 counts each as a crash.
+    /// The faults reported to its ring (RENDER-25): G12 counts each as a crash.
     pub fn stops(&self) -> u64 {
-        u64::from(self.plan.stopped.count())
+        self.plan.report.faults().count()
     }
 
     /// The last block's runs.

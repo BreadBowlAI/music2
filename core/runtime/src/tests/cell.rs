@@ -387,7 +387,9 @@ fn a_kernel_that_writes_its_input_fails() {
     r.set_strict(false);
     let mut rig = Rig::new(r);
     let out = rig.run(4 * BLOCK);
-    assert!(peak(&out) == 0.0 && rig.e.current().unwrap().info().stopped.why(1) == Some(Why::Crashed));
+    let told = rig.e.current().unwrap().info().faults.drain();
+    let stopped = crate::fault::Fault { code: crate::fault::Code::Stopped, plan: rig.e.current().unwrap().info().id, subject: crate::fault::Subject::Node(1) };
+    assert!(peak(&out) == 0.0 && told == [stopped], "{told:?}");
     std::fs::remove_dir_all(dir).ok();
 }
 

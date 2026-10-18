@@ -49,7 +49,7 @@ pub mod overlay;
 mod preview;
 mod projects;
 mod songkey;
-mod stopped;
+mod faults;
 mod view_file;
 mod watcher;
 mod fx;
@@ -418,6 +418,11 @@ struct Inner {
     busy: Mutex<Busy>,
     /// What the actor ended or saved on its own (a pending commit), for the watcher to toast.
     notices: Mutex<Vec<String>>,
+    /// The app's one fault ring (RENDER-25): every live plan reports into it, and so does the
+    /// actor. The notices thread reads it ([`Graph::hear_faults`]).
+    faults: Arc<m2_runtime::fault::Faults>,
+    /// What the session told of it: the problems it lists now. A leaf lock.
+    told: Mutex<faults::Told>,
     /// Each module's audio lanes' misses as last seen, and the last words about one (D7).
     disk: Mutex<DiskSeen>,
     /// The commit being made durable after its preview, if one is (PLANE-5).
@@ -577,6 +582,8 @@ impl Inner {
             last_taken_in: Mutex::default(),
             busy: Mutex::default(),
             notices: Mutex::default(),
+            faults: Arc::default(),
+            told: Mutex::default(),
             disk: Mutex::default(),
             saving: Mutex::default(),
             watch: Mutex::default(),
@@ -718,17 +725,18 @@ impl Inner {
     /// above a dragged knob gives it a new id, and the page finds its drag's knob by its lease
     /// (WRITE-22).
     fn state(&self) -> Option<Value> {
-        let (shown, leases, overlays, local) = {
+        let (shown, leases, overlays, local, token) = {
             let cp = self.control.lock();
             let p = cp.open.as_ref()?;
             let now = Instant::now();
             let token = p.engine.token;
             let leases: Vec<LeaseInfo> =
                 cp.leases.live.iter().filter(|l| l.token == token).filter_map(|l| l.seen_at(p.shown.revision, now)).collect();
-            (p.shown.clone(), leases, p.overlays.state(), Value::Object(p.local.clone()))
+            (p.shown.clone(), leases, p.overlays.state(), Value::Object(p.local.clone()), token)
         };
         let status = self.status();
         let mut state = shown.state.clone();
+        faults::listed(self, token, &mut state["problems"]);
         state["timeline"] = shown.timeline.to_value();
         state["playing"] = json!(status.playing);
         state["seconds"] = json!(status.seconds);
@@ -925,6 +933,7 @@ impl Graph {
         let cp = self.inner.control.lock();
         let Some(p) = cp.open.as_ref() else { return json!({}) };
         let mut news = p.shown.news.clone();
+        faults::listed(&self.inner, p.engine.token, &mut news["problems"]);
         let now = Instant::now();
         news["leases"] = json!(cp.leases.live.iter().filter(|l| l.token == p.engine.token).map(|l| l.info(now)).collect::<Vec<_>>());
         news
@@ -1653,8 +1662,18 @@ impl Graph {
     pub fn panic(&self) -> Result<()> {
         if let Some(d) = self.inner.current_device() {
             d.player.panic()?;
+            // Every sound that stopped plays again: it isn't listed (RENDER-25).
+            self.inner.told.lock().panic();
         }
         Ok(())
+    }
+
+    /// Read the app's fault ring (RENDER-25): each fault named by the plan it came from and listed
+    /// among the open song's problems until its part plays again. Returns what to toast, a part's
+    /// first fault of a code in the open song, and whether the problems changed. It never waits
+    /// for the session: the server calls it every 300 ms from a thread of its own.
+    pub fn hear_faults(&self) -> (Vec<String>, bool) {
+        self.inner.told.lock().hear(&self.inner.faults)
     }
 
     /// Apply a fix a problem offers, as the problem carried it (`{code, title, likely, tx}`):

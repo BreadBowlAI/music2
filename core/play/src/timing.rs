@@ -312,7 +312,8 @@ mod tests {
         fill(&mut d, 128);
         let before = player.timing();
         // The node fails as the audio thread would mark it.
-        info.stopped.stop(1, m2_runtime::Why::Crashed);
+        use m2_runtime::fault::{Code, Fault, Subject};
+        info.faults.report(Fault { code: Code::Stopped, plan: info.id, subject: Subject::Node(1) });
         fill(&mut d, 128);
         let t = player.timing().since(&before);
         assert_eq!((t.crashed, t.crashes), (false, 1), "the sound's stop is counted");

@@ -11,6 +11,7 @@
 //! `peak_db` and the `problems` it carries (a plugin that isn't installed, FMT-18a; one it couldn't
 //! borrow, `plugin.not-borrowed`), or an `error`.
 
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,7 +21,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::render::{Length, Render, Threads};
 use m2_play::Player;
-use m2_plugins::{Blob, Found, RenderMode};
+use m2_plugins::{Blob, Found, Handle, RenderMode};
+use m2_runtime::fault::{Code, Reporter};
 use m2_runtime::{BLOCK, PluginInstance};
 use m2_song::Diagnostic;
 use parking_lot::Mutex;
@@ -296,13 +298,17 @@ pub struct Lent {
     pub(crate) record: Borrowing,
     /// What tells the session it is over.
     pub(crate) done: Option<Box<dyn FnOnce() + Send>>,
+    /// Where one that won't come back is reported (`plugin.failed`): the plan that plays, and each
+    /// instance's node in it.
+    report: (Reporter, HashMap<Handle, usize>),
     #[cfg(test)]
     pub(crate) hooks: Option<Arc<Hooks>>,
 }
 
 impl Lent {
-    pub(crate) fn new(player: Player, borrows: Vec<Borrow>, rate: u32) -> Lent {
+    pub(crate) fn new(player: Player, borrows: Vec<Borrow>, rate: u32, report: (Reporter, HashMap<Handle, usize>)) -> Lent {
         Lent {
+            report,
             player,
             rate,
             taken: Vec::with_capacity(borrows.len()),
@@ -396,13 +402,16 @@ impl Lent {
         let _ = host.set_render_mode(h, RenderMode::Realtime);
         // One that won't come back active is marked failed before playback resumes, so its node
         // plays silence and never calls it; the session replaces it from its committed state
-        // (HOST-5) and says so.
+        // (HOST-5), and tells it as its node would (`plugin.failed`).
         match host.activate(h, self.rate, BLOCK as u32) {
             // Measured again (RENDER-17): the session compensates a change at its next activation.
             Ok(frames) => inst.set_latency(frames),
             Err(e) => {
                 eprintln!("music2: a plugin didn't come back after the export: {e:#}");
                 inst.kill();
+                if let Some(&node) = self.report.1.get(&h) {
+                    self.report.0.node(Code::PluginFailed, node);
+                }
             }
         }
         inst.mark_reloaded();

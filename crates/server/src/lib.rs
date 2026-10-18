@@ -289,11 +289,13 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
                 let said = state.graph.expire();
                 state.graph.save_overlays();
                 state.graph.expire_auditions();
-                for s in &said {
+                // Faults found while sound is made: each a problem until its part plays again.
+                let (faults, listed) = state.graph.hear_faults();
+                for s in said.iter().chain(&faults) {
                     state.toast(s.clone());
                 }
                 // What ended changes the gestures clients show.
-                if !said.is_empty() {
+                if !said.is_empty() || listed {
                     state.graph_changed();
                 }
             }

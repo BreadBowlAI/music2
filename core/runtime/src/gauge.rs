@@ -54,13 +54,13 @@ impl Renderer {
         let b = self.pre(clock, runner);
         let t1 = Instant::now();
         let failed = match how {
-            How::Parts => run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner, &self.plan.stopped),
+            How::Parts => run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner, &self.plan.report),
             How::One => {
                 if self.whole.is_none() {
                     self.whole = Some(Box::new(Schedule::cut(&self.plan.graph.order, &self.plan.graph.exec, &[])?));
                 }
                 let whole = self.whole.as_deref_mut().expect("made above");
-                run_graph(&mut self.plan.graph, whole, &self.lanes.slots, &b, runner, &self.plan.stopped)
+                run_graph(&mut self.plan.graph, whole, &self.lanes.slots, &b, runner, &self.plan.report)
             }
             How::Old => self.plan.graph.process(&b, Seg::WHOLE, None, None, &self.lanes.slots).err(),
         };
@@ -83,7 +83,7 @@ impl Renderer {
             let parts = &self.plan.schedule.parts;
             for p in order {
                 let t = Instant::now();
-                let ok = run_part(&view, parts, p as u32, &b, &self.lanes.slots, &self.plan.stopped);
+                let ok = run_part(&view, parts, p as u32, &b, &self.lanes.slots, &self.plan.report);
                 ns[p] = t.elapsed().as_nanos() as u64;
                 if !ok {
                     break;
