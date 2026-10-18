@@ -66,9 +66,9 @@ they started, which suites compare edits against.
 
 ## Byte-identity of renders
 
-`baseline.sh` renders the pure fixtures, ten renders in all (full renders of `examples/first-song`,
-`examples/resample`, `examples/sounds`, `templates/starter`, `templates/empty`, and `--from 4 --seconds 6`
-of each) into a folder with a `SHA256SUMS`:
+`baseline.sh` renders the pure fixtures, twelve renders in all (full renders of `examples/first-song`,
+`examples/resample`, `examples/sounds`, `examples/sampler`, `templates/starter`, `templates/empty`, and
+`--from 4 --seconds 6` of each) into a folder with a `SHA256SUMS`:
 
 ```sh
 e2e/baseline.sh 933f4de /tmp/base-head          # builds m2 at that commit in a temporary worktree
