@@ -107,8 +107,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 20 | **Meters after the fader, and loudness for export.** Today's meters read each track before its fader, so a fader move doesn't move them: after-fader taps need the engine (`core/runtime`). | You can't see what a fader does to a track's level. | Partly (a meter on each track) | medium |
-| 27 | **Sends and buses in the app**: buses, sends and groups work in song code (`bus()` and std's mixer, [RENDER-34](architecture.md#buses)), and the edits and their routes are built (add a bus, a send, an output), but the Mix view shows no bus strips, send knobs or output picker yet. | Standard mixing, such as one reverb shared by every track, without writing code. | Yes | large |
+| 20 | **Meters after the fader, and loudness for export.** Today's meters read each track and bus before its fader, so a fader move doesn't move them: after-fader taps need the engine (`core/runtime`). | You can't see what a fader does to a track's level. | Partly (a meter on each track) | medium |
 
 - **Soloing a bus plays its tracks' dry sound too**: a wet-only solo needs a cell per path.
 - **A send has no pan of its own**, and can't be made mono.
@@ -120,6 +119,11 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A send's knob in the graph view is named by its id** (`hats.sends.verb.db`), not in words ("Hats send to Reverb", as its lane is).
 - **A send level written into `{ pre: true }` is a plain number** (`db: -6`), even where the other sends write `db(…)`.
 - **A Group bus shows a Gain knob** in the graph view: the 0 dB gain that gives the group a node of its own.
+- **A send's knob can't be typed into**: Return opens its menu. Its level is written to two decimals (`db(-1.44)`), not tenths as a fader's.
+- **The output picker lists every bus**, a Reverb too, not only Groups: a bus doesn't record what kind it was made as. A track sent wholly into a Reverb plays only wet.
+- **A bus strip doesn't show its effect**: its name says it (Reverb); its knobs are in the Device view.
+- **Many buses make the faders short**: each bus is a row on every strip, so a short dock with five buses leaves little fader.
+- **A new bus goes last** in the timeline, not near the tracks that feed it.
 
 ## Timeline and clips
 
@@ -258,7 +262,6 @@ Every row marked **No** was missing from the old app too. Of the rows marked **P
 | The Song Library | a picture of each song (#12) |
 | Import Audio | other file types, warp by hand (#18) |
 | Settings | view settings for every song (#31) |
-| The Track inspector | output and sends (#27) |
 | The Sounds panel, and m2plug's sampler | the rest of the Sampler (#22) |
 | m2plug's Pump | #21 |
 | Drawing automation | curves (#14) |

@@ -106,7 +106,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 - **Automation:** drawing how a knob changes over time, such as a fade-in, or a filter that opens over 8 bars before the drop.
 
 **In music2:**
-- Buses and sends aren't in the app yet ([gap #27](gaps.md#mixing)).
+- Buses and sends: in **Mix** (⌥3), **Add bus** makes a Reverb, a Delay or a Group. Turn up a track's knob for a bus to send to it; set a track's output to a Group to put it through the Group's fader.
 - A sidechain is written in code: `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](../examples/first-song) does this.
 - For a ghost kick, use `kick.env` in `duck` but leave the kick out of the `mixer`.
 - Automation: right-click a knob, then **Automate**. It gets a lane on the timeline. Double-click the lane for a clip, then click its line to add points, or press B and paint. Curves between points are still to come ([gap #14](gaps.md#automation)).

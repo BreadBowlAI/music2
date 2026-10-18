@@ -213,6 +213,21 @@ the Xvfb screen :98.
 
 **Done when:** the suite passes with the other browser suites; `ci/check.sh --gates` passes once.
 
+### Slice 3, as built
+
+**In short:** built as planned. Two small view fields were needed, and one slice 2 test was fixed.
+
+| What changed from the plan | Why |
+|---|---|
+| Each strip gets `loops` (bus, why for a send, why for an output) | The view greys a loop "with why": the words come from the edits' own check (`bus::looped`), so the window never works routing out |
+| A timeline track gets `bus` (written only when true) | So the timeline can mark the row and leave out Change instrument |
+| A send row is a **+** until the send exists, then a knob | One click adds the send at −12 dB. A knob for a send that isn't there would need a first write on drag, as the pan has. This is the design, not a gap |
+| The output picker lists every bus, not only Groups | A bus doesn't record which kind it was made as. Logged |
+| A bus strip shows a merge mark before its name, not the word "Bus" | The word doesn't fit a 76 px strip beside the name. The timeline's header shows the word |
+| Tab stops on the output after the fader | So the picker can be reached by keys; s8-mix's Tab check follows |
+| `a_new_send_and_output_play_within_one_activation` counts the engine's activations | It compared plan ids, which one counter gives the whole process, so it failed beside other tests |
+| The bus strip's "effect" is its name | Its knobs are in the Device view. Logged |
+
 ## Decisions
 
 | # | Decision | Why |

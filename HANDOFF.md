@@ -10,6 +10,9 @@ design for whatever you pick up. Older versions of this page, with each track's 
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
   71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
 - **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
+- **Track `bus`** (branch `bus`, not landed yet): buses, sends and groups, in song code (RENDER-34, `@m2/core`
+  1.5.0, std 0.4.0) and in the Mix view (Add bus, a send knob per bus, an output picker). Gap #27 is closed. Its
+  plan and what each slice built: `docs/designs/step9/bus-plan.md`.
 - **The Mac is owed.** It was last green at `cbac57c` (step 7). At `85b069a` it passed 11 of 13 rows, and `macfix`
   fixed both. Everything since then (step 8's later tracks and all of step 9) has never run on a Mac.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
@@ -23,7 +26,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
 | 1 | `ci/check.sh` on `main` | Every row on the Mac since `85b069a`: `macfix`, 8a's live half (G12's minute, the Mac's real-time code tested for the first time), `studio`, and step 9's six tracks (the plugin program's shared memory and wake, plugin windows and the microphone run on a Mac for the first time; G7f's run of one sandbox a box) | about 45 min |
 | 2 | (dropped) G7f store on the old gain | Not needed any more. It asked whether the Mac's +135 µs a block since step 7 was the 32 MiB store layout (O1). Track `ab` replaced that layout with one sandbox per box, so run 1's G7f rows now judge the new layout. The old std (ABI v0) can't load on `main` anyway. | — |
 | 3 | 8a's Mac sweep, `ci/sweep.sh` | The live thread count (`live_count`) and park or spin (`BETWEEN`) in `core/play/src/engines.rs`; gate 8 (no dropout at 128 frames, p99 at most 70%) | about 40 min |
-| 4 | By ear, steps 7 to 116 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116) | about 2 hours, in parts |
+| 4 | By ear, steps 7 to 123 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116), `bus` (117–123) | about 2 hours, in parts |
 
 After a green run the lead writes in the contract's PLAT-6 and the gates table: "macOS: green at <commit>", with
 G7f's numbers. If a row fails, fix it on Linux, check the mac lint, and ask for one more run. The Mac's pasted runs
@@ -111,7 +114,7 @@ these or a real failure, and fixes the real ones (most were a read a moment too 
    Known already: `push_tree` opens files read-only, but `FlushFileBuffers` needs write access.
 3. **The top gaps**, if the owner asks for features ([docs/gaps.md](docs/gaps.md), most visible first): the rest of
    recording (#24, #25), audio clips (#18), adding a plugin from the app (#32), the Sampler (#22), presets (#26),
-   meters after the fader (#20), buses (#27), sections (#23), scale help (#16).
+   meters after the fader (#20), sections (#23), scale help (#16).
 4. **Open owner decisions** (below): ask them, with the recommendation.
 
 The owner wants the app finished clean, with tokens conserved: no new features unless asked, no polish passes.

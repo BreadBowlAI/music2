@@ -5,7 +5,7 @@
 - Do them after the check in [HANDOFF.md](../HANDOFF.md) ("The owner's Mac command") has passed.
 - About two hours in all. You can do one part at a time, on different days.
 - After each part, tell the lead what you saw and heard. That is the last step of each part.
-- The steps are numbered 7 to 116, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
+- The steps are numbered 7 to 123, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
 
 **What you need**
 
@@ -35,6 +35,7 @@
 | 96 to 102 | stretched clips, Follow tempo | track `sx` |
 | 103 to 110 | one-note sounds, the wheels, MIDI files | track `pm` |
 | 111 to 116 | the sound input's problems | track `ex` |
+| 117 to 123 | buses: a shared reverb, a send before the fader, a group | track `bus` |
 
 ---
 
@@ -198,3 +199,14 @@ that has a pitch wheel and a mod wheel):
 | 115 | Press R again. | The same "music2 can't use the microphone…" words. Nothing records. Then turn music2 (or the Terminal) back on in System Settings ▸ Privacy & Security ▸ Microphone. |
 | 116 | Tell the lead what you saw and heard at 111 to 115. | |
 
+**A check by ear of buses** (`bus`, about 10 minutes):
+
+| # | Do this | You should see and hear |
+|---|---|---|
+| 117 | Click **Open an Example**, then **First song**. Press ⌥3 for Mix. Click **Add bus**, then **Reverb**. | A Reverb strip after Keys, with a merge mark before its name. Every other strip has a row "+ Reverb". A message says to turn up a track's Reverb knob. |
+| 118 | Press Space. On the Keys strip, click the **+** beside Reverb. | Within a moment the keys sound like they are in a room. No click. The Reverb strip's meter moves. |
+| 119 | While it plays, drag that small Reverb knob on Keys up, then down, and let go. | More room as it goes up, less as it goes down. No clicks, no crackle. |
+| 120 | Drag the Keys fader down to the bottom. Then right-click the Reverb knob on Keys and click **Before the fader**. | With the fader down, the keys and their room both go. After **Before the fader**, only the room comes back: a ghostly keys sound. A small dot on the knob. Press ⌘Z twice: as before. |
+| 121 | Click **Add bus**, then **Group**. Under the Kick fader, click **Master** and pick **Group**. Do the same under Hats. Then drag the Group fader down and up. | Kick and Hats go quieter and louder together. Bass and Keys don't change. Kick's strip says Group under its fader. |
+| 122 | On the Group strip, click the **+** beside Reverb. Then, under the Reverb fader, click **Master**. | In the list, Group is grey and says "Group already feeds Reverb, so Reverb can't go to Group." |
+| 123 | Tell the lead what you saw and heard at 117 to 122. | |

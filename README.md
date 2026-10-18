@@ -18,6 +18,7 @@ Status (2026-10-18): every planned step is built and checked on Linux. The check
 | Edit clips: move, copy, trim, split, join, repeat | the timeline |
 | Turn knobs, add effects, connect cables | **Device** (⌥1) |
 | Mix: faders, pans, mute, solo, and meters | **Mix** (⌥3), and each track's header |
+| Share a reverb or a delay, or group tracks under one fader | **Mix** (⌥3) ▸ **Add bus** |
 | Draw automation (knob moves over time) | right-click a knob ▸ **Automate**, then draw on the timeline |
 | Play live: the computer's keys, or a MIDI keyboard with its wheels | ⌘K; or plug a keyboard in |
 | Hear a click on each beat | K |
@@ -175,6 +176,18 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - Click a strip to select its track. Right-click it to rename or recolour the track, or for **Edit in code**, which opens `song.ts` at its channel. Right-click a fader, or a pan once it's written, for **Automate** and **Reset to default** (a pan in grey has the strip's menu).
   - **Automate** on a fader gives it a lane under the Song in the timeline, "Hats volume". The fader then follows the lane: it moves with playback, shows the lane's dot, and can't be dragged. Right-click it for **Show Hats volume lane** or **Remove automation**, which writes the level at the playhead back into the code.
   - A track that doesn't reach the mixer gets a strip that says so, with **Edit in code**. So does a song that mixes its tracks its own way.
+  - **Buses.** A bus is a track with no notes. It plays what other tracks send it. **Add bus** (after the strips) makes one:
+
+    | Bus | What it is for | How a track uses it |
+    |---|---|---|
+    | **Reverb** | one shared room for every track | turn up the track's **Reverb** knob |
+    | **Delay** | shared echoes | turn up the track's **Delay** knob |
+    | **Group** | one fader for several tracks (all the drums) | set the track's output to it |
+
+    It writes `tracks/<its key>.ts` with `bus(…)` and a channel in the mixer. A bus strip comes after the tracks, with a merge mark before its name. It has M, S and a meter, like a track.
+  - **Sends.** Every strip has a row for each bus. Click **+** to send the track there, at −12 dB, after its fader. Then the row is a small knob: drag it, as a fader. Right-click it for **Before the fader** (the track's fader no longer turns it down; a dot on the knob), **Automate**, **Remove send** and **Edit in code**.
+  - **Output.** Under each fader: where the strip goes, **Master** or a bus. Click it to pick. A choice that would make a loop (a bus feeding itself) is greyed, and says why.
+  - Each of these is one undo step. In the timeline, a bus is a row marked **Bus**, with no lanes.
 - **Code:** the selected track's TypeScript, with type checks. The list on the left shows the song's files. Right-click a track's file for **Change track ID…**: the ID is the name code and files use (`track("bass", …)`, `data/bass/`). Changing it moves both, and the track's view settings, as one undo step; the track's sounds restart. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and the status pill in the top bar says so; its popover offers **Show in code**. A song whose code doesn't compile when you open it still opens: in its code, at the error, with its tracks and clips greyed in the timeline and nothing to play until a save makes it compile, and then it plays.
 - **Notes:** the selected clip in a piano roll; with none selected, it says how to pick one.
   - Pick a snap grid (1/4 to 1/64, triplets, or off): new notes are a grid step long. A click selects; a double-click adds a note; a drag across empty space selects with a box. In Draw mode (B, or the pencil) a click adds a note and a drag paints them. Drag a note to move it, its right edge to resize it.
@@ -569,7 +582,7 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 
 **`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays. It needs a second signal, so it's written in code rather than added from the browser.
 
-**`mixer` and `master`** (`std/mix`): `mixer` adds tracks together. Each channel has a level, `db` (0 when left out), and can have a `pan`. `master` has a level too, then a limiter, so the song never clips. A level of −96 dB or lower is silence.
+**`mixer` and `master`** (`std/mix`): `mixer` adds tracks together. Each channel has a level, `db` (0 when left out), and can have a `pan`, `sends` to buses and a `to` (a group bus instead of the master): see [Buses, sends and groups](docs/song-as-program.md#buses-sends-and-groups). `master` has a level too, then a limiter, so the song never clips. A level of −96 dB or lower is silence.
 
 **Building blocks:** `std/dsp` (oscillators, noise, envelopes, filters, gain, pan), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`.
 
@@ -702,6 +715,9 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 | `POST /api/graph/overlay` `{session, mute?, solo?, exclusive?, clear?}` | Mute or solo tracks while listening (`{kick: true}`). Not a write: it changes nothing in the song, and works read-only |
 | `POST /api/graph/layout` `{session, order? \| colour? \| reset?}` | Reorder the tracks (`order`: every track, top to bottom), recolour one (`colour: {module, colour}`), or write the defaults over a `layout.json` that doesn't read. Writes `layout.json` only, with no revision |
 | `POST /api/graph/mix/insert` `{session, channel, control, value}` | Write a mixer channel's first pan (`control: "pan"`) into its entry; answers with the new knob's id (`control`) |
+| `POST /api/graph/mix/bus` `{session, kind, label?, after?}` | Add a bus: `reverb`, `delay` or `group`. Answers with its `module`, `label` and the new Mix view (`mix`) |
+| `POST /api/graph/mix/send` `{session, channel, bus, action, pre?}` | A send from a channel to a bus channel: `add` (before the fader with `pre`), `remove`, or `pre` (set before or after the fader). A loop is refused in words. Answers with `mix` |
+| `POST /api/graph/mix/route` `{session, channel, to}` | Send a channel to a bus channel instead of the master, or (`to: null`) back to the master. A loop is refused in words. Answers with `mix` |
 | `POST /api/graph/clips` `{session, gesture}` | A clip gesture (create, move, resize, split, join, duplicate, paste, delete, quantize), by clip id; 409 when a clip it names changed since |
 | `POST /api/graph/audition` `{client, module, lane, on?, off?, keep?}` | Play or let go of notes on a lane, as a window does. Not a write |
 | `POST /api/tx/check` `{session?, tx}` | Check a Tx: `{checked: {delta, hash, diagnostics}}`, writing nothing (409 when a file it's based on changed, 422 when it would do something else) |
