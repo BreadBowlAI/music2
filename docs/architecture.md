@@ -953,6 +953,7 @@ The message is plain words, and names the file, the field and the fix where they
 |---|---|---|---|---|
 | `code.build` | Error | the TypeScript doesn't parse or throws | — | yes |
 | `code.check` | Error | the graph checker rejects the IR | — | yes |
+| `kernel.offline` | Error | song code calls an offline kernel, which only music2 runs ([ABI-2](#kernel-abi-reservations)) | — | yes |
 | `import.outside-code` | Error | an import resolves to anything but a Code file of the snapshot ([FMT-6a](#paths)) | — | yes |
 | `key.invalid` | Error | a key breaks [ID-1](#keys) | — | yes |
 | `key.duplicate` | Error | a key is used twice where it must be unique: two tracks, two `key()` frames in one parent, two plugin keys in one frame ([ID-5](#keys)) | — | yes |

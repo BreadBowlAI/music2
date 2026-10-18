@@ -241,6 +241,8 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A clip's own tempo isn't found from its file**: Follow tempo takes the clip as it plays when you turn it on.
 - **No `m2` command for Follow tempo**: agents use `POST /api/graph/clips` (`{"op": "audio", "follow": true}`).
 - **One stretch method for all clips** (`std:stretch`, WSOLA). No choice per clip (drums, voice, pads).
+- **Stretches after a tempo change are made one at a time**, in build order (lane, then clip), each from its clip's start: with several long followed clips, the one under the playhead may stay silent until those before it are done. Later: make the one nearest the playhead first.
+- **Reverse with Follow tempo** (the clip menu allows both): the clip's edges and Split are refused ("Change that in its lane file"), and after a tempo change it is silent from its start until its whole stretch is made.
 - **A stretch that fails plays silence** live, with a line in the log only (an export fails and names the clip). A stretch the cache folder can't take is made in memory, also with a line in the log only.
 - **The plugin host process** (HOST-3, since ph-1). Plugins run in a second program, so a crash no longer ends the app. What it doesn't do yet:
   - All plugins share one host process, so one crash silences them all (each comes back by itself). One process per plugin would silence only the one that crashed.
@@ -273,7 +275,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
   - Live keyboard notes into a late plugin arrive late by its offset too.
   - `m2-gates realtime --offline`'s step 7 loop (`How::Old`) gives a late plugin or poly no notes (timing only).
   - A plugin given back by an export, with notes to start again, starts them from its lane's notes, not the delayed ones.
-- **The cache folder is never trimmed**: warped clips' renders and waveforms stay in it until it is deleted by hand.
+- **The cache folder is never trimmed**: warped clips' renders and waveforms stay in it until it is deleted by hand. Follow tempo makes it grow fast: each tempo tried leaves a whole stretch of every followed clip, about 23 MB a stereo minute at 48 kHz (trying 10 tempos on a 4-minute stereo clip leaves about 0.9 GB).
 - **A disk too slow for an audio clip** cuts it to silence for a moment, with a click; it doesn't fade. The status says "Disk too slow".
 - **A WAV another program changes while it plays** may play a mix of old and new for a moment, until the song is built again.
 - **`m2-os`'s two `fake_sysfs` tests** share one temp folder, so run together they sometimes fail; alone they pass.
