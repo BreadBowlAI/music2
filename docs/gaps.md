@@ -60,9 +60,12 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 32 | **Add an installed plugin from the app**: list installed CLAP plugins in the effect browser and in + Track, and put one on a track. | Today a plugin goes on a track only by writing `plugin("clap:…")` in its code, after finding its id with `m2 plugins`. | No | medium |
 | 33 | **VST3 and AU** plugins. | Many popular synths and mastering plugins come only as AU or VST3 on the Mac. | No | large |
 
+- **A plugin effect can't be removed, turned off or moved from its card**: only in code (Undo works right after adding it) (#32's leftover).
+- **A plugin installed while the app is open shows only after Look again** in a Plugins list.
+- **A plugin removed since the list was made is named by its id** ("org.example.reverb isn't installed…"), not its name, when adding it is refused.
+- **A plugin whose CLAP features say neither instrument nor effect** (an analyzer, a note effect) isn't listed; it can still be written in code.
 - **All plugins share one plugin program**, so one crash silences them all for a moment (each comes back by itself). One program per plugin would silence only the one that crashed.
 - **A plugin stuck in its window, its start or a settings load** holds up edits and saves for up to 30 seconds (2 minutes in a scan); then music2 ends the plugin program and says so (the ph review's r1).
 - **One broken `.clap` file that crashes the scan** makes every plugin say "not installed", and the bad file isn't named (the ph review's r4).
@@ -154,7 +157,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 35 | **Knobs for more numbers**: a number held in a variable (`const cutoff = 800`) or worked out from others (`2 * 440`) shows **edit in code**; settings such as an instrument's `voices`, `mode` and `glide` aren't on its card (the card says how it plays, read-only). | A beginner who gives a number a name, as tutorials teach, loses its knob. | No | medium |
-| 1 | **The rest of changing an instrument**: a track whose instrument is built from parts, has two instruments or a plugin, or whose settings code works out, is refused in words. Adding a track to a song that mixes its own way, or picking a CLAP instrument (#32), still needs code. | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
+| 1 | **The rest of changing an instrument**: a track whose instrument is built from parts, has two instruments or a plugin, or whose settings code works out, is refused in words. Adding a track to a song that mixes its own way, or changing a track's instrument to a CLAP plugin, still needs code (+ Track can add a plugin track). | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
 | 10 | **The rest of changing a track's ID**: a track with a new ID restarts its sounds (its plugins' and instruments' state isn't carried over, design-8b §11.3), and the status popover has no Restore for a rename done by hand in code (DIAG-6). | A rename shouldn't cut a sound that is playing. | Yes | small |
 
 - **A knob let go while the code doesn't compile** keeps playing its new value, and is written once the code compiles; after 30 seconds it is dropped, with a message. Writing it at once, when the broken file is another one, is the owner's call (the step 6 design's C21).

@@ -45,10 +45,10 @@ The `key` is always written, so the plugin's settings can be saved (HOME-6 needs
 | Step | What | Files |
 |---|---|---|
 | 1a | The plugin list: scanned once per app run, off the async threads, on the first ask; kept until **Look again**. Each plugin is an instrument (`instrument` in its features) or an effect (`audio-effect`), or both | `crates/server/src/routes_plugins.rs` (new): `GET /api/plugins` → `{plugins: [{id: "clap:…", name, vendor, version, instrument, effect}], errors}`, `POST /api/plugins/scan`; the cache in `AppState` (`crates/server/src/lib.rs`) |
-| 1b | Adding an effect plugin. `add_effect` sees a `clap:` id and wraps the call in `plugin(…)`: two insertions around it (R5, WRITE-8), the import, one `Confined` Tx. The planner's check: exactly one new plugin node reads what the call made, and the readers now read it. Refused in words when the candidate's plugin is missing, or has no audio input | `crates/editor/src/plugins.rs` (new), `effect.rs` (the dispatch) |
+| 1b | Adding an effect plugin. `add_effect` sees a `clap:` id and wraps the call in `plugin(…)`: two insertions around it (R5, WRITE-8), the import, one `Confined` Tx. The planner's check: exactly one new plugin node reads what the call made, and the readers now read it. Refused in words when the plugin is missing, has no audio input, or is an instrument only (its features). *As built:* the plugin is described through the host before planning, so a refusal writes nothing; the planner also checks the candidate has no new `plugin.missing`. The wrap is shared with std's effects (`effect::wrap_call`) | `crates/editor/src/plugins.rs` (new), `effect.rs` (the dispatch) |
 | 1c | Adding a plugin track. `Play::Plugin(id)` beside `Play::Instrument`; `tracks::add` takes a `clap:` id. Refused in words when the plugin is missing, or takes no notes | `crates/editor/src/tracks.rs`, `plugins.rs` |
 | 1d | Routes: no new write route. `POST /api/graph/effect/add` and `/api/graph/track/add` take `clap:<id>` as their `component` | `crates/server/src/routes.rs` (docs and errors only) |
-| 1e | The app: the side browser gets a **Plugins** group under the effects, and one under the instruments; + Track gets a **Plugins** group last. Each opens with "Looking for plugins…" and has **Look again**. Drag, double-click and Enter work as for std. With none installed: "No plugins are installed. music2 looks in ~/Library/Audio/Plug-Ins/CLAP." (the folder from the server, so Linux says its own) | `web/src/components/Browser.tsx`, `EffectBrowser.tsx`, `Tracks.tsx`, `web/src/lib/plugins.ts` (new), `lib/graph.ts` |
+| 1e | The app: the side browser gets a **Plugins** group under the effects, and one under the instruments; + Track gets a **Plugins** group last. Each opens with "Looking for plugins…" and has **Look again**. Drag, double-click and Enter work as for std. With none installed: "No plugins are installed. music2 looks in ~/Library/Audio/Plug-Ins/CLAP." (the folder from the server, so Linux says its own). *As built:* the side browser's Plugins groups stay folded until opened, since opening one is what scans; the Device view's + lists effect plugins last too | `web/src/components/Browser.tsx`, `EffectBrowser.tsx`, `Tracks.tsx`, `SongTimeline.tsx` (the drop), `PluginsFoot.tsx` (new: a group's foot), `web/src/lib/plugins.ts` (new) |
 | 1f | The contract: HOST-3's "Finding plugins" row says the app's lists come from the scan. gaps.md: #32 done; its leftovers listed | `docs/architecture.md`, `docs/gaps.md`, `README.md` |
 
 **Words the app says.**
@@ -56,7 +56,7 @@ The `key` is always written, so the plugin's settings can be saved (HOME-6 needs
 | When | Words |
 |---|---|
 | Added | "Added m2 probe after Kick" with **Undo** |
-| Not installed (removed since the scan) | "m2 probe isn't installed on this computer, so it can't be added. Install it, then choose Look again." |
+| Not installed (removed since the scan) | "m2.probe isn't installed on this computer, so it can't be added. Install it, then choose Look again." *As built:* by its id, since the editor can't learn a missing plugin's name (a gap) |
 | An instrument dropped as an effect | "Surge XT plays notes; it can't go after a sound. Add it with + Track." |
 
 **Tests, red first.**
