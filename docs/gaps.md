@@ -60,7 +60,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 33 | **VST3 and AU** plugins. | Many popular synths and mastering plugins come only as AU or VST3 on the Mac. | No | large |
+| 33 | **VST3 and AU** plugins: **not planned.** The owner chose CLAP only (2026-10-19), as the open format. | Many popular synths and mastering plugins come only as AU or VST3 on the Mac. | No | large |
 
 - **A plugin effect can't be removed, turned off or moved from its card**: only in code (Undo works right after adding it) (#32's leftover).
 - **A plugin installed while the app is open shows only after Look again** in a Plugins list.
