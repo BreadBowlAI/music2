@@ -23,14 +23,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **Track `br` landed** (2026-10-18, `054e338`): add an installed plugin from the app (#32), and presets for std
   sounds and plugins (#26, FMT-22, HOST-8). Linux green at `1fb6caa`; macOS owed (in the next Mac run). Build notes
   `docs/designs/step9/build-notes-br.md`.
-- **Checks on Linux are faster, and check no less** (track `cs`): `ci/check.sh --gates=auto` skips the
-  timing gates only when git proves the change can't reach them (only `web/`, `docs/`, `README.md` or
-  `HANDOFF.md` changed since main), and the browser suites run 4 at a time: about 3 minutes instead of 11, with
-  the same results. Its own `ci/check.sh --gates=auto` passed at `e4a6183` (the gates ran: `ci/` changed): 1,770
-  Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 27 minutes. One suite passed only on its
-  retry: `pl-zoom-fix`, a race of its own that fails about half the time, alone too (branch `dn` fixes it). The
-  docs commit after it, checked with `--gates=auto --base e4a6183`, skipped the gates and passed in 10 minutes. See
-  "The check" below.
+- **Checks on Linux are faster, and check no less** (track `cs`): `ci/check.sh --gates=auto` skips the timing gates only when HEAD holds, in every file they read, what an earlier check on this machine passed them on, and the browser suites run 4 at a time; its own check passed at `b5e3a0f` with the gates (`ci/` changed): 1,771 Rust tests, 74/74 browser suites in 2.7 min, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry. See "The check" below.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
 - Next: that one Mac run (after `mf2` is merged), then fix what it finds. Then Windows, as its own step, or the top gaps.
@@ -276,8 +269,8 @@ Times on the server, warm `target/`:
 | browser suites | 10.5 to 11 min, one at a time | 2.7 min, 4 at a time |
 | timing gates, with the S build | 16 min | the same when they run; none when `--gates=auto` skips them |
 | rust tests | 6 min | the same |
-| the whole check, with the gates | 34 to 40 min | 27 min (`e4a6183`) |
-| the whole check, gates skipped | (no such run) | 10 min (`2bd6456`, `--base e4a6183`: only `HANDOFF.md` changed) |
+| the whole check, with the gates | 34 to 40 min | 26 to 27 min (`b5e3a0f`, `e4a6183`) |
+| the whole check, gates skipped | (no such run) | 10 min (`2bd6456`, `--base e4a6183`: only `HANDOFF.md` changed; timed under the first rule, which kept no record) |
 
 On the server, a track's check (with a warm `target/`):
 
