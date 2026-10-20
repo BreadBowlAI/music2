@@ -25,7 +25,10 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **Checks on Linux are faster, and check no less** (track `cs`): `ci/check.sh --gates=auto` skips the
   timing gates only when git proves the change can't reach them (only `web/`, `docs/`, `README.md` or
   `HANDOFF.md` changed since main), and the browser suites run 4 at a time: about 3 minutes instead of 11, with
-  the same results. See "The check" below.
+  the same results. Its own `ci/check.sh --gates=auto` passed at `e4a6183` (the gates ran: `ci/` changed): 1,770
+  Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 27 minutes. One suite passed only on its
+  retry: `pl-zoom-fix`, a race of its own that fails about half the time, alone too (branch `dn` fixes it). See
+  "The check" below.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
 - Next: that one Mac run (after `mf2` is merged), then fix what it finds. Then Windows, as its own step, or the top gaps.
@@ -255,9 +258,11 @@ Times on the server, warm `target/`:
 
 | part | before | now |
 |---|---|---|
-| browser suites | 10.5 to 11 min, one at a time | 2.7 min, 4 at a time (3 runs) |
+| browser suites | 10.5 to 11 min, one at a time | 2.7 min, 4 at a time |
 | timing gates, with the S build | 16 min | the same when they run; none when `--gates=auto` skips them |
 | rust tests | 6 min | the same |
+| the whole check, with the gates | 34 to 40 min | 27 min (`e4a6183`) |
+| the whole check, gates skipped | (no such run) | about 11 min: all of the run at `e4a6183` before its gates |
 
 On the server, a track's check (with a warm `target/`):
 
