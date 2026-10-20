@@ -82,7 +82,8 @@ In short: `--jobs 4` runs the suites 4 at a time and gives the same answer as on
 - The results are the same as at `--jobs 1`: the same line for each run, printed in the list's
   order, the same counts, the same `ok`/`PART`/`FAIL` rules and the same exit status. Anything that
   goes wrong in one run (the server or the suite can't start) fails that run, not all of them.
-- `ci/check.sh` runs `all --jobs 4` on Linux, and then runs each run that failed once more, alone,
+- `ci/check.sh` runs `all --jobs N` on Linux (N is a quarter of the machine's threads, 1 to 4: 4 on
+  the server), and then runs each run that failed once more, alone,
   with nothing else of `run.mjs` running: the same retry as before, so "passed only on a retry"
   means what it meant. On a Mac it runs one at a time, as before, until a Mac run shows the suites
   hold at 4 (`M2_CHECK_JOBS=4 ci/check.sh` tries it).

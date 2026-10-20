@@ -1,7 +1,8 @@
 #!/bin/bash
 # ci/gates-auto-test.sh: tries the rule of ci/gates-auto.sh (when --gates=auto may skip the timing
 # gates) on a table of cases. Each case gets its own small git repo, made in a temporary folder
-# outside this one. ci/check.sh runs it as its "gates rule" row. Prints a PASS or FAIL line for each
+# outside this one, and its own record of passes (GATES_PASSED), which starts with main's tree, as
+# when the check of the track that made main passed the gates. ci/check.sh runs it as its "gates rule" row. Prints a PASS or FAIL line for each
 # case, then a total. Exit status: 0 when every case passed, 1 when not, 2 when it couldn't start.
 # Written for bash 3.2, which macOS ships.
 
@@ -18,6 +19,8 @@ export HOME=$TMP XDG_CONFIG_HOME=$TMP/config GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NA
 
 # c <message>: commit everything.
 c() { git add -A && git commit -q -m "$1"; }
+# rec: record that the gates passed on HEAD, as ci/check.sh does after a check whose gates row passed.
+rec() { gates_record "$(gates_tree)" "$(git rev-parse --short=12 HEAD)"; }
 # edit <file>: change it (or make it), folders and all.
 edit() { mkdir -p "$(dirname "$1")" && echo "changed $RANDOM" >> "$1"; }
 
@@ -38,12 +41,14 @@ passed=0
 failed=0
 n=0
 # case <name> <skip|run> <words its verdict line holds> <base> <commands that make the change>:
-# the commands run in a copy of the fixture, on a branch "topic" taken from main.
+# the commands run in a copy of the fixture, on a branch "topic" taken from main, after main's
+# tree was recorded as passed.
 case_() {
   n=$((n + 1))
   dir=$TMP/case-$n
+  GATES_PASSED=$TMP/passed-$n
   cp -R "$F" "$dir" || exit 2
-  if ! (cd "$dir" && git checkout -q -b topic && eval "$5") > "$TMP/setup.log" 2>&1; then
+  if ! (cd "$dir" && rec && git checkout -q -b topic && eval "$5") > "$TMP/setup.log" 2>&1; then
     failed=$((failed + 1))
     echo "FAIL  $1: setting it up failed: $(head -1 "$TMP/setup.log")"
     return
@@ -63,6 +68,24 @@ case_() {
   failed=$((failed + 1))
   echo "FAIL  $1: wanted \"$2 ... $3\" (status $want), got status $st: $line"
 }
+# tree_ <name> <same|another> <commands>: whether gates_tree is the same after the commands
+# (committed) as on main.
+tree_() {
+  n=$((n + 1))
+  dir=$TMP/case-$n
+  cp -R "$F" "$dir" || exit 2
+  if ! got=$(cd "$dir" && a=$(gates_tree) && eval "$3" > /dev/null 2>&1 && c tree && b=$(gates_tree) &&
+      if [ "$a" = "$b" ]; then echo same; else echo another; fi); then
+    failed=$((failed + 1))
+    echo "FAIL  gates_tree: $1: setting it up failed"
+  elif [ "$got" = "$2" ]; then
+    passed=$((passed + 1))
+    echo "PASS  gates_tree: $1: $got"
+  else
+    failed=$((failed + 1))
+    echo "FAIL  gates_tree: $1: wanted $2, got $got"
+  fi
+}
 
 case_ "a UI-only change (web/, docs/)" skip "only web/, docs/ changed since" main \
   'edit web/src/app.tsx && rm web/package.json && edit docs/new.md && c ui'
@@ -70,14 +93,32 @@ case_ "the counts and the base" skip "changed since $(cd "$F" && git rev-parse -
   'edit web/src/app.tsx && rm web/package.json && edit docs/new.md && c ui'
 case_ "README.md and HANDOFF.md" skip "only README.md, HANDOFF.md changed" main \
   'edit HANDOFF.md && edit README.md && c notes'
-case_ "the branch merged main in after main changed code" skip "only docs/ changed" main \
+case_ "the skip names the pass it relies on" skip "the gates passed at $(cd "$F" && git rev-parse --short=12 HEAD) (" main \
+  'edit web/src/app.tsx && c ui'
+case_ "the branch merged main in after main changed code, and main's check passed" skip "only docs/ changed" main \
+  'edit docs/a.md && c docs && git checkout -q main && edit core/a.rs && c code && rec && git checkout -q topic && git merge -q --no-edit main'
+case_ "the branch merged main in after main changed code, but no pass on main's new code" run "the gates haven't passed" main \
   'edit docs/a.md && c docs && git checkout -q main && edit core/a.rs && c code && git checkout -q topic && git merge -q --no-edit main'
-case_ "main moved on with code; the branch changed only docs" skip "only docs/ changed" main \
+case_ "main moved on with code; the branch changed only docs (its other files are main's old ones)" skip "only docs/ changed" main \
   'git checkout -q main && edit core/a.rs && c code && git checkout -q topic && edit docs/a.md && c docs'
-case_ "--base: a commit on the branch" skip "only docs/ changed" HEAD~1 \
+case_ "a base main fast-forwarded past (a mid-track commit whose check failed)" run "the gates haven't passed" main \
+  'git checkout -q main && edit core/a.rs && c mid && edit core/a.rs && c fix && rec && git checkout -q -B topic HEAD~1 && edit web/src/app.tsx && c ui'
+case_ "a parallel track's commit merged in, then landed with its fix" run "the gates haven't passed" main \
+  'git checkout -q -b dn && edit core/a.rs && c d1 && git checkout -q topic && git merge -q --no-edit dn && git checkout -q dn && edit core/a.rs && c d2 && git checkout -q main && git merge -q --ff-only dn && rec && git checkout -q topic && edit web/src/app.tsx && c ui'
+case_ "no recorded pass at all" run "the gates haven't passed" main \
+  ': > "$GATES_PASSED" && edit web/src/app.tsx && c ui'
+case_ "no record file" run "the gates haven't passed" main \
+  'rm "$GATES_PASSED" && edit web/src/app.tsx && c ui'
+case_ "a pass on a dirty tree isn't recorded" run "the gates haven't passed" main \
+  ': > "$GATES_PASSED" && edit core/a.rs && ! rec && git checkout -q -- core/a.rs && edit web/src/app.tsx && c ui'
+case_ "a pass isn't recorded when the files changed during the check" run "the gates haven't passed" main \
+  ': > "$GATES_PASSED" && t=$(gates_tree) && edit core/a.rs && c code && ! gates_record "$t" x && git checkout -q -B topic main && edit web/src/app.tsx && c ui'
+case_ "--base: a commit on the branch whose check passed" skip "only docs/ changed" HEAD~1 \
+  'edit core/a.rs && c code && rec && edit docs/a.md && c docs'
+case_ "--base: a commit on the branch with no pass" run "the gates haven't passed" HEAD~1 \
   'edit core/a.rs && c code && edit docs/a.md && c docs'
-case_ "a build output git ignores (web/dist/)" skip "only web/ changed" main \
-  'edit web/src/app.tsx && c ui && edit web/dist/index.html'
+case_ "build output git ignores (target/, web/dist/, e2e/node_modules/, std's kernels' target/)" skip "only web/ changed" main \
+  'edit web/src/app.tsx && c ui && edit web/dist/index.html && edit target/release/x && edit e2e/node_modules/x/index.js && edit std/kernels-src/target/x'
 case_ "a Rust file" run "core/a.rs changed since" main \
   'edit core/a.rs && c code'
 case_ "a UI change and a Rust file" run "core/a.rs changed since" main \
@@ -110,6 +151,18 @@ case_ "a staged change" run "the tree isn't clean: 1 uncommitted" main \
   'edit web/src/app.tsx && c ui && edit docs/architecture.md && git add docs/architecture.md'
 case_ "an untracked file" run "the tree isn't clean: 1 uncommitted or untracked" main \
   'edit web/src/app.tsx && c ui && edit web/src/new.tsx'
+case_ "an ignored file in an untracked folder (newdir/sub/dist/z.rs)" run "1 file git ignores where the gates can read" main \
+  'edit web/src/app.tsx && c ui && edit newdir/sub/dist/z.rs'
+case_ "an ignored file in a free folder (web/.env)" skip "only web/ changed" main \
+  'edit web/src/app.tsx && c ui && echo .env >> .git/info/exclude && edit web/.env'
+case_ "a change git hides (skip-worktree)" run "git hides" main \
+  'edit web/src/app.tsx && c ui && git update-index --skip-worktree core/a.rs && edit core/a.rs'
+case_ "a change git hides (assume-unchanged)" run "git hides" main \
+  'edit web/src/app.tsx && c ui && git update-index --assume-unchanged core/a.rs && edit core/a.rs'
+case_ "an untracked file .git/info/exclude hides (.cargo/config.toml)" run "1 file git ignores where the gates can read" main \
+  'edit web/src/app.tsx && c ui && echo .cargo/ >> .git/info/exclude && edit .cargo/config.toml'
+case_ "an ignored file where the gates read (core/dist/x.rs)" run "1 file git ignores where the gates can read" main \
+  'edit web/src/app.tsx && c ui && edit core/dist/x.rs'
 case_ "an empty diff: main itself" run "nothing changed since" main \
   'git checkout -q main'
 case_ "a branch already merged into main" run "nothing changed since" main \
@@ -124,6 +177,14 @@ case_ "a symlink" run "HEAD holds a symlink (web/link)" main \
   'ln -s ../core/a.rs web/link && c link'
 case_ "a name git quotes" run "changed since" main \
   'edit "web/a\"b.tsx" && c quoted'
+
+tree_ "a change under web/ and docs/, README.md, HANDOFF.md" same \
+  'edit web/src/app.tsx && edit docs/x.md && edit README.md && edit HANDOFF.md'
+tree_ "a change in core/" another 'edit core/a.rs'
+tree_ "a change in e2e/" another 'edit e2e/renders.sha256'
+tree_ "a new file only named like a free one" another 'edit README.md.orig'
+tree_ "a file that became executable" another 'chmod +x core/a.rs'
+tree_ "a file moved from core/ to docs/" another 'git mv core/a.rs docs/a.rs'
 
 echo
 echo "$passed of $n cases passed"

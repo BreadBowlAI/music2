@@ -20,17 +20,23 @@
 #   ci/check.sh --no-gates       on a Mac, without them
 #
 # When --gates=auto skips the gates (ci/gates-auto.sh holds the rule, ci/gates-auto-test.sh its
-# cases, which the "gates rule" row runs): the change is every file git diff --no-renames names
-# between git merge-base HEAD main and HEAD. The gates are skipped only when the tree is clean,
-# that list isn't empty, HEAD holds no symlink, and every file on it is under web/, docs/,
-# README.md or HANDOFF.md: the paths m2-gates never reads or builds from (e2e/ isn't one:
-# m2-gates reads e2e/renders.sha256). Anything else runs them: any other file, a dirty tree, an untracked
-# file, main itself (nothing changed), a git error, or a failed "gates rule" row. The decision is
-# printed at the start. A skip is a SKIP row, "only web/, docs/ changed since <base> (12 files)",
-# never a PASS, and the first line says the gates were skipped.
+# cases, which the "gates rule" row runs): only when git proves that HEAD holds, in every file they
+# read or build from, what a check on this machine already passed them on. The change is every file
+# git diff --no-renames names between git merge-base HEAD main and HEAD. The gates are skipped only
+# when the tree is clean (nothing uncommitted or untracked, no change git hides, no ignored file
+# where they read), that list isn't empty, HEAD holds no symlink, every file on it is under web/,
+# docs/, README.md or HANDOFF.md (the paths m2-gates never reads or builds from; e2e/ isn't one:
+# m2-gates reads e2e/renders.sha256), and the files the gates do read are exactly those of a tree
+# whose gates passed on this machine. Each Linux check whose gates row passes, on a clean tree, adds
+# that tree to ~/.cache/m2-check/gates-passed. Anything else runs them: any other file, a dirty tree,
+# main itself (nothing changed), no recorded pass on the same files, a git error, or a failed "gates
+# rule" row. The decision is printed at the start. A skip is a SKIP row, "only web/, docs/ changed
+# since <base> (12 files); the gates passed at <commit> (<date>) on the same files they read",
+# never a PASS, and the first line says the gates weren't run.
 #
-# The browser suites run 4 at a time on Linux (e2e/run.mjs --jobs 4: each still on its own server,
-# HOME and browser) and one at a time on a Mac, as before. A suite that failed runs once more, alone.
+# The browser suites run several at a time on Linux (e2e/run.mjs --jobs: a quarter of the threads,
+# 1 to 4; each suite still on its own server, HOME and browser) and one at a time on a Mac, as
+# before. A suite that failed runs once more, alone.
 #
 # Optional settings:
 #   CLAP_PATH         a folder holding "Surge XT.clap" and "Airwindows Consolidated.clap". The
@@ -41,7 +47,8 @@
 #   CARGO_TARGET_DIR  where cargo builds (default: target/ in the repo)
 #   M2_CHECK_OUT      where the logs go (default: ~/m2-check/<commit>). Only a folder an earlier
 #                     check made is ever replaced.
-#   M2_CHECK_JOBS     how many browser suites run at once (default: 4 on Linux, 1 on a Mac)
+#   M2_CHECK_JOBS     how many browser suites run at once (default: on Linux a quarter of the
+#                     threads, 1 to 4; on a Mac 1)
 # Exit status: 0 when every check passed, all of it judged, with the test plugins; 1 when not; 2 when
 # it couldn't start.
 #
@@ -69,7 +76,8 @@ case $(uname -s) in
     PLUGINS=$HOME/Library/Audio/Plug-Ins/CLAP ;;
   Linux)
     OS=linux
-    JOBS=4
+    # A quarter of the threads, 1 to 4: each suite runs a server and a browser.
+    JOBS=$(( $(nproc) / 4 )); if [ $JOBS -gt 4 ]; then JOBS=4; elif [ $JOBS -lt 1 ]; then JOBS=1; fi
     MACHINE="$(. /etc/os-release && echo "$PRETTY_NAME"), $(uname -m), $(nproc) threads"
     CHROME_DIR=linux-133.0.6943.141/chrome-headless-shell-linux64
     PLUGINS=$HOME/.local/share/m2-test-plugins/clap ;;
@@ -118,6 +126,9 @@ export CARGO_HOME=${CARGO_HOME:-$HOME/.cargo} RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.
 # get M2_MIDI=inject from run.mjs).
 export M2_AUDIO=none M2_MIDI=none CARGO_TERM_COLOR=never
 TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
+# Linux: this machine's record of the trees the gates passed on, which --gates=auto reads
+# (ci/gates-auto.sh). Steps 0b and 11 keep it; a Mac keeps none.
+if [ $OS = linux ]; then GATES_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/m2-check/gates-passed; else GATES_PASSED=; fi
 CHROME=${E2E_CHROME:-$HOME/.cache/puppeteer/chrome-headless-shell/$CHROME_DIR/chrome-headless-shell}
 if [ -z "${CLAP_PATH:-}" ] && [ -e "$PLUGINS/Surge XT.clap" ] && [ -e "$PLUGINS/Airwindows Consolidated.clap" ]; then
   CLAP_PATH=$PLUGINS
@@ -244,7 +255,7 @@ summary() {
     verdict=PASS
   fi
   if awk -F"$TAB" '$1 == "gates" && $2 == "SKIP" { found = 1 } END { exit !found }' "$OUT/results"; then
-    verdict="$verdict, without the gates: --gates=auto skipped them (see the gates row)"
+    verdict="$verdict, without running the gates: --gates=auto skipped them, as they passed before on the same files (see the gates row)"
   fi
   if [ -s "$OUT/flaky" ]; then verdict="$verdict; $(grep -c '' "$OUT/flaky") passed only on a retry"; fi
   # Logs only: no renders, no screenshots, no kept projects (a failed fx-fixes keeps a file of
@@ -315,11 +326,15 @@ for d in /Library/Audio/Plug-Ins/CLAP /usr/lib/clap; do
 done
 
 # 0b. The rule --gates=auto follows (ci/gates-auto.sh), tried on its table of cases in scratch git
-#     repos (ci/gates-auto-test.sh). Then, with --gates=auto, whether the gates run: on a Mac
-#     always; on Linux by the rule, judged on the tree as the check found it, and always when the
-#     rule's own cases failed. GATESWHY says why they run, SKIPPED why they don't.
+#     repos (ci/gates-auto-test.sh). On Linux, when they pass, the rule is loaded (RULE), and
+#     TREE0 is HEAD's gates_tree if the files on disk are HEAD's alone (gates_unseen): step 11
+#     records it as passed when the gates row passes. Then, with --gates=auto, whether the gates
+#     run: on a Mac always; on Linux by the rule, judged on the tree as the check found it, and
+#     always when the rule's own cases failed. GATESWHY says why they run, SKIPPED why they don't.
 GATESWHY=
 SKIPPED=
+RULE=
+TREE0=
 begin "gates rule" "seconds"
 if quiet gates-rule.log ci/gates-auto-test.sh; then
   rule=PASS
@@ -328,6 +343,13 @@ else
   rule=FAIL
   record "gates rule" FAIL "see gates-rule.log"
   { grep '^FAIL' "$OUT/gates-rule.log" || tail -1 "$OUT/gates-rule.log"; } | sed 's/^FAIL  //; s/^/gates rule: /' | cut -c1-160 >> "$OUT/failed"
+fi
+if [ $OS = linux ] && [ $rule = PASS ] && . ci/gates-auto.sh > "$OUT/gates-auto.log" 2>&1; then
+  RULE=1
+  if gates_unseen > "$OUT/gates-unseen.log" 2>&1 && ! TREE0=$(gates_tree); then
+    TREE0=
+    echo "git couldn't hash HEAD's tree" > "$OUT/gates-unseen.log"
+  fi
 fi
 if [ -n "$AUTO" ]; then
   if [ $OS = macos ]; then
@@ -340,7 +362,7 @@ if [ -n "$AUTO" ]; then
     # Any failure here (the file, the function, git) leaves the gates on.
     GATES=1
     GATESWHY="the rule's answer couldn't be read: see gates-auto.log"
-    if . ci/gates-auto.sh > "$OUT/gates-auto.log" 2>&1; then
+    if [ -n "$RULE" ]; then
       gates_auto "${BASE:-main}" >> "$OUT/gates-auto.log" 2>&1
       st=$?
       said=$(head -1 "$OUT/gates-auto.log")
@@ -608,8 +630,9 @@ while read -r run log; do
     { echo "suite $run"; echo "  $(first "$log" '^FAIL|^[A-Za-z]*Error: ')"; } >> "$OUT/failed"
   fi
 done < "$SCR/runs"
-# No total line: run.mjs itself stopped (a crash exits 1 too), so nothing can be trusted.
-if [ -z "$line" ] || { [ $st -ne 0 ] && [ $st -ne 1 ] && [ $st -ne 3 ]; }; then
+# No total line, or an exit 1 that names no failed suite: run.mjs itself stopped (a crash exits 1
+# too), so nothing can be trusted.
+if [ -z "$line" ] || { [ $st -ne 0 ] && [ $st -ne 1 ] && [ $st -ne 3 ]; } || { [ $st -eq 1 ] && [ ! -s "$SCR/runs" ]; }; then
   record "browser suites" FAIL "run.mjs stopped (exit $st): see e2e.log"
   echo "browser suites: run.mjs stopped (exit $st): $(tail -1 "$OUT/e2e.log" | cut -c1-120)" >> "$OUT/failed"
 elif [ $again -ne 0 ] || [ "$others" -gt 0 ] || { [ "$parts" -gt 0 ] && [ -n "${CLAP_PATH:-}" ]; }; then
@@ -677,7 +700,16 @@ if [ -n "$GATES" ]; then
   if [ -z "$bad" ] && grep -q '^      skip  .*not judged on this Mac (PLAT-1)' "$OUT/gates.log"; then
     record gates PART "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names, but G7f wasn't judged: this Mac isn't the one S's records name (see gates)$auto"
   elif [ -z "$bad" ]; then
-    record gates PASS "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names$auto"
+    # Linux: recorded as passed, so --gates=auto may skip them on the same files later.
+    kept=
+    if [ $OS = linux ] && [ -z "$RULE" ]; then
+      kept="; not recorded for --gates=auto: the gates rule row failed"
+    elif [ $OS = linux ] && [ -z "$TREE0" ]; then
+      kept="; not recorded for --gates=auto: when the check began, $(head -1 "$OUT/gates-unseen.log")"
+    elif [ $OS = linux ]; then
+      kept="; $(gates_record "$TREE0" "$SHA" 2>&1 | head -1)"
+    fi
+    record gates PASS "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names$auto$kept"
   else
     record gates FAIL "$bad: see gates.log$auto"
   fi

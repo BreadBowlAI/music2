@@ -272,6 +272,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **`m2-gates realtime --offline`'s step 7 loop** gives a late plugin or poly no notes (timing only).
 - **std's kernel test `odd_db_values` fails in a debug build** (a NaN's sign bit); `ci/check.sh` runs those tests in release, where it passes.
 - **The Confined check's rewire to a node made inside the edit** (WRITE-8, `core/session/src/tx/expect.rs` `made_inside`) has no test in `core/session`: only the editor's bus tests cover it.
+- **`--gates=auto` sees only what git sees**: what the gates take from outside the repo (`RUSTFLAGS` and other settings, a `.cargo/config.toml` above the repo or in `CARGO_HOME`, the machine itself) isn't in its record, so a skip trusts that these are as they were at the recorded pass.
+- **A check whose gates `--gates=auto` skipped still begins `music2 check: PASS`** (it goes on "without running the gates", and the gates row says SKIP): a script that must know the gates ran at this very commit has to read the gates row.
 - **The browser logs an error with no song open**: `GET /api/graph` answers 400, which is how the window knows to show the start screen. Answering "no project" without an error status would be quieter.
 
 ## The old app's parts not back yet

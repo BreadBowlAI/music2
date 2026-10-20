@@ -233,7 +233,7 @@ One script checks everything, on the server and on the Mac ([PLAT-6](docs/archit
 line says `music2 check: PASS`, `FAIL` or `PART`. PART means no row failed but the gates couldn't judge G7f (the Mac
 isn't the one S's records name). Only PASS is a pass.
 
-Rows: gates rule (`--gates=auto`'s rule tried on its 30 cases), toolchain, web build, build, app (Linux: the desktop
+Rows: gates rule (`--gates=auto`'s rule tried on its 51 cases), toolchain, web build, build, app (Linux: the desktop
 app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, clippy (a warning is an error),
 pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
 type-checked), browser suites, renders (against `e2e/renders.sha256`, one record for every OS), old engine S (with
@@ -242,17 +242,30 @@ the gates), gates (the 7 runs `ci/gates.txt` names), repo unchanged.
 - Without the test plugins it says FAIL. Edit no tracked file while it runs.
 
 **When the gates run.** On a Mac: always (`--no-gates` leaves them out). On Linux: with `--gates`, always; with no
-option, never; with `--gates=auto`, unless git proves the change can't reach them. The rule (`ci/gates-auto.sh`) is
-mechanical: the change is every file `git diff --no-renames` names between `git merge-base HEAD main` (or `--base
-<rev>`) and HEAD. The gates are skipped only when the tree is clean, that list isn't empty, HEAD holds no symlink, and
-every file on it is under `web/`, `docs/`, `README.md` or `HANDOFF.md`, which m2-gates never reads or builds from
-(checked by hand, in its build's dep-info files, and by tracing every file the S build and the 7 runs touch: the top
-of `ci/gates-auto.sh`). `e2e/` isn't one: m2-gates reads `e2e/renders.sha256` (G12's offline sweep). Anything else runs them: any other file, a dirty tree, an untracked file, main itself, a git
-error. The check prints its decision at the start. A skip is the row `gates SKIP only web/, docs/ changed since
-<base> (N files)` and the first line says "without the gates"; it is never a PASS. The rule trusts that the gates
-passed at the base, which holds because each track merges main in and runs its check with the gates before it lands.
+option, never; with `--gates=auto`, unless git proves that HEAD holds, in every file the gates read or build from,
+exactly what a check on this machine already passed them on. The rule (`ci/gates-auto.sh`) is mechanical:
 
-**The browser suites** run 4 at a time on Linux (`e2e/run.mjs all --jobs 4`; each suite still has its own server,
+- The change is every file `git diff --no-renames` names between `git merge-base HEAD main` (or `--base <rev>`) and
+  HEAD. Every file on it must be under `web/`, `docs/`, `README.md` or `HANDOFF.md`, which m2-gates never reads or
+  builds from (checked by hand, in its build's dep-info files, and by tracing every file the S build and the 7 runs
+  touch: the top of `ci/gates-auto.sh`). `e2e/` isn't one: m2-gates reads `e2e/renders.sha256`.
+- The list isn't empty (not main itself), and HEAD holds no symlink.
+- The tree is clean: nothing uncommitted or untracked, no change git hides (skip-worktree, assume-unchanged), and no
+  ignored file where the gates read (build output in `target/`, `e2e/node_modules/` and std's kernels' `target/` is
+  fine).
+- **A recorded pass on the same files.** Every Linux check whose gates row passes, on a clean tree, adds a hash of
+  every file the gates can read to `~/.cache/m2-check/gates-passed` (the gates row says "recorded in ..."). The skip
+  needs HEAD's hash there. The merge base alone proves nothing: main fast-forwards through a track's every commit, so
+  the base can be a mid-track commit whose own check failed, or a parallel track's commit that landed later with its
+  fix.
+
+Anything else runs them, and the check prints its decision at the start. A skip is the row `gates SKIP only web/,
+docs/ changed since <base> (N files); the gates passed at <commit> (<date>) on the same files they read`, and the
+first line says "without running the gates"; it is never a PASS. The rule doesn't see what the gates take from
+outside the repo (`RUSTFLAGS`, a `.cargo/config.toml` above it): gaps.md.
+
+**The browser suites** run several at a time on Linux (`e2e/run.mjs all --jobs N`, N a quarter of the threads, 1
+to 4: 4 on the server; each suite still has its own server,
 `HOME`, folder and browser; what they could share was checked, see `e2e/README.md`, "In parallel"), then each failed
 run once more alone, as before. On a Mac they run one at a time, as before (`M2_CHECK_JOBS=4` tries 4 there).
 
