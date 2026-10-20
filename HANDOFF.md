@@ -16,6 +16,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
   picker). Gap #27 is closed. No sound changed. A song asking for std "0.3" needs `std = "0.4"` (below). Its
   `ci/check.sh --gates` passed at `7bb44f3`: 1,770 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate
   runs, 34 minutes. Notes: `docs/designs/step9/build-notes-bus.md`.
+- **Draw mode (B) draws as GarageBand does** (branch `dn`): a press adds a note, a drag sets its length, ⌥-drag paints one a grid step. `ci/check.sh --gates` passed at `ce91acb`: 1,771 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes, nothing on a retry. Its first run caught two old races, now fixed: a take started right after the one before on the same track failed ("File exists"), and the playhead lagged Follow by a frame. By ear: mac-run step 133.
 - **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
   (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by
   far. 8a's sweep is done. **One more `ci/check.sh` on the Mac is owed, with the output at 48 kHz.**
