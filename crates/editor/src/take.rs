@@ -2,7 +2,8 @@
 //! grows in the song's `assets/` while it records.
 //!
 //! [`Growing::new`] makes a hidden part file there, create-only, and locks it at once, as an import
-//! does (`.Vox take.wav.<pid>.part`), so no sweep takes it. [`Growing::append`] adds frames; every
+//! does (`.Vox take.wav.<pid>.part`, or `.Vox take.wav.2.<pid>.part` while the take before on the
+//! track is still written), so no sweep takes it. [`Growing::append`] adds frames; every
 //! write leaves a WAV whose header says what it holds so far. [`Growing::finish`] finishes the
 //! header, pushes the bytes to the disk, names the file create-only (`Vox take.wav`, numbered when
 //! taken in any capitals: `Vox take 2.wav`) and syncs the folder. Only then may a Tx name it. A
@@ -86,9 +87,21 @@ impl Growing {
         let folder = dir.join(ASSETS);
         m2_os::fs::make_dirs(&folder).map_err(io)?;
         let wanted = AssetName::for_import(&format!("{} take.wav", label.trim()));
-        let part = part_path(&folder.join(wanted.as_str())).map_err(io)?;
         sweep(&folder);
-        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&part).map_err(io)?;
+        // The take before on the track may still be written, or be on its way out: its part file
+        // is there, and this one is numbered past it.
+        let (part, file) = 'made: {
+            for n in 1..100 {
+                let name = if n == 1 { wanted.as_str().to_string() } else { format!("{}.{n}", wanted.as_str()) };
+                let part = part_path(&folder.join(name)).map_err(io)?;
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(&part) {
+                    Ok(file) => break 'made (part, file),
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(io(e)),
+                }
+            }
+            return Err(io("too many takes of this track are being written at once"));
+        };
         let made = (|| {
             let lock = file.try_clone()?;
             let _ = m2_os::fs::try_lock(&lock);

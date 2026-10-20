@@ -30,6 +30,9 @@ export function setClock(status: GraphStatus, tempo: { beat: number; bpm: number
   // engine plays the tempo before, which the status says, and the playhead keeps to that.
   const playing = status.bpm ? [{ beat: 0, bpm: status.bpm }] : tempo;
   clock = { beat: status.beat, playing: status.playing && !status.paused, at: performance.now(), tempo: playing, loop: status.loop };
+  // Drawn at once, not at the next frame: what starts drawing now (Follow, as play starts) draws
+  // at once too, and the two never disagree for a frame (a view paged to the playhead without it).
+  draw();
 }
 
 const bpmAt = (beat: number) => {
@@ -53,14 +56,19 @@ export function beatNow(): number {
   return beat;
 }
 
-const tick = () => {
-  frame = 0;
-  if (!listeners.size) return;
+/** Every listener at the beat now, if it moved since they were last drawn. */
+const draw = () => {
   const beat = beatNow();
   if (beat !== shown) {
     shown = beat;
     for (const f of listeners) f(beat);
   }
+};
+
+const tick = () => {
+  frame = 0;
+  if (!listeners.size) return;
+  draw();
   frame = requestAnimationFrame(tick);
 };
 
