@@ -241,8 +241,8 @@ option, never; with `--gates=auto`, unless git proves the change can't reach the
 mechanical: the change is every file `git diff --no-renames` names between `git merge-base HEAD main` (or `--base
 <rev>`) and HEAD. The gates are skipped only when the tree is clean, that list isn't empty, HEAD holds no symlink, and
 every file on it is under `web/`, `docs/`, `README.md` or `HANDOFF.md`, which m2-gates never reads or builds from
-(how that was checked: the top of `ci/gates-auto.sh`). `e2e/` isn't one: G12 reads
-`e2e/renders.sha256`. Anything else runs them: any other file, a dirty tree, an untracked file, main itself, a git
+(checked by hand, in its build's dep-info files, and by tracing every file the S build and the 7 runs touch: the top
+of `ci/gates-auto.sh`). `e2e/` isn't one: m2-gates reads `e2e/renders.sha256` (G12's offline sweep). Anything else runs them: any other file, a dirty tree, an untracked file, main itself, a git
 error. The check prints its decision at the start. A skip is the row `gates SKIP only web/, docs/ changed since
 <base> (N files)` and the first line says "without the gates"; it is never a PASS. The rule trusts that the gates
 passed at the base, which holds because each track merges main in and runs its check with the gates before it lands.

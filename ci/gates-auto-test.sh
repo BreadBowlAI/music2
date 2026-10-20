@@ -96,7 +96,7 @@ case_ "rust-toolchain.toml" run "rust-toolchain.toml changed" main \
   'edit rust-toolchain.toml && c toolchain'
 case_ "ci/" run "ci/gates.txt changed" main \
   'edit ci/gates.txt && c gates'
-case_ "e2e/ (G12 reads e2e/renders.sha256)" run "e2e/run.mjs changed" main \
+case_ "e2e/ (m2-gates reads e2e/renders.sha256)" run "e2e/run.mjs changed" main \
   'edit e2e/run.mjs && c suites'
 case_ "a new top-level folder" run "webapp/x.ts changed" main \
   'edit webapp/x.ts && c new'

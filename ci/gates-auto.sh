@@ -9,8 +9,9 @@
 # (ci/check.sh). The rule trusts that the gates passed at the merge base. That holds because each
 # track merges main in and runs its check with the gates before it lands.
 #
-# GATES_FREE: the paths m2-gates never reads or builds from. Checked by hand at 69c3283 (2026-10-20).
-# Check again when m2-gates, its songs, or what it builds starts reading a new file:
+# GATES_FREE: the paths m2-gates never reads or builds from. Checked at 69c3283 (2026-10-20), by
+# hand and by watching it (below). Check again when m2-gates, its songs, or what it builds starts
+# reading a new file:
 #   web/       m2-gates never starts the HTTP server, so it never serves web/dist. It drives
 #              m2_server's Graph, AppState and export directly. No crate it builds reaches web/:
 #              none of them has a build script (the only ones are crates/gates' and the desktop
@@ -20,14 +21,21 @@
 #              Named only in comments and messages. Nothing m2-gates builds or runs opens them,
 #              nor does the S build (crates/gates/s/build.sh: git archive of 8aa301e,
 #              rust-toolchain.toml and crates/gates/s).
-#   not e2e/   G12's bits check reads e2e/renders.sha256 (crates/gates/src/realtime.rs).
+#   not e2e/   m2-gates reads e2e/renders.sha256 (G12's offline sweep, crates/gates/src/realtime.rs).
+#              ci/gates.txt doesn't run that sweep today, but one line added there would.
 #   Not anything else either: the code and its Cargo.toml files, Cargo.lock, rust-toolchain.toml, std/,
 #              examples/ and templates/ (the gates' songs and fixtures), crates/gates (the S build,
 #              its records), ci/ (gates.txt, check.sh, this file), and any new top-level path.
-# How the check was done:
+# How it was checked. By hand:
 #   grep -rnE 'include_(str|bytes)!|CARGO_MANIFEST_DIR' core crates/server/src crates/editor crates/gates
 #   grep -rnE '"[^"]*(docs/|web/|e2e|README|HANDOFF|\.md)[^"]*"' core crates/server crates/editor crates/gates
 #   find . -name build.rs -not -path ./target/\*; git ls-tree -r HEAD | grep -c '^120000'
+# By watching it: the release build's dep-info files (target/release/deps/*.d) name 227 files of the
+# repo, all under core/, crates/ and examples/first-song; cargo itself reads Cargo.toml, Cargo.lock,
+# rust-toolchain.toml and each package's own README; and under strace (-f, every file call) the S
+# build and the 7 runs of ci/gates.txt touched the repo only in crates/gates, crates/server,
+# examples/with-plugins, std/, target/ and rust-toolchain.toml: nothing under web/, docs/, e2e/,
+# README.md or HANDOFF.md.
 GATES_FREE="web/ docs/ README.md HANDOFF.md"
 
 # gates_auto <rev>: whether the timing gates can be skipped for HEAD, judged against

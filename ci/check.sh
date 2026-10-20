@@ -23,8 +23,8 @@
 # cases, which the "gates rule" row runs): the change is every file git diff --no-renames names
 # between git merge-base HEAD main and HEAD. The gates are skipped only when the tree is clean,
 # that list isn't empty, HEAD holds no symlink, and every file on it is under web/, docs/,
-# README.md or HANDOFF.md: the paths m2-gates never reads or builds from (e2e/ isn't one: G12
-# reads e2e/renders.sha256). Anything else runs them: any other file, a dirty tree, an untracked
+# README.md or HANDOFF.md: the paths m2-gates never reads or builds from (e2e/ isn't one:
+# m2-gates reads e2e/renders.sha256). Anything else runs them: any other file, a dirty tree, an untracked
 # file, main itself (nothing changed), a git error, or a failed "gates rule" row. The decision is
 # printed at the start. A skip is a SKIP row, "only web/, docs/ changed since <base> (12 files)",
 # never a PASS, and the first line says the gates were skipped.
