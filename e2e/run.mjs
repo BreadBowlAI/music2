@@ -24,6 +24,11 @@
 //   --keep         keep every scratch folder (logs are always kept, and so is the folder of a run
 //                  that wasn't ok)
 //   --quiet        don't stream a single suite's output (all mode never streams)
+//   --jobs <n>     run up to n suites at once (default 1: one at a time, in the list's order). Each
+//                  still gets its own fresh server, scratch HOME, folder and browser; the suites
+//                  marked `serial` in SUITES run after the others, alone. Results print in the
+//                  list's order whatever the order they finish in, with the same counts, rules and
+//                  exit status as at --jobs 1.
 //
 // Environment:
 //   M2_HEADLESS  the server: `cargo build -p m2-server --example headless` → target/<profile>/examples/headless
@@ -59,6 +64,8 @@ const E2E = path.dirname(fileURLToPath(import.meta.url));
 // [suite, default kind, options]. Order is the order of `all`. `expect`: the checks the suite
 // passes on that kind at 933f4de (the README's table). `clap`: the suite gets CLAP_PATH. live3b's
 // 51 include the 11 of its plugin part: without CLAP_PATH it passes 40 and prints a SKIP.
+// `serial`: with --jobs above 1, the suite runs after the others, alone, for the reason its comment
+// gives (none needs it at present: what suites share was checked, see the README's "In parallel").
 export const SUITES = [
   ["graph", "proj", { expect: 19 }],
   ["cables", "cables", { expect: 12 }],
@@ -139,13 +146,13 @@ const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 
 function usage(msg) {
   if (msg) console.error(`run.mjs: ${msg}`);
-  console.error("usage: M2_HEADLESS=<bin> node e2e/run.mjs <suite|all> [kind] [--repo DIR] [--out DIR] [--keep] [--quiet]");
+  console.error("usage: M2_HEADLESS=<bin> node e2e/run.mjs <suite|all> [kind] [--repo DIR] [--out DIR] [--keep] [--quiet] [--jobs N]");
   console.error(`suites: ${[...new Set(SUITES.map(([s]) => s))].join(" ")}`);
   process.exit(2);
 }
 
 const argv = process.argv.slice(2);
-const opts = { repo: path.resolve(E2E, ".."), out: null, keep: false, quiet: false };
+const opts = { repo: path.resolve(E2E, ".."), out: null, keep: false, quiet: false, jobs: 1 };
 const pos = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -153,6 +160,11 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--out") opts.out = path.resolve(argv[++i] ?? usage("--out needs a folder"));
   else if (a === "--keep") opts.keep = true;
   else if (a === "--quiet") opts.quiet = true;
+  else if (a === "--jobs" || a.startsWith("--jobs=")) {
+    const n = a === "--jobs" ? argv[++i] : a.slice("--jobs=".length);
+    if (!/^[1-9][0-9]*$/.test(n ?? "")) usage("--jobs needs a whole number, 1 or more");
+    opts.jobs = Number(n);
+  }
   else if (a === "-h" || a === "--help") usage();
   else if (a.startsWith("--")) usage(`unknown option ${a}`);
   else pos.push(a);
@@ -175,6 +187,10 @@ let runs;
 if (which === "all") {
   if (kindArg) usage("all takes no kind");
   runs = SUITES;
+  // Two runs of one name would share a folder and a log.
+  const names = SUITES.map(([s, k]) => `${s}-${k}`);
+  const twice = names.find((n, i) => names.indexOf(n) !== i);
+  if (twice) usage(`SUITES lists ${twice} twice`);
 } else {
   const known = SUITES.filter(([s]) => s === which);
   if (!known.length) usage(`unknown suite ${which}`);
@@ -272,8 +288,12 @@ async function runOne(suite, kind, o = {}, stream) {
   const env = envFor(home, o.clap, o.probe);
   const session = path.join(home, ".music2/session.json");
   const log = fs.openSync(logFile, "w");
+  // Once the log is closed, a late line goes to it by name: its old descriptor may belong to
+  // another run's file by then.
+  let closed = false;
   const say = (s) => {
-    fs.writeSync(log, s);
+    if (closed) fs.appendFileSync(logFile, s);
+    else fs.writeSync(log, s);
     if (stream) process.stdout.write(s);
   };
 
@@ -281,6 +301,8 @@ async function runOne(suite, kind, o = {}, stream) {
   const server = spawn(headless, [open, session, `e2e${Date.now()}`], { env, stdio: ["ignore", serverLog, serverLog] });
   let serverExit = null;
   server.on("exit", (code, sig) => (serverExit = sig ?? code));
+  // It couldn't be started: say so in its run, not as a crash of every run.
+  server.on("error", (e) => (serverExit ??= e.code ?? String(e)));
   const t0 = Date.now();
   while (!fs.existsSync(session) && serverExit === null && Date.now() - t0 < 30000) await sleep(100);
   await sleep(300);
@@ -293,6 +315,9 @@ async function runOne(suite, kind, o = {}, stream) {
       const child = spawn(process.execPath, [path.join(E2E, `${suite}.mjs`), ...args], { cwd: E2E, env, stdio: ["ignore", "pipe", "pipe"] });
       child.stdout.on("data", (d) => say(d.toString()));
       child.stderr.on("data", (d) => say(d.toString()));
+      // Its output can still be on the way when it exits: wait for the end of both (at most 2 s,
+      // in case something it started holds them open), so every line it printed is counted.
+      const ends = Promise.all([child.stdout, child.stderr].map((s) => new Promise((r) => s.once("end", r).once("error", r))));
       // On a timeout, SIGTERM first: puppeteer closes its browser on it (a SIGKILL would leave
       // chrome-headless-shell running, since puppeteer starts it in its own process group).
       let hard;
@@ -304,7 +329,14 @@ async function runOne(suite, kind, o = {}, stream) {
       child.on("exit", (c, sig) => {
         clearTimeout(timer);
         clearTimeout(hard);
-        resolve(sig ? 1 : c);
+        Promise.race([ends, sleep(2000)]).then(() => resolve(sig ? 1 : c));
+      });
+      // node couldn't be started: that run fails, and the others go on.
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        clearTimeout(hard);
+        say(`FAIL  the suite didn't start: ${e.message}\n`);
+        resolve(1);
       });
     });
   }
@@ -314,6 +346,7 @@ async function runOne(suite, kind, o = {}, stream) {
     if (serverExit === null) server.kill("SIGKILL");
   }
   fs.closeSync(serverLog);
+  closed = true;
   fs.closeSync(log);
   const text = fs.readFileSync(logFile, "utf8");
   const pass = (text.match(/^PASS/gm) ?? []).length;
@@ -330,17 +363,49 @@ async function runOne(suite, kind, o = {}, stream) {
   return { name, code, pass, fail, skip: skips.length, expect, why, status, logFile };
 }
 
-const results = [];
-for (const [suite, kind, o] of runs) {
-  const stream = runs.length === 1 && !opts.quiet;
-  const r = await runOne(suite, kind ?? "proj", o ?? {}, stream);
-  results.push(r);
-  if (runs.length > 1) {
-    const counts = `${r.pass} pass ${r.fail} fail${r.skip ? ` ${r.skip} skip` : ""}`;
-    const short = r.expect !== undefined && r.pass !== r.expect ? ` (expected ${r.expect} pass)` : "";
-    console.log(`${r.status.padEnd(4)} ${r.name.padEnd(18)} exit=${r.code} ${counts}${short}`);
+// One run, never a crash of all of them: anything runOne throws is that run's FAIL, in its log.
+async function runSafe(suite, kind, o, stream) {
+  const t0 = Date.now();
+  try {
+    return { ...(await runOne(suite, kind, o, stream)), ms: Date.now() - t0 };
+  } catch (e) {
+    const name = `${suite}-${kind}`;
+    const logFile = path.join(root, `${name}.log`);
+    fs.appendFileSync(logFile, `FAIL  run.mjs couldn't run it: ${e?.stack ?? e}\n`);
+    return { name, code: 1, pass: 0, fail: 1, skip: 0, expect: o.expect, why: [], status: "FAIL", logFile, ms: Date.now() - t0 };
   }
 }
+
+// Every run, up to opts.jobs at once, the `serial` ones after the others and alone (at --jobs 1, all
+// of them one at a time in the list's order, as before). Each result prints once every run before
+// it in the list has printed, so the lines come in the list's order.
+const started = Date.now();
+const results = new Array(runs.length);
+let printed = 0;
+function finished(i, r) {
+  results[i] = r;
+  for (; printed < runs.length && results[printed]; printed++) {
+    if (runs.length === 1) continue;
+    const r = results[printed];
+    const counts = `${r.pass} pass ${r.fail} fail${r.skip ? ` ${r.skip} skip` : ""}`;
+    const short = r.expect !== undefined && r.pass !== r.expect ? ` (expected ${r.expect} pass)` : "";
+    console.log(`${r.status.padEnd(4)} ${r.name.padEnd(18)} exit=${r.code} ${counts}${short}  ${Math.round(r.ms / 1000)} s`);
+  }
+}
+const one = async (i) => {
+  const [suite, kind, o] = runs[i];
+  finished(i, await runSafe(suite, kind ?? "proj", o ?? {}, runs.length === 1 && !opts.quiet));
+};
+const all = runs.map((_, i) => i);
+const together = opts.jobs > 1 ? all.filter((i) => !runs[i][2]?.serial) : all;
+const alone = opts.jobs > 1 ? all.filter((i) => runs[i][2]?.serial) : [];
+let next = 0;
+await Promise.all(
+  Array.from({ length: Math.min(opts.jobs, together.length) }, async () => {
+    while (next < together.length) await one(together[next++]);
+  }),
+);
+for (const i of alone) await one(i);
 
 const failed = results.filter((r) => r.status === "FAIL");
 const part = results.filter((r) => r.status === "PART");
@@ -351,6 +416,7 @@ console.log(
     `${part.length ? `, ${part.length} PART (passed, but not in full)` : ""}${failed.length ? `, ${failed.length} failed` : ""}; ` +
     `${sum((r) => r.pass)}${expected} checks passed, ${sum((r) => r.fail)} failed, ${sum((r) => r.skip)} skipped. Logs: ${root}`,
 );
+console.log(`time: ${((Date.now() - started) / 60000).toFixed(1)} min, ${opts.jobs === 1 ? "one suite at a time" : `up to ${opts.jobs} suites at once${alone.length ? `, then ${alone.length} alone` : ""}`}`);
 for (const r of part) console.log(`  PART:   ${r.name}: ${r.why.join("; ")}. ${r.logFile}`);
 for (const r of failed) console.log(`  failed: ${r.name} (exit ${r.code}) ${r.logFile}`);
 process.exit(failed.length ? 1 : part.length ? 3 : 0);

@@ -14,6 +14,7 @@ cargo build -p m2-server --example headless && cargo build -p m2   # the server;
 M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs graph        # one suite
 M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs start empty  # one suite, another fixture kind
 M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs all          # every suite, each on a fresh server
+M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs all --jobs 4 # the same, 4 at a time (ci/check.sh on Linux)
 CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs all
                                      # the same, with live3b's plugin part (Surge XT, Airwindows) included
 ```
@@ -29,7 +30,10 @@ CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP M2_HEADLESS=target/debug/examples/headle
   note when the binary wasn't built in `--repo`.
 - `--out <dir>` keeps the logs (and, with `--keep`, the scratch folders) there; by default a new temp
   folder, printed at the end. The scratch folder of a run that wasn't `ok` is always kept.
-- `all` prints one line per suite and a total. A run is `ok` only when the suite exited 0, printed no
+- `--jobs <n>` runs up to `n` suites at once (default 1, one at a time). Each still gets its own
+  server, scratch `HOME`, folder and browser. See "In parallel" below.
+- `all` prints one line per suite, in the list's order whatever the order they finish in, with how
+  long each took; then a total, and the time of the whole run. A run is `ok` only when the suite exited 0, printed no
   `FAIL` and no `SKIP` line, and passed exactly the number of checks `run.mjs` expects of it (the
   `expect` counts in its `SUITES`, the same as the table below). A run that passed but printed a
   `SKIP`, or passed another number of checks, is `PART`, and the total says why: part of it didn't
@@ -69,6 +73,58 @@ Fixture kinds (what `run.mjs` prepares in `<root>`, and the suite's arguments):
 
 `<root>` also holds `orig-song.ts`, `keys-orig.ts` (and `cables-orig.ts`): the fixture's files as
 they started, which suites compare edits against.
+
+### In parallel (`--jobs`)
+
+In short: `--jobs 4` runs the suites 4 at a time and gives the same answer as one at a time, in about
+3 minutes instead of 11 on the Linux server. The suites share nothing but the machine.
+
+- The results are the same as at `--jobs 1`: the same line for each run, printed in the list's
+  order, the same counts, the same `ok`/`PART`/`FAIL` rules and the same exit status. Anything that
+  goes wrong in one run (the server or the suite can't start) fails that run, not all of them.
+- `ci/check.sh` runs `all --jobs 4` on Linux, and then runs each run that failed once more, alone,
+  with nothing else of `run.mjs` running: the same retry as before, so "passed only on a retry"
+  means what it meant. On a Mac it runs one at a time, as before, until a Mac run shows the suites
+  hold at 4 (`M2_CHECK_JOBS=4 ci/check.sh` tries it).
+- A suite marked `serial: true` in `run.mjs`'s `SUITES` (with the reason in a comment) runs after
+  the others, alone. None needs it at present.
+
+What the suites could have shared, and why they don't (checked 2026-10-20):
+
+| what | how each run keeps its own |
+|------|----------------------------|
+| ports | every server listens on port 0 (the OS picks a free one) and writes its URL to its own session file; Chrome's debugging port is 0 too (puppeteer's default) |
+| the session file | `<run>/testhome/.music2/session.json`; a suite's second server writes its own under `<run>/` |
+| scratch `HOME` | one per run (`<run>/testhome`), and one per second server (`<run>/inject/home` and the like). music2 finds its cache, settings and plugins from `HOME` alone, never `XDG_*` |
+| temporary folders | run.mjs makes one `--out` folder; suites write only under their `<root>`, `HOME` and project |
+| the Chrome profile | puppeteer makes a new one for each browser (`mkdtemp`, `puppeteer_dev_chrome_profile-*`) |
+| `--out` folders | one per run, named `<suite>-<kind>` (run.mjs refuses a list naming one twice); a retry goes to `e2e-retry` |
+| `CLAP_PATH`, the probe plugin | the plugin files are only read; what Surge XT writes goes to the run's `HOME`. The probe plugin lives in the server's memory (`M2_PROBE=1`) |
+| plugin shared memory (`/dev/shm`) | named `/m2-<server's pid>-<n>`, made with `O_EXCL`, removed once both sides map it; the plugin host talks over pipes |
+| MIDI and audio | `M2_AUDIO=none`, `M2_MIDI=inject`, `M2_AUDIO_INPUT=inject`: no device is opened |
+| Xvfb | only `ph-window` starts one, with `-displayfd`: the X server picks a free display |
+| files in the repo | none are written (suites run in `e2e/` but write only to their folders; `ci/check.sh`'s "repo unchanged" row checks). The server reads `web/dist`, `std`, `templates/` and `examples/` from the tree, never writes them |
+| a suite's log | each run's own file; a line that comes late is added to it by name, never through a closed descriptor another run may have by then, and a run counts only once its output has ended |
+
+What they do share is CPU time, so a suite's own timing check (`export`'s "the server answers
+while exporting" within 300 ms, `s8-tracks`' "within a second or so") is where parallel could hurt.
+The evidence below shows none did.
+
+Evidence, on the Linux server (Ryzen 9 7950X3D, 16 cores, 32 threads), `all` with `CLAP_PATH` set, on
+branch `cs` (main at `69c3283` with this change), 2026-10-20:
+
+| run | `--jobs` | suites | checks passed | time |
+|-----|---------:|--------|--------------:|-----:|
+| 1 | 1 | 73 of 74 ok; `pl-zoom-fix` failed | 3,129 of 3,130 | 11.0 min |
+| 2 | 4 | 74 of 74 ok | 3,130 of 3,130 | 2.7 min |
+| 3 | 4 | 73 of 74 ok; `pl-zoom-fix` failed | 3,129 of 3,130 | 2.7 min |
+| 4 | 4 | 74 of 74 ok | 3,130 of 3,130 | 2.7 min |
+
+Every other suite passed in all four runs, with the same counts. `pl-zoom-fix` fails about half the
+time alone too (6 of 11 runs by itself), always on the same check, "which sits near the view's left: -2700 px
+in": the view pages to the playhead a frame before the playhead is drawn there (150 ms later it is
+194 px in, as the check wants). That is a race of its own, not of running in parallel (branch `dn`
+fixes it), so no suite needed `serial`. Run 1 shared the machine with another track's check.
 
 ## Byte-identity of renders
 

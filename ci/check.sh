@@ -10,9 +10,27 @@
 # Mac's output muted: it plays zeros), and never touches your ~/Music or ~/.music2. If one line says
 # "running" for over 30 minutes, press Ctrl-C once: it stops and prints the summary anyway.
 #
-#   ci/check.sh             everything (on a Mac, the timing gates too)
-#   ci/check.sh --gates     on Linux, the timing gates too (recorded for information, PLAT-1)
-#   ci/check.sh --no-gates  on a Mac, without them
+#   ci/check.sh                  everything (on a Mac, the timing gates too)
+#   ci/check.sh --gates          on Linux, the timing gates too (recorded for information, PLAT-1)
+#   ci/check.sh --gates=auto     on Linux, the timing gates too, unless git proves the change can't
+#                                reach them (below). On a Mac they always run.
+#   ci/check.sh --gates=auto --base <rev>
+#                                the same, with the change counted from git merge-base HEAD <rev>
+#                                instead of from main
+#   ci/check.sh --no-gates       on a Mac, without them
+#
+# When --gates=auto skips the gates (ci/gates-auto.sh holds the rule, ci/gates-auto-test.sh its
+# cases, which the "gates rule" row runs): the change is every file git diff --no-renames names
+# between git merge-base HEAD main and HEAD. The gates are skipped only when the tree is clean,
+# that list isn't empty, HEAD holds no symlink, and every file on it is under web/, docs/,
+# README.md or HANDOFF.md: the paths m2-gates never reads or builds from (e2e/ isn't one: G12
+# reads e2e/renders.sha256). Anything else runs them: any other file, a dirty tree, an untracked
+# file, main itself (nothing changed), a git error, or a failed "gates rule" row. The decision is
+# printed at the start. A skip is a SKIP row, "only web/, docs/ changed since <base> (12 files)",
+# never a PASS, and the first line says the gates were skipped.
+#
+# The browser suites run 4 at a time on Linux (e2e/run.mjs --jobs 4: each still on its own server,
+# HOME and browser) and one at a time on a Mac, as before. A suite that failed runs once more, alone.
 #
 # Optional settings:
 #   CLAP_PATH         a folder holding "Surge XT.clap" and "Airwindows Consolidated.clap". The
@@ -23,6 +41,7 @@
 #   CARGO_TARGET_DIR  where cargo builds (default: target/ in the repo)
 #   M2_CHECK_OUT      where the logs go (default: ~/m2-check/<commit>). Only a folder an earlier
 #                     check made is ever replaced.
+#   M2_CHECK_JOBS     how many browser suites run at once (default: 4 on Linux, 1 on a Mac)
 # Exit status: 0 when every check passed, all of it judged, with the test plugins; 1 when not; 2 when
 # it couldn't start.
 #
@@ -36,16 +55,21 @@
 
 set -u -o pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd) && cd "$ROOT" || exit 2
+# GATES: 1 when the gates run. AUTO: --gates=auto, which decides that after the "gates rule" row.
 GATES=
+AUTO=
+BASE=
 case $(uname -s) in
   Darwin)
     OS=macos
     GATES=1
+    JOBS=1
     MACHINE="$(sysctl -n hw.model), macOS $(sw_vers -productVersion), $(uname -m)"
     CHROME_DIR=mac_arm-133.0.6943.141/chrome-headless-shell-mac-arm64
     PLUGINS=$HOME/Library/Audio/Plug-Ins/CLAP ;;
   Linux)
     OS=linux
+    JOBS=4
     MACHINE="$(. /etc/os-release && echo "$PRETTY_NAME"), $(uname -m), $(nproc) threads"
     CHROME_DIR=linux-133.0.6943.141/chrome-headless-shell-linux64
     PLUGINS=$HOME/.local/share/m2-test-plugins/clap ;;
@@ -53,13 +77,23 @@ case $(uname -s) in
     echo "ci/check.sh runs on macOS and Linux"
     exit 2 ;;
 esac
-for a in "$@"; do
-  case $a in
-    --gates) GATES=1 ;;
-    --no-gates) GATES= ;;
-    *) echo "ci/check.sh: no option $a (see the top of the script)"; exit 2 ;;
+while [ $# -gt 0 ]; do
+  case $1 in
+    --gates) GATES=1; AUTO= ;;
+    --gates=auto) AUTO=1 ;;
+    --no-gates) GATES=; AUTO= ;;
+    --base)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then echo "ci/check.sh: --base needs a commit"; exit 2; fi
+      BASE=$2
+      shift ;;
+    --base=?*) BASE=${1#--base=} ;;
+    *) echo "ci/check.sh: no option $1 (see the top of the script)"; exit 2 ;;
   esac
+  shift
 done
+if [ -n "$BASE" ] && [ -z "$AUTO" ]; then echo "ci/check.sh: --base goes with --gates=auto"; exit 2; fi
+JOBS=${M2_CHECK_JOBS:-$JOBS}
+case $JOBS in ''|0*|*[!0-9]*) echo "ci/check.sh: M2_CHECK_JOBS must be a whole number, 1 or more"; exit 2 ;; esac
 if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
 SHA=$(git rev-parse --short=12 HEAD) || exit 2
 OUT=${M2_CHECK_OUT:-$HOME/m2-check/$SHA}
@@ -209,6 +243,9 @@ summary() {
   else
     verdict=PASS
   fi
+  if awk -F"$TAB" '$1 == "gates" && $2 == "SKIP" { found = 1 } END { exit !found }' "$OUT/results"; then
+    verdict="$verdict, without the gates: --gates=auto skipped them (see the gates row)"
+  fi
   if [ -s "$OUT/flaky" ]; then verdict="$verdict; $(grep -c '' "$OUT/flaky") passed only on a retry"; fi
   # Logs only: no renders, no screenshots, no kept projects (a failed fx-fixes keeps a file of
   # over 300 MB).
@@ -276,6 +313,49 @@ for d in /Library/Audio/Plug-Ins/CLAP /usr/lib/clap; do
     exit 2
   fi
 done
+
+# 0b. The rule --gates=auto follows (ci/gates-auto.sh), tried on its table of cases in scratch git
+#     repos (ci/gates-auto-test.sh). Then, with --gates=auto, whether the gates run: on a Mac
+#     always; on Linux by the rule, judged on the tree as the check found it, and always when the
+#     rule's own cases failed. GATESWHY says why they run, SKIPPED why they don't.
+GATESWHY=
+SKIPPED=
+begin "gates rule" "seconds"
+if quiet gates-rule.log ci/gates-auto-test.sh; then
+  rule=PASS
+  record "gates rule" PASS "$(tail -1 "$OUT/gates-rule.log")"
+else
+  rule=FAIL
+  record "gates rule" FAIL "see gates-rule.log"
+  { grep '^FAIL' "$OUT/gates-rule.log" || tail -1 "$OUT/gates-rule.log"; } | sed 's/^FAIL  //; s/^/gates rule: /' | cut -c1-160 >> "$OUT/failed"
+fi
+if [ -n "$AUTO" ]; then
+  if [ $OS = macos ]; then
+    GATES=1
+    GATESWHY="on a Mac the gates always run"
+  elif [ $rule != PASS ]; then
+    GATES=1
+    GATESWHY="the gates rule row failed"
+  else
+    # Any failure here (the file, the function, git) leaves the gates on.
+    GATES=1
+    GATESWHY="the rule's answer couldn't be read: see gates-auto.log"
+    if . ci/gates-auto.sh > "$OUT/gates-auto.log" 2>&1; then
+      gates_auto "${BASE:-main}" >> "$OUT/gates-auto.log" 2>&1
+      st=$?
+      said=$(head -1 "$OUT/gates-auto.log")
+      case $st:$said in
+        "0:skip  "?*) GATES= SKIPPED=${said#skip  } ;;
+        *:"run   "?*) GATESWHY=${said#run   } ;;
+      esac
+    fi
+  fi
+  if [ -n "$GATES" ]; then
+    echo "gates            --gates=auto runs them: $GATESWHY"
+  else
+    echo "gates            --gates=auto skips them: $SKIPPED"
+  fi
+fi
 
 # 1. The pinned toolchain, installed if missing (rustup 1.28 or later reads rust-toolchain.toml).
 begin toolchain "1 min"
@@ -502,17 +582,19 @@ if [ $OS = linux ]; then
   fi
 fi
 
-# 9. Every browser suite, each on a fresh headless server with a scratch HOME (e2e/run.mjs). A run
-#    that failed runs once more alone; if it passes then, it is named as retried.
-begin "browser suites" "8 min"
+# 9. Every browser suite, each on a fresh headless server with a scratch HOME (e2e/run.mjs), $JOBS at
+#    a time (the suites run.mjs marks serial after the others, alone). A run that failed runs once
+#    more, alone, with nothing else of run.mjs's running; if it passes then, it is named as retried.
+if [ "$JOBS" -gt 1 ]; then begin "browser suites" "4 min"; else begin "browser suites" "10 min"; fi
 quiet e2e-npm.log sh -c 'cd e2e && npm ci --no-audit --no-fund'
 if [ ! -x "$CHROME" ]; then
   (cd e2e && node_modules/.bin/browsers install chrome-headless-shell@133.0.6943.141 --path "$HOME/.cache/puppeteer") \
     >> "$OUT/e2e-npm.log" 2>&1
 fi
-quiet e2e.log suites all --out "$OUT/e2e"
+quiet e2e.log suites all --jobs "$JOBS" --out "$OUT/e2e"
 st=$?
-line=$(grep -E 'suites ok' "$OUT/e2e.log" | tail -1 | cut -d';' -f1)
+line=$(grep -E '^[0-9]+/[0-9]+ suites ok' "$OUT/e2e.log" | tail -1 | cut -d';' -f1)
+took=$(grep -m1 '^time: ' "$OUT/e2e.log" | sed 's/^time: //; s/,.*//')
 parts=$(grep -c '^  PART:' "$OUT/e2e.log")
 others=$(grep '^  PART:' "$OUT/e2e.log" | grep -vc 'live3b-proj')
 grep '^  failed: ' "$OUT/e2e.log" | awk '{print $2, $NF}' > "$SCR/runs"
@@ -526,17 +608,19 @@ while read -r run log; do
     { echo "suite $run"; echo "  $(first "$log" '^FAIL|^[A-Za-z]*Error: ')"; } >> "$OUT/failed"
   fi
 done < "$SCR/runs"
-if [ $st -ne 0 ] && [ $st -ne 1 ] && [ $st -ne 3 ]; then
+# No total line: run.mjs itself stopped (a crash exits 1 too), so nothing can be trusted.
+if [ -z "$line" ] || { [ $st -ne 0 ] && [ $st -ne 1 ] && [ $st -ne 3 ]; }; then
   record "browser suites" FAIL "run.mjs stopped (exit $st): see e2e.log"
+  echo "browser suites: run.mjs stopped (exit $st): $(tail -1 "$OUT/e2e.log" | cut -c1-120)" >> "$OUT/failed"
 elif [ $again -ne 0 ] || [ "$others" -gt 0 ] || { [ "$parts" -gt 0 ] && [ -n "${CLAP_PATH:-}" ]; }; then
   record "browser suites" FAIL "$line: see e2e.log"
   grep '^  PART:' "$OUT/e2e.log" | sed 's/^  PART: */suite /' | cut -c1-160 >> "$OUT/failed"
 elif [ "$parts" -gt 0 ]; then
   record "browser suites" PART "$line (live3b without plugins)"
 elif [ -s "$SCR/runs" ]; then
-  record "browser suites" PASS "$line; passed on a retry"
+  record "browser suites" PASS "$line, $JOBS at a time, $took; passed on a retry"
 else
-  record "browser suites" PASS "$line"
+  record "browser suites" PASS "$line, $JOBS at a time, $took"
 fi
 
 # 10. The offline renders with the debug m2 from step 3 (it renders the release m2's bits),
@@ -552,7 +636,8 @@ else
   grep -v ': OK$' "$OUT/renders-check.log" 2> /dev/null | sed 's/^/render /' >> "$OUT/failed"
 fi
 
-# 11. The timing gates ci/gates.txt names, in release: on a Mac by default, on Linux with --gates.
+# 11. The timing gates ci/gates.txt names, in release: on a Mac by default, on Linux with --gates,
+#     or with --gates=auto unless its rule skipped them (step 0b; then the row says SKIP and why).
 #     Only the reference Mac's timings are judged; elsewhere they are recorded (PLAT-1). First, G7f's
 #     old engine: S, the commit before step 7, which G7f measures beside the app in every run. Its
 #     runner is built from a clean copy of S, in a cache folder outside the repo, and kept there
@@ -587,12 +672,14 @@ if [ -n "$GATES" ]; then
   fi
   # A Mac S's records don't name runs G7f but can't judge its timings (PLAT-1): the row says PART, and
   # so does the check's first line, never PASS.
+  # With --gates=auto, why they ran.
+  if [ -n "$AUTO" ]; then auto=" (--gates=auto: $GATESWHY)"; else auto=; fi
   if [ -z "$bad" ] && grep -q '^      skip  .*not judged on this Mac (PLAT-1)' "$OUT/gates.log"; then
-    record gates PART "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names, but G7f wasn't judged: this Mac isn't the one S's records name (see gates)"
+    record gates PART "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names, but G7f wasn't judged: this Mac isn't the one S's records name (see gates)$auto"
   elif [ -z "$bad" ]; then
-    record gates PASS "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names"
+    record gates PASS "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names$auto"
   else
-    record gates FAIL "$bad: see gates.log"
+    record gates FAIL "$bad: see gates.log$auto"
   fi
   # First the machine m2-gates names, once: only on the one S's records name are G7f's timings
   # judged, and on a Mac they don't name it is the line to copy into them (PLAT-1). Then each run,
@@ -608,6 +695,9 @@ if [ -n "$GATES" ]; then
   # dropouts, and its note when this Mac only stands in for gate 8's.
   { grep -m1 '^machine: ' "$OUT/gates.log"; grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: |^      ok    the same music|^      info  (block|callback), (P1 against S|the app.s layout against P1|starting a turn)|^      info  S as recorded: |^      ok    (full build within|footprint within) |^      ok    .*: (set-up|dropouts): |^      info  gate 8: ' "$OUT/gates.log"; } 2> /dev/null |
     cut -c1-220 > "$OUT/gates.sum"
+elif [ -n "$SKIPPED" ]; then
+  # Never a PASS: nothing was measured.
+  record gates SKIP "$SKIPPED"
 fi
 
 # 12. The check changed nothing in the repo.

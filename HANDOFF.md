@@ -22,6 +22,10 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **Track `br` landed** (2026-10-18, `054e338`): add an installed plugin from the app (#32), and presets for std
   sounds and plugins (#26, FMT-22, HOST-8). Linux green at `1fb6caa`; macOS owed (in the next Mac run). Build notes
   `docs/designs/step9/build-notes-br.md`.
+- **Checks on Linux are faster, and check no less** (track `cs`): `ci/check.sh --gates=auto` skips the
+  timing gates only when git proves the change can't reach them (only `web/`, `docs/`, `README.md` or
+  `HANDOFF.md` changed since main), and the browser suites run 4 at a time: about 3 minutes instead of 11, with
+  the same results. See "The check" below.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
 - Next: that one Mac run (after `mf2` is merged), then fix what it finds. Then Windows, as its own step, or the top gaps.
@@ -224,19 +228,44 @@ One script checks everything, on the server and on the Mac ([PLAT-6](docs/archit
 line says `music2 check: PASS`, `FAIL` or `PART`. PART means no row failed but the gates couldn't judge G7f (the Mac
 isn't the one S's records name). Only PASS is a pass.
 
-Rows: toolchain, web build, build, app (Linux: the desktop app on Xvfb with `first-song` and `with-plugins`, a
-picture of each), rust tests, clippy (a warning is an error), pool models, std kernels, `std.wasm` (rebuilt to the
-same bytes elsewhere), mac lint (Linux: the Mac-only code type-checked), browser suites, renders (against
-`e2e/renders.sha256`, one record for every OS), old engine S (with the gates), gates (the 7 runs `ci/gates.txt`
-names; on Linux only with `--gates`), repo unchanged.
+Rows: gates rule (`--gates=auto`'s rule tried on its 30 cases), toolchain, web build, build, app (Linux: the desktop
+app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, clippy (a warning is an error),
+pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
+type-checked), browser suites, renders (against `e2e/renders.sha256`, one record for every OS), old engine S (with
+the gates), gates (the 7 runs `ci/gates.txt` names), repo unchanged.
 
 - Without the test plugins it says FAIL. Edit no tracked file while it runs.
 
-On the server (about 35 minutes with `--gates` and a warm `target/`):
+**When the gates run.** On a Mac: always (`--no-gates` leaves them out). On Linux: with `--gates`, always; with no
+option, never; with `--gates=auto`, unless git proves the change can't reach them. The rule (`ci/gates-auto.sh`) is
+mechanical: the change is every file `git diff --no-renames` names between `git merge-base HEAD main` (or `--base
+<rev>`) and HEAD. The gates are skipped only when the tree is clean, that list isn't empty, HEAD holds no symlink, and
+every file on it is under `web/`, `docs/`, `README.md` or `HANDOFF.md`, which m2-gates never reads or builds from
+(how that was checked: the top of `ci/gates-auto.sh`). `e2e/` isn't one: G12 reads
+`e2e/renders.sha256`. Anything else runs them: any other file, a dirty tree, an untracked file, main itself, a git
+error. The check prints its decision at the start. A skip is the row `gates SKIP only web/, docs/ changed since
+<base> (N files)` and the first line says "without the gates"; it is never a PASS. The rule trusts that the gates
+passed at the base, which holds because each track merges main in and runs its check with the gates before it lands.
+
+**The browser suites** run 4 at a time on Linux (`e2e/run.mjs all --jobs 4`; each suite still has its own server,
+`HOME`, folder and browser; what they could share was checked, see `e2e/README.md`, "In parallel"), then each failed
+run once more alone, as before. On a Mac they run one at a time, as before (`M2_CHECK_JOBS=4` tries 4 there).
+
+Times on the server, warm `target/`:
+
+| part | before | now |
+|---|---|---|
+| browser suites | 10.5 to 11 min, one at a time | 2.7 min, 4 at a time (3 runs) |
+| timing gates, with the S build | 16 min | the same when they run; none when `--gates=auto` skips them |
+| rust tests | 6 min | the same |
+
+On the server, a track's check (with a warm `target/`):
 
 ```sh
-TW_WAIT=3500 ~/m2-runs/tw check-<label> 'M2_CHECK_OUT=$HOME/m2-runs/check-<label> ci/check.sh --gates'
+TW_WAIT=3500 ~/m2-runs/tw check-<label> 'M2_CHECK_OUT=$HOME/m2-runs/check-<label> ci/check.sh --gates=auto'
 ```
+
+`--gates` instead runs the gates whatever changed.
 
 Run it from the worktree being checked. `M2_CHECK_OUT` must be a new folder. It gets `summary.txt`, every log, and
 the app's two pictures; all logs are also packed in `<folder>.tgz`.
