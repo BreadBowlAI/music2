@@ -5,7 +5,7 @@
 - Do them after the check in [HANDOFF.md](../HANDOFF.md) ("The owner's Mac command") has passed.
 - About two hours in all. You can do one part at a time, on different days.
 - After each part, tell the lead what you saw and heard. That is the last step of each part.
-- The steps are numbered 7 to 132, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
+- The steps are numbered 7 to 133, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
 
 **What you need**
 
@@ -37,6 +37,7 @@
 | 111 to 116 | the sound input's problems | track `ex` |
 | 117 to 125 | adding an installed plugin, and presets | track `br` |
 | 126 to 132 | buses: a shared reverb, a send before the fader, a group | track `bus` |
+| 133 | drawing notes: a drag draws one long note, ⌥-drag paints | track `dn` |
 
 ---
 
@@ -225,3 +226,9 @@ that has a pitch wheel and a mod wheel):
 | 130 | Click **Add bus**, then **Group**. Under the Kick fader, click **Master** and pick **Group**. Do the same under Hats. Then drag the Group fader down and up. | Kick and Hats go quieter and louder together. Bass and Keys don't change. Kick's strip says Group under its fader. |
 | 131 | On the Group strip, click the **+** beside Reverb. Then, under the Reverb fader, click **Master**. | In the list, Group is grey and says "Group already feeds Reverb, so Reverb can't go to Group." |
 | 132 | Tell the lead what you saw and heard at 126 to 131. | |
+
+**A check by ear of drawing notes** (`dn`, about 3 minutes):
+
+| # | Do this | You should see and hear |
+|---|---|---|
+| 133 | Click **Open an Example**, then **First song**. Double-click the Bass clip, press B, then press on an empty row and drag right about a bar, up and down a little too, and let go. Then hold ⌥ and drag across a few grid steps on another row. Press ⌘Z twice. | The first drag makes one note that grows as you drag, on the row you pressed; you hear it while you hold and it stops when you let go. The ⌥-drag adds a short note in each step, each heard. Each ⌘Z takes back one drag's notes. Tell the lead what you saw and heard. |

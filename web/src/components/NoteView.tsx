@@ -74,6 +74,7 @@ type Gesture =
   | { kind: "move" | "resize"; pointer: number; x0: number; y0: number; index: number; base: Shape; from: Basis; sel: ReadonlySet<number>; shift: boolean; picked: boolean; result?: Shape }
   | { kind: "empty"; pointer: number; x0: number; y0: number; keep: ReadonlySet<number>; moved: boolean }
   | { kind: "paint"; pointer: number; base: Shape; from: Basis; cells: Set<string>; result: Shape }
+  | { kind: "draw"; pointer: number; x0: number; base: Shape; from: Basis; moved: boolean; result: Shape }
   | { kind: "velocity"; pointer: number; index: number; base: Shape; from: Basis; sel: ReadonlySet<number>; result?: Shape };
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
@@ -381,15 +382,15 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     letGo(g.pointer);
     gesture.current = null;
     setMarquee(null);
-    if (g.kind === "paint") setDraft(null);
+    if (g.kind === "paint" || g.kind === "draw") setDraft(null);
     else if (g.kind !== "empty" && g.result) setDraft(g.base);
     if (grid.current?.hasPointerCapture(g.pointer)) grid.current.releasePointerCapture(g.pointer);
   };
-  // Esc while a note is dragged or painted puts it back, and is the drag's alone (not the page's deselect).
+  // Esc while a note is dragged, drawn or painted puts it back, and is the drag's alone (not the page's deselect).
   useEffect(() => {
     const esc = (e: KeyboardEvent) => {
       const g = gesture.current;
-      if (e.key !== "Escape" || !g || g.kind === "empty" || g.kind === "velocity" || (g.kind !== "paint" && !g.result)) return;
+      if (e.key !== "Escape" || !g || g.kind === "empty" || g.kind === "velocity" || !g.result) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       cancelGesture();
@@ -577,11 +578,22 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
         lastEmpty.current = null;
         sound(e.pointerId, p.pitch, VELOCITY);
       }
-      // Draw mode (B): a click adds a note, and a drag paints one in each cell it crosses.
+      // Draw mode (B), as in GarageBand: a press adds a note there, sounding while held, and a drag
+      // sets its length; an ⌥-drag paints one in each cell it crosses.
       if (draw && !locked) {
-        const g: Gesture = { kind: "paint", pointer: e.pointerId, base: clip, from: basis(), cells: new Set(), result: clip };
+        if (e.altKey) {
+          const g: Gesture = { kind: "paint", pointer: e.pointerId, base: clip, from: basis(), cells: new Set(), result: clip };
+          gesture.current = g;
+          paint(g, p);
+          return;
+        }
+        const note = noteAt(p, clip.length);
+        if (!note) return;
+        const g: Gesture = { kind: "draw", pointer: e.pointerId, x0: p.x, base: clip, from: basis(), moved: false, result: { length: clip.length, notes: [...clip.notes, note] } };
         gesture.current = g;
-        paint(g, p);
+        setDraft(g.result);
+        hear(g, g.result);
+        sound(e.pointerId, note.pitch, note.velocity);
         return;
       }
       gesture.current = { kind: "empty", pointer: e.pointerId, x0: p.x, y0: p.y, keep: e.shiftKey ? selected : new Set(), moved: false };
@@ -604,6 +616,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     if (!g || g.pointer !== e.pointerId || g.kind === "velocity" || !clip) return;
     const p = at(e);
     if (g.kind === "paint") return paint(g, p);
+    if (g.kind === "draw") return stretch(g, p);
     if (g.kind === "empty") {
       if (!g.moved && Math.hypot(p.x - g.x0, p.y - g.y0) < 4) return;
       g.moved = true;
@@ -645,7 +658,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     gesture.current = null;
     setMarquee(null);
     const lease = taken(g);
-    if (g.kind === "paint") {
+    if (g.kind === "paint" || g.kind === "draw") {
       if (same(g.result, g.base)) {
         lease?.abort();
         return setDraft(null);
@@ -679,7 +692,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     taken(g)?.abort();
     gesture.current = null;
     setMarquee(null);
-    if (g.kind === "paint") setDraft(null);
+    if (g.kind === "paint" || g.kind === "draw") setDraft(null);
     else if (g.kind !== "empty" && g.result) setDraft(g.base);
   };
 
@@ -697,7 +710,22 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     commit({ length: clip.length, notes: [...clip.notes, note] }, new Set([clip.notes.length]));
   };
 
-  /** Draw mode: a note in each new cell under the pointer that has none starting there; written as one edit on release. */
+  /**
+   * Draw mode: the note being drawn ends where the pointer is, past a 3 px drag (on the grid when it
+   * snaps), never shorter than a grid step (or the smallest length unsnapped). Its pitch stays.
+   */
+  const stretch = (g: Extract<Gesture, { kind: "draw" }>, p: { x: number; beat: number }) => {
+    if (!g.moved && Math.abs(p.x - g.x0) < 3) return;
+    g.moved = true;
+    const n0 = g.result.notes[g.base.notes.length];
+    const length = clean(Math.max(snapBeat(p.beat) - n0.start, snap || MIN_LEN));
+    if (length === n0.length) return;
+    g.result = { length: g.base.length, notes: [...g.base.notes, { ...n0, length }] };
+    setDraft(g.result);
+    hear(g, g.result);
+  };
+
+  /** Draw mode's ⌥-drag: a note in each new cell under the pointer that has none starting there; written as one edit on release. */
   const paint = (g: Extract<Gesture, { kind: "paint" }>, p: { beat: number; pitch: number }) => {
     const note = noteAt(p, g.base.length);
     const cell = note && `${note.start}:${note.pitch}`;
@@ -834,7 +862,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
               <Segment role="radio" aria-checked={!draw} data-tool="select" on={!draw} title="Select (B toggles): click selects, double-click adds a note" onClick={() => useShell.getState().set({ draw: false })} className="!px-1.5">
                 <MousePointer2 size={14} />
               </Segment>
-              <Segment role="radio" aria-checked={draw} data-tool="draw" on={draw} title="Draw (B): click adds a note, drag paints" onClick={() => useShell.getState().set({ draw: true })} className="!px-1.5">
+              <Segment role="radio" aria-checked={draw} data-tool="draw" on={draw} title={`Draw (B): click adds a note, drag sets its length, ${mod.alt}-drag paints`} onClick={() => useShell.getState().set({ draw: true })} className="!px-1.5">
                 <Pencil size={14} />
               </Segment>
             </div>
@@ -889,7 +917,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                       ? `Read only until ${file} reads again`
                       : "Read only until the code compiles"
                     : draw
-                      ? "Draw: click to add a note · drag to paint notes · B to select"
+                      ? `Draw: click to add a note · drag to set its length · ${mod.alt}-drag to paint notes · B to select`
                       : `Double-click to add a note · drag a note to move it · drag its right edge to resize · drag across empty space to select · ${keyName("Backspace")} deletes · ${chord("D")} duplicates · arrows move · B to draw · right-click for note tools`
                 }
                 onContextMenu={onGridMenu}
