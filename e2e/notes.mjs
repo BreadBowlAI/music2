@@ -139,6 +139,38 @@ for (let k = 0; k < 4; k++) {
 check(await until(async () => fs.readFileSync(FILE, "utf8") === original), "four more undos (velocity, resize, move, add) restore the original file");
 check(await until(async () => (await notes()).length === 48 && (await at(60)).length === 0), "and the roll");
 
+// Draw mode (B), as in GarageBand: a press adds a note, a drag sets its length (its end on the grid)
+// and moving up doesn't change its pitch: one note, one write, one undo.
+await page.keyboard.press("b");
+check(await until(async () => (await page.$eval("[data-tool=draw]", (e) => e.getAttribute("aria-checked"))) === "true"), "B picks the Draw tool");
+rev = await revision();
+const d0 = cell(60, 1.1), d1 = cell(62, 2.6);
+const sounding = () => page.$$eval("[data-testid=notes] [data-key][data-sounding]", (els) => els.map((e) => Number(e.dataset.key)));
+await page.mouse.move(d0.x, d0.y);
+await page.mouse.down();
+await page.mouse.move(d1.x, d1.y, { steps: 12 });
+check(await until(async () => (await sounding()).join() === "60"), `C4 sounds while the mouse is held: ${await sounding()}`);
+await page.mouse.up();
+check(await until(async () => (await sounding()).length === 0), "and stops on release");
+check(await until(async () => json(onDisk(60)) === json([{ pitch: "C4", start: 1, length: 1.5, velocity: 0.8 }])), `a drag in Draw mode from beat 1 to 2.5 draws one C4, its end on the grid: ${json(disk().clips[0].notes.filter((n) => ["C4", "C#4", "D4"].includes(n.pitch)))}`);
+check(onDisk(61).length === 0 && onDisk(62).length === 0 && disk().clips[0].notes.length === 49, "the drag up two rows left its pitch alone, and nothing else was added");
+check((await sleep(300), (await revision()) === rev + 1), "one write");
+await undo();
+check(await until(async () => fs.readFileSync(FILE, "utf8") === original), "one undo takes it back");
+
+// ⌥-drag in Draw mode paints a note in each grid cell it crosses.
+await until(async () => (await at(60)).length === 0);
+rev = await revision();
+await page.keyboard.down("Alt");
+await drag(cell(60, 1.1), cell(60, 2.1));
+await page.keyboard.up("Alt");
+check(await until(async () => json(onDisk(60).map((n) => [n.start, n.length])) === json([[1, 0.25], [1.25, 0.25], [1.5, 0.25], [1.75, 0.25], [2, 0.25]])), `an ⌥-drag across five cells paints five 1/16 notes: ${json(onDisk(60))}`);
+check((await sleep(300), (await revision()) === rev + 1), "one write");
+await undo();
+check(await until(async () => fs.readFileSync(FILE, "utf8") === original), "one undo takes them back");
+await page.keyboard.press("b");
+check(await until(async () => (await page.$eval("[data-tool=select]", (e) => e.getAttribute("aria-checked"))) === "true" && (await at(60)).length === 0), "B again: the Select tool");
+
 // Select with a marquee, move with the arrows, duplicate with ⌘D.
 await page.$eval("[data-testid=roll-scroller]", (el, row, ruler) => { el.scrollTop = ruler + (127 - 36) * row - el.clientHeight / 2; el.scrollLeft = 0; }, ROW, RULER);
 await sleep(150);

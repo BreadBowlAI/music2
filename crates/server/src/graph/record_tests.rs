@@ -1237,6 +1237,25 @@ mod audio {
         assert!(mono.room().abs_diff(2 * most) < 2, "a mono take twice as long");
     }
 
+    // Stop then R at once on the same track: the take before is still being written (its last
+    // frames, then the disk), or, let go, its thread hasn't yet taken its part file away. The next
+    // take makes a part file of its own, and each is named as it finishes.
+    #[test]
+    fn a_take_starts_while_the_one_before_is_still_written() {
+        let f = Fixture::new();
+        let mut first = m2_editor::take::Growing::new(&f.0, "Vox", 2, 48_000).unwrap();
+        let mut second = m2_editor::take::Growing::new(&f.0, "Vox", 2, 48_000).unwrap();
+        let let_go = m2_editor::take::Growing::new(&f.0, "Vox", 2, 48_000).unwrap();
+        first.append(&[[0.5; 2]; 4]).unwrap();
+        second.append(&[[0.25; 2]; 4]).unwrap();
+        assert_eq!(first.finish("Vox take.wav").unwrap().asset.as_str(), "Vox take.wav");
+        assert_eq!(second.finish("Vox take.wav").unwrap().asset.as_str(), "Vox take 2.wav");
+        drop(let_go);
+        let mut names: Vec<String> = std::fs::read_dir(f.0.join("assets")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["Vox take 2.wav", "Vox take.wav"], "no part file is left");
+    }
+
     // MON-8: hearing yourself plays the input on the take's lane, live only: an export made while the
     // take records has none of it.
     #[test]

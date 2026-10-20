@@ -88,7 +88,7 @@ Things to try:
 1. **Add a track.** Click **+ Track** above the track names (or press ⌘T), type to find an instrument such as Synth pluck, and press Enter. The new track appears below the selected one, ready to play.
 2. **Turn a knob.** Click the **Song** row at the foot of the timeline. The dock below shows the mix as boxes with knobs. Drag a knob while the song plays and you hear it change. Let go, and the new number is written into `song.ts`.
 3. **Add a clip.** In the timeline, double-click the Bass row past the end of the song. A one-bar clip appears, and opens in the dock's **Notes** view (a piano roll).
-4. **Draw notes.** Double-click the grid to add a note (or press B for Draw mode, where a click adds one and a drag paints), drag a note to move it, and drag its right edge to make it longer.
+4. **Draw notes.** Double-click the grid to add a note (or press B for Draw mode, where a click adds one, a drag draws one as long as you drag, and ⌥-drag paints one in each grid step), drag a note to move it, and drag its right edge to make it longer.
 5. **Add an effect.** Press ⌥1 (or click **Device**), then click **+** on a box that makes sound and pick an effect such as reverb, or drag one from the browser on the left onto a track.
 6. **Undo.** Press ⌘Z to take these back, one at a time.
 7. **Export it.** Click **Export** in the top bar (or File → Export…, ⇧⌘E), keep **Song**, and save. The song is written to a WAV file you can play anywhere or share; click **Show in Finder** when it's done (**Show in Folder** on Linux).
@@ -191,7 +191,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - Each of these is one undo step. In the timeline, a bus is a row marked **Bus**, with no lanes.
 - **Code:** the selected track's TypeScript, with type checks. The list on the left shows the song's files. Right-click a track's file for **Change track ID…**: the ID is the name code and files use (`track("bass", …)`, `data/bass/`). Changing it moves both, and the track's view settings, as one undo step; the track's sounds restart. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and the status pill in the top bar says so; its popover offers **Show in code**. A song whose code doesn't compile when you open it still opens: in its code, at the error, with its tracks and clips greyed in the timeline and nothing to play until a save makes it compile, and then it plays.
 - **Notes:** the selected clip in a piano roll; with none selected, it says how to pick one.
-  - Pick a snap grid (1/4 to 1/64, triplets, or off): new notes are a grid step long. A click selects; a double-click adds a note; a drag across empty space selects with a box. In Draw mode (B, or the pencil) a click adds a note and a drag paints them. Drag a note to move it, its right edge to resize it.
+  - Pick a snap grid (1/4 to 1/64, triplets, or off): new notes are a grid step long. A click selects; a double-click adds a note; a drag across empty space selects with a box. In Draw mode (B, or the pencil) a click adds a note, sounding while you hold it, and dragging sets how long it is (moving up or down keeps its pitch); ⌥-drag paints a note in each grid step it crosses. Drag a note to move it, its right edge to resize it.
   - The strip at the bottom sets velocity (how hard each note is played).
   - Set the clip's length in bars in the dock's header.
   - While the clip's data file doesn't read (the status pill lists it), the piano roll is read only, with a note in the dock's header saying which file: it shows the notes the lane played before, and editing them would overwrite the file. Fix the file and it can be edited again.
@@ -301,6 +301,7 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⌥← / ⌥→ | Alt+← / Alt+→ | Go to the marker before / after |
 | Q | Q | Quantize: in Notes the selected notes (or with none, every note), else the selected clips' notes |
 | B | B | Draw mode: notes, and automation points |
+| ⌥-drag | Alt-drag | In Draw mode in Notes: paint a note in each grid step |
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Device / Notes / Mix / Code (X: Mix) |
 | E | E | Show or hide the dock |

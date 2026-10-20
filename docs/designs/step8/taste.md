@@ -861,7 +861,9 @@ This replaces "TRACKS" and "4/4 · 124 BPM".
   - a click on empty grid selects nothing and moves the insert point;
   - a double-click adds a note;
   - dragging on empty grid draws a marquee;
-  - in Draw mode (B), a click adds a note and a drag paints.
+  - in Draw mode (B), as in GarageBand, a press adds a note on that row (sounding while held) and
+    a drag sets its length, its end on the grid (never shorter than a step; its pitch stays); an
+    ⌥-drag paints a note in each cell it crosses. Drum lanes the same.
 - **Empty states:**
   - a selected track with no clip selected: "Select a clip, or double-click in the timeline to make
     one."

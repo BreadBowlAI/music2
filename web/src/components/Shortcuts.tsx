@@ -39,6 +39,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Select all notes", chord("A")],
       ["Deselect", "Esc"],
       ["Draw mode: notes and automation", "B"],
+      ["Paint notes in Draw mode, one per grid step", `${mod.alt}-drag`],
       ["Move notes by the grid / by a bar", `← → / ${shifted("←")} ${shifted("→")}`],
       ["Transpose a semitone / an octave", `↑ ↓ / ${shifted("↑")} ${shifted("↓")}`],
       ["Quantize the notes in Notes", "Q"],
