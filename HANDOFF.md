@@ -27,7 +27,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
   `HANDOFF.md` changed since main), and the browser suites run 4 at a time: about 3 minutes instead of 11, with
   the same results. Its own `ci/check.sh --gates=auto` passed at `e4a6183` (the gates ran: `ci/` changed): 1,770
   Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 27 minutes. One suite passed only on its
-  retry: `pl-zoom-fix`, a race of its own that fails about half the time, alone too (branch `dn` fixes it). See
+  retry: `pl-zoom-fix`, a race of its own that fails about half the time, alone too (branch `dn` fixes it). The
+  docs commit after it, checked with `--gates=auto --base e4a6183`, skipped the gates and passed in 10 minutes. See
   "The check" below.
 - What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
@@ -262,7 +263,7 @@ Times on the server, warm `target/`:
 | timing gates, with the S build | 16 min | the same when they run; none when `--gates=auto` skips them |
 | rust tests | 6 min | the same |
 | the whole check, with the gates | 34 to 40 min | 27 min (`e4a6183`) |
-| the whole check, gates skipped | (no such run) | about 11 min: all of the run at `e4a6183` before its gates |
+| the whole check, gates skipped | (no such run) | 10 min (`2bd6456`, `--base e4a6183`: only `HANDOFF.md` changed) |
 
 On the server, a track's check (with a warm `target/`):
 
