@@ -161,7 +161,8 @@ fake() {
   mkdir -p "$d" && printf '%s\n' "$@" > "$d/$s" && echo "$e" > "$d/$s.exit"
 }
 # check_case <name> <case> <want exit> <the words the summary's first line starts with> [VAR=value...]:
-#   ci/check.sh --pr with the stand-in's files of <case>.
+#   ci/check.sh --pr with the stand-in's files of <case>. With $NAMED set, the summary must also hold
+#   that line under "what failed"; with $UNNAMED set, it must not.
 check_case() {
   n=$((n + 1))
   name=$1 c=$2 want=$3 words=$4
@@ -171,7 +172,11 @@ check_case() {
     > "$TMP/check-$n.log" 2>&1 < /dev/null
   st=$?
   line=$(grep -m1 '^music2 check --pr: ' "$out/summary.txt" 2> /dev/null)
+  failed_list=$(sed -n '/^what failed:$/,/^$/p' "$out/summary.txt" 2> /dev/null)
+  if [ -n "${NAMED:-}" ] && ! printf '%s\n' "$failed_list" | grep -qxF "  $NAMED"; then line="$line (what failed doesn't name \"$NAMED\")"; fi
+  if [ -n "${UNNAMED:-}" ] && printf '%s\n' "$failed_list" | grep -qF "$UNNAMED"; then line="$line (what failed names \"$UNNAMED\")"; fi
   case $st:$line in
+    *"(what failed "*) result "check --pr: $name" 0 "$line"; sed 's/^/        /' "$out/summary.txt" | tail -8 ;;
     "$want:music2 check --pr: $words"*) result "check --pr: $name" 1 "$line" ;;
     *) result "check --pr: $name" 0 "wanted exit $want and \"$words\", got exit $st and \"${line:-no summary}\" (see below)"
        tail -5 "$TMP/check-$n.log" | sed 's/^/        /' ;;
@@ -193,12 +198,29 @@ fake failed rust 1 "$PLUGINS_PASS" 'rust tests       FAIL  exit 100 after 1 s: s
 cp -R "$TMP/fake-full" "$TMP/fake-advisory" || exit 2
 fake advisory changes 0 'full  Cargo.lock changed' 'docs_only=false' 'deps=true'
 fake advisory advisories 1 'advisories       FAIL  exit 1 after 1 s: see advisories.log'
+# A Rust test whose process crashed on both tries, as nextest prints it, and one that failed once
+# and then passed (FLAKY): only the first is a failure.
+cp -R "$TMP/fake-full" "$TMP/fake-crash" || exit 2
+fake crash rust 1 "$PLUGINS_PASS" 'rust tests       FAIL  exit 100 after 133 s: see test.log' \
+  '                       Summary [ 125.195s] 1733 tests run: 1732 passed, 1 failed, 47 skipped' \
+  '                       FLAKY 2/2 [   0.512s] ( 100/1733) m2-song data::tests::once' \
+  '' '=== rust tests: the last 60 lines of /x/test.log' \
+  '  TRY 1 FAIL [   0.500s] ( 100/1733) m2-song data::tests::once' \
+  '  TRY 1 SEGV [   1.104s] ( 719/1733) m2-plugins tests::airwindows_processes_audio' \
+  '  TRY 2 SEGV [   1.111s] ( 720/1733) m2-plugins tests::airwindows_processes_audio' \
+  '     Summary [ 125.195s] 1733 tests run: 1732 passed, 1 failed, 47 skipped' \
+  '   FLAKY 2/2 [   0.512s] ( 100/1733) m2-song data::tests::once' \
+  '  TRY 2 SEGV [   1.111s] ( 720/1733) m2-plugins tests::airwindows_processes_audio' \
+  'error: test run failed'
 
 check_case "docs only, with no plugins: what CI passes" docs 0 "PASS"
 check_case "the whole tier, with the plugins" full 0 "PASS" CLAP_PATH="$TMP/clap"
 check_case "the whole tier, M2_NO_PLUGINS: not all CI runs" noplugins 1 "PART" M2_NO_PLUGINS=1
 check_case "the whole tier, a step failed" failed 1 "FAIL (1 of" CLAP_PATH="$TMP/clap"
 check_case "a Cargo.lock changed, and RustSec has an advisory" advisory 1 "FAIL (1 of" CLAP_PATH="$TMP/clap"
+NAMED="test m2-plugins tests::airwindows_processes_audio" UNNAMED="data::tests::once"
+check_case "a Rust test crashed twice: what failed names it, and not the flaky one" crash 1 "FAIL (1 of" CLAP_PATH="$TMP/clap"
+NAMED= UNNAMED=
 
 echo "PR tier verdicts: $passed of $((passed + failed)) cases passed"
 [ $failed -eq 0 ]

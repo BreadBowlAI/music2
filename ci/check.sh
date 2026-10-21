@@ -397,10 +397,13 @@ if [ -n "$PR" ]; then
       record "$row" PASS "${said:-done}"
     else
       record "$row" FAIL "${said:+after $said: }see pr-$1.log"
-      # The step's FAIL rows, then each Rust test (nextest's FAIL lines) and suite that failed.
+      # The step's FAIL rows, then each Rust test and suite that failed. A test: nextest's list
+      # after its last Summary line, where each one's last try is (FAIL, TIMEOUT, or the signal
+      # that ended its process: "TRY 2 SEGV"); not the tries before (a FLAKY test failed one).
       {
         grep -E '^[a-z][a-zA-Z0-9. -]* +FAIL  ' "$log" | sed "s/^/$1: /"
-        grep -E '^ +(FAIL|SIGSEGV|SIGABRT|TIMEOUT) \[' "$log" | sed -E 's/^ +[A-Z]+ \[[^]]*\] (\([^)]*\) )?/test /' | sort -u
+        awk '/^ *Summary \[/ { n = NR } { l[NR] = $0 } END { for (i = n; n && i <= NR; i++) print l[i] }' "$log" | grep -E '^ +(TRY [0-9]+ )?(FAIL|TIMEOUT|ABORT|SIG[A-Z]+|SEGV|ABRT|BUS|ILL|FPE|KILL|TRAP|SYS) \[' |
+          sed -E 's/^ +(TRY [0-9]+ )?[A-Z]+ \[[^]]*\] (\([^)]*\) )?/test /' | sort -u
         grep -E '^  failed: ' "$OUT/pr-$1/e2e.log" 2> /dev/null | sed -E 's/^  failed: ([^ ]+).*/suite \1/'
       } | cut -c1-160 >> "$OUT/failed"
       if ! grep -qE ' +FAIL  ' "$log"; then echo "$1: $(tail -1 "$log" | cut -c1-140)" >> "$OUT/failed"; fi
