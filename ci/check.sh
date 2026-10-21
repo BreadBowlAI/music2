@@ -30,7 +30,8 @@
 #
 # --pr: the checks every pull request must pass, and nothing else: rustfmt, actionlint, the gates
 # and docs rules, licences, the web build, std's kernels and std.wasm, clippy, the Rust tests and
-# browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the 12 renders. When
+# browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the 12 renders; RustSec's
+# advisories only when the change touches a Cargo.lock or deny.toml (ci/pr.sh changes). When
 # git proves your committed change is documentation only (ci/docs-only.sh, on a clean tree), it
 # runs only the docs rule's cases, as CI does. It builds into <target>/pr without debug info, as
 # CI does, so it never rebuilds what your own cargo build made. It needs what ci/pr.sh needs (its
@@ -60,14 +61,16 @@
 #                     default, when both are there: ~/Library/Audio/Plug-Ins/CLAP on a Mac,
 #                     ~/.local/share/m2-test-plugins/clap on Linux (ci/plugins.sh fills it).
 #                     Without them the check can't pass (PLAT-6): it says FAIL, even when no row
-#                     failed.
+#                     failed. With --pr, as in CI: the steps that host plugins (rust, suites) fail
+#                     without them, M2_NO_PLUGINS=1 skips those tests and the summary says PART,
+#                     and a docs-only change needs none.
 #   CARGO_TARGET_DIR  where cargo builds (default: target/ in the repo)
 #   M2_CHECK_OUT      where the logs go (default: ~/m2-check/<commit>). Only a folder an earlier
 #                     check made is ever replaced.
 #   M2_CHECK_JOBS     how many browser suites run at once (default: on Linux a quarter of the
 #                     threads, 1 to 4; on a Mac 1)
-# Exit status: 0 when every check passed, all of it judged, with the test plugins; 1 when not; 2 when
-# it couldn't start.
+# Exit status: 0 when every check passed, all of it judged, with the test plugins (--pr: when the
+# summary says PASS); 1 when not; 2 when it couldn't start.
 #
 # On a Mac, set the output to the built-in speakers at 48 kHz first (Audio MIDI Setup): G12 plays
 # there, muted, and judges that set-up.
@@ -285,9 +288,15 @@ summary() {
   total=$(wc -l < "$OUT/results" | tr -d ' ')
   mins=$(( ($(date +%s) - START + 59) / 60 ))
   if [ -s "$SCR/before" ]; then state="with local changes"; else state=clean; fi
+  # --pr: the steps themselves say whether the test plugins were there (CI's jobs have them; a
+  # docs-only change needs none). A step without them fails, unless M2_NO_PLUGINS skipped them.
+  noplugins=
+  if [ -n "$PR" ]; then noplugins=$(grep -lE '^plugins +SKIP ' "$OUT"/pr-*.log 2> /dev/null | sed 's/.*pr-//; s/\.log$//' | tr '\n' ' ' | sed 's/ $//; s/ /, /g'); fi
   if [ "$fails" -gt 0 ]; then
     verdict="FAIL ($fails of $total checks)"
-  elif [ -z "$TESTPLUGINS" ]; then
+  elif [ -n "$PR" ] && [ -n "$noplugins" ]; then
+    verdict="PART: no row failed, but M2_NO_PLUGINS left out the tests that host plugins ($noplugins), so it isn't all CI runs"
+  elif [ -z "$PR" ] && [ -z "$TESTPLUGINS" ]; then
     verdict="FAIL: no row failed, but the test plugins weren't there, so it isn't a pass (PLAT-6)"
   elif [ -n "$partial" ]; then
     verdict="PART: no row failed, but the $partial row wasn't judged in full, so it isn't a pass: see that row"
@@ -351,7 +360,8 @@ trap stopped INT TERM
 
 echo "music2 check of $SHA on $MACHINE (logs in $OUT)"
 git status --porcelain > "$SCR/before"
-if [ -z "$TESTPLUGINS" ]; then
+# (--pr: the steps that need them say so, in their own rows.)
+if [ -z "$TESTPLUGINS" ] && [ -z "$PR" ]; then
   echo "plugins: Surge XT.clap and Airwindows Consolidated.clap aren't both in ${CLAP_PATH:-$PLUGINS} (on Linux, ci/plugins.sh installs them)" >> "$OUT/failed"
 fi
 
@@ -381,7 +391,7 @@ if [ -n "$PR" ]; then
     # What passed only when run again: nextest's FLAKY tests, and suites that passed alone.
     {
       grep -E '^ +FLAKY ' "$log" | sed -E 's/^ +FLAKY [^]]*\] (\([^)]*\) )?/test /' | sort -u
-      grep -E 'passed only on a retry alone: ' "$log" | sed 's/.*retry alone: //' | tr ',' '\n' | sed 's/^ */suite /'
+      grep -E 'passed only on a retry alone: ' "$log" | sed 's/.*retry alone: //; s/: see .*//' | tr ',' '\n' | sed 's/^ */suite /'
     } >> "$OUT/flaky"
     if [ $st -eq 0 ]; then
       record "$row" PASS "${said:-done}"
@@ -403,6 +413,8 @@ if [ -n "$PR" ]; then
   else
     record changes PASS "$(head -1 "$OUT/pr-changes.log" | sed -E 's/^(full|docs)  //' | cut -c1-120): the whole PR tier runs"
     pr "pr quick" "2 min" quick
+    # RustSec's advisories, as CI: only when the change touches a Cargo.lock or deny.toml.
+    if grep -q '^deps=true$' "$OUT/pr-changes.log"; then pr "pr advisories" "seconds" advisories; fi
     pr "pr clippy" "1 min; 4 the first time" clippy
     pr "pr rust" "6 min; 12 the first time" rust 1/1
     pr "pr suites" "4 min" suites 1/1
@@ -417,8 +429,7 @@ if [ -n "$PR" ]; then
   fi
   trap '' INT TERM
   summary
-  [ "$fails" -eq 0 ] && [ -n "$TESTPLUGINS" ] && [ -z "$partial" ]
-  exit
+  case $verdict in PASS*) exit 0 ;; *) exit 1 ;; esac
 fi
 
 # 0b. The rule --gates=auto follows (ci/gates-auto.sh), tried on its table of cases in scratch git

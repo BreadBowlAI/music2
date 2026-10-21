@@ -4,22 +4,30 @@
 # runs every step, one after another, on your machine.
 #
 # In short: the PR tier is what every pull request must pass, quickly. It holds every check that
-# gives the same answer on any machine: no timing gates, and none of the tests ci/nightly-tests.txt
-# and e2e/run.mjs tag for the nightly tier (a speed bound, a known flake, over a minute). Those run
-# every night (ci/check.sh does everything). Nothing here changes the repo, opens a screen, plays
+# gives the same answer on any machine and any day: no timing gates, none of the tests
+# ci/nightly-tests.txt and e2e/run.mjs tag for the nightly tier (a speed bound, a known flake, over
+# a minute), and RustSec's advisories only when the change touches a Cargo.lock or deny.toml (they
+# change with the date, not the code). The rest runs every night: ci/check.sh does everything, and
+# nightly.yml runs the advisories step too. Nothing here changes the repo, opens a screen, plays
 # sound, or touches your ~/Music or ~/.music2: whatever runs music2 gets a scratch HOME.
 #
 #   ci/pr.sh changes [<base>]   whether the change since git merge-base HEAD <base> (default: main,
 #                               or origin/main) is documentation only (ci/docs-only.sh). Prints the
-#                               verdict, then docs_only=true or docs_only=false (also into
-#                               $GITHUB_OUTPUT when set). Exit 0 either way, 2 on a usage error.
+#                               verdict, then docs_only=true or docs_only=false, then deps=true when
+#                               it touches a Cargo.lock or deny.toml (or git can't say), else
+#                               deps=false (both also into $GITHUB_OUTPUT when set). Exit 0 either
+#                               way, 2 on a usage error.
 #   ci/pr.sh docs               the docs job: the docs rule's own cases (ci/docs-only-test.sh)
 #   ci/pr.sh toolchain          the Rust toolchain rust-toolchain.toml pins, installed if missing
 #                               (CI's jobs run it before their cache step, which asks rustc)
-#   ci/pr.sh quick              rustfmt, actionlint, the gates rule's and the docs rule's cases,
-#                               licences (cargo-deny on both workspaces, npm), the web typecheck and
-#                               build, std's kernels (tests, clippy) and std.wasm rebuilt to the
-#                               committed bytes
+#   ci/pr.sh quick              rustfmt, actionlint, the cases of the gates rule, the docs rule, the
+#                               PR tier's own verdicts (ci/pr-test.sh) and ci/nightly.sh
+#                               (ci/nightly-test.sh), licences (cargo-deny's bans, licences and
+#                               sources on both workspaces; npm), the web typecheck and build, std's
+#                               kernels (tests, clippy) and std.wasm rebuilt to the committed bytes
+#   ci/pr.sh advisories         RustSec's advisories for both workspaces (cargo-deny; it fetches
+#                               their database): on a pull request when changes says deps=true, and
+#                               every night
 #   ci/pr.sh clippy             clippy on every target, every warning an error
 #   ci/pr.sh rust [<i>/<n>]     the Rust tests of the PR tier, part i of n (cargo-nextest's hash
 #                               partitions, so a new test lands in one part and the parts stay even);
@@ -27,7 +35,8 @@
 #                               (main_thread, app_main_thread), which nextest can't list
 #   ci/pr.sh suites [<i>/<n>]   the browser suites of the PR tier (e2e/run.mjs all --tier pr --shard),
 #                               M2_PR_JOBS at a time (default 2); a run that failed runs once more,
-#                               alone, as in ci/check.sh, and is named if it passes then
+#                               alone, as in ci/check.sh, and is named if it passes then; a run
+#                               that was PART (passed, but not in full) fails the step
 #   ci/pr.sh renders            the 12 offline renders, against e2e/renders.sha256
 #   rust and suites take --all: the nightly-tagged tests too (the Mac's nightly job).
 #
@@ -58,7 +67,7 @@ ALL=
 BASE=
 case $STEP in
   changes) if [ $# -gt 1 ]; then usage; fi; BASE=${1:-} ;;
-  docs|toolchain|quick|clippy|renders) if [ $# -gt 0 ]; then usage; fi ;;
+  docs|toolchain|quick|advisories|clippy|renders) if [ $# -gt 0 ]; then usage; fi ;;
   rust|suites)
     while [ $# -gt 0 ]; do
       case $1 in
@@ -104,10 +113,18 @@ if [ "$STEP" = changes ]; then
   fi
   printf '%s\n' "$verdict"
   case $verdict in docs\ *) d=true ;; *) d=false ;; esac
+  # deps: whether the change touches what RustSec's advisories are judged on (a Cargo.lock) or how
+  # (deny.toml). Anything git can't say, or a tree that isn't clean: yes.
+  deps=true
+  if [ -z "$(git status --porcelain 2> /dev/null)" ] && mb=$(git merge-base HEAD "$BASE" 2> /dev/null) &&
+     files=$(git diff --no-renames --name-only "$mb" HEAD 2> /dev/null); then
+    if ! printf '%s\n' "$files" | grep -qE '(^|/)Cargo\.lock$|^deny\.toml$'; then deps=false; fi
+  fi
   echo "docs_only=$d"
-  if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "docs_only=$d" >> "$GITHUB_OUTPUT"; fi
+  echo "deps=$deps"
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then printf 'docs_only=%s\ndeps=%s\n' "$d" "$deps" >> "$GITHUB_OUTPUT"; fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-    { echo "### Docs only: $d"; echo; echo '```'; printf '%s\n' "$verdict" | head -30; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+    { echo "### Docs only: $d; a Cargo.lock or deny.toml changed: $deps"; echo; echo '```'; printf '%s\n' "$verdict" | head -30; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
   fi
   exit 0
 fi
@@ -213,15 +230,25 @@ case $STEP in
       # No shellcheck or pyflakes inside actionlint: their versions differ from machine to machine,
       # and every run: block only calls a script here.
       check workflows actionlint.log sh -c 'actionlint -color -shellcheck= -pyflakes= && node ci/ci-ok.mjs --check-workflow'
-      check licences licences.log sh -c 'cargo deny --locked --color never --config deny.toml check &&
-        cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A advisory-not-detected -A license-not-encountered &&
+      # No advisories (the advisories step), so no advisory database is fetched: the same answer every day.
+      check licences licences.log sh -c 'cargo deny --locked --color never --config deny.toml check bans licenses sources &&
+        cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources &&
         node ci/npm-licenses.mjs'
     fi
     check "gates rule" gates-rule.log ci/gates-auto-test.sh
     check "docs rule" docs-rule.log ci/docs-only-test.sh
+    check "pr verdicts" pr-test.log ci/pr-test.sh
+    check "nightly.sh" nightly-test.log ci/nightly-test.sh
     check "web build" web.log web
     check "std kernels" kernels.log sh -c 'cd std/kernels-src && cargo test --locked --release --workspace && cargo clippy --locked --workspace --all-targets -- -D warnings'
     check std.wasm std-wasm.log std/build.sh --check ;;
+
+  advisories)
+    # std's kernels use no wasmtime, so deny.toml's wasmtime advisories aren't there to ignore.
+    if tools deny; then
+      check advisories advisories.log sh -c 'cargo deny --locked --color never --config deny.toml check advisories &&
+        cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A advisory-not-detected advisories'
+    fi ;;
 
   clippy)
     check "web build" web.log web &&
@@ -266,12 +293,19 @@ case $STEP in
       st=$?
       took="$(( $(date +%s) - t0 )) s"
       grep -E '^(tier|shard|--no-clap|[0-9]+/[0-9]+ suites ok|time:)|^  (PART|failed):' "$OUT/e2e.log" | sed 's/^/                       /'
-      # A run that failed runs once more, alone, as ci/check.sh does: if it passes then, the step
-      # passes and names it (a flake to tag); if it fails again, the step fails.
+      # Judged on what run.mjs said, whatever its exit status: every PART line and every failed
+      # run, as ci/check.sh does. A run that failed runs once more, alone: if it passes then, it is
+      # named (a flake to tag); if it fails again, the step fails. A PART run always fails the step:
+      # it passed, but not in full (here the plugins are there, or --no-clap left its runs out).
       runs=$(grep '^  failed: ' "$OUT/e2e.log" | awk '{print $2}')
-      if [ $st -eq 0 ]; then
-        row "browser suites" PASS "$took"
-      elif [ $st -eq 1 ] && [ -n "$runs" ]; then
+      parts=$(grep '^  PART: ' "$OUT/e2e.log" | sed -E 's/^  PART: +([^:]+):.*/\1/' | tr '\n' ' ' | sed 's/ $//; s/ /, /g')
+      total=$(grep -cE '^[0-9]+/[0-9]+ suites ok' "$OUT/e2e.log")
+      # No total line, an exit status run.mjs never gives, or an exit 1 that names no failed run:
+      # run.mjs itself stopped (a crash exits 1 too), so nothing it said can be trusted.
+      if [ "$total" -eq 0 ] || { [ $st -ne 0 ] && [ $st -ne 1 ] && [ $st -ne 3 ]; } || { [ $st -eq 1 ] && [ -z "$runs" ]; }; then
+        row "browser suites" FAIL "run.mjs stopped (exit $st after $took): see e2e.log"
+        { echo; echo "=== browser suites: the last 60 lines of $OUT/e2e.log"; tail -60 "$OUT/e2e.log"; } >> "$OUT/tails"
+      else
         bad=
         again=
         for run in $runs; do
@@ -282,15 +316,19 @@ case $STEP in
             bad="$bad${bad:+, }$run"
           fi
         done
-        if [ -z "$bad" ]; then
+        if [ -n "$bad$parts" ]; then
+          why=
+          if [ -n "$bad" ]; then why="$bad failed, and again alone"; fi
+          if [ -n "$parts" ]; then why="$why${why:+; }PART (passed, but not in full): $parts"; fi
+          if [ -n "$again" ]; then why="$why; passed only on a retry alone: $again"; fi
+          row "browser suites" FAIL "$why: see e2e.log${bad:+ and e2e-retry.log}"
+          if [ -n "$bad" ]; then log=e2e-retry.log; else log=e2e.log; fi
+          { echo; echo "=== browser suites: the last 60 lines of $OUT/$log"; tail -60 "$OUT/$log"; } >> "$OUT/tails"
+        elif [ -n "$again" ]; then
           row "browser suites" PASS "$took; passed only on a retry alone: $again"
         else
-          row "browser suites" FAIL "$bad failed, and again alone: see e2e.log and e2e-retry.log"
-          { echo; echo "=== browser suites: the last 60 lines of $OUT/e2e-retry.log"; tail -60 "$OUT/e2e-retry.log"; } >> "$OUT/tails"
+          row "browser suites" PASS "$took"
         fi
-      else
-        row "browser suites" FAIL "exit $st after $took (3: a run was PART; others: run.mjs stopped): see e2e.log"
-        { echo; echo "=== browser suites: the last 60 lines of $OUT/e2e.log"; tail -60 "$OUT/e2e.log"; } >> "$OUT/tails"
       fi
     fi ;;
 

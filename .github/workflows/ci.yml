@@ -41,6 +41,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       docs_only: ${{ steps.rule.outputs.docs_only }}
+      deps: ${{ steps.rule.outputs.deps }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,7 +55,10 @@ jobs:
         run: ci/pr.sh changes "$BASE"
       - run: ci/pr.sh docs
 
-  # fmt, actionlint, the gates and docs rules, licences, the web build, std's kernels and std.wasm.
+  # fmt, actionlint, the gates and docs rules and the PR tier's verdicts, licences, the web build,
+  # std's kernels and std.wasm; RustSec's advisories only when a Cargo.lock or deny.toml changed
+  # (they change with the date, not the code, so every pull request would go red on the day one is
+  # published; nightly.yml checks them every night).
   quick:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -80,6 +84,8 @@ jobs:
           shared-key: quick
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: ci/pr.sh quick
+      - if: ${{ !cancelled() && needs.changes.outputs.deps == 'true' }}
+        run: ci/pr.sh advisories
       - if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

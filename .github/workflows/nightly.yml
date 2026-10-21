@@ -3,9 +3,11 @@
 #
 # In short: everything ci/check.sh does but the timing gates, on GitHub's Linux machine
 # (ci/check.sh --nightly: every Rust test, every browser suite one at a time, the tests the PR tier
-# leaves out among them, the pool's models, the app on an invisible screen, the mac lint). Once the
-# repo is public, also a Mac: the build, every Rust test and every browser suite (macOS minutes are
-# free only for public repos). When a job fails, one issue, "Nightly failed", gets the run's link.
+# leaves out among them, the pool's models, the app on an invisible screen, the mac lint), and
+# RustSec's advisories for both Cargo.lock files (ci/pr.sh advisories). Once the repo is public,
+# also a Mac: the build, every Rust test and every browser suite (macOS minutes are free only for
+# public repos). When a job fails or is cancelled (a job that runs past its timeout is cancelled:
+# a hang), one issue, "Nightly failed", gets the run's link.
 # The timing gates never run here: a shared cloud machine can't judge real-time audio (ci/nightly.sh
 # runs them on a quiet maintainer machine).
 
@@ -70,8 +72,28 @@ jobs:
             ~/m2-check/*/summary.txt
           retention-days: 14
 
+  # RustSec's advisories change with the date, not the code: the PR tier checks them only when a
+  # Cargo.lock or deny.toml changes, so here every night.
+  advisories:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/m2-tools
+          key: m2-tools-${{ runner.os }}-${{ hashFiles('ci/tools.sh') }}
+      - run: ci/pr.sh toolchain
+      - run: ci/pr.sh advisories
+
+  # Only when the repo is public. visibility == 'public' fails closed: were the field ever missing
+  # from the event, the job is skipped, never billed (private == false would be true then: GitHub
+  # compares null and false as the number 0).
   macos:
-    if: github.ref == 'refs/heads/main' && github.event.repository.private == false
+    if: github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
     runs-on: macos-15
     timeout-minutes: 150
     env:
@@ -115,10 +137,12 @@ jobs:
           path: ~/m2-check/
           retention-days: 14
 
-  # One issue for every failed night: opened once, commented on after.
+  # One issue for every failed night: opened once, commented on after. A job past its timeout
+  # (a hang) ends "cancelled", not "failure", so both count; this workflow never cancels itself
+  # (cancel-in-progress: false), so a cancelled job is a timeout or a person's click.
   report:
-    needs: [linux, macos]
-    if: ${{ always() && contains(needs.*.result, 'failure') }}
+    needs: [linux, advisories, macos]
+    if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # A job's own permissions replace the top-level ones: contents: read again, for the checkout.
@@ -134,5 +158,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          WHAT: "linux ${{ needs.linux.result }}, macos ${{ needs.macos.result }}"
+          WHAT: "linux ${{ needs.linux.result }}, advisories ${{ needs.advisories.result }}, macos ${{ needs.macos.result }}"
         run: ci/nightly-issue.sh "$RUN" "$WHAT"

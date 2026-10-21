@@ -1,8 +1,15 @@
-# deny.toml: what cargo-deny allows in music2's Rust dependencies. ci/pr.sh's "licences" step runs it
-# on both workspaces (this one and std/kernels-src), with this file for both:
+# deny.toml: what cargo-deny allows in music2's Rust dependencies, on both workspaces (this one and
+# std/kernels-src), with this file for both. ci/pr.sh's "licences" row (its quick step, on every pull
+# request) checks bans, licences and sources, which give the same answer every day:
 #
-#   cargo deny --locked --config deny.toml check
-#   cargo deny --locked --manifest-path std/kernels-src/Cargo.toml --config deny.toml check
+#   cargo deny --locked --config deny.toml check bans licenses sources
+#   cargo deny --locked --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources
+#
+# Its advisories step (ci/pr.sh advisories: every night, and on a pull request that changes a
+# Cargo.lock or this file) checks RustSec's advisories, whose database changes from day to day:
+#
+#   cargo deny --locked --config deny.toml check advisories
+#   cargo deny --locked --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A advisory-not-detected advisories
 #
 # In short: only crates from crates.io; only the licences below, all of which let us ship music2 under
 # MIT OR Apache-2.0; no RustSec advisory but the ones listed under [advisories], each with why.
