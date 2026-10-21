@@ -176,17 +176,30 @@ fn web_dir(app: &tauri::AppHandle) -> PathBuf {
 fn publish_session(url: &str, token: &str) {
     let path = home().join(".music2").join("session.json");
     let body = serde_json::json!({"url": url, "token": token, "pid": std::process::id()});
-    let write = || -> std::io::Result<()> {
-        std::fs::create_dir_all(path.parent().unwrap_or(&path))?;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-        std::io::Write::write_all(&mut opts.open(&path)?, serde_json::to_string_pretty(&body)?.as_bytes())
-    };
+    let write = || -> std::io::Result<()> { write_private(&path, serde_json::to_string_pretty(&body)?.as_bytes()) };
     if let Err(e) = write() {
         eprintln!("music2: couldn't write {}: {e}", path.display());
     }
+}
+
+/// Writes `bytes` to `path` so that only this user can read it (SECURITY.md): mode 0600 even when
+/// the file was there already with another mode, set before the bytes go in, and 0700 for a folder
+/// it makes. (On Unix; elsewhere the OS's default rights.)
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut dirs = std::fs::DirBuilder::new();
+    dirs.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
+    dirs.create(path.parent().unwrap_or(path))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut file = opts.open(path)?;
+    // The mode above is only for a file it creates.
+    #[cfg(unix)]
+    file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    std::io::Write::write_all(&mut file, bytes)
 }
 
 fn token() -> String {
@@ -226,4 +239,29 @@ fn keep_title_in_sync(window: tauri::WebviewWindow, server: Arc<AppState>) {
             std::thread::sleep(Duration::from_millis(300));
         }
     });
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    /// SECURITY.md: session.json holds the local API's token, so only you may read it: mode 0600
+    /// even when an older one was there with another mode, in a ~/.music2 made 0700.
+    #[test]
+    fn the_session_file_is_private_even_when_one_was_there() {
+        let dir = std::env::temp_dir().join(format!("m2-session-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(".music2").join("session.json");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+
+        super::write_private(&path, b"first").unwrap();
+        assert_eq!((mode(&path), mode(path.parent().unwrap())), (0o600, 0o700), "a new file, in a new folder");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        super::write_private(&path, b"second").unwrap();
+        assert_eq!(mode(&path), 0o600, "a file that was there, readable by others");
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
