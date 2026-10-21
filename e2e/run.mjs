@@ -156,7 +156,7 @@ export const SUITES = [
   ["nx-click", "fix", { expect: 20, s: 8 }],
   ["s8-mix", "fix", { expect: 80, s: 23 }],
   ["pl-mix", "fix", { expect: 47, s: 14, tier: "nightly", why: "speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18)" }],
-  ["bus-mix", "fix", { expect: 37, s: 8, tier: "nightly", why: "flake: with nothing sent, the Reverb's meter rose above the floor in 3 of 14 runs, 2 of them alone on 4 cores (2026-10-21); cause not known" }],
+  ["bus-mix", "fix", { expect: 37, s: 8, tier: "nightly", why: "flake: with nothing sent, the Reverb's meter rose above the floor in 3 of 15 runs, 2 of them in 12 runs alone on 4 cores (2026-10-21); cause not known" }],
   ["pl-sounds", "fix", { expect: 46, s: 4 }],
   ["pl-ids", "fix", { expect: 39, s: 3, tier: "nightly", why: "flake: a rename took more than one revision, at half CPU (2026-10-21)" }],
   ["pc-keys", "fix", { expect: 37, s: 3 }],
