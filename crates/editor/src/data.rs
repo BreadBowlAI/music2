@@ -309,12 +309,8 @@ pub fn plugin_state(s: &mut Session, module: &Key, path: &[Key], blob: Vec<u8>, 
     let w = state_writes(s, module, path, blob, sidecar)?;
     let place = format!("{module} › {}", path.iter().map(Key::as_str).collect::<Vec<_>>().join("/"));
     let was = if s.accepted().snapshot.binaries.contains_key(&w.blob) { "saved state" } else { "no saved state" };
-    let mut tx = plan::planned(
-        s,
-        (format!("{place}: {was}"), format!("{place}: {}", sidecar.plugin)),
-        w.ops,
-        Expect::Confined(Confined::default()),
-    );
+    let mut tx =
+        plan::planned(s, (format!("{place}: {was}"), format!("{place}: {}", sidecar.plugin)), w.ops, Expect::Confined(Confined::default()));
     tx.base.extend(w.bases);
     commit(s, tx, &w.blob, |_, _| Ok(()))
 }

@@ -543,7 +543,16 @@ mod tests {
             Req::SaveState { h: 11 },
             Req::MainCall { h: 4, call: MainCall::LoadPreset { location: PresetAt::Plugin, key: Some("dark".into()) } },
             Req::MainCall { h: 4, call: MainCall::LoadPreset { location: PresetAt::File("/p/Lead.fxp".into()), key: None } },
-            Req::Presets { found: Found { id: "c".into(), name: "C".into(), vendor: "".into(), version: "".into(), features: vec![], bundle: "c".into() } },
+            Req::Presets {
+                found: Found {
+                    id: "c".into(),
+                    name: "C".into(),
+                    vendor: "".into(),
+                    version: "".into(),
+                    features: vec![],
+                    bundle: "c".into(),
+                },
+            },
         ];
         for (i, r) in reqs.iter().enumerate() {
             let mut w = W::frame();
@@ -562,7 +571,14 @@ mod tests {
             latency: 64,
             gui: true,
         };
-        for r in [Reply::Value(Some(0.5)), Reply::Text(None), Reply::Info(Box::new(info)), Reply::Log(vec!["w".into()]), Reply::Window(true), Reply::Loaded] {
+        for r in [
+            Reply::Value(Some(0.5)),
+            Reply::Text(None),
+            Reply::Info(Box::new(info)),
+            Reply::Log(vec!["w".into()]),
+            Reply::Window(true),
+            Reply::Loaded,
+        ] {
             let mut w = W::default();
             w.reply(&r);
             assert_eq!(format!("{:?}", R::new(&w.0).reply().unwrap()), format!("{r:?}"));

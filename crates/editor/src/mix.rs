@@ -475,7 +475,8 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
             let frame = &song.frames[f as usize];
             let call = rev.compiled.sites.iter().find(|x| x.id == frame.site && x.in_project);
             let options = call.zip(frame.options).and_then(|(c, o)| Some((c, c.args.get(o as usize)?)));
-            let db_lane = db.is_none().then(|| options.and_then(|(c, o)| lane_read(rev, song, &c.file, o.at(&["db".to_string()])))).flatten();
+            let db_lane =
+                db.is_none().then(|| options.and_then(|(c, o)| lane_read(rev, song, &c.file, o.at(&["db".to_string()])))).flatten();
             Some(MasterStrip { db, ceiling: ids.get(&(f, "ceiling".into())).cloned(), db_lane })
         }
         _ => None,
@@ -514,7 +515,8 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
     let routes = crate::bus::routing(rev, m);
     let feeds = crate::bus::feeds(rev);
     let channels = m.site(rev).and_then(|x| x.args.first());
-    let lane = |c: &Channel, control: &str| lane_read(rev, song, &m.file, channels.and_then(|o| o.at(&[c.key.clone(), control.to_string()])));
+    let lane =
+        |c: &Channel, control: &str| lane_read(rev, song, &m.file, channels.and_then(|o| o.at(&[c.key.clone(), control.to_string()])));
     let strip = |c: &Channel| {
         let db = ids.get(&(m.frame, format!("channels.{}.db", c.key))).cloned();
         let pan = ids.get(&(m.frame, format!("channels.{}.pan", c.key))).cloned();
@@ -624,7 +626,8 @@ fn strips(rev: &Revision, frame: u32) -> BTreeMap<(String, String), (f64, Vec<St
             continue;
         };
         // A channel's own controls; a send's (`channels.vox.sends.verb.db`) waits for the Mix view's sends.
-        let Some((key, control)) = slot.slot.strip_prefix("channels.").and_then(|r| r.split_once('.')).filter(|(_, c)| !c.contains('.')) else {
+        let Some((key, control)) = slot.slot.strip_prefix("channels.").and_then(|r| r.split_once('.')).filter(|(_, c)| !c.contains('.'))
+        else {
             continue;
         };
         at.insert(i, (key.to_string(), control.to_string()));

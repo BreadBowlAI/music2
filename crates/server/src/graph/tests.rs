@@ -443,7 +443,8 @@ fn the_published_timeline_is_the_sessions_and_shares_what_didnt_change() {
     let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
     let snare = lane(&graph, "snare");
     let clips: Vec<NoteClip> =
-        serde_json::from_value(json!([{"id": "k", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 0.25}]}])).unwrap();
+        serde_json::from_value(json!([{"id": "k", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 0.25}]}]))
+            .unwrap();
     graph.write_notes(token, revision, "kick", "hits", &clips).unwrap();
     same(&graph);
     assert!(Arc::ptr_eq(&snare, &lane(&graph, "snare")), "the lane not written is the same JSON");
@@ -1248,7 +1249,8 @@ fn panic_ends_every_note_and_never_touches_the_session() {
     let fixture = Fixture::new();
     fixture.put("song.ts", HELD);
     let clips: Vec<NoteClip> =
-        serde_json::from_value(json!([{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C2", "start": 0, "length": 64}]}])).unwrap();
+        serde_json::from_value(json!([{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C2", "start": 0, "length": 64}]}]))
+            .unwrap();
     fixture.put("data/bass/notes.json", &m2_song::canonical(&m2_song::LaneData::Notes(clips)));
     let (p, mut driver) = Player::driven(48_000);
     let graph = Graph::with_player(p);
@@ -3655,10 +3657,14 @@ fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
     mixed(&fixture);
     let graph = fixture.open();
     let token = graph.state().unwrap()["session"].as_u64().unwrap();
-    let names: Vec<String> = graph.state().unwrap()["instruments"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().into()).collect();
+    let names: Vec<String> =
+        graph.state().unwrap()["instruments"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().into()).collect();
     // std's ready-made sounds (T3): drums, instruments, the sampler, then the two with every knob.
     assert_eq!(names.len(), 23, "{names:?}");
-    assert_eq!((names[0].as_str(), names[10].as_str(), names[11].as_str(), names[20].as_str(), names[22].as_str()), ("Drum kit", "FM metal", "FM keys", "Sampler", "Polysynth"));
+    assert_eq!(
+        (names[0].as_str(), names[10].as_str(), names[11].as_str(), names[20].as_str(), names[22].as_str()),
+        ("Drum kit", "FM metal", "FM keys", "Sampler", "Polysynth")
+    );
     assert_eq!(graph.state().unwrap()["palette"][0], "rose");
     let added = graph.add_track(token, "std:synth-pluck", None, None, Some("kick".into())).unwrap();
     assert_eq!(
@@ -3721,7 +3727,10 @@ fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
         // A chord for the first 2 beats (1 s at 120 BPM); its release rings on for 1.6 s.
         let notes: Vec<String> =
             ["C4", "E4", "G4"].iter().map(|p| format!("{{\"pitch\": \"{p}\", \"start\": 0, \"length\": 2, \"velocity\": 0.8}}")).collect();
-        fixture.put("data/pad/notes.json", &format!("{{\"clips\": [{{\"id\": \"chord\", \"start\": 0, \"length\": 8, \"notes\": [{}]}}]}}\n", notes.join(", ")));
+        fixture.put(
+            "data/pad/notes.json",
+            &format!("{{\"clips\": [{{\"id\": \"chord\", \"start\": 0, \"length\": 8, \"notes\": [{}]}}]}}\n", notes.join(", ")),
+        );
         let (p, driver) = Player::driven(48_000);
         let graph = Graph::with_player(p);
         graph.open(&fixture.0).unwrap();
@@ -3864,8 +3873,11 @@ fn a_layout_write_after_an_outside_edit_conflicts() {
         let s = &mut a.open.as_mut().unwrap().session;
         let read = m2_editor::layout::read_disk(&s.accepted().project.dir);
         let view = m2_editor::layout::effective(&m2_editor::layout::default_order(s), &read);
-        let text = m2_editor::layout::text_after(&read, &m2_editor::layout::Change { order: view.order.clone(), colours: &view.colours, gone: None })
-            .unwrap();
+        let text = m2_editor::layout::text_after(
+            &read,
+            &m2_editor::layout::Change { order: view.order.clone(), colours: &view.colours, gone: None },
+        )
+        .unwrap();
         let (op, file, base) = m2_editor::layout::write_op(s, text);
         let mut tx = m2_editor::plan::planned(s, ("a".into(), "b".into()), vec![op], m2_song::tx::Expect::Identical);
         tx.base.insert(file, base);
@@ -3945,7 +3957,8 @@ fn the_bus_routes_answer_with_the_new_view() {
     let (_, sent) = post("/api/graph/mix/send", json!({"session": session, "channel": "kick", "bus": "reverb", "action": "add"}));
     let send = &strip(&sent, "kick")["sends"][0];
     assert_eq!((&send["bus"], &send["pre"], send["knob"].is_string()), (&json!("reverb"), &json!(false), true), "{sent:#}");
-    let (_, pre) = post("/api/graph/mix/send", json!({"session": session, "channel": "kick", "bus": "reverb", "action": "pre", "pre": true}));
+    let (_, pre) =
+        post("/api/graph/mix/send", json!({"session": session, "channel": "kick", "bus": "reverb", "action": "pre", "pre": true}));
     assert_eq!(strip(&pre, "kick")["sends"][0]["pre"], true, "{pre:#}");
     let (_, routed) = post("/api/graph/mix/route", json!({"session": session, "channel": "hats", "to": "reverb"}));
     assert_eq!(strip(&routed, "hats")["output"], "reverb", "{routed:#}");

@@ -44,7 +44,10 @@ fn at_its_root_a_sample_plays_its_own_samples() {
     let (a, b) = (file(500, 2), file(500, 3));
     let stereo = native::asset(SR, vec![a.clone(), b.clone()]);
     let got = play_note(&[stereo], &[48.0], 48.0, 600, 600, &[]);
-    assert!(got.main()[..500].iter().zip(a.iter().zip(&b)).all(|(f, (a, b))| f[0] == *a && f[1] == *b), "a stereo file plays both channels");
+    assert!(
+        got.main()[..500].iter().zip(a.iter().zip(&b)).all(|(f, (a, b))| f[0] == *a && f[1] == *b),
+        "a stereo file plays both channels"
+    );
     assert!(got.active[450] && !got.active[599], "active while the file plays, not after");
 }
 

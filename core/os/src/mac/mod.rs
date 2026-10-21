@@ -3,9 +3,9 @@
 
 mod av;
 mod cf;
+pub(crate) mod ipc;
 pub(crate) mod main_loop;
 pub(crate) mod rt;
-pub(crate) mod ipc;
 pub(crate) mod wake;
 pub(crate) mod watch;
 pub(crate) mod window;
@@ -22,8 +22,8 @@ use crate::process::Memory;
 #[cfg(test)]
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
-    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, foreign, host_name, load_average, local_time, make_writable, push,
-    exit_now, read_at, sync_dir, take_stdout, token,
+    c_numbers, change_and_inode, cpu_time, exit_now, file_id, file_id_of, foreign, host_name, load_average, local_time, make_writable,
+    push, read_at, sync_dir, take_stdout, token,
 };
 use crate::unix::{check, cpath};
 

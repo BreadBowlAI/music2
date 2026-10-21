@@ -5,9 +5,9 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
+use m2_editor::{Gestures, render};
 use m2_ir::{Diagnostic, FOp, Flat, Ir};
 use m2_runtime::{PackageSet, Renderer};
-use m2_editor::{Gestures, render};
 use m2_session::{Compiled, Session};
 use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project, TxOp};
 
@@ -468,9 +468,18 @@ fn run() -> Result<()> {
                         .collect::<Vec<_>>()
                 };
                 if args.iter().any(|a| a == "--json") {
-                    println!("{}", serde_json::json!({"id": s.id, "description": s.description, "inputs": ports(&s.inputs), "outputs": ports(&s.outputs)}));
+                    println!(
+                        "{}",
+                        serde_json::json!({"id": s.id, "description": s.description, "inputs": ports(&s.inputs), "outputs": ports(&s.outputs)})
+                    );
                 } else {
-                    println!("{:12} ({}) -> ({})\n             {}", s.id, ports(&s.inputs).join(", "), ports(&s.outputs).join(", "), s.description);
+                    println!(
+                        "{:12} ({}) -> ({})\n             {}",
+                        s.id,
+                        ports(&s.inputs).join(", "),
+                        ports(&s.outputs).join(", "),
+                        s.description
+                    );
                 }
             }
         }
@@ -493,10 +502,13 @@ fn run() -> Result<()> {
             // anything is rendered (WRITE-18); a bounce alone only creates new assets, and needs
             // none.
             let mut placer = match &place {
-                Some(p) => Some(writer_saying(&project.dir, &format!(
-                    "\nThe clip goes on {}: add it by writing that file directly, or bounce without --place.",
-                    m2_song::path::slashed(&p.rel)
-                ))?),
+                Some(p) => Some(writer_saying(
+                    &project.dir,
+                    &format!(
+                        "\nThe clip goes on {}: add it by writing that file directly, or bounce without --place.",
+                        m2_song::path::slashed(&p.rel)
+                    ),
+                )?),
                 None => None,
             };
             let mut bounced = ir.root.clone();
@@ -606,12 +618,24 @@ fn run() -> Result<()> {
                 println!("\n{shown}{}", if m.track { " (track)" } else { "" });
                 for n in &m.nodes {
                     let at = n.file.as_ref().map(|f| format!("  {f}:{}", n.line.unwrap_or(0))).unwrap_or_default();
-                    let to: Vec<&str> = m.edges.iter().filter(|(a, _)| *a == n.id).filter_map(|(_, b)| m.nodes.iter().find(|x| x.id == *b)).map(|x| x.label.as_str()).collect();
-                    println!("  {:22} {:7}{at}{}", n.label, n.kind, if to.is_empty() { String::new() } else { format!("  → {}", to.join(", ")) });
+                    let to: Vec<&str> = m
+                        .edges
+                        .iter()
+                        .filter(|(a, _)| *a == n.id)
+                        .filter_map(|(_, b)| m.nodes.iter().find(|x| x.id == *b))
+                        .map(|x| x.label.as_str())
+                        .collect();
+                    println!(
+                        "  {:22} {:7}{at}{}",
+                        n.label,
+                        n.kind,
+                        if to.is_empty() { String::new() } else { format!("  → {}", to.join(", ")) }
+                    );
                     for k in &n.knobs {
                         let shared = if k.uses > 1 { format!("  shared ×{}", k.uses) } else { String::new() };
                         // A range only where one is declared (PKG-8); the code's text, or the default it plays.
-                        let range = k.range.map_or("—".to_string(), |[lo, hi]| format!("[{lo} … {hi}]{}", if k.log { " log" } else { "" }));
+                        let range =
+                            k.range.map_or("—".to_string(), |[lo, hi]| format!("[{lo} … {hi}]{}", if k.log { " log" } else { "" }));
                         let written = if k.written { format!("`{}`", k.literal) } else { "(default)".to_string() };
                         println!("      {:14} {:>9} {:9} {range}  {written}{shared}", k.label, k.value, k.unit.unwrap_or("number"));
                     }
@@ -640,7 +664,14 @@ fn run() -> Result<()> {
             let t = Instant::now();
             let at = s.accepted().number;
             let c = s.set(at, &id, value, expect).map_err(|e| anyhow!("{e}"))?;
-            println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", c.file, c.before, c.after, c.revision, t.elapsed().as_secs_f64() * 1000.0);
+            println!(
+                "{}: `{}` → `{}` (revision {}, verified in {:.0} ms)",
+                c.file,
+                c.before,
+                c.after,
+                c.revision,
+                t.elapsed().as_secs_f64() * 1000.0
+            );
         }
         Some("automate") => {
             let mut s = session(Path::new(&arg(1)?))?;
@@ -677,7 +708,10 @@ fn run() -> Result<()> {
                 })?;
             let (name, key, after) = (flag(&args, "--name"), flag(&args, "--key"), flag(&args, "--after"));
             let made = s.add_track(&inst.component, name.as_deref(), key.as_deref(), after.as_deref()).map_err(|e| anyhow!("{e}"))?;
-            println!("added {} ({}), ID {}, in {} (revision {})", made.label, inst.label, made.module, made.edited.file, made.edited.revision);
+            println!(
+                "added {} ({}), ID {}, in {} (revision {})",
+                made.label, inst.label, made.module, made.edited.file, made.edited.revision
+            );
         }
         Some("import") => {
             // Studio lane A's A4: what the app's File ▸ Import Audio… does, from the terminal.
@@ -703,7 +737,11 @@ fn run() -> Result<()> {
             let target = match flag(&args, "--track") {
                 Some(key) => {
                     let ir = &s.accepted().compiled.ir;
-                    let m = ir.modules.iter().find(|m| m.key == key).ok_or_else(|| anyhow!("there's no track `{key}`: the tracks are {}", tracks(ir)))?;
+                    let m = ir
+                        .modules
+                        .iter()
+                        .find(|m| m.key == key)
+                        .ok_or_else(|| anyhow!("there's no track `{key}`: the tracks are {}", tracks(ir)))?;
                     let lane = m.lanes.iter().find(|l| m2_runtime::lane_kind(l.kind) == LaneKind::Audio);
                     let lane = lane.ok_or_else(|| anyhow!("`{key}` has no audio lane: bring audio onto a track that plays one (lane.audio), or leave out --track for new ones"))?;
                     m2_editor::import::Target::Lane { module: key, lane: lane.key.clone(), beat }
@@ -732,7 +770,14 @@ fn run() -> Result<()> {
         Some("duplicate-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let made = s.duplicate_track(&arg(2)?).map_err(|e| anyhow!("{e}"))?;
-            println!("duplicated {} as {}, ID {}, in {} (revision {})", arg(2)?, made.label, made.module, made.edited.file, made.edited.revision);
+            println!(
+                "duplicated {} as {}, ID {}, in {} (revision {})",
+                arg(2)?,
+                made.label,
+                made.module,
+                made.edited.file,
+                made.edited.revision
+            );
         }
         Some("delete-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
@@ -748,17 +793,27 @@ fn run() -> Result<()> {
                 }
                 m2_editor::Deleted::Asks(deps) => {
                     let list: Vec<String> = deps.iter().map(shown).collect();
-                    bail!("other tracks read {track}:
+                    bail!(
+                        "other tracks read {track}:
 {}
-run again with --cascade to take {track} out of them too", list.join("
-"));
+run again with --cascade to take {track} out of them too",
+                        list.join(
+                            "
+"
+                        )
+                    );
                 }
                 m2_editor::Deleted::Blocked(deps) => {
                     let list: Vec<String> = deps.iter().map(shown).collect();
-                    bail!("{track} can't be deleted from here, since other code reads it:
+                    bail!(
+                        "{track} can't be deleted from here, since other code reads it:
 {}
-change that code first", list.join("
-"));
+change that code first",
+                        list.join(
+                            "
+"
+                        )
+                    );
                 }
             }
         }
@@ -778,13 +833,19 @@ change that code first", list.join("
             let value = arg(2)?;
             // From bar N (counted from 1): a change there; else the song's own.
             let bar = match flag(&args, "--at") {
-                Some(n) => Some(n.parse::<u64>().ok().filter(|n| *n >= 1).ok_or_else(|| anyhow!("--at takes a bar, counted from 1, not `{n}`"))?),
+                Some(n) => {
+                    Some(n.parse::<u64>().ok().filter(|n| *n >= 1).ok_or_else(|| anyhow!("--at takes a bar, counted from 1, not `{n}`"))?)
+                }
                 None => None,
             };
             let at = bar.map(|n| bar_start(&s.accepted().project.arrangement, n - 1));
             let e = match command {
                 "tempo" => {
-                    let bpm: f64 = value.trim_end_matches("bpm").trim().parse().map_err(|_| anyhow!("a tempo is a number of BPM, such as 128, not `{value}`"))?;
+                    let bpm: f64 = value
+                        .trim_end_matches("bpm")
+                        .trim()
+                        .parse()
+                        .map_err(|_| anyhow!("a tempo is a number of BPM, such as 128, not `{value}`"))?;
                     match at {
                         Some(at) => m2_editor::song::tempo_change(&mut s, at, bpm),
                         None => m2_editor::song::tempo(&mut s, 0.0, bpm),
@@ -850,13 +911,25 @@ change that code first", list.join("
                         let (module, name) = effect.rsplit_once('.')?;
                         s.effects().into_iter().find(|e| e.module == module && e.name == name).map(|e| e.component)
                     };
-                    let component = if effect.contains(':') { effect.clone() } else { by_export().context("name the effect by its id (std:delay) or its export (std/fx.delay); `m2 effects` lists them")? };
+                    let component = if effect.contains(':') {
+                        effect.clone()
+                    } else {
+                        by_export()
+                            .context("name the effect by its id (std:delay) or its export (std/fx.delay); `m2 effects` lists them")?
+                    };
                     s.add_effect(at, &arg(2)?, &component)
                 }
                 _ => s.remove_effect(at, &arg(2)?),
             }
             .map_err(|e| anyhow!("{e}"))?;
-            println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", e.file, e.before, e.after, e.revision, t.elapsed().as_secs_f64() * 1000.0);
+            println!(
+                "{}: `{}` → `{}` (revision {}, verified in {:.0} ms)",
+                e.file,
+                e.before,
+                e.after,
+                e.revision,
+                t.elapsed().as_secs_f64() * 1000.0
+            );
         }
         Some(command @ ("connect" | "disconnect")) => {
             let mut s = session(Path::new(&arg(1)?))?;
@@ -867,7 +940,14 @@ change that code first", list.join("
                 _ => s.disconnect(at, &arg(2)?),
             }
             .map_err(|e| anyhow!("{e}"))?;
-            println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", e.file, e.before, e.after, e.revision, t.elapsed().as_secs_f64() * 1000.0);
+            println!(
+                "{}: `{}` → `{}` (revision {}, verified in {:.0} ms)",
+                e.file,
+                e.before,
+                e.after,
+                e.revision,
+                t.elapsed().as_secs_f64() * 1000.0
+            );
         }
         Some(command @ ("relink" | "delete-data" | "fix")) => {
             // What needs attention is printed after: the fix may have settled it.
@@ -919,8 +999,11 @@ change that code first", list.join("
                 let sig = m2_ir::Kernels::plugin(&pk, id).expect("described");
                 let info = pk.plugin_info(id).expect("described");
                 println!("{} ({}), latency {} samples", sig.id, sig.description, sig.latency);
-                let params: std::collections::HashMap<&str, &m2_plugins::Param> =
-                    m2_plugins::param_port_names(&info.params).into_iter().zip(&info.params).map(|(n, p)| (sig.inputs.iter().find(|i| i.name == n).map_or("", |i| i.name.as_str()), p)).collect();
+                let params: std::collections::HashMap<&str, &m2_plugins::Param> = m2_plugins::param_port_names(&info.params)
+                    .into_iter()
+                    .zip(&info.params)
+                    .map(|(n, p)| (sig.inputs.iter().find(|i| i.name == n).map_or("", |i| i.name.as_str()), p))
+                    .collect();
                 for p in &sig.inputs {
                     match params.get(p.name.as_str()) {
                         Some(q) => println!("  in  {:28} {}  {}..{}, default {}  ({})", p.name, p.kind, q.min, q.max, q.default, q.name),
@@ -1039,9 +1122,8 @@ impl Place {
             pitch: 0.0,
             warp: vec![],
         };
-        m2_editor::data::place_clip(s, &self.addr, self.was.as_deref(), clip).map_err(|e| {
-            anyhow!("{e}; {asset} is bounced, place it on {} by hand", self.rel.display())
-        })?;
+        m2_editor::data::place_clip(s, &self.addr, self.was.as_deref(), clip)
+            .map_err(|e| anyhow!("{e}; {asset} is bounced, place it on {} by hand", self.rel.display()))?;
         println!("placed it on {}.{} at beat {} ({})", self.addr.module, self.addr.lane, self.beat, self.rel.display());
         Ok(())
     }

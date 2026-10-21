@@ -182,7 +182,11 @@ fn the_lane_is_named_after_the_control() {
     let id = |s: &Session, literal: &str| s.controls().into_iter().find(|c| c.literal == literal).map(|c| c.id).unwrap();
     let a = s.automate(s.accepted().number, &id(&s, "5")).unwrap();
     assert_eq!((a.lane.to_string(), a.name.as_str()), ("keys/detune-cents".to_string(), "detune (cents)"));
-    assert!(f.read("song.ts").contains("detune: lane.control(\"detune-cents\", \"scalar\", 5, { name: \"Detune (cents)\" })"), "{}", f.read("song.ts"));
+    assert!(
+        f.read("song.ts").contains("detune: lane.control(\"detune-cents\", \"scalar\", 5, { name: \"Detune (cents)\" })"),
+        "{}",
+        f.read("song.ts")
+    );
     let shown = s.timeline().tracks.into_iter().flat_map(|t| t.lanes).find(|l| l.key() == "detune-cents").unwrap();
     assert!(matches!(shown, TimelineLane::Control { label, .. } if label == "Detune (cents)"));
     let a = s.automate(s.accepted().number, &id(&s, "2")).unwrap();
@@ -236,7 +240,10 @@ fn remove_automation_puts_the_heard_value_back() {
     // The cutoff's clip rises from 300 to 2200 Hz over beats 0 to 16; the fallback is hz(500).
     for (beat, written) in [(Some(8.0), "hz(1250)"), (Some(40.0), "hz(500)"), (None, "hz(500)")] {
         let e = remove(&mut s, "bass", "cutoff", beat).unwrap();
-        assert_eq!((e.file.as_str(), e.before.as_str(), e.after.as_str()), ("tracks/bass.ts", "cutoff automated", &*format!("cutoff {written}")));
+        assert_eq!(
+            (e.file.as_str(), e.before.as_str(), e.after.as_str()),
+            ("tracks/bass.ts", "cutoff automated", &*format!("cutoff {written}"))
+        );
         let now = f.read("tracks/bass.ts");
         assert_eq!(now, bass.replace("lane.control(\"cutoff\", \"hz\", hz(500))", written), "at {beat:?}");
         assert!(!f.0.join("data/bass/cutoff.json").exists(), "the lane file is gone");

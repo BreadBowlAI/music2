@@ -68,7 +68,10 @@ pub enum Msg {
     /// Count in one bar, then play (lane B): `beats` clicks `frames_per_beat` apart, the song
     /// silent meanwhile; the transport plays from the block after the bar. Applied at once, as a
     /// transport command is; a Play, a Stop, a seek or a hold cancels it.
-    CountIn { beats: u32, frames_per_beat: f64 },
+    CountIn {
+        beats: u32,
+        frames_per_beat: f64,
+    },
     /// Hear a live input on audio lane `slot` of the renderer with this generation while a take
     /// records (MON-8), or with None stop hearing it. In order behind activations, as `Live` is.
     Hear {

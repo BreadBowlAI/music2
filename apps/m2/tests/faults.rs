@@ -37,7 +37,11 @@ fn m2(args: &[&std::ffi::OsStr]) -> Output {
 fn m2_render_of_a_host_crash_exits_non_zero_naming_it() {
     let temp = Temp(std::env::temp_dir().join(format!("m2-faults-cli-{}", std::process::id())));
     let song = temp.0.join("song");
-    put(&song, "music2.toml", b"[project]\nname = \"crash\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n");
+    put(
+        &song,
+        "music2.toml",
+        b"[project]\nname = \"crash\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n",
+    );
     put(
         &song,
         "song.ts",

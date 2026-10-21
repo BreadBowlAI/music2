@@ -180,8 +180,7 @@ fn airwindows_processes_audio() {
 #[test]
 fn param_addresses_are_a_name_then_the_id() {
     let p = |id, name: &str| Param { id, name: name.into(), module: String::new(), min: 0.0, max: 1.0, default: 0.0, stepped: false };
-    let names =
-        param_port_names(&[p(1, "Dry/Wet"), p(2, "-"), p(3, "-"), p(4, "Filter 1 Cutoff"), p(5, "in"), p(6, "2nd"), p(7, "Key")]);
+    let names = param_port_names(&[p(1, "Dry/Wet"), p(2, "-"), p(3, "-"), p(4, "Filter 1 Cutoff"), p(5, "in"), p(6, "2nd"), p(7, "Key")]);
     assert_eq!(names, ["dry_wet_1", "param_2", "param_3", "filter_1_cutoff_4", "in_5", "2nd_6", "key_7"]);
     assert_eq!(param_address("dry_wet_12"), Some(("dry_wet", 12)));
     assert_eq!(param_address("osc_2_4294967295"), Some(("osc_2", u32::MAX)));

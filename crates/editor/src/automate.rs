@@ -281,7 +281,11 @@ pub fn remove(s: &mut Session, module: &str, lane: &str, beat: Option<f64>) -> R
     let calls: Vec<&Site> = at.iter().filter_map(|id| rev.compiled.sites.iter().find(|x| x.id == *id)).collect();
     let site = match calls[..] {
         [one] if one.in_project => one.clone(),
-        [] | [_] => return Err(EditError::Rejected(format!("{name} isn't read in this song's own code; take the automation out where it is read."))),
+        [] | [_] => {
+            return Err(EditError::Rejected(format!(
+                "{name} isn't read in this song's own code; take the automation out where it is read."
+            )));
+        }
         _ => return Err(EditError::Rejected(format!("{name} is read in {} places; take the automation out in the code.", calls.len()))),
     };
     let text = rev.snapshot.files[Path::new(&site.file)].clone();

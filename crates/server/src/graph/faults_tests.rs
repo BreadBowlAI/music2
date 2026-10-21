@@ -96,7 +96,16 @@ impl Rig {
 /// The problems in `problems` that faults made, as (code, module, message).
 pub(in crate::graph) fn listed(problems: &Value) -> Vec<(String, Option<String>, String)> {
     let text = |v: &Value| v.as_str().map(str::to_string);
-    let codes = ["sound.stopped", "plugin.failed", "plugin.crashed", "asset.unreadable", "stretch.failed", "input.missing", "input.lost", "input.refused"];
+    let codes = [
+        "sound.stopped",
+        "plugin.failed",
+        "plugin.crashed",
+        "asset.unreadable",
+        "stretch.failed",
+        "input.missing",
+        "input.lost",
+        "input.refused",
+    ];
     let faults = problems.as_array().unwrap().iter().filter(|p| codes.contains(&p["code"].as_str().unwrap()));
     faults.map(|p| (text(&p["code"]).unwrap(), text(&p["module"]), text(&p["message"]).unwrap())).collect()
 }
@@ -155,7 +164,10 @@ fn a_stopped_sound_is_a_problem_naming_it_and_its_track() {
 fn out_of_memory_is_told_as_memory() {
     let rig = Rig::new();
     rig.report(Code::OutOfMemory, rig.node("bass", delay));
-    assert_eq!(rig.told(), [format!("The delay on Bass ran out of memory (a sound may use up to 256 MB), so music2 made it silent. {AGAIN}")]);
+    assert_eq!(
+        rig.told(),
+        [format!("The delay on Bass ran out of memory (a sound may use up to 256 MB), so music2 made it silent. {AGAIN}")]
+    );
 }
 
 // RENDER-25, RENDER-10, D3: a problem goes when its part plays again: Stop All Sound resets every
@@ -270,7 +282,10 @@ fn a_sampler_file_that_wont_decode_is_told_naming_it_and_its_track() {
         )
     };
     let mut rig = Rig::with(&song("36"), |f| {
-        f.put("data/drums/hits.json", r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C2", "start": 0, "length": 1}]}]}"#);
+        f.put(
+            "data/drums/hits.json",
+            r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C2", "start": 0, "length": 1}]}]}"#,
+        );
         f.put("assets/kick.wav", "RIFF\u{0}\u{0}\u{0}\u{0}WAVEnot a sound at all");
     });
     let said = "kick.wav, which the instrument on Drums plays, can't be read, so it plays silent. It may be damaged. The rest of the song \

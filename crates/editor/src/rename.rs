@@ -30,7 +30,9 @@ pub(crate) fn track_call<'a>(sites: &'a [Site], files: &BTreeMap<PathBuf, std::s
         let t = text.get(s as usize..e as usize).unwrap_or("");
         [format!("\"{}\"", m.key), format!("'{}'", m.key), format!("`{}`", m.key)].iter().any(|k| k == t)
     };
-    let mut calls = sites.iter().filter(|x| x.in_project && x.file == file && x.callee == if m.bus { "bus" } else { "track" } && x.args.first().is_some_and(written));
+    let mut calls = sites.iter().filter(|x| {
+        x.in_project && x.file == file && x.callee == if m.bus { "bus" } else { "track" } && x.args.first().is_some_and(written)
+    });
     let call = calls.next()?;
     calls.next().is_none().then_some(call)
 }

@@ -26,7 +26,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub use check::{Consumer, Flat, FNode, FOp, Input, NoteField, OverlaySite, PortRef, Voice, check};
+pub use check::{Consumer, FNode, FOp, Flat, Input, NoteField, OverlaySite, PortRef, Voice, check};
 pub use kind::{EventType, Kind, PortKind, Unit};
 pub use sig::{KernelSig, Kernels, PortSig};
 
@@ -244,8 +244,12 @@ impl Origin {
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum Op {
     /// A typed timeline input of the module. Inside a `poly` body: a note field.
-    Lane { lane: String },
-    Time { of: TimeOf },
+    Lane {
+        lane: String,
+    },
+    Time {
+        of: TimeOf,
+    },
     /// A constant. Without a unit it is an untyped literal that fits any control.
     Const {
         value: f64,
@@ -279,9 +283,15 @@ pub enum Op {
         body: Body,
     },
     /// The value of `input` one block ago. The only way to close a loop.
-    Feedback { kind: Kind, input: String },
+    Feedback {
+        kind: Kind,
+        input: String,
+    },
     /// Another module's export, by module key.
-    Import { module: String, export: String },
+    Import {
+        module: String,
+        export: String,
+    },
     /// A hosted plugin (`clap:<plugin id>`). Inputs are `in` (audio), `notes` (from a
     /// notes lane) and parameters by port name. Its state, if it has one, is filed under
     /// its module, its `key()` frames and its key (ID-8): see [`Op::state_path`].

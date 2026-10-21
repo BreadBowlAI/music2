@@ -105,7 +105,8 @@ impl Graph {
         let mut done = self.call(move |a| {
             a.edit_and(token, |s| {
                 let p = import::place(s, &placing, &target)?;
-                let made: Vec<Value> = p.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();
+                let made: Vec<Value> =
+                    p.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();
                 let tracks: Vec<Value> = p.tracks.iter().map(|(m, l)| json!({"module": m, "label": l})).collect();
                 Ok((p.edited, json!({"made": made, "tracks": tracks})))
             })
@@ -115,7 +116,8 @@ impl Graph {
             done["undo_name"] = named["undo_name"].clone();
         }
         // A new track under a key a gone track's mute or solo was kept for starts heard (Q7).
-        let keys: Vec<String> = done["tracks"].as_array().into_iter().flatten().filter_map(|t| t["module"].as_str().map(String::from)).collect();
+        let keys: Vec<String> =
+            done["tracks"].as_array().into_iter().flatten().filter_map(|t| t["module"].as_str().map(String::from)).collect();
         if !keys.is_empty() {
             self.forget_overlays(&keys);
         }

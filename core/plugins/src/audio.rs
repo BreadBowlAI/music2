@@ -52,7 +52,13 @@ pub(crate) fn process(c: &Core, io: &mut SharedBuffers, ev_in: &Events, ev_out: 
     }
     debug_assert!(ev_in.sorted(), "events must come in time order");
     for (ch, buf) in a.ins.iter_mut().enumerate() {
-        let src = if ch < io.n_in { Some(io.inputs[ch]) } else if io.n_in > 0 { Some(io.inputs[0]) } else { None };
+        let src = if ch < io.n_in {
+            Some(io.inputs[ch])
+        } else if io.n_in > 0 {
+            Some(io.inputs[0])
+        } else {
+            None
+        };
         match src {
             Some(s) => buf[..n].copy_from_slice(&s[..n]),
             None => buf[..n].fill(0.0),
@@ -66,9 +72,20 @@ pub(crate) fn process(c: &Core, io: &mut SharedBuffers, ev_in: &Events, ev_out: 
     for b in a.outs.iter_mut() {
         a.out_ptrs.push(b.as_mut_ptr());
     }
-    let audio_in = clap_audio_buffer { data32: a.in_ptrs.as_mut_ptr(), data64: null_mut(), channel_count: a.in_ptrs.len() as u32, latency: 0, constant_mask: 0 };
-    let mut audio_out =
-        clap_audio_buffer { data32: a.out_ptrs.as_mut_ptr(), data64: null_mut(), channel_count: a.out_ptrs.len() as u32, latency: 0, constant_mask: 0 };
+    let audio_in = clap_audio_buffer {
+        data32: a.in_ptrs.as_mut_ptr(),
+        data64: null_mut(),
+        channel_count: a.in_ptrs.len() as u32,
+        latency: 0,
+        constant_mask: 0,
+    };
+    let mut audio_out = clap_audio_buffer {
+        data32: a.out_ptrs.as_mut_ptr(),
+        data64: null_mut(),
+        channel_count: a.out_ptrs.len() as u32,
+        latency: 0,
+        constant_mask: 0,
+    };
     let transport = transport_event(t);
     let in_events = clap_input_events { ctx: ev_in.as_ctx(), size: Some(in_size), get: Some(in_get) };
     let out_events = clap_output_events { ctx: ev_out as *mut Events as *mut c_void, try_push: Some(out_push) };
@@ -118,7 +135,10 @@ pub(crate) fn reset(c: &Core) {
 fn transport_event(t: &Transport) -> clap_event_transport {
     let beat_time = |b: f64| (b * CLAP_BEATTIME_FACTOR as f64) as i64;
     let sec_time = |s: f64| (s * CLAP_SECTIME_FACTOR as f64) as i64;
-    let mut flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_BEATS_TIMELINE | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE | CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+    let mut flags = CLAP_TRANSPORT_HAS_TEMPO
+        | CLAP_TRANSPORT_HAS_BEATS_TIMELINE
+        | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE
+        | CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
     if t.playing {
         flags |= CLAP_TRANSPORT_IS_PLAYING;
     }

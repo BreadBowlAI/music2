@@ -693,13 +693,15 @@ fn std_one_note_sounds_are_one_poly() {
     );
     let m = &b.ir.modules[0];
     let ns = nodes(m);
-    let kernels: BTreeSet<&str> = ns.iter().filter_map(|n| if let Op::Kernel { kernel, .. } = &n.op { Some(kernel.as_str()) } else { None }).collect();
+    let kernels: BTreeSet<&str> =
+        ns.iter().filter_map(|n| if let Op::Kernel { kernel, .. } = &n.op { Some(kernel.as_str()) } else { None }).collect();
     assert!(!kernels.contains("std:mono") && !kernels.contains("std:notecv"), "{kernels:?}");
     let polys: Vec<(&str, u32, m2_ir::Alloc, Option<&Node>)> = ns
         .iter()
         .filter_map(|n| match &n.op {
             Op::Poly { voices, alloc, glide, body, .. } => {
-                let engine = body.nodes.iter().find_map(|b| if let Op::Kernel { kernel, .. } = &b.op { Some(kernel.as_str()) } else { None });
+                let engine =
+                    body.nodes.iter().find_map(|b| if let Op::Kernel { kernel, .. } = &b.op { Some(kernel.as_str()) } else { None });
                 let glide = glide.as_ref().map(|g| *ns.iter().find(|x| x.id == split_ref(g).0).expect("the glide's node"));
                 Some((engine.unwrap_or(""), *voices, *alloc, glide))
             }

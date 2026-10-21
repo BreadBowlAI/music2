@@ -141,7 +141,11 @@ fn one_tempo_prepare_in_flight() {
     std::thread::sleep(Duration::from_millis(200));
     let l = &d.graph.tempo_leases()[0];
     let ran = jobs.load(Ordering::Relaxed);
-    assert!(ran <= 4 && l.previews <= 4, "{ran} jobs ran and {} plans played: one prepare in flight, the values between skipped", l.previews);
+    assert!(
+        ran <= 4 && l.previews <= 4,
+        "{ran} jobs ran and {} plans played: one prepare in flight, the values between skipped",
+        l.previews
+    );
     assert_eq!(l.heard, Some(170.0), "the last plan plays the 50th value");
     assert_eq!(d.graph.status().bpm, Some(170.0));
 }
@@ -340,7 +344,8 @@ fn a_seek_during_a_tempo_lease_lands_on_its_beat() {
 
 /// Clip `a` with its first E2 at `e` (beats into the clip), the second at 12: a drag of a note.
 fn e_at(e: f64) -> m2_editor::clips::Gesture {
-    let clip = m2_editor::clips::ClipRef { lane: m2_song::LaneAddr::new("bass", "notes").unwrap(), id: Some("a".into()), at: None, sha: None };
+    let clip =
+        m2_editor::clips::ClipRef { lane: m2_song::LaneAddr::new("bass", "notes").unwrap(), id: Some("a".into()), at: None, sha: None };
     let note = |start: f64| m2_song::Note { pitch: 40.0, start, length: 1.0, velocity: 0.8 };
     m2_editor::clips::Gesture::Notes { clip, notes: vec![note(e), note(12.0)], length: None }
 }

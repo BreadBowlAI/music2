@@ -33,12 +33,15 @@ fn the_plugin_list_comes_from_the_host_scan() {
     let host: Arc<dyn m2_plugins::PluginHost> = Arc::new(remote.clone());
     let player = m2_play::Player::silent().expect("a silent player");
     let dir = std::env::temp_dir().join(format!("m2-routes-plugins-{}", std::process::id()));
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::with_player_on(player, host)).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::with_player_on(player, host))
+            .unwrap();
     assert!(remote.process_id().is_none(), "no host process before the list is asked for");
 
     let (status, list) = ask(&running.url, "GET", "/api/plugins");
     assert_eq!(status, 200, "{list}");
-    let probe = list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "clap:m2.probe").unwrap_or_else(|| panic!("the probe: {list:#}"));
+    let probe =
+        list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "clap:m2.probe").unwrap_or_else(|| panic!("the probe: {list:#}"));
     assert_eq!(
         (&probe["name"], &probe["vendor"], &probe["version"], &probe["instrument"], &probe["effect"]),
         (&Value::from("m2 probe"), &Value::from("music2"), &Value::from("1.0.0"), &Value::from(true), &Value::from(true)),

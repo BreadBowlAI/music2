@@ -49,7 +49,9 @@ fn settle_assets_whole(snap: &mut Snapshot) {
         .filter_map(|(_, t)| serde_json::from_str::<serde_json::Value>(t).ok())
         .flat_map(|v| {
             let clips = v.get("clips").and_then(|c| c.as_array()).cloned().unwrap_or_default();
-            clips.into_iter().filter_map(|c| Some(m2_song::DataPath::Asset(m2_song::AssetName::new(c.get("asset")?.as_str()?).ok()?).path()))
+            clips
+                .into_iter()
+                .filter_map(|c| Some(m2_song::DataPath::Asset(m2_song::AssetName::new(c.get("asset")?.as_str()?).ok()?).path()))
         })
         .collect();
     let dir = snap.dir.clone();

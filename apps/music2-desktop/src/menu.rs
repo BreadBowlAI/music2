@@ -311,14 +311,19 @@ enum RecentRow {
     Song(String, String),
     Line,
     /// Clear Menu, which does something only while there is a song to clear.
-    Clear { enabled: bool },
+    Clear {
+        enabled: bool,
+    },
 }
 
 /// File ▸ Open Recent ▸'s rows for `songs` (folder, name), newest first: up to ten songs, a line,
 /// and Clear Menu. With none, only Clear Menu, greyed out.
 fn recent_rows(songs: &[(std::path::PathBuf, String)]) -> Vec<RecentRow> {
-    let mut rows: Vec<RecentRow> =
-        songs.iter().take(RECENT_SHOWN).map(|(dir, name)| RecentRow::Song(format!("{OPEN_RECENT}{}", dir.display()), name.clone())).collect();
+    let mut rows: Vec<RecentRow> = songs
+        .iter()
+        .take(RECENT_SHOWN)
+        .map(|(dir, name)| RecentRow::Song(format!("{OPEN_RECENT}{}", dir.display()), name.clone()))
+        .collect();
     if !rows.is_empty() {
         rows.push(RecentRow::Line);
     }
@@ -570,12 +575,18 @@ mod tests {
             let bar = layout(mac);
             let menu = |name: &str| bar.iter().find(|m| m.0 == name).expect(name).1.clone();
             let view = menu("View");
-            assert_eq!(view[..6], [Row::Item("zoom_in"), Row::Item("zoom_out"), Row::Item("zoom_fit"), Row::Item("taller"), Row::Item("shorter"), Row::Line]);
+            assert_eq!(
+                view[..6],
+                [Row::Item("zoom_in"), Row::Item("zoom_out"), Row::Item("zoom_fit"), Row::Item("taller"), Row::Item("shorter"), Row::Line]
+            );
             let transport = menu("Transport");
             let at = transport.iter().position(|r| *r == Row::Item("loop_selection")).expect("Loop Selection");
             assert_eq!(transport[at + 1..at + 3], [Row::Item("metronome"), Row::Item("follow")], "mac: {mac}");
             let at = transport.iter().position(|r| *r == Row::Item("add_marker")).expect("Add Marker");
-            assert_eq!(transport[at - 1..at + 4], [Row::Line, Row::Item("add_marker"), Row::Item("prev_marker"), Row::Item("next_marker"), Row::Line]);
+            assert_eq!(
+                transport[at - 1..at + 4],
+                [Row::Line, Row::Item("add_marker"), Row::Item("prev_marker"), Row::Item("next_marker"), Row::Line]
+            );
         }
     }
 
@@ -615,7 +626,11 @@ mod tests {
             let bar = layout(mac);
             let transport = &bar.iter().find(|m| m.0 == "Transport").expect("Transport").1;
             let at = transport.iter().position(|r| *r == Row::Item("loop")).expect("Loop");
-            assert_eq!(transport[at..at + 4], [Row::Item("loop"), Row::Item("loop_selection"), Row::Item("metronome"), Row::Item("follow")], "mac: {mac}");
+            assert_eq!(
+                transport[at..at + 4],
+                [Row::Item("loop"), Row::Item("loop_selection"), Row::Item("metronome"), Row::Item("follow")],
+                "mac: {mac}"
+            );
         }
     }
 

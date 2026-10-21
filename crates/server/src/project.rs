@@ -252,7 +252,8 @@ fn tempo_of(a: &m2_song::Arrangement, bpm: f64) -> Result<String> {
     let mut a = a.clone();
     a.tempo[0].bpm = bpm;
     let text = a.canonical();
-    m2_song::Arrangement::read(&text).map_err(|d| anyhow!("{}", d.message.replace("data/arrangement.json: tempo entry 1 (beat 0): ", "the tempo: ")))?;
+    m2_song::Arrangement::read(&text)
+        .map_err(|d| anyhow!("{}", d.message.replace("data/arrangement.json: tempo entry 1 (beat 0): ", "the tempo: ")))?;
     Ok(text)
 }
 
@@ -658,7 +659,9 @@ pub fn rename(state: &AppState, req: &Rename) -> Result<Value> {
             [one] => format!("{one} has"),
             many => format!("{} files have", many.len()),
         };
-        bail!("{files} unsaved edits in the code editor. Renaming the folder closes the song without saving them. Save first, or rename anyway.");
+        bail!(
+            "{files} unsaved edits in the code editor. Renaming the folder closes the song without saving them. Save first, or rename anyway."
+        );
     }
     state.graph.title(req.session, name)?;
     let Some(to) = to else { return Ok(json!({"name": name, "dir": dir, "warning": null})) };
@@ -913,7 +916,10 @@ mod tests {
         let t = Temp::new();
         let dir = create(&t.0, "Fast", &template("starter")).unwrap();
         set_tempo(&dir, 140.0).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join("data/arrangement.json")).unwrap(), "{\n  \"tempo\": [\n    {\"beat\": 0, \"bpm\": 140}\n  ],\n  \"meter\": []\n}\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("data/arrangement.json")).unwrap(),
+            "{\n  \"tempo\": [\n    {\"beat\": 0, \"bpm\": 140}\n  ],\n  \"meter\": []\n}\n"
+        );
         let tempos: Vec<(String, f64)> = templates().into_iter().map(|s| (s.id, s.tempo)).collect();
         assert_eq!(tempos, vec![("starter".into(), 116.0), ("empty".into(), 120.0)]);
         let e = tempo_of(&m2_song::Arrangement::default(), 1000.0).unwrap_err().to_string();

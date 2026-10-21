@@ -494,7 +494,8 @@ fn the_instruments_are_stds_sounds_in_order() {
     let f = fixture("templates/empty");
     let s = f.open();
     let list = s.instruments();
-    let rows: Vec<(&str, &str, &str, &str)> = list.iter().map(|i| (i.component.as_str(), i.label.as_str(), i.category.as_str(), i.lane.as_str())).collect();
+    let rows: Vec<(&str, &str, &str, &str)> =
+        list.iter().map(|i| (i.component.as_str(), i.label.as_str(), i.category.as_str(), i.lane.as_str())).collect();
     let drum = |c, l| (c, l, "Drums", "hits");
     let inst = |c, l| (c, l, "Instruments", "notes");
     let design = |c, l| (c, l, "Sound design", "notes");
@@ -568,7 +569,10 @@ fn two_tracks_in_one_tx_are_one_undo_step() {
     let pluck = NewTrack { play: Play::Instrument("std:synth-pluck".into()), label: None, key: None, clips: vec![] };
     let made = add_tracks(&mut s, &[pluck, audio_track("Vox", vec![])], Some("kick"), None).unwrap();
     assert_eq!(s.accepted().number, number + 1, "one revision");
-    assert_eq!(made.iter().map(|m| (m.module.as_str(), m.label.as_str())).collect::<Vec<_>>(), [("synth-pluck", "Synth pluck"), ("vox", "Vox")]);
+    assert_eq!(
+        made.iter().map(|m| (m.module.as_str(), m.label.as_str())).collect::<Vec<_>>(),
+        [("synth-pluck", "Synth pluck"), ("vox", "Vox")]
+    );
     let song = f.read("song.ts");
     assert!(song.contains("import synthPluck from \"./tracks/synth-pluck\";\nimport vox from \"./tracks/vox\";"), "{song}");
     assert!(song.contains("\"synth-pluck\": synthPluck.out,\n      vox: vox.out"), "{song}");
@@ -594,7 +598,9 @@ fn an_audio_track_plays_its_lane() {
         f.read("tracks/keys-bounce.ts"),
         "import { track } from \"@m2/core\";\n\nexport default track(\"keys-bounce\", { name: \"Keys bounce\" }, ({ lane }) => lane.audio(\"clips\"));\n"
     );
-    let LaneData::Audio(clips) = LaneData::read(&f.read("data/keys-bounce/clips.json"), &m2_song::LaneKind::Audio).unwrap() else { unreachable!() };
+    let LaneData::Audio(clips) = LaneData::read(&f.read("data/keys-bounce/clips.json"), &m2_song::LaneKind::Audio).unwrap() else {
+        unreachable!()
+    };
     assert_eq!((clips.len(), clips[0].start, clips[0].asset.as_str()), (1, 20.0, "keys-bounce.wav"));
     let heard = render(&s, 12.0);
     // Beat 20 at 120 BPM is 10 s: silent before as it was, sounding after.

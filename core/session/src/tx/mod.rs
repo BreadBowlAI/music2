@@ -1373,7 +1373,8 @@ impl Session {
         let previous = match planned.seeds.as_slice() {
             [] => &baseline.compiled.data,
             seeds => {
-                seeded = seeds.iter().fold(baseline.compiled.data.clone(), |d, s| d.seeded(&s.addr, &s.kind, s.text.clone(), s.data.clone()));
+                seeded =
+                    seeds.iter().fold(baseline.compiled.data.clone(), |d, s| d.seeded(&s.addr, &s.kind, s.text.clone(), s.data.clone()));
                 &seeded
             }
         };
@@ -1486,7 +1487,8 @@ impl Session {
             for (k, v) in m2_song::under(&candidate.snapshot.files, &at) {
                 draft.files.insert(k.clone(), v.clone());
             }
-            let bins: Vec<(PathBuf, Stored)> = m2_song::under(&candidate.snapshot.binaries, &at).map(|(k, v)| (k.clone(), v.clone())).collect();
+            let bins: Vec<(PathBuf, Stored)> =
+                m2_song::under(&candidate.snapshot.binaries, &at).map(|(k, v)| (k.clone(), v.clone())).collect();
             if !bins.is_empty() {
                 Arc::make_mut(&mut draft.binaries).extend(bins);
             }

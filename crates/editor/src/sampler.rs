@@ -76,7 +76,8 @@ pub fn set_sample(s: &mut Session, at: u64, call: &str, file: &Imported) -> Resu
     let d = rev.compiled.components.get(SAMPLER).cloned().ok_or_else(|| EditError::NotFound(SAMPLER.into()))?;
     let text = rev.snapshot.files.get(Path::new(&site.file)).cloned().ok_or_else(|| EditError::NotFound(site.file.clone()))?;
     let quoted = literal(&name);
-    let in_code = |why: &str| EditError::Rejected(format!("Sampler's file can't be set here: {why}. Write `sample: {quoted}` in its code."));
+    let in_code =
+        |why: &str| EditError::Rejected(format!("Sampler's file can't be set here: {why}. Write `sample: {quoted}` in its code."));
     let options = options_of(m, site.id).map_err(in_code)?;
     let props = options.and_then(|i| match site.args.get(i) {
         Some(Arg::Object { props, .. }) => Some(props),
@@ -90,7 +91,9 @@ pub fn set_sample(s: &mut Session, at: u64, call: &str, file: &Imported) -> Resu
             let (a, b) = v.span();
             let old = text.get(a as usize..b as usize).unwrap_or("");
             // Only a name written there is replaced: anything else is code that picks the file.
-            if !(old.len() >= 2 && (old.starts_with('"') && old.ends_with('"') || old.starts_with('\'') && old.ends_with('\''))) || old.contains('\\') {
+            if !(old.len() >= 2 && (old.starts_with('"') && old.ends_with('"') || old.starts_with('\'') && old.ends_with('\'')))
+                || old.contains('\\')
+            {
                 return Err(in_code("its file is picked by code"));
             }
             if old[1..old.len() - 1] == name {
@@ -127,7 +130,13 @@ pub fn set_sample(s: &mut Session, at: u64, call: &str, file: &Imported) -> Resu
         }
         let delta = &checked.delta;
         let mine = |n: &Vec<String>| n.first() == Some(&key);
-        let others = delta.added.iter().chain(&delta.removed).map(|n| &n.name).chain(delta.rewired.iter().map(|w| &w.node)).chain(delta.values.iter().map(|v| &v.node));
+        let others = delta
+            .added
+            .iter()
+            .chain(&delta.removed)
+            .map(|n| &n.name)
+            .chain(delta.rewired.iter().map(|w| &w.node))
+            .chain(delta.values.iter().map(|v| &v.node));
         if let Some(n) = others.into_iter().find(|n| !mine(n)) {
             return Err(said(&format!("{} changes", n.join("/"))));
         }

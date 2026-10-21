@@ -396,7 +396,15 @@ mod tests {
         assert!(!d[0].message.contains("This app has"), "{}", d[0].message);
         // Only std: another package asked for at an older version gets none.
         let drums = Manifest::read(&GOOD.replace("[dependencies]", "[dependencies]\ndrums = \"1\"")).unwrap();
-        let d = drums.check_dependencies(|name: &str| Version::parse(if name == SDK { "1.0.0" } else if name == STD { "0.2.0" } else { "2.0.0" }));
+        let d = drums.check_dependencies(|name: &str| {
+            Version::parse(if name == SDK {
+                "1.0.0"
+            } else if name == STD {
+                "0.2.0"
+            } else {
+                "2.0.0"
+            })
+        });
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
         assert!(d[0].message.contains("drums") && !d[0].message.contains("This app has"), "{}", d[0].message);
         let d = m.check_dependencies(installed("1.0.0", None));

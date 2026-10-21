@@ -1297,7 +1297,15 @@ fn range_labels(lab: &Lab, song: &Song, out: &mut Outcome, file: &std::path::Pat
     let seconds = |beat: f64| song.data.tempo().seconds_at(beat);
     let render = |from: f64| -> Result<m2_editor::render::Rendered> {
         let length = Length::Seconds(seconds(32.0));
-        let r = Render::range(std::sync::Arc::new(song.clone()), &lab.packages, song.rate, seconds(from), seconds(8.0), length, Threads::Exactly(1))?;
+        let r = Render::range(
+            std::sync::Arc::new(song.clone()),
+            &lab.packages,
+            song.rate,
+            seconds(from),
+            seconds(8.0),
+            length,
+            Threads::Exactly(1),
+        )?;
         r.write(file, |_| {})
     };
     let (late, early) = (render(BAR_64)?, render(0.0)?);

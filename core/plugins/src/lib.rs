@@ -40,13 +40,13 @@ use clap_sys::factory::plugin_factory::*;
 use clap_sys::version::clap_version_is_compatible;
 
 pub use host::{
-    Blob, Events, Handle, HostEvent, HostEvents, MAX_CALL_EVENTS, MAX_PRESET_FILES, MainCall, Offered, Owner, Pending, PluginHost, PresetAt,
-    RenderMode, Reply, SharedBuffers, Status, WindowCall,
+    Blob, Events, Handle, HostEvent, HostEvents, MAX_CALL_EVENTS, MAX_PRESET_FILES, MainCall, Offered, Owner, Pending, PluginHost,
+    PresetAt, RenderMode, Reply, SharedBuffers, Status, WindowCall,
 };
 pub use inprocess::{InProcess, MAX_INSTANCES};
+pub use main_thread::{DRAIN, MainThread, main_thread, on_main_thread, run_main, test_main_thread, use_app_main_thread};
 pub use remote::child::serve as serve_host;
 pub use remote::{FLAG as HOST_FLAG, HANG, Remote};
-pub use main_thread::{DRAIN, MainThread, main_thread, on_main_thread, run_main, test_main_thread, use_app_main_thread};
 
 /// Where plugins are installed on this machine: `CLAP_PATH`, then the OS's CLAP folders.
 pub fn search_paths() -> Vec<PathBuf> {
@@ -148,7 +148,8 @@ fn binary_in(bundle: &Path) -> Result<PathBuf> {
         return Ok(bundle.to_path_buf());
     }
     let dir = bundle.join("Contents/MacOS");
-    let mut files = std::fs::read_dir(&dir).with_context(|| format!("{} is not a CLAP bundle", bundle.display()))?.flatten().map(|e| e.path());
+    let mut files =
+        std::fs::read_dir(&dir).with_context(|| format!("{} is not a CLAP bundle", bundle.display()))?.flatten().map(|e| e.path());
     files.next().ok_or_else(|| anyhow!("{} has no binary", dir.display()))
 }
 
@@ -175,7 +176,8 @@ fn load(bundle: &Path) -> Result<Arc<Library>> {
     let bin = binary_in(bundle)?;
     // SAFETY: loading a plugin runs its native code; plugins are trusted like in any DAW.
     let lib = unsafe { libloading::Library::new(&bin) }.with_context(|| format!("loading {}", bin.display()))?;
-    let entry = unsafe { *lib.get::<*const clap_plugin_entry>(b"clap_entry\0").with_context(|| format!("{} has no clap_entry", bin.display()))? };
+    let entry =
+        unsafe { *lib.get::<*const clap_plugin_entry>(b"clap_entry\0").with_context(|| format!("{} has no clap_entry", bin.display()))? };
     let e = unsafe { &*entry };
     if !clap_version_is_compatible(e.clap_version) {
         bail!("{} uses an incompatible CLAP version", bundle.display());
@@ -273,7 +275,8 @@ pub(crate) fn scan_here() -> (Vec<Found>, Vec<String>) {
     let (mut found, mut errors) = (vec![], vec![]);
     for dir in search_paths() {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        let mut bundles: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "clap")).collect();
+        let mut bundles: Vec<PathBuf> =
+            entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "clap")).collect();
         bundles.sort();
         for b in bundles {
             match library(&b) {
@@ -299,19 +302,48 @@ pub fn find(id: &str) -> Result<Found> {
 /// Something that happens at a sample offset within a `process` call.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    NoteOn { time: u32, id: i32, key: i16, velocity: f64 },
-    NoteOff { time: u32, id: i32, key: i16 },
+    NoteOn {
+        time: u32,
+        id: i32,
+        key: i16,
+        velocity: f64,
+    },
+    NoteOff {
+        time: u32,
+        id: i32,
+        key: i16,
+    },
     /// End a note at once, with no release (a panic).
-    NoteChoke { time: u32, id: i32, key: i16 },
+    NoteChoke {
+        time: u32,
+        id: i32,
+        key: i16,
+    },
     /// Tuning in semitones for one note (for pitches between keys).
-    Tuning { time: u32, id: i32, key: i16, semitones: f64 },
-    Param { time: u32, id: u32, value: f64 },
+    Tuning {
+        time: u32,
+        id: i32,
+        key: i16,
+        semitones: f64,
+    },
+    Param {
+        time: u32,
+        id: u32,
+        value: f64,
+    },
     /// A MIDI message, sent as `CLAP_EVENT_MIDI` on the note port: the lane's pitch wheel and mod
     /// wheel (RENDER-14's `Midi`).
-    Midi { time: u32, bytes: [u8; 3] },
+    Midi {
+        time: u32,
+        bytes: [u8; 3],
+    },
     /// The person began (or ended) changing a parameter in the plugin's window: what a plugin
     /// outputs around the values it sets (CLAP's gesture events, HOST-4).
-    Gesture { time: u32, id: u32, begin: bool },
+    Gesture {
+        time: u32,
+        id: u32,
+        begin: bool,
+    },
 }
 
 impl Event {

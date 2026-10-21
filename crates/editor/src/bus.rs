@@ -86,7 +86,11 @@ pub(crate) fn bus_import(kind: BusKind) -> &'static str {
 /// The text of a new bus file.
 fn bus_text(kind: BusKind, key: &str, label: &str) -> String {
     let (name, from) = (bus_import(kind), kind.body().1);
-    format!("import {{ bus }} from \"@m2/core\";\nimport {{ {name} }} from {};\n\nexport default {};\n", quoted(from), bus_call_text(kind, key, label))
+    format!(
+        "import {{ bus }} from \"@m2/core\";\nimport {{ {name} }} from {};\n\nexport default {};\n",
+        quoted(from),
+        bus_call_text(kind, key, label)
+    )
 }
 
 /// Add a bus of `kind`, shown as `label` (else the kind's name), placed after track `after` in the
@@ -120,10 +124,8 @@ pub fn add_bus(s: &mut Session, kind: BusKind, label: Option<&str>, after: Optio
         plan::text_edit(&song_file, &song_text, &edits),
         Op::Write { file: new_file.clone(), bytes: Payload::Text(bus_text(kind, &key, &label).into()) },
     ];
-    let ranges = [
-        (song_file, Declared::Ranges(vec![Range::bytes(mixer.call.0, mixer.call.1), Range::bytes(at, at)])),
-        (new_file, Declared::Whole),
-    ];
+    let ranges =
+        [(song_file, Declared::Ranges(vec![Range::bytes(mixer.call.0, mixer.call.1), Range::bytes(at, at)])), (new_file, Declared::Whole)];
     let k = Key::new(&key).map_err(EditError::Rejected)?;
     let expect = Expect::Confined(Confined { ranges: ranges.into(), lanes: vec![], modules: vec![ModuleChange::Added(k)] });
     let layout = tracks::layout_write(s, |v| {
@@ -300,7 +302,8 @@ pub(crate) struct Written {
 /// Channel `c`'s entry in `text`, named `name` in a refusal: an object this can't read (a spread,
 /// `sends` not written as an object) is changed in code.
 pub(crate) fn written(text: &str, c: &Channel, name: &str) -> Result<Written, EditError> {
-    let in_code = || EditError::Rejected(format!("{name}'s mixer entry isn't written in a way this can change: change it in the Code view."));
+    let in_code =
+        || EditError::Rejected(format!("{name}'s mixer entry isn't written in a way this can change: change it in the Code view."));
     let p = &c.property;
     let object = text.get(p.value.0 as usize..p.value.1 as usize).is_some_and(|v| v.trim_start().starts_with('{'));
     let fields = match object {
@@ -323,8 +326,9 @@ fn with_prop(text: &str, p: &Property, first: &str, prop: &str) -> Result<Edits,
     let (a, b) = p.value;
     let value = &text[a as usize..b as usize];
     if value.trim_start().starts_with('{') {
-        let fields = properties(text, p.value)
-            .ok_or_else(|| EditError::Rejected(format!("{}'s entry isn't written in a way this can change: change it in the Code view.", p.key)))?;
+        let fields = properties(text, p.value).ok_or_else(|| {
+            EditError::Rejected(format!("{}'s entry isn't written in a way this can change: change it in the Code view.", p.key))
+        })?;
         return Ok(match fields.last() {
             Some(last) => vec![(last.end, last.end, format!(", {prop}"))],
             None => vec![(a, b, format!("{{ {prop} }}"))],
@@ -450,7 +454,8 @@ fn commit(s: &mut Session, m: &Mixer, edits: Edits, label: (String, String), wan
 /// channel keeps its tracks, and the routing is `want`.
 fn routed(checked: &Checked, before: &[(String, Vec<String>)], want: &BTreeMap<String, Route>) -> Result<(), String> {
     let d = &checked.delta;
-    if !(d.modules.is_empty() && d.values.is_empty() && d.lanes.is_empty() && d.states.is_empty() && d.assets.is_empty() && !d.arrangement) {
+    if !(d.modules.is_empty() && d.values.is_empty() && d.lanes.is_empty() && d.states.is_empty() && d.assets.is_empty() && !d.arrangement)
+    {
         return Err("change a track, a value or the song's data too".into());
     }
     let Mixing::One(m) = mix::mixer(checked.candidate()) else { return Err("lose the mixer".into()) };

@@ -6,16 +6,44 @@
 
 const BANNED: [&str; 34] = [
     // Allocation.
-    "Box::new", "Box<[", "vec!", "Vec<", "Vec::", ".to_vec(", "String", "format!", ".collect", "Arc::new", ".clone()",
-    "to_string", "to_owned", "with_capacity", ".push(", ".extend(",
+    "Box::new",
+    "Box<[",
+    "vec!",
+    "Vec<",
+    "Vec::",
+    ".to_vec(",
+    "String",
+    "format!",
+    ".collect",
+    "Arc::new",
+    ".clone()",
+    "to_string",
+    "to_owned",
+    "with_capacity",
+    ".push(",
+    ".extend(",
     // Locks.
-    "Mutex", "RwLock", ".lock(", "Condvar", "Barrier",
+    "Mutex",
+    "RwLock",
+    ".lock(",
+    "Condvar",
+    "Barrier",
     // Channels.
-    "channel", "mpsc", "crossbeam",
+    "channel",
+    "mpsc",
+    "crossbeam",
     // Thread-locals.
-    "thread_local!", "thread::current", "LocalKey",
+    "thread_local!",
+    "thread::current",
+    "LocalKey",
     // I/O.
-    "print!", "println!", "eprint", "dbg!", "std::io", "File", "stdout",
+    "print!",
+    "println!",
+    "eprint",
+    "dbg!",
+    "std::io",
+    "File",
+    "stdout",
 ];
 
 /// Words that look banned but aren't: the workers' table is made in lib.rs and only handed in.

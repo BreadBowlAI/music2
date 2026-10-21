@@ -537,7 +537,13 @@ fn move_plan(s: &Session, site: &Site, d: &Descriptor, earlier: bool) -> Result<
     let written = if earlier { inner } else { outer };
     if let Some(other) = written {
         let (outer, inner) = if earlier { (site, &other.0) } else { (&other.0, site) };
-        let text = |a: &Arg| s.accepted().snapshot.files.get(Path::new(&site.file)).and_then(|t| t.get(a.span().0 as usize..a.span().1 as usize).map(str::to_string));
+        let text = |a: &Arg| {
+            s.accepted()
+                .snapshot
+                .files
+                .get(Path::new(&site.file))
+                .and_then(|t| t.get(a.span().0 as usize..a.span().1 as usize).map(str::to_string))
+        };
         let spread = outer.args.iter().chain(&inner.args).any(|a| text(a).is_some_and(|t| t.trim_start().starts_with("...")));
         if spread || inner.args.is_empty() || !(outer.start < outer.open && inner.start < inner.open) {
             let what = if spread { "one of them spreads its arguments" } else { "they aren't written as plain calls" };
@@ -547,8 +553,14 @@ fn move_plan(s: &Session, site: &Site, d: &Descriptor, earlier: bool) -> Result<
     }
     let (before, after) = chained_next(s, site.id);
     match (earlier, before, after) {
-        (true, Some(b), _) => Err(format!("{} and {} aren't next to each other in the code, so they can't swap here. Change their order in code.", b.label, d.label)),
-        (false, _, Some(a)) => Err(format!("{} and {} aren't next to each other in the code, so they can't swap here. Change their order in code.", d.label, a.label)),
+        (true, Some(b), _) => Err(format!(
+            "{} and {} aren't next to each other in the code, so they can't swap here. Change their order in code.",
+            b.label, d.label
+        )),
+        (false, _, Some(a)) => Err(format!(
+            "{} and {} aren't next to each other in the code, so they can't swap here. Change their order in code.",
+            d.label, a.label
+        )),
         (true, ..) => Err(format!("{} is the first effect here.", d.label)),
         (false, ..) => Err(format!("{} is the last effect here.", d.label)),
     }
@@ -570,14 +582,22 @@ pub(crate) fn move_row(s: &Session, site: &Site, earlier: bool) -> Result<String
 pub fn reorder(s: &mut Session, at: u64, call: &str, earlier: bool) -> Result<Edited, EditError> {
     ready(s)?;
     let site = current_site(s, at, call)?.clone();
-    let effect = effect_at(s, &site).ok_or_else(|| EditError::Rejected(format!("`{}` is not an effect that can be moved here", site.callee)))?;
+    let effect =
+        effect_at(s, &site).ok_or_else(|| EditError::Rejected(format!("`{}` is not an effect that can be moved here", site.callee)))?;
     let (other, d) = move_plan(s, &site, &effect, earlier).map_err(EditError::Rejected)?;
-    let ((outer, od), (inner, id)) = if earlier { ((site.clone(), effect.clone()), (other, d)) } else { ((other, d), (site.clone(), effect.clone())) };
+    let ((outer, od), (inner, id)) =
+        if earlier { ((site.clone(), effect.clone()), (other, d)) } else { ((other, d), (site.clone(), effect.clone())) };
     let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
     let t = |a: u32, b: u32| text[a as usize..b as usize].to_string();
     let x = inner.args[0].span();
     // outer( gap inner( gap x itail otail  →  inner( gap outer( gap x otail itail
-    let head = format!("{}{}{}{}", t(inner.start, inner.open + 1), t(outer.open + 1, inner.start), t(outer.start, outer.open + 1), t(inner.open + 1, x.0));
+    let head = format!(
+        "{}{}{}{}",
+        t(inner.start, inner.open + 1),
+        t(outer.open + 1, inner.start),
+        t(outer.start, outer.open + 1),
+        t(inner.open + 1, x.0)
+    );
     let tail = format!("{}{}", t(inner.end, outer.end), t(x.1, inner.end));
     let edits = [(outer.start, x.0, head), (x.1, outer.end, tail)];
     // Where the outer call starts now: after the inner one's head and the gap.
@@ -588,12 +608,17 @@ pub fn reorder(s: &mut Session, at: u64, call: &str, earlier: bool) -> Result<Ed
     let label = (format!("{}({}(…))", outer.callee, inner.callee), format!("{}({}(…))", inner.callee, outer.callee));
     let tx = plan::planned(s, label.clone(), vec![plan::text_edit(&file, &text, &edits)], expect);
     let refused = || EditError::Rejected(format!("swapping {} and {} would change more than their order", id.label, od.label));
-    let said = |why: &str| EditError::Rejected(format!("swapping {} and {} would change more than their order ({why})", id.label, od.label));
+    let said =
+        |why: &str| EditError::Rejected(format!("swapping {} and {} would change more than their order ({why})", id.label, od.label));
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;
         let (b, c) = (&checked.baseline().compiled, &checked.candidate().compiled);
-        let find = |start: u32, callee: &str| c.sites.iter().find(|x| x.file == outer.file && x.start == start && x.callee == callee).map(|x| x.id);
-        let (Some(now_outer), Some(now_inner)) = (find(outer.start, &inner.callee), find(outer.start + shift, &outer.callee)) else { return Err(refused()) };
+        let find = |start: u32, callee: &str| {
+            c.sites.iter().find(|x| x.file == outer.file && x.start == start && x.callee == callee).map(|x| x.id)
+        };
+        let (Some(now_outer), Some(now_inner)) = (find(outer.start, &inner.callee), find(outer.start + shift, &outer.callee)) else {
+            return Err(refused());
+        };
         // The other way round: the outer call reads the inner one's output, in each (or the
         // inner one is turned off, and gives its input on).
         let reads = |c: &Compiled, reader: u32, read: u32| {
@@ -743,7 +768,11 @@ pub fn sidechain(s: &mut Session, at: u64, call: &str, track: &str) -> Result<Ed
         EditError::Rejected(format!("{} can't listen to {named} here: {} doesn't import it. Change it in code.", d.label, site.file))
     })?;
     let env = compiled.ir.modules.iter().any(|t| t.key == track && t.exports.contains_key("env"));
-    let side = site.args.get(1).ok_or_else(|| EditError::Rejected(format!("{}'s side input isn't written in its call. Change it in code.", d.label)))?.span();
+    let side = site
+        .args
+        .get(1)
+        .ok_or_else(|| EditError::Rejected(format!("{}'s side input isn't written in its call. Change it in code.", d.label)))?
+        .span();
     let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
     let new = if env { format!("{handle}.env") } else { format!("follow({handle}.out)") };
     if text[side.0 as usize..side.1 as usize] == new {

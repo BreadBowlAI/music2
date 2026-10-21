@@ -159,7 +159,8 @@ fn work(dir: PathBuf) -> String {
     probe::install();
     assert!(!m2_plugins::on_main_thread(), "the worker isn't the plugins' main thread");
     // The app's main loop still runs jobs: on the process's main thread exactly when the OS says so.
-    let (on, process_main) = m2_plugins::main_thread().unwrap().run(|| (m2_plugins::on_main_thread(), m2_os::thread::is_process_main())).unwrap();
+    let (on, process_main) =
+        m2_plugins::main_thread().unwrap().run(|| (m2_plugins::on_main_thread(), m2_os::thread::is_process_main())).unwrap();
     assert!(on && process_main == APP_ON_PROCESS_MAIN, "a job ran on the app's main loop: {on}; on the process's: {process_main}");
     assert_eq!(m2_plugins::host_process(), None, "no host process before a plugin is needed");
 
@@ -198,7 +199,10 @@ fn work(dir: PathBuf) -> String {
     assert!(teardown.left == 0 && teardown.destroyed >= 1, "quit left plugin instances alive: {teardown:?}");
     eventually("quit ended the host process", || m2_plugins::host_process().is_none());
     let surge = with_plugins(&server, &dir);
-    format!("{made} probe instances made in host process {host} from the app's hook; quit destroyed {} and left {}; {surge}", teardown.destroyed, teardown.left)
+    format!(
+        "{made} probe instances made in host process {host} from the app's hook; quit destroyed {} and left {}; {surge}",
+        teardown.destroyed, teardown.left
+    )
 }
 
 /// With `CLAP_PATH` naming a folder with Surge XT and Airwindows (tests never read the user's own):

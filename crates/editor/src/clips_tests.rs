@@ -73,7 +73,8 @@ fn a_move_keeps_its_id() {
     let after = f.read("data/kick/hits.json");
     assert_eq!(changed_lines(&before, &after), ["  {\"id\": \"my53vvkc\", \"start\": 32, \"length\": 32, \"notes\": ["]);
     // Onto another lane of its kind, it keeps its id there too.
-    let done = go(&mut s, Gesture::Move { clips: vec![by_id("kick/hits", "my53vvkc")], by: -32.0, to: Some(addr("hats/hits")), copy: false });
+    let done =
+        go(&mut s, Gesture::Move { clips: vec![by_id("kick/hits", "my53vvkc")], by: -32.0, to: Some(addr("hats/hits")), copy: false });
     assert!(clips(&s, "kick/hits").is_empty());
     assert!(clips(&s, "hats/hits").contains(&(Some("my53vvkc".into()), 0.0, 32.0)), "{:?}", clips(&s, "hats/hits"));
     assert_eq!(done.made, [(addr("hats/hits"), "my53vvkc".to_string())], "moved to another lane: the app selects it there");
@@ -117,7 +118,11 @@ fn every_copy_mints() {
     let n = notes(&s, "kick/hits");
     let first: Vec<AbsNote> = n.iter().filter(|x| x.start < 32.0).copied().collect();
     for (from, to) in [(32.0, 64.0), (64.0, 96.0), (128.0, 160.0)] {
-        let later: Vec<AbsNote> = n.iter().filter(|x| x.start >= from && x.start < to).map(|x| AbsNote { start: x.start - from, end: x.end - from, ..*x }).collect();
+        let later: Vec<AbsNote> = n
+            .iter()
+            .filter(|x| x.start >= from && x.start < to)
+            .map(|x| AbsNote { start: x.start - from, end: x.end - from, ..*x })
+            .collect();
         assert_eq!(later, first, "the copy at {from}");
     }
 }
@@ -307,7 +312,8 @@ fn kinds_and_units_never_mix() {
     let why = refused(&mut s, Gesture::Move { clips: cutoff, by: 0.0, to: Some(addr("bass/drop")), copy: true });
     assert!(why.contains("hz") && why.contains("unit01") && why.contains("can't share clips"), "{why}");
     let clip = data(&s, "bass/cutoff").unwrap().clip_value("adp0sw76").unwrap();
-    let why = refused(&mut s, Gesture::Paste { clips: vec![Copied { from: addr("bass/cutoff"), clip }], to: Some(addr("kick/hits")), at: 0.0 });
+    let why =
+        refused(&mut s, Gesture::Paste { clips: vec![Copied { from: addr("bass/cutoff"), clip }], to: Some(addr("kick/hits")), at: 0.0 });
     assert!(why.contains("An automation clip can't go on a notes lane"), "{why}");
     let why = refused(&mut s, Gesture::Move { clips: kick(), by: -1.0, to: None, copy: false });
     assert!(why.contains("before the song starts"), "{why}");
@@ -516,7 +522,10 @@ fn join_makes_one_clip_and_keeps_every_note_in_time() {
     let heard = notes(&s, "keys/chords");
     go(&mut s, Gesture::Join { clips: vec![by_id("keys/chords", "a"), by_id("keys/chords", "b")] });
     assert_eq!(notes(&s, "keys/chords"), heard, "every note where it played, and the hidden ones silent");
-    assert_eq!(notes_by_id(&s, "keys/chords"), [("a".to_string(), 0.0, 12.0, vec![(60.0, 0.0, 1.0), (61.0, 3.5, 0.5), (64.0, 8.0, 1.0), (65.0, 10.0, 1.0)])]);
+    assert_eq!(
+        notes_by_id(&s, "keys/chords"),
+        [("a".to_string(), 0.0, 12.0, vec![(60.0, 0.0, 1.0), (61.0, 3.5, 0.5), (64.0, 8.0, 1.0), (65.0, 10.0, 1.0)])]
+    );
     let one = refused(&mut s, Gesture::Join { clips: vec![by_id("keys/chords", "a")] });
     assert!(one.contains("two"), "{one}");
 }
@@ -547,7 +556,8 @@ fn quantize_to_sixteenths_and_triplets() {
     let mut s = f.open();
     let clip = notes_clip("a", 4.0, 4.0, &[(60.0, 0.1, 0.3), (62.0, 0.3, 0.2), (64.0, 1.13, 0.5)]);
     go(&mut s, Gesture::Set { lane: addr("keys/chords"), put: vec![clip], delete: vec!["6ryexzev".into()] });
-    let q = |notes: Option<Vec<u32>>, grid: f64, ends: bool| Gesture::Quantize { clips: vec![by_id("keys/chords", "a")], notes, grid, ends };
+    let q =
+        |notes: Option<Vec<u32>>, grid: f64, ends: bool| Gesture::Quantize { clips: vec![by_id("keys/chords", "a")], notes, grid, ends };
     go(&mut s, q(None, 0.25, false));
     assert_eq!(notes_by_id(&s, "keys/chords")[0].3, [(60.0, 0.0, 0.3), (62.0, 0.25, 0.2), (64.0, 1.25, 0.5)]);
     s.undo().unwrap();
@@ -568,7 +578,8 @@ fn notes_and_points_edit_one_clip() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
     let n = |pitch: f64, start: f64| Note { pitch, start, length: 0.5, velocity: 0.8 };
-    let done = go(&mut s, Gesture::Notes { clip: by_id("kick/hits", "my53vvkc"), notes: vec![n(36.0, 1.0), n(36.0, 0.0)], length: Some(8.0) });
+    let done =
+        go(&mut s, Gesture::Notes { clip: by_id("kick/hits", "my53vvkc"), notes: vec![n(36.0, 1.0), n(36.0, 0.0)], length: Some(8.0) });
     assert_eq!(notes_by_id(&s, "kick/hits"), [("my53vvkc".into(), 0.0, 8.0, vec![(36.0, 0.0, 0.5), (36.0, 1.0, 0.5)])]);
     assert!(done.edited.after.contains("bar 1"), "{:?}", done.edited);
     go(&mut s, Gesture::Points { clip: by_id("bass/cutoff", "adp0sw76"), points: vec![(8.0, 1000.0), (0.0, 200.0)] });
@@ -873,7 +884,10 @@ fn the_edges_stop_at_the_file_both_ways() {
     assert!(why.contains("ends where keys-bounce.wav starts"), "{why}");
     // …its left edge reaches back to the file's end, and no further.
     go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 20.0 - beats(file), length: beats(file) });
-    let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 20.0 - beats(file) - 0.01, length: beats(file) + 0.01 });
+    let why = refused(
+        &mut s,
+        Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 20.0 - beats(file) - 0.01, length: beats(file) + 0.01 },
+    );
     assert!(why.contains("starts where keys-bounce.wav ends"), "{why}");
     // Forwards, the left edge stops at the file's start (the old words).
     let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "nwskkw0g"), start: 3.9, length: 1.1 });

@@ -215,7 +215,10 @@ mod tests {
         assert_eq!(again.output.choice(), Choice { device: Some("coreaudio:USB".into()), frames: Some(256) }, "opened by its id");
         assert_eq!(again.songs.as_deref(), Some(Path::new("/Users/me/Songs")));
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-        assert_eq!(json, serde_json::json!({"output": {"device": "coreaudio:USB", "name": "Headphones", "frames": 256}, "songs": "/Users/me/Songs"}));
+        assert_eq!(
+            json,
+            serde_json::json!({"output": {"device": "coreaudio:USB", "name": "Headphones", "frames": 256}, "songs": "/Users/me/Songs"})
+        );
         // Back to the defaults: nulls, and nothing else is left in the folder.
         s.change(|k| *k = Kept::default()).unwrap();
         assert_eq!(s.read(), Kept::default());
@@ -245,7 +248,11 @@ mod tests {
         assert_eq!(json["record"], serde_json::json!({"count_in": false, "quantize": true}));
         assert_eq!(json["midi"], serde_json::json!({"off": ["Keystation 49"]}));
         assert_eq!(json.get("input"), None, "the input's defaults aren't written");
-        let kept = s.change(|k| k.input = InputKept { device: Some("alsa:sysdefault:CARD=USB".into()), name: Some("USB mic".into()), monitor: true }).unwrap();
+        let kept = s
+            .change(|k| {
+                k.input = InputKept { device: Some("alsa:sysdefault:CARD=USB".into()), name: Some("USB mic".into()), monitor: true }
+            })
+            .unwrap();
         assert_eq!(kept.input.choice(), InputChoice { device: Some("alsa:sysdefault:CARD=USB".into()), name: Some("USB mic".into()) });
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         assert_eq!(json["input"], serde_json::json!({"device": "alsa:sysdefault:CARD=USB", "name": "USB mic", "monitor": true}));

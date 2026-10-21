@@ -107,7 +107,8 @@ impl Graph {
             let input = record.input().map(|ring| meters.input_level(ring));
             (plays.info.taps.as_ref()?.take(), meters.load(), player.device_errors().xruns + meters.late, input)
         };
-        let tracks: Map<String, Value> = peaks.tracks.iter().map(|(k, p)| (k.clone(), json!(p.iter().map(|&x| short(x)).collect::<Vec<_>>()))).collect();
+        let tracks: Map<String, Value> =
+            peaks.tracks.iter().map(|(k, p)| (k.clone(), json!(p.iter().map(|&x| short(x)).collect::<Vec<_>>()))).collect();
         let mut m = json!({
             "t": "meters",
             "tracks": tracks,

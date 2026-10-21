@@ -315,7 +315,8 @@ fn fixtures(lab: &mut Lab, n: usize) -> Result<(bool, String)> {
         for (from, length, suffix) in [(0.0, Length::Song, ""), (4.0, Length::Seconds(6.0), "-from4-for6")] {
             let file = format!("{}{suffix}.wav", name.replace('/', "-"));
             let path = out.join(&file);
-            Render::new(std::sync::Arc::new(song.clone()), &lab.packages, song.rate, from, length, Threads::Exactly(n))?.write(&path, |_| {})?;
+            Render::new(std::sync::Arc::new(song.clone()), &lab.packages, song.rate, from, length, Threads::Exactly(n))?
+                .write(&path, |_| {})?;
             let got = m2_song::Sha::of_file(&path)?.hex();
             match want(&file) {
                 Some(w) if w == got => matched += 1,

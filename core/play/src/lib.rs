@@ -119,7 +119,10 @@ pub enum Keep {
 
 enum Msg {
     Engine(Envelope),
-    Replace { live: Box<Live>, keep: Keep },
+    Replace {
+        live: Box<Live>,
+        keep: Keep,
+    },
     Unload,
     /// The player's engine threads (8a's live half), handed over once they are made.
     Threads(Box<Handover>),
@@ -801,7 +804,8 @@ impl Drop for Callback {
     /// callback there (cpal's ALSA stream does). It is no callback any more: what the dropper has no
     /// room for is dropped here.
     fn drop(&mut self) {
-        let mut rest = vec![self.live.take().map(Gone::Live), self.fade.take().map(|f| Gone::Live(f.old)), self.input.take().map(Gone::Input)];
+        let mut rest =
+            vec![self.live.take().map(Gone::Live), self.fade.take().map(|f| Gone::Live(f.old)), self.input.take().map(Gone::Input)];
         rest.extend(self.held.take().map(Callback::leftover));
         rest.extend(self.gone.iter_mut().map(Option::take));
         rest.extend(self.rx.try_iter().map(Callback::leftover));
@@ -1609,7 +1613,7 @@ impl Player {
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 #[path = "load_tests.rs"]
 mod load_tests;
+#[cfg(test)]
+mod tests;

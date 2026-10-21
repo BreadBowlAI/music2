@@ -50,7 +50,8 @@ fn churn(dir: &std::path::Path, edits: &[Edit], warm: usize) -> Left {
     let mut cache = Cache::default();
     let mut plays = s.accepted_arc();
     let rev = s.accepted();
-    let r = Renderer::prepare(&rev.compiled.flat, &rev.compiled.data, &s.packages, SR, &mut cache, &Owner::discard(), Basis::Fresh).unwrap();
+    let r =
+        Renderer::prepare(&rev.compiled.flat, &rev.compiled.data, &s.packages, SR, &mut cache, &Owner::discard(), Basis::Fresh).unwrap();
     let mut info = r.info();
     let (player, mut d) = playing(r, SR);
     player.play();
@@ -59,7 +60,8 @@ fn churn(dir: &std::path::Path, edits: &[Edit], warm: usize) -> Left {
     let footprint = || m2_os::process::memory().map_or(0, |m| m.footprint);
     let mut first = footprint();
     let mut renders: Vec<Weak<AudioLane>> = cache.lanes();
-    let originals: Vec<(String, String)> = edits.iter().map(|(f, _)| (f.to_string(), std::fs::read_to_string(dir.join(f)).unwrap())).collect();
+    let originals: Vec<(String, String)> =
+        edits.iter().map(|(f, _)| (f.to_string(), std::fs::read_to_string(dir.join(f)).unwrap())).collect();
     let mut last = vec![];
     for (k, (file, edit)) in edits.iter().enumerate() {
         let original = &originals.iter().find(|(f, _)| f == file).unwrap().1;
@@ -136,7 +138,10 @@ fn random_structural_edits_leak_nothing() {
         ));
         if k % 10 == 9 {
             let bpm = 100 + 7 * k;
-            edits.push(("data/arrangement.json", Box::new(move |_: &str| format!("{{\"tempo\": [{{\"beat\": 0, \"bpm\": {bpm}}}], \"meter\": []}}\n"))));
+            edits.push((
+                "data/arrangement.json",
+                Box::new(move |_: &str| format!("{{\"tempo\": [{{\"beat\": 0, \"bpm\": {bpm}}}], \"meter\": []}}\n")),
+            ));
         }
     }
     let left = churn(&first, &edits, 0);

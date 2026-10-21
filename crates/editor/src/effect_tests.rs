@@ -824,7 +824,12 @@ fn the_options_go_with_their_effect() {
     for (body, callee, earlier, after) in [
         ("lowpass(delay(osc.saw(hz(110)), { time: 0.1 }), 800)", "lowpass", true, "delay(lowpass(osc.saw(hz(110)), 800), { time: 0.1 })"),
         ("delay(reverb(osc.saw(hz(110))))", "reverb", false, "reverb(delay(osc.saw(hz(110))))"),
-        ("delay(reverb(osc.saw(hz(110)), { size: 0.8, bypass: true }))", "delay", true, "reverb(delay(osc.saw(hz(110))), { size: 0.8, bypass: true })"),
+        (
+            "delay(reverb(osc.saw(hz(110)), { size: 0.8, bypass: true }))",
+            "delay",
+            true,
+            "reverb(delay(osc.saw(hz(110))), { size: 0.8, bypass: true })",
+        ),
         (
             "master(\n    delay(\n      reverb(osc.saw(hz(110)), { size: 0.8 }),\n      { time: 0.1 },\n    ),\n  )",
             "delay",
@@ -923,10 +928,16 @@ fn a_track_with_no_env_gets_follow_of_its_out_and_the_import() {
     let done = listen(&mut s, "bass.out", "clap").unwrap();
     assert_eq!((done.before.as_str(), done.after.as_str()), ("kick.env", "follow(clap.out)"));
     let expected = original
-        .replace("import { compress, duck } from \"std/fx\";\n", "import { compress, duck } from \"std/fx\";\nimport { follow } from \"std/dsp\";\n")
+        .replace(
+            "import { compress, duck } from \"std/fx\";\n",
+            "import { compress, duck } from \"std/fx\";\nimport { follow } from \"std/dsp\";\n",
+        )
         .replace("duck(bass.out, kick.env,", "duck(bass.out, follow(clap.out),");
     let now = f.read("song.ts");
-    assert!(now.contains("duck(bass.out, follow(clap.out), { depth: db(-9) })") && now.contains("import { follow } from \"std/dsp\";"), "{now}");
+    assert!(
+        now.contains("duck(bass.out, follow(clap.out), { depth: db(-9) })") && now.contains("import { follow } from \"std/dsp\";"),
+        "{now}"
+    );
     assert_eq!(now.replace("import { follow } from \"std/dsp\";\n", ""), expected.replace("import { follow } from \"std/dsp\";\n", ""));
     assert_eq!(card(&s).track.as_deref(), Some("clap"));
     s.undo().unwrap();
@@ -959,11 +970,24 @@ fn a_duck_in_a_track_file_is_refused_in_words() {
     let bass = f.read("tracks/bass.ts");
     f.write(
         "tracks/bass.ts",
-        bass.replace("import { bass } from \"std/instruments\";", "import { bass } from \"std/instruments\";\nimport { duck } from \"std/fx\";")
-            .replace("({ lane }) => bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 })", "({ lane }) => duck(bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 }), lane.mask(\"pump\"))"),
+        bass.replace(
+            "import { bass } from \"std/instruments\";",
+            "import { bass } from \"std/instruments\";\nimport { duck } from \"std/fx\";",
+        )
+        .replace(
+            "({ lane }) => bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 })",
+            "({ lane }) => duck(bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 }), lane.mask(\"pump\"))",
+        ),
     );
     let mut s = f.open();
-    let id = s.accepted().compiled.sites.iter().find(|x| x.callee == "duck" && x.file == "tracks/bass.ts").map(|x| format!("{}#{}", x.file, x.ordinal)).unwrap();
+    let id = s
+        .accepted()
+        .compiled
+        .sites
+        .iter()
+        .find(|x| x.callee == "duck" && x.file == "tracks/bass.ts")
+        .map(|x| format!("{}#{}", x.file, x.ordinal))
+        .unwrap();
     let words = "Bass's Duck is in tracks/bass.ts, which can't hear other tracks. Change it in code.";
     let at = rev(&s);
     let e = sidechain(&mut s, at, &id, "kick").unwrap_err().to_string();

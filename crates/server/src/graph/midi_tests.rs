@@ -148,7 +148,12 @@ fn unplugging_a_keyboard_lets_go_of_its_notes() {
 fn a_held_midi_key_outlives_the_watchdog() {
     let (_f, graph) = played();
     send(&graph, &[0x90, 36, 100]);
-    let window = Audition { module: Some("snare".into()), lane: Some("hits".into()), on: vec![Strike { h: 1, pitch: 38.0, velocity: 0.8 }], ..Audition::default() };
+    let window = Audition {
+        module: Some("snare".into()),
+        lane: Some("hits".into()),
+        on: vec![Strike { h: 1, pitch: 38.0, velocity: 0.8 }],
+        ..Audition::default()
+    };
     graph.audition("w1", window).unwrap();
     eventually("both sound", || live(&graph) == 2);
     graph.expire_auditions_at(Instant::now() + Duration::from_secs(11));

@@ -16,26 +16,26 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use clap_sys::ext::audio_ports::*;
 use clap_sys::ext::gui::*;
-use clap_sys::ext::posix_fd_support::*;
-use clap_sys::ext::timer_support::*;
-use clap_sys::id::clap_id;
 use clap_sys::ext::latency::*;
 use clap_sys::ext::log::*;
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
+use clap_sys::ext::posix_fd_support::*;
 use clap_sys::ext::render::*;
 use clap_sys::ext::state::*;
 use clap_sys::ext::thread_check::*;
+use clap_sys::ext::timer_support::*;
 use clap_sys::host::clap_host;
+use clap_sys::id::clap_id;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 use crossbeam_channel::bounded;
 
-use crate::{audio, gui};
 use crate::host::*;
 use crate::main_thread::{main_thread, token};
 use crate::{Found, Info, Library, Param, Transport, cstr, fixed, library};
+use crate::{audio, gui};
 
 /// Instances alive at once, across the process: 50 tracks with a few plugins each, twice over
 /// while an activation crossfades.
@@ -451,7 +451,11 @@ impl PluginHost for InProcess {
 }
 
 /// Run `f` on the main thread and send its result, as text, on `tx`: always exactly once.
-fn reply_on_main<R: Send + 'static>(h: Handle, tx: crossbeam_channel::Sender<Result<R, String>>, f: impl FnOnce(&Core) -> Result<R> + Send + 'static) {
+fn reply_on_main<R: Send + 'static>(
+    h: Handle,
+    tx: crossbeam_channel::Sender<Result<R, String>>,
+    f: impl FnOnce(&Core) -> Result<R> + Send + 'static,
+) {
     let m = match main_thread() {
         Ok(m) if !m.closed() => m,
         Ok(_) => return drop(tx.send(Err("the plugin main thread has shut down".into()))),
@@ -613,7 +617,9 @@ fn destroy_main(h: Handle) {
 
 fn read_info(plugin: *const clap_plugin, found: Found) -> Info {
     let api = CString::new(m2_os::window::API).unwrap_or_default();
-    let gui = ext::<clap_plugin_gui>(plugin, CLAP_EXT_GUI).and_then(|g| g.is_api_supported).is_some_and(|f| unsafe { f(plugin, api.as_ptr(), false) });
+    let gui = ext::<clap_plugin_gui>(plugin, CLAP_EXT_GUI)
+        .and_then(|g| g.is_api_supported)
+        .is_some_and(|f| unsafe { f(plugin, api.as_ptr(), false) });
     let mut info = Info { found, audio_in: None, audio_out: None, note_in: false, params: vec![], latency: 0, gui };
     if let Some(ap) = ext::<clap_plugin_audio_ports>(plugin, CLAP_EXT_AUDIO_PORTS)
         && let (Some(count), Some(get)) = (ap.count, ap.get)

@@ -94,7 +94,6 @@ impl Peaks {
         Builder { channels: 1, frames: 0, open: [(f32::INFINITY, f32::NEG_INFINITY); 2], data: vec![] }
     }
 
-
     /// The file's bytes, and the route's answer.
     pub fn bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(HEADER + self.data.len());

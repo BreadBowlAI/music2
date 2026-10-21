@@ -28,8 +28,8 @@ pub mod path;
 pub mod tx;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
 use std::ops::Bound;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use arrangement::{Arrangement, Meter, Tempo, TempoMap};
@@ -138,7 +138,14 @@ impl Snapshot {
 
     /// Read the file at `p` (project path `rel`; `link`: a symbolic link) into this snapshot, by what
     /// [`DataPath`] classes it as, as [`Snapshot::read`] reads each file it lists.
-    fn read_entry(&mut self, p: &Path, rel: PathBuf, link: bool, binaries: &mut BTreeMap<PathBuf, Stored>, unknown: &mut BTreeSet<PathBuf>) {
+    fn read_entry(
+        &mut self,
+        p: &Path,
+        rel: PathBuf,
+        link: bool,
+        binaries: &mut BTreeMap<PathBuf, Stored>,
+        unknown: &mut BTreeSet<PathBuf>,
+    ) {
         let d = DataPath::parse(&rel);
         match d {
             DataPath::Manifest
@@ -178,7 +185,12 @@ impl Snapshot {
     /// is read without reading or listing the rest of the project (WRITE-19). A path with no file
     /// there is absent. Of the assets, those `hashed` names are hashed and the rest listed: which
     /// of them a lane names is settled where the paths are taken in.
-    pub fn read_paths(dir: &Path, paths: &BTreeSet<PathBuf>, hashed: &dyn Fn(&Path) -> bool, unknown: BTreeSet<PathBuf>) -> anyhow::Result<Snapshot> {
+    pub fn read_paths(
+        dir: &Path,
+        paths: &BTreeSet<PathBuf>,
+        hashed: &dyn Fn(&Path) -> bool,
+        unknown: BTreeSet<PathBuf>,
+    ) -> anyhow::Result<Snapshot> {
         use anyhow::Context;
         let dir = dir.canonicalize().with_context(|| format!("opening project {}", dir.display()))?;
         let mut snap = Snapshot { dir: dir.clone(), ..Snapshot::default() };
@@ -331,7 +343,9 @@ fn listed(dir: &Path, rel: &Path, folders: &mut BTreeMap<PathBuf, Option<BTreeMa
     for (i, name) in parts.iter().enumerate() {
         // Each name with whether it is a folder (its entry's type, never followed).
         let names = folders.entry(at.clone()).or_insert_with(|| {
-            std::fs::read_dir(dir.join(&at)).ok().map(|r| r.flatten().map(|e| (e.file_name(), e.file_type().is_ok_and(|t| t.is_dir()))).collect())
+            std::fs::read_dir(dir.join(&at))
+                .ok()
+                .map(|r| r.flatten().map(|e| (e.file_name(), e.file_type().is_ok_and(|t| t.is_dir()))).collect())
         });
         match names.as_ref().and_then(|n| n.get(*name)) {
             Some(&folder) if folder || i + 1 == parts.len() => at.push(name),

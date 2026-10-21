@@ -31,9 +31,8 @@ fn listed(labels: &[String]) -> String {
 /// The edit that sets `muted` in the options of the `track()` call `site` of `m`, in `text`: none
 /// when it says so already.
 fn option_edit(text: &str, site: &m2_script::sites::Site, m: &Module, muted: bool) -> Result<Option<(u32, u32, String)>, EditError> {
-    let in_code = || {
-        EditError::Rejected(format!("{}'s track() call isn't written with its key and options in the code; mute it there", m.label()))
-    };
+    let in_code =
+        || EditError::Rejected(format!("{}'s track() call isn't written with its key and options in the code; mute it there", m.label()));
     let key = site.args[0].span();
     Ok(match &site.args[..] {
         // `track("kick", fn)`: options after the key, so the call's first and last characters stay
@@ -80,7 +79,13 @@ pub fn mute_in_song(s: &mut Session, modules: &[String], muted: bool) -> Result<
         if key == ROOT {
             return Err(EditError::Rejected("The song itself can't be muted: mute its tracks.".into()));
         }
-        let m = rev.compiled.ir.modules.iter().find(|m| &m.key == key).ok_or_else(|| EditError::Missing(format!("There's no track `{key}`.")))?;
+        let m = rev
+            .compiled
+            .ir
+            .modules
+            .iter()
+            .find(|m| &m.key == key)
+            .ok_or_else(|| EditError::Missing(format!("There's no track `{key}`.")))?;
         if !m.track {
             return Err(EditError::Rejected(format!("{key} isn't a track, so it can't be muted in the song")));
         }
@@ -120,8 +125,14 @@ pub fn mute_in_song(s: &mut Session, modules: &[String], muted: bool) -> Result<
         ops.push(plan::text_edit(&p, &rev.snapshot.files[Path::new(&f)], &e));
         ranges.insert(p, Declared::Ranges(e.iter().map(|x| Range::bytes(x.0, x.1)).collect()));
     }
-    let wanted: Vec<String> = changes.iter().filter_map(|c| if let ModuleChange::Muted { module, .. } = c { Some(module.to_string()) } else { None }).collect();
-    let tx = plan::planned(s, (before.clone(), after.clone()), ops, Expect::Confined(Confined { ranges, modules: changes, ..Confined::default() }));
+    let wanted: Vec<String> =
+        changes.iter().filter_map(|c| if let ModuleChange::Muted { module, .. } = c { Some(module.to_string()) } else { None }).collect();
+    let tx = plan::planned(
+        s,
+        (before.clone(), after.clone()),
+        ops,
+        Expect::Confined(Confined { ranges, modules: changes, ..Confined::default() }),
+    );
     let say = |why: &str| EditError::Rejected(format!("muting in the song would change more than that ({why})"));
     let done = plan::run_as(s, tx, say, |_, checked| {
         // The planner's assertion: each track is as asked in the candidate's graph.

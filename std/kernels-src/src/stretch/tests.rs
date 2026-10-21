@@ -36,8 +36,12 @@ fn left(x: &[[f32; 2]]) -> Vec<f32> {
 
 /// The frequency of `x`, from its upward zero crossings, each placed between its two samples.
 fn freq(x: &[f32], rate: f32) -> f64 {
-    let ups: Vec<f64> =
-        x.windows(2).enumerate().filter(|(_, w)| w[0] < 0.0 && w[1] >= 0.0).map(|(i, w)| i as f64 + (w[0] / (w[0] - w[1])) as f64).collect();
+    let ups: Vec<f64> = x
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[0] < 0.0 && w[1] >= 0.0)
+        .map(|(i, w)| i as f64 + (w[0] / (w[0] - w[1])) as f64)
+        .collect();
     match ups[..] {
         [first, .., last] => (ups.len() - 1) as f64 / ((last - first) / rate as f64),
         _ => 0.0,
@@ -152,11 +156,12 @@ fn pitch_with_a_map_transposes_and_keeps_time() {
     }
     let mut host = Host::<Stretch>::of(cfg(vec![src], rate, SR, &[[0.0, 0.0], [2.0, 3.0]], 7.0));
     let take = |host: &mut Host<Stretch>| -> Vec<f32> {
-        (0..300).flat_map(|_| {
-            host.process(BLOCK as u32);
-            host.port_mut(0)[..BLOCK].to_vec()
-        })
-        .collect()
+        (0..300)
+            .flat_map(|_| {
+                host.process(BLOCK as u32);
+                host.port_mut(0)[..BLOCK].to_vec()
+            })
+            .collect()
     };
     let first = take(&mut host);
     host.reset();

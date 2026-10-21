@@ -60,7 +60,8 @@ pub fn start(state: &Arc<AppState>, token: u64) -> Result<PathBuf> {
 /// [`start`] into a new folder in `exports`.
 fn start_in(state: &Arc<AppState>, token: u64, exports: &Path) -> Result<PathBuf> {
     let song = state.graph.name().context("no project is open")?;
-    let slot = Slot::take(state, &song).ok_or_else(|| anyhow!("A song is already being exported. Wait for it to finish, then try again."))?;
+    let slot =
+        Slot::take(state, &song).ok_or_else(|| anyhow!("A song is already being exported. Wait for it to finish, then try again."))?;
     let plan = state.graph.stems(token)?;
     let dir = state.graph.dir().context("no project is open")?;
     let folder = new_folder(exports, &plan.song)?;
@@ -81,13 +82,18 @@ fn start_in(state: &Arc<AppState>, token: u64, exports: &Path) -> Result<PathBuf
                     if last.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
                         *last = Some(Instant::now());
                         let progress = (i as f64 + done) / of as f64;
-                        let _ = state.events.send(with(&about, json!({"progress": progress, "stem": label, "n": i + 1, "of": of})).to_string());
+                        let _ =
+                            state.events.send(with(&about, json!({"progress": progress, "stem": label, "n": i + 1, "of": of})).to_string());
                     }
                 };
                 // Each stem says it started, whatever the clock says.
                 last = None;
                 tell(0.0, &mut last);
-                let r = render.write_float(&path, |p| if p < 1.0 { tell(p, &mut last) })?;
+                let r = render.write_float(&path, |p| {
+                    if p < 1.0 {
+                        tell(p, &mut last)
+                    }
+                })?;
                 written.push(path);
                 seconds = r.seconds();
             }

@@ -41,7 +41,10 @@ fn tracks_are_added_duplicated_deleted_and_laid_out_from_the_terminal() {
 
     let said = ok(&["add-track", dir, "synth.pluck", "--name", "Lead Vox", "--after", "kick"]);
     assert!(said.contains("added Lead Vox (Synth pluck), ID lead-vox, in tracks/lead-vox.ts"), "{said}");
-    assert!(read("tracks/lead-vox.ts").contains("import { synth } from \"std/synth\";") && read("tracks/lead-vox.ts").contains("synth.pluck(lane.notes(\"notes\"))"));
+    assert!(
+        read("tracks/lead-vox.ts").contains("import { synth } from \"std/synth\";")
+            && read("tracks/lead-vox.ts").contains("synth.pluck(lane.notes(\"notes\"))")
+    );
     assert!(read("song.ts").contains("\"lead-vox\": leadVox.out"));
     assert!(read("layout.json").contains("[\"kick\", \"lead-vox\", \"hats\""), "{}", read("layout.json"));
     // An instrument that isn't one says which there are.

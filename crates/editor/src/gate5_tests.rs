@@ -352,7 +352,10 @@ fn planned_call_forms_are_current() {
         forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label)));
     }
     // An installed instrument plugin added as a track (gaps #32), as the probe.
-    forms.push(format!("    // clap:m2.probe added as a track\n    {},\n", crate::plugins::track_call_text("clap:m2.probe", "m2-probe", "m2 probe")));
+    forms.push(format!(
+        "    // clap:m2.probe added as a track\n    {},\n",
+        crate::plugins::track_call_text("clap:m2.probe", "m2-probe", "m2 probe")
+    ));
     // An audio track (studio lane A's Q8).
     forms.push(format!("    // an audio track added\n    {},\n", crate::tracks::audio_call_text("audio", "Audio")));
     // A bus of each kind the Add bus menu makes (RENDER-34).

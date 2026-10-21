@@ -4,8 +4,8 @@
 //! graph verification belong to the session.
 
 use m2_ir::Origin;
-use m2_script::sites::{Arg, Site};
 use m2_script::component::EachDesc;
+use m2_script::sites::{Arg, Site};
 use m2_script::{Descriptor, UnitCtor};
 
 use super::EditError;
@@ -145,7 +145,8 @@ impl Insertion {
             if !parts.len().is_multiple_of(2) {
                 return Err("it isn't a control of a dictionary entry");
             }
-            let mut each = desc.controls.iter().find(|c| c.name == dict).and_then(|c| c.each.as_deref()).ok_or("its dictionary isn't declared")?;
+            let mut each =
+                desc.controls.iter().find(|c| c.name == dict).and_then(|c| c.each.as_deref()).ok_or("its dictionary isn't declared")?;
             let mut written = written;
             let mut at = 0;
             while parts.len() - at > 2 {
@@ -153,8 +154,10 @@ impl Insertion {
                 let Arg::Object { props, .. } = written else { return Err("its dictionary isn't an object written in the call") };
                 let (_, value) = props.iter().find(|(k, _)| k == key).ok_or("its entry isn't written in the call")?;
                 let Arg::Object { props: fields, .. } = value else { return Err("its entry doesn't write its own dictionary") };
-                written = fields.iter().find(|(k, _)| k == sub).map(|(_, a)| a).ok_or("its entry's dictionary isn't written in the call")?;
-                each = each.controls.iter().find(|c| c.name == sub).and_then(|c| c.each.as_deref()).ok_or("its dictionary isn't declared")?;
+                written =
+                    fields.iter().find(|(k, _)| k == sub).map(|(_, a)| a).ok_or("its entry's dictionary isn't written in the call")?;
+                each =
+                    each.controls.iter().find(|c| c.name == sub).and_then(|c| c.each.as_deref()).ok_or("its dictionary isn't declared")?;
                 path.extend([key.to_string(), sub.to_string()]);
                 at += 2;
             }
@@ -238,7 +241,8 @@ impl Insertion {
                 // A call written over lines gets its new options on a line of their own, at its
                 // arguments' indent, with a comma after them when its last argument has one.
                 let first = args.first().map(|a| a.span().0 as usize);
-                let lines = first.is_some_and(|f| site.open >= site.start && source.get(site.open as usize..f).is_some_and(|t| t.contains('\n')));
+                let lines =
+                    first.is_some_and(|f| site.open >= site.start && source.get(site.open as usize..f).is_some_and(|t| t.contains('\n')));
                 match args.last() {
                     Some(last) if lines => {
                         let at = after(last);

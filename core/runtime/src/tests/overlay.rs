@@ -153,7 +153,8 @@ fn a_new_plan_starts_at_its_overlay_values() {
 #[test]
 fn an_edit_while_muted_keeps_the_track_silent() {
     let pk = std_packages();
-    let scale = |id: &str, input: &str, by: &str| json!({"id": id, "op": "kernel", "kernel": "std:scale", "inputs": {"in": input, "by": by}});
+    let scale =
+        |id: &str, input: &str, by: &str| json!({"id": id, "op": "kernel", "kernel": "std:scale", "inputs": {"in": input, "by": by}});
     let c = |id: &str, v: f64| json!({"id": id, "op": "const", "value": v});
     // The song with no kick: a sine at 0, made of new nodes, so it is silent from its first frame.
     let deleted: Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
@@ -164,7 +165,11 @@ fn an_edit_while_muted_keeps_the_track_silent() {
     .unwrap();
     let cases = [
         // The consumer replaced: `g` goes, a new `h` reads the kick instead.
-        ("replaced", kicked(json!([scale("g", "k", "x"), c("x", 0.5)]), "g", false), kicked(json!([scale("h", "k", "y"), c("y", 0.25)]), "h", false)),
+        (
+            "replaced",
+            kicked(json!([scale("g", "k", "x"), c("x", 0.5)]), "g", false),
+            kicked(json!([scale("h", "k", "y"), c("y", 0.25)]), "h", false),
+        ),
         // The consumer kept, its input changed: `m` read the kick, and reads a new `fx` of it.
         (
             "faded",

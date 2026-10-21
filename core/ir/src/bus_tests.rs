@@ -76,7 +76,8 @@ fn pair(a: &str, b: &str) -> (String, String) {
 // ID-11: an IR without `bus` keeps its JSON, so its hash; `false` reads as absent.
 #[test]
 fn a_song_without_buses_has_the_same_ir_hash() {
-    let text = r#"{"ir":2,"modules":[{"key":"kick","track":true,"lanes":[],"nodes":[],"exports":{}}],"root":{"module":"song","export":"out"}}"#;
+    let text =
+        r#"{"ir":2,"modules":[{"key":"kick","track":true,"lanes":[],"nodes":[],"exports":{}}],"root":{"module":"song","export":"out"}}"#;
     let ir: Ir = serde_json::from_str(text).unwrap();
     assert_eq!(serde_json::to_string(&ir).unwrap(), text);
     let off: Ir = serde_json::from_str(&text.replace(r#""track":true"#, r#""track":true,"bus":false"#)).unwrap();
@@ -95,7 +96,9 @@ fn routes_follow_the_song_from_a_track_to_the_buses_it_feeds() {
     // The bus is a track like any other: the song reads it through a site.
     let sites: Vec<(&str, &str)> = f.overlays.iter().map(|s| (s.module.as_str(), s.into.as_str())).collect();
     assert_eq!(sites, [("vox", "song"), ("verb", "song"), ("kick", "song"), ("delay", "song")]);
-    let plain = ir(json!([saw("kick"), {"key": "song", "nodes": [{"id": "k", "op": "import", "module": "kick", "export": "out"}], "exports": {"out": "k"}}]));
+    let plain = ir(
+        json!([saw("kick"), {"key": "song", "nodes": [{"id": "k", "op": "import", "module": "kick", "export": "out"}], "exports": {"out": "k"}}]),
+    );
     assert!(routes(&plain).is_empty());
 }
 

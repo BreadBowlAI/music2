@@ -20,17 +20,8 @@ pub enum Unit {
 }
 
 impl Unit {
-    pub const ALL: [Unit; 9] = [
-        Unit::Hz,
-        Unit::Db,
-        Unit::Gain,
-        Unit::Semitones,
-        Unit::Seconds,
-        Unit::Beats,
-        Unit::Unit01,
-        Unit::Bipolar,
-        Unit::Scalar,
-    ];
+    pub const ALL: [Unit; 9] =
+        [Unit::Hz, Unit::Db, Unit::Gain, Unit::Semitones, Unit::Seconds, Unit::Beats, Unit::Unit01, Unit::Bipolar, Unit::Scalar];
 
     pub fn name(self) -> &'static str {
         match self {

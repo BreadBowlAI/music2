@@ -69,8 +69,14 @@ pub(super) fn is_keyboard(client: &str) -> bool {
 /// What a message says to a keyboard's notes.
 #[derive(Debug, PartialEq)]
 enum Said {
-    On { h: u32, pitch: f64, velocity: f64 },
-    Off { h: u32 },
+    On {
+        h: u32,
+        pitch: f64,
+        velocity: f64,
+    },
+    Off {
+        h: u32,
+    },
     Pedal(bool),
     AllOff,
     /// A wheel: pitch bend, CC 1 or CC 121.
@@ -83,7 +89,9 @@ fn read(bytes: &[u8]) -> Said {
     let (d1, d2) = (bytes.get(1).copied(), bytes.get(2).copied());
     let key = |n: u8| u32::from(n & 0x7F) + 128 * u32::from(status & 0x0F);
     match (status & 0xF0, d1, d2) {
-        (0x90, Some(n), Some(v)) if v & 0x7F > 0 => Said::On { h: key(n), pitch: f64::from(n & 0x7F), velocity: f64::from(v & 0x7F) / 127.0 },
+        (0x90, Some(n), Some(v)) if v & 0x7F > 0 => {
+            Said::On { h: key(n), pitch: f64::from(n & 0x7F), velocity: f64::from(v & 0x7F) / 127.0 }
+        }
         (0x90 | 0x80, Some(n), Some(_)) => Said::Off { h: key(n) },
         (0xB0, Some(64), Some(v)) => Said::Pedal(v >= 64),
         (0xE0, Some(l), Some(m)) => Said::Wheel([status, l & 0x7F, m & 0x7F]),

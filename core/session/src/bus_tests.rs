@@ -96,7 +96,8 @@ fn a_send_after_the_fader_follows_it() {
 // ignores the channel's pan and fader.
 #[test]
 fn a_send_before_the_fader_ignores_it() {
-    let sent = render("return mixer({ vox: { in: vox.out, db: db(-20), pan: 0.4, sends: { verb: { db: db(0), pre: true } } }, verb: verb.out });");
+    let sent =
+        render("return mixer({ vox: { in: vox.out, db: db(-20), pan: 0.4, sends: { verb: { db: db(0), pre: true } } }, verb: verb.out });");
     let apart = render("return mixer({ vox: { in: vox.out, db: db(-20), pan: 0.4 }, wet: vox.out });");
     assert!(same(&sent, &apart), "the send is the input");
 }
@@ -105,7 +106,8 @@ fn a_send_before_the_fader_ignores_it() {
 // tracks summed, and they aren't in the master twice. A bus may go to another bus, and send.
 #[test]
 fn a_track_sent_to_a_group_leaves_the_master() {
-    let grouped = render("return mixer({ vox: { in: vox.out, db: db(-6), to: \"verb\" }, keys: { in: keys.out, to: \"verb\" }, verb: verb.out });");
+    let grouped =
+        render("return mixer({ vox: { in: vox.out, db: db(-6), to: \"verb\" }, keys: { in: keys.out, to: \"verb\" }, verb: verb.out });");
     let plain = render("return mixer({ vox: { in: vox.out, db: db(-6) }, keys: keys.out });");
     assert!(same(&grouped, &plain), "the group is its tracks, once");
     let chained = render(
@@ -118,7 +120,9 @@ fn a_track_sent_to_a_group_leaves_the_master() {
 // and by the checker when code feeds a bus its own output, naming the modules.
 #[test]
 fn a_bus_that_feeds_itself_is_refused_in_plain_words() {
-    let e = error("return mixer({ vox: { in: vox.out, sends: { verb: db(-12) } }, verb: { in: verb.out, sends: { delay: db(-6) } }, delay: { in: delay.out, to: \"verb\" } });");
+    let e = error(
+        "return mixer({ vox: { in: vox.out, sends: { verb: db(-12) } }, verb: { in: verb.out, sends: { delay: db(-6) } }, delay: { in: delay.out, to: \"verb\" } });",
+    );
     assert_eq!(e.code, "code.build", "{e}");
     assert!(
         e.message.contains("verb feeds itself: verb → delay → verb. A bus can't feed itself. Take away one of these sends or outputs."),

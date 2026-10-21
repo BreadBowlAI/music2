@@ -222,5 +222,9 @@ fn blocking_problems_print_their_code() {
     let kick = std::fs::read_to_string(song.join("tracks/kick.ts")).unwrap();
     std::fs::write(song.join("tracks/kick.ts"), kick.replacen("track(\"kick\"", "track(\"Kick\"", 1)).unwrap();
     let out = m2(&["check", dir]);
-    assert!(!out.status.success() && stderr(&out).contains("error: tracks/kick.ts:") && stderr(&out).contains("[key.invalid]"), "{}", stderr(&out));
+    assert!(
+        !out.status.success() && stderr(&out).contains("error: tracks/kick.ts:") && stderr(&out).contains("[key.invalid]"),
+        "{}",
+        stderr(&out)
+    );
 }

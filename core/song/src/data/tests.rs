@@ -631,7 +631,8 @@ fn reading_again_keeps_unchanged_lanes_as_a_fresh_read_does() {
 fn a_read_reuses_only_what_its_files_are() {
     let audio = |asset: &str| format!(r#"{{"clips": [{{"id": "a", "start": 0, "length": 4, "asset": "{asset}"}}]}}"#);
     let notes = r#"{"clips": [{"id": "n", "start": 0, "length": 4, "notes": []}]}"#;
-    let d = Dir::new(&[("data/vox/takes.json", audio("a.wav").as_bytes()), ("data/bass/notes.json", notes.as_bytes()), ("assets/a.wav", b"a")]);
+    let d =
+        Dir::new(&[("data/vox/takes.json", audio("a.wav").as_bytes()), ("data/bass/notes.json", notes.as_bytes()), ("assets/a.wav", b"a")]);
     let decls = lanes(&[("vox", "takes", LaneKind::Audio), ("bass", "notes", LaneKind::Notes)]);
     let snap = Snapshot::read(&d.0).unwrap();
     let (first, _) = Project::from_snapshot(&snap).unwrap().data(&decls, None);
@@ -668,9 +669,29 @@ fn a_read_reuses_only_what_its_files_are() {
 // a dot, a space, a digit, or `assets` itself.
 #[test]
 fn the_paths_under_a_path_are_one_run() {
-    let names = ["assets", "assets0", "assets.wav", "asset", "assets/a.wav", "assets/vox/b.wav", "assets/vox", "assetsz/x", "data",
-        "data/kick", "data/kick/hits.json", "data/kick-2/hits.json", "data/kicks/x.json", "data/kick/sub/a.state", "data/kick.json",
-        "data/ kick", "song.ts", "a b/c", "Assets/x", "assets/z", "assets/vox-2/c.wav"];
+    let names = [
+        "assets",
+        "assets0",
+        "assets.wav",
+        "asset",
+        "assets/a.wav",
+        "assets/vox/b.wav",
+        "assets/vox",
+        "assetsz/x",
+        "data",
+        "data/kick",
+        "data/kick/hits.json",
+        "data/kick-2/hits.json",
+        "data/kicks/x.json",
+        "data/kick/sub/a.state",
+        "data/kick.json",
+        "data/ kick",
+        "song.ts",
+        "a b/c",
+        "Assets/x",
+        "assets/z",
+        "assets/vox-2/c.wav",
+    ];
     let map: BTreeMap<PathBuf, usize> = names.iter().enumerate().map(|(i, n)| (PathBuf::from(n), i)).collect();
     let set: BTreeSet<PathBuf> = map.keys().cloned().collect();
     for p in names.iter().copied().chain(["", "assets/", "data/kick/", "nothing", "data/kick/hits.json/x"]) {

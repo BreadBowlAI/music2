@@ -443,7 +443,10 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         measured.is_some() && two.is_some(),
         same,
     );
-    out.info("batched drops", format!("the drop raises the audio-like thread's p99 by {raises}, pair by pair; S's drop has no thread beside it, so not compared"));
+    out.info(
+        "batched drops",
+        format!("the drop raises the audio-like thread's p99 by {raises}, pair by pair; S's drop has no thread beside it, so not compared"),
+    );
     out.info("layout", line);
     Ok(out)
 }
@@ -788,7 +791,6 @@ mod tests {
             "{BLOCKS} blocks in turns of {TURN}: {orders} orders"
         );
     }
-
 
     // PLAT-1: S's own record, as checked in, names the reference Mac.
     #[test]

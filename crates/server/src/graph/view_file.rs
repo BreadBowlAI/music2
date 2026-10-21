@@ -35,7 +35,11 @@ fn file(dir: &Path) -> PathBuf {
 
 /// What the file holds; empty when there is none, or it doesn't read.
 pub(super) fn read(dir: &Path) -> Map<String, Value> {
-    std::fs::read(file(dir)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default()
+    std::fs::read(file(dir))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
 }
 
 /// Set `key` to `value`, keeping every other entry.

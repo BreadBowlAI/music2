@@ -27,16 +27,16 @@ use oxc::ast::ast::{
 };
 use oxc::ast::builder::AstBuilder;
 use oxc::ast_visit::{VisitMut, walk_mut};
-use serde::{Deserialize, Serialize};
 use oxc::codegen::{Codegen, CodegenOptions};
 use oxc::parser::Parser;
 use oxc::semantic::SemanticBuilder;
 use oxc::span::{SPAN, SourceType};
 use oxc::transformer::{TransformOptions, Transformer};
-use rquickjs::loader::{ImportAttributes, Loader, Resolver};
-use rquickjs::function::{Opt, Rest};
 use rquickjs::context::EvalOptions;
+use rquickjs::function::{Opt, Rest};
+use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 use rquickjs::{CatchResultExt, CaughtError, Coerced, Context, Ctx, Function, Module, Object, Runtime};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// The `@m2/core` SDK, shipped inside the core.
@@ -488,7 +488,8 @@ fn strip(path: &str, source: &str) -> Result<(String, LineMap), String> {
         let (line, _) = line_col(source, at as usize);
         return Err(format!("{path}:{line}: this `**` can't be made to compute alike on every computer: write Math.pow(a, b)"));
     }
-    let out = Codegen::new().with_options(CodegenOptions { source_map_path: Some(PathBuf::from(path)), ..Default::default() }).build(&program);
+    let out =
+        Codegen::new().with_options(CodegenOptions { source_map_path: Some(PathBuf::from(path)), ..Default::default() }).build(&program);
     let mut map = LineMap::default();
     if let Some(sm) = &out.map {
         map.tokens = sm.get_tokens().map(|t| (t.get_dst_line(), t.get_dst_col(), t.get_src_line(), t.get_src_col())).collect();
@@ -599,7 +600,12 @@ impl Resolver for Resolve {
 struct Load(Rc<RefCell<State>>);
 
 impl Loader for Load {
-    fn load<'js>(&mut self, ctx: &Ctx<'js>, name: &str, _: Option<ImportAttributes<'js>>) -> rquickjs::Result<Module<'js, rquickjs::module::Declared>> {
+    fn load<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        name: &str,
+        _: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<Module<'js, rquickjs::module::Declared>> {
         let fail = |e: String| rquickjs::Error::new_loading_message(name, e);
         let mut st = self.0.borrow_mut();
         let (original, instrumented) = if name == CORE {
@@ -714,7 +720,8 @@ fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     });
     let [json, outputs, components, units] = result?;
     let outputs: Vec<Output> = serde_json::from_str(&outputs).map_err(|e| err(format!("the SDK produced invalid outputs: {e}")))?;
-    let components: Vec<Descriptor> = serde_json::from_str(&components).map_err(|e| err(format!("the SDK produced invalid descriptors: {e}")))?;
+    let components: Vec<Descriptor> =
+        serde_json::from_str(&components).map_err(|e| err(format!("the SDK produced invalid descriptors: {e}")))?;
     let units: Vec<UnitCtor> = serde_json::from_str(&units).map_err(|e| err(format!("the SDK produced an invalid unit table: {e}")))?;
     let mut ir: Ir = serde_json::from_str(&json).map_err(|e| err(format!("the SDK produced invalid IR: {e}")))?;
     let st = state.borrow();
@@ -835,7 +842,8 @@ pub fn describe(packages: &[(String, PathBuf)]) -> Catalog {
                 }
             }
         }
-        let mut subs: Vec<String> = files.iter().filter_map(|f| Some(f.strip_prefix(&src).ok()?.to_string_lossy().replace('\\', "/"))).collect();
+        let mut subs: Vec<String> =
+            files.iter().filter_map(|f| Some(f.strip_prefix(&src).ok()?.to_string_lossy().replace('\\', "/"))).collect();
         subs.sort();
         for sub in subs {
             let spec = format!("{name}/{}", sub.strip_suffix(".ts").unwrap_or(&sub));
@@ -869,7 +877,9 @@ fn described(packages: &[(String, PathBuf)], spec: &str) -> Result<Described, Di
     static CACHE: std::sync::OnceLock<std::sync::Mutex<DescribeCache>> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let key = (packages.to_vec(), spec.to_string());
-    let same = |read: &[(PathBuf, String)]| read.iter().all(|(p, sha)| std::fs::read(p).is_ok_and(|b| format!("{:x}", Sha256::digest(&b)) == *sha));
+    let same = |read: &[(PathBuf, String)]| {
+        read.iter().all(|(p, sha)| std::fs::read(p).is_ok_and(|b| format!("{:x}", Sha256::digest(&b)) == *sha))
+    };
     if let Some((read, result)) = cache.lock().expect("the describe cache").get(&key)
         && same(read)
     {
@@ -948,7 +958,10 @@ fn merge(runs: Vec<(String, Result<Described, Diagnostic>)>) -> Catalog {
     for (id, mut at) in found {
         if at.len() > 1 {
             let places: Vec<&str> = at.iter().map(|d| d.at.as_str()).collect();
-            let message = format!("two components have the id `{id}`: at {}. Ids are unique in their package (PKG-9), so both are left out", places.join(" and "));
+            let message = format!(
+                "two components have the id `{id}`: at {}. Ids are unique in their package (PKG-9), so both are left out",
+                places.join(" and ")
+            );
             catalog.problems.push(Diagnostic::error("pkg.invalid", message).at(Some(places[0].to_string())));
             continue;
         }

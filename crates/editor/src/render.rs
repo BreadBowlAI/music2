@@ -33,8 +33,8 @@ use m2_os::process::Cores;
 use m2_runtime::{PackageSet, PluginInstance, Pool, Renderer, Runner};
 use m2_song::DataSet;
 
-pub use crate::faults::{Faulted, Parts, Song};
 use crate::faults::Namer;
+pub use crate::faults::{Faulted, Parts, Song};
 
 /// The longest render. A WAV file's sizes are 32-bit, so it can't hold much over 4 hours of
 /// 24-bit stereo at 48 kHz; and a song this long is most likely a clip put far past the rest.
@@ -207,7 +207,14 @@ fn bounds(data: &DataSet, sample_rate: u32, from: f64, length: Length) -> Result
 impl Render {
     /// Render a compiled song (its graph and the data it plays) from `from` seconds in (replaying
     /// up to there first), on `threads`: exact (RENDER-1).
-    pub fn new(song: Arc<dyn Song>, packages: &PackageSet, sample_rate: u32, from: f64, length: Length, threads: Threads) -> Result<Render> {
+    pub fn new(
+        song: Arc<dyn Song>,
+        packages: &PackageSet,
+        sample_rate: u32,
+        from: f64,
+        length: Length,
+        threads: Threads,
+    ) -> Result<Render> {
         let namer = Namer::new(0, song.clone(), packages);
         let (flat, data) = (song.flat(), song.data());
         let (first, end) = bounds(data, sample_rate, from, length)?;
@@ -420,8 +427,15 @@ impl Render {
     /// Write the WAV to `part`. Returns the part's lock, held until it is named.
     fn write_to(&mut self, part: &Path, progress: &mut dyn FnMut(f64)) -> Result<(File, Rendered)> {
         let spec = match self.float {
-            true => hound::WavSpec { channels: 2, sample_rate: self.sample_rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float },
-            false => hound::WavSpec { channels: 2, sample_rate: self.sample_rate, bits_per_sample: 24, sample_format: hound::SampleFormat::Int },
+            true => hound::WavSpec {
+                channels: 2,
+                sample_rate: self.sample_rate,
+                bits_per_sample: 32,
+                sample_format: hound::SampleFormat::Float,
+            },
+            false => {
+                hound::WavSpec { channels: 2, sample_rate: self.sample_rate, bits_per_sample: 24, sample_format: hound::SampleFormat::Int }
+            }
         };
         let file = File::create(part)?;
         // A second handle on the same open file keeps the lock after the writer closes its own.
@@ -773,10 +787,7 @@ mod tests {
         let mut packages = std_packages();
         let compiled = Arc::new(m2_session::compile(&project, &mut packages).unwrap());
         for (from, length) in [(0.0, Length::Seconds(0.0)), (0.0, Length::Seconds(f64::NAN)), (-1.0, Length::Song)] {
-            assert!(
-                Render::new(compiled.clone(), &packages, SAMPLE_RATE, from, length, Threads::Exactly(1)).is_err(),
-                "{from} {length:?}"
-            );
+            assert!(Render::new(compiled.clone(), &packages, SAMPLE_RATE, from, length, Threads::Exactly(1)).is_err(), "{from} {length:?}");
         }
     }
 
@@ -917,8 +928,7 @@ mod tests {
             let rendered = r.write(&out, |_| {}).unwrap();
             (rendered, std::fs::read(out).unwrap())
         };
-        let range =
-            |from, preroll| Render::range(c.clone(), &packages, SAMPLE_RATE, from, preroll, second, Threads::Exactly(1)).unwrap();
+        let range = |from, preroll| Render::range(c.clone(), &packages, SAMPLE_RATE, from, preroll, second, Threads::Exactly(1)).unwrap();
         let (a, a_bytes) = write(range(4.0, 1.0), "a.wav");
         let (b, b_bytes) = write(range(4.0, 1.0), "b.wav");
         assert_eq!((a.exact, a.reproducible, a.frames), (false, true, SR as u64));
@@ -931,10 +941,7 @@ mod tests {
         assert!(e.exact && e_bytes == x_bytes);
         assert!(range(4.0, 9.0).exact());
         for preroll in [-1.0, f64::NAN, f64::INFINITY] {
-            assert!(
-                Render::range(c.clone(), &packages, SAMPLE_RATE, 4.0, preroll, second, Threads::Exactly(1)).is_err(),
-                "{preroll}"
-            );
+            assert!(Render::range(c.clone(), &packages, SAMPLE_RATE, 4.0, preroll, second, Threads::Exactly(1)).is_err(), "{preroll}");
         }
     }
 
@@ -1050,7 +1057,10 @@ mod tests {
         std::fs::write(dir.0.join("data/p/lead.state"), state).unwrap();
         let (c, packages) = compiled(&dir);
         let out = dir.0.join("out.wav");
-        let e = Render::new(c, &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(1)).unwrap().write(&out, |_| {}).unwrap_err();
+        let e = Render::new(c, &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(1))
+            .unwrap()
+            .write(&out, |_| {})
+            .unwrap_err();
         let f = Faulted::of(&e).unwrap_or_else(|| panic!("a fault: {e:#}"));
         assert_eq!(f.code, "plugin.failed");
         assert_eq!(
@@ -1073,7 +1083,10 @@ mod tests {
                  const d = track('drums', { name: 'Drums' }, ({ lane }) => sampler(lane.notes('hits'), { zones: { 36: 'kick.wav' } }));\n\
                  export default song(() => d.out);\n",
             ),
-            ("data/drums/hits.json", r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C2", "start": 0, "length": 1}]}]}"#),
+            (
+                "data/drums/hits.json",
+                r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C2", "start": 0, "length": 1}]}]}"#,
+            ),
             ("assets/kick.wav", "RIFF\u{0}\u{0}\u{0}\u{0}WAVEnot a sound at all"),
             TEMPO,
         ]);
@@ -1083,7 +1096,10 @@ mod tests {
             .map(drop)
             .unwrap_err();
         assert_eq!(Faulted::of(&e).map(|f| f.code), Some("asset.unreadable"), "{e:#}");
-        assert_eq!(format!("{e:#}"), "kick.wav, which the instrument on Drums plays, can't be read, so the file wasn't made. It may be damaged.");
+        assert_eq!(
+            format!("{e:#}"),
+            "kick.wav, which the instrument on Drums plays, can't be read, so the file wasn't made. It may be damaged."
+        );
         assert!(parts(&dir.0).is_empty(), "no file");
     }
 

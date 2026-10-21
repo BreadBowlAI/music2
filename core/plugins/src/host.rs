@@ -253,7 +253,9 @@ pub const MAX_PRESET_FILES: usize = 2_000;
 pub enum WindowCall {
     /// Open it, titled `title`, or bring it to the front when it is open. An error, in plain
     /// words, when the plugin has no window this OS can show, or there is no screen.
-    Open { title: String },
+    Open {
+        title: String,
+    },
     Close,
     /// Tests (debug builds): its window as the process hosting it sees it ([`Reply::Shown`]).
     #[cfg(debug_assertions)]
@@ -321,7 +323,14 @@ fn header(size: usize, time: u32, type_: u16) -> clap_event_header {
 fn raw(e: &Event) -> Raw {
     use std::mem::size_of;
     let note = |time, type_, id, key, velocity| Raw {
-        note: clap_event_note { header: header(size_of::<clap_event_note>(), time, type_), note_id: id, port_index: 0, channel: 0, key, velocity },
+        note: clap_event_note {
+            header: header(size_of::<clap_event_note>(), time, type_),
+            note_id: id,
+            port_index: 0,
+            channel: 0,
+            key,
+            velocity,
+        },
     };
     match *e {
         Event::NoteOn { time, id, key, velocity } => note(time, CLAP_EVENT_NOTE_ON, id, key, velocity),
@@ -360,9 +369,9 @@ fn raw(e: &Event) -> Raw {
                 value,
             },
         },
-        Event::Midi { time, bytes } => {
-            Raw { midi: clap_event_midi { header: header(size_of::<clap_event_midi>(), time, CLAP_EVENT_MIDI), port_index: 0, data: bytes } }
-        }
+        Event::Midi { time, bytes } => Raw {
+            midi: clap_event_midi { header: header(size_of::<clap_event_midi>(), time, CLAP_EVENT_MIDI), port_index: 0, data: bytes },
+        },
     }
 }
 
@@ -388,7 +397,12 @@ pub(crate) unsafe fn decode(h: *const clap_event_header) -> Option<Event> {
         }
         CLAP_EVENT_NOTE_EXPRESSION => {
             let x = unsafe { &*(h as *const clap_event_note_expression) };
-            (x.expression_id == CLAP_NOTE_EXPRESSION_TUNING).then_some(Event::Tuning { time, id: x.note_id, key: x.key, semitones: x.value })
+            (x.expression_id == CLAP_NOTE_EXPRESSION_TUNING).then_some(Event::Tuning {
+                time,
+                id: x.note_id,
+                key: x.key,
+                semitones: x.value,
+            })
         }
         CLAP_EVENT_PARAM_VALUE => {
             let p = unsafe { &*(h as *const clap_event_param_value) };

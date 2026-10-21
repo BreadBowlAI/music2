@@ -29,7 +29,8 @@ fn kick_song() -> Fixture {
 
 /// The id of the last call to `callee` in the accepted revision.
 fn call(s: &Session, callee: &str) -> String {
-    let site = s.accepted().compiled.sites.iter().rfind(|x| x.in_project && x.callee == callee).unwrap_or_else(|| panic!("no call `{callee}`"));
+    let site =
+        s.accepted().compiled.sites.iter().rfind(|x| x.in_project && x.callee == callee).unwrap_or_else(|| panic!("no call `{callee}`"));
     format!("{}#{}", site.file, site.ordinal)
 }
 
@@ -67,7 +68,10 @@ fn adding_a_plugin_effect_wraps_the_call_in_one_tx() {
     assert_eq!((found[0].0.as_str(), found[0].1.as_deref()), ("clap:m2.probe", Some("m2-probe")));
     let m = &s.accepted().compiled.ir.modules.iter().find(|m| m.key == "kick").unwrap();
     let reads_kick = found[0].2.as_deref().unwrap();
-    assert!(m.nodes.iter().any(|n| n.id == m2_ir::split_ref(reads_kick).0 && matches!(&n.op, Op::Kernel { .. } | Op::Poly { .. })), "it reads the kick");
+    assert!(
+        m.nodes.iter().any(|n| n.id == m2_ir::split_ref(reads_kick).0 && matches!(&n.op, Op::Kernel { .. } | Op::Poly { .. })),
+        "it reads the kick"
+    );
     crate::undo(&mut s).unwrap();
     assert_eq!(f.read("song.ts"), before, "one Undo gives the old bytes back");
 }

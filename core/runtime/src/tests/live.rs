@@ -98,7 +98,14 @@ impl Rig {
     }
 
     /// [`Rig::prepare`] with what continues given, its instances reporting to `owner`.
-    pub(super) fn prepare_with(&mut self, flat: &Flat, data: &DataSet, pk: &PackageSet, owner: &m2_plugins::Owner, cont: &Continues) -> Result<Renderer> {
+    pub(super) fn prepare_with(
+        &mut self,
+        flat: &Flat,
+        data: &DataSet,
+        pk: &PackageSet,
+        owner: &m2_plugins::Owner,
+        cont: &Continues,
+    ) -> Result<Renderer> {
         let (old, old_data, info) = self.last.as_ref().expect("a plan to prepare against");
         let restarts = HashSet::new();
         let keep = Keep { old, old_data, info, cont, restarts: &restarts };
@@ -438,7 +445,8 @@ fn plugin_events_merge_as_a_stable_sort_did() {
     keys.extend([(1, 60), (2, 61)]);
     let mut out = m2_plugins::Events::with_capacity(64);
     let mut next = 0;
-    let (_, allocs) = during(|| plugin_events(&[], &[], None, &notes, &mut next, &mut params, &[], &reads(&bufs), (0, BLOCK), &mut keys, &mut out));
+    let (_, allocs) =
+        during(|| plugin_events(&[], &[], None, &notes, &mut next, &mut params, &[], &reads(&bufs), (0, BLOCK), &mut keys, &mut out));
     assert_eq!((allocs, out.capacity(), out.dropped(), next), (0, 64, 0, notes.len()));
     // Before: held notes' offs, then each new note's events, then parameters, stably sorted.
     let mut before = vec![P::NoteOff { time: 0, id: 1, key: 60 }, P::NoteOff { time: 16, id: 2, key: 61 }];
@@ -463,7 +471,8 @@ fn plugin_events_merge_as_a_stable_sort_did() {
     // with no choke, after them.
     let (mut next, mut none) = (0, Vec::with_capacity(4));
     let release = [(3, 70)];
-    let (sent, allocs) = during(|| plugin_events(&keys, &release, None, &[], &mut next, &mut [], &[], &reads(&bufs), (0, BLOCK), &mut none, &mut out));
+    let (sent, allocs) =
+        during(|| plugin_events(&keys, &release, None, &[], &mut next, &mut [], &[], &reads(&bufs), (0, BLOCK), &mut none, &mut out));
     assert_eq!((allocs, sent), (0, (3, Some(0))));
     assert_eq!(
         out.iter().collect::<Vec<_>>(),
@@ -477,7 +486,8 @@ fn plugin_events_merge_as_a_stable_sort_did() {
     );
     // A full list counts what it can't hold, and never grows.
     let mut small = m2_plugins::Events::with_capacity(2);
-    let (_, allocs) = during(|| plugin_events(&keys, &[], None, &[], &mut next, &mut [], &[], &reads(&bufs), (0, BLOCK), &mut none, &mut small));
+    let (_, allocs) =
+        during(|| plugin_events(&keys, &[], None, &[], &mut next, &mut [], &[], &reads(&bufs), (0, BLOCK), &mut none, &mut small));
     assert_eq!((allocs, small.len(), small.dropped()), (0, 2, 2));
 }
 
@@ -574,7 +584,9 @@ fn rendering_live_allocates_nothing() {
     rig.run(BLOCK);
     // An edit: a delay after the level, which the output fades to.
     let mut edited = ir.clone();
-    edited.modules[0].nodes.push(serde_json::from_value(json!({"id": "d2", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "out"}})).unwrap());
+    edited.modules[0]
+        .nodes
+        .push(serde_json::from_value(json!({"id": "d2", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "out"}})).unwrap());
     edited.modules[0].exports.insert("out".into(), "d2".into());
     let next = rig.prepare(&check(&edited, &pk).unwrap(), &data, &pk);
     // A box marked as gone non-finite, which the activation resets as it moves it (RENDER-25).

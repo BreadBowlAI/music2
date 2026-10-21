@@ -83,7 +83,12 @@ pub(crate) fn effect_text(id: &str, key: &str) -> (String, String) {
 /// as the track. Also checked as a call form (PKG-11, `planned_call_forms_are_current`).
 pub(crate) fn track_call_text(id: &str, key: &str, label: &str) -> String {
     let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
-    format!("track({}{options}, ({{ lane }}) => plugin({}, {{ notes: lane.notes(\"notes\"), key: {} }}))", quoted(key), quoted(id), quoted(key))
+    format!(
+        "track({}{options}, ({{ lane }}) => plugin({}, {{ notes: lane.notes(\"notes\"), key: {} }}))",
+        quoted(key),
+        quoted(id),
+        quoted(key)
+    )
 }
 
 /// The text of a new track file playing instrument plugin `id`.

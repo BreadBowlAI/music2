@@ -61,7 +61,8 @@ fn outside(name: &str, bytes: &[u8]) -> (Fixture, PathBuf) {
 
 /// The names in `assets/`, dot files too, sorted.
 fn assets(f: &Fixture) -> Vec<String> {
-    let mut v: Vec<String> = std::fs::read_dir(f.0.join("assets")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let mut v: Vec<String> =
+        std::fs::read_dir(f.0.join("assets")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     v.sort();
     v
 }
@@ -104,7 +105,11 @@ fn a_taken_name_gets_a_number() {
     let (a, _) = audio(&song.0, bytes("keys-bounce.wav", tone(0.5, 2.0))).unwrap();
     let (b, _) = audio(&song.0, bytes("KEYS-BOUNCE.WAV", tone(0.5, 3.0))).unwrap();
     assert_eq!((a.asset.as_str(), b.asset.as_str()), ("keys-bounce 2.wav", "KEYS-BOUNCE 3.wav"), "taken in any capitals");
-    assert_eq!(std::fs::read(song.0.join("assets/keys-bounce.wav")).unwrap(), std::fs::read(fixture("examples/resample").0.join("assets/keys-bounce.wav")).unwrap(), "never replaced");
+    assert_eq!(
+        std::fs::read(song.0.join("assets/keys-bounce.wav")).unwrap(),
+        std::fs::read(fixture("examples/resample").0.join("assets/keys-bounce.wav")).unwrap(),
+        "never replaced"
+    );
 }
 
 #[test]
@@ -297,7 +302,15 @@ fn the_clip_is_the_files_length_at_the_tempo_there() {
 
 #[test]
 fn a_file_name_makes_a_track_name() {
-    let i = |name: &str| Imported { asset: AssetName::new("x.wav").unwrap(), name: name.into(), hash: m2_song::Sha::of(b""), seconds: 1.0, rate: 48_000, dropped_channels: 0, reused: false };
+    let i = |name: &str| Imported {
+        asset: AssetName::new("x.wav").unwrap(),
+        name: name.into(),
+        hash: m2_song::Sha::of(b""),
+        seconds: 1.0,
+        rate: 48_000,
+        dropped_channels: 0,
+        reused: false,
+    };
     assert_eq!(track_label(&i("lead vox.wav")), "Lead vox");
     assert_eq!(track_label(&i("ベース.wav")), "ベース");
     assert_eq!(track_label(&i(".wav")), "Audio");

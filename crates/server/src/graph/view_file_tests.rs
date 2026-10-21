@@ -46,7 +46,11 @@ fn view_settings_merge_and_keep_the_loop() {
     let answer = graph.set_view(session, set(json!({"zoom": 54.0, "heights": {"kick": 72}}))).unwrap();
     assert_eq!(answer["local"], json!({"zoom": 54.0, "heights": {"kick": 72}}));
     assert_eq!(graph.state().unwrap()["local"], answer["local"]);
-    assert_eq!(file(&dir), json!({"loop": looped, "zoom": 54.0, "newer": 1, "heights": {"kick": 72}}), "the loop and a newer version's key stay");
+    assert_eq!(
+        file(&dir),
+        json!({"loop": looped, "zoom": 54.0, "newer": 1, "heights": {"kick": 72}}),
+        "the loop and a newer version's key stay"
+    );
 
     // A null takes a key out.
     graph.set_view(session, set(json!({"zoom": null}))).unwrap();

@@ -48,7 +48,11 @@ pub(crate) struct Zone {
 /// The zones of a state's settings: each asset, with its three values (or their defaults).
 fn zones(cfg: &Cfg) -> Box<[Zone]> {
     let v = |i: usize, default: f32| cfg.values.get(i).map_or(default, |&x| if x.is_finite() { x as f32 } else { default });
-    cfg.assets.iter().enumerate().map(|(i, &asset)| Zone { asset, root: v(3 * i, 60.0), lo: v(3 * i + 1, 0.0), hi: v(3 * i + 2, 127.0) }).collect()
+    cfg.assets
+        .iter()
+        .enumerate()
+        .map(|(i, &asset)| Zone { asset, root: v(3 * i, 60.0), lo: v(3 * i + 1, 0.0), hi: v(3 * i + 2, 127.0) })
+        .collect()
 }
 
 /// What one note is doing. A plain value: a reset writes a fresh one.
@@ -90,7 +94,17 @@ impl Sampler {
         let attack = clampf(at(ATTACK), 0.0, 60.0) * self.sr;
         let (env, slope) = if attack >= 1.0 { (0.0, 1.0 / attack) } else { (1.0, 0.0) };
         let velocity = clampf(at(VELOCITY), 0.0, 1.0);
-        self.note = Note { zone, pos: 0.0, step: 0.0, step_for: (f32::NAN, f32::NAN), env, slope, releasing: false, gated: at(MODE) >= 0.5, velocity };
+        self.note = Note {
+            zone,
+            pos: 0.0,
+            step: 0.0,
+            step_for: (f32::NAN, f32::NAN),
+            env,
+            slope,
+            releasing: false,
+            gated: at(MODE) >= 0.5,
+            velocity,
+        };
         self.win_len = 0;
     }
 
@@ -150,7 +164,16 @@ impl Kernel for Sampler {
 
     fn new(cfg: &Cfg) -> Self {
         let win = || vec![0.0; 4 * cfg.max_block.max(1) + 8].into_boxed_slice();
-        Sampler { sr: cfg.sample_rate, zones: zones(cfg), gate: false, note: Note::default(), level: Memo::new(), win: [win(), win()], win_at: 0, win_len: 0 }
+        Sampler {
+            sr: cfg.sample_rate,
+            zones: zones(cfg),
+            gate: false,
+            note: Note::default(),
+            level: Memo::new(),
+            win: [win(), win()],
+            win_at: 0,
+            win_len: 0,
+        }
     }
 
     /// Its zones and window stay; the window is read again before it is used.

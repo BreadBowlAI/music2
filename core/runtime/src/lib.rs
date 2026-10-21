@@ -54,9 +54,9 @@ mod overlay;
 pub mod packages;
 mod parts;
 mod plan;
-mod renders;
 pub mod plugins;
 mod poly;
+mod renders;
 mod sandbox;
 pub mod sched;
 pub mod stream;
@@ -74,24 +74,24 @@ use anyhow::{Context, Result, bail};
 use m2_ir::{Alloc, FNode, FOp, Flat, Input, Kind, Mode, NoteField, PortRef, TimeOf};
 use m2_song::{Arrangement, DataSet, LaneData, TempoMap};
 
+pub use audio::LiveInput;
 pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
-pub use audio::LiveInput;
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
 pub use m2_pool::{Counters, ENTRY_BUCKETS, Meter, Pool, Runner, Setup, Trip};
 pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
-pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
 pub use sandbox::{OutOfMemory, TooManySounds};
+pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
 pub use taps::{Peaks, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
 use crate::cells::{Cells, Write};
-use crate::fault::{Code, Reporter};
 use crate::fade::xfade;
+use crate::fault::{Code, Reporter};
 use crate::keep::{Edge, Wiring, used};
 use crate::parts::Schedule;
 use crate::plan::{Entry, LanePlan, LaneSlot, Lanes, Plan};
@@ -268,7 +268,15 @@ impl KernelInst {
 
     /// Kernel `k` for node `n`, its state born in `sandbox`, a voice pool's `at`th, its constant
     /// inputs written into its memory once.
-    fn born(sandbox: &mut Sandbox, at: usize, prefix: &str, packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
+    fn born(
+        sandbox: &mut Sandbox,
+        at: usize,
+        prefix: &str,
+        packages: &PackageSet,
+        n: &FNode,
+        k: &Kernel,
+        shape: u64,
+    ) -> Result<KernelInst> {
         let (id, inputs) = (k.id, k.inputs);
         let sig = m2_ir::Kernels::kernel(packages, id).with_context(|| format!("{}: kernel `{id}` has no signature", n.name))?;
         let (n_in, n_out) = (inputs.len(), n.outputs.len());
@@ -401,7 +409,8 @@ impl KernelInst {
         let before = std::mem::take(&mut self.before);
         let (sb, state) = self.sandbox(pool);
         let data = sb.bytes();
-        let changed = state.ins.iter().enumerate().position(|(k, &ptr)| data[ptr..ptr + PORT_BYTES] != before[k * PORT_BYTES..(k + 1) * PORT_BYTES]);
+        let changed =
+            state.ins.iter().enumerate().position(|(k, &ptr)| data[ptr..ptr + PORT_BYTES] != before[k * PORT_BYTES..(k + 1) * PORT_BYTES]);
         self.before = before;
         if let Some(k) = changed {
             let (kernel, port) = (&self.kernel, &self.in_names[k]);
@@ -1137,10 +1146,14 @@ fn sandboxes(flat: &Flat, used: &[bool], packages: &PackageSet) -> usize {
     let one = |n: &FNode| match &n.op {
         FOp::Kernel { .. } => 1,
         FOp::Poly { voice, .. } => {
-            let mut of: Vec<&str> = voice.nodes.iter().filter_map(|n| match &n.op {
-                FOp::Kernel { kernel, .. } => packages.module_for(kernel).map(|(_, _, package)| package),
-                _ => None,
-            }).collect();
+            let mut of: Vec<&str> = voice
+                .nodes
+                .iter()
+                .filter_map(|n| match &n.op {
+                    FOp::Kernel { kernel, .. } => packages.module_for(kernel).map(|(_, _, package)| package),
+                    _ => None,
+                })
+                .collect();
             of.sort_unstable();
             of.dedup();
             of.len()
@@ -1236,9 +1249,20 @@ impl Builder<'_> {
 
     /// One node. A ghost, a replaced node that plays out an activation's window, reads no notes.
     #[allow(clippy::too_many_arguments)]
-    fn node(&mut self, nodes: &[FNode], n: &FNode, in_voice: bool, boxed: Make, ghost: bool, room: Option<Caps>, capture: usize) -> Result<Exec> {
+    fn node(
+        &mut self,
+        nodes: &[FNode],
+        n: &FNode,
+        in_voice: bool,
+        boxed: Make,
+        ghost: bool,
+        room: Option<Caps>,
+        capture: usize,
+    ) -> Result<Exec> {
         Ok(match &n.op {
-            FOp::Lane { module, lane, kind: Kind::Control(_), default } => Exec::Control { slot: self.slot(module, lane)?, default: *default as f32 },
+            FOp::Lane { module, lane, kind: Kind::Control(_), default } => {
+                Exec::Control { slot: self.slot(module, lane)?, default: *default as f32 }
+            }
             FOp::Lane { kind: Kind::Events(_), .. } => Exec::Notes,
             FOp::Lane { module, lane, kind: Kind::Audio(_), .. } => Exec::Audio { slot: self.slot(module, lane)? },
             FOp::Time(t) => Exec::Time(*t),
@@ -1294,7 +1318,16 @@ impl Builder<'_> {
                             sb.seal().with_context(|| n.name.clone())?;
                         }
                         let mono = (alloc.mode != Mode::Poly).then(|| Box::new(poly::Mono::new(self.sample_rate)));
-                        Some(Box::new(VoicePool { voices: slots, alloc: *alloc, mono, wheels: poly::Wheels::default(), sandboxes, born: 0, shape, stopped: false }))
+                        Some(Box::new(VoicePool {
+                            voices: slots,
+                            alloc: *alloc,
+                            mono,
+                            wheels: poly::Wheels::default(),
+                            sandboxes,
+                            born: 0,
+                            shape,
+                            stopped: false,
+                        }))
                     }
                     _ => None,
                 };
@@ -1498,7 +1531,8 @@ fn latencies(
                 match had {
                     Some(inst) => inst.latency(),
                     None => {
-                        let info = packages.plugin_info(plugin).with_context(|| format!("{}: plugin `{plugin}` was not described", n.name))?;
+                        let info =
+                            packages.plugin_info(plugin).with_context(|| format!("{}: plugin `{plugin}` was not described", n.name))?;
                         let inst = mk(n, &info.found, shape(i).as_ref().map_or(0, Shape::hash64))?;
                         let frames = inst.latency();
                         made.insert(i, inst);
@@ -2065,7 +2099,9 @@ impl Graph {
             .iter()
             .map(|e| match e {
                 Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.own.is_some() as usize,
-                Exec::Poly(p) => p.pool.iter().map(|pool| pool.sandboxes.len() + pool.voices.iter().map(|v| v.graph.sandboxes()).sum::<usize>()).sum(),
+                Exec::Poly(p) => {
+                    p.pool.iter().map(|pool| pool.sandboxes.len() + pool.voices.iter().map(|v| v.graph.sandboxes()).sum::<usize>()).sum()
+                }
                 _ => 0,
             })
             .sum()
@@ -2290,7 +2326,11 @@ impl PolyNode {
                 voices[slot].born = *born;
                 voices[slot].taken = true;
                 let at = start + frame as u64;
-                plan.push(Planned { voice: slot as u16, frame: frame as u16, note: VoiceNote { id, pitch, velocity, on: at, off: u64::MAX } });
+                plan.push(Planned {
+                    voice: slot as u16,
+                    frame: frame as u16,
+                    note: VoiceNote { id, pitch, velocity, on: at, off: u64::MAX },
+                });
             }
         }
         // Offs for notes that started this block.
@@ -2590,7 +2630,9 @@ impl Renderer {
         let tempo = data.tempo().clone();
         let rate = sample_rate as f64;
         let keep = match &basis {
-            Basis::Keep(k) if k.info.rate != sample_rate => bail!("a plan is prepared against one at {} Hz, not {sample_rate}", k.info.rate),
+            Basis::Keep(k) if k.info.rate != sample_rate => {
+                bail!("a plan is prepared against one at {} Hz, not {sample_rate}", k.info.rate)
+            }
             Basis::Keep(k) => Some(k),
             Basis::Fresh | Basis::Lend(_) => None,
         };
@@ -2700,8 +2742,14 @@ impl Renderer {
         let schedule = Schedule::build(&graph.order, &graph.exec, &labels)?;
         let window_overlays: Vec<(usize, usize)> =
             placed.nodes.iter().enumerate().skip(placed.sites).filter_map(|(j, o)| Some((base + j, o.follows?))).collect();
-        let window_held: Vec<(usize, usize)> =
-            placed.nodes.iter().enumerate().skip(placed.sites).filter(|(_, o)| o.follows.is_none()).filter_map(|(j, o)| Some((base + j, o.was?))).collect();
+        let window_held: Vec<(usize, usize)> = placed
+            .nodes
+            .iter()
+            .enumerate()
+            .skip(placed.sites)
+            .filter(|(_, o)| o.follows.is_none())
+            .filter_map(|(j, o)| Some((base + j, o.was?)))
+            .collect();
         let sites: Vec<(usize, f32)> = placed.nodes[..placed.sites].iter().enumerate().map(|(j, o)| (base + j, o.value)).collect();
         let mut cells = Cells::new(&cells::cells(flat), &sites);
         // What moves in, and what it keeps and makes.
@@ -3403,7 +3451,11 @@ impl Renderer {
     /// what was heard before, to retire; Err with `input` back for a slot that isn't one of its
     /// audio lanes. Only one lane hears at a time. Never allocates.
     #[allow(clippy::type_complexity)]
-    pub fn hear(&mut self, slot: usize, input: Option<Arc<dyn LiveInput>>) -> Result<Option<Arc<dyn LiveInput>>, Option<Arc<dyn LiveInput>>> {
+    pub fn hear(
+        &mut self,
+        slot: usize,
+        input: Option<Arc<dyn LiveInput>>,
+    ) -> Result<Option<Arc<dyn LiveInput>>, Option<Arc<dyn LiveInput>>> {
         let lanes = &mut self.lanes.slots[..self.lanes.live];
         if input.is_some() && !matches!(lanes.get(slot), Some(LaneSlot::Audio(Some(_)))) {
             return Err(input);
@@ -3553,9 +3605,13 @@ impl Renderer {
         self.top()
             .iter()
             .filter_map(|e| match e {
-                Exec::Plugin(p) => {
-                    Some(PluginView { handle: p.inst.as_ref()?.handle(), notes: p.keys.clone(), offs: p.offs, last_off: p.last_off, status: p.status })
-                }
+                Exec::Plugin(p) => Some(PluginView {
+                    handle: p.inst.as_ref()?.handle(),
+                    notes: p.keys.clone(),
+                    offs: p.offs,
+                    last_off: p.last_off,
+                    status: p.status,
+                }),
                 _ => None,
             })
             .collect()
