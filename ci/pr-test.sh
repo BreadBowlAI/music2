@@ -47,10 +47,11 @@ EOF
 printf '#!/bin/sh\necho "rustc 0.0.0 (stand-in)"\n' > "$TMP/bin-check/rustc"
 chmod +x "$TMP/bin/cargo" "$TMP/bin/npm" "$TMP/bin/node" "$TMP/chrome" "$TMP/bin-check/rustc" || exit 2
 
-# fixture <dir> <ci/pr.sh to use>: a git repo holding ci/check.sh, that ci/pr.sh, and the folders
-# the steps go into.
+# fixture <dir> <ci/pr.sh to use>: a git repo holding ci/check.sh, that ci/pr.sh (and the file it
+# sources), and the folders the steps go into.
 fixture() {
   mkdir -p "$1/ci" "$1/web" "$1/e2e" && cp "$HERE/check.sh" "$1/ci/check.sh" && cp "$2" "$1/ci/pr.sh" &&
+    cp "$HERE/nightly-list.sh" "$1/ci/nightly-list.sh" &&
     echo '# a song-as-program DAW' > "$1/README.md" && echo '{}' > "$1/web/package.json" &&
     echo '{}' > "$1/e2e/package.json" && printf 'target/\n' > "$1/.gitignore" &&
     (cd "$1" && git init -q && git symbolic-ref HEAD refs/heads/main && git add -A && git commit -q -m fixture)

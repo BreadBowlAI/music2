@@ -15,8 +15,10 @@
 #
 # One line a test: <nextest binary id> <test name> <reason...>. The binary id is the package, or
 # package::<file> for a file under tests/ (cargo nextest list prints them). Test names must match
-# exactly. ci/pr.sh turns these lines into a nextest filter; ci/pr.sh rust --tier nightly runs only
-# them.
+# exactly: the "nightly list" row (ci/pr.sh rust, ci/check.sh) fails on a name nextest can't find.
+# ci/pr.sh turns these lines into a nextest filter (ci/nightly-list.sh): ci/pr.sh rust leaves them
+# out, and ci/pr.sh rust --all runs them too. To run one alone (cargo-nextest from ci/tools.sh):
+#   cargo nextest run --locked -E 'binary_id(=<binary id>) & test(=<test name>)'
 
 # speed: bounds under 2 s, or a real-time period
 m2-os ipc::tests::a_wake_crosses_two_mappings  speed: woken within 2 s, in 15 ms steps (core/os/src/ipc.rs)

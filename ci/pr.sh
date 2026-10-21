@@ -7,9 +7,10 @@
 # gives the same answer on any machine and any day: no timing gates, none of the tests
 # ci/nightly-tests.txt and e2e/run.mjs tag for the nightly tier (a speed bound, a known flake, over
 # a minute), and RustSec's advisories only when the change touches a Cargo.lock or deny.toml (they
-# change with the date, not the code). The rest runs every night: ci/check.sh does everything, and
-# nightly.yml runs the advisories step too. Nothing here changes the repo, opens a screen, plays
-# sound, or touches your ~/Music or ~/.music2: whatever runs music2 gets a scratch HOME.
+# change with the date, not the code). The rest runs every night: ci/check.sh does everything this
+# script does (it runs the lint and advisories steps as rows of its own) and more. Nothing here
+# changes the repo, opens a screen, plays sound, or touches your ~/Music or ~/.music2: whatever
+# runs music2 gets a scratch HOME.
 #
 #   ci/pr.sh changes [<base>]   whether the change since git merge-base HEAD <base> (default: main,
 #                               or origin/main) is documentation only (ci/docs-only.sh). Prints the
@@ -20,11 +21,16 @@
 #   ci/pr.sh docs               the docs job: the docs rule's own cases (ci/docs-only-test.sh)
 #   ci/pr.sh toolchain          the Rust toolchain rust-toolchain.toml pins, installed if missing
 #                               (CI's jobs run it before their cache step, which asks rustc)
-#   ci/pr.sh quick              rustfmt, actionlint, the cases of the gates rule, the docs rule, the
-#                               PR tier's own verdicts (ci/pr-test.sh) and ci/nightly.sh
-#                               (ci/nightly-test.sh), licences (cargo-deny's bans, licences and
-#                               sources on both workspaces; npm), the web typecheck and build, std's
-#                               kernels (tests, clippy) and std.wasm rebuilt to the committed bytes
+#   ci/pr.sh lint               the checks that build nothing: rustfmt, actionlint, licences
+#                               (cargo-deny's bans, licences and sources on both workspaces; npm),
+#                               and the cases of the docs rule, of the PR tier's own verdicts
+#                               (ci/pr-test.sh) and of ci/nightly.sh (ci/nightly-test.sh)
+#   ci/pr.sh quick              lint's checks, then the cases of the gates rule, the pool's models,
+#                               the web typecheck and build, std's kernels (tests, clippy) and
+#                               std.wasm rebuilt to the committed bytes
+#   ci/pr.sh models             the pool's models alone (core/pool/tests/models.rs, in release, and
+#                               their lint), as ci/check.sh's "pool models" row: the Mac's nightly
+#                               job runs them, as arm64 can catch an ordering too weak that x86 hides
 #   ci/pr.sh advisories         RustSec's advisories for both workspaces (cargo-deny; it fetches
 #                               their database): on a pull request when changes says deps=true, and
 #                               every night
@@ -67,7 +73,7 @@ ALL=
 BASE=
 case $STEP in
   changes) if [ $# -gt 1 ]; then usage; fi; BASE=${1:-} ;;
-  docs|toolchain|quick|advisories|clippy|renders) if [ $# -gt 0 ]; then usage; fi ;;
+  docs|toolchain|lint|quick|models|advisories|clippy|renders) if [ $# -gt 0 ]; then usage; fi ;;
   rust|suites)
     while [ $# -gt 0 ]; do
       case $1 in
@@ -192,21 +198,30 @@ suites() { env E2E_CHROME="$CHROME" M2_HEADLESS="$TARGET/debug/examples/headless
 # build: the binaries the browser suites and the renders use, in one cargo run (two would resolve
 # features apart and build the shared crates twice).
 build() { cargo build --locked -p m2-server --example headless -p m2 -p m2-plugins --bin m2 --bin m2-plugin-host; }
-# nightly_list: whether nextest finds exactly the tests ci/nightly-tests.txt names.
-nightly_list() {
-  awk '!/^#/ && NF >= 2 { print $1, $2 }' ci/nightly-tests.txt | sort > "$OUT/nightly-want.txt"
-  cargo nextest list --locked --workspace --message-format oneline -E "$(nightly_filter)" 2> /dev/null | sort > "$OUT/nightly-found.txt" || return 1
-  if cmp -s "$OUT/nightly-want.txt" "$OUT/nightly-found.txt"; then
-    echo "all $(grep -c '' "$OUT/nightly-want.txt") tests ci/nightly-tests.txt names are there"
-  else
-    echo "ci/nightly-tests.txt names tests nextest doesn't find (<), or finds them twice (>):"
-    diff "$OUT/nightly-want.txt" "$OUT/nightly-found.txt"
-    return 1
+# nightly_filter, nightly_list <dir>: ci/nightly-tests.txt as nextest sees it (ci/check.sh judges
+# the list with the same functions).
+. ci/nightly-list.sh || exit 2
+# lint: the PR tier's checks that build nothing (its own step, and the start of quick).
+lint() {
+  check fmt fmt.log sh -c 'cargo fmt --all --check && cd std/kernels-src && cargo fmt --all --check'
+  if tools actionlint deny; then
+    # No shellcheck or pyflakes inside actionlint: their versions differ from machine to machine,
+    # and every run: block only calls a script here.
+    check workflows actionlint.log sh -c 'actionlint -color -shellcheck= -pyflakes= && node ci/ci-ok.mjs --check-workflow'
+    # No advisories (the advisories step), so no advisory database is fetched: the same answer every day.
+    check licences licences.log sh -c 'cargo deny --locked --color never --config deny.toml check bans licenses sources &&
+      cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources &&
+      node ci/npm-licenses.mjs'
   fi
+  check "docs rule" docs-rule.log ci/docs-only-test.sh
+  check "pr verdicts" pr-test.log ci/pr-test.sh
+  check "nightly.sh" nightly-test.log ci/nightly-test.sh
 }
-# nightly_filter: ci/nightly-tests.txt as a nextest filter that matches those tests.
-nightly_filter() {
-  awk '!/^#/ && NF >= 2 { printf "%s(binary_id(=%s) & test(=%s))", (n++ ? " | " : ""), $1, $2 } END { if (!n) printf "none()" }' ci/nightly-tests.txt
+# models: the pool's models, in release, and their lint (the same commands as ci/check.sh's step
+# 6b). m2-pool needs only m2-os and libc, so this builds in seconds, with no system library.
+models() {
+  cargo test --locked --release -p m2-pool --features models &&
+    cargo clippy --locked -p m2-pool --features models --all-targets -- -D warnings
 }
 
 # toolchain: the one rust-toolchain.toml names, installed if missing (rustup 1.28 and later take
@@ -224,24 +239,19 @@ case $STEP in
   toolchain)
     check toolchain toolchain.log toolchain && row rustc PASS "$(rustc -V)" ;;
 
+  lint)
+    lint ;;
+
   quick)
-    check fmt fmt.log sh -c 'cargo fmt --all --check && cd std/kernels-src && cargo fmt --all --check'
-    if tools actionlint deny; then
-      # No shellcheck or pyflakes inside actionlint: their versions differ from machine to machine,
-      # and every run: block only calls a script here.
-      check workflows actionlint.log sh -c 'actionlint -color -shellcheck= -pyflakes= && node ci/ci-ok.mjs --check-workflow'
-      # No advisories (the advisories step), so no advisory database is fetched: the same answer every day.
-      check licences licences.log sh -c 'cargo deny --locked --color never --config deny.toml check bans licenses sources &&
-        cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources &&
-        node ci/npm-licenses.mjs'
-    fi
+    lint
     check "gates rule" gates-rule.log ci/gates-auto-test.sh
-    check "docs rule" docs-rule.log ci/docs-only-test.sh
-    check "pr verdicts" pr-test.log ci/pr-test.sh
-    check "nightly.sh" nightly-test.log ci/nightly-test.sh
+    check "pool models" pool-models.log models
     check "web build" web.log web
     check "std kernels" kernels.log sh -c 'cd std/kernels-src && cargo test --locked --release --workspace && cargo clippy --locked --workspace --all-targets -- -D warnings'
     check std.wasm std-wasm.log std/build.sh --check ;;
+
+  models)
+    check "pool models" pool-models.log models ;;
 
   advisories)
     # std's kernels use no wasmtime, so deny.toml's wasmtime advisories aren't there to ignore.
@@ -272,7 +282,7 @@ case $STEP in
         check "own-main tests" main-thread.log env HOME="$OUT/home" cargo test --locked --workspace --test main_thread --test app_main_thread
         # Every line of ci/nightly-tests.txt names a test that is there, so a renamed test can't
         # slip back into the PR tier unseen (Linux: some names are Linux's own modules).
-        if [ $OS = linux ]; then check "nightly list" nightly-list.log nightly_list; fi
+        if [ $OS = linux ]; then check "nightly list" nightly-list.log nightly_list "$OUT"; fi
       fi
     fi ;;
 

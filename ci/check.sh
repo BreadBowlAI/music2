@@ -3,7 +3,9 @@
 #
 # In short: run it in the repo with no arguments. It builds everything, runs every Rust test,
 # clippy, the pool's models, the web build, every browser suite, std's checks and the offline
-# renders; on a Mac it also times the gates ci/gates.txt names. First it builds the old engine
+# renders, and every check of the PR tier besides (ci/pr.sh lint: rustfmt, actionlint, licences,
+# the CI scripts' own cases; RustSec's advisories; the nightly list), so it passes only where every
+# tier would; on a Mac it also times the gates ci/gates.txt names. First it builds the old engine
 # G7f compares with (S), in a folder of its own: ~/m2-check/s-8aa301e on a Mac,
 # ~/.cache/m2-check/s-8aa301e on Linux. Then it prints a short summary to paste back. It changes
 # nothing in the repo, never opens the app on a screen you can see, never plays sound (G12 opens the
@@ -29,13 +31,14 @@
 #                                at a time, built without debug info into <target>/nightly
 #
 # --pr: the checks every pull request must pass, and nothing else: rustfmt, actionlint, the gates
-# and docs rules, licences, the web build, std's kernels and std.wasm, clippy, the Rust tests and
-# browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the 12 renders; RustSec's
-# advisories only when the change touches a Cargo.lock or deny.toml (ci/pr.sh changes). When
-# git proves your committed change is documentation only (ci/docs-only.sh, on a clean tree), it
-# runs only the docs rule's cases, as CI does. It builds into <target>/pr without debug info, as
-# CI does, so it never rebuilds what your own cargo build made. It needs what ci/pr.sh needs (its
-# top says): cargo-nextest, cargo-deny and actionlint come from ci/tools.sh.
+# and docs rules, licences, the pool's models, the web build, std's kernels and std.wasm, clippy,
+# the Rust tests and browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the
+# 12 renders; RustSec's advisories only when the change touches a Cargo.lock or deny.toml
+# (ci/pr.sh changes). When git proves your committed change is documentation only
+# (ci/docs-only.sh, on a clean tree), it runs only the docs rule's cases, as CI does. It builds into
+# <target>/pr without debug info, as CI does, so it never rebuilds what your own cargo build made.
+# It needs what ci/pr.sh needs (its top says): cargo-nextest, cargo-deny and actionlint come from
+# ci/tools.sh.
 #
 # When --gates=auto skips the gates (ci/gates-auto.sh holds the rule, ci/gates-auto-test.sh its
 # cases, which the "gates rule" row runs): only when git proves that HEAD holds, in every file they
@@ -76,7 +79,8 @@
 # there, muted, and judges that set-up.
 #
 # Needs rustup and Node 24. The first run installs Rust 1.99.0 (rust-toolchain.toml) and
-# chrome-headless-shell 133.0.6943.141. On a Mac, run it in Terminal on the Mac itself, not over
+# chrome-headless-shell 133.0.6943.141, and ci/tools.sh fetches cargo-nextest, cargo-deny and
+# actionlint into ~/.cache/m2-tools (the advisories row fetches RustSec's database). On a Mac, run it in Terminal on the Mac itself, not over
 # ssh: the app's test needs your login session. On Linux with Xvfb it also opens the desktop app
 # on an invisible screen. Written for bash 3.2, which macOS ships.
 
@@ -375,40 +379,41 @@ for d in /Library/Audio/Plug-Ins/CLAP /usr/lib/clap; do
   fi
 done
 
-# --pr: the PR tier, as CI runs it: ci/pr.sh's steps, each a row with its time, then the summary.
-#    A step that failed has its FAIL lines (and the tail of its logs) in "what failed"; each step's
-#    output is pr-<step>.log, and its own logs are in pr-<step>/.
-if [ -n "$PR" ]; then
-  # pr <row> <usual time> <ci/pr.sh arguments...>: one step of the PR tier as one row.
-  pr() {
-    row=$1 usual=$2
-    shift 2
-    begin "$row" "$usual"
-    log=$OUT/pr-$1.log
-    M2_PR_OUT=$OUT/pr-$1 M2_PR_JOBS=$JOBS ci/pr.sh "$@" > "$log" 2>&1 < /dev/null
-    st=$?
-    said=$(grep -E '^ci/pr.sh .*: (PASS|FAIL) in ' "$log" | tail -1 | sed -E 's/^ci\/pr.sh [^:]*: (PASS|FAIL) in //; s/ \(logs in .*$//')
-    # What passed only when run again: nextest's FLAKY tests, and suites that passed alone.
+# pr <row> <usual time> <ci/pr.sh arguments...>: one step of ci/pr.sh as one row (--pr runs the PR
+# tier this way; the full check its lint and advisories steps). A step that failed has its FAIL
+# lines (and the tail of its logs) in "what failed"; each step's output is pr-<step>.log, and its
+# own logs are in pr-<step>/.
+pr() {
+  row=$1 usual=$2
+  shift 2
+  begin "$row" "$usual"
+  log=$OUT/pr-$1.log
+  M2_PR_OUT=$OUT/pr-$1 M2_PR_JOBS=$JOBS ci/pr.sh "$@" > "$log" 2>&1 < /dev/null
+  st=$?
+  said=$(grep -E '^ci/pr.sh .*: (PASS|FAIL) in ' "$log" | tail -1 | sed -E 's/^ci\/pr.sh [^:]*: (PASS|FAIL) in //; s/ \(logs in .*$//')
+  # What passed only when run again: nextest's FLAKY tests, and suites that passed alone.
+  {
+    grep -E '^ +FLAKY ' "$log" | sed -E 's/^ +FLAKY [^]]*\] (\([^)]*\) )?/test /' | sort -u
+    grep -E 'passed only on a retry alone: ' "$log" | sed 's/.*retry alone: //; s/: see .*//' | tr ',' '\n' | sed 's/^ */suite /'
+  } >> "$OUT/flaky"
+  if [ $st -eq 0 ]; then
+    record "$row" PASS "${said:-done}"
+  else
+    record "$row" FAIL "${said:+after $said: }see pr-$1.log"
+    # The step's FAIL rows, then each Rust test and suite that failed. A test: nextest's list
+    # after its last Summary line, where each one's last try is (FAIL, TIMEOUT, or the signal
+    # that ended its process: "TRY 2 SEGV"); not the tries before (a FLAKY test failed one).
     {
-      grep -E '^ +FLAKY ' "$log" | sed -E 's/^ +FLAKY [^]]*\] (\([^)]*\) )?/test /' | sort -u
-      grep -E 'passed only on a retry alone: ' "$log" | sed 's/.*retry alone: //; s/: see .*//' | tr ',' '\n' | sed 's/^ */suite /'
-    } >> "$OUT/flaky"
-    if [ $st -eq 0 ]; then
-      record "$row" PASS "${said:-done}"
-    else
-      record "$row" FAIL "${said:+after $said: }see pr-$1.log"
-      # The step's FAIL rows, then each Rust test and suite that failed. A test: nextest's list
-      # after its last Summary line, where each one's last try is (FAIL, TIMEOUT, or the signal
-      # that ended its process: "TRY 2 SEGV"); not the tries before (a FLAKY test failed one).
-      {
-        grep -E '^[a-z][a-zA-Z0-9. -]* +FAIL  ' "$log" | sed "s/^/$1: /"
-        awk '/^ *Summary \[/ { n = NR } { l[NR] = $0 } END { for (i = n; n && i <= NR; i++) print l[i] }' "$log" | grep -E '^ +(TRY [0-9]+ )?(FAIL|TIMEOUT|ABORT|SIG[A-Z]+|SEGV|ABRT|BUS|ILL|FPE|KILL|TRAP|SYS) \[' |
-          sed -E 's/^ +(TRY [0-9]+ )?[A-Z]+ \[[^]]*\] (\([^)]*\) )?/test /' | sort -u
-        grep -E '^  failed: ' "$OUT/pr-$1/e2e.log" 2> /dev/null | sed -E 's/^  failed: ([^ ]+).*/suite \1/'
-      } | cut -c1-160 >> "$OUT/failed"
-      if ! grep -qE ' +FAIL  ' "$log"; then echo "$1: $(tail -1 "$log" | cut -c1-140)" >> "$OUT/failed"; fi
-    fi
-  }
+      grep -E '^[a-z][a-zA-Z0-9. -]* +FAIL  ' "$log" | sed "s/^/$1: /"
+      awk '/^ *Summary \[/ { n = NR } { l[NR] = $0 } END { for (i = n; n && i <= NR; i++) print l[i] }' "$log" | grep -E '^ +(TRY [0-9]+ )?(FAIL|TIMEOUT|ABORT|SIG[A-Z]+|SEGV|ABRT|BUS|ILL|FPE|KILL|TRAP|SYS) \[' |
+        sed -E 's/^ +(TRY [0-9]+ )?[A-Z]+ \[[^]]*\] (\([^)]*\) )?/test /' | sort -u
+      grep -E '^  failed: ' "$OUT/pr-$1/e2e.log" 2> /dev/null | sed -E 's/^  failed: ([^ ]+).*/suite \1/'
+    } | cut -c1-160 >> "$OUT/failed"
+    if ! grep -qE ' +FAIL  ' "$log"; then echo "$1: $(tail -1 "$log" | cut -c1-140)" >> "$OUT/failed"; fi
+  fi
+}
+# --pr: the PR tier, as CI runs it: ci/pr.sh's steps, each a row with its time, then the summary.
+if [ -n "$PR" ]; then
   begin changes "seconds"
   if ci/pr.sh changes ${PRBASE:+"$PRBASE"} > "$OUT/pr-changes.log" 2>&1 && grep -q '^docs_only=true$' "$OUT/pr-changes.log"; then
     record changes PASS "$(head -1 "$OUT/pr-changes.log" | sed 's/^docs  //'): CI runs only the docs job"
@@ -497,6 +502,13 @@ if grep -q '^rustc 1\.99\.0 ' "$OUT/toolchain.log"; then
 else
   record toolchain FAIL "not Rust 1.99.0: see toolchain.log"
 fi
+
+# 1b. The PR tier's checks that build nothing (ci/pr.sh lint: rustfmt, actionlint, licences, and the
+#     cases of the docs rule, of the PR tier's verdicts and of ci/nightly.sh), then RustSec's
+#     advisories (ci/pr.sh advisories: they fetch RustSec's database, so their answer changes with
+#     the date). Their tools come from ci/tools.sh; when it can't get one, the row says FAIL and why.
+pr lint "1 min" lint
+pr advisories "seconds" advisories
 
 # 2. The web UI: the desktop app embeds it, and the browser suites load it.
 begin "web build" "1 min"
@@ -654,6 +666,25 @@ else
   record "rust tests" FAIL "$counts: see test.log"
   failures "" "$OUT/test.log" >> "$OUT/failed"
   { first "$OUT/test.log" '^error' | sed 's/^/tests: /'; cause "$OUT/test.log"; } >> "$OUT/failed"
+fi
+
+# 5b. Linux: every line of ci/nightly-tests.txt names a test that is there (ci/nightly-list.sh, as
+#     ci/pr.sh rust's row of the same name), so a renamed test can't slip back into the PR tier
+#     unseen (some names are Linux's own modules). nextest lists the test binaries step 5 built.
+if [ $OS = linux ]; then
+  begin "nightly list" "seconds"
+  if ! p=$(ci/tools.sh nextest 2> "$OUT/tools.log" | tail -1) || [ -z "$p" ]; then
+    record "nightly list" FAIL "ci/tools.sh couldn't get cargo-nextest: see tools.log"
+    echo "nightly list: $(tail -1 "$OUT/tools.log" | cut -c1-140)" >> "$OUT/failed"
+  else
+    PATH=$p:$PATH
+    if . ci/nightly-list.sh && quiet nightly-list.log nightly_list "$OUT"; then
+      record "nightly list" PASS "$(head -1 "$OUT/nightly-list.log")"
+    else
+      record "nightly list" FAIL "see nightly-list.log"
+      grep '^[<>]' "$OUT/nightly-list.log" | sed 's/^/nightly list: /' | cut -c1-160 >> "$OUT/failed"
+    fi
+  fi
 fi
 
 # 6. Clippy, every warning an error.
