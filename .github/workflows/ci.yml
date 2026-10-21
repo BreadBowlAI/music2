@@ -1,0 +1,227 @@
+# .github/workflows/ci.yml: the PR tier. Every pull request, every merge-queue group and every push
+# to main runs it. Branch protection needs one check only: ci-ok.
+#
+# In short: each job runs one step of ci/pr.sh, the same command anyone can type on their own
+# machine (ci/check.sh --pr runs them all). This file only gets the machine ready (checkout,
+# caches, system packages) and calls scripts in ci/. A change that is documentation only
+# (ci/docs-only.sh) runs the changes job alone, and ci-ok passes. The slow, timing and known-flaky
+# checks are in nightly.yml.
+#
+# Security: no secrets in any job here; the token is read-only (permissions below) and never kept
+# in the checkout (persist-credentials: false); pull_request, never pull_request_target, so a fork's
+# code never runs with this repo's rights; every action pinned by its full commit (version in the
+# comment; dependabot.yml keeps them current).
+
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its run still going; main's runs all finish.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: never
+  # Where ci/plugins.sh finds the test plugins' archives when upstream lost them: this repo's
+  # release "test-plugins" (docs/maintainers.md says how it is made).
+  M2_PLUGINS_MIRROR: ${{ github.server_url }}/${{ github.repository }}/releases/download/test-plugins
+
+jobs:
+  # Whether the change is documentation only, then the docs job's own check (seconds).
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      docs_only: ${{ steps.rule.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: rule
+        env:
+          # A pull request's checkout is its merge commit: HEAD^1 is the base branch as it is now.
+          # A merge group's base is the commit it goes onto. A push to main runs everything.
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'HEAD' }}
+        run: ci/pr.sh changes "$BASE"
+      - run: ci/pr.sh docs
+
+  # fmt, actionlint, the gates and docs rules, licences, the web build, std's kernels and std.wasm.
+  quick:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/m2-tools
+          key: m2-tools-${{ runner.os }}-${{ hashFiles('ci/tools.sh') }}
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: std/kernels-src -> ../../target/pr
+          shared-key: quick
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: ci/pr.sh quick
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-quick
+          path: ~/m2-check/
+          retention-days: 7
+
+  # clippy on every target of the workspace, every warning an error.
+  clippy:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/apt.sh build
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: . -> target/pr
+          shared-key: clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: ci/pr.sh clippy
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-clippy
+          path: ~/m2-check/
+          retention-days: 7
+
+  # The Rust tests of the PR tier, in three parts (cargo-nextest's hash partitions).
+  rust:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1/3, 2/3, 3/3]
+    name: rust (${{ matrix.part }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/apt.sh build
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/m2-tools
+          key: m2-tools-${{ runner.os }}-${{ hashFiles('ci/tools.sh') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/m2-test-plugins/dl
+          key: m2-plugins-${{ hashFiles('ci/plugins.sha256') }}
+      - run: ci/plugins.sh
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: . -> target/pr
+          shared-key: rust
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == '1/3' }}
+      - run: ci/pr.sh rust "${{ matrix.part }}"
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-rust-${{ strategy.job-index }}
+          path: ~/m2-check/
+          retention-days: 7
+
+  # The browser suites of the PR tier, in two parts, two at a time; the first part also renders.
+  suites:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1/2, 2/2]
+    name: suites (${{ matrix.part }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/apt.sh suites
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            e2e/package-lock.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/puppeteer
+          key: chrome-headless-shell-133.0.6943.141-${{ runner.os }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/m2-test-plugins/dl
+          key: m2-plugins-${{ hashFiles('ci/plugins.sha256') }}
+      - run: ci/plugins.sh
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: . -> target/pr
+          shared-key: suites
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == '1/2' }}
+      - run: ci/pr.sh suites "${{ matrix.part }}"
+      - if: ${{ !cancelled() && matrix.part == '1/2' }}
+        run: ci/pr.sh renders
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-suites-${{ strategy.job-index }}
+          path: ~/m2-check/
+          retention-days: 7
+
+  # The one required check: passes when every job passed, or when the change is documentation
+  # only and the rest were skipped for that (ci/ci-ok.mjs). Keep its needs: every other job, on
+  # one line (ci/pr.sh quick checks that).
+  ci-ok:
+    if: always()
+    needs: [changes, quick, clippy, rust, suites]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: ci
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: node ci/ci-ok.mjs

@@ -18,6 +18,20 @@
 #                                the same, with the change counted from git merge-base HEAD <rev>
 #                                instead of from main
 #   ci/check.sh --no-gates       on a Mac, without them
+#   ci/check.sh --pr             only the PR tier, exactly as CI runs it on a pull request
+#                                (ci/pr.sh's steps, one after another, each a row with its time;
+#                                below)
+#   ci/check.sh --nightly        the nightly tier as CI runs it (.github/workflows/nightly.yml):
+#                                everything but the timing gates, on any OS, the browser suites one
+#                                at a time, built without debug info into <target>/nightly
+#
+# --pr: the checks every pull request must pass, and nothing else: rustfmt, actionlint, the gates
+# and docs rules, licences, the web build, std's kernels and std.wasm, clippy, the Rust tests and
+# browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the 12 renders. When
+# git proves your committed change is documentation only (ci/docs-only.sh, on a clean tree), it
+# runs only the docs rule's cases, as CI does. It builds into <target>/pr without debug info, as
+# CI does, so it never rebuilds what your own cargo build made. It needs what ci/pr.sh needs (its
+# top says): cargo-nextest, cargo-deny and actionlint come from ci/tools.sh.
 #
 # When --gates=auto skips the gates (ci/gates-auto.sh holds the rule, ci/gates-auto-test.sh its
 # cases, which the "gates rule" row runs): only when git proves that HEAD holds, in every file they
@@ -66,6 +80,9 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd) && cd "$ROOT" || exit 2
 GATES=
 AUTO=
 BASE=
+PR=
+NIGHTLY=
+ASKED=
 case $(uname -s) in
   Darwin)
     OS=macos
@@ -87,7 +104,7 @@ case $(uname -s) in
 esac
 while [ $# -gt 0 ]; do
   case $1 in
-    --gates) GATES=1; AUTO= ;;
+    --gates) GATES=1; AUTO=; ASKED=1 ;;
     --gates=auto) AUTO=1 ;;
     --no-gates) GATES=; AUTO= ;;
     --base)
@@ -95,13 +112,30 @@ while [ $# -gt 0 ]; do
       BASE=$2
       shift ;;
     --base=?*) BASE=${1#--base=} ;;
+    --pr) PR=1 ;;
+    --nightly) NIGHTLY=1 ;;
     *) echo "ci/check.sh: no option $1 (see the top of the script)"; exit 2 ;;
   esac
   shift
 done
 if [ -n "$BASE" ] && [ -z "$AUTO" ]; then echo "ci/check.sh: --base goes with --gates=auto"; exit 2; fi
+if [ -n "$PR" ] && [ -n "$NIGHTLY" ]; then echo "ci/check.sh: --pr or --nightly, not both"; exit 2; fi
+# --nightly: never the gates (a shared CI machine can't judge them, PLAT-1), the suites one at a
+# time (that finds races running several at once hides), and the build CI's disk holds.
+if [ -n "$NIGHTLY" ]; then
+  if [ -n "$AUTO$ASKED" ]; then echo "ci/check.sh: --nightly runs no gates"; exit 2; fi
+  GATES=
+  export CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
+  export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}/nightly
+  case $CARGO_TARGET_DIR in /*) ;; *) CARGO_TARGET_DIR=$ROOT/$CARGO_TARGET_DIR ;; esac
+fi
+if [ -n "$PR" ] && [ -n "$AUTO$ASKED" ]; then echo "ci/check.sh: --pr runs no gates"; exit 2; fi
+# The summary's first line says which tier ran, when it isn't the full check.
+MODE=
+if [ -n "$PR" ]; then MODE=--pr; GATES=; elif [ -n "$NIGHTLY" ]; then MODE=--nightly; fi
 JOBS=${M2_CHECK_JOBS:-$JOBS}
 case $JOBS in ''|0*|*[!0-9]*) echo "ci/check.sh: M2_CHECK_JOBS must be a whole number, 1 or more"; exit 2 ;; esac
+if [ -n "$NIGHTLY" ]; then JOBS=1; fi
 if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
 SHA=$(git rev-parse --short=12 HEAD) || exit 2
 OUT=${M2_CHECK_OUT:-$HOME/m2-check/$SHA}
@@ -263,7 +297,7 @@ summary() {
   (cd "$OUT" && tar -czf "$OUT.tgz" $(find . -maxdepth 2 -type f \( -name '*.log' -o -name '*.sum' -o -name results -o -name failed -o -name flaky \))) 2> /dev/null
   {
     echo
-    echo "music2 check: $verdict"
+    echo "music2 check${MODE:+ $MODE}: $verdict"
     echo "commit   $SHA on $(git rev-parse --abbrev-ref HEAD) ($state)"
     echo "machine  $MACHINE"
     echo "tools    $(rustc -V 2> /dev/null | cut -d' ' -f1-2), node $(node -v 2> /dev/null), $mins min"
@@ -324,6 +358,57 @@ for d in /Library/Audio/Plug-Ins/CLAP /usr/lib/clap; do
     exit 2
   fi
 done
+
+# --pr: the PR tier, as CI runs it: ci/pr.sh's steps, each a row with its time, then the summary.
+#    A step that failed has its FAIL lines (and the tail of its logs) in "what failed"; each step's
+#    output is pr-<step>.log, and its own logs are in pr-<step>/.
+if [ -n "$PR" ]; then
+  # pr <row> <usual time> <ci/pr.sh arguments...>: one step of the PR tier as one row.
+  pr() {
+    row=$1 usual=$2
+    shift 2
+    begin "$row" "$usual"
+    log=$OUT/pr-$1.log
+    M2_PR_OUT=$OUT/pr-$1 M2_PR_JOBS=$JOBS ci/pr.sh "$@" > "$log" 2>&1 < /dev/null
+    st=$?
+    said=$(grep -E '^ci/pr.sh .*: (PASS|FAIL) in ' "$log" | tail -1 | sed -E 's/^ci\/pr.sh [^:]*: (PASS|FAIL) in //; s/ \(logs in .*$//')
+    if [ $st -eq 0 ]; then
+      record "$row" PASS "${said:-done}"
+    else
+      record "$row" FAIL "${said:+after $said: }see pr-$1.log"
+      # The step's FAIL rows, then each Rust test (nextest's FAIL lines) and suite that failed.
+      {
+        grep -E '^[a-z][a-zA-Z0-9. -]* +FAIL  ' "$log" | sed "s/^/$1: /"
+        grep -E '^ +(FAIL|SIGSEGV|SIGABRT|TIMEOUT) \[' "$log" | sed -E 's/^ +[A-Z]+ \[[^]]*\] (\([^)]*\) )?/test /' | sort -u
+        grep -E '^  failed: ' "$OUT/pr-$1/e2e.log" 2> /dev/null | sed -E 's/^  failed: ([^ ]+).*/suite \1/'
+      } | cut -c1-160 >> "$OUT/failed"
+      if ! grep -qE ' +FAIL  ' "$log"; then echo "$1: $(tail -1 "$log" | cut -c1-140)" >> "$OUT/failed"; fi
+    fi
+  }
+  begin changes "seconds"
+  if ci/pr.sh changes > "$OUT/pr-changes.log" 2>&1 && grep -q '^docs_only=true$' "$OUT/pr-changes.log"; then
+    record changes PASS "$(head -1 "$OUT/pr-changes.log" | sed 's/^docs  //'): CI runs only the docs job"
+    pr "docs" "seconds" docs
+  else
+    record changes PASS "$(head -1 "$OUT/pr-changes.log" | sed -E 's/^(full|docs)  //' | cut -c1-120): the whole PR tier runs"
+    pr "pr quick" "2 min" quick
+    pr "pr clippy" "1 min; 4 the first time" clippy
+    pr "pr rust" "6 min; 12 the first time" rust 1/1
+    pr "pr suites" "4 min" suites 1/1
+    pr "pr renders" "seconds" renders
+  fi
+  begin "repo unchanged" "seconds"
+  git status --porcelain > "$SCR/after"
+  if cmp -s "$SCR/before" "$SCR/after"; then
+    record "repo unchanged" PASS ""
+  else
+    record "repo unchanged" FAIL "$(diff "$SCR/before" "$SCR/after" | grep -c '^[<>]') entries changed: run git status"
+  fi
+  trap '' INT TERM
+  summary
+  [ "$fails" -eq 0 ] && [ -n "$TESTPLUGINS" ] && [ -z "$partial" ]
+  exit
+fi
 
 # 0b. The rule --gates=auto follows (ci/gates-auto.sh), tried on its table of cases in scratch git
 #     repos (ci/gates-auto-test.sh). On Linux, when they pass, the rule is loaded (RULE), and

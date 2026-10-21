@@ -1,0 +1,136 @@
+# .github/workflows/nightly.yml: the nightly tier, once a day on main (and by hand from the Actions
+# tab).
+#
+# In short: everything ci/check.sh does but the timing gates, on GitHub's Linux machine
+# (ci/check.sh --nightly: every Rust test, every browser suite one at a time, the tests the PR tier
+# leaves out among them, the pool's models, the app on an invisible screen, the mac lint). Once the
+# repo is public, also a Mac: the build, every Rust test and every browser suite (macOS minutes are
+# free only for public repos). When a job fails, one issue, "Nightly failed", gets the run's link.
+# The timing gates never run here: a shared cloud machine can't judge real-time audio (ci/nightly.sh
+# runs them on a quiet maintainer machine).
+
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  M2_PLUGINS_MIRROR: ${{ github.server_url }}/${{ github.repository }}/releases/download/test-plugins
+
+jobs:
+  linux:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/apt.sh check
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            e2e/package-lock.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/puppeteer
+          key: chrome-headless-shell-133.0.6943.141-${{ runner.os }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/m2-test-plugins/dl
+          key: m2-plugins-${{ hashFiles('ci/plugins.sha256') }}
+      - run: ci/plugins.sh
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            . -> target/nightly
+            std/kernels-src -> ../../target/nightly
+          shared-key: nightly
+      - run: ci/check.sh --nightly
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-linux
+          path: |
+            ~/m2-check/*.tgz
+            ~/m2-check/*/summary.txt
+          retention-days: 14
+
+  macos:
+    if: github.ref == 'refs/heads/main' && github.event.repository.private == false
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      # No Mac copy of the test plugins is pinned yet: their tests skip, and the suites that need
+      # them are left out (and said).
+      M2_NO_PLUGINS: 1
+      M2_PR_JOBS: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            e2e/package-lock.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/m2-tools
+          key: m2-tools-${{ runner.os }}-${{ hashFiles('ci/tools.sh') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/puppeteer
+          key: chrome-headless-shell-133.0.6943.141-${{ runner.os }}
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: . -> target/pr
+          shared-key: nightly-macos
+      - run: ci/pr.sh rust --all
+      - if: ${{ !cancelled() }}
+        run: ci/pr.sh suites --all
+      - if: ${{ !cancelled() }}
+        run: ci/pr.sh renders
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-macos
+          path: ~/m2-check/
+          retention-days: 14
+
+  # One issue for every failed night: opened once, commented on after.
+  report:
+    needs: [linux, macos]
+    if: ${{ always() && contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: ci
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WHAT: "linux ${{ needs.linux.result }}, macos ${{ needs.macos.result }}"
+        run: ci/nightly-issue.sh "$RUN" "$WHAT"
