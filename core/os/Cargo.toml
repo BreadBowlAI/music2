@@ -4,6 +4,7 @@ description = "What music2 does differently on each operating system, in one pla
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 libc.workspace = true

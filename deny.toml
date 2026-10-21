@@ -1,0 +1,77 @@
+# deny.toml: what cargo-deny allows in music2's Rust dependencies. ci/pr.sh's "licences" step runs it
+# on both workspaces (this one and std/kernels-src), with this file for both:
+#
+#   cargo deny --locked --config deny.toml check
+#   cargo deny --locked --manifest-path std/kernels-src/Cargo.toml --config deny.toml check
+#
+# In short: only crates from crates.io; only the licences below, all of which let us ship music2 under
+# MIT OR Apache-2.0; no RustSec advisory but the ones listed under [advisories], each with why.
+
+[graph]
+# Every feature and every OS: a dependency only the Mac or Windows build uses is checked too.
+all-features = true
+
+[advisories]
+# A crate yanked from crates.io fails the check: it was pulled for a reason.
+yanked = "deny"
+# Each one: why music2 lives with it for now, and what ends it. Look at this list whenever
+# Cargo.lock changes; delete a line as soon as its fix lands.
+ignore = [
+  # wasmtime 49.0.2 (all of these are fixed in 49.0.4, a Cargo.lock change: the owner's call, then
+  # the full ci/check.sh). RUSTSEC-2026-0379 DOES reach music2: Cranelift compiles every kernel, and on
+  # an Apple silicon Mac a large Wasm br_table can jump to the wrong place. std's kernels are ours;
+  # the risk grows when packages from other people arrive (docs/gaps.md #39).
+  { id = "RUSTSEC-2026-0379", reason = "wasmtime 49.0.2, aarch64 br_table miscompile; reaches the Mac; fixed by wasmtime 49.0.4 (owed)" },
+  # The other 13 are in parts of wasmtime music2 doesn't build (default-features = false; only
+  # anyhow, cranelift, runtime and std: no component model, async, GC or exceptions). cargo-deny
+  # flags the version, not the features. They go with the same upgrade.
+  { id = "RUSTSEC-2026-0353", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0354", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0355", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0356", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0357", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0358", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0359", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0360", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0361", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0362", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0363", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0364", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  { id = "RUSTSEC-2026-0378", reason = "wasmtime 49.0.2; a part music2 doesn't build; fixed by 49.0.4" },
+  # Unmaintained, not unsafe: a build-time macro under Tauri's Linux menus (glib-macros 0.18 via
+  # gtk 0.18 and muda). No fix upstream yet; it goes when Tauri moves off gtk 0.18.
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained; build-time only, via tauri's gtk 0.18 on Linux; no fix upstream" },
+]
+
+[licenses]
+# Every licence our dependencies use today (checked 2026-10-21: 600 crates). All are permissive,
+# but MPL-2.0, which is file-level copyleft: fine to depend on, as long as those crates' own files
+# stay MPL (cssparser, selectors and dtoa-short under Tauri's HTML tooling; option-ext under dirs).
+# A crate with another licence fails the check: add it here only after reading the licence.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "BSL-1.0",
+  "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# 40 crates come in two versions today (Tauri's tree): information, not a failure.
+multiple-versions = "allow"
+# A dependency without a version ("*") fails. Path dependencies between our own crates are fine,
+# because every crate of ours says publish = false (Cargo.toml's [workspace.package]).
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only: no git dependencies, no other registry.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -4,6 +4,7 @@ description = "music2 from the terminal: build, check and render song-as-program
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 m2-ir.workspace = true

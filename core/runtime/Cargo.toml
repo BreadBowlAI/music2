@@ -4,6 +4,7 @@ description = "Runs checked music2 graphs: the WebAssembly kernel host, poly voi
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 m2-ir.workspace = true

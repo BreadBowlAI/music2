@@ -4,6 +4,7 @@ description = "Hosts CLAP plugins as music2 graph nodes"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 m2-os.workspace = true

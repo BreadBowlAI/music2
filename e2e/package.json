@@ -1,6 +1,7 @@
 {
   "name": "m2-e2e",
   "private": true,
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "description": "Browser suites for the music2 UI, run against the headless server (see README.md)",
   "scripts": {

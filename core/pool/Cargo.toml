@@ -4,6 +4,7 @@ description = "A small pool of threads that runs a graph of numbered tasks, each
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [features]
 # The models' build: a chaos point (a random yield or short spin) before every atomic step and
