@@ -134,6 +134,7 @@ these or a real failure, and fixes the real ones (most were a read a moment too 
    recording (#24, #25), audio clips (#18), the Sampler (#22),
    meters after the fader (#20), sections (#23), scale help (#16).
 4. **Open owner decisions** (below): ask them, with the recommendation.
+5. **Opening the repository to everyone:** the owner's one-time GitHub steps are in [docs/maintainers.md](docs/maintainers.md).
 
 The owner wants the app finished clean, with tokens conserved: no new features unless asked, no polish passes.
 

@@ -18,7 +18,7 @@ music2 is young: there is no 1.0 and no release yet. You build it from source. B
 | System | State |
 |---|---|
 | Linux on x86_64 (Ubuntu 24.04) | Works. Every change is checked here. |
-| macOS on Apple silicon | Works. The owner's Mac is the reference: timings are judged there. |
+| macOS on Apple silicon | Works. Checked by hand on the owner's Mac, which is the reference for timings. |
 | macOS on Intel | Not supported. |
 | Windows | Not yet. It is the next platform step. |
 
@@ -33,11 +33,11 @@ What works today:
 | Mix: faders, pans, mute, solo, meters, buses and sends | **Mix** (⌥3) |
 | Play a MIDI keyboard or the computer's keys, and record notes or audio | ⌘K, or plug a keyboard in; R records |
 | Bring in WAV and MIDI files | drag them onto the window |
-| Play CLAP plugins, in their own window | the browser's **Plugins** |
+| Play CLAP plugins, and open their own windows | the browser's **Plugins** |
 | Export the song, its stems, or the notes as MIDI | **Export** (⇧⌘E) |
 | Edit the song's code, with type checks | **Code** (⌥4) |
 
-The full list, and how to do each thing, is in [the manual](docs/manual.md#in-short-what-you-can-do). What is missing is in [What music2 can't do yet](docs/gaps.md).
+Keys are shown as on a Mac. On Linux, Ctrl does what ⌘ does, and Alt what ⌥ does. The full list, and how to do each thing, is in [the manual](docs/manual.md#in-short-what-you-can-do). What is missing is in [What music2 can't do yet](docs/gaps.md).
 
 ## Quick start
 
