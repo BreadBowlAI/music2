@@ -35,9 +35,10 @@
 # check's log ends the output (its last 60 lines); every log is in M2_PR_OUT (default
 # ~/m2-check/pr-<commit>/<step>; only a folder a check made is ever replaced).
 #
-# Builds: cargo --locked, with CARGO_PROFILE_DEV_DEBUG=0 and CARGO_INCREMENTAL=0 (a debug build with
-# debug info is 31 GB, more than a CI runner's disk), into <CARGO_TARGET_DIR or target>/pr, so it
-# never rebuilds what your own `cargo build` made.
+# Builds: cargo --locked, with CARGO_PROFILE_DEV_DEBUG=0 and CARGO_INCREMENTAL=0 (a debug build
+# with debug info is 31 GB, more than a CI runner's disk), into <CARGO_TARGET_DIR or target>/pr,
+# so it never rebuilds what your own `cargo build` made. nextest runs no doctests: there are none
+# today (2026-10-21), and the nightly tier's cargo test would run any.
 #
 # Needs: rustup and Node 24 (as ci/check.sh); cargo-nextest, cargo-deny and actionlint at the
 # versions ci/tools.sh pins (it fetches them into ~/.cache/m2-tools); for rust and suites, the test
@@ -171,6 +172,18 @@ plugins() {
 # build: the binaries the browser suites and the renders use, in one cargo run (two would resolve
 # features apart and build the shared crates twice).
 build() { cargo build --locked -p m2-server --example headless -p m2 -p m2-plugins --bin m2 --bin m2-plugin-host; }
+# nightly_list: whether nextest finds exactly the tests ci/nightly-tests.txt names.
+nightly_list() {
+  awk '!/^#/ && NF >= 2 { print $1, $2 }' ci/nightly-tests.txt | sort > "$OUT/nightly-want.txt"
+  cargo nextest list --locked --workspace --message-format oneline -E "$(nightly_filter)" 2> /dev/null | sort > "$OUT/nightly-found.txt" || return 1
+  if cmp -s "$OUT/nightly-want.txt" "$OUT/nightly-found.txt"; then
+    echo "all $(grep -c '' "$OUT/nightly-want.txt") tests ci/nightly-tests.txt names are there"
+  else
+    echo "ci/nightly-tests.txt names tests nextest doesn't find (<), or finds them twice (>):"
+    diff "$OUT/nightly-want.txt" "$OUT/nightly-found.txt"
+    return 1
+  fi
+}
 # nightly_filter: ci/nightly-tests.txt as a nextest filter that matches those tests.
 nightly_filter() {
   awk '!/^#/ && NF >= 2 { printf "%s(binary_id(=%s) & test(=%s))", (n++ ? " | " : ""), $1, $2 } END { if (!n) printf "none()" }' ci/nightly-tests.txt
@@ -196,7 +209,7 @@ case $STEP in
     if tools actionlint deny; then
       # No shellcheck or pyflakes inside actionlint: their versions differ from machine to machine,
       # and every run: block only calls a script here.
-      check workflows actionlint.log actionlint -color -shellcheck= -pyflakes=
+      check workflows actionlint.log sh -c 'actionlint -color -shellcheck= -pyflakes= && node ci/ci-ok.mjs --check-workflow'
       check licences licences.log sh -c 'cargo deny --locked --color never --config deny.toml check &&
         cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A advisory-not-detected -A license-not-encountered &&
         node ci/npm-licenses.mjs'
@@ -215,7 +228,7 @@ case $STEP in
     filter="not (binary(=main_thread) | binary(=app_main_thread))"
     if [ -z "$ALL" ]; then filter="$filter and not ($(nightly_filter))"; fi
     if tools nextest && plugins && check "web build" web.log web &&
-       check "build tests" build.log cargo nextest run --locked --workspace --no-run; then
+       check "build tests" build.log cargo nextest run --locked --workspace --no-run -E "$filter"; then
       check "rust tests" test.log env HOME="$OUT/home" cargo nextest run --locked --workspace --no-tests=warn \
         --partition "hash:$PART" -E "$filter"
       # What nextest said: the counts, and each test that passed only when run again.
@@ -227,6 +240,9 @@ case $STEP in
       fi
       if [ "${PART%/*}" = 1 ]; then
         check "own-main tests" main-thread.log env HOME="$OUT/home" cargo test --locked --workspace --test main_thread --test app_main_thread
+        # Every line of ci/nightly-tests.txt names a test that is there, so a renamed test can't
+        # slip back into the PR tier unseen (Linux: some names are Linux's own modules).
+        if [ $OS = linux ]; then check "nightly list" nightly-list.log nightly_list; fi
       fi
     fi ;;
 
