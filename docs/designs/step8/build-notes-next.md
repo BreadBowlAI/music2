@@ -1,7 +1,7 @@
 # Next: build notes
 
 What each part of the next track built, its tests, the red run before each change, and what is
-left. The plan is `~/m2-runs/s8n/plan.md`. Each part writes only under its own heading.
+left. The plan is `$SCRATCH/s8n/plan.md`. Each part writes only under its own heading.
 
 ## P0
 
@@ -590,7 +590,7 @@ only the server's `midi` feature); the state's `midi` and the `midi` event; `M2_
 **The desktop app on `:97`** (once, `app-shot.sh` under `flock …/x97.lock`, a scratch HOME, `M2_AUDIO=none`,
 the build of `3e65ddd`): Ctrl+K showed the piano card ("Plays Kick", the first track, selected for you); View lists
 "Keyboard Piano  Ctrl+K" right after "Show Browser  Ctrl+Alt+B"; Transport lists Loop, Loop Selection,
-Metronome, Follow Playhead. Pictures: `~/m2-runs/s8n/scratch/b-shots/run1`, `run2`.
+Metronome, Follow Playhead. Pictures: `$SCRATCH/s8n/scratch/b-shots/run1`, `run2`.
 
 **The renders** after B3 (`3e65ddd`'s `m2`): 10 of 10 match `e2e/renders.sha256`.
 
@@ -759,7 +759,7 @@ the song there, stopped; a start that failed is tried again when the default out
 - `choosing_an_output_makes_a_new_player_where_it_was` with `set_output` only keeping the choice:
   `output_tests.rs:160: it was playing`.
 - `new_songs_go_where_settings_say` with `keep_settings` not setting the folder: `songs_folder.rs:34`: `left:
-  "/home/jerry/Music/music2", right: "/tmp/m2-songs-folder-48080/My Songs"` (it stops before anything is made).
+  "/home/<user>/Music/music2", right: "/tmp/m2-songs-folder-48080/My Songs"` (it stops before anything is made).
 - The desktop tests without the rows: `menu.rs:513`: `left: None, right: Some(("Settings…",
   Some("CmdOrCtrl+Comma")))`; with `folder_ask` ignoring JSON: `actions.rs:266`, the JSON as the folder and the old title.
 - `nx-settings` on the new server with `DIST=` the page before: 3 of 38 passed, then it stopped. `FAIL  ⌘, opens the
@@ -1237,12 +1237,12 @@ section above is its own branch's, word for word.
 - `s8-tracks` stopped once at its `synth-pad` tab (`dragFrom` undefined) in the first joined run, under that load. It
   passed 5 of 5 runs since, 3 of them under load. Left as it is.
 
-**Tools** (`~/m2-runs/s8n/tools`, not in the repo): `app-shot.sh` takes `scratch/x97.lock` itself (`flock -w 1200`),
+**Tools** (`$SCRATCH/s8n/tools`, not in the repo): `app-shot.sh` takes `scratch/x97.lock` itself (`flock -w 1200`),
 so two runs never share `:97`; never wrap it in `flock` too, or it waits on itself. It gives the app `M2_MIDI=inject`,
 so the End's `HOOK` can post a keyboard to `/api/graph/midi/inject`. Tried once with a stand-in binary on `:97`.
 `lane-suites.sh` already had lane D's `nx` mapping.
 
-**Checks on the joined `next`** (logs in `~/m2-runs/logs/`; `main` hasn't moved from `70f9b61`, so nothing to merge)
+**Checks on the joined `next`** (logs in `$SCRATCH/logs/`; `main` hasn't moved from `70f9b61`, so nothing to merge)
 
 | Check | Result | Log |
 |---|---|---|
@@ -1272,7 +1272,7 @@ lanes had deleted their own targets and server copies. `target-nx` and `bin/nx-b
 | The review | 12 findings (6 on how it behaves, 6 on tests, docs and words). All are fixed, each in its own commit, with a test that failed first (below). One more came up while fixing them (NX-S5, after): fixed the same way |
 | `main` | Merged in at `8a6d9e1` (8a's offline half), as a merge commit. One line clashed (`engine.rs`'s imports): both sides kept |
 | The full check | `ci/check.sh --gates` at `1560a19`: every row PASS, nothing passed only on a retry: 1,353 Rust tests, 58/58 browser suites, 10 of 10 renders, the 6 gate runs, 44 minutes |
-| Pictures | `~/m2-runs/app-shots/next-1560a19/`, with `captions.txt` |
+| Pictures | `$SCRATCH/app-shots/next-1560a19/`, with `captions.txt` |
 | Owed | The Mac run: `ci/check.sh`, then the by-ear steps 51 to 60 in HANDOFF (a real MIDI keyboard, the metronome against the beat, switching the output) |
 
 ### The review
@@ -1316,15 +1316,15 @@ several cores). git joined every file but one: `core/runtime/src/engine.rs`'s `u
 `s4-meter` and `pl-arrange` pass on the merged page and server (the first run of `export` and `s8-mute` stopped
 because the server copy had no `m2` beside it; with it, 37 of 37 and 152 of 152).
 
-**The final check** (`TW_WAIT=5400 ~/m2-runs/tw check-next 'cd ~/m2-runs/wt/nx && M2_CHECK_OUT=$HOME/m2-runs/check-next
-ci/check.sh --gates'`; log `~/m2-runs/logs/check-next-1017-173215-1239717.log`, out `~/m2-runs/check-next`), verbatim:
+**The final check** (`TW_WAIT=5400 $SCRATCH/tw check-next 'cd $SCRATCH/wt/nx && M2_CHECK_OUT=$SCRATCH/check-next
+ci/check.sh --gates'`; log `$SCRATCH/logs/check-next-1017-173215-1239717.log`, out `$SCRATCH/check-next`), verbatim:
 
 ```
 music2 check: PASS
 commit   1560a198bbed on next (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 44 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -1338,7 +1338,7 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  58/58 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 6 runs ci/gates.txt names
 repo unchanged   PASS  
 
@@ -1384,10 +1384,10 @@ gates:
         skip  callback within S's + 320 µs, by the mean: would pass: +300 µs (5 pairs, -424 to +2040) over S, measured here (bound 320). p99, not judged: -5716 µs (5 pairs, -10118 to +10881); not judged off the referenc
         ok    the slowest activation block under half the device buffer's period: 4562 µs, p50 2049; the block before it p50 2819, max 4840 (bound 5333 µs; the run's p99 callback 32431)
 
-logs     /home/jerry/m2-runs/check-next.tgz
+logs     $SCRATCH/check-next.tgz
 ```
 
-**Pictures** (`~/m2-runs/app-shots/next-1560a19/`, the Linux app on Xvfb `:97`, `captions.txt` beside them):
+**Pictures** (`$SCRATCH/app-shots/next-1560a19/`, the Linux app on Xvfb `:97`, `captions.txt` beside them):
 
 | Picture | Shows |
 |---|---|
@@ -1422,5 +1422,5 @@ metronome in `view.json`), `README.md` (the top bar, playing live, drags heard, 
 Settings), `docs/designs/platform/design.md` (§2.4 and §8: `midir` lives in `m2-os`, Q1), the plan as
 `docs/designs/step8/next-plan.md`, and HANDOFF.
 
-**Cleaned up:** `~/m2-runs/s8n/scratch/`, `~/m2-runs/s8n/bin/` and `~/m2-runs/s8n/target-nx` are deleted. `wt/nx` and
+**Cleaned up:** `$SCRATCH/s8n/scratch/`, `$SCRATCH/s8n/bin/` and `$SCRATCH/s8n/target-nx` are deleted. `wt/nx` and
 its `target/` stay: the lead lands `next` and removes them.

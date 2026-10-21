@@ -1,7 +1,7 @@
 # Polish: build notes
 
 What each part of the polish track built, its tests, the red run before each change, and what is
-left. The plan is `~/m2-runs/s8c/plan.md`. Each part writes only under its own heading.
+left. The plan is `$SCRATCH/s8c/plan.md`. Each part writes only under its own heading.
 
 ## P0
 
@@ -1252,13 +1252,13 @@ field (`has-[input]:flex`), so only Return writes and Esc never does.
 **Checks** (the server and `m2` built from `98e3b11`, copied to `bin/pl-98e3b11`):
 - Rust: `cargo test --locked --no-fail-fast` of `m2-script` (56, 1, 8), `m2-editor` (280),
   `m2-server` (232), `m2` (its tests), `m2-session` (154), `music2-desktop` (12). Clippy
-  `-D warnings` on all six: clean. Log `~/m2-runs/logs/pl-rust1-*`.
+  `-D warnings` on all six: clean. Log `$SCRATCH/logs/pl-rust1-*`.
 - The web build (it type-checks): green.
 - Every browser suite but `live3b` (it needs plugins: the End's), twice: four batches at once,
   then two. All passed but `s8-clips` (the two checks above), and three that passed when run again:
   `pl-mix` 46/47 once (a meter read silence, −60, while playing, as the Rust tests ran beside it),
   `newsong` once (⌘N right after a new song opened found no dialog in 30 s), and `s8-songbar`.
-  Logs `~/m2-runs/logs/pl-suites-*`, `pl-sweep2-*`, `pl-flaky*`.
+  Logs `$SCRATCH/logs/pl-suites-*`, `pl-sweep2-*`, `pl-flaky*`.
 - On the tip, after the fixes below: every suite but `live3b` green with its count, in three
   batches at once (logs `pl-final-a-*`, `pl-final-b-*`, `pl-final-c-*`), and `s8-songbar` six
   more times and `newsong` three more, all green (`pl-final-sb-*`). `start` with no song open:
@@ -1281,7 +1281,7 @@ The lead's last check, docs and pictures.
 | Also | Three things the pictures, the sweep and the first full check found: a drum's name spilling out of a short note, a race in `pl-notes`, and the headless server reading `HOME` outside `m2-os`. All fixed, each with a test that failed first. The unused `canvas.renameSong` is gone |
 | `main` | Still `d7207d2`: already in `polish`, so no merge |
 | The full check | `ci/check.sh` at `65f59f1`: PASS, every row, nothing passed only on a retry (1,184 Rust tests, 49/49 browser suites, 10 of 10 renders). The run before, at `c3dd95a`, failed one Rust test: see "Also: the headless server read HOME itself" below |
-| Pictures | `~/m2-runs/app-shots/polish-c3dd95a/`, four, with `captions.txt` |
+| Pictures | `$SCRATCH/app-shots/polish-c3dd95a/`, four, with `captions.txt` |
 | Docs | `docs/gaps.md`, `README.md`, `docs/architecture.md` (FMT-19, FMT-20, ID-17, WRITE-10, the homes table), `taste.md` (§2.12, §3.3, SS-2), `HANDOFF.md`, and this plan as `polish-plan.md` |
 
 ### Review fixes
@@ -1450,7 +1450,7 @@ it now asks `m2_os::dirs::home()`. The merge's Rust runs had left out `m2-os`; t
 
 | | |
 |---|---|
-| Red (the full check at `c3dd95a`, `~/m2-runs/check-polish-2`) | `rust tests FAIL 1183 passed, 1 failed` with `crates/server/examples/headless.rs:40: var_os("HOME"): if let Some(home) = std::env::var_os("HOME") {` |
+| Red (the full check at `c3dd95a`, `$SCRATCH/check-polish-2`) | `rust tests FAIL 1183 passed, 1 failed` with `crates/server/examples/headless.rs:40: var_os("HOME"): if let Some(home) = std::env::var_os("HOME") {` |
 | Green | `cargo test -p m2-os --test one_place`: 3 passed; clippy of the example clean. Every other row of that check passed: 49/49 browser suites, 10 of 10 renders |
 
 ### The review, finding by finding
@@ -1488,14 +1488,14 @@ Rust, per fix: `m2-server` `project::` 31/31, `m2-editor` `markers::` 7/7, clipp
 
 ### The full check
 
-`TW_WAIT=3600 ~/m2-runs/tw check-polish 'cd ~/m2-runs/wt/pl && M2_CHECK_OUT=$HOME/m2-runs/check-polish-3 ci/check.sh'` (log `~/m2-runs/logs/check-polish-1017-*.log`), verbatim:
+`TW_WAIT=3600 $SCRATCH/tw check-polish 'cd $SCRATCH/wt/pl && M2_CHECK_OUT=$SCRATCH/check-polish-3 ci/check.sh'` (log `$SCRATCH/logs/check-polish-1017-*.log`), verbatim:
 
 ```
 music2 check: PASS
 commit   65f59f11b36f on polish (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 14 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -1510,14 +1510,14 @@ browser suites   PASS  49/49 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
 repo unchanged   PASS  
 
-logs     /home/jerry/m2-runs/check-polish-3.tgz
+logs     $SCRATCH/check-polish-3.tgz
 ```
 
-Nothing is listed as flaky (`~/m2-runs/check-polish-3/flaky` is empty). Two earlier runs: `check-polish`, stopped by the lead to fix the note label the pictures showed; `check-polish-2`, at `c3dd95a`, FAIL on `os_code_lives_in_m2_os` only (fixed above).
+Nothing is listed as flaky (`$SCRATCH/check-polish-3/flaky` is empty). Two earlier runs: `check-polish`, stopped by the lead to fix the note label the pictures showed; `check-polish-2`, at `c3dd95a`, FAIL on `os_code_lives_in_m2_os` only (fixed above).
 
 ### Pictures
 
-`~/m2-runs/app-shots/polish-c3dd95a/`, from the desktop app on the invisible screen `:96`, each state written into
+`$SCRATCH/app-shots/polish-c3dd95a/`, from the desktop app on the invisible screen `:96`, each state written into
 a copy of the song first (or sent to the app's own server from a hook):
 
 | Picture | How it was made |
@@ -1533,7 +1533,7 @@ scratch HOME), `HOOK=` (a script run after the first shot) and `-` for no song.
 ### The Linux app on `:96`
 
 The debug desktop app, on the invisible screen `:96`, a scratch HOME, `M2_AUDIO=none`; keys sent with `xkey`
-(the plan's §9 step 5). Pictures in `~/m2-runs/s8c/scratch/shots/linux-*` (deleted with the scratch folder).
+(the plan's §9 step 5). Pictures in `$SCRATCH/s8c/scratch/shots/linux-*` (deleted with the scratch folder).
 
 | Did | Saw |
 |---|---|

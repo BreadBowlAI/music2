@@ -5,11 +5,11 @@ Research only. Nothing was built or run except a 60-line Python reader that prin
 facts. **Unverified** marks what could not be checked.
 
 Short names for paths:
-- `W` = `/home/jerry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmtime-49.0.2/src`
+- `W` = `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmtime-49.0.2/src`
 - `E` = `.../wasmtime-environ-49.0.2/src`
 - `CL` = `.../wasmtime-internal-cranelift-49.0.2/src`
 - `CG` = `.../cranelift-codegen-meta-0.136.2/src` (the Cranelift that wasmtime 49.0.2 uses: `wasmtime-internal-cranelift-49.0.2/Cargo.toml:50`)
-- `S7` = `/home/jerry/m2-runs/idea3/src` (step 7, frozen at ed7fc8e)
+- `S7` = `$SCRATCH/idea3/src` (step 7, frozen at ed7fc8e)
 
 ---
 

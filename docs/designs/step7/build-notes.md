@@ -13,7 +13,7 @@ checks and that move. No regression was found. Step 7's gates G7a to G7d and the
 
 ### The rebase
 
-`git cherry-pick 5079233` onto `main` at `b90bacf`, in the worktree `~/m2-runs/wt/s7`. Committed as `c8117c3`
+`git cherry-pick 5079233` onto `main` at `b90bacf`, in the worktree `$SCRATCH/wt/s7`. Committed as `c8117c3`
 (`step7` = `main` + that commit). Three files conflicted:
 
 | File | Conflict | How it was resolved |
@@ -140,7 +140,7 @@ test, most of the slice's tests, and every contract edit but one. Three old chec
 At `deab06f`, on this server (Ryzen 9 7950X3D, 32 threads, Ubuntu 24.04), load average 2 to 9 (other work ran
 beside it). Timings here are for information only: only the reference Mac's are judged (PLAT-1).
 
-**`ci/check.sh`** (11 min; logs and the app's screenshots in `~/m2-runs/check-rebase/`): FAIL, 2 of 12 rows.
+**`ci/check.sh`** (11 min; logs and the app's screenshots in `$SCRATCH/check-rebase/`): FAIL, 2 of 12 rows.
 
 | Row | Result |
 |---|---|
@@ -168,7 +168,7 @@ No real regression was found: every other test passes, the slice 1-3 ones includ
 14 `delta_tests`, the `text.rs` and `sites` tests, G7c's three new tests, G7d, the churn test, `host_math.rs`,
 `no_alloc.rs`).
 
-**Step 7's gates** (release; logs in `~/m2-runs/gates-rebase/`):
+**Step 7's gates** (release; logs in `$SCRATCH/gates-rebase/`):
 
 | Gate | Result | Numbers |
 |---|---|---|
@@ -208,7 +208,7 @@ No real regression was found: every other test passes, the slice 1-3 ones includ
 **In short:** one xrun no longer stops play. The player now sorts the audio device's errors by kind. An xrun (a
 dropout) is counted and play goes on. A change of output device makes a new player. Only a device that is gone
 stalls it. The error callback only adds to a counter. Tests inject errors, since this server has no sound card.
-Branch `s7-bug1`, from `step7` at `a06c543`; worktree `~/m2-runs/wt/s7-bug1`.
+Branch `s7-bug1`, from `step7` at `a06c543`; worktree `$SCRATCH/wt/s7-bug1`.
 
 ### What was wrong
 
@@ -333,7 +333,7 @@ of a song with plugins pauses playback and borrows them, on the export's own thr
 says "Paused for export" and "Loading Surge XT…". G7e passes, and so does every slice 4 test. Testing
 with the real Surge XT found two real bugs, now fixed: after a state load, Surge kept its old filter
 setting instead of the code's (HOME-4), and a borrowed export lost the lead. `ci/check.sh` fails only
-on the two known `store.rs` lines. Branch `step7`, worktree `~/m2-runs/wt/s7`.
+on the two known `store.rs` lines. Branch `step7`, worktree `$SCRATCH/wt/s7`.
 
 ### What was done first
 
@@ -421,7 +421,7 @@ and the test plugins, at `7f7cfd7`. The load average was under 3.
 | with-plugins (`m2-gates plugins`, release) | PASS, every check, the new changed-state ones included |
 | with-plugins with `--no-arena` (must fail) | FAILS, as it must: no instance kept |
 | G7e (`m2-gates --server export`, release) | PASS 3 of 3 (below) |
-| `ci/check.sh` (`~/m2-runs/check-s7-slice4/`, 8 min) | FAIL, 2 of 12 rows: rust tests (839 passed; only `os_code_lives_in_m2_os`) and the mac lint (`store.rs`). Every other row passed: app, clippy, std kernels, `std.wasm`, 29 of 29 browser suites (1,043 checks), 8 of 8 renders, repo unchanged. Nothing passed only on a retry. |
+| `ci/check.sh` (`$SCRATCH/check-s7-slice4/`, 8 min) | FAIL, 2 of 12 rows: rust tests (839 passed; only `os_code_lives_in_m2_os`) and the mac lint (`store.rs`). Every other row passed: app, clippy, std kernels, `std.wasm`, 29 of 29 browser suites (1,043 checks), 8 of 8 renders, repo unchanged. Nothing passed only on a retry. |
 
 G7e's numbers (one run; Linux, for information only, PLAT-1):
 
@@ -492,7 +492,7 @@ checks what §12.5 asks: it never pauses, and borrows nothing.
 | G7e now | PASS 3 of 3 (above); without the fix FAIL 2 of 2 (the tail 62.85 and 68.54 dB off) |
 | with-plugins (`m2-gates plugins`, release) | PASS, the changed-state checks included |
 | with-plugins `--quick --no-arena` | FAILS, as it must |
-| `ci/check.sh` | FAIL, 2 of 12 rows, as the builder's run (`~/m2-runs/check-cs4/`, 8 min, at `6dd49e0`): rust tests (840 passed; only `os_code_lives_in_m2_os`) and the mac lint (`store.rs`). Every other row passed: app, clippy, std kernels, `std.wasm`, 29 of 29 browser suites (live3b 60 of 60), 8 of 8 renders, repo unchanged. Nothing passed only on a retry. |
+| `ci/check.sh` | FAIL, 2 of 12 rows, as the builder's run (`$SCRATCH/check-cs4/`, 8 min, at `6dd49e0`): rust tests (840 passed; only `os_code_lives_in_m2_os`) and the mac lint (`store.rs`). Every other row passed: app, clippy, std kernels, `std.wasm`, 29 of 29 browser suites (live3b 60 of 60), 8 of 8 renders, repo unchanged. Nothing passed only on a retry. |
 
 Read closely and found right: a hold sent while a window runs waits for it; an idle engine wakes on
 the hold message; quit stops an export from a thread of its own, so the plugin main thread keeps
@@ -577,7 +577,7 @@ Linux's footprint is not macOS's: one p50 renderer adds 195 MB here (`RssAnon`) 
 
 ### Checks
 
-On this server (Ryzen 9 7950X3D, 32 threads, Ubuntu 24.04), in `~/m2-runs/wt/s7-proc` with its own `target/`, a
+On this server (Ryzen 9 7950X3D, 32 threads, Ubuntu 24.04), in `$SCRATCH/wt/s7-proc` with its own `target/`, a
 scratch `HOME` and `M2_AUDIO=none`. Other agents' builds ran beside some of these (load 8 to 27).
 
 | Check | Result |
@@ -637,7 +637,7 @@ on an audio thread: `interactive()` is called once, before the drop test's loop.
 
 | Check | Result |
 |---|---|
-| `ci/check.sh --gates` at `56d10f1` (17 min, load 6 to 24; logs in `~/m2-runs/check-check-proc/`) | FAIL, 2 of 13 rows, both known. Rust tests: 827 passed, 3 failed, slice 4's three broken checks (above). Gates: G7f part 1's 25% rule only. Mac lint, clippy, `one_place.rs` and every other row: PASS. |
+| `ci/check.sh --gates` at `56d10f1` (17 min, load 6 to 24; logs in `$SCRATCH/check-check-proc/`) | FAIL, 2 of 13 rows, both known. Rust tests: 827 passed, 3 failed, slice 4's three broken checks (above). Gates: G7f part 1's 25% rule only. Mac lint, clippy, `one_place.rs` and every other row: PASS. |
 | m2-os's tests, 150 runs of the test binary | `the_footprint_counts_touched_pages_and_a_reservation_only_maps` failed 12, then 13 times in 150 |
 | The same, after the fix | 0 failures in 300 runs. A broken `memory()` (`RssFile` for `RssAnon`) fails it 20 times in 20. |
 | After the fixes: m2-os and m2-gates' tests, clippy, the mac lint | PASS. `rustfmt --check` is clean on every changed file. |
@@ -660,7 +660,7 @@ the slowest activation block 4,820 µs (bound 5,333 µs); callback p99 13,541 µ
 
 - **The thread count in `machine()` is what the process may use.** On Linux that follows `taskset` and cgroup limits:
   under `taskset -c 0-3` the same server is "4 threads", so another machine. The G7f runs in
-  `~/m2-runs/g7f-linux/one.sh` use `taskset -c 4,20`: a record made that way names "2 threads" and judges only runs
+  `$SCRATCH/g7f-linux/one.sh` use `taskset -c 4,20`: a record made that way names "2 threads" and judges only runs
   pinned the same way. Counting the CPUs online instead would name the machine, not the run.
 - **Linux's footprint leaves out shared memory.** A memfd's pages, mapped and only read, count in `RssShmem`, not
   `RssAnon`. In G7f part 1 on p50 that peaked at 180 MB. Only same-machine comparisons are judged, so the rules stay
@@ -684,7 +684,7 @@ decision. The combination needed one list fix, one flaky test fixed, and one new
   One conflict: both sides added a section at the end of this file. Both are kept, in order: Bug 1, Slice 4, then
   m2-os process.
 - `s7-bug1` was already in `step7` (slice 4's builder fast-forwarded it first).
-- Then the worktrees `~/m2-runs/wt/s7-bug1` and `~/m2-runs/wt/s7-proc` were removed, and the branches `s7-bug1` and
+- Then the worktrees `$SCRATCH/wt/s7-bug1` and `$SCRATCH/wt/s7-proc` were removed, and the branches `s7-bug1` and
   `s7-proc` deleted, after checking each is in `step7`.
 
 ### Fixes for the combination
@@ -711,16 +711,16 @@ since the player that played it is gone. That is right.
 
 | Run | Commit | Result |
 |---|---|---|
-| `ci/check.sh` (`~/m2-runs/check-s7-a`, 8 min) | `c1c9201` | **PASS**, every row. 851 tests passed, 0 failed, 3 ignored. Nothing passed only on a retry. 29 of 29 browser suites. 8 of 8 renders match `e2e/renders.sha256`: step 7 changes no offline render. The mac lint and `one_place.rs` pass (the process module moved `store.rs`'s OS code). |
-| `ci/check.sh --gates` (`~/m2-runs/check-s7-a-gates`, 13 min) | `c1c9201` | FAIL, 1 row of 13: the gates row, only on G7f part 1's address-space rule (below). Every other row as above, and every other gate run passes. |
-| `ci/check.sh` (`~/m2-runs/check-s7-b`, 8 min) | `15874a2` | **PASS**, every row, with the two test commits. 852 tests passed, 0 failed, 3 ignored. Nothing passed only on a retry. 29 of 29 suites; 8 of 8 renders. |
+| `ci/check.sh` (`$SCRATCH/check-s7-a`, 8 min) | `c1c9201` | **PASS**, every row. 851 tests passed, 0 failed, 3 ignored. Nothing passed only on a retry. 29 of 29 browser suites. 8 of 8 renders match `e2e/renders.sha256`: step 7 changes no offline render. The mac lint and `one_place.rs` pass (the process module moved `store.rs`'s OS code). |
+| `ci/check.sh --gates` (`$SCRATCH/check-s7-a-gates`, 13 min) | `c1c9201` | FAIL, 1 row of 13: the gates row, only on G7f part 1's address-space rule (below). Every other row as above, and every other gate run passes. |
+| `ci/check.sh` (`$SCRATCH/check-s7-b`, 8 min) | `15874a2` | **PASS**, every row, with the two test commits. 852 tests passed, 0 failed, 3 ignored. Nothing passed only on a retry. 29 of 29 suites; 8 of 8 renders. |
 
 ### Every step 7 gate
 
 On this server: ASRockRack B665D4U-1L, Ryzen 9 7950X3D, 32 threads, Ubuntu 24.04.3. Load average 1 to 5. Release
 builds, as the design says. Timings are for information only: the reference Mac judges them (PLAT-1). Logs, and
-`verdicts` with every run's result, are in `~/m2-runs/gates-integrate/`; the gates check's are in
-`~/m2-runs/check-s7-a-gates/gates.log`.
+`verdicts` with every run's result, are in `$SCRATCH/gates-integrate/`; the gates check's are in
+`$SCRATCH/check-s7-a-gates/gates.log`.
 
 | Gate | Rule (design-7 §12) | Here | Verdict |
 |---|---|---|---|
@@ -771,7 +771,7 @@ builds, as the design says. Timings are for information only: the reference Mac 
 ## Review and fixes
 
 **In short:** a six-lens review of `d7475b1`, with a skeptic for each finding, confirmed 19 findings and dropped
-5 (its results: `~/m2-runs/review-b1/findings.json`). The owner decided five questions (O1 to O5, below). Four fixers
+5 (its results: `$SCRATCH/review-b1/findings.json`). The owner decided five questions (O1 to O5, below). Four fixers
 then worked on their own branches, one area each. Every finding is fixed but one, fit-3, which no fixer's list held
 (see "Left, and why"). Each code fix has a test that fails without it, but two: the rt-4 race, too narrow for any
 test, and O1, a setting whose guard is the renders staying the same. Their branches and `main` are merged into
@@ -905,11 +905,11 @@ Two fixer commits have no blank line after the subject, so `git log --oneline` s
 
 | Run | Commit | Result |
 |---|---|---|
-| `ci/check.sh` (`~/m2-runs/check-s7-c1`, 8 min) | `a1d9914` | **PASS**, every row: toolchain, web build, build, the app (first-song and with-plugins each connected in 1 s), rust tests (890 passed, 0 failed), clippy, std kernels, std.wasm, mac lint, browser suites (29 of 29), renders (8 of 8 match `e2e/renders.sha256`), repo unchanged. Nothing passed only on a retry. |
-| `ci/check.sh` (`~/m2-runs/check-s7-c2`, 8 min) | `a1d9914` | **PASS**, every row, the same numbers. Nothing passed only on a retry. Its two screenshots of the app are in `~/m2-runs/app-shots/step7-a1d9914/`. |
-| `ci/check.sh --gates` (`~/m2-runs/check-s7-cg`, 20 min) | `a1d9914` | **PASS**, all 13 rows. The gates row passes on Linux for the first time in step 7: G7f part 1's 25% rule, which failed at 37.6%, now passes at 0.29% (O1). |
-| `ci/check.sh --gates` (`~/m2-runs/check-s7-cg2`, 20 min) | `e82e614` | FAIL, 1 row of 13: "repo unchanged", because this file was edited while the check ran (the integrator's mistake, not the code's). Every other row passed, the gates row included. |
-| `ci/check.sh --gates` (`~/m2-runs/check-s7-cg3`, 20 min) | `e82e614` | **PASS**, all 13 rows, nothing on a retry, the 8 renders unchanged. The gates row took 12 minutes. |
+| `ci/check.sh` (`$SCRATCH/check-s7-c1`, 8 min) | `a1d9914` | **PASS**, every row: toolchain, web build, build, the app (first-song and with-plugins each connected in 1 s), rust tests (890 passed, 0 failed), clippy, std kernels, std.wasm, mac lint, browser suites (29 of 29), renders (8 of 8 match `e2e/renders.sha256`), repo unchanged. Nothing passed only on a retry. |
+| `ci/check.sh` (`$SCRATCH/check-s7-c2`, 8 min) | `a1d9914` | **PASS**, every row, the same numbers. Nothing passed only on a retry. Its two screenshots of the app are in `$SCRATCH/app-shots/step7-a1d9914/`. |
+| `ci/check.sh --gates` (`$SCRATCH/check-s7-cg`, 20 min) | `a1d9914` | **PASS**, all 13 rows. The gates row passes on Linux for the first time in step 7: G7f part 1's 25% rule, which failed at 37.6%, now passes at 0.29% (O1). |
+| `ci/check.sh --gates` (`$SCRATCH/check-s7-cg2`, 20 min) | `e82e614` | FAIL, 1 row of 13: "repo unchanged", because this file was edited while the check ran (the integrator's mistake, not the code's). Every other row passed, the gates row included. |
+| `ci/check.sh --gates` (`$SCRATCH/check-s7-cg3`, 20 min) | `e82e614` | **PASS**, all 13 rows, nothing on a retry, the 8 renders unchanged. The gates row took 12 minutes. |
 
 O1 changed no offline render: the 8 renders match in every run, and fixer D's 4-minute p16 render is the same file
 before and after.
@@ -918,8 +918,8 @@ before and after.
 
 On this server: Ryzen 9 7950X3D, 32 threads, Ubuntu 24.04.3, load average 1 to 10 (other agents ran beside). Release
 builds. Timings are for information only: the reference Mac judges them (PLAT-1). Logs, the script (`run.sh`) and
-`verdicts` with every run's result are in `~/m2-runs/gates-fix/`; the gates checks' are in
-`~/m2-runs/check-s7-cg/gates.log` and `~/m2-runs/check-s7-cg2/gates.log`.
+`verdicts` with every run's result are in `$SCRATCH/gates-fix/`; the gates checks' are in
+`$SCRATCH/check-s7-cg/gates.log` and `$SCRATCH/check-s7-cg2/gates.log`.
 
 | Gate | Rule (design-7 §12, with the review's changes) | Here | Verdict |
 |---|---|---|---|
@@ -1003,7 +1003,7 @@ information only (PLAT-1). Nothing was pushed.
 
 ### What was tried
 
-- **Each fix taken out**, in a scratch worktree, then its guard tests run (34 cuts, script `~/m2-runs/xc/mut/run.py`).
+- **Each fix taken out**, in a scratch worktree, then its guard tests run (34 cuts, script `$SCRATCH/xc/mut/run.py`).
   Every guard failed: rt-1, rt-2, rt-3, O4 (and `no_alloc`'s plugin step), K1 (all three parts; the stream one
   hangs), K5 (in a release build), plug-1 (the flag not read, and never set), plug-2 (the runtime test; the server
   test with both layers off), plug-3, K2 (told once; plain words), K3, K4, K6, K7, fit-1, fit-2 (said again; named by
@@ -1020,7 +1020,7 @@ information only (PLAT-1). Nothing was pushed.
   No note starts again after a stop, a seek or a panic; otherwise each held note starts once, with its own id, and
   nothing is doubled. The workspace allocation tests pass.
 - **O1:** the p16 render is the same file (`ebc87e0b…`) at `018c587`; the 8 renders match at `8e1d84f`.
-- **The gates** (release, at `84e4339` and `018c587`; logs in `~/m2-runs/xc/g7f/`):
+- **The gates** (release, at `84e4339` and `018c587`; logs in `$SCRATCH/xc/g7f/`):
 
 | Run | Result |
 |---|---|
@@ -1042,7 +1042,7 @@ information only (PLAT-1). Nothing was pushed.
 
 ### The check
 
-`ci/check.sh` at `8e1d84f` (`~/m2-runs/check-s7-x`, 9 min): **PASS**, every row. 893 Rust tests passed, 0 failed
+`ci/check.sh` at `8e1d84f` (`$SCRATCH/check-s7-x`, 9 min): **PASS**, every row. 893 Rust tests passed, 0 failed
 (890 before, plus the 3 above). Clippy, std's kernels, std.wasm, the mac lint pass. Browser suites 29 of 29 (fx-fixes
 57 checks, live3b 60). Renders 8 of 8. The app connected for first-song and with-plugins. Nothing passed only on a
 retry. The gates row wasn't run (`--gates`); the gates above were run by hand.
@@ -1100,9 +1100,9 @@ pushed.
 
 ### The check
 
-`ci/check.sh` at `6297c9a` (`~/m2-runs/check-s7-final`, 8 min): **PASS**, every row. 893 Rust tests passed, 0 failed
+`ci/check.sh` at `6297c9a` (`$SCRATCH/check-s7-final`, 8 min): **PASS**, every row. 893 Rust tests passed, 0 failed
 (6 ignored: the recorded runs). Clippy, std's kernels, `std.wasm` (the same bytes), the mac lint pass. The app connected
-for first-song and with-plugins in 1 s each (screenshots in `~/m2-runs/app-shots/step7-6297c9a/`). Browser suites 29 of
+for first-song and with-plugins in 1 s each (screenshots in `$SCRATCH/app-shots/step7-6297c9a/`). Browser suites 29 of
 29, 1,049 checks (live3b 60, fx-fixes 57). Renders 8 of 8. Repo unchanged. Nothing passed only on a retry.
 
 The recorded tests, after it, at the same commit (release, scratch `HOME`; `cargo test -p m2-play --release --test
@@ -1183,8 +1183,8 @@ callback.
 
 ### Where the time went (the profile)
 
-A study on Linux (`~/m2-runs/speed/prof/results.md`). Tools built for it: valgrind 3.27.1 from source,
-with its address-space limit raised (`~/m2-runs/tools/valgrind`), gimli's addr2line, and a small
+A study on Linux (`$SCRATCH/speed/prof/results.md`). Tools built for it: valgrind 3.27.1 from source,
+with its address-space limit raised (`$SCRATCH/tools/valgrind`), gimli's addr2line, and a small
 sampler on the thread's CPU clock.
 
 - HEAD against S, fresh, p50 from 3:00: +144 to +158 µs a callback with P1 (2.1% of S's 7,020 µs), and
@@ -1271,7 +1271,7 @@ PART there, and it exits with 1.
 
 | Finding | Fix | Test, or how it was shown | Commit |
 |---|---|---|---|
-| vp-1 and part-verdict-still-pass (medium): a gates row PART still gave "music2 check: PASS" and exit status 0, though the docs said a Mac's run couldn't pass with G7f unjudged. | The first line says "PART: no row failed, but the gates row wasn't judged in full, so it isn't a pass", and the exit status is 1. | `~/m2-runs/speed/rv/scripts/test-verdict.sh` runs the script's own `summary()` on fake rows: before, PASS and 0; after, PART and 1. All PASS, a FAIL row, and no plugins give what they did. | `3320557` |
+| vp-1 and part-verdict-still-pass (medium): a gates row PART still gave "music2 check: PASS" and exit status 0, though the docs said a Mac's run couldn't pass with G7f unjudged. | The first line says "PART: no row failed, but the gates row wasn't judged in full, so it isn't a pass", and the exit status is 1. | `$SCRATCH/speed/rv/scripts/test-verdict.sh` runs the script's own `summary()` on fake rows: before, PASS and 0; after, PART and 1. All PASS, a FAIL row, and no plugins give what they did. | `3320557` |
 | vp-2 (low): on such a Mac, a check judged there that failed (the 25% rule) gave "copy its machine line". | A failed check comes first: "the app's layout fails the rule". | `the_layout_is_judged_only_on_the_same_music` gains the other Mac; with the old order it fails | `041cf06` |
 | vp-3 (low): off the Mac, "not judged off the reference Mac" came before the numbers, so the summary's 220-byte cut took the end of the Linux callback line. | The numbers first, as on another Mac. | `a_timing_is_judged_on_the_reference_mac_only` cuts both places at 220 bytes, with the check's own numbers; before, it fails | `9ebcf21` |
 | vp-4 and handoff-machine-line-not-pasted (low): HANDOFF pointed at a `machine:` line the summary didn't keep. | The gates part starts with the machine m2-gates names, once. HANDOFF says what to copy, into which three record lines. | `test-machine.sh` on a fake log: before none, after one, first | `33812c4` |
@@ -1312,14 +1312,14 @@ All on Linux, at `a894448` unless said. After the review of the fixes, the last 
 
 | Check | Result |
 |---|---|
-| `ci/check.sh`, the first, at `37250bd` (`~/m2-runs/check-s7-sp1-retry`) | PASS, but 1 passed only on a retry: `a_plugin_that_keeps_failing_is_started_again_once`. Its catch-up rounds were skipped while the actor was busy. Fixed in `a894448` (stress: 33 of 200 runs failed before, 0 of 200 after). |
-| `ci/check.sh` (`~/m2-runs/check-s7-sp1`, 8 min) | **PASS**, every row: 910 Rust tests, 0 failed; clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 8 of 8 renders; repo unchanged. Nothing passed only on a retry. |
-| `ci/check.sh` (`~/m2-runs/check-s7-sp2`, 8 min) | **PASS**, the same. |
-| `ci/check.sh --gates` (`~/m2-runs/check-s7-spg`, 25 min) | **PASS**, every row: the same, plus "old engine (S)" (built from a clean copy of `8aa301e`) and the gates, all 6 runs `ci/gates.txt` names. G11 p95 9.0 to 9.2 ms; G7a heard at p95 110 ms. G7f, printed as PLAT-1 skips: a block +23 µs (+15 to +59), would pass; a callback +97 µs (+56 to +201), would pass; the build 215 ms against S's 183. The slowest activation block 4,026 µs (bound 5,333). The gates row took 17 minutes. |
+| `ci/check.sh`, the first, at `37250bd` (`$SCRATCH/check-s7-sp1-retry`) | PASS, but 1 passed only on a retry: `a_plugin_that_keeps_failing_is_started_again_once`. Its catch-up rounds were skipped while the actor was busy. Fixed in `a894448` (stress: 33 of 200 runs failed before, 0 of 200 after). |
+| `ci/check.sh` (`$SCRATCH/check-s7-sp1`, 8 min) | **PASS**, every row: 910 Rust tests, 0 failed; clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 8 of 8 renders; repo unchanged. Nothing passed only on a retry. |
+| `ci/check.sh` (`$SCRATCH/check-s7-sp2`, 8 min) | **PASS**, the same. |
+| `ci/check.sh --gates` (`$SCRATCH/check-s7-spg`, 25 min) | **PASS**, every row: the same, plus "old engine (S)" (built from a clean copy of `8aa301e`) and the gates, all 6 runs `ci/gates.txt` names. G11 p95 9.0 to 9.2 ms; G7a heard at p95 110 ms. G7f, printed as PLAT-1 skips: a block +23 µs (+15 to +59), would pass; a callback +97 µs (+56 to +201), would pass; the build 215 ms against S's 183. The slowest activation block 4,026 µs (bound 5,333). The gates row took 17 minutes. |
 | The p16 render (release `m2 render` of the reference example's p16, as the build notes made it) | `ebc87e0b…` at `a894448`: the same file (46 s) |
 | m2-gates' own tests (in the rust tests row) | 31 in the library, 1 in the binary, 6 in the harness: all pass. rustfmt is clean on every changed file. |
-| `ci/check.sh` at `ffc36aa` (`~/m2-runs/check-s7-rv1`, 8 min) | **PASS**, every row: 912 Rust tests (the two new ones are m2-gates': 33 in its library now), 0 failed; clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 8 of 8 renders; repo unchanged. Nothing passed only on a retry. |
-| `ci/check.sh --gates` at `ffc36aa` (`~/m2-runs/check-s7-rvg`, 26 min) | **PASS**, every row: the same, plus "old engine (S)" and the gates, all 6 runs. The gates part starts with the machine line. G11 p95 8.8 to 9.4 ms; G7a heard at p95 116 ms; G7e paused 252 ms. G7f, printed as PLAT-1 skips, the numbers first: a block +20 µs (+17 to +27), would pass; a callback +86 µs (+46 to +147), would pass; the build 219 ms against S's 183. The starting line: +1, +17 a block; +63, +26 a callback. The slowest activation block 3,142 µs (bound 5,333). The gates row took 18 minutes. |
+| `ci/check.sh` at `ffc36aa` (`$SCRATCH/check-s7-rv1`, 8 min) | **PASS**, every row: 912 Rust tests (the two new ones are m2-gates': 33 in its library now), 0 failed; clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 8 of 8 renders; repo unchanged. Nothing passed only on a retry. |
+| `ci/check.sh --gates` at `ffc36aa` (`$SCRATCH/check-s7-rvg`, 26 min) | **PASS**, every row: the same, plus "old engine (S)" and the gates, all 6 runs. The gates part starts with the machine line. G11 p95 8.8 to 9.4 ms; G7a heard at p95 116 ms; G7e paused 252 ms. G7f, printed as PLAT-1 skips, the numbers first: a block +20 µs (+17 to +27), would pass; a callback +86 µs (+46 to +147), would pass; the build 219 ms against S's 183. The starting line: +1, +17 a block; +63, +26 a callback. The slowest activation block 3,142 µs (bound 5,333). The gates row took 18 minutes. |
 
 ### Linux's numbers (information only, PLAT-1)
 
@@ -1380,7 +1380,7 @@ the 6 gate runs). G7f against the estimate above:
 ### Left, and why
 
 - The Mac run: done, green at `cbac57c` (above). Its by-ear steps (HANDOFF 7 to 17) are still owed.
-- Cut 3 and cut 4: held, as above. Cut 2: dropped (`~/m2-runs/speed/build/cut2.diff`).
+- Cut 3 and cut 4: held, as above. Cut 2: dropped (`$SCRATCH/speed/build/cut2.diff`).
 - The method's per-process error (the A/A table): G7f could start every side in a fresh process each
   round, so the median samples 5 placements. Not done: it needs a runner for HEAD's engine too, a bigger
   change, and the Mac's error is unmeasured. Worth it if the Mac's result lands near a bound.
@@ -1390,5 +1390,5 @@ the 6 gate runs). G7f against the estimate above:
   of that decision, left as it is.
 - HANDOFF's "Open owner decisions" row on the mean against the p99 stays: the owner's choice isn't
   recorded anywhere else.
-- Scratch: logs and scripts are kept in `~/m2-runs/speed/{sg,prof,design,attack,build,review-*,finish}`;
+- Scratch: logs and scripts are kept in `$SCRATCH/speed/{sg,prof,design,attack,build,review-*,finish}`;
   every scratch `target/` is deleted.

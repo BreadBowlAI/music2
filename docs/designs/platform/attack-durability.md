@@ -1,6 +1,6 @@
 # Attack: crash safety and durability on Linux
 
-Label `attack-durability`. Written 2026-10-14 on `jerry-ax102`, against `design.md` revision 1 and `main` at `f126d03`.
+Label `attack-durability`. Written 2026-10-14 on the Linux server, against `design.md` revision 1 and `main` at `f126d03`.
 Every claim was checked in source or measured here, unless it is marked *(unverified)*.
 
 ## In short
@@ -82,7 +82,7 @@ the design gives no mechanism that works.
 **What goes wrong on ext4.** ext4 delays choosing disk blocks for new data. The Tx's own syncs force a journal commit. That commit
 makes the WAV's name and its file entry durable, while its bytes are still only in memory.
 
-**Measured here** (`~/m2-runs/logs/ad-delalloc-1014-222842-1284066.log`, script `ad-delalloc-probe.sh`):
+**Measured here** (`$SCRATCH/logs/ad-delalloc-1014-222842-1284066.log`, script `ad-delalloc-probe.sh`):
 
 | Step | Result |
 |---|---|
@@ -123,7 +123,7 @@ never syncs.
 
 **What the barrier does on Linux.** It runs `fsync` on that journal file, which hasn't changed since it was written.
 
-**Measured here** (`~/m2-runs/logs/ad-jbd2.log`, script `ad-jbd2-probe.py`), 300 rounds each:
+**Measured here** (`$SCRATCH/logs/ad-jbd2.log`, script `ad-jbd2-probe.py`), 300 rounds each:
 
 | What each round did | Forced journal commits |
 |---|---|
@@ -167,5 +167,5 @@ So the barrier makes none of those renames durable.
 
 ## Probes
 
-All are kept in `~/m2-runs/logs/`: `ad-delalloc-probe.sh` with its run `ad-delalloc-1014-222842-1284066.log`, and `ad-jbd2-probe.py`
+All are kept in `$SCRATCH/logs/`: `ad-delalloc-probe.sh` with its run `ad-delalloc-1014-222842-1284066.log`, and `ad-jbd2-probe.py`
 with `ad-jbd2.log`. The scratch folder is deleted. No cargo target dir was made.

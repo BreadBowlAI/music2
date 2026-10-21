@@ -1,6 +1,6 @@
 # 8b back ends: design-8b checked against the code
 
-For the `8b-backend` track (worktree `~/m2-runs/wt/be`, branch `8b-backend`, base `09b2dfd`). It covers 8b.4 (mute,
+For the `8b-backend` track (worktree `$SCRATCH/wt/be`, branch `8b-backend`, base `09b2dfd`). It covers 8b.4 (mute,
 solo, mute in song), 8b.5 (clips by id, automation drawn in place and removed, markers), 8b.6 (audition) and 8b.8
 (meters and the DSP load). It reads `docs/designs/step8/design-8b.md` (written at `cbf5eb9`, before step 7) against the
 code as built. Nothing here was built or run. Sizes are rough: S is under 2 hours of agent time, M is half a day, L is
@@ -531,14 +531,14 @@ None of B1–B12 needs a taste-next builder to build or to pass its tests.
 ## 9. How to run things
 
 - Environment for every cargo or music2 command:
-  `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Anything that runs music2 (server and CLI tests):
-  `HOME=/home/jerry/m2-runs/be-scratch/home M2_AUDIO=none`. Builds `--locked`; never `cargo update`.
+  `CARGO_HOME=/home/<user>/.cargo RUSTUP_HOME=/home/<user>/.rustup`. Anything that runs music2 (server and CLI tests):
+  `HOME=$SCRATCH/be-scratch/home M2_AUDIO=none`. Builds `--locked`; never `cargo update`.
 - One target folder: the worktree's own `target/`. Delete it when the track ends (scratch builds once filled 390 GB).
 - A slice's tests, for example B2:
-  `cd /home/jerry/m2-runs/wt/be && CARGO_HOME=… RUSTUP_HOME=… HOME=/home/jerry/m2-runs/be-scratch/home M2_AUDIO=none cargo test --locked -p m2-runtime -p m2-play -p m2-session`
+  `cd $SCRATCH/wt/be && CARGO_HOME=… RUSTUP_HOME=… HOME=$SCRATCH/be-scratch/home M2_AUDIO=none cargo test --locked -p m2-runtime -p m2-play -p m2-session`
 - Long runs (the server's tests, the End check) through the tmux helper:
-  `TW_WAIT=2400 ~/m2-runs/tw be-b3 'cd ~/m2-runs/wt/be && … cargo test --locked -p m2-server'` (logs in
-  `~/m2-runs/logs/`).
+  `TW_WAIT=2400 $SCRATCH/tw be-b3 'cd $SCRATCH/wt/be && … cargo test --locked -p m2-server'` (logs in
+  `$SCRATCH/logs/`).
 - W1 only: `std/build.sh`, then `std/build.sh --check`, in the same commit as the change.
 - The End step: `ci/check.sh` (tests, clippy, std, renders, browser suites as they are).
 - Commits: small and green; a plain subject, a blank line, a short body, then the two trailer lines. Never push, never
@@ -605,7 +605,7 @@ only; nothing was built or run.
 | G7 | taste-next moved `rename_label`'s options editing into `rename::name_edit`. | Don't copy that code into `mute.rs`. Write a small option edit over `crate::sites::properties` (already `pub`). At the merge, both can share one helper. |
 | G8 | The plan says `view.rs` isn't touched by 8b.1 to 8b.3. taste-next does touch it (`ViewNode.title`, `locate`). | Our change (`InputPort.lane` in `InputPort::new`, and the lane edges near line 644) doesn't overlap. Expect a merge check, no conflict. |
 | G9 | `m2 automate --remove` edits the `automate` arm (`main.rs:552`), close to where taste adds its arms. | A new command, `m2 unautomate <project> <track>/<lane> [--at <bar.beat>]`, in `apps/m2/src/edits.rs`. |
-| G10 | `ci/check.sh` writes to `$HOME/m2-check/<sha>` by default. | At the End: `M2_CHECK_OUT=/home/jerry/m2-runs/be-scratch/check`. |
+| G10 | `ci/check.sh` writes to `$HOME/m2-check/<sha>` by default. | At the End: `M2_CHECK_OUT=$SCRATCH/be-scratch/check`. |
 
 ### R. Real-time and determinism
 
@@ -697,7 +697,7 @@ only; nothing was built or run.
 | G6 | The clip `sha` in `timeline()` | One call in the rebuilt branch. | Decided |
 | G7 | The track option edit | A helper over `sites::properties`; nothing copied from `rename.rs`. | Decided |
 | G9 | Remove automation's CLI | `m2 unautomate`, in `edits.rs`. | Decided |
-| G10 | The End check's output folder | `M2_CHECK_OUT=/home/jerry/m2-runs/be-scratch/check`. | Decided |
+| G10 | The End check's output folder | `M2_CHECK_OUT=$SCRATCH/be-scratch/check`. | Decided |
 | R1 | The op at value 0 | Writes `+0.0`. | Decided |
 | R2 | Bad `Live` input | Checked by the server; the engine refuses, never panics. | Decided |
 | R3 | A glide cut by an activation | A step of what is left. Said in RENDER-22a. | Decided |

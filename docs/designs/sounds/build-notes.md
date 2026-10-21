@@ -1,9 +1,9 @@
 # The sounds merge: build notes
 
 What each slice of the `sounds` merge did, and what its checks said. The plan is
-`~/m2-runs/sounds/plan.md` (with its Attack and the lead decisions L1 to L7); slice 4 copies it here as
-`design.md`. Each slice adds its own section. All runs are on Linux (jerry-ax102), in the worktree
-`~/m2-runs/wt/sm`, branch `sounds-merge`, made from `main` at `cbac57c`.
+`$SCRATCH/sounds/plan.md` (with its Attack and the lead decisions L1 to L7); slice 4 copies it here as
+`design.md`. Each slice adds its own section. All runs are on Linux (the server), in the worktree
+`$SCRATCH/wt/sm`, branch `sounds-merge`, made from `main` at `cbac57c`.
 
 ## Slice 1: the merge
 
@@ -91,8 +91,8 @@ Red first: with the bound set to 4 MiB for a trial, the test fails and names `st
 
 | Run | Result |
 |---|---|
-| `ci/check.sh --gates` at `e8bba0e` (`~/m2-runs/check-sm1c`, 31 min) | **PASS**, every row: 915 Rust tests, 0 failed; clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; old engine (S); the gates, all 6 runs; repo unchanged. Nothing passed only on a retry. G11 p95 9.0 to 9.4 ms; G7a heard at p95 113 ms. |
-| `ci/check.sh` at `ec0acad`, the slice's tip but these notes' last lines (`~/m2-runs/check-sm1d`, 10 min) | **PASS**, every row, the same counts: 915 Rust tests, 0 failed; 29/29 browser suites; 10 of 10 renders. Nothing passed only on a retry. No gates: the commits after `e8bba0e` change a test and these notes only. |
+| `ci/check.sh --gates` at `e8bba0e` (`$SCRATCH/check-sm1c`, 31 min) | **PASS**, every row: 915 Rust tests, 0 failed; clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; old engine (S); the gates, all 6 runs; repo unchanged. Nothing passed only on a retry. G11 p95 9.0 to 9.4 ms; G7a heard at p95 113 ms. |
+| `ci/check.sh` at `ec0acad`, the slice's tip but these notes' last lines (`$SCRATCH/check-sm1d`, 10 min) | **PASS**, every row, the same counts: 915 Rust tests, 0 failed; 29/29 browser suites; 10 of 10 renders. Nothing passed only on a retry. No gates: the commits after `e8bba0e` change a test and these notes only. |
 | The two runs before them (`check-sm1`, `check-sm1b`) | FAIL, both from the moved `target/` (below). Not counted. |
 
 ### G7f beside step 7's (information on Linux, PLAT-1)
@@ -141,7 +141,7 @@ Part of the +59 s is `examples/sounds`' own new tests (risk 14 guessed 1 to 2 mi
 
 ### Found: a `target/` folder that had moved
 
-This worktree's `target/` was step 7's, moved from `~/m2-runs/wt/s7` (since deleted). Cargo reuses what
+This worktree's `target/` was step 7's, moved from `$SCRATCH/wt/s7` (since deleted). Cargo reuses what
 it finds there. Some of it still named the old folder:
 - Build-script outputs (tauri, its plugins, wasmtime, cranelift, rquickjs) pointed at files under
   `wt/s7/target`. Run 1 (`check-sm1`) failed to build the desktop app, so the tests, clippy, the mac
@@ -163,8 +163,8 @@ For the lead: a `target/` should not move between worktrees. If one does, `cargo
 - `e2e/README.md` and HANDOFF still say 8 renders: slice 4 (docs).
 - Other tests that find the repo's files from where they were built fail loudly when it moves (an
   `unwrap`); only the fixtures test passed quietly. They were not all read.
-- Scratch: `~/m2-runs/sm-scratch` (renders, the std load timing). The check logs are in
-  `~/m2-runs/check-sm1`, `-sm1b` and `-sm1c`.
+- Scratch: `$SCRATCH/sm-scratch` (renders, the std load timing). The check logs are in
+  `$SCRATCH/check-sm1`, `-sm1b` and `-sm1c`.
 
 ## Slice 2: O3, std's effects follow the song
 
@@ -267,10 +267,10 @@ narrowed.
 
 | Run | Result |
 |---|---|
-| `ci/check.sh --gates` at `09b2dfd` (`~/m2-runs/check-sm2b`, 27 min) | **PASS**, every row: 921 Rust tests, 0 failed (915 at slice 1, and 6 new); clippy; std kernels (110 tests, 107 at slice 1); std.wasm; mac lint; 29/29 browser suites (`e2e/dsp.mjs` among them: a chorus added after the Keys from the browser, its settings as knobs); 10 of 10 renders; old engine (S); the gates, all 6 runs; repo unchanged. Nothing passed only on a retry. G11 p95 8.3 to 9.1 ms; G7a heard at p95 113 ms. |
-| `ci/check.sh` at `ddf63da`, the slice's tip but these lines (`~/m2-runs/check-sm2c`, 10 min) | **PASS**, every row, the same counts: 921 Rust tests, 0 failed; 29/29 browser suites; 10 of 10 renders. Nothing passed only on a retry. No gates: the commit after `09b2dfd` changes these notes only. |
-| The run before the gates' (`~/m2-runs/check-sm2`, at `09b2dfd`) | FAIL on "repo unchanged" only: I edited these notes in the worktree while it ran, and that row saw it. Every other row passed, the gates too. Not counted. Nothing is written in the worktree during a check now. |
-| The recorded tests, `cargo test --locked -p m2-play --release --test bit_identity --test live --test churn -- --ignored --nocapture` (`~/m2-runs/logs/sm-recorded-1017-032326-3122353.log`, 11 min) | **PASS**, 5 of 5: `live_is_the_export_on_all_of_p16`, `live_is_the_export_on_p50` and `a_no_op_activation_on_p50` (422 s together); `p16_churns_200_edits_within_20_mb` (183.0 MB after 70 edits, then 177.5 MB); `p16_loops_ten_minutes_without_drift` (79 laps, 504 Ons each, 116 s). |
+| `ci/check.sh --gates` at `09b2dfd` (`$SCRATCH/check-sm2b`, 27 min) | **PASS**, every row: 921 Rust tests, 0 failed (915 at slice 1, and 6 new); clippy; std kernels (110 tests, 107 at slice 1); std.wasm; mac lint; 29/29 browser suites (`e2e/dsp.mjs` among them: a chorus added after the Keys from the browser, its settings as knobs); 10 of 10 renders; old engine (S); the gates, all 6 runs; repo unchanged. Nothing passed only on a retry. G11 p95 8.3 to 9.1 ms; G7a heard at p95 113 ms. |
+| `ci/check.sh` at `ddf63da`, the slice's tip but these lines (`$SCRATCH/check-sm2c`, 10 min) | **PASS**, every row, the same counts: 921 Rust tests, 0 failed; 29/29 browser suites; 10 of 10 renders. Nothing passed only on a retry. No gates: the commit after `09b2dfd` changes these notes only. |
+| The run before the gates' (`$SCRATCH/check-sm2`, at `09b2dfd`) | FAIL on "repo unchanged" only: I edited these notes in the worktree while it ran, and that row saw it. Every other row passed, the gates too. Not counted. Nothing is written in the worktree during a check now. |
+| The recorded tests, `cargo test --locked -p m2-play --release --test bit_identity --test live --test churn -- --ignored --nocapture` (`$SCRATCH/logs/sm-recorded-1017-032326-3122353.log`, 11 min) | **PASS**, 5 of 5: `live_is_the_export_on_all_of_p16`, `live_is_the_export_on_p50` and `a_no_op_activation_on_p50` (422 s together); `p16_churns_200_edits_within_20_mb` (183.0 MB after 70 edits, then 177.5 MB); `p16_loops_ten_minutes_without_drift` (79 laps, 504 Ons each, 116 s). |
 | Each commit, before it was made | `8b7b7e9`: the `m2-ir` and `m2-runtime` tests, clippy. `02aab27`: `cargo test --locked --workspace`, 919 passed, 0 failed; the SDK's `tsc` check. `ed2e9ec`: the workspace run failed one test, the starter's Add Chorus labels (see Tests); after its fix the editor's 150 passed; `std/kernels-src` tests, clippy and `cargo fmt --check` clean; the 10 renders made and matched. `09b2dfd`: the workspace, 921 passed, 0 failed; the 10 renders matched. Clippy clean at each. |
 
 G7f beside slice 1's, for information (PLAT-1; p50 uses none of the four effects, so all three
@@ -361,7 +361,7 @@ line of slice 2's notes named the old requirement; it now says "std's version".
 - The fix keeps what G7f already did: S plays its own std. The runner copies the project into its own
   folder and sets the std line to S's version. p50 uses none of std's new kernels, so all three
   sides still play the same music, and G7f checks that.
-- Run by hand on the bumped tree (`~/m2-runs/logs/sm3-g7f-1017-035254-3363279.log`), S's runner
+- Run by hand on the bumped tree (`$SCRATCH/logs/sm3-g7f-1017-035254-3363279.log`), S's runner
   built in a scratch cache:
 
 | | Slice 2, `09b2dfd` (in the check) | Slice 3, by hand |
@@ -400,8 +400,8 @@ changed render.
 
 | Run | Result |
 |---|---|
-| `ci/check.sh` at `b790a63`, the slice's code (`~/m2-runs/check-sm3`, 10 min) | **PASS**, every row: 922 Rust tests, 0 failed (921 at slice 2, and the new manifest test); clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; repo unchanged. Nothing passed only on a retry (`failed` and `flaky` empty). No gates: no kernel changed, and G7f was run by hand above. |
-| `ci/check.sh` at `df017d7`, the slice's tip but this line (`~/m2-runs/check-sm3b`, 10 min) | **PASS**, every row, the same counts: 922 Rust tests, 0 failed; 29/29 browser suites; 10 of 10 renders. Nothing passed only on a retry. The commit after `b790a63` changes these notes only. |
+| `ci/check.sh` at `b790a63`, the slice's code (`$SCRATCH/check-sm3`, 10 min) | **PASS**, every row: 922 Rust tests, 0 failed (921 at slice 2, and the new manifest test); clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; repo unchanged. Nothing passed only on a retry (`failed` and `flaky` empty). No gates: no kernel changed, and G7f was run by hand above. |
+| `ci/check.sh` at `df017d7`, the slice's tip but this line (`$SCRATCH/check-sm3b`, 10 min) | **PASS**, every row, the same counts: 922 Rust tests, 0 failed; 29/29 browser suites; 10 of 10 renders. Nothing passed only on a retry. The commit after `b790a63` changes these notes only. |
 | Before each commit | `6591ecd`: `cargo test --locked --workspace`, every test passed but the renders test, which my own mistake above broke; after its fix it passed; clippy clean. `b790a63`: `m2-song`'s 76 tests, the session's dependency tests, clippy clean. |
 
 ### Left, and why
@@ -415,8 +415,8 @@ changed render.
 - For the lead: `a3214f6` is a choice the plan didn't name. It keeps S on its own std, as before
   (risk 17, L5). The other way, S playing the app's std, can't work: the app's std/fx reads
   `time.playing`, which S's IR doesn't have.
-- Scratch: `~/m2-runs/sm-scratch/s-cache` (S's runner, about 1 GB) is deleted. The checks' logs are
-  in `~/m2-runs/check-sm3` and `-sm3b`.
+- Scratch: `$SCRATCH/sm-scratch/s-cache` (S's runner, about 1 GB) is deleted. The checks' logs are
+  in `$SCRATCH/check-sm3` and `-sm3b`.
 
 ## Slice 4: docs
 
@@ -467,7 +467,7 @@ changed render.
 
 | Run | Result |
 |---|---|
-| `ci/check.sh` at `f1fa181`, the slice's tip but these lines (`~/m2-runs/check-sm4`, 10 min) | **PASS**, every row: 922 Rust tests, 0 failed (as at slice 3); clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; repo unchanged. Nothing passed only on a retry (`failed` and `flaky` empty). No gates: no code changed but one test's module doc. The commit after `f1fa181` changes these notes and HANDOFF's "In short" only. |
+| `ci/check.sh` at `f1fa181`, the slice's tip but these lines (`$SCRATCH/check-sm4`, 10 min) | **PASS**, every row: 922 Rust tests, 0 failed (as at slice 3); clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; repo unchanged. Nothing passed only on a retry (`failed` and `flaky` empty). No gates: no code changed but one test's module doc. The commit after `f1fa181` changes these notes and HANDOFF's "In short" only. |
 | Besides the run | `cargo test --locked -p m2-play --test bit_identity --no-run` built the test whose module doc `056223c` changed (the run's "rust tests" row builds and runs it too); the names script and the std grep (Checks, above). |
 
 ### Left, and why
@@ -494,7 +494,7 @@ changed render.
   do the recorded tests, 5 of 5. The commit after it changes these notes, HANDOFF and the contract's *Today*
   lines only.
 - A screenshot of **Pop sounds** in the app, on an invisible screen:
-  `~/m2-runs/app-shots/sounds-e108e46/pop-sounds.png`.
+  `$SCRATCH/app-shots/sounds-e108e46/pop-sounds.png`.
 
 ### The review's findings, and what was done
 
@@ -529,8 +529,8 @@ copy of `std/` in the scratchpad, never in the worktree: `cargo test --locked --
 
 | Run | Result |
 |---|---|
-| `ci/check.sh --gates` at `e108e46` (`~/m2-runs/check-sm-fg`, 29 min) | **PASS**, every row: 922 Rust tests, 0 failed (as at slice 4); clippy; std kernels (111 tests, 110 before F1's); std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; old engine (S); the gates, all 6 runs; repo unchanged. Nothing passed only on a retry: `failed` and `flaky` are empty. The run's log: `~/m2-runs/logs/check-sm-fg-1017-051929-4107515.log`. |
-| The recorded tests at `e108e46`, `cargo test --locked -p m2-play --release --test bit_identity --test live --test churn -- --ignored --nocapture` (`~/m2-runs/logs/sm-recorded-fg-1017-054825-118021.log`, 9 min) | **PASS**, 5 of 5. They last ran at slice 2; slice 3 moved the std line in their `common/mod.rs`. |
+| `ci/check.sh --gates` at `e108e46` (`$SCRATCH/check-sm-fg`, 29 min) | **PASS**, every row: 922 Rust tests, 0 failed (as at slice 4); clippy; std kernels (111 tests, 110 before F1's); std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; old engine (S); the gates, all 6 runs; repo unchanged. Nothing passed only on a retry: `failed` and `flaky` are empty. The run's log: `$SCRATCH/logs/check-sm-fg-1017-051929-4107515.log`. |
+| The recorded tests at `e108e46`, `cargo test --locked -p m2-play --release --test bit_identity --test live --test churn -- --ignored --nocapture` (`$SCRATCH/logs/sm-recorded-fg-1017-054825-118021.log`, 9 min) | **PASS**, 5 of 5. They last ran at slice 2; slice 3 moved the std line in their `common/mod.rs`. |
 | Before each fix's commit | F1: the kernel crate's tests (111 of 111), clippy, `cargo fmt --check`, `std/build.sh --check` (the same bytes). D3: `m2-song`'s 75 tests, the session's dependency tests, clippy. F3: `std/build.sh --check` (a comment changed in `fx.rs`), `bit_identity` built. |
 
 The summary, verbatim:
@@ -540,7 +540,7 @@ music2 check: PASS
 commit   e108e46ff7c5 on sounds-merge (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 29 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -553,7 +553,7 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  29/29 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 6 runs ci/gates.txt names
 repo unchanged   PASS  
 ```
@@ -608,21 +608,21 @@ check (load average about 5.5), so the callbacks spread wider than at slice 2; I
 
 ### For the owner: a screenshot
 
-`~/m2-runs/app-shots/sounds-e108e46/pop-sounds.png`: the debug app at `e108e46` with **Pop sounds**
+`$SCRATCH/app-shots/sounds-e108e46/pop-sounds.png`: the debug app at `e108e46` with **Pop sounds**
 (`examples/sounds`) open, on an invisible Xvfb screen, as the check's app row opens it (a copy of the song, a
 scratch `HOME`, no sound). It shows the timeline with the song's tracks, the track tabs, and the Arp track's
-graph: `synth.pluck` with its knobs. The check's own two screenshots are in `~/m2-runs/check-sm-fg/`
+graph: `synth.pluck` with its knobs. The check's own two screenshots are in `$SCRATCH/check-sm-fg/`
 (`app-first-song.png`, `app-with-plugins.png`).
 
 ### Left, and why
 
 - The lead lands it: push `sounds-merge`, and fast-forward `main` (no agent pushed). Then delete the worktree
-  `~/m2-runs/wt/sm` with its `target/` (about 40 GB) and the detached `~/m2-runs/wt/sounds`.
+  `$SCRATCH/wt/sm` with its `target/` (about 40 GB) and the detached `$SCRATCH/wt/sounds`.
 - The Mac run, with the by-ear steps 18 to 21: owed, by hand, after it lands. One run then covers step 7 too.
 - For the owner: L2 (Space, Return, Space). It is in HANDOFF's open owner decisions, with its default: the
   wobble carries on.
 - The compile bar still cuts other long messages at the window's edge (D3 moved only the std hint first). Wrapping
   them belongs with `taste`'s redraw of the UI.
-- Scratch: the scratch `HOME`s under `~/m2-runs/sm-scratch` are deleted. What is left there is small evidence the
+- Scratch: the scratch `HOME`s under `$SCRATCH/sm-scratch` are deleted. What is left there is small evidence the
   slices' notes cite: the renders of slices 1, 3 and 4 (30 MB each), copies of the old and S's `std.wasm`, and a
   few logs.

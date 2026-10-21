@@ -66,14 +66,14 @@ fixed in `9c985c3` (it waits until the page's revision is the server's), 3 of 3 
 again (`792d281`; bus's by-ear steps moved to 126 to 132), which passed clean (1,770 Rust tests, 74/74 suites).
 Then track `gb` landed and was merged in too (`7bb44f3`, no code conflicts). The last run:
 
-`ci/check.sh --gates` at `7bb44f3` (`~/m2-runs/check-bus/summary.txt`), word for word:
+`ci/check.sh --gates` at `7bb44f3` (`$SCRATCH/check-bus/summary.txt`), word for word:
 
 ```
 music2 check: PASS
 commit   7bb44f3c14c9 on bus (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 34 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -87,7 +87,7 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  74/74 suites ok
 renders          PASS  12 of 12 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
 repo unchanged   PASS  
 
@@ -131,13 +131,13 @@ gates:
   === m2-gates realtime --reference 50 --minutes 1
   PASS  G12 live (RENDER-28, RENDER-28a) on the silent clock on p50, 128 frames
 
-logs     /home/jerry/m2-runs/check-bus.tgz
+logs     $SCRATCH/check-bus.tgz
 ```
 
 ## Pictures
 
 From the desktop app on the invisible screen `:98` (the window 1440x900), the bus fixture
-`core/session/tests/fixtures/buses`, built at `3a0f504` (`~/m2-runs/app-shots/bus-3a0f504/`, with `captions.txt`):
+`core/session/tests/fixtures/buses`, built at `3a0f504` (`$SCRATCH/app-shots/bus-3a0f504/`, with `captions.txt`):
 
 | File | Shows |
 |---|---|

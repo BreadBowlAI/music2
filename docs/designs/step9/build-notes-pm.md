@@ -78,7 +78,7 @@ music2 check: PASS
 commit   e6019bfdecb3 on pm (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 36 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -92,14 +92,14 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  70/70 suites ok
 renders          PASS  12 of 12 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
 repo unchanged   PASS  
 ```
 
 ## Pictures
 
-From the app on the invisible screen `:95`, in `~/m2-runs/app-shots/pm-73392de/` (captions in
+From the app on the invisible screen `:95`, in `$SCRATCH/app-shots/pm-73392de/` (captions in
 `captions.txt` there). Taken before the `sx` merge, which changed nothing on these screens:
 
 | Picture | Shows |

@@ -1,6 +1,6 @@
 # Next: the plan
 
-For the `next` track: branch `next`, worktree `/home/jerry/m2-runs/wt/nx`, made from `main` at `70f9b61` (steps 1 to 7,
+For the `next` track: branch `next`, worktree `$SCRATCH/wt/nx`, made from `main` at `70f9b61` (steps 1 to 7,
 the sounds, taste's look, all of 8b but 8b.7 and 8b.10, and polish). Written 2026-10-17 by a planning agent, read
 only: files and `git`, nothing built or run. File:line cites are at `70f9b61`. Sizes: **S** under 2 hours of agent
 time, **M** half a day, **L** most of a day *(estimates)*.
@@ -102,35 +102,35 @@ See "## Attack" and the "## Decisions" after it, at the end of this file: they o
 
 ### 1.1 Branches and worktrees
 
-- `next` in `/home/jerry/m2-runs/wt/nx` is the lead's: P0 (§2), the merges and the End (§9).
+- `next` in `$SCRATCH/wt/nx` is the lead's: P0 (§2), the merges and the End (§9).
 - After P0 the lead makes four lanes from `next`:
   ```
-  cd /home/jerry/m2-runs/wt/nx && git config rerere.enabled true
-  for l in a b c d; do git worktree add /home/jerry/m2-runs/wt/nx-$l -b next-$l next; done
+  cd $SCRATCH/wt/nx && git config rerere.enabled true
+  for l in a b c d; do git worktree add $SCRATCH/wt/nx-$l -b next-$l next; done
   ```
   Each lane runs `git config rerere.enabled true` in its worktree too.
 - When `main` moves (8a lands), the lead merges `main` into `next`; lanes merge `next` into their branch when it
   moves. Merges only: never rebase, never rewrite history, never push.
-- Never touch `wt/8a`, nor tmux sessions `m2`, `1`, `2`, `ssh_tmux`. Never delete anything under `~/m2-runs/plugins`.
+- Never touch `wt/8a`, nor tmux sessions `m2`, `1`, `2`, `ssh_tmux`. Never delete anything under `$SCRATCH/plugins`.
 
 ### 1.2 Builds
 
-Every cargo, npm or music2 run has `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Builds are
+Every cargo, npm or music2 run has `CARGO_HOME=/home/<user>/.cargo RUSTUP_HOME=/home/<user>/.rustup`. Builds are
 `--locked`, never `cargo update`. The one exception: lane B's first build after adding `midir` (§4, B3).
 
 | Who | Target | Builds |
 |---|---|---|
-| Lead (`wt/nx`) | `/home/jerry/m2-runs/s8n/target-nx` | the merge checks, the desktop app for pictures, the End's full check |
-| Lane X (`wt/nx-x`) | `/home/jerry/m2-runs/s8n/target-x` | `cargo build --locked -p m2-server --example headless -p m2`, and the tests and clippy of the crates it touches |
+| Lead (`wt/nx`) | `$SCRATCH/s8n/target-nx` | the merge checks, the desktop app for pictures, the End's full check |
+| Lane X (`wt/nx-x`) | `$SCRATCH/s8n/target-x` | `cargo build --locked -p m2-server --example headless -p m2`, and the tests and clippy of the crates it touches |
 | Lanes B and C, also | their own target | `cargo test --locked -p music2-desktop` and its clippy (menu rows); the mac lint of the crates they touch: `CC_aarch64_apple_darwin=$PWD/ci/stub-cc CXX_aarch64_apple_darwin=$PWD/ci/stub-cc AR_aarch64_apple_darwin=$PWD/ci/stub-ar cargo clippy --locked --target aarch64-apple-darwin -p <crates> --all-targets -- -D warnings` |
 
 - After each build, copy the binaries per commit, so a rebuild never swaps one under a running suite:
-  `B=/home/jerry/m2-runs/s8n/bin/<lane>-<sha>; mkdir -p $B/examples; cp $T/debug/examples/headless $B/examples/; cp $T/debug/m2 $B/`
+  `B=$SCRATCH/s8n/bin/<lane>-<sha>; mkdir -p $B/examples; cp $T/debug/examples/headless $B/examples/; cp $T/debug/m2 $B/`
   (`run.mjs` finds `m2` one folder above the server's).
 - Web: `cd web && npm ci && npm run build` (it type-checks). Once per worktree also `cd e2e && npm ci`.
 - Long jobs (cargo builds and tests over a few minutes, suite batches, the full check) go through
-  `TW_WAIT=<seconds> ~/m2-runs/tw <name> '<cmd>'` (no double quotes or parentheses in the command). Logs in
-  `~/m2-runs/logs/`. Name them `nx-<lane>-<what>`.
+  `TW_WAIT=<seconds> $SCRATCH/tw <name> '<cmd>'` (no double quotes or parentheses in the command). Logs in
+  `$SCRATCH/logs/`. Name them `nx-<lane>-<what>`.
 - **`Cargo.lock`: only lane B changes it**, only by adding `midir` and what it needs (§4, B3). Every other lane's
   `git diff Cargo.lock` is empty at each commit.
 - At its end each lane deletes `target-<lane>` and `bin/<lane>-*`. The lead deletes `target-nx` and `bin/` after
@@ -138,19 +138,19 @@ Every cargo, npm or music2 run has `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/h
 
 ### 1.3 Suites
 
-- **Tools** (`/home/jerry/m2-runs/s8n/tools/`; change only these copies). P0 edits:
-  - `lane-suites.sh <lane> <out> <suite>…`: `repo=/home/jerry/m2-runs/wt/nx` for `nx`, else
-    `/home/jerry/m2-runs/wt/nx-<lane>`, and its header comment. `DIST=<folder>` serves an older page (red first);
+- **Tools** (`$SCRATCH/s8n/tools/`; change only these copies). P0 edits:
+  - `lane-suites.sh <lane> <out> <suite>…`: `repo=$SCRATCH/wt/nx` for `nx`, else
+    `$SCRATCH/wt/nx-<lane>`, and its header comment. `DIST=<folder>` serves an older page (red first);
     `OLD=<folder>` an old tree's std, templates and examples; `M2_HEADLESS` (required) a copy under
-    `/home/jerry/m2-runs/s8n/bin/`.
-  - `app-shot.sh`: runs under `flock /home/jerry/m2-runs/s8n/scratch/x97.lock`, so two lanes never share `:97`.
-    Display `:97` only, scratch under `/home/jerry/m2-runs/s8n/scratch/`. It passes `M2_MIDI=inject` to the app, so
+    `$SCRATCH/s8n/bin/`.
+  - `app-shot.sh`: runs under `flock $SCRATCH/s8n/scratch/x97.lock`, so two lanes never share `:97`.
+    Display `:97` only, scratch under `$SCRATCH/s8n/scratch/`. It passes `M2_MIDI=inject` to the app, so
     the app never opens a MIDI device here and a `HOOK` can post one (§9 step 6).
   - `lane-a-suites.sh`, `ui-suites.sh`: unused; left as they are.
 - **Running:**
   ```
-  M2_HEADLESS=/home/jerry/m2-runs/s8n/bin/a-<sha>/examples/headless \
-    /home/jerry/m2-runs/s8n/tools/lane-suites.sh a /home/jerry/m2-runs/s8n/scratch/e2e/a1 s8-leases taste s8-clips
+  M2_HEADLESS=$SCRATCH/s8n/bin/a-<sha>/examples/headless \
+    $SCRATCH/s8n/tools/lane-suites.sh a $SCRATCH/s8n/scratch/e2e/a1 s8-leases taste s8-clips
   ```
   `--repo` is the lane's worktree, which built the server, so std, the templates and the examples are the lane's.
   Each suite gets a scratch HOME under `<out>` and `M2_AUDIO=none` (`e2e/run.mjs`, `envFor`): never the real
@@ -202,7 +202,7 @@ Every new Rust test and suite check that tests behaviour is shown failing first:
 ### 1.7 The desktop app
 
 Only on the invisible Xvfb screen `:97`, through `tools/app-shot.sh` (it takes the lock), a scratch HOME under
-`/home/jerry/m2-runs/s8n/scratch/` and `M2_AUDIO=none`. Never on a real screen. Lanes B and C may open it once each to
+`$SCRATCH/s8n/scratch/` and `M2_AUDIO=none`. Never on a real screen. Lanes B and C may open it once each to
 check their menu rows (B: View ▸ Keyboard Piano, Transport ▸ Metronome; C: File ▸ Settings… with Ctrl+,, and Edit ▸
 Undo with a name). The End takes the pictures (§9).
 
@@ -248,7 +248,7 @@ About an hour, then the lanes start. No behaviour a user can reach.
 5. The four worktrees (§1.1); `npm ci` in each `web/` and `e2e/`.
 6. A first `cargo build --locked -p m2-server --example headless -p m2` into `target-nx`, copied to `bin/nx-<sha>`:
    the "before" server every lane's red-first runs use, with `web/dist` copied to
-   `/home/jerry/m2-runs/s8n/scratch/dist-before`.
+   `$SCRATCH/s8n/scratch/dist-before`.
 
 ---
 
@@ -887,12 +887,12 @@ deletes its `target-<lane>` and `bin/<lane>-*` when it is done.
      rows), the piano card, the Settings dialog.
    - `docs/designs/platform/design.md` §2.4 and §8 (Q1).
    - `e2e/README.md`'s rows; `HANDOFF.md` (below).
-4. **The full check once:** `TW_WAIT=3600 ~/m2-runs/tw check-next 'cd /home/jerry/m2-runs/wt/nx &&
-   CARGO_TARGET_DIR=/home/jerry/m2-runs/s8n/target-nx M2_CHECK_OUT=$HOME/m2-runs/check-next ci/check.sh'`. Renders
+4. **The full check once:** `TW_WAIT=3600 $SCRATCH/tw check-next 'cd $SCRATCH/wt/nx &&
+   CARGO_TARGET_DIR=$SCRATCH/s8n/target-nx M2_CHECK_OUT=$SCRATCH/check-next ci/check.sh'`. Renders
    must match `e2e/renders.sha256`.
 5. **The Linux app on `:97`** (`app-shot.sh`; never a real screen): Ctrl+, opens Settings; File ▸ Settings… is there;
    Ctrl+K shows the piano card; Transport ▸ Metronome; Edit ▸ Undo with a name after an edit.
-6. **Pictures**, in `~/m2-runs/app-shots/next-<sha>/` with `captions.txt` (each one plain line, and "This is the
+6. **Pictures**, in `$SCRATCH/app-shots/next-<sha>/` with `captions.txt` (each one plain line, and "This is the
    Linux version. On your Mac it uses the Mac's own font and ⌘ keys."): the top bar with the metronome on and the
    MIDI icon (`app-shot.sh` passes `M2_MIDI=inject`, and a `HOOK` posts a keyboard to the app's
    `/api/graph/midi/inject` with the URL and token in its `session.json`); the keyboard piano card; the Settings

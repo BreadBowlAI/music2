@@ -1,6 +1,6 @@
 # Track ph: build notes
 
-Written as the slices land. Plan: `ph-plan.md`. Worktree `~/m2-runs/wt/ph`, branch `ph`, from `main` at `258275b`.
+Written as the slices land. Plan: `ph-plan.md`. Worktree `$SCRATCH/wt/ph`, branch `ph`, from `main` at `258275b`.
 
 ## In short
 
@@ -16,7 +16,7 @@ Written as the slices land. Plan: `ph-plan.md`. Worktree `~/m2-runs/wt/ph`, bran
 |---|---|
 | The 10 render records at `258275b` (debug `m2`) | 10 of 10 match `e2e/renders.sha256` |
 | `m2 render examples/with-plugins`, twice | **Not the same bytes**: they differ from frame 13 (Surge XT). The worst second is 0.20 dB apart |
-| So | "Same sound" for with-plugins is G7e's rule: each second's level within 1 dB of the base render (`~/m2-runs/sph/base-with-plugins.wav`) |
+| So | "Same sound" for with-plugins is G7e's rule: each second's level within 1 dB of the base render (`$SCRATCH/sph/base-with-plugins.wav`) |
 
 The machine was shared with other tracks all along (load 0.6 at the start, 11 to 13 during the gates). Timings here
 are information only (PLAT-1).
@@ -43,7 +43,7 @@ are information only (PLAT-1).
 
 ### Tests, each red first
 
-The red diffs and their logs are in `~/m2-runs/sph/red/`.
+The red diffs and their logs are in `$SCRATCH/sph/red/`.
 
 | Test | Red by | Red result |
 |---|---|---|
@@ -68,8 +68,8 @@ The red diffs and their logs are in `~/m2-runs/sph/red/`.
 | `m2-gates plugins` (G1 to G5, G7) | PASS |
 | `m2-gates --server export` (G7e) | PASS |
 | clippy, the Mac lint | clean |
-| The app on Xvfb `:96`: with-plugins looping, `kill -9` of the host process | the app stayed open and kept playing; the toast said: "The plugin host crashed, so the plugins in it went quiet; the rest of the song plays on. music2 started Surge XT (Lead) and Airwindows Consolidated (Lead) again from the saved settings. (plugin.crashed)"; a new host process ran, and the engine load went back to its level with Surge XT playing (0.16). Pictures: `~/m2-runs/app-shots/ph-1/` (`app-after-kill.png` has the toast) |
-| `ci/check.sh` at `982c68c` | **PASS**: 1577 Rust tests, 66 of 66 browser suites, renders 10 of 10, the app (first-song and with-plugins), clippy, the Mac lint, std. Logs: `~/m2-runs/sph/check-982c68c` |
+| The app on Xvfb `:96`: with-plugins looping, `kill -9` of the host process | the app stayed open and kept playing; the toast said: "The plugin host crashed, so the plugins in it went quiet; the rest of the song plays on. music2 started Surge XT (Lead) and Airwindows Consolidated (Lead) again from the saved settings. (plugin.crashed)"; a new host process ran, and the engine load went back to its level with Surge XT playing (0.16). Pictures: `$SCRATCH/app-shots/ph-1/` (`app-after-kill.png` has the toast) |
+| `ci/check.sh` at `982c68c` | **PASS**: 1577 Rust tests, 66 of 66 browser suites, renders 10 of 10, the app (first-song and with-plugins), clippy, the Mac lint, std. Logs: `$SCRATCH/sph/check-982c68c` |
 | Disk at the slice's end | 2.2 TB free; this worktree's `target/` is 79 GB (kept for slices 2 and 3); no shared memory left in `/dev/shm` |
 | A call's round trip (release, Linux, loaded machine; `the_round_trip_is_measured`) | a probe call of 128 frames: 614 µs in process, 625 µs through the host process at the median (about 11 µs more), 670 µs at the 99th percentile (35 µs more), 986 µs at most |
 
@@ -117,7 +117,7 @@ The red diffs and their logs are in `~/m2-runs/sph/red/`.
 
 ### Tests, each red first
 
-The red diffs and their logs are in `~/m2-runs/sph/red/`.
+The red diffs and their logs are in `$SCRATCH/sph/red/`.
 
 | Test | Red by | Red result |
 |---|---|---|
@@ -141,10 +141,10 @@ The red diffs and their logs are in `~/m2-runs/sph/red/`.
 | clippy, the Mac lint | clean |
 | Browser suites `ph-window`, `live3b` (with the plugins), `graph`, `ports` | 9 of 9, 60 of 60, 19 of 19, 46 of 46 |
 | The app on Xvfb `:96`, examples/with-plugins | see below |
-| `ci/check.sh` at `c658b5e` | **PASS**: 1584 Rust tests, 67 of 67 browser suites (`ph-window` among them, on its own Xvfb), renders 10 of 10, the app (first-song and with-plugins), clippy, the Mac lint, std. Logs: `~/m2-runs/sph/check-c658b5e.tgz` |
+| `ci/check.sh` at `c658b5e` | **PASS**: 1584 Rust tests, 67 of 67 browser suites (`ph-window` among them, on its own Xvfb), renders 10 of 10, the app (first-song and with-plugins), clippy, the Mac lint, std. Logs: `$SCRATCH/sph/check-c658b5e.tgz` |
 | Disk at the slice's end | 2.2 TB free; this worktree's `target/` is 96 GB (kept for slice 3); no shared memory left in `/dev/shm` |
 
-The app on Xvfb `:96` (pictures in `~/m2-runs/app-shots/ph-2/`):
+The app on Xvfb `:96` (pictures in `$SCRATCH/app-shots/ph-2/`):
 
 | Step | Result | Picture |
 |---|---|---|
@@ -197,7 +197,7 @@ The app on Xvfb `:96` (pictures in `~/m2-runs/app-shots/ph-2/`):
 
 ### Tests, each red first
 
-The red diffs and their logs are in `~/m2-runs/sph/red/`.
+The red diffs and their logs are in `$SCRATCH/sph/red/`.
 
 | Test | Red by | Red result |
 |---|---|---|
@@ -222,10 +222,10 @@ compared with an offline one (they differ by `L` then), none a crash or an asser
 |---|---|
 | Renders | 10 of 10 |
 | with-plugins against the base (G7e's rule) | worst second 0.47 dB apart |
-| `~/m2-runs/sph/check.sh` (runtime, ir, plugins, play, editor, server) | 1112 passed; clippy and the Mac lint clean |
+| `$SCRATCH/sph/check.sh` (runtime, ir, plugins, play, editor, server) | 1112 passed; clippy and the Mac lint clean |
 | `m2-gates plugins` (G1 to G5, G7) and `m2-gates --server export` (G7e) | PASS |
 | `ci/check.sh --gates` at `b0ebc74`, first run (load 9 to 10 from other tracks) | every row passed but the gates: G11 tx-data's session part was 5.9 ms at p95 (bound 5) with 5,000 assets. Alone, 3 runs of 3 passed it (p95 1.5 to 1.8 ms) |
-| `ci/check.sh --gates` at `b0ebc74`, second run (load 3 to 4) | **PASS**: 1597 Rust tests, 67 of 67 browser suites, renders 10 of 10, the app (first-song and with-plugins), clippy, the Mac lint, std, the 7 gate runs. Logs: `~/m2-runs/sph/check-b0ebc74.tgz` (the first run's: `check-b0ebc74-run1.tgz`) |
+| `ci/check.sh --gates` at `b0ebc74`, second run (load 3 to 4) | **PASS**: 1597 Rust tests, 67 of 67 browser suites, renders 10 of 10, the app (first-song and with-plugins), clippy, the Mac lint, std, the 7 gate runs. Logs: `$SCRATCH/sph/check-b0ebc74.tgz` (the first run's: `check-b0ebc74-run1.tgz`) |
 | Disk at the track's end | 2.1 TB free; this worktree's `target/` is 105 GB; no shared memory left in `/dev/shm` |
 
 ### Decisions taken while building
@@ -272,7 +272,7 @@ each). One is a line in `docs/gaps.md`. Then `main` (with `io`, then `ab`) was m
 
 ### Tests, each red first
 
-The red diffs and their logs are in `~/m2-runs/sph/red/`.
+The red diffs and their logs are in `$SCRATCH/sph/red/`.
 
 | Test | Red by | Red result |
 |---|---|---|
@@ -297,10 +297,10 @@ steps are now 88 to 95, after `ab`'s 83 to 87).
 
 | Run | Result |
 |---|---|
-| First, at `dcf075d` | Failed 3 rows: clippy (the probe's new loop), the mac lint (the merge's clash), and "repo unchanged" (docs edited while it ran). Every other row passed: 1,628 Rust tests, 68/68 browser suites, renders 10 of 10, the 7 gate runs. Logs: `~/m2-runs/sph/check-dcf075d-run1.tgz` |
-| Second, at `659037f` | **PASS**; 1 passed only on a retry: the browser suite `st-audio-fix` (from `studio`, not this branch's code; Known flakes). 1,628 Rust tests, 68 browser suites, renders 10 of 10, the app, clippy, the mac lint, std, the 7 gate runs, the repo unchanged. 39 minutes. Logs: `~/m2-runs/sph/check-659037f.tgz` |
-| Third, at `d897cf0` (after the second merge) | Failed only a timing gate, under load from other tracks (load 8): G7f arena's slowest activation block, 7,450 µs (bound 5,333; Known flakes). The browser suite `nx-effects-fix` passed only on its retry (a tooltip read early). Every other row passed: 1,645 Rust tests, renders 12 of 12. Logs: `~/m2-runs/sph/check-d897cf0-run1.tgz` |
-| Fourth, at `d897cf0` | **PASS**: every row, nothing only on a retry. 1,645 Rust tests, 69/69 browser suites, renders 12 of 12, the 7 gate runs. 37 minutes. Logs: `~/m2-runs/sph/check-d897cf0.tgz` |
+| First, at `dcf075d` | Failed 3 rows: clippy (the probe's new loop), the mac lint (the merge's clash), and "repo unchanged" (docs edited while it ran). Every other row passed: 1,628 Rust tests, 68/68 browser suites, renders 10 of 10, the 7 gate runs. Logs: `$SCRATCH/sph/check-dcf075d-run1.tgz` |
+| Second, at `659037f` | **PASS**; 1 passed only on a retry: the browser suite `st-audio-fix` (from `studio`, not this branch's code; Known flakes). 1,628 Rust tests, 68 browser suites, renders 10 of 10, the app, clippy, the mac lint, std, the 7 gate runs, the repo unchanged. 39 minutes. Logs: `$SCRATCH/sph/check-659037f.tgz` |
+| Third, at `d897cf0` (after the second merge) | Failed only a timing gate, under load from other tracks (load 8): G7f arena's slowest activation block, 7,450 µs (bound 5,333; Known flakes). The browser suite `nx-effects-fix` passed only on its retry (a tooltip read early). Every other row passed: 1,645 Rust tests, renders 12 of 12. Logs: `$SCRATCH/sph/check-d897cf0-run1.tgz` |
+| Fourth, at `d897cf0` | **PASS**: every row, nothing only on a retry. 1,645 Rust tests, 69/69 browser suites, renders 12 of 12, the 7 gate runs. 37 minutes. Logs: `$SCRATCH/sph/check-d897cf0.tgz` |
 
 The last check's summary, word for word:
 
@@ -309,7 +309,7 @@ music2 check: PASS
 commit   d897cf033dc7 on ph (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 37 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -323,15 +323,15 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  69/69 suites ok
 renders          PASS  12 of 12 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
 repo unchanged   PASS
 ```
 
 ### Pictures
 
-On Xvfb :96, 1440x900: `~/m2-runs/app-shots/ph-659037f/` (`captions.txt` says what each shows), taken at `659037f`,
+On Xvfb :96, 1440x900: `$SCRATCH/app-shots/ph-659037f/` (`captions.txt` says what each shows), taken at `659037f`,
 before the second merge (which didn't touch the plugin host). The song was made
 20 minutes long so its export was still rendering when the plugin program was frozen (SIGSTOP,
-`~/m2-runs/sph/tools/hang-export.sh`). 30 s later music2 ended it and playback went on. The export then finished
+`$SCRATCH/sph/tools/hang-export.sh`). 30 s later music2 ended it and playback went on. The export then finished
 with the lead silent from the freeze and said only "Exported": a line in `docs/gaps.md`.

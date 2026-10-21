@@ -37,7 +37,7 @@ Linux and Windows equivalents with their caveats.
    message queue, even in the CLI (§5).
 6. **Determinism across OSes isn't free.**
    - Host-side DSP math goes through each platform's libm.
-   - `std/kernels/std.wasm` embeds the builder's absolute path (`/Users/jerryxu/dev/suite2/music2/core/kernel/src/lib.rs`)
+   - `std/kernels/std.wasm` embeds the builder's absolute path (`<repo>/core/kernel/src/lib.rs`)
      and the rustc commit. A rebuild on Linux therefore changes the kernels' hashes.
    - The toolchain isn't pinned (§8, §11).
 7. **The browser suites have three Mac assumptions.**
@@ -540,7 +540,7 @@ picks its OS loop: AppKit or CFRunLoop, GLib or a poll loop, or a Win32 message 
 | id | piece | Linux | Windows |
 |---|---|---|---|
 | OS-63 | `std/build.sh` (POSIX `sh`; `cargo build --target wasm32-unknown-unknown`; `ls -l`) | works | needs Git Bash or WSL, or a `.ps1` twin |
-| OS-64 | **`std.wasm` embeds host paths:** `strings` finds `/Users/jerryxu/dev/suite2/music2/core/kernel/src/lib.rs`, `/rustc/b940084d7…/library/…` (rustc 1.99.0, the local toolchain) and `src/fx.rs` | a rebuild elsewhere, or with another rustc, gives other bytes, hence other kernel hashes: RENDER-25's shape (kernels start from init) and RENDER-2's package-content provenance change | same |
+| OS-64 | **`std.wasm` embeds host paths:** `strings` finds `<repo>/core/kernel/src/lib.rs`, `/rustc/b940084d7…/library/…` (rustc 1.99.0, the local toolchain) and `src/fx.rs` | a rebuild elsewhere, or with another rustc, gives other bytes, hence other kernel hashes: RENDER-25's shape (kernels start from init) and RENDER-2's package-content provenance change | same |
 | OS-65 | no `rust-toolchain.toml`; edition 2024; `File::try_lock` (stable since 1.89) and let-chains set the minimum; local `rustc 1.99.0` | pin 1.99.0, plus `wasm32-unknown-unknown`, for CI and reproducible `std.wasm` | same |
 | OS-66 | system crates in `Cargo.lock`: `alsa-sys` (cpal); for the app only, `gtk-sys`, `webkit2gtk-sys`, `soup3-sys`, `javascriptcore-rs-sys`, `libappindicator-sys` (tray-icon), `libdbus-sys` (tao), `gdkx11-sys`, `gdkwayland-sys`; `rquickjs-sys` (cc) everywhere | headless: `cargo test --workspace --exclude music2-desktop` needs only `libasound2-dev`, `pkg-config` and a C compiler; the full workspace also needs `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libsoup-3.0-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libdbus-1-dev` | MSVC build tools; `webview2-com-sys`; whether QuickJS builds with cl.exe *(verify)* |
 | OS-67 | npm lockfiles (`web/`, `e2e/`) | they list `linux-arm64-gnu`, `linux-x64-gnu` and musl bindings for rolldown, tailwind oxide, lightningcss, the Tauri CLI and TypeScript 7's native compiler, so `npm ci` works on Linux | `win32-x64-msvc` and `win32-arm64` too |

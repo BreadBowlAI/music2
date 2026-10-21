@@ -149,7 +149,7 @@ Unpinned Linux runs (ci/check.sh) swing much more (+19 to +125 a block, +144 to 
 - In `KernelNode::process`, both `k.memory.data_mut(&mut k.store)` become `k.view.bytes(&k.memory, &mut k.store)`.
 - `Graph::prewarm`, after each kernel's first reset (the only reset allowed to grow its memory): a check in release builds too that `data_ptr` is unchanged. If it changed, building fails with a plain error ("a kernel memory moved", RENDER-32). This runs once per instance, off the audio thread.
 - `unsafe impl Send for MemView` (only for the view, not the whole instance), with a SAFETY comment. There is one `unsafe` block, in `bytes`.
-- The prototype (`/home/jerry/m2-runs/speed/design/hv15.diff`) uses bare fields and `unsafe impl Send for KernelInst`. The real code should use the narrower `MemView` above.
+- The prototype (`$SCRATCH/speed/design/hv15.diff`) uses bare fields and `unsafe impl Send for KernelInst`. The real code should use the narrower `MemView` above.
 
 **Why it is safe.**
 
@@ -228,7 +228,7 @@ Unpinned Linux runs (ci/check.sh) swing much more (+19 to +125 a block, +144 to 
 
 ## 6. Order of work
 
-1. **Branch.** A new branch `s7-speed` from s7-sg at `8177eb2`, in worktree `/home/jerry/m2-runs/wt/s7-speed`. s7-sg is the base because it measures S fresh. The lead decides how it joins step7.
+1. **Branch.** A new branch `s7-speed` from s7-sg at `8177eb2`, in worktree `$SCRATCH/wt/s7-speed`. s7-sg is the base because it measures S fresh. The lead decides how it joins step7.
 2. **Commit A, cut 1:** `MemView`, both lookups, the prewarm check, the new test `a_kernel_memory_never_moves`. Then run `cargo test -p m2-runtime -p m2-play` (debug, test plugins, scratch HOME, `M2_AUDIO=none`), and the negative control in a scratch copy.
 3. **Commit B, cut 2:** the inline instance.
 4. **Measure on Linux, pinned** (section 7), after each commit with the lockstep harness, and with the gate after both. Check against the targets in section 2.
@@ -240,19 +240,19 @@ Unpinned Linux runs (ci/check.sh) swing much more (+19 to +125 a block, +144 to 
 
 ## 7. How to measure
 
-All runs: scratch HOME, `M2_AUDIO=none`, `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Jobs over 20 s go through `~/m2-runs/tw`.
+All runs: scratch HOME, `M2_AUDIO=none`, `CARGO_HOME=/home/<user>/.cargo RUSTUP_HOME=/home/<user>/.rustup`. Jobs over 20 s go through `$SCRATCH/tw`.
 
 - **G7f's gate by hand** (the number the Mac judges).
   - Make a scratch copy with `git archive`, build `m2-gates` into its own target, then run:
-  - `/home/jerry/m2-runs/speed/design/gates.sh <tree> arena`, then `… store`.
+  - `$SCRATCH/speed/design/gates.sh <tree> arena`, then `… store`.
   - The script pins to 0-7,16-23, uses S's runner from `~/.cache/m2-check/s-8aa301e`, and logs to `design/logs/`.
   - Or use sg's commands with `taskset -c 0-7,16-23` in front.
   - Read the "the app's layout against S", "P1 against S" and "the same music" lines.
   - About 5 min for arena and 6 for store.
 - **The lockstep harness** (quick, paired, per commit).
-  - Copy `crates/gates/src/bin/cbench/` from `/home/jerry/m2-runs/speed/design/src-hv15` into the scratch tree.
+  - Copy `crates/gates/src/bin/cbench/` from `$SCRATCH/speed/design/src-hv15` into the scratch tree.
   - Build it with `design/build.sh <tree>`, which uses its own target.
-  - Run `python3 scripts/lockstep.py <name> 6 4 s:s head:p2 <tree>:p2 head:p1 <tree>:p1` from `/home/jerry/m2-runs/speed/design`.
+  - Run `python3 scripts/lockstep.py <name> 6 4 s:s head:p2 <tree>:p2 head:p1 <tree>:p1` from `$SCRATCH/speed/design`.
   - About 20 min. Expect `<tree>:p2` near +5 against S, and about −247 against `head:p2`.
 - **Cache misses** (exact, optional). Use the profile's `scripts/vgall.sh <tag> 3 m1 s:s head:p2 <tree>:p2` and `cgdiff.py`. Host-side L2 misses should fall from about 11.1 K a callback toward S's 3.4 K. Host-side L1 misses should fall from 133 K toward 100 K or below.
 - **Sound.**
@@ -276,22 +276,22 @@ All runs: scratch HOME, `M2_AUDIO=none`, `CARGO_HOME=/home/jerry/.cargo RUSTUP_H
 
 ## 10. Files
 
-- This plan: `/home/jerry/m2-runs/speed/plan.md`.
-- Prototype diff of cuts 1+2: `/home/jerry/m2-runs/speed/design/hv15.diff` (73 lines, against `ed7fc8e`'s `lib.rs`; it applies unchanged to s7-sg).
-- Prototype trees: `/home/jerry/m2-runs/speed/design/src-hv15` (HEAD + cuts, with cbench) and `src-sg15` (s7-sg + cuts).
+- This plan: `$SCRATCH/speed/plan.md`.
+- Prototype diff of cuts 1+2: `$SCRATCH/speed/design/hv15.diff` (73 lines, against `ed7fc8e`'s `lib.rs`; it applies unchanged to s7-sg).
+- Prototype trees: `$SCRATCH/speed/design/src-hv15` (HEAD + cuts, with cbench) and `src-sg15` (s7-sg + cuts).
 - Logs:
-  - `/home/jerry/m2-runs/speed/design/logs/ls-F.log` (lockstep);
+  - `$SCRATCH/speed/design/logs/ls-F.log` (lockstep);
   - `gates-sg-{arena,store}-*.log` and `gates-sg15-{arena,store}-*.log` (G7f by hand);
   - `tests-hv15.log`;
   - `renders/hv15/`.
-- Scripts: `/home/jerry/m2-runs/speed/design/{build.sh,build-gates.sh,gates.sh,scripts/}`.
-- The profile's study: `/home/jerry/m2-runs/speed/prof/results.md` and `prof/patches/` (cuts 3 and 4).
-- Scratch `target/` folders are deleted. `/home/jerry/m2-runs/speed/design` is 50 MB.
+- Scripts: `$SCRATCH/speed/design/{build.sh,build-gates.sh,gates.sh,scripts/}`.
+- The profile's study: `$SCRATCH/speed/prof/results.md` and `prof/patches/` (cuts 3 and 4).
+- Scratch `target/` folders are deleted. `$SCRATCH/speed/design` is 50 MB.
 
 ## Attack (label attack, 2026-10-16)
 
 I tried to break the plan before anyone builds it. Linux numbers are information only (PLAT-1). What I ran is in
-`/home/jerry/m2-runs/speed/attack/logs/`: clippy on the prototype, the sizes of the types, two lockstep campaigns,
+`$SCRATCH/speed/attack/logs/`: clippy on the prototype, the sizes of the types, two lockstep campaigns,
 and the recorded tests. The scratch `target/` is deleted.
 
 ### The verdict in one table

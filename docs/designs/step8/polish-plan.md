@@ -1,6 +1,6 @@
 # Polish: the plan
 
-For the `polish` track: branch `polish`, worktree `~/m2-runs/wt/pl`, made from 8b-ui's tip `29430e8` (main,
+For the `polish` track: branch `polish`, worktree `$SCRATCH/wt/pl`, made from 8b-ui's tip `29430e8` (main,
 taste-next and all of 8b's screens). Written 2026-10-17 by a planning agent. Read only: files and `git`. Nothing was
 built or run. File:line cites are at `29430e8`. Sizes: **S** under 2 hours of agent time, **M** half a day, **L** most
 of a day *(estimates)*.
@@ -109,11 +109,11 @@ Done: the findings (X1 to X45) and the decision for each are at the end of this 
 
 ### 1.1 Branches and worktrees
 
-- `polish` in `~/m2-runs/wt/pl` is the lead's. P0 and the End are built there.
+- `polish` in `$SCRATCH/wt/pl` is the lead's. P0 and the End are built there.
 - After P0a lands (§2), the lead makes four lanes, each from `polish`:
   ```
-  cd /home/jerry/m2-runs/wt/pl && git config rerere.enabled true
-  for l in a b c d; do git worktree add /home/jerry/m2-runs/wt/pl-$l -b polish-$l polish; done
+  cd $SCRATCH/wt/pl && git config rerere.enabled true
+  for l in a b c d; do git worktree add $SCRATCH/wt/pl-$l -b polish-$l polish; done
   ```
 - Lanes merge `polish` into their branch when P0b lands, and whenever `polish` moves (main merged in). Never rebase.
 - Each lane merges into `polish` at its end, by the lead (§8). Never push.
@@ -121,37 +121,37 @@ Done: the findings (X1 to X45) and the decision for each are at the end of this 
 
 ### 1.2 Builds
 
-Every cargo, npm or music2 run has `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Builds are
+Every cargo, npm or music2 run has `CARGO_HOME=/home/<user>/.cargo RUSTUP_HOME=/home/<user>/.rustup`. Builds are
 `--locked`. Never `cargo update`; if cargo wants to change `Cargo.lock`, stop and look.
 
 | Who | Target | Builds |
 |---|---|---|
-| Lead (`wt/pl`) | `/home/jerry/m2-runs/s8c/target-pl` | P0's Rust tests, the desktop app for pictures, the End's full check |
-| Lane X (`wt/pl-x`) | `/home/jerry/m2-runs/s8c/target-x` | `cargo build --locked -p m2-server --example headless -p m2`, and the tests and clippy of the crates it touches |
+| Lead (`wt/pl`) | `$SCRATCH/s8c/target-pl` | P0's Rust tests, the desktop app for pictures, the End's full check |
+| Lane X (`wt/pl-x`) | `$SCRATCH/s8c/target-x` | `cargo build --locked -p m2-server --example headless -p m2`, and the tests and clippy of the crates it touches |
 | Lane C, also | `target-c` | `cargo test --locked -p music2-desktop` and its clippy: C2 changes `menu.rs`, `main.rs` and `actions.rs`. The one exception to "headless and m2 only" |
 
 - After each build, copy the binaries per commit, so a rebuild never swaps one under a running suite:
-  `B=/home/jerry/m2-runs/s8c/bin/<lane>-<sha>; mkdir -p $B/examples; cp $T/debug/examples/headless $B/examples/; cp $T/debug/m2 $B/`
+  `B=$SCRATCH/s8c/bin/<lane>-<sha>; mkdir -p $B/examples; cp $T/debug/examples/headless $B/examples/; cp $T/debug/m2 $B/`
   (`run.mjs` finds `m2` one folder above the server's, `e2e/run.mjs:125`).
 - Web: `cd web && npm ci && npm run build` (it type-checks, `web/package.json`). Once per worktree also `cd e2e && npm ci`.
-- Long jobs go through `TW_WAIT=<seconds> ~/m2-runs/tw <name> '<cmd>'` (cargo builds and tests, suite runs over a few
-  minutes, the full check). Logs in `~/m2-runs/logs/`.
+- Long jobs go through `TW_WAIT=<seconds> $SCRATCH/tw <name> '<cmd>'` (cargo builds and tests, suite runs over a few
+  minutes, the full check). Logs in `$SCRATCH/logs/`.
 - At its end each lane deletes `target-<lane>` and `bin/<lane>-*`. The lead deletes `target-pl` and `bin/` after the
   End's pictures. (MEMORY: scratch targets once filled 390 GB.)
 
 ### 1.3 Suites
 
-- **Tools.** P0 copies `~/m2-runs/s8ui/tools/*` to `/home/jerry/m2-runs/s8c/tools/` and changes only the copies:
-  - `lane-suites.sh <lane> <out> <suite>…`: a copy of `ui-suites.sh` with `repo=/home/jerry/m2-runs/wt/pl` for
-    `pl`, else `/home/jerry/m2-runs/wt/pl-<lane>`. It copies the page and the suites into `<out>` first. `DIST=<folder>`
+- **Tools.** P0 copies `$SCRATCH/s8ui/tools/*` to `$SCRATCH/s8c/tools/` and changes only the copies:
+  - `lane-suites.sh <lane> <out> <suite>…`: a copy of `ui-suites.sh` with `repo=$SCRATCH/wt/pl` for
+    `pl`, else `$SCRATCH/wt/pl-<lane>`. It copies the page and the suites into `<out>` first. `DIST=<folder>`
     serves an older page (for red first). `M2_HEADLESS` is required.
-  - `app-shot.sh`: display `:96` by default, scratch under `/home/jerry/m2-runs/s8c/scratch`, and `KEEP_HOME=<dir>`
+  - `app-shot.sh`: display `:96` by default, scratch under `$SCRATCH/s8c/scratch`, and `KEEP_HOME=<dir>`
     to reuse a HOME across two launches (C2's reopen check).
   - `xkey`, `xkey.c`: as they are.
 - **Running:**
   ```
-  M2_HEADLESS=/home/jerry/m2-runs/s8c/bin/a-<sha>/examples/headless \
-    /home/jerry/m2-runs/s8c/tools/lane-suites.sh a /home/jerry/m2-runs/s8c/scratch/e2e/a1 pl-mix taste s8-mix
+  M2_HEADLESS=$SCRATCH/s8c/bin/a-<sha>/examples/headless \
+    $SCRATCH/s8c/tools/lane-suites.sh a $SCRATCH/s8c/scratch/e2e/a1 pl-mix taste s8-mix
   ```
   `M2_WEB` is set by the script to the copied page. `--repo` is the lane's worktree, which built the server, so std,
   the templates and the examples are the lane's. Each suite gets a scratch HOME under `<out>` and `M2_AUDIO=none`
@@ -197,7 +197,7 @@ Every new suite check and Rust test that tests behaviour is shown failing first:
 ### 1.7 Pictures
 
 Only the lead, at the End, from the desktop app on the invisible Xvfb screen `:96`, never a real screen, with a
-scratch HOME under `/home/jerry/m2-runs/s8c/scratch/` and `M2_AUDIO=none`. States are written into a copy of the song
+scratch HOME under `$SCRATCH/s8c/scratch/` and `M2_AUDIO=none`. States are written into a copy of the song
 first (`view.json` for zoom and heights, `layout.json` for markers and the key, `recent.json` for the start screen),
 not clicked. Each picture gets one plain line, and: "This is the Linux version. On your Mac it uses the Mac's own font
 and ⌘ keys."
@@ -274,7 +274,7 @@ changes before that.
 - `web/src/lib/shell.ts`: the new `canvas` hooks, declared (`shell.ts:180-201`).
 - `web/src/components/TopBar.tsx`: mounts `<KeyField graph={graph} status={status} />` after `MeterField`, from
   `KeyField.tsx` (D's), which renders nothing yet.
-- `docs/designs/step8/build-notes-polish.md`: the headings (§1.6). `/home/jerry/m2-runs/s8c/tools/` (§1.3).
+- `docs/designs/step8/build-notes-polish.md`: the headings (§1.6). `$SCRATCH/s8c/tools/` (§1.3).
 
 **Checks:** the web build; `taste`, `pc-keys`, `start`, `notes`, `s8-tracks`, `s8-songbar`, `code` (counts
 unchanged); `cargo test` and clippy of `m2-editor`, `m2-server`, `music2-desktop`. Copy the server to
@@ -967,12 +967,12 @@ turns out large, build the part that fits and list the rest as left.
    (FMT-19: `markers` and `key`; the HOME table and FMT-20's `view.json` keys; ID-17 and WRITE-10: the track ID change);
    `taste.md` (§2.12 the follow icon; §3.3 the Key field; SS-2 built without its thumbnail); `e2e/README.md`'s rows;
    `HANDOFF.md` (what to try on the Mac, by ear: zoom with a pinch, Open Recent, reopen at launch, ⇧⌘S).
-4. **The full check once:** `TW_WAIT=3600 ~/m2-runs/tw check-polish 'cd /home/jerry/m2-runs/wt/pl &&
-   CARGO_TARGET_DIR=/home/jerry/m2-runs/s8c/target-pl M2_CHECK_OUT=$HOME/m2-runs/check-polish ci/check.sh'`. Renders must
+4. **The full check once:** `TW_WAIT=3600 $SCRATCH/tw check-polish 'cd $SCRATCH/wt/pl &&
+   CARGO_TARGET_DIR=$SCRATCH/s8c/target-pl M2_CHECK_OUT=$SCRATCH/check-polish ci/check.sh'`. Renders must
    match `e2e/renders.sha256` (nothing here changes sound).
 5. **The Linux app on `:96`** (never a real screen): Ctrl+= and Ctrl+− zoom; Ctrl+Shift+S opens Save As; Alt+→ goes to
    the next marker and doesn't navigate; Open Recent lists songs; a second launch with `KEEP_HOME` reopens the song.
-6. **Pictures** (§1.7), in `~/m2-runs/app-shots/polish-<sha>/` with `captions.txt`: the Mix view playing with a mute
+6. **Pictures** (§1.7), in `$SCRATCH/app-shots/polish-<sha>/` with `captions.txt`: the Mix view playing with a mute
    and meters; Change instrument's list; a drum kit in Notes with names; the timeline zoomed in with a tall Bass and
    markers; the start screen with Recent; the note menu; the key picker and the shaded roll; a log-scale cutoff lane.
 7. **Clean up:** each lane's `target-<lane>` and `bin/<lane>-*` (the lanes do it), then `target-pl` and `bin/`; the
@@ -1150,7 +1150,7 @@ The lead builds with these. Every Q not named in the last table stands.
 | X27 | Swing **sets** each off-beat note (start within a quarter step of the half-way point of its pair) to its swung place, so doing it twice changes nothing. Notes elsewhere stay. The suite checks Swing Medium twice equals once |
 | X28 | With no note selected, Q acts on every note (Q25); the arrow keys still act only on selected notes, so the menu shows the arrow keys only while notes are selected |
 | X29 | One `AppState::open_song(dir)` opens and records. `graph_open`, `project_new`, the desktop's `open_project`, Save As and Rename all call it |
-| X31 | A red run on an old server also sets `M2_STD`, `M2_TEMPLATES` and `M2_EXAMPLES` to a copy of the old tree: `git worktree add --detach /home/jerry/m2-runs/s8c/scratch/old-<sha> <sha>`, removed after. `lane-suites.sh` takes `OLD=<folder>` and sets all three |
+| X31 | A red run on an old server also sets `M2_STD`, `M2_TEMPLATES` and `M2_EXAMPLES` to a copy of the old tree: `git worktree add --detach $SCRATCH/s8c/scratch/old-<sha> <sha>`, removed after. `lane-suites.sh` takes `OLD=<folder>` and sets all three |
 | X43 | On the start screen Return opens the newest song only when no button has the focus |
 
 ### Tests

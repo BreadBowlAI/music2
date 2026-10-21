@@ -35,7 +35,7 @@ Branch `ab`, from `main` at `258275b`, 2026-10-18. The plan is [ab-plan.md](ab-p
 
 ## Pictures
 
-From the app on the invisible screen `:95`, in `~/m2-runs/app-shots/ab-sampler/`:
+From the app on the invisible screen `:95`, in `$SCRATCH/app-shots/ab-sampler/`:
 
 | Picture | Shows |
 |---|---|
@@ -83,7 +83,7 @@ music2 check: PASS
 commit   7399cb8539e8 on ab (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 36 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -97,9 +97,9 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  68/68 suites ok
 renders          PASS  12 of 12 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
 repo unchanged   PASS
 ```
 
-Pictures from the app on `:95` (1440×900): `~/m2-runs/app-shots/ab-7399cb8/` (`drums-zones.png`, `keys-playing.png`, `captions.txt`).
+Pictures from the app on `:95` (1440×900): `$SCRATCH/app-shots/ab-7399cb8/` (`drums-zones.png`, `keys-playing.png`, `captions.txt`).

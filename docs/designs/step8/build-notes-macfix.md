@@ -1,7 +1,7 @@
 # Macfix: build notes
 
 The owner's `ci/check.sh` on the reference Mac at `85b069a` failed 2 of 13 rows. This track fixes both. Branch
-`macfix`, worktree `~/m2-runs/wt/mf`, from `main` at `85b069a`. Linux timings here are information only (PLAT-1):
+`macfix`, worktree `$SCRATCH/wt/mf`, from `main` at `85b069a`. Linux timings here are information only (PLAT-1):
 only the Mac judges them. Other tracks loaded this server the whole time, so every timing is paired.
 
 ## In short
@@ -45,12 +45,12 @@ the Mac's own). No std version bump: no render changed (FMT-3). `std.wasm` chang
 
 ### What was measured, and how
 
-| What | How | Log (`~/m2-runs/logs/`) |
+| What | How | Log (`$SCRATCH/logs/`) |
 |---|---|---|
 | One node's cost a block | `m2 render` (1 thread) of a sine through 200 `std:gain` or `std:scale` in a row, 31 s less 1 s, 6 rounds in rotating turns, old std against new | `mf-nodebench2-1017-201338-*.log` |
 | p50's graph with each std | `m2 check --json` of p50, kernels counted | (below) |
 | The master's cost | `m2 render` of 50 sines at -12 dB, summed, into the old master or the new one, 10 rounds | `mf-master-1017-210453-*.log` |
-| p50 by std, paired | a scratch tool (never committed, kept at `~/m2-runs/smf/stdab.rs`): p50 in one process, one renderer per std folder, in G7f store's own turns (`paired::in_turns`: 375 warm, 11,250 blocks, turns of 625 after 188 not judged) | `mf-stdab1-*`, `mf-stdab2-*`, `mf-stdab3-*` |
+| p50 by std, paired | a scratch tool (never committed, kept at `$SCRATCH/smf/stdab.rs`): p50 in one process, one renderer per std folder, in G7f store's own turns (`paired::in_turns`: 375 warm, 11,250 blocks, turns of 625 after 188 not judged) | `mf-stdab1-*`, `mf-stdab2-*`, `mf-stdab3-*` |
 | G7f store itself | `m2-gates store --reference 50` with S's runner, the track's binary with each std, and the binaries of `e108e46` and `22bea45` | `mf-g7f-1017-212756-*.log` |
 
 ### One node, a block (Linux, load 20 to 30)
@@ -175,8 +175,8 @@ the same bits.
 
 ### The G7f sweep (Linux, information only)
 
-`m2-gates store --reference 50`, S's runner built from a clean copy of `8aa301e` (`~/m2-runs/smf/s-8aa301e`), one
-run after another (`~/m2-runs/smf/g7f-sweep.sh`, log `mf-g7f-1017-212756-3182255.log`). "old" and "new" are the
+`m2-gates store --reference 50`, S's runner built from a clean copy of `8aa301e` (`$SCRATCH/smf/s-8aa301e`), one
+run after another (`$SCRATCH/smf/g7f-sweep.sh`, log `mf-g7f-1017-212756-3182255.log`). "old" and "new" are the
 track's binary with `85b069a`'s std and with the fast path's std (`M2_STD`).
 
 | Run | Start, load | Block over S, by the mean | P1 over S | The app's layout over P1 |
@@ -202,7 +202,7 @@ Once macfix is on `main`, the owner runs `ci/check.sh` on the Mac, then this, in
 minutes; S's runner is already built in `~/m2-check/s-8aa301e`):
 
 ```sh
-cd ~/dev/suite2/music2
+cd <repo>
 mkdir -p ~/m2-check/std-85b069a && git archive 85b069a std | tar -x -C ~/m2-check/std-85b069a
 export M2_GATES_S=$(crates/gates/s/build.sh | tail -1)
 M2_STD=~/m2-check/std-85b069a/std cargo run --locked --release -p m2-gates -- store --reference 50 2>&1 | tee ~/m2-g7f-old-gain.txt
@@ -216,8 +216,8 @@ It plays G7f store with the app's side on `85b069a`'s std, the old gain, against
 | near step 7's -19 | the shift is gone with the old gain too, so the fast path hides nothing. Write it in RENDER-32; nothing more to chase |
 | anything between | run it once more before deciding (one run is good to about ±30 µs a block) |
 
-Tried on Linux (information only), with S's runner built again in `~/m2-runs/smf/s-8aa301e` and the track's
-binary (`~/m2-runs/smf/g7f-archive.sh`, log `mf-g7f-archive-1017-225523-*.log`, load 9 to 6, 11 minutes). The
+Tried on Linux (information only), with S's runner built again in `$SCRATCH/smf/s-8aa301e` and the track's
+binary (`$SCRATCH/smf/g7f-archive.sh`, log `mf-g7f-archive-1017-225523-*.log`, load 9 to 6, 11 minutes). The
 archive's `std.wasm` is `3dd1f634…`, the same folder as the sweep's "old". It played the same music
 (`22cd1b3810530499`) and read **-59 µs** over S (5 pairs, -281 to +52); P1 +254 over S, the app's layout -337 over
 P1. This server can't say more than that: one run here moves by about 100 µs.
@@ -264,7 +264,7 @@ to the link's target, and the home folder stays where it is. `ci/check.sh` runs 
 link, so it never saw it. `cargo test` in a real HOME would. Now the test says what it means: the songs folder is
 `$HOME/Music/music2`, by its real path.
 
-| Run (`~/m2-runs/smf/songs-test.sh`: HOME with `Music` a link out of it, then a plain HOME) | Linked `Music` | Plain |
+| Run (`$SCRATCH/smf/songs-test.sh`: HOME with `Music` a link out of it, then a plain HOME) | Linked `Music` | Plain |
 |---|---|---|
 | The first fix's test (`mf-songs-red-1017-225111-*.log`, `mf-songs-red2-1017-225234-*.log`) | **FAIL** at `project.rs:1156`, "under the home folder, by its real path as the songs folder is" | pass |
 | The test now (`mf-songs-green-1017-225242-*.log`) | pass | pass |
@@ -277,7 +277,7 @@ the owner wants the folder as spelled instead, it would be resolved only to comp
 
 ## C. Checks
 
-All on Linux, in `~/m2-runs/smf/target` (and `target-kernels`, `target-wasm`), HOME a scratch folder, `M2_AUDIO=none`,
+All on Linux, in `$SCRATCH/smf/target` (and `target-kernels`, `target-wasm`), HOME a scratch folder, `M2_AUDIO=none`,
 `M2_MIDI=none`.
 
 | Check | Result |
@@ -324,9 +324,9 @@ One round, two findings. Each fix is its own commit.
 
 ### The final check
 
-`TW_WAIT=5400 ~/m2-runs/tw check-macfix2 'cd ~/m2-runs/wt/mf && M2_CHECK_OUT=$HOME/m2-runs/check-macfix2 ci/check.sh
---gates'` (`check-macfix` was taken by an old run); log `~/m2-runs/logs/check-macfix2-1017-230738-3955074.log`,
-out `~/m2-runs/check-macfix2`. Load 17 at the start, 3 at the end. Verbatim:
+`TW_WAIT=5400 $SCRATCH/tw check-macfix2 'cd $SCRATCH/wt/mf && M2_CHECK_OUT=$SCRATCH/check-macfix2 ci/check.sh
+--gates'` (`check-macfix` was taken by an old run); log `$SCRATCH/logs/check-macfix2-1017-230738-3955074.log`,
+out `$SCRATCH/check-macfix2`. Load 17 at the start, 3 at the end. Verbatim:
 
 ```
 
@@ -334,7 +334,7 @@ music2 check: PASS
 commit   ac5d8c0325c3 on macfix (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 45 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -348,7 +348,7 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  58/58 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 6 runs ci/gates.txt names
 repo unchanged   PASS  
 
@@ -394,5 +394,5 @@ gates:
         skip  callback within S's + 320 µs, by the mean: would pass: -1994 µs (5 pairs, -2181 to -1917) over S, measured here (bound 320). p99, not judged: -3348 µs (5 pairs, -3614 to -3122); not judged off the referenc
         ok    the slowest activation block under half the device buffer's period: 4217 µs, p50 2480; the block before it p50 3028, max 4392 (bound 5333 µs; the run's p99 callback 18621)
 
-logs     /home/jerry/m2-runs/check-macfix2.tgz
+logs     $SCRATCH/check-macfix2.tgz
 ```

@@ -1,7 +1,7 @@
 # 8a, offline half: the plan (slices 0, 1, 2)
 
 Written 2026-10-17, read-only on the repo (git log, show, diff and grep; nothing built or run). Base: branch `8a` at
-`e571a5f` (= `main`), worktree `~/m2-runs/wt/8a`. Starts from `~/m2-runs/s8a/refresh.md` (written against `ed7fc8e`);
+`e571a5f` (= `main`), worktree `$SCRATCH/wt/8a`. Starts from `$SCRATCH/s8a/refresh.md` (written against `ed7fc8e`);
 its Attack section wins wherever it differs from the refresh. Also read: `docs/designs/step8/design-8a.md` (rev 2),
 `docs/architecture.md`, `docs/designs/step7/build-notes.md`, `docs/designs/platform/design.md` §5.6 and §8,
 `HANDOFF.md`, `docs/designs/step8/backend-plan.md`. "Estimate" marks a number nobody measured.
@@ -98,11 +98,11 @@ About half a day, beside slice 1.
 
 | What | Where |
 |---|---|
-| Worktree | `git -C ~/m2-runs/wt/8a worktree add --detach ~/m2-runs/wt/8a-spike HEAD` |
-| Target | `CARGO_TARGET_DIR=/home/jerry/m2-runs/8a-scratch/spike-target`; build only `-p m2-gates --release` |
-| HOME | `/home/jerry/m2-runs/8a-scratch/home`, with `M2_AUDIO=none` |
-| Logs | `~/m2-runs/s8a/spike/` (one log a run), plus `spike.diff` (the code, kept for reference) |
-| Afterwards | numbers into build notes "Slice 0"; `git worktree remove --force ~/m2-runs/wt/8a-spike`; delete the spike target; `df -h /` |
+| Worktree | `git -C $SCRATCH/wt/8a worktree add --detach $SCRATCH/wt/8a-spike HEAD` |
+| Target | `CARGO_TARGET_DIR=$SCRATCH/8a-scratch/spike-target`; build only `-p m2-gates --release` |
+| HOME | `$SCRATCH/8a-scratch/home`, with `M2_AUDIO=none` |
+| Logs | `$SCRATCH/s8a/spike/` (one log a run), plus `spike.diff` (the code, kept for reference) |
+| Afterwards | numbers into build notes "Slice 0"; `git worktree remove --force $SCRATCH/wt/8a-spike`; delete the spike target; `df -h /` |
 
 ### 3.2 The code (spike quality, no tests)
 
@@ -291,7 +291,7 @@ The shim puts a chaos point before every atomic operation and every park: a seed
 | `skips_are_exactly_the_descendants` | random failures |
 
 **Shown red before the slice lands**, each against the model that must catch it (patches kept in
-`~/m2-runs/s8a/mutants/`, logs in the build notes, never committed):
+`$SCRATCH/s8a/mutants/`, logs in the build notes, never committed):
 
 | Mutant | Caught by |
 |---|---|
@@ -549,7 +549,7 @@ for slice 4.
 
 ### 5.7 Checks and commits
 
-Per commit: the touched crates' tests with a scratch HOME (`HOME=/home/jerry/m2-runs/8a-scratch/home
+Per commit: the touched crates' tests with a scratch HOME (`HOME=$SCRATCH/8a-scratch/home
 M2_AUDIO=none cargo test --locked -p m2-pool -p m2-runtime -p m2-play -p m2-editor -p m2 -p m2-os -p m2-gates
 -p m2-session -p m2-server -p m2-plugins`), workspace clippy, and for `core/os` the Mac lint
 (`CC_aarch64_apple_darwin=ci/stub-cc AR_aarch64_apple_darwin=ci/stub-ar cargo clippy --locked --target
@@ -568,10 +568,10 @@ Commits, each green:
 7. "m2-gates realtime --offline: the sweep, paced blocks, partitions, the executor's cost" (and `p50-sends`).
 8. "Contract: RENDER-2, RENDER-2a, RENDER-32; build notes: slice 2".
 
-**The track's last check**, once: from `~/m2-runs/wt/8a`,
-`TW_WAIT=3500 ~/m2-runs/tw check-8a 'M2_CHECK_OUT=$HOME/m2-runs/check-8a ci/check.sh --gates'`. Then the offline
+**The track's last check**, once: from `$SCRATCH/wt/8a`,
+`TW_WAIT=3500 $SCRATCH/tw check-8a 'M2_CHECK_OUT=$SCRATCH/check-8a ci/check.sh --gates'`. Then the offline
 gate on Linux, twice, with `uptime` first: pinned to CCD1 (`taskset -c 8-15`) and not pinned:
-`TW_WAIT=1800 ~/m2-runs/tw 8a-offline 'uptime; HOME=/home/jerry/m2-runs/8a-scratch/home M2_AUDIO=none taskset -c 8-15 target/release/m2-gates realtime --offline --reference 50'`.
+`TW_WAIT=1800 $SCRATCH/tw 8a-offline 'uptime; HOME=$SCRATCH/8a-scratch/home M2_AUDIO=none taskset -c 8-15 target/release/m2-gates realtime --offline --reference 50'`.
 Numbers and log paths go in build notes "Slice 2". Then HANDOFF: one short entry (8a's offline half on branch `8a`,
 Linux green at `<commit>`, the Mac sweep owed).
 
@@ -589,7 +589,7 @@ For the owner. Plugged in, lid open, other apps closed, in Terminal on the Mac i
 | 4 | Paste back what is in `~/m2-8a-offline.txt` | that is all the lead needs |
 
 ```sh
-cd ~/dev/suite2/music2 && git fetch && git switch main && git pull
+cd <repo> && git fetch && git switch main && git pull
 cargo run --locked --release -p m2-gates -- realtime --offline --reference 50 2>&1 | tee ~/m2-8a-offline.txt
 sysctl hw.perflevel0 hw.perflevel1 | tee -a ~/m2-8a-offline.txt
 ```
@@ -659,7 +659,7 @@ The lead decides; none waits for the owner.
 | T4 | `crates/server`, `docs/architecture.md`, `HANDOFF.md`, `Cargo.lock` or `ci/check.sh` conflict with `8b-ui` or `taste-next` | Small, local edits; merges only; for `Cargo.lock`, take main's and let cargo add `m2-pool` |
 | T5 | A 1-vs-N test flakes on a busy machine | Spread asserts are summed over whole renders (thousands of blocks); no time bounds anywhere |
 | T6 | The models miss an ordering bug on x86 | Said in the row's doc; the Mac's check runs them on arm64 |
-| T7 | Disk | One target in `~/m2-runs/wt/8a`; the spike's deleted after slice 0; `df -h /` at each slice's end |
+| T7 | Disk | One target in `$SCRATCH/wt/8a`; the spike's deleted after slice 0; `df -h /` at each slice's end |
 | T8 | The renders row now renders on 16 threads in a debug build | A free cross-check against the 1-thread records. If the row gets slow, it sets `M2_THREADS=4`; decide from its time |
 
 ---
@@ -676,13 +676,13 @@ The lead decides; none waits for the owner.
 
 Build notes: `docs/designs/step8/build-notes-8a.md`, sections "In short", "Slice 0: the spike", "Slice 1: the pool",
 "Slice 2: the executor offline", "The last check", "The Mac sweep (owed)". Each holds its numbers, the load at the
-time, and the log paths (`~/m2-runs/logs/`, `~/m2-runs/s8a/spike/`, `~/m2-runs/check-8a/`). Committed with its slice.
+time, and the log paths (`$SCRATCH/logs/`, `$SCRATCH/s8a/spike/`, `$SCRATCH/check-8a/`). Committed with its slice.
 
 ---
 
 ## 10. Files read
 
-`~/m2-runs/s8a/refresh.md` (with its Attack); in `~/m2-runs/wt/8a` at `e571a5f`: `HANDOFF.md`,
+`$SCRATCH/s8a/refresh.md` (with its Attack); in `$SCRATCH/wt/8a` at `e571a5f`: `HANDOFF.md`,
 `docs/architecture.md` (RENDER-2, 22a, 28, 32, 33, MON-1, HOST-2, PLAT-1 to 7, the gates),
 `docs/designs/step8/design-8a.md`, `backend-plan.md`, `docs/designs/platform/design.md` §5.6 and §8,
 `core/runtime/src/lib.rs`, `overlay.rs`, `taps.rs`, `cells.rs`, `engine.rs`, `plan.rs` (`end_fade`), `keep.rs`
@@ -781,7 +781,7 @@ Load while reading: 0.25, 0.46, 1.01.
 
 | # | Finding |
 |---|---|
-| 34 | `polish` is in flight (`~/m2-runs/wt/pl`, from `29430e8`): Mix strips, renaming a track's key, recent projects, Save As, drum names. It likely touches `apps/m2/src/main.rs` (USAGE), `crates/server`, `HANDOFF.md`, `docs/architecture.md`, perhaps std. taste-next and 8b-ui are on `main` now, so merging `main` covers them |
+| 34 | `polish` is in flight (`$SCRATCH/wt/pl`, from `29430e8`): Mix strips, renaming a track's key, recent projects, Save As, drum names. It likely touches `apps/m2/src/main.rs` (USAGE), `crates/server`, `HANDOFF.md`, `docs/architecture.md`, perhaps std. taste-next and 8b-ui are on `main` now, so merging `main` covers them |
 | 35 | A new probe id `m2.probe.sets-fz` changes the probe's `plugin_count` and every listing of found plugins in tests. The probe already selects behaviour by a state tag (`fails-process`, `probe::tagged`) |
 | 36 | The server's `Graph::render` is not an agent render: only tests and the gates' G7e use it (`git grep` on `main`) |
 | 37 | Server tests export with `Alone` (16 threads here). Edition 2024 makes `set_var` unsafe, so a test can't set `M2_THREADS` in-process. Their tiny songs wake no worker, so this is spawns only |
@@ -824,7 +824,7 @@ The decision to build with, for each item above.
 | 4 | The chain is ×1e-30, ×1e-10 (1e-40, subnormal), ×1e30, ×1e10, from a signal near 1. Flushed, it ends at 0; kept, near 1 |
 | 5 | A full `m2 render` and `m2 bounce` render `Alone`, unless the project's lock is held, then `Beside`. Add `lock::held(dir) -> bool` to `core/session/src/lock.rs`: open `.music2/lock` only if it exists (never make `.music2/`), `try_lock`, drop. A test: held by a `ProjectLock`, it says true; free, false; the lock is free after. Q6 changes to this |
 | 6 | The gate gets a second judged line: the five pure fixtures rendered through `Render` on the sweep's largest count, hashed as `e2e/baseline.sh` does, must match `e2e/renders.sha256`. §6 gets one more line, before the gate: `cargo test --locked --release -p m2-pool --features models`. The Mac's full `ci/check.sh` stays owed before slice 3, written so in HANDOFF |
-| 7 | Every command that sets `HOME` also sets `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. The last check uses `M2_CHECK_OUT=/home/jerry/m2-runs/8a-scratch/check` |
+| 7 | Every command that sets `HOME` also sets `CARGO_HOME=/home/<user>/.cargo RUSTUP_HOME=/home/<user>/.rustup`. The last check uses `M2_CHECK_OUT=$SCRATCH/8a-scratch/check` |
 | 8 | `Pool::counters(&self)` reads the shared state; `Runner::counters` stays for the gates. The held-off test calls a crate-private signal function (`#[cfg(test)]` access in `src/tests.rs`) |
 | 9 | In spread mode the random spin comes before each pop, so another thread can take a pushed consumer. Each render asserts tasks on workers > 0 (certain under spread). Edges across threads are summed over a whole test, across fixtures, counts and seeds, and asserted > 0 once |
 | 10 | Spread is on only while the pool has live workers; otherwise it does nothing, as with one thread. `Setup.start` runs inside the worker's abort guard |

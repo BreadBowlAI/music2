@@ -182,9 +182,9 @@ unchanged, 0.3% of the address space for 2 copies, build 214 ms against 220). No
 
 ## Where the numbers are
 
-`~/m2-runs/g7f-linux/`: every run's log (`runs/`: `t-` round 1, `u-` round 2, `a-` round 3, `side-` the copies side
+`$SCRATCH/g7f-linux/`: every run's log (`runs/`: `t-` round 1, `u-` round 2, `a-` round 3, `side-` the copies side
 by side), the scripts (`one.sh`, `campaign*.sh`, `summary.py`, `renders.sh`), and the campaigns' logs in
-`~/m2-runs/logs/g7f-*`. The scratch copy's changes are in `scratch.diff` there: the layout switch in `engine()`
+`$SCRATCH/logs/g7f-*`. The scratch copy's changes are in `scratch.diff` there: the layout switch in `engine()`
 (`M2_G7F_LAYOUT`), the Linux memory rows and CPU time in `store.rs`, the two server tests
 (`g7f_at_the_address_space_limit`, `g7f_how_many_at_once`), the player test (`g7f_leak.rs`) and the MPK patch. The
 copy itself was removed.

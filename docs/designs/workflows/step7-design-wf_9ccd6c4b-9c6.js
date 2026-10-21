@@ -10,7 +10,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/jerryxu/dev/suite2/music2'
+const REPO = '<repo>'
 const D = `${REPO}/.git/m2-step7`
 
 const RULES = `

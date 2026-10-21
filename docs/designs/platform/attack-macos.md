@@ -1,6 +1,6 @@
 # Attack on the platform design: macOS safety
 
-Label `attack-macos`. Written 2026-10-14 on `jerry-ax102`, against `design.md` revision 1 and `main` at `f126d03`.
+Label `attack-macos`. Written 2026-10-14 on the Linux server, against `design.md` revision 1 and `main` at `f126d03`.
 Nothing here ran on a Mac. Every fact was checked in source or measured here, unless it says *(unverified)*.
 
 ## In short
@@ -118,7 +118,7 @@ second candidate in the same function, with its own test. This makes S6 smaller.
 
 | Claim | How it was checked | Result |
 |---|---|---|
-| `std.wasm` rebuilds to the same bytes on a Mac (PLAT-5) | Cargo's `-C metadata` could include rustc's `host:` line. Built std in the S3 layout (`m2-kernel` inside the kernels' workspace) twice here: once normally, once through a `rustc` wrapper whose `-vV` says `host: aarch64-apple-darwin` (`~/m2-runs/logs/am-stdhost-*.log`) | Same metadata, same file names, same bytes (`909f4881…`). Cargo leaves the host out for wasm32 units. The file holds no machine path, only `kernel/src/lib.rs` and `/rustc/<hash>/…`. Whether rustc itself emits the same bytes on an arm Mac stays *(unverified)* until the Mac run. |
+| `std.wasm` rebuilds to the same bytes on a Mac (PLAT-5) | Cargo's `-C metadata` could include rustc's `host:` line. Built std in the S3 layout (`m2-kernel` inside the kernels' workspace) twice here: once normally, once through a `rustc` wrapper whose `-vV` says `host: aarch64-apple-darwin` (`$SCRATCH/logs/am-stdhost-*.log`) | Same metadata, same file names, same bytes (`909f4881…`). Cargo leaves the host out for wasm32 units. The file holds no machine path, only `kernel/src/lib.rs` and `/rustc/<hash>/…`. Whether rustc itself emits the same bytes on an arm Mac stays *(unverified)* until the Mac run. |
 | `libm` gives the same bits on x86_64 and aarch64 | Read `libm` 0.2.16's source for `target_arch` and `target_feature` | Only exact operations differ per CPU (`sqrt`, `fma`, `rint`, `floor`…, all correctly rounded). The functions S4 uses (`cosf`, `sinf`, `powf`, `exp2`, `sin`, `cos`) run the same Rust on both. The predicted Mac hashes are well founded. |
 | The Mac check's renders use the debug `m2`, the recorded hashes came from a release one | Read §5.1 and `audio.rs` | Fine after S4: `libm::exp2` is called by name, so LLVM can't swap `pow` and `exp2` between builds. All dependencies are built at opt-level 3 in dev (`Cargo.toml`), so `libm` is not slow on the audio thread in debug runs. |
 | Wasm floats on x86_64 and arm | Read the design and wasmtime's settings | Holds: no fused multiply-add outside relaxed SIMD (off), IEEE everywhere. Only NaN sign and payload can differ (NaN canonicalization off), and the renderer silences non-finite samples. |

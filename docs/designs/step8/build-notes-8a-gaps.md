@@ -1,9 +1,9 @@
 # 8a's live half, the gaps lane: build notes
 
 What the gaps lane built, how it was tested, and where the logs are. The plan is
-`~/m2-runs/s8a/plan-live.md` §5 (its Attack and Decisions win: D24, D27). The lane ran beside slice 3 on its own
-branch (`8a-gaps`, worktree `~/m2-runs/wt/8a-g`, from `8a` at `98620e7`), with its own target
-(`~/m2-runs/8a-scratch/target-gaps`) and scratch HOME (`~/m2-runs/8a-scratch/g-home`).
+`$SCRATCH/s8a/plan-live.md` §5 (its Attack and Decisions win: D24, D27). The lane ran beside slice 3 on its own
+branch (`8a-gaps`, worktree `$SCRATCH/wt/8a-g`, from `8a` at `98620e7`), with its own target
+(`$SCRATCH/8a-scratch/target-gaps`) and scratch HOME (`$SCRATCH/8a-scratch/g-home`).
 
 ## In short
 
@@ -67,7 +67,7 @@ Where it differs from the plan:
 
 ### Tests
 
-Each new test was shown red once by a small deliberate bug, its change and run kept in `~/m2-runs/s8a/g-red/`
+Each new test was shown red once by a small deliberate bug, its change and run kept in `$SCRATCH/s8a/g-red/`
 (`<name>.diff`, `<name>.log`; `mutate.py` puts the file back afterwards).
 
 | Test | Where | Proves | Red by |
@@ -82,9 +82,9 @@ Each new test was shown red once by a small deliberate bug, its change and run k
 
 ### Checks
 
-`~/m2-runs/s8a/g-check.sh m2-runtime m2-play m2-server` (a copy of `s2-check.sh` with the lane's paths), load
+`$SCRATCH/s8a/g-check.sh m2-runtime m2-play m2-server` (a copy of `s2-check.sh` with the lane's paths), load
 6.0 at the start: renders 10 of 10 OK; tests all pass (runtime 174 + 1 ignored, server 235, play's suites);
-clippy clean, Linux and the Mac lint. Log: `~/m2-runs/logs/g1-check-1017-181044-1523245.log`. Its first run
+clippy clean, Linux and the Mac lint. Log: `$SCRATCH/logs/g1-check-1017-181044-1523245.log`. Its first run
 failed only its rustfmt step, on lines the tree had before (`rustfmt` follows a file's modules, and the tree
 isn't rustfmt-clean). The script now checks only new files, as `s2-check.sh` does.
 
@@ -126,7 +126,7 @@ stops at the cap now (`memory.size` < 512), and still proves the memory never mo
 
 `g-check.sh m2-runtime m2-play m2-server m2-editor`, load 6.6 at the start: renders 10 of 10 OK; tests all pass
 (runtime 176 + 1 ignored, server 236, editor 284, play's suites); clippy clean, Linux and the Mac lint. Log:
-`/home/jerry/m2-runs/logs/g2-check-1017-181854-1584955.log`.
+`$SCRATCH/logs/g2-check-1017-181854-1584955.log`.
 
 ## G3: the app says which sound stopped, on which track, and what brings it back
 
@@ -186,15 +186,15 @@ the whole chain runs for real: the trap on the audio thread, the mark, the actor
 
 The suite red first, on the server of `98620e7` (before this lane, built in a throwaway worktree, its page the
 same), load 12.5: 6 of 12 fail. Nothing is said, the song stops (`playing` false), and every meter falls to the
-floor: the old "whole song silent" gap. Log: `~/m2-runs/s8a/g-red/sound-stops-base.log`. Then on this lane's
-server, 5 runs of 5 pass (load 8.7 to 4.8; `~/m2-runs/logs/g-stops-5-*.log`), about 7 s each. A picture of the
-toast: `~/m2-runs/s8a/g-red/sound-stops-toast.png`.
+floor: the old "whole song silent" gap. Log: `$SCRATCH/s8a/g-red/sound-stops-base.log`. Then on this lane's
+server, 5 runs of 5 pass (load 8.7 to 4.8; `$SCRATCH/logs/g-stops-5-*.log`), about 7 s each. A picture of the
+toast: `$SCRATCH/s8a/g-red/sound-stops-toast.png`.
 
 ### Checks
 
 `g-check.sh m2-runtime m2-server m2-play`, load 14.6 at the start: renders 10 of 10 OK; tests all pass (runtime
 176 + 1 ignored, server 238, play's suites); clippy clean, Linux and the Mac lint; the new files formatted. Log:
-`~/m2-runs/logs/g3-check-1017-183107-1689097.log`. The run before it failed clippy only
+`$SCRATCH/logs/g3-check-1017-183107-1689097.log`. The run before it failed clippy only
 (`cloned_ref_to_slice_refs` in the new test), fixed.
 
 ## G4: pl-mix waits for a hat before it reads the meter past the fader
@@ -206,12 +206,12 @@ toast: `~/m2-runs/s8a/g-red/sound-stops-toast.png`.
   So all ten reads could land between hits.
 - **Measured:** with the plan's fix (150 ms apart, on until one is loud, 40 at most), 10 runs of 10 passed, but the
   first loud read came at read 10, 10, 10, 12, 12, 12, 12, 15, 25 and **37**. So the old 10 reads would have
-  failed in 7 of 10 runs, and 40 was too close. Log: `~/m2-runs/logs/g-mix-10-1017-183443-1721006.log`.
+  failed in 7 of 10 runs, and 40 was too close. Log: `$SCRATCH/logs/g-mix-10-1017-183443-1721006.log`.
 - **Built:** reads 50 ms apart, at least 10, on until one is loud, 12 s at most. Every read must still match the
   header's within 1.5 dB. The same for the check before the fader. The words print how many reads, the first ten
   and the loud ones.
 - **10 runs of 10 pass**, load 2.7 at the start: the first loud read at read 10 to 33 (1.7 s at most). Log:
-  `~/m2-runs/logs/g-mix-10b-1017-183830-1746598.log` (the red run, then the 10).
+  `$SCRATCH/logs/g-mix-10b-1017-183830-1746598.log` (the red run, then the 10).
 
 ### Tests
 

@@ -112,7 +112,7 @@ The kept tests stay green: `pitch_without_warp_is_varispeed_and_with_warp_keeps_
 | `follow_tempo_through_the_clips_route` | `crates/server/src/routes_8b_tests.rs` | before the field |
 | browser suite `sx-follow`: the row, its check, a tempo change, Undo | `e2e/sx-follow.mjs` | before the row |
 
-**Done when:** all green. `ci/check.sh --gates` passes, run with `~/m2-runs/tw`. Pictures from the app on `:98` (the menu, a followed clip after a tempo change). By-ear steps written. Every new test was seen red once.
+**Done when:** all green. `ci/check.sh --gates` passes, run with `$SCRATCH/tw`. Pictures from the app on `:98` (the menu, a followed clip after a tempo change). By-ear steps written. Every new test was seen red once.
 
 **Built** (2026-10-18), with these changes to the plan:
 - A lane a rebuild keeps keeps its renders going: the lane remembers its renders' keys, and a build that reuses it marks them used. Without this, any edit to another track during a stretch would have stopped it. `a_dropped_render_stops_and_leaves_no_part_file` checks it.

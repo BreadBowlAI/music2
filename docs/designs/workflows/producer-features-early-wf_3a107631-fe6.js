@@ -12,8 +12,8 @@ export const meta = {
   ],
 }
 
-const MAIN = '/Users/jerryxu/dev/suite2/music2'
-const S = '/private/tmp/claude-501/-Users-jerryxu-dev-suite2-music2/07b91ec3-d8c4-49ce-985f-b33193c681f7/scratchpad'
+const MAIN = '<repo>'
+const S = '<scratchpad>'
 const WT = `${S}/wt-taste`
 const TGT = `${S}/target-taste`
 const D = `${MAIN}/.git/m2-step8`
@@ -26,7 +26,7 @@ Owner decisions: the level slider lives only on the Mix strip (no header slider)
 These slices are built BEFORE step 7 lands (design-8b §12 says 8b.1-8b.3 can): until step 7, an add or delete of a track builds a new renderer (tails cut) and a tempo change rebuilds; that is expected now; do not try to build step 7's arena here. Keep every engine-facing change minimal so the later merge with step 7 (which rewrites core/runtime, core/play and parts of crates/server/src/graph/actor.rs and graph.rs) stays easy: prefer Tx builders in crates/editor, routes in crates/server/src/routes.rs, and web/.
 Hard rules:
 - You MAY commit in ${WT} on branch "taste" (one commit per slice, clear message ending with the line "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"), but never push, never rebase, never reset --hard, never touch other branches or refs/backup/*.
-- Do NOT launch music2-desktop; never kill music2-desktop processes; never use the real ~/.music2 or ~/Music (HOME=${S}/home-8b for servers and the CLI; cargo then needs RUSTUP_HOME=/Users/jerryxu/.rustup CARGO_HOME=/Users/jerryxu/.cargo PATH=/Users/jerryxu/.cargo/bin:$PATH).
+- Do NOT launch music2-desktop; never kill music2-desktop processes; never use the real ~/.music2 or ~/Music (HOME=${S}/home-8b for servers and the CLI; cargo then needs RUSTUP_HOME=/Users/<user>/.rustup CARGO_HOME=/Users/<user>/.cargo PATH=/Users/<user>/.cargo/bin:$PATH).
 - ONE cargo target dir CARGO_TARGET_DIR=${TGT}; run cargo with nice -n 10 (the machine is shared with two other workflows).
 - Every slice lands green. Never weaken a test. Offline renders of the fixtures stay byte-identical (${S}/baseline/SHA256SUMS; e2e/baseline.sh --tree ${WT} <out> plus templates/empty --from 4 --seconds 6) unless the slice intentionally changes a template, which these slices must not.
 - Match the surrounding code; short "why" comments; rule ids in comments on tests.

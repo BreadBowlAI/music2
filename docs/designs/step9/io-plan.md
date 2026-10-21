@@ -1,6 +1,6 @@
 # io: the plan
 
-For the `io` track: branch `io`, worktree `/home/jerry/m2-runs/wt/io`, made from `main` at `258275b`. Step 9's
+For the `io` track: branch `io`, worktree `$SCRATCH/wt/io`, made from `main` at `258275b`. Step 9's
 audio-and-sample turns 1 and 4 ([Order of work](../../architecture.md#order-of-work), item 9): disk streaming, then
 recording audio (gaps #25). Written 2026-10-18 by a planning agent: files read, nothing built or run.
 

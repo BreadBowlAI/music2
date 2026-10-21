@@ -1,6 +1,6 @@
 # Attack on the platform design: simplicity and fit
 
-Label `attack-simplicity`. Written 2026-10-14 on `jerry-ax102`, against `design.md` revision 1 at `f126d03`.
+Label `attack-simplicity`. Written 2026-10-14 on the Linux server, against `design.md` revision 1 at `f126d03`.
 The lens: abstractions not needed today, APIs too big or too small, code moved for no gain, and fit with 8a, 8b,
 step 9, Windows and the three branches. Each claim was checked in source or measured here, unless marked
 *(unverified)*.
@@ -138,7 +138,7 @@ test children can call `prctl` themselves under `cfg(target_os = "linux")`.
 
 **What goes wrong.** When 8b.10 is built after this step, `one_place.rs` has an empty allow-list. CoreMIDI calls
 outside `m2-os` fail PLAT-2, and nothing in the layer is shaped for them. On Linux the sequencer is not reachable
-here: `/dev/snd/seq` is `root:audio 0660` and `jerry` is not in `audio`. Opening it gives `EACCES` (measured). A MIDI
+here: `/dev/snd/seq` is `root:audio 0660` and the user is not in `audio`. Opening it gives `EACCES` (measured). A MIDI
 backend that treats that as an error would fail every Linux test and every check run.
 
 **Fix (a few lines in §9 and §2.4).**
@@ -157,8 +157,8 @@ OUT=${M2_CHECK_OUT:-$HOME/m2-check/$SHA}
 rm -rf "$OUT" && mkdir -p "$OUT/home" || exit 2
 ```
 
-§7.4 tells agents to pass `M2_CHECK_OUT=$HOME/m2-runs/check-<label>`. One slip,
-`M2_CHECK_OUT=$HOME/m2-runs`, deletes `~/m2-runs`: the `tw` helper, the unpacked plugins in `~/m2-runs/plugins/clap`,
+§7.4 tells agents to pass `M2_CHECK_OUT=$SCRATCH/check-<label>`. One slip,
+`M2_CHECK_OUT=$SCRATCH`, deletes `$SCRATCH`: the `tw` helper, the unpacked plugins in `$SCRATCH/plugins/clap`,
 every log and every target folder.
 
 **Fix.** If `$OUT` exists and has no `.m2-check` marker, stop with a message. Write the marker after `mkdir`.
@@ -175,4 +175,4 @@ every log and every target folder.
 | Does `sounds` use `Math.` or `**` in TypeScript? | No. |
 | A shell wrapper for Chrome instead of launch args | Needed: 20 suites each call `puppeteer.launch` with their own `args`. |
 | Does `baseline.sh` give the renders a scratch `HOME`? | Yes (`r()` sets `HOME=$OUT/home`). |
-| inotify instances in use by `jerry` now | 2 of 128. |
+| inotify instances in use by the user now | 2 of 128. |

@@ -1,6 +1,6 @@
 # Attack on the platform design: verification and slices
 
-Label `attack-verification`. Written 2026-10-14 on `jerry-ax102`, against `design.md` revision 1 at `f126d03`.
+Label `attack-verification`. Written 2026-10-14 on the Linux server, against `design.md` revision 1 at `f126d03`.
 
 ## In short
 
@@ -94,9 +94,9 @@ plugins says none").
   `PASS`.
 
 **Scenario C: the Linux plugin builds.**
-- They exist only in `~/m2-runs/plugins`, unpacked by `~/m2-runs/get-plugins.sh`. Neither is in the repo.
+- They exist only in `$SCRATCH/plugins`, unpacked by `$SCRATCH/get-plugins.sh`. Neither is in the repo.
 - The Airwindows file is a nightly zip, and GitHub deletes the old zip (`ci.md`).
-- `~/m2-runs` gets cleaned (the 390 GB episode). After a clean-up, the same build can't be fetched again. A newer
+- `$SCRATCH` gets cleaned (the 390 GB episode). After a clean-up, the same build can't be fetched again. A newer
   nightly may change the sound or the saved state.
 
 **Fix.**
@@ -105,13 +105,13 @@ plugins says none").
 - Commit `ci/plugins.sh` and `ci/plugins.sha256`. The script fetches Surge XT 1.3.4 and the recorded Airwindows zip
   and checks their hashes. It unpacks them into one user folder that no CLAP search path names, for example
   `~/.local/share/m2-test-plugins/clap`. On Linux, `check.sh` uses that folder as `CLAP_PATH` when it exists.
-- Keep a copy of both archives outside `~/m2-runs`.
+- Keep a copy of both archives outside `$SCRATCH`.
 - Print each plugin's version in the summary. The Mac uses whatever versions the owner installed.
 
 ## 4. The "long-path flake" always fails in a long checkout (low)
 
 **Measured.**
-- My scratch checkout was `/home/jerry/m2-runs/scratch-attack-verification/tree` (52 characters).
+- My scratch checkout was `$SCRATCH/scratch-attack-verification/tree` (52 characters).
 - There, `files::tests::diagnostics_say_where_in_the_project_each_problem_is` fails on every run with:
   `Could not find export 'nope' in module 'std/src/ds'`.
 - The cause: QuickJS writes module names into a 64-byte buffer (`ATOM_GET_STR_BUF_SIZE 64`, `quickjs.c:3821`; the
@@ -121,7 +121,7 @@ plugins says none").
 - HANDOFF calls this a flake. `branches.md` met it in a scratch run.
 
 **Scenario.**
-- The review and skeptic agents must verify in `~/m2-runs/scratch-<label>/…` copies. With a label of about 16
+- The review and skeptic agents must verify in `$SCRATCH/scratch-<label>/…` copies. With a label of about 16
   characters or more, `ci/check.sh` says `rust tests FAIL` at every slice. The agents either learn to ignore a
   FAIL, or chase a cause that isn't new.
 - Users can get the same cut-off name if the app sits in `~/Applications`
@@ -163,7 +163,7 @@ Setup: a scratch copy of `f126d03` (made with `git archive`), with:
 - S3's kernel move and the new `std/build.sh`;
 - S1's files, and the design's `ci/check.sh`, copied word for word.
 
-Logs are in `~/m2-runs/logs/av-*`.
+Logs are in `$SCRATCH/logs/av-*`.
 
 | Claim (design section) | Result |
 |---|---|

@@ -1,6 +1,6 @@
 # Browser suites on Linux: why 8 runs are not ok
 
-Ground work for the platform design. Measured on jerry-ax102 (Ubuntu 24.04, ext4 on NVMe RAID 0) at f126d03,
+Ground work for the platform design. Measured on the Linux server (Ubuntu 24.04, ext4 on NVMe RAID 0) at f126d03,
 with the binaries the lead built in the repo and chrome-headless-shell linux64 133.0.6943.141.
 
 ## In short
@@ -24,8 +24,8 @@ with the binaries the lead built in the repo and chrome-headless-shell linux64 1
 
 | Run | What | Result |
 |---|---|---|
-| Lead's baseline | all 29, as they are | 21 ok, 1 PART, 7 FAIL (`~/m2-runs/base-f126d03/e2e.log`) |
-| rerun1 | the 7 failing suites, as they are | the same 17 checks fail: not flaky (`~/m2-runs/logs/e2e-rerun1-*.log`) |
+| Lead's baseline | all 29, as they are | 21 ok, 1 PART, 7 FAIL (`$SCRATCH/base-f126d03/e2e.log`) |
+| rerun1 | the 7 failing suites, as they are | the same 17 checks fail: not flaky (`$SCRATCH/logs/e2e-rerun1-*.log`) |
 | Mac user agent | code, fixes-graph, attention, s6-write, export, with only the user agent set to a Mac's | the 4 editor suites pass in full; export still fails ⌘E (`e2e-ua-*.log`) |
 | Fixed suites ×3 | all 29, with the suite fixes below | run 1: 27 ok, newsong failed one label ("Show in Finder"), now in the fix. Runs 2 and 3: 28 ok + live3b PART, 0 failed (`e2e-mod-all*.log`) |
 | No web fonts | all 29, fixed, with Google Fonts blocked | 20 suites fail "no console errors"; fx-fixes also fails a toast-fit check (`e2e-nofont-*.log`) |

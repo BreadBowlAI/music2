@@ -1,6 +1,6 @@
 # The three waiting branches: where the platform layer meets them
 
-Ground work for the platform design. Measured on jerry-ax102 (Ubuntu 24.04, x86_64, ext4) on 2026-10-14, with
+Ground work for the platform design. Measured on the Linux server (Ubuntu 24.04, x86_64, ext4) on 2026-10-14, with
 main at `f126d03` and the branches `wip/step7` `5079233`, `taste` `4804247` and `sounds` `916127d`. All three
 fork from `8aa301e`. Since then main only added docs.
 
@@ -44,7 +44,7 @@ fork from `8aa301e`. Since then main only added docs.
 |---|---|---|
 | Trial merges | A scratch clone (`git clone --shared`, all branches fetched). On main, a comment was added to each line the surveys name, one group per seam (math, threads, dirs, files and lock, watcher, audio, shell, gates, browser suites, std.wasm, Cargo). Then `git merge --no-commit` of each branch, the conflicted files listed, and `git merge --abort`. | §5 (per seam), and each branch's table |
 | Branch tests | `git archive` of each branch into scratch, its own target dir, a scratch `HOME`, `M2_AUDIO=none`. `cargo build`, `cargo test --no-fail-fast`, and `cargo clippy` with warnings listed (not denied). | §2.3, §3.3, §4.4 |
-| taste's browser suites | The lead's full run (`~/m2-runs/linux-taste-4804247/e2e.log`, taken while three branch checks ran at once). Then the failing suites again, alone, and with the two one-place fixes. | §3.3 |
+| taste's browser suites | The lead's full run (`$SCRATCH/linux-taste-4804247/e2e.log`, taken while three branch checks ran at once). Then the failing suites again, alone, and with the two one-place fixes. | §3.3 |
 | std.wasm | main's and sounds' kernels rebuilt with rustc 1.99.0 (`b940084d7`, the same rustc the Mac used), in different folders, with and without `--remap-path-prefix`. | §4.3 |
 
 **A caveat.** The trial merges used marker edits, not the real layer. A real change can touch fewer lines (fewer
@@ -178,7 +178,7 @@ taste.
 
 | # | Piece | Where | On Linux | Relates to |
 |---|---|---|---|---|
-| 1 | `std.wasm` rebuilt (143,471 → 215,110 bytes), with 6 new kernels. It holds `/Users/jerryxu/dev/suite2/music2/core/kernel/src/lib.rs` and rustc `b940084d7` paths | `std/kernels/std.wasm` | rebuilds bit for bit here only in some folders (§4.3) | OS-64, OS-65 |
+| 1 | `std.wasm` rebuilt (143,471 → 215,110 bytes), with 6 new kernels. It holds `<repo>/core/kernel/src/lib.rs` and rustc `b940084d7` paths | `std/kernels/std.wasm` | rebuilds bit for bit here only in some folders (§4.3) | OS-64, OS-65 |
 | 2 | Kernel math: oscillators, ladder filter, FM | `std/kernels-src/src/{synth,fm,drums,voice,notes}.rs` | inside wasm the math is compiler-builtins' libm, the same on every OS. The native kernel tests use the host's libm but check properties, not bits: 107 pass here (release) | OS-46 |
 | 3 | Drum noise seeded from the lane's hit count, not from engine samples | `drums.rs` | portable | — |
 | 4 | A new example, `examples/sounds`. It is in `bit_identity`'s "live equals the export" list, but not in `renders.json`'s `PURE` list and not in `e2e/baseline.sh` | `core/play/tests/bit_identity.rs` | live equals export here. Whether the new sounds give the same bytes on every OS is checked nowhere | OS-45, OS-46 (RENDER-2) |
@@ -289,14 +289,14 @@ sounds then taste conflict in `docs/gaps.md` and `std/src/instruments.ts`.
 
 ```sh
 # Trial merges: a scratch clone with every branch, then per branch:
-git clone -q --shared ~/dev/suite2/music2 clone && cd clone
+git clone -q --shared <repo> clone && cd clone
 git fetch -q origin 'refs/remotes/origin/*:refs/remotes/up/*'
 #   ...mark lines on main, commit...
 git merge --no-commit --no-ff up/taste; git diff --name-only --diff-filter=U; git merge --abort
 
 # std.wasm in a folder of your choice (copy std/, core/kernel/ and the root Cargo.toml there first):
 cd <copy>/std/kernels-src
-RUSTFLAGS="-C link-arg=-zstack-size=65536 --remap-path-prefix=<copy>=/Users/jerryxu/dev/suite2/music2" \
+RUSTFLAGS="-C link-arg=-zstack-size=65536 --remap-path-prefix=<copy>=<repo>" \
   CARGO_TARGET_DIR=<target> cargo build --offline --release --target wasm32-unknown-unknown -v 2>&1 | grep -o 'metadata=[0-9a-f]*'
 
 # taste's suites with the two one-place fixes: native.ts line 16 becomes

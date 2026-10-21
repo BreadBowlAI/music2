@@ -1,6 +1,6 @@
 # Track br: add an installed plugin, and presets
 
-Gaps #32 and #26. Branch `br`, from `main` at `e7518f4`. Worktree `~/m2-runs/wt/br`.
+Gaps #32 and #26. Branch `br`, from `main` at `e7518f4`. Worktree `$SCRATCH/wt/br`.
 
 ## In short
 
@@ -71,7 +71,7 @@ The `key` is always written, so the plugin's settings can be saved (HOME-6 needs
 | `planned_call_forms_are_current` gains the two new forms | existing test | — |
 | `e2e/br-plugins.mjs`: the Plugins groups list m2 probe; a drag onto Kick adds it, the card shows, Undo takes it away; + Track adds a probe track | `e2e/` (with `M2_PROBE=1`) | no Plugins group |
 
-**Done when** the tests above pass, clippy and the Mac lint are clean, the renders match, the suites `br-plugins`, `effects`, `s8-tracks` and `graph` pass, and the app on Xvfb `:95` shows the Plugins group (a picture in `~/m2-runs/app-shots/br-1/`).
+**Done when** the tests above pass, clippy and the Mac lint are clean, the renders match, the suites `br-plugins`, `effects`, `s8-tracks` and `graph` pass, and the app on Xvfb `:95` shows the Plugins group (a picture in `$SCRATCH/app-shots/br-1/`).
 
 ## Slice 2: presets for std sounds (#26, first half)
 
@@ -169,7 +169,7 @@ A folder name is the id with every character outside `A–Z a–z 0–9 . _ -` t
 | `a_preset_for_another_plugin_is_refused_in_words` | same | the `sound` check left out |
 | `e2e/br-presets.mjs` (plugin part): the probe's card lists "m2 probe's" Bright and Dark; Dark loads, with Undo | `e2e/` | no plugin group |
 
-**Done when** as slice 2, and `m2-gates plugins` passes, and `ci/check.sh` passes once at the track's end (through `~/m2-runs/tw`). Surge XT on Xvfb `:95` is tried by hand: its own presets listed if it offers discovery, a saved preset loaded back (information only, a picture).
+**Done when** as slice 2, and `m2-gates plugins` passes, and `ci/check.sh` passes once at the track's end (through `$SCRATCH/tw`). Surge XT on Xvfb `:95` is tried by hand: its own presets listed if it offers discovery, a saved preset loaded back (information only, a picture).
 
 ### Slice 3 as built
 
@@ -186,7 +186,7 @@ A folder name is the id with every character outside `A–Z a–z 0–9 . _ -` t
 | A plugin's own presets are searched on the calling thread, not the main thread (set by the review) | CLAP's discovery factory is thread-safe; a long search on the main thread froze plugin windows and held up autosave. Loading one stays on the main thread |
 | A new server test, `the_plugins_own_preset_loads_on_a_scratch_instance` | Covers the list, the scratch instance (made, then destroyed, by the probe's records) and the Tx |
 
-Surge XT on Xvfb `:95`, by hand: it offers 1,974 presets through discovery, listed in about 0.5 s; one of them (Attacky) loads in about 0.1 s, and its saved state names it; a preset of yours (67 KB) saves and loads back. Picture and logs: `~/m2-runs/app-shots/br-3/`.
+Surge XT on Xvfb `:95`, by hand: it offers 1,974 presets through discovery, listed in about 0.5 s; one of them (Attacky) loads in about 0.1 s, and its saved state names it; a preset of yours (67 KB) saves and loads back. Picture and logs: `$SCRATCH/app-shots/br-3/`.
 
 ## Decisions
 

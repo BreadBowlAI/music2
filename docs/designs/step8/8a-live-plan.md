@@ -1,11 +1,11 @@
 # 8a, live half: the plan (R1, slices 3 and 4, the gaps lane)
 
 Written 2026-10-17, read-only on the repo: git log, show, diff and grep; nothing built or run. Base: branch `8a`
-at `6d4086d`, worktree `~/m2-runs/wt/8a`; `main` is `8a6d9e1` (= `6d4086d` + a HANDOFF commit). Read:
+at `6d4086d`, worktree `$SCRATCH/wt/8a`; `main` is `8a6d9e1` (= `6d4086d` + a HANDOFF commit). Read:
 `build-notes-8a.md` (every slice, "For the lead", the review), `8a-plan.md` (Attack and Decisions),
-`design-8a.md` (§5.5, §6, §9, §10, §12), `~/m2-runs/s8a/refresh.md` (its Attack), `docs/architecture.md`
+`design-8a.md` (§5.5, §6, §9, §10, §12), `$SCRATCH/s8a/refresh.md` (its Attack), `docs/architecture.md`
 (RENDER-2, 2a, 25, 28, 32, HOST-2, HOST-5, PLAT-1, PLAT-2, gate 8), and the code named in §11. Also the `next`
-track's diff against `main` (`~/m2-runs/wt/nx`, read only). "Estimate" marks a number nobody measured.
+track's diff against `main` (`$SCRATCH/wt/nx`, read only). "Estimate" marks a number nobody measured.
 
 ## In short
 
@@ -39,13 +39,13 @@ track's diff against `main` (`~/m2-runs/wt/nx`, read only). "Estimate" marks a n
 
 | Step | Command or rule |
 |---|---|
-| Merge `main` into `8a` | `git -C ~/m2-runs/wt/8a merge --ff-only main` (8a is an ancestor of main: a fast-forward, nothing rewritten) |
-| The gaps lane's worktree | `git -C ~/m2-runs/wt/8a worktree add -b 8a-gaps ~/m2-runs/wt/8a-g 8a`, after the merge |
-| Targets | each worktree its own `target/` (two agents build at once). Never move one between worktrees. Delete `~/m2-runs/wt/8a-g/target` when the lane is merged; `df -h /` at each slice's end |
-| Environment | every cargo or music2 command: `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`; music2 runs: `HOME=/home/jerry/m2-runs/8a-scratch/home M2_AUDIO=none` (the gaps lane: `.../8a-scratch/g-home`) |
-| Per-commit check | `~/m2-runs/s8a/s2-check.sh <crates>` (renders 10 of 10, the crates' tests, clippy, the Mac lint). The gaps lane copies it to `~/m2-runs/s8a/g-check.sh` with its own worktree and scratch paths |
-| Red runs | a small deliberate bug for each new test, as slice 2 did: `~/m2-runs/s8a/s3-red/` and `~/m2-runs/s8a/g-red/` (`<name>.diff`, `<name>.log`, a copy of `s2-red/mutate.py`) |
-| Long jobs | `TW_WAIT=<s> ~/m2-runs/tw <name> '<cmd>'`; `uptime` first, said in the notes. Xvfb display `:95` only if needed |
+| Merge `main` into `8a` | `git -C $SCRATCH/wt/8a merge --ff-only main` (8a is an ancestor of main: a fast-forward, nothing rewritten) |
+| The gaps lane's worktree | `git -C $SCRATCH/wt/8a worktree add -b 8a-gaps $SCRATCH/wt/8a-g 8a`, after the merge |
+| Targets | each worktree its own `target/` (two agents build at once). Never move one between worktrees. Delete `$SCRATCH/wt/8a-g/target` when the lane is merged; `df -h /` at each slice's end |
+| Environment | every cargo or music2 command: `CARGO_HOME=/home/<user>/.cargo RUSTUP_HOME=/home/<user>/.rustup`; music2 runs: `HOME=$SCRATCH/8a-scratch/home M2_AUDIO=none` (the gaps lane: `.../8a-scratch/g-home`) |
+| Per-commit check | `$SCRATCH/s8a/s2-check.sh <crates>` (renders 10 of 10, the crates' tests, clippy, the Mac lint). The gaps lane copies it to `$SCRATCH/s8a/g-check.sh` with its own worktree and scratch paths |
+| Red runs | a small deliberate bug for each new test, as slice 2 did: `$SCRATCH/s8a/s3-red/` and `$SCRATCH/s8a/g-red/` (`<name>.diff`, `<name>.log`, a copy of `s2-red/mutate.py`) |
+| Long jobs | `TW_WAIT=<s> $SCRATCH/tw <name> '<cmd>'`; `uptime` first, said in the notes. Xvfb display `:95` only if needed |
 | Never | touch `wt/nx*`, send keys to tmux `m2`, `1`, `2`, `ssh_tmux`, `cargo update`, push, rebase |
 
 ---
@@ -62,7 +62,7 @@ track's diff against `main` (`~/m2-runs/wt/nx`, read only). "Estimate" marks a n
 | G12 (`crates/gates/src/realtime.rs`) | `--offline` only: sweep, bits, paced, partitions, cost, tails | gains the live runs in a new file `realtime/live.rs` |
 | `ci/check.sh` | exports `M2_AUDIO=none`; the gates row runs each `ci/gates.txt` line | G12's live run opens the device explicitly, muted, so the check still plays nothing aloud |
 
-**What `next` changes in the same files** (`~/m2-runs/wt/nx`, not on `main` yet; read only):
+**What `next` changes in the same files** (`$SCRATCH/wt/nx`, not on `main` yet; read only):
 
 | File | `next`'s edit | How this track stays out of its way |
 |---|---|---|
@@ -477,7 +477,7 @@ Build in this order; what doesn't fit goes to "Left", in this order, in the buil
 
 ---
 
-## 5. The gaps lane (worktree `~/m2-runs/wt/8a-g`, branch `8a-gaps`)
+## 5. The gaps lane (worktree `$SCRATCH/wt/8a-g`, branch `8a-gaps`)
 
 ### In short
 
@@ -585,9 +585,9 @@ rest of the plan plays on, and the app names the sound and its track. Offline th
 | When | What |
 |---|---|
 | each commit | `s2-check.sh` with the crates touched (`m2-pool m2-os m2-runtime m2-play m2-editor m2-gates` as fits); the pool's models row's two commands after commit 4 |
-| R1, around commit 1 | the offline gate held on CCD1, before R1 (the merged base's release build, made before R1's edit) and after, `uptime` first: `cargo build --locked --release -p m2-gates`, then `TW_WAIT=1800 ~/m2-runs/tw 8a-r1 'uptime; cd ~/m2-runs/wt/8a && HOME=/home/jerry/m2-runs/8a-scratch/home M2_AUDIO=none taskset -c 8-15 target/release/m2-gates realtime --offline --reference 50 --sweep 1,4,8'` |
+| R1, around commit 1 | the offline gate held on CCD1, before R1 (the merged base's release build, made before R1's edit) and after, `uptime` first: `cargo build --locked --release -p m2-gates`, then `TW_WAIT=1800 $SCRATCH/tw 8a-r1 'uptime; cd $SCRATCH/wt/8a && HOME=$SCRATCH/8a-scratch/home M2_AUDIO=none taskset -c 8-15 target/release/m2-gates realtime --offline --reference 50 --sweep 1,4,8'` |
 | slice 4, after commit 10 | G12 on the silent clock, information: `realtime --reference 50 --minutes 1 --sweep 1,2,4 --between park,spin` held on CCD1, `uptime` first |
-| the end | `TW_WAIT=3600 ~/m2-runs/tw check-8a-live 'cd ~/m2-runs/wt/8a && M2_CHECK_OUT=$HOME/m2-runs/check-8a-live ci/check.sh --gates'`: every row, nothing passed only on a retry. Then build notes "The final check", HANDOFF, delete the gaps worktree and its target, `df -h /` |
+| the end | `TW_WAIT=3600 $SCRATCH/tw check-8a-live 'cd $SCRATCH/wt/8a && M2_CHECK_OUT=$SCRATCH/check-8a-live ci/check.sh --gates'`: every row, nothing passed only on a retry. Then build notes "The final check", HANDOFF, delete the gaps worktree and its target, `df -h /` |
 
 ---
 
@@ -603,7 +603,7 @@ Terminal on the Mac itself. It plays nothing aloud. Paste back `~/m2-8a.txt`.
 | 3 | Paste back what is in `~/m2-8a.txt` | that is all the lead needs |
 
 ```sh
-cd ~/dev/suite2/music2 && git fetch && git switch main && git pull
+cd <repo> && git fetch && git switch main && git pull
 cargo test --locked --release -p m2-pool --features models 2>&1 | tail -5 | tee ~/m2-8a.txt
 sysctl hw.model hw.perflevel0 hw.perflevel1 | tee -a ~/m2-8a.txt
 cargo run --locked --release -p m2-gates -- realtime --offline --reference 50 2>&1 | tee -a ~/m2-8a.txt
@@ -685,7 +685,7 @@ the time-constraint policy, and G12's one minute). It is a separate run of about
 
 ## 11. Files read
 
-In `~/m2-runs/wt/8a` at `6d4086d`: `docs/designs/step8/build-notes-8a.md`, `8a-plan.md`, `design-8a.md`;
+In `$SCRATCH/wt/8a` at `6d4086d`: `docs/designs/step8/build-notes-8a.md`, `8a-plan.md`, `design-8a.md`;
 `docs/architecture.md` (RENDER-2, 2a, 25, 28, 32, HOST-2, HOST-5, PLAT-1, PLAT-2, gate 8, Deferred);
 `docs/song-as-program.md`; `core/pool/src/{lib,run}.rs`, `tests/no_blocking.rs`; `core/runtime/src/{engine,parts,
 threads}.rs`, `lib.rs` (`KernelInst`, `step`, `run_graph`, `run_part`, `labels`, `render_block_on`, `pre`,
@@ -695,8 +695,8 @@ no_alloc,no_blocking}.rs`, `Cargo.toml`; `core/os/src/{lib,thread}.rs`, `mac/mod
 `tests/one_place.rs`, `Cargo.toml`; `crates/gates/src/{main,realtime,gates}.rs`; `crates/server/src/graph.rs`
 (`let_go`, `plainly`), `graph/actor.rs` (`heard_plugins`, `plugin_named`, `unbuilt`, `export`); `ci/check.sh`,
 `ci/gates.txt`; `e2e/pl-mix.mjs`; `std/src/mix.ts`; `Cargo.lock`. `main`'s `HANDOFF.md` (the two gaps, step
-7's "Left for later"). `~/m2-runs/s8a/refresh.md` (§4, §6, §7, its Attack), `~/m2-runs/s8a/s2-check.sh`,
-`~/m2-runs/tw`. The `next` track's diff against `main` (`core/play`, `core/runtime`, `core/os`). wasmtime 49.0.2
+7's "Left for later"). `$SCRATCH/s8a/refresh.md` (§4, §6, §7, its Attack), `$SCRATCH/s8a/s2-check.sh`,
+`$SCRATCH/tw`. The `next` track's diff against `main` (`core/play`, `core/runtime`, `core/os`). wasmtime 49.0.2
 `runtime/limits.rs`; cpal 0.18.2 `DeviceId`, CoreAudio `Device::id`; libc 0.2.190 (Mach and `sched` symbols).
 
 ---
@@ -903,7 +903,7 @@ type alias trips `clashing_extern_declarations` under `-D warnings`. D22.
 ## The owner's Mac sweep (added by the lead, 2026-10-17 18:05; overrides the Decisions where they differ)
 
 The owner ran 8a's offline sweep on the reference Mac (MacBookPro18,1) at `main` 8a6d9e1. Raw output, word for word:
-`~/m2-runs/mac-runs/8a-offline-8a6d9e1.txt`. Put it in build-notes-8a.md ("The Mac sweep") with these decisions.
+`$SCRATCH/mac-runs/8a-offline-8a6d9e1.txt`. Put it in build-notes-8a.md ("The Mac sweep") with these decisions.
 
 | Line | Read | Decision |
 |---|---|---|

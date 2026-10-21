@@ -142,7 +142,7 @@ Branch `ex`, from `main` at `83fa4e4`, 2026-10-18. Step 9.
 | io r2 kept | `an_input_unplugged_mid_take_is_one_problem` (the unplug test, adapted) | `record_tests.rs` | before `input.lost` |
 | the app | browser suite `ex-faults`: a trapping kernel; the popover lists it, naming the track; one toast | `e2e/ex-faults.mjs` | before slice 1 (run once on it) |
 
-**Done when:** all green. `ci/check.sh --gates` passes, run with `~/m2-runs/tw`. The Mac lint passes. A picture of the popover from the app on `:96`. By-ear steps written, with one for the owner's Mac: click Don't Allow during the first take. Six gaps lines gone.
+**Done when:** all green. `ci/check.sh --gates` passes, run with `$SCRATCH/tw`. The Mac lint passes. A picture of the popover from the app on `:96`. By-ear steps written, with one for the owner's Mac: click Don't Allow during the first take. Six gaps lines gone.
 
 **As built (slice 3).** Where the build went another way than the tables above:
 

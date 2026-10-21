@@ -6,12 +6,12 @@ ABI v1 (isolation between packages, asset data outside every memory cap) and det
 export, on any thread count).
 
 How to read the citations (the same as `code-map.md` and `external.md`):
-- a bare path (`core/runtime/src/lib.rs:329`) is under `/home/jerry/m2-runs/idea3/src`, step 7 frozen at `ed7fc8e`;
-- `cut1.diff:N` is a line of `/home/jerry/m2-runs/idea3/cut1.diff`;
+- a bare path (`core/runtime/src/lib.rs:329`) is under `$SCRATCH/idea3/src`, step 7 frozen at `ed7fc8e`;
+- `cut1.diff:N` is a line of `$SCRATCH/idea3/cut1.diff`;
 - `W/` = `wasmtime-49.0.2/src`, `E/` = `wasmtime-environ-49.0.2/src`, `CL/` = `wasmtime-internal-cranelift-49.0.2/src`,
-  `CG/` = `cranelift-codegen-meta-0.136.2/src`, all under `/home/jerry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`;
-- `results.md` = `/home/jerry/m2-runs/speed/prof/results.md`, `plan.md` = `/home/jerry/m2-runs/speed/plan.md`,
-  `refresh.md` = `/home/jerry/m2-runs/s8a/refresh.md`; `code-map §n` and `external §n` are the notes in this folder;
+  `CG/` = `cranelift-codegen-meta-0.136.2/src`, all under `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`;
+- `results.md` = `$SCRATCH/speed/prof/results.md`, `plan.md` = `$SCRATCH/speed/plan.md`,
+  `refresh.md` = `$SCRATCH/s8a/refresh.md`; `code-map §n` and `external §n` are the notes in this folder;
 - **estimate** = arithmetic shown, from measured numbers or counts from the code; **unverified** = not checked here;
   **proposal** = a value or wording this design suggests, for the owner to decide.
 
@@ -532,7 +532,7 @@ between a plugin and a kernel copies through host buffers, as today.
 
 ## 10. What changes
 
-**Code** (all paths under `/home/jerry/m2-runs/idea3/src`):
+**Code** (all paths under `$SCRATCH/idea3/src`):
 
 | File | Change |
 |---|---|

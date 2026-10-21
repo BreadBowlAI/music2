@@ -1,8 +1,8 @@
 # Taste's next part: build notes
 
 What each slice of taste's next part did, and what its checks said. The plan is
-`~/m2-runs/taste/plan.md`, with its Attack and the lead decisions T1 to T8, which override it. Each slice
-adds its own section. All runs are on Linux (jerry-ax102), in the worktree `~/m2-runs/wt/tn`, branch
+`$SCRATCH/taste/plan.md`, with its Attack and the lead decisions T1 to T8, which override it. Each slice
+adds its own section. All runs are on Linux (the server), in the worktree `$SCRATCH/wt/tn`, branch
 `taste-next`, made from `09b2dfd`: `main` (`cbac57c`, step 7) plus the `sounds` merge's slices 1 and 2.
 The `sounds` merge's slices 3 (std 0.1 to 0.2) and 4 (docs) are not in it yet.
 
@@ -149,8 +149,8 @@ Both G11 gates pass. The machine was shared (load 12 to 15), so the p95s say lit
 - The owner's screenshots (+ Track's list with the 22) come from the app on Xvfb at A-end.
 - The Mac run judges the pill's place and the Mac app's bar for real. This slice only lays a page out
   as the app's.
-- Scratch: `~/m2-runs/tn-scratch` (the suite runner `suite.sh`, suite logs, renders). Logs:
-  `~/m2-runs/logs/tn-a1-*`.
+- Scratch: `$SCRATCH/tn-scratch` (the suite runner `suite.sh`, suite logs, renders). Logs:
+  `$SCRATCH/logs/tn-a1-*`.
 
 ## A2: fonts
 
@@ -200,7 +200,7 @@ The worktree's `music2-desktop` (debug), opened on first-song on an invisible Xv
 HOME, `M2_AUDIO=none`), once with this slice's `web/dist` and once with the commit before's
 (`MUSIC2_WEB_DIR`). WebKitGTK draws the UI in Inter: narrower letters than DejaVu Sans, Inter's
 shapes. The GTK menu bar keeps the system's font (A3 rebuilds that menu). Pictures:
-`~/m2-runs/tn-scratch/a2/` (`before/`, `after/`, and `cmp-list.png`, the browser's list enlarged,
+`$SCRATCH/tn-scratch/a2/` (`before/`, `after/`, and `cmp-list.png`, the browser's list enlarged,
 before on top).
 
 ### Decisions made in the slice
@@ -285,7 +285,7 @@ Tried against the sheet before this slice: 3 checks fail (its Mac symbols, and a
 On Linux, GTK runs a menu's shortcut before the focused field sees the key, so in the app the page
 gets Ctrl+Z, Ctrl+D and Ctrl+Backspace as menu commands even while typing. No browser has that
 path. Checked by hand: the worktree's debug `music2-desktop` on first-song, on an invisible Xvfb
-screen, a scratch HOME, `M2_AUDIO=none`; keys and clicks sent with XTest by `~/m2-runs/tools/xkey`
+screen, a scratch HOME, `M2_AUDIO=none`; keys and clicks sent with XTest by `$SCRATCH/tools/xkey`
 (new, outside the repo, as plan §4.5 says).
 
 | Check (T8) | Result |
@@ -296,7 +296,7 @@ screen, a scratch HOME, `M2_AUDIO=none`; keys and clicks sent with XTest by `~/m
 | Alt+3 shows Mix | yes (with the focus outside the code editor: see below) |
 | Also | Ctrl+Backspace in Monaco deleted one word ("end"), not the line; Ctrl+S saved "// xyz xyz" to `tracks/kick.ts`; Alt+4 showed Code; Ctrl+Backspace on Hats deleted it and Ctrl+Z brought it back; Alt+K showed the sheet with every row whole; the menus as designed; About opens GTK's dialog with the version and icon |
 
-Pictures: `~/m2-runs/tn-scratch/a3/` (`01-file.png` the File menu, `03-help.png` Help, `05-rename.png`,
+Pictures: `$SCRATCH/tn-scratch/a3/` (`01-file.png` the File menu, `03-help.png` Help, `05-rename.png`,
 `06-field-undo.png`, `08-code-word.png`, `09-code-ctrl-d.png`, `10-mix.png`, `12-sheet.png`,
 `13-about.png`). The script is `a3/app.sh` and `a3/do.sh`.
 
@@ -341,8 +341,8 @@ Pictures: `~/m2-runs/tn-scratch/a3/` (`01-file.png` the File menu, `03-help.png`
 - `ci/check.sh` at `22c09cd` (A3's last commit), with the test plugins: **music2 check: PASS**. Every
   row passed the first time: nothing passed only on a retry, and "what failed" and the retry list are
   empty.
-- Run in tmux (`~/m2-runs/tw check-tnA`), 12 minutes, on a quiet machine (load under 3 at the start).
-  Logs: `~/m2-runs/check-tnA/` and `check-tnA.tgz`.
+- Run in tmux (`$SCRATCH/tw check-tnA`), 12 minutes, on a quiet machine (load under 3 at the start).
+  Logs: `$SCRATCH/check-tnA/` and `check-tnA.tgz`.
 
 | Row | Result |
 |---|---|
@@ -406,7 +406,7 @@ gates run with the final phase.
 ### The app on Linux (Xvfb)
 
 A3 left Ctrl+Period for B1. The worktree's debug `music2-desktop` on first-song, on an invisible Xvfb
-screen, a scratch HOME, `M2_AUDIO=none`, keys sent with `~/m2-runs/tools/xkey`:
+screen, a scratch HOME, `M2_AUDIO=none`, keys sent with `$SCRATCH/tools/xkey`:
 
 | Check | Result |
 |---|---|
@@ -417,7 +417,7 @@ screen, a scratch HOME, `M2_AUDIO=none`, keys sent with `~/m2-runs/tools/xkey`:
 | Ctrl+. outside it | no error. What it does is not visible without sound. |
 | Space, Space, Shift+Space | plays; stops back at 1.1.1; continues from where it stopped (3.2.2 after 1.2 s) |
 
-Pictures: `~/m2-runs/tn-scratch/b1/` (`01-transport.png`, `02-loop-selection.png`,
+Pictures: `$SCRATCH/tn-scratch/b1/` (`01-transport.png`, `02-loop-selection.png`,
 `05-code-ctrl-l.png`, `06-code-ctrl-period.png`, `08-playing.png` to `11-stopped2.png`).
 
 ### Checks
@@ -457,7 +457,7 @@ everywhere. The fields have fixed widths, so the font changes little.
 | Empty lane space moves the start point (design §4.3) | B2 |
 | WRITE-10's rows, `docs/gaps.md`, README (the song bar, the CLI's three commands) | B2 |
 | When the `sounds` merge's slice 3 lands: the WIP added no manifest that names std's version | — |
-| Scratch: `~/m2-runs/tn-scratch/b1/` (the app run), `renders-b1/`, `e2e-all-051142/`. Logs: `~/m2-runs/logs/tn-b1-*`. | — |
+| Scratch: `$SCRATCH/tn-scratch/b1/` (the app run), `renders-b1/`, `e2e-all-051142/`. Logs: `$SCRATCH/logs/tn-b1-*`. | — |
 
 ## B2: finish 8b.2, the song bar
 
@@ -549,7 +549,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | Screenshots of the top bar and the New Song dialog from the app on Xvfb | B-end |
 | When `sounds`' slice 4 lands: join its "Going back to bar 1 … is a jump" line with B2's Space, Space loose end in `docs/gaps.md` | the merge |
 | Setting a loop during an export's hold is judged in the tempo the engine plays, not the edit's | later, if it matters |
-| Scratch: `~/m2-runs/tn-scratch/e2e-all-055337/`, `renders-b2/`. Logs: `~/m2-runs/logs/tn-b2-*`. | — |
+| Scratch: `$SCRATCH/tn-scratch/e2e-all-055337/`, `renders-b2/`. Logs: `$SCRATCH/logs/tn-b2-*`. | — |
 
 ## B3: 8b.3a, std's gains
 
@@ -627,7 +627,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | A user's own stateful effect between the mixer and the master (`master(compress(mixer(…)))`) in a mix that is mono all the way still starts again on the first pan | later, if it matters |
 | The timed gates with the new nodes (p16 and p50 gain the master's gain and `std:stereo`) | final phase |
 | When the `sounds` merge's slice 3 lands: rebuild `std.wasm` (`std/build.sh`, then `--check`), never take a side | the merge |
-| Scratch: `~/m2-runs/tn-scratch/e2e-all-062703/`, `renders-b3/`. Logs: `~/m2-runs/logs/tn-b3-*`. | — |
+| Scratch: `$SCRATCH/tn-scratch/e2e-all-062703/`, `renders-b3/`. Logs: `$SCRATCH/logs/tn-b3-*`. | — |
 
 ## B4: 8b.3b, the builders
 
@@ -696,7 +696,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | A strip whose fader is a signal shows no fader (`db` null); B5 decides its words | B5a |
 | The timed gates with the new state field (`mix` adds a view's walk to each state) | final phase |
 | When the `sounds` merge's slice 3 lands: rebuild `std.wasm` (`std/build.sh`, then `--check`), never take a side; `forms.ts` may need recording again | the merge |
-| Scratch: `~/m2-runs/tn-scratch/b4/`. Logs: `~/m2-runs/logs/tn-b4-*`. | — |
+| Scratch: `$SCRATCH/tn-scratch/b4/`. Logs: `$SCRATCH/logs/tn-b4-*`. | — |
 
 ## B5a: 8b.3c, the Mix view
 
@@ -764,7 +764,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | The Song's Device view as one compact mixer card; the 9 suites that drag or read the mixer's knobs there move to the Mix view | B5b |
 | A first options object in a call written over several lines lands on the last argument's line: the master's first fader move writes `}), { db: -4.8 },`. Right, but not how a person would lay it out. | B-end review (B4's `Insertion::plan`) |
 | A meter beside each fader, M and S, mute in song, the sidechain row | 8b.8, 8b.4 |
-| Scratch: `~/m2-runs/tn-scratch/b5/`. Logs: `~/m2-runs/logs/tn-b5-*`, `tn-b5a-*`. | — |
+| Scratch: `$SCRATCH/tn-scratch/b5/`. Logs: `$SCRATCH/logs/tn-b5-*`, `tn-b5a-*`. | — |
 
 ## B5b: 8b.3c, the compact mixer card and the suites that follow
 
@@ -828,7 +828,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | Off the Mac, a mouse scrolls sideways with Shift+wheel. Not checked: whether WebKitGTK and Chrome send that to a fader as a sideways scroll (the strips move) or as up and down (the fader moves) | B-end review, with T6 |
 | M and S, mute in song, a meter per strip, the sidechain row | 8b.4, 8b.8 |
 | The full `ci/check.sh` | the final phase |
-| Scratch: `~/m2-runs/tn-scratch/b5/`. Logs: `~/m2-runs/logs/tn-b5b-*`. | — |
+| Scratch: `$SCRATCH/tn-scratch/b5/`. Logs: `$SCRATCH/logs/tn-b5b-*`. | — |
 
 A last commit after these notes: a first pan refused in the middle of a drag asks no more until the
 next press (one toast, not one a move). s8-mix, gestures, taste and live3b (with the test plugins)
@@ -892,7 +892,7 @@ music2 check: PASS; 1 passed only on a retry
 commit   395fc6338297 on taste-next (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 13 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -910,7 +910,7 @@ repo unchanged   PASS
 passed only on a retry:
   suite gestures-fix
 
-logs     /home/jerry/m2-runs/check-tn-f1.tgz
+logs     $SCRATCH/check-tn-f1.tgz
 ```
 
 `check-tn-f2`, as it printed:
@@ -920,7 +920,7 @@ music2 check: PASS
 commit   22bea45dd32a on taste-next (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 12 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -935,18 +935,18 @@ browser suites   PASS  35/35 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
 repo unchanged   PASS  
 
-logs     /home/jerry/m2-runs/check-tn-f2.tgz
+logs     $SCRATCH/check-tn-f2.tgz
 ```
 
-`check-tn-fg`, as it printed (its gates part, with G7f's numbers, is in `~/m2-runs/logs/check-tn-fg-*.log`
-and `~/m2-runs/check-tn-fg.tgz`):
+`check-tn-fg`, as it printed (its gates part, with G7f's numbers, is in `$SCRATCH/logs/check-tn-fg-*.log`
+and `$SCRATCH/check-tn-fg.tgz`):
 
 ```
 music2 check: PASS
 commit   22bea45dd32a on taste-next (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 29 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -959,7 +959,7 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  35/35 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 6 runs ci/gates.txt names
 repo unchanged   PASS  
 ```
@@ -972,7 +972,7 @@ a block +61 µs over S by the mean (bound 80), a callback −110 µs (bound 320)
 ### Pictures for the owner
 
 The app on an invisible Xvfb screen (1600 × 1000, the window 1440 × 900), at `22bea45`, with a scratch
-HOME and no sound: `~/m2-runs/app-shots/taste-22bea45/`. This is the Linux version: on the Mac it uses the
+HOME and no sound: `$SCRATCH/app-shots/taste-22bea45/`. This is the Linux version: on the Mac it uses the
 Mac's own font and ⌘ keys.
 
 | File | What it shows |
@@ -993,4 +993,4 @@ Mac's own font and ⌘ keys.
 | `taste` once timed out waiting for the Bass header's selection, in a run of three suites at once beside other agents; not in any check | the HANDOFF's known flakes |
 | M and S, mute in song, a meter per strip, the sidechain row | 8b.4, 8b.8 (`8b-ui`) |
 | The Mac run: `ci/check.sh`, then the look-and-listen steps 22 to 31 | the HANDOFF |
-| Scratch: deleted (`~/m2-runs/tn-scratch/`). Logs: `~/m2-runs/logs/tn-merge-*`, `check-tn-f1*`, `check-tn-f2*`, `check-tn-fg*`; `~/m2-runs/check-tn-f1.tgz`, `-f2.tgz`, `-fg.tgz`. | — |
+| Scratch: deleted (`$SCRATCH/tn-scratch/`). Logs: `$SCRATCH/logs/tn-merge-*`, `check-tn-f1*`, `check-tn-f2*`, `check-tn-fg*`; `$SCRATCH/check-tn-f1.tgz`, `-f2.tgz`, `-fg.tgz`. | — |

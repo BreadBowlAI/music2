@@ -3,9 +3,9 @@
 Research only. Nothing was built, run or measured for this note.
 
 Citations follow `code-map.md`:
-- a bare path is under `/home/jerry/m2-runs/idea3/src` (step 7 at `ed7fc8e`); `cut1.diff:N` is a line of `/home/jerry/m2-runs/idea3/cut1.diff`;
+- a bare path is under `$SCRATCH/idea3/src` (step 7 at `ed7fc8e`); `cut1.diff:N` is a line of `$SCRATCH/idea3/cut1.diff`;
 - `W/`, `E/`, `CL/`, `CG/` are wasmtime 49.0.2's crates, as in `external.md` (`W` = `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmtime-49.0.2/src`);
-- `plan.md` = `~/m2-runs/speed/plan.md`, `refresh.md` = `~/m2-runs/s8a/refresh.md`, `results.md` = `~/m2-runs/speed/prof/results.md`;
+- `plan.md` = `$SCRATCH/speed/plan.md`, `refresh.md` = `$SCRATCH/s8a/refresh.md`, `results.md` = `$SCRATCH/speed/prof/results.md`;
 - `code-map §N` and `external §N` are the two fact notes in this folder.
 
 "Estimate" marks arithmetic on measured numbers or on counts taken from the code. "Unverified" marks what I could not check. Linux numbers are information only (PLAT-1).
