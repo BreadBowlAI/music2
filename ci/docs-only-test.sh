@@ -96,6 +96,14 @@ case_ "dependabot's settings" full ".github/dependabot.yml changed" main \
   'edit .github/dependabot.yml && c deps'
 case_ "CODEOWNERS" full ".github/CODEOWNERS changed" main \
   'edit .github/CODEOWNERS && c owners'
+case_ "CODEOWNERS under docs/, which GitHub reads too" full "docs/CODEOWNERS changed" main \
+  'edit docs/CODEOWNERS && c owners'
+case_ "CODEOWNERS at the top" full "CODEOWNERS changed" main \
+  'edit CODEOWNERS && c owners'
+case_ "CODEOWNERS deeper under docs/" full "docs/team/CODEOWNERS changed" main \
+  'edit docs/team/CODEOWNERS && c owners'
+case_ "a doc whose name only ends like CODEOWNERS" docs "only docs/ changed" main \
+  'edit docs/MYCODEOWNERS && c owners'
 case_ "ci/" full "ci/check.sh changed" main \
   'edit ci/check.sh && c ci'
 case_ "Cargo.lock" full "Cargo.lock changed" main \

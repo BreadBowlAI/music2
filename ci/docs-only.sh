@@ -28,15 +28,17 @@
 #                                            manifest says license =, never license-file =)
 #   .github/ISSUE_TEMPLATE/ .github/PULL_REQUEST_TEMPLATE.md
 #                                            GitHub's forms; no workflow reads them
-# Not free, on purpose: .github/workflows/ and .github/dependabot.yml (they are CI), CODEOWNERS (it
-# decides who must review), e2e/README.md and the crates' own README.md files (cargo knows a
+# Not free, on purpose: .github/workflows/ and .github/dependabot.yml (they are CI), a file named
+# CODEOWNERS in any folder, docs/ too (it decides who must review, and GitHub reads docs/CODEOWNERS
+# when .github/ has none), e2e/README.md and the crates' own README.md files (cargo knows a
 # package's readme, and a code folder is simpler left whole), ci/, and any new top-level path.
 DOCS_FREE="docs/ README.md HANDOFF.md CONTRIBUTING.md AGENTS.md CLAUDE.md CODE_OF_CONDUCT.md SECURITY.md GOVERNANCE.md LICENSE-MIT LICENSE-APACHE .github/ISSUE_TEMPLATE/ .github/PULL_REQUEST_TEMPLATE.md"
 
 # docs_under <file>: prints the path of DOCS_FREE that <file> is, or is under (one ending in /),
-# and returns 0. Returns 1 when there is none.
+# and returns 0. Returns 1 when there is none, and for any file named CODEOWNERS.
 docs_under() {
   local p
+  case /$1 in */CODEOWNERS) return 1 ;; esac
   for p in $DOCS_FREE; do
     case $p in
       */) case $1 in "$p"*) echo "$p"; return 0 ;; esac ;;
