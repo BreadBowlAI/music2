@@ -122,7 +122,9 @@ cargo run --locked --release -p music2-desktop
 | `examples/` | `first-song`, `resample`, `with-plugins`, `sounds` and `sampler`, each with an `example.toml` for the start screen (and the plugins it needs) |
 | `e2e/` | The browser suites |
 | `crates/gates` | The timing gates (`m2-gates`) that `ci/check.sh` runs |
-| `ci/` | `check.sh` (the full check), `gates.txt`, `sweep.sh` (a Mac's thread sweep), `plugins.sh` (the test plugins) |
+| `ci/` | `check.sh` (the full check; `--pr` the pull request tier), `pr.sh` (one CI job's part), `nightly.sh` (the timing gates on a quiet machine), `nightly-tests.txt` (the Rust tests only the nightly tier runs), `docs-only.sh` (the docs-only rule), `tools.sh`, `apt.sh` and `plugins.sh` (what the checks need), `gates.txt`, `sweep.sh` (a Mac's thread sweep) |
+| `.github/` | The workflows (`ci.yml`, the pull request tier; `nightly.yml`), Dependabot's settings, and the issue and pull request forms |
+| `.config/nextest.toml` | How cargo-nextest runs the Rust tests in CI |
 | `docs/` | The manual, the goals, the contract, the design notes and the gap list |
 
 ## Licence of your contribution
