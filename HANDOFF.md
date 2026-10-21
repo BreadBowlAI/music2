@@ -24,6 +24,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
   sounds and plugins (#26, FMT-22, HOST-8). Linux green at `1fb6caa`; macOS owed (in the next Mac run). Build notes
   `docs/designs/step9/build-notes-br.md`.
 - **Checks on Linux are faster, and check no less** (track `cs`): `ci/check.sh --gates=auto` skips the timing gates only when HEAD holds, in every file they read, what an earlier check on this machine passed them on, and the browser suites run 4 at a time; its own check passed at `b5e3a0f` with the gates (`ci/` changed): 1,771 Rust tests, 74/74 browser suites in 2.7 min, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry. See "The check" below.
+- **Ready to open up** (track `os`): MIT OR Apache-2.0, a fast pull request tier on GitHub (`ci/check.sh --pr` runs the same here), a nightly tier, the timing gates every night on a quiet machine (`ci/nightly.sh`), and the docs for contributors and agents (README, CONTRIBUTING, AGENTS, goals, SECURITY). `ci/check.sh --gates=auto` passed at `d4681ab` with the gates (`ci/` changed): 1,771 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 30 minutes, nothing on a retry; `ci/check.sh --pr` passed there too. The owner's GitHub steps: [docs/maintainers.md](docs/maintainers.md). See "The tiers" below.
 - What the app does: [docs/manual.md](docs/manual.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
 - Next: that one Mac run (after `mf2` is merged), then fix what it finds. Then Windows, as its own step, or the top gaps.
@@ -221,6 +222,22 @@ lead" sections. The ones a next session most needs:
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |
+
+## The tiers: what runs where
+
+Every check runs from a script in `ci/`, so whatever CI runs, you run with the same command.
+
+| Tier | Where and when | The command | What |
+|---|---|---|---|
+| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences, actionlint, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
+| Nightly | GitHub, every day on `main` (`.github/workflows/nightly.yml`) | `ci/check.sh --nightly`; `ci/pr.sh advisories` | the full check without the timing gates, the browser suites one at a time, the tests tagged nightly, the advisories; a Mac too once the repo is public. A failed or timed-out job opens or comments on one issue, "Nightly failed". |
+| Timing gates | a quiet maintainer machine, every night, by cron | `ci/nightly.sh --report` | `ci/check.sh --gates` on a fresh clone of `origin/main`; posts the status `nightly/gates`. It runs as an OS user of its own, with a fine-grained token that can only write commit statuses (docs/maintainers.md, part 5). Not set up yet. |
+| Full check | your machine; the server with `--gates=auto` | `ci/check.sh` | everything, below. |
+
+- **Which tier a test is in.** A Rust test that judges speed or is a known flake is listed in `ci/nightly-tests.txt`, with why; a browser suite gets `tier: "nightly"` and a `why` in `e2e/run.mjs`. Unchanged either way: it runs every night.
+- **Times** (`ci/check.sh --pr` in a clean clone on 8 threads of the server, at `2141096` and `d4681ab`): about 10 minutes cold (607 s), 7.5 warm (447 and 451 s), with music2's own crates rebuilt. On GitHub's 4-core runner each job is one part of that; its real times are still to be measured (gaps.md).
+- **What the first real runs found.** A test that hosts Surge XT or Airwindows in this process could pass, then crash as its process exited: a destroy is queued to the plugin main thread, and the exit ran the plugin library's destructors under it. nextest runs each test in a process of its own, so it showed at once (one test crashed 40 runs of 40 alone). Now `test_main_thread()` drains that thread when the test's thread ends (`d4681ab`).
+- **Verdicts.** `--pr` says PASS only when CI would pass. A docs-only change needs no plugins. `M2_NO_PLUGINS=1` skips the plugin tests and says PART. A browser suite that was PART fails it, even when another run failed and then passed alone. "What failed" names a Rust test whose process crashed (nextest's `SEGV`). The cases are in `ci/pr-test.sh` and `ci/nightly-test.sh`, which the quick step runs.
 
 ## The check: `ci/check.sh`
 

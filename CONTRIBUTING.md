@@ -51,7 +51,7 @@ cargo run --locked --release -p music2-desktop
 
 | Command | What it runs | When |
 |---|---|---|
-| `ci/check.sh --pr` | Exactly the checks CI runs on a pull request, one after another, with each one's time and a total. For a change that is only docs, only the docs check, as in CI. About 11 minutes the first time on an 8-thread machine; less once it has built. | Before every pull request. Paste its summary into the pull request. |
+| `ci/check.sh --pr` | Exactly the checks CI runs on a pull request, one after another, with each one's time and a total. For a change that is only docs, only the docs check, as in CI. About 10 minutes the first time on an 8-thread machine, and about 7 to 8 after a change. | Before every pull request. Paste its summary into the pull request. |
 | `ci/check.sh` | The full check: every test, every browser suite, and on a Mac the timing gates. | Before a big change lands. The nightly run does this every day, without the timing gates. |
 | `ci/pr.sh <part>` | One part of the pull request checks, as one CI job runs it: `quick`, `advisories`, `clippy`, `rust 1/3` (and `2/3`, `3/3`), `suites 1/2` (and `2/2`), `renders`. `ci/pr.sh changes` says whether your change is docs only, and whether it touches a `Cargo.lock`. | When one CI job failed, to run just that part. |
 | `ci/check.sh --nightly` | The nightly tier as CI runs it: everything but the timing gates, the browser suites one at a time. | To repeat a failed nightly run. |
