@@ -21,6 +21,9 @@
 #   ci/check.sh --pr             only the PR tier, exactly as CI runs it on a pull request
 #                                (ci/pr.sh's steps, one after another, each a row with its time;
 #                                below)
+#   ci/check.sh --pr --base <rev>
+#                                the same, with the change the docs rule judges counted from
+#                                git merge-base HEAD <rev> instead of from main
 #   ci/check.sh --nightly        the nightly tier as CI runs it (.github/workflows/nightly.yml):
 #                                everything but the timing gates, on any OS, the browser suites one
 #                                at a time, built without debug info into <target>/nightly
@@ -118,7 +121,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-if [ -n "$BASE" ] && [ -z "$AUTO" ]; then echo "ci/check.sh: --base goes with --gates=auto"; exit 2; fi
+if [ -n "$BASE" ] && [ -z "$AUTO$PR" ]; then echo "ci/check.sh: --base goes with --gates=auto or --pr"; exit 2; fi
 if [ -n "$PR" ] && [ -n "$NIGHTLY" ]; then echo "ci/check.sh: --pr or --nightly, not both"; exit 2; fi
 # --nightly: never the gates (a shared CI machine can't judge them, PLAT-1), the suites one at a
 # time (that finds races running several at once hides), and the build CI's disk holds.
@@ -130,6 +133,9 @@ if [ -n "$NIGHTLY" ]; then
   case $CARGO_TARGET_DIR in /*) ;; *) CARGO_TARGET_DIR=$ROOT/$CARGO_TARGET_DIR ;; esac
 fi
 if [ -n "$PR" ] && [ -n "$AUTO$ASKED" ]; then echo "ci/check.sh: --pr runs no gates"; exit 2; fi
+# --pr --base <rev>: the change the docs rule judges starts at git merge-base HEAD <rev>.
+PRBASE=
+if [ -n "$PR" ]; then PRBASE=$BASE; BASE=; fi
 # The summary's first line says which tier ran, when it isn't the full check.
 MODE=
 if [ -n "$PR" ]; then MODE=--pr; GATES=; elif [ -n "$NIGHTLY" ]; then MODE=--nightly; fi
@@ -386,7 +392,7 @@ if [ -n "$PR" ]; then
     fi
   }
   begin changes "seconds"
-  if ci/pr.sh changes > "$OUT/pr-changes.log" 2>&1 && grep -q '^docs_only=true$' "$OUT/pr-changes.log"; then
+  if ci/pr.sh changes ${PRBASE:+"$PRBASE"} > "$OUT/pr-changes.log" 2>&1 && grep -q '^docs_only=true$' "$OUT/pr-changes.log"; then
     record changes PASS "$(head -1 "$OUT/pr-changes.log" | sed 's/^docs  //'): CI runs only the docs job"
     pr "docs" "seconds" docs
   else
