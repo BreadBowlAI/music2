@@ -131,8 +131,8 @@ fixes it), so no suite needed `serial`. Run 1 shared the machine with another tr
 
 ### Tiers and parts (`--tier`, `--shard`)
 
-In short: every pull request runs the PR tier, `all --tier pr` (53 of the 74 runs), split over CI
-machines with `--shard`. The other 21 runs are tagged `tier: "nightly"` in `run.mjs`, each with
+In short: every pull request runs the PR tier, `all --tier pr` (52 of the 74 runs), split over CI
+machines with `--shard`. The other 22 runs are tagged `tier: "nightly"` in `run.mjs`, each with
 why, and run every night with all the rest (`ci/check.sh --nightly`: `all`, one at a time).
 
 - `--tier pr` keeps the runs with no tag; `--tier nightly` only the tagged ones. Without `--tier`,
@@ -182,6 +182,7 @@ The nightly runs and why:
 | `s8-tracks-fix` | speed: within 1.5 s; flake: it reads the new track's tab a moment too soon (twice at half CPU, 2026-10-21) |
 | `s8-mute-export` | speed: overlays.json within 1.5 s; flake: once on the Mac at e7518f4 (HANDOFF.md) |
 | `pl-mix-fix` | speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18) |
+| `bus-mix-fix` | flake: with nothing sent, the Reverb's meter rose above the floor in 3 of 14 runs, 2 of them alone on 4 cores (2026-10-21); cause not known |
 | `pl-ids-fix` | flake: a rename took more than one revision, at half CPU (2026-10-21) |
 
 ## Byte-identity of renders
