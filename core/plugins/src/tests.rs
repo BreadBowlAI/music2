@@ -52,17 +52,7 @@ impl Inst {
 impl Drop for Inst {
     fn drop(&mut self) {
         self.host.destroy(self.h);
-        settle();
     }
-}
-
-/// Wait until the plugin main thread has run everything queued so far. `destroy` is queued and
-/// returns at once, and a program drains it before it exits (`run_main`); a test has no such drain.
-/// Without this, a test could end, and its process exit, while the plugin is still being torn down
-/// on that thread: the exit runs the plugin library's own destructors under it, and the process
-/// crashes after the test passed (SIGSEGV, `airwindows_processes_audio` alone, 40 runs of 40).
-fn settle() {
-    main_thread().expect("the test plugin main thread").run(|| ()).expect("the plugin main thread ran what was queued");
 }
 
 /// Render `seconds` in blocks on this thread, with `events(block_start)` giving each block's events.
@@ -376,7 +366,6 @@ fn an_owner_shows_what_it_is_loading() {
     let h = creating.join().unwrap();
     assert!(owner.loading().is_empty());
     host.destroy(h);
-    settle();
 }
 
 // A state the plugin refuses fails `create`, and leaves nothing behind.

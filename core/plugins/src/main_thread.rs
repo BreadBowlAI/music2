@@ -172,8 +172,34 @@ fn install(at: Where) -> Result<&'static MainThread> {
 
 /// Tests: one dedicated thread is the plugin main thread (libtest owns the process's). Idempotent,
 /// and a no-op when the process installed its real main thread (C1).
+///
+/// The calling thread also drains on its way out: when it ends, it waits until the plugin main
+/// thread has run what was queued by then, as [`run_main`] drains before a program exits. A
+/// destroy is queued and returns at once, and libtest joins a test's thread before it reports and
+/// the process exits; without the drain, a test that dropped a plugin last could end, and its
+/// process exit, while that plugin was still torn down on the plugin main thread, and the exit
+/// would run the plugin library's own destructors under it: a crash after the test passed.
 pub fn test_main_thread() {
     let _ = install(Where::Thread("m2-plugin-main"));
+    DRAIN_ON_EXIT.with(|_| {});
+}
+
+thread_local! {
+    static DRAIN_ON_EXIT: DrainOnExit = const { DrainOnExit };
+}
+
+/// Dropped when its thread ends: waits for the plugin main thread to run what was queued.
+struct DrainOnExit;
+
+impl Drop for DrainOnExit {
+    fn drop(&mut self) {
+        if let Ok(m) = main_thread()
+            && !m.is_current()
+        {
+            // An error only once the main thread shut down or a job panicked: nothing to wait for.
+            let _ = m.run(|| ());
+        }
+    }
 }
 
 /// The CLI, the headless server and the gates (HOST-2): `work` runs on a thread of its own, with an
