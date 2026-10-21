@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A security problem
+    url: https://github.com/BreadBowlAI/music2/security/advisories/new
+    about: Please report it in private. SECURITY.md says how.
+  - name: A question, or help with music2
+    url: https://github.com/BreadBowlAI/music2/discussions
+    about: Ask in Discussions.

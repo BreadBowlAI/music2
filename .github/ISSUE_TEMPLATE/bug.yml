@@ -1,0 +1,60 @@
+name: Bug
+description: Something in music2 doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **In short:** say what you did, what you expected, and what happened instead. Short and plain is best.
+
+        A security problem? Please don't report it here: see [SECURITY.md](https://github.com/BreadBowlAI/music2/blob/main/SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you do, and what did you see or hear?
+      placeholder: I opened the Starter beat and pressed Space. The hats played, but the bass was silent.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      placeholder: |
+        1. New Song…, keep Starter beat, Create.
+        2. Click the Bass track.
+        3. ...
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Linux (Ubuntu 24.04)
+        - Linux (another distribution)
+        - macOS on Apple silicon
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: In your music2 folder, `git rev-parse --short HEAD` prints it.
+      placeholder: 381e02d
+  - type: textarea
+    id: output
+    attributes:
+      label: What the app said
+      description: A message in the app (the status pill's popover has the details), or what the terminal printed.
+      render: text
+  - type: textarea
+    id: song
+    attributes:
+      label: A song that shows it (optional)
+      description: If you can share it, attach a zip of a small song folder that shows the bug.
