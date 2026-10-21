@@ -22,7 +22,7 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 |---|---|
 | Check before a pull request (the PR tier, as CI runs it) | `ci/check.sh --pr` |
 | The full check (every test; the timing gates on a Mac) | `ci/check.sh` |
-| One CI job's part again | `ci/pr.sh quick`, `clippy`, `rust 1/3` (`2/3`, `3/3`), `suites 1/2` (`2/2`), `renders`; `ci/pr.sh changes` says if a change is docs only |
+| One CI job's part again | `ci/pr.sh quick`, `advisories`, `clippy`, `rust 1/3` (`2/3`, `3/3`), `suites 1/2` (`2/2`), `renders`; `ci/pr.sh changes` says if a change is docs only, and if it touches a `Cargo.lock` |
 | The checks' tools (nextest, cargo-deny, actionlint) | `ci/tools.sh` |
 | Which browser suites a pull request runs | `node e2e/run.mjs all --tier pr --list` |
 | Build the UI | `(cd web && npm ci && npm run build)` |
@@ -50,6 +50,6 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 
 ## Pull requests
 
-Use the template. Paste the summary of `ci/check.sh --pr` (from `music2 check --pr:` down). Say which agent wrote the change. The one required check is `ci-ok`; merges go through the merge queue.
+Use the template. Paste the summary of `ci/check.sh --pr` (from `music2 check --pr:` down). Only `PASS` is a pass; `PART` with `M2_NO_PLUGINS` means the plugin tests didn't run here (say so). Say which agent wrote the change. The one required check is `ci-ok`; merges go through the merge queue.
 
 What you send is under MIT OR Apache-2.0 (Apache-2.0, section 5). No CLA.

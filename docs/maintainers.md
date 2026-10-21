@@ -53,15 +53,19 @@ Repository **Settings → Advanced Security** (called "Code security" on some ac
 
 ## 5. The timing gates, on a quiet machine
 
-The timing gates measure real-time audio, so they need a quiet machine. GitHub's shared runners can't judge them, and the repository has no self-hosted runner (a pull request from a fork could reach it). So they run on a maintainer's own machine, every night:
+The timing gates measure real-time audio, so they need a quiet machine. GitHub's shared runners can't judge them, and the repository has no self-hosted runner (a pull request from a fork could reach it). So they run on a maintainer's own machine, every night, with `ci/nightly.sh`.
 
-| Step | Do |
-|---|---|
-| 1 | Pick a machine you trust that is quiet at night, with the test plugins (on Linux `ci/plugins.sh`; on the Mac in `~/Library/Audio/Plug-Ins/CLAP`). Clone the repository there. |
-| 2 | Try it once by hand: `ci/nightly.sh`. It fetches `origin/main`, clones it fresh into `~/.cache/m2-nightly/clone`, runs `ci/check.sh --gates` there, and writes each night's logs and `summary.txt` under `~/.cache/m2-nightly/runs/`. `last.txt` is the newest summary. It never touches the checkout it lives in, your `~/Music` or your `~/.music2`. |
-| 3 | To show the result on GitHub, log `gh` in with your own account (it needs the `repo` scope). Then `ci/nightly.sh --report` also posts the verdict as the commit status **nightly/gates** on that commit. |
-| 4 | On Linux, add one line with `crontab -e` (every night at 02:17): `17 2 * * * cd /path/to/music2 && ci/nightly.sh --report >> "$HOME/.cache/m2-nightly/cron.log" 2>&1` |
-| 5 | On the reference Mac, start it from a LaunchAgent in your login session instead of cron: the app's test and G12 need the session. |
+That script builds and runs whatever is on `main`, and every dependency's build script, with nobody watching. If merged code or a dependency ever turned bad, it could take whatever the user running it holds. So it runs as a user of its own, with one small token.
+
+| Step | Do | Why |
+|---|---|---|
+| 1 | Pick a machine you trust that is quiet at night. Make an OS user just for this, with no other credentials: no `gh` login, no ssh keys, no cloud keys. On Linux: `sudo adduser --disabled-password m2-nightly`. On the Mac: a standard user that stays logged in (fast user switching). | A bad build could then take nothing of yours. The Mac needs a login session for the app's test and G12. |
+| 2 | As that user: install [rustup](https://rustup.rs) and Node.js 24, clone the repository, and add the test plugins (on Linux `ci/plugins.sh`; on the Mac in `~/Library/Audio/Plug-Ins/CLAP`). | The check needs them, as on any machine. |
+| 3 | Try it once by hand: `ci/nightly.sh`. It fetches `origin/main`, clones it fresh into `~/.cache/m2-nightly/clone`, runs `ci/check.sh --gates` there, and writes each night's logs and `summary.txt` under `~/.cache/m2-nightly/runs/`. `last.txt` is the newest summary. | It never touches the checkout it lives in, `~/Music` or `~/.music2`. Its summary warns if the user holds other credentials. |
+| 4 | To show the result on GitHub, make a **fine-grained** personal access token: your GitHub **Settings → Developer settings → Personal access tokens → Fine-grained tokens**. Resource owner: the organization. Repository access: only music2. Permissions: **Commit statuses: Read and write**, nothing else. Save it as that user's `~/.cache/m2-nightly/token`, then `chmod 600` it. If the organization asks to approve such tokens, approve it there. | Then `ci/nightly.sh --report` posts the verdict as the commit status **nightly/gates**. That is all the token can do. The script refuses any other kind of token (one that doesn't start `github_pat_`). |
+| 5 | On Linux, add one line to that user's crontab (`crontab -e`), for every night at 02:17: `17 2 * * * cd /path/to/music2 && ci/nightly.sh --report >> "$HOME/.cache/m2-nightly/cron.log" 2>&1` | |
+| 6 | On the Mac, start it from a LaunchAgent in that user's login session instead of cron. | The app's test and G12 need the session. |
+| 7 | Renew the token before it expires (GitHub emails you first). | An expired token makes `--report` fail; the check itself still runs. |
 
 A failed night shows as a red **nightly/gates** status on that commit. Its description is the check's first line; `summary.txt` has every row.
 
@@ -69,14 +73,16 @@ A failed night shows as a red **nightly/gates** status on that commit. Its descr
 
 GitHub runs a limited number of jobs at the same time for the whole account. Standard runners, per the [limits page](https://docs.github.com/en/actions/reference/limits):
 
-| Plan | Jobs at once | of them on macOS |
-|---|---|---|
-| Free | 20 | 5 |
-| Pro | 40 | 5 |
-| Team | 60 | 5 |
-| Enterprise | 500 | 50 |
+| Plan | Jobs at once | of them on macOS | Pull request runs at once (7 jobs each) |
+|---|---|---|---|
+| Free | 20 | 5 | about 2 |
+| Pro | 40 | 5 | about 5 |
+| Team | 60 | 5 | about 8 |
+| Enterprise | 500 | 50 | about 70 |
 
-One pull request uses up to 9 jobs: `changes`, `quick`, `clippy`, three `rust` parts, two `suites` parts, and `ci-ok`. A docs-only pull request uses 2: `changes`, which finds that it is docs only and checks the docs rule, and `ci-ok`. So on Free about 2 pull requests are checked at once, on Team about 6; the rest wait their turn.
+One run of the pull request tier is 9 jobs: `changes` first, then 7 at once (`quick`, `clippy`, three `rust` parts, two `suites` parts), then `ci-ok`. A docs-only run is 2 jobs: `changes`, which finds that it is docs only and checks the docs rule, and `ci-ok`.
+
+Each pull request that merges runs the tier three times: on the pull request, in the merge queue, and on the push to `main`. The push repeats the tree the queue just tested; it is there to save the build caches every pull request starts from. So one merged pull request costs about 27 jobs, plus one run for each new push to it. The rest wait their turn.
 
 When the limit binds, runs wait in a queue: nothing fails, it is only slower. What helps, cheapest first:
 
@@ -84,4 +90,5 @@ When the limit binds, runs wait in a queue: nothing fails, it is only slower. Wh
 2. Docs-only pull requests run one quick job (already set).
 3. First-time contributors wait for your approval (part 2).
 4. The merge queue tests pull requests in groups: raise its group size in the ruleset.
-5. A bigger plan (Team, Enterprise), or ask GitHub Support to raise the limit.
+5. Run only the parts that save caches on the push to `main` (a small change to `ci.yml`, listed in [gaps.md](gaps.md)).
+6. A bigger plan (Team, Enterprise), or ask GitHub Support to raise the limit.

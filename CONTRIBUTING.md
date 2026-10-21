@@ -44,7 +44,8 @@ cargo run --locked --release -p music2-desktop
 
 - On Linux, `ci/plugins.sh` downloads both into `~/.local/share/m2-test-plugins/clap`, checked against `ci/plugins.sha256`. Airwindows' file is gone upstream, so fetch the project's copy: `M2_PLUGINS_MIRROR=https://github.com/BreadBowlAI/music2/releases/download/test-plugins ci/plugins.sh`.
 - On a Mac, install both in `~/Library/Audio/Plug-Ins/CLAP`.
-- Without them, the checks say FAIL. `M2_NO_PLUGINS=1 ci/check.sh --pr` runs without them: the plugin tests skip, and the summary says so.
+- Without them, `ci/check.sh` and the Rust and browser parts of `ci/check.sh --pr` say FAIL, as CI would. A change that is only docs needs no plugins.
+- `M2_NO_PLUGINS=1 ci/check.sh --pr` runs without them: the plugin tests skip, and the summary says `PART`, not `PASS`, because CI still runs them. Say so in your pull request.
 
 ## Before a pull request
 
@@ -52,7 +53,7 @@ cargo run --locked --release -p music2-desktop
 |---|---|---|
 | `ci/check.sh --pr` | Exactly the checks CI runs on a pull request, one after another, with each one's time and a total. For a change that is only docs, only the docs check, as in CI. About 11 minutes the first time on an 8-thread machine; less once it has built. | Before every pull request. Paste its summary into the pull request. |
 | `ci/check.sh` | The full check: every test, every browser suite, and on a Mac the timing gates. | Before a big change lands. The nightly run does this every day, without the timing gates. |
-| `ci/pr.sh <part>` | One part of the pull request checks, as one CI job runs it: `quick`, `clippy`, `rust 1/3` (and `2/3`, `3/3`), `suites 1/2` (and `2/2`), `renders`. `ci/pr.sh changes` says whether your change is docs only. | When one CI job failed, to run just that part. |
+| `ci/pr.sh <part>` | One part of the pull request checks, as one CI job runs it: `quick`, `advisories`, `clippy`, `rust 1/3` (and `2/3`, `3/3`), `suites 1/2` (and `2/2`), `renders`. `ci/pr.sh changes` says whether your change is docs only, and whether it touches a `Cargo.lock`. | When one CI job failed, to run just that part. |
 | `ci/check.sh --nightly` | The nightly tier as CI runs it: everything but the timing gates, the browser suites one at a time. | To repeat a failed nightly run. |
 | `ci/tools.sh` | Fetches the three tools the checks use beyond Rust and Node (cargo-nextest, cargo-deny, actionlint), each checked against its sha256, into `~/.cache/m2-tools`. | `ci/check.sh --pr` runs it for you. |
 | `node e2e/run.mjs all --tier pr --list` | Lists the browser suites a pull request runs (`--tier nightly`: the ones only the nightly run has). | To see which tier a suite is in. |
@@ -63,8 +64,8 @@ cargo run --locked --release -p music2-desktop
 
 | Tier | When | What |
 |---|---|---|
-| **Pull request** | every pull request, the merge queue, and each push to `main` | fmt, clippy, the Rust tests in 3 parts, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences and advisories (cargo-deny, npm), the workflow files (actionlint). Only tests that give the same answer every time. |
-| **Nightly** | every day on `main`, on GitHub's machines | the full check without the timing gates, with the browser suites one at a time, and the tests the pull request tier leaves out. On macOS too, once the repository is public. |
+| **Pull request** | every pull request, the merge queue, and each push to `main` | fmt, clippy, the Rust tests in 3 parts, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences (cargo-deny, npm), the workflow files (actionlint), and the checks' own cases. Security advisories (RustSec) only when a `Cargo.lock` or `deny.toml` changes. Only checks that give the same answer every time, on any day. |
+| **Nightly** | every day on `main`, on GitHub's machines | the full check without the timing gates, with the browser suites one at a time, the tests the pull request tier leaves out, and the security advisories. On macOS too, once the repository is public. |
 | **Timing gates** | every night on a quiet machine of a maintainer's | the gates that time real-time audio. A shared cloud machine can't judge them. |
 
 ## The rules
@@ -122,7 +123,7 @@ cargo run --locked --release -p music2-desktop
 | `examples/` | `first-song`, `resample`, `with-plugins`, `sounds` and `sampler`, each with an `example.toml` for the start screen (and the plugins it needs) |
 | `e2e/` | The browser suites |
 | `crates/gates` | The timing gates (`m2-gates`) that `ci/check.sh` runs |
-| `ci/` | `check.sh` (the full check; `--pr` the pull request tier), `pr.sh` (one CI job's part), `nightly.sh` (the timing gates on a quiet machine), `nightly-tests.txt` (the Rust tests only the nightly tier runs), `docs-only.sh` (the docs-only rule), `tools.sh`, `apt.sh` and `plugins.sh` (what the checks need), `gates.txt`, `sweep.sh` (a Mac's thread sweep) |
+| `ci/` | `check.sh` (the full check; `--pr` the pull request tier), `pr.sh` (one CI job's part), `nightly.sh` (the timing gates on a quiet machine), `nightly-tests.txt` (the Rust tests only the nightly tier runs), `docs-only.sh` (the docs-only rule), the checks' own cases (`docs-only-test.sh`, `gates-auto-test.sh`, `pr-test.sh`, `nightly-test.sh`), `tools.sh`, `apt.sh` and `plugins.sh` (what the checks need), `gates.txt`, `sweep.sh` (a Mac's thread sweep) |
 | `.github/` | The workflows (`ci.yml`, the pull request tier; `nightly.yml`), Dependabot's settings, and the issue and pull request forms |
 | `.config/nextest.toml` | How cargo-nextest runs the Rust tests in CI |
 | `deny.toml` | cargo-deny's rules for the Rust dependencies: the licences allowed, security advisories, crates.io only |

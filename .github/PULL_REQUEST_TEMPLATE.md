@@ -9,7 +9,7 @@ Closes #
 
 ## How it was checked
 
-- [ ] `ci/check.sh --pr` passed on my machine. Its summary is below.
+- [ ] `ci/check.sh --pr` passed on my machine. Its summary is below. (No test plugins here? Then it says `PART` with `M2_NO_PLUGINS=1`: say so, and CI runs those tests.)
 - [ ] A test shows the problem failing before the change, and passing after it. (Or: no behaviour changed, for example docs only.)
 - [ ] No test was weakened, skipped or deleted.
 - [ ] If a rule of the contract (`docs/architecture.md`) changes, the contract changes first, in this pull request.
