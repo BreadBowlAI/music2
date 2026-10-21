@@ -33,8 +33,8 @@ Repository **Settings**:
 
 **CODEOWNERS** isn't in the repository yet: whose GitHub login reviews couldn't be confirmed when it was written (the account the server pushes as is `BreadBowlAI`). The scripts that decide whether a pull request passes run from that pull request's own files, so a change to them needs your careful review. To make GitHub ask for it:
 
-1. Create `.github/CODEOWNERS` with these lines, each with your login: `/ci/ @<login>`, `/.github/ @<login>`, `/deny.toml @<login>`, `/.config/ @<login>`, `/e2e/run.mjs @<login>`. These are the checks, the workflows, the licence rules, how the Rust tests run, and how the browser suites are judged.
-2. Make a second branch ruleset for the default branch, with only **Require a pull request before merging** and, inside it, **Require review from Code Owners** (0 approvals). Add **Repository admin** to its bypass list, for pull requests only. A pull request that changes those files then needs your approval. Your own can still merge: GitHub doesn't let you approve your own pull request. Keep the first ruleset without a bypass, so `ci-ok` holds for everyone.
+1. Create `.github/CODEOWNERS` with these lines, each with your login: `/ci/ @<login>`, `/.github/ @<login>`, `/deny.toml @<login>`, `/.config/ @<login>`, `/e2e/run.mjs @<login>`. These are the checks, the workflows, the licence rules, how the Rust tests run, and how the browser suites are judged. From then on, GitHub asks you to review every pull request that changes one of them.
+2. To make that review a must, make a second branch ruleset for the default branch, with only **Require a pull request before merging** and, inside it, **Require review from Code Owners** (0 approvals). Add **Repository admin** to its bypass list, for pull requests only, so your own pull requests aren't stuck: GitHub doesn't let you approve your own. Keep the first ruleset without a bypass, so `ci-ok` holds for everyone.
 
 ## 3. Security
 
