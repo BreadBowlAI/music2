@@ -1,0 +1,6 @@
+# Commits git blame skips, so a line is blamed on the change that wrote it, not on a reformat:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs   (GitHub reads this file by itself)
+# One full commit hash a line, each with what it was.
+
+# Format every Rust file with rustfmt (2026-10-21)
+91685aa332d112840156b53f857dc6bd2b870800
