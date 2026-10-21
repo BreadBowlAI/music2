@@ -10,7 +10,7 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 
 | Page | What it decides |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | The contract. Rules have ids (`RENDER-8`); tests name the id they check. A change that breaks a rule edits this page first, in the same commit. Where any other doc disagrees, the contract wins. |
+| [docs/architecture.md](docs/architecture.md) | The contract. Rules have ids (`RENDER-8`); tests name the id they check. A change that breaks a rule edits this page first: in the same pull request as the code, in a commit ahead of it. Where any other doc disagrees, the contract wins. |
 | [docs/goals.md](docs/goals.md) | Goals and non-goals: no AI in the app, CLAP only, no backwards compatibility before 1.0. |
 | [docs/designs/step8/taste.md](docs/designs/step8/taste.md) | How the UI looks and behaves. |
 | [docs/gaps.md](docs/gaps.md) | What is missing. Numbered gaps keep their numbers everywhere. |
@@ -21,8 +21,8 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 | Do | Command |
 |---|---|
 | Check before a pull request (the PR tier, as CI runs it) | `ci/check.sh --pr` |
-| The full check (every test; the timing gates on a Mac) | `ci/check.sh` |
-| One CI job's part again | `ci/pr.sh quick`, `advisories`, `clippy`, `rust 1/3` (`2/3`, `3/3`), `suites 1/2` (`2/2`), `renders`; `ci/pr.sh changes` says if a change is docs only, and if it touches a `Cargo.lock` |
+| The full check (every PR-tier check, every test; the timing gates on a Mac) | `ci/check.sh` |
+| One CI job's part again | `ci/pr.sh quick`, `advisories`, `clippy`, `rust 1/3` (`2/3`, `3/3`), `suites 1/2` (`2/2`), `renders`; smaller: `lint` (what builds nothing), `models` (the pool's models); `ci/pr.sh changes` says if a change is docs only, and if it touches a `Cargo.lock` |
 | The checks' tools (nextest, cargo-deny, actionlint) | `ci/tools.sh` |
 | Which browser suites a pull request runs | `node e2e/run.mjs all --tier pr --list` |
 | Build the UI | `(cd web && npm ci && npm run build)` |

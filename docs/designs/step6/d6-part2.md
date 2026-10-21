@@ -19,7 +19,7 @@ Journal (`core/session/src/tx/journal.rs`):
 
 ```json
 {"journal": 1, "id": "1760351234567-4121-3", "tx": "tx-7k2m9q4c",
- "host": "Jerrys-MacBook-Pro", "host_id": "8C1F0D2A-…", "pid": 4121, "program": "music2",
+ "host": "my-mac", "host_id": "…", "pid": 4121, "program": "music2",
  "label": ["hats pan 0.3", "hats pan automated"],
  "targets": [
    {"path": "song.ts", "before": "sha256:…", "after": "sha256:…", "text": "…before…", "staged": 0},

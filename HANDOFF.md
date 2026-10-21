@@ -229,15 +229,15 @@ Every check runs from a script in `ci/`, so whatever CI runs, you run with the s
 
 | Tier | Where and when | The command | What |
 |---|---|---|---|
-| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences, actionlint, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
-| Nightly | GitHub, every day on `main` (`.github/workflows/nightly.yml`) | `ci/check.sh --nightly`; `ci/pr.sh advisories` | the full check without the timing gates, the browser suites one at a time, the tests tagged nightly, the advisories; a Mac too once the repo is public. A failed or timed-out job opens or comments on one issue, "Nightly failed". |
+| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences, actionlint, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
+| Nightly | GitHub, every day on `main`, only once the repo is public (`.github/workflows/nightly.yml`) | `ci/check.sh --nightly` | the full check without the timing gates (so every PR-tier check and the advisories too), the browser suites one at a time, the tests tagged nightly; and a Mac: the Rust tests, the pool's models, the browser suites, the renders. A failed or timed-out job opens or comments on one issue, "Nightly failed". |
 | Timing gates | a quiet maintainer machine, every night, by cron | `ci/nightly.sh --report` | `ci/check.sh --gates` on a fresh clone of `origin/main`; posts the status `nightly/gates`. It runs as an OS user of its own, with a fine-grained token that can only write commit statuses (docs/maintainers.md, part 5). Not set up yet. |
-| Full check | your machine; the server with `--gates=auto` | `ci/check.sh` | everything, below. |
+| Full check | your machine; the server with `--gates=auto` | `ci/check.sh` | everything, below: every check of the other tiers. |
 
 - **Which tier a test is in.** A Rust test that judges speed or is a known flake is listed in `ci/nightly-tests.txt`, with why; a browser suite gets `tier: "nightly"` and a `why` in `e2e/run.mjs`. Unchanged either way: it runs every night.
 - **Times** (`ci/check.sh --pr` in a clean clone on 8 threads of the server, at `2141096` and `d4681ab`): about 10 minutes cold (607 s), 7.5 warm (447 and 451 s), with music2's own crates rebuilt. On GitHub's 4-core runner each job is one part of that; its real times are still to be measured (gaps.md).
 - **What the first real runs found.** A test that hosts Surge XT or Airwindows in this process could pass, then crash as its process exited: a destroy is queued to the plugin main thread, and the exit ran the plugin library's destructors under it. nextest runs each test in a process of its own, so it showed at once (one test crashed 40 runs of 40 alone). Now `test_main_thread()` drains that thread when the test's thread ends (`d4681ab`).
-- **Verdicts.** `--pr` says PASS only when CI would pass. A docs-only change needs no plugins. `M2_NO_PLUGINS=1` skips the plugin tests and says PART. A browser suite that was PART fails it, even when another run failed and then passed alone. "What failed" names a Rust test whose process crashed (nextest's `SEGV`). The cases are in `ci/pr-test.sh` and `ci/nightly-test.sh`, which the quick step runs.
+- **Verdicts.** `--pr` says PASS only when CI would pass. A docs-only change needs no plugins. `M2_NO_PLUGINS=1` skips the plugin tests and says PART. A browser suite that was PART fails it, even when another run failed and then passed alone. "What failed" names a Rust test whose process crashed (nextest's `SEGV`). The cases are in `ci/pr-test.sh` and `ci/nightly-test.sh`, which the lint step runs (in quick, and in the full check).
 
 ## The check: `ci/check.sh`
 
@@ -245,9 +245,10 @@ One script checks everything, on the server and on the Mac ([PLAT-6](docs/archit
 line says `music2 check: PASS`, `FAIL` or `PART`. PART means no row failed but the gates couldn't judge G7f (the Mac
 isn't the one S's records name). Only PASS is a pass.
 
-Rows: gates rule (`--gates=auto`'s rule tried on its 51 cases), toolchain, web build, build, app (Linux: the desktop
-app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, clippy (a warning is an error),
-pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
+Rows: gates rule (`--gates=auto`'s rule tried on its 51 cases), toolchain, lint (`ci/pr.sh lint`: fmt, actionlint,
+licences, the CI scripts' own cases), advisories (`ci/pr.sh advisories`: RustSec's), web build, build, app (Linux: the
+desktop app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, nightly list (Linux: every
+test `ci/nightly-tests.txt` names is there), clippy (a warning is an error), pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
 type-checked), browser suites, renders (against `e2e/renders.sha256`, one record for every OS), old engine S (with
 the gates), gates (the 7 runs `ci/gates.txt` names), repo unchanged.
 

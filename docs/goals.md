@@ -29,7 +29,7 @@
 
 How the work is done. [CONTRIBUTING.md](../CONTRIBUTING.md) has the full rules.
 
-- **The contract is the rulebook.** Every rule in [architecture.md](architecture.md) has an id, such as `RENDER-8`. A change that breaks a rule changes the contract first, in the same commit.
+- **The contract is the rulebook.** Every rule in [architecture.md](architecture.md) has an id, such as `RENDER-8`. A change that breaks a rule changes the contract first: in the same pull request as the code, in a commit ahead of it.
 - **Files are the truth.** What is on disk decides what plays. The app never moves, deletes or repairs a file on its own; it offers a fix, and you click it (contract P2, P3).
 - **Fix causes, never weaken tests.** Every fix comes with a test shown failing first.
 - **One full check.** `ci/check.sh` is the full check, the same script on Linux and the Mac ([PLAT-6](architecture.md#platforms)). What CI runs, you can run with the same command.

@@ -19,7 +19,7 @@
 
 - **A small change** (a fix, a gap from [docs/gaps.md](docs/gaps.md)): open an issue, or claim one, then send a pull request. [CONTRIBUTING.md](CONTRIBUTING.md) says how.
 - **A big change** (a new feature, a new rule, a change to the format or the SDK): open an issue first, and write a design note under [docs/designs/](docs/designs/README.md) before the code. The owner says yes or no in the issue.
-- **A change to a goal, the taste or the contract:** open an issue that says what to change and why. If the owner agrees, the change to the page lands in its own pull request, before any code that needs it.
+- **A change to a goal, the taste or the contract:** open an issue that says what to change and why. If the owner agrees, the page changes first: in the same pull request as any code that needs it, in a commit ahead of that code.
 
 ## More maintainers
 
