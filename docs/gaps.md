@@ -1,7 +1,7 @@
 # What music2 can't do yet
 
 **In short**
-- This page lists only what is missing. What the app does today is in the README: [In short: what you can do](../README.md#in-short-what-you-can-do).
+- This page lists only what is missing. What the app does today is in the manual: [In short: what you can do](manual.md#in-short-what-you-can-do).
 - The gaps are grouped by area. The areas you notice first when making a song are at the top.
 - Each line is one gap. The big ones have a number (#18, #24, …), which stays the same everywhere. Small loose ends are listed under them, without numbers.
 - Size: **small** is one focused change; **medium** touches the window, the server and the core; **large** is new engine work.
@@ -199,7 +199,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; Open an Example names it plainly), and the docs past [Music basics](music-basics.md) and the README's first sections are technical. | Many people who open music2 are new to making music. | Yes | small |
+| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; Open an Example names it plainly), and the docs past [Music basics](music-basics.md) and the manual's first sections are technical. | Many people who open music2 are new to making music. | Yes | small |
 
 - **A problem from a sound or plugin that stopped can't be dismissed**: it stays in the status popover until the part plays again.
 - **A sound that stops in the moment between Stop All Sound and its reset** stays listed, though the reset starts it again (ex-1).
@@ -259,7 +259,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 37 | **`m2` commands** for change instrument, markers, the song's key, a track's ID, Save As and Follow tempo. Agents can send these to the app's routes, or as a Tx (Follow tempo: `POST /api/graph/clips` with `{"op": "audio", "follow": true}`). | Scripts and agents need the same basics as the app. | Yes (in `music2-cli`) | small |
-| 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. | An agent has to read the README or the source to learn the routes. | Yes | medium |
+| 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. | An agent has to read the manual or the source to learn the routes. | Yes | medium |
 
 ## Checked on Linux only
 
