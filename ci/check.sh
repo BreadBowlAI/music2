@@ -378,6 +378,11 @@ if [ -n "$PR" ]; then
     M2_PR_OUT=$OUT/pr-$1 M2_PR_JOBS=$JOBS ci/pr.sh "$@" > "$log" 2>&1 < /dev/null
     st=$?
     said=$(grep -E '^ci/pr.sh .*: (PASS|FAIL) in ' "$log" | tail -1 | sed -E 's/^ci\/pr.sh [^:]*: (PASS|FAIL) in //; s/ \(logs in .*$//')
+    # What passed only when run again: nextest's FLAKY tests, and suites that passed alone.
+    {
+      grep -E '^ +FLAKY ' "$log" | sed -E 's/^ +FLAKY [^]]*\] (\([^)]*\) )?/test /' | sort -u
+      grep -E 'passed only on a retry alone: ' "$log" | sed 's/.*retry alone: //' | tr ',' '\n' | sed 's/^ */suite /'
+    } >> "$OUT/flaky"
     if [ $st -eq 0 ]; then
       record "$row" PASS "${said:-done}"
     else

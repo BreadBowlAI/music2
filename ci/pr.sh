@@ -26,7 +26,8 @@
 #                               part 1 also runs the two tests that own their main thread
 #                               (main_thread, app_main_thread), which nextest can't list
 #   ci/pr.sh suites [<i>/<n>]   the browser suites of the PR tier (e2e/run.mjs all --tier pr --shard),
-#                               M2_PR_JOBS at a time (default 2)
+#                               M2_PR_JOBS at a time (default 2); a run that failed runs once more,
+#                               alone, as in ci/check.sh, and is named if it passes then
 #   ci/pr.sh renders            the 12 offline renders, against e2e/renders.sha256
 #   rust and suites take --all: the nightly-tagged tests too (the Mac's nightly job).
 #
@@ -169,6 +170,8 @@ plugins() {
     return 1
   fi
 }
+# suites <run.mjs arguments>: the browser suites, each on a fresh headless server.
+suites() { env E2E_CHROME="$CHROME" M2_HEADLESS="$TARGET/debug/examples/headless" node e2e/run.mjs "$@"; }
 # build: the binaries the browser suites and the renders use, in one cargo run (two would resolve
 # features apart and build the shared crates twice).
 build() { cargo build --locked -p m2-server --example headless -p m2 -p m2-plugins --bin m2 --bin m2-plugin-host; }
@@ -258,9 +261,37 @@ case $STEP in
        check "e2e npm" e2e-npm.log sh -c 'cd e2e && npm ci --no-audit --no-fund' &&
        { [ -x "$CHROME" ] || check chrome chrome.log sh -c "cd e2e && node_modules/.bin/browsers install chrome-headless-shell@$CHROME_VERSION --path \"\$HOME/.cache/puppeteer\""; }; then
       # $tier: no option, "--tier pr", "--no-clap" or both: split into words on purpose.
-      check "browser suites" e2e.log env E2E_CHROME="$CHROME" M2_HEADLESS="$TARGET/debug/examples/headless" \
-        node e2e/run.mjs all $tier --shard "$PART" --jobs "$JOBS" --out "$OUT/e2e"
+      t0=$(date +%s)
+      suites all $tier --shard "$PART" --jobs "$JOBS" --out "$OUT/e2e" > "$OUT/e2e.log" 2>&1 < /dev/null
+      st=$?
+      took="$(( $(date +%s) - t0 )) s"
       grep -E '^(tier|shard|--no-clap|[0-9]+/[0-9]+ suites ok|time:)|^  (PART|failed):' "$OUT/e2e.log" | sed 's/^/                       /'
+      # A run that failed runs once more, alone, as ci/check.sh does: if it passes then, the step
+      # passes and names it (a flake to tag); if it fails again, the step fails.
+      runs=$(grep '^  failed: ' "$OUT/e2e.log" | awk '{print $2}')
+      if [ $st -eq 0 ]; then
+        row "browser suites" PASS "$took"
+      elif [ $st -eq 1 ] && [ -n "$runs" ]; then
+        bad=
+        again=
+        for run in $runs; do
+          if suites "${run%-*}" "${run##*-}" --quiet --out "$OUT/e2e-retry" >> "$OUT/e2e-retry.log" 2>&1 < /dev/null; then
+            again="$again${again:+, }$run"
+            if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning title=Passed only on a retry::suite $run"; fi
+          else
+            bad="$bad${bad:+, }$run"
+          fi
+        done
+        if [ -z "$bad" ]; then
+          row "browser suites" PASS "$took; passed only on a retry alone: $again"
+        else
+          row "browser suites" FAIL "$bad failed, and again alone: see e2e.log and e2e-retry.log"
+          { echo; echo "=== browser suites: the last 60 lines of $OUT/e2e-retry.log"; tail -60 "$OUT/e2e-retry.log"; } >> "$OUT/tails"
+        fi
+      else
+        row "browser suites" FAIL "exit $st after $took (3: a run was PART; others: run.mjs stopped): see e2e.log"
+        { echo; echo "=== browser suites: the last 60 lines of $OUT/e2e.log"; tail -60 "$OUT/e2e.log"; } >> "$OUT/tails"
+      fi
     fi ;;
 
   renders)
