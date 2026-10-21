@@ -7,6 +7,9 @@
 # M2_PLUGINS_MIRROR: a folder URL that holds copies of both archives, tried when upstream fails
 # (CI names the repo's release "test-plugins"; Airwindows' pinned zip is gone upstream since
 # 2026-10-21, and it is MIT, so a copy may be shared). The checksums decide, wherever a file came from.
+# A GitHub release's folder (https://github.com/<owner>/<repo>/releases/download/<tag>) is read with
+# gh when GH_TOKEN is set (CI hands it the job's read-only token), which works while that repo is
+# private too; otherwise with curl, which needs the repo to be public.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SUMS=$ROOT/ci/plugins.sha256
@@ -15,12 +18,24 @@ SURGE=surge-xt-linux-x64-1.3.4.deb
 AW=$(grep -o 'AirwindowsConsolidated-.*-Linux\.zip' "$SUMS")
 mkdir -p "$P/dl" "$P/clap"
 cd "$P/dl"
+# mirror <file>: download it from M2_PLUGINS_MIRROR into <file>.part.
+mirror() {
+  case $M2_PLUGINS_MIRROR in
+    https://*/releases/download/?*)
+      if [ -n "${GH_TOKEN:-}" ] && command -v gh > /dev/null; then
+        repo=${M2_PLUGINS_MIRROR#https://}
+        gh release download "${M2_PLUGINS_MIRROR##*/releases/download/}" --repo "${repo%%/releases/download/*}" \
+          --pattern "$1" --output "$1.part" --clobber && return 0
+        echo "plugins: gh couldn't get $1 from that release, trying curl" >&2
+      fi ;;
+  esac
+  curl -fsSL --retry 3 -o "$1.part" "$M2_PLUGINS_MIRROR/$1"
+}
 # get <file> <upstream url>: download it unless it is here, from upstream, else from the mirror.
 get() {
   [ -f "$1" ] && return 0
   curl -fsSL --retry 3 -o "$1.part" "$2" ||
-    { [ -n "${M2_PLUGINS_MIRROR:-}" ] && echo "plugins: $2 failed, trying the mirror" >&2 &&
-      curl -fsSL --retry 3 -o "$1.part" "$M2_PLUGINS_MIRROR/$1"; } ||
+    { [ -n "${M2_PLUGINS_MIRROR:-}" ] && echo "plugins: $2 failed, trying the mirror" >&2 && mirror "$1"; } ||
     { rm -f "$1.part"; echo "plugins: couldn't download $1 (upstream${M2_PLUGINS_MIRROR:+ or $M2_PLUGINS_MIRROR})" >&2; exit 1; }
   mv "$1.part" "$1"
 }

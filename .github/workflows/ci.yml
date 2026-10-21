@@ -7,10 +7,11 @@
 # (ci/docs-only.sh) runs the changes job alone, and ci-ok passes. The slow, timing and known-flaky
 # checks are in nightly.yml.
 #
-# Security: no secrets in any job here; the token is read-only (permissions below) and never kept
-# in the checkout (persist-credentials: false); pull_request, never pull_request_target, so a fork's
-# code never runs with this repo's rights; every action pinned by its full commit (version in the
-# comment; dependabot.yml keeps them current).
+# Security: no secrets in any job here; the token is read-only (permissions below), never kept in
+# the checkout (persist-credentials: false), and handed only to ci/plugins.sh, to read this repo's
+# "test-plugins" release; pull_request, never pull_request_target, so a fork's code never runs with
+# this repo's rights; every action pinned by its full commit (version in the comment;
+# dependabot.yml keeps them current).
 
 name: CI
 
@@ -23,9 +24,11 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request cancels its run still going; main's runs all finish.
+# A new push to a pull request cancels its run still going. Every run of the merge queue and of a
+# push to main runs to its end: each has a group of its own (its commit). A group they shared would
+# not do: GitHub keeps one run waiting per group, and cancels it when a newer one comes.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -55,10 +58,10 @@ jobs:
         run: ci/pr.sh changes "$BASE"
       - run: ci/pr.sh docs
 
-  # fmt, actionlint, the gates and docs rules and the PR tier's verdicts, licences, the web build,
-  # std's kernels and std.wasm; RustSec's advisories only when a Cargo.lock or deny.toml changed
-  # (they change with the date, not the code, so every pull request would go red on the day one is
-  # published; nightly.yml checks them every night).
+  # fmt, actionlint, the gates and docs rules and the PR tier's verdicts, licences, the pool's
+  # models, the web build, std's kernels and std.wasm; RustSec's advisories only when a Cargo.lock
+  # or deny.toml changed (they change with the date, not the code, so every pull request would go
+  # red on the day one is published; nightly.yml checks them every night).
   quick:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -152,7 +155,10 @@ jobs:
         with:
           path: ~/.local/share/m2-test-plugins/dl
           key: m2-plugins-${{ hashFiles('ci/plugins.sha256') }}
-      - run: ci/plugins.sh
+      # The job's own read-only token, so the release download works while the repo is private too.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: ci/plugins.sh
       - run: ci/pr.sh toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -198,7 +204,10 @@ jobs:
         with:
           path: ~/.local/share/m2-test-plugins/dl
           key: m2-plugins-${{ hashFiles('ci/plugins.sha256') }}
-      - run: ci/plugins.sh
+      # The job's own read-only token, so the release download works while the repo is private too.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: ci/plugins.sh
       - run: ci/pr.sh toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
