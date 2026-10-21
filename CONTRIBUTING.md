@@ -50,14 +50,14 @@ cargo run --locked --release -p music2-desktop
 
 | Command | What it runs | When |
 |---|---|---|
-| `ci/check.sh --pr` | Exactly the checks CI runs on a pull request, one after another, with each one's time and a total. | Before every pull request. Paste its last lines into the pull request. |
+| `ci/check.sh --pr` | Exactly the checks CI runs on a pull request, one after another, with each one's time and a total. For a change that is only docs, only the docs check, as in CI. About 11 minutes the first time on an 8-thread machine; less once it has built. | Before every pull request. Paste its summary into the pull request. |
 | `ci/check.sh` | The full check: every test, every browser suite, and on a Mac the timing gates. | Before a big change lands. The nightly run does this every day, without the timing gates. |
 | `ci/pr.sh <part>` | One part of the pull request checks, as one CI job runs it: `quick`, `clippy`, `rust 1/3` (and `2/3`, `3/3`), `suites 1/2` (and `2/2`), `renders`. `ci/pr.sh changes` says whether your change is docs only. | When one CI job failed, to run just that part. |
 | `ci/check.sh --nightly` | The nightly tier as CI runs it: everything but the timing gates, the browser suites one at a time. | To repeat a failed nightly run. |
 | `ci/tools.sh` | Fetches the three tools the checks use beyond Rust and Node (cargo-nextest, cargo-deny, actionlint), each checked against its sha256, into `~/.cache/m2-tools`. | `ci/check.sh --pr` runs it for you. |
 | `node e2e/run.mjs all --tier pr --list` | Lists the browser suites a pull request runs (`--tier nightly`: the ones only the nightly run has). | To see which tier a suite is in. |
 
-`ci/check.sh` says `PASS` or `FAIL` on its first line, then one row for each part. It changes no file in the repo, never opens the app on your screen, plays no sound, and never touches your `~/Music` or `~/.music2`.
+`ci/check.sh`, with or without `--pr`, ends with a summary. Its first line says `PASS` or `FAIL` (for example `music2 check --pr: PASS`), then comes one row for each part. Paste from that line down. The checks change no file in the repo, never open the app on your screen, play no sound, and never touch your `~/Music` or `~/.music2`.
 
 ### What runs where
 
@@ -125,6 +125,7 @@ cargo run --locked --release -p music2-desktop
 | `ci/` | `check.sh` (the full check; `--pr` the pull request tier), `pr.sh` (one CI job's part), `nightly.sh` (the timing gates on a quiet machine), `nightly-tests.txt` (the Rust tests only the nightly tier runs), `docs-only.sh` (the docs-only rule), `tools.sh`, `apt.sh` and `plugins.sh` (what the checks need), `gates.txt`, `sweep.sh` (a Mac's thread sweep) |
 | `.github/` | The workflows (`ci.yml`, the pull request tier; `nightly.yml`), Dependabot's settings, and the issue and pull request forms |
 | `.config/nextest.toml` | How cargo-nextest runs the Rust tests in CI |
+| `deny.toml` | cargo-deny's rules for the Rust dependencies: the licences allowed, security advisories, crates.io only |
 | `docs/` | The manual, the goals, the contract, the design notes and the gap list |
 
 ## Licence of your contribution

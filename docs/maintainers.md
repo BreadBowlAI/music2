@@ -16,7 +16,7 @@
 | 5 | **Delete the two leftover `refs/claude-teleport/*` refs** on GitHub (`git ls-remote origin` lists them; `git push origin :<ref>` deletes one). | One holds unfinished work that is not on `main`. They would become public too. |
 | 6 | **Decide on the wasmtime upgrade** (49.0.2 to 49.0.4: a change to `Cargo.lock`, then the full check). | RUSTSEC-2026-0379 is a Cranelift miscompile on Apple silicon. [SECURITY.md](../SECURITY.md) lists it as known. |
 | 7 | **Decide on the macOS bundle id** `com.suite2.music2` (`apps/music2-desktop/tauri.conf.json`). Changing it means macOS asks for the microphone again. | It names an unreleased project. Keeping it is fine. |
-| 8 | **Host the Airwindows test plugin.** Make a release whose tag is `test-plugins`, and upload the Airwindows zip from `~/.local/share/m2-test-plugins/dl/` as its file. `ci/plugins.sh` falls back to that release when upstream fails. | Upstream deleted the zip, and CI needs it. Airwindows is MIT, so it may be shared. (Surge XT's package is still upstream. It is GPL-3.0: sharing a copy would also mean offering its source, so leave it there.) |
+| 8 | **Host the Airwindows test plugin.** Make a release whose tag is `test-plugins`, and upload the Airwindows zip from `~/.local/share/m2-test-plugins/dl/` as its file. `ci/plugins.sh` falls back to that release when upstream fails. | Upstream deleted the zip, and CI needs it: until the release is there, CI's `rust` and `suites` jobs fail at `ci/plugins.sh` whenever their cache is empty. Airwindows is MIT, so it may be shared. (Surge XT's package is still upstream. It is GPL-3.0: sharing a copy would also mean offering its source, so leave it there.) |
 | 9 | **Make it public:** **Settings → General → Danger Zone → Change visibility**. | |
 
 ## 2. Pull requests and merging
@@ -26,12 +26,12 @@ Repository **Settings**:
 | Where | Set | Why |
 |---|---|---|
 | **General → Pull Requests** | Allow merge commits. Untick squash merging and rebase merging. Tick "Automatically delete head branches". | The project merges; it never rebases. |
-| **Rules → Rulesets → New branch ruleset**, for the default branch | Require a pull request before merging (1 approval). Require status checks to pass: **ci-ok** only. Require merge queue (merge method: merge commit; only merge pull requests that pass). Block force pushes. Restrict deletions. Do **not** require linear history. | `ci-ok` is the one check that sums up all the others. The queue tests each pull request on top of the newest `main` before it merges. |
+| **Rules → Rulesets → New branch ruleset**, for the default branch | Require a pull request before merging (0 approvals while you are the only maintainer: GitHub doesn't let you approve your own pull request; raise it when there are more). Require status checks to pass: **ci-ok** only. Require merge queue (merge method: merge commit; only merge pull requests that pass). Block force pushes. Restrict deletions. Do **not** require linear history. | `ci-ok` is the one check that sums up all the others. The queue tests each pull request on top of the newest `main` before it merges. |
 | **Actions → General → Fork pull request workflows from outside collaborators** | Require approval for first-time contributors. | A newcomer's first run waits for your click, so spam can't use the shared runners. |
 | **Actions → General → Workflow permissions** | Read repository contents and packages permissions. Don't allow GitHub Actions to create or approve pull requests. | The workflows ask for more only where they need it. |
 | **Actions → General → Actions permissions** | Allow actions made by GitHub, plus `Swatinem/rust-cache`, the one other action the workflows use. | An action outside that list can't run, even if a pull request adds one. |
 
-**CODEOWNERS** isn't in the repository yet: your GitHub login couldn't be read when it was written. To add it, create `.github/CODEOWNERS` with the line `* @<your-login>`, and tick "Require review from Code Owners" in the ruleset.
+**CODEOWNERS** isn't in the repository yet: whose GitHub login reviews couldn't be confirmed when it was written (the account the server pushes as is `BreadBowlAI`). To add it, create `.github/CODEOWNERS` with the line `* @<the reviewer's login>`. Tick "Require review from Code Owners" in the ruleset only once there is a second maintainer, for the same reason as the approvals.
 
 ## 3. Security
 

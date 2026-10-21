@@ -9,14 +9,14 @@ Closes #
 
 ## How it was checked
 
-- [ ] `ci/check.sh --pr` passed on my machine. Its last lines are below.
+- [ ] `ci/check.sh --pr` passed on my machine. Its summary is below.
 - [ ] A test shows the problem failing before the change, and passing after it. (Or: no behaviour changed, for example docs only.)
 - [ ] No test was weakened, skipped or deleted.
 - [ ] If a rule of the contract (`docs/architecture.md`) changes, the contract changes first, in this pull request.
 - [ ] Docs and messages in the app use plain words.
 
 ```text
-(paste the last lines of ci/check.sh --pr here)
+(paste ci/check.sh --pr's summary here, from the line "music2 check --pr:" down)
 ```
 
 ## Made with an AI agent?
