@@ -43,7 +43,6 @@ So, what can go wrong:
 
 | Issue | Status |
 |---|---|
-| wasmtime 49.0.2, in `Cargo.lock`, has 14 RustSec advisories. One, RUSTSEC-2026-0379, is a Cranelift miscompile on aarch64 (Apple silicon) for large `br_table`s. The other 13 are in wasmtime features music2 builds without (the component model, async, GC), so they likely don't reach it. | Fixed upstream in wasmtime 49.0.4. The upgrade is open. |
 | Kernels have no time limit. | Open ([gaps.md](docs/gaps.md), Playback). It matters once kernels from other people can load. |
 | The desktop window has no Content Security Policy (`"csp": null` in `apps/music2-desktop/tauri.conf.json`). | Open. |
 | The window's native commands are allowed for any page on `127.0.0.1` or `localhost`, on any port, not only the app's own server: its port is chosen at launch, so the capability can't name it. | Open. It matters only if the window is ever sent to another local page. |
