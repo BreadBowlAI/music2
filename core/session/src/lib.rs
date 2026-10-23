@@ -13,6 +13,7 @@
 //! saves, `lock` keeps one writer per project, and `watch` settles outside changes. Core holds no
 //! gesture (P10, WRITE-9): `crates/editor` plans each one as a Tx and asserts what it means.
 
+pub mod forward;
 pub mod lock;
 pub mod reference;
 pub mod session;

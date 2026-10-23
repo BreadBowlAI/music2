@@ -25,6 +25,8 @@ mod continues_tests;
 #[cfg(test)]
 mod delta_tests;
 #[cfg(test)]
+mod forward_tests;
+#[cfg(test)]
 mod hook_tests;
 #[cfg(test)]
 mod kill_tests;
@@ -782,6 +784,13 @@ impl Session {
         assert(self, &checked).map_err(Uncommitted::Asserted)?;
         // The candidate is the commit's alone again, so accepting it copies nothing.
         drop(checked);
+        // A read-only session given the lock's holder sends it there, checked (AGENT-1).
+        if self.forward.is_some() {
+            if seen {
+                self.judge(&tx, &mut p).map_err(refused)?;
+            }
+            return self.forward_prepared(&tx, p).map_err(refused);
+        }
         let scans = self.scans;
         if let Some(r) = self.writable() {
             return Err(refused(rejected(vec![r])));
@@ -800,10 +809,44 @@ impl Session {
         Ok(done)
     }
 
+    /// Send a Tx checked here to the lock's holder (AGENT-1), with the hash of that check and the
+    /// assets taken in since the last one; once it landed, read what the holder wrote. What it
+    /// answers is this check's, with the holder's numbers: nothing was written here.
+    fn forward_prepared(&mut self, tx: &Tx, p: Prepared) -> Result<Committed, Refusal> {
+        let assets: Vec<TxPath> = self.forward_assets.iter().filter_map(|a| TxPath::new(&m2_song::path::slashed(a)).ok()).collect();
+        let to = self.forward.as_mut().expect("a forwarding session");
+        let landed = to.commit(tx, p.hash, &assets)?;
+        let paths = crate::forward::landed_paths(self, tx, &self.forward_assets);
+        if let Ok(snapshot) = Snapshot::read_paths(&self.dir, &paths, &|_| true, BTreeSet::new()) {
+            self.take_in_only(snapshot, &paths);
+        }
+        self.forward_assets.clear();
+        self.cache = None;
+        self.landed = Some(landed);
+        let Prepared { delta, hash, diagnostics, planned, .. } = p;
+        Ok(Committed {
+            number: landed.number,
+            code_rev: landed.code_rev,
+            data_rev: landed.data_rev,
+            delta,
+            hash,
+            diagnostics,
+            patches: planned.patches,
+            wrote: vec![],
+        })
+    }
+
     /// Commit `tx` (WRITE-5): checked as `check` does, then journaled, staged and renamed into
     /// place under the lock, accepted, and recorded for undo as its inverse (WRITE-21). A new
     /// commit ends any redo.
     pub fn commit(&mut self, tx: Tx) -> Result<Committed, Refusal> {
+        // Forwarded, it is checked here first, as every forwarded Tx is (AGENT-1); a recovery isn't
+        // forwarded (`m2 fix` asks the app).
+        if self.forward.is_some() && !matches!(tx.expect, Expect::Journal(_)) {
+            return self.commit_with(tx, |_, _| Ok::<(), Refusal>(())).map_err(|e| match e {
+                Uncommitted::Refused(r) | Uncommitted::Asserted(r) => r,
+            });
+        }
         let (done, step) = self.commit_tx(&tx, false)?;
         if let Some(step) = step {
             self.record_tx(step);
@@ -1682,7 +1725,12 @@ impl Session {
 
     /// The before-images undo, interrupted journals and journals left alone still need.
     pub(crate) fn blobs_in_use(&self) -> BTreeSet<Sha> {
-        let steps = self.history.iter().chain(&self.redo).flat_map(TxStep::blobs);
+        // A commit's ended redo too, which a retract brings back (AGENT-3).
+        let ended = match &self.last_change {
+            Some(crate::session::Change::Commit { cleared }) => &cleared[..],
+            _ => &[],
+        };
+        let steps = self.history.iter().chain(&self.redo).chain(ended).flat_map(TxStep::blobs);
         steps.chain(self.interrupted.iter().flat_map(|j| j.blobs())).chain(self.kept.iter().copied()).collect()
     }
 

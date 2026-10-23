@@ -92,23 +92,33 @@ pub struct Stepped {
     pub committed: crate::tx::Committed,
 }
 
-/// Who made an undo step (AGENT-2). Track 2 of the agents design adds agents, by the name each
-/// gives, once they have a key of their own (AGENT-10).
+/// Who made an undo step (AGENT-2): told apart by the key a request carries (AGENT-10).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Source {
-    /// The app's page, and until then every write through the app's API.
+    /// The app's page.
     #[default]
     Page,
+    /// An agent, by the name it gives (`agent` when it gives none).
+    Agent(String),
     /// Files saved outside the app, which the watcher took in (WRITE-19).
     Outside,
 }
 
 impl Source {
-    /// As the app's API says it: `page` or `outside`.
+    /// As the app's API says it: `page`, `agent` or `outside`.
     pub fn as_str(&self) -> &'static str {
         match self {
             Source::Page => "page",
+            Source::Agent(_) => "agent",
             Source::Outside => "outside",
+        }
+    }
+
+    /// An agent's name.
+    pub fn by(&self) -> Option<&str> {
+        match self {
+            Source::Agent(name) => Some(name),
+            _ => None,
         }
     }
 }
@@ -223,6 +233,28 @@ pub struct Session {
     pub(crate) wrote: Vec<(PathBuf, Option<crate::watch::Stamp>)>,
     /// What the host does with a commit about to be written (PLANE-5).
     pub(crate) before_write: Option<crate::tx::BeforeWrite>,
+    /// The lock's holder, which this read-only session's commits go to (AGENT-1).
+    pub(crate) forward: Option<Box<dyn crate::forward::Forward>>,
+    /// The files under `assets/` taken in since the last forwarded commit: the next one names them
+    /// to the holder, which takes them in first (AGENT-1).
+    pub(crate) forward_assets: BTreeSet<PathBuf>,
+    /// Where the last forwarded Tx landed.
+    pub(crate) landed: Option<crate::forward::Landed>,
+    /// Who the steps recorded now are by, and what they are called (AGENT-2, AGENT-10).
+    pub(crate) by: Source,
+    pub(crate) why: Option<String>,
+    /// The last commit, undo or redo: what [`Session::retract`] takes back (AGENT-3).
+    pub(crate) last_change: Option<Change>,
+}
+
+/// The last change this session made, as [`Session::retract`] takes it back.
+pub(crate) enum Change {
+    /// A commit, which recorded a step and ended these redo steps.
+    Commit {
+        cleared: Vec<TxStep>,
+    },
+    Undo,
+    Redo,
 }
 
 /// A project that can't be read from its snapshot: the manifest's or the arrangement's errors.
@@ -365,6 +397,12 @@ impl Session {
             last: None,
             wrote: vec![],
             before_write: None,
+            forward: None,
+            forward_assets: BTreeSet::new(),
+            landed: None,
+            by: Source::Page,
+            why: None,
+            last_change: None,
         };
         s.problems = s.gather_problems();
         Ok(s)
@@ -565,9 +603,60 @@ impl Session {
         step.made = self.accepted.number;
         self.steps += 1;
         step.id = self.steps;
+        // Not the watcher's: whoever the app says the request is by (AGENT-10), named by its words.
+        if step.source == Source::Page {
+            step.source = self.by.clone();
+            if step.name.is_none() {
+                step.name = self.why.clone().map(|w| (w, false));
+            }
+        }
         self.push_history(step);
-        self.redo.clear();
+        let cleared = std::mem::take(&mut self.redo);
+        self.last_change = Some(Change::Commit { cleared });
         self.steps
+    }
+
+    /// Who the steps recorded from now on are by, and what they are called when `why` is given
+    /// (AGENT-2, AGENT-10): the app says so for each request, by the key it came with.
+    pub fn act_as(&mut self, by: Source, why: Option<String>) {
+        (self.by, self.why) = (by, why);
+    }
+
+    /// Take back the last commit, undo or redo this session made, and leave undo and redo as they
+    /// were before it (AGENT-3): what the app does with an agent's change the musician began to
+    /// hold while it landed. Its bases match, since nothing wrote meanwhile; when something did,
+    /// it is refused as an undo is, and the change stays.
+    pub fn retract(&mut self) -> Result<Stepped, StepError> {
+        let done = match self.last_change.take() {
+            None => return Err(StepError::Nothing("nothing to take back")),
+            Some(Change::Commit { cleared }) => {
+                let done = self.step(false)?;
+                // The step its undo pushed goes, and the redo the commit ended comes back.
+                self.redo.pop();
+                self.redo = cleared;
+                done
+            }
+            // Its redo puts the step back as it was, with its id; redo is as before the undo.
+            Some(Change::Undo) => self.step(true)?,
+            Some(Change::Redo) => self.step(false)?,
+        };
+        self.last_change = None;
+        Ok(done)
+    }
+
+    /// Every file the last change touched, while [`Session::retract`] can take it back: the app
+    /// checks them against what the musician holds (AGENT-3). None when there is none.
+    pub fn last_change(&self) -> Option<Vec<String>> {
+        let step = match self.last_change.as_ref()? {
+            Change::Commit { .. } | Change::Redo => self.history.last(),
+            Change::Undo => self.redo.last(),
+        };
+        Some(step?.inverse.touched().iter().map(|p| p.to_string()).collect())
+    }
+
+    /// Keep the last change: it can't be retracted from now on (AGENT-3).
+    pub fn keep_change(&mut self) {
+        self.last_change = None;
     }
 
     /// The id the newest step recorded got, 0 before the first: a change that records a step makes
@@ -650,11 +739,18 @@ impl Session {
             return false;
         }
         self.history.pop();
+        self.last_change = None;
         true
     }
 
     /// Commit the inverse on top of one stack; its own inverse goes on the other.
     fn step(&mut self, redo: bool) -> Result<Stepped, StepError> {
+        // Undo lives in the app that holds the lock: `m2 undo` asks it there (AGENT-1, AGENT-4).
+        if self.forward.is_some() {
+            return Err(StepError::ReadOnly(
+                "nothing was undone or redone: undo lives in the open app, where `m2 undo` takes back an agent's own newest step".into(),
+            ));
+        }
         let stack = if redo { &mut self.redo } else { &mut self.history };
         let Some(step) = stack.pop() else {
             return Err(StepError::Nothing(if redo { "nothing to redo" } else { "nothing to undo" }));
@@ -684,6 +780,7 @@ impl Session {
                     (inverse.id, inverse.source) = (step.id, step.source.clone());
                     if redo { &mut self.history } else { &mut self.redo }.push(inverse);
                 }
+                self.last_change = Some(if redo { Change::Redo } else { Change::Undo });
                 let (before, after) = tx.label.clone();
                 Ok(Stepped { number: done.number, file: step.file.clone(), before, after, committed: done })
             }

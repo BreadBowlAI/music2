@@ -3,8 +3,8 @@
 //! may write: the app while the project is open, a CLI write command for its run. The OS lets go
 //! of it when the process exits, so a crash leaves no stale lock. The file says who holds it,
 //! only to make messages clear. A process that can't take it opens the project read-only: it
-//! plays and reads, and refuses every write with a message naming the holder. Forwarding writes
-//! to the holder is deferred (owner decision 10).
+//! plays and reads, and refuses every write with a message naming the holder. A read-only `m2`
+//! session hands its writes to the app when the app holds the lock (AGENT-1, `crate::forward`).
 //!
 //! `flock` locks belong to the open file, so a second session of one project in one process
 //! finds the lock held too, and is read-only (the step 6 design's C10).

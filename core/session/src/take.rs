@@ -174,6 +174,10 @@ impl Session {
     /// `snapshot` may be a whole read or one of the paths alone (`Snapshot::read_paths`): the
     /// assets the lanes then name are hashed, the others listed, as a whole read lists them.
     pub fn take_in_only(&mut self, snapshot: Snapshot, paths: &BTreeSet<PathBuf>) -> TakenIn {
+        // New assets a forwarded commit will name: the holder takes them in first (AGENT-1).
+        if self.forward.is_some() {
+            self.forward_assets.extend(paths.iter().filter(|p| p.starts_with(m2_song::path::ASSETS)).cloned());
+        }
         let mut only = overlay(&self.draft, &snapshot, paths);
         crate::tx::settle_assets(&mut only);
         self.take_in(only)
