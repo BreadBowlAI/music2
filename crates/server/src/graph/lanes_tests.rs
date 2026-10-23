@@ -478,3 +478,53 @@ fn an_automation_drag_is_heard_before_it_is_written() {
     assert_eq!(d.revision(), before + 1);
     eventually("the lease ended", || d.graph.lane_leases().is_empty());
 }
+
+// AGENT-3, WRITE-22a (the review's F1): an agent's change to the code that would end the musician's
+// clip drag is taken back at its settle, though it touches no lane file: here song.ts, renaming the
+// track whose clip is dragged (`m2 edit` makes it so). The drag goes on, and one that leaves it be
+// lands.
+#[test]
+fn an_agents_rename_that_would_end_a_clip_drag_is_taken_back() {
+    use m2_song::tx::{Base, Edit, Expect, Op, Pos, Tx, TxPath};
+    use serde_json::json;
+    let mut d = Drag::new();
+    let lease = d.begin(e_at(4.0)).lease.expect("a lane lease");
+    d.fill(2);
+    let agent = || crate::caller::Caller::agent(Some("Claude"), Some("rename the bass"));
+    // On the code as it is now, committed on the hash its check shows, as `m2 edit` commits it.
+    let seen = |d: &Drag, old: &str, new: &str| {
+        let text = d.fixture.read("song.ts");
+        let at = text.find(old).unwrap();
+        let path = TxPath::new("song.ts").unwrap();
+        let edits =
+            vec![Edit { start: Pos::Byte(at as u32), end: Pos::Byte((at + old.len()) as u32), expected: old.into(), text: new.into() }];
+        let mut tx = Tx::new(
+            "tx-agent",
+            ("a".into(), "b".into()),
+            vec![Op::TextEdit { file: path.clone(), edits }],
+            Expect::Seen(m2_song::Sha::of(b"")),
+        );
+        tx.base.insert(path, Base::text(&text));
+        let mut json = tx.to_json();
+        let (status, checked) = d.graph.tx_check(Some(d.token), &json).unwrap();
+        assert_eq!(status, 200, "{checked}");
+        json["expect"] = json!({"seen": checked["checked"]["hash"]});
+        json
+    };
+    // A change that leaves the drag be: a comment.
+    let tx = seen(&d, "export default", "// the bass\nexport default");
+    let (status, body) = crate::caller::as_caller(agent(), || d.graph.tx_commit(Some(d.token), &tx, None, &[])).unwrap();
+    assert_eq!(status, 200, "{body}");
+    d.fill(2);
+    assert!(d.graph.lane_leases().iter().any(|l| l.lease == lease), "the drag goes on");
+    // The rename would drop it: taken back.
+    let song = d.fixture.read("song.ts");
+    let tx = seen(&d, "track('bass'", "track('sub'");
+    let (status, body) = crate::caller::as_caller(agent(), || d.graph.tx_commit(Some(d.token), &tx, None, &[])).unwrap();
+    assert_eq!((status, &body["busy"]["what"], &body["busy"]["taken_back"]), (423, &json!("lane"), &json!(true)), "{body}");
+    assert!(body["busy"]["words"].as_str().unwrap().contains("dragging a clip on"), "{body}");
+    assert_eq!(d.fixture.read("song.ts"), song, "taken back");
+    d.fill(4);
+    assert!(d.graph.lane_leases().iter().any(|l| l.lease == lease), "the drag goes on");
+    d.graph.lane_update(lease, Some(3), e_at(5.0)).unwrap();
+}

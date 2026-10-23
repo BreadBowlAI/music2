@@ -10,6 +10,9 @@ use std::future::Future;
 /// The longest an agent's words are shown (AGENT-10): its name, why it made a change.
 pub const WORDS: usize = 80;
 
+/// The name of the session's actor's thread, where [`now`] is never read.
+pub(crate) const ACTOR: &str = "m2-session";
+
 /// Who sent a request.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Caller {
@@ -24,7 +27,7 @@ impl Caller {
     /// An agent that calls itself `name` (else `agent`), saying `why`: both as plain text, at most
     /// [`WORDS`] characters.
     pub fn agent(name: Option<&str>, why: Option<&str>) -> Caller {
-        let name = name.map(words).filter(|n| !n.is_empty()).unwrap_or_else(|| "agent".into());
+        let name = name.map(words).filter(|n| !n.is_empty() && !the_apps(n)).unwrap_or_else(|| "agent".into());
         let why = why.map(words).filter(|w| !w.is_empty());
         Caller::Agent { name, why }
     }
@@ -59,10 +62,11 @@ impl Caller {
     }
 }
 
-/// Plain text an agent gives to be shown (AGENT-10): no control characters, no spaces at either
-/// end, and at most [`WORDS`] characters, the last of them "…" when it is cut.
+/// Plain text an agent gives to be shown (AGENT-10): no control or invisible characters (bidi
+/// controls, zero-width marks: what a Tx's path may not hold either), no spaces at either end, and
+/// at most [`WORDS`] characters, the last of them "…" when it is cut.
 pub fn words(s: &str) -> String {
-    let plain: String = s.chars().filter(|c| !c.is_control()).collect();
+    let plain: String = s.chars().filter(|c| !m2_song::tx::hidden(*c)).collect();
     let plain = plain.trim();
     if plain.chars().count() <= WORDS {
         return plain.to_string();
@@ -70,6 +74,14 @@ pub fn words(s: &str) -> String {
     let mut cut: String = plain.chars().take(WORDS - 1).collect();
     cut.push('…');
     cut
+}
+
+/// Whether an agent's name reads as the app's own words for a change it didn't make: the notice's
+/// "Changed outside the app", the Edit menu's "outside change" (AGENT-10). Such a name is `agent`,
+/// so no agent's change passes for an outside one.
+fn the_apps(name: &str) -> bool {
+    let letters: String = name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
+    letters.starts_with("changedoutside") || letters.starts_with("outsidechange")
 }
 
 tokio::task_local! {
@@ -83,8 +95,10 @@ thread_local! {
 }
 
 /// Who asks for what is served now: the request's caller on its task, or on the thread its
-/// blocking work runs on; else the page (the app's own work).
+/// blocking work runs on; else the page (the app's own work). Read where a request is served, never
+/// on the session's actor, whose jobs are given their caller ([`crate::graph::Graph`]'s `call`).
 pub fn now() -> Caller {
+    debug_assert_ne!(std::thread::current().name(), Some(ACTOR), "the session's actor is given its job's caller; it never reads one");
     if let Some(c) = ON_THREAD.with(|c| c.borrow().clone()) {
         return c;
     }
@@ -132,5 +146,21 @@ mod tests {
         assert_eq!(Caller::Page.saying(Some("Claude"), Some("x")), Caller::Page, "the page is the page");
         assert_eq!(as_caller(Caller::agent(Some("A"), None), now).source(), m2_session::Source::Agent("A".into()));
         assert_eq!(now(), Caller::Page);
+    }
+
+    // AGENT-10 (the review's F7): invisible characters go too (bidi controls, zero-width marks), and
+    // a name that reads as the app's own words for a change made outside it is `agent`.
+    #[test]
+    fn an_agents_words_hide_nothing_and_its_name_is_its_own() {
+        assert_eq!(words("the code \u{202E}stah\u{200B} \u{2066}x\u{2069}\u{feff}"), "the code stah x");
+        let name = |n: &str| match Caller::agent(Some(n), None) {
+            Caller::Agent { name, .. } => name,
+            Caller::Page => unreachable!(),
+        };
+        for fake in ["Changed outside the app", "changed outside the app: song.ts", "Outside change", "outside\u{200B} change"] {
+            assert_eq!(name(fake), "agent", "{fake:?}");
+        }
+        assert_eq!(name("Outsider"), "Outsider");
+        assert_eq!(name("Claude"), "Claude");
     }
 }

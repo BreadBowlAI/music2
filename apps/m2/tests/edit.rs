@@ -130,3 +130,88 @@ fn m2_edit_works_with_the_app_closed() {
     assert!(!said(&o).contains("open app"), "{}", said(&o));
     assert!(std::fs::read_to_string(Path::new(&song).join("tracks/kick.ts")).unwrap().contains("ms(120)"));
 }
+
+// The review's F9: `--as` and `--why` are read at the end of the command line only, so text given
+// to `--old` or `--new` that reads like one of them is that text. One put in the middle is refused,
+// saying where they go.
+#[test]
+fn m2_edit_takes_text_that_reads_like_a_flag() {
+    let temp = Temp::new("edit-flags");
+    let song = temp.0.join("song");
+    copy(&example("first-song"), &song);
+    let (dir, home) = (song.to_str().unwrap(), temp.0.join("home"));
+    let o = m2_in(&home, &["edit", dir, "song.ts", "--old", "The root module", "--new", "--why"], &[]);
+    assert!(o.status.success(), "{}", said(&o));
+    assert!(std::fs::read_to_string(song.join("song.ts")).unwrap().starts_with("// --why: whatever"));
+    let o = m2_in(&home, &["edit", dir, "song.ts", "--old", "--why", "--new", "--as", "--as", "Claude", "--why", "words"], &[]);
+    assert!(o.status.success(), "{}", said(&o));
+    assert!(std::fs::read_to_string(song.join("song.ts")).unwrap().starts_with("// --as: whatever"));
+    let o = m2_in(&home, &["title", dir, "--as", "Claude", "Night Drive"], &[]);
+    assert_eq!(o.status.code(), Some(1), "{}", said(&o));
+    assert!(said(&o).contains("--as and --why go at the end"), "{}", said(&o));
+    assert!(!std::fs::read_to_string(song.join("music2.toml")).unwrap().contains("--as"), "nothing changed");
+}
+
+/// The musician saves a mistake in `tracks/kick.ts` through the app's code editor: the app plays
+/// the last version that built. The text saved.
+fn save_a_mistake(a: &App) -> String {
+    let good = a.read("tracks/kick.ts");
+    let broken = good.replace("ms(150)", "ms(150");
+    a.running.state.graph.write_file(Some(a.session), "tracks/kick.ts", &good, &broken).unwrap();
+    assert_eq!(a.read("tracks/kick.ts"), broken);
+    broken
+}
+
+// AGENT-1, WRITE-2 (the review's F12): while the song's code on disk doesn't build (the musician
+// saved a mistake; the app plays the last version that built), `m2 edit` fixes it in the app as the
+// code editor saves a file: one undo step, the agent's, named by its words. `m2 undo` takes it back,
+// to the musician's text.
+#[test]
+fn m2_edit_fixes_a_song_that_doesnt_build_with_the_app_open() {
+    let a = App::open("first-song", |_| {});
+    let broken = save_a_mistake(&a);
+    let o = a.m2(&["edit", a.dir(), "tracks/kick.ts", "--old", "ms(150", "--new", "ms(120)", "--as", "Claude", "--why", "fixed the kick"]);
+    assert!(o.status.success(), "{}", said(&o));
+    assert!(said(&o).contains("in the open app: one undo step, Claude: fixed the kick"), "{}", said(&o));
+    assert!(a.read("tracks/kick.ts").contains("release: ms(120)"));
+    let top = a.top();
+    assert_eq!((&top["source"], &top["by"], &top["name"]), (&json!("agent"), &json!("Claude"), &json!("fixed the kick")), "{top}");
+    let o = a.m2(&["undo", a.dir(), "--as", "Claude"]);
+    assert!(o.status.success(), "{}", said(&o));
+    assert_eq!(a.read("tracks/kick.ts"), broken, "the musician's text is back");
+}
+
+// AGENT-1, AGENT-2 (the review's F12): an agent's save that doesn't make the song build is
+// refused, and nothing is written: the musician's text stays, and there is no step. `m2` says why.
+#[test]
+fn m2_write_that_leaves_a_song_broken_changes_nothing() {
+    let a = App::open("first-song", |_| {});
+    let broken = save_a_mistake(&a);
+    let from = a.temp.0.join("kick.ts");
+    std::fs::write(&from, broken.replace("ms(150", "ms(120) +")).unwrap();
+    let o = a.m2(&["write", a.dir(), "tracks/kick.ts", from.to_str().unwrap(), "--as", "Claude"]);
+    assert_eq!(o.status.code(), Some(1), "{}", said(&o));
+    assert!(said(&o).contains("nothing was changed") && said(&o).contains("tracks/kick.ts"), "{}", said(&o));
+    assert_eq!(a.read("tracks/kick.ts"), broken, "the musician's text stays");
+    assert_ne!(a.top()["source"], json!("agent"), "no step: {}", a.top());
+}
+
+// AGENT-1 (the review's F12): with the app closed, `m2 edit` fixes a song whose code doesn't build
+// too, and refuses one that leaves it broken.
+#[test]
+fn m2_edit_fixes_a_song_that_doesnt_build_with_the_app_closed() {
+    let temp = Temp::new("edit-broken");
+    let song = temp.0.join("song");
+    copy(&example("first-song"), &song);
+    let (dir, home) = (song.to_str().unwrap(), temp.0.join("home"));
+    let kick = song.join("tracks/kick.ts");
+    let broken = std::fs::read_to_string(&kick).unwrap().replace("ms(150)", "ms(150");
+    std::fs::write(&kick, &broken).unwrap();
+    let o = m2_in(&home, &["edit", dir, "tracks/kick.ts", "--old", "ms(150", "--new", "ms(120) +"], &[]);
+    assert_eq!(o.status.code(), Some(1), "{}", said(&o));
+    assert_eq!(std::fs::read_to_string(&kick).unwrap(), broken, "nothing changed");
+    let o = m2_in(&home, &["edit", dir, "tracks/kick.ts", "--old", "ms(150", "--new", "ms(120)"], &[]);
+    assert!(o.status.success(), "{}", said(&o));
+    assert!(std::fs::read_to_string(&kick).unwrap().contains("release: ms(120)"));
+    assert!(m2_in(&home, &["check", dir], &[]).status.success(), "it builds");
+}

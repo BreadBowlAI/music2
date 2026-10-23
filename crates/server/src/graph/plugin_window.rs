@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::Control;
 use m2_ir::{FOp, Input};
-use m2_plugins::{Blob, Handle, MainCall, Reply, WindowCall};
+use m2_plugins::{Blob, Handle, HostEvent, HostEvents, MainCall, Reply, WindowCall};
 use m2_runtime::PluginInstance;
 use m2_runtime::plugins::{GESTURE, HELD, LATCHED};
 use m2_song::{Key, Sidecar};
@@ -120,6 +120,41 @@ fn list(v: &[String]) -> String {
     }
 }
 
+/// Mark each instance of `p` whose window changed its state, not saved yet (HOME-6): those that
+/// said `mark_dirty` (`dirty`), and those whose own flag says so. What every tick hears, and what
+/// an agent's change is checked against at its settle (AGENT-3).
+fn changed(o: &mut Open, p: &Plays, dirty: Vec<Handle>) {
+    let now = Instant::now();
+    for h in dirty {
+        o.windows.dirty.insert(h, now);
+    }
+    for at in &p.info.plugins {
+        let Some(inst) = at.inst.upgrade() else { continue };
+        if inst.take_changed() {
+            o.windows.dirty.insert(at.handle, now);
+        }
+        if o.windows.dirty.contains_key(&at.handle) {
+            inst.set_unsaved(true);
+        }
+    }
+}
+
+/// What the plugin windows of `o` did since the last tick, heard now: the check at an agent's
+/// settle runs on what the musician holds then, not as of the job's start (AGENT-3). The host's
+/// other events wait in `unheard`, in their order, for the next tick.
+pub(super) fn hear_now(o: &mut Open, events: &HostEvents, unheard: &mut Vec<HostEvent>) {
+    let mut dirty = vec![];
+    for e in events.try_iter() {
+        match e {
+            HostEvent::Dirty(h) => dirty.push(h),
+            e => unheard.push(e),
+        }
+    }
+    if let Some(p) = o.plays.clone() {
+        changed(o, &p, dirty);
+    }
+}
+
 impl Actor {
     /// The tick: what each instance's window did since the last one (see the module's table).
     /// `dirty` are the instances that said `mark_dirty`, `closed` those whose window the person
@@ -136,19 +171,10 @@ impl Actor {
         }
         let Some(o) = self.open.as_mut() else { return };
         let Some(p) = o.plays.clone() else { return };
-        let now = Instant::now();
-        for h in dirty {
-            o.windows.dirty.insert(h, now);
-        }
+        changed(o, &p, dirty);
         let (mut said, mut held) = (vec![], vec![]);
         for at in &p.info.plugins {
             let Some(inst) = at.inst.upgrade() else { continue };
-            if inst.take_changed() {
-                o.windows.dirty.insert(at.handle, now);
-            }
-            if o.windows.dirty.contains_key(&at.handle) {
-                inst.set_unsaved(true);
-            }
             let mut back: Vec<String> = vec![];
             for id in inst.take_reverted() {
                 let name = param_name(o, &p, at.node, id);
@@ -198,7 +224,8 @@ impl Actor {
             Held::Begin(h, id, c) => {
                 let revision = o.session.accepted().number;
                 let owner = Owner { client: None, gesture: Some(format!("plugin window {} {id}", h.0)), ttl: Some(lease::MAX_TTL) };
-                match self.begin(token, revision, &c.id, owner) {
+                // The window's gesture is the musician's, whichever job hears it.
+                match self.begin(token, revision, &c.id, owner, &crate::caller::Caller::Page) {
                     Ok(b) => {
                         if let Some(o) = self.open.as_mut() {
                             o.windows.leases.insert((h, id), b.lease);

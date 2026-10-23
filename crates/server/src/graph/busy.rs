@@ -1,7 +1,8 @@
 //! What the musician holds (AGENT-3): an agent's write that touches it is refused, busy. The app
 //! checks when the write arrives, and again at the start of the settle that follows, under the
 //! control plane's lock, before anything of the change is carried, sent to the engine or shown;
-//! a change the musician began to hold meanwhile is taken back there.
+//! a change the musician began to hold meanwhile is taken back there, and so is one that would end
+//! what they hold, whatever file it touched: what the settle's carry decides would end.
 
 use m2_ir::FOp;
 use serde_json::{Value, json};
@@ -37,19 +38,36 @@ impl std::fmt::Display for Busy {
 impl std::error::Error for Busy {}
 
 /// Agents don't hold leases (AGENT-3): a drag is the musician's. An agent's change is one edit.
-pub(super) fn no_lease() -> anyhow::Result<()> {
-    if crate::caller::now().is_agent() {
+/// `by` asks: the caller the request's job was given, never read off the thread it runs on.
+pub(super) fn no_lease(by: &crate::caller::Caller) -> anyhow::Result<()> {
+    if by.is_agent() {
         anyhow::bail!("agents don't drag: an agent's change is one edit (m2 set, m2 clips, m2 tempo), never a lease");
     }
     Ok(())
 }
 
-/// Something the musician holds: a file (or everything, `None`), and the words that say it.
+/// Something the musician holds: what it is, a file (or everything, `None`), and the words that
+/// say it.
 #[derive(Clone, Debug)]
 pub(super) struct Hold {
+    of: Held,
     what: &'static str,
     file: Option<String>,
     words: String,
+}
+
+/// Which hold a [`Hold`] is: what a change would end is named so ([`check`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Held {
+    Take,
+    /// A knob drag, by its lease.
+    Knob(u64),
+    /// A drag on clips, by its lease.
+    Lane(u64),
+    Tempo,
+    /// A plugin window's changes not saved yet, by its instance.
+    Plugin(m2_plugins::Handle),
+    Code,
 }
 
 /// What the musician holds in project `o` now (AGENT-3): their knob, clip and tempo drags, a
@@ -63,7 +81,7 @@ pub(super) fn held(cp: &ControlPlane, o: &Open, inner: &Inner) -> Vec<Hold> {
     // A take holds everything: its notes follow the tempo map, and the musician may hear
     // themselves through the track's effects.
     if let Some(module) = super::record::recording_on(cp, token) {
-        out.push(Hold { what: "take", file: None, words: format!("you're recording on {}", label(&module)) });
+        out.push(Hold { of: Held::Take, what: "take", file: None, words: format!("you're recording on {}", label(&module)) });
     }
     for l in cp.leases.live.iter().filter(|l| l.token == token) {
         let knob = view.and_then(|v| v.as_array()).into_iter().flatten().find_map(|m| {
@@ -72,39 +90,45 @@ pub(super) fn held(cp: &ControlPlane, o: &Open, inner: &Inner) -> Vec<Hold> {
             Some(format!("{} {}", m["label"].as_str()?, k["label"].as_str()?))
         });
         let knob = knob.unwrap_or_else(|| format!("a knob in {}", l.control.file));
-        out.push(Hold { what: "knob", file: Some(l.control.file.clone()), words: format!("you're dragging {knob} in the app") });
+        let words = format!("you're dragging {knob} in the app");
+        out.push(Hold { of: Held::Knob(l.id), what: "knob", file: Some(l.control.file.clone()), words });
     }
-    for lane in super::lanes::held(cp, token) {
+    for (lease, lane) in super::lanes::held(cp, token) {
         let file = m2_song::DataPath::lane(&lane).to_string();
-        out.push(Hold { what: "lane", file: Some(file), words: format!("you're dragging a clip on {}", label(lane.module.as_str())) });
+        let words = format!("you're dragging a clip on {}", label(lane.module.as_str()));
+        out.push(Hold { of: Held::Lane(lease), what: "lane", file: Some(file), words });
     }
     if super::tempo_lease::held(cp, token) {
-        out.push(Hold { what: "tempo", file: Some("data/arrangement.json".into()), words: "you're dragging the tempo".into() });
+        let file = Some("data/arrangement.json".into());
+        out.push(Hold { of: Held::Tempo, what: "tempo", file, words: "you're dragging the tempo".into() });
     }
     if let Some(p) = &o.plays {
         for h in o.windows.unsaved() {
             let Some(at) = p.info.plugins.iter().find(|at| at.handle == h) else { continue };
             let n = &p.revision.compiled.flat.nodes[at.node];
             let FOp::Plugin { state: Some(keys), .. } = &n.op else { continue };
-            let file = format!("data/{}/{}.state", n.module, keys.join("/"));
+            let Some(file) = m2_song::DataPath::plugin_state(&n.module, keys).map(|p| p.to_string()) else { continue };
             let who = plugin_named(&*p.revision, &o.session.packages, at.node);
-            out.push(Hold { what: "plugin", file: Some(file), words: format!("you're changing {who} in its window") });
+            out.push(Hold { of: Held::Plugin(h), what: "plugin", file: Some(file), words: format!("you're changing {who} in its window") });
         }
     }
     let unsaved = inner.unsaved.lock();
     if unsaved.0 == token {
         for f in &unsaved.1 {
-            out.push(Hold { what: "code", file: Some(f.clone()), words: format!("{f} has unsaved changes in the app's code editor") });
+            let words = format!("{f} has unsaved changes in the app's code editor");
+            out.push(Hold { of: Held::Code, what: "code", file: Some(f.clone()), words });
         }
     }
     out
 }
 
-/// The first of `holds` an agent's write touching `files` meets: every hold, when `files` is
-/// None (a write whose files aren't known before it is planned meets only a take). A file is
-/// held by its own path, a folder holding it, or (a plugin's state) its sidecar.
-pub(super) fn check(holds: &[Hold], files: Option<&[String]>) -> Option<Busy> {
+/// The first of `holds` an agent's write touching `files` meets, or would end (`ends`, what the
+/// settle's carry decided its revision would end, whatever files it touched): every hold, when
+/// `files` is None (a write whose files aren't known before it is planned meets only a take). A
+/// file is held by its own path, a folder holding it, or (a plugin's state) its sidecar.
+pub(super) fn check(holds: &[Hold], files: Option<&[String]>, ends: &[Held]) -> Option<Busy> {
     let meets = |h: &Hold| match (&h.file, files) {
+        _ if ends.contains(&h.of) => true,
         (None, _) => true,
         (Some(_), None) => false,
         (Some(f), Some(files)) => {

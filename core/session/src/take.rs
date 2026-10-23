@@ -111,6 +111,17 @@ pub struct Saved {
     pub recorded: bool,
 }
 
+/// What taking in a draft decides ([`Session::settling`]): built, before anything changes.
+enum Settle {
+    /// No revision: the draft is the accepted one (`clear`: nothing waits any more), or what
+    /// changed waits already.
+    Same { clear: bool },
+    /// This snapshot, built so, is the new accepted revision (`clear`: nothing waits any more).
+    Accept { built: Box<(Snapshot, m2_song::Project, crate::Compiled)>, clear: bool },
+    /// It doesn't build: these paths wait, for these errors.
+    Wait { errors: Vec<m2_ir::Diagnostic>, paths: BTreeSet<PathBuf> },
+}
+
 /// Only the entries of `paths` of `s`.
 fn pick(s: &Snapshot, paths: &BTreeSet<PathBuf>) -> Snapshot {
     overlay(&Snapshot { dir: s.dir.clone(), ..Snapshot::default() }, s, paths)
@@ -152,10 +163,16 @@ impl Session {
             return TakenIn::default();
         }
         let batch = changed_paths(&self.draft, &snapshot);
+        let settled = self.settling(&snapshot, &batch);
+        self.take_in_settled(snapshot, settled)
+    }
+
+    /// [`Session::take_in`] of `snapshot`, whose batch `settled` decided already.
+    fn take_in_settled(&mut self, snapshot: Snapshot, settled: Settle) -> TakenIn {
         self.draft = snapshot;
         self.cache = None;
         let before = self.accepted.clone();
-        let taken = self.settle_batch(&batch);
+        let taken = self.settle(settled);
         let accepted = taken.then(|| {
             let after = self.accepted.clone();
             let plane = plane(&before, &after);
@@ -286,14 +303,12 @@ impl Session {
         }
     }
 
-    /// Accept what `batch` changed in the draft, as the module's table says. Whether a revision
-    /// was accepted.
-    fn settle_batch(&mut self, batch: &BTreeSet<PathBuf>) -> bool {
+    /// What taking in `draft` decides, `batch` being what changed in it, as the module's table says:
+    /// built, but nothing changed yet, so a save knows it before it writes.
+    fn settling(&mut self, draft: &Snapshot, batch: &BTreeSet<PathBuf>) -> Settle {
         let accepted = self.accepted.clone();
-        if accepted.has_code() && self.draft == accepted.snapshot {
-            self.draft_errors.clear();
-            self.waiting.clear();
-            return false;
+        if accepted.has_code() && *draft == accepted.snapshot {
+            return Settle::Same { clear: true };
         }
         let kinds: BTreeSet<Kind> = batch.iter().map(|p| kind_of(p)).collect();
         let code_like = kinds.contains(&Kind::Code) || kinds.contains(&Kind::Arrangement);
@@ -301,35 +316,45 @@ impl Session {
             // The data path: the batch's data read against the accepted code (WRITE-14), its
             // paths that wait staying out.
             let take: BTreeSet<PathBuf> = batch.iter().filter(|p| !self.waiting.contains(*p)).cloned().collect();
-            let snap = overlay(&accepted.snapshot, &self.draft, &take);
+            let snap = overlay(&accepted.snapshot, draft, &take);
             if take.is_empty() || snap == accepted.snapshot {
-                return false;
+                return Settle::Same { clear: false };
             }
             return match self.build(&snap, Some(accepted.compiled.code().clone()), &accepted.compiled.data) {
-                Ok((project, compiled)) => {
-                    self.accept(snap, project, compiled);
-                    true
-                }
-                Err(d) => {
-                    self.draft_errors = d;
-                    self.waiting.extend(take);
-                    false
-                }
+                Ok((project, compiled)) => Settle::Accept { built: Box::new((snap, project, compiled)), clear: false },
+                Err(errors) => Settle::Wait { errors, paths: take },
             };
         }
         // The whole draft, which must build: a compile when its code differs from the accepted.
-        let draft = self.draft.clone();
-        let code = !accepted.has_code() || changed_paths(&accepted.snapshot, &draft).iter().any(|p| kind_of(p) == Kind::Code);
-        match self.build(&draft, (!code).then(|| accepted.compiled.code().clone()), &accepted.compiled.data) {
-            Ok((project, compiled)) => {
-                self.accept(draft, project, compiled);
-                self.draft_errors.clear();
-                self.waiting.clear();
+        let code = !accepted.has_code() || changed_paths(&accepted.snapshot, draft).iter().any(|p| kind_of(p) == Kind::Code);
+        match self.build(draft, (!code).then(|| accepted.compiled.code().clone()), &accepted.compiled.data) {
+            Ok((project, compiled)) => Settle::Accept { built: Box::new((draft.clone(), project, compiled)), clear: true },
+            Err(errors) => Settle::Wait { errors, paths: batch.clone() },
+        }
+    }
+
+    /// Do what [`Session::settling`] decided. Whether a revision was accepted.
+    fn settle(&mut self, settled: Settle) -> bool {
+        match settled {
+            Settle::Same { clear } => {
+                if clear {
+                    self.draft_errors.clear();
+                    self.waiting.clear();
+                }
+                false
+            }
+            Settle::Accept { built, clear } => {
+                let (snap, project, compiled) = *built;
+                self.accept(snap, project, compiled);
+                if clear {
+                    self.draft_errors.clear();
+                    self.waiting.clear();
+                }
                 true
             }
-            Err(d) => {
-                self.draft_errors = d;
-                self.waiting.extend(batch.iter().cloned());
+            Settle::Wait { errors, paths } => {
+                self.draft_errors = errors;
+                self.waiting.extend(paths);
                 false
             }
         }
@@ -341,6 +366,32 @@ impl Session {
     /// undo when it was taken into an accepted revision as written: its undo writes the old text
     /// back while the file is as the save left it (WRITE-21).
     pub fn save(&mut self, file: &Path, base: Base, text: &str) -> Result<Saved, Refusal> {
+        self.save_as(file, base, text, false)
+    }
+
+    /// [`Session::save`], written only when the song takes the file in as written, so it is one undo
+    /// step: an agent's save (AGENT-1, WRITE-2), which `m2 edit` and `m2 write` make while the code
+    /// on disk doesn't build. What it would make is settled before anything is written; one the song
+    /// wouldn't take is refused with why (its build's errors), and nothing is written. A read-only
+    /// session given the lock's holder sends it there, and then reads what landed.
+    pub fn save_built(&mut self, file: &Path, base: Base, text: &str) -> Result<Saved, Refusal> {
+        if self.forward.is_none() {
+            return self.save_as(file, base, text, true);
+        }
+        let p = TxPath::new(&m2_song::path::slashed(file))
+            .map_err(|e| Refusal::Rejected { diagnostics: vec![Diagnostic::error("tx.path", e)], unexpected: None })?;
+        let to = self.forward.as_mut().expect("a forwarding session");
+        let landed = to.save(&p, &base, text)?;
+        self.landed = Some(landed);
+        let paths = BTreeSet::from([file.to_path_buf()]);
+        let taken = match Snapshot::read_paths(&self.dir, &paths, &|_| true, BTreeSet::new()) {
+            Ok(snapshot) => self.take_in_only(snapshot, &paths),
+            Err(_) => TakenIn::default(),
+        };
+        Ok(Saved { taken, recorded: true })
+    }
+
+    fn save_as(&mut self, file: &Path, base: Base, text: &str, built: bool) -> Result<Saved, Refusal> {
         if let Some(r) = self.writable() {
             return Err(Refusal::Rejected { diagnostics: vec![r], unexpected: None });
         }
@@ -365,16 +416,34 @@ impl Session {
             return Ok(Saved { taken: TakenIn::default(), recorded: false });
         }
         let after = Sha::of(text.as_bytes());
+        // Taken in with the draft as it was settled, this file replaced: decided first, so a save
+        // that must go in as written (`built`) is refused before anything is written.
+        let mut draft = self.draft.clone();
+        crate::tx::put_file(&mut draft, file, Some(text.as_bytes()));
+        let settled = (draft != self.draft).then(|| {
+            let batch = changed_paths(&self.draft, &draft);
+            self.settling(&draft, &batch)
+        });
+        if built {
+            let why = match &settled {
+                Some(Settle::Accept { built, .. }) if built.0.files.get(file).map(|t| &**t) == Some(text) => None,
+                Some(Settle::Wait { errors, .. }) => Some(errors.iter().cloned().map(crate::problem).collect()),
+                _ => Some(vec![Diagnostic::error("tx.waiting", format!("{p} waits for the song's code to build first"))]),
+            };
+            if let Some(diagnostics) = why {
+                return Err(Refusal::Rejected { diagnostics, unexpected: None });
+            }
+        }
         let before = cur.bytes.clone().map(|bytes| Before { sha: cur.sha.expect("bytes have a hash"), bytes });
         let target = Target::Write { path: p.to_string(), before, bytes: Arc::from(text.as_bytes()), after };
         let tx = Tx::new("save", (p.to_string(), p.to_string()), vec![], Expect::Identical);
         self.stage(&tx, &[target], vec![], None)?;
         // Whatever outside writers did to it before, the file is the musician's now (AGENT-2).
         self.outside_was.paths.remove(file);
-        // Taken in with the draft as it was settled, this file replaced.
-        let mut draft = self.draft.clone();
-        crate::tx::put_file(&mut draft, file, Some(text.as_bytes()));
-        let taken = self.take_in(draft);
+        let taken = match settled {
+            Some(settled) => self.take_in_settled(draft, settled),
+            None => TakenIn::default(),
+        };
         let recorded = taken.accepted.is_some() && self.accepted.snapshot.files.get(file).map(|t| &**t) == Some(text);
         if recorded {
             let undo = match &cur.bytes {

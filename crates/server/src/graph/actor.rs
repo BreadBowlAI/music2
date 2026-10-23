@@ -69,6 +69,9 @@ pub(crate) struct Actor {
     /// What this Graph's plugin instances report unasked (its [`m2_plugins::Owner`]'s): no other
     /// session, test or rig sees them.
     events: HostEvents,
+    /// Those of them a settle's check took off `events` early, to hear the windows' changes
+    /// (AGENT-3), but for those: the next tick hears them first.
+    unheard: Vec<HostEvent>,
     /// Where each step event goes to have what its step changed worked out ([`changes`]).
     changes: mpsc::Sender<Told>,
     /// Tests: every renderer build fails, as one whose plugin can't load would.
@@ -122,6 +125,7 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         caller: crate::caller::Caller::Page,
         taken_back: None,
         events,
+        unheard: vec![],
         changes: changes(),
         #[cfg(test)]
         fail_builds: false,
@@ -196,7 +200,7 @@ impl Actor {
         }
         if let Some(o) = self.open.as_ref() {
             let cp = self.inner.control.lock();
-            if let Some(busy) = super::busy::check(&super::busy::held(&cp, o, &self.inner), files) {
+            if let Some(busy) = super::busy::check(&super::busy::held(&cp, o, &self.inner), files, &[]) {
                 return Err(busy.into());
             }
         }
@@ -969,33 +973,36 @@ impl Actor {
         // (RENDER-26b). Each plugin is named as the user knows it. A refused state isn't loaded
         // again, so it is said once. Latency on a feedback loop is said when it changes (RENDER-20).
         let relatent = way.renderer().is_some_and(|r| !r.stats().relatent.is_empty());
+        // What to tell of it, told once the check below passed: a change taken back there shows the
+        // musician nothing (AGENT-3).
+        let mut said: Vec<String> = vec![];
+        let mut feedback = None;
         if let Some(r) = way.renderer() {
             let (rev, rate) = (o.session.accepted(), o.session.accepted().project.sample_rate() as f64);
             let named = |node: usize| plugin_named(rev, &o.session.packages, node);
-            let mut notices = inner.notices.lock();
             let looped: Vec<String> = r.info().latency.in_feedback.iter().map(|&n| named(n)).collect();
             if looped != o.told_feedback {
                 if !looped.is_empty() {
                     let ms = r.latency() as f64 / rate * 1e3;
-                    notices.push(format!(
+                    said.push(format!(
                         "{} sits on a feedback loop and adds latency there, so the loop's repeats come later than written. \
                          The rest of the song stays in time ({ms:.1} ms of latency in all) (latency.in-feedback).",
                         looped.join(", ")
                     ));
                 }
-                o.told_feedback = looped;
+                feedback = Some(looped);
             }
-            notices.extend(r.stats().unloaded.iter().map(|(node, why)| {
+            said.extend(r.stats().unloaded.iter().map(|(node, why)| {
                 format!("{} couldn't load its new settings, so it keeps the sound it had. (In detail: {why})", named(*node))
             }));
         }
         // A renderer that didn't build: the version before plays on, and the user is told, once
         // for each revision, though the catch-up tries again every 300 ms.
+        let unbuilt_now = matches!(way, Way::Unbuilt(_)) && o.told_unbuilt != Some(number);
         if let Way::Unbuilt(e) = &way
-            && o.told_unbuilt != Some(number)
+            && unbuilt_now
         {
-            o.told_unbuilt = Some(number);
-            inner.notices.lock().push(unbuilt(e));
+            said.push(unbuilt(e));
         }
         // When the old build plays on, where the accepted revision's controls are in it: a carry
         // per control, done once here rather than under the lock.
@@ -1031,9 +1038,10 @@ impl Actor {
 
         // Phase 1, under the control plane's lock: what `begin` and `update` need, with the
         // engine messages, so every lease's sends reach the queue in order. An agent's change is
-        // checked first against what the musician holds, which a drag, unsaved text or a take may
-        // have begun while it landed (AGENT-3): one it meets is taken back before anything of it
-        // is carried or sent.
+        // checked first against what the musician holds, which a drag, unsaved text, a plugin
+        // window or a take may have begun while it landed, and against what the carry below
+        // decides it would end, whatever file it touched (AGENT-3): one it meets is taken back
+        // before anything of it is carried or sent.
         let landing = if self.caller.is_agent() { o.session.last_change() } else { None };
         #[cfg(test)]
         if landing.is_some()
@@ -1041,23 +1049,10 @@ impl Actor {
         {
             f(&inner);
         }
+        if landing.is_some() {
+            super::plugin_window::hear_now(o, &self.events, &mut self.unheard);
+        }
         let mut cp = inner.control.lock();
-        if let Some(files) = landing {
-            match super::busy::check(&super::busy::held(&cp, o, &inner), Some(&files)) {
-                Some(busy) => {
-                    drop(cp);
-                    drop(way);
-                    return self.take_back(busy, view);
-                }
-                None => o.session.keep_change(),
-            }
-        }
-        if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
-            for (from, to) in &rekeys {
-                p.overlays.rekey(from, to);
-            }
-            p.overlays.follow(song, o.session.access().refusal().is_none());
-        }
         let closing = install.as_ref().and_then(|i| i.lease);
         // Each live lease is carried to the accepted code, or ends (WRITE-22): it stays only while
         // its call is untouched and still reads its value.
@@ -1082,6 +1077,38 @@ impl Actor {
                 (l.id, kept)
             })
             .collect();
+        if let Some(files) = landing {
+            use super::busy::Held;
+            // What it would end: a knob drag its code can't carry, a clip drag its revision can't,
+            // and a plugin window not saved yet whose instance the new plan doesn't keep.
+            let mut ends: Vec<Held> = decisions.iter().filter(|(_, kept)| kept.is_err()).map(|(id, _)| Held::Knob(*id)).collect();
+            ends.extend(super::lanes::ending(&cp, token, &o.session.accepted_arc()).into_iter().map(Held::Lane));
+            if let Some(r) = way.renderer() {
+                let kept: HashSet<Handle> = r.info().plugins.iter().map(|at| at.handle).collect();
+                ends.extend(o.windows.unsaved().into_iter().filter(|h| !kept.contains(h)).map(Held::Plugin));
+            }
+            match super::busy::check(&super::busy::held(&cp, o, &inner), Some(&files), &ends) {
+                Some(busy) => {
+                    drop(cp);
+                    drop(way);
+                    return self.take_back(busy, view);
+                }
+                None => o.session.keep_change(),
+            }
+        }
+        if let Some(looped) = feedback {
+            o.told_feedback = looped;
+        }
+        if unbuilt_now {
+            o.told_unbuilt = Some(number);
+        }
+        inner.notices.lock().extend(said);
+        if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
+            for (from, to) in &rekeys {
+                p.overlays.rekey(from, to);
+            }
+            p.overlays.follow(song, o.session.access().refusal().is_none());
+        }
         // A new renderer plays each kept lease's value from its first block: written into its
         // cells before it is sent, so no update is lost to the activation.
         if let Some(r) = way.renderer() {
@@ -1467,7 +1494,8 @@ impl Actor {
     /// them as one problem.
     fn heard_plugins(&mut self) {
         let (mut crashed, mut hung, mut dirty, mut closed, mut latent) = (HashSet::new(), false, vec![], vec![], vec![]);
-        while let Ok(e) = self.events.try_recv() {
+        let early = std::mem::take(&mut self.unheard);
+        for e in early.into_iter().chain(self.events.try_iter()) {
             match e {
                 HostEvent::Restart(h) => {
                     if let Some(o) = &mut self.open {
@@ -1622,14 +1650,22 @@ impl Actor {
         }
     }
 
-    /// A gesture named at a revision the control plane no longer knows: the session carries it.
-    pub(super) fn begin(&mut self, token: u64, revision: u64, id: &str, owner: super::Owner) -> Result<super::Begun> {
+    /// A gesture named at a revision the control plane no longer knows: the session carries it. For
+    /// `by`: the job's caller, or the musician for their plugin window's gesture.
+    pub(super) fn begin(
+        &mut self,
+        token: u64,
+        revision: u64,
+        id: &str,
+        owner: super::Owner,
+        by: &crate::caller::Caller,
+    ) -> Result<super::Begun> {
         let o = self.open.as_ref().context("no project is open")?;
         o.check_token(token)?;
         let c = o.session.carry(revision, id, &o.controls).map_err(|e| anyhow!("{e}"))?;
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
-        self.inner.register(&mut cp, device.as_ref(), c, owner, (revision, id))
+        self.inner.register(&mut cp, device.as_ref(), c, owner, (revision, id), by)
     }
 
     /// The live lease of `gesture` on the control a compatible route's request names, for one
@@ -1949,7 +1985,9 @@ impl Actor {
         self.settle(None).changed || changed
     }
 
-    /// Save a file from the code editor (WRITE-2: the session's `save()`), and take it in.
+    /// Save a file from the code editor (WRITE-2: the session's `save()`), and take it in. An
+    /// agent's is written only when the song takes it in as written, so it is one step, the agent's
+    /// (AGENT-1): `m2 edit` and `m2 write` while the code on disk doesn't build.
     pub(super) fn write_file(&mut self, token: Option<u64>, path: &str, base: &str, text: &str) -> Result<Value> {
         let o = self.open.as_mut().context("no project is open")?;
         if let Some(token) = token {
@@ -1958,7 +1996,7 @@ impl Actor {
         self.arrive(Some(&[path.to_string()]))?;
         let o = self.open.as_mut().context("no project is open")?;
         let steps = o.session.last_step();
-        files::save(&mut o.session, path, base, text)?;
+        files::save(&mut o.session, path, base, text, self.caller.is_agent())?;
         let made = o.session.last_step();
         self.settle(None);
         let mut state = self.inner.state().context("no project is open")?;

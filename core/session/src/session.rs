@@ -249,9 +249,11 @@ pub struct Session {
 
 /// The last change this session made, as [`Session::retract`] takes it back.
 pub(crate) enum Change {
-    /// A commit, which recorded a step and ended these redo steps.
+    /// A commit, which recorded a step, ended these redo steps, and pushed these oldest steps out of
+    /// a full history.
     Commit {
         cleared: Vec<TxStep>,
+        pushed: Vec<TxStep>,
     },
     Undo,
     Redo,
@@ -610,9 +612,9 @@ impl Session {
                 step.name = self.why.clone().map(|w| (w, false));
             }
         }
-        self.push_history(step);
+        let pushed = self.push_history(step);
         let cleared = std::mem::take(&mut self.redo);
-        self.last_change = Some(Change::Commit { cleared });
+        self.last_change = Some(Change::Commit { cleared, pushed });
         self.steps
     }
 
@@ -629,11 +631,14 @@ impl Session {
     pub fn retract(&mut self) -> Result<Stepped, StepError> {
         let done = match self.last_change.take() {
             None => return Err(StepError::Nothing("nothing to take back")),
-            Some(Change::Commit { cleared }) => {
+            Some(Change::Commit { cleared, mut pushed }) => {
                 let done = self.step(false)?;
-                // The step its undo pushed goes, and the redo the commit ended comes back.
+                // The step its undo pushed goes, the redo the commit ended comes back, and so do the
+                // oldest steps it pushed out of a full history.
                 self.redo.pop();
                 self.redo = cleared;
+                pushed.append(&mut self.history);
+                self.history = pushed;
                 done
             }
             // Its redo puts the step back as it was, with its id; redo is as before the undo.
@@ -654,7 +659,8 @@ impl Session {
         Some(step?.inverse.touched().iter().map(|p| p.to_string()).collect())
     }
 
-    /// Keep the last change: it can't be retracted from now on (AGENT-3).
+    /// Keep the last change: it can't be retracted from now on (AGENT-3), and the steps it pushed
+    /// out of a full history are gone for good.
     pub fn keep_change(&mut self) {
         self.last_change = None;
     }
@@ -692,12 +698,17 @@ impl Session {
         (self.history.last().map(named), self.redo.last().map(named))
     }
 
-    fn push_history(&mut self, step: TxStep) {
+    /// Push `step` on undo's history, forgetting the oldest steps past what it keeps: those, oldest
+    /// first.
+    fn push_history(&mut self, step: TxStep) -> Vec<TxStep> {
         self.history.push(step);
         let mut kept: usize = self.history.iter().map(TxStep::retained).sum();
-        while self.history.len() > HISTORY || (kept > RETAINED && self.history.len() > 1) {
-            kept -= self.history.remove(0).retained();
+        let mut out = 0;
+        while self.history.len() - out > HISTORY || (kept > RETAINED && self.history.len() - out > 1) {
+            kept -= self.history[out].retained();
+            out += 1;
         }
+        self.history.drain(..out).collect()
     }
 
     /// Undo the newest change made in this session: commit its stored inverse (WRITE-21), which

@@ -330,7 +330,7 @@ pub(super) fn settled(cp: &mut ControlPlane, token: u64, device: Option<&Device>
             i += 1;
             continue;
         }
-        match previewed(accepted, &l.gesture, &l.tx_id) {
+        match carried(l, accepted) {
             Ok(lanes) => {
                 if let Err(e) = send(l, &lanes, accepted, at) {
                     eprintln!("music2: couldn't carry a drag to the new revision: {e:#}");
@@ -338,24 +338,36 @@ pub(super) fn settled(cp: &mut ControlPlane, token: u64, device: Option<&Device>
                 l.basis = accepted.clone();
                 i += 1;
             }
-            Err(e) => {
-                let why = match e {
-                    EditError::Changed(_) | EditError::Missing(_) => dropped(&l.basis, &l.gesture),
-                    e => format!("Your drag was dropped: {e}"),
-                };
-                end(cp, i, why, device);
-            }
+            Err(why) => end(cp, i, why, device),
         }
     }
 }
 
-/// The lanes the musician's live clip drags hold in project `token` (AGENT-3).
-pub(super) fn held(cp: &ControlPlane, token: u64) -> Vec<LaneAddr> {
-    let mut out: Vec<LaneAddr> = vec![];
+/// Whether lease `l` goes on in revision `rev`: its gesture, applied there, as it then plays; else
+/// why it ends (a clip it drags changed, or its lane is gone). What decides a drag's fate at each
+/// settle, and what an agent's change is checked by (AGENT-3).
+fn carried(l: &LaneLease, rev: &Revision) -> Result<Vec<(LaneAddr, Arc<LaneData>)>, String> {
+    previewed(rev, &l.gesture, &l.tx_id).map_err(|e| match e {
+        EditError::Changed(_) | EditError::Missing(_) => dropped(&l.basis, &l.gesture),
+        e => format!("Your drag was dropped: {e}"),
+    })
+}
+
+/// The musician's drags on clips in project `token` that revision `rev` would end, whatever it
+/// changed (AGENT-3): each one its gesture can't be carried to. One being written counts too: its
+/// commit would meet the same.
+pub(super) fn ending(cp: &ControlPlane, token: u64, rev: &Arc<Revision>) -> Vec<u64> {
+    let ends = |l: &&LaneLease| l.token == token && !Arc::ptr_eq(&l.basis, rev) && carried(l, rev).is_err();
+    cp.lanes.live.iter().filter(ends).map(|l| l.id).collect()
+}
+
+/// The lanes the musician's live clip drags hold in project `token` (AGENT-3), each by its drag.
+pub(super) fn held(cp: &ControlPlane, token: u64) -> Vec<(u64, LaneAddr)> {
+    let mut out: Vec<(u64, LaneAddr)> = vec![];
     for l in cp.lanes.live.iter().filter(|l| l.token == token) {
         for a in named(&l.gesture).into_iter().chain(l.sent.iter().map(|s| s.lane.clone())) {
-            if !out.contains(&a) {
-                out.push(a);
+            if !out.contains(&(l.id, a.clone())) {
+                out.push((l.id, a));
             }
         }
     }
@@ -408,7 +420,7 @@ impl Graph {
         client: Option<String>,
         ttl: Option<Duration>,
     ) -> Result<Result<LaneBegun, String>> {
-        super::busy::no_lease()?;
+        super::busy::no_lease(&crate::caller::now())?;
         let engine = {
             let cp = self.inner.control.lock();
             let p = cp.open.as_ref().context("no project is open")?;

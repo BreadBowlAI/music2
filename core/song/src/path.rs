@@ -75,6 +75,15 @@ impl DataPath {
         DataPath::Lane { module: addr.module.clone(), lane: addr.lane.clone() }
     }
 
+    /// The state file of the plugin keyed `path` (its `key()` frames, then its own key) in module
+    /// `module`, as a plugin node names them (ID-8), spelled as the song spells it: a key that is a
+    /// Windows device name (`aux`) ends with a hyphen there. None when one of them isn't a key.
+    pub fn plugin_state(module: &str, path: &[impl AsRef<str>]) -> Option<DataPath> {
+        let module = Key::new(module).ok()?;
+        let path = path.iter().map(|k| Key::new(k.as_ref())).collect::<Result<Vec<_>, _>>().ok()?;
+        Some(DataPath::PluginState { module, path, sidecar: false })
+    }
+
     /// Classify a path relative to the project folder. A path that isn't relative, has an
     /// empty, `.` or `..` segment, or isn't UTF-8 is `Unknown`.
     pub fn parse(p: &Path) -> DataPath {

@@ -34,6 +34,23 @@ impl fmt::Display for Conflict {
 
 impl std::error::Error for Conflict {}
 
+/// An agent's save the song wouldn't take in as written (WRITE-2, AGENT-1): nothing was written.
+/// Why, as the build said it.
+#[derive(Debug)]
+pub struct Unbuilt {
+    pub path: String,
+    pub diagnostics: Vec<m2_song::Diagnostic>,
+}
+
+impl fmt::Display for Unbuilt {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let why: Vec<String> = self.diagnostics.iter().map(|d| d.message.clone()).collect();
+        write!(f, "{} wasn't saved: the song doesn't build with it ({})", self.path, why.join("; "))
+    }
+}
+
+impl std::error::Error for Unbuilt {}
+
 /// One reason the draft doesn't compile, placed in a file when it can be told where.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Problem {
@@ -100,7 +117,9 @@ pub fn resolve(dir: &Path, path: &str) -> Result<PathBuf> {
 /// fail with a [`Conflict`] carrying what it says now. A path that is a link within the project
 /// saves the file it leads to, so the link stays. A file that isn't UTF-8 is shown as its lossy
 /// text, which stands for its bytes here, so saving it as UTF-8 is how it is fixed (WRITE-2).
-pub fn save(session: &mut Session, path: &str, base: &str, text: &str) -> Result<m2_session::take::Saved> {
+/// `built`: an agent's save, written only when the song takes it in as written, else [`Unbuilt`]
+/// (AGENT-1).
+pub fn save(session: &mut Session, path: &str, base: &str, text: &str, built: bool) -> Result<m2_session::take::Saved> {
     let dir = session.accepted().project.dir.clone();
     let file = resolve(&dir, path)?;
     let root = dir.canonicalize().with_context(|| format!("opening {}", dir.display()))?;
@@ -115,11 +134,13 @@ pub fn save(session: &mut Session, path: &str, base: &str, text: &str) -> Result
         Ok(_) => Base::text(base),
         Err(_) => Base::Sha(m2_song::Sha::of(&bytes)),
     };
-    match session.save(&rel, base, text) {
+    let saved = if built { session.save_built(&rel, base, text) } else { session.save(&rel, base, text) };
+    match saved {
         Ok(saved) => Ok(saved),
         Err(Refusal::Conflict { .. }) => {
             Err(Conflict { path: path.into(), current: String::from_utf8_lossy(&read()?).into_owned() }.into())
         }
+        Err(Refusal::Rejected { diagnostics, .. }) if built => Err(Unbuilt { path: path.into(), diagnostics }.into()),
         Err(r) => Err(anyhow!("{path} wasn't saved: {r}")),
     }
 }
@@ -455,7 +476,7 @@ mod tests {
         std::os::unix::fs::symlink(p.0.join("tracks/lead.ts"), p.0.join("alias.ts")).unwrap();
         assert!(resolve(&p.0, "tracks/escape.ts").is_err());
         assert!(resolve(&p.0, "linked/secret.ts").is_err());
-        assert!(save(&mut p.session(), "tracks/escape.ts", "// not the project's", "// overwritten").is_err());
+        assert!(save(&mut p.session(), "tracks/escape.ts", "// not the project's", "// overwritten", false).is_err());
         assert_eq!(std::fs::read_to_string(outside.0.join("secret.ts")).unwrap(), "// not the project's");
         assert!(resolve(&p.0, "alias.ts").unwrap().ends_with("tracks/lead.ts"));
     }
@@ -465,11 +486,11 @@ mod tests {
         let p = lead();
         let mut s = p.session();
         let changed = LEAD.replace("300", "310");
-        save(&mut s, "tracks/lead.ts", LEAD, &changed).unwrap();
+        save(&mut s, "tracks/lead.ts", LEAD, &changed, false).unwrap();
         assert_eq!(p.read("tracks/lead.ts"), changed);
 
         // Saved again from the old text: refused, and told what the file says now.
-        let e = save(&mut s, "tracks/lead.ts", LEAD, &LEAD.replace("300", "320")).unwrap_err();
+        let e = save(&mut s, "tracks/lead.ts", LEAD, &LEAD.replace("300", "320"), false).unwrap_err();
         let conflict = e.downcast_ref::<Conflict>().expect("a conflict");
         assert_eq!(conflict.current, changed);
         assert_eq!(p.read("tracks/lead.ts"), changed);
@@ -484,8 +505,8 @@ mod tests {
         std::fs::write(p.0.join("tracks/lead.ts"), [b"// caf\xe9\n".as_slice(), LEAD.as_bytes()].concat()).unwrap();
         let mut s = p.session();
         let shown = format!("// caf\u{fffd}\n{LEAD}");
-        assert!(save(&mut s, "tracks/lead.ts", LEAD, LEAD).unwrap_err().downcast_ref::<Conflict>().is_some());
-        save(&mut s, "tracks/lead.ts", &shown, &format!("// café\n{LEAD}")).unwrap();
+        assert!(save(&mut s, "tracks/lead.ts", LEAD, LEAD, false).unwrap_err().downcast_ref::<Conflict>().is_some());
+        save(&mut s, "tracks/lead.ts", &shown, &format!("// café\n{LEAD}"), false).unwrap();
         assert_eq!(p.read("tracks/lead.ts"), format!("// café\n{LEAD}"));
     }
 
@@ -497,7 +518,7 @@ mod tests {
         for name in ["tracks/lead.m2tmp", &format!("tracks/.lead.ts.{}-0.m2tmp", std::process::id())] {
             std::os::unix::fs::symlink(outside.0.join("victim.txt"), p.0.join(name)).unwrap();
         }
-        save(&mut p.session(), "tracks/lead.ts", LEAD, "// saved\n").unwrap();
+        save(&mut p.session(), "tracks/lead.ts", LEAD, "// saved\n", false).unwrap();
         assert_eq!(outside.read("victim.txt"), "victim data\n");
         assert!(!std::fs::symlink_metadata(p.0.join("tracks/lead.ts")).unwrap().file_type().is_symlink());
         assert_eq!(p.read("tracks/lead.ts"), "// saved\n");
@@ -508,7 +529,7 @@ mod tests {
     fn a_save_through_a_link_keeps_the_link() {
         let p = lead();
         std::os::unix::fs::symlink(p.0.join("tracks/lead.ts"), p.0.join("alias.ts")).unwrap();
-        save(&mut p.session(), "alias.ts", LEAD, "// saved\n").unwrap();
+        save(&mut p.session(), "alias.ts", LEAD, "// saved\n", false).unwrap();
         assert!(std::fs::symlink_metadata(p.0.join("alias.ts")).unwrap().file_type().is_symlink());
         assert_eq!(p.read("tracks/lead.ts"), "// saved\n");
     }

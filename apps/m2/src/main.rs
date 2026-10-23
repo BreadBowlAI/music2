@@ -124,9 +124,10 @@ USAGE:
   m2 edit <project> <file> --old <text> --new <text> [--all]
                                          replace text found once in a file of the song (every time, with
                                          --all), as one edit: how an agent changes a file while the app
-                                         has the song open
+                                         has the song open. While the song's code doesn't build, it fixes
+                                         a code file: written only if the song then builds
   m2 write <project> <file> [<from> | -] write a whole text file of the song (from a file, or standard
-                                         input), as one edit
+                                         input), as one edit; while the code doesn't build, as m2 edit
   m2 undo <project>                      take back your own newest change in the open app (by --as):
                                          never the musician's, nor another agent's
 
@@ -135,7 +136,8 @@ with the commands that fix it.
 
 One program writes a project at a time (its lock is .music2/lock). While the app has the song open,
 a command that writes it hands its edit to the app, which makes it one undo step, named by --as <name>
-(or M2_AS) and --why <words>: you see it there, and m2 undo takes it back. While you (the musician)
+(or M2_AS) and --why <words>, which go last, after the command's own arguments: you see it there, and
+m2 undo takes it back. While you (the musician)
 drag what it changes, record, or have unsaved code in its file, the app refuses it: m2 waits up to
 30 s, then exits 3, changing nothing. Don't write the song's files directly while the app has it
 open: the app can't refuse that, and it ends a drag on what it changes. With the app closed, m2

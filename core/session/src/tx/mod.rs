@@ -1731,12 +1731,12 @@ impl Session {
 
     /// The before-images undo, interrupted journals and journals left alone still need.
     pub(crate) fn blobs_in_use(&self) -> BTreeSet<Sha> {
-        // A commit's ended redo too, which a retract brings back (AGENT-3).
-        let ended = match &self.last_change {
-            Some(crate::session::Change::Commit { cleared }) => &cleared[..],
-            _ => &[],
+        // A commit's ended redo and the steps it pushed out too, which a retract brings back (AGENT-3).
+        let (ended, pushed) = match &self.last_change {
+            Some(crate::session::Change::Commit { cleared, pushed }) => (&cleared[..], &pushed[..]),
+            _ => (&[][..], &[][..]),
         };
-        let steps = self.history.iter().chain(&self.redo).chain(ended).flat_map(TxStep::blobs);
+        let steps = self.history.iter().chain(&self.redo).chain(ended).chain(pushed).flat_map(TxStep::blobs);
         steps.chain(self.interrupted.iter().flat_map(|j| j.blobs())).chain(self.kept.iter().copied()).collect()
     }
 

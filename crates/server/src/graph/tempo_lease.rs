@@ -201,7 +201,7 @@ impl Graph {
     /// it. Never waits for the session. The window that holds a drag may begin again; another
     /// window's begin is refused.
     pub fn tempo_begin(&self, token: u64, at: f64, client: Option<String>, ttl: Option<Duration>) -> Result<TempoBegun> {
-        super::busy::no_lease()?;
+        super::busy::no_lease(&crate::caller::now())?;
         if !at.is_finite() {
             bail!("can't drag the tempo at beat {at}");
         }

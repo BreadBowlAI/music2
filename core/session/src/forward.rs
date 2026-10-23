@@ -1,21 +1,26 @@
 //! Forwarding (AGENT-1): a read-only session whose commits go to the lock's holder, the app that
 //! has the song open. Each Tx is checked here first, under its own expectation and its planner's
 //! assertion, and sent with the hash of that check; the holder commits it only while its delta has
-//! that hash. Undo and redo are the holder's.
+//! that hash. A save of a song whose code doesn't build goes there too, as an agent's save. Undo and
+//! redo are the holder's.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use m2_song::tx::{Tx, TxPath};
+use m2_song::tx::{Base, Tx, TxPath};
 use m2_song::{DataPath, Sha};
 
 use crate::session::Session;
 use crate::tx::Refusal;
 
-/// The lock's holder, which takes a read-only session's commits (AGENT-1).
+/// The lock's holder, which takes a read-only session's commits and saves (AGENT-1).
 pub trait Forward: Send {
     /// Commit `sent.tx` in the holder, only if its delta's hash is `sent.seen`.
     fn commit(&mut self, sent: &Sent) -> Result<Landed, Refusal>;
+
+    /// Save `text` to `file` in the holder, over `base`, as an agent's save is
+    /// ([`Session::save_built`]): only when its song takes it in as written.
+    fn save(&mut self, file: &TxPath, base: &Base, text: &str) -> Result<Landed, Refusal>;
 }
 
 /// A Tx checked here, as it is sent to the holder.

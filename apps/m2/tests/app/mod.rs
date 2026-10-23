@@ -127,7 +127,8 @@ pub type Asked = (String, String, Value);
 
 /// A fake app: an HTTP server on 127.0.0.1 that answers `GET /api/graph` with `state`, and every
 /// other request with what `answer` says: a status and a body, or None to close the connection
-/// without a word, as an app that quit does. What it was asked is kept.
+/// without a word, as an app that quit does; `{"__raw": text}` answers `text` as it is. What it was asked
+/// is kept.
 pub fn fake(state: Value, answer: impl FnMut(&Asked) -> Option<(u16, Value)> + Send + 'static) -> (String, Arc<Mutex<Vec<Asked>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -164,10 +165,14 @@ pub fn fake(state: Value, answer: impl FnMut(&Asked) -> Option<(u16, Value)> + S
             let reply =
                 if asked.0 == "GET" && asked.1 == "/api/graph" { Some((200, state.clone())) } else { (answer.lock().unwrap())(&asked) };
             if let Some((status, v)) = reply {
-                let text = v.to_string();
+                // `{"__raw": text}` answers `text` as it is, not as JSON, as a server's own refusal is.
+                let (kind, text) = match v.get("__raw").and_then(Value::as_str) {
+                    Some(raw) => ("text/plain; charset=utf-8", raw.to_string()),
+                    None => ("application/json", v.to_string()),
+                };
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
+                    "HTTP/1.1 {status} X\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
                     text.len()
                 );
             }

@@ -37,6 +37,16 @@ impl Forward for Holder {
             Err(Uncommitted::Asserted(h)) => Err(Refusal::Io { message: format!("the delta is {h}, not what was seen") }),
         }
     }
+
+    fn save(&mut self, file: &TxPath, base: &m2_song::tx::Base, text: &str) -> Result<Landed, Refusal> {
+        let mut s = self.s.lock().unwrap();
+        s.act_as(Source::Agent("Claude".into()), Some("fixed".into()));
+        let saved = s.save_built(&file.path(), base.clone(), text);
+        s.act_as(Source::Page, None);
+        saved?;
+        let a = s.accepted();
+        Ok(Landed { step: s.last_step(), number: a.number, code_rev: a.code_rev, data_rev: a.data_rev })
+    }
 }
 
 /// A read-only session of `d` whose commits go to a writer session of it, and what that writer
@@ -156,4 +166,71 @@ fn retract_leaves_undo_and_redo_as_they_were() {
     s.retract().expect("taken back");
     assert_eq!(ids(&s), before);
     assert!(d.read("song.ts").contains("pan: 0.4"));
+}
+
+// AGENT-3, WRITE-21 (the review's F5): a commit into a full history pushes its oldest step out;
+// taking that commit back puts the step back, so undo is as it was, all of it. Once the commit is
+// kept, the step is gone for good.
+#[test]
+fn retract_brings_back_what_a_full_history_pushed_out() {
+    let d = Dir::first_song();
+    let mut s = d.open();
+    s.commit(pan(&d, 0.4)).unwrap();
+    // A full history: 500 steps (copies of that one, each with an id of its own).
+    let one = s.history[0].clone();
+    for id in 2..=500 {
+        let mut t = one.clone();
+        t.id = id;
+        s.history.push(t);
+    }
+    s.steps = 500;
+    let ids = |s: &Session| s.history.iter().map(|t| t.id).collect::<Vec<_>>();
+    let before = ids(&s);
+    assert_eq!((before.len(), before[0]), (500, 1));
+    s.act_as(Source::Agent("Claude".into()), None);
+    s.commit(pan(&d, 0.5)).unwrap();
+    s.act_as(Source::Page, None);
+    assert_eq!((s.history.len(), s.history[0].id), (500, 2), "the oldest step was pushed out");
+    s.retract().expect("taken back");
+    assert_eq!(ids(&s), before, "undo as it was, its oldest step too");
+    assert!(d.read("song.ts").contains("pan: 0.4"));
+    // Kept, the commit's push is for good.
+    s.commit(pan(&d, 0.5)).unwrap();
+    s.keep_change();
+    assert_eq!((s.history.len(), s.history[0].id), (500, 2));
+}
+
+// WRITE-2, AGENT-1 (the review's F12): an agent's save lands only when the song takes it in as
+// written. While the code on disk doesn't build (the musician saved a mistake), one that leaves it
+// broken is refused with its build's errors, and writes nothing; one that fixes it is one undo step.
+// A forwarding session sends it to the holder, then reads what landed.
+#[test]
+fn an_agents_save_lands_only_as_written() {
+    use m2_song::tx::Base;
+    use std::path::Path;
+    let d = Dir::first_song();
+    let mut s = d.open();
+    let kick = Path::new("tracks/kick.ts");
+    let good = d.read("tracks/kick.ts");
+    let broken = good.replace("ms(150)", "ms(150");
+    assert!(!s.save(kick, Base::text(&good), &broken).unwrap().recorded, "the musician's mistake: no step");
+    let steps = s.last_step();
+    let worse = broken.replace("ms(150", "ms(120) +");
+    match s.save_built(kick, Base::text(&broken), &worse) {
+        Err(Refusal::Rejected { diagnostics, .. }) => assert!(diagnostics.iter().any(|d| d.code == "code.build"), "{diagnostics:?}"),
+        other => panic!("refused: {:?}", other.map(|s| s.recorded)),
+    }
+    assert_eq!((d.read("tracks/kick.ts"), s.last_step()), (broken.clone(), steps), "nothing written, no step");
+    // Through a forwarding session, to the holder.
+    let holder = Arc::new(Mutex::new(s));
+    let mut reader = Session::open_read_only(&d.0, std_packages()).unwrap();
+    assert!(!reader.accepted().has_code(), "the code on disk doesn't build");
+    reader.forward_to(Box::new(Holder { s: holder.clone(), sent: Sent::default() }));
+    let fixed = broken.replace("ms(150", "ms(120)");
+    assert!(reader.save_built(kick, Base::text(&broken), &fixed).unwrap().recorded);
+    assert_eq!(d.read("tracks/kick.ts"), fixed);
+    let s = holder.lock().unwrap();
+    assert_eq!(s.last_step(), steps + 1, "one step");
+    assert_eq!(s.step_names().0.unwrap().source, Source::Agent("Claude".into()));
+    assert!(reader.accepted().has_code(), "the reader read what landed: it builds");
 }

@@ -1,6 +1,10 @@
 //! `m2 edit` and `m2 write` (AGENT-1, the agents design's 5.3): a change to a song's text file as a
 //! Tx with a base, which the app can refuse, name and let the agent undo while the song is open, and
 //! which `m2` writes itself while it is closed. What an agent's own Edit and Write tools do, as Tx.
+//!
+//! While the song's code on disk doesn't build, `m2` can't plan a Tx; then they save a code file as
+//! the app's code editor does (WRITE-2), in the app while it is open, written only when the song
+//! takes it in as written, so it builds again: the fix, as one undo step, the agent's.
 
 use std::path::Path;
 
@@ -42,9 +46,45 @@ fn commit(s: &mut Session, path: &TxPath, mut tx: Tx) -> Result<Committed, Refus
     s.commit(tx)
 }
 
+/// A session to write the song at `dir` with, and whether its code on disk doesn't build: then
+/// only a code file can be changed, and it is saved (the fix), not committed.
+fn session(dir: &Path, path: &TxPath, verb: &str) -> Result<(Session, bool)> {
+    let s = super::locked(dir, "")?;
+    if s.accepted().has_code() {
+        super::attention(dir, s.problems());
+        return Ok((s, false));
+    }
+    if !matches!(path.data(), DataPath::Code(_)) {
+        let e = super::broken(dir, &s);
+        bail!("{e}: the song's code doesn't build, so m2 {verb} changes only its code now, to fix it; {path} waits for that");
+    }
+    Ok((s, true))
+}
+
+/// Save `text` over `base` at `path`, in a song whose code doesn't build: written only when the
+/// song takes it in as written (AGENT-1). Its revision, or why nothing was written.
+fn save(s: &mut Session, path: &TxPath, base: Base, text: &str) -> Result<u64, Refusal> {
+    s.save_built(&path.path(), base, text)?;
+    Ok(s.landed().filter(|l| l.number > 0).map_or(s.accepted().number, |l| l.number))
+}
+
+/// Why a change wasn't made, in words: a conflict or a rejection changed nothing; the app's and the
+/// disk's own words say what happened, which may be otherwise.
+fn refused(r: Refusal, dir: &Path, path: &TxPath, fixing: bool) -> anyhow::Error {
+    match r {
+        Refusal::Io { message } => anyhow!("{message}"),
+        Refusal::Rejected { diagnostics, .. } if fixing => {
+            super::attention(dir, &diagnostics);
+            anyhow!("nothing was changed: the song's code wouldn't build with {path} so (above), and while it doesn't, it isn't written")
+        }
+        r => anyhow!("nothing was changed: {r}"),
+    }
+}
+
 /// `m2 edit`: replace `--old`, found exactly once (or every time, with `--all`), with `--new`, as
 /// one Tx whose edits each guard their place with the text they replace, on the base of the text
-/// it read. A file that changed since it was read is read again, and the edit tried once more.
+/// it read; or, while the code doesn't build, as a save of the file. A file that changed since it
+/// was read is read again, and the edit tried once more.
 pub fn edit(args: &[String]) -> Result<()> {
     let [_, dir, file, rest @ ..] = args else { bail!("{EDIT}") };
     let (mut old, mut new, mut all) = (None, None, false);
@@ -68,7 +108,7 @@ pub fn edit(args: &[String]) -> Result<()> {
     }
     let dir = Path::new(dir);
     let path = text_file(dir, file, "edit")?;
-    let mut s = super::session(dir)?;
+    let (mut s, fixing) = session(dir, &path, "edit")?;
     for again in [false, true] {
         let text = std::fs::read_to_string(dir.join(path.path())).with_context(|| format!("reading {path}"))?;
         let at: Vec<usize> = text.match_indices(old.as_str()).map(|(i, _)| i).collect();
@@ -92,17 +132,22 @@ pub fn edit(args: &[String]) -> Result<()> {
             Expect::Identical,
         );
         tx.base.insert(path.clone(), Base::text(&text));
-        match commit(&mut s, &path, tx) {
-            Ok(c) => {
+        let done = match fixing {
+            false => commit(&mut s, &path, tx).map(|c| c.number),
+            true => save(&mut s, &path, Base::text(&text), &text.replace(old.as_str(), &new)),
+        };
+        match done {
+            Ok(number) => {
                 let n = at.len();
-                println!("{path}: replaced {n} place{} (revision {})", if n == 1 { "" } else { "s" }, c.number);
+                let builds = if fixing { "; the song builds again" } else { "" };
+                println!("{path}: replaced {n} place{} (revision {number}){builds}", if n == 1 { "" } else { "s" });
                 return Ok(());
             }
             // "Replace this text" means the same on the file as it is now.
             Err(Refusal::Conflict { .. }) if !again => {
                 s.refresh();
             }
-            Err(r) => bail!("nothing was changed: {r}"),
+            Err(r) => return Err(refused(r, dir, &path, fixing)),
         }
     }
     unreachable!("the second try returns")
@@ -122,22 +167,34 @@ pub fn write(args: &[String]) -> Result<()> {
         "-" => std::io::read_to_string(std::io::stdin()).context("reading the text from standard input")?,
         from => std::fs::read_to_string(from).with_context(|| format!("reading {from} (m2 write writes text, in UTF-8)"))?,
     };
-    let mut s = super::session(dir)?;
+    let (mut s, fixing) = session(dir, &path, "write")?;
     let base = match std::fs::read_to_string(dir.join(path.path())) {
         Ok(t) => Base::text(&t),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Base::Absent,
         Err(e) => bail!("{path} can't be read ({e}): nothing was changed"),
     };
     let made = base == Base::Absent;
-    let label = (if made { "nothing".into() } else { path.to_string() }, path.to_string());
-    let mut tx = Tx::new(
-        &m2_song::tx::random_id(),
-        label,
-        vec![Op::Write { file: path.clone(), bytes: Payload::Text(text.as_str().into()) }],
-        Expect::Identical,
-    );
-    tx.base.insert(path.clone(), base);
-    let c = commit(&mut s, &path, tx).map_err(|r| anyhow!("nothing was changed: {r}"))?;
-    println!("{path}: {} {} bytes (revision {})", if made { "made, with" } else { "written," }, text.len(), c.number);
+    if made && fixing {
+        bail!(
+            "nothing was changed: the song's code doesn't build, so m2 write fixes a file that is there; {path} isn't. Fix the code first"
+        );
+    }
+    let number = match fixing {
+        true => save(&mut s, &path, base, &text),
+        false => {
+            let label = (if made { "nothing".into() } else { path.to_string() }, path.to_string());
+            let mut tx = Tx::new(
+                &m2_song::tx::random_id(),
+                label,
+                vec![Op::Write { file: path.clone(), bytes: Payload::Text(text.as_str().into()) }],
+                Expect::Identical,
+            );
+            tx.base.insert(path.clone(), base);
+            commit(&mut s, &path, tx).map(|c| c.number)
+        }
+    }
+    .map_err(|r| refused(r, dir, &path, fixing))?;
+    let builds = if fixing { "; the song builds again" } else { "" };
+    println!("{path}: {} {} bytes (revision {number}){builds}", if made { "made, with" } else { "written," }, text.len());
     Ok(())
 }

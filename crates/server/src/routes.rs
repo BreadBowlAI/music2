@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
@@ -70,7 +70,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/lane", post(graph_lane))
         .route("/api/graph/relink", post(graph_relink))
         .route("/api/graph/data/delete", post(graph_delete_data))
-        .route("/api/graph/fix", post(graph_fix))
+        .route("/api/graph/fix", post(graph_fix).layer(DefaultBodyLimit::max(crate::TX_BODY)))
         .route("/api/graph/label", post(graph_label))
         .route("/api/graph/automate", post(graph_automate))
         .route("/api/graph/track/add", post(track_add))
@@ -83,8 +83,8 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/title", post(graph_title))
         .route("/api/graph/panic", post(graph_panic))
         .route("/api/graph/lock/retry", post(graph_lock_retry))
-        .route("/api/tx/check", post(tx_check))
-        .route("/api/tx/commit", post(tx_commit))
+        .route("/api/tx/check", post(tx_check).layer(DefaultBodyLimit::max(crate::TX_BODY)))
+        .route("/api/tx/commit", post(tx_commit).layer(DefaultBodyLimit::max(crate::TX_BODY)))
         .route("/api/graph/undo", post(graph_undo))
         .route("/api/graph/undo/skip", post(graph_undo_skip))
         .route("/api/graph/redo", post(graph_redo))
@@ -93,7 +93,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/seek", post(graph_seek))
         .route("/api/graph/loop", post(graph_loop))
         .route("/api/graph/files", get(graph_files))
-        .route("/api/graph/file", put(graph_put_file))
+        .route("/api/graph/file", put(graph_put_file).layer(DefaultBodyLimit::max(crate::TX_BODY)))
         .route("/api/graph/types", get(graph_types))
         .route("/api/graph/unsaved", post(graph_unsaved))
         .route("/api/graph/export", post(graph_export))
@@ -122,17 +122,22 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
 
 /// Reject `/api` calls without one of the two keys (AGENT-10), and serve each as its caller: the
 /// page's key is the musician's; the tools key an agent's, named by its `x-m2-as` header (else
-/// `agent`), saying why with `x-m2-why`. The key decides, never what a request says about itself.
+/// `agent`), saying why with `x-m2-why`, and refused on the musician's routes (AGENT-3). The key
+/// decides, never what a request says about itself.
 async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     if !req.uri().path().starts_with("/api/") {
         return next.run(req).await;
     }
     let header = req.headers().get("x-m2-token").and_then(|v| v.to_str().ok());
     let query: Vec<&str> = req.uri().query().map_or(vec![], |q| q.split('&').filter_map(|kv| kv.strip_prefix("token=")).collect());
-    let carries = |key: &str| !key.is_empty() && (header == Some(key) || query.contains(&key));
+    let carries = |key: &str| header.is_some_and(|h| same_key(h, key)) || query.iter().any(|q| same_key(q, key));
     let caller = if carries(&s.page_token) {
         crate::caller::Caller::Page
     } else if carries(&s.token) {
+        if MUSICIANS.contains(&req.uri().path()) {
+            let why = "agents can't do this: it acts on what the musician holds in the app (a drag, unsaved code, undo, a take)";
+            return (StatusCode::FORBIDDEN, Json(json!({"error": why}))).into_response();
+        }
         let said = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
         crate::caller::Caller::agent(said("x-m2-as"), said("x-m2-why"))
     } else {
@@ -140,6 +145,41 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
     };
     crate::caller::serving(caller, next.run(req)).await
 }
+
+/// Whether `given` is the key `key` (AGENT-10), compared in constant time: every byte is looked at
+/// whatever the first difference, so how long a refusal takes says nothing of the key. An empty key
+/// is no key.
+pub(crate) fn same_key(given: &str, key: &str) -> bool {
+    let (a, b) = (given.as_bytes(), key.as_bytes());
+    if b.is_empty() || a.len() != b.len() {
+        return false;
+    }
+    std::hint::black_box(a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y))) == 0
+}
+
+/// The routes that act on what the musician holds (AGENT-3): their drags after the begin, the code
+/// editor's list of unsaved files, undo's skip, and a take's stop and cancel. The tools key can't
+/// use them: an agent's change is one edit, refused while the musician holds what it touches, and
+/// it never ends what they hold.
+const MUSICIANS: [&str; 17] = [
+    "/api/graph/lease/update",
+    "/api/graph/lease/keepalive",
+    "/api/graph/lease/commit",
+    "/api/graph/lease/cancel",
+    "/api/graph/preview/cancel",
+    "/api/graph/lane/lease/update",
+    "/api/graph/lane/lease/keepalive",
+    "/api/graph/lane/lease/commit",
+    "/api/graph/lane/lease/cancel",
+    "/api/graph/tempo/lease/update",
+    "/api/graph/tempo/lease/keepalive",
+    "/api/graph/tempo/lease/commit",
+    "/api/graph/tempo/lease/cancel",
+    "/api/graph/unsaved",
+    "/api/graph/undo/skip",
+    "/api/graph/record/stop",
+    "/api/graph/record/cancel",
+];
 
 /// The routes that write the open project, or begin a gesture whose commit would.
 const WRITES: [&str; 28] = [
@@ -1024,6 +1064,12 @@ struct FileReq {
     /// What the file said when the editor read it.
     base: String,
     text: String,
+    /// An agent's name and words for its step (AGENT-10): only with the tools key, whose save is
+    /// written only when the song takes it in as written (AGENT-1).
+    #[serde(default, rename = "as")]
+    by: Option<String>,
+    #[serde(default)]
+    why: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1043,16 +1089,27 @@ async fn graph_unsaved(State(s): S, Json(r): Json<UnsavedReq>) -> ApiResult {
 /// 409 and what it says now, so the editor can offer to load that or keep its own.
 async fn graph_put_file(State(s): S, Json(r): Json<FileReq>) -> Response {
     let state = s.clone();
-    let result = crate::caller::blocking(move || state.graph.write_file(r.session, &r.path, &r.base, &r.text)).await;
+    let caller = crate::caller::now().saying(r.by.as_deref(), r.why.as_deref());
+    let result =
+        crate::caller::blocking(move || crate::caller::as_caller(caller, || state.graph.write_file(r.session, &r.path, &r.base, &r.text)))
+            .await;
     match result {
         Ok(Ok(v)) => {
             s.graph_changed();
             Json(v).into_response()
         }
-        Ok(Err(e)) => match e.downcast_ref::<crate::files::Conflict>() {
-            Some(c) => (StatusCode::CONFLICT, Json(json!({"error": c.to_string(), "current": c.current}))).into_response(),
-            None => ApiError::from(e).into_response(),
-        },
+        Ok(Err(e)) => {
+            if let Some(c) = e.downcast_ref::<crate::files::Conflict>() {
+                return (StatusCode::CONFLICT, Json(json!({"error": c.to_string(), "current": c.current}))).into_response();
+            }
+            // An agent's save the song wouldn't take in as written: 422 with the build's words, as a
+            // Tx's rejection says them.
+            if let Some(u) = e.downcast_ref::<crate::files::Unbuilt>() {
+                let rejected = json!({"error": u.to_string(), "rejected": {"diagnostics": u.diagnostics}});
+                return (StatusCode::UNPROCESSABLE_ENTITY, Json(rejected)).into_response();
+            }
+            ApiError::from(e).into_response()
+        }
         Err(e) => err(e.to_string()).into_response(),
     }
 }

@@ -346,3 +346,242 @@ fn a_forwarded_import_plays_its_asset_from_the_start_and_makes_one_step() {
     let (status, _) = agent(|| graph.tx_commit(Some(t), &tx.to_json(), None, &["song.ts".into()])).unwrap();
     assert_eq!(status, 400);
 }
+
+// ---------------------------------------------------------------- the review of ag-fwd
+
+/// A TextEdit Tx on `file` replacing each `(old, new)`, on the file as it is now, committed on the
+/// hash its check shows, as `m2 edit` commits a change to code (`Expect::Seen`).
+fn seen_tx(graph: &Graph, f: &super::super::tests::Fixture, file: &str, swaps: &[(&str, &str)]) -> Value {
+    let text = f.read(file);
+    let path = TxPath::new(file).unwrap();
+    let edits = swaps
+        .iter()
+        .map(|(old, new)| {
+            let at = text.find(old).unwrap_or_else(|| panic!("no `{old}` in {file}"));
+            Edit { start: Pos::Byte(at as u32), end: Pos::Byte((at + old.len()) as u32), expected: (*old).into(), text: (*new).into() }
+        })
+        .collect();
+    let mut tx = Tx::new(
+        "tx-agent-seen",
+        ("a".into(), "b".into()),
+        vec![Op::TextEdit { file: path.clone(), edits }],
+        Expect::Seen(m2_song::Sha::of(b"")),
+    );
+    tx.base.insert(path, Base::text(&text));
+    let json = tx.to_json();
+    let (status, checked) = graph.tx_check(Some(token(graph)), &json).unwrap();
+    assert_eq!(status, 200, "checked: {checked}");
+    let mut json = json;
+    json["expect"] = json!({"seen": checked["checked"]["hash"]});
+    json
+}
+
+/// The bass's wobble knob, in `tracks/bass.ts`: the accepted revision, and its id.
+fn bass_knob(graph: &Graph) -> (u64, String) {
+    use m2_editor::Gestures;
+    graph.inspect(|a| {
+        let o = a.open.as_ref().unwrap();
+        let c = o.session.controls().into_iter().find(|c| c.id.starts_with("tracks/bass.ts")).expect("a knob in tracks/bass.ts");
+        (o.session.accepted().number, c.id)
+    })
+}
+
+// AGENT-3, WRITE-22 (the review's F1): an agent's change to another file that would end the
+// musician's knob drag is taken back at its settle, whatever file it touched: here song.ts, taking
+// the bass out of the song while a knob in tracks/bass.ts is dragged. One that leaves the drag be
+// lands.
+#[test]
+fn an_agents_change_elsewhere_that_would_end_a_knob_drag_is_taken_back() {
+    let (fixture, graph) = first_song();
+    let t = token(&graph);
+    let (revision, id) = bass_knob(&graph);
+    let lease = graph.begin(t, revision, &id, Owner { client: Some("page".into()), ..Owner::default() }).unwrap().lease;
+    graph.update(lease, Some(1), 0.7).unwrap();
+    // A change elsewhere that leaves the drag be lands, and the drag goes on.
+    let tx = values_tx(&fixture, "song.ts", "pan: 0.3", "0.3", "0.4");
+    let (status, body) = agent(|| graph.tx_commit(Some(t), &tx, None, &[])).unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(graph.leases().iter().any(|l| l.lease == lease), "the drag goes on");
+    // One that takes the bass out of the song would end it: taken back.
+    let song = fixture.read("song.ts");
+    let tx = seen_tx(
+        &graph,
+        &fixture,
+        "song.ts",
+        &[("import bass from \"./tracks/bass\";\n", ""), ("      bass: duck(bass.out, kick.env, { depth: db(-9) }),\n", "")],
+    );
+    let (status, body) = agent(|| graph.tx_commit(Some(t), &tx, None, &[])).unwrap();
+    assert_eq!((status, &body["busy"]["what"], &body["busy"]["taken_back"]), (423, &json!("knob"), &json!(true)), "{body}");
+    assert!(body["busy"]["words"].as_str().unwrap().contains("dragging Bass"), "{body}");
+    assert_eq!(fixture.read("song.ts"), song, "taken back");
+    assert!(graph.leases().iter().any(|l| l.lease == lease), "the drag goes on");
+    graph.update(lease, Some(2), 0.8).unwrap();
+    graph.commit(lease, 0.8, None).unwrap();
+}
+
+// AGENT-3 (the review's F2): agents never hold leases, however a begin is resolved: one named at a
+// revision the control plane no longer knows is carried by the session's actor, which refuses it
+// to an agent too. The musician's, named the same way, goes on.
+#[test]
+fn an_agents_drag_named_at_an_old_revision_is_refused_too() {
+    let (_fixture, graph) = first_song();
+    let t = token(&graph);
+    let (revision, id) = bass_knob(&graph);
+    // Three code changes elsewhere: the control plane no longer knows that revision.
+    set(&graph, 0.3, 0.31);
+    set(&graph, 0.31, 0.32);
+    set(&graph, 0.32, 0.33);
+    let e = agent(|| graph.begin(t, revision, &id, Owner::default())).unwrap_err();
+    assert!(e.to_string().contains("agents don't drag"), "{e:#}");
+    assert!(graph.leases().is_empty(), "no lease");
+    let mine = graph.begin(t, revision, &id, Owner { client: Some("page".into()), ..Owner::default() });
+    assert!(mine.is_ok(), "the musician's: {:?}", mine.err());
+}
+
+// AGENT-10 (the review's F7): what an agent gives to be shown is plain text: invisible and
+// direction-changing characters go, as controls do; and a name that reads as the app's own words
+// for a change made outside it is shown as `agent`.
+#[test]
+fn an_agents_name_and_words_cant_pass_for_the_apps_own() {
+    let (fixture, running, session) = serving();
+    let url = &running.url;
+    let graph = &running.state.graph;
+    let tx = values_tx(&fixture, "song.ts", "pan: 0.3", "0.3", "0.4");
+    let body =
+        json!({"session": session, "tx": tx, "as": "Changed outside the app", "why": "the code in song.ts \u{202E}stah rethgirb\u{200B}"});
+    assert_eq!(post(url, "/api/tx/commit", "t00ls", &[], &body).0, 200);
+    let top = graph.state().unwrap()["undo_name"].clone();
+    assert_eq!((&top["by"], &top["name"]), (&json!("agent"), &json!("the code in song.ts stah rethgirb")), "{top}");
+    assert_eq!(graph.undo_names().0.as_deref(), Some("agent: the code in song.ts stah rethgirb"), "the Edit menu's words");
+    for name in ["outside change", " Outside  change: ", "CHANGED OUTSIDE THE APP!"] {
+        let tx = values_tx(&fixture, "song.ts", "pan: 0.4", "0.4", "0.45");
+        assert_eq!(post(url, "/api/tx/commit", "t00ls", &[("x-m2-as", name)], &json!({"session": session, "tx": tx})).0, 200);
+        assert_eq!(graph.state().unwrap()["undo_name"]["by"], json!("agent"), "{name:?}");
+        graph.undo(session).unwrap();
+    }
+    // A name of its own is kept (in the body: a header carries no more than ASCII).
+    let tx = values_tx(&fixture, "song.ts", "pan: 0.4", "0.4", "0.45");
+    let body = json!({"session": session, "tx": tx, "as": "Outsider \u{2066}2\u{2069}"});
+    assert_eq!(post(url, "/api/tx/commit", "t00ls", &[], &body).0, 200);
+    assert_eq!(graph.state().unwrap()["undo_name"]["by"], json!("Outsider 2"));
+}
+
+// AGENT-3 (the review's F8): the tools key can't act on what the musician holds: it can't move,
+// keep, commit or cancel their drags, clear their list of unsaved code, skip their undo or stop
+// their take (403); the page's key can. So the agent's write to the unsaved file stays busy.
+#[test]
+fn the_tools_key_cant_end_the_musicians_drags_or_clear_their_unsaved_code() {
+    let (fixture, running, session) = serving();
+    let url = &running.url;
+    let graph = &running.state.graph;
+    let (t, revision, id) = knob(graph, -0.25);
+    let lease = graph.begin(t, revision, &id, Owner { client: Some("page".into()), ..Owner::default() }).unwrap().lease;
+    let musicians = [
+        ("/api/graph/lease/update", json!({"lease": lease, "seq": 9, "value": 0.1})),
+        ("/api/graph/lease/keepalive", json!({"lease": lease})),
+        ("/api/graph/lease/commit", json!({"lease": lease, "value": 0.1})),
+        ("/api/graph/lease/cancel", json!({"lease": lease})),
+        ("/api/graph/preview/cancel", json!({"session": session, "id": id, "gesture": "g"})),
+        ("/api/graph/lane/lease/update", json!({"lease": lease, "seq": 9, "gesture": {}})),
+        ("/api/graph/lane/lease/keepalive", json!({"lease": lease})),
+        ("/api/graph/lane/lease/commit", json!({"lease": lease, "gesture": {}})),
+        ("/api/graph/lane/lease/cancel", json!({"lease": lease})),
+        ("/api/graph/tempo/lease/update", json!({"lease": lease, "seq": 9, "bpm": 100})),
+        ("/api/graph/tempo/lease/keepalive", json!({"lease": lease})),
+        ("/api/graph/tempo/lease/commit", json!({"lease": lease, "bpm": 100})),
+        ("/api/graph/tempo/lease/cancel", json!({"lease": lease})),
+        ("/api/graph/unsaved", json!({"session": session, "files": []})),
+        ("/api/graph/undo/skip", json!({"session": session, "step": 1})),
+        ("/api/graph/record/stop", json!({"session": session})),
+        ("/api/graph/record/cancel", json!({"session": session})),
+    ];
+    graph.set_unsaved(session, vec!["song.ts".into()]).unwrap();
+    for (path, body) in &musicians {
+        let (status, said) = post(url, path, "t00ls", &[], body);
+        assert_eq!(status, 403, "{path}: {said}");
+        assert!(said["error"].as_str().unwrap().contains("the musician"), "{path}: {said}");
+    }
+    assert!(graph.leases().iter().any(|l| l.lease == lease), "the drag goes on");
+    assert_eq!(graph.unsaved(), vec!["song.ts".to_string()], "the unsaved list is as the editor said");
+    // The page's key acts on them: the drag ends, and the agent's write to song.ts is still busy,
+    // for the unsaved code.
+    assert_eq!(post(url, "/api/graph/lease/cancel", "t0k", &[], &json!({"lease": lease})).0, 200);
+    let tx = values_tx(&fixture, "song.ts", "pan: 0.3", "0.3", "0.4");
+    let (status, body) = post(url, "/api/tx/commit", "t00ls", &[], &json!({"session": session, "tx": tx, "as": "Claude"}));
+    assert_eq!((status, &body["busy"]["what"]), (423, &json!("code")), "{body}");
+    assert_eq!(post(url, "/api/graph/unsaved", "t0k", &[], &json!({"session": session, "files": []})).0, 200);
+    assert!(graph.unsaved().is_empty());
+}
+
+// AGENT-10 (the review's F11): keys are compared in constant time: every byte is looked at,
+// whatever the first difference.
+#[test]
+fn keys_are_compared_whole() {
+    use crate::routes::same_key;
+    assert!(same_key("t00ls", "t00ls"));
+    assert!(!same_key("t00ls", "t00lz") && !same_key("x00ls", "t00ls") && !same_key("t00l", "t00ls") && !same_key("", "t00ls"));
+    assert!(!same_key("", ""), "no key is never a key");
+}
+
+// AGENT-3 (the review's F10): a change taken back at its settle shows the musician nothing: here
+// an agent's new plugin state, which the plugin refuses, and a change to song.ts, taken back
+// because the code editor posted unsaved text in song.ts as it landed, leaves no notice of the
+// refused state.
+#[test]
+fn a_change_taken_back_leaves_no_notice() {
+    use m2_plugins::probe;
+    probe::install();
+    let fixture = super::super::tests::Fixture::new();
+    fixture.put(
+        "song.ts",
+        "import { plugin, song, track } from '@m2/core';\n\
+         const p = track('p', ({ lane }) => plugin('clap:m2.probe.fails-state', { notes: lane.notes('n'), key: 'lead', gain_1: 0.5 }));\n\
+         export default song(() => p.out);\n",
+    );
+    fixture.put(
+        "data/p/n.json",
+        r#"{"clips": [{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C4", "start": 0, "length": 60}]}]}"#,
+    );
+    fixture.put("data/p/lead.state.json", r#"{"plugin": "clap:m2.probe.fails-state", "plugin_version": "1.0.0"}"#);
+    let state = probe::state("fine", 1.0);
+    std::fs::write(fixture.0.join("data/p/lead.state"), &state).unwrap();
+    let (p, mut driver) = m2_play::Player::driven(48_000);
+    let graph = std::sync::Arc::new(Graph::with_player(p));
+    graph.open(&fixture.0).unwrap();
+    graph.transport("play").unwrap();
+    for _ in 0..4 {
+        let mut buf = [0.0f32; 256];
+        driver.fill(&mut buf, 2);
+        drop(driver.drain_retired());
+    }
+    let t = token(&graph);
+    let song = fixture.read("song.ts");
+    let (file, code) = (TxPath::new("data/p/lead.state").unwrap(), TxPath::new("song.ts").unwrap());
+    let at = song.find("0.5").unwrap() as u32;
+    let mut tx = Tx::new(
+        "tx-agent-state",
+        ("a".into(), "b".into()),
+        vec![
+            Op::Write { file: file.clone(), bytes: m2_song::tx::Payload::Bytes(b"fail: refused".to_vec().into()) },
+            Op::TextEdit {
+                file: code.clone(),
+                edits: vec![Edit { start: Pos::Byte(at), end: Pos::Byte(at + 3), expected: "0.5".into(), text: "0.6".into() }],
+            },
+        ],
+        Expect::Seen(m2_song::Sha::of(b"")),
+    );
+    tx.base.insert(file, Base::Sha(m2_song::Sha::of(&state)));
+    tx.base.insert(code, Base::text(&song));
+    let mut tx = tx.to_json();
+    let (status, checked) = graph.tx_check(Some(t), &tx).unwrap();
+    assert_eq!(status, 200, "{checked}");
+    tx["expect"] = json!({"seen": checked["checked"]["hash"]});
+    let g = graph.clone();
+    after_arrival(&graph, move || g.set_unsaved(t, vec!["song.ts".into()]).unwrap());
+    let (status, body) = agent(|| graph.tx_commit(Some(t), &tx, None, &[])).unwrap();
+    graph.inspect(|a| a.after_arrival = None);
+    assert_eq!((status, &body["busy"]["what"], &body["busy"]["taken_back"]), (423, &json!("code"), &json!(true)), "{body}");
+    assert_eq!(std::fs::read(fixture.0.join("data/p/lead.state")).unwrap(), state, "taken back");
+    let said = graph.expire();
+    assert!(!said.iter().any(|s| s.contains("couldn't load")), "nothing is said of a change that didn't land: {said:?}");
+}

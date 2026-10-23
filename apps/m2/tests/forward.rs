@@ -453,3 +453,35 @@ fn m2_undo_with_the_app_closed_says_undo_lives_in_the_app() {
     assert_eq!(o.status.code(), Some(1), "{}", said(&o));
     assert!(said(&o).contains("nothing to undo: undo lives in the open app"), "{}", said(&o));
 }
+
+// AGENT-1 (the review's F6): every Tx carries its bases' whole text, so a change to a big file is a
+// big request: one of a few megabytes lands in the app as a small one does.
+#[test]
+fn a_change_to_a_big_file_lands_in_the_app() {
+    let a = App::open("first-song", |song| {
+        let text = std::fs::read_to_string(song.join("song.ts")).unwrap();
+        std::fs::write(song.join("song.ts"), format!("{text}\n// {}\n", "x".repeat(2_200_000))).unwrap();
+    });
+    ok(&a, &["set", a.dir(), "song.ts#2/0.hats.pan", "0.4", "--as", "Claude"]);
+    assert!(a.read("song.ts").contains("pan: 0.4"), "landed");
+    let big = format!("{}// {}\n", a.read("song.ts"), "y".repeat(3_000_000));
+    let from = a.temp.0.join("big.ts");
+    std::fs::write(&from, &big).unwrap();
+    ok(&a, &["write", a.dir(), "song.ts", from.to_str().unwrap(), "--as", "Claude"]);
+    assert_eq!(a.read("song.ts"), big, "landed");
+    assert_eq!(a.top()["by"], json!("Claude"));
+}
+
+// AGENT-1 (the review's F6): an answer `m2` can't read is said with its status and words, as a
+// refusal: never "null", and never as a write that landed.
+#[test]
+fn an_answer_that_isnt_json_is_said_with_its_status() {
+    let (temp, dir, home) =
+        held_by_fake("fwd-not-json", |_, _| Some((413, json!({"__raw": "Failed to buffer the request body: length limit exceeded"}))));
+    let o = m2_in(&home, &["set", &dir, "song.ts#2/0.hats.pan", "0.4"], &[]);
+    assert_eq!(o.status.code(), Some(1), "{}", said(&o));
+    let err = said(&o);
+    assert!(err.contains("nothing was changed") && err.contains("413") && err.contains("length limit exceeded"), "{err}");
+    assert!(!err.contains("null"), "{err}");
+    assert!(std::fs::read_to_string(temp.0.join("song/song.ts")).unwrap().contains("pan: 0.3"));
+}

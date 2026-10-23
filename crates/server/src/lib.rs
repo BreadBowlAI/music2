@@ -39,6 +39,11 @@ use parking_lot::Mutex;
 use serde_json::json;
 use tokio::sync::{broadcast, watch};
 
+/// The largest request `POST /api/tx/commit`, `/api/tx/check` and `/api/graph/fix` take (AGENT-1):
+/// a Tx carries each file it changes whole, as it was and as it will be, so this is room for both
+/// at what undo keeps (64 MiB each), and the JSON around them. `m2` checks it before it sends.
+pub const TX_BODY: usize = 144 << 20;
+
 /// Startup can't produce more than a few; the newest are kept.
 const MAX_UNHEARD: usize = 8;
 

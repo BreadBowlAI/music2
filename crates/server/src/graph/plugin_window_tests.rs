@@ -317,3 +317,171 @@ fn a_plugin_window_not_yet_saved_makes_its_state_busy() {
     let (status, body) = as_caller(agent, || r.graph().tx_commit(Some(session), &other.to_json(), None, &[])).unwrap();
     assert_eq!(status, 200, "{body}");
 }
+
+/// Fill until the session heard the window's change: it changed the plugin's state, not saved yet.
+fn until_unsaved(r: &mut Rig) {
+    let t = Instant::now();
+    while r.graph().inspect(|a| a.open.as_ref().unwrap().windows.unsaved().is_empty()) {
+        assert!(t.elapsed() < Duration::from_secs(5), "the window's change was heard");
+        r.fill(1);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// An agent's Tx writing the probe's state at `file`, over `was`, as `m2 plugin-state` sends it.
+fn state_tx(file: &str, was: &[u8]) -> m2_song::tx::Tx {
+    use m2_song::tx::{Base, Confined, Expect, Op, Payload, Tx, TxPath};
+    let path = TxPath::new(file).unwrap();
+    let mut tx = Tx::new(
+        "tx-agent",
+        ("a".into(), "b".into()),
+        vec![Op::Write { file: path.clone(), bytes: Payload::Bytes(probe::state_with("agent", 1.0, 0.2).into()) }],
+        Expect::Confined(Confined::default()),
+    );
+    tx.base.insert(path, Base::Sha(m2_song::Sha::of(was)));
+    tx
+}
+
+// AGENT-3 (the review's F3): a plugin's state is held by its window under the name the song gives
+// its file: a plugin keyed `aux` (a Windows device name) keeps its state in `aux-.state`, and an
+// agent's write of that file is busy while the window's changes aren't saved.
+#[test]
+fn a_plugin_keyed_aux_is_held_by_its_window() {
+    use crate::caller::{Caller, as_caller};
+    probe::install();
+    let fixture = Fixture::new();
+    fixture.put("song.ts", &song("0.5").replace("key: 'lead'", "key: 'aux'"));
+    fixture.put("data/p/n.json", NOTES);
+    fixture.put("data/p/g.json", LANE);
+    std::fs::write(fixture.0.join("data/p/aux-.state"), probe::state_with("dirty-at-10-400", 1.0, 0.1)).unwrap();
+    fixture.put("data/p/aux-.state.json", r#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#);
+    let (p, driver) = Player::driven(48_000);
+    let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p)));
+    state.graph.open(&fixture.0).unwrap();
+    state.graph.transport("play").unwrap();
+    let mut r = Rig { fixture, state, driver };
+    r.fill(4);
+    r.fill_to(20);
+    until_unsaved(&mut r);
+    let saved = std::fs::read(r.fixture.0.join("data/p/aux-.state")).unwrap();
+    let tx = state_tx("data/p/aux-.state", &saved);
+    let session = r.session();
+    let (status, body) =
+        as_caller(Caller::agent(Some("Claude"), None), || r.graph().tx_commit(Some(session), &tx.to_json(), None, &[])).unwrap();
+    assert_eq!(
+        (status, &body["busy"]["what"], &body["busy"]["file"]),
+        (423, &serde_json::json!("plugin"), &serde_json::json!("data/p/aux-.state")),
+        "{body}"
+    );
+    assert_eq!(std::fs::read(r.fixture.0.join("data/p/aux-.state")).unwrap(), saved, "nothing changed");
+}
+
+// AGENT-3 (the review's F4): the check at the settle hears what the plugin windows did up to then:
+// a change the musician makes in the window while an agent's write of that plugin's state is on
+// its way takes the write back, and the window's change stays theirs, not saved yet.
+#[test]
+fn a_window_change_made_while_an_agents_state_lands_takes_it_back() {
+    use crate::caller::{Caller, as_caller};
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    use std::sync::mpsc;
+    let mut r = Rig::new("0.5", "dirty-at-10-400");
+    assert!(r.graph().inspect(|a| a.open.as_ref().unwrap().windows.unsaved().is_empty()), "not changed yet");
+    let state = r.saved();
+    let tx = state_tx("data/p/lead.state", &state);
+    let handle = r.handle();
+    let session = r.session();
+    let (arrived, at) = mpsc::channel::<()>();
+    let (filled, wait) = mpsc::channel::<()>();
+    r.graph().inspect(move |a| {
+        a.after_arrival = Some(Box::new(move |_| {
+            let _ = arrived.send(());
+            let _ = wait.recv();
+        }))
+    });
+    let stop = AtomicBool::new(false);
+    let Rig { state: app, driver, .. } = &mut r;
+    let (status, body) = std::thread::scope(|s| {
+        let stop = &stop;
+        s.spawn(move || {
+            if at.recv().is_err() {
+                return;
+            }
+            // The musician changes the plugin's sound in its window as the agent's write lands.
+            let stats = probe::stats(handle).unwrap();
+            while stats.process.load(Relaxed) < 20 {
+                let mut buf = [0.0f32; 256];
+                driver.fill(&mut buf, 2);
+                drop(driver.drain_retired());
+            }
+            let _ = filled.send(());
+            while !stop.load(Relaxed) {
+                let mut buf = [0.0f32; 256];
+                driver.fill(&mut buf, 2);
+                drop(driver.drain_retired());
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        });
+        let agent = Caller::agent(Some("Claude"), Some("a warmer lead"));
+        let out = as_caller(agent, || app.graph.tx_commit(Some(session), &tx.to_json(), None, &[])).unwrap();
+        stop.store(true, Relaxed);
+        out
+    });
+    r.graph().inspect(|a| a.after_arrival = None);
+    assert_eq!(
+        (status, &body["busy"]["what"], &body["busy"]["taken_back"]),
+        (423, &serde_json::json!("plugin"), &serde_json::json!(true)),
+        "{body}"
+    );
+    assert_eq!(r.saved(), state, "taken back");
+    assert!(
+        !r.graph().inspect(|a| a.open.as_ref().unwrap().windows.unsaved().is_empty()),
+        "the window's change is still theirs, not saved yet"
+    );
+}
+
+// AGENT-3 (the review's F1): an agent's change that would end a plugin window's changes not saved
+// yet is taken back, whatever file it touched: here song.ts, playing the track with an instrument
+// of std in the plugin's place, which would drop the instance the window changed.
+#[test]
+fn an_agents_change_that_would_drop_a_window_not_saved_yet_is_taken_back() {
+    use crate::caller::{Caller, as_caller};
+    use m2_song::tx::{Base, Edit, Expect, Op, Pos, Tx, TxPath};
+    let mut r = Rig::new("0.5", "dirty-at-10-400");
+    r.fill_to(20);
+    until_unsaved(&mut r);
+    let session = r.session();
+    let text = r.song();
+    let old = "plugin('clap:m2.probe', { notes: lane.notes('n'), key: 'lead', gain_1: 0.5 })";
+    let at = text.find(old).expect("the plugin's call");
+    let path = TxPath::new("song.ts").unwrap();
+    let edits = vec![
+        Edit { start: Pos::Byte(0), end: Pos::Byte(0), expected: String::new(), text: "import { pluck } from 'std/instruments';\n".into() },
+        Edit {
+            start: Pos::Byte(at as u32),
+            end: Pos::Byte((at + old.len()) as u32),
+            expected: old.into(),
+            text: "pluck(lane.notes('n'))".into(),
+        },
+    ];
+    let mut tx = Tx::new(
+        "tx-agent",
+        ("a".into(), "b".into()),
+        vec![Op::TextEdit { file: path.clone(), edits }],
+        Expect::Seen(m2_song::Sha::of(b"")),
+    );
+    tx.base.insert(path, Base::text(&text));
+    let mut json = tx.to_json();
+    let (status, checked) = r.graph().tx_check(Some(session), &json).unwrap();
+    assert_eq!(status, 200, "{checked}");
+    json["expect"] = serde_json::json!({"seen": checked["checked"]["hash"]});
+    let (status, body) =
+        as_caller(Caller::agent(Some("Claude"), Some("a plucked lead")), || r.graph().tx_commit(Some(session), &json, None, &[])).unwrap();
+    assert_eq!(
+        (status, &body["busy"]["what"], &body["busy"]["taken_back"]),
+        (423, &serde_json::json!("plugin"), &serde_json::json!(true)),
+        "{body}"
+    );
+    assert!(body["busy"]["words"].as_str().unwrap().contains("in its window"), "{body}");
+    assert_eq!(r.song(), text, "taken back");
+    assert!(!r.graph().inspect(|a| a.open.as_ref().unwrap().windows.unsaved().is_empty()), "the window's change is still theirs");
+}

@@ -788,10 +788,18 @@ impl Inner {
     }
 
     /// Register a lease on `control`, read in the published accepted revision, which the request
-    /// named `name` (WRITE-22). One gesture owns a control at a time; a pending lease of the same
-    /// window is taken over.
-    fn register(&self, cp: &mut ControlPlane, device: Option<&Device>, control: Control, owner: Owner, name: (u64, &str)) -> Result<Begun> {
-        busy::no_lease()?;
+    /// named `name` (WRITE-22), for `by`, who asked: never an agent (AGENT-3). One gesture owns a
+    /// control at a time; a pending lease of the same window is taken over.
+    fn register(
+        &self,
+        cp: &mut ControlPlane,
+        device: Option<&Device>,
+        control: Control,
+        owner: Owner,
+        name: (u64, &str),
+        by: &crate::caller::Caller,
+    ) -> Result<Begun> {
+        busy::no_lease(by)?;
         let engine = cp.open.as_ref().context("no project is open")?.engine.clone();
         let now = Instant::now();
         let mut playing = control.value;
@@ -878,7 +886,7 @@ impl Graph {
         let actor_inner = inner.clone();
         // QuickJS gets as much stack as it has on a main thread.
         std::thread::Builder::new()
-            .name("m2-session".into())
+            .name(crate::caller::ACTOR.into())
             .stack_size(8 << 20)
             .spawn(move || actor::run(actor_inner, rx, events))
             .expect("a thread for the session");
@@ -1162,7 +1170,9 @@ impl Graph {
                 bail!("the open project changed; refresh the graph before editing");
             }
             match p.find(revision, id) {
-                Resolved::Control(c) => return self.inner.register(&mut cp, device.as_ref(), *c, owner, (revision, id)),
+                Resolved::Control(c) => {
+                    return self.inner.register(&mut cp, device.as_ref(), *c, owner, (revision, id), &crate::caller::now());
+                }
                 Resolved::Missing => bail!("no control `{id}` in that revision"),
                 Resolved::Slow => {}
             }
@@ -1175,7 +1185,11 @@ impl Graph {
     #[doc(hidden)]
     pub fn begin_via_actor(&self, token: u64, revision: u64, id: &str, owner: Owner) -> Result<Begun> {
         let id = id.to_string();
-        self.call(move |a| a.begin(token, revision, &id, owner))
+        // The job carries who asked (`Graph::call`): the actor never reads it off its own thread.
+        self.call(move |a| {
+            let by = a.caller.clone();
+            a.begin(token, revision, &id, owner, &by)
+        })
     }
 
     /// Play `value` for lease `lease`, straight into the engine: a write to its cells' slots

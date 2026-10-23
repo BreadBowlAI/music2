@@ -212,8 +212,8 @@ pub struct TxPath {
 }
 
 /// Characters no path may hold: controls, and the invisible ones that make a name read as
-/// another (bidi overrides, zero-width marks).
-fn hidden(c: char) -> bool {
+/// another (bidi overrides, zero-width marks). Nor may an agent's words the app shows (AGENT-10).
+pub fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(c, '\u{ad}' | '\u{61c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}')
         || matches!(c, '\u{2066}'..='\u{2069}' | '\u{feff}')
