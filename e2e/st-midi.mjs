@@ -157,7 +157,7 @@ const upload = (name, bytes, to) =>
       const r = await fetch(`/api/graph/midifile/import?${q}`, { method: "POST", headers: { "x-m2-token": token, "content-type": "application/octet-stream" }, body: new Uint8Array(bytes) });
       return { status: r.status, body: await r.json().catch(() => ({})) };
     },
-    sess.token,
+    sess.page_token,
     name,
     [...bytes],
     to,
@@ -217,7 +217,7 @@ const yBelow = async () => {
   const rows = await page.$$eval("[data-track]", (els) => els.filter((e) => e.dataset.track !== "song").map((e) => e.getBoundingClientRect().bottom));
   return Math.max(...rows) + 20;
 };
-const tracksNow = () => page.evaluate(async (token) => (await (await fetch("/api/graph", { headers: { "x-m2-token": token } })).json()).timeline.tracks.filter((t) => t.track).map((t) => t.label), sess.token);
+const tracksNow = () => page.evaluate(async (token) => (await (await fetch("/api/graph", { headers: { "x-m2-token": token } })).json()).timeline.tracks.filter((t) => t.track).map((t) => t.label), sess.page_token);
 const tempo = () => JSON.parse(read("data/arrangement.json")).tempo;
 const askShown = () => page.$eval("[data-testid=midi-ask]", (e) => e.textContent).catch(() => null);
 const before = await tracksNow();
@@ -246,7 +246,7 @@ check(await until(() => JSON.stringify(tempo()) === JSON.stringify([{ beat: 0, b
 // Esc: nothing. The undo is on disk before the page hears of it, so first wait until the page's
 // revision is the server's: read sooner, the undo's own revision landed after the Esc, like a write.
 const pageRev = () => page.$eval("[data-revision]", (e) => e.dataset.revision);
-const serverRev = () => page.evaluate(async (token) => String((await (await fetch("/api/graph", { headers: { "x-m2-token": token } })).json()).view.revision), sess.token);
+const serverRev = () => page.evaluate(async (token) => String((await (await fetch("/api/graph", { headers: { "x-m2-token": token } })).json()).view.revision), sess.page_token);
 await until(async () => (await serverRev()) === (await pageRev()));
 const revAsk = await pageRev();
 await dropBytes(xAt(9), await yBelow(), "groove.mid", groove);
@@ -293,12 +293,12 @@ await app.evaluateOnNewDocument(
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     window.__menu = (id) => menu.forEach((h) => callbacks.get(h)?.({ event: "menu", id: 0, payload: id }));
   },
-  sess.token,
+  sess.page_token,
   `${ROOT}/groove.mid`,
 );
 const opened = await page.evaluate(
   async (token, path) => (await fetch("/api/graph/open", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ path }) })).status,
-  sess.token,
+  sess.page_token,
   empty,
 );
 await app.goto(sess.url, { waitUntil: "domcontentloaded" });

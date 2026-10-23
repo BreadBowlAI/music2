@@ -24,8 +24,8 @@ page.on("response", (r) => {
   const what = `${r.status()} ${r.request().method()} ${new URL(r.url()).pathname}`;
   if (r.status() >= 400 && r.status() !== 423 && what !== "400 GET /api/graph") consoleErrors.push(what);
 });
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.token);
-const headers = { "x-m2-token": sess.token, "content-type": "application/json" };
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
+const headers = { "x-m2-token": sess.page_token, "content-type": "application/json" };
 const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers })).json();
 const post = async (path, body) => {
   const res = await fetch(`${sess.url}/api/${path}`, { method: "POST", headers, body: JSON.stringify(body) });

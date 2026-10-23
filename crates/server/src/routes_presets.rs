@@ -33,7 +33,7 @@ pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
 
 /// Run `f` off the async threads: presets are files.
 async fn blocking(f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> ApiResult {
-    Ok(Json(tokio::task::spawn_blocking(f).await.map_err(anyhow::Error::from)??))
+    Ok(Json(crate::caller::blocking(f).await.map_err(anyhow::Error::from)??))
 }
 
 #[derive(Deserialize)]

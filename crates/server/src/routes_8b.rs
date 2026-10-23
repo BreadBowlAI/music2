@@ -49,7 +49,7 @@ async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
-    tokio::task::spawn_blocking(f).await.map_err(anyhow::Error::from)?.map_err(ApiError::from)
+    crate::caller::blocking(f).await.map_err(anyhow::Error::from)?.map_err(ApiError::from)
 }
 
 #[derive(Deserialize)]
@@ -234,7 +234,7 @@ pub(crate) async fn ws_text(state: &Arc<AppState>, client: Option<&str>, text: &
             _ => None,
         };
         let st = state.clone();
-        if let Ok(Ok(())) = tokio::task::spawn_blocking(move || st.graph.midi_target(target)).await {
+        if let Ok(Ok(())) = crate::caller::blocking(move || st.graph.midi_target(target)).await {
             state.midi_changed();
         }
         return None;
@@ -251,7 +251,7 @@ pub(crate) async fn ws_text(state: &Arc<AppState>, client: Option<&str>, text: &
         Err(e) => return said(format!("This audition message doesn't read: {e}")),
     };
     let state = state.clone();
-    match tokio::task::spawn_blocking(move || state.graph.audition(&client, a)).await {
+    match crate::caller::blocking(move || state.graph.audition(&client, a)).await {
         Ok(Ok(answer)) => answer.map(|v| v.to_string()),
         Ok(Err(e)) => said(format!("{e:#}")),
         Err(e) => said(e.to_string()),

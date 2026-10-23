@@ -60,7 +60,7 @@ async function serve(name, dir = "-") {
   await sleep(300);
   const s = JSON.parse(fs.readFileSync(file, "utf8"));
   const api = async (path, body) => {
-    const r = await fetch(`${s.url}/api/${path}`, body === undefined ? { headers: { "x-m2-token": s.token } } : { method: "POST", headers: { "x-m2-token": s.token, "content-type": "application/json" }, body: JSON.stringify(body) });
+    const r = await fetch(`${s.url}/api/${path}`, body === undefined ? { headers: { "x-m2-token": s.page_token } } : { method: "POST", headers: { "x-m2-token": s.page_token, "content-type": "application/json" }, body: JSON.stringify(body) });
     return { status: r.status, json: await r.json().catch(() => null) };
   };
   const stop = async () => {
@@ -109,7 +109,7 @@ async function pageOn(s, { pc = false, app = false, picked = null } = {}) {
       window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
       window.__menu = (id) => menu.forEach((h) => callbacks.get(h)?.({ event: "menu", id: 0, payload: id }));
     },
-    s.token,
+    s.page_token,
     pc ? "linux" : "macos",
     app,
     picked,
@@ -148,7 +148,7 @@ const toasts = (page) => page.$$eval("[data-testid=toast]", (els) => els.map((e)
 
 {
   const sess = JSON.parse(fs.readFileSync(`${HOME}/.music2/session.json`, "utf8"));
-  const { page, close } = await pageOn({ url: sess.url, token: sess.token });
+  const { page, close } = await pageOn({ url: sess.url, token: sess.page_token });
   check(!!(await page.$("[data-testid=start]")), "the run's server shows the start screen");
   check(!(await shown(page)), "no Settings window at first");
   await key(page, "Meta+Comma");

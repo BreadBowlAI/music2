@@ -410,6 +410,11 @@ impl Recorder {
     }
 }
 
+/// The track a take records on in project `token` now, counting in or recording (AGENT-3).
+pub(super) fn recording_on(cp: &ControlPlane, token: u64) -> Option<String> {
+    cp.record.take.as_ref().filter(|t| t.token == token).map(|t| t.module.clone())
+}
+
 /// The track's name as the timeline shows it, for the undo step.
 pub(super) fn label_of(cp: &ControlPlane, module: &str) -> String {
     cp.open

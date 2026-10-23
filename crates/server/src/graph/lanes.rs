@@ -349,6 +349,19 @@ pub(super) fn settled(cp: &mut ControlPlane, token: u64, device: Option<&Device>
     }
 }
 
+/// The lanes the musician's live clip drags hold in project `token` (AGENT-3).
+pub(super) fn held(cp: &ControlPlane, token: u64) -> Vec<LaneAddr> {
+    let mut out: Vec<LaneAddr> = vec![];
+    for l in cp.lanes.live.iter().filter(|l| l.token == token) {
+        for a in named(&l.gesture).into_iter().chain(l.sent.iter().map(|s| s.lane.clone())) {
+            if !out.contains(&a) {
+                out.push(a);
+            }
+        }
+    }
+    out
+}
+
 /// End every lane lease idle past its TTL (the server's `music2-tell` thread, every 300 ms).
 pub(super) fn expire(cp: &mut ControlPlane, device: Option<&Device>, now: Instant) {
     let mut i = 0;
@@ -395,6 +408,7 @@ impl Graph {
         client: Option<String>,
         ttl: Option<Duration>,
     ) -> Result<Result<LaneBegun, String>> {
+        super::busy::no_lease()?;
         let engine = {
             let cp = self.inner.control.lock();
             let p = cp.open.as_ref().context("no project is open")?;

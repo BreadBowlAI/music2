@@ -14,8 +14,8 @@ await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.token);
-const HDR = { "x-m2-token": sess.token };
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
+const HDR = { "x-m2-token": sess.page_token };
 const api = async (path, body) => {
   const r = await fetch(`${sess.url}/api/${path}`, body === undefined ? { headers: HDR } : { method: "POST", headers: { ...HDR, "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: r.status, json: await r.json().catch(() => null) };
@@ -238,7 +238,7 @@ await app.evaluateOnNewDocument((token, picked) => {
     unregisterCallback: () => {},
   };
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-}, sess.token, other);
+}, sess.page_token, other);
 await api("graph/close", {});
 await app.goto(sess.url, { waitUntil: "domcontentloaded" });
 await app.waitForSelector("[data-testid=open-project]", { timeout: 6000 });

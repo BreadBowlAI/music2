@@ -256,7 +256,7 @@ await new Promise((r) => holder.once("exit", r));
 const empty = await page.evaluate(async (token) => {
   const r = await fetch("/api/project/new", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ name: "Empty one", template: "empty" }) });
   return { status: r.status, body: await r.json() };
-}, sess.token);
+}, sess.page_token);
 check(empty.status === 200, "an Empty song opens");
 const first = await page.waitForSelector("[data-testid=add-first-track]", { timeout: 8000 }).catch(() => null);
 check(!!first && (await page.$eval("[data-testid=no-tracks]", (e) => e.innerText)).includes("or write one in code"), "its lanes offer Add a track, or code");

@@ -339,12 +339,12 @@ fn an_agents_tx_is_checked_then_committed_on_the_hash_its_check_showed() {
     assert_eq!(checked["checked"]["delta"]["values"].as_array().map(Vec::len), Some(1), "{checked}");
     assert_eq!((fixture.read("song.ts"), playing(&graph)), (song.clone(), (revision, revision)), "a check writes nothing");
 
-    let (status, committed) = graph.tx_commit(Some(token), &tx(json!({"seen": hash}))).unwrap();
+    let (status, committed) = graph.tx_commit(Some(token), &tx(json!({"seen": hash})), None, &[]).unwrap();
     assert_eq!((status, committed["committed"]["hash"].as_str()), (200, Some(hash.as_str())), "{committed}");
     assert!(fixture.read("song.ts").contains("hz(900)") && synced(&graph));
     assert_eq!(knob(&graph, 900.0).1, revision + 1, "plays the revision it made");
 
-    let (status, refused) = graph.tx_commit(Some(token), &tx(json!({"seen": hash}))).unwrap();
+    let (status, refused) = graph.tx_commit(Some(token), &tx(json!({"seen": hash})), None, &[]).unwrap();
     assert_eq!((status, &refused["conflict"]["files"][0]["file"]), (409, &json!("song.ts")), "{refused}");
     graph.undo(token).unwrap();
     assert!(fixture.read("song.ts").contains("hz(800)") && synced(&graph));
@@ -356,7 +356,7 @@ fn an_agents_tx_is_checked_then_committed_on_the_hash_its_check_showed() {
     let remove = json!([{"op": "remove", "file": "../x.json"}]);
     let outside = json!({"id": "tx-agent", "base": {"../x.json": null}, "ops": remove, "expect": "identical"});
     for (bad, code) in [(extra, "tx.invalid"), (outside, "tx.path")] {
-        for answer in [graph.tx_check(Some(token), &bad).unwrap(), graph.tx_commit(Some(token), &bad).unwrap()] {
+        for answer in [graph.tx_check(Some(token), &bad).unwrap(), graph.tx_commit(Some(token), &bad, None, &[]).unwrap()] {
             assert_eq!((answer.0, &answer.1["rejected"]["diagnostics"][0]["code"]), (422, &json!(code)), "{}", answer.1);
         }
     }
@@ -3945,7 +3945,7 @@ fn the_bus_routes_answer_with_the_new_view() {
     let fixture = Fixture::new();
     mixed(&fixture);
     let song = fixture.read("song.ts");
-    let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t0k".into() };
+    let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
     let running = crate::start_with(options, Graph::silent()).unwrap();
     let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
     let post = |path: &str, body: Value| crate::routes_8b::tests::post(&running.url, path, Some("t0k"), &body);

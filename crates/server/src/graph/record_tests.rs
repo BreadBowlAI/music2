@@ -1301,3 +1301,43 @@ mod audio {
         r.written();
     }
 }
+
+// AGENT-3: while a take records, every agent's write is busy, whatever it touches: the take's
+// notes follow the tempo map, and the musician may hear themselves through the track's effects.
+// Nothing changes, and once the take ended the same write goes ahead.
+#[test]
+fn while_a_take_records_every_agents_write_is_busy() {
+    use crate::caller::{Caller, as_caller};
+    let mut r = Rig::new();
+    let agent = Caller::agent(Some("Claude"), None);
+    // A step of the agent's own, made before the take, which its undo would take back.
+    let layout = serde_json::json!({"op": "write", "file": "layout.json", "text": "{}\n"});
+    let made =
+        serde_json::json!({"id": "tx-mine", "base": {"layout.json": null}, "label": ["a", "b"], "ops": [layout], "expect": "identical"});
+    assert_eq!(as_caller(agent.clone(), || r.graph.tx_commit(Some(r.token), &made, None, &[])).unwrap().0, 200);
+    r.start(false, None);
+    r.fill(10);
+    let song = r.fixture.read("song.ts");
+    let lane = LaneAddr::new("keys", "notes").unwrap();
+    let put = serde_json::json!({"id": "agent1", "start": 0, "length": 4, "notes": [{"pitch": "E1", "start": 0, "length": 0.25}]});
+    let mut tx = m2_song::Tx::new(
+        "tx-agent",
+        ("before".into(), "after".into()),
+        vec![m2_song::tx::Op::Clips { lane: lane.clone(), put: vec![put], delete: vec![] }],
+        m2_song::tx::Expect::Confined(m2_song::tx::Confined { lanes: vec![lane.clone()], ..Default::default() }),
+    );
+    let file = r.fixture.0.join("data/keys/notes.json");
+    let base = std::fs::read_to_string(&file).map_or(m2_song::tx::Base::Absent, |t| m2_song::tx::Base::text(&t));
+    tx.base.insert(m2_song::tx::TxPath::lane(&lane), base);
+    let (status, body) = as_caller(agent.clone(), || r.graph.tx_commit(Some(r.token), &tx.to_json(), None, &[])).unwrap();
+    assert_eq!((status, &body["busy"]["what"]), (423, &serde_json::json!("take")), "{body}");
+    assert_eq!(body["busy"]["words"], serde_json::json!("you're recording on Bass"), "{body}");
+    assert!(!file.exists(), "nothing changed");
+    assert_eq!(r.fixture.read("song.ts"), song);
+    let e = as_caller(agent.clone(), || r.graph.undo(r.token)).unwrap_err();
+    assert!(e.downcast_ref::<crate::graph::busy::Busy>().is_some(), "an undo too: {e:#}");
+    r.graph.record_stop(r.token).unwrap();
+    r.written();
+    let (status, body) = as_caller(agent, || r.graph.tx_commit(Some(r.token), &tx.to_json(), None, &[])).unwrap();
+    assert_eq!(status, 200, "{body}");
+}

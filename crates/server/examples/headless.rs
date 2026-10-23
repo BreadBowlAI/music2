@@ -2,7 +2,9 @@
 //!
 //!   M2_AUDIO=none cargo run -p m2-server --example headless -- <project-folder | -> <session.json> <token>
 //!
-//! Opens the project (`-`: none, for the start screen) and writes `{url, token, pid}` to the session file.
+//! Opens the project (`-`: none, for the start screen) and writes `{url, token, page_token, pid}` to the session file,
+//! whole: `<token>` is the page's key (AGENT-10), which the browser suites give their pages as `page_token`; `token` is
+//! the tools key, made here, which `m2` uses as an agent's, as with the app.
 //!
 //! It serves the `web/dist` of the tree it was built in, or with `M2_WEB=<folder>` that folder: one
 //! server build then serves another checkout's page. std, the templates and the examples still come
@@ -33,12 +35,18 @@ fn main() -> anyhow::Result<()> {
 fn serve() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [project, session, token] = &args[..] else { anyhow::bail!("usage: headless <project-folder | -> <session.json> <token>") };
+    // The tools key (AGENT-10): another key than the page's, as the app makes it.
+    let tools = format!("{token}-{:016x}", {
+        use std::hash::{BuildHasher, Hasher};
+        std::collections::hash_map::RandomState::new().build_hasher().finish()
+    });
     let opts = m2_server::ServeOptions {
         port: 0,
         web_dir: std::env::var_os("M2_WEB")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/dist"))),
-        token: token.clone(),
+        token: tools.clone(),
+        page_token: token.clone(),
     };
     let running = match std::env::var_os("M2_AUDIO_CAPTURE") {
         Some(file) => m2_server::start_with(opts, m2_server::graph::Graph::with_player(capture(file.into())?))?,
@@ -53,8 +61,11 @@ fn serve() -> anyhow::Result<()> {
     if project != "-" {
         running.state.open_song(std::path::Path::new(project))?;
     }
-    let body = serde_json::json!({"url": running.url, "token": token, "pid": std::process::id()});
-    std::fs::write(session, serde_json::to_string_pretty(&body)?)?;
+    let body = serde_json::json!({"url": running.url, "token": tools, "page_token": token, "pid": std::process::id()});
+    // Whole: to a new file, then renamed over the old one, so nothing reads half of it.
+    let next = format!("{session}.new");
+    std::fs::write(&next, serde_json::to_string_pretty(&body)?)?;
+    std::fs::rename(&next, session)?;
     println!("{}", running.url);
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));

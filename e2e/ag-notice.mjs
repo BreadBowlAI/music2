@@ -24,9 +24,13 @@ import { lint } from "./lintlib.mjs";
 
 const { page, errors, posts, api, key, show, toasts } = await open(1440, 900);
 /** The server's state, read from here, not by the page. */
-const server = async () => (await fetch(`${sess.url}/api/graph`, { headers: { "x-m2-token": sess.token } })).json();
-/** A Tx from outside the page on Bass's notes, as an agent sends it: its answer. */
-const agentTx = async (id) => {
+const server = async () => (await fetch(`${sess.url}/api/graph`, { headers: { "x-m2-token": sess.page_token } })).json();
+/**
+ * A Tx from outside the page on Bass's notes: its answer. With the page's key, the musician's (as
+ * another window of theirs would send it); with the tools key (`sess.token`), an agent's, named by
+ * `as` and `why` (AGENT-10).
+ */
+const agentTx = async (id, { key = sess.page_token, as, why } = {}) => {
   const now = read("data/bass/notes.json");
   const tx = {
     id,
@@ -34,7 +38,7 @@ const agentTx = async (id) => {
     ops: [{ op: "clips", lane: ["bass", "notes"], put: [{ id, start: 0, length: 4, notes: [{ pitch: "E1", start: 0, length: 0.25 }] }], delete: [] }],
     expect: { confined: { ranges: {}, lanes: [["bass", "notes"]], modules: [] } },
   };
-  const res = await fetch(`${sess.url}/api/tx/commit`, { method: "POST", headers: { "x-m2-token": sess.token, "content-type": "application/json" }, body: JSON.stringify({ tx }) });
+  const res = await fetch(`${sess.url}/api/tx/commit`, { method: "POST", headers: { "x-m2-token": key, "content-type": "application/json" }, body: JSON.stringify({ tx, as, why }) });
   return { status: res.status, body: await res.json() };
 };
 const notices = () => page.$$eval("[data-testid=notice]", (els) => els.map((e) => e.textContent ?? ""));
@@ -234,4 +238,26 @@ if (process.env.AG_SHOT) {
 }
 await page.keyboard.press("Shift");
 check(await until(async () => (await glowing()).length === 0), `a key press ends the glow: ${await glowing()}`);
+
+// ---------------------------------------------------------------- an agent's change (track 2)
+
+// With the tools key, a Tx is an agent's (AGENT-10): its notice and Undo say who, by its words.
+await page.mouse.move(ruler.x + ruler.width - 40, ruler.y + ruler.height + 200);
+const beforeAgent = read("data/bass/notes.json");
+const byAgent = await agentTx("agent3", { key: sess.token, as: "Claude", why: "brighter hats" });
+check(byAgent.status === 200, `an agent's Tx lands: ${byAgent.status} ${JSON.stringify(byAgent.body).slice(0, 200)}`);
+check(await until(async () => ((await notices())[0] ?? "").startsWith("Claude: brighter hats")), `its notice says who and why: ${JSON.stringify(await notices())}`);
+check(!!(await page.$("[data-testid=notice] button")), "with Undo");
+check(await until(async () => (await undoTitle()) === "Undo Claude: brighter hats (⌘Z)"), `Undo names it: ${await undoTitle()}`);
+check(await until(async () => (await glowing()).includes("bass")), `Bass glows: ${await glowing()}`);
+if (process.env.AG_SHOT) {
+  await sleep(300);
+  await page.screenshot({ path: `${process.env.AG_SHOT}/agent-notice.png` });
+  const b = await (await page.$("[data-testid=notice]"))?.boundingBox();
+  if (b) await page.screenshot({ path: `${process.env.AG_SHOT}/agent-notice-near.png`, clip: { x: b.x - 24, y: b.y - 24, width: b.width + 48, height: b.height + 48, scale: 3 } });
+  const u = await (await page.$('button[aria-label="Undo"]'))?.boundingBox();
+  if (u) await page.screenshot({ path: `${process.env.AG_SHOT}/agent-undo-near.png`, clip: { x: u.x - 60, y: u.y - 8, width: u.width + 160, height: u.height + 16, scale: 3 } });
+}
+await page.click("[data-testid=notice] button");
+check(await until(() => read("data/bass/notes.json") === beforeAgent), "the notice's Undo takes the agent's change back");
 done(errors);

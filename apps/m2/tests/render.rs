@@ -37,7 +37,13 @@ fn the_cli_and_the_apps_export_write_the_same_file() {
     let out = Command::new(env!("CARGO_BIN_EXE_m2")).arg("render").arg(&song).arg(&cli).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 
-    let running = m2_server::start(m2_server::ServeOptions { port: 0, web_dir: temp.0.join("no-web"), token: "test".into() }).unwrap();
+    let running = m2_server::start(m2_server::ServeOptions {
+        port: 0,
+        web_dir: temp.0.join("no-web"),
+        token: "test-tools".into(),
+        page_token: "test".into(),
+    })
+    .unwrap();
     let state = running.state;
     state.graph.open(&song).unwrap();
     let mut events = state.events.subscribe();

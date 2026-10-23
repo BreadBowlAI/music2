@@ -45,7 +45,7 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
     try {
       if (!localStorage.getItem("m2.browser.open")) localStorage.setItem("m2.browser.open", String(side));
     } catch {}
-  }, sess.token, side, pc ? "linux" : "macos");
+  }, sess.page_token, side, pc ? "linux" : "macos");
   await page.goto(sess.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
   const api = (path, opts = {}) =>
@@ -54,7 +54,7 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
         const r = await fetch(`/api/graph${path}`, { ...opts, headers: { "x-m2-token": token, "content-type": "application/json" } });
         return { status: r.status, body: await r.json().catch(() => ({})) };
       },
-      sess.token,
+      sess.page_token,
       path,
       opts,
     );

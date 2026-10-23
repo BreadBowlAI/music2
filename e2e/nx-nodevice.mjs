@@ -47,7 +47,7 @@ async function serve(name, dir) {
   await until(async () => fs.existsSync(file), 30000);
   await sleep(300);
   const s = JSON.parse(fs.readFileSync(file, "utf8"));
-  const get = async (path) => (await fetch(`${s.url}/api/${path}`, { headers: { "x-m2-token": s.token } })).json().catch(() => null);
+  const get = async (path) => (await fetch(`${s.url}/api/${path}`, { headers: { "x-m2-token": s.page_token } })).json().catch(() => null);
   return { ...s, get, log };
 }
 
@@ -63,7 +63,7 @@ async function pageOn(s, { pc = false } = {}) {
     (token, platform) => {
       window.__M2__ = { native: false, token, platform };
     },
-    s.token,
+    s.page_token,
     pc ? "linux" : "macos",
   );
   await page.goto(s.url, { waitUntil: "domcontentloaded" });

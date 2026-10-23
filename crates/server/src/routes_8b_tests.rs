@@ -43,7 +43,9 @@ fn mute_and_solo_answer_with_the_overlay_state() {
          const kick = track('kick', () => osc.sine(55));\nexport default song(() => kick.out);\n",
     )
     .unwrap();
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     let state = running.state.graph.open(&dir).unwrap();
     let session = state["session"].as_u64().unwrap();
     let url = &running.url;
@@ -178,7 +180,9 @@ fn audition_over_http_and_the_websocket() {
          const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
     )
     .unwrap();
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     running.state.graph.open(&dir).unwrap();
     let url = &running.url;
     let strike = |h: u32| json!({"client": "agent", "module": "kick", "lane": "hits", "on": [{"h": h, "pitch": 36}]});
@@ -230,7 +234,9 @@ fn mute_in_song_is_refused_read_only() {
                 const kick = track('kick', () => osc.sine(55));\nexport default song(() => kick.out);\n";
     std::fs::write(dir.join("song.ts"), song).unwrap();
     let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let (status, answer) =
         post(&running.url, "/api/graph/track/mute", Some("t0k"), &json!({"session": session, "modules": ["kick"], "muted": true}));
@@ -257,7 +263,9 @@ fn meters_reach_every_window_and_the_status_has_the_load() {
          const lead = track('lead', () => osc.sine(440));\nexport default song(() => lead.out);\n",
     )
     .unwrap();
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     running.state.graph.open(&dir).unwrap();
     running.state.graph.transport("play").unwrap();
     let url = &running.url;
@@ -291,7 +299,9 @@ fn clip_gestures_over_http() {
          const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
     )
     .unwrap();
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     let create = json!({"session": session, "gesture": {"op": "create", "module": "kick", "lane": "hits", "start": 4}});
@@ -341,7 +351,9 @@ fn the_rolls_lane_write_takes_clips_as_the_timeline_shows_them() {
     std::fs::create_dir_all(dir.join("data/kick")).unwrap();
     std::fs::write(dir.join("data/kick/hits.json"), "{\"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"notes\": []}]}\n")
         .unwrap();
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     let state = running.state.graph.open(&dir).unwrap();
     let (session, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
     let mut clips = state["timeline"]["tracks"][0]["lanes"][0]["clips"].clone();
@@ -373,7 +385,9 @@ fn remove_automation_over_http() {
         "{\"unit\": \"hz\", \"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"points\": [[0, 200], [4, 600]]}]}\n",
     )
     .unwrap();
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let body = json!({"session": session, "module": "song", "lane": "freq", "beat": 2});
     let (status, done) = post(&running.url, "/api/graph/automate/remove", Some("t0k"), &body);
@@ -401,7 +415,9 @@ fn follow_tempo_through_the_clips_route() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-follow-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     crate::routes_audio::tests::copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/resample"), &dir);
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let follow = |on: bool, lane: &str, id: &str| {
         let gesture =

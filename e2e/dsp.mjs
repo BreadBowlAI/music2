@@ -17,8 +17,8 @@ page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
 await page.evaluateOnNewDocument((token) => {
   window.__M2__ = { native: false, token, platform: "macos" };
-}, sess.token);
-const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers: { "x-m2-token": sess.token } })).json();
+}, sess.page_token);
+const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers: { "x-m2-token": sess.page_token } })).json();
 
 let pass = 0, fail = 0;
 const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); ok ? pass++ : fail++; };

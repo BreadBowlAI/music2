@@ -58,6 +58,13 @@ pub(crate) struct Windows {
     unsaveable: HashSet<String>,
 }
 
+impl Windows {
+    /// The instances whose window changed their sound, not saved yet: changed, or saving (AGENT-3).
+    pub(super) fn unsaved(&self) -> Vec<Handle> {
+        self.dirty.keys().chain(self.saving.iter()).copied().collect()
+    }
+}
+
 impl Default for Windows {
     fn default() -> Windows {
         Windows { dirty: HashMap::new(), saving: HashSet::new(), saved: channel(), leases: HashMap::new(), unsaveable: HashSet::new() }

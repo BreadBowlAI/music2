@@ -70,7 +70,7 @@ async function serve(name, dir = "-") {
   await sleep(300);
   const s = JSON.parse(fs.readFileSync(file, "utf8"));
   const api = async (path, body) => {
-    const r = await fetch(`${s.url}/api/${path}`, body === undefined ? { headers: { "x-m2-token": s.token } } : { method: "POST", headers: { "x-m2-token": s.token, "content-type": "application/json" }, body: JSON.stringify(body) });
+    const r = await fetch(`${s.url}/api/${path}`, body === undefined ? { headers: { "x-m2-token": s.page_token } } : { method: "POST", headers: { "x-m2-token": s.page_token, "content-type": "application/json" }, body: JSON.stringify(body) });
     return { status: r.status, json: await r.json().catch(() => null) };
   };
   const stop = async () => {
@@ -92,7 +92,7 @@ async function pageOn(s, { pc = false } = {}) {
     (token, platform) => {
       window.__M2__ = { native: false, token, platform };
     },
-    s.token,
+    s.page_token,
     pc ? "linux" : "macos",
   );
   await page.goto(s.url, { waitUntil: "domcontentloaded" });
@@ -137,7 +137,7 @@ async function appPage(s, picked) {
       window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
       window.__menu = (id) => menu.forEach((h) => callbacks.get(h)?.({ event: "menu", id: 0, payload: id }));
     },
-    s.token,
+    s.page_token,
     picked,
   );
   await page.goto(s.url, { waitUntil: "domcontentloaded" });
@@ -216,7 +216,7 @@ if (part("c1")) {
 const sess = JSON.parse(fs.readFileSync(`${HOME}/.music2/session.json`, "utf8"));
 const run = { ...sess, api: null };
 run.api = async (path, body) => {
-  const r = await fetch(`${sess.url}/api/${path}`, body === undefined ? { headers: { "x-m2-token": sess.token } } : { method: "POST", headers: { "x-m2-token": sess.token, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const r = await fetch(`${sess.url}/api/${path}`, body === undefined ? { headers: { "x-m2-token": sess.page_token } } : { method: "POST", headers: { "x-m2-token": sess.page_token, "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 const recentFile = `${HOME}/.music2/recent.json`;

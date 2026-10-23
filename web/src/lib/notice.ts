@@ -2,9 +2,10 @@
 // what changed.
 //
 // After each change that is an undo step, the server tells every window with a `step` event: its
-// id, who made it (`page`, or `outside`: a file saved in another program), its name, and the
-// tracks, lanes and knobs it changed. For a step that isn't this page's own, the page shows one
-// notice ("Changed outside the app: the code in tracks/bass.ts · Undo"), a newer one replacing it,
+// id, who made it (`page`; `agent`, by its name in `by`; or `outside`: a file saved in another
+// program), its name, and the tracks, lanes and knobs it changed. For a step that isn't this
+// page's own, the page shows one notice ("Claude: brighter hats · Undo", "Changed outside the
+// app: the code in tracks/bass.ts · Undo"), a newer one replacing it,
 // and outlines what changed until the next click or key press. The notice's Undo sends that step's
 // id, so it can never take back another step: once a newer change came, it says so instead. It
 // offers Undo only while undo can take the step back.
@@ -17,7 +18,9 @@ export interface StepEvent {
   session: number;
   step: number;
   made: number;
-  source: "page" | "outside";
+  source: "page" | "agent" | "outside";
+  /** An agent's name, as it gave it: plain text (AGENT-10). */
+  by?: string | null;
   name: string;
   files: string[];
   /** Whether undo can take it back now. */
@@ -33,7 +36,7 @@ export interface Notice {
   id: number;
   session: number;
   step: number;
-  /** "Changed outside the app". */
+  /** "Changed outside the app", or an agent's name: "Claude". */
   who: string;
   name: string;
   /** Steps not made here since the notice first showed, this one included. */
@@ -61,8 +64,9 @@ interface Noticed {
 
 export const useNotice = create<Noticed>(() => ({ notice: null, glow: null }));
 
-/** Who made a step, as a notice says it. */
-export function who(source: string): string {
+/** Who made a step, as a notice says it: an agent by its name, as text. */
+export function who(source: string, by?: string | null): string {
+  if (source === "agent") return by || "agent";
   return source === "outside" ? "Changed outside the app" : "Changed";
 }
 
@@ -78,8 +82,7 @@ export function heard(e: StepEvent) {
   if (useStore.getState().graph?.session !== e.session) return;
   const { notice } = useNotice.getState();
   if (e.source === "page") {
-    // Made here (or, until agents have a key of their own, through the app's API): what glowed is
-    // old news, and the notice's step is no longer the newest.
+    // Made here: what glowed is old news, and the notice's step is no longer the newest.
     const newer = notice && notice.session === e.session && notice.step < e.step ? { ...notice, newer: true } : notice;
     return useNotice.setState({ glow: null, notice: newer });
   }
@@ -89,7 +92,7 @@ export function heard(e: StepEvent) {
       id: ++ids,
       session: e.session,
       step: e.step,
-      who: who(e.source),
+      who: who(e.source, e.by),
       name: e.name,
       count: showing ? notice.count + 1 : 1,
       undoable: e.undoable,

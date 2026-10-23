@@ -76,7 +76,7 @@ try {
     (
       await fetch(`${s.url}/api/${path}`, {
         method: body ? "POST" : "GET",
-        headers: { "x-m2-token": s.token, "content-type": "application/json" },
+        headers: { "x-m2-token": s.page_token, "content-type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
       })
     ).json();
@@ -94,7 +94,7 @@ try {
   await page.setViewport({ width: 1600, height: 1000 });
   page.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text()));
   page.on("pageerror", (e) => consoleErrors.push(String(e)));
-  await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, s.token);
+  await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, s.page_token);
   await page.goto(s.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-testid=graph], [data-testid=mix]", { timeout: 8000 });
   if (!(await page.$("[data-testid=graph]"))) await page.keyboard.press("Escape");

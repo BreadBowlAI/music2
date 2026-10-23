@@ -44,7 +44,7 @@ const tx = {
   ops: [{ op: "clips", lane: ["bass", "notes"], put: [{ id: "agent1", start: 0, length: 4, notes: [{ pitch: "E1", start: 0, length: 0.25 }] }], delete: [] }],
   expect: { confined: { ranges: {}, lanes: [["bass", "notes"]], modules: [] } },
 };
-const res = await fetch(`${sess.url}/api/tx/commit`, { method: "POST", headers: { "x-m2-token": sess.token, "content-type": "application/json" }, body: JSON.stringify({ session: (await state()).session, tx }) });
+const res = await fetch(`${sess.url}/api/tx/commit`, { method: "POST", headers: { "x-m2-token": sess.page_token, "content-type": "application/json" }, body: JSON.stringify({ session: (await state()).session, tx }) });
 const posted = { status: res.status, body: await res.json().catch(() => null) };
 check(posted.status === 200, `an agent's Tx on Bass's notes commits: ${posted.status} ${JSON.stringify(posted.body).slice(0, 200)}`);
 check(await until(async () => (await undoTitle()) === "Undo Bass notes (⌘Z)"), `Undo names it plainly: ${await undoTitle()}`);

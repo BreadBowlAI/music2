@@ -41,7 +41,7 @@ async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
-    tokio::task::spawn_blocking(f).await.map_err(anyhow::Error::from)?.map_err(ApiError::from)
+    crate::caller::blocking(f).await.map_err(anyhow::Error::from)?.map_err(ApiError::from)
 }
 
 #[derive(Deserialize)]

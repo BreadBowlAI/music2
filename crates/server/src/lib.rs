@@ -3,6 +3,7 @@
 //!
 //! `music2-desktop` hosts it in-process. Local scripts use the same API with the session token.
 
+pub mod caller;
 pub mod export;
 mod files;
 pub mod graph;
@@ -44,10 +45,13 @@ pub struct AppState {
     /// One-shot events for every connected client: toasts, and `graph` when the open
     /// project changed.
     pub events: broadcast::Sender<String>,
-    /// Every `/api` request must carry it (`x-m2-token` header or `?token=`).
-    /// The desktop app sets a fresh one per launch so other local software and web pages
-    /// can't drive the app.
+    /// The tools key (AGENT-10): every `/api` request must carry it or the page's key
+    /// (`x-m2-token` header or `?token=`); one with it is an agent's. The desktop app makes a
+    /// fresh one per launch and publishes it in `~/.music2/session.json`, so other local software
+    /// and web pages can't drive the app.
     pub token: String,
+    /// The page's key, handed only to its window: a request with it is the musician's.
+    pub page_token: String,
     /// The open song project, if any.
     pub graph: graph::Graph,
     /// Export Audio, which renders the song on a thread of its own.
@@ -80,6 +84,7 @@ impl AppState {
         AppState {
             events,
             token,
+            page_token: String::new(),
             graph,
             exports: Default::default(),
             unheard: Mutex::default(),
@@ -215,8 +220,10 @@ pub struct ServeOptions {
     pub port: u16,
     /// Built frontend (`web/dist`). Missing → API only (use the Vite dev server).
     pub web_dir: PathBuf,
-    /// Require this token on every API call (see [`AppState::token`]).
+    /// The tools key: what agents send (see [`AppState::token`]).
     pub token: String,
+    /// The page's key, handed only to its window (AGENT-10).
+    pub page_token: String,
 }
 
 /// A running server.
@@ -235,7 +242,9 @@ pub fn start(opts: ServeOptions) -> Result<Running> {
 /// ([`graph::Graph::with_player`]).
 pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     resources::keep_hashes();
-    let state = Arc::new(AppState::new(opts.token, graph));
+    let mut state = AppState::new(opts.token, graph);
+    state.page_token = opts.page_token;
+    let state = Arc::new(state);
     spawn_graph_watch(&state);
     spawn_meters(&state);
     spawn_midi(&state);
@@ -441,7 +450,9 @@ mod tests {
             "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n",
         )
         .unwrap();
-        let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t".into() }, graph).unwrap();
+        let running =
+            start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t-tools".into(), page_token: "t".into() }, graph)
+                .unwrap();
         let state = running.state.clone();
         state.graph.open(&song).unwrap();
         assert!(state.graph.no_output());

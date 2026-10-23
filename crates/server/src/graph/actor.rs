@@ -61,6 +61,11 @@ pub(super) type Hook = Box<dyn FnMut(&Inner) + Send>;
 pub(crate) struct Actor {
     pub(super) inner: Arc<Inner>,
     pub(crate) open: Option<Open>,
+    /// Who asked for the job it runs (AGENT-10): every step the job records is theirs, and an
+    /// agent's writes are checked against what the musician holds (AGENT-3).
+    pub(super) caller: crate::caller::Caller,
+    /// The job's agent's change, taken back at its settle: the job answers this.
+    taken_back: Option<super::busy::Busy>,
     /// What this Graph's plugin instances report unasked (its [`m2_plugins::Owner`]'s): no other
     /// session, test or rig sees them.
     events: HostEvents,
@@ -75,6 +80,12 @@ pub(crate) struct Actor {
     /// Tests: every session opened from now on commits through the disk this makes.
     #[cfg(test)]
     pub(super) disk: Option<Box<dyn Fn() -> Box<dyn m2_session::tx::stage::Disk> + Send>>,
+    /// Tests: run once an agent's write passed its check on arrival (AGENT-3).
+    #[cfg(test)]
+    pub(super) after_arrival: Option<Hook>,
+    /// Tests: run as a settle checks an agent's change, before it takes the control plane's lock.
+    #[cfg(test)]
+    pub(super) at_landing: Option<Hook>,
 }
 
 /// A `step` event to send once what its step changed is worked out (AGENT-5).
@@ -108,6 +119,8 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
     let mut actor = Actor {
         inner,
         open: None,
+        caller: crate::caller::Caller::Page,
+        taken_back: None,
         events,
         changes: changes(),
         #[cfg(test)]
@@ -116,6 +129,10 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         between_phases: None,
         #[cfg(test)]
         disk: None,
+        #[cfg(test)]
+        after_arrival: None,
+        #[cfg(test)]
+        at_landing: None,
     };
     while let Ok(job) = jobs.recv() {
         // On the player's clock: 0 until there is a player (an open starts it).
@@ -127,6 +144,8 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         actor.heard_plugins();
         actor.told_step(before);
         let before = actor.open.as_ref().map(|o| (o.token, o.session.accepted_arc()));
+        // The app's own work, unless the job says who asked (`Graph::call`).
+        actor.asked_by(crate::caller::Caller::Page);
         // A request that panics answers with an error (its reply is dropped unsent), and the
         // actor serves the next.
         if catch_unwind(AssertUnwindSafe(|| job(&mut actor))).is_err() {
@@ -146,6 +165,63 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
 }
 
 impl Actor {
+    /// Serve what follows for `caller` (AGENT-10): the steps it records are theirs, named by the
+    /// words they gave, and only what it changes can be taken back at its settle (AGENT-3).
+    pub(super) fn asked_by(&mut self, caller: crate::caller::Caller) {
+        if let Some(o) = self.open.as_mut() {
+            o.session.act_as(caller.source(), caller.why());
+            o.session.keep_change();
+        }
+        self.caller = caller;
+        self.taken_back = None;
+    }
+
+    /// The job's answer, `r`: or busy, when its agent's change was taken back at its settle
+    /// (AGENT-3). What follows is the app's own work again.
+    pub(super) fn answered<T>(&mut self, r: Result<T>) -> Result<T> {
+        self.asked_by(crate::caller::Caller::Page);
+        match self.taken_back.take() {
+            Some(busy) => Err(busy.into()),
+            None => r,
+        }
+    }
+
+    /// AGENT-3, on arrival: an agent's write is refused, busy, before anything of it is planned or
+    /// compiled, when it touches what the musician holds: `files`, when they are known before it
+    /// is planned (a Tx's, an undo's), else only a take, which holds everything. Its settle checks
+    /// again, whatever it touched.
+    pub(super) fn arrive(&mut self, files: Option<&[String]>) -> Result<()> {
+        if !self.caller.is_agent() {
+            return Ok(());
+        }
+        if let Some(o) = self.open.as_ref() {
+            let cp = self.inner.control.lock();
+            if let Some(busy) = super::busy::check(&super::busy::held(&cp, o, &self.inner), files) {
+                return Err(busy.into());
+            }
+        }
+        #[cfg(test)]
+        if let Some(f) = self.after_arrival.as_mut() {
+            f(&self.inner.clone());
+        }
+        Ok(())
+    }
+
+    /// AGENT-3, at the settle: the agent's change met something the musician began to hold while
+    /// it landed. It is taken back, before anything of it was carried, sent or shown, and the
+    /// settle plays what was there; the job answers `busy`. When it can't be (an outside write
+    /// came between), it stays, and what the musician holds meets it as an outside write.
+    fn take_back(&mut self, busy: super::busy::Busy, view: bool) -> Settled {
+        if let Some(o) = self.open.as_mut() {
+            match o.session.retract() {
+                Ok(_) => self.taken_back = Some(super::busy::Busy { taken_back: true, ..busy }),
+                Err(e) => eprintln!("music2: couldn't take back an agent's change the musician holds: {e}"),
+            }
+            o.session.keep_change();
+        }
+        self.settle_as(None, view)
+    }
+
     /// Tell every window of the step just recorded, if one was (AGENT-5): its id, who made it, its
     /// name, whether undo can take it back, and what changed since `before`, the revision before
     /// it. What changed is worked out on the `changes` thread, from the two revisions, so the next
@@ -954,8 +1030,28 @@ impl Actor {
         }
 
         // Phase 1, under the control plane's lock: what `begin` and `update` need, with the
-        // engine messages, so every lease's sends reach the queue in order.
+        // engine messages, so every lease's sends reach the queue in order. An agent's change is
+        // checked first against what the musician holds, which a drag, unsaved text or a take may
+        // have begun while it landed (AGENT-3): one it meets is taken back before anything of it
+        // is carried or sent.
+        let landing = if self.caller.is_agent() { o.session.last_change() } else { None };
+        #[cfg(test)]
+        if landing.is_some()
+            && let Some(f) = self.at_landing.as_mut()
+        {
+            f(&inner);
+        }
         let mut cp = inner.control.lock();
+        if let Some(files) = landing {
+            match super::busy::check(&super::busy::held(&cp, o, &inner), Some(&files)) {
+                Some(busy) => {
+                    drop(cp);
+                    drop(way);
+                    return self.take_back(busy, view);
+                }
+                None => o.session.keep_change(),
+            }
+        }
         if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
             for (from, to) in &rekeys {
                 p.overlays.rekey(from, to);
@@ -1654,6 +1750,9 @@ impl Actor {
         let inner = self.inner.clone();
         let o = self.open.as_mut().context("no project is open")?;
         o.check_token(token)?;
+        let file = o.session.carry(revision, id, &o.controls).ok().map(|c| c.file);
+        self.arrive(file.as_ref().map(std::slice::from_ref))?;
+        let o = self.open.as_mut().context("no project is open")?;
         // The edit plans on the accepted revision, which the watcher keeps up with the disk; an
         // outside change in the knob's own file rides along through the commit's baseline (R2).
         let mut target = id.to_string();
@@ -1689,12 +1788,13 @@ impl Actor {
     /// automate added), as more fields of the answer.
     pub(super) fn edit_and(&mut self, token: u64, edit: impl FnOnce(&mut Session) -> Result<(Edited, Value), EditError>) -> Result<Value> {
         let inner = self.inner.clone();
+        self.open.as_ref().context("no project is open")?.check_token(token)?;
+        self.arrive(None)?;
         let o = self.open.as_mut().context("no project is open")?;
-        o.check_token(token)?;
         let requested_ns = inner.now_ns();
         o.sent = None;
         let steps = o.session.last_step();
-        let (result, heard) = self.previewing(edit);
+        let (result, heard) = self.heard(edit);
         let compiled_ns = inner.now_ns();
         let s = self.settle(None);
         let last = self.open.as_ref().and_then(|o| o.sent);
@@ -1853,6 +1953,8 @@ impl Actor {
         if let Some(token) = token {
             o.check_token(token)?;
         }
+        self.arrive(Some(&[path.to_string()]))?;
+        let o = self.open.as_mut().context("no project is open")?;
         let steps = o.session.last_step();
         files::save(&mut o.session, path, base, text)?;
         let made = o.session.last_step();
@@ -1887,10 +1989,72 @@ impl Actor {
                 Err(r) => refused(&r),
             });
         }
+        self.forwarded(token, tx, None, vec![])
+    }
+
+    /// Commit a Tx (WRITE-5) whose own expectation is judged, and, when `seen` is given (a Tx
+    /// `m2` forwards, AGENT-1), only while its delta has that hash: the one its sender checked.
+    /// `assets`, new files under `assets/` it names, are taken in first, so its clips play them
+    /// from the first block. An agent's is checked against what the musician holds, on arrival
+    /// and at its settle, and is never previewed (AGENT-3): busy is 423.
+    pub(super) fn forwarded(
+        &mut self,
+        token: Option<u64>,
+        tx: m2_song::Tx,
+        seen: Option<m2_song::Sha>,
+        assets: Vec<PathBuf>,
+    ) -> Result<(u16, Value)> {
+        let o = self.open.as_mut().context("no project is open")?;
+        if let Some(token) = token {
+            o.check_token(token)?;
+        }
+        let refused = |r: &m2_session::Refusal| {
+            let status = match r {
+                m2_session::Refusal::Conflict { .. } => 409,
+                m2_session::Refusal::Rejected { .. } => 422,
+                m2_session::Refusal::Io { .. } => 500,
+            };
+            (status, m2_editor::json::refusal(r))
+        };
+        let files: Vec<String> = tx.touched().iter().map(|p| p.to_string()).collect();
+        if let Err(e) = self.arrive(Some(&files)) {
+            return match e.downcast::<super::busy::Busy>() {
+                Ok(busy) => Ok((423, busy.json())),
+                Err(e) => Err(e),
+            };
+        }
+        let o = self.open.as_mut().context("no project is open")?;
+        if !assets.is_empty() {
+            // As the app's own import takes its files in (`m2_editor::import::take_in`).
+            let paths: std::collections::BTreeSet<PathBuf> = assets.into_iter().collect();
+            let dir = o.session.accepted().project.dir.clone();
+            match Snapshot::read_paths(&dir, &paths, &|_| true, Default::default()) {
+                Ok(snapshot) => {
+                    o.session.take_in_only(snapshot, &paths);
+                }
+                Err(e) => return Ok((500, json!({"io": {"message": format!("the new assets couldn't be read: {e:#}")}}))),
+            }
+        }
         o.sent = None;
         let steps = o.session.last_step();
-        let (done, heard) = self.previewing(|s| s.commit(tx));
+        let commit = move |s: &mut Session| match seen {
+            None => s.commit(tx),
+            Some(hash) => s.commit_with(tx, |_, c| if c.hash == hash { Ok(()) } else { Err(()) }).map_err(|e| match e {
+                m2_session::Uncommitted::Refused(r) => r,
+                m2_session::Uncommitted::Asserted(()) => m2_session::Refusal::Rejected {
+                    diagnostics: vec![m2_song::Diagnostic::error(
+                        "tx.seen",
+                        "the song changed while this was planned; nothing was changed; run it again",
+                    )],
+                    unexpected: None,
+                },
+            }),
+        };
+        let (done, heard) = self.heard(commit);
         self.settle(None);
+        if let Some(busy) = self.taken_back.take() {
+            return Ok((423, busy.json()));
+        }
         // The undo step it made, by its id (AGENT-2): what an agent names it by.
         let made = self.open.as_ref().map(|o| o.session.last_step()).filter(|id| *id > steps);
         // Heard in the app, or said there to be not saved yet: the app hears how it ended too,
@@ -1922,6 +2086,17 @@ impl Actor {
                 (status, answer)
             }
         })
+    }
+
+    /// Run `edit` on the open project's session: the page's with the preview hook installed
+    /// ([`Actor::previewing`]); an agent's without, so nothing of it is heard before its settle
+    /// checks it against what the musician holds (AGENT-3).
+    fn heard<R>(&mut self, edit: impl FnOnce(&mut Session) -> R) -> (R, preview::Heard) {
+        if !self.caller.is_agent() {
+            return self.previewing(edit);
+        }
+        let o = self.open.as_mut().expect("an open project");
+        (edit(&mut o.session), preview::Heard::default())
     }
 
     /// Run `edit` on the open project's session with the preview hook installed (PLANE-5): a data

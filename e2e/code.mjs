@@ -17,7 +17,7 @@ const errors = [];
 page.on("console", (m) => m.type() === "error" && !/status of (400|409)/.test(m.text()) && errors.push(m.text()));
 page.on("pageerror", (e) => { console.log("PAGEERROR", String(e), e.stack?.slice(0, 300)); errors.push(String(e)); });
 // The dock as tall as the panel it replaced was at this size (45%): the editor shows the whole of bass.ts.
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.page_token);
 
 let pass = 0, fail = 0;
 const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); ok ? pass++ : fail++; };
@@ -35,7 +35,7 @@ const api = (method, path, body) =>
   page.evaluate(async (method, path, body, token) => {
     const r = await fetch(`/api/graph${path}`, { method, headers: { "content-type": "application/json", "x-m2-token": token }, body: body && JSON.stringify(body) });
     return { status: r.status, data: await r.json().catch(() => null) };
-  }, method, path, body, sess.token);
+  }, method, path, body, sess.page_token);
 const key = async (combo) => {
   const keys = combo.split("+");
   for (const k of keys.slice(0, -1)) await page.keyboard.down(k);

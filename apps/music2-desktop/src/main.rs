@@ -1,7 +1,8 @@
 //! music2 as a native app.
 //!
 //! The React UI in a native window: the app's server runs in-process on a private port with
-//! a per-launch token, and the window loads the UI from it. This shell adds what a browser
+//! two per-launch keys (AGENT-10): the page's, handed only to the window, and the tools key that
+//! `~/.music2/session.json` publishes for agents and scripts. The window loads the UI from it. This shell adds what a browser
 //! can't: the menu bar, file dialogs and the prompt about unsaved code.
 //!
 //!   music2-desktop [project-folder/]
@@ -58,6 +59,7 @@ fn main() {
                 port: if dev_url.is_some() { 4100 } else { 0 },
                 web_dir: web_dir(app.handle()),
                 token: token(),
+                page_token: token(),
             })?;
             let server = running.state.clone();
             server.keep_recent(home().join(".music2").join("recent.json"));
@@ -85,7 +87,7 @@ fn main() {
             let url = dev_url.unwrap_or(running.url);
             let init = format!(
                 "window.__M2__ = {};",
-                serde_json::json!({"native": true, "token": server.token, "platform": std::env::consts::OS})
+                serde_json::json!({"native": true, "token": server.page_token, "platform": std::env::consts::OS})
             );
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
                 .title("music2")
@@ -170,9 +172,9 @@ fn web_dir(app: &tauri::AppHandle) -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/dist"))
 }
 
-/// Where local tools (Claude Code, scripts) find the running app: its server URL and
-/// token, in `~/.music2/session.json`, readable only by this user. Web pages can't read
-/// it, which is what the token protects against.
+/// Where local tools (Claude Code, scripts, `m2`) find the running app: its server URL and the
+/// tools key, in `~/.music2/session.json`, readable only by this user. Web pages can't read it,
+/// which is what the key protects against; a request with it is an agent's (AGENT-10).
 fn publish_session(url: &str, token: &str) {
     let path = home().join(".music2").join("session.json");
     let body = serde_json::json!({"url": url, "token": token, "pid": std::process::id()});
@@ -182,24 +184,31 @@ fn publish_session(url: &str, token: &str) {
     }
 }
 
-/// Writes `bytes` to `path` so that only this user can read it (SECURITY.md): mode 0600 even when
-/// the file was there already with another mode, set before the bytes go in, and 0700 for a folder
-/// it makes. (On Unix; elsewhere the OS's default rights.)
+/// Writes `bytes` to `path` whole, so that only this user can read it (SECURITY.md, AGENT-10): to
+/// a new file beside it with mode 0600, set before the bytes go in, then renamed over the old one,
+/// so a reader never reads half of it and the mode holds even where an older file had another.
+/// 0700 for a folder it makes. (On Unix; elsewhere the OS's default rights.)
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut dirs = std::fs::DirBuilder::new();
     dirs.recursive(true);
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
     dirs.create(path.parent().unwrap_or(path))?;
+    let mut next = path.as_os_str().to_owned();
+    next.push(".new");
+    let next = PathBuf::from(next);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-    let mut file = opts.open(path)?;
-    // The mode above is only for a file it creates.
+    let mut file = opts.open(&next)?;
+    // The mode above is only for a file it creates: one left by a launch that stopped half way
+    // may have another.
     #[cfg(unix)]
     file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
-    std::io::Write::write_all(&mut file, bytes)
+    std::io::Write::write_all(&mut file, bytes)?;
+    drop(file);
+    std::fs::rename(&next, path)
 }
 
 fn token() -> String {
@@ -259,9 +268,15 @@ mod tests {
         assert_eq!((mode(&path), mode(path.parent().unwrap())), (0o600, 0o700), "a new file, in a new folder");
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // AGENT-10: written whole: one who opened the old file reads it whole, never half of the new.
+        let mut old = std::fs::File::open(&path).unwrap();
         super::write_private(&path, b"second").unwrap();
         assert_eq!(mode(&path), 0o600, "a file that was there, readable by others");
         assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        let mut was = vec![];
+        std::io::Read::read_to_end(&mut old, &mut was).unwrap();
+        assert_eq!(was, b"first", "the old file was replaced, not written over");
+        assert!(!dir.join(".music2/session.json.new").exists(), "nothing left beside it");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

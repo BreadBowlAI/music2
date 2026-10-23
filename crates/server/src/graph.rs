@@ -38,6 +38,7 @@
 
 mod actor;
 pub mod audition;
+pub mod busy;
 pub mod clips;
 mod events;
 pub(crate) mod exchange;
@@ -790,6 +791,7 @@ impl Inner {
     /// named `name` (WRITE-22). One gesture owns a control at a time; a pending lease of the same
     /// window is taken over.
     fn register(&self, cp: &mut ControlPlane, device: Option<&Device>, control: Control, owner: Owner, name: (u64, &str)) -> Result<Begun> {
+        busy::no_lease()?;
         let engine = cp.open.as_ref().context("no project is open")?.engine.clone();
         let now = Instant::now();
         let mut playing = control.value;
@@ -913,10 +915,14 @@ impl Graph {
         // The actor may wait for the plugin main thread (creating plugins): that thread must never
         // wait for the actor, or the two deadlock (design §2.7).
         debug_assert!(!m2_plugins::on_main_thread(), "the plugin main thread waited for the session");
+        // Who asked (AGENT-10): the job is theirs, the steps it records too.
+        let caller = crate::caller::now();
         let (tx, rx) = mpsc::sync_channel(1);
         self.jobs
             .send(Box::new(move |a: &mut Actor| {
+                a.asked_by(caller);
                 let r = f(a);
+                let r = a.answered(r);
                 // A change may let a pending commit be written (C5): before the reply, so the
                 // caller sees it.
                 a.retry_pending();
@@ -1762,7 +1768,11 @@ impl Graph {
     pub fn fix(&self, token: u64, fix: &Value) -> Result<Value> {
         let tx = m2_song::Tx::from_json(fix.get("tx").context("a fix carries its Tx")?)
             .map_err(|d| anyhow!("{}", d.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("; ")))?;
-        self.edit(token, move |s| m2_editor::data::apply_tx(s, tx))
+        let files: Vec<String> = tx.touched().iter().map(|p| p.to_string()).collect();
+        self.call(move |a| {
+            a.arrive(Some(&files))?;
+            a.edit(token, move |s| m2_editor::data::apply_tx(s, tx))
+        })
     }
 
     /// Check an agent's Tx (WRITE-4, WRITE-11): its delta, the delta's hash and the
@@ -1777,9 +1787,21 @@ impl Graph {
     }
 
     /// Commit an agent's Tx (WRITE-5), and play what it made: one JSON shape with `m2 tx`.
-    pub fn tx_commit(&self, token: Option<u64>, tx: &Value) -> Result<(u16, Value)> {
+    pub fn tx_commit(&self, token: Option<u64>, tx: &Value, seen: Option<&str>, assets: &[String]) -> Result<(u16, Value)> {
+        let seen = match seen.map(m2_song::Sha::parse_prefixed) {
+            None => None,
+            Some(Some(h)) => Some(h),
+            Some(None) => return Ok((400, json!({"error": "`seen` is a hash: `sha256:` and 64 hex digits"}))),
+        };
+        let mut paths = vec![];
+        for a in assets {
+            match m2_song::DataPath::parse(Path::new(a)) {
+                m2_song::DataPath::Asset(_) => paths.push(PathBuf::from(a)),
+                _ => return Ok((400, json!({"error": format!("{a} isn't a file under assets/")}))),
+            }
+        }
         match parse_tx(tx) {
-            Ok(tx) => self.call(move |a| a.tx(token, tx, true)),
+            Ok(tx) => self.call(move |a| a.forwarded(token, tx, seen, paths)),
             Err(answer) => Ok(answer),
         }
     }
@@ -1969,11 +1991,14 @@ impl Graph {
 
     /// The code editor of project `token` says which of its files have unsaved edits.
     pub fn set_unsaved(&self, token: u64, files: Vec<String>) -> Result<()> {
-        let open = self.inner.control.lock().open.as_ref().map(|p| p.engine.token);
-        if open.context("no project is open")? != token {
+        // Under the control plane's lock, where an agent's change is checked as it lands: that
+        // check sees every list posted before it (AGENT-3).
+        let cp = self.inner.control.lock();
+        if cp.open.as_ref().map(|p| p.engine.token).context("no project is open")? != token {
             bail!("the open project changed; refresh the graph before editing");
         }
         *self.inner.unsaved.lock() = (token, files);
+        drop(cp);
         Ok(())
     }
 

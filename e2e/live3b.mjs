@@ -45,19 +45,19 @@ const newPage = async (s = sess) => {
   await page.setViewport({ width: 1600, height: 1000 });
   page.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text()));
   page.on("pageerror", (e) => consoleErrors.push(String(e)));
-  await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, s.token);
+  await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, s.page_token);
   await page.goto(s.url, { waitUntil: "domcontentloaded" });
   // The dock opens on the view this browser chose last: Device, or Mix.
   await page.waitForSelector("[data-testid=graph], [data-testid=mix]", { timeout: 8000 });
   return page;
 };
 const apiOf = (s) => async (path, opts = {}) =>
-  (await fetch(`${s.url}/api/${path}`, { ...opts, headers: { "x-m2-token": s.token, "content-type": "application/json" } })).json();
+  (await fetch(`${s.url}/api/${path}`, { ...opts, headers: { "x-m2-token": s.page_token, "content-type": "application/json" } })).json();
 const api = apiOf(sess);
 const leases = () => api("graph/leases");
 /** The code editor's save: answers once the session took the file in, its compile included. */
 const putFile = (s, path, base, text) =>
-  fetch(`${s.url}/api/graph/file`, { method: "PUT", headers: { "x-m2-token": s.token, "content-type": "application/json" }, body: JSON.stringify({ path, base, text }) });
+  fetch(`${s.url}/api/graph/file`, { method: "PUT", headers: { "x-m2-token": s.page_token, "content-type": "application/json" }, body: JSON.stringify({ path, base, text }) });
 /** A build that spins for about a second and a half (QuickJS has no clock; a counted loop is the way). */
 const slowly = (text) => `for (let i = 0; i < 150000000; i++) {}\n${text}`;
 

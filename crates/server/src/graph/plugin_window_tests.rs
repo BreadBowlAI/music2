@@ -270,3 +270,50 @@ fn export_now(r: &mut Rig) -> PathBuf {
     }
     out
 }
+
+// AGENT-3, HOME-6: a plugin whose window changed its sound, not saved yet, holds its state: an
+// agent's write of that state is busy, and says so; its other files are free.
+#[test]
+fn a_plugin_window_not_yet_saved_makes_its_state_busy() {
+    use crate::caller::{Caller, as_caller};
+    use m2_song::tx::{Base, Expect, Op, Payload, Tx, TxPath};
+    let mut r = Rig::new("0.5", "dirty-at-10-400");
+    r.fill_to(20);
+    let t = Instant::now();
+    while r.graph().inspect(|a| a.open.as_ref().unwrap().windows.unsaved().is_empty()) {
+        assert!(t.elapsed() < Duration::from_secs(5), "the window's change was heard");
+        r.fill(1);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let state = r.saved();
+    let path = TxPath::new("data/p/lead.state").unwrap();
+    let mut tx = Tx::new(
+        "tx-agent",
+        ("a".into(), "b".into()),
+        vec![Op::Write { file: path.clone(), bytes: Payload::Bytes(probe::state_with("agent", 1.0, 0.2).into()) }],
+        Expect::Identical,
+    );
+    tx.base.insert(path, Base::Sha(m2_song::Sha::of(&state)));
+    let agent = Caller::agent(Some("Claude"), None);
+    let session = r.session();
+    let (status, body) = as_caller(agent.clone(), || r.graph().tx_commit(Some(session), &tx.to_json(), None, &[])).unwrap();
+    assert_eq!(
+        (status, &body["busy"]["what"], &body["busy"]["file"]),
+        (423, &serde_json::json!("plugin"), &serde_json::json!("data/p/lead.state")),
+        "{body}"
+    );
+    assert!(body["busy"]["words"].as_str().unwrap().contains("in its window"), "{body}");
+    assert_eq!(r.saved(), state, "nothing changed");
+    let notes = TxPath::new("data/p/n.json").unwrap();
+    let lane = m2_song::LaneAddr::new("p", "n").unwrap();
+    let confined = Expect::Confined(m2_song::tx::Confined { lanes: vec![lane], ..Default::default() });
+    let mut other = Tx::new(
+        "tx-agent-2",
+        ("a".into(), "b".into()),
+        vec![Op::Write { file: notes.clone(), bytes: Payload::Text(NOTES.replace("60}", "30}").into()) }],
+        confined,
+    );
+    other.base.insert(notes, Base::text(NOTES));
+    let (status, body) = as_caller(agent, || r.graph().tx_commit(Some(session), &other.to_json(), None, &[])).unwrap();
+    assert_eq!(status, 200, "{body}");
+}

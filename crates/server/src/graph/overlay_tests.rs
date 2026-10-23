@@ -301,7 +301,7 @@ fn a_mute_in_song_toggle_is_a_cell_write() {
     let kick = m2_song::Key::new("kick").unwrap();
     let muted = vec![ModuleChange::Muted { module: kick.clone(), muted: true }];
     let tx = song_edit(&rig, "{ name: 'Kick' }", "{ name: 'Kick', muted: true }", muted);
-    let (status, done) = rig.graph.tx_commit(Some(rig.token()), &tx.to_json()).unwrap();
+    let (status, done) = rig.graph.tx_commit(Some(rig.token()), &tx.to_json(), None, &[]).unwrap();
     assert_eq!(status, 200, "{done:#}");
     rig.fill(16);
     assert_eq!(rig.renderer().generation(), first, "no activation");

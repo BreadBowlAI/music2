@@ -164,7 +164,9 @@ fn work(dir: PathBuf) -> String {
     assert!(on && process_main == APP_ON_PROCESS_MAIN, "a job ran on the app's main loop: {on}; on the process's: {process_main}");
     assert_eq!(m2_plugins::host_process(), None, "no host process before a plugin is needed");
 
-    let running = m2_server::start(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "app".into() }).unwrap();
+    let running =
+        m2_server::start(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "app-tools".into(), page_token: "app".into() })
+            .unwrap();
     let server = running.state.clone();
     let created = || m2_plugins::host().counts().0;
     // The launch project, as `setup` opens it: off the main thread.

@@ -10,7 +10,7 @@ import { HOME, check, done, open, sess, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 import { tips } from "./tiplib.mjs";
 
-const HDR = { "x-m2-token": sess.token, "content-type": "application/json" };
+const HDR = { "x-m2-token": sess.page_token, "content-type": "application/json" };
 const made = await (await fetch(`${sess.url}/api/project/new`, { method: "POST", headers: HDR, body: JSON.stringify({ name: "First", template: "empty" }) })).json();
 const DIR = made.dir;
 check(!!DIR && made.timeline?.tracks?.every((t) => !t.track), `an Empty song opens: ${DIR}`);
@@ -54,7 +54,7 @@ async function appPage(answers = {}) {
     };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     window.__menu = (id) => menu.forEach((h) => callbacks.get(h)?.({ event: "menu", id: 0, payload: id }));
-  }, sess.token, answers);
+  }, sess.page_token, answers);
   await p.goto(sess.url, { waitUntil: "domcontentloaded" });
   await p.waitForSelector("[data-testid=timeline]", { timeout: 10000 });
   return p;

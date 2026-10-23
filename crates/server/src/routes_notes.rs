@@ -48,7 +48,7 @@ struct SongKeyReq {
 /// write. Answers `{file, before, after, revision}`.
 async fn song_key(State(s): S, Json(r): Json<SongKeyReq>) -> ApiResult {
     let state = s.clone();
-    let result = tokio::task::spawn_blocking(move || state.graph.song_key(r.session, r.key)).await.map_err(anyhow::Error::from)?;
+    let result = crate::caller::blocking(move || state.graph.song_key(r.session, r.key)).await.map_err(anyhow::Error::from)?;
     s.graph_changed();
     Ok(Json(result?))
 }

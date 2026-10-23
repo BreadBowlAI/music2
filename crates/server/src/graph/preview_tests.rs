@@ -288,7 +288,7 @@ fn a_durable_failure_swaps_the_accepted_data_back() {
         Expect::Confined(Confined { lanes: vec![lane.clone()], ..Confined::default() }),
     );
     agent.base.insert(TxPath::lane(&lane), Base::Sha(m2_song::Sha::of(file.as_bytes())));
-    let (status, answer) = graph.tx_commit(Some(token), &agent.to_json()).unwrap();
+    let (status, answer) = graph.tx_commit(Some(token), &agent.to_json(), None, &[]).unwrap();
     assert_eq!((status, &answer["io"]["taken_back"]), (500, &json!(true)), "{answer}");
     assert!(answer["io"]["message"].as_str().unwrap().ends_with("taken back."), "{answer}");
     assert!(plays_accepted(&graph) && fixture.read("data/kick/hits.json") == file);
@@ -557,7 +557,7 @@ fn a_failed_write_nothing_plays_says_nothing_of_a_preview() {
         Expect::Confined(Confined::default()),
     );
     agent.base.insert(path, Base::Absent);
-    let (status, answer) = graph.tx_commit(Some(token), &agent.to_json()).unwrap();
+    let (status, answer) = graph.tx_commit(Some(token), &agent.to_json(), None, &[]).unwrap();
     assert_eq!((status, answer["io"].get("taken_back")), (500, None), "{answer}");
     assert!(!answer["io"]["message"].as_str().unwrap().contains("taken back"), "{answer}");
     drop(tx);
@@ -686,7 +686,7 @@ fn an_agents_write_heard_and_taken_back_is_said_in_the_app() {
     let graph = Arc::new(graph);
     graph.expire();
     disk.at("hits.json Swap", Act::Fail);
-    let (status, answer) = graph.tx_commit(Some(token), &agent_tx(&fixture, "E1")).unwrap();
+    let (status, answer) = graph.tx_commit(Some(token), &agent_tx(&fixture, "E1"), None, &[]).unwrap();
     let said = answer["io"]["message"].as_str().unwrap_or_default().to_string();
     assert!(status == 500 && answer["io"]["taken_back"] == json!(true), "{answer}");
     assert!(said.starts_with("data/kick/hits.json couldn't be saved: "), "{said}");
@@ -698,7 +698,7 @@ fn an_agents_write_heard_and_taken_back_is_said_in_the_app() {
     disk.at("hits.json Swap", Act::Fail);
     let agent = {
         let (g, tx) = (graph.clone(), agent_tx(&fixture, "F1"));
-        std::thread::spawn(move || g.tx_commit(Some(token), &tx))
+        std::thread::spawn(move || g.tx_commit(Some(token), &tx, None, &[]))
     };
     let said = said_while(&graph, &agent);
     assert_eq!(said, ["Saving is taking a while: the disk hasn't answered for 2 s. The last edit plays, but isn't saved yet."]);
@@ -733,7 +733,7 @@ fn with_the_transport_stopped_no_message_says_the_edit_played() {
     assert!(t.previewed && t.taken_back.is_some(), "{t:?}");
     assert_eq!(e, "data/kick/hits.json couldn't be saved: injected");
     disk.at("hits.json Swap", Act::Fail);
-    let (status, answer) = graph.tx_commit(Some(token), &agent_tx(&fixture, "E1")).unwrap();
+    let (status, answer) = graph.tx_commit(Some(token), &agent_tx(&fixture, "E1"), None, &[]).unwrap();
     assert_eq!((status, &answer["io"]["taken_back"]), (500, &json!(true)), "{answer}");
     assert_eq!(answer["io"]["message"], json!("data/kick/hits.json couldn't be saved: injected"));
     assert!(graph.expire().is_empty(), "nothing heard, nothing said in the app");
@@ -777,7 +777,7 @@ fn an_interrupted_commit_after_its_preview_points_to_needs_attention() {
     agent.base.insert(spare, Base::Absent);
     // The second rename fails, then the rollback's swap of the lane file back.
     disk.at("spare.json Excl", Act::FailThen("hits.json Swap".into()));
-    let (status, answer) = graph.tx_commit(Some(token), &agent.to_json()).unwrap();
+    let (status, answer) = graph.tx_commit(Some(token), &agent.to_json(), None, &[]).unwrap();
     let said = answer["io"]["message"].as_str().unwrap_or_default();
     assert_eq!(status, 500, "{answer}");
     assert!(said.contains("couldn't be undone") && said.ends_with("Needs attention says how to finish or undo it."), "{said}");

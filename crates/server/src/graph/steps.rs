@@ -16,10 +16,10 @@ use serde_json::{Value, json};
 
 use super::{Graph, Inner, Timeline};
 
-/// A step's name as the state says it: `{name, structural, given, step, source}`; null with no
-/// step. `given`: a window named it; else it is the plain name of what it changed ("2 files" for
-/// an outside change of several). `step` is its id, `source` who made it: `page` or `outside`
-/// (AGENT-2).
+/// A step's name as the state says it: `{name, structural, given, step, source, by}`; null with
+/// no step. `given`: a window named it, or an agent gave its words; else it is the plain name of
+/// what it changed ("2 files" for an outside change of several). `step` is its id, `source` who
+/// made it: `page`, `agent` or `outside` (AGENT-2); `by` an agent's name, else null (AGENT-10).
 pub(super) fn named(step: Option<&StepName>, timeline: &Timeline) -> Value {
     let Some(step) = step else { return Value::Null };
     let (name, given) = match &step.name {
@@ -27,7 +27,14 @@ pub(super) fn named(step: Option<&StepName>, timeline: &Timeline) -> Value {
         None if step.source == Source::Outside && step.files.len() > 1 => (format!("{} files", step.files.len()), false),
         None => (plain(&step.file, timeline), false),
     };
-    json!({"name": name, "structural": given && step.structural, "given": given, "step": step.id, "source": step.source.as_str()})
+    json!({
+        "name": name,
+        "structural": given && step.structural,
+        "given": given,
+        "step": step.id,
+        "source": step.source.as_str(),
+        "by": step.source.by(),
+    })
 }
 
 /// The `step` event of step `step` (AGENT-5), session `token`: what every window hears as it
@@ -41,6 +48,7 @@ pub(super) fn event(token: u64, step: &StepName, undoable: bool, timeline: &Time
         "step": step.id,
         "made": step.made,
         "source": step.source.as_str(),
+        "by": step.source.by(),
         "name": named["name"],
         "files": step.files,
         "undoable": undoable,
@@ -141,12 +149,21 @@ impl Graph {
             let (undo, again) = o.session.step_names();
             let top = if redo { again } else { undo };
             let took = named(top.as_ref(), &o.timeline);
+            // AGENT-4: an agent's undo takes back only its own newest step.
+            if let crate::caller::Caller::Agent { name, .. } = &a.caller
+                && !redo
+                && top.as_ref().and_then(|t| t.source.by()) != Some(name.as_str())
+            {
+                return Err(NotTheirs { newest: took, agent: name.clone() }.into());
+            }
             if let Some(id) = step
                 && top.as_ref().map(|t| t.id) != Some(id)
             {
                 return Err(NotNewest { redo, newest: took }.into());
             }
             let files = top.as_ref().map(|t| t.files.clone()).unwrap_or_default();
+            // AGENT-3: checked as its writes are, by the files it puts back.
+            a.arrive(Some(&files))?;
             let mut v = if redo {
                 a.edit(token, m2_editor::redo)?
             } else {
@@ -266,16 +283,40 @@ impl std::fmt::Display for NotNewest {
 
 impl std::error::Error for NotNewest {}
 
-/// A step as Undo's tooltip and the Edit menu say it, after "Undo" (AGENT-2): its name, or for an
-/// outside one "outside change: …". None for no step.
+/// A step as Undo's tooltip and the Edit menu say it, after "Undo" (AGENT-2): its name, for an
+/// outside one "outside change: …", and for an agent's its name first, "Claude: …". None for no
+/// step.
 pub(super) fn said(step: &Value) -> Option<String> {
     let name = step["name"].as_str()?;
-    Some(match step["source"].as_str() {
-        Some("outside") => format!("outside change: {name}"),
+    Some(match (step["source"].as_str(), step["by"].as_str()) {
+        (Some("outside"), _) => format!("outside change: {name}"),
+        (Some("agent"), Some(by)) => format!("{by}: {name}"),
         _ => name.to_string(),
     })
 }
 
+/// An agent's undo when the newest step isn't its own (AGENT-4): nothing changed. Its words name
+/// the newest step and who made it; `newest` is that step as the state names it (null: none).
+#[derive(Debug)]
+pub struct NotTheirs {
+    pub newest: Value,
+    pub agent: String,
+}
+
+impl std::fmt::Display for NotTheirs {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let Some(name) = self.newest["name"].as_str() else { return write!(f, "nothing was undone: there is nothing to undo") };
+        let agent = &self.agent;
+        match (self.newest["source"].as_str(), self.newest["by"].as_str()) {
+            (Some("outside"), _) => write!(f, "nothing was undone: the newest change was made outside the app ({name}), not by {agent}"),
+            (Some("agent"), Some(by)) => write!(f, "nothing was undone: the newest change is {by}'s ({name}), not {agent}'s"),
+            _ => write!(f, "nothing was undone: the newest change is yours ({name}), not {agent}'s"),
+        }
+    }
+}
+
+impl std::error::Error for NotTheirs {}
+
 #[cfg(test)]
 #[path = "steps_tests.rs"]
-mod tests;
+pub(in crate::graph) mod tests;

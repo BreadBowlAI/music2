@@ -170,7 +170,7 @@ await until(async () => fs.existsSync(roFile), 30000);
 await sleep(300);
 const rs = JSON.parse(fs.readFileSync(roFile, "utf8"));
 const roApi = async (path, body) => {
-  const r = await fetch(`${rs.url}/api/${path}`, body === undefined ? { headers: { "x-m2-token": rs.token } } : { method: "POST", headers: { "x-m2-token": rs.token, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const r = await fetch(`${rs.url}/api/${path}`, body === undefined ? { headers: { "x-m2-token": rs.page_token } } : { method: "POST", headers: { "x-m2-token": rs.page_token, "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 let roGraph = null;

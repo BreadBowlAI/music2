@@ -16,7 +16,7 @@ const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
 // The dock as tall as the panel it replaced was at this size (45%), so the roll shows as many rows.
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.page_token);
 
 let pass = 0, fail = 0;
 const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); ok ? pass++ : fail++; };
@@ -43,7 +43,7 @@ const header = () => page.$eval("[data-testid=dock-header]", (e) => e.textConten
 const openClip = () => page.$$eval("[data-clip][data-open]", (els) => els.map((e) => `${e.closest("[data-lane]").dataset.lane}#${[...e.parentElement.querySelectorAll(":scope > [data-clip]")].indexOf(e)}`));
 const ID = /^[0-9a-z]{8}$/;
 const undo = async () => { await page.keyboard.down("Meta"); await page.keyboard.press("z"); await page.keyboard.up("Meta"); };
-const revision = () => page.evaluate(async (token) => (await (await fetch("/api/graph", { headers: { "x-m2-token": token } })).json()).view.revision, sess.token);
+const revision = () => page.evaluate(async (token) => (await (await fetch("/api/graph", { headers: { "x-m2-token": token } })).json()).view.revision, sess.page_token);
 const drag = async (from, to, steps = 12) => {
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();

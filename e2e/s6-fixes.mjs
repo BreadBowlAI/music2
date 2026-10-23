@@ -19,8 +19,8 @@ await page.setViewport({ width: 1600, height: 1000 });
 const consoleErrors = [];
 page.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text()));
 page.on("pageerror", (e) => consoleErrors.push(String(e)));
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.token);
-const headers = { "x-m2-token": sess.token, "content-type": "application/json" };
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
+const headers = { "x-m2-token": sess.page_token, "content-type": "application/json" };
 const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers })).json();
 const post = async (path, body) => {
   const r = await fetch(`${sess.url}/api/${path}`, { method: "POST", headers, body: JSON.stringify(body) });

@@ -10,7 +10,7 @@ const page = await browser.newPage();
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 await page.setViewport({ width: 1600, height: 1000 });
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
 await page.goto(sess.url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=graph]");
 // The panel shows one module at a time: pick the one under test.

@@ -27,12 +27,12 @@ pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
 /// `{plugins: [{id: "clap:…", name, vendor, version, instrument, effect}], errors, folder}`: the
 /// list kept for this app run, made now on the first ask.
 async fn list(State(s): S) -> ApiResult {
-    Ok(Json(tokio::task::spawn_blocking(move || s.plugins(false)).await.map_err(anyhow::Error::from)?))
+    Ok(Json(crate::caller::blocking(move || s.plugins(false)).await.map_err(anyhow::Error::from)?))
 }
 
 /// Look again: scan now, and keep that list.
 async fn scan(State(s): S) -> ApiResult {
-    Ok(Json(tokio::task::spawn_blocking(move || s.plugins(true)).await.map_err(anyhow::Error::from)?))
+    Ok(Json(crate::caller::blocking(move || s.plugins(true)).await.map_err(anyhow::Error::from)?))
 }
 
 /// What `host` finds installed, as the app lists it: by name, each plugin once (the first folder's,

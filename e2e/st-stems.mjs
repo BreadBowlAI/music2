@@ -14,7 +14,7 @@ import { lint } from "./lintlib.mjs";
 
 const [S, H, P, M2] = process.argv.slice(2);
 const sess = JSON.parse(fs.readFileSync(`${H}/.music2/session.json`, "utf8"));
-const HDR = { "x-m2-token": sess.token };
+const HDR = { "x-m2-token": sess.page_token };
 const api = async (path, body) => {
   const r = await fetch(`${sess.url}/api/${path}`, body === undefined ? { headers: HDR } : { method: "POST", headers: { ...HDR, "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: r.status, json: await r.json().catch(() => null) };

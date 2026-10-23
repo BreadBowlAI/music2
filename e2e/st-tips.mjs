@@ -242,7 +242,7 @@ await place("[data-testid=keyboard-piano]", "the keyboard piano's card");
 await key("Meta+KeyK");
 await page.evaluate(async (token) => {
   await fetch("/api/graph/midi/inject", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ device: "Test Keys", plugged: true }) });
-}, sess.token);
+}, sess.page_token);
 if (await page.waitForSelector("[data-testid=midi-status]", { timeout: 4000 }).catch(() => null)) {
   const t = await page.$eval("[data-testid=midi-status]", (e) => e.closest("[title]")?.getAttribute("title") ?? "");
   check(t.length > 0, `a MIDI keyboard's mark says what it is: "${t}"`);
@@ -274,7 +274,7 @@ async function appPage() {
     };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     window.__menu = (id) => menu.forEach((h) => callbacks.get(h)?.({ event: "menu", id: 0, payload: id }));
-  }, sess.token);
+  }, sess.page_token);
   await p.goto(sess.url, { waitUntil: "domcontentloaded" });
   await p.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
   return p;

@@ -33,9 +33,11 @@ fn the_plugin_list_comes_from_the_host_scan() {
     let host: Arc<dyn m2_plugins::PluginHost> = Arc::new(remote.clone());
     let player = m2_play::Player::silent().expect("a silent player");
     let dir = std::env::temp_dir().join(format!("m2-routes-plugins-{}", std::process::id()));
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::with_player_on(player, host))
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::with_player_on(player, host),
+    )
+    .unwrap();
     assert!(remote.process_id().is_none(), "no host process before the list is asked for");
 
     let (status, list) = ask(&running.url, "GET", "/api/plugins");

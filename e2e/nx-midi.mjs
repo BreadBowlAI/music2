@@ -24,7 +24,7 @@ import { ROOT, check, done, open, sess, sleep, until } from "./fixlib.mjs";
   const r = await page.evaluate(async (token) => {
     const res = await fetch("/api/graph/midi/inject", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ device: "Test Keys", plugged: true }) });
     return res.status;
-  }, sess.token);
+  }, sess.page_token);
   // run.mjs may give every suite's server M2_MIDI=inject (the next track's P0), and the suite the
   // same environment: the API answers only then.
   const injects = process.env.M2_MIDI === "inject";
@@ -66,7 +66,7 @@ try {
       try {
         localStorage.setItem("m2.browser.open", "false");
       } catch {}
-    }, s2.token, pc ? "linux" : "macos");
+    }, s2.page_token, pc ? "linux" : "macos");
     await p.goto(s2.url, { waitUntil: "domcontentloaded" });
     await p.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
     return p;
@@ -78,7 +78,7 @@ try {
         const r = await fetch(`/api${path}`, { method: body ? "POST" : "GET", headers: { "x-m2-token": token, "content-type": "application/json" }, body: body && JSON.stringify(body) });
         return { status: r.status, body: await r.json().catch(() => ({})) };
       },
-      s2.token,
+      s2.page_token,
       path,
       body,
     );

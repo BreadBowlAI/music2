@@ -26,7 +26,7 @@ pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
-    tokio::task::spawn_blocking(f).await.map_err(anyhow::Error::from)?.map_err(ApiError::from)
+    crate::caller::blocking(f).await.map_err(anyhow::Error::from)?.map_err(ApiError::from)
 }
 
 /// The settings as the window shows them: what is chosen (an output by its id, and its name: as

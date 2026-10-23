@@ -12,8 +12,8 @@ await page.setViewport({ width: 1600, height: 1000 });
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.token);
-const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers: { "x-m2-token": sess.token } })).json();
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
+const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers: { "x-m2-token": sess.page_token } })).json();
 
 let pass = 0, fail = 0;
 const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); ok ? pass++ : fail++; };
@@ -143,7 +143,7 @@ check(await until(async () => (await api("graph")).view.revision > rev0), "a new
 check(JSON.stringify(await shown()) === JSON.stringify(["bass"]) && JSON.stringify(await highlighted()) === JSON.stringify(["bass"]), "Bass stays selected after the edit");
 
 const post = async (path, body) =>
-  (await fetch(`${sess.url}/api/${path}`, { method: "POST", headers: { "x-m2-token": sess.token, "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+  (await fetch(`${sess.url}/api/${path}`, { method: "POST", headers: { "x-m2-token": sess.page_token, "content-type": "application/json" }, body: JSON.stringify(body) })).json();
 
 // Playing on past the song's end (and past the drawn width): the ruler and rows run on under the playhead.
 await page.$eval("[data-testid=timeline]", (e) => { e.scrollLeft = 0; });
@@ -200,7 +200,7 @@ const rev1 = (await api("graph")).view.revision;
 const songTs = fs.readFileSync(`${proj}/song.ts`, "utf8");
 const busy = fetch(`${sess.url}/api/graph/file`, {
   method: "PUT",
-  headers: { "x-m2-token": sess.token, "content-type": "application/json" },
+  headers: { "x-m2-token": sess.page_token, "content-type": "application/json" },
   body: JSON.stringify({ path: "song.ts", base: songTs, text: `${songTs}// saved while a knob moves\n` }),
 }).then((r) => r.json());
 await sleep(20);

@@ -10,14 +10,14 @@ use super::super::tests::{Fixture, knob};
 use super::*;
 
 /// examples/first-song, open.
-fn first_song() -> (Fixture, Graph) {
+pub(in crate::graph) fn first_song() -> (Fixture, Graph) {
     let fixture = first_song_files();
     let graph = fixture.open();
     (fixture, graph)
 }
 
 /// examples/first-song's files, but its audio.
-fn first_song_files() -> Fixture {
+pub(in crate::graph) fn first_song_files() -> Fixture {
     let fixture = Fixture::new();
     let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song");
     let mut stack = vec![from.clone()];
@@ -42,12 +42,12 @@ fn names(graph: &Graph) -> (String, String) {
 }
 
 /// Set the control whose value is `from` to `to`, as a knob's release does; the revision it made.
-fn set(graph: &Graph, from: f64, to: f64) -> u64 {
+pub(in crate::graph) fn set(graph: &Graph, from: f64, to: f64) -> u64 {
     let (token, revision, id) = knob(graph, from);
     graph.set(token, revision, &id, "set", to, None).unwrap()["revision"].as_u64().unwrap()
 }
 
-fn token(graph: &Graph) -> u64 {
+pub(in crate::graph) fn token(graph: &Graph) -> u64 {
     graph.state().unwrap()["session"].as_u64().unwrap()
 }
 
@@ -116,7 +116,7 @@ fn a_step_made_elsewhere_gets_a_plain_name() {
         Expect::Confined(Confined { lanes: vec![lane.clone()], ..Confined::default() }),
     );
     tx.base.insert(TxPath::lane(&lane), Base::Sha(m2_song::Sha::of(fixture.read("data/bass/notes.json").as_bytes())));
-    let (status, answer) = graph.tx_commit(None, &tx.to_json()).unwrap();
+    let (status, answer) = graph.tx_commit(None, &tx.to_json(), None, &[]).unwrap();
     assert_eq!(status, 200, "{answer}");
     assert_eq!(answer["step"], graph.state().unwrap()["undo_name"]["step"], "it answers with its step, as an edit does: {answer}");
     assert_eq!(names(&graph).0, "Bass notes");
@@ -147,14 +147,14 @@ fn a_refused_undo_keeps_the_names() {
 }
 
 /// Every `step` event the graph sends from now on (AGENT-5).
-fn steps_of(graph: &Graph) -> tokio::sync::broadcast::Receiver<String> {
+pub(in crate::graph) fn steps_of(graph: &Graph) -> tokio::sync::broadcast::Receiver<String> {
     let (to, from) = tokio::sync::broadcast::channel(64);
     graph.tell_steps(to);
     from
 }
 
 /// The `step` events heard so far, as JSON.
-fn heard(from: &mut tokio::sync::broadcast::Receiver<String>) -> Vec<Value> {
+pub(in crate::graph) fn heard(from: &mut tokio::sync::broadcast::Receiver<String>) -> Vec<Value> {
     let mut out = vec![];
     while let Ok(e) = from.try_recv() {
         let v: Value = serde_json::from_str(&e).unwrap();
@@ -165,12 +165,12 @@ fn heard(from: &mut tokio::sync::broadcast::Receiver<String>) -> Vec<Value> {
 }
 
 /// Watch for up to `ms`, until `done` holds.
-fn until(graph: &Graph, ms: u64, done: impl FnMut(&Graph) -> bool) {
+pub(in crate::graph) fn until(graph: &Graph, ms: u64, done: impl FnMut(&Graph) -> bool) {
     super::super::tests::watching(graph, ms, done);
 }
 
 /// A mono 16-bit WAV of `frames` frames at 48 kHz.
-fn wav(frames: usize) -> Vec<u8> {
+pub(in crate::graph) fn wav(frames: usize) -> Vec<u8> {
     let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
     let mut out = std::io::Cursor::new(vec![]);
     let mut w = hound::WavWriter::new(&mut out, spec).unwrap();
@@ -298,7 +298,7 @@ fn a_step_event_names_what_its_delta_changed() {
 /// A server on first-song's files, with the test token: its url, the graph and the session.
 fn serving() -> (Fixture, crate::Running, u64) {
     let fixture = first_song_files();
-    let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t0k".into() };
+    let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
     let running = crate::start_with(options, Graph::silent()).unwrap();
     let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
     (fixture, running, session)

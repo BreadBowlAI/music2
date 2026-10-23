@@ -300,7 +300,7 @@ async function heardWhileStopped() {
     await p2.setViewport({ width: 1440, height: 900 });
     await p2.evaluateOnNewDocument((token) => {
       window.__M2__ = { native: false, token, platform: "macos" };
-    }, s2.token);
+    }, s2.page_token);
     await p2.goto(s2.url, { waitUntil: "domcontentloaded" });
     await p2.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
     await openClip(p2, "bass.notes");

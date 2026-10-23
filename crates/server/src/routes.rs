@@ -18,26 +18,33 @@ use crate::AppState;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-pub struct ApiError(String);
+/// A route's error: 400 with its words, or 423 with what the musician holds when an agent's write
+/// is busy (AGENT-3).
+pub struct ApiError(StatusCode, Value);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (StatusCode::BAD_REQUEST, Json(json!({"error": self.0}))).into_response()
+        (self.0, Json(self.1)).into_response()
     }
 }
 
 impl<E: Into<anyhow::Error>> From<E> for ApiError {
     fn from(e: E) -> Self {
-        ApiError(format!("{:#}", e.into()))
+        let e = e.into();
+        match e.downcast_ref::<crate::graph::busy::Busy>() {
+            Some(b) => ApiError(StatusCode::LOCKED, b.json()),
+            None => ApiError(StatusCode::BAD_REQUEST, json!({"error": format!("{e:#}")})),
+        }
     }
 }
 
 fn err(msg: impl Into<String>) -> ApiError {
-    ApiError(msg.into())
+    ApiError(StatusCode::BAD_REQUEST, json!({"error": msg.into()}))
 }
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| err(e.to_string()))?.map_err(ApiError::from)
+/// Run `f` off the async threads, as the request's caller (AGENT-10).
+pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
+    crate::caller::blocking(f).await.map_err(|e| err(e.to_string()))?.map_err(ApiError::from)
 }
 
 pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
@@ -113,17 +120,25 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .with_state(state)
 }
 
-/// Reject `/api` calls without the session token.
+/// Reject `/api` calls without one of the two keys (AGENT-10), and serve each as its caller: the
+/// page's key is the musician's; the tools key an agent's, named by its `x-m2-as` header (else
+/// `agent`), saying why with `x-m2-why`. The key decides, never what a request says about itself.
 async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    let token = &s.token;
-    if req.uri().path().starts_with("/api/") {
-        let header = req.headers().get("x-m2-token").and_then(|v| v.to_str().ok());
-        let query = req.uri().query().is_some_and(|q| q.split('&').any(|kv| kv.strip_prefix("token=") == Some(token)));
-        if header != Some(token.as_str()) && !query {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
-        }
+    if !req.uri().path().starts_with("/api/") {
+        return next.run(req).await;
     }
-    next.run(req).await
+    let header = req.headers().get("x-m2-token").and_then(|v| v.to_str().ok());
+    let query: Vec<&str> = req.uri().query().map_or(vec![], |q| q.split('&').filter_map(|kv| kv.strip_prefix("token=")).collect());
+    let carries = |key: &str| !key.is_empty() && (header == Some(key) || query.contains(&key));
+    let caller = if carries(&s.page_token) {
+        crate::caller::Caller::Page
+    } else if carries(&s.token) {
+        let said = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
+        crate::caller::Caller::agent(said("x-m2-as"), said("x-m2-why"))
+    } else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+    };
+    crate::caller::serving(caller, next.run(req)).await
 }
 
 /// The routes that write the open project, or begin a gesture whose commit would.
@@ -190,7 +205,7 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
         if let Some(client) = q.client {
             // Off the async threads: putting values back may wait for room in the player's queue.
             let state = s.clone();
-            let _ = tokio::task::spawn_blocking(move || state.graph.client_gone(&client)).await;
+            let _ = crate::caller::blocking(move || state.graph.client_gone(&client)).await;
             s.graph_changed();
         }
     })
@@ -626,7 +641,7 @@ async fn track_duplicate(State(s): S, Json(r): Json<TrackReq>) -> ApiResult {
 /// Delete a track (⌘⌫ on its header). 409 with the dependents when other code reads it.
 async fn track_delete(State(s): S, Json(r): Json<TrackReq>) -> Response {
     let state = s.clone();
-    let result = tokio::task::spawn_blocking(move || state.graph.delete_track(r.session, &r.module, r.cascade)).await;
+    let result = crate::caller::blocking(move || state.graph.delete_track(r.session, &r.module, r.cascade)).await;
     s.graph_changed();
     tx_answer(result)
 }
@@ -768,21 +783,40 @@ struct TxReq {
     session: Option<u64>,
     /// The Tx's JSON (WRITE-3), as `m2 tx` reads it.
     tx: Value,
+    /// A forwarded Tx (AGENT-1): the hash of the delta its sender checked. It is committed only
+    /// while its delta has that hash, under its own expectation.
+    #[serde(default)]
+    seen: Option<String>,
+    /// The new files under `assets/` it names, taken in before it is committed (AGENT-1).
+    #[serde(default)]
+    assets: Vec<String>,
+    /// An agent's name and why it made the change, for its step (AGENT-10): only with the tools
+    /// key.
+    #[serde(default, rename = "as")]
+    by: Option<String>,
+    #[serde(default)]
+    why: Option<String>,
 }
 
 /// Check a Tx (WRITE-4, WRITE-11): its delta, the delta's hash and the diagnostics; nothing is
 /// written. 409 for a conflict, 422 for a rejection.
 async fn tx_check(State(s): S, Json(r): Json<TxReq>) -> Response {
     let state = s.clone();
-    let result = tokio::task::spawn_blocking(move || state.graph.tx_check(r.session, &r.tx)).await;
+    let result = crate::caller::blocking(move || state.graph.tx_check(r.session, &r.tx)).await;
     tx_answer(result)
 }
 
-/// Commit a Tx (WRITE-5): `Seen(hash)` commits only the delta its check showed. The engine plays
-/// what it made, and every window hears of it.
+/// Commit a Tx (WRITE-5): `Seen(hash)` commits only the delta its check showed; a forwarded one
+/// (`seen` beside it, AGENT-1) only while its delta has that hash, its new assets taken in first.
+/// The engine plays what it made, and every window hears of it. An agent's that the musician
+/// holds is busy: 423 (AGENT-3).
 async fn tx_commit(State(s): S, Json(r): Json<TxReq>) -> Response {
     let state = s.clone();
-    let result = tokio::task::spawn_blocking(move || state.graph.tx_commit(r.session, &r.tx)).await;
+    let caller = crate::caller::now().saying(r.by.as_deref(), r.why.as_deref());
+    let result = crate::caller::blocking(move || {
+        crate::caller::as_caller(caller, || state.graph.tx_commit(r.session, &r.tx, r.seen.as_deref(), &r.assets))
+    })
+    .await;
     s.graph_changed();
     tx_answer(result)
 }
@@ -834,7 +868,7 @@ async fn graph_redo(State(s): S, Json(r): Json<StepReq>) -> Response {
 
 async fn stepped(s: Arc<AppState>, r: StepReq, redo: bool) -> Response {
     let state = s.clone();
-    let result = tokio::task::spawn_blocking(move || match (r.step, redo) {
+    let result = crate::caller::blocking(move || match (r.step, redo) {
         (Some(step), false) => state.graph.undo_step(r.session, step),
         (Some(step), true) => state.graph.redo_step(r.session, step),
         (None, false) => state.graph.undo(r.session),
@@ -848,11 +882,14 @@ async fn stepped(s: Arc<AppState>, r: StepReq, redo: bool) -> Response {
 /// An undo's, a redo's or a skip's answer: 409 when its step isn't the newest (`newest`), or
 /// when undo can't take it back and it can be skipped (`stuck`), with words either way (AGENT-2).
 fn step_answer(result: Result<anyhow::Result<Value>, tokio::task::JoinError>) -> Response {
-    use crate::graph::steps::{NotNewest, Stuck};
+    use crate::graph::steps::{NotNewest, NotTheirs, Stuck};
     match result {
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => {
             if let Some(n) = e.downcast_ref::<NotNewest>() {
+                return (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "newest": n.newest}))).into_response();
+            }
+            if let Some(n) = e.downcast_ref::<NotTheirs>() {
                 return (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "newest": n.newest}))).into_response();
             }
             if let Some(s) = e.downcast_ref::<Stuck>() {
@@ -873,7 +910,7 @@ struct SkipReq {
 /// Skip the newest step, which undo can't take back (AGENT-2): nothing is written.
 async fn graph_undo_skip(State(s): S, Json(r): Json<SkipReq>) -> Response {
     let state = s.clone();
-    let result = tokio::task::spawn_blocking(move || state.graph.skip_step(r.session, r.step)).await;
+    let result = crate::caller::blocking(move || state.graph.skip_step(r.session, r.step)).await;
     s.graph_changed();
     step_answer(result)
 }
@@ -994,7 +1031,7 @@ async fn graph_unsaved(State(s): S, Json(r): Json<UnsavedReq>) -> ApiResult {
 /// 409 and what it says now, so the editor can offer to load that or keep its own.
 async fn graph_put_file(State(s): S, Json(r): Json<FileReq>) -> Response {
     let state = s.clone();
-    let result = tokio::task::spawn_blocking(move || state.graph.write_file(r.session, &r.path, &r.base, &r.text)).await;
+    let result = crate::caller::blocking(move || state.graph.write_file(r.session, &r.path, &r.base, &r.text)).await;
     match result {
         Ok(Ok(v)) => {
             s.graph_changed();

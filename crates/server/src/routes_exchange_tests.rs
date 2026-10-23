@@ -53,7 +53,9 @@ fn notes(path: &Path) -> Vec<(u8, u64, u64)> {
 #[test]
 fn the_song_and_a_clip_are_written_where_picked() {
     let dir = project("picked");
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     let out = dir.join("out");
@@ -135,7 +137,9 @@ fn upload(url: &str, path: &str, bytes: &[u8]) -> (u16, Value) {
 #[test]
 fn a_midi_file_comes_into_a_notes_lane_as_one_undo_step() {
     let dir = project("import");
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     std::fs::write(dir.join("riff.mid"), riff()).unwrap();
@@ -192,7 +196,9 @@ fn an_import_below_asks_then_writes() {
         "import { master, mixer } from 'std/mix';\nexport default song(() => master(mixer({ bass: b.out })));",
     );
     std::fs::write(dir.join("song.ts"), mixed).unwrap();
-    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     std::fs::write(dir.join("groove.mid"), groove()).unwrap();

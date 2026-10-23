@@ -364,7 +364,7 @@ async function heard() {
           const r = await fetch(`/api/graph${path}`, { method: body ? "POST" : "GET", headers: { "x-m2-token": token, "content-type": "application/json" }, body: body && JSON.stringify(body) });
           return r.json().catch(() => ({}));
         },
-        s2.token,
+        s2.page_token,
         path,
         body,
       );
@@ -372,7 +372,7 @@ async function heard() {
     await p2.setViewport({ width: 1440, height: 900 });
     await p2.evaluateOnNewDocument((token) => {
       window.__M2__ = { native: false, token, platform: "macos" };
-    }, s2.token);
+    }, s2.page_token);
     await p2.goto(s2.url, { waitUntil: "domcontentloaded" });
     await p2.waitForSelector("[data-testid=metronome-toggle]", { timeout: 10000 });
     const g = await call(p2, "");

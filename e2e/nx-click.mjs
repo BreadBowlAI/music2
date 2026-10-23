@@ -163,13 +163,13 @@ async function heard() {
     await p2.setViewport({ width: 1440, height: 900 });
     await p2.evaluateOnNewDocument((token) => {
       window.__M2__ = { native: false, token, platform: "macos" };
-    }, s2.token);
+    }, s2.page_token);
     await p2.goto(s2.url, { waitUntil: "domcontentloaded" });
     await p2.waitForSelector("[data-testid=metronome-toggle]", { timeout: 10000 });
     const transport = (action) =>
       p2.evaluate(
         (token, action) => fetch("/api/graph/transport", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ action }) }),
-        s2.token,
+        s2.page_token,
         action,
       );
     await until(() => fs.existsSync(capture), 5000);

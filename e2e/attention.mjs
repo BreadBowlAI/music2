@@ -32,7 +32,7 @@ await page.evaluate((token) => {
   const ws = new WebSocket(`ws://${location.host}/api/ws?token=${token}`);
   ws.onmessage = (e) => window.__events.push(JSON.parse(e.data));
   return new Promise((r) => (ws.onopen = r));
-}, sess.token);
+}, sess.page_token);
 const events = () => page.evaluate(() => window.__events.filter((e) => e.t === "graph"));
 const said = (e) => [...(e.problems ?? []), ...(e.warnings ?? [])];
 

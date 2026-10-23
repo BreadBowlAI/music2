@@ -73,14 +73,14 @@ page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.tes
 page.on("pageerror", (e) => errors.push(String(e)));
 await page.evaluateOnNewDocument((token) => {
   window.__M2__ = { native: false, token, platform: "macos" };
-}, s.token);
+}, s.page_token);
 await page.goto(s.url, { waitUntil: "domcontentloaded" });
 check(!!(await page.waitForSelector("[data-testid=timeline] [data-track=hats]", { timeout: 20000 }).catch(() => null)), "first-song opens on the copy of std");
 
 const api = (path) =>
   page.evaluate(
     async (token, path) => (await fetch(`/api/graph${path}`, { headers: { "x-m2-token": token } })).json(),
-    s.token,
+    s.page_token,
     path,
   );
 const playing = async () => (await api("/status")).playing === true;
