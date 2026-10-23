@@ -14,6 +14,7 @@
 pub mod automate;
 pub mod bus;
 pub mod cable;
+pub mod changed;
 pub mod clips;
 pub mod controls;
 pub mod data;

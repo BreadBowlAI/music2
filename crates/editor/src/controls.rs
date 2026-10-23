@@ -259,7 +259,11 @@ pub(crate) fn options_of(m: &Module, site: u32) -> Result<Option<usize>, &'stati
 /// literal reaching two slots is one control, with both in `declared`), an inherited control
 /// by its call and slot (every evaluation of that call).
 pub fn controls(s: &Session) -> Vec<Control> {
-    let rev = s.accepted();
+    controls_in(s.accepted())
+}
+
+/// [`controls`] of revision `rev`.
+pub(crate) fn controls_in(rev: &Revision) -> Vec<Control> {
     let sites: HashMap<u32, &Site> = rev.compiled.sites.iter().map(|s| (s.id, s)).collect();
     let mut found: BTreeMap<String, Control> = BTreeMap::new();
     for m in &rev.compiled.ir.modules {
