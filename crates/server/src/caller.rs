@@ -59,8 +59,8 @@ impl Caller {
     }
 }
 
-/// Plain text an agent gives to be shown (AGENT-10): no control characters, spaces as they are
-/// at either end trimmed, and at most [`WORDS`] characters, the last of them "…" when it is cut.
+/// Plain text an agent gives to be shown (AGENT-10): no control characters, no spaces at either
+/// end, and at most [`WORDS`] characters, the last of them "…" when it is cut.
 pub fn words(s: &str) -> String {
     let plain: String = s.chars().filter(|c| !c.is_control()).collect();
     let plain = plain.trim();

@@ -1,7 +1,8 @@
 //! The app's local server. It serves the React UI to the desktop app's web view, and the
 //! open song project over HTTP (`/api/graph…`) and a WebSocket of events.
 //!
-//! `music2-desktop` hosts it in-process. Local scripts use the same API with the session token.
+//! `music2-desktop` hosts it in-process. Local scripts and agents use the same API with the tools
+//! key that `~/.music2/session.json` publishes; the page has a key of its own (AGENT-10).
 
 pub mod caller;
 pub mod export;
