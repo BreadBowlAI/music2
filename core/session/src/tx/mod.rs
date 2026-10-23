@@ -277,6 +277,19 @@ pub(crate) struct Prepared {
     graphs: (delta::Graph, delta::Graph),
 }
 
+/// What stops an undo step now ([`Session::blocked`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Blocked {
+    /// The session can't write.
+    ReadOnly,
+    /// It touches code, and the draft doesn't build.
+    Draft,
+    /// A file it touches waits with code that doesn't build yet.
+    Waiting,
+    /// What it would put back changed since, in a way that made no step.
+    Changed,
+}
+
 /// An undo step made of a Tx: its inverse, ready to commit (WRITE-21).
 #[derive(Clone, Debug)]
 pub(crate) struct TxStep {
@@ -518,6 +531,27 @@ fn named_by(text: &Arc<str>) -> Arc<[PathBuf]> {
 /// through either would change the real file while its delta saw another, whatever its base, so
 /// both are refused. A name nothing answers to, in any spelling, is new from there on.
 fn spelled(dir: &Path, p: &TxPath) -> Result<(), Refusal> {
+    spelling(dir, p).map_err(|s| match s {
+        Spelling::Io(message) => Refusal::Io { message },
+        Spelling::Link(what) => bad_path(format!("{p} {what}, and music2 never writes through one")),
+        Spelling::Other(real) => {
+            let real = real.map_or_else(|| "another way".to_string(), |r| format!("`{r}`"));
+            bad_path(format!("{p} is spelled {real} on this disk: a Tx names a file exactly as the disk does"))
+        }
+    })
+}
+
+/// Why `p` can't be written under `dir` as it is named ([`spelled`]).
+pub(crate) enum Spelling {
+    /// It, or a folder on the way to it, is a link: what it is.
+    Link(&'static str),
+    /// The disk spells it another way: how, when it can tell.
+    Other(Option<String>),
+    Io(String),
+}
+
+/// [`spelled`], saying why not.
+pub(crate) fn spelling(dir: &Path, p: &TxPath) -> Result<(), Spelling> {
     let path = p.path();
     let parts: Vec<&std::ffi::OsStr> = path.iter().collect();
     let mut at = dir.to_path_buf();
@@ -526,10 +560,10 @@ fn spelled(dir: &Path, p: &TxPath) -> Result<(), Refusal> {
         let meta = match std::fs::symlink_metadata(&next) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(Refusal::Io { message: format!("{p} can't be read: {e}") }),
+            Err(e) => return Err(Spelling::Io(format!("{p} can't be read: {e}"))),
         };
         let listed: Vec<std::ffi::OsString> = std::fs::read_dir(&at)
-            .map_err(|e| Refusal::Io { message: format!("{} can't be listed: {e}", at.display()) })?
+            .map_err(|e| Spelling::Io(format!("{} can't be listed: {e}", at.display())))?
             .flatten()
             .map(|e| e.file_name())
             .collect();
@@ -541,16 +575,23 @@ fn spelled(dir: &Path, p: &TxPath) -> Result<(), Refusal> {
                 real.push(n);
                 m2_song::path::slashed(&real)
             });
-            let real = real.map_or_else(|| "another way".to_string(), |r| format!("`{r}`"));
-            return Err(bad_path(format!("{p} is spelled {real} on this disk: a Tx names a file exactly as the disk does")));
+            return Err(Spelling::Other(real));
         }
         if meta.file_type().is_symlink() {
-            let what = if i + 1 == parts.len() { "is a link" } else { "is in a folder that is a link" };
-            return Err(bad_path(format!("{p} {what}, and music2 never writes through one")));
+            return Err(Spelling::Link(if i + 1 == parts.len() { "is a link" } else { "is in a folder that is a link" }));
         }
         at = next;
     }
     Ok(())
+}
+
+/// The file `snap` has under `p`'s name in other capitals, when a Tx would make `p` (`base` is
+/// `Absent`): on a disk that ignores capitals, `p` would be that file.
+pub(crate) fn taken_by(snap: &Snapshot, p: &TxPath, base: &Base) -> Option<PathBuf> {
+    if !matches!(base, Base::Absent) {
+        return None;
+    }
+    snap.taken(&p.path()).filter(|by| !by.starts_with(p.path()))
 }
 
 /// `(line, UTF-16 column)` of byte `at` of `text`, from 0.
@@ -843,9 +884,7 @@ impl Session {
         for (p, base) in &tx.base {
             // A name made where the project has it in other capitals would read as that one on a
             // disk that ignores capitals, or not at all.
-            if matches!(base, Base::Absent)
-                && let Some(by) = self.accepted.snapshot.taken(&p.path()).filter(|by| !by.starts_with(p.path()))
-            {
+            if let Some(by) = taken_by(&self.accepted.snapshot, p, base) {
                 return Err(bad_path(format!(
                     "{p} can't be made: on a disk that ignores capitals it is {}, which is there already",
                     by.display()
@@ -1741,40 +1780,47 @@ impl Session {
     /// Whether undo step `step` would go ahead now, without compiling: writer access, the draft
     /// rule, no target waiting, and every base applies to the accepted revision (WRITE-21).
     pub(crate) fn can_tx(&self, step: &TxStep) -> bool {
+        self.blocked(step).is_none()
+    }
+
+    /// What stops undo step `step` now, judged without compiling ([`Session::can_tx`]): none
+    /// when it would go ahead.
+    pub(crate) fn blocked(&self, step: &TxStep) -> Option<Blocked> {
         let tx = &step.inverse;
         if !self.access.writer() {
-            return false;
+            return Some(Blocked::ReadOnly);
         }
         let touched = tx.touched();
         if touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest)) && !self.draft_errors.is_empty() {
-            return false;
+            return Some(Blocked::Draft);
         }
         if touched.iter().any(|p| self.waits(p)) {
-            return false;
+            return Some(Blocked::Waiting);
         }
+        let changed = Some(Blocked::Changed);
         let snap = &self.accepted.snapshot;
         for op in &tx.ops {
             match op {
                 Op::TextEdit { file, edits } => {
                     let (Some(Base::WithText { text, .. }), Some(now)) = (tx.base.get(file), snap.files.get(&file.path())) else {
-                        return false;
+                        return changed;
                     };
                     let outside = Edits::between(text, now);
                     for e in edits {
-                        let (Ok(s), Ok(end)) = (expect::resolve(text, &e.start), expect::resolve(text, &e.end)) else { return false };
+                        let (Ok(s), Ok(end)) = (expect::resolve(text, &e.start), expect::resolve(text, &e.end)) else { return changed };
                         match outside.carry(s..end) {
                             Some(r) if now.get(r.clone()) == Some(e.expected.as_str()) => {}
-                            _ => return false,
+                            _ => return changed,
                         }
                     }
                 }
                 Op::Clips { lane, put, delete } => {
                     let file = TxPath::lane(lane);
                     let Some(kind) = self.accepted.compiled.decls.lanes.iter().find(|(a, _)| a == lane).map(|(_, k)| k.clone()) else {
-                        return false;
+                        return changed;
                     };
                     let (Some(Base::WithText { text, .. }), Some(now)) = (tx.base.get(&file), snap.files.get(&file.path())) else {
-                        return false;
+                        return changed;
                     };
                     let ids = put.iter().filter_map(|c| c.get("id").and_then(|i| i.as_str())).chain(delete.iter().map(String::as_str));
                     // The base is the file now, which the accepted revision read as this lane: every
@@ -1783,15 +1829,15 @@ impl Session {
                         && let Some(is) = self.accepted.compiled.data.parsed(lane, &kind, now)
                     {
                         if ids.into_iter().any(|id| is.clips_with(id) > 1) {
-                            return false;
+                            return changed;
                         }
                         continue;
                     }
-                    let (Ok(was), Ok(is)) = (LaneData::read(text, &kind), LaneData::read(now, &kind)) else { return false };
+                    let (Ok(was), Ok(is)) = (LaneData::read(text, &kind), LaneData::read(now, &kind)) else { return changed };
                     for id in ids {
                         let (a, b) = (was.lines_of(id), is.lines_of(id));
                         if a.len() > 1 || a != b {
-                            return false;
+                            return changed;
                         }
                     }
                 }
@@ -1801,10 +1847,10 @@ impl Session {
                         let have = match known(snap, &p) {
                             None => None,
                             Some(Some(s)) => Some(s),
-                            Some(None) => return false,
+                            Some(None) => return changed,
                         };
                         if p.class() != Class::Presentation && want != have {
-                            return false;
+                            return changed;
                         }
                     }
                 }
@@ -1813,10 +1859,12 @@ impl Session {
         // A `Values` inverse is offered only while each number it writes back still sets its
         // value at the scale it had (`khz(0.9)` turned `hz(0.9)` would be undone to 2.5 Hz): the
         // design's 10.3 prediction, judged on the accepted revision's tables without compiling.
-        if let Expect::Values(values) = &tx.expect {
-            return values.iter().all(|(anchor, v)| self.predicts(tx, anchor, *v));
+        if let Expect::Values(values) = &tx.expect
+            && !values.iter().all(|(anchor, v)| self.predicts(tx, anchor, *v))
+        {
+            return changed;
         }
-        true
+        None
     }
 
     /// Whether the number `tx` writes at `anchor` (in its base text) gives `v` in the accepted

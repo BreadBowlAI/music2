@@ -73,9 +73,34 @@ pub enum Outside {
     /// No step: git wrote it (the watcher waited for its `index.lock`), and git can undo it. How
     /// many files it changed.
     Git(usize),
-    /// No step: it changed or removed this binary file (an asset, a plugin's state), or one that
-    /// couldn't be read, whose bytes before are gone (the agents design's D5).
-    Binary(String),
+    /// No step: undo couldn't put `file` back, for `why`, so nothing of the batch is undone; it
+    /// changed `others` files besides.
+    Cant { file: String, why: Cant, others: usize },
+}
+
+/// Why undo couldn't put a file of an outside batch back (AGENT-2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cant {
+    /// A binary file (an asset, a plugin's state), or one that couldn't be read: its bytes before
+    /// are gone (the agents design's D5).
+    Bytes,
+    /// It is a link, or in a folder that is one: music2 never writes through one (WRITE-3a).
+    Link,
+    /// Its name is another file's in other capitals, or the disk spells it another way: a write
+    /// of it would reach that file (WRITE-3a).
+    Capitals,
+    /// The batch is more than undo keeps (WRITE-21's 64 MiB).
+    TooBig,
+}
+
+/// What outside writers changed in the draft that no revision holds yet (AGENT-2): each path a
+/// watcher batch changed while it waits, and in `was` what the app knew there before the first of
+/// those batches (nothing: it wasn't there). The outside step that takes them in puts that back. A
+/// save takes its file out, so the musician's own text is never an outside change.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OutsideWas {
+    pub(crate) paths: BTreeSet<PathBuf>,
+    pub(crate) was: Snapshot,
 }
 
 /// What a save did.
@@ -84,6 +109,11 @@ pub struct Saved {
     pub taken: TakenIn,
     /// Recorded for undo: it was taken into an accepted revision as written.
     pub recorded: bool,
+}
+
+/// Only the entries of `paths` of `s`.
+fn pick(s: &Snapshot, paths: &BTreeSet<PathBuf>) -> Snapshot {
+    overlay(&Snapshot { dir: s.dir.clone(), ..Snapshot::default() }, s, paths)
 }
 
 /// `base` with the entries of `paths` taken from `from`.
@@ -149,47 +179,69 @@ impl Session {
         self.take_in(only)
     }
 
-    /// Take in the watcher's batch, as [`Session::take_in_only`] does, and make what it changed
-    /// one undo step (AGENT-2), source outside: its inverse writes back each text file it changed
-    /// or removed, guarded by the hash the batch left, and removes each text file it made. `git`:
-    /// the watcher waited for git's `index.lock` while the batch settled. Only the watcher's job
-    /// calls this: files the app takes in for its own Tx (an import's) make no step.
+    /// Take in the watcher's batch, as [`Session::take_in_only`] does, and make what outside
+    /// writers changed one undo step (AGENT-2), source outside. Its inverse puts back what the app
+    /// knew of each file before they changed it ([`OutsideWas`]: a save that didn't build yet is the
+    /// musician's, and stays), guarded by the hash the batch left, and removes each file they made,
+    /// other than under `assets/`. `git`: the watcher saw git's `index.lock` while the batch
+    /// settled. Only the watcher's job calls this: files the app takes in for its own Tx (an
+    /// import's) make no step.
     pub fn take_in_batch(&mut self, snapshot: Snapshot, paths: &BTreeSet<PathBuf>, git: bool) -> (TakenIn, Outside) {
-        let before = self.accepted.clone();
+        if !self.access.writer() {
+            // A window that can't undo keeps no history of what others change.
+            self.outside_was = OutsideWas::default();
+            return (self.take_in_only(snapshot, paths), Outside::Nothing);
+        }
+        // A path no longer waiting went into a revision since (a save or an undo made the draft
+        // build): what the draft has there now is what the app knows.
+        let waiting = &self.waiting;
+        self.outside_was.paths.retain(|p| waiting.contains(p));
+        let fresh: BTreeSet<PathBuf> = paths.difference(&self.outside_was.paths).cloned().collect();
+        self.outside_was.was = overlay(&self.outside_was.was, &self.draft, &fresh);
+        self.outside_was.paths.extend(fresh);
         let taken = self.take_in_only(snapshot, paths);
         if taken.accepted.is_none() {
             return (taken, Outside::Nothing);
         }
-        let after = self.accepted.clone();
-        // From the last accepted revision: a batch that waited rides along with the one that
-        // made it build.
-        let changed = changed_paths(&before.snapshot, &after.snapshot);
-        if git {
+        // What went into the revision: every outside path that doesn't wait now.
+        let waiting = &self.waiting;
+        let (left, went): (BTreeSet<PathBuf>, BTreeSet<PathBuf>) =
+            self.outside_was.paths.iter().cloned().partition(|p| waiting.contains(p));
+        let was = pick(&self.outside_was.was, &went);
+        self.outside_was = OutsideWas { was: pick(&self.outside_was.was, &left), paths: left };
+        let is = &self.accepted.snapshot;
+        let changed = changed_paths(&was, &pick(is, &went));
+        if git && !changed.is_empty() && crate::watch::git_has(&self.dir, &changed) {
             return (taken, Outside::Git(changed.len()));
         }
-        let (was, is) = (&before.snapshot, &after.snapshot);
+        let others = changed.len().saturating_sub(1);
         let mut ops = vec![];
         let mut bases = vec![];
         for p in &changed {
             let name = m2_song::path::slashed(p);
+            let cant = |why| Outside::Cant { file: name.clone(), why, others };
             // Its bytes before are gone, or were never read: nothing can put them back (D5).
-            if binary(was, p) || was.unreadable.contains_key(p) || is.unreadable.contains_key(p) {
-                return (taken, Outside::Binary(name));
+            if binary(&was, p) || was.unreadable.contains_key(p) || is.unreadable.contains_key(p) {
+                return (taken, cant(Cant::Bytes));
             }
-            let Ok(file) = TxPath::new(&name) else { return (taken, Outside::Binary(name)) };
-            let op = match (text_of(was, p), text_of(is, p)) {
-                (Some(old), _) => Op::Write { file: file.clone(), bytes: Payload::Text(old.clone()) },
-                (None, Some(_)) => Op::Remove { file: file.clone() },
-                // A binary file it made stays: an asset no lane names plays nothing.
-                (None, None) => continue,
+            let Ok(file) = TxPath::new(&name) else { return (taken, cant(Cant::Bytes)) };
+            let op = match text_of(&was, p) {
+                Some(old) => Op::Write { file: file.clone(), bytes: Payload::Text(old.clone()) },
+                // A file made under `assets/` stays: an asset no lane names plays nothing.
+                None if matches!(file.data(), DataPath::Asset(_)) => continue,
+                None => Op::Remove { file: file.clone() },
             };
             // Guarded by what the batch left there (WRITE-21).
             let left = match (is.files.get(p), is.binaries.get(p)) {
                 (Some(t), _) => Base::Sha(is.not_utf8.get(p).copied().unwrap_or_else(|| Sha::of(t.as_bytes()))),
                 (None, Some(Stored::Hash(sha))) => Base::Sha(*sha),
-                (None, Some(_)) => return (taken, Outside::Binary(name)),
+                (None, Some(_)) => return (taken, cant(Cant::Bytes)),
                 (None, None) => Base::Absent,
             };
+            // Refused as a commit would refuse it, it could never be undone (WRITE-3a).
+            if let Some(why) = self.unwritable(&file, &left) {
+                return (taken, cant(why));
+            }
             bases.push((file, left));
             ops.push(op);
         }
@@ -197,7 +249,7 @@ impl Session {
             return (taken, Outside::Nothing);
         }
         let file = bases[0].0.to_string();
-        let shown = match (&ops[..], text_of(was, Path::new(&file)), text_of(is, Path::new(&file))) {
+        let shown = match (&ops[..], text_of(&was, Path::new(&file)), text_of(is, Path::new(&file))) {
             ([_], Some(old), Some(new)) => summarize(old, new),
             ([_], ..) => (file.clone(), file.clone()),
             (many, ..) => (format!("{} files", many.len()), format!("{} files", many.len())),
@@ -205,10 +257,29 @@ impl Session {
         let mut inverse = Tx::new("undo-outside", (shown.1, shown.0), ops, Expect::Identical);
         inverse.base.extend(bases);
         // Raw, as a save's step is: taken in like an outside write when undone (WRITE-21).
-        let mut step = TxStep::new(inverse, true, false, file);
+        let mut step = TxStep::new(inverse, true, false, file.clone());
+        // More than undo keeps would push every other step out of it.
+        if step.retained() > crate::session::RETAINED {
+            return (taken, Outside::Cant { file, why: Cant::TooBig, others });
+        }
         step.source = crate::session::Source::Outside;
         let id = self.record_tx(step);
         (taken, Outside::Step(id))
+    }
+
+    /// Why undo couldn't write `p` back over `base`, the way a commit would refuse it: a name that
+    /// is another file's in other capitals, a link, or a name the disk spells another way
+    /// (WRITE-3a).
+    fn unwritable(&self, p: &TxPath, base: &Base) -> Option<Cant> {
+        if crate::tx::taken_by(&self.accepted.snapshot, p, base).is_some() {
+            return Some(Cant::Capitals);
+        }
+        match crate::tx::spelling(&self.dir, p) {
+            Ok(()) => None,
+            Err(crate::tx::Spelling::Link(_)) => Some(Cant::Link),
+            Err(crate::tx::Spelling::Other(_)) => Some(Cant::Capitals),
+            Err(crate::tx::Spelling::Io(_)) => Some(Cant::Bytes),
+        }
     }
 
     /// Accept what `batch` changed in the draft, as the module's table says. Whether a revision
@@ -294,6 +365,8 @@ impl Session {
         let target = Target::Write { path: p.to_string(), before, bytes: Arc::from(text.as_bytes()), after };
         let tx = Tx::new("save", (p.to_string(), p.to_string()), vec![], Expect::Identical);
         self.stage(&tx, &[target], vec![], None)?;
+        // Whatever outside writers did to it before, the file is the musician's now (AGENT-2).
+        self.outside_was.paths.remove(file);
         // Taken in with the draft as it was settled, this file replaced.
         let mut draft = self.draft.clone();
         crate::tx::put_file(&mut draft, file, Some(text.as_bytes()));

@@ -160,7 +160,7 @@ const HISTORY: usize = 500;
 
 /// How many bytes of text and data undo keeps alive at most (WRITE-21); the oldest steps are
 /// forgotten first, though never the newest.
-const RETAINED: usize = 64 << 20;
+pub(crate) const RETAINED: usize = 64 << 20;
 
 pub struct Session {
     pub packages: PackageSet,
@@ -180,6 +180,10 @@ pub struct Session {
     pub(crate) redo: Vec<TxStep>,
     /// The id the last step recorded got: ids are never reused while the session lives (AGENT-2).
     pub(crate) steps: u64,
+    /// The step whose last undo was refused as a conflict (0: none): it can be skipped (AGENT-2).
+    pub(crate) refused: u64,
+    /// What outside writers changed that waits, and what the app knew there before (AGENT-2).
+    pub(crate) outside_was: crate::take::OutsideWas,
     /// What every revision accepted so far declared, so data a rename left behind is named as
     /// its track was and offered only to lanes that read it.
     pub(crate) seen: Seen,
@@ -342,6 +346,8 @@ impl Session {
             history: vec![],
             redo: vec![],
             steps: 0,
+            refused: 0,
+            outside_was: Default::default(),
             catalog,
             problems: vec![],
             access,
@@ -627,6 +633,26 @@ impl Session {
         self.redo.last().is_some_and(|t| self.can_tx(t))
     }
 
+    /// Whether the newest step can only be skipped (AGENT-2): undo can't take it back, because a
+    /// file it puts back changed since in a way that made no step (git's, a binary batch), or its
+    /// last undo was refused as a conflict.
+    pub fn undo_stuck(&self) -> bool {
+        self.history
+            .last()
+            .is_some_and(|t| self.access.writer() && (self.refused == t.id || self.blocked(t) == Some(crate::tx::Blocked::Changed)))
+    }
+
+    /// Take the newest step, `id`, out of the history while it is [`Session::undo_stuck`]: nothing
+    /// is written, and the steps before it can be undone (AGENT-2). Redo stays as it was. Whether
+    /// it did.
+    pub fn skip_undo(&mut self, id: u64) -> bool {
+        if self.history.last().is_none_or(|t| t.id != id) || !self.undo_stuck() {
+            return false;
+        }
+        self.history.pop();
+        true
+    }
+
     /// Commit the inverse on top of one stack; its own inverse goes on the other.
     fn step(&mut self, redo: bool) -> Result<Stepped, StepError> {
         let stack = if redo { &mut self.redo } else { &mut self.history };
@@ -648,6 +674,9 @@ impl Session {
         };
         match result {
             Ok((done, inverse)) => {
+                if self.refused == step.id {
+                    self.refused = 0;
+                }
                 if let Some(mut inverse) = inverse {
                     // The step it pushes is the same change: it keeps its id, its source and its
                     // name (AGENT-2).
@@ -659,6 +688,9 @@ impl Session {
                 Ok(Stepped { number: done.number, file: step.file.clone(), before, after, committed: done })
             }
             Err(e) => {
+                if !redo && matches!(e, StepError::Refused(Refusal::Conflict { .. })) {
+                    self.refused = step.id;
+                }
                 if redo { &mut self.redo } else { &mut self.history }.push(step);
                 Err(e)
             }

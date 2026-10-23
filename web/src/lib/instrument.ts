@@ -75,7 +75,7 @@ export async function changeInstrument(module: string, instrument: Instrument) {
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     const r = data as Edited;
-    recorded(session, r.revision, { name: `changing ${name}'s instrument`, structural: true });
+    recorded(session, r, { name: `changing ${name}'s instrument`, structural: true });
     toast(`${name} plays ${instrument.label} now`, undoAction(session, r.step));
     guideDid("sound");
   } catch (error) {

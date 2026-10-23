@@ -24,8 +24,8 @@ export const onDisk = (f: ProjectFile) => (f.draft === undefined ? f.text : f.dr
 /** A source an import resolves to, by its path under `node_modules` (`std/fx.ts`). */
 export interface TypeFile { path: string; text: string }
 
-/** A save: the new state, or what the file says now if it changed since it was read. */
-export type Saved = { ok: true; graph: GraphState } | { ok: false; current: string };
+/** A save: the new state, with the undo step it made (AGENT-2), or what the file says now if it changed since it was read. */
+export type Saved = { ok: true; graph: GraphState; step?: number } | { ok: false; current: string };
 
 const headers: Record<string, string> = { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) };
 
@@ -47,7 +47,7 @@ export const codeApi = {
     const { status, data } = await request<GraphState & { current?: string }>("PUT", "/file", { session, path, base, text });
     if (status === 409 && typeof data.current === "string") return { ok: false, current: data.current };
     if (status >= 400) throw new Error(data.error ?? `HTTP ${status}`);
-    return { ok: true, graph: data };
+    return { ok: true, graph: data, step: (data as { step?: number }).step };
   },
 };
 

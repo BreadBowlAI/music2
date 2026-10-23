@@ -57,10 +57,31 @@ interface Named {
  */
 let answered: { session: number; revision: number; undo: StepName | null; redo: StepName | null } | null = null;
 
-/** An edit this window made has committed `revision`, as `step`: the server names its undo step so. */
-export function recorded(session: number, revision: number, step: Step) {
+/** The undo steps this window's own edits made, by id (AGENT-2): only these may ⌘Z take back unshown. */
+let mine: { session: number; steps: Set<number> } = { session: 0, steps: new Set() };
+
+/** Whether undo step `step` of `session` was made by an edit of this window. */
+export function madeHere(session: number, step: number | undefined): boolean {
+  return step !== undefined && mine.session === session && mine.steps.has(step);
+}
+
+/**
+ * An edit this window made has committed `answer.revision`, as `step`: the server names its undo
+ * step so. Its id (`answer.step`) is kept as this window's, and Undo names it at once, so a ⌘Z
+ * pressed before the state is read again takes back this edit, not the one before.
+ */
+export function recorded(session: number, answer: { revision: number; step?: number }, step: Step) {
+  const revision = answer.revision;
+  const undo: StepName = { name: step.name, structural: !!step.structural, given: true, source: "page", step: answer.step };
+  if (answer.step !== undefined) {
+    if (mine.session !== session) mine = { session, steps: new Set() };
+    mine.steps.add(answer.step);
+    const { graph, set } = useStore.getState();
+    // Unless a newer state already says what is on top.
+    if (graph?.session === session && graph.view.revision <= revision) set({ graph: { ...graph, undo_name: undo, redo_name: null, can_undo: true } });
+  }
   // Said at once, before the server has it: the edit's own refresh names the step plainly.
-  answered = { session, revision, undo: { name: step.name, structural: !!step.structural, given: true, source: "page" }, redo: null };
+  answered = { session, revision, undo, redo: null };
   request<Named>("/api/graph/step", { session, revision, name: step.name, structural: !!step.structural })
     .then((r) => {
       answered = { session, revision: r.revision, undo: r.undo_name, redo: r.redo_name };

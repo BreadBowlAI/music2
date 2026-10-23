@@ -49,6 +49,6 @@ export async function setSongKey(session: number, key: SongKey | null) {
   const done = await readJson(res);
   if (!res.ok) throw new Error(done.error ?? `HTTP ${res.status}`);
   // Setting the key it has already changes nothing, and is no step.
-  if (done.before !== "no change") recorded(session, done.revision, { name: key ? `key ${songKeyName(key)}` : "taking out the key" });
+  if (done.before !== "no change") recorded(session, done, { name: key ? `key ${songKeyName(key)}` : "taking out the key" });
   return done as { revision: number; before: string; after: string };
 }

@@ -64,6 +64,8 @@ pub(crate) struct Actor {
     /// What this Graph's plugin instances report unasked (its [`m2_plugins::Owner`]'s): no other
     /// session, test or rig sees them.
     events: HostEvents,
+    /// Where each step event goes to have what its step changed worked out ([`changes`]).
+    changes: mpsc::Sender<Told>,
     /// Tests: every renderer build fails, as one whose plugin can't load would.
     #[cfg(test)]
     pub(crate) fail_builds: bool,
@@ -75,12 +77,39 @@ pub(crate) struct Actor {
     pub(super) disk: Option<Box<dyn Fn() -> Box<dyn m2_session::tx::stage::Disk> + Send>>,
 }
 
+/// A `step` event to send once what its step changed is worked out (AGENT-5).
+pub(super) struct Told {
+    event: Value,
+    before: Arc<Revision>,
+    after: Arc<Revision>,
+    to: tokio::sync::broadcast::Sender<String>,
+}
+
+/// Work out what each step changed, from the revisions before and after it, and send its event:
+/// in the order they were told, off the actor's thread (on a 50-track song it takes 12 ms). Ends
+/// with the actor.
+fn changes() -> mpsc::Sender<Told> {
+    let (tell, told) = mpsc::channel::<Told>();
+    let work = move || {
+        for Told { mut event, before, after, to } in told {
+            let c = m2_editor::changed::changed(&before, &after);
+            (event["tracks"], event["lanes"], event["knobs"]) = (json!(c.tracks), json!(c.lanes), json!(c.knobs));
+            let _ = to.send(event.to_string());
+        }
+    };
+    if let Err(e) = std::thread::Builder::new().name("m2-changed".into()).spawn(work) {
+        eprintln!("music2: no thread to tell what each change changed: {e}");
+    }
+    tell
+}
+
 /// Serve requests until the [`super::Graph`] is dropped.
 pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEvents) {
     let mut actor = Actor {
         inner,
         open: None,
         events,
+        changes: changes(),
         #[cfg(test)]
         fail_builds: false,
         #[cfg(test)]
@@ -92,8 +121,11 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         // On the player's clock: 0 until there is a player (an open starts it).
         let start = actor.inner.now_ns();
         actor.inner.busy.lock().since = start.max(1);
+        // What a step changed is read from the revision before it (AGENT-5): a plugin window's
+        // commit or autosave is told apart from the job's.
+        let before = actor.open.as_ref().map(|o| (o.token, o.session.accepted_arc()));
         actor.heard_plugins();
-        // What the job's step changed is read from the revision before it (AGENT-5).
+        actor.told_step(before);
         let before = actor.open.as_ref().map(|o| (o.token, o.session.accepted_arc()));
         // A request that panics answers with an error (its reply is dropped unsent), and the
         // actor serves the next.
@@ -114,18 +146,18 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
 }
 
 impl Actor {
-    /// Tell every window of the step the job just recorded, if it recorded one (AGENT-5): its id,
-    /// who made it, its name, and what changed since `before`, the revision before the job. An
-    /// undo or a redo makes no new step, so it tells nothing.
+    /// Tell every window of the step just recorded, if one was (AGENT-5): its id, who made it, its
+    /// name, whether undo can take it back, and what changed since `before`, the revision before
+    /// it. What changed is worked out on the `changes` thread, from the two revisions, so the next
+    /// request never waits for it. An undo or a redo makes no new step, so it tells nothing.
     fn told_step(&mut self, before: Option<(u64, Arc<Revision>)>) {
         let Some(o) = self.open.as_mut() else { return };
         let Some(top) = o.session.step_names().0.filter(|t| t.id > o.told_step) else { return };
         o.told_step = top.id;
         let Some((_, before)) = before.filter(|(token, _)| *token == o.token) else { return };
-        let event = super::steps::event(o.token, &top, &o.session, &before, &o.timeline);
-        if let Some(to) = self.inner.steps_to.lock().as_ref() {
-            let _ = to.send(event.to_string());
-        }
+        let Some(to) = self.inner.steps_to.lock().clone() else { return };
+        let event = super::steps::event(o.token, &top, o.session.can_undo(), &o.timeline);
+        let _ = self.changes.send(Told { event, before, after: o.session.accepted_arc(), to });
     }
 
     /// Tell the watcher what the session wrote itself, so its own writes make no batch (R12).
@@ -692,6 +724,8 @@ impl Open {
                 "mix": s.mix(),
                 "can_undo": s.can_undo(),
                 "can_redo": s.can_redo(),
+                // Undo can't take the newest step back, which can be skipped (AGENT-2).
+                "undo_stuck": s.undo_stuck(),
                 // What they would take back, in words (gaps #29, `steps`).
                 "undo_name": super::steps::named(s.step_names().0.as_ref(), &self.timeline),
                 "redo_name": super::steps::named(s.step_names().1.as_ref(), &self.timeline),
@@ -1533,9 +1567,14 @@ impl Actor {
         };
         // What plays takes the commit as the cells whose constants differ from it (an outside
         // change in the knob's file that rode along included), in the settle (RENDER-22).
+        let steps = o.session.last_step();
         match o.session.set(revision, &id, value, expect) {
             Ok(c) => {
-                let written = json!({"file": c.file, "before": c.before, "after": c.after, "revision": c.revision});
+                let mut written = json!({"file": c.file, "before": c.before, "after": c.after, "revision": c.revision});
+                // The undo step it made, by its id, as every gesture answers (AGENT-2).
+                if o.session.last_step() > steps {
+                    written["step"] = json!(o.session.last_step());
+                }
                 self.settle(Some(Install { lease: Some(lease), id, origin: c.origin, value: c.value }));
                 Ok(Committed::Written(written))
             }
@@ -1814,9 +1853,16 @@ impl Actor {
         if let Some(token) = token {
             o.check_token(token)?;
         }
+        let steps = o.session.last_step();
         files::save(&mut o.session, path, base, text)?;
+        let made = o.session.last_step();
         self.settle(None);
-        self.inner.state().context("no project is open")
+        let mut state = self.inner.state().context("no project is open")?;
+        // The undo step it made, by its id, as every gesture answers (AGENT-2).
+        if made > steps {
+            state["step"] = json!(made);
+        }
+        Ok(state)
     }
 
     /// Check or commit an agent's Tx (WRITE-4, WRITE-5, WRITE-11), answering in the editor's one
@@ -1842,15 +1888,24 @@ impl Actor {
             });
         }
         o.sent = None;
+        let steps = o.session.last_step();
         let (done, heard) = self.previewing(|s| s.commit(tx));
         self.settle(None);
+        // The undo step it made, by its id (AGENT-2): what an agent names it by.
+        let made = self.open.as_ref().map(|o| o.session.last_step()).filter(|id| *id > steps);
         // Heard in the app, or said there to be not saved yet: the app hears how it ended too,
         // not only the agent (PLANE-5).
         let said = done.as_ref().err().map(|r| heard.said(&r.to_string()));
         let told = heard.told(said.as_deref()).map(|t| if said.is_some() { format!("An agent's edit: {t}") } else { t });
         self.inner.notices.lock().extend(told);
         Ok(match done {
-            Ok(c) => (200, m2_editor::json::committed(&c)),
+            Ok(c) => {
+                let mut answer = m2_editor::json::committed(&c);
+                if let Some(id) = made {
+                    answer["step"] = json!(id);
+                }
+                (200, answer)
+            }
             Err(r) => {
                 let (status, mut answer) = refused(&r);
                 // Heard before it failed (PLANE-5): an agent is told as the app is.

@@ -92,7 +92,7 @@ export const presetsApi = {
       from,
       name,
     }).then((r) => {
-      if (r.changed) recorded(session, r.revision, { name: `loading ${name}` });
+      if (r.changed) recorded(session, r, { name: `loading ${name}` });
       return r;
     }),
 };

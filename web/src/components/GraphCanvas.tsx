@@ -17,7 +17,7 @@ import {
 } from "../lib/graph";
 import { setClock } from "../lib/clock";
 import { pickedIn, useClipSelection } from "../lib/clips";
-import { tookBack } from "../lib/history";
+import { madeHere, said, tookBack, type StepName } from "../lib/history";
 import { forget, stepped } from "../lib/notice";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
 import { flushLocal } from "../lib/local";
@@ -312,23 +312,24 @@ export function closeSong() {
  * the server takes back only while it is the newest (AGENT-2); else it says which is. Its result
  * shows where it happened, so it makes no toast (ST-5), unless it took back a part added or
  * removed, which may be off screen: then the toast says so in the step's words ("Undid adding
- * Reverb"). Never a file or a diff (ST-6).
+ * Reverb"). Never a file or a diff (ST-6). A step undo can't take back (a file it puts back changed
+ * since) is said, with Skip it.
  */
 export async function graphUndo(session: number, id: "undo" | "redo", step?: number, own = false) {
   const toast = useStore.getState().toast;
   try {
     const { status, json } = await (id === "redo" ? graphApi.redo(session, step) : graphApi.undo(session, step));
     if (status === 409) {
-      // The newest is this page's own step, which the window hadn't shown yet (an edit made a
-      // moment ago): Undo's key means that one. Any other is said first (AGENT-2).
-      const newest = json.newest;
-      if (own && newest?.source === "page" && newest.step !== undefined && newest.step !== step) return graphUndo(session, id, newest.step);
+      const stuck = json.stuck?.step;
+      if (stuck !== undefined) return toast(json.error ?? "Undo can't take back that change.", { label: "Skip it", run: () => void skipStep(session, stuck) });
+      // The newest is a step this window made a moment ago, which it hadn't shown yet: Undo's key
+      // means that one. Any other is said, never taken back (AGENT-2).
+      const newest = json.newest?.step;
+      if (own && newest !== step && madeHere(session, newest)) return graphUndo(session, id, newest);
       return toast(json.error ?? "Nothing was changed: it isn't the newest change now.");
     }
     stepped(json.step);
-    // The tops after it, so a ⌘Z pressed again before the state is read names the next step.
-    const { graph, set } = useStore.getState();
-    if (graph?.session === session && json.undo_name !== undefined) set({ graph: { ...graph, undo_name: json.undo_name, redo_name: json.redo_name } });
+    tops(session, json);
     const took = tookBack(json);
     if (took?.structural) toast(`${id === "redo" ? "Redid" : "Undid"} ${took.name}`);
   } catch (error) {
@@ -336,16 +337,36 @@ export async function graphUndo(session: number, id: "undo" | "redo", step?: num
   }
 }
 
+/** The tops after an undo, a redo or a skip, so a ⌘Z pressed again before the state is read names the next step. */
+function tops(session: number, answer: { undo_name?: StepName | null; redo_name?: StepName | null }) {
+  const { graph, set } = useStore.getState();
+  if (graph?.session === session && answer.undo_name !== undefined) set({ graph: { ...graph, undo_name: answer.undo_name, redo_name: answer.redo_name } });
+}
+
+/** Skip step `step`, which undo can't take back: nothing is written, and Undo reaches the steps before it (AGENT-2). */
+async function skipStep(session: number, step: number) {
+  const toast = useStore.getState().toast;
+  try {
+    const { status, json } = await graphApi.skip(session, step);
+    if (status === 409) return toast(json.error ?? "Nothing was skipped: it isn't the newest change now.");
+    tops(session, json);
+    toast(json.undo_name ? `Skipped it. Undo takes back ${said(json.undo_name)} now.` : "Skipped it. There's nothing more to undo.");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error));
+  }
+}
+
 /**
  * Undo or Redo of the step on top, as the window shows it (the top bar, ⌘Z, the Edit menu): by its
- * id, so a change that landed elsewhere since is named before it can be taken back.
+ * id, so a change that landed elsewhere since is named before it can be taken back. With no step
+ * shown, 0, which is never the newest: the server says what is.
  */
 export function undoTop(graph: GraphState, id: "undo" | "redo") {
   // One after another, each naming the top the one before left: ⌘Z held down takes back step by step.
   topped = topped.then(() => {
     const now = useStore.getState().graph ?? graph;
     if (now.session !== graph.session) return;
-    return graphUndo(now.session, id, (id === "redo" ? now.redo_name : now.undo_name)?.step, true);
+    return graphUndo(now.session, id, (id === "redo" ? now.redo_name : now.undo_name)?.step ?? 0, true);
   });
   return topped;
 }

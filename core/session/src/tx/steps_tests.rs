@@ -1,7 +1,8 @@
 //! Undo steps with ids and sources (AGENT-2, track 1 of the agents design): an outside batch that
-//! builds is one step, source outside, whose inverse puts its text files back; binaries, new assets
-//! and git make none; the session's own writes and saves keep their one step each; ids are never
-//! shared, and follow a step through undo and redo.
+//! builds is one step, source outside, whose inverse puts back what outside writers changed and
+//! leaves the musician's own saves; binaries, links, new assets, git and a read-only window make
+//! none; a step that can't be undone any more can be skipped; the session's own writes and saves
+//! keep their one step each; ids are never shared, and follow a step through undo and redo.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -9,8 +10,8 @@ use std::path::{Path, PathBuf};
 use m2_song::Snapshot;
 use m2_song::tx::{Base, Expect, Op, Payload, Tx};
 
-use super::tests::{Dir, p, pan};
-use crate::take::Outside;
+use super::tests::{Dir, p, pan, std_packages};
+use crate::take::{Cant, Outside};
 use crate::{Refusal, Session, Source, StepError};
 
 fn paths(ps: &[&str]) -> BTreeSet<PathBuf> {
@@ -30,6 +31,26 @@ fn top(s: &Session) -> Option<(u64, Source, Vec<String>)> {
 /// `song.ts` with the hats' pan at `to`, as an editor saves it.
 fn panned(d: &Dir, to: &str) -> String {
     d.read("song.ts").replacen("pan: 0.3", &format!("pan: {to}"), 1)
+}
+
+/// Run git in `d`, with the tests' own name and none of this machine's settings.
+fn git(d: &Dir, args: &[&str]) {
+    let ran = std::process::Command::new("git")
+        .current_dir(&d.0)
+        .args(["-c", "user.name=m2", "-c", "user.email=m2@example.invalid", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    assert!(ran.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&ran.stderr));
+}
+
+/// `d` as a git repository, everything in it committed.
+fn committed(d: &Dir) {
+    git(d, &["init", "-q"]);
+    git(d, &["add", "-A"]);
+    git(d, &["commit", "-q", "-m", "one"]);
 }
 
 // AGENT-2: a text file saved outside the app, whose batch builds, is one undo step with an id,
@@ -101,15 +122,17 @@ fn undoing_an_outside_edit_puts_back_its_text() {
 }
 
 // WRITE-21, AGENT-2: an outside step undoes only while its file is as the batch left it. A later
-// change that made no step (git's) means undo is a conflict naming the file, and nothing changes.
+// change that made no step (git's checkout) means undo is a conflict naming the file, and nothing
+// changes.
 #[test]
 fn undoing_an_outside_edit_after_a_change_without_a_step_conflicts() {
     let d = Dir::first_song();
+    committed(&d);
     let mut s = d.open();
     d.write("song.ts", &panned(&d, "0.5"));
     let Outside::Step(id) = batch(&d, &mut s, &["song.ts"]) else { panic!("one step") };
-    let checkout = d.read("song.ts").replacen("pan: 0.5", "pan: 0.6", 1);
-    d.write("song.ts", &checkout);
+    git(&d, &["checkout", "-q", "--", "song.ts"]);
+    let checkout = d.read("song.ts");
     let by_git = s.take_in_batch(Snapshot::read(&d.0).unwrap(), &paths(&["song.ts"]), true).1;
     assert_eq!(by_git, Outside::Git(1), "git's batch makes no step");
     match s.undo() {
@@ -118,6 +141,33 @@ fn undoing_an_outside_edit_after_a_change_without_a_step_conflicts() {
     }
     assert_eq!(d.read("song.ts"), checkout, "nothing changed");
     assert_eq!(top(&s).map(|t| t.0), Some(id), "the step stays");
+}
+
+// AGENT-2: a step whose undo is refused because its file changed since can be skipped: nothing is
+// written, and the step before it undoes. One that undo can take back isn't skipped.
+#[test]
+fn a_step_whose_file_changed_since_can_be_skipped() {
+    let d = Dir::first_song();
+    committed(&d);
+    let mut s = d.open();
+    let bass = d.read("tracks/bass.ts");
+    s.save(Path::new("tracks/bass.ts"), Base::text(&bass), &format!("{bass}\n// mine\n")).unwrap();
+    let mine = top(&s).unwrap().0;
+    assert!(!s.skip_undo(mine), "a step undo can take back isn't skipped");
+    d.write("song.ts", &panned(&d, "0.5"));
+    let Outside::Step(id) = batch(&d, &mut s, &["song.ts"]) else { panic!("one step") };
+    git(&d, &["checkout", "-q", "--", "song.ts"]);
+    let checkout = d.read("song.ts");
+    assert_eq!(s.take_in_batch(Snapshot::read(&d.0).unwrap(), &paths(&["song.ts"]), true).1, Outside::Git(1));
+    assert!(s.undo().is_err(), "song.ts changed since");
+    assert!(s.undo_stuck(), "the newest step can only be skipped");
+    assert!(!s.skip_undo(mine), "only the newest");
+    assert!(s.skip_undo(id), "skipped");
+    assert_eq!(d.read("song.ts"), checkout, "nothing was written");
+    assert_eq!(top(&s).map(|t| t.0), Some(mine), "the step before it is the newest");
+    assert!(!s.undo_stuck() && s.can_undo());
+    s.undo().unwrap();
+    assert_eq!(d.read("tracks/bass.ts"), bass, "and it undoes");
 }
 
 // AGENT-2, D5: a batch that changes or removes a binary file makes no step, since its bytes
@@ -132,11 +182,12 @@ fn an_outside_binary_change_makes_no_step() {
     d.write("song.ts", &format!("{song}\n// and a text change\n"));
     let number = s.accepted().number;
     let made = batch(&d, &mut s, &["assets/keys-bounce.wav", "song.ts"]);
-    assert_eq!(made, Outside::Binary("assets/keys-bounce.wav".into()));
+    let cant = |file: &str, others| Outside::Cant { file: file.into(), why: Cant::Bytes, others };
+    assert_eq!(made, cant("assets/keys-bounce.wav", 1), "and it says the text file can't be undone either");
     assert!(s.history.is_empty(), "no step");
     assert!(s.accepted().number > number, "taken in all the same");
     std::fs::remove_file(d.0.join("assets/keys-bounce.wav.json")).unwrap();
-    assert_eq!(batch(&d, &mut s, &["assets/keys-bounce.wav.json"]), Outside::Binary("assets/keys-bounce.wav.json".into()), "removed too");
+    assert_eq!(batch(&d, &mut s, &["assets/keys-bounce.wav.json"]), cant("assets/keys-bounce.wav.json", 0), "removed too");
     assert!(s.history.is_empty());
 }
 
@@ -159,17 +210,135 @@ fn a_batch_that_only_adds_assets_makes_no_step() {
     assert!(d.0.join("assets/other-take.wav").exists(), "the new asset stays");
 }
 
-// AGENT-2: what git wrote makes no step (git can undo it), and says how many files it changed.
+// AGENT-2: what git wrote makes no step (git can undo it), and says how many files it changed: the
+// watcher saw git's lock, and each file is as git's index has it.
 #[test]
 fn a_batch_git_wrote_makes_no_step() {
     let d = Dir::first_song();
-    let mut s = d.open();
+    committed(&d);
     d.write("song.ts", &panned(&d, "0.5"));
-    d.write("tracks/bass.ts", &format!("{}\n// checked out\n", d.read("tracks/bass.ts")));
+    d.write("tracks/bass.ts", &format!("{}\n// two\n", d.read("tracks/bass.ts")));
+    git(&d, &["commit", "-q", "-a", "-m", "two"]);
+    let mut s = d.open();
+    git(&d, &["checkout", "-q", "HEAD~1", "--", "song.ts", "tracks/bass.ts"]);
     let (taken, made) = s.take_in_batch(Snapshot::read(&d.0).unwrap(), &paths(&["song.ts", "tracks/bass.ts"]), true);
     assert_eq!(made, Outside::Git(2));
     assert!(taken.accepted.is_some(), "taken in");
     assert!(s.history.is_empty() && s.step_names().0.is_none(), "no step");
+}
+
+// AGENT-2: git running while a batch settles (`git status` takes git's lock, as a shell's prompt
+// runs it) doesn't make the batch git's. A save git's index doesn't have is one step.
+#[test]
+fn a_save_while_git_runs_is_one_step() {
+    let d = Dir::first_song();
+    committed(&d);
+    let mut s = d.open();
+    let song = d.read("song.ts");
+    d.write("song.ts", &panned(&d, "0.5"));
+    let made = s.take_in_batch(Snapshot::read(&d.0).unwrap(), &paths(&["song.ts"]), true).1;
+    let Outside::Step(id) = made else { panic!("one step: {made:?}") };
+    assert_eq!(top(&s).map(|t| (t.0, t.1)), Some((id, Source::Outside)));
+    s.undo().unwrap();
+    assert_eq!(d.read("song.ts"), song, "undo takes it back");
+}
+
+// AGENT-2: the musician's code-editor save that doesn't build yet is theirs. An outside batch that
+// makes it build is one step of the outside file alone: undo takes that back, and leaves the save.
+#[test]
+fn an_outside_batch_that_makes_a_waiting_save_build_leaves_the_save_on_undo() {
+    let d = Dir::first_song();
+    let mut s = d.open();
+    let song = d.read("song.ts");
+    let mine = song.replacen(
+        "import kick from \"./tracks/kick\";",
+        "import kick from \"./tracks/kick\";\nimport { pad } from \"./tracks/pad\";\nvoid pad;",
+        1,
+    );
+    assert_ne!(mine, song);
+    let saved = s.save(Path::new("song.ts"), Base::text(&song), &mine).unwrap();
+    assert!(!saved.recorded && !s.draft_errors.is_empty(), "it doesn't build yet: no step");
+    d.write("tracks/pad.ts", "export const pad = 1;\n");
+    let Outside::Step(id) = batch(&d, &mut s, &["tracks/pad.ts"]) else { panic!("one step") };
+    assert!(s.draft_errors.is_empty(), "it builds");
+    assert_eq!(top(&s), Some((id, Source::Outside, vec!["tracks/pad.ts".to_string()])), "only the outside file");
+    s.undo().unwrap();
+    assert_eq!(d.read("song.ts"), mine, "the musician's save stays");
+    assert!(!d.0.join("tracks/pad.ts").exists(), "the outside file is gone");
+}
+
+// AGENT-2: an outside change to a file whose save didn't build yet is undone to the musician's
+// save, the text the app last knew there, not to the last version that built.
+#[test]
+fn undoing_an_outside_fix_of_a_waiting_save_puts_the_save_back() {
+    let d = Dir::first_song();
+    let mut s = d.open();
+    let bass = d.read("tracks/bass.ts");
+    let mine = format!("{bass}\nconst broken = ;\n");
+    let saved = s.save(Path::new("tracks/bass.ts"), Base::text(&bass), &mine).unwrap();
+    assert!(!saved.recorded && !s.draft_errors.is_empty(), "it doesn't build yet: no step");
+    d.write("tracks/bass.ts", &format!("{bass}\nconst fixed = 1;\n"));
+    let Outside::Step(_) = batch(&d, &mut s, &["tracks/bass.ts"]) else { panic!("one step") };
+    s.undo().unwrap();
+    assert_eq!(d.read("tracks/bass.ts"), mine, "the musician's save is back");
+}
+
+// AGENT-2, WRITE-3a: music2 never writes through a link, so a file made outside as one can't be
+// undone: the batch makes no step and says why, and the steps before it still undo.
+#[test]
+fn an_outside_link_makes_no_step_and_older_steps_still_undo() {
+    let d = Dir::first_song();
+    let mut s = d.open();
+    s.commit(pan(&d, 0.4)).unwrap();
+    let mine = top(&s).unwrap().0;
+    let target = d.0.with_extension("extra.json");
+    std::fs::write(&target, r#"{"clips": []}"#).unwrap();
+    std::os::unix::fs::symlink(&target, d.0.join("data/hats/extra.json")).unwrap();
+    let made = batch(&d, &mut s, &["data/hats/extra.json"]);
+    assert_eq!(made, Outside::Cant { file: "data/hats/extra.json".into(), why: Cant::Link, others: 0 });
+    assert_eq!(top(&s).map(|t| t.0), Some(mine), "no step");
+    s.undo().unwrap();
+    assert!(d.read("song.ts").contains("pan: 0.3"), "the step before it undoes");
+    let _ = std::fs::remove_file(&target);
+}
+
+// AGENT-2, WRITE-3a: a file renamed in capitals alone can't come back under its old name while the
+// new one is there, on a disk that ignores capitals: no step.
+#[test]
+fn an_outside_rename_in_capitals_makes_no_step() {
+    let d = Dir::first_song();
+    d.write("data/hats/extra.json", r#"{"clips": []}"#);
+    let mut s = d.open();
+    std::fs::rename(d.0.join("data/hats/extra.json"), d.0.join("data/hats/Extra.json")).unwrap();
+    let made = batch(&d, &mut s, &["data/hats/extra.json", "data/hats/Extra.json"]);
+    assert_eq!(made, Outside::Cant { file: "data/hats/extra.json".into(), why: Cant::Capitals, others: 0 });
+    assert!(s.history.is_empty(), "no step");
+}
+
+// AGENT-2: a plugin state made outside changes the sound: its step removes it. A new asset beside
+// it stays.
+#[test]
+fn an_outside_plugin_state_is_removed_by_undo() {
+    let d = Dir::first_song();
+    let mut s = d.open();
+    d.write_bytes("data/hats/hats.state", b"\x00\x01 a plugin's state");
+    let Outside::Step(_) = batch(&d, &mut s, &["data/hats/hats.state"]) else { panic!("one step") };
+    assert_eq!(top(&s).unwrap().2, vec!["data/hats/hats.state".to_string()]);
+    s.undo().unwrap();
+    assert!(!d.0.join("data/hats/hats.state").exists(), "undo removes it");
+}
+
+// AGENT-2: a window that has the song read-only can't undo, so it records no outside step for
+// what the writing window changes; it takes the change in all the same.
+#[test]
+fn a_read_only_window_records_no_outside_step() {
+    let d = Dir::first_song();
+    let mut w = d.open();
+    let mut r = Session::open_read_only(&d.0, std_packages()).unwrap_or_else(|d| panic!("{d:?}"));
+    w.commit(pan(&d, 0.5)).unwrap();
+    assert_eq!(batch(&d, &mut r, &["song.ts"]), Outside::Nothing);
+    assert!(r.step_names().0.is_none(), "no step");
+    assert!(r.accepted().snapshot.files[Path::new("song.ts")].contains("pan: 0.5"), "taken in");
 }
 
 // WRITE-2, AGENT-2: a save from the code editor is one step, the page's, as before; the watcher's

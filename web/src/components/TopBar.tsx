@@ -208,7 +208,8 @@ export default function TopBar({
       <Divider />
       <BarButton
         onClick={() => void undoTop(graph, "undo")}
-        disabled={!graph.can_undo}
+        // A step undo can't take back still answers, offering to skip it (AGENT-2).
+        disabled={!graph.can_undo && !graph.undo_stuck}
         title={`Undo${undoing ? ` ${said(undoing)}` : ""} (${chord("Z")})`}
         aria-label="Undo"
         className="w-ctl !px-0"

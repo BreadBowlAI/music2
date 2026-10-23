@@ -235,6 +235,6 @@ export interface Edited {
  */
 export async function muteInSongCall(session: number, modules: string[], muted: boolean) {
   const r = await post<Edited>("/track/mute", { session, modules, muted });
-  if (r.before !== r.after) recorded(session, r.revision, { name: muted ? "mute in song" : "unmute in song", structural: true });
+  if (r.before !== r.after) recorded(session, r, { name: muted ? "mute in song" : "unmute in song", structural: true });
   return r;
 }

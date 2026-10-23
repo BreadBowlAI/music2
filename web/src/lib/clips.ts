@@ -143,7 +143,7 @@ export async function send(graph: GraphState, gesture: Gesture, step: Step, via?
     q.revision = Math.max(q.revision, done.revision);
     // A gesture that changed nothing says "no change" on both sides. One whose words read the same
     // before and after (a quantize: the same clip, its notes moved) is still a step.
-    if (done.before !== done.after || done.before !== "no change") recorded(graph.session, done.revision, step);
+    if (done.before !== done.after || done.before !== "no change") recorded(graph.session, done, step);
     return done;
   } finally {
     q.pending--;
@@ -230,6 +230,6 @@ export async function removeAutomation(graph: GraphState, addr: LaneAddr, beat: 
   const json = await readJson(res);
   if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
   const done = json as { file: string; before: string; after: string; revision: number; step?: number };
-  if (done.before !== done.after) recorded(graph.session, done.revision, { name: `removing the ${name} automation`, structural: true });
+  if (done.before !== done.after) recorded(graph.session, done, { name: `removing the ${name} automation`, structural: true });
   return done;
 }

@@ -83,7 +83,7 @@ async function edit(path: string, body: Record<string, unknown>, step: Step) {
   if (why) return toast(`${why}.`);
   try {
     const r = await post(path, { session: graph.session, revision: graph.view.revision, ...body });
-    if (r.before !== r.after) recorded(graph.session, r.revision, step);
+    if (r.before !== r.after) recorded(graph.session, r, step);
   } catch (error) {
     toast(message(error));
   }

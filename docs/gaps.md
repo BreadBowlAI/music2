@@ -262,9 +262,10 @@ The old engine, with its own song files and screens, was removed in October 2026
 | 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. | An agent has to read the manual or the source to learn the routes. | Yes | medium |
 
 - **An agent's write through the app's API is the page's undo step** until agents get a key of their own (track 2 of the [agents design](designs/agents/design.md)): it shows no notice and isn't named as the agent's.
-- **A `git checkout` that finishes between two looks of the watcher** (50 ms) is taken as an outside edit, one undo step; and an editor's save while `git status` holds `index.lock` makes no step.
-- **The glow outlines every clip of a changed lane**, not only the clips that changed; notes in the piano roll and automation points don't glow.
-- **The `step` event's "what changed"** (a delta, and the knobs of two revisions) is worked out on the session's thread after each step: not yet timed on a 50-track song.
+- **A `git checkout` that finishes between two looks of the watcher** (50 ms) is taken as an outside edit, one undo step: a batch is git's only when git's `index.lock` was seen while it settled.
+- **The glow outlines every clip of a changed lane**, not only the clips that changed; notes in the piano roll and automation points don't glow. A rewrite of more than 500 lines is one change to the carry (`DIFF_LINES`), so no knob inside it glows.
+- **Outside saves aren't merged into one step**: an editor that saves every second as you type (autosave) makes a step each time, and 500 of them push the app's own changes out of undo. Merging close saves of the same files, with no other step between, would fix that.
+- **Only undo's newest step can be skipped**: a redo whose file changed since stays refused until the next change clears redo.
 
 ## Checked on Linux only
 

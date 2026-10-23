@@ -6,7 +6,8 @@
 // tracks, lanes and knobs it changed. For a step that isn't this page's own, the page shows one
 // notice ("Changed outside the app: the code in tracks/bass.ts · Undo"), a newer one replacing it,
 // and outlines what changed until the next click or key press. The notice's Undo sends that step's
-// id, so it can never take back another step: once a newer change came, it says so instead.
+// id, so it can never take back another step: once a newer change came, it says so instead. It
+// offers Undo only while undo can take the step back.
 
 import { create } from "zustand";
 import { useStore } from "./store";
@@ -19,6 +20,8 @@ export interface StepEvent {
   source: "page" | "outside";
   name: string;
   files: string[];
+  /** Whether undo can take it back now. */
+  undoable: boolean;
   tracks: string[];
   lanes: [string, string][];
   knobs: string[];
@@ -35,6 +38,8 @@ export interface Notice {
   name: string;
   /** Steps not made here since the notice first showed, this one included. */
   count: number;
+  /** Undo could take it back when it landed. */
+  undoable: boolean;
   /** A newer change came after it: its Undo would take back something else. */
   newer: boolean;
   /** The server's words when its Undo was refused. */
@@ -80,7 +85,16 @@ export function heard(e: StepEvent) {
   }
   const showing = notice && notice.session === e.session && !notice.newer && !notice.refused;
   useNotice.setState({
-    notice: { id: ++ids, session: e.session, step: e.step, who: who(e.source), name: e.name, count: showing ? notice.count + 1 : 1, newer: false },
+    notice: {
+      id: ++ids,
+      session: e.session,
+      step: e.step,
+      who: who(e.source),
+      name: e.name,
+      count: showing ? notice.count + 1 : 1,
+      undoable: e.undoable,
+      newer: false,
+    },
     glow: { session: e.session, tracks: new Set(e.tracks), lanes: new Set(e.lanes.map(([m, l]) => `${m}/${l}`)), knobs: new Set(e.knobs) },
   });
 }

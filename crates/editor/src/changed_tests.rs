@@ -26,11 +26,28 @@ fn changed_names_tracks_lanes_and_knobs() {
     assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
     let pan = s.controls().into_iter().find(|c| c.file == "song.ts" && c.id.ends_with("hats.pan")).expect("the hats' pan knob");
     assert!((pan.value - 0.45).abs() < 1e-9);
-    let got = changed(&s, &before);
+    let got = changed(&before, s.accepted());
     assert_eq!(
         got,
         Changed { tracks: vec!["bass".into(), "song".into()], lanes: vec![("bass".into(), "notes".into())], knobs: vec![pan.id.clone()] },
     );
     // The same revision on both sides: nothing changed.
-    assert_eq!(changed(&s, &s.accepted_arc()), Changed::default());
+    assert_eq!(changed(s.accepted(), s.accepted()), Changed::default());
+}
+
+// AGENT-5: a knob that showed its declared default, written now (the commonest agent edit, "set
+// the ceiling to -0.5"), is the same knob under its new id, and glows.
+#[test]
+fn an_inherited_knob_written_is_named() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let (id, v) = s.controls().into_iter().find(|c| c.id.contains("/@")).map(|c| (c.id, c.value)).expect("a knob left out of its call");
+    let before = s.accepted_arc();
+    let rev = s.accepted().number;
+    let to = if v == 0.0 { 0.5 } else { v * 0.5 };
+    crate::value::set(&mut s, rev, &id, to, None).unwrap();
+    let now: Vec<String> = s.controls().into_iter().filter(|c| (c.value - to).abs() < 1e-9 && c.written).map(|c| c.id).collect();
+    let [written] = &now[..] else { panic!("one knob has the new value: {now:?}") };
+    assert_ne!(written, &id, "written, it has an id of its own");
+    assert_eq!(changed(&before, s.accepted()).knobs, vec![written.clone()]);
 }

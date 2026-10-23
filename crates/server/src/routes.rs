@@ -79,6 +79,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/tx/check", post(tx_check))
         .route("/api/tx/commit", post(tx_commit))
         .route("/api/graph/undo", post(graph_undo))
+        .route("/api/graph/undo/skip", post(graph_undo_skip))
         .route("/api/graph/redo", post(graph_redo))
         .route("/api/graph/disconnect", post(graph_disconnect))
         .route("/api/graph/transport", post(graph_transport))
@@ -126,7 +127,7 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
 }
 
 /// The routes that write the open project, or begin a gesture whose commit would.
-const WRITES: [&str; 27] = [
+const WRITES: [&str; 28] = [
     "/api/graph/preview",
     "/api/graph/set",
     "/api/graph/lease/begin",
@@ -151,6 +152,7 @@ const WRITES: [&str; 27] = [
     "/api/graph/meter",
     "/api/graph/title",
     "/api/graph/undo",
+    "/api/graph/undo/skip",
     "/api/graph/redo",
     "/api/graph/file",
     "/api/tx/commit",
@@ -840,14 +842,40 @@ async fn stepped(s: Arc<AppState>, r: StepReq, redo: bool) -> Response {
     })
     .await;
     s.graph_changed();
+    step_answer(result)
+}
+
+/// An undo's, a redo's or a skip's answer: 409 when its step isn't the newest (`newest`), or
+/// when undo can't take it back and it can be skipped (`stuck`), with words either way (AGENT-2).
+fn step_answer(result: Result<anyhow::Result<Value>, tokio::task::JoinError>) -> Response {
+    use crate::graph::steps::{NotNewest, Stuck};
     match result {
         Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => match e.downcast_ref::<crate::graph::steps::NotNewest>() {
-            Some(n) => (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "newest": n.newest}))).into_response(),
-            None => ApiError::from(e).into_response(),
-        },
+        Ok(Err(e)) => {
+            if let Some(n) = e.downcast_ref::<NotNewest>() {
+                return (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "newest": n.newest}))).into_response();
+            }
+            if let Some(s) = e.downcast_ref::<Stuck>() {
+                return (StatusCode::CONFLICT, Json(json!({"error": s.to_string(), "stuck": s.stuck}))).into_response();
+            }
+            ApiError::from(e).into_response()
+        }
         Err(e) => err(e.to_string()).into_response(),
     }
+}
+
+#[derive(Deserialize)]
+struct SkipReq {
+    session: u64,
+    step: u64,
+}
+
+/// Skip the newest step, which undo can't take back (AGENT-2): nothing is written.
+async fn graph_undo_skip(State(s): S, Json(r): Json<SkipReq>) -> Response {
+    let state = s.clone();
+    let result = tokio::task::spawn_blocking(move || state.graph.skip_step(r.session, r.step)).await;
+    s.graph_changed();
+    step_answer(result)
 }
 
 #[derive(Deserialize)]

@@ -119,7 +119,10 @@ function NoticeCard({ notice }: { notice: Notice }) {
       ({ status, json }) => (status === 409 ? refused(notice.id, json.error ?? "Nothing was undone: it isn't the newest change now.") : stepped(json.step ?? notice.step)),
       (error) => refused(notice.id, error instanceof Error ? error.message : String(error)),
     );
-  const offered = !notice.newer && !notice.refused;
+  // Only an Undo that can work: the step is still the newest, and undo can take it back (AGENT-5).
+  const shown = useStore((s) => s.graph);
+  const blocked = !!shown?.read_only || (shown?.undo_name?.step === notice.step && !shown.can_undo);
+  const offered = !notice.newer && !notice.refused && notice.undoable && !blocked;
   return (
     <div
       data-testid="notice"

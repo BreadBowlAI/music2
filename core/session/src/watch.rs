@@ -651,6 +651,34 @@ pub fn git(git_dir: Option<&Path>) -> Git {
     Git { lock_age: age }
 }
 
+/// Whether git's index has each of `paths` of the project at `dir` as the folder has it now, or
+/// left it unmerged with its conflict marks: what git wrote itself, and can undo (AGENT-2). A
+/// `git status` of those paths alone, which takes none of git's locks, so it never holds up git or
+/// the watcher. False when git can't say (no git, no repository).
+pub fn git_has(dir: &Path, paths: &BTreeSet<PathBuf>) -> bool {
+    let asked = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "--no-optional-locks",
+            "--literal-pathspecs",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+            "--",
+        ])
+        .args(paths)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    let Ok(out) = asked.map_err(drop).and_then(|o| if o.status.success() { Ok(o.stdout) } else { Err(()) }) else { return false };
+    // An entry is `XY path`: Y is the folder against the index, a space when they are the same.
+    let unmerged = |xy: &[u8]| matches!(xy, b"DD" | b"AU" | b"UD" | b"UA" | b"DU" | b"AA" | b"UU");
+    out.split(|b| *b == 0).filter(|e| e.len() > 2).all(|e| e[1] == b' ' || unmerged(&e[..2]))
+}
+
 /// The wall clock, in nanoseconds since the epoch.
 pub fn wall_ns() -> i128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i128)

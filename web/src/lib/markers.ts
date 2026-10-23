@@ -78,7 +78,7 @@ export async function writeMarkers(list: Marker[], step: Step) {
     });
     const r = await readJson(res);
     if (!res.ok) throw new Error(r.error ?? `HTTP ${res.status}`);
-    if (r.before !== r.after) recorded(graph.session, r.revision, step);
+    if (r.before !== r.after) recorded(graph.session, r, step);
   } catch (error) {
     usePendingMarkers.setState({ pending: null });
     toast((error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, ""));

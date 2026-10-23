@@ -7,8 +7,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use m2_session::Revision;
 use m2_session::text::Edits;
-use m2_session::{Revision, Session};
 
 use crate::controls::{controls_in, site_by_id};
 
@@ -21,10 +21,9 @@ pub struct Changed {
     pub knobs: Vec<String>,
 }
 
-/// What changed from `before` to the session's accepted revision. Nothing when they are one
-/// revision (a change to `layout.json` alone, PLANE-3).
-pub fn changed(s: &Session, before: &Revision) -> Changed {
-    let after = s.accepted();
+/// What changed from `before` to `after`. Nothing when they are one revision (a change to
+/// `layout.json` alone, PLANE-3). Pure on the two revisions, so it can be worked out anywhere.
+pub fn changed(before: &Revision, after: &Revision) -> Changed {
     if before.number == after.number {
         return Changed::default();
     }
@@ -50,31 +49,44 @@ pub fn changed(s: &Session, before: &Revision) -> Changed {
     Changed { tracks: tracks.into_iter().collect(), lanes: lanes.into_iter().collect(), knobs }
 }
 
-/// The knobs of `after` whose value differs from what the same knob had in `before`: each of
-/// `before`'s carried by its call (WRITE-12's carry), so a call inserted above renames nothing.
+/// The knobs of `after` whose value differs from what the same knob had in `before`. A knob is its
+/// call, carried by WRITE-12's carry (so a call inserted above renames nothing), and what in the
+/// call it is: its argument path, or for one the call leaves out, its slot (`@slot`). A knob that
+/// showed its default and is written now (`@ceiling` to `1.ceiling`), or the other way, is the
+/// same knob: they share the slot.
 fn knobs(before: &Revision, after: &Revision) -> Vec<String> {
-    let now: HashMap<String, f64> = controls_in(after).into_iter().map(|c| (c.id, c.value)).collect();
-    let mut out = BTreeSet::new();
+    let mut was: HashMap<(String, String), f64> = HashMap::new();
     for c in controls_in(before) {
-        if let Some(id) = carried(before, after, &c.id)
-            && now.get(&id).is_some_and(|v| *v != c.value)
-        {
-            out.insert(id);
+        let Some(call) = carried(before, after, &c.id) else { continue };
+        let Some((_, what)) = c.id.rsplit_once('/') else { continue };
+        was.insert((call.clone(), what.to_string()), c.value);
+        for d in &c.declared {
+            was.entry((call.clone(), format!("@{}", d.slot))).or_insert(c.value);
+        }
+    }
+    let mut out = BTreeSet::new();
+    for c in controls_in(after) {
+        let Some((call, what)) = c.id.rsplit_once('/') else { continue };
+        let slots = c.declared.iter().map(|d| format!("@{}", d.slot));
+        let old = std::iter::once(what.to_string()).chain(slots).find_map(|w| was.get(&(call.to_string(), w)));
+        if old.is_some_and(|v| *v != c.value) {
+            out.insert(c.id);
         }
     }
     out.into_iter().collect()
 }
 
-/// Knob `id` of `before`, as `after` names it: its call found where its first character went, so
-/// a change inside the call (its number) keeps it, and one above it renumbers it.
+/// The call of knob `id` of `before`, as `after` names it (`file#ordinal`): found where the `(`
+/// that opens its arguments went, which names a call across edits (ID-13), so a change inside it
+/// (its number) keeps it, and a call inserted above renumbers it.
 fn carried(before: &Revision, after: &Revision, id: &str) -> Option<String> {
-    let (old, arg) = site_by_id(&before.compiled.sites, id)?;
+    let (old, _) = site_by_id(&before.compiled.sites, id)?;
     let file = Path::new(&old.file);
     let (was, is) = (before.snapshot.files.get(file)?, after.snapshot.files.get(file)?);
-    let start = old.start as usize;
-    let to = Edits::between(was, is).carry(start..start + 1)?.start as u32;
-    let site = after.compiled.sites.iter().find(|x| x.file == old.file && x.start == to)?;
-    Some(format!("{}#{}/{}", site.file, site.ordinal, arg.join(".")))
+    let open = old.open as usize;
+    let to = Edits::between(was, is).carry(open..open + 1)?.start as u32;
+    let site = after.compiled.sites.iter().find(|x| x.file == old.file && x.open == to)?;
+    Some(format!("{}#{}", site.file, site.ordinal))
 }
 
 #[cfg(test)]

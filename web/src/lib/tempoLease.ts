@@ -100,7 +100,7 @@ export function begin(session: number, at: number, ended: (why: string) => void)
               return json;
             })
           : await post("commit", { lease: id, bpm });
-      if (done.before !== done.after) recorded(session, done.revision, step);
+      if (done.before !== done.after) recorded(session, done, step);
       return done;
     },
     abort() {

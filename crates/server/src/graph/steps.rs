@@ -30,11 +30,11 @@ pub(super) fn named(step: Option<&StepName>, timeline: &Timeline) -> Value {
     json!({"name": name, "structural": given && step.structural, "given": given, "step": step.id, "source": step.source.as_str()})
 }
 
-/// The `step` event of step `step` (AGENT-5), session `token`: what every window hears as it lands,
-/// with what changed from `before`, the revision before the job that made it.
-pub(super) fn event(token: u64, step: &StepName, s: &m2_session::Session, before: &m2_session::Revision, timeline: &Timeline) -> Value {
+/// The `step` event of step `step` (AGENT-5), session `token`: what every window hears as it
+/// lands. `undoable`: undo can take it back now. Its `tracks`, `lanes` and `knobs` are filled in
+/// once worked out (`actor::changes`).
+pub(super) fn event(token: u64, step: &StepName, undoable: bool, timeline: &Timeline) -> Value {
     let named = named(Some(step), timeline);
-    let changed = m2_editor::changed::changed(s, before);
     json!({
         "t": "step",
         "session": token,
@@ -43,9 +43,10 @@ pub(super) fn event(token: u64, step: &StepName, s: &m2_session::Session, before
         "source": step.source.as_str(),
         "name": named["name"],
         "files": step.files,
-        "tracks": changed.tracks,
-        "lanes": changed.lanes,
-        "knobs": changed.knobs,
+        "undoable": undoable,
+        "tracks": [],
+        "lanes": [],
+        "knobs": [],
     })
 }
 
@@ -145,7 +146,21 @@ impl Graph {
             {
                 return Err(NotNewest { redo, newest: took }.into());
             }
-            let mut v = if redo { a.edit(token, m2_editor::redo)? } else { a.edit(token, m2_editor::undo)? };
+            let files = top.as_ref().map(|t| t.files.clone()).unwrap_or_default();
+            let mut v = if redo {
+                a.edit(token, m2_editor::redo)?
+            } else {
+                match a.edit(token, m2_editor::undo) {
+                    Ok(v) => v,
+                    // Refused for good, maybe: the window may offer to skip it (AGENT-2).
+                    Err(e) => match a.open.as_ref() {
+                        Some(o) if o.session.undo_stuck() && o.session.step_names().0.map(|t| t.id) == took["step"].as_u64() => {
+                            return Err(Stuck { stuck: took, files }.into());
+                        }
+                        _ => return Err(e),
+                    },
+                }
+            };
             v["name"] = took["name"].clone();
             v["structural"] = json!(took["structural"].as_bool().unwrap_or(false));
             // The step it took back, by its id, and the tops after it: what the window's next Undo
@@ -161,17 +176,74 @@ impl Graph {
     }
 }
 
+impl Graph {
+    /// Take the newest step, `step`, out of the history, when undo can't take it back because a
+    /// file it puts back changed since (AGENT-2): nothing is written, and Undo reaches the steps
+    /// before it. Answers `{step, undo_name, redo_name}`, the tops after it. Refused, changing
+    /// nothing, when `step` isn't the newest ([`NotNewest`]) or undo can take it back.
+    pub fn skip_step(&self, token: u64, step: u64) -> Result<Value> {
+        self.call(move |a| {
+            let o = a.open.as_mut().context("no project is open")?;
+            o.check_token(token)?;
+            let top = o.session.step_names().0;
+            if top.as_ref().map(|t| t.id) != Some(step) {
+                return Err(NotNewest { redo: false, newest: named(top.as_ref(), &o.timeline) }.into());
+            }
+            if !o.session.skip_undo(step) {
+                bail!("Undo can take that change back, so it wasn't skipped.");
+            }
+            a.republish();
+            let o = a.open.as_ref().context("no project is open")?;
+            let (undo, redo) = o.session.step_names();
+            Ok(json!({"step": step, "undo_name": named(undo.as_ref(), &o.timeline), "redo_name": named(redo.as_ref(), &o.timeline)}))
+        })
+    }
+}
+
 /// What a window is told of an outside batch that made no undo step (AGENT-2), if anything: git's,
-/// which git can undo, and one that changed a binary file, which can't be.
+/// which git can undo, and one undo couldn't put every file of back, which can't be.
 pub(super) fn unstepped(undo: &m2_session::take::Outside) -> Option<String> {
-    use m2_session::take::Outside;
+    use m2_session::take::{Cant, Outside};
     match undo {
         Outside::Git(1) => Some("Git changed a file of this song. Undo doesn't take that back: git can.".into()),
         Outside::Git(n) => Some(format!("Git changed {n} files of this song. Undo doesn't take that back: git can.")),
-        Outside::Binary(file) => Some(format!("{file} changed outside the app. That can't be undone here.")),
+        Outside::Cant { file, why, others } => {
+            let what = match others {
+                0 => file.clone(),
+                1 => format!("{file} and 1 other file"),
+                n => format!("{file} and {n} other files"),
+            };
+            let why = match why {
+                Cant::Bytes => String::new(),
+                Cant::Link => format!(": {file} is a link"),
+                Cant::Capitals => format!(": another file has the name {file} in other capitals"),
+                Cant::TooBig => ": it's more than undo keeps".into(),
+            };
+            Some(format!("{what} changed outside the app. That can't be undone here{why}."))
+        }
         Outside::Nothing | Outside::Step(_) => None,
     }
 }
+
+/// An undo refused because a file its step puts back changed since, in a way that made no step
+/// (AGENT-2): nothing changed, and the step can be skipped. `stuck` is that step as the state
+/// names it.
+#[derive(Debug)]
+pub struct Stuck {
+    pub stuck: Value,
+    pub files: Vec<String>,
+}
+
+impl std::fmt::Display for Stuck {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match &self.files[..] {
+            [one] => write!(f, "{one} changed since, so Undo can't take back that change."),
+            many => write!(f, "One of its {} files changed since, so Undo can't take back that change.", many.len()),
+        }
+    }
+}
+
+impl std::error::Error for Stuck {}
 
 /// An undo or a redo for a step that isn't the newest (AGENT-2): nothing changed. Its words name
 /// the newest, as Undo's tooltip does; `newest` is that step as the state names it (null: none).

@@ -11,6 +11,13 @@ use super::*;
 
 /// examples/first-song, open.
 fn first_song() -> (Fixture, Graph) {
+    let fixture = first_song_files();
+    let graph = fixture.open();
+    (fixture, graph)
+}
+
+/// examples/first-song's files, but its audio.
+fn first_song_files() -> Fixture {
     let fixture = Fixture::new();
     let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song");
     let mut stack = vec![from.clone()];
@@ -24,8 +31,7 @@ fn first_song() -> (Fixture, Graph) {
             }
         }
     }
-    let graph = fixture.open();
-    (fixture, graph)
+    fixture
 }
 
 /// The state's names of Undo's and Redo's steps: their words, or "-" with none.
@@ -112,6 +118,7 @@ fn a_step_made_elsewhere_gets_a_plain_name() {
     tx.base.insert(TxPath::lane(&lane), Base::Sha(m2_song::Sha::of(fixture.read("data/bass/notes.json").as_bytes())));
     let (status, answer) = graph.tx_commit(None, &tx.to_json()).unwrap();
     assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer["step"], graph.state().unwrap()["undo_name"]["step"], "it answers with its step, as an edit does: {answer}");
     assert_eq!(names(&graph).0, "Bass notes");
     assert_eq!(graph.undo(token(&graph)).unwrap()["name"], json!("Bass notes"));
     assert_eq!(names(&graph).1, "Bass notes");
@@ -129,7 +136,9 @@ fn a_refused_undo_keeps_the_names() {
     let (fixture, graph) = first_song();
     let made = set(&graph, 0.3, 0.4);
     graph.name_step(token(&graph), made, "Hats pan".into(), false).unwrap();
-    // Another editor changes the same value meanwhile.
+    // The same value changes meanwhile in a way that makes no step, as a git checkout does: `poll`
+    // takes the folder in without the watcher, so it records none. (An editor's save would be a
+    // step of its own, which undo takes back first, AGENT-2.)
     fixture.put("song.ts", &fixture.read("song.ts").replacen("pan: 0.4", "pan: 0.45", 1));
     graph.poll();
     let refused = graph.undo(token(&graph));
@@ -269,7 +278,7 @@ fn a_step_event_names_what_its_delta_changed() {
     let [e] = &told[..] else { panic!("one step event: {told:?}") };
     let state = graph.state().unwrap();
     assert_eq!((&e["session"], &e["made"], &e["step"]), (&json!(session), &json!(revision), &state["undo_name"]["step"]), "{e}");
-    assert_eq!((&e["source"], &e["name"]), (&json!("outside"), &json!("2 files")), "{e}");
+    assert_eq!((&e["source"], &e["name"], &e["undoable"]), (&json!("outside"), &json!("2 files"), &json!(true)), "{e}");
     assert_eq!(e["files"], json!(["data/bass/notes.json", "song.ts"]), "{e}");
     assert_eq!(e["tracks"], json!(["bass", "song"]), "{e}");
     assert_eq!(e["lanes"], json!([["bass", "notes"]]), "{e}");
@@ -284,4 +293,84 @@ fn a_step_event_names_what_its_delta_changed() {
     assert_eq!(mine.len(), 1, "{mine:?}");
     assert_eq!((&mine[0]["source"], &mine[0]["tracks"]), (&json!("page"), &json!(["song"])), "{:?}", mine[0]);
     assert_eq!(mine[0]["knobs"].as_array().map(Vec::len), Some(1), "{:?}", mine[0]);
+}
+
+/// A server on first-song's files, with the test token: its url, the graph and the session.
+fn serving() -> (Fixture, crate::Running, u64) {
+    let fixture = first_song_files();
+    let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t0k".into() };
+    let running = crate::start_with(options, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
+    (fixture, running, session)
+}
+
+// AGENT-2, as the page sees it: `POST /api/graph/undo` with a step that isn't the newest answers
+// 409, with the newest in `newest` and words that name it, and changes nothing; so does the page's
+// 0 (it names no step). With the newest, 200, and the step it took back.
+#[test]
+fn the_undo_route_answers_409_naming_the_newest_step() {
+    let (fixture, running, session) = serving();
+    let graph = &running.state.graph;
+    set(graph, 0.3, 0.4);
+    let first = graph.state().unwrap()["undo_name"]["step"].as_u64().unwrap();
+    set(graph, -0.25, -0.5);
+    let second = graph.state().unwrap()["undo_name"]["step"].as_u64().unwrap();
+    let song = fixture.read("song.ts");
+    let post =
+        |step: u64| crate::routes_8b::tests::post(&running.url, "/api/graph/undo", Some("t0k"), &json!({"session": session, "step": step}));
+    for stale in [first, 0] {
+        let (status, body) = post(stale);
+        assert_eq!((status, &body["newest"]["step"], &body["newest"]["source"]), (409, &json!(second), &json!("page")), "{body}");
+        assert!(body["error"].as_str().unwrap().contains("The newest is the code in song.ts"), "{body}");
+    }
+    assert_eq!(fixture.read("song.ts"), song, "nothing changed");
+    let (status, body) = post(second);
+    assert_eq!((status, &body["step"], &body["undo_name"]["step"]), (200, &json!(second), &json!(first)), "{body}");
+    assert_ne!(fixture.read("song.ts"), song, "undone");
+}
+
+// AGENT-2: an undo refused because its file changed since in a way that made no step (here a
+// batch that also removed an audio file, which undo can't put back) answers 409 with `stuck`.
+// Skipping it writes nothing, and Undo reaches the step before it; a step undo can take back
+// isn't skipped.
+#[test]
+fn a_stuck_undo_answers_409_and_can_be_skipped() {
+    let (fixture, running, session) = serving();
+    let graph = &running.state.graph;
+    let post =
+        |path: &str, step: u64| crate::routes_8b::tests::post(&running.url, path, Some("t0k"), &json!({"session": session, "step": step}));
+    set(graph, 0.3, 0.4);
+    let mine = graph.state().unwrap()["undo_name"]["step"].as_u64().unwrap();
+    std::fs::create_dir_all(fixture.0.join("assets")).unwrap();
+    std::fs::write(fixture.0.join("assets/spare.wav"), wav(480)).unwrap();
+    let bass = fixture.read("tracks/bass.ts");
+    fixture.put("tracks/bass.ts", &format!("{bass}\n// from another editor\n"));
+    let start = std::time::Instant::now();
+    let outside = loop {
+        let top = graph.state().unwrap()["undo_name"].clone();
+        if top["source"] == json!("outside") {
+            break top["step"].as_u64().unwrap();
+        }
+        assert!(start.elapsed().as_secs() < 5, "an outside step");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let (status, body) = post("/api/graph/undo/skip", outside);
+    assert_eq!(status, 400, "undo can take it back: {body}");
+    // One batch: the audio file goes, which makes no step, and the code changes again.
+    std::fs::remove_file(fixture.0.join("assets/spare.wav")).unwrap();
+    fixture.put("tracks/bass.ts", &format!("{bass}\n// changed again\n"));
+    let start = std::time::Instant::now();
+    while graph.state().unwrap()["undo_stuck"] != json!(true) {
+        assert!(start.elapsed().as_secs() < 5, "stuck: {}", graph.state().unwrap()["undo_name"]);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let (status, body) = post("/api/graph/undo", outside);
+    assert_eq!((status, &body["stuck"]["step"]), (409, &json!(outside)), "{body}");
+    assert_eq!(body["error"], json!("tracks/bass.ts changed since, so Undo can't take back that change."), "{body}");
+    assert!(fixture.read("tracks/bass.ts").contains("changed again"), "nothing was written");
+    assert_eq!(post("/api/graph/undo/skip", mine).0, 409, "only the newest is skipped");
+    let (status, body) = post("/api/graph/undo/skip", outside);
+    assert_eq!((status, &body["undo_name"]["step"]), (200, &json!(mine)), "{body}");
+    assert!(fixture.read("tracks/bass.ts").contains("changed again"), "skipping writes nothing");
+    assert_eq!(post("/api/graph/undo", mine).0, 200, "Undo reaches the step before it");
 }

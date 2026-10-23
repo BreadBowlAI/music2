@@ -443,6 +443,8 @@ export interface GraphState extends GraphStatus {
   /** Whether an edit made here can be undone or redone. */
   can_undo: boolean;
   can_redo: boolean;
+  /** Undo can't take the newest step back (a file it puts back changed since): it can be skipped (AGENT-2). */
+  undo_stuck?: boolean;
   /** Effects the packages offer to put after audio. */
   effects: Effect[];
   /** Instruments a new track can play, drums first. Absent from older servers. */
@@ -661,15 +663,18 @@ export const editorHooks: {
 function edit<T extends { revision: number; before: string; after: string; pending?: boolean }>(session: number, step: Step | ((r: T) => Step), p: Promise<T>) {
   // A value held while the code doesn't compile (`pending`) commits nothing yet; nor does an edit that changes nothing.
   return p.then((r) => {
-    if (!r.pending && r.before !== r.after) recorded(session, r.revision, typeof step === "function" ? step(r) : step);
+    if (!r.pending && r.before !== r.after) recorded(session, r, typeof step === "function" ? step(r) : step);
     return r;
   });
 }
 
 /** An edit's answer. `step`: the undo step it made, by its id (AGENT-2); an undo's or a redo's: the step it took back. */
 type Edit = { file: string; before: string; after: string; revision: number; step?: number };
-/** An undo's or a redo's answer: the edit, the tops after it; or, refused, the newest step. */
-type Stepped = Edit & { undo_name?: StepName | null; redo_name?: StepName | null; newest?: StepName | null };
+/**
+ * An undo's or a redo's answer: the edit, the tops after it; or, refused, the newest step (`newest`),
+ * or the step undo can't take back, which can be skipped (`stuck`).
+ */
+type Stepped = Edit & { undo_name?: StepName | null; redo_name?: StepName | null; newest?: StepName | null; stuck?: StepName };
 
 export const graphApi = {
   get: () => call<GraphState>(""),
@@ -765,7 +770,7 @@ export const graphApi = {
   /** A layout write (no revision, PLANE-3): every track in a new order, one track's colour, or the defaults. */
   // Always a step of its own, though a move says "Kick" before and after: what Undo takes back next.
   layout: (session: number, change: { order?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) =>
-    call<Edit>("/layout", { session, ...change }).then((r) => (recorded(session, r.revision, step), r)),
+    call<Edit>("/layout", { session, ...change }).then((r) => (recorded(session, r, step), r)),
   /**
    * Undo the step `step` names, only while it is the newest (AGENT-2); without it, the newest. A
    * step that isn't the newest is a 409: nothing changed, and `newest` names the newest.
@@ -774,6 +779,11 @@ export const graphApi = {
   /** Try the project's lock again (the read-only banner's Retry). Answers with the state. */
   retryLock: (session: number) => call<GraphState>("/lock/retry", { session }),
   redo: (session: number, step?: number) => answer<Stepped>("/redo", { session, step }),
+  /**
+   * Skip the newest step, `step`, which undo can't take back: it leaves the history and nothing is
+   * written, so Undo reaches the steps before it. Answers with the tops after it.
+   */
+  skip: (session: number, step: number) => answer<Stepped>("/undo/skip", { session, step }),
   /** Play, stop, or the one of them it isn't doing (Space). A stop leaves the playhead where it stopped. */
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
   /**
