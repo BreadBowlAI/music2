@@ -1,0 +1,10 @@
+<!-- The app icon's drawing. To change it: edit this page, take a 1024x1024 screenshot with a
+     transparent background (headless Chrome), then in web/: npx tauri icon <that png> -o <dir>, and copy
+     the files tauri.conf.json lists (and 64x64.png, icon.png) into this folder. The font is Liberation Sans
+     (SIL Open Font License 1.1), narrowed to 82%. -->
+<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;width:1024px;height:1024px;background:transparent}
+.tile{position:absolute;left:100px;top:100px;width:824px;height:824px;border-radius:185px;background:#fff;
+  box-shadow:0 10px 24px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.06) inset;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.word{font-family:'Liberation Sans';font-weight:400;font-size:300px;letter-spacing:-4px;color:#000;filter:blur(4px);transform:translateY(-12px) scaleX(0.82)}
+</style></head><body><div class="tile"><div class="word">music2</div></div></body></html>

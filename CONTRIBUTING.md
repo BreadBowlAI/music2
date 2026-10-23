@@ -64,7 +64,7 @@ cargo run --locked --release -p music2-desktop
 
 | Tier | When | What |
 |---|---|---|
-| **Pull request** | every pull request, the merge queue, and each push to `main` | fmt, clippy, the Rust tests in 3 parts, the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences (cargo-deny, npm), the workflow files (actionlint), and the checks' own cases. Security advisories (RustSec) only when a `Cargo.lock` or `deny.toml` changes. Only checks that give the same answer every time, on any day. |
+| **Pull request** | every pull request and each push to `main` (and the merge queue, if one is on) | fmt, clippy, the Rust tests in 3 parts, the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences (cargo-deny, npm), the workflow files (actionlint), and the checks' own cases. Security advisories (RustSec) only when a `Cargo.lock` or `deny.toml` changes. Only checks that give the same answer every time, on any day. |
 | **Nightly** | every day on `main`, on GitHub's machines, once the repository is public | the full check without the timing gates: every pull request check, with the browser suites one at a time, the tests the pull request tier leaves out, and the security advisories. On macOS too: the Rust tests, the pool's models, the browser suites and the renders. |
 | **Timing gates** | every night on a quiet machine of a maintainer's | the gates that time real-time audio. A shared cloud machine can't judge them. |
 
@@ -88,7 +88,7 @@ cargo run --locked --release -p music2-desktop
 1. CI runs on your pull request. Its one required check is **ci-ok**: it passes only when every other check passed. A pull request that changes only docs runs a quick docs check instead, and the rest is skipped.
 2. A first-time contributor's checks start after a maintainer allows them (a GitHub setting that keeps spam from using the shared machines).
 3. A maintainer reviews it. Expect questions: they are about the contract, the taste and plain words as much as the code.
-4. Once approved, it goes into the **merge queue**. The queue runs the checks again on top of the newest `main`, then merges it with a merge commit.
+4. Once approved and up to date with `main` (its checks run again on top of the newest `main`), it merges with a merge commit.
 5. The expensive and timing-sensitive tests run every night on `main`. If the nightly run fails, it opens an issue called "Nightly failed".
 
 ## Building and testing
