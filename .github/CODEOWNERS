@@ -1,0 +1,8 @@
+# Who must review a change to the files that decide whether a pull request passes:
+# the checks, the workflows, the licence rules, how the Rust tests run, and how the
+# browser suites are judged (docs/maintainers.md, part 2).
+/ci/ @BreadBowlAI
+/.github/ @BreadBowlAI
+/deny.toml @BreadBowlAI
+/.config/ @BreadBowlAI
+/e2e/run.mjs @BreadBowlAI
