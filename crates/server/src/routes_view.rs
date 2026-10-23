@@ -52,8 +52,8 @@ struct ViewReq {
 }
 
 /// The page's view settings (Q16): `{session, set: {key: value | null}}`, merged into what the
-/// state's `local` holds (null takes a key out). Only `zoom`, `follow`, `heights`, `hidden`,
-/// `grid` and `audition`. Answers `{local}`.
+/// state's `local` holds (null takes a key out). Only the 8 keys of `view_file::KEYS`: `zoom`,
+/// `follow`, `heights`, `hidden`, `grid`, `audition`, `metronome` and `guide`. Answers `{local}`.
 async fn graph_view(State(s): S, Json(r): Json<ViewReq>) -> ApiResult {
     let state = s.clone();
     Ok(Json(blocking(move || state.graph.set_view(r.session, r.set)).await?))
