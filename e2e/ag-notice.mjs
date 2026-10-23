@@ -255,8 +255,6 @@ if (process.env.AG_SHOT) {
   await page.screenshot({ path: `${process.env.AG_SHOT}/agent-notice.png` });
   const b = await (await page.$("[data-testid=notice]"))?.boundingBox();
   if (b) await page.screenshot({ path: `${process.env.AG_SHOT}/agent-notice-near.png`, clip: { x: b.x - 24, y: b.y - 24, width: b.width + 48, height: b.height + 48, scale: 3 } });
-  const u = await (await page.$('button[aria-label="Undo"]'))?.boundingBox();
-  if (u) await page.screenshot({ path: `${process.env.AG_SHOT}/agent-undo-near.png`, clip: { x: u.x - 60, y: u.y - 8, width: u.width + 160, height: u.height + 16, scale: 3 } });
 }
 await page.click("[data-testid=notice] button");
 check(await until(() => read("data/bass/notes.json") === beforeAgent), "the notice's Undo takes the agent's change back");

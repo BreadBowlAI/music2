@@ -94,7 +94,7 @@ export const SUITES = [
   ["cables", "cables", { expect: 12, s: 5 }],
   ["undo", "cables", { expect: 10, s: 6 }],
   ["nx-undo", "fix", { expect: 18, s: 2 }],
-  ["ag-notice", "fix", { expect: 47, s: 20 }],
+  ["ag-notice", "fix", { expect: 53, s: 22 }],
   ["effects", "proj", { expect: 12, s: 7 }],
   ["nx-effects", "fix", { expect: 47, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
   ["layout", "proj", { expect: 39, s: 8 }],

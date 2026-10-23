@@ -86,13 +86,15 @@ export function heard(e: StepEvent) {
     const newer = notice && notice.session === e.session && notice.step < e.step ? { ...notice, newer: true } : notice;
     return useNotice.setState({ glow: null, notice: newer });
   }
-  const showing = notice && notice.session === e.session && !notice.newer && !notice.refused;
+  // Counted while they come from the same author: another's starts a notice of its own.
+  const by = who(e.source, e.by);
+  const showing = notice && notice.session === e.session && !notice.newer && !notice.refused && notice.who === by;
   useNotice.setState({
     notice: {
       id: ++ids,
       session: e.session,
       step: e.step,
-      who: who(e.source, e.by),
+      who: by,
       name: e.name,
       count: showing ? notice.count + 1 : 1,
       undoable: e.undoable,

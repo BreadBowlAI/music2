@@ -43,7 +43,8 @@ Revision 3. Revision 2 answered a skeptic's six major findings; this one answers
 the design simpler (section 10). It builds on the design panel's combined architecture, "one song, one
 writer, many hands", and on the code map (every UI action against its route and its `m2` command, and what
 an agent can and can't see). Track 1 (`ag-steps`) is built on branch `ag`: what it does and the choices it made are in
-[build-notes-steps.md](build-notes-steps.md). Tracks 2 to 5 are not built yet.
+[build-notes-steps.md](build-notes-steps.md). Track 2 (`ag-fwd`) is built on branch `ag-fwd`:
+[build-notes-fwd.md](build-notes-fwd.md). Tracks 3 to 5 are not built yet.
 
 ## 2. What each side needs
 

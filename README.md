@@ -5,7 +5,7 @@
 - In music2 a song is a folder, and the folder is a small program. Code says how the song sounds: the instruments, the effects and the mix. Data files say what plays: the notes, the automation (knob moves over time) and the audio.
 - The app shows that folder as a timeline, a piano roll, knobs and cables, and a code editor. Every change you make there is written into the files at once.
 - It is made for people new to making music, and it aims to stay simple yet elegant enough for a producer.
-- There's no AI inside the app. Scripts and AI agents can work on a song through the same files and a local API.
+- There's no AI inside the app. Scripts and AI agents can work on a song through the same files, the `m2` command and a local API. While the song is open, an agent's change goes through the app: you see each one land, you can take it back, and it waits while you hold what it changes.
 
 ![The music2 window: six tracks on the timeline, and the Bass clip open in the piano roll below](docs/screenshot.png)
 
