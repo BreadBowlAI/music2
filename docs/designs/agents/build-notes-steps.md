@@ -56,7 +56,7 @@ Where the design was unclear, or didn't fit today's code, this is what was done 
 
 - The crates touched (`m2-session`, `m2-editor`, `m2-server`): every test passes.
 - Browser suites: `ag-notice`, `undo`, `nx-undo`, `notes`, `pl-notes`, `sx-follow`, `s6-write` and `code` pass; every PR-tier suite was run once (the three that ⌘Z right after an edit failed, which choice 6 fixed).
-- `ci/check.sh --pr`: see the track's report.
+- `ci/check.sh --pr` at `f2e1942`: `music2 check --pr: PASS` (quick, clippy, rust, suites, renders; 8 min, on the Linux build server, with the test plugins).
 - Screenshots of the notice and the glow: `~/m2-runs/sag/shots3/` and `~/m2-runs/sag/shots5/` (made by `AG_SHOT=<folder>` with the suite). Looking at them changed two things: the glow got a soft inner glow so it reads as a highlight, not a focus ring, and the notice's "a newer change" words moved into its sentence, since side by side they broke its one line into two columns.
 
 ## Left for later
