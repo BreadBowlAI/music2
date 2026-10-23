@@ -39,6 +39,8 @@ interface Loaded {
   before: string;
   after: string;
   revision: number;
+  /** The undo step it made, by its id (AGENT-2): what its toast's Undo takes back. */
+  step?: number;
   /** False when the sound had these settings already: nothing was written, so there is no Undo. */
   changed: boolean;
   kept: Kept[];

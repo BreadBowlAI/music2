@@ -1,6 +1,6 @@
 // The graph view of the open song project: types, API, layout.
 
-import { recorded, type Step } from "./history";
+import { recorded, type Step, type StepName } from "./history";
 import { token } from "./native";
 
 /** A declared control a constant is (PKG-3): its instance's frame, its slot, and whether the call leaves it out. */
@@ -666,7 +666,10 @@ function edit<T extends { revision: number; before: string; after: string; pendi
   });
 }
 
-type Edit = { file: string; before: string; after: string; revision: number };
+/** An edit's answer. `step`: the undo step it made, by its id (AGENT-2); an undo's or a redo's: the step it took back. */
+type Edit = { file: string; before: string; after: string; revision: number; step?: number };
+/** An undo's or a redo's answer: the edit, the tops after it; or, refused, the newest step. */
+type Stepped = Edit & { undo_name?: StepName | null; redo_name?: StepName | null; newest?: StepName | null };
 
 export const graphApi = {
   get: () => call<GraphState>(""),
@@ -763,10 +766,14 @@ export const graphApi = {
   // Always a step of its own, though a move says "Kick" before and after: what Undo takes back next.
   layout: (session: number, change: { order?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) =>
     call<Edit>("/layout", { session, ...change }).then((r) => (recorded(session, r.revision, step), r)),
-  undo: (session: number) => call<Edit>("/undo", { session }),
+  /**
+   * Undo the step `step` names, only while it is the newest (AGENT-2); without it, the newest. A
+   * step that isn't the newest is a 409: nothing changed, and `newest` names the newest.
+   */
+  undo: (session: number, step?: number) => answer<Stepped>("/undo", { session, step }),
   /** Try the project's lock again (the read-only banner's Retry). Answers with the state. */
   retryLock: (session: number) => call<GraphState>("/lock/retry", { session }),
-  redo: (session: number) => call<Edit>("/redo", { session }),
+  redo: (session: number, step?: number) => answer<Stepped>("/redo", { session, step }),
   /** Play, stop, or the one of them it isn't doing (Space). A stop leaves the playhead where it stopped. */
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
   /**

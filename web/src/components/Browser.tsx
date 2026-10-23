@@ -62,7 +62,7 @@ export function addEffectTo(module: string, component: string) {
   const add = () =>
     graphApi
       .addEffect(graph.session, graph.view.revision, end.node.id, effect)
-      .then((r) => toast(`Added ${effect.label} after ${after}`, undoAction(graph.session, r.revision)))
+      .then((r) => toast(`Added ${effect.label} after ${after}`, undoAction(graph.session, r.step)))
       .catch((error) => toast((error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, "")));
   if (!end.also.length) return void add();
   toast(`${effect.label} after ${after} would reach ${end.also.join(" and ")} too`, {

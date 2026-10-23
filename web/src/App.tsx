@@ -1,9 +1,10 @@
 import { LucideProvider, WifiOff } from "lucide-react";
 import { useEffect } from "react";
 import { connect, on } from "./lib/events";
+import { heard as heardStep } from "./lib/notice";
 import { useStore } from "./lib/store";
 import Toasts from "./components/Toasts";
-import GraphCanvas, { closeSong, graphUndo } from "./components/GraphCanvas";
+import GraphCanvas, { closeSong, undoTop } from "./components/GraphCanvas";
 import Shortcuts from "./components/Shortcuts";
 import StartScreen from "./components/StartScreen";
 import NewSongDialog, { openNewSong } from "./components/NewSongDialog";
@@ -127,6 +128,7 @@ export default function App() {
     const heard = [
       on("toast", (msg) => toast(msg.text, undefined, true)),
       on("graph", () => void refreshGraph()),
+      on("step", heardStep),
       on("export", (msg) => void onExportEvent(msg)),
     ];
     const stop = connect((c) => {
@@ -290,7 +292,7 @@ export function appCommand(id: string) {
       // In the code editor, its own history; in a text field, undo the typing, like any native app.
       if (editorHooks.undo?.(id === "redo")) return;
       if (editing()) return void document.execCommand(id);
-      return void graphUndo(graph.session, id);
+      return void undoTop(graph, id);
     case "duplicate": {
       // Focus decides (taste.md §5.3): in the code editor, its own ⌘D; else the roll's selected
       // notes; else the timeline's selected clips; else the selected track, when no clip of it is

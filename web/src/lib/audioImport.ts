@@ -27,6 +27,8 @@ export const isWav = (name: string) => WAV.some((x) => name.toLowerCase().endsWi
 /** What the server answers. */
 interface Imported {
   revision: number;
+  /** The undo step it made, by its id (AGENT-2): what its toast's Undo takes back. */
+  step?: number;
   name: string;
   made: { module: string; lane: string; id: string }[];
   tracks: { module: string; label: string }[];
@@ -92,7 +94,7 @@ export async function bringIn(files: Incoming[], to: Target) {
     if (done.tracks.length === 1) said.unshift(`Added ${done.tracks[0].label}, playing ${done.assets[0]}`);
     else if (done.tracks.length > 1) said.unshift(`Added ${done.tracks.length} audio tracks`);
     // A new track may be off screen: its toast has Undo.
-    if (said.length) toast(said.join(" "), done.tracks.length ? undoAction(graph.session, done.revision) : undefined);
+    if (said.length) toast(said.join(" "), done.tracks.length ? undoAction(graph.session, done.step) : undefined);
   } catch (error) {
     toast(`Nothing was added to the song: ${words(error)}`);
   }
@@ -189,7 +191,7 @@ export async function addAudioTrack(after: string | null) {
     useStore.getState().set({ graph: fresh });
     useShell.getState().select(json.module);
     trackMade(json.module, AUDIO_TRACK.lane);
-    toast(`Added ${json.label}`, undoAction(graph.session, json.revision));
+    toast(`Added ${json.label}`, undoAction(graph.session, json.step));
   } catch (error) {
     toast(words(error));
   }

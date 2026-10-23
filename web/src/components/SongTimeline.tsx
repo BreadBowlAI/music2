@@ -74,6 +74,7 @@ import { audioLabel, audioRows, VolumePopover, Wave, type WaveEdit } from "./Wav
 import { edgeLimits, fileSeconds, respanned } from "../lib/peaks";
 import Take from "./Take";
 import { exportMidi } from "../lib/midiFiles";
+import { useGlows } from "../lib/notice";
 
 /** A clip sits this far inside its row, inside its 1px border; its drawing this far inside that. */
 const CLIP_INSET = 4;
@@ -1859,6 +1860,8 @@ const TrackRows = memo(function TrackRows({
   const module = track.module;
   const ppb = useZoom();
   const selected = useShell((s) => s.selected === module);
+  // Changed elsewhere just now (AGENT-5): outlined until the next click or key press.
+  const glows = useGlows("tracks", module);
   // Notes outlines the clip it shows.
   const shown = useShell((s) => (s.view === "notes" && s.module === module ? (s.clips[module] ?? null) : null));
   const open = useShell((s) => s.open.has(module));
@@ -1895,6 +1898,7 @@ const TrackRows = memo(function TrackRows({
                 title: opts.movable
                   ? `${moduleName({ key: module, label: track.label })}: click to show it in the dock below · drag to move it · right-click for more`
                   : "Song: click to show what the whole song plays through",
+                "data-glow": glows || undefined,
               }
           : {})}
         className={clsx(
@@ -2265,6 +2269,8 @@ function LaneClips({
   onMenu: (ref: ClipRef, e: React.MouseEvent<HTMLElement>) => void;
 }) {
   const picked = useClipSelection((s) => s.picked);
+  // Its lane changed elsewhere just now (AGENT-5): every clip of it outlined.
+  const glows = useGlows("lanes", `${module}/${lane.key}`);
   // An automation point picked, and points being edited: drawn in place of the clip's own.
   const point = usePoints((s) => (s.picked && s.picked.clip.module === module && s.picked.clip.lane === lane.key ? s.picked : null));
   const editing = usePoints((s) => (s.editing && s.editing.clip.module === module && s.editing.clip.lane === lane.key ? s.editing : null));
@@ -2325,6 +2331,7 @@ function LaneClips({
         hidden={hidden}
         editable={editable}
         painting={painting}
+        glow={glows}
         onDoubleClick={lane.kind === "notes" ? () => onOpen(i) : undefined}
         onPointerDown={(e) => onDown(ref, e)}
         onContextMenu={(e) => onMenu(ref, e)}
@@ -2376,6 +2383,7 @@ function Clip({
   dragged,
   editable,
   painting,
+  glow,
   onDoubleClick,
   onPointerDown,
   onContextMenu,
@@ -2398,6 +2406,8 @@ function Clip({
   editable?: boolean;
   /** Draw mode on an automation clip: a drag paints its points. */
   painting?: boolean;
+  /** Its lane changed elsewhere just now (AGENT-5). */
+  glow?: boolean;
   onDoubleClick?: () => void;
   /** Given, the clip can be selected (and, editable, dragged by its body or either edge). */
   onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
@@ -2415,6 +2425,7 @@ function Clip({
       data-length={clip.length}
       data-open={open || undefined}
       data-picked={picked || undefined}
+      data-glow={glow || undefined}
       title={title || undefined}
       // Its body is the tint, its border the bar; the selected clip is the strongest outline on screen.
       className={clsx(

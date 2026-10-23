@@ -224,6 +224,8 @@ export interface Edited {
   before: string;
   after: string;
   revision: number;
+  /** The undo step it made, by its id (AGENT-2): what its toast's Undo takes back. */
+  step?: number;
 }
 
 /**

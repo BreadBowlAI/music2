@@ -21,7 +21,7 @@ export function unautomate(addr: LaneAddr) {
   const lane = findLane(graph.timeline, addr.module, addr.lane);
   const name = lane ? laneTitle(lane) : addr.lane;
   removeAutomation(graph, addr, playhead(), name).then(
-    (done) => toast(`Removed the ${name} automation`, undoAction(graph.session, done.revision)),
+    (done) => toast(`Removed the ${name} automation`, undoAction(graph.session, done.step)),
     (error) => toast(error instanceof Error ? error.message : String(error)),
   );
 }

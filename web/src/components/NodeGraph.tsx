@@ -53,6 +53,7 @@ import {
 import { listenTo, moveEffect, turnEffect } from "../lib/effects";
 import { laneMade } from "../lib/events";
 import { mod, opt } from "../lib/native";
+import { useGlows } from "../lib/notice";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Dots } from "./draw";
@@ -774,8 +775,8 @@ function NodeCard({
   }, [call]);
   const why = useContext(Locked);
   /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
-  const edited = (p: Promise<{ revision: number }>, words: string) =>
-    p.then((c) => toast(words, undoAction(session, c.revision))).catch((error) => toast(error instanceof Error ? error.message : String(error)));
+  const edited = (p: Promise<{ revision: number; step?: number }>, words: string) =>
+    p.then((c) => toast(words, undoAction(session, c.step))).catch((error) => toast(error instanceof Error ? error.message : String(error)));
   // Just the header, its one circle beside it (see `compact`).
   const small = compact(node);
   // The Song's mixer, as one compact card (MX-6).
@@ -1412,6 +1413,8 @@ function KnobControl({
     hold: (token, on) => (on ? held.set(token, { knob: mountKey, node: nodeKey }) : held.delete(token)),
   });
   const value = g.value;
+  // Changed elsewhere just now (AGENT-5): outlined until the next click or key press.
+  const glows = useGlows("knobs", knob.id);
   // The knob's menu (right-click), anchored to the knob: its left edge, below it (or above it, the room).
   const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
   const svg = useRef<SVGSVGElement>(null);
@@ -1430,7 +1433,7 @@ function KnobControl({
     graphApi
       .automate(session, revision, knob.id)
       .then((r) => {
-        toast(`Automating ${r.name} in a new lane`, undoAction(session, r.revision));
+        toast(`Automating ${r.name} in a new lane`, undoAction(session, r.step));
         laneMade(r.lane.module, r.lane.lane);
       })
       .catch((error) => toast(error instanceof Error ? error.message : String(error)));
@@ -1485,6 +1488,7 @@ function KnobControl({
       }}
       data-knob={knob.label}
       data-knob-id={editable ? knob.id : undefined}
+      data-glow={glows || undefined}
       data-value={value}
       data-shared={knob.uses > 1 || undefined}
       data-default={!knob.written || undefined}

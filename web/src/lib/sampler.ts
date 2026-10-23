@@ -52,7 +52,7 @@ export async function dropOnSampler(files: DropFile[], t: SamplerTarget) {
     if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
     const fresh = await graphApi.get();
     useStore.getState().set({ graph: fresh });
-    toast(`${t.title} plays ${json.asset}`, undoAction(graph.session, json.revision));
+    toast(`${t.title} plays ${json.asset}`, undoAction(graph.session, json.step));
   } catch (error) {
     toast(`Nothing was changed: ${words(error)}`);
   }

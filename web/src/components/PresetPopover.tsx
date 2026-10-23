@@ -76,7 +76,7 @@ export default function PresetPopover({
         else
           toast(
             `Loaded ${name} into ${title}${kept ? `. ${kept}` : ""}`,
-            undoAction(session, r.revision),
+            undoAction(session, r.step),
           );
       },
       (e) => toast(e instanceof Error ? e.message : String(e)),

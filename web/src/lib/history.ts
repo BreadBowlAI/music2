@@ -4,7 +4,8 @@
 // made, and follows it through undo and redo, for every window and after a reload. The window that
 // makes an edit names it as it records it (`POST /api/graph/step`); a step made elsewhere (an
 // agent's Tx, a save in another editor) has a plain name from what it changed ("Bass notes"). The
-// state says the two tops as `undo_name` and `redo_name`.
+// state says the two tops as `undo_name` and `redo_name`, each with its id and who made it
+// (AGENT-2): a file saved in another program is "Undo outside change: the code in song.ts".
 
 import { useStore } from "./store";
 import { request } from "./projects";
@@ -22,6 +23,15 @@ export interface StepName {
   name: string;
   structural: boolean;
   given: boolean;
+  /** Its id: what Undo and Redo send, so they take back only this step (AGENT-2). */
+  step?: number;
+  /** Who made it: this page (or the app's API), or a program outside the app. */
+  source?: "page" | "outside";
+}
+
+/** A step as Undo's tooltip says it after "Undo": its name, or "outside change: …" (AGENT-2). */
+export function said(step: StepName): string {
+  return step.source === "outside" ? `outside change: ${step.name}` : step.name;
 }
 
 declare module "./graph" {
@@ -50,7 +60,7 @@ let answered: { session: number; revision: number; undo: StepName | null; redo: 
 /** An edit this window made has committed `revision`, as `step`: the server names its undo step so. */
 export function recorded(session: number, revision: number, step: Step) {
   // Said at once, before the server has it: the edit's own refresh names the step plainly.
-  answered = { session, revision, undo: { name: step.name, structural: !!step.structural, given: true }, redo: null };
+  answered = { session, revision, undo: { name: step.name, structural: !!step.structural, given: true, source: "page" }, redo: null };
   request<Named>("/api/graph/step", { session, revision, name: step.name, structural: !!step.structural })
     .then((r) => {
       answered = { session, revision: r.revision, undo: r.undo_name, redo: r.redo_name };

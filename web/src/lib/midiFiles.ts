@@ -99,7 +99,7 @@ export type TempoChoice = "keep" | "use";
 /** What the server answers: the edit, or the tempo question (nothing written). */
 type Imported =
   | { asks: { file_bpm: number; song_bpm: number } }
-  | { revision: number; name: string; made: { module: string; lane: string; id: string }[]; tracks: { module: string; label: string }[] };
+  | { revision: number; step?: number; name: string; made: { module: string; lane: string; id: string }[]; tracks: { module: string; label: string }[] };
 
 /** The tempo question while it waits for an answer (MidiTempoAsk): the file, where it goes, both tempos. */
 export interface MidiAsk {
@@ -159,7 +159,7 @@ export async function bringMidi(file: MidiIncoming, to: MidiTarget, tempo?: Temp
     useClipSelection.getState().only(refs);
     for (const t of done.tracks) trackMade(t.module, done.made.find((m) => m.module === t.module)?.lane ?? "notes");
     const into = done.tracks.length ? `: ${listed(done.tracks.map((t) => t.label))}` : refs[0] ? ` into ${nameOf(fresh, refs[0].module)}` : "";
-    toast(`Imported ${file.name}${into}`, undoAction(graph.session, done.revision));
+    toast(`Imported ${file.name}${into}`, undoAction(graph.session, done.step));
   } catch (error) {
     toast(`Nothing was added to the song: ${message(error)}`);
   }

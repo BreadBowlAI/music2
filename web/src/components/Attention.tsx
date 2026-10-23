@@ -48,7 +48,7 @@ export default function Attention({ graph, locked }: { graph: GraphState; /** Wh
     setBusy(true);
     graphApi
       .fix(session, graph.view.revision, fix)
-      .then(({ revision }) => toast(done(fix, problem), undoAction(session, revision)))
+      .then(({ step }) => toast(done(fix, problem), undoAction(session, step)))
       .catch((error) => toast(error instanceof Error ? error.message : String(error)))
       .finally(() => setBusy(false));
   };

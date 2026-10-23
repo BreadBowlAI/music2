@@ -3,12 +3,12 @@ import { Download, Metronome, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, 
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
-import { next } from "../lib/history";
+import { next, said } from "../lib/history";
 import { useMetronome, toggleMetronome } from "../lib/metronome";
 import { chord, keyName } from "../lib/native";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
-import { graphUndo } from "./GraphCanvas";
+import { undoTop } from "./GraphCanvas";
 import KeyField from "./KeyField";
 import MidiStatus from "./MidiStatus";
 import { MeterField, SongTitle, TempoField } from "./SongBar";
@@ -207,18 +207,18 @@ export default function TopBar({
       <OverlayPill graph={graph} />
       <Divider />
       <BarButton
-        onClick={() => void graphUndo(graph.session, "undo")}
+        onClick={() => void undoTop(graph, "undo")}
         disabled={!graph.can_undo}
-        title={`Undo${undoing ? ` ${undoing.name}` : ""} (${chord("Z")})`}
+        title={`Undo${undoing ? ` ${said(undoing)}` : ""} (${chord("Z")})`}
         aria-label="Undo"
         className="w-ctl !px-0"
       >
         <Undo2 size={16} />
       </BarButton>
       <BarButton
-        onClick={() => void graphUndo(graph.session, "redo")}
+        onClick={() => void undoTop(graph, "redo")}
         disabled={!graph.can_redo}
-        title={`Redo${redoing ? ` ${redoing.name}` : ""} (${chord("Z", { shift: true })})`}
+        title={`Redo${redoing ? ` ${said(redoing)}` : ""} (${chord("Z", { shift: true })})`}
         aria-label="Redo"
         className="w-ctl !px-0"
       >

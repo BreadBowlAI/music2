@@ -30,6 +30,7 @@ import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { undoAction } from "./GraphCanvas";
 import { Bubble, FINE, focusNext, KnobMenu, MiniKnob, NOTCH, useKnobDrag, useKnobGesture } from "./Knob";
+import { useGlows } from "../lib/notice";
 import Meter, { ClipDot } from "./Meter";
 import { StripMuteSolo } from "./MuteSolo";
 import { Colours, openChangeInstrument } from "./Tracks";
@@ -530,7 +531,7 @@ async function muteStripInSong(name: string, modules: string[], muted: boolean) 
   if (why) return toast(`${why}.`);
   try {
     const r = await muteInSongCall(graph.session, modules, muted);
-    if (r.before !== r.after) toast(`${name} ${muted ? "muted" : "unmuted"} in the song`, undoAction(graph.session, r.revision));
+    if (r.before !== r.after) toast(`${name} ${muted ? "muted" : "unmuted"} in the song`, undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
   }
@@ -641,7 +642,7 @@ function automate(session: number, revision: number, knob: KnobInfo) {
   graphApi
     .automate(session, revision, knob.id)
     .then((r) => {
-      toast(`Automating ${r.name} in a new lane`, undoAction(session, r.revision));
+      toast(`Automating ${r.name} in a new lane`, undoAction(session, r.step));
       laneMade(r.lane.module, r.lane.lane);
     })
     .catch((error) => toast(message(error)));
@@ -676,6 +677,7 @@ function Fader({
 }) {
   const label = `${name} volume`;
   const g = useKnobGesture({ session, revision, knob, editable, name: label, label });
+  const glows = useGlows("knobs", knob.id);
   const value = g.value;
   const column = useRef<HTMLDivElement>(null);
   const travel = useRef<HTMLDivElement>(null);
@@ -791,6 +793,7 @@ function Fader({
       className="flex-1 min-h-0 flex flex-col"
       data-knob={knob.label}
       data-knob-id={editable ? knob.id : undefined}
+      data-glow={glows || undefined}
       data-value={value}
       data-default={!knob.written || undefined}
       data-fader={name}
@@ -946,6 +949,7 @@ function Pan({
   const live = knob ? { knob, revision } : (made ?? { knob: blank, revision });
   const first = !knob && !made;
   const g = useKnobGesture({ session, revision: live.revision, knob: live.knob, editable, name: label, label });
+  const glows = useGlows("knobs", knob?.id);
   // The first pan being written: the value to go on with, how it goes on, and whether the drag was let go (or lost) meanwhile.
   const writing = useRef<{ value: number; how: "drag" | "step" | "value"; released: boolean; cancelled: boolean } | null>(null);
   // The first pan was refused during this press: the rest of it asks no more (one toast, not one a move).
@@ -1058,6 +1062,7 @@ function Pan({
     <div
       data-knob={k.label}
       data-knob-id={editable && knob ? knob.id : undefined}
+      data-glow={glows || undefined}
       data-value={value}
       data-default={!written || undefined}
       aria-disabled={disabled}
@@ -1175,7 +1180,7 @@ function AddBus({ session, locked }: { session: number; locked: string | null })
       .mixBus(session, k.kind, k.label)
       .then((r) => {
         const next = k.kind === "group" ? "Set a track's output to it." : `Turn up a track's ${r.label} knob to send to it.`;
-        toast(`Added the ${r.label} bus. ${next}`, undoAction(session, r.revision));
+        toast(`Added the ${r.label} bus. ${next}`, undoAction(session, r.step));
       })
       .catch((error) => toast(message(error)));
   };
@@ -1297,6 +1302,7 @@ function SendKnob({
   const toast = useStore((s) => s.toast);
   const editable = !locked;
   const g = useKnobGesture({ session, revision, knob, editable, name, label: name });
+  const glows = useGlows("knobs", knob.id);
   const k = g.descriptor;
   const value = g.value;
   const svg = useRef<SVGSVGElement>(null);
@@ -1326,6 +1332,7 @@ function SendKnob({
       ref={root}
       data-knob={k.label}
       data-knob-id={editable ? knob.id : undefined}
+      data-glow={glows || undefined}
       data-value={value}
       aria-disabled={disabled}
       title={!editable ? `${locked}.` : `${name}, ${display(k, value)}, ${where}\nDrag (${mod.shift} for fine) · scroll · right-click for more`}

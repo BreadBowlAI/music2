@@ -22,6 +22,8 @@ interface Edited {
   before: string;
   after: string;
   revision: number;
+  /** The undo step it made, by its id (AGENT-2): what its toast's Undo takes back. */
+  step?: number;
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, "");
@@ -74,7 +76,7 @@ export async function changeInstrument(module: string, instrument: Instrument) {
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     const r = data as Edited;
     recorded(session, r.revision, { name: `changing ${name}'s instrument`, structural: true });
-    toast(`${name} plays ${instrument.label} now`, undoAction(session, r.revision));
+    toast(`${name} plays ${instrument.label} now`, undoAction(session, r.step));
     guideDid("sound");
   } catch (error) {
     const words = message(error);

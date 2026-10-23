@@ -126,7 +126,7 @@ export async function addTrack(instrument: Instrument, after: string | null) {
     const r = await graphApi.addTrack(graph.session, instrument, { after });
     await refreshed();
     arrived(r.module, instrument.lane);
-    toast(r.label === instrument.label ? `Added ${r.label}` : `Added ${r.label} (${instrument.label})`, undoAction(graph.session, r.revision));
+    toast(r.label === instrument.label ? `Added ${r.label}` : `Added ${r.label} (${instrument.label})`, undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
   }
@@ -143,7 +143,7 @@ export async function duplicateTrack(module: string) {
     const r = await graphApi.duplicateTrack(graph.session, module, name);
     await refreshed();
     arrived(r.module, lane);
-    toast(r.new_channel ? `Duplicated ${name} into the mixer` : `Duplicated ${name}`, undoAction(graph.session, r.revision));
+    toast(r.new_channel ? `Duplicated ${name} into the mixer` : `Duplicated ${name}`, undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
   }
@@ -166,7 +166,7 @@ export async function deleteTrack(module: string, cascade = false) {
     const r = await graphApi.deleteTrack(graph.session, module, name, cascade);
     if (r.asks) return void useTracksUi.setState({ asking: { module, name, ...r.asks }, menu: null });
     const taken = r.done.excised ?? [];
-    toast(taken.length ? `Deleted ${name} and ${what(taken)}` : `Deleted ${name}`, undoAction(graph.session, r.done.revision));
+    toast(taken.length ? `Deleted ${name} and ${what(taken)}` : `Deleted ${name}`, undoAction(graph.session, r.done.step));
   } catch (error) {
     toast(message(error));
   }
@@ -184,7 +184,7 @@ export async function muteInSong(module: string, muted: boolean) {
   const toast = useStore.getState().toast;
   try {
     const r = await muteInSongCall(graph.session, [module], muted);
-    if (r.before !== r.after) toast(`${name} ${muted ? "muted" : "unmuted"} in the song`, undoAction(graph.session, r.revision));
+    if (r.before !== r.after) toast(`${name} ${muted ? "muted" : "unmuted"} in the song`, undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
   }

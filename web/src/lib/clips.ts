@@ -229,7 +229,7 @@ export async function removeAutomation(graph: GraphState, addr: LaneAddr, beat: 
   });
   const json = await readJson(res);
   if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-  const done = json as { file: string; before: string; after: string; revision: number };
+  const done = json as { file: string; before: string; after: string; revision: number; step?: number };
   if (done.before !== done.after) recorded(graph.session, done.revision, { name: `removing the ${name} automation`, structural: true });
   return done;
 }

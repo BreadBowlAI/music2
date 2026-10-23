@@ -18,6 +18,7 @@ import {
 import { setClock } from "../lib/clock";
 import { pickedIn, useClipSelection } from "../lib/clips";
 import { tookBack } from "../lib/history";
+import { forget, stepped } from "../lib/notice";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
 import { flushLocal } from "../lib/local";
 import { canvas, useShell } from "../lib/shell";
@@ -95,6 +96,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   // nothing to show yet: it opens in its code (WRITE-20), without changing the window's choice.
   useEffect(() => {
     useShell.getState().resetSelection();
+    forget();
     if (graph.has_code === false) useShell.setState({ view: "code", dock: true });
   }, []);
 
@@ -306,31 +308,57 @@ export function closeSong() {
 }
 
 /**
- * Undo or redo an edit to the open song. Its result shows where it happened, so it makes no toast
- * (ST-5), unless it took back a part added or removed, which may be off screen: then the toast says
- * so in the step's words ("Undid adding Reverb"). Never a file or a diff (ST-6).
+ * Undo or redo an edit to the open song: the step `step` names, as Undo's tooltip shows it, which
+ * the server takes back only while it is the newest (AGENT-2); else it says which is. Its result
+ * shows where it happened, so it makes no toast (ST-5), unless it took back a part added or
+ * removed, which may be off screen: then the toast says so in the step's words ("Undid adding
+ * Reverb"). Never a file or a diff (ST-6).
  */
-export async function graphUndo(session: number, id: "undo" | "redo") {
+export async function graphUndo(session: number, id: "undo" | "redo", step?: number, own = false) {
   const toast = useStore.getState().toast;
-  await (id === "redo" ? graphApi.redo(session) : graphApi.undo(session))
-    .then((c) => {
-      const step = tookBack(c);
-      if (step?.structural) toast(`${id === "redo" ? "Redid" : "Undid"} ${step.name}`);
-    })
-    .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+  try {
+    const { status, json } = await (id === "redo" ? graphApi.redo(session, step) : graphApi.undo(session, step));
+    if (status === 409) {
+      // The newest is this page's own step, which the window hadn't shown yet (an edit made a
+      // moment ago): Undo's key means that one. Any other is said first (AGENT-2).
+      const newest = json.newest;
+      if (own && newest?.source === "page" && newest.step !== undefined && newest.step !== step) return graphUndo(session, id, newest.step);
+      return toast(json.error ?? "Nothing was changed: it isn't the newest change now.");
+    }
+    stepped(json.step);
+    // The tops after it, so a ⌘Z pressed again before the state is read names the next step.
+    const { graph, set } = useStore.getState();
+    if (graph?.session === session && json.undo_name !== undefined) set({ graph: { ...graph, undo_name: json.undo_name, redo_name: json.redo_name } });
+    const took = tookBack(json);
+    if (took?.structural) toast(`${id === "redo" ? "Redid" : "Undid"} ${took.name}`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error));
+  }
 }
 
 /**
- * A toast's Undo for the edit that made `revision`: it undoes only while that edit is still the
- * newest change, since later Undo would take back something else.
+ * Undo or Redo of the step on top, as the window shows it (the top bar, ⌘Z, the Edit menu): by its
+ * id, so a change that landed elsewhere since is named before it can be taken back.
  */
-export function undoAction(session: number, revision: number) {
-  return {
-    label: "Undo",
-    run: () => {
-      const now = useStore.getState().graph;
-      if (now?.session === session && now.view.revision <= revision) void graphUndo(session, "undo");
-      else useStore.getState().toast("The song has changed since, so this can't be undone from here. Use Undo in the top bar.");
-    },
-  };
+export function undoTop(graph: GraphState, id: "undo" | "redo") {
+  // One after another, each naming the top the one before left: ⌘Z held down takes back step by step.
+  topped = topped.then(() => {
+    const now = useStore.getState().graph ?? graph;
+    if (now.session !== graph.session) return;
+    return graphUndo(now.session, id, (id === "redo" ? now.redo_name : now.undo_name)?.step, true);
+  });
+  return topped;
+}
+
+/** The last Undo or Redo of the top sent: the next waits for its answer. */
+let topped: Promise<void> = Promise.resolve();
+
+/**
+ * A toast's Undo for the edit that made undo step `step` (its answer's `step`): the server takes it
+ * back only while it is still the newest change, and says which is when it isn't (AGENT-2). None
+ * when the edit made no step.
+ */
+export function undoAction(session: number, step: number | undefined) {
+  if (step === undefined) return undefined;
+  return { label: "Undo", run: () => void graphUndo(session, "undo", step) };
 }
