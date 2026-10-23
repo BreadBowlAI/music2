@@ -261,6 +261,11 @@ The old engine, with its own song files and screens, was removed in October 2026
 | 37 | **`m2` commands** for change instrument, markers, the song's key, a track's ID, Save As and Follow tempo. Agents can send these to the app's routes, or as a Tx (Follow tempo: `POST /api/graph/clips` with `{"op": "audio", "follow": true}`). | Scripts and agents need the same basics as the app. | Yes (in `music2-cli`) | small |
 | 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. | An agent has to read the manual or the source to learn the routes. | Yes | medium |
 
+- **An agent's write through the app's API is the page's undo step** until agents get a key of their own (track 2 of the [agents design](designs/agents/design.md)): it shows no notice and isn't named as the agent's.
+- **A `git checkout` that finishes between two looks of the watcher** (50 ms) is taken as an outside edit, one undo step; and an editor's save while `git status` holds `index.lock` makes no step.
+- **The glow outlines every clip of a changed lane**, not only the clips that changed; notes in the piano roll and automation points don't glow.
+- **The `step` event's "what changed"** (a delta, and the knobs of two revisions) is worked out on the session's thread after each step: not yet timed on a 50-track song.
+
 ## Checked on Linux only
 
 - **Owed on a Mac**: every step by ear in [mac-run.md](mac-run.md), and the Mac-only code that is only lint-checked here: the plugin program's shared memory and wake, plugin windows, real-time threads in the audio workgroup, the microphone and its permission, and G7f's numbers for one sandbox a box. HANDOFF has the table.
