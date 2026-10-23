@@ -11,19 +11,42 @@
 //! is left: they go when it closes).
 
 use anyhow::{Context, Result, bail};
-use m2_session::StepName;
+use m2_session::{Source, StepName};
 use serde_json::{Value, json};
 
 use super::{Graph, Inner, Timeline};
 
-/// A step's name as the state says it: `{name, structural, given}`; null with no step. `given`:
-/// a window named it; else it is the plain name of what it changed.
+/// A step's name as the state says it: `{name, structural, given, step, source}`; null with no
+/// step. `given`: a window named it; else it is the plain name of what it changed ("2 files" for
+/// an outside change of several). `step` is its id, `source` who made it: `page` or `outside`
+/// (AGENT-2).
 pub(super) fn named(step: Option<&StepName>, timeline: &Timeline) -> Value {
     let Some(step) = step else { return Value::Null };
-    match &step.name {
-        Some(name) => json!({"name": name, "structural": step.structural, "given": true}),
-        None => json!({"name": plain(&step.file, timeline), "structural": false, "given": false}),
-    }
+    let (name, given) = match &step.name {
+        Some(name) => (name.clone(), true),
+        None if step.source == Source::Outside && step.files.len() > 1 => (format!("{} files", step.files.len()), false),
+        None => (plain(&step.file, timeline), false),
+    };
+    json!({"name": name, "structural": given && step.structural, "given": given, "step": step.id, "source": step.source.as_str()})
+}
+
+/// The `step` event of step `step` (AGENT-5), session `token`: what every window hears as it lands,
+/// with what changed from `before`, the revision before the job that made it.
+pub(super) fn event(token: u64, step: &StepName, s: &m2_session::Session, before: &m2_session::Revision, timeline: &Timeline) -> Value {
+    let named = named(Some(step), timeline);
+    let changed = m2_editor::changed::changed(s, before);
+    json!({
+        "t": "step",
+        "session": token,
+        "step": step.id,
+        "made": step.made,
+        "source": step.source.as_str(),
+        "name": named["name"],
+        "files": step.files,
+        "tracks": changed.tracks,
+        "lanes": changed.lanes,
+        "knobs": changed.knobs,
+    })
 }
 
 /// What a change to `file` is called, by what the file holds: a lane by its track and kind, the
@@ -100,27 +123,85 @@ impl Graph {
         Ok(json!({"named": named, "revision": at, "undo_name": undo, "redo_name": redo}))
     }
 
-    /// Undo's and Redo's names, as the app's Edit menu says them: None with nothing to undo or
-    /// redo (or no song open).
+    /// Undo's and Redo's names, as the app's Edit menu says them after "Undo" and "Redo": an
+    /// outside change says so (AGENT-2). None with nothing to undo or redo (or no song open).
     pub fn undo_names(&self) -> (Option<String>, Option<String>) {
         let (undo, redo) = shown(&self.inner);
-        let name = |v: &Value| v["name"].as_str().map(String::from);
-        (name(&undo), name(&redo))
+        (said(&undo), said(&redo))
     }
 
     /// Undo, or redo: the answer of any edit, and the name of what it took back (`name`,
-    /// `structural`), read before it, in the same turn of the session.
-    pub(super) fn step(&self, token: u64, redo: bool) -> Result<Value> {
-        let inner = self.inner.clone();
+    /// `structural`), read before it, in the same turn of the session. With `step`, only while
+    /// that step is the newest (for redo, the newest undone): else [`NotNewest`] (AGENT-2).
+    pub(super) fn step(&self, token: u64, redo: bool, step: Option<u64>) -> Result<Value> {
         self.call(move |a| {
-            let (undo, again) = shown(&inner);
-            let took = if redo { again } else { undo };
+            let o = a.open.as_ref().context("no project is open")?;
+            o.check_token(token)?;
+            let (undo, again) = o.session.step_names();
+            let top = if redo { again } else { undo };
+            let took = named(top.as_ref(), &o.timeline);
+            if let Some(id) = step
+                && top.as_ref().map(|t| t.id) != Some(id)
+            {
+                return Err(NotNewest { redo, newest: took }.into());
+            }
             let mut v = if redo { a.edit(token, m2_editor::redo)? } else { a.edit(token, m2_editor::undo)? };
             v["name"] = took["name"].clone();
             v["structural"] = json!(took["structural"].as_bool().unwrap_or(false));
+            // The step it took back, by its id, and the tops after it: what the window's next Undo
+            // and Redo name, before its state is read again (AGENT-2).
+            v["step"] = took["step"].clone();
+            if let Some(o) = a.open.as_ref() {
+                let (undo, redo) = o.session.step_names();
+                v["undo_name"] = named(undo.as_ref(), &o.timeline);
+                v["redo_name"] = named(redo.as_ref(), &o.timeline);
+            }
             Ok(v)
         })
     }
+}
+
+/// What a window is told of an outside batch that made no undo step (AGENT-2), if anything: git's,
+/// which git can undo, and one that changed a binary file, which can't be.
+pub(super) fn unstepped(undo: &m2_session::take::Outside) -> Option<String> {
+    use m2_session::take::Outside;
+    match undo {
+        Outside::Git(1) => Some("Git changed a file of this song. Undo doesn't take that back: git can.".into()),
+        Outside::Git(n) => Some(format!("Git changed {n} files of this song. Undo doesn't take that back: git can.")),
+        Outside::Binary(file) => Some(format!("{file} changed outside the app. That can't be undone here.")),
+        Outside::Nothing | Outside::Step(_) => None,
+    }
+}
+
+/// An undo or a redo for a step that isn't the newest (AGENT-2): nothing changed. Its words name
+/// the newest, as Undo's tooltip does; `newest` is that step as the state names it (null: none).
+#[derive(Debug)]
+pub struct NotNewest {
+    pub redo: bool,
+    pub newest: Value,
+}
+
+impl std::fmt::Display for NotNewest {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match (said(&self.newest), self.redo) {
+            (Some(newest), false) => write!(f, "Nothing was undone: it isn't the newest change now. The newest is {newest}."),
+            (Some(next), true) => write!(f, "Nothing was redone: it isn't the next change to redo now. The next is {next}."),
+            (None, false) => write!(f, "Nothing was undone: there is nothing to undo."),
+            (None, true) => write!(f, "Nothing was redone: there is nothing to redo."),
+        }
+    }
+}
+
+impl std::error::Error for NotNewest {}
+
+/// A step as Undo's tooltip and the Edit menu say it, after "Undo" (AGENT-2): its name, or for an
+/// outside one "outside change: …". None for no step.
+pub(super) fn said(step: &Value) -> Option<String> {
+    let name = step["name"].as_str()?;
+    Some(match step["source"].as_str() {
+        Some("outside") => format!("outside change: {name}"),
+        _ => name.to_string(),
+    })
 }
 
 #[cfg(test)]

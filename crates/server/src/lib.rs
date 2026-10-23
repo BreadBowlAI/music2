@@ -74,8 +74,11 @@ pub struct AppState {
 impl AppState {
     /// The app's state around `graph`, with no server: tests and the gates.
     pub fn new(token: String, graph: graph::Graph) -> AppState {
+        let events = broadcast::channel(256).0;
+        // Every change that is an undo step is told as it lands (AGENT-5).
+        graph.tell_steps(events.clone());
         AppState {
-            events: broadcast::channel(256).0,
+            events,
             token,
             graph,
             exports: Default::default(),

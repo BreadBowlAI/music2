@@ -226,6 +226,8 @@ pub(crate) struct Ready {
     pub unknown: BTreeSet<PathBuf>,
     /// The assets a lane names, which the watcher tracked by their hashes.
     pub named: Arc<BTreeSet<String>>,
+    /// Git wrote it: the rule waited for git's `index.lock` while it settled (AGENT-2).
+    pub git: bool,
 }
 
 /// What a tick found.
@@ -391,7 +393,9 @@ impl Watch {
         }
         // Only a walk of everything makes a batch ready, so its listing has every Ignored file.
         let ready = match polled {
-            Poll::Ready(paths) => Some(Ready { paths, unknown: looked.listing.unknown, named: self.named.clone() }),
+            Poll::Ready(paths) => {
+                Some(Ready { paths, unknown: looked.listing.unknown, named: self.named.clone(), git: self.settle.by_git() })
+            }
             Poll::Idle | Poll::Settling => None,
         };
         if looked.scope.is_some() {

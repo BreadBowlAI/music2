@@ -813,18 +813,41 @@ struct SessionReq {
     session: u64,
 }
 
-async fn graph_undo(State(s): S, Json(r): Json<SessionReq>) -> ApiResult {
-    let state = s.clone();
-    let result = blocking(move || state.graph.undo(r.session)).await;
-    s.graph_changed();
-    Ok(Json(result?))
+/// Undo or redo `{session, step}`: the step its id names, only while it is the newest (for redo,
+/// the newest undone), else 409 naming the newest, and nothing changes (AGENT-2). Without `step`,
+/// the newest.
+#[derive(Deserialize)]
+struct StepReq {
+    session: u64,
+    step: Option<u64>,
 }
 
-async fn graph_redo(State(s): S, Json(r): Json<SessionReq>) -> ApiResult {
+async fn graph_undo(State(s): S, Json(r): Json<StepReq>) -> Response {
+    stepped(s, r, false).await
+}
+
+async fn graph_redo(State(s): S, Json(r): Json<StepReq>) -> Response {
+    stepped(s, r, true).await
+}
+
+async fn stepped(s: Arc<AppState>, r: StepReq, redo: bool) -> Response {
     let state = s.clone();
-    let result = blocking(move || state.graph.redo(r.session)).await;
+    let result = tokio::task::spawn_blocking(move || match (r.step, redo) {
+        (Some(step), false) => state.graph.undo_step(r.session, step),
+        (Some(step), true) => state.graph.redo_step(r.session, step),
+        (None, false) => state.graph.undo(r.session),
+        (None, true) => state.graph.redo(r.session),
+    })
+    .await;
     s.graph_changed();
-    Ok(Json(result?))
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => match e.downcast_ref::<crate::graph::steps::NotNewest>() {
+            Some(n) => (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "newest": n.newest}))).into_response(),
+            None => ApiError::from(e).into_response(),
+        },
+        Err(e) => err(e.to_string()).into_response(),
+    }
 }
 
 #[derive(Deserialize)]

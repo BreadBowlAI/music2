@@ -93,12 +93,15 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         let start = actor.inner.now_ns();
         actor.inner.busy.lock().since = start.max(1);
         actor.heard_plugins();
+        // What the job's step changed is read from the revision before it (AGENT-5).
+        let before = actor.open.as_ref().map(|o| (o.token, o.session.accepted_arc()));
         // A request that panics answers with an error (its reply is dropped unsent), and the
         // actor serves the next.
         if catch_unwind(AssertUnwindSafe(|| job(&mut actor))).is_err() {
             eprintln!("music2: the session hit a bug; that request failed");
         }
         actor.told_watcher();
+        actor.told_step(before);
         let mut busy = actor.inner.busy.lock();
         busy.since = 0;
         if start > 0 {
@@ -111,6 +114,20 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
 }
 
 impl Actor {
+    /// Tell every window of the step the job just recorded, if it recorded one (AGENT-5): its id,
+    /// who made it, its name, and what changed since `before`, the revision before the job. An
+    /// undo or a redo makes no new step, so it tells nothing.
+    fn told_step(&mut self, before: Option<(u64, Arc<Revision>)>) {
+        let Some(o) = self.open.as_mut() else { return };
+        let Some(top) = o.session.step_names().0.filter(|t| t.id > o.told_step) else { return };
+        o.told_step = top.id;
+        let Some((_, before)) = before.filter(|(token, _)| *token == o.token) else { return };
+        let event = super::steps::event(o.token, &top, &o.session, &before, &o.timeline);
+        if let Some(to) = self.inner.steps_to.lock().as_ref() {
+            let _ = to.send(event.to_string());
+        }
+    }
+
     /// Tell the watcher what the session wrote itself, so its own writes make no batch (R12).
     fn told_watcher(&mut self) {
         let Some(o) = self.open.as_mut() else { return };
@@ -168,9 +185,12 @@ pub(crate) struct Open {
     /// What preparing the last plan took, for the edit's timing.
     pub(super) prepared: Prepared,
     /// The timeline last published, whose lanes the next one shares where they are the same.
-    timeline: Arc<super::Timeline>,
+    pub(super) timeline: Arc<super::Timeline>,
     /// What plugin windows did that waits for the session: holds, autosaves (HOME-5, HOME-6).
     pub(crate) windows: super::plugin_window::Windows,
+    /// The id of the newest step told in a `step` event (AGENT-5): a newer one is told after the
+    /// job that made it.
+    told_step: u64,
 }
 
 /// The plan the engine plays: what it was built from, and how `SwapLane` reaches its lanes.
@@ -459,7 +479,7 @@ impl Open {
         &self.controls
     }
 
-    fn check_token(&self, token: u64) -> Result<()> {
+    pub(super) fn check_token(&self, token: u64) -> Result<()> {
         if token != self.token {
             return Err(anyhow!("the open project changed; refresh the graph before editing"));
         }
@@ -1188,6 +1208,7 @@ impl Actor {
             prepared: Prepared::default(),
             timeline: Arc::default(),
             windows: Default::default(),
+            told_step: 0,
         };
         // The overlays saved for it, which its first renderer plays from its first block (A6).
         let accepted = o.session.accepted();
@@ -1633,6 +1654,7 @@ impl Actor {
         o.check_token(token)?;
         let requested_ns = inner.now_ns();
         o.sent = None;
+        let steps = o.session.last_step();
         let (result, heard) = self.previewing(edit);
         let compiled_ns = inner.now_ns();
         let s = self.settle(None);
@@ -1676,6 +1698,11 @@ impl Actor {
         if let (Some(a), Value::Object(more)) = (answer.as_object_mut(), more) {
             a.extend(more);
         }
+        // The undo step it made, by its id: what its toast's Undo names (AGENT-2).
+        let made = self.open.as_ref().map(|o| o.session.last_step()).filter(|id| *id > steps);
+        if let Some(id) = made {
+            answer["step"] = json!(id);
+        }
         Ok(answer)
     }
 
@@ -1686,7 +1713,7 @@ impl Actor {
     pub(super) fn settled(&mut self, token: u64, ready: watcher::Ready) -> bool {
         let requested_ns = self.inner.now_ns();
         let Some(o) = self.open.as_mut().filter(|o| o.token == token) else { return false };
-        let watcher::Ready { paths, unknown, named } = ready;
+        let watcher::Ready { paths, unknown, named, git } = ready;
         // The assets the watcher tracked by their hashes are hashed, so each reads as it settled.
         let hashed = |p: &Path| named.contains(&m2_song::path::slashed(p));
         let Ok(snapshot) = Snapshot::read_paths(&o.session.accepted().project.dir, &paths, &hashed, unknown) else { return false };
@@ -1703,11 +1730,13 @@ impl Actor {
         if paths.is_empty() {
             return false;
         }
-        let taken = o.session.take_in_only(snapshot, &paths);
+        // One undo step, source outside, unless git wrote it or it changed a binary (AGENT-2).
+        let (taken, undo) = o.session.take_in_batch(snapshot, &paths, git);
         // DIAG-3: an outside write that makes a module play data nothing played says so, once.
         if let Some(a) = &taken.accepted {
             self.inner.notices.lock().extend(a.notices.iter().map(|d| d.message.clone()));
         }
+        self.inner.notices.lock().extend(super::steps::unstepped(&undo));
         if !taken.draft_changed {
             return false;
         }

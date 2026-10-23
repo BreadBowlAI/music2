@@ -59,7 +59,7 @@ mod projects;
 pub mod record;
 mod rekey;
 mod songkey;
-mod steps;
+pub(crate) mod steps;
 mod take_audio;
 mod tempo_lease;
 mod view_file;
@@ -421,6 +421,9 @@ struct Inner {
     busy: Mutex<Busy>,
     /// What the actor ended or saved on its own (a pending commit), for the watcher to toast.
     notices: Mutex<Vec<String>>,
+    /// Where the actor sends each `step` event (AGENT-5): every window's events, once the app's
+    /// state is made around this Graph ([`Graph::tell_steps`]).
+    steps_to: Mutex<Option<tokio::sync::broadcast::Sender<String>>>,
     /// The app's one fault ring (RENDER-25): every live plan reports into it, and so does the
     /// actor. The notices thread reads it ([`Graph::hear_faults`]).
     faults: Arc<m2_runtime::fault::Faults>,
@@ -595,6 +598,7 @@ impl Inner {
             last_taken_in: Mutex::default(),
             busy: Mutex::default(),
             notices: Mutex::default(),
+            steps_to: Mutex::default(),
             faults,
             told: Mutex::default(),
             disk: Mutex::default(),
@@ -1783,11 +1787,28 @@ impl Graph {
     /// Undo the last edit made through this session: its stored inverse (WRITE-21). The answer
     /// names what it took back (`name`, `structural`; see `steps`).
     pub fn undo(&self, token: u64) -> Result<Value> {
-        self.step(token, false)
+        self.step(token, false, None)
     }
 
     pub fn redo(&self, token: u64) -> Result<Value> {
-        self.step(token, true)
+        self.step(token, true, None)
+    }
+
+    /// Undo step `step`, only while it is the newest (AGENT-2): otherwise a [`steps::NotNewest`]
+    /// naming the newest, and nothing changes.
+    pub fn undo_step(&self, token: u64, step: u64) -> Result<Value> {
+        self.step(token, false, Some(step))
+    }
+
+    /// Redo step `step`, only while it is the newest undone.
+    pub fn redo_step(&self, token: u64, step: u64) -> Result<Value> {
+        self.step(token, true, Some(step))
+    }
+
+    /// Send every `step` event to `to` from now on (AGENT-5): the app's state does, so each
+    /// window hears every change as it lands.
+    pub fn tell_steps(&self, to: tokio::sync::broadcast::Sender<String>) {
+        *self.inner.steps_to.lock() = Some(to);
     }
 
     fn edit(

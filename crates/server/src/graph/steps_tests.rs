@@ -136,3 +136,152 @@ fn a_refused_undo_keeps_the_names() {
     assert!(refused.is_err(), "{refused:?}");
     assert_eq!(names(&graph), ("Hats pan".into(), "-".into()));
 }
+
+/// Every `step` event the graph sends from now on (AGENT-5).
+fn steps_of(graph: &Graph) -> tokio::sync::broadcast::Receiver<String> {
+    let (to, from) = tokio::sync::broadcast::channel(64);
+    graph.tell_steps(to);
+    from
+}
+
+/// The `step` events heard so far, as JSON.
+fn heard(from: &mut tokio::sync::broadcast::Receiver<String>) -> Vec<Value> {
+    let mut out = vec![];
+    while let Ok(e) = from.try_recv() {
+        let v: Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["t"], json!("step"), "{v}");
+        out.push(v);
+    }
+    out
+}
+
+/// Watch for up to `ms`, until `done` holds.
+fn until(graph: &Graph, ms: u64, done: impl FnMut(&Graph) -> bool) {
+    super::super::tests::watching(graph, ms, done);
+}
+
+/// A mono 16-bit WAV of `frames` frames at 48 kHz.
+fn wav(frames: usize) -> Vec<u8> {
+    let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let mut out = std::io::Cursor::new(vec![]);
+    let mut w = hound::WavWriter::new(&mut out, spec).unwrap();
+    for i in 0..frames {
+        w.write_sample(((i % 100) as i16 - 50) * 100).unwrap();
+    }
+    w.finalize().unwrap();
+    out.into_inner()
+}
+
+// AGENT-2: an import writes its asset, takes it in for its own Tx, and makes that Tx's one step,
+// the page's. The watcher's look at the files it wrote makes no outside step.
+#[test]
+fn an_import_in_the_app_makes_one_step_and_no_outside_step() {
+    let (fixture, graph) = first_song();
+    let mut steps = steps_of(&graph);
+    until(&graph, 400, |_| false);
+    let target = m2_editor::import::Target::Below { beat: 0.0 };
+    let source = m2_editor::import::Source::Bytes { name: "tone.wav".into(), bytes: wav(4_800) };
+    graph.import_audio(token(&graph), vec![source], target).unwrap();
+    assert!(fixture.0.join("assets/tone.wav").exists());
+    until(&graph, 1500, |_| false);
+    let told = heard(&mut steps);
+    assert_eq!(told.len(), 1, "one step: {told:?}");
+    assert_eq!(told[0]["source"], json!("page"));
+    let s = graph.state().unwrap();
+    assert_eq!((&s["undo_name"]["source"], &s["undo_name"]["step"]), (&json!("page"), &told[0]["step"]));
+    graph.undo(token(&graph)).unwrap();
+    assert_eq!(graph.state().unwrap()["can_undo"], json!(false), "nothing else to undo");
+}
+
+// AGENT-2: Undo's name says whose step is next: the page's by its name, an outside one as an
+// outside change, by its file, in the state and in the Edit menu's words.
+#[test]
+fn undo_says_the_source_of_the_newest_step() {
+    let (fixture, graph) = first_song();
+    until(&graph, 400, |_| false);
+    set(&graph, 0.3, 0.4);
+    let mine = graph.state().unwrap()["undo_name"].clone();
+    assert_eq!((&mine["source"], &mine["name"]), (&json!("page"), &json!("the code in song.ts")), "{mine}");
+    let id = mine["step"].as_u64().expect("a step id");
+    assert_eq!(graph.undo_names().0.as_deref(), Some("the code in song.ts"));
+    fixture.put("tracks/bass.ts", &format!("{}\n// from another editor\n", fixture.read("tracks/bass.ts")));
+    until(&graph, 3000, |g| g.state().unwrap()["undo_name"]["source"] == json!("outside"));
+    let theirs = graph.state().unwrap()["undo_name"].clone();
+    assert_eq!(
+        (&theirs["source"], &theirs["name"], &theirs["given"]),
+        (&json!("outside"), &json!("the code in tracks/bass.ts"), &json!(false)),
+        "{theirs}"
+    );
+    assert!(theirs["step"].as_u64().unwrap() > id, "a new id: {theirs}");
+    assert_eq!(graph.undo_names().0.as_deref(), Some("outside change: the code in tracks/bass.ts"), "the Edit menu's words");
+    let undone = graph.undo(token(&graph)).unwrap();
+    assert_eq!(undone["name"], json!("the code in tracks/bass.ts"));
+    assert_eq!(graph.state().unwrap()["redo_name"]["source"], json!("outside"), "redo says it too");
+    assert_eq!(graph.state().unwrap()["undo_name"]["step"], json!(id), "the page's step is next again");
+}
+
+// AGENT-2: an undo or a redo names its step by id, and is refused when that step isn't the
+// newest (for redo, the newest undone): nothing changes, and the refusal names the newest.
+#[test]
+fn an_undo_for_a_step_that_is_no_longer_newest_changes_nothing() {
+    let (fixture, graph) = first_song();
+    until(&graph, 400, |_| false);
+    fixture.put("tracks/bass.ts", &format!("{}\n// from another editor\n", fixture.read("tracks/bass.ts")));
+    until(&graph, 3000, |g| g.state().unwrap()["undo_name"]["source"] == json!("outside"));
+    let outside = graph.state().unwrap()["undo_name"]["step"].as_u64().expect("an outside step");
+    set(&graph, 0.3, 0.4);
+    let mine = graph.state().unwrap()["undo_name"]["step"].as_u64().unwrap();
+    assert_ne!(mine, outside);
+    let (song, bass) = (fixture.read("song.ts"), fixture.read("tracks/bass.ts"));
+    let refused = graph.undo_step(token(&graph), outside).unwrap_err();
+    let not = refused.downcast_ref::<NotNewest>().unwrap_or_else(|| panic!("not the newest: {refused:#}"));
+    assert_eq!(not.newest["step"], json!(mine));
+    assert!(refused.to_string().contains("The newest is the code in song.ts"), "{refused}");
+    assert_eq!((fixture.read("song.ts"), fixture.read("tracks/bass.ts")), (song.clone(), bass.clone()), "nothing changed");
+    assert!(graph.redo_step(token(&graph), mine).unwrap_err().downcast_ref::<NotNewest>().is_some(), "nothing to redo");
+    let undone = graph.undo_step(token(&graph), mine).unwrap();
+    assert_eq!(undone["step"], json!(mine), "it says the step it took back");
+    assert_eq!((&undone["undo_name"]["step"], &undone["redo_name"]["step"]), (&json!(outside), &json!(mine)), "and the tops after it");
+    assert!(graph.redo_step(token(&graph), outside).unwrap_err().downcast_ref::<NotNewest>().is_some(), "redo's newest is mine");
+    graph.undo_step(token(&graph), outside).unwrap();
+    assert!(!fixture.read("tracks/bass.ts").contains("another editor"), "the outside step undone, now it is the newest");
+    graph.redo_step(token(&graph), outside).unwrap();
+    assert_eq!(graph.state().unwrap()["undo_name"]["step"], json!(outside), "redone, with its id");
+}
+
+// AGENT-5: after each job that records a step, every window hears a `step` event: its id, the
+// revision it made, its source, its name, its files, and the tracks, lanes and knobs its delta
+// changed, by the view's names.
+#[test]
+fn a_step_event_names_what_its_delta_changed() {
+    let (fixture, graph) = first_song();
+    let mut steps = steps_of(&graph);
+    until(&graph, 400, |_| false);
+    fixture.put("song.ts", &fixture.read("song.ts").replacen("pan: 0.3", "pan: 0.45", 1));
+    let notes = fixture.read("data/bass/notes.json");
+    fixture.put("data/bass/notes.json", &notes.replacen("\"start\": 0", "\"start\": 0.5", 1));
+    let mut told = vec![];
+    until(&graph, 3000, |_| {
+        told.extend(heard(&mut steps));
+        !told.is_empty()
+    });
+    let (session, revision, pan) = knob(&graph, 0.45);
+    let [e] = &told[..] else { panic!("one step event: {told:?}") };
+    let state = graph.state().unwrap();
+    assert_eq!((&e["session"], &e["made"], &e["step"]), (&json!(session), &json!(revision), &state["undo_name"]["step"]), "{e}");
+    assert_eq!((&e["source"], &e["name"]), (&json!("outside"), &json!("2 files")), "{e}");
+    assert_eq!(e["files"], json!(["data/bass/notes.json", "song.ts"]), "{e}");
+    assert_eq!(e["tracks"], json!(["bass", "song"]), "{e}");
+    assert_eq!(e["lanes"], json!([["bass", "notes"]]), "{e}");
+    assert_eq!(e["knobs"], json!([pan]), "{e}");
+    // The page's own steps are told too, with their source.
+    set(&graph, -0.25, -0.5);
+    let mut mine = vec![];
+    until(&graph, 2000, |_| {
+        mine.extend(heard(&mut steps));
+        !mine.is_empty()
+    });
+    assert_eq!(mine.len(), 1, "{mine:?}");
+    assert_eq!((&mine[0]["source"], &mine[0]["tracks"]), (&json!("page"), &json!(["song"])), "{:?}", mine[0]);
+    assert_eq!(mine[0]["knobs"].as_array().map(Vec::len), Some(1), "{:?}", mine[0]);
+}
