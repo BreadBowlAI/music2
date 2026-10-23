@@ -301,7 +301,11 @@ mod tests {
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!("m2-session-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        let dir = std::env::temp_dir().join(format!(
+            "m2-session-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
         for (name, text) in [("music2.toml", MANIFEST)].iter().chain(files) {
             let p = dir.join(name);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();

@@ -212,7 +212,9 @@ fn imports(store: &mut Store<Host>, module: &Module) -> Result<Vec<Extern>> {
             bail!("a kernel may import only `m2.asset_read`, but this module imports `{}.{}`", i.module(), i.name());
         }
         let ExternType::Func(f) = i.ty() else { bail!("`m2.asset_read` must be imported as a function") };
-        let same = f.params().len() == 5 && f.params().all(|p| matches!(p, ValType::I32)) && matches!(f.results().collect::<Vec<_>>()[..], [ValType::I32]);
+        let same = f.params().len() == 5
+            && f.params().all(|p| matches!(p, ValType::I32))
+            && matches!(f.results().collect::<Vec<_>>()[..], [ValType::I32]);
         if !same {
             bail!("`m2.asset_read` has the wrong signature: it is (i32, i32, i32, i32, i32) -> i32 (docs/kernel-abi.md)");
         }
@@ -285,7 +287,11 @@ impl Sandbox {
         let active = self.instance.get_typed_func::<u32, u32>(&mut self.store, &f("active"))?;
         let declared = ports.call(&mut self.store, ())?;
         if declared != ((inputs as u32) << 8 | outputs as u32) {
-            bail!("`{prefix}` has {} inputs and {} outputs, but its manifest declares {inputs} and {outputs}", declared >> 8, declared & 0xff);
+            bail!(
+                "`{prefix}` has {} inputs and {} outputs, but its manifest declares {inputs} and {outputs}",
+                declared >> 8,
+                declared & 0xff
+            );
         }
         let n = inputs + outputs;
         debug_assert_eq!(channels.len(), n);

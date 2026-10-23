@@ -29,7 +29,8 @@ fn with_verb(verb: &str, body: &str) -> Result<Ir, Vec<Diagnostic>> {
 
 /// The bus halves what it is fed; the song feeds it a quarter of the vox and plays both.
 const HALF: &str = "({ input }) => kernel(\"std:scale\", { in: input, by: 0.5 })";
-const FEEDS: &str = "feed(verb, kernel(\"std:scale\", { in: vox.out, by: 0.25 }));\nreturn kernel(\"std:add\", { a: vox.out, b: verb.out });";
+const FEEDS: &str =
+    "feed(verb, kernel(\"std:scale\", { in: vox.out, by: 0.25 }));\nreturn kernel(\"std:add\", { a: vox.out, b: verb.out });";
 
 /// The one error a build fails with.
 fn error(r: Result<Ir, Vec<Diagnostic>>) -> Diagnostic {

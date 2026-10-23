@@ -127,7 +127,12 @@ impl Rig {
     fn written(&self) -> Value {
         let t = std::time::Instant::now();
         loop {
-            if let Some(v) = self.graph.record_tick().into_iter().find(|v| v.get("written").is_some() || v.get("empty").is_some() || v.get("error").is_some()) {
+            if let Some(v) = self
+                .graph
+                .record_tick()
+                .into_iter()
+                .find(|v| v.get("written").is_some() || v.get("empty").is_some() || v.get("error").is_some())
+            {
                 return v;
             }
             assert!(t.elapsed() < Duration::from_secs(5), "no take was written");
@@ -225,7 +230,13 @@ fn piano_notes_marked_record_are_recorded_and_audition_is_not() {
     r.start(false, None);
     r.to(1.0);
     let strike = |client: &str, h: u32, pitch: f64, record: bool| {
-        let a = Audition { module: Some("bass".into()), lane: Some("notes".into()), on: vec![Strike { h, pitch, velocity: 0.5 }], record, ..Default::default() };
+        let a = Audition {
+            module: Some("bass".into()),
+            lane: Some("notes".into()),
+            on: vec![Strike { h, pitch, velocity: 0.5 }],
+            record,
+            ..Default::default()
+        };
         r.graph.audition(client, a).unwrap();
     };
     strike("piano", 1, 62.0, true);
@@ -711,7 +722,10 @@ fn a_loop_turned_off_during_a_take_lets_it_go_on() {
     r.graph.set_loop(None, Some(false)).unwrap();
     r.to(4.5);
     let said = r.graph.record_tick();
-    assert!(r.graph.recording() && said.iter().all(|v| v.get("written").is_none() && v.get("empty").is_none()), "still recording past the old end: {said:?}");
+    assert!(
+        r.graph.recording() && said.iter().all(|v| v.get("written").is_none() && v.get("empty").is_none()),
+        "still recording past the old end: {said:?}"
+    );
     let on = r.key(&[0x90, 60, 100]);
     r.to(5.0);
     r.key(&[0x80, 60, 100]);
@@ -888,7 +902,9 @@ mod audio {
             self.fill(4);
             loop {
                 let said = self.graph.record_tick();
-                if let Some(v) = said.into_iter().find(|v| v.get("written").is_some() || v.get("empty").is_some() || v.get("error").is_some()) {
+                if let Some(v) =
+                    said.into_iter().find(|v| v.get("written").is_some() || v.get("empty").is_some() || v.get("error").is_some())
+                {
                     return v;
                 }
                 assert!(t.elapsed() < Duration::from_secs(10), "no take was written");
@@ -968,7 +984,8 @@ mod audio {
         r.graph.record_stop(r.token).unwrap();
         assert!(r.written()["written"].is_object());
         assert_eq!(m2_editor::take::steps(&r.fixture.0), ["push", "name", "sync", "tx"]);
-        let parts: Vec<String> = std::fs::read_dir(r.fixture.0.join("assets")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        let parts: Vec<String> =
+            std::fs::read_dir(r.fixture.0.join("assets")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(parts, ["Vox take.wav"], "no part file is left");
     }
 
@@ -1139,10 +1156,12 @@ mod audio {
         r.player.name_inputs(&["Mic A", "Mic B"]);
         r.anchor = r.graph.engine_clock().unwrap();
         r.sound = Box::new(|_| 0.5);
-        let chosen = |name: &str| Options { input: InputChoice { device: Some(name.into()), name: Some(name.into()) }, ..Default::default() };
+        let chosen =
+            |name: &str| Options { input: InputChoice { device: Some(name.into()), name: Some(name.into()) }, ..Default::default() };
         r.graph.record_start(r.token, "vox", "clips", chosen("Mic C")).unwrap();
         assert_eq!(r.player.input().map(|l| l.name).as_deref(), Some("Mic A"), "it records from the one there");
-        let words = "Mic C isn't plugged in, so this take records from Mic A. To record from another input, choose it in Settings ▸ Sound input.";
+        let words =
+            "Mic C isn't plugged in, so this take records from Mic A. To record from another input, choose it in Settings ▸ Sound input.";
         assert_eq!(r.told(), [words]);
         let listed = (vec![("input.missing".to_string(), None, words.to_string())], vec!["warning".to_string()]);
         assert_eq!(r.problems(), listed);
@@ -1218,7 +1237,8 @@ mod audio {
         let (s, _, _) = r.samples(&r.clips()[0]);
         assert!((BEAT as usize..2 * BEAT as usize).contains(&s.len()), "up to where the disk was full: {} frames", s.len());
         assert!(s.iter().all(|x| *x == 0.5), "every frame whole");
-        let names: Vec<String> = std::fs::read_dir(r.fixture.0.join("assets")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        let names: Vec<String> =
+            std::fs::read_dir(r.fixture.0.join("assets")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["Vox take.wav"], "no part file is left");
         r.graph.transport("stop").unwrap();
     }
@@ -1251,7 +1271,8 @@ mod audio {
         assert_eq!(first.finish("Vox take.wav").unwrap().asset.as_str(), "Vox take.wav");
         assert_eq!(second.finish("Vox take.wav").unwrap().asset.as_str(), "Vox take 2.wav");
         drop(let_go);
-        let mut names: Vec<String> = std::fs::read_dir(f.0.join("assets")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        let mut names: Vec<String> =
+            std::fs::read_dir(f.0.join("assets")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         names.sort();
         assert_eq!(names, ["Vox take 2.wav", "Vox take.wav"], "no part file is left");
     }

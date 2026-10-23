@@ -1,0 +1,63 @@
+# deny.toml: what cargo-deny allows in music2's Rust dependencies, on both workspaces (this one and
+# std/kernels-src), with this file for both. ci/pr.sh's "licences" row (its quick step, on every pull
+# request) checks bans, licences and sources, which give the same answer every day:
+#
+#   cargo deny --locked --config deny.toml check bans licenses sources
+#   cargo deny --locked --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources
+#
+# Its advisories step (ci/pr.sh advisories: every night, and on a pull request that changes a
+# Cargo.lock or this file) checks RustSec's advisories, whose database changes from day to day:
+#
+#   cargo deny --locked --config deny.toml check advisories
+#   cargo deny --locked --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A advisory-not-detected advisories
+#
+# In short: only crates from crates.io; only the licences below, all of which let us ship music2 under
+# MIT OR Apache-2.0; no RustSec advisory but the ones listed under [advisories], each with why.
+
+[graph]
+# Every feature and every OS: a dependency only the Mac or Windows build uses is checked too.
+all-features = true
+
+[advisories]
+# A crate yanked from crates.io fails the check: it was pulled for a reason.
+yanked = "deny"
+# Each one: why music2 lives with it for now, and what ends it. Look at this list whenever
+# Cargo.lock changes; delete a line as soon as its fix lands.
+ignore = [
+  # Unmaintained, not unsafe: a build-time macro under Tauri's Linux menus (glib-macros 0.18 via
+  # gtk 0.18 and muda). No fix upstream yet; it goes when Tauri moves off gtk 0.18.
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained; build-time only, via tauri's gtk 0.18 on Linux; no fix upstream" },
+]
+
+[licenses]
+# Every licence our dependencies use today (checked 2026-10-21: 600 crates). All are permissive,
+# but MPL-2.0, which is file-level copyleft: fine to depend on, as long as those crates' own files
+# stay MPL (cssparser, selectors and dtoa-short under Tauri's HTML tooling; option-ext under dirs).
+# A crate with another licence fails the check: add it here only after reading the licence.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "BSL-1.0",
+  "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# 40 crates come in two versions today (Tauri's tree): information, not a failure.
+multiple-versions = "allow"
+# A dependency without a version ("*") fails. Path dependencies between our own crates are fine,
+# because every crate of ours says publish = false (Cargo.toml's [workspace.package]).
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only: no git dependencies, no other registry.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

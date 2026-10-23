@@ -67,28 +67,60 @@ pub enum Input {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FOp {
     /// A lane, addressed by module key and lane key (ID-6).
-    Lane { module: String, lane: String, kind: Kind, default: f64 },
+    Lane {
+        module: String,
+        lane: String,
+        kind: Kind,
+        default: f64,
+    },
     Time(TimeOf),
     Const(f64),
     /// `inputs` are in the kernel's declared order; `channels` is the count resolved for its
     /// `audio<*>` ports; `assets` and `values` are its settings, as the IR gives them.
-    Kernel { kernel: String, channels: u8, inputs: Vec<Input>, assets: Vec<String>, values: Vec<f64> },
+    Kernel {
+        kernel: String,
+        channels: u8,
+        inputs: Vec<Input>,
+        assets: Vec<String>,
+        values: Vec<f64>,
+    },
     /// A hosted plugin; `inputs` are in its signature's order (`in`, `notes`, parameters).
     /// `state` is where its state is filed below its module, as keys ([`Op::state_path`]).
-    Plugin { plugin: String, inputs: Vec<Input>, channels: u8, state: Option<Vec<String>> },
+    Plugin {
+        plugin: String,
+        inputs: Vec<Input>,
+        channels: u8,
+        state: Option<Vec<String>>,
+    },
     /// `lane` is the notes lane node feeding the voices; `alloc` how they are given notes, and
     /// `glide` what a slide's time is read from (RENDER-16).
-    Poly { lane: usize, voices: u32, voice: Box<Voice>, channels: u8, alloc: Alloc, glide: Option<PortRef> },
-    Feedback { input: PortRef, channels: u8 },
+    Poly {
+        lane: usize,
+        voices: u32,
+        voice: Box<Voice>,
+        channels: u8,
+        alloc: Alloc,
+        glide: Option<PortRef>,
+    },
+    Feedback {
+        input: PortRef,
+        channels: u8,
+    },
     /// Voice graphs only: a field of the voice's note.
     NoteField(NoteField),
     /// Voice graphs only: an output of a node outside the voice.
     Capture(PortRef),
     /// A delay of `frames` samples on an audio or control signal, which the runtime's planner
     /// inserts so every path into a node arrives aligned (RENDER-18). Never in a checked graph.
-    Delay { input: PortRef, frames: u32 },
+    Delay {
+        input: PortRef,
+        frames: u32,
+    },
     /// The notes of lane node `lane`, `frames` samples late (RENDER-18): inserted as [`FOp::Delay`].
-    NoteDelay { lane: usize, frames: u32 },
+    NoteDelay {
+        lane: usize,
+        frames: u32,
+    },
 }
 
 impl FOp {
@@ -185,10 +217,18 @@ pub struct OverlaySite {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Consumer {
     /// A kernel's input, or a plugin's main audio input, by its place in the node's inputs.
-    Input { node: usize, input: u16 },
+    Input {
+        node: usize,
+        input: u16,
+    },
     /// What a `poly`'s voices read from outside, by the capture's place in node order.
-    Capture { poly: usize, index: u16 },
-    Feedback { node: usize },
+    Capture {
+        poly: usize,
+        index: u16,
+    },
+    Feedback {
+        node: usize,
+    },
     /// The song's output.
     Out,
 }
@@ -262,10 +302,9 @@ impl<'a> Scope<'a> for VoiceScope<'a, '_> {
     }
 
     fn lane(&self, _: &'a Module, lane: &str) -> Result<(FOp, Kind), String> {
-        let (_, f) = NoteField::ALL
-            .iter()
-            .find(|(n, _)| *n == lane)
-            .ok_or_else(|| format!("inside poly, lanes are note fields (pitch, gate, velocity, pressure, timbre, modWheel), not `{lane}`"))?;
+        let (_, f) = NoteField::ALL.iter().find(|(n, _)| *n == lane).ok_or_else(|| {
+            format!("inside poly, lanes are note fields (pitch, gate, velocity, pressure, timbre, modWheel), not `{lane}`")
+        })?;
         Ok((FOp::NoteField(*f), f.kind()))
     }
 
@@ -365,7 +404,10 @@ impl<'a> Checker<'a> {
             }
             for s in &f.sidechain {
                 if !ids.contains(split_ref(&s.source).0) {
-                    let e = format!("frame {i} (site {}): sidechain input `{}` reads `{}`, which isn't a node of the module", f.site, s.input, s.source);
+                    let e = format!(
+                        "frame {i} (site {}): sidechain input `{}` reads `{}`, which isn't a node of the module",
+                        f.site, s.input, s.source
+                    );
                     self.diags.push(diag(m, None, e));
                 }
             }
@@ -684,7 +726,9 @@ impl<'a> Checker<'a> {
                     FOp::Kernel { inputs, .. } | FOp::Plugin { inputs, .. } => {
                         // A plugin's audio inputs other than its main one are sidechain ports (PKG-13).
                         let main = match &nodes[i].op {
-                            FOp::Plugin { plugin, .. } => self.kernels.plugin(plugin).and_then(|s| s.inputs.iter().position(|p| p.name == "in")),
+                            FOp::Plugin { plugin, .. } => {
+                                self.kernels.plugin(plugin).and_then(|s| s.inputs.iter().position(|p| p.name == "in"))
+                            }
                             _ => None,
                         };
                         let side = self.side_sources(m, n.frame);
@@ -706,7 +750,11 @@ impl<'a> Checker<'a> {
                     }
                     FOp::Poly { voice, .. } => {
                         let Op::Poly { body, .. } = &n.op else { continue };
-                        let captures = voice.nodes.iter().enumerate().filter_map(|(j, v)| if let FOp::Capture(p) = v.op { Some((j, p)) } else { None });
+                        let captures = voice
+                            .nodes
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(j, v)| if let FOp::Capture(p) = v.op { Some((j, p)) } else { None });
                         for (index, (j, p)) in captures.enumerate() {
                             if !crosses(p, into) {
                                 continue;
@@ -897,7 +945,8 @@ impl<'a> Checker<'a> {
         let mut kinds: Vec<Option<Vec<Kind>>> = vec![None; n];
         kinds.extend(extras.iter().map(|(_, k)| Some(vec![*k])));
         let mut ops: Vec<Option<FOp>> = (0..n).map(|_| None).collect();
-        let kind_of = |kinds: &[Option<Vec<Kind>>], p: PortRef| kinds.get(p.node).and_then(|k| k.as_ref()).and_then(|k| k.get(p.port)).copied();
+        let kind_of =
+            |kinds: &[Option<Vec<Kind>>], p: PortRef| kinds.get(p.node).and_then(|k| k.as_ref()).and_then(|k| k.get(p.port)).copied();
         for &i in &order {
             let (m, node) = items[i];
             let typed: Result<(FOp, Vec<Kind>), String> = match (&node.op, &res[i]) {
@@ -925,7 +974,10 @@ impl<'a> Checker<'a> {
                         self.diags.push(diag(
                             m,
                             Some(node),
-                            format!("`{kernel}` adds {} samples of latency, which can't be made up for inside poly; use it after the voices", sig.latency),
+                            format!(
+                                "`{kernel}` adds {} samples of latency, which can't be made up for inside poly; use it after the voices",
+                                sig.latency
+                            ),
                         ));
                         continue;
                     }
@@ -942,7 +994,8 @@ impl<'a> Checker<'a> {
                     if upstream_broken {
                         continue;
                     }
-                    let unknown: Vec<&str> = conns.iter().map(|(p, _)| p.as_str()).filter(|p| !sig.inputs.iter().any(|s| s.name == *p)).collect();
+                    let unknown: Vec<&str> =
+                        conns.iter().map(|(p, _)| p.as_str()).filter(|p| !sig.inputs.iter().any(|s| s.name == *p)).collect();
                     let notes_not_lane = is_plugin
                         && typed_conns.get("notes").is_some_and(|(p, _)| !matches!(ops.get(p.node), Some(Some(FOp::Lane { .. }))));
                     if notes_not_lane {
@@ -993,7 +1046,10 @@ impl<'a> Checker<'a> {
                                 match self.check_voice(m, body, &kinds) {
                                     Some((voice, Kind::Audio(c))) => {
                                         let (voice, alloc, glide) = (Box::new(voice), *alloc, *glide);
-                                        Ok((FOp::Poly { lane: events.node, voices: *voices, voice, channels: c, alloc, glide }, vec![Kind::Audio(c)]))
+                                        Ok((
+                                            FOp::Poly { lane: events.node, voices: *voices, voice, channels: c, alloc, glide },
+                                            vec![Kind::Audio(c)],
+                                        ))
                                     }
                                     Some((_, k)) => Err(format!("a voice must output audio, not {k}")),
                                     None => continue,
@@ -1807,7 +1863,8 @@ mod tests {
         assert_eq!(code, "key.invalid");
         let (_, m) = one(codes(json!([{"site": 4, "component": "std:follow", "sidechain": [{"input": "in", "ref": "nope"}]}]), json!([])));
         assert!(m.contains("sidechain input `in` reads `nope`"), "{m}");
-        let (_, m) = one(codes(json!([{"site": 4, "component": "std:follow", "sidechain": [{"input": "in", "ref": "o.nope"}]}]), json!([])));
+        let (_, m) =
+            one(codes(json!([{"site": 4, "component": "std:follow", "sidechain": [{"input": "in", "ref": "o.nope"}]}]), json!([])));
         assert!(m.contains("sidechain input `in`") && m.contains("no output `nope`"), "{m}");
     }
 
@@ -1861,7 +1918,10 @@ mod tests {
         assert!(written.same_value(&o(json!({"site": 3, "arg": ["0"]}))), "a literal is the same value with or without a slot");
         let q = o(json!({"site": 9, "control": {"frame": 2, "slot": "q", "inherited": true}}));
         assert!(q.inherited() && q.slot() == Some("q"));
-        assert!(q.same_value(&o(json!({"site": 9, "control": {"frame": 5, "slot": "q", "inherited": true}}))), "another evaluation of the call");
+        assert!(
+            q.same_value(&o(json!({"site": 9, "control": {"frame": 5, "slot": "q", "inherited": true}}))),
+            "another evaluation of the call"
+        );
         assert!(!q.same_value(&o(json!({"site": 9, "control": {"frame": 2, "slot": "cutoff", "inherited": true}}))));
         assert!(!written.inherited());
         // Inherited and smooth are written only when set.

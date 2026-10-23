@@ -438,7 +438,13 @@ pub(super) fn unbuilt(e: &anyhow::Error) -> String {
 /// which then keeps only what this one uses (the plan it replaces holds its own until it is
 /// retired). Against `basis` it keeps every instance that continues; the rest are created,
 /// reporting to `owner`, on the plugin main thread while the old plan plays (RENDER-25).
-fn build(session: &Session, audio: &mut audio::Cache, owner: &m2_plugins::Owner, basis: Basis, data: Option<&m2_song::DataSet>) -> Result<Renderer> {
+fn build(
+    session: &Session,
+    audio: &mut audio::Cache,
+    owner: &m2_plugins::Owner,
+    basis: Basis,
+    data: Option<&m2_song::DataSet>,
+) -> Result<Renderer> {
     let rev = session.accepted();
     // A tempo drag's arrangement in place of the accepted one (RENDER-27a).
     let (flat, data, rate) = (&rev.compiled.flat, data.unwrap_or(&rev.compiled.data), rev.project.sample_rate());
@@ -531,7 +537,13 @@ impl Open {
 
     /// How the accepted revision reaches `device`'s engine, its plan prepared if it needs one, and
     /// what preparing it took.
-    fn way(&mut self, device: &Device, owner: &m2_plugins::Owner, fail: bool, tempo: Option<&Arc<m2_song::Arrangement>>) -> (Way, Prepared) {
+    fn way(
+        &mut self,
+        device: &Device,
+        owner: &m2_plugins::Owner,
+        fail: bool,
+        tempo: Option<&Arc<m2_song::Arrangement>>,
+    ) -> (Way, Prepared) {
         let rev = self.session.accepted();
         let (number, rate) = (rev.number, rev.project.sample_rate());
         let refused = self.refused(device);
@@ -595,7 +607,8 @@ impl Open {
             }
             None => Basis::Fresh,
         };
-        let built = if fail { Err(anyhow!("the renderer failed to build (a test)")) } else { build(session, audio, owner, basis, leased.as_ref()) };
+        let built =
+            if fail { Err(anyhow!("the renderer failed to build (a test)")) } else { build(session, audio, owner, basis, leased.as_ref()) };
         prepared.prepare_ns = t.elapsed().as_nanos() as u64 - prepared.continues_ns;
         let r = match built {
             Ok(r) => Box::new(r),
@@ -719,11 +732,12 @@ impl Open {
                 };
                 let rest = serde_json::to_string(&lane).expect("a lane serialises");
                 let same = self.timeline.lane(&module, &key).filter(|l| {
-                    l.head == rest && match (&l.data, &shown) {
-                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                        (None, None) => true,
-                        _ => false,
-                    }
+                    l.head == rest
+                        && match (&l.data, &shown) {
+                            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                            (None, None) => true,
+                            _ => false,
+                        }
                 });
                 let json = match same {
                     Some(l) => l.json.clone(),
@@ -984,7 +998,9 @@ impl Actor {
                     let d = device.as_ref().map_err(|e| anyhow!("{e:#}"))?;
                     let looping = inner.timing.lock().as_ref().and_then(|t| t.range.filter(|_| t.on));
                     // A new player clicks as the song's window says, a read-only one's included.
-                    d.player.set_click(cp.open.as_ref().filter(|p| p.engine.token == token).is_some_and(|p| super::view_file::metronome(&p.local)));
+                    d.player.set_click(
+                        cp.open.as_ref().filter(|p| p.engine.token == token).is_some_and(|p| super::view_file::metronome(&p.local)),
+                    );
                     o.load(d, *r, plays, d.resume, looping)?;
                     super::faults::sent(&inner, o, o.plays.as_ref().expect("loaded"));
                     o.restarts.clear();
@@ -1080,7 +1096,8 @@ impl Actor {
         if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
             p.revs.push(number, o.code_rev);
             let accepted = o.session.accepted_arc();
-            p.engine = Arc::new(EngineView { token, revision: number, code_rev: o.code_rev, controls: o.controls.clone(), plays, accepted });
+            p.engine =
+                Arc::new(EngineView { token, revision: number, code_rev: o.code_rev, controls: o.controls.clone(), plays, accepted });
         }
         // Lane leases (WRITE-22a): a new plan, or new data for a lane a drag plays, hears the drag
         // again, after this settle's own sends; a change to a dragged clip ends it.
@@ -1226,7 +1243,8 @@ impl Actor {
             self.inner.end_all(&mut cp);
             let mut revs = Revs::default();
             revs.push(number, code_rev);
-            let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view, accepted: o.session.accepted_arc() });
+            let engine =
+                Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view, accepted: o.session.accepted_arc() });
             let aliases = Arc::new(super::Aliases { to: code_rev, ids: HashMap::new() });
             let local = super::view_file::local(&shown.dir);
             // The metronome as this song had it here: off for one that never had it on.
@@ -1725,7 +1743,11 @@ impl Actor {
             Ok(_) if o.exporting => false,
             Ok(d) => {
                 has_code
-                    && (!o.loaded(&d) || o.playing != Some(o.session.accepted().number) || !o.restarts.is_empty() || o.relatent || o.refused(&d))
+                    && (!o.loaded(&d)
+                        || o.playing != Some(o.session.accepted().number)
+                        || !o.restarts.is_empty()
+                        || o.relatent
+                        || o.refused(&d))
             }
             // Let go of: the settle starts a new one, and loads the project into it where it was,
             // stopped. Let go of here, no action failed to say why: if it played, the user is told.

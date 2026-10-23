@@ -1,0 +1,65 @@
+# ci/nightly-tests.txt: the Rust tests that run only in the nightly tier, each with why.
+#
+# In short: the PR tier (ci/pr.sh rust, and so every pull request) leaves these out; the nightly tier
+# (ci/check.sh, which runs every test) still runs them, unchanged. A test is here for one of three
+# reasons, and only these:
+#   speed     it judges how FAST something happens (a bound under 2 s, or a real-time period), so a
+#             slow or busy machine fails it with correct code. A test that only waits up to a
+#             deadline of 2 s or more for something to happen stays in the PR tier: it fails only
+#             if the thing never happens.
+#   flake     it failed on correct code in a recorded run (HANDOFF.md's "Known flakes", or the
+#             open-source audit of 2026-10-21) and the cause isn't fixed yet.
+#   slow      it alone takes over a minute on 4 cores ("run the expensive tests nightly").
+# A test here is never weakened or deleted to get it back: fix the cause (a flake), make it
+# measure work instead of time (speed), or make it quicker (slow); then take its line out.
+#
+# One line a test: <nextest binary id> <test name> <reason...>. The binary id is the package, or
+# package::<file> for a file under tests/ (cargo nextest list prints them). Test names must match
+# exactly: the "nightly list" row (ci/pr.sh rust, ci/check.sh) fails on a name nextest can't find.
+# ci/pr.sh turns these lines into a nextest filter (ci/nightly-list.sh): ci/pr.sh rust leaves them
+# out, and ci/pr.sh rust --all runs them too. To run one alone (cargo-nextest from ci/tools.sh):
+#   cargo nextest run --locked -E 'binary_id(=<binary id>) & test(=<test name>)'
+
+# speed: bounds under 2 s, or a real-time period
+m2-os ipc::tests::a_wake_crosses_two_mappings  speed: woken within 2 s, in 15 ms steps (core/os/src/ipc.rs)
+m2-os os::tests::waits_for_a_cpu_are_read  speed: two reads within 10 ms (core/os/src/linux/mod.rs)
+m2-os thread::tests::cpu_time_grows_while_the_thread_works  speed: 10 ms of CPU within 5 s (core/os/src/thread.rs)
+m2-play outputs::tests::a_fixed_buffer_is_used_when_in_range  speed: within 1 s (core/play/src/outputs/tests.rs)
+m2-play tests::a_cell_write_never_waits_for_the_queue  speed: within 5 ms (core/play/src/tests.rs)
+m2-play tests::a_full_queue_stalls_instead_of_hanging  speed: within 5 ms (core/play/src/tests.rs)
+m2-play timing::tests::a_late_callback_and_a_gap_are_counted  speed: a histogram of real sleeps, 40 ms (core/play/src/timing.rs)
+m2-play timing::tests::a_windows_longest_is_its_own  speed: a histogram of real sleeps, 9 ms (core/play/src/timing.rs)
+m2-play::stream a_slow_disk_misses_but_never_waits  speed: every callback within its 10 ms period; also a flake (the Mac at e7518f4)
+m2-play::stream a_player_plays_a_render_as_it_is_made  speed: every callback within its 10 ms period (core/play/tests/stream.rs)
+m2-plugins::remote a_crash_marks_every_instance_of_its_process  speed: within 400 ms (core/plugins/tests/remote.rs)
+m2-plugins::remote a_hung_call_ends_its_process  speed: ended within 480 ms to 3 s (core/plugins/tests/remote.rs)
+m2-plugins::remote a_main_thread_call_that_hangs_ends_its_process  speed: ended within 950 ms to 5 s (core/plugins/tests/remote.rs)
+m2-plugins::remote an_offline_call_that_hangs_ends_its_process  speed: ended within 950 ms to 5 s (core/plugins/tests/remote.rs)
+m2-server export::tests::an_export_renders_on_its_own_while_a_second_is_refused  speed: answered within 250 ms (crates/server/src/export.rs)
+m2-server graph::lanes::tests::lane_previews_never_wait_for_a_compile  speed: within 500 ms (crates/server/src/graph/lanes_tests.rs)
+m2-server graph::presets::tests::loading_a_plugin_preset_is_one_undo_step  speed: within 600 ms (crates/server/src/graph/presets_tests.rs)
+m2-server graph::preview_tests::a_save_the_disk_is_slow_to_make_is_said  speed: within 1.9 s (crates/server/src/graph/preview_tests.rs)
+m2-server graph::preview_tests::the_server_says_a_slow_save_while_an_outside_save_waits_behind_it  speed: within 300 ms (crates/server/src/graph/preview_tests.rs)
+m2-server graph::record::tests::audio::a_new_audio_lane_never_waits_for_the_disk_under_the_lock  speed: the lock held under 150 ms (crates/server/src/graph/record_tests.rs)
+m2-server graph::record::tests::stopping_never_waits_for_a_compile  speed: within 200 ms (crates/server/src/graph/record_tests.rs)
+m2-server graph::tests::previews_never_wait_for_a_compile  speed: within 50 ms, each update under 20 ms (crates/server/src/graph/tests.rs)
+m2-server graph::tests::seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo  speed: within 1 s (crates/server/src/graph/tests.rs)
+m2-server graph::tests::the_loop_is_checked_kept_while_off_and_played  speed: within 1.2 s (crates/server/src/graph/tests.rs)
+m2-server graph::tests::a_host_crash_is_one_plugin_crashed_problem  speed: within 480 ms; also a flake: named one silent plugin of two (2026-10-21)
+m2-server graph::tests::a_hung_host_process_is_ended_and_said  speed: ended within 480 ms to 3 s; also a flake: named one silent plugin of two (2026-10-21)
+m2-server graph::watch_tests::an_event_wakes_an_idle_watcher_and_a_batch_wakes_it_when_due  speed: within 100 ms (crates/server/src/graph/watch_tests.rs)
+m2-gates::harness the_live_engine_passes_every_gate  speed: the gates at CI sizes, e.g. G1 audible within 50 ms (crates/gates/tests/harness.rs)
+
+# flake: failed on correct code, cause not fixed
+m2-runtime tests::live::keep::an_edit_window_renders_the_same_bits_on_1_and_n_threads  flake: asserts work crossed threads, which the scheduler decides; 3 of 5 runs on 4 cores (2026-10-21)
+m2-server graph::audition::tests::audition_never_waits_for_a_compile  flake: "the compile's span" not found, under load (HANDOFF.md)
+m2-server graph::midi::tests::midi_never_waits_for_a_compile  flake: "the compile's span" not found, under load (HANDOFF.md)
+m2-session tx::tests::a_second_session_is_read_only  flake: its refresh after the lock came back, under load (HANDOFF.md)
+m2-os os::cores::tests::cores_are_read_from_sysfs  flake: shares one temp folder with the next test (HANDOFF.md)
+m2-os os::cores::tests::the_affinity_mask_and_quota_cut_them  flake: shares one temp folder with the test above (HANDOFF.md)
+
+# slow: over a minute alone on 4 cores (2026-10-21)
+m2-session tx::kill_tests::killed_at_every_commit_step_the_project_recovers  slow: 133 s
+m2-session tx::kill_tests::killed_at_every_commit_step_without_a_swap_the_project_recovers  slow: 160 s
+m2-play::bit_identity live_on_n_threads_is_the_export_on_1  slow: 86 s
+m2-play::bit_identity every_pure_fixture_renders_the_same_bits_on_1_and_n_threads  slow: 81 s

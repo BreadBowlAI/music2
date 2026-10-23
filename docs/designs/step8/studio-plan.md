@@ -1,6 +1,6 @@
 # Studio: the plan
 
-For the `studio` track: branch `studio`, worktree `/home/jerry/m2-runs/wt/st`, made from `main` at `85b069a` (steps 1
+For the `studio` track: branch `studio`, worktree `$SCRATCH/wt/st`, made from `main` at `85b069a` (steps 1
 to 7, the sounds, taste's look, all of 8b, polish, 8a's offline half, and `next`). Written 2026-10-17 by a planning
 agent, read only: files and `git`, nothing built or run. File:line cites are at `85b069a`. Sizes: **S** under 2 hours
 of agent time, **M** half a day, **L** most of a day *(estimates)*.
@@ -144,57 +144,57 @@ everything above.
 
 ### 1.1 Branches and worktrees
 
-- `studio` in `/home/jerry/m2-runs/wt/st` is the lead's: P0 (§2), the merges and the End (§9).
+- `studio` in `$SCRATCH/wt/st` is the lead's: P0 (§2), the merges and the End (§9).
 - The lead's first commit makes the build notes and the module stubs (§2.1); then four lanes from `studio`:
   ```
-  cd /home/jerry/m2-runs/wt/st && git config rerere.enabled true
-  for l in a b c d; do git worktree add /home/jerry/m2-runs/wt/st-$l -b studio-$l studio; done
+  cd $SCRATCH/wt/st && git config rerere.enabled true
+  for l in a b c d; do git worktree add $SCRATCH/wt/st-$l -b studio-$l studio; done
   ```
   Each lane runs `git config rerere.enabled true` in its worktree too.
 - The lanes start at once, on work that needs nothing from P0 (§8). When P0 lands on `studio`, each lane merges
   `studio`. When `main` moves (8a lands), the lead merges `main` into `studio`, and the lanes merge `studio`. Merges
   only: never rebase, never rewrite history, never push.
 - Never touch `wt/8a`, `wt/8a-g`, `wt/8a-g-base`, nor tmux sessions `m2`, `1`, `2`, `ssh_tmux`. Never delete anything
-  under `~/m2-runs/plugins`.
+  under `$SCRATCH/plugins`.
 
 ### 1.2 Builds
 
-Every cargo, npm or music2 run has `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Builds are
+Every cargo, npm or music2 run has `CARGO_HOME=/home/<user>/.cargo RUSTUP_HOME=/home/<user>/.rustup`. Builds are
 `--locked`, never `cargo update`. No lane adds a crate (Q48).
 
 | Who | Target | Builds |
 |---|---|---|
-| Lead (`wt/st`) | `/home/jerry/m2-runs/sst/target-st` | the "before" server, P0, the merge checks, the desktop app for pictures, the End's full check |
-| Lane X (`wt/st-x`) | `/home/jerry/m2-runs/sst/target-x` | `cargo build --locked -p m2-server --example headless -p m2`, and the tests and clippy of the crates it touches |
+| Lead (`wt/st`) | `$SCRATCH/sst/target-st` | the "before" server, P0, the merge checks, the desktop app for pictures, the End's full check |
+| Lane X (`wt/st-x`) | `$SCRATCH/sst/target-x` | `cargo build --locked -p m2-server --example headless -p m2`, and the tests and clippy of the crates it touches |
 | Every lane, for its menu row | its own target | `cargo test --locked -p music2-desktop` and its clippy; the mac lint of the crates it touches: `CC_aarch64_apple_darwin=$PWD/ci/stub-cc CXX_aarch64_apple_darwin=$PWD/ci/stub-cc AR_aarch64_apple_darwin=$PWD/ci/stub-ar cargo clippy --locked --target aarch64-apple-darwin -p <crates> --all-targets -- -D warnings` |
 
 - After each build, copy the binaries per commit, so a rebuild never swaps one under a running suite:
-  `B=/home/jerry/m2-runs/sst/bin/<lane>-<sha>; mkdir -p $B/examples; cp $T/debug/examples/headless $B/examples/; cp $T/debug/m2 $B/`
+  `B=$SCRATCH/sst/bin/<lane>-<sha>; mkdir -p $B/examples; cp $T/debug/examples/headless $B/examples/; cp $T/debug/m2 $B/`
   (`run.mjs` finds `m2` one folder above the server's; suites that run `m2` need it).
 - Web: `cd web && npm ci && npm run build` (it type-checks). Once per worktree also `cd e2e && npm ci`.
 - Long jobs (cargo builds and tests over a few minutes, suite batches, the full check) go through
-  `TW_WAIT=<seconds> ~/m2-runs/tw <name> '<cmd>'` (no double quotes or parentheses in the command). Logs in
-  `~/m2-runs/logs/`. Name them `st-<lane>-<what>`.
+  `TW_WAIT=<seconds> $SCRATCH/tw <name> '<cmd>'` (no double quotes or parentheses in the command). Logs in
+  `$SCRATCH/logs/`. Name them `st-<lane>-<what>`.
 - Never move a `target/` between worktrees. At its end each lane deletes `target-<lane>` and `bin/<lane>-*`. The lead
   deletes `target-st`, `bin/` and `scratch/` after the pictures (scratch targets once filled 390 GB).
 
 ### 1.3 Suites
 
-- **Tools** (`/home/jerry/m2-runs/sst/tools/`; change only these copies): `lane-suites.sh <lane> <out> <suite>…`
+- **Tools** (`$SCRATCH/sst/tools/`; change only these copies): `lane-suites.sh <lane> <out> <suite>…`
   already maps `st` to `wt/st` and `a`…`d` to `wt/st-a`…`wt/st-d`. `DIST=<folder>` serves an older page (red first);
   `OLD=<folder>` an old tree's std, templates and examples; `M2_HEADLESS` (required) a copy under
-  `/home/jerry/m2-runs/sst/bin/`. `app-shot.sh` takes `scratch/x97.lock` itself (never wrap it in `flock`), uses `:97`
+  `$SCRATCH/sst/bin/`. `app-shot.sh` takes `scratch/x97.lock` itself (never wrap it in `flock`), uses `:97`
   only, a scratch HOME, `M2_AUDIO=none`, `M2_MIDI=inject`.
 - **Running:**
   ```
-  M2_HEADLESS=/home/jerry/m2-runs/sst/bin/a-<sha>/examples/headless \
-    /home/jerry/m2-runs/sst/tools/lane-suites.sh a /home/jerry/m2-runs/sst/scratch/e2e/a1 st-audio taste s8-clips
+  M2_HEADLESS=$SCRATCH/sst/bin/a-<sha>/examples/headless \
+    $SCRATCH/sst/tools/lane-suites.sh a $SCRATCH/sst/scratch/e2e/a1 st-audio taste s8-clips
   ```
   Each suite gets a scratch HOME under `<out>`, `M2_AUDIO=none` and `M2_MIDI=inject` (`e2e/run.mjs`, `envFor`): never
   the real `~/.music2` or `~/Music`.
 - **The "before" server and page** (the lead, first thing): `cargo build --locked -p m2-server --example headless -p m2`
   at `85b069a` into `target-st`, copied to `bin/st-85b069a/`; `web/dist` copied to
-  `/home/jerry/m2-runs/sst/scratch/dist-before`. Every red-first suite run uses them.
+  `$SCRATCH/sst/scratch/dist-before`. Every red-first suite run uses them.
 - **How a suite drops files** (P0's `e2e/droplib.mjs`):
   - *As the app does:* an app page (the Tauri shim `pl-projects.mjs:111-142` uses, made shared in P0's
     `e2e/applib.mjs`) answers `plugin:event|listen` for Tauri's drag-drop events too. `drop(page, paths, x, y)` fires
@@ -249,7 +249,7 @@ A test that can't be red (it guards something that never happened) is named a **
 ### 1.7 The desktop app
 
 Only on the invisible Xvfb screen `:97`, through `tools/app-shot.sh`, a scratch HOME under
-`/home/jerry/m2-runs/sst/scratch/` and `M2_AUDIO=none`. Never on a real screen. Each lane may open it once to check
+`$SCRATCH/sst/scratch/` and `M2_AUDIO=none`. Never on a real screen. Each lane may open it once to check
 its menu rows (A: File ▸ Import Audio… with Ctrl+Shift+I; B: Transport ▸ Record; C: File ▸ Import MIDI…, File ▸
 Export…; D: Help ▸ Make Your First Song). The End takes the pictures (§9).
 
@@ -978,13 +978,13 @@ If a lane is late at Day 2 midday, its unfinished slice waits and the End lists 
      fade handles), §3.6 (+ Track's Audio group), the drop hint, the Export dialog, the tempo question, the guide
      card, §5.1 (R is Record, ⇧⌘I imports audio), §5.3 (the Transport and Help menus).
    - `e2e/README.md`'s rows; `HANDOFF.md` (below).
-4. **The full check once:** `TW_WAIT=5400 ~/m2-runs/tw check-studio 'cd /home/jerry/m2-runs/wt/st &&
-   CARGO_TARGET_DIR=/home/jerry/m2-runs/sst/target-st M2_CHECK_OUT=$HOME/m2-runs/check-studio ci/check.sh --gates'`
+4. **The full check once:** `TW_WAIT=5400 $SCRATCH/tw check-studio 'cd $SCRATCH/wt/st &&
+   CARGO_TARGET_DIR=$SCRATCH/sst/target-st M2_CHECK_OUT=$SCRATCH/check-studio ci/check.sh --gates'`
    (`--gates`: lane B changed the engine's block). Renders must match `e2e/renders.sha256`; nothing may pass only on
    a retry.
 5. **The Linux app on `:97`** (`app-shot.sh`; never a real screen): File ▸ Import Audio… (Ctrl+Shift+I) and Import
    MIDI…, File ▸ Export…, Transport ▸ Record, Help ▸ Make Your First Song.
-6. **Pictures**, in `~/m2-runs/app-shots/studio-<sha>/` with `captions.txt` (each one plain line, and "This is the
+6. **Pictures**, in `$SCRATCH/app-shots/studio-<sha>/` with `captions.txt` (each one plain line, and "This is the
    Linux version. On your Mac it uses the Mac's own font and ⌘ keys."): audio clips with waveforms and a fade; the
    drop hint below the tracks; the Record button counting in; a take growing; the Export dialog; the tempo question;
    the guide card half done; an error in plain words with Details open; Settings' MIDI keyboards (a `HOOK` posts a
@@ -1042,7 +1042,7 @@ If a lane is late at Day 2 midday, its unfinished slice waits and the End lists 
 ## Attack
 
 Written 2026-10-17 by an attack agent, read only. It checks this plan against `85b069a` (`wt/st`), against
-`8a` at `739cfc6` and `8a-gaps` at `8a3d70a`, and against 8a's own plan (`/home/jerry/m2-runs/s8a/plan-live.md`).
+`8a` at `739cfc6` and `8a-gaps` at `8a3d70a`, and against 8a's own plan (`$SCRATCH/s8a/plan-live.md`).
 File:line cites are at `85b069a` unless named. Nothing was built or run. The Decisions section right after this one
 takes each item. Both override everything above, the first Decisions table included.
 

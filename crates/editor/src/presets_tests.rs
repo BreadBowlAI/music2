@@ -25,7 +25,8 @@ fn keys(imports: &str, call: &str) -> Fixture {
 
 /// The id of the last call to `callee` in the accepted revision.
 fn call(s: &Session, callee: &str) -> String {
-    let site = s.accepted().compiled.sites.iter().rfind(|x| x.in_project && x.callee == callee).unwrap_or_else(|| panic!("no call `{callee}`"));
+    let site =
+        s.accepted().compiled.sites.iter().rfind(|x| x.in_project && x.callee == callee).unwrap_or_else(|| panic!("no call `{callee}`"));
     format!("{}#{}", site.file, site.ordinal)
 }
 
@@ -105,7 +106,9 @@ fn a_preset_name_is_one_line_of_1_to_40() {
     for good in ["Soft", "My pluck 2", "Ünïcode ☺", &"x".repeat(40)] {
         assert_eq!(name_error(good), None, "{good}");
     }
-    for bad in ["", &"x".repeat(41), "two\nlines", "a/b", "a\\b", "a:b", "a*", "a?", "a\"b", "<a>", "a|b", ".hidden", " Soft", "Soft ", "Soft."] {
+    for bad in
+        ["", &"x".repeat(41), "two\nlines", "a/b", "a\\b", "a:b", "a*", "a?", "a\"b", "<a>", "a|b", ".hidden", " Soft", "Soft ", "Soft."]
+    {
         assert!(name_error(bad).is_some(), "{bad:?}");
     }
     let mut p = preset("std:synth-pluck", &[]);
@@ -123,8 +126,12 @@ fn saving_a_std_preset_writes_every_control_of_the_call() {
     let s = f.open();
     let before = f.read("tracks/keys.ts");
     let saved = capture(&s, s.accepted().number, &call(&s, "synth.pluck"), "Mine").unwrap();
-    let want: BTreeMap<String, f64> = [("brightness", 3000.0), ("decay", 0.45), ("spread", 0.7), ("velSens", 0.5)].map(|(k, v)| (k.to_string(), v)).into();
-    assert_eq!(saved.preset, Preset { name: "Mine".into(), sound: "std:synth-pluck".into(), values: want, plugin_version: None, state: None });
+    let want: BTreeMap<String, f64> =
+        [("brightness", 3000.0), ("decay", 0.45), ("spread", 0.7), ("velSens", 0.5)].map(|(k, v)| (k.to_string(), v)).into();
+    assert_eq!(
+        saved.preset,
+        Preset { name: "Mine".into(), sound: "std:synth-pluck".into(), values: want, plugin_version: None, state: None }
+    );
     assert_eq!(saved.left, vec![]);
     assert_eq!(f.read("tracks/keys.ts"), before);
     assert!(capture(&s, s.accepted().number, &call(&s, "synth.pluck"), "a/b").is_err(), "a name that won't do");
@@ -162,7 +169,11 @@ fn loading_a_std_preset_is_one_values_tx() {
     let warm = preset("std:synth-pad", &[("cutoff", 1200.0), ("attack", 0.9), ("spread", 0.9)]);
     let (at, node) = (s.accepted().number, call(&s, "synth.pad"));
     load(&mut s, at, &node, &warm).unwrap();
-    assert!(f.read("tracks/keys.ts").contains("synth.pad(lane.notes(\"chords\"), { cutoff: 1200, attack: 0.9 })"), "{}", f.read("tracks/keys.ts"));
+    assert!(
+        f.read("tracks/keys.ts").contains("synth.pad(lane.notes(\"chords\"), { cutoff: 1200, attack: 0.9 })"),
+        "{}",
+        f.read("tracks/keys.ts")
+    );
 }
 
 // FMT-22, HOME-2: a control a lane drives keeps its lane, and is named; the rest load.
@@ -178,7 +189,11 @@ fn a_control_a_lane_drives_keeps_its_lane_and_is_named() {
     let (at, node) = (s.accepted().number, call(&s, "synth.pluck"));
     let loaded = load(&mut s, at, &node, &soft).unwrap();
     assert_eq!(loaded.kept, vec![("brightness".to_string(), Why::Lane)]);
-    assert!(f.read("tracks/keys.ts").contains("{ brightness: lane.control(\"bright\", \"hz\", 3000), decay: 0.6 }"), "{}", f.read("tracks/keys.ts"));
+    assert!(
+        f.read("tracks/keys.ts").contains("{ brightness: lane.control(\"bright\", \"hz\", 3000), decay: 0.6 }"),
+        "{}",
+        f.read("tracks/keys.ts")
+    );
 }
 
 // FMT-22: a preset is for one sound; loading it into another is refused in words, writing nothing.
@@ -215,7 +230,12 @@ fn every_factory_preset_loads() {
             let s = f.open();
             let desc = s.catalog().components.get(&p.sound).unwrap_or_else(|| panic!("{}: no sound {}", file.display(), p.sound)).clone();
             for k in p.values.keys() {
-                assert!(desc.controls.iter().any(|c| &c.name == k && c.each.is_none()), "{}: {} has no control {k}", file.display(), p.sound);
+                assert!(
+                    desc.controls.iter().any(|c| &c.name == k && c.each.is_none()),
+                    "{}: {} has no control {k}",
+                    file.display(),
+                    p.sound
+                );
             }
             let export = s.catalog().exports[&p.sound][0].clone();
             drop(s);

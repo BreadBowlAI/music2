@@ -321,9 +321,11 @@ fn commit_with_is_check_then_commit() {
                 assert_eq!(asserted.as_ref().map(|a| a.0), seen.as_ref().ok().map(|s| s.0), "case {case}");
                 refused += 1;
             }
-            _ => panic!("case {case}: one committed and one didn't
+            _ => panic!(
+                "case {case}: one committed and one didn't
 {one:?}
-{two:?}"),
+{two:?}"
+            ),
         }
         assert_eq!(a.tree(), b.tree(), "case {case}: the same files");
         assert_eq!((sa.can_undo(), sa.can_redo()), (sb.can_undo(), sb.can_redo()), "case {case}");

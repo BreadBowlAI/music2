@@ -45,8 +45,8 @@ use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::*;
 use clap_sys::ext::audio_ports::*;
 use clap_sys::ext::gui::*;
-use clap_sys::ext::log::*;
 use clap_sys::ext::latency::*;
+use clap_sys::ext::log::*;
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
 use clap_sys::ext::preset_load::*;
@@ -442,10 +442,14 @@ const fn descriptor(id: &'static CStr, name: &'static CStr, features: *const *co
 static PROBE: clap_plugin_descriptor = descriptor(c"m2.probe", c"m2 probe", FEATURES.0.as_ptr());
 static FAILING: clap_plugin_descriptor = descriptor(c"m2.probe.fails-state", c"m2 probe (fails state)", FEATURES.0.as_ptr());
 
-static FACTORY: clap_plugin_factory =
-    clap_plugin_factory { get_plugin_count: Some(plugin_count), get_plugin_descriptor: Some(plugin_descriptor), create_plugin: Some(create) };
+static FACTORY: clap_plugin_factory = clap_plugin_factory {
+    get_plugin_count: Some(plugin_count),
+    get_plugin_descriptor: Some(plugin_descriptor),
+    create_plugin: Some(create),
+};
 
-static ENTRY: clap_plugin_entry = clap_plugin_entry { clap_version: CLAP_VERSION, init: Some(entry_init), deinit: Some(entry_deinit), get_factory: Some(get_factory) };
+static ENTRY: clap_plugin_entry =
+    clap_plugin_entry { clap_version: CLAP_VERSION, init: Some(entry_init), deinit: Some(entry_deinit), get_factory: Some(get_factory) };
 
 unsafe extern "C" fn entry_init(_: *const c_char) -> bool {
     true
@@ -526,10 +530,9 @@ unsafe fn probe<'a>(p: *const clap_plugin) -> &'a mut Probe {
 impl Probe {
     fn thread(&self) -> (bool, bool) {
         match self.checks {
-            Some(c) => (
-                c.is_main_thread.is_some_and(|f| unsafe { f(self.host) }),
-                c.is_audio_thread.is_some_and(|f| unsafe { f(self.host) }),
-            ),
+            Some(c) => {
+                (c.is_main_thread.is_some_and(|f| unsafe { f(self.host) }), c.is_audio_thread.is_some_and(|f| unsafe { f(self.host) }))
+            }
             None => (false, false),
         }
     }
@@ -1199,7 +1202,10 @@ unsafe extern "C" fn provider_count(_: *const clap_preset_discovery_factory) -> 
     1
 }
 
-unsafe extern "C" fn provider_descriptor(_: *const clap_preset_discovery_factory, i: u32) -> *const clap_preset_discovery_provider_descriptor {
+unsafe extern "C" fn provider_descriptor(
+    _: *const clap_preset_discovery_factory,
+    i: u32,
+) -> *const clap_preset_discovery_provider_descriptor {
     if i == 0 { &PROVIDER.0 } else { null() }
 }
 
@@ -1291,7 +1297,12 @@ unsafe extern "C" fn provider_extension(_: *const clap_preset_discovery_provider
 
 static PRESET_LOAD: clap_plugin_preset_load = clap_plugin_preset_load { from_location: Some(from_location) };
 
-unsafe extern "C" fn from_location(p: *const clap_plugin, kind: clap_preset_discovery_location_kind, _: *const c_char, key: *const c_char) -> bool {
+unsafe extern "C" fn from_location(
+    p: *const clap_plugin,
+    kind: clap_preset_discovery_location_kind,
+    _: *const c_char,
+    key: *const c_char,
+) -> bool {
     let me = unsafe { probe(p) };
     me.record("preset-load");
     if kind != CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN || key.is_null() {
@@ -1364,7 +1375,8 @@ impl Probe {
                 unsafe { f(out, h) };
             }
         };
-        let header = |size: usize, type_: u16| clap_event_header { size: size as u32, time: 0, space_id: CLAP_CORE_EVENT_SPACE_ID, type_, flags: 0 };
+        let header =
+            |size: usize, type_: u16| clap_event_header { size: size as u32, time: 0, space_id: CLAP_CORE_EVENT_SPACE_ID, type_, flags: 0 };
         for i in 0..self.scripts.len() {
             let s = self.scripts[i];
             if call < s.from || call > s.to {

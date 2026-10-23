@@ -199,7 +199,10 @@ fn removing_both_changes_at_a_mark_is_one_step() {
 #[test]
 fn the_first_tempo_entry_stays() {
     let f = fixture("examples/first-song");
-    f.write(FILE, r#"{"tempo": [{"beat": 0, "bpm": 124}], "meter": [{"beat": 0, "beats": 4, "unit": 4}, {"beat": 16, "beats": 3, "unit": 4}]}"#);
+    f.write(
+        FILE,
+        r#"{"tempo": [{"beat": 0, "bpm": 124}], "meter": [{"beat": 0, "beats": 4, "unit": 4}, {"beat": 16, "beats": 3, "unit": 4}]}"#,
+    );
     let mut s = f.open();
     let before = tree(&f);
     for e in [remove_tempo(&mut s, 0.0), remove_meter(&mut s, 0.0)] {
@@ -243,7 +246,8 @@ fn undo_restores_the_arrangement_bytes() {
 fn a_title_edit_is_identical() {
     let f = fixture("examples/first-song");
     // The example's own manifest, with comments: its dependencies as the example writes them.
-    let manifest = format!("# The demo.\n{}", f.read("music2.toml").replace("name = \"first-song\"\n", "name = \"first-song\"   # its label\n"));
+    let manifest =
+        format!("# The demo.\n{}", f.read("music2.toml").replace("name = \"first-song\"\n", "name = \"first-song\"   # its label\n"));
     assert!(manifest.contains("# its label\nformat = 1\n"), "{manifest}");
     f.write("music2.toml", &manifest);
     let mut s = f.open();

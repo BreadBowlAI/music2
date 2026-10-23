@@ -3,6 +3,7 @@ name = "m2-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 m2-ir.workspace = true

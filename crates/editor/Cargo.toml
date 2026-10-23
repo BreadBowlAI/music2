@@ -4,6 +4,7 @@ description = "The gestures, as Tx builders, and the views the app and the CLI s
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 m2-ir.workspace = true

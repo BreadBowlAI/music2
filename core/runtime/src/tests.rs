@@ -421,7 +421,22 @@ fn play_state(sb: &mut sandbox::Sandbox, s: &sandbox::State, blocks: usize, x: i
 fn two_states_in_one_instance_play_independently() {
     let pk = std_packages();
     let (module, prefix, _) = pk.module_for("std:delay").unwrap();
-    let born = |sb: &mut sandbox::Sandbox| sb.state(prefix, &sandbox::Spec { inputs: 4, outputs: 1, channels: &[1; 5], audio: 1, sample_rate: SR as f64, values: &[], assets: &[], offline: None }).unwrap();
+    let born = |sb: &mut sandbox::Sandbox| {
+        sb.state(
+            prefix,
+            &sandbox::Spec {
+                inputs: 4,
+                outputs: 1,
+                channels: &[1; 5],
+                audio: 1,
+                sample_rate: SR as f64,
+                values: &[],
+                assets: &[],
+                offline: None,
+            },
+        )
+        .unwrap()
+    };
     let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
     let controls = [0.01, 0.5, 0.5];
     let alone = |seed: usize| {
@@ -840,7 +855,9 @@ fn a_kernel_past_its_birth_cap_says_it_ran_out() {
 fn a_song_past_the_sandbox_limit_is_refused_in_plain_words() {
     let n = SANDBOX_LIMIT + 1;
     let mut nodes = vec![json!({"id": "g0", "op": "kernel", "kernel": "std:sine", "inputs": {}})];
-    nodes.extend((1..n).map(|i| json!({"id": format!("g{i}"), "op": "kernel", "kernel": "std:gain", "inputs": {"in": format!("g{}", i - 1)}})));
+    nodes.extend(
+        (1..n).map(|i| json!({"id": format!("g{i}"), "op": "kernel", "kernel": "std:gain", "inputs": {"in": format!("g{}", i - 1)}})),
+    );
     let ir = song(Value::Array(nodes), &format!("g{}", n - 1), json!([]));
     let pk = std_packages();
     let flat = check(&ir, &pk).unwrap();
@@ -1177,7 +1194,8 @@ fn an_export_with_an_empty_cache_folder_equals_one_with_a_full_one() {
 
 /// The finished renders in `folder`, and its part files.
 fn renders_in(folder: &Path) -> (usize, usize) {
-    let names: Vec<String> = std::fs::read_dir(folder).map_or(vec![], |d| d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect());
+    let names: Vec<String> =
+        std::fs::read_dir(folder).map_or(vec![], |d| d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect());
     let parts = names.iter().filter(|n| n.ends_with(".part")).count();
     (names.len() - parts, parts)
 }
@@ -1190,7 +1208,10 @@ fn renders_in(folder: &Path) -> (usize, usize) {
 #[test]
 fn an_export_never_plays_a_render_half_made() {
     let src = sine(440.0, 3.0, SR);
-    let (ir, tl, dir) = audio_song(&[("a.wav", vec![src.clone(), src], SR)], json!([{"start": 1, "length": 6, "asset": "a.wav", "warp": [[0, 0], [3, 6]]}]));
+    let (ir, tl, dir) = audio_song(
+        &[("a.wav", vec![src.clone(), src], SR)],
+        json!([{"start": 1, "length": 6, "asset": "a.wav", "warp": [[0, 0], [3, 6]]}]),
+    );
     let pk = std_packages();
     let flat = check(&ir, &pk).unwrap();
     let (folder, owner) = (dir.join("renders"), m2_plugins::Owner::discard());
@@ -1205,7 +1226,8 @@ fn an_export_never_plays_a_render_half_made() {
     live.prune();
     assert!(live.settle_renders(std::time::Duration::from_secs(20)));
     assert_eq!(renders_in(&folder), (0, 1), "the new stretch is half made, in its part file");
-    let export = |cache: &mut audio::Cache| Renderer::prepare(&flat, &slower, &pk, SR, cache, &owner, Basis::Fresh).unwrap().render(5.0).unwrap();
+    let export =
+        |cache: &mut audio::Cache| Renderer::prepare(&flat, &slower, &pk, SR, cache, &owner, Basis::Fresh).unwrap().render(5.0).unwrap();
     let after = export(&mut audio::Cache::with_renders_in(Some(folder.clone())));
     let cold = export(&mut audio::Cache::with_renders_in(None));
     assert!(peak(&cold[SR as usize..4 * SR as usize]) > 0.2, "the warped clip plays");
@@ -1222,7 +1244,10 @@ fn an_export_never_plays_a_render_half_made() {
 #[test]
 fn a_cache_folder_that_cannot_be_written_still_plays_warped_clips() {
     let src = sine(440.0, 3.0, SR);
-    let (ir, tl, dir) = audio_song(&[("a.wav", vec![src.clone(), src], SR)], json!([{"start": 1, "length": 6, "asset": "a.wav", "warp": [[0, 0], [3, 6]]}]));
+    let (ir, tl, dir) = audio_song(
+        &[("a.wav", vec![src.clone(), src], SR)],
+        json!([{"start": 1, "length": 6, "asset": "a.wav", "warp": [[0, 0], [3, 6]]}]),
+    );
     let pk = std_packages();
     let flat = check(&ir, &pk).unwrap();
     let (folder, owner) = (dir.join("renders"), m2_plugins::Owner::discard());
@@ -1266,10 +1291,13 @@ fn an_export_whose_stretch_fails_names_the_clip() {
     let k = offline::Kernel::of(&pk, "t:k").expect("an offline kernel");
     let dir = project(&[]);
     audio::write_wav(&dir.join("a.wav"), &[sine(440.0, 1.0, SR)], SR).unwrap();
-    let clip: m2_song::AudioClip = serde_json::from_value(json!({"start": 2, "length": 4, "asset": "a.wav", "warp": [[0, 0], [1, 4]]})).unwrap();
+    let clip: m2_song::AudioClip =
+        serde_json::from_value(json!({"start": 2, "length": 4, "asset": "a.wav", "warp": [[0, 0], [1, 4]]})).unwrap();
     let tempo = m2_song::TempoMap::constant(120.0);
     let folder = dir.join("renders");
-    let build = |cache: &mut audio::Cache| audio::AudioLane::build_with(std::slice::from_ref(&clip), &|a| Some(dir.join(a)), cache, &tempo, SR as f64, 2, Some(&k));
+    let build = |cache: &mut audio::Cache| {
+        audio::AudioLane::build_with(std::slice::from_ref(&clip), &|a| Some(dir.join(a)), cache, &tempo, SR as f64, 2, Some(&k))
+    };
     let e = build(&mut audio::Cache::with_renders_in(Some(folder.clone()))).map(|_| ()).expect_err("the export fails");
     let e = format!("{e:#}");
     assert!(e.starts_with("the warped clip of a.wav at beat 2 can't be stretched: ") && e.contains("crashed"), "{e}");
@@ -1539,7 +1567,16 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
         let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
         let values = [channel as f64];
         let assets = [Some(held)];
-        let spec = sandbox::Spec { inputs: 0, outputs: 1, channels: &[1], audio: 1, sample_rate: SR as f64, values: &values, assets: &assets, offline: None };
+        let spec = sandbox::Spec {
+            inputs: 0,
+            outputs: 1,
+            channels: &[1],
+            audio: 1,
+            sample_rate: SR as f64,
+            values: &values,
+            assets: &assets,
+            offline: None,
+        };
         let s = sb.state(prefix, &spec).unwrap();
         sb.seal().unwrap();
         [1, 37, 128, 1_000, 20_000, 5, 30_000, 300]

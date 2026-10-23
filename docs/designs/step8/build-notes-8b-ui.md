@@ -2,11 +2,11 @@
 
 What each slice of the `8b-ui` track did, and what its checks said. The track builds the screens for
 mute and solo, clips, hearing notes as you draw them (audition) and meters. Its plan is
-`~/m2-runs/s8ui/plan.md`. The lead took every open question's default (Q1 to Q24). For Q15 that means:
+`$SCRATCH/s8ui/plan.md`. The lead took every open question's default (Q1 to Q24). For Q15 that means:
 no DSP pill and no master meter in the top bar; the status pill says "Heavy load" and "Sound dropped
 out"; the master meter sits on the Song row.
 
-All runs are on Linux (jerry-ax102), in the worktree `~/m2-runs/wt/ui`, branch `8b-ui`. Each slice
+All runs are on Linux (the server), in the worktree `$SCRATCH/wt/ui`, branch `8b-ui`. Each slice
 adds its own section here, in the same commit.
 
 ## In short
@@ -63,11 +63,11 @@ std.wasm: no conflict. Neither side touched `std/kernels-src`, so it wasn't rebu
 | `cargo build --locked --workspace --all-targets` | ok; `Cargo.lock` unchanged |
 | `cargo test --locked -p m2-server -p m2-editor -p m2-session -p m2-play -p m2 -p m2-script -p music2-desktop` | 717 passed, 0 failed (m2-server 208, m2-editor 210 + 3, m2-session 152, m2-script 55 + 8, m2-play 19 + 40, m2 15, music2-desktop 7) |
 | `cargo clippy --locked` on the same crates, `--all-targets -- -D warnings` | clean |
-| Log | `~/m2-runs/logs/ui-test-1017-060706-268687.log` |
+| Log | `$SCRATCH/logs/ui-test-1017-060706-268687.log` |
 
 **Red first:** the new test on the merge alone (the wiring taken out, the test kept) fails at its first
 check after the delete: hats' mute stays, `["hats", "synth-pluck"]` where `["synth-pluck"]` was
-wanted (`~/m2-runs/logs/ui-forget-red-*.log`). With the wiring it passes.
+wanted (`$SCRATCH/logs/ui-forget-red-*.log`). With the wiring it passes.
 
 ### Left
 
@@ -148,7 +148,7 @@ Every lane: `useHeard(module)` is real now, and the types are in `graph8b.ts`.
 | `notes`, `fixes-notes`, `gestures`, `s4-clips` | 52, 37, 30, 28: all pass |
 | `cargo test --locked -p music2-desktop` | 7 passed (the menu tests unchanged) |
 | A probe, not a suite (first-song with `overlays.json` = Kick muted, Bass soloed, and Hats muted in the song by `m2 mute-in-song`), served with `M2_WEB` | Kick's name `fg-muted`, its clips 0.4 and `grayscale(0.6)`. Hats struck through and hatched. Keys `fg-faint` (silenced by the Bass solo). Bass and the Song row as before. The slots where the table above says, at 1440 and 1100 px. No page errors |
-| Logs | `~/m2-runs/logs/ui-u0-suites2-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/u0` |
+| Logs | `$SCRATCH/logs/ui-u0-suites2-*.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/u0` |
 
 **Red first:** no new suite: U0 adds no behaviour a user can reach. The suites ran before and after
 the 1 px fix of the slots (both green); the probe showed the slots 1 px left of taste.md's x before it.
@@ -228,12 +228,12 @@ So 100 px for the status words leaves at least 41 px between the name and the st
 | `fx-fixes` (the top bar at 1100 to 1280 px) | 75 of 75 |
 | `s8-tracks`, `layout`, `views`, `pc-keys` | 75, 39, 30, 37: all pass |
 | `notes`, `s4-clips`, `gestures`, `fixes-notes` | 52, 28, 30, 37: all pass |
-| Log | `~/m2-runs/logs/ui-a-u1-1017-062905-464483.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/lane-a/u1` |
+| Log | `$SCRATCH/logs/ui-a-u1-1017-062905-464483.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/lane-a/u1` |
 
-All against the U0 server (`~/m2-runs/s8ui/bin/fba5147`) serving this lane's page through `M2_WEB`.
+All against the U0 server (`$SCRATCH/s8ui/bin/fba5147`) serving this lane's page through `M2_WEB`.
 
 **Red first:** `s8-mute` on U0's page fails at its first check (no M or S in the header) and stops
-at the first click on M (`~/m2-runs/s8ui/scratch/e2e/lane-a/u1-red`).
+at the first click on M (`$SCRATCH/s8ui/scratch/e2e/lane-a/u1-red`).
 
 ### Left
 
@@ -273,10 +273,10 @@ unmute it to hear it".
 | `cd web && npm run build` (type-checks) | ok |
 | `s8-mute` | 99 of 99 |
 | `taste`, `s8-tracks`, `pc-keys` (the suites that open the header menu) | 39, 75, 37: all pass |
-| Log | `~/m2-runs/logs/ui-a-u2-1017-063221-505368.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/lane-a/u2` |
+| Log | `$SCRATCH/logs/ui-a-u2-1017-063221-505368.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/lane-a/u2` |
 
 **Red first:** the suite on U1's page stops where it clicks the menu's Mute in song: there is no
-such row (`~/m2-runs/s8ui/scratch/e2e/lane-a/u2-red`).
+such row (`$SCRATCH/s8ui/scratch/e2e/lane-a/u2-red`).
 
 ### Left
 
@@ -331,14 +331,14 @@ again" (S8): it wouldn't outlive the app's launch (Q7).
 | `cd web && npm run build` (type-checks) | ok |
 | `s8-mute` | 126 of 126 |
 | `taste`, `export`, `fx-fixes` (export and its toasts) | 39, 37, 75: all pass |
-| Log | `~/m2-runs/logs/ui-a-u3-1017-063851-554489.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/lane-a/u3` |
+| Log | `$SCRATCH/logs/ui-a-u3-1017-063851-554489.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/lane-a/u3` |
 
 Part 3 compares two exports with `m2 render`, byte for byte: after "Mute Kick in the song, then
 export" the WAV equals the render of the song with Kick muted in its code; after Export anyway it
 equals the render of the song as written.
 
 **Red first:** on U2's page, ⇧⌘E with Kick muted asks nothing, and the suite stops where it
-presses "Mute Kick in the song, then export" (`~/m2-runs/s8ui/scratch/e2e/lane-a/u3-red`).
+presses "Mute Kick in the song, then export" (`$SCRATCH/s8ui/scratch/e2e/lane-a/u3-red`).
 
 ### Left
 
@@ -397,10 +397,10 @@ server while a suite plays first-song was 9% to 22%, with no late callbacks (pri
 | The suites that read the status pill: `taste`, `attention`, `code`, `fx-fixes`, `live3b` (with the plugins), `s6-fixes`, `s6-write`, `s8-tracks` | 39, 57, 58, 75, 60, 19, 36, 75: all pass |
 | `graph`, `s6-builders` | failed one check each: U1's fallout above. Fixed, and green in the full run below |
 | Every suite (`run.mjs all`, with the plugins), on this page | 34 of 35 ok, 1468 of 1469 checks. The one: `s8-songbar`'s "7/8" check read the field once, just after the file changed. It passed twice on its own, unchanged (it doesn't touch what lane A changed) |
-| Logs | `~/m2-runs/logs/ui-a-u11-1017-064421-611952.log` and `~/m2-runs/logs/ui-a-all-1017-064802-654005.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/lane-a/u11`, `…/all`, `…/songbar-1`, `…/songbar-2` |
+| Logs | `$SCRATCH/logs/ui-a-u11-1017-064421-611952.log` and `$SCRATCH/logs/ui-a-all-1017-064802-654005.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/lane-a/u11`, `…/all`, `…/songbar-1`, `…/songbar-2` |
 
 **Red first:** on U3's page, a load of 75% while playing shows nothing, and the suite stops
-there (`~/m2-runs/s8ui/scratch/e2e/lane-a/u11-red`).
+there (`$SCRATCH/s8ui/scratch/e2e/lane-a/u11-red`).
 
 ### Left
 
@@ -427,7 +427,7 @@ there (`~/m2-runs/s8ui/scratch/e2e/lane-a/u11-red`).
 
 **The lane's merge.** Before U4, lane B merged `8b-backend` at `bc761ef` (B7, B8) into `8b-ui-b`
 (`5a34189`), with no conflict, for U5. Its server is built in `wt/ui-b` and copied to
-`~/m2-runs/s8ui/bin/ui-b-5a34189/`. Cargo.lock didn't change.
+`$SCRATCH/s8ui/bin/ui-b-5a34189/`. Cargo.lock didn't change.
 
 ### What changed
 
@@ -447,12 +447,12 @@ there (`~/m2-runs/s8ui/scratch/e2e/lane-a/u11-red`).
 | `s8-clips` (new) | 22 of 22 |
 | `taste`, `notes`, `s4-clips`, `s8-songbar` | 39, 52, 28, 68: all pass |
 | `layout`, `views`, `pc-keys`, `s8-tracks`, `gestures` | 39, 30, 37, 75, 30: all pass |
-| Server | `~/m2-runs/s8ui/bin/ui-b-5a34189` (lane B's build, with B7 and B8), serving `web/dist` through `M2_WEB` |
-| Logs | `~/m2-runs/logs/ui-b-u4-suites-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/ui-b-u4` |
+| Server | `$SCRATCH/s8ui/bin/ui-b-5a34189` (lane B's build, with B7 and B8), serving `web/dist` through `M2_WEB` |
+| Logs | `$SCRATCH/logs/ui-b-u4-suites-*.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/ui-b-u4` |
 
 **Red first:** `s8-clips` on U0's page (the same server): no chip, no eighth lines, a drag of 32 px
 landed on beat 1 (whole beats), and holding ⌘ still snapped (beat 2). 1 check passed and 6 failed
-before it stopped at the missing chip (`~/m2-runs/s8ui/scratch/e2e/ui-b-u4-red/s8-clips-fix.log`).
+before it stopped at the missing chip (`$SCRATCH/s8ui/scratch/e2e/ui-b-u4-red/s8-clips-fix.log`).
 
 ### Choices
 
@@ -513,13 +513,13 @@ before it stopped at the missing chip (`~/m2-runs/s8ui/scratch/e2e/ui-b-u4-red/s
 | `taste`, `s4-clips`, `notes`, `fixes-notes`, `s8-songbar`, `gestures` | 39, 28, 52, 37, 68, 30 |
 | `layout`, `views`, `pc-keys`, `s8-tracks`, `s6-write`, `s4-meter` | 39, 30, 37, 75, 36, 8 |
 | `attention`, `g11-play`, `live3a`, `s6-builders`, `s4-problems`, `s4-attn`, `newsong` | 57, 24, 49, 55, 18, 13, 71 |
-| Server | `~/m2-runs/s8ui/bin/ui-b-5a34189` (B6, B7, B8) |
-| Logs | `~/m2-runs/logs/ui-b-u5-suites2-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/ui-b-u5b` |
-| Pictures (headless page, not the app) | `~/m2-runs/s8ui/scratch/e2e/ui-b-u5-shot/s8-clips-fix/`: `s8-clips-grid.png` (the grid menu), `s8-clips-across.png` (a Kick clip dragged onto Hats), `s8-clips-select.png` (two clips selected across tracks) |
+| Server | `$SCRATCH/s8ui/bin/ui-b-5a34189` (B6, B7, B8) |
+| Logs | `$SCRATCH/logs/ui-b-u5-suites2-*.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/ui-b-u5b` |
+| Pictures (headless page, not the app) | `$SCRATCH/s8ui/scratch/e2e/ui-b-u5-shot/s8-clips-fix/`: `s8-clips-grid.png` (the grid menu), `s8-clips-across.png` (a Kick clip dragged onto Hats), `s8-clips-select.png` (two clips selected across tracks) |
 
 **Red first:** part 2 on U4's page (the same server): no bubble or guide, the move went out as a
 whole-lane write (`/api/graph/lane`), not a gesture, and the clip had no edges; it stopped there
-(3 failed; `~/m2-runs/s8ui/scratch/e2e/ui-b-u5-red/s8-clips-fix.log`).
+(3 failed; `$SCRATCH/s8ui/scratch/e2e/ui-b-u5-red/s8-clips-fix.log`).
 
 **Found while building:** a clip moved to another lane was taken out of its own lane while dragged,
 which dropped the pointer and cancelled the drop. It is now hidden there but kept.
@@ -546,8 +546,8 @@ which dropped the pointer and cancelled the drop. It is now hidden there but kep
 - A dragged clip is heard only when dropped (Q10).
 - The app shots `ui-u4-grid.png` and `ui-u5-select.png` (Xvfb `:98`) are for after the merge into
   `8b-ui`.
-- Lane B's cargo target (`~/m2-runs/wt/ui-b/target`) is deleted. Its server stays in
-  `~/m2-runs/s8ui/bin/ui-b-5a34189` for the merge's runs; delete it with `~/m2-runs/s8ui/bin` at the End.
+- Lane B's cargo target (`$SCRATCH/wt/ui-b/target`) is deleted. Its server stays in
+  `$SCRATCH/s8ui/bin/ui-b-5a34189` for the merge's runs; delete it with `$SCRATCH/s8ui/bin` at the End.
 
 ## U6: clip commands (lane B)
 
@@ -605,11 +605,11 @@ which dropped the pointer and cancelled the drop. It is now hidden there but kep
 | `taste`, `s4-clips`, `notes`, `fixes-notes`, `s8-songbar`, `gestures`, `layout` | 39, 28, 52, 37, 68, 30, 39 |
 | `views`, `pc-keys`, `s8-tracks`, `s6-write`, `s4-meter`, `attention`, `g11-play` | 30, 37, 75, 36, 8, 57, 24 |
 | `live3a`, `s6-builders`, `s4-problems`, `s4-attn`, `newsong`, `code` | 49, 55, 18, 13, 71, 58 |
-| Server | `~/m2-runs/s8ui/bin/ui-b-5a34189` (B6, B7, B8), serving a copy of this page through `M2_WEB` |
+| Server | `$SCRATCH/s8ui/bin/ui-b-5a34189` (B6, B7, B8), serving a copy of this page through `M2_WEB` |
 | `cargo test --locked -p music2-desktop` (in `wt/ui-b`, its own target) | 8 passed; clippy `-D warnings` clean; `Cargo.lock` unchanged |
 | In the Linux app on Xvfb `:98` (lane B's build) | Kick clip clicked, Ctrl+C, the ruler clicked at bar 10, Ctrl+V: the file has a copy at beat 36 (M7). The playhead at bar 5, the clip clicked, Ctrl+E (the menu bar's): two clips, 0–16 and 16–32 |
-| Logs | `~/m2-runs/logs/ui-b-u6-suites-*.log`, `ui-b-u6-menu-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/ui-b-u6s` |
-| Pictures | `~/m2-runs/s8ui/shots/lane-b/ui-u6-menu.png` (the clip menu in the Linux app), `ui-u6-paste.png` (the pasted copy at bar 10); `s8-clips-menu.png` in the suite's folder |
+| Logs | `$SCRATCH/logs/ui-b-u6-suites-*.log`, `ui-b-u6-menu-*.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/ui-b-u6s` |
+| Pictures | `$SCRATCH/s8ui/shots/lane-b/ui-u6-menu.png` (the clip menu in the Linux app), `ui-u6-paste.png` (the pasted copy at bar 10); `s8-clips-menu.png` in the suite's folder |
 
 Captions for the owner:
 - `ui-u6-menu.png`: right-click on a clip shows what you can do to it, with the keys.
@@ -618,9 +618,9 @@ Captions for the owner:
 
 **Red first:**
 - `s8-clips` on U5's page (the same server): parts 1 and 2 pass, then no clip menu opens on a
-  right-click and it stops there (`~/m2-runs/s8ui/scratch/e2e/ui-b-u6-red/s8-clips-fix.log`).
+  right-click and it stops there (`$SCRATCH/s8ui/scratch/e2e/ui-b-u6-red/s8-clips-fix.log`).
 - The menu tests on the old `menu.rs` with the new tests: the two new ones fail, no Split item and
-  no rows after Duplicate (`~/m2-runs/logs/ui-b-menu-red-*.log`).
+  no rows after Duplicate (`$SCRATCH/logs/ui-b-menu-red-*.log`).
 
 **Found while building:**
 - A right-click (or click) on a clip, with Notes showing nothing, opened the roll, which took the
@@ -695,9 +695,9 @@ Captions for the owner:
 | `views`, `layout`, `gestures`, `s8-tracks`, `s6-write`, `s6-fixes`, `attention` | 30, 39, 30, 75, 36, 19, 57 |
 | `live3a`, `g11-play`, `code`, `s8-songbar`, `fixes-graph` | 49, 24, 58, 68, 42 |
 | In the Linux app on Xvfb `:98` | Bass unfolded, a click on the Cutoff line at bar 3 and a drag: the file has a point at beat 9, 2638 Hz |
-| Server | `~/m2-runs/s8ui/bin/ui-b-5a34189` (B8: Automate's names, Remove automation, `InputPort.lane`) |
-| Logs | `~/m2-runs/logs/ui-b-u7-suites-*.log`, `ui-b-u7-suites2-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/ui-b-u7s`, `ui-b-u7s2` |
-| Pictures | `~/m2-runs/s8ui/shots/lane-b/ui-u7-automation.png`; `s8-automation.png` in the suite's folder |
+| Server | `$SCRATCH/s8ui/bin/ui-b-5a34189` (B8: Automate's names, Remove automation, `InputPort.lane`) |
+| Logs | `$SCRATCH/logs/ui-b-u7-suites-*.log`, `ui-b-u7-suites2-*.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/ui-b-u7s`, `ui-b-u7s2` |
+| Pictures | `$SCRATCH/s8ui/shots/lane-b/ui-u7-automation.png`; `s8-automation.png` in the suite's folder |
 
 Captions for the owner:
 - `ui-u7-automation.png`: Bass unfolded; a point added on the Cutoff line and dragged up. The dark
@@ -706,7 +706,7 @@ Captions for the owner:
 
 **Red first:** `s8-automation` on U6's page (the same server): Automate and the "Decay" name pass
 (B8), then the Device view has no input that follows the lane, and it stops there
-(`~/m2-runs/s8ui/scratch/e2e/ui-b-u7-red/s8-automation-fix.log`).
+(`$SCRATCH/s8ui/scratch/e2e/ui-b-u7-red/s8-automation-fix.log`).
 
 **Found while building:**
 - A drawing range is what the lane's values span (the server's rule). Painting near the bottom of a
@@ -718,7 +718,7 @@ Captions for the owner:
 - U6 kept text from being selected during a marquee with `user-select: none` on the timeline. In
   WebKit that can stop typing in a field inside it (the track rename field). The marquee now clears
   any text selection as it goes instead. `s8-clips`, `s8-tracks`, `taste` and `s8-automation` ran
-  again on this page: 90, 75, 39, 43 (`~/m2-runs/logs/ui-b-u7-suites3-*.log`).
+  again on this page: 90, 75, 39, 43 (`$SCRATCH/logs/ui-b-u7-suites3-*.log`).
 
 ### Choices
 
@@ -797,10 +797,10 @@ Captions for the owner:
 | `notes`, `fixes-notes`, `pc-keys`, `views` | 52, 37, 37, 30 |
 | `s4-clips`, `g11-play`, `live3a`, `s4-meter` | 28, 24, 49, 8 |
 | Server | `bin/fba5147` (U0's); no Rust changed |
-| Logs | `~/m2-runs/s8ui/scratch/e2e/c/u9` (the suite), `…/u9-moves` (the nine), `~/m2-runs/logs/c-u9-*.log` |
+| Logs | `$SCRATCH/s8ui/scratch/e2e/c/u9` (the suite), `…/u9-moves` (the nine), `$SCRATCH/logs/c-u9-*.log` |
 
 **Red first:** the suite on U0's web (the same server) fails 32 of its 49 checks and runs to the end
-(`~/m2-runs/s8ui/scratch/e2e/c/u9-red`). The 17 that pass there are the ones about the roll itself or
+(`$SCRATCH/s8ui/scratch/e2e/c/u9-red`). The 17 that pass there are the ones about the roll itself or
 about nothing sounding (for example "with it off, a press sends nothing").
 
 What the suite checks, in short: `live` goes to 1 on a press and 0 on letting go; the page's WebSocket
@@ -867,9 +867,9 @@ tooltip says Ctrl+.; on a server of its own that plays into a file, a key held w
 | `s8-tracks`, `layout`, `views`, `gestures`, `s4-clips`, `pc-keys` | 75, 39, 30, 30, 28, 37 |
 | `notes`, `fixes-notes`, `live3a` | 52, 37, 49 |
 | Server | `bin/fba5147` (U0's); no Rust changed |
-| Logs | `~/m2-runs/s8ui/scratch/e2e/c/u10` (the suite), `…/u10-moves` (the twelve), `~/m2-runs/logs/c-u10-*.log` |
+| Logs | `$SCRATCH/s8ui/scratch/e2e/c/u10` (the suite), `…/u10-moves` (the twelve), `$SCRATCH/logs/c-u10-*.log` |
 
-**Red first:** the suite on U0's web fails 16 of its 22 checks (`~/m2-runs/s8ui/scratch/e2e/c/u10-red`).
+**Red first:** the suite on U0's web fails 16 of its 22 checks (`$SCRATCH/s8ui/scratch/e2e/c/u10-red`).
 The 6 that pass there check the server's messages (their rate, shape and the silence at the end),
 which U10 doesn't change, and that the page has no console errors.
 
@@ -936,7 +936,7 @@ after them: it holds the newest page.
 | Check | Result |
 |---|---|
 | `cd web && npm run build` (type-checks) | ok |
-| `cargo build --locked --workspace --all-targets` | ok; `Cargo.lock` unchanged. Server and `m2` copied to `~/m2-runs/s8ui/bin/ed910e5/` |
+| `cargo build --locked --workspace --all-targets` | ok; `Cargo.lock` unchanged. Server and `m2` copied to `$SCRATCH/s8ui/bin/ed910e5/` |
 | Every browser suite (`run.mjs all`, with `CLAP_PATH`), at `ed910e5` and `160cbf8` | 39 of 39 ok, 1692 of 1692 checks, both times |
 | The same at `83c3ae0` and at `3da9b2c` (taste's `s8-mix` added) | 40 of 40 ok: 1755 of 1755, then 1759 of 1759 checks |
 | The s8 suites in it | s8-mute 141, s8-clips 90, s8-automation 43, s8-audition 49, s8-meters 22, s8-tracks 75, s8-songbar 68, s8-mix 67 (63 at `83c3ae0`) |
@@ -944,9 +944,9 @@ after them: it holds the newest page.
 | `cargo test --locked --no-fail-fast` on the 10 crates the merges touched | 1037 passed, 0 failed, 6 ignored (`m2`, `music2-desktop` 8, `m2-play`, `m2-runtime`, `m2-script`, `m2-session`, `m2-song`, `m2-editor`, `m2-gates`, `m2-server`) |
 | `cargo clippy --locked` on the same crates, `--all-targets -- -D warnings` | clean |
 | std kernels: tests, clippy, `std/build.sh --check` | 111 passed; clean; the same bytes |
-| Logs | `~/m2-runs/logs/ui-int-build-*.log`, `ui-int-all-*.log`, `ui-int-all2-*.log`, `ui-int-all3-*.log`, `ui-int-all4-*.log`, `ui-int-rust-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/int/all` to `…/int/all4` |
+| Logs | `$SCRATCH/logs/ui-int-build-*.log`, `ui-int-all-*.log`, `ui-int-all2-*.log`, `ui-int-all3-*.log`, `ui-int-all4-*.log`, `ui-int-rust-*.log`; suite logs in `$SCRATCH/s8ui/scratch/e2e/int/all` to `…/int/all4` |
 
-The suites ran through `~/m2-runs/s8ui/tools/ui-suites.sh`, a copy of lane A's runner for `wt/ui`.
+The suites ran through `$SCRATCH/s8ui/tools/ui-suites.sh`, a copy of lane A's runner for `wt/ui`.
 It copies the page and the suites first, so nothing changes under a running suite.
 
 **Red first:** nothing new to show red. The merges add no behaviour of their own.
@@ -955,7 +955,7 @@ It copies the page and the suites first, so nothing changes under a running suit
 
 - The owner's pictures from the desktop app on Xvfb `:98` (U1, U2, U3, U4, U5, U9, U10, and U11 if a
   real load shows). The app in `wt/ui` is built with this page. Lane B's U6 and U7 pictures are in
-  `~/m2-runs/s8ui/shots/lane-b/`.
+  `$SCRATCH/s8ui/shots/lane-b/`.
 - U12 (M, S and meters on the Mix strips) can start: taste-next's Mix view is in.
 - `docs/gaps.md` #8, #9, #14 and #17 still say the UI is to come; the End rewrites them, with the line
   that view settings (the grid, the audition toggle) reset at each app launch (Q7).
@@ -963,7 +963,7 @@ It copies the page and the suites first, so nothing changes under a running suit
   meter). That is taste-next's file: the End, after taste-next lands.
 - taste-next's `s8-songbar` failed once in lane A's run (its time signature check reads once, right
   after the file changes). It passed here. A wait there would settle it.
-- Delete `~/m2-runs/s8ui/bin/` and this worktree's `target/` when the track ends.
+- Delete `$SCRATCH/s8ui/bin/` and this worktree's `target/` when the track ends.
 
 ## End: the review, the final check, the pictures
 
@@ -974,7 +974,7 @@ It copies the page and the suites first, so nothing changes under a running suit
   (T4 and T5 are docs).
 - The first full check found two old races in the page. Both are fixed, with a check each.
 - The full check then passed at `92317ad`: every row, nothing passed only on a retry.
-- Four pictures for you: `~/m2-runs/app-shots/8b-ui-92317ad/`.
+- Four pictures for you: `$SCRATCH/app-shots/8b-ui-92317ad/`.
 - Names below: B1 to B3 are the behaviour lens's findings, T1 to T6 the other lens's.
 
 ### The review
@@ -1018,7 +1018,7 @@ Now an OK answer cut off on its way throws `CutOff` (`readJson`, also used by `l
 | Check | Before | After |
 |---|---|---|
 | s8-meters, 2 new checks: a cut-off answer, then "the window stays as it was" | `FAIL the window stays as it was: … TypeError: Cannot read properties of undefined (reading 'tempo')` | 24 of 24; taste, start, s6-write and s8-automation ok |
-| The taste suite 28 times at once (a stress run, `~/m2-runs/logs/8b-ui-review/flake-*`) | 25, 26, 26 and 24 of 28 ok in four runs: the two races above (in the last run one more failed, from the recorder itself) | 28 of 28, twice |
+| The taste suite 28 times at once (a stress run, `$SCRATCH/logs/8b-ui-review/flake-*`) | 25, 26, 26 and 24 of 28 ok in four runs: the two races above (in the last run one more failed, from the recorder itself) | 28 of 28, twice |
 
 ### The last merges
 
@@ -1032,7 +1032,7 @@ Now an OK answer cut off on its way throws `CutOff` (`readJson`, also used by `l
 
 ### The final check
 
-`TW_WAIT=3600 ~/m2-runs/tw check-8b-ui-2 'cd ~/m2-runs/wt/ui && M2_CHECK_OUT=$HOME/m2-runs/check-8b-ui-2 ci/check.sh'`,
+`TW_WAIT=3600 $SCRATCH/tw check-8b-ui-2 'cd $SCRATCH/wt/ui && M2_CHECK_OUT=$SCRATCH/check-8b-ui-2 ci/check.sh'`,
 at `92317ad`, on Linux (no gates: they are the Mac's to judge). Every row PASS, and nothing passed only
 on a retry. Its summary, verbatim:
 
@@ -1041,7 +1041,7 @@ music2 check: PASS
 commit   92317ad5bc0d on 8b-ui (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 13 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -1056,18 +1056,18 @@ browser suites   PASS  40/40 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
 repo unchanged   PASS  
 
-logs     /home/jerry/m2-runs/check-8b-ui-2.tgz
+logs     $SCRATCH/check-8b-ui-2.tgz
 ```
 
-Logs: `~/m2-runs/check-8b-ui-2.tgz`. The first run's (at `641da77`, the three rows above):
-`~/m2-runs/check-8b-ui.tgz`.
+Logs: `$SCRATCH/check-8b-ui-2.tgz`. The first run's (at `641da77`, the three rows above):
+`$SCRATCH/check-8b-ui.tgz`.
 
 ### The owner's pictures
 
 From the desktop app built by that check, on the invisible Xvfb screen `:98`, with
-`~/m2-runs/s8ui/tools/app-shot.sh`. Each state was written into a copy of the song first, not
+`$SCRATCH/s8ui/tools/app-shot.sh`. Each state was written into a copy of the song first, not
 clicked: `.music2/overlays.json` for the mutes, `m2 mute-in-song` for Hats. Only the meters (Space)
-and Notes (a double-click and a key held down) needed input. In `~/m2-runs/app-shots/8b-ui-92317ad/`,
+and Notes (a double-click and a key held down) needed input. In `$SCRATCH/app-shots/8b-ui-92317ad/`,
 each with one line in `captions.txt`:
 
 | Picture | What it shows |

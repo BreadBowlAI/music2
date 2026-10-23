@@ -39,31 +39,31 @@
 mod actor;
 pub mod audition;
 pub mod clips;
-mod instrument;
-mod rekey;
 mod events;
+pub(crate) mod exchange;
+mod faults;
+mod fx;
+mod import;
+mod instrument;
+mod lanes;
 pub mod lease;
 mod markers;
 pub mod meters;
-pub mod overlay;
-mod preview;
-mod projects;
-mod songkey;
-mod faults;
-mod view_file;
-mod watcher;
-mod fx;
-pub mod output;
-mod steps;
 pub mod midi;
-mod lanes;
-mod tempo_lease;
-mod import;
-pub mod record;
-mod take_audio;
-pub(crate) mod exchange;
+pub mod output;
+pub mod overlay;
 pub(crate) mod plugin_window;
 mod presets;
+mod preview;
+mod projects;
+pub mod record;
+mod rekey;
+mod songkey;
+mod steps;
+mod take_audio;
+mod tempo_lease;
+mod view_file;
+mod watcher;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -562,9 +562,8 @@ fn loop_fits(tempo: &TempoMap, rate: u32, start: f64, end: f64) -> Result<()> {
 /// `tx.invalid` or `tx.path` diagnostics, as every other refusal is answered (the step 6 design's
 /// 1.2).
 fn parse_tx(v: &Value) -> Result<m2_song::Tx, (u16, Value)> {
-    m2_song::Tx::from_json(v).map_err(|diagnostics| {
-        (422, m2_editor::json::refusal(&m2_session::Refusal::Rejected { diagnostics, unexpected: None }))
-    })
+    m2_song::Tx::from_json(v)
+        .map_err(|diagnostics| (422, m2_editor::json::refusal(&m2_session::Refusal::Rejected { diagnostics, unexpected: None })))
 }
 
 /// Put a lease's code value back where its updates went: it ended without a commit.
@@ -1537,7 +1536,14 @@ impl Graph {
     /// Add a track playing instrument `component` (`std:synth-pluck`), named `label` (else the
     /// instrument's), keyed `key` (else proposed from the label), below track `after` (WRITE-10).
     /// The answer names the track: `module` and `label`.
-    pub fn add_track(&self, token: u64, component: &str, label: Option<String>, key: Option<String>, after: Option<String>) -> Result<Value> {
+    pub fn add_track(
+        &self,
+        token: u64,
+        component: &str,
+        label: Option<String>,
+        key: Option<String>,
+        after: Option<String>,
+    ) -> Result<Value> {
         let component = component.to_string();
         let added = self.call(move |a| {
             a.edit_and(token, |s| {
@@ -1573,7 +1579,8 @@ impl Graph {
     /// after track `after` (RENDER-34). The answer: the edit, the bus's `module` and `label`, and
     /// the Mix view after it (`mix`).
     pub fn mix_bus(&self, token: u64, kind: &str, label: Option<String>, after: Option<String>) -> Result<Value> {
-        let kind = m2_editor::bus::BusKind::named(kind).ok_or_else(|| anyhow!("There's no bus kind `{kind}`: a bus is a reverb, a delay or a group."))?;
+        let kind = m2_editor::bus::BusKind::named(kind)
+            .ok_or_else(|| anyhow!("There's no bus kind `{kind}`: a bus is a reverb, a delay or a group."))?;
         let made = self.call(move |a| {
             a.edit_and(token, |s| {
                 let made = m2_editor::bus::add_bus(s, kind, label.as_deref(), after.as_deref())?;
@@ -1837,14 +1844,17 @@ impl Graph {
     /// outside edit (an agent, git) shows within two ticks of its event, and an idle project is
     /// watched with no stat (WRITE-19).
     fn layout_moved(&self, look: bool) -> bool {
-        let Some((token, dir)) = self.inner.control.lock().open.as_ref().map(|p| (p.engine.token, p.shown.dir.clone())) else { return false };
+        let Some((token, dir)) = self.inner.control.lock().open.as_ref().map(|p| (p.engine.token, p.shown.dir.clone())) else {
+            return false;
+        };
         {
             let seen = self.inner.layout.lock();
             if seen.token == token && !look && !seen.changed {
                 return false;
             }
         }
-        let stamp = std::fs::metadata(dir.join(m2_song::path::LAYOUT)).ok().map(|m| (m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
+        let stamp =
+            std::fs::metadata(dir.join(m2_song::path::LAYOUT)).ok().map(|m| (m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
         let mut seen = self.inner.layout.lock();
         seen.looks += 1;
         if seen.token != token {

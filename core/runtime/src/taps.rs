@@ -46,7 +46,10 @@ impl TapSlots {
     /// The peaks since the last take, each slot set back to 0.
     pub fn take(&self) -> Peaks {
         let take = |i: usize| f32::from_bits(self.peaks[i].swap(0, Ordering::Relaxed));
-        Peaks { out: [take(0), take(1)], tracks: self.tracks.iter().map(|(k, at, n)| (k.clone(), (*at..at + n).map(take).collect())).collect() }
+        Peaks {
+            out: [take(0), take(1)],
+            tracks: self.tracks.iter().map(|(k, at, n)| (k.clone(), (*at..at + n).map(take).collect())).collect(),
+        }
     }
 
     fn raise(&self, slot: usize, peak: f32) {

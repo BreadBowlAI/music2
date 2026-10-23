@@ -1,12 +1,12 @@
 # 8a refresh: design-8a against the engine step 7 built
 
 Written 2026-10-16. Read-only: nothing was built, run or changed. Checked against:
-- branch `step7` at `ed7fc8e` (worktree `~/m2-runs/wt/s7`), its `docs/architecture.md`, `HANDOFF.md`,
+- branch `step7` at `ed7fc8e` (worktree `$SCRATCH/wt/s7`), its `docs/architecture.md`, `HANDOFF.md`,
   `docs/designs/step7/design-7.md` and `build-notes.md`, `docs/designs/step8/design-8a.md` and `understand-8a.md`,
   `docs/designs/platform/design.md` §8;
 - wasmtime 49.0.2, cpal 0.18.2, clap-sys 0.5.0, mach2 0.6.0 and objc2-core-audio 0.3.2 in `~/.cargo/registry`;
-- the speed workflow's own logs: `~/m2-runs/speed/prof/` (lockstep runs, callgrind, patches HV1, HV3, HV4) and
-  `~/m2-runs/speed/sg/runs/` (G7f with S measured fresh, branch `s7-sg` at `5b77ae4`).
+- the speed workflow's own logs: `$SCRATCH/speed/prof/` (lockstep runs, callgrind, patches HV1, HV3, HV4) and
+  `$SCRATCH/speed/sg/runs/` (G7f with S measured fresh, branch `s7-sg` at `5b77ae4`).
 
 design-8a (revision 2) was written on 2026-10-14, before step 7 was built. "Estimate" marks a number nobody measured.
 
@@ -49,7 +49,7 @@ no longer applies).
 
 | # | design-8a part | Verdict | What changes | Evidence (step 7 as built) |
 |---|---|---|---|---|
-| 1 | §1: one `Store` per kernel instance; `Graph` functions take no store | holds | If the speed branch's HV3 lands, a voice pool's kernels share one `Store`. Still one `Store` per box, still one thread at a time | `core/runtime/src/lib.rs`: `KernelInst` (its own `Store<StoreLimits>`), `KernelInst::new`, `Graph::process`; `~/m2-runs/speed/prof/patches/hv3.diff` |
+| 1 | §1: one `Store` per kernel instance; `Graph` functions take no store | holds | If the speed branch's HV3 lands, a voice pool's kernels share one `Store`. Still one `Store` per box, still one thread at a time | `core/runtime/src/lib.rs`: `KernelInst` (its own `Store<StoreLimits>`), `KernelInst::new`, `Graph::process`; `$SCRATCH/speed/prof/patches/hv3.diff` |
 | 2 | §1: the schedule is built with the plan, off the audio thread, and retired with it | holds | Build it in `Renderer::build`, which both `Renderer::new` and `prepare` call | `lib.rs`: `Renderer::build`; `plan.rs`: `Plan` |
 | 3 | §1: lanes are a serial pre-pass; note ids are engine-wide | holds | — | `lib.rs`: `Renderer::render_block` (schedulers in slot order with `next_note`, then `AudioPlayer::fill`) |
 | 4 | §1: no two-renderer crossfade, no `lend` | holds in the engine, **change** around it | The engine plays one plan. But the player still crossfades two whole engines for 5 ms on `Replace` and `Unload` (a project opened, a rate change): two engine runs in one callback, one after the other. "Lend" now means an export borrowing plugin instances while the engine is held | `engine.rs`: `Engine::render`; `core/play/src/lib.rs`: `Callback::render`, `LiveFade`, `fade_out`; `plan.rs`: `Basis::Lend` |
@@ -149,7 +149,7 @@ no longer applies).
   on it. A cycle between modules (track A reads B, B reads A) is 8a's depth split, unchanged.
 - An activation's block runs the ghosts and fades in parallel too. Measured on Linux on one thread, an activation's
   block costs about what an ordinary block does (p50 1.8 to 2.3 ms; the slowest 3.2 to 4.2 ms;
-  `~/m2-runs/speed/sg/runs/*.log`), so it should scale like one.
+  `$SCRATCH/speed/sg/runs/*.log`), so it should scale like one.
 
 ### 3.4 Holds and exports
 
@@ -420,7 +420,7 @@ Each lands in the slice that changes the code.
 
 ## 8. Files read
 
-- `~/m2-runs/wt/s7`: `HANDOFF.md`; `docs/architecture.md` (RENDER-2, 28, 32, 33, HOST-1, 2, PLAT-1 to 7, the gates);
+- `$SCRATCH/wt/s7`: `HANDOFF.md`; `docs/architecture.md` (RENDER-2, 28, 32, 33, HOST-1, 2, PLAT-1 to 7, the gates);
   `docs/designs/step7/design-7.md`, `build-notes.md`; `docs/designs/step8/design-8a.md`, `understand-8a.md`,
   `design-8b.md` (its 8a needs); `docs/designs/platform/design.md` §2.8, §3.8, §3.10, §5.5, §5.6, §8.
 - Code: `core/runtime/src/lib.rs`, `engine.rs`, `plan.rs`, `keep.rs`, `plugins.rs`, `packages.rs`;
@@ -430,15 +430,15 @@ Each lands in the slice that changes the code.
 - Crates: wasmtime 49.0.2 (`Cargo.toml` features, `src/config.rs`, `src/engine.rs`, `vm/traphandlers.rs`,
   `vm/sys/unix/signals.rs`, `machports.rs`); cpal 0.18.2 (features, `traits.rs`, `host/alsa/mod.rs`); clap-sys 0.5.0;
   mach2 0.6.0; objc2-core-audio 0.3.2.
-- Speed workflow: `~/m2-runs/speed/prof/logs/*.log`, `vg/m1-diff.txt`, `patches/hv1.diff`, `hv3.diff`, `hv4.diff`;
-  `~/m2-runs/speed/sg/runs/*.log`; branch `s7-sg` at `5b77ae4`.
+- Speed workflow: `$SCRATCH/speed/prof/logs/*.log`, `vg/m1-diff.txt`, `patches/hv1.diff`, `hv3.diff`, `hv4.diff`;
+  `$SCRATCH/speed/sg/runs/*.log`; branch `s7-sg` at `5b77ae4`.
 - This server's limits: `ulimit -r` 0, `ulimit -e` 0, no rtkit on the system bus.
 
 ---
 
 ## Attack
 
-Written 2026-10-16, read-only. I checked the refresh against `step7` at `ed7fc8e` (`~/m2-runs/wt/s7`), the speed
+Written 2026-10-16, read-only. I checked the refresh against `step7` at `ed7fc8e` (`$SCRATCH/wt/s7`), the speed
 workflow's patches and logs, cpal 0.18.2, wasmtime 49.0.2 and the platform design. I also read CLAP's
 `thread-check.h` online (the header isn't on this machine). Nothing was built or run.
 

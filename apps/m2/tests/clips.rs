@@ -106,7 +106,10 @@ fn split_join_and_quantize_from_the_terminal() {
     let before = read();
     let out = ok(dir, &["split", "bass/notes:db9f9t5s", "--at", "5"]);
     let second = out.lines().find_map(|l| l.trim().strip_prefix("made bass/notes:")).unwrap_or_else(|| panic!("{out}")).to_string();
-    assert!(read().contains("{\"id\": \"db9f9t5s\", \"start\": 0, \"length\": 16") && read().contains(&format!("{{\"id\": \"{second}\", \"start\": 16")));
+    assert!(
+        read().contains("{\"id\": \"db9f9t5s\", \"start\": 0, \"length\": 16")
+            && read().contains(&format!("{{\"id\": \"{second}\", \"start\": 16"))
+    );
     ok(dir, &["join", "bass/notes:db9f9t5s", &format!("bass/notes:{second}")]);
     assert_eq!(read(), before, "joined back, as it was");
     ok(dir, &["quantize", "bass/notes@1", "--grid", "1"]);
@@ -131,7 +134,10 @@ fn unautomate_from_the_terminal() {
     // Bar 3 is beat 8, half way up the cutoff's rise from 300 to 2200 Hz.
     let o = m2(&["unautomate", dir, "bass/cutoff", "--at", "3"]);
     assert!(o.status.success() && said(&o).contains("cutoff automated → cutoff hz(1250)"), "{}", said(&o));
-    assert_eq!(std::fs::read_to_string(song.join("tracks/bass.ts")).unwrap(), bass.replace("lane.control(\"cutoff\", \"hz\", hz(500))", "hz(1250)"));
+    assert_eq!(
+        std::fs::read_to_string(song.join("tracks/bass.ts")).unwrap(),
+        bass.replace("lane.control(\"cutoff\", \"hz\", hz(500))", "hz(1250)")
+    );
     assert!(!song.join("data/bass/cutoff.json").exists());
     let o = m2(&["unautomate", dir, "bass/drop"]);
     assert!(o.status.success(), "{}", said(&o));

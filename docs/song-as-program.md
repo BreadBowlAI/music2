@@ -638,7 +638,7 @@ Simplified for now:
 
 This describes the app as it is (commit `92a19a3`, plus steps 1, 4 and 5 of the [order of work](architecture.md#order-of-work)), not the contract.
 
-In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop <project-folder>`, opens a project. The window shows the timeline above a panel with a tab for each module, and three views of it: Graph, Code and Notes. The README describes how to use them.
+In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop <project-folder>`, opens a project. The window shows the timeline above a panel with a tab for each module, and three views of it: Graph, Code and Notes. The [manual](manual.md) describes how to use them.
 
 - **The view** (`core/session/src/view.rs`) shows the calls written in the project, not the kernels they expand into. Each component call is a frame in the IR, with its ComponentId (`std:bass`), and every node names the frame it was made in, so everything `bass(...)` builds is one node.
   - Knobs sit on the innermost call that contains where their number is written.

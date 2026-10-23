@@ -131,7 +131,10 @@ fn an_output_is_listed_from_the_device_a_person_means() {
     let rows = listed(&seen, None, |i| (!seen[i].0.contains("sysdefault")).then_some((44_100, None)));
     assert_eq!(rows[1].id, "alsa:front:CARD=PCH,DEV=0");
     // Elsewhere (CoreAudio, WASAPI) each device is its own name: every one listed, as it is.
-    let mac = vec![("coreaudio:BuiltIn".to_string(), "MacBook Pro Speakers".to_string()), ("coreaudio:USB".to_string(), "Scarlett 2i2".to_string())];
+    let mac = vec![
+        ("coreaudio:BuiltIn".to_string(), "MacBook Pro Speakers".to_string()),
+        ("coreaudio:USB".to_string(), "Scarlett 2i2".to_string()),
+    ];
     let rows = listed(&mac, Some("coreaudio:USB"), |_| Some((48_000, None)));
     let ids: Vec<(&str, bool)> = rows.iter().map(|o| (o.id.as_str(), o.default)).collect();
     assert_eq!(ids, [("coreaudio:USB", true), ("coreaudio:BuiltIn", false)]);
@@ -141,7 +144,11 @@ fn an_output_is_listed_from_the_device_a_person_means() {
 // saying so (fell back); only the default when none is chosen.
 #[test]
 fn a_start_tries_the_output_chosen_then_the_default() {
-    assert_eq!(in_order(true, Some("USB"), Some("Speakers")), [("USB", false), ("Speakers", true)], "chosen, then the default if it won't open");
+    assert_eq!(
+        in_order(true, Some("USB"), Some("Speakers")),
+        [("USB", false), ("Speakers", true)],
+        "chosen, then the default if it won't open"
+    );
     assert_eq!(in_order(true, None, Some("Speakers")), [("Speakers", true)], "chosen and gone");
     assert_eq!(in_order(false, None, Some("Speakers")), [("Speakers", false)], "none chosen");
     assert_eq!(in_order::<&str>(true, None, None), [], "no output at all");
@@ -152,10 +159,11 @@ fn a_start_tries_the_output_chosen_then_the_default() {
 #[test]
 fn the_null_output_is_never_listed() {
     let discard = "Discard all samples (playback) or generate zero samples (capture)";
-    let seen: Vec<(String, String)> = [("alsa:null", discard), ("alsa:usbstream:CARD=USB", "Scarlett 2i2 USB"), ("alsa:pipewire", "PipeWire Sound Server")]
-        .into_iter()
-        .map(|(id, name)| (id.to_string(), name.to_string()))
-        .collect();
+    let seen: Vec<(String, String)> =
+        [("alsa:null", discard), ("alsa:usbstream:CARD=USB", "Scarlett 2i2 USB"), ("alsa:pipewire", "PipeWire Sound Server")]
+            .into_iter()
+            .map(|(id, name)| (id.to_string(), name.to_string()))
+            .collect();
     let rows = listed(&seen, None, |_| Some((48_000, None)));
     assert_eq!(rows.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["PipeWire Sound Server"]);
     assert!(listed(&seen[..1], None, |_| Some((48_000, None))).is_empty(), "no sound card: no output listed");

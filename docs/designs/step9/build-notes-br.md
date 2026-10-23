@@ -64,7 +64,7 @@ music2 check: PASS
 commit   1fb6caab7968 on br (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 37 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
 build            PASS  
@@ -77,17 +77,17 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  73/73 suites ok
 renders          PASS  12 of 12 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
 repo unchanged   PASS  
 ```
 
 The first run failed only one timing row, while other tracks built (load 4 to 10): G11's "5,000 files in
 assets/" case, p95 6.8 ms against 5 ms. Code br changed isn't on that path. The second run passed every row,
-that case at p95 1.6 ms, and nothing passed only on a retry. Logs: `~/m2-runs/check-br/` and
-`~/m2-runs/check-br.tgz`.
+that case at p95 1.6 ms, and nothing passed only on a retry. Logs: `$SCRATCH/check-br/` and
+`$SCRATCH/check-br.tgz`.
 
-**Pictures** on Xvfb `:95`: `~/m2-runs/app-shots/br-1fb6caa/` (captions in `captions.txt`).
+**Pictures** on Xvfb `:95`: `$SCRATCH/app-shots/br-1fb6caa/` (captions in `captions.txt`).
 
 ## A check by ear
 

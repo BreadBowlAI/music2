@@ -1,6 +1,6 @@
 # Ground facts: checking the Mac on GitHub Actions, and plugins on Linux
 
-Written 2026-10-14 on `jerry-ax102` for the platform layer (task label `ground-ci`). Facts come from GitHub's
+Written 2026-10-14 on the Linux server for the platform layer (task label `ground-ci`). Facts come from GitHub's
 docs, the projects' own source, and checks on this server. Sources are numbered [S1]… at the end. Anything
 not checked here or in a source is marked *(unverified)*. Nothing was downloaded or installed.
 
@@ -18,10 +18,10 @@ not checked here or in a source is marked *(unverified)*. Nothing was downloaded
 | Will it fit? | **Yes, with two settings.** Our debug `target/` is 25 GB in the main checkout today. With no debug info and no incremental files it measured 2.5 to 4.5 GB here. GitHub promises 14 GB free. Peak build memory was 2.2 GB; the runner has 7 GB. |
 | Does the cache save much? | **Less than it seems.** GitHub deletes a cache nobody used for 7 days. A run once per step is often cold. The follow-up run after a fix is warm (about 12 minutes shorter). |
 | Plugins on the runner? | **Yes, unpacked into a private folder, never installed.** m2 always searches `/Library/Audio/Plug-Ins/CLAP`, and `fx-fixes` needs the plugins to be missing. So the job unpacks the two packages and names the folder only in `CLAP_PATH`. |
-| Plugins on Linux? | Surge XT 1.3.4 ships a `.deb`; Airwindows Consolidated ships only a nightly zip whose name changes. **Both install per user without sudo:** unpack into `~/m2-runs/plugins/` and set `CLAP_PATH`. Never `sudo dpkg -i` (same `fx-fixes` reason). Up to three small X libraries may be missing here; `ldd` will tell. |
+| Plugins on Linux? | Surge XT 1.3.4 ships a `.deb`; Airwindows Consolidated ships only a nightly zip whose name changes. **Both install per user without sudo:** unpack into `$SCRATCH/plugins/` and set `CLAP_PATH`. Never `sudo dpkg -i` (same `fx-fixes` reason). Up to three small X libraries may be missing here; `ldd` will tell. |
 | Renders in CI? | **The debug `m2` is enough.** It gave the release `m2`'s bits for all 8 renders here, and it saves a 7–10 minute release build on the runner. |
 | A GitHub Linux job too? | **No, not now.** This server is already Ubuntu 24.04 on x86_64, and much faster. |
-| Found on the way | `std/kernels/std.wasm` contains the owner's Mac path (`/Users/<owner>/dev/suite2/music2/core/kernel/src/lib.rs`). A rebuild anywhere else gives other bytes. Remap the path before any "std.wasm reproduces" check. |
+| Found on the way | `std/kernels/std.wasm` contains the owner's Mac path (`<repo>/core/kernel/src/lib.rs`). A rebuild anywhere else gives other bytes. Remap the path before any "std.wasm reproduces" check. |
 
 ---
 
@@ -86,7 +86,7 @@ Notes:
 The runner can't be measured from here. So this server played the job on **3 CPUs** (`taskset`), with the
 job's settings (`CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`), on a plain copy of f126d03 (`git archive`),
 with its own target folder. Other agents' jobs ran at the same time (load 8 to 72 on 32 threads), so the
-times are rough. Their logs: `~/m2-runs/logs/gci-*.log` (the scratch copy was deleted).
+times are rough. Their logs: `$SCRATCH/logs/gci-*.log` (the scratch copy was deleted).
 
 | What (3 CPUs) | Measured here | Notes |
 |---|---|---|
@@ -142,16 +142,16 @@ The repo is private, so listing runs and fetching logs needs a token with read a
 | `gh run watch <id> -R BreadBowlAI/music2 --exit-status` | waits until it ends (not with a fine-grained token) |
 | `gh run view <id> -R BreadBowlAI/music2 --json jobs --jq '.jobs[].steps[] \| [.name,.conclusion] \| @tsv'` | each check's result |
 | `gh run view <id> -R BreadBowlAI/music2 --log-failed` | the failing steps' output |
-| `gh run download <id> -R BreadBowlAI/music2 -n mac-logs -D ~/m2-runs/mac-<sha>` | every log as files |
+| `gh run download <id> -R BreadBowlAI/music2 -n mac-logs -D $SCRATCH/mac-<sha>` | every log as files |
 
-The lead's whole loop, run through `~/m2-runs/tw` since it waits up to an hour:
+The lead's whole loop, run through `$SCRATCH/tw` since it waits up to an hour:
 
 ```sh
 sha=$(git rev-parse HEAD); R=BreadBowlAI/music2
 git push -f origin "$sha:refs/heads/check/mac"
 until id=$(gh run list -R $R -w mac.yml -c "$sha" --json databaseId -q '.[0].databaseId') && [ -n "$id" ]; do sleep 15; done
 gh run watch "$id" -R $R --exit-status > /dev/null; echo "mac run $id: exit $?"
-gh run download "$id" -R $R -n mac-logs -D ~/m2-runs/mac-"$sha"   # summary.md, test.log, clippy.log, e2e/…
+gh run download "$id" -R $R -n mac-logs -D $SCRATCH/mac-"$sha"   # summary.md, test.log, clippy.log, e2e/…
 ```
 
 ### Which login
@@ -330,7 +330,7 @@ above the CLAP folder. Then any `HOME` works and nothing else needs setting. Sur
 ### Install per user, without sudo (do this when the gates need it)
 
 ```sh
-P=~/m2-runs/plugins
+P=$SCRATCH/plugins
 mkdir -p "$P/clap" "$P/dl" && cd "$P/dl"
 # Surge XT 1.3.4: dpkg-deb -x unpacks a .deb as a normal user.
 curl -fLO https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-x64-1.3.4.deb
@@ -347,7 +347,7 @@ find aw -name 'Airwindows Consolidated.clap' -exec cp -R {} "$P/clap/" \;
 ldd "$P/clap/Surge XT.clap" "$P/clap/Airwindows Consolidated.clap" | grep -E '^/|not found'
 ```
 
-Then `CLAP_PATH=$HOME/m2-runs/plugins/clap`. That folder holds exactly `Surge XT.clap` and
+Then `CLAP_PATH=$SCRATCH/plugins/clap`. That folder holds exactly `Surge XT.clap` and
 `Airwindows Consolidated.clap`, the two names `e2e/live3b.mjs` checks for.
 
 Notes:
@@ -375,7 +375,7 @@ on Linux usually links freetype and ALSA (`libasound2`, present) and loads X11 o
 If `ldd` shows something missing:
 - simplest: the owner runs `sudo apt install libxcb-cursor0 libxcb-xkb1 libxkbcommon-x11-0` (three small libraries); or
 - with no sudo: `apt-get download libxcb-cursor0 libxcb-xkb1 libxkbcommon-x11-0` (works as a normal user),
-  `dpkg-deb -x` each into `~/m2-runs/plugins/lib`, and set `LD_LIBRARY_PATH=$HOME/m2-runs/plugins/lib/usr/lib/x86_64-linux-gnu`
+  `dpkg-deb -x` each into `$SCRATCH/plugins/lib`, and set `LD_LIBRARY_PATH=$SCRATCH/plugins/lib/usr/lib/x86_64-linux-gnu`
   for plugin runs.
 
 What else Linux needs before these plugins play here is platform-layer work, not packaging: JUCE plugins on
@@ -391,13 +391,13 @@ For the platform layer to add (small):
 1. **`rust-toolchain.toml`**: `channel = "1.99.0"`, `components = ["clippy", "rustfmt"]`,
    `targets = ["wasm32-unknown-unknown"]`, `profile = "minimal"` (survey OS-65).
 2. **The eighth render in `e2e/baseline.sh`**: `templates/empty --from 4 --seconds 6`. Today
-   `~/m2-runs/check.sh` adds it by hand.
+   `$SCRATCH/check.sh` adds it by hand.
 3. **`e2e/renders.sha256`**: the recorded hashes, one file for every OS, named as `baseline.sh` names the
    files (`…-from4-for6.wav`; `HANDOFF.md` writes `…-from4.wav`). The deterministic-math commit changes it once,
    on purpose.
 4. **`.github/workflows/mac.yml`** on `main` (the draft below).
 5. Later, for a "std.wasm reproduces" check: `std/build.sh` must remap source paths. Today's `std.wasm`
-   contains `/Users/<owner>/dev/suite2/music2/core/kernel/src/lib.rs` (checked with `strings`), so a build in
+   contains `<repo>/core/kernel/src/lib.rs` (checked with `strings`), so a build in
    any other folder differs. Note that `RUSTFLAGS` replaces the `rustflags` in
    `std/kernels-src/.cargo/config.toml`, so keep its `-zstack-size=65536` when adding `--remap-path-prefix`.
 
@@ -607,7 +607,7 @@ Design notes on the draft:
 - **Every check runs even when an earlier one fails** (`!cancelled()`), so one paid run gives the whole
   picture. Steps that need the build skip when it failed. The job is red if any step failed.
 - **Logs are files**, so the lead reads them with `gh run download` and greps them like the server's
-  `~/m2-runs/` logs. The artifact holds only logs (a few MB), never the e2e scratch folders (500 MB here).
+  `$SCRATCH/` logs. The artifact holds only logs (a few MB), never the e2e scratch folders (500 MB here).
 - **No secrets.** The job uses only its own short-lived token, read-only.
 - The script lines avoid bash 4 features (the image's `bash` is 3.2).
 
@@ -658,4 +658,4 @@ Design notes on the draft:
 - Chrome for Testing, 133.0.6943.141 downloads: https://googlechromelabs.github.io/chrome-for-testing/133.0.6943.141.json
 - Checked on this server: `apt-cache policy gh` (2.45.0-1ubuntu0.3), `rustup` toolchains and components, `dpkg-query`
   for the plugin libraries, `strings std/kernels/std.wasm`, `ssh -T git@github.com`, the lead's
-  `~/m2-runs/base-f126d03/` logs, and the timing runs in §3.
+  `$SCRATCH/base-f126d03/` logs, and the timing runs in §3.

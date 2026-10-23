@@ -268,7 +268,9 @@ impl<'a> Visit<'a> for Collect<'_> {
             None => match &it.callee {
                 Expression::Identifier(i) => Some((i.span, Ends::Callee)),
                 Expression::StaticMemberExpression(m) if !m.optional && plain_object(&m.object) => Some((m.object.span(), Ends::Receiver)),
-                Expression::ComputedMemberExpression(m) if !m.optional && plain_object(&m.object) => Some((m.object.span(), Ends::Receiver)),
+                Expression::ComputedMemberExpression(m) if !m.optional && plain_object(&m.object) => {
+                    Some((m.object.span(), Ends::Receiver))
+                }
                 _ => None,
             },
         };
@@ -382,12 +384,10 @@ mod tests {
         );
         // Sites in source order with their argument shapes.
         let s = &i.sites;
-        assert_eq!(s.iter().map(|s| &src[s.start as usize..s.end as usize]).collect::<Vec<_>>()[..4], [
-            "vca(svf.lowpass(osc.saw(hz(110)), hz(800)), 0.5)",
-            "svf.lowpass(osc.saw(hz(110)), hz(800))",
-            "osc.saw(hz(110))",
-            "hz(110)",
-        ]);
+        assert_eq!(
+            s.iter().map(|s| &src[s.start as usize..s.end as usize]).collect::<Vec<_>>()[..4],
+            ["vca(svf.lowpass(osc.saw(hz(110)), hz(800)), 0.5)", "svf.lowpass(osc.saw(hz(110)), hz(800))", "osc.saw(hz(110))", "hz(110)",]
+        );
         assert!(matches!(s[0].args[1], Arg::Number { value, .. } if value == 0.5));
         assert!(matches!(s[3].args[0], Arg::Number { value, .. } if value == 110.0));
     }
@@ -492,17 +492,20 @@ mod tests {
         "#;
         let i = instrument("t.ts", src, 0).unwrap();
         let bindings: Vec<_> = i.sites.iter().map(|site| (&src[site.start as usize..site.end as usize], site.binding.as_deref())).collect();
-        assert_eq!(bindings, vec![
-            ("hz(800)", Some("cutoff")),
-            ("db(-6)", Some("gain")),
-            ("filter(input, hz(900))", Some("sound")),
-            ("hz(900)", None),
-            ("hz(1000)", None),
-            ("makeValue(1)", None),
-            ("hz(1100)", None),
-            ("hz(1200)", None),
-            ("hz(1300)", None),
-        ]);
+        assert_eq!(
+            bindings,
+            vec![
+                ("hz(800)", Some("cutoff")),
+                ("db(-6)", Some("gain")),
+                ("filter(input, hz(900))", Some("sound")),
+                ("hz(900)", None),
+                ("hz(1000)", None),
+                ("makeValue(1)", None),
+                ("hz(1100)", None),
+                ("hz(1200)", None),
+                ("hz(1300)", None),
+            ]
+        );
     }
 
     #[test]

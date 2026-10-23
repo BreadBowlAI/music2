@@ -148,7 +148,9 @@ fn named(g: &Gesture) -> Vec<LaneAddr> {
             clips.iter().for_each(|c| add(&c.lane));
             to.iter().for_each(&mut add);
         }
-        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } | Gesture::Audio { clip, .. } => add(&clip.lane),
+        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } | Gesture::Audio { clip, .. } => {
+            add(&clip.lane)
+        }
         Gesture::Split { clips, .. }
         | Gesture::Join { clips }
         | Gesture::Duplicate { clips, .. }
@@ -166,7 +168,8 @@ fn named(g: &Gesture) -> Vec<LaneAddr> {
 /// Why `g` isn't previewed on `rev`, if it isn't: only a drag of notes or automation is (design-8b
 /// §9.1); a gesture on an audio lane needs renders.
 fn unpreviewable(rev: &Revision, g: &Gesture) -> Option<&'static str> {
-    if !matches!(g, Gesture::Move { .. } | Gesture::Resize { .. } | Gesture::Notes { .. } | Gesture::Points { .. } | Gesture::Create { .. }) {
+    if !matches!(g, Gesture::Move { .. } | Gesture::Resize { .. } | Gesture::Notes { .. } | Gesture::Points { .. } | Gesture::Create { .. })
+    {
         return Some("only a drag is previewed");
     }
     let audio = named(g).iter().any(|a| {
@@ -211,7 +214,12 @@ fn playing<'a>(plays: Option<&'a PlaysView>, device: Option<&'a Device>) -> Opti
 
 /// Play `lanes` (each lane's data) for lease `l` in what plays, and give the accepted data back to
 /// the lanes it reached before and doesn't now. Returns the last engine message's number.
-fn send(l: &mut LaneLease, lanes: &[(LaneAddr, Arc<LaneData>)], accepted: &Revision, at: Option<(&PlaysView, &Device)>) -> Result<Option<u64>> {
+fn send(
+    l: &mut LaneLease,
+    lanes: &[(LaneAddr, Arc<LaneData>)],
+    accepted: &Revision,
+    at: Option<(&PlaysView, &Device)>,
+) -> Result<Option<u64>> {
     let mut seq = None;
     let mut sent = vec![];
     if let Some((p, d)) = at {
@@ -289,14 +297,15 @@ pub(super) fn settled(cp: &mut ControlPlane, token: u64, device: Option<&Device>
         }
         let accepted = &engine.accepted;
         let lanes = named(&l.gesture).into_iter().chain(l.sent.iter().map(|s| s.lane.clone()));
-        let moved = !Arc::ptr_eq(&l.basis, accepted) && lanes.into_iter().any(|a| {
-            let (m, k) = (a.module.as_str(), a.lane.as_str());
-            match (l.basis.compiled.data.lane(m, k), accepted.compiled.data.lane(m, k)) {
-                (Some(x), Some(y)) => !Arc::ptr_eq(x, y),
-                (None, None) => false,
-                _ => true,
-            }
-        });
+        let moved = !Arc::ptr_eq(&l.basis, accepted)
+            && lanes.into_iter().any(|a| {
+                let (m, k) = (a.module.as_str(), a.lane.as_str());
+                match (l.basis.compiled.data.lane(m, k), accepted.compiled.data.lane(m, k)) {
+                    (Some(x), Some(y)) => !Arc::ptr_eq(x, y),
+                    (None, None) => false,
+                    _ => true,
+                }
+            });
         let fresh = at.is_some_and(|(p, _)| l.sent.iter().any(|s| (s.epoch, s.generation) != (p.epoch, p.generation)));
         if l.closing {
             // Its lanes as the lease saw them (the same data, though perhaps read again).
@@ -379,7 +388,13 @@ impl Graph {
     /// plane published it, never waiting for the session, then heard as `update` hears it. A
     /// gesture that isn't previewed (an audio lane's, or one that isn't a drag) begins nothing, and
     /// is written on release as before. Changed: a clip it names changed since the window drew it.
-    pub fn lane_begin(&self, token: u64, gesture: Gesture, client: Option<String>, ttl: Option<Duration>) -> Result<Result<LaneBegun, String>> {
+    pub fn lane_begin(
+        &self,
+        token: u64,
+        gesture: Gesture,
+        client: Option<String>,
+        ttl: Option<Duration>,
+    ) -> Result<Result<LaneBegun, String>> {
         let engine = {
             let cp = self.inner.control.lock();
             let p = cp.open.as_ref().context("no project is open")?;

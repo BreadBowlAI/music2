@@ -449,9 +449,9 @@ impl LaneData {
                 neg(&c.start) || neg(&c.length) || c.notes.iter().any(|n| [n.pitch, n.start, n.length, n.velocity].iter().any(neg))
             }),
             LaneData::Control { clips, .. } => clips.iter().any(|c| neg(&c.start) || neg(&c.length) || pairs(&c.points)),
-            LaneData::Audio(c) => c.iter().any(|c| {
-                [c.start, c.length, c.offset, c.gain_db, c.fade_in, c.fade_out, c.pitch].iter().any(neg) || pairs(&c.warp)
-            }),
+            LaneData::Audio(c) => {
+                c.iter().any(|c| [c.start, c.length, c.offset, c.gain_db, c.fade_in, c.fade_out, c.pitch].iter().any(neg) || pairs(&c.warp))
+            }
         }
     }
 
@@ -553,9 +553,10 @@ fn each<T: for<'de> Deserialize<'de> + Clip>(clips: &[Value], kind: &LaneKind) -
             let start = c.get("start").and_then(Value::as_f64);
             let at = start.map_or_else(|| format!("clip {}", i + 1), |s| at(i, s));
             // Name the note when a note is what's wrong.
-            let note = c.get("notes").and_then(Value::as_array).and_then(|ns| {
-                ns.iter().enumerate().find_map(|(j, n)| Note::deserialize(n).err().map(|e| format!("note {}: {e}", j + 1)))
-            });
+            let note = c
+                .get("notes")
+                .and_then(Value::as_array)
+                .and_then(|ns| ns.iter().enumerate().find_map(|(j, n)| Note::deserialize(n).err().map(|e| format!("note {}: {e}", j + 1))));
             let shape = shape_hint(c, kind);
             LaneError::Invalid(format!("{at}: {}{shape}", note.unwrap_or_else(|| e.to_string())))
         })?;

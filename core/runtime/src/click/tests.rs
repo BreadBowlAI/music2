@@ -73,10 +73,15 @@ impl Rig {
     fn run(&mut self, frames: usize) -> Vec<[f32; 2]> {
         let mut out = vec![[0.0; 2]; frames];
         let inbox = &mut self.inbox;
-        self.e.process(&mut out, &mut || inbox.pop_front(), &mut |r: Retired| {
-            drop(r);
-            Ok(())
-        }, CallbackStamp::default());
+        self.e.process(
+            &mut out,
+            &mut || inbox.pop_front(),
+            &mut |r: Retired| {
+                drop(r);
+                Ok(())
+            },
+            CallbackStamp::default(),
+        );
         out
     }
 }
@@ -193,7 +198,9 @@ fn the_click_off_changes_no_bit() {
     let n = frames(2.0);
     let export = renderer(&ir, &arr).render(2.0).unwrap();
     assert_eq!(export.len(), n);
-    let same = |a: &[[f32; 2]], b: &[[f32; 2]]| a.iter().zip(b).position(|(x, y)| x[0].to_bits() != y[0].to_bits() || x[1].to_bits() != y[1].to_bits());
+    let same = |a: &[[f32; 2]], b: &[[f32; 2]]| {
+        a.iter().zip(b).position(|(x, y)| x[0].to_bits() != y[0].to_bits() || x[1].to_bits() != y[1].to_bits())
+    };
     // Never on: the export's bits.
     let mut never = Rig::new(&ir, &arr, true, false);
     assert_eq!(same(&never.run(n), &export), None, "off, the engine plays the export");
@@ -321,7 +328,9 @@ fn no_count_in_changes_no_bit() {
     let (ir, arr) = (sine(0.5), at_bpm(120.0));
     let n = frames(2.0);
     let export = renderer(&ir, &arr).render(2.0).unwrap();
-    let same = |a: &[[f32; 2]], b: &[[f32; 2]]| a.iter().zip(b).position(|(x, y)| x[0].to_bits() != y[0].to_bits() || x[1].to_bits() != y[1].to_bits());
+    let same = |a: &[[f32; 2]], b: &[[f32; 2]]| {
+        a.iter().zip(b).position(|(x, y)| x[0].to_bits() != y[0].to_bits() || x[1].to_bits() != y[1].to_bits())
+    };
     let mut never = Rig::new(&ir, &arr, true, false);
     assert_eq!(same(&never.run(n), &export), None);
     // 3/4: the first click would come 64 frames in; a Play read in the same block cancels it.

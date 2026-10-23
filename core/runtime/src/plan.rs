@@ -23,8 +23,8 @@ use m2_song::{DataSet, LaneData, Sha, TempoMap};
 use crate::audio::{self, AudioLane, AudioPlayer, KernelAssets};
 use crate::cells::{CellId, CellMap, CellSlots, Cells};
 use crate::event::Event;
-use crate::sched::{Caps, LaneSwap, NoteScheduler};
 use crate::fault::{Code, Faults, Reporter};
+use crate::sched::{Caps, LaneSwap, NoteScheduler};
 use crate::taps::{TapSlots, Taps};
 use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, lane_slots, notes_data};
 

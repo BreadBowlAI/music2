@@ -1,6 +1,6 @@
 # Ground facts: what the Linux server really does
 
-Measured on 2026-10-14 on the owner's server `jerry-ax102`, at commit `f126d03`. Each fact below was
+Measured on 2026-10-14 on the owner's Linux server, at commit `f126d03`. Each fact below was
 checked on this machine with a small probe program or a command, unless it is marked *(unverified)*.
 The probes were C programs (`cc -O2`) and small scratch Rust crates (rustc 1.99.0, own target dir).
 They were deleted afterwards; the "Rerun" notes at the end say how to rebuild each one.
@@ -12,7 +12,7 @@ They were deleted afterwards; the "Rerun" notes at the end say how to rebuild ea
 | 1 | Exchange and no-replace renames | Both work on ext4 and tmpfs. A bad flag gives `EINVAL`. `FICLONE` gives `EOPNOTSUPP`. | Use `renameat2` for Swap and Excl. Probe each volume once; don't read every `EINVAL` as "unsupported". |
 | 2 | Cost of a durable commit | About **0.6 ms** idle and **1.5 ms** p95 while another process writes 1 GB. | Far inside PLANE-5's 20 ms. But this disk is a server disk with power-loss protection; a laptop disk is slower *(unverified)*. |
 | 3 | Is an inotify event there as soon as the write returns? | **Yes.** 0 misses in 2.8 million checks. | "Flush" on Linux is a non-blocking drain. Nothing is ever "on its way". |
-| 4 | Lock, ids, names | `flock` works per open file, is freed at exit and at `SIGKILL`. machine-id exists. Host name is `Ubuntu-2404-noble-amd64-base`. | The lock code works as on macOS. Messages will show that host name, not "jerry-ax102". |
+| 4 | Lock, ids, names | `flock` works per open file, is freed at exit and at `SIGKILL`. machine-id exists. Host name is `Ubuntu-2404-noble-amd64-base`. | The lock code works as on macOS. Messages will show that host name, not "the Linux server". |
 | 5 | Audio | No sound card, no PipeWire, no rtkit, no realtime rights. cpal's default device exists but **fails to open**, and ALSA prints 8 lines to stderr. | "No device" is not `None` here. It is an error from `default_output_config`. Fall back to silent on it. |
 | 6 | Host math vs the `libm` crate | glibc and `libm` differ on 0.04% to 9.7% of inputs, always by 1 ulp. `libm` here equals the math inside wasm, bit for bit. | Only `examples/resample` differs from the Mac. With `libm` it renders `39f94764…` here. That should be the hash on every OS. |
 | 7 | Is `std.wasm` reproducible? | **Yes**, byte for byte, once the build path is remapped to the Mac's. The committed file is also stale: it was built before a 10-line doc edit in `core/kernel/src/lib.rs`. | Remap the path in `std/build.sh`, pin the toolchain, then rebuild once on purpose. |
@@ -42,7 +42,7 @@ They were deleted afterwards; the "Rerun" notes at the end say how to rebuild ea
 
 **Probe:** a C program that calls `renameat2` (raw syscall and glibc's wrapper), `ioctl(FICLONE)`,
 `copy_file_range`, `link`, `fsync`, `fdatasync`, `syncfs` and `sync_file_range` in a folder, and prints
-each result or errno. Run in `~/m2-runs/…` (ext4), `/tmp` (ext4) and `/dev/shm` (tmpfs).
+each result or errno. Run in `$SCRATCH/…` (ext4), `/tmp` (ext4) and `/dev/shm` (tmpfs).
 
 | Call | ext4 (`/`, `/tmp`) | tmpfs (`/dev/shm`) |
 |---|---|---|
@@ -157,7 +157,7 @@ The same result on ext4 and on tmpfs: 0 misses in 2.8 million checks in all. It 
 | `max_user_watches` | **997,324** | No sysctl file sets it. That is 1% of RAM at about 1.3 KB a watch: the RAM-scaled default. |
 | `max_user_instances` | 128 | per user |
 | `max_queued_events` | 16,384 | per instance |
-| In use by `jerry` now | 4 instances, 137 watches | |
+| In use by the user now | 4 instances, 137 watches | |
 
 fanotify's own limits are there too (`max_user_groups` 128, `max_user_marks` 1,048,576), but it still
 needs `CAP_SYS_ADMIN` for whole-filesystem marks.
@@ -222,8 +222,8 @@ ext4 and tmpfs.
 | `statfs(/dev/shm).f_type` | `0x01021994` (tmpfs) |
 | `/proc/self/mountinfo` for `/` | fs type `ext4`, source `/dev/md2` |
 | `/etc/machine-id` | present: 32 hex digits and a newline. `/var/lib/dbus/machine-id` is the same. |
-| `/sys/class/dmi/id/product_uuid` | mode 0400, root only (reading it as `jerry`: permission denied) |
-| `gethostname` | **`Ubuntu-2404-noble-amd64-base`** (the Hetzner image name; "jerry-ax102" is not the host name) |
+| `/sys/class/dmi/id/product_uuid` | mode 0400, root only (reading it as the user: permission denied) |
+| `gethostname` | **`Ubuntu-2404-noble-amd64-base`** (the Hetzner image name; the server's own name is not its host name) |
 | time zone | `Europe/Berlin` (CEST); `TZ` unset |
 | case | ext4 here is case-sensitive: `Exports` and `exports` are two files. The kernel supports casefold, but no folder here uses it. |
 
@@ -244,7 +244,7 @@ ext4 and tmpfs.
 | Check | Result |
 |---|---|
 | `/proc/asound/cards` | `--- no soundcards ---` |
-| `/dev/snd` | only `seq` and `timer`, owned `root:audio`, mode 0660, no ACL for `jerry` |
+| `/dev/snd` | only `seq` and `timer`, owned `root:audio`, mode 0660, no ACL for the user |
 | `aplay` | not installed (`alsa-utils` absent) |
 | kernel modules | AMD SOF audio modules loaded, but no card |
 | PipeWire, PulseAudio, WirePlumber, JACK daemons | none running, none installed. `libpipewire-0.3-0` (the library only) is installed; `libpipewire-0.3-dev` is not. |
@@ -370,7 +370,7 @@ out **identical** under glibc and `libm`. The 1-ulp gaps vanish when the f64 val
 
 ### 6e. Linux renders vs the Mac's
 
-Linux at `f126d03` (the lead's run, `~/m2-runs/base-f126d03/renders/SHA256SUMS`) against the Mac's at
+Linux at `f126d03` (the lead's run, `$SCRATCH/base-f126d03/renders/SHA256SUMS`) against the Mac's at
 `8aa301e` (`HANDOFF.md`). `f126d03` is `8aa301e` plus documents, so the code is the same. Linux names
 the `--from 4 --seconds 6` files `…-from4-for6.wav`.
 
@@ -439,7 +439,7 @@ target dir, three ways. Each build took 0.8 s.
 | Build | sha256 | Size | vs committed `std/kernels/std.wasm` (`83cc5961…`, 143,471 B) |
 |---|---|---|---|
 | A: as `std/build.sh` does it, at HEAD | `5ebef4a8…` | 143,479 | differs: this machine's path is in it (8 bytes longer) |
-| B: HEAD, with `--remap-path-prefix=<copy>=/Users/jerryxu/dev/suite2/music2` | `807a28a2…` | 143,471 | **10 bytes differ** |
+| B: HEAD, with `--remap-path-prefix=<copy>=<repo>` | `807a28a2…` | 143,471 | **10 bytes differ** |
 | C: like B, but the sources of `650f842` (the commit that last rebuilt `std.wasm`) | **`83cc5961…`** | 143,471 | **identical** |
 
 Where B differs: the 10 bytes are panic-location **line numbers** in `core/kernel/src/lib.rs`, each 9 or
@@ -450,7 +450,7 @@ Host-specific strings in `std.wasm` (from `strings`):
 
 | String | Where from | Same on every host? |
 |---|---|---|
-| `/Users/jerryxu/dev/suite2/music2/core/kernel/src/lib.rs` | `m2-kernel` is a path dependency outside the `kernels-src` workspace, so cargo passes its absolute path | **no**: the only host-specific string |
+| `<repo>/core/kernel/src/lib.rs` | `m2-kernel` is a path dependency outside the `kernels-src` workspace, so cargo passes its absolute path | **no**: the only host-specific string |
 | `src/fx.rs` | the crate being built: relative | yes |
 | `/rustc/b940084d7…/library/…` (8 paths) | the prebuilt std of rustc 1.99.0 | yes, for the same rustc |
 | `/rust/deps/dlmalloc-0.2.14/src/dlmalloc.rs` | std's allocator, prebuilt | yes, for the same rustc |
@@ -600,7 +600,7 @@ Other run-time facts:
 ## Rerun notes
 
 All probes were deleted after the run (scratch rule). To rebuild one, write it again from this list.
-Use a scratch `HOME`, `M2_AUDIO=none` and an own `CARGO_TARGET_DIR`. Run long ones through `~/m2-runs/tw`,
+Use a scratch `HOME`, `M2_AUDIO=none` and an own `CARGO_TARGET_DIR`. Run long ones through `$SCRATCH/tw`,
 and put commands that use quotes or brackets in a script file: `tw` writes the command into an `echo`
 line, and a quote in it breaks the job silently.
 
@@ -612,6 +612,6 @@ line, and a quote in it breaks the job silently.
 | 4 | C: `flock(fd, LOCK_EX\|LOCK_NB)` on two `open`s, `dup`, a `fork`ed holder that exits or is `SIGKILL`ed. Rust: `File::try_lock` twice. |
 | 5 | Rust crate, `cpal = "=0.18.2"`: `available_hosts`, `default_host`, `output_devices`, `default_output_device`, `default_output_config`, `build_output_stream::<f32>`. |
 | 6 | Rust crate, `libm = "=0.2.16"` and `wasmtime = "=49.0.2"` (the workspace's `Cargo.lock` copied in). glibc through `unsafe extern "C" { fn cosf(x: f32) -> f32; … }`. A 32-thread sweep over f32 bit patterns. The wasm side: a `cdylib` with `hash_f32` and `hash_f64` exports (FNV-1a over result bits). Renders with `LD_PRELOAD` of a `cdylib` that exports `cosf`, `sinf`, `powf`, `exp2`, `pow`, `sin`, `cos` as `libm` calls. |
-| 7 | `git archive 650f842 Cargo.toml core/kernel std \| tar -x -C <dir>`, then in `std/kernels-src`: `cargo build --release --target wasm32-unknown-unknown --config 'target.wasm32-unknown-unknown.rustflags=["--remap-path-prefix=<dir>=/Users/jerryxu/dev/suite2/music2"]'`, then `cmp`. |
+| 7 | `git archive 650f842 Cargo.toml core/kernel std \| tar -x -C <dir>`, then in `std/kernels-src`: `cargo build --release --target wasm32-unknown-unknown --config 'target.wasm32-unknown-unknown.rustflags=["--remap-path-prefix=<dir>=<repo>"]'`, then `cmp`. |
 | 8 | C: loop `mmap(NULL, 32M+4G+32M, PROT_NONE, MAP_PRIVATE\|MAP_ANONYMOUS\|MAP_NORESERVE)` + `mprotect` 64 KiB read-write, count lines of `/proc/self/maps`. |
 | 9 | `readelf -d`, `ldd`, `dpkg -S`, `objdump -T \| grep -o 'GLIBC_[0-9.]*' \| sort -uV \| tail -1`. |

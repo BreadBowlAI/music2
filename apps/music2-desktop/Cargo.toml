@@ -3,6 +3,7 @@ name = "music2-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "music2 as a native app: the React UI in a system webview around the Rust server"
 
 [build-dependencies]

@@ -1,6 +1,6 @@
 # The platform layer: design (shaped for what comes)
 
-Written 2026-10-14 on the Linux server `jerry-ax102`, at `f126d03`. Label: design-shaped.
+Written 2026-10-14 on the Linux server, at `f126d03`. Label: design-shaped.
 
 Inputs: `HANDOFF.md`, the contract `docs/architecture.md`, the surveys `survey-code.md` (OS-01 to OS-85) and
 `survey-later.md`, and the ground notes in `ground/` (`tests.md`, `e2e.md`, `facts.md`, `branches.md`, `ci.md`). The
@@ -356,7 +356,7 @@ Totals: 51 built, 2 designed, 6 deferred, 26 no change. The Windows column is on
 | OS-24 | `is_process_main()` | Built (S2): `thread::is_process_main` | `gettid() == getpid()`: two plain system calls, no allocation, no lock. Fixes `main_thread.rs:78` (tests.md). | the id recorded when `Loop::start(ProcessMain)` runs |
 | OS-25 | thread token | Built (S2): `thread::current` | `pthread_self` through `libc` | `GetCurrentThreadId` (today's bare `pthread_self` would not link there) |
 | OS-26 | the app's executor | Built (S2): `Where::AppMain` | a loop thread of its own. GTK keeps its main thread; plugin hosting never touches GTK. Tested by the AppKit test made portable (OS-30): on Linux it installs as the app does and plays the same song with the probe plugin, on the loop thread, with no window. | the same (a message pump comes with the Windows step) |
-| OS-27 | the CLI's loop | Built (S2): `Where::ProcessMain`, the same channel loop as today, moved. CLAP's `timer-support` and `posix-fd-support`: **deferred to step 9**: Surge XT and Airwindows already pass live3b's plugin part on Linux without them (the lead's run, 51 of 51, `~/m2-runs/logs/live3b-plugins-1014-210631-833394.log`). In step 9 the Linux loop becomes `epoll` over an eventfd, a timerfd and the plugins' fds, in the same file. | Win32 message pump (Windows step) |
+| OS-27 | the CLI's loop | Built (S2): `Where::ProcessMain`, the same channel loop as today, moved. CLAP's `timer-support` and `posix-fd-support`: **deferred to step 9**: Surge XT and Airwindows already pass live3b's plugin part on Linux without them (the lead's run, 51 of 51, `$SCRATCH/logs/live3b-plugins-1014-210631-833394.log`). In step 9 the Linux loop becomes `epoll` over an eventfd, a timerfd and the plugins' fds, in the same file. | Win32 message pump (Windows step) |
 | OS-28 | the probe records `process_main` | No change: OS-24 fixes it | | |
 | OS-29 | `leave_now` (`_exit`) | Built (S2): `thread::leave_now` | `_exit` | `TerminateProcess`, which skips DLL detach |
 | OS-30 | the AppKit test | Built (S2): renamed `app_main_thread.rs`. Its work (the song with the probe plugin, the carried instance, quit's teardown, the plugins' part) runs on every OS; only AppKit's run loop stays under `cfg(target_os = "macos")`. No branch edits this file. Every item is then used, which ends clippy lints 7 to 15. | the same work on the app's loop thread; no display needed | the same file |
@@ -366,7 +366,7 @@ Totals: 51 built, 2 designed, 6 deferred, 26 no change. The Windows column is on
 
 | id | Piece | This step | Linux | Windows plan |
 |---|---|---|---|---|
-| OS-32 | search paths | Built (S5): `dirs::clap()` after `CLAP_PATH` | `~/.clap`, `/usr/lib/clap`. The suites' plugins stay in `~/m2-runs/plugins/clap`, named only by `CLAP_PATH`: `fx-fixes` needs them missing everywhere else. | `%LOCALAPPDATA%\Programs\Common\CLAP`, `%COMMONPROGRAMFILES%\CLAP` |
+| OS-32 | search paths | Built (S5): `dirs::clap()` after `CLAP_PATH` | `~/.clap`, `/usr/lib/clap`. The suites' plugins stay in `$SCRATCH/plugins/clap`, named only by `CLAP_PATH`: `fx-fixes` needs them missing everywhere else. | `%LOCALAPPDATA%\Programs\Common\CLAP`, `%COMMONPROGRAMFILES%\CLAP` |
 | OS-33 | the binary in a bundle | No change: a Linux `.clap` is the file itself | | a DLL |
 | OS-34 | scan depth | No change: one level on every OS, though the spec says recursive. Not OS-specific; decide in step 9. | | |
 | OS-35 | `dlopen` | No change: `RTLD_LAZY \| RTLD_LOCAL` loads and plays Surge XT and Airwindows here | | `load_with_flags(LOAD_WITH_ALTERED_SEARCH_PATH)`; libloading's default lacks it (facts) |
@@ -514,7 +514,7 @@ APIs (OS-68), and lints 4 to 6 gone (S3): `crates/gates/src/server.rs` 1019, 102
 | export | off the app, `isMac` reads `navigator.platform` | `native.ts`: `isMac` follows `__M2__.platform` when given |
 | fx-fixes | ext4 tells "exports 2" from "Exports 2" | the product: a new song's name is taken in any capitals, on every OS (Q1); the suite stays as it is |
 | notes ("the whole drag is one write") | the suite reads the file, then the revision, and Linux saves so fast it lands between the two (2.7 ms) | `notes.mjs:97`: wait until the revision moves, wait 300 ms, then check it moved by exactly one |
-| live3b (PART) | no plugins | `CLAP_PATH=~/m2-runs/plugins/clap`. The lead unpacked Surge XT 1.3.4 and Airwindows Consolidated there (no sudo; `ldd` finds every library). Measured: live3b 51 of 51 with it. `ci/check.sh` sets it when the folder has both. |
+| live3b (PART) | no plugins | `CLAP_PATH=$SCRATCH/plugins/clap`. The lead unpacked Surge XT 1.3.4 and Airwindows Consolidated there (no sudo; `ldd` finds every library). Measured: live3b 51 of 51 with it. `ci/check.sh` sets it when the folder has both. |
 
 Passed only by luck today, and what this step does:
 
@@ -608,7 +608,7 @@ Measured for this design with exactly the §5.1 patch (`libm::exp2` for pitch) o
 
 | Fact | Source |
 |---|---|
-| `std.wasm` holds the Mac's path `/Users/jerryxu/dev/suite2/music2/core/kernel/src/lib.rs` | facts §7, ci.md |
+| `std.wasm` holds the Mac's path `<repo>/core/kernel/src/lib.rs` | facts §7, ci.md |
 | Remapping that path rebuilds main's file only from `650f842`'s sources; at HEAD 10 bytes (panic line numbers) differ: the committed file is stale | facts §7 |
 | A remap is not enough: cargo hashes `m2-kernel`'s absolute path into `-C metadata`, which reorders the layout (1,003 bytes differed between two folders for `sounds`) | branches.md §4.3 |
 | With `m2-kernel` inside the kernels' own workspace, two folders gave identical bytes with no machine path | branches.md §4.3 |
@@ -804,15 +804,15 @@ Under item 6, after its bullets, add (S1):
 One script, `ci/check.sh`, run where the owner can watch:
 
 ```sh
-cd ~/dev/suite2/music2
-~/m2-runs/tw check 'CARGO_TARGET_DIR=$HOME/m2-runs/target-check M2_CHECK_OUT=$HOME/m2-runs/check-now ci/check.sh'
-# about 15 minutes (estimate from the ground notes' parts); then ~/m2-runs/tw-wait … as tw prints
+cd <repo>
+$SCRATCH/tw check 'CARGO_TARGET_DIR=$SCRATCH/target-check M2_CHECK_OUT=$SCRATCH/check-now ci/check.sh'
+# about 15 minutes (estimate from the ground notes' parts); then $SCRATCH/tw-wait … as tw prints
 ```
 
 - No double quotes in the `tw` command (the helper breaks on them, tests.md).
 - Each slice ends with a full run. The summary is in `$M2_CHECK_OUT/summary.txt`.
 - `ci/check.sh` adds the macOS and Windows standard libraries to rustup the first time (264 MB, user level, no sudo).
-- It replaces `~/m2-runs/check.sh`. Delete `~/m2-runs/target-check` after each workflow (disk note).
+- It replaces `$SCRATCH/check.sh`. Delete `$SCRATCH/target-check` after each workflow (disk note).
 
 ### 7.2 The compile checks of macOS and Windows code, from Linux
 
@@ -890,7 +890,7 @@ ships.
 # the macOS and Windows standard libraries to rustup, for the compile checks (no sudo).
 #
 # Plugins: live3b and the plugin tests use Surge XT and Airwindows Consolidated from $CLAP_PATH,
-# else from ~/Library/Audio/Plug-Ins/CLAP (macOS) or ~/m2-runs/plugins/clap (Linux) when both are
+# else from ~/Library/Audio/Plug-Ins/CLAP (macOS) or $SCRATCH/plugins/clap (Linux) when both are
 # there. Without them live3b is PART, and the check still passes. Never put them in
 # /Library/Audio/Plug-Ins/CLAP or /usr/lib/clap: music2 always looks there, and fx-fixes needs
 # them missing.
@@ -931,7 +931,7 @@ case $(uname -s) in
   Linux)
     OS=linux
     CHROME_DIR=linux-133.0.6943.141/chrome-headless-shell-linux64
-    PLUGINS=$HOME/m2-runs/plugins/clap
+    PLUGINS=$SCRATCH/plugins/clap
     MACHINE="$(. /etc/os-release && echo "$PRETTY_NAME"), $(uname -m), $(nproc) threads" ;;
   *)
     echo "ci/check.sh runs on macOS and Linux"
@@ -1305,15 +1305,15 @@ presses.
 Messages on the server say "Ubuntu-2404-noble-amd64-base" (the server's real host name), for example "this project
 is open for writing in music2 on Ubuntu-2404-noble-amd64-base". It changes nothing else: music2 tells computers
 apart by their machine id, not their name.
-- **Recommended: rename it once, if you like:** `sudo hostnamectl set-hostname jerry-ax102`. It is a system setting,
+- **Recommended: rename it once, if you like:** `sudo hostnamectl set-hostname <name>`. It is a system setting,
   so only you can do it. Skipping it is fine.
 
 ---
 
 ## Appendix A. Measured for this design
 
-All on `jerry-ax102`, at `f126d03`, with a scratch rustup and target folder (deleted afterwards). Logs in
-`~/m2-runs/logs/dsh-*`.
+All on the Linux server, at `f126d03`, with a scratch rustup and target folder (deleted afterwards). Logs in
+`$SCRATCH/logs/dsh-*`.
 
 **A1. Compile checks for macOS and Windows from Linux.** An isolated `RUSTUP_HOME` with rustc 1.99.0 and the
 `aarch64-apple-darwin` and `x86_64-pc-windows-msvc` standard libraries.
@@ -1341,8 +1341,8 @@ calls C `pow`; `**` uses it, lines 15475 and 15547) and 49019-49050 (`Math.sin` 
 `Math.` in `examples/`, `templates/`, `std/src` or the SDK.
 
 **A4. Other facts used here.** `apps/music2-desktop/gen/schemas/linux-schema.json` is byte-identical to the committed
-`macOS-schema.json`. The lead's run of live3b with `CLAP_PATH=~/m2-runs/plugins/clap`: 51 passed, 0 failed
-(`~/m2-runs/logs/live3b-plugins-1014-210631-833394.log`); `ldd` reports no missing library for either plugin
+`macOS-schema.json`. The lead's run of live3b with `CLAP_PATH=$SCRATCH/plugins/clap`: 51 passed, 0 failed
+(`$SCRATCH/logs/live3b-plugins-1014-210631-833394.log`); `ldd` reports no missing library for either plugin
 (`get-plugins-1014-210617-832021.log`). The branches touch none of the layer's files except `core/play/src/lib.rs`,
 `core/runtime/src/audio.rs`, `crates/editor/src/render.rs`, `crates/gates/src/server.rs` (step 7) and `e2e/run.mjs`'s
 suite list (taste) (`git diff main...origin/<branch> --stat`).

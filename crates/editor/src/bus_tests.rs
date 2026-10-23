@@ -133,7 +133,10 @@ fn a_send_can_go_before_the_fader() {
     let mut s = f.open();
     let song = f.read("song.ts");
     bus::add_send(&mut s, "bass", "echo", true).unwrap();
-    assert!(f.read("song.ts").contains("bass: { in: duck(bass.out, kick.env, { depth: db(-9) }), sends: { echo: { db: db(-12), pre: true } } },"));
+    assert!(
+        f.read("song.ts")
+            .contains("bass: { in: duck(bass.out, kick.env, { depth: db(-9) }), sends: { echo: { db: db(-12), pre: true } } },")
+    );
     s.undo().unwrap();
     bus::set_pre(&mut s, "hats", "verb", true).unwrap();
     assert_eq!(f.read("song.ts"), song.replacen("sends: { verb: db(-14) }", "sends: { verb: { db: db(-14), pre: true } }", 1));
@@ -274,7 +277,11 @@ fn deleting_a_bus_takes_its_sends_and_routes_with_it() {
     assert_eq!(rows, [("kick", "Output"), ("hats", "Output")]);
     s.delete_track("drums", true).unwrap();
     let text = f.read("song.ts");
-    assert!(text.contains("      kick: kick.out,\n") && text.contains("hats: { in: hats.out, db: db(-6), pan: 0.3, sends: { verb: db(-14) } },"), "{text}");
+    assert!(
+        text.contains("      kick: kick.out,\n")
+            && text.contains("hats: { in: hats.out, db: db(-6), pan: 0.3, sends: { verb: db(-14) } },"),
+        "{text}"
+    );
     assert!(!routes(&s).iter().any(|r| r.1 == "drums"));
     s.undo().unwrap();
     assert_eq!(f.read("song.ts"), song);
@@ -326,7 +333,9 @@ fn the_mix_view_lists_buses_sends_and_outputs() {
         .collect();
     assert_eq!(sends, [("verb", false, -10.0), ("echo", true, -12.0)]);
     assert!(strip(&v, "bass").sends.is_empty() && keys.sends.iter().all(|x| x.lane.is_none()));
-    for (key, may) in [("kick", &["drums", "verb", "echo"][..]), ("drums", &["verb", "echo"]), ("verb", &["drums"]), ("echo", &["drums", "verb"])] {
+    for (key, may) in
+        [("kick", &["drums", "verb", "echo"][..]), ("drums", &["verb", "echo"]), ("verb", &["drums"]), ("echo", &["drums", "verb"])]
+    {
         assert_eq!(strip(&v, key).may_use, may, "{key}");
     }
 }
@@ -344,12 +353,17 @@ fn the_mix_view_says_why_a_bus_would_make_a_loop() {
         loops("verb"),
         [
             said("verb", "Reverb can't send to itself.", "Reverb can't go to itself."),
-            said("echo", "Echo already feeds Reverb, so Reverb can't send to Echo.", "Echo already feeds Reverb, so Reverb can't go to Echo."),
+            said(
+                "echo",
+                "Echo already feeds Reverb, so Reverb can't send to Echo.",
+                "Echo already feeds Reverb, so Reverb can't go to Echo."
+            ),
         ]
     );
     assert_eq!(loops("drums"), [said("drums", "Drums can't send to itself.", "Drums can't go to itself.")]);
     assert!(loops("kick").is_empty() && loops("keys").is_empty());
-    let rows: Vec<(String, bool, usize)> = crate::timeline::timeline(&s).tracks.into_iter().map(|t| (t.module, t.bus, t.lanes.len())).collect();
+    let rows: Vec<(String, bool, usize)> =
+        crate::timeline::timeline(&s).tracks.into_iter().map(|t| (t.module, t.bus, t.lanes.len())).collect();
     let bus_rows: Vec<&(String, bool, usize)> = rows.iter().filter(|r| r.1).collect();
     assert_eq!(bus_rows.iter().map(|r| (r.0.as_str(), r.2)).collect::<Vec<_>>(), [("drums", 0), ("verb", 0), ("echo", 0)], "{rows:?}");
 }

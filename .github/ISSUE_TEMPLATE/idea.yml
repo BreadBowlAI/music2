@@ -1,0 +1,38 @@
+name: Idea
+description: A feature, or a change you would like.
+labels: ["idea"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **In short:** say what you would like to do in music2, and why.
+
+        Before you write, please check two pages:
+        - [What music2 can't do yet](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md). Many ideas are listed there with a number (#18, #24…). If yours is, say its number below.
+        - [Goals](https://github.com/BreadBowlAI/music2/blob/main/docs/goals.md). Some things are not planned: AI features inside the app, and VST3 or AU plugins.
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What would you like to do, and how would it look in the app or in a song's code?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      description: Who does it help, and what can't they do today?
+    validations:
+      required: true
+  - type: input
+    id: gap
+    attributes:
+      label: Gap number
+      description: Its number in docs/gaps.md, if it has one.
+      placeholder: "#22"
+  - type: checkboxes
+    id: build
+    attributes:
+      label: Building it
+      options:
+        - label: "I would like to build this myself. (Wait for a maintainer's yes before you start. A big change starts with a design note, as CONTRIBUTING.md says.)"

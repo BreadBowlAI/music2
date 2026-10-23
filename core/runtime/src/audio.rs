@@ -170,7 +170,6 @@ impl ClipKey {
         let stretch = stretch.filter(|_| !c.warp.is_empty()).map(|k| k.sha);
         ClipKey { asset, clip: clip.into_iter().map(f64::to_bits).collect(), tempo, rate: rate.to_bits(), stretch }
     }
-
 }
 
 /// What a warped clip's stretch depends on: everything its kernel is given (D8). The source's
@@ -565,7 +564,13 @@ fn whole(k: &Kernel, run: &crate::offline::Run) -> Result<RenderedClip> {
 /// ([`stream`]); a warped one is stretched whole by `stretch` (silent without it), then reversed,
 /// faded and gained as its file is when read. This is the reference their pieces must equal (tests).
 #[cfg(test)]
-pub(crate) fn render_clip(clip: &AudioClip, asset: &Arc<Asset>, tempo: &TempoMap, sample_rate: f64, stretch: Option<&Kernel>) -> Result<RenderedClip> {
+pub(crate) fn render_clip(
+    clip: &AudioClip,
+    asset: &Arc<Asset>,
+    tempo: &TempoMap,
+    sample_rate: f64,
+    stretch: Option<&Kernel>,
+) -> Result<RenderedClip> {
     let sh = Shape::of(clip, asset.sample_rate, tempo, sample_rate);
     let mut out: RenderedClip = if clip.warp.is_empty() {
         // Varispeed: source time runs `rate` times faster.
@@ -573,7 +578,14 @@ pub(crate) fn render_clip(clip: &AudioClip, asset: &Arc<Asset>, tempo: &TempoMap
     } else {
         let map = time_map(clip, tempo);
         let channels = asset.channels.len();
-        let run = crate::offline::Run { source: Held::Whole(asset.clone()), values: &[clip.pitch], map: &map, rate: sample_rate, channels, frames: sh.len };
+        let run = crate::offline::Run {
+            source: Held::Whole(asset.clone()),
+            values: &[clip.pitch],
+            map: &map,
+            rate: sample_rate,
+            channels,
+            frames: sh.len,
+        };
         match stretch {
             Some(k) => whole(k, &run)?,
             None => vec![vec![0.0; sh.len]; channels],
@@ -757,7 +769,6 @@ impl AudioLane {
         self.clips.iter().any(|c| c.at < pos && pos < c.at + c.len)
     }
 }
-
 
 /// The most places one block of a player reads: a fade's start, each fade, and its runs.
 const NEED: usize = 1 + TAPS + crate::transport::MAX_RUNS;
@@ -1082,7 +1093,8 @@ mod tests {
     // old renders at its frame plus the shift to the new ones at its frame, then the new ones alone.
     #[test]
     fn a_swap_reads_the_old_renders_at_their_own_position() {
-        let ramp = |k: f32| Arc::new(AudioLane::of_renders(vec![(0, Arc::new(vec![(0..96_000).map(|i| k * i as f32).collect()]))], 1, 48_000.0));
+        let ramp =
+            |k: f32| Arc::new(AudioLane::of_renders(vec![(0, Arc::new(vec![(0..96_000).map(|i| k * i as f32).collect()]))], 1, 48_000.0));
         let (old, new) = (ramp(1e-5), ramp(-1e-5));
         let mut p = AudioPlayer::new(old, 48_000.0);
         let run = |at: u64| Runs::one(Run { off: 0, n: BLOCK as u32, at, moving: true, jump: Jump::None });

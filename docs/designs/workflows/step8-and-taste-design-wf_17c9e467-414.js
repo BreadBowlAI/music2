@@ -9,8 +9,8 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/jerryxu/dev/suite2/music2'
-const S = '/private/tmp/claude-501/-Users-jerryxu-dev-suite2-music2/07b91ec3-d8c4-49ce-985f-b33193c681f7/scratchpad'
+const REPO = '<repo>'
+const S = '<scratchpad>'
 const D = `${REPO}/.git/m2-step8`
 const WT = `${S}/wt-head`
 const TH = `${S}/target-head`

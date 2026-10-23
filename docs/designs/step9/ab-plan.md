@@ -43,10 +43,10 @@ Step 9, the audio-and-sample turn 2 (architecture.md, Order of work, item 9). Br
 | 1c | Commit A: the runtime speaks v1, still one state per sandbox, 32 MiB (P2). One new module holds the sandbox: Store, memory, kept base address, birth, the v1 calls. The host places port buffers and the settings block with `m2_alloc`, so ABI-1's overlap check goes; the debug input check stays | `core/runtime/src/sandbox.rs` (new), `core/runtime/src/lib.rs` (`KernelInst` becomes a state in a sandbox), `core/runtime/src/packages.rs` |
 | 1d | Commit B: one sandbox per box. A kernel outside an instrument has its own sandbox. A `poly`'s voices share one sandbox per package: `VoicePool` holds it, and its voices' kernel nodes hold state handles. wasmtime's default 4 GiB reservation, `memory_may_move(false)`, the Spectre guard on. Seal by the limiter after birth; prewarm (one reset of each state) after the seal; every page touched once | `core/runtime/src/sandbox.rs`, `lib.rs` (`VoicePool`, `KernelNode`), `packages.rs` (`Layout` goes; G7f's P1 side then plays the same layout, printed, not judged) |
 
-**How it is measured** (Linux; runs over 2 minutes go through `~/m2-runs/tw`):
-- `main`'s copy: `git archive 258275b` into `/home/jerry/m2-runs/sab/main`, built in release there. Its `target/` is deleted after the spike.
+**How it is measured** (Linux; runs over 2 minutes go through `$SCRATCH/tw`):
+- `main`'s copy: `git archive 258275b` into `$SCRATCH/sab/main`, built in release there. Its `target/` is deleted after the spike.
 - S's runner from `crates/gates/s/build.sh`, as G7f needs.
-- Three pairs, in the order main, B, main, B, main, B. Each run is `m2-gates store --reference 50` (a block) and `m2-gates arena --reference 50 --at 180` (a 512-frame callback), held with `taskset -c 4,20` (the 96 MB-cache die), as `~/m2-runs/g7f-linux/one.sh` does. Each run measures against S fresh, so a pair's difference is B's figure minus main's.
+- Three pairs, in the order main, B, main, B, main, B. Each run is `m2-gates store --reference 50` (a block) and `m2-gates arena --reference 50 --at 180` (a 512-frame callback), held with `taskset -c 4,20` (the 96 MB-cache die), as `$SCRATCH/g7f-linux/one.sh` does. Each run measures against S fresh, so a pair's difference is B's figure minus main's.
 - From the same runs: p50's footprint, its build time, the address space two renderers hold, the slowest activation block.
 - Commit A against `main`: one pair, for information only (what the new call shape costs alone, report §10 #6).
 - The same bits: the 10 renders against `e2e/renders.sha256`; `core/play/tests/bit_identity.rs` (live equals export on every pure fixture and p16, and 1, 2, 3, 4 and 7 threads); a 4-minute p16 render, byte for byte against `main`'s.
@@ -163,7 +163,7 @@ The existing tests that guard live edits must pass unchanged: `keep.rs`, `no_all
 - **The builder refuses** a Sampler whose code gives `zones`, a file picked by code, and the file it plays already, in words.
 - **The card**: a row under its knobs ("Drop a WAV here", the file, or "2 files: …"); the whole card takes the drop. The view's node says `sampler: {files}`.
 - **The browser suite** uses the `export` kind, to render with the command line. first-song isn't silent, so it checks that the export changes with the drop and comes back with Undo.
-- **The pictures** were taken with a copy of `app-shot.sh` whose scratch HOME is under `~/m2-runs/sab`.
+- **The pictures** were taken with a copy of `app-shot.sh` whose scratch HOME is under `$SCRATCH/sab`.
 
 ## Decisions
 
@@ -212,6 +212,6 @@ Defaults chosen here, so no one waits. The owner can change any of them.
 
 ## How every run is kept safe
 
-- Every run of music2: `HOME=/home/jerry/m2-runs/sab/home`, `M2_AUDIO=none`, `M2_MIDI=none`, `CARGO_HOME=/home/jerry/.cargo`, `RUSTUP_HOME=/home/jerry/.rustup`.
+- Every run of music2: `HOME=$SCRATCH/sab/home`, `M2_AUDIO=none`, `M2_MIDI=none`, `CARGO_HOME=/home/<user>/.cargo`, `RUSTUP_HOME=/home/<user>/.rustup`.
 - Builds in this worktree's own `target/`, with `--locked`. `main`'s copy for the spike builds under `sab/main` and is deleted after.
-- The app only on Xvfb `:95`. Long jobs through `~/m2-runs/tw`. No OS code is planned (PLAT-2); the mac lint still runs.
+- The app only on Xvfb `:95`. Long jobs through `$SCRATCH/tw`. No OS code is planned (PLAT-2); the mac lint still runs.

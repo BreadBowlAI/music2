@@ -202,7 +202,12 @@ impl Tasks {
             roots: roots.into(),
             width,
             state: (0..n)
-                .map(|_| State { waiting: AtomicU32::new(0), skip: AtomicBool::new(false), outcome: AtomicU8::new(0), ran_on: AtomicU8::new(0) })
+                .map(|_| State {
+                    waiting: AtomicU32::new(0),
+                    skip: AtomicBool::new(false),
+                    outcome: AtomicU8::new(0),
+                    ran_on: AtomicU8::new(0),
+                })
                 .collect(),
             queue: (0..n).map(|_| AtomicU32::new(EMPTY)).collect(),
             head: Padded(AtomicU32::new(0)),

@@ -3,7 +3,9 @@
 #
 # In short: run it in the repo with no arguments. It builds everything, runs every Rust test,
 # clippy, the pool's models, the web build, every browser suite, std's checks and the offline
-# renders; on a Mac it also times the gates ci/gates.txt names. First it builds the old engine
+# renders, and every check of the PR tier besides (ci/pr.sh lint: rustfmt, actionlint, licences,
+# the CI scripts' own cases; RustSec's advisories; the nightly list), so it passes only where every
+# tier would; on a Mac it also times the gates ci/gates.txt names. First it builds the old engine
 # G7f compares with (S), in a folder of its own: ~/m2-check/s-8aa301e on a Mac,
 # ~/.cache/m2-check/s-8aa301e on Linux. Then it prints a short summary to paste back. It changes
 # nothing in the repo, never opens the app on a screen you can see, never plays sound (G12 opens the
@@ -18,6 +20,25 @@
 #                                the same, with the change counted from git merge-base HEAD <rev>
 #                                instead of from main
 #   ci/check.sh --no-gates       on a Mac, without them
+#   ci/check.sh --pr             only the PR tier, exactly as CI runs it on a pull request
+#                                (ci/pr.sh's steps, one after another, each a row with its time;
+#                                below)
+#   ci/check.sh --pr --base <rev>
+#                                the same, with the change the docs rule judges counted from
+#                                git merge-base HEAD <rev> instead of from main
+#   ci/check.sh --nightly        the nightly tier as CI runs it (.github/workflows/nightly.yml):
+#                                everything but the timing gates, on any OS, the browser suites one
+#                                at a time, built without debug info into <target>/nightly
+#
+# --pr: the checks every pull request must pass, and nothing else: rustfmt, actionlint, the gates
+# and docs rules, licences, the pool's models, the web build, std's kernels and std.wasm, clippy,
+# the Rust tests and browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the
+# 12 renders; RustSec's advisories only when the change touches a Cargo.lock or deny.toml
+# (ci/pr.sh changes). When git proves your committed change is documentation only
+# (ci/docs-only.sh, on a clean tree), it runs only the docs rule's cases, as CI does. It builds into
+# <target>/pr without debug info, as CI does, so it never rebuilds what your own cargo build made.
+# It needs what ci/pr.sh needs (its top says): cargo-nextest, cargo-deny and actionlint come from
+# ci/tools.sh.
 #
 # When --gates=auto skips the gates (ci/gates-auto.sh holds the rule, ci/gates-auto-test.sh its
 # cases, which the "gates rule" row runs): only when git proves that HEAD holds, in every file they
@@ -43,20 +64,23 @@
 #                     default, when both are there: ~/Library/Audio/Plug-Ins/CLAP on a Mac,
 #                     ~/.local/share/m2-test-plugins/clap on Linux (ci/plugins.sh fills it).
 #                     Without them the check can't pass (PLAT-6): it says FAIL, even when no row
-#                     failed.
+#                     failed. With --pr, as in CI: the steps that host plugins (rust, suites) fail
+#                     without them, M2_NO_PLUGINS=1 skips those tests and the summary says PART,
+#                     and a docs-only change needs none.
 #   CARGO_TARGET_DIR  where cargo builds (default: target/ in the repo)
 #   M2_CHECK_OUT      where the logs go (default: ~/m2-check/<commit>). Only a folder an earlier
 #                     check made is ever replaced.
 #   M2_CHECK_JOBS     how many browser suites run at once (default: on Linux a quarter of the
 #                     threads, 1 to 4; on a Mac 1)
-# Exit status: 0 when every check passed, all of it judged, with the test plugins; 1 when not; 2 when
-# it couldn't start.
+# Exit status: 0 when every check passed, all of it judged, with the test plugins (--pr: when the
+# summary says PASS); 1 when not; 2 when it couldn't start.
 #
 # On a Mac, set the output to the built-in speakers at 48 kHz first (Audio MIDI Setup): G12 plays
 # there, muted, and judges that set-up.
 #
 # Needs rustup and Node 24. The first run installs Rust 1.99.0 (rust-toolchain.toml) and
-# chrome-headless-shell 133.0.6943.141. On a Mac, run it in Terminal on the Mac itself, not over
+# chrome-headless-shell 133.0.6943.141, and ci/tools.sh fetches cargo-nextest, cargo-deny and
+# actionlint into ~/.cache/m2-tools (the advisories row fetches RustSec's database). On a Mac, run it in Terminal on the Mac itself, not over
 # ssh: the app's test needs your login session. On Linux with Xvfb it also opens the desktop app
 # on an invisible screen. Written for bash 3.2, which macOS ships.
 
@@ -66,6 +90,9 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd) && cd "$ROOT" || exit 2
 GATES=
 AUTO=
 BASE=
+PR=
+NIGHTLY=
+ASKED=
 case $(uname -s) in
   Darwin)
     OS=macos
@@ -87,7 +114,7 @@ case $(uname -s) in
 esac
 while [ $# -gt 0 ]; do
   case $1 in
-    --gates) GATES=1; AUTO= ;;
+    --gates) GATES=1; AUTO=; ASKED=1 ;;
     --gates=auto) AUTO=1 ;;
     --no-gates) GATES=; AUTO= ;;
     --base)
@@ -95,13 +122,33 @@ while [ $# -gt 0 ]; do
       BASE=$2
       shift ;;
     --base=?*) BASE=${1#--base=} ;;
+    --pr) PR=1 ;;
+    --nightly) NIGHTLY=1 ;;
     *) echo "ci/check.sh: no option $1 (see the top of the script)"; exit 2 ;;
   esac
   shift
 done
-if [ -n "$BASE" ] && [ -z "$AUTO" ]; then echo "ci/check.sh: --base goes with --gates=auto"; exit 2; fi
+if [ -n "$BASE" ] && [ -z "$AUTO$PR" ]; then echo "ci/check.sh: --base goes with --gates=auto or --pr"; exit 2; fi
+if [ -n "$PR" ] && [ -n "$NIGHTLY" ]; then echo "ci/check.sh: --pr or --nightly, not both"; exit 2; fi
+# --nightly: never the gates (a shared CI machine can't judge them, PLAT-1), the suites one at a
+# time (that finds races running several at once hides), and the build CI's disk holds.
+if [ -n "$NIGHTLY" ]; then
+  if [ -n "$AUTO$ASKED" ]; then echo "ci/check.sh: --nightly runs no gates"; exit 2; fi
+  GATES=
+  export CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
+  export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}/nightly
+  case $CARGO_TARGET_DIR in /*) ;; *) CARGO_TARGET_DIR=$ROOT/$CARGO_TARGET_DIR ;; esac
+fi
+if [ -n "$PR" ] && [ -n "$AUTO$ASKED" ]; then echo "ci/check.sh: --pr runs no gates"; exit 2; fi
+# --pr --base <rev>: the change the docs rule judges starts at git merge-base HEAD <rev>.
+PRBASE=
+if [ -n "$PR" ]; then PRBASE=$BASE; BASE=; fi
+# The summary's first line says which tier ran, when it isn't the full check.
+MODE=
+if [ -n "$PR" ]; then MODE=--pr; GATES=; elif [ -n "$NIGHTLY" ]; then MODE=--nightly; fi
 JOBS=${M2_CHECK_JOBS:-$JOBS}
 case $JOBS in ''|0*|*[!0-9]*) echo "ci/check.sh: M2_CHECK_JOBS must be a whole number, 1 or more"; exit 2 ;; esac
+if [ -n "$NIGHTLY" ]; then JOBS=1; fi
 if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
 SHA=$(git rev-parse --short=12 HEAD) || exit 2
 OUT=${M2_CHECK_OUT:-$HOME/m2-check/$SHA}
@@ -245,9 +292,15 @@ summary() {
   total=$(wc -l < "$OUT/results" | tr -d ' ')
   mins=$(( ($(date +%s) - START + 59) / 60 ))
   if [ -s "$SCR/before" ]; then state="with local changes"; else state=clean; fi
+  # --pr: the steps themselves say whether the test plugins were there (CI's jobs have them; a
+  # docs-only change needs none). A step without them fails, unless M2_NO_PLUGINS skipped them.
+  noplugins=
+  if [ -n "$PR" ]; then noplugins=$(grep -lE '^plugins +SKIP ' "$OUT"/pr-*.log 2> /dev/null | sed 's/.*pr-//; s/\.log$//' | tr '\n' ' ' | sed 's/ $//; s/ /, /g'); fi
   if [ "$fails" -gt 0 ]; then
     verdict="FAIL ($fails of $total checks)"
-  elif [ -z "$TESTPLUGINS" ]; then
+  elif [ -n "$PR" ] && [ -n "$noplugins" ]; then
+    verdict="PART: no row failed, but M2_NO_PLUGINS left out the tests that host plugins ($noplugins), so it isn't all CI runs"
+  elif [ -z "$PR" ] && [ -z "$TESTPLUGINS" ]; then
     verdict="FAIL: no row failed, but the test plugins weren't there, so it isn't a pass (PLAT-6)"
   elif [ -n "$partial" ]; then
     verdict="PART: no row failed, but the $partial row wasn't judged in full, so it isn't a pass: see that row"
@@ -263,7 +316,7 @@ summary() {
   (cd "$OUT" && tar -czf "$OUT.tgz" $(find . -maxdepth 2 -type f \( -name '*.log' -o -name '*.sum' -o -name results -o -name failed -o -name flaky \))) 2> /dev/null
   {
     echo
-    echo "music2 check: $verdict"
+    echo "music2 check${MODE:+ $MODE}: $verdict"
     echo "commit   $SHA on $(git rev-parse --abbrev-ref HEAD) ($state)"
     echo "machine  $MACHINE"
     echo "tools    $(rustc -V 2> /dev/null | cut -d' ' -f1-2), node $(node -v 2> /dev/null), $mins min"
@@ -311,7 +364,8 @@ trap stopped INT TERM
 
 echo "music2 check of $SHA on $MACHINE (logs in $OUT)"
 git status --porcelain > "$SCR/before"
-if [ -z "$TESTPLUGINS" ]; then
+# (--pr: the steps that need them say so, in their own rows.)
+if [ -z "$TESTPLUGINS" ] && [ -z "$PR" ]; then
   echo "plugins: Surge XT.clap and Airwindows Consolidated.clap aren't both in ${CLAP_PATH:-$PLUGINS} (on Linux, ci/plugins.sh installs them)" >> "$OUT/failed"
 fi
 
@@ -324,6 +378,67 @@ for d in /Library/Audio/Plug-Ins/CLAP /usr/lib/clap; do
     exit 2
   fi
 done
+
+# pr <row> <usual time> <ci/pr.sh arguments...>: one step of ci/pr.sh as one row (--pr runs the PR
+# tier this way; the full check its lint and advisories steps). A step that failed has its FAIL
+# lines (and the tail of its logs) in "what failed"; each step's output is pr-<step>.log, and its
+# own logs are in pr-<step>/.
+pr() {
+  row=$1 usual=$2
+  shift 2
+  begin "$row" "$usual"
+  log=$OUT/pr-$1.log
+  M2_PR_OUT=$OUT/pr-$1 M2_PR_JOBS=$JOBS ci/pr.sh "$@" > "$log" 2>&1 < /dev/null
+  st=$?
+  said=$(grep -E '^ci/pr.sh .*: (PASS|FAIL) in ' "$log" | tail -1 | sed -E 's/^ci\/pr.sh [^:]*: (PASS|FAIL) in //; s/ \(logs in .*$//')
+  # What passed only when run again: nextest's FLAKY tests, and suites that passed alone.
+  {
+    grep -E '^ +FLAKY ' "$log" | sed -E 's/^ +FLAKY [^]]*\] (\([^)]*\) )?/test /' | sort -u
+    grep -E 'passed only on a retry alone: ' "$log" | sed 's/.*retry alone: //; s/: see .*//' | tr ',' '\n' | sed 's/^ */suite /'
+  } >> "$OUT/flaky"
+  if [ $st -eq 0 ]; then
+    record "$row" PASS "${said:-done}"
+  else
+    record "$row" FAIL "${said:+after $said: }see pr-$1.log"
+    # The step's FAIL rows, then each Rust test and suite that failed. A test: nextest's list
+    # after its last Summary line, where each one's last try is (FAIL, TIMEOUT, or the signal
+    # that ended its process: "TRY 2 SEGV"); not the tries before (a FLAKY test failed one).
+    {
+      grep -E '^[a-z][a-zA-Z0-9. -]* +FAIL  ' "$log" | sed "s/^/$1: /"
+      awk '/^ *Summary \[/ { n = NR } { l[NR] = $0 } END { for (i = n; n && i <= NR; i++) print l[i] }' "$log" | grep -E '^ +(TRY [0-9]+ )?(FAIL|TIMEOUT|ABORT|SIG[A-Z]+|SEGV|ABRT|BUS|ILL|FPE|KILL|TRAP|SYS) \[' |
+        sed -E 's/^ +(TRY [0-9]+ )?[A-Z]+ \[[^]]*\] (\([^)]*\) )?/test /' | sort -u
+      grep -E '^  failed: ' "$OUT/pr-$1/e2e.log" 2> /dev/null | sed -E 's/^  failed: ([^ ]+).*/suite \1/'
+    } | cut -c1-160 >> "$OUT/failed"
+    if ! grep -qE ' +FAIL  ' "$log"; then echo "$1: $(tail -1 "$log" | cut -c1-140)" >> "$OUT/failed"; fi
+  fi
+}
+# --pr: the PR tier, as CI runs it: ci/pr.sh's steps, each a row with its time, then the summary.
+if [ -n "$PR" ]; then
+  begin changes "seconds"
+  if ci/pr.sh changes ${PRBASE:+"$PRBASE"} > "$OUT/pr-changes.log" 2>&1 && grep -q '^docs_only=true$' "$OUT/pr-changes.log"; then
+    record changes PASS "$(head -1 "$OUT/pr-changes.log" | sed 's/^docs  //'): CI runs only the docs job"
+    pr "docs" "seconds" docs
+  else
+    record changes PASS "$(head -1 "$OUT/pr-changes.log" | sed -E 's/^(full|docs)  //' | cut -c1-120): the whole PR tier runs"
+    pr "pr quick" "2 min" quick
+    # RustSec's advisories, as CI: only when the change touches a Cargo.lock or deny.toml.
+    if grep -q '^deps=true$' "$OUT/pr-changes.log"; then pr "pr advisories" "seconds" advisories; fi
+    pr "pr clippy" "1 min; 4 the first time" clippy
+    pr "pr rust" "6 min; 12 the first time" rust 1/1
+    pr "pr suites" "4 min" suites 1/1
+    pr "pr renders" "seconds" renders
+  fi
+  begin "repo unchanged" "seconds"
+  git status --porcelain > "$SCR/after"
+  if cmp -s "$SCR/before" "$SCR/after"; then
+    record "repo unchanged" PASS ""
+  else
+    record "repo unchanged" FAIL "$(diff "$SCR/before" "$SCR/after" | grep -c '^[<>]') entries changed: run git status"
+  fi
+  trap '' INT TERM
+  summary
+  case $verdict in PASS*) exit 0 ;; *) exit 1 ;; esac
+fi
 
 # 0b. The rule --gates=auto follows (ci/gates-auto.sh), tried on its table of cases in scratch git
 #     repos (ci/gates-auto-test.sh). On Linux, when they pass, the rule is loaded (RULE), and
@@ -387,6 +502,13 @@ if grep -q '^rustc 1\.99\.0 ' "$OUT/toolchain.log"; then
 else
   record toolchain FAIL "not Rust 1.99.0: see toolchain.log"
 fi
+
+# 1b. The PR tier's checks that build nothing (ci/pr.sh lint: rustfmt, actionlint, licences, and the
+#     cases of the docs rule, of the PR tier's verdicts and of ci/nightly.sh), then RustSec's
+#     advisories (ci/pr.sh advisories: they fetch RustSec's database, so their answer changes with
+#     the date). Their tools come from ci/tools.sh; when it can't get one, the row says FAIL and why.
+pr lint "1 min" lint
+pr advisories "seconds" advisories
 
 # 2. The web UI: the desktop app embeds it, and the browser suites load it.
 begin "web build" "1 min"
@@ -544,6 +666,25 @@ else
   record "rust tests" FAIL "$counts: see test.log"
   failures "" "$OUT/test.log" >> "$OUT/failed"
   { first "$OUT/test.log" '^error' | sed 's/^/tests: /'; cause "$OUT/test.log"; } >> "$OUT/failed"
+fi
+
+# 5b. Linux: every line of ci/nightly-tests.txt names a test that is there (ci/nightly-list.sh, as
+#     ci/pr.sh rust's row of the same name), so a renamed test can't slip back into the PR tier
+#     unseen (some names are Linux's own modules). nextest lists the test binaries step 5 built.
+if [ $OS = linux ]; then
+  begin "nightly list" "seconds"
+  if ! p=$(ci/tools.sh nextest 2> "$OUT/tools.log" | tail -1) || [ -z "$p" ]; then
+    record "nightly list" FAIL "ci/tools.sh couldn't get cargo-nextest: see tools.log"
+    echo "nightly list: $(tail -1 "$OUT/tools.log" | cut -c1-140)" >> "$OUT/failed"
+  else
+    PATH=$p:$PATH
+    if . ci/nightly-list.sh && quiet nightly-list.log nightly_list "$OUT"; then
+      record "nightly list" PASS "$(head -1 "$OUT/nightly-list.log")"
+    else
+      record "nightly list" FAIL "see nightly-list.log"
+      grep '^[<>]' "$OUT/nightly-list.log" | sed 's/^/nightly list: /' | cut -c1-160 >> "$OUT/failed"
+    fi
+  fi
 fi
 
 # 6. Clippy, every warning an error.

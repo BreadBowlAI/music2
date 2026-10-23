@@ -52,7 +52,11 @@ fn clip(rng: &mut Rng, kind: &LaneKind) -> String {
     }
     f.push(("start", rng.pick(&NUMBERS).into()));
     f.push(("length", rng.pick(&["4", "1", "0.25", "0", "-1", "16"]).into()));
-    let shape = if rng.one_in(10) { [LaneKind::Notes, LaneKind::Control { unit: None }, LaneKind::Audio][rng.below(3)].clone() } else { kind.clone() };
+    let shape = if rng.one_in(10) {
+        [LaneKind::Notes, LaneKind::Control { unit: None }, LaneKind::Audio][rng.below(3)].clone()
+    } else {
+        kind.clone()
+    };
     match shape {
         LaneKind::Notes => {
             let notes: Vec<String> = (0..rng.below(5)).map(|_| note(rng)).collect();

@@ -99,7 +99,8 @@ fn a_streamed_lane_is_the_rendered_lane() {
     let assets = resample().join("assets");
     let len = (tempo.seconds_at(clips.iter().map(|c| c.start + c.length).fold(0.0, f64::max)) * SR) as usize + 1000;
     for channels in [2, 1] {
-        let lane = AudioLane::build_with(&clips, &|a| Some(assets.join(a)), &mut Cache::default(), &tempo, SR, channels, Some(&stretch())).unwrap();
+        let lane = AudioLane::build_with(&clips, &|a| Some(assets.join(a)), &mut Cache::default(), &tempo, SR, channels, Some(&stretch()))
+            .unwrap();
         assert!(!lane.resident(), "the lane streams: more chunks than slots");
         let (want, got) = (rendered(&clips, &assets, &tempo, channels, len), streamed(&lane, channels, len));
         for c in 0..channels {
@@ -222,13 +223,19 @@ fn a_warped_render_holds_neither_file_whole() {
     let mut cache = Cache::with_renders_in(Some(dir.join("renders")));
     let k = stretch();
     reads();
-    let (lane, most) = super::alloc_count::largest(|| AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut cache, &tempo, SR, 2, Some(&k)).unwrap());
+    let (lane, most) = super::alloc_count::largest(|| {
+        AudioLane::build_with(&[clip], &|a| Some(dir.join(a)), &mut cache, &tempo, SR, 2, Some(&k)).unwrap()
+    });
     let (largest, n) = reads();
     let render = 25 * SR as usize * 2 * 4;
     assert_eq!(cache.work().1, 1, "one render made");
     assert!(most < 1 << 20, "a block of {most} bytes taken while the source is {file} bytes and its render {render}");
-    assert!(largest <= READ && n * largest >= file && n * largest < 2 * file, "{n} reads of up to {largest} bytes read the source about once");
-    let rendered = std::fs::read_dir(dir.join("renders")).unwrap().map(|e| e.unwrap().metadata().unwrap().len() as usize).collect::<Vec<_>>();
+    assert!(
+        largest <= READ && n * largest >= file && n * largest < 2 * file,
+        "{n} reads of up to {largest} bytes read the source about once"
+    );
+    let rendered =
+        std::fs::read_dir(dir.join("renders")).unwrap().map(|e| e.unwrap().metadata().unwrap().len() as usize).collect::<Vec<_>>();
     assert_eq!(rendered, [render], "its render is in the cache folder, whole");
     lane.ensure(10 * SR as u64, 4096, &[]);
     let mut buf = vec![0.0f32; 2 * 4096];
@@ -345,14 +352,18 @@ fn a_lane_plays_its_render_as_it_is_made() {
                     lane.fill(&mut out, chunk, 0, k * chunk as u64, chunk);
                     for ch in 0..2 {
                         let from = k as usize * chunk;
-                        let first = (0..chunk).find(|&i| out[ch * chunk + i].to_bits() != want[ch].get(from + i).copied().unwrap_or(0.0).to_bits());
+                        let first =
+                            (0..chunk).find(|&i| out[ch * chunk + i].to_bits() != want[ch].get(from + i).copied().unwrap_or(0.0).to_bits());
                         assert_eq!(first, None, "{reverse}: chunk {k} filled with {made} frames made is the offline render's");
                     }
                 }
             }
             filled.push(ready);
         }
-        assert!(filled.windows(2).all(|w| w[0] <= w[1]) && filled[0] < filled[2] && filled[2] < filled[4], "{reverse}: chunks fill as it is made: {filled:?}");
+        assert!(
+            filled.windows(2).all(|w| w[0] <= w[1]) && filled[0] < filled[2] && filled[2] < filled[4],
+            "{reverse}: chunks fill as it is made: {filled:?}"
+        );
         assert_eq!(streamed(&lane, 2, len), want, "{reverse}: the whole lane is the offline render");
         drop((lane, cache));
         std::fs::remove_dir_all(&dir).ok();
@@ -398,7 +409,10 @@ fn a_render_whose_disk_fills_goes_on_in_memory() {
 fn an_export_of_a_streamed_file_cut_short_fails_naming_it() {
     use crate::fault::{Code, Failed, Subject};
     // Six seconds: more chunks than a lane's slots, so it is read as it plays.
-    let (ir, tl, dir) = super::audio_song(&[("long.wav", vec![super::sine(220.0, 6.0, SR as u32); 2], SR as u32)], serde_json::json!([{"start": 0, "length": 12, "asset": "long.wav"}]));
+    let (ir, tl, dir) = super::audio_song(
+        &[("long.wav", vec![super::sine(220.0, 6.0, SR as u32); 2], SR as u32)],
+        serde_json::json!([{"start": 0, "length": 12, "asset": "long.wav"}]),
+    );
     let pk = super::std_packages();
     let flat = super::check(&ir, &pk).unwrap();
     let mut r = crate::Renderer::new(&flat, &tl, &pk, SR as u32).unwrap();

@@ -5,7 +5,7 @@
 ## How to read this
 
 - **MUST**, **MUST NOT**, **SHOULD** and **MAY** mean what they mean in RFC 2119. A SHOULD may be broken only with the reason written next to the code that breaks it.
-- Every rule has an id, such as `RENDER-8`. A test that checks a rule names the id in a comment. A change that breaks a rule changes this page first, in the same commit. A rule inserted after adoption gets a letter suffix (`RENDER-6a`); one added at the end of its section takes the next number. Ids already cited never move.
+- Every rule has an id, such as `RENDER-8`. A test that checks a rule names the id in a comment. A change that breaks a rule changes this page first: in the same pull request as the code, in a commit ahead of it. A rule inserted after adoption gets a letter suffix (`RENDER-6a`); one added at the end of its section takes the next number. Ids already cited never move.
 - **Why** gives the reason in one line. **Today** says where the code differs, or that it already matches. File and line pointers are to commit `92a19a3`. Step 1's code is named by file only, since it lands after that commit.
 - "Step n" means a step in the [order of work](#order-of-work).
 

@@ -60,7 +60,10 @@ fn a_clip_gesture_takes_the_data_path() {
 fn the_timeline_carries_each_clips_sha_and_a_stale_one_is_refused() {
     let fixture = Fixture::new();
     fixture.write(KICK);
-    fixture.put("data/kick/hits.json", "{\"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"notes\": []}, {\"start\": 4, \"length\": 4, \"notes\": []}]}\n");
+    fixture.put(
+        "data/kick/hits.json",
+        "{\"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"notes\": []}, {\"start\": 4, \"length\": 4, \"notes\": []}]}\n",
+    );
     let graph = fixture.open();
     let token = session(&graph);
     let clips = |graph: &Graph| graph.state().unwrap()["timeline"]["tracks"][0]["lanes"][0]["clips"].clone();

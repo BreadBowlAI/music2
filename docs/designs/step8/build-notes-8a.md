@@ -1,8 +1,8 @@
 # 8a: build notes
 
 What each slice of 8a did, what it measured, and where the logs are. The offline half's plan is `8a-plan.md`
-beside this file (written as `~/m2-runs/s8a/plan.md`); the live half's is `8a-live-plan.md` (written as
-`~/m2-runs/s8a/plan-live.md`). Each
+beside this file (written as `$SCRATCH/s8a/plan.md`); the live half's is `8a-live-plan.md` (written as
+`$SCRATCH/s8a/plan-live.md`). Each
 plan's Attack and Decisions win. The design is `design-8a.md`. Linux timings here are information only: only the
 owner's Mac judges timings (PLAT-1).
 
@@ -48,11 +48,11 @@ owner's Mac judges timings (PLAT-1).
 
 | What | Where |
 |---|---|
-| Base | `main` at `d7207d2`, branch `8a-spike`, worktree `~/m2-runs/wt/8a-spike`. So the numbers are on the base the plan's Decision 1 asks for: 8b.3's gain on every mixer channel is in |
-| Target | `/home/jerry/m2-runs/8a-scratch/spike-target`, `m2-gates` in release |
-| Code (kept for reference, never merged) | `~/m2-runs/s8a/spike/spike.diff`: `core/runtime/src/spike.rs`, `crates/gates/src/spike.rs`, `m2-gates spike` |
-| How every run was started | `~/m2-runs/s8a/spike/run.sh` (one step a log) |
-| Logs | `~/m2-runs/s8a/spike/<step>-<time>.log` |
+| Base | `main` at `d7207d2`, branch `8a-spike`, worktree `$SCRATCH/wt/8a-spike`. So the numbers are on the base the plan's Decision 1 asks for: 8b.3's gain on every mixer channel is in |
+| Target | `$SCRATCH/8a-scratch/spike-target`, `m2-gates` in release |
+| Code (kept for reference, never merged) | `$SCRATCH/s8a/spike/spike.diff`: `core/runtime/src/spike.rs`, `crates/gates/src/spike.rs`, `m2-gates spike` |
+| How every run was started | `$SCRATCH/s8a/spike/run.sh` (one step a log) |
+| Logs | `$SCRATCH/s8a/spike/<step>-<time>.log` |
 | Afterwards | the worktree, its target and the branch deleted |
 
 The spike, in short:
@@ -243,7 +243,7 @@ above back to back; Linux says it likely will be.
 
 ### Logs
 
-All in `~/m2-runs/s8a/spike/`, with `run.sh` (each step's command) and `spike.diff` (the code).
+All in `$SCRATCH/s8a/spike/`, with `run.sh` (each step's command) and `spike.diff` (the code).
 
 | Step | Logs (time started, 2026-10-17) |
 |---|---|
@@ -385,10 +385,10 @@ Load (1 minute) 1.9 when timed.
 
 | What | Where |
 |---|---|
-| The mutants: each one's change (`.diff`), its run (`.log`), `results.txt`, `run.sh`, `mutate.py` | `~/m2-runs/s8a/mutants/` |
-| The first run of M1 to M5, against the models at 2,000 cases (same verdicts) | `~/m2-runs/s8a/mutants/models-draft-2000-cases/` |
-| Debug build; renders, `no_alloc`, tests and lints | `~/m2-runs/logs/8a-s1-build-1017-114455-2806073.log`, `8a-s1-checks-1017-120750-2997791.log` |
-| The mutant runs | `~/m2-runs/logs/8a-s1-mutants-1017-120427-2972920.log`, `8a-s1-mutants2-1017-120957-3012654.log`, `8a-s1-m3x3-1017-121122-3020767.log` |
+| The mutants: each one's change (`.diff`), its run (`.log`), `results.txt`, `run.sh`, `mutate.py` | `$SCRATCH/s8a/mutants/` |
+| The first run of M1 to M5, against the models at 2,000 cases (same verdicts) | `$SCRATCH/s8a/mutants/models-draft-2000-cases/` |
+| Debug build; renders, `no_alloc`, tests and lints | `$SCRATCH/logs/8a-s1-build-1017-114455-2806073.log`, `8a-s1-checks-1017-120750-2997791.log` |
+| The mutant runs | `$SCRATCH/logs/8a-s1-mutants-1017-120427-2972920.log`, `8a-s1-mutants2-1017-120957-3012654.log`, `8a-s1-m3x3-1017-121122-3020767.log` |
 
 ### For slice 2
 
@@ -498,7 +498,7 @@ Known limits, for slice 3 (Decision 41 and the spike):
 ### Tests
 
 Every test below was shown red once by a small deliberate bug (a mutant), its change and run kept in
-`~/m2-runs/s8a/s2-red/` (`<name>.diff`, `<name>.log`; `mutate.py` puts the file back afterwards).
+`$SCRATCH/s8a/s2-red/` (`<name>.diff`, `<name>.log`; `mutate.py` puts the file back afterwards).
 
 | Test | Where | Proves | Red by |
 |---|---|---|---|
@@ -608,12 +608,12 @@ same bits, 28.6 s.
 
 | What | Where |
 |---|---|
-| The red runs: each mutant's change and run | `~/m2-runs/s8a/s2-red/` (`<name>.diff`, `<name>.log`, `mutate.py`) |
-| Each commit's check (renders, tests, clippy, the Mac lint) | `~/m2-runs/logs/8a-s2-c{2,3,4,5,6}-1017-*.log`; the script `~/m2-runs/s8a/s2-check.sh` |
-| The gate's first run (p16, a short sweep) | `~/m2-runs/logs/8a-gate-smoke-1017-133112-3616369.log` |
-| The gate, held on CCD1 and not held | `~/m2-runs/logs/8a-offline-ccd1-1017-141710-3902468.log`, `8a-offline-free-1017-142032-3918668.log` (copies in `~/m2-runs/s8a/s2-gate/`) |
-| p50 on 8 threads | `~/m2-runs/logs/8a-p50-bits-1017-142400-3935706.log` |
-| The last check | `~/m2-runs/logs/check-8a-1017-134212-3696229.log`; its logs `~/m2-runs/check-8a-33885a6.tgz` |
+| The red runs: each mutant's change and run | `$SCRATCH/s8a/s2-red/` (`<name>.diff`, `<name>.log`, `mutate.py`) |
+| Each commit's check (renders, tests, clippy, the Mac lint) | `$SCRATCH/logs/8a-s2-c{2,3,4,5,6}-1017-*.log`; the script `$SCRATCH/s8a/s2-check.sh` |
+| The gate's first run (p16, a short sweep) | `$SCRATCH/logs/8a-gate-smoke-1017-133112-3616369.log` |
+| The gate, held on CCD1 and not held | `$SCRATCH/logs/8a-offline-ccd1-1017-141710-3902468.log`, `8a-offline-free-1017-142032-3918668.log` (copies in `$SCRATCH/s8a/s2-gate/`) |
+| p50 on 8 threads | `$SCRATCH/logs/8a-p50-bits-1017-142400-3935706.log` |
+| The last check | `$SCRATCH/logs/check-8a-1017-134212-3696229.log`; its logs `$SCRATCH/check-8a-33885a6.tgz` |
 
 ### For the lead
 
@@ -627,7 +627,7 @@ same bits, 28.6 s.
 - **`pl-mix`** (polish's suite) failed once and passed on its retry: "its strip meter still reads as the header's:
   before the fader", all ten samples at the floor. Its check needs one of ten samples, 150 ms apart, above −24 dB
   on first-song's hats, which are short hits: in polish's own checks most samples read the floor too
-  (`~/m2-runs/check-polish-2`, `-3`). A suite to make sturdier, not an 8a change.
+  (`$SCRATCH/check-polish-2`, `-3`). A suite to make sturdier, not an 8a change.
 
 ## The review
 
@@ -659,23 +659,23 @@ same bits, 28.6 s.
 | alone-over-64-falls-to-one | `m2_threads_is_read_and_nonsense_refused` (`crates/editor/src/render.rs`), now with 72 cores behind one cache | 72 and 80 threads, which `Pool::new` refuses | 64 and 64 |
 | G10 | `m2-gates --rig engine --quick range`, the debug build, before and after in turns | 2 of 8 runs failed on the server at load 6 to 22 (bar 64: 1.70 s against 0.95). Pinned to CPU 31 beside bursts of a busy loop there (0.3 to 1.5 s on, then off): 5 of 10 failed, then 2 of 10 | quiet: 10 of 10. Beside the same bursts: 10 of 10, bar 64 within 2% of bar 1 (0.81 to 0.87 s each). The best of three by the wall clock alone wasn't enough: 4 of 10 failed beside the bursts |
 
-Each commit's own check (`~/m2-runs/s8a/s2-check.sh`: the debug `m2`, 10 of 10 renders, the crates' tests, clippy
+Each commit's own check (`$SCRATCH/s8a/s2-check.sh`: the debug `m2`, 10 of 10 renders, the crates' tests, clippy
 on Linux and for the Mac) passed before it was made.
 
 ### Logs
 
 | What | Where |
 |---|---|
-| det-2: the test, its red runs (`det2.py`), the commit's check | `~/m2-runs/logs/8a-r1-det2-*.log`, `8a-r1-det2-red-*.log`, `8a-r1-det2-check-*.log` |
-| The model: M2 before and after, the other mutants (`run.sh`, a copy of slice 1's) | `~/m2-runs/s8a/review-red/` (`M2-before1..3.log`, `M2-after1..5.log`, `M1-after.log`, `M3-after.log`, `M4-after.log`, `results.txt`); `~/m2-runs/logs/8a-r2-*.log` |
-| The bounce: red and green (`bounce.py`), the commit's check | `~/m2-runs/logs/8a-r3-*.log` |
-| The thread count: red and green (`count.py`), the commit's check | `~/m2-runs/logs/8a-r4-*.log` |
-| G10: before and after, quiet and beside bursts; the commit's check | `~/m2-runs/logs/8a-g10-*.log`, `8a-r5-g10-check-*.log` |
-| The first final check (G10 passed only on its retry) | `~/m2-runs/logs/check-8a-fg-1017-151507-229683.log`; its logs `~/m2-runs/check-8a-fg-run1.tgz` |
+| det-2: the test, its red runs (`det2.py`), the commit's check | `$SCRATCH/logs/8a-r1-det2-*.log`, `8a-r1-det2-red-*.log`, `8a-r1-det2-check-*.log` |
+| The model: M2 before and after, the other mutants (`run.sh`, a copy of slice 1's) | `$SCRATCH/s8a/review-red/` (`M2-before1..3.log`, `M2-after1..5.log`, `M1-after.log`, `M3-after.log`, `M4-after.log`, `results.txt`); `$SCRATCH/logs/8a-r2-*.log` |
+| The bounce: red and green (`bounce.py`), the commit's check | `$SCRATCH/logs/8a-r3-*.log` |
+| The thread count: red and green (`count.py`), the commit's check | `$SCRATCH/logs/8a-r4-*.log` |
+| G10: before and after, quiet and beside bursts; the commit's check | `$SCRATCH/logs/8a-g10-*.log`, `8a-r5-g10-check-*.log` |
+| The first final check (G10 passed only on its retry) | `$SCRATCH/logs/check-8a-fg-1017-151507-229683.log`; its logs `$SCRATCH/check-8a-fg-run1.tgz` |
 
 ## The final check
 
-`ci/check.sh --gates` from `~/m2-runs/wt/8a` at `bc41693`, with `M2_CHECK_OUT=~/m2-runs/check-8a-fg`, 33 minutes,
+`ci/check.sh --gates` from `$SCRATCH/wt/8a` at `bc41693`, with `M2_CHECK_OUT=$SCRATCH/check-8a-fg`, 33 minutes,
 load 4.0 at the start and 1.9 at the end: **PASS, every row, nothing passed only on a retry.** `main` (`70f9b61`) was
 already merged in (`f0dc7ab`): it hasn't moved since.
 
@@ -700,9 +700,9 @@ length from bar 1: 1.19 s against 0.85 s". That is the fifth fix above (`bc41693
 
 | What | Where |
 |---|---|
-| The final check | `~/m2-runs/logs/check-8a-fg-1017-161554-749344.log`; its logs `~/m2-runs/check-8a-fg/` (`check-8a-fg.tgz` beside it) |
-| The first one | `~/m2-runs/logs/check-8a-fg-1017-151507-229683.log`; its logs `~/m2-runs/check-8a-fg-run1.tgz` |
-| The check before the review, at `33885a6` (every row; polish's `pl-mix` passed on its retry) | `~/m2-runs/logs/check-8a-1017-134212-3696229.log`; its logs `~/m2-runs/check-8a-33885a6.tgz` |
+| The final check | `$SCRATCH/logs/check-8a-fg-1017-161554-749344.log`; its logs `$SCRATCH/check-8a-fg/` (`check-8a-fg.tgz` beside it) |
+| The first one | `$SCRATCH/logs/check-8a-fg-1017-151507-229683.log`; its logs `$SCRATCH/check-8a-fg-run1.tgz` |
+| The check before the review, at `33885a6` (every row; polish's `pl-mix` passed on its retry) | `$SCRATCH/logs/check-8a-1017-134212-3696229.log`; its logs `$SCRATCH/check-8a-33885a6.tgz` |
 
 ## R1: a mixer strip runs with its track
 
@@ -773,11 +773,11 @@ R1, and R1 then the base. µs a block; the load is the 1-minute one as each run 
 
 | Log | |
 |---|---|
-| Base alone | `~/m2-runs/logs/8a-r1-before-1017-175736-1430602.log` |
-| Pair 1 | `~/m2-runs/logs/8a-r1-pair-1017-180852-1511403.log` |
-| Pair 2 | `~/m2-runs/logs/8a-r1-pair2-1017-194502-2191968.log` |
-| The commit's check | `~/m2-runs/logs/8a-s3-r1-check-1017-180442-1482167.log` |
-| Red runs | `~/m2-runs/s8a/s3-red/r1-*.diff`, `.log` |
+| Base alone | `$SCRATCH/logs/8a-r1-before-1017-175736-1430602.log` |
+| Pair 1 | `$SCRATCH/logs/8a-r1-pair-1017-180852-1511403.log` |
+| Pair 2 | `$SCRATCH/logs/8a-r1-pair2-1017-194502-2191968.log` |
+| The commit's check | `$SCRATCH/logs/8a-s3-r1-check-1017-180442-1482167.log` |
+| Red runs | `$SCRATCH/s8a/s3-red/r1-*.diff`, `.log` |
 
 ## Slice 3: live playback on engine threads
 
@@ -859,7 +859,7 @@ How a live block runs now:
 
 ### Tests
 
-Each shown red once by a small deliberate bug (`~/m2-runs/s8a/s3-red/<name>.diff` and `.log`, made by
+Each shown red once by a small deliberate bug (`$SCRATCH/s8a/s3-red/<name>.diff` and `.log`, made by
 `mutate.py`, which puts the file back). No test has a time bound: each waits on counters under a 60 s watchdog.
 
 | Test | Where | Proves | Red by |
@@ -904,7 +904,7 @@ model 3.5 s), still under the check row's "10 s".
 
 **20 rounds, none failed**, 19:18 to 19:45, while other tracks built and tested: the 1-minute load went from
 2.3 to 52 (round 11) and back to 4.7. Copies of the debug test binaries at `ab41e57`, so the worktree could
-build meanwhile (`~/m2-runs/s8a/s3-repeat/run.sh`; the copies, 1.7 GB, deleted after). Each round ran 26 tests:
+build meanwhile (`$SCRATCH/s8a/s3-repeat/run.sh`; the copies, 1.7 GB, deleted after). Each round ran 26 tests:
 
 | Binary | Tests each round | Time each round |
 |---|---|---|
@@ -914,11 +914,11 @@ build meanwhile (`~/m2-runs/s8a/s3-repeat/run.sh`; the copies, 1.7 GB, deleted a
 | the runtime's `tests::parts` | all 15 (R1's among them) | about 2.4 s |
 
 That is 520 test runs, each comparing bits on 1 and N threads, or checking a worker, with no failure. Log:
-`~/m2-runs/logs/8a-s3-repeat-1017-191814-1978988.log`.
+`$SCRATCH/logs/8a-s3-repeat-1017-191814-1978988.log`.
 
 ### Checks
 
-- Each commit's check (`~/m2-runs/s8a/s2-check.sh`): the debug `m2`, 10 of 10 renders against
+- Each commit's check (`$SCRATCH/s8a/s2-check.sh`): the debug `m2`, 10 of 10 renders against
   `e2e/renders.sha256`, the touched crates' tests, workspace clippy and the Mac lint (`--target
   aarch64-apple-darwin`), rustfmt on new files. All green.
 - The merge of `next` checked alone (`m2-os`, `m2-pool`, `m2-runtime`, `m2-play`): green.
@@ -928,14 +928,14 @@ That is 520 test runs, each comparing bits on 1 and N threads, or checking a wor
 
 | What | Log |
 |---|---|
-| R1 | `~/m2-runs/logs/8a-s3-r1-check-1017-180442-1482167.log` |
+| R1 | `$SCRATCH/logs/8a-s3-r1-check-1017-180442-1482167.log` |
 | m2-os | `8a-s3-c3-check-1017-182007-1597241.log` |
 | the pool (and its models) | `8a-s3-c4-check-1017-182818-1663680.log` |
 | the merge of `next` | `8a-s3-merge-check2-1017-183509-1723714.log` (the first, `8a-s3-merge-check-…`, failed on a draft file of mine left beside it, not on the merge) |
 | the player | `8a-s3-c5-check2-1017-190806-1915032.log` (its Mac lint failed on `u64::from` of a `u64`; fixed, both lints and fmt run again green) |
 | the device | `8a-s3-c6-check-1017-191420-1955995.log` |
 | the trap on workers | `8a-s3-trap-check-1017-195235-2246146.log` |
-| the red runs | `~/m2-runs/s8a/s3-red/`; commit 5's in one run: `8a-s3-red5-1017-185720-1842344.log` |
+| the red runs | `$SCRATCH/s8a/s3-red/`; commit 5's in one run: `8a-s3-red5-1017-185720-1842344.log` |
 
 ### For the lead
 
@@ -954,7 +954,7 @@ That is 520 test runs, each comparing bits on 1 and N threads, or checking a wor
 decided when slice 3 was written.
 
 ```sh
-cd ~/dev/suite2/music2 && git fetch && git switch main && git pull
+cd <repo> && git fetch && git switch main && git pull
 cargo test --locked --release -p m2-pool --features models 2>&1 | tail -5 | tee ~/m2-8a.txt
 cargo test --locked -p m2-os rt 2>&1 | grep -E '^test |test result' | tee -a ~/m2-8a.txt
 sysctl hw.model hw.perflevel0 hw.perflevel1 | tee -a ~/m2-8a.txt
@@ -1047,7 +1047,7 @@ How a live run goes:
 
 ### Tests
 
-Each shown red once by a small deliberate bug (`~/m2-runs/s8a/s4-red/<name>.diff` and `.log`, made by `mutate.py`,
+Each shown red once by a small deliberate bug (`$SCRATCH/s8a/s4-red/<name>.diff` and `.log`, made by `mutate.py`,
 which puts the file back). Each red run failed on its test's assertion, not on a build error.
 
 | Test | Where | Proves | Red by |
@@ -1106,22 +1106,22 @@ judged everywhere (no crash, no non-finite sample, frames exactly as the engine 
 
 | Log | |
 |---|---|
-| As the check runs it, then the sweep | `~/m2-runs/logs/8a-s4-g12-info-1017-203023-2701484.log` |
-| The first run | `~/m2-runs/logs/8a-s4-g12-sweep-1017-202215-2628380.log` |
+| As the check runs it, then the sweep | `$SCRATCH/logs/8a-s4-g12-info-1017-203023-2701484.log` |
+| The first run | `$SCRATCH/logs/8a-s4-g12-sweep-1017-202215-2628380.log` |
 
 ### Checks
 
-- Each commit's check (`~/m2-runs/s8a/s2-check.sh`): the debug `m2`, 10 of 10 renders against
+- Each commit's check (`$SCRATCH/s8a/s2-check.sh`): the debug `m2`, 10 of 10 renders against
   `e2e/renders.sha256` (no record changed), the touched crates' tests (scratch `HOME`, `M2_AUDIO=none`), workspace
   clippy and the Mac lint (`--target aarch64-apple-darwin`), rustfmt on new files. All green, first time.
 - The pool's commit also ran its models in release and their clippy: 6 models and 22 unit tests, green.
 - At the slice's end (`ac34493`), the whole workspace's tests but the desktop shell's, once: **1,373 passed, none
-  failed**, 20:43 to 20:50, load 2.7 to 4.4 (`~/m2-runs/logs/8a-s4-workspace-1017-204307-2790700.log`).
+  failed**, 20:43 to 20:50, load 2.7 to 4.4 (`$SCRATCH/logs/8a-s4-workspace-1017-204307-2790700.log`).
 - `Cargo.lock` unchanged; every build `--locked`. The PLAT-2 test passes: no OS code outside `core/os`.
 - `ci/check.sh` and `ci/sweep.sh` pass `bash -n`. `ci/sweep.sh` can't run here (it is the Mac's); its lines are
   the ones the build notes gave before, in one file.
 
-| Commit | Log (`~/m2-runs/logs/`) |
+| Commit | Log (`$SCRATCH/logs/`) |
 |---|---|
 | `5b66dca` the pool (and its models) | `8a-s4-c8-check-1017-200450-2409692.log` |
 | `fbeb82f` the export count | `8a-s4-c9-check-1017-200828-2466931.log` |
@@ -1129,7 +1129,7 @@ judged everywhere (no crash, no non-finite sample, frames exactly as the engine 
 | `953c30c` the live gate | `8a-s4-c11-check-1017-202132-2616721.log` |
 | `566c014` "over 8192" | `8a-s4-c11b-check-1017-202857-2692365.log` |
 | `abc6ced` the workgroup's advice | `8a-s4-c11c-check-1017-203734-2749619.log` |
-| the red runs | `~/m2-runs/s8a/s4-red/` |
+| the red runs | `$SCRATCH/s8a/s4-red/` |
 
 Disk at the slice's end: `df -h /` 2.3 TB free; this worktree's `target/` 114 GB, kept for the lead's final check (delete it after).
 
@@ -1152,7 +1152,7 @@ Disk at the slice's end: `df -h /` 2.3 TB free; this worktree's `target/` 114 GB
 ### In short
 
 - **The owner ran 8a's offline sweep** on the reference Mac (MacBookPro18,1, M1 Pro) at `main` `8a6d9e1`, before R1,
-  on 2026-10-17. Word for word: `~/m2-runs/mac-runs/8a-offline-8a6d9e1.txt`.
+  on 2026-10-17. Word for word: `$SCRATCH/mac-runs/8a-offline-8a6d9e1.txt`.
 - **Go for the live half as planned:** 4 threads are 2.92 times faster than 1 by the p99 (the rule needs 2.5).
 - **Two things came out of it, both built in slice 4:** an export alone now uses every fast core on a Mac (8
   threads were 22% faster than 4), and G12 now shows what decides park or spin on the Mac.
@@ -1186,7 +1186,7 @@ nothing aloud. Then paste back what is in `~/m2-8a.txt`.
 | 2 | Paste back what is in `~/m2-8a.txt` | that is all the lead needs |
 
 ```sh
-cd ~/dev/suite2/music2 && git fetch && git switch main && git pull && ci/sweep.sh
+cd <repo> && git fetch && git switch main && git pull && ci/sweep.sh
 ```
 
 What `ci/sweep.sh` runs, and what each step decides:
@@ -1238,7 +1238,7 @@ engine counts no crash. So G12's "no crash" check could no longer see one.
 |---|---|
 | Built | `Stopped::count()` (stops so far), `Renderer::stops()`; the player's `publish` adds them to the engine's crashes in the record. Atomics only: nothing allocates or locks |
 | Test | `a_sound_that_stops_counts_as_a_crash` (`core/play/src/timing.rs`): a node marked stopped as the audio thread would; the record must say 1 crash |
-| Red first | the test alone, before the fix: `crashes: 0` (`~/m2-runs/s8a/int-red/g12-stops-red.log`); after: green (`g12-stops-green.log`) |
+| Red first | the test alone, before the fix: `crashes: 0` (`$SCRATCH/s8a/int-red/g12-stops-red.log`); after: green (`g12-stops-green.log`) |
 | Docs | `crates/gates/README.md`'s G12 row: a sound that stops alone counts as a crash |
 
 Limit, as for non-finite samples: the count is the playing plan's. A plan swapped in during a run starts again
@@ -1246,13 +1246,13 @@ at 0. G12 makes no edits.
 
 ### Checks
 
-| Check | Result | Log (`~/m2-runs/logs/`) |
+| Check | Result | Log (`$SCRATCH/logs/`) |
 |---|---|---|
 | The merge, before its commit: `cargo check` of the workspace, every target | green | `8a-int-check0-1017-205238-2876880.log` |
 | The merge: `s2-check.sh` with m2-os, m2-pool, m2-runtime, m2-play, m2-editor, m2-server, m2-gates, m2 (debug m2, 10 of 10 renders, the tests, clippy `-D warnings`, the Mac lint, fmt) | green: 1,030 tests passed, 0 failed, 7 ignored | `8a-int-merge-check-1017-205303-2879751.log` |
 | The fix: `s2-check.sh` with m2-runtime, m2-play, m2-gates | green: 10 of 10 renders, 321 tests | `8a-int-g12stops-check-1017-210212-2954826.log` |
-| Browser: `sound-stops` 5 times, `pl-mix` 5 times (web rebuilt, debug headless at `c3f5d2d`) | 5 of 5 each: 12 of 12 and 47 of 47 checks. pl-mix's first loud hat came at read 10 to 38 | `8a-int-e2e-1017-210818-3002215.log`; each run's log in `~/m2-runs/s8a/int/e2e/` |
-| The live tests, 10 rounds (script `~/m2-runs/s8a/int/repeat/run.sh`, copies of the debug binaries at `c3f5d2d`) | 280 test runs, 0 failed | `8a-int-repeat-1017-211123-3048181.log` |
+| Browser: `sound-stops` 5 times, `pl-mix` 5 times (web rebuilt, debug headless at `c3f5d2d`) | 5 of 5 each: 12 of 12 and 47 of 47 checks. pl-mix's first loud hat came at read 10 to 38 | `8a-int-e2e-1017-210818-3002215.log`; each run's log in `$SCRATCH/s8a/int/e2e/` |
+| The live tests, 10 rounds (script `$SCRATCH/s8a/int/repeat/run.sh`, copies of the debug binaries at `c3f5d2d`) | 280 test runs, 0 failed | `8a-int-repeat-1017-211123-3048181.log` |
 | G12 as `ci/check.sh` runs it (release, 1 minute) | PASS: crashes 0, non-finite 0, frames +0; 66.2 s | `8a-int-g12-1017-212419-3151599.log` |
 
 Each round of the live tests: the three live 1-vs-N bit tests, the two offline ones, the 5 engine-thread tests, the
@@ -1320,7 +1320,7 @@ Severity is the confirmed one: gaps-2 was filed as medium and confirmed as low.
 | rt-3 | `live_workers_hold_their_group_until_they_leave` (`core/runtime/src/threads.rs`): a weak reference to the group, a pool of 4 | "the workers hold their group while they are in it" failed: the group was gone 100 ms after the workers started | held while the workers run, gone once the pool drops |
 | the check | `loading_is_published_while_a_plugin_is_created`, with a deliberate 5 ms between its two reads | 10 of 10 failed | 0 of 10. Without the delay: 0 of 20 |
 
-Each commit's check (`~/m2-runs/s8a/s2-check.sh`: the debug `m2`, 10 of 10 renders, the touched crates' tests,
+Each commit's check (`$SCRATCH/s8a/s2-check.sh`: the debug `m2`, 10 of 10 renders, the touched crates' tests,
 clippy on Linux and for the Mac, fmt of new files) passed before the commit was made.
 
 ### Where the fixes differ from what the review proposed
@@ -1339,8 +1339,8 @@ callback from before the window, as rt-1 says. Read those as information only; n
 
 | What | Where |
 |---|---|
-| The red and green runs | `~/m2-runs/s8a/review2-red/` (`g1-export-*`, `g2-panic-*`, `g3-refused-*`, `g4-key-*`, `r1-max-*`, `r3-group-*`, `8a-rv-loading-*`, `loading.sh`; `e2e/` and `e2e-one.sh` for `sound-stops`) |
-| Each commit's check (`~/m2-runs/logs/`) | `8a-rv-g1-check-1017-215507-3338673.log` (the loading test's failure is in its first pass), `8a-rv-g2-check-1017-220140-3385717.log`, `8a-rv-g3-check-1017-220736-3435158.log`, `8a-rv-g4-check-1017-221325-3479085.log`, `8a-rv-r1-check-1017-221654-3527766.log`, `8a-rv-r3-check-1017-222316-3597142.log` |
+| The red and green runs | `$SCRATCH/s8a/review2-red/` (`g1-export-*`, `g2-panic-*`, `g3-refused-*`, `g4-key-*`, `r1-max-*`, `r3-group-*`, `8a-rv-loading-*`, `loading.sh`; `e2e/` and `e2e-one.sh` for `sound-stops`) |
+| Each commit's check (`$SCRATCH/logs/`) | `8a-rv-g1-check-1017-215507-3338673.log` (the loading test's failure is in its first pass), `8a-rv-g2-check-1017-220140-3385717.log`, `8a-rv-g3-check-1017-220736-3435158.log`, `8a-rv-g4-check-1017-221325-3479085.log`, `8a-rv-r1-check-1017-221654-3527766.log`, `8a-rv-r3-check-1017-222316-3597142.log` |
 | `sound-stops` after gaps-4 | `8a-rv-g4-e2e-1017-221257-3475059.log` |
 | The loading test: with the delay, before and after; then 20 runs | `8a-rv-loading-red-1017-222908-3663705.log`, `8a-rv-loading-mutant-1017-222951-3669646.log`, `8a-rv-loading-green-1017-223009-3672697.log` |
 | A check stopped early | `8a-rv-g1-check-1017-215244-3320440.log`: it started while the next fix's test was being written into the tree. Stopped, and run again on the fix alone |
@@ -1367,7 +1367,7 @@ music2 check: PASS
 commit   21a7a1be501e on 8a (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 35 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS
@@ -1381,7 +1381,7 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  59/59 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
 repo unchanged   PASS
 
@@ -1429,7 +1429,7 @@ gates:
   === m2-gates realtime --reference 50 --minutes 1
   PASS  G12 live (RENDER-28, RENDER-28a) on the silent clock on p50, 128 frames
 
-logs     /home/jerry/m2-runs/check-8a-live-3.tgz
+logs     $SCRATCH/check-8a-live-3.tgz
 ```
 
 ### The three runs
@@ -1456,8 +1456,8 @@ silent player renders on one thread (`live_count` off a device), so the live hal
 
 | What | Where |
 |---|---|
-| The final check | `~/m2-runs/logs/check-8a-live-3-1018-000531-181620.log`; its logs `~/m2-runs/check-8a-live-3/` (`check-8a-live-3.tgz` beside it); the load every 30 s `~/m2-runs/s8a/review2-red/load-check3.log` |
-| The check before, at `c924e0b` | `~/m2-runs/logs/check-8a-live-2-1017-231833-4083659.log`; `~/m2-runs/check-8a-live-2/` (and `.tgz`); the load `~/m2-runs/s8a/review2-red/load-check2.log` |
-| The merge's own check (`s2-check.sh` with m2-server and m2-play: 10 of 10 renders) | `~/m2-runs/logs/8a-live-merge-check-1018-000221-154637.log` |
-| The first run | `~/m2-runs/logs/check-8a-live-1017-223052-3679399.log`; `~/m2-runs/check-8a-live/` (and `.tgz`) |
-| The gate alone, 3 runs | `~/m2-runs/logs/8a-live-g5-again-1017-231751-4078122.log` (a copy in `~/m2-runs/s8a/review2-red/`) |
+| The final check | `$SCRATCH/logs/check-8a-live-3-1018-000531-181620.log`; its logs `$SCRATCH/check-8a-live-3/` (`check-8a-live-3.tgz` beside it); the load every 30 s `$SCRATCH/s8a/review2-red/load-check3.log` |
+| The check before, at `c924e0b` | `$SCRATCH/logs/check-8a-live-2-1017-231833-4083659.log`; `$SCRATCH/check-8a-live-2/` (and `.tgz`); the load `$SCRATCH/s8a/review2-red/load-check2.log` |
+| The merge's own check (`s2-check.sh` with m2-server and m2-play: 10 of 10 renders) | `$SCRATCH/logs/8a-live-merge-check-1018-000221-154637.log` |
+| The first run | `$SCRATCH/logs/check-8a-live-1017-223052-3679399.log`; `$SCRATCH/check-8a-live/` (and `.tgz`) |
+| The gate alone, 3 runs | `$SCRATCH/logs/8a-live-g5-again-1017-231751-4078122.log` (a copy in `$SCRATCH/s8a/review2-red/`) |

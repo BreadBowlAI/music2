@@ -77,9 +77,18 @@ pub enum Gesture {
         copy: bool,
     },
     /// Either edge: a new start moves the left edge, and what is inside stays where it plays.
-    Resize { clip: ClipRef, start: f64, length: f64 },
-    Split { clips: Vec<ClipRef>, at: f64 },
-    Join { clips: Vec<ClipRef> },
+    Resize {
+        clip: ClipRef,
+        start: f64,
+        length: f64,
+    },
+    Split {
+        clips: Vec<ClipRef>,
+        at: f64,
+    },
+    Join {
+        clips: Vec<ClipRef>,
+    },
     /// Copies right after the selection, or after `range` (a marquee's, bar-snapped). `grid` is
     /// what a span shorter than a bar rounds up to; none rounds nothing. `times` copies (Repeat…,
     /// Q12: 1 to 64), each right after the one before; one when not given.
@@ -100,7 +109,9 @@ pub enum Gesture {
         to: Option<LaneAddr>,
         at: f64,
     },
-    Delete { clips: Vec<ClipRef> },
+    Delete {
+        clips: Vec<ClipRef>,
+    },
     /// The piano roll's edit of one clip: its notes, and its length when given.
     Notes {
         clip: ClipRef,
@@ -109,7 +120,10 @@ pub enum Gesture {
         length: Option<f64>,
     },
     /// Automation drawn in place: one clip's points.
-    Points { clip: ClipRef, points: Vec<(f64, f64)> },
+    Points {
+        clip: ClipRef,
+        points: Vec<(f64, f64)>,
+    },
     /// Note starts to the nearest line of `grid` (beats), and ends too when `ends`. `notes` picks
     /// notes of one clip by their place in it.
     Quantize {
@@ -283,7 +297,8 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
             for (c, kind) in clips.iter().zip(&kinds) {
                 let target = to.clone().filter(|_| one).unwrap_or_else(|| c.from.clone());
                 let into = w.lane(&target)?.kind.clone();
-                fits(kind, &into).map_err(|why| EditError::Rejected(why.replace("{from}", &w.named(&c.from)).replace("{to}", &w.named(&target))))?;
+                fits(kind, &into)
+                    .map_err(|why| EditError::Rejected(why.replace("{from}", &w.named(&c.from)).replace("{to}", &w.named(&target))))?;
                 let mut clip = parse(&c.clip, &into)?;
                 clip.set_start(at + (clip.start() - earliest));
                 clip.set_id(None);
@@ -314,7 +329,10 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
             let seconds = tempo.seconds_at(c.start + c.length) - tempo.seconds_at(c.start);
             // Only fades it sets are held to the clip: a volume or a direction never fails on them.
             if (fade_in.is_some() || fade_out.is_some()) && c.fade_in + c.fade_out > seconds + SLACK {
-                return Err(EditError::Rejected(format!("The fades together are at most the clip: {} seconds.", (seconds * 100.0).round() / 100.0)));
+                return Err(EditError::Rejected(format!(
+                    "The fades together are at most the clip: {} seconds.",
+                    (seconds * 100.0).round() / 100.0
+                )));
             }
             if let Some(r) = reverse {
                 c.reverse = *r;
@@ -361,7 +379,10 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 split = true;
             }
             if !split {
-                return Err(EditError::Rejected(format!("No clip picked crosses {}, so there is nothing to split.", crate::notes::place(arr, *at))));
+                return Err(EditError::Rejected(format!(
+                    "No clip picked crosses {}, so there is nothing to split.",
+                    crate::notes::place(arr, *at)
+                )));
             }
         }
         Gesture::Join { clips } => {
@@ -453,8 +474,13 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
 /// Notes as the lane format holds them: each a pitch, a start, a length above 0 and a velocity of 0
 /// or more.
 fn notes_fit(notes: &[Note]) -> Result<(), EditError> {
-    match notes.iter().find(|n| ![n.pitch, n.start, n.length, n.velocity].iter().all(|x| x.is_finite()) || n.length <= 0.0 || n.velocity < 0.0) {
-        Some(n) => Err(EditError::Rejected(format!("A note needs a pitch, a start, a length above 0 and a velocity of 0 or more, not {n:?}."))),
+    match notes
+        .iter()
+        .find(|n| ![n.pitch, n.start, n.length, n.velocity].iter().all(|x| x.is_finite()) || n.length <= 0.0 || n.velocity < 0.0)
+    {
+        Some(n) => {
+            Err(EditError::Rejected(format!("A note needs a pitch, a start, a length above 0 and a velocity of 0 or more, not {n:?}.")))
+        }
         None => Ok(()),
     }
 }
@@ -898,7 +924,8 @@ impl Work<'_> {
             let (module, key) = (addr.module.as_str(), addr.lane.as_str());
             let m = rev.compiled.ir.modules.iter().find(|m| m.key == module);
             let m = m.ok_or_else(|| EditError::Missing(format!("There's no track `{module}`.")))?;
-            let decl: &LaneDecl = m.lanes.iter().find(|l| l.key == key).ok_or_else(|| EditError::Missing(format!("{} has no lane `{key}`.", m.label())))?;
+            let decl: &LaneDecl =
+                m.lanes.iter().find(|l| l.key == key).ok_or_else(|| EditError::Missing(format!("{} has no lane `{key}`.", m.label())))?;
             let shown = DataPath::lane(addr).to_string();
             if let Some(d) = rev.compiled.problems.iter().find(|d| d.src.as_deref() == Some(&shown) && d.code.starts_with("lane.")) {
                 return Err(EditError::Rejected(format!(
@@ -947,15 +974,17 @@ impl Work<'_> {
                 let at = there.nth(rank as usize).map(|(i, _)| i).filter(|i| id.is_none() || l.was[*i].id() == id.as_deref());
                 at.ok_or_else(|| format!("No clip starts at {} on {named} now.", crate::notes::place(arr, start)))
             }
-            (None, Some(id)) => match l.was.iter().enumerate().filter(|(_, c)| c.id() == Some(id)).map(|(i, _)| i).collect::<Vec<_>>()[..] {
-                [i] => Ok(i),
-                [] => Err(format!("{named} has no clip `{id}` now.")),
-                _ => {
-                    return Err(EditError::Rejected(format!(
-                        "Two clips on {named} have the id `{id}`; name the clip by where it starts."
-                    )));
+            (None, Some(id)) => {
+                match l.was.iter().enumerate().filter(|(_, c)| c.id() == Some(id)).map(|(i, _)| i).collect::<Vec<_>>()[..] {
+                    [i] => Ok(i),
+                    [] => Err(format!("{named} has no clip `{id}` now.")),
+                    _ => {
+                        return Err(EditError::Rejected(format!(
+                            "Two clips on {named} have the id `{id}`; name the clip by where it starts."
+                        )));
+                    }
                 }
-            },
+            }
             (None, None) => return Err(EditError::Rejected("Name the clip by its id, or by where it starts.".into())),
         };
         let changed = |why: String, clip: Option<String>| {
@@ -965,7 +994,9 @@ impl Work<'_> {
         };
         let i = match found {
             Ok(i) => i,
-            Err(why) if r.sha.is_some() => return Err(changed(format!("{why} It was changed in another window or by an agent; try again."), r.id.clone())),
+            Err(why) if r.sha.is_some() => {
+                return Err(changed(format!("{why} It was changed in another window or by an agent; try again."), r.id.clone()));
+            }
             Err(why) => return Err(EditError::Missing(why)),
         };
         let c = &l.was[i];
@@ -1118,7 +1149,9 @@ pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
         | Gesture::Duplicate { clips, .. }
         | Gesture::Delete { clips }
         | Gesture::Quantize { clips, .. } => clips.iter_mut().try_for_each(&mut pin)?,
-        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } | Gesture::Audio { clip, .. } => pin(clip)?,
+        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } | Gesture::Audio { clip, .. } => {
+            pin(clip)?
+        }
         Gesture::Create { .. } | Gesture::Paste { .. } | Gesture::Set { .. } => {}
     }
     Ok(g)
@@ -1219,7 +1252,9 @@ fn describe(rev: &Revision, edits: &[LaneEdit]) -> (String, String) {
     match &each[..] {
         [(_, one)] => one.clone(),
         _ => {
-            let side = |f: &dyn Fn(&(String, String)) -> &String| each.iter().map(|(n, s)| format!("{n}: {}", f(s))).collect::<Vec<_>>().join("; ");
+            let side = |f: &dyn Fn(&(String, String)) -> &String| {
+                each.iter().map(|(n, s)| format!("{n}: {}", f(s))).collect::<Vec<_>>().join("; ")
+            };
             (side(&|s| &s.0), side(&|s| &s.1))
         }
     }
@@ -1251,10 +1286,13 @@ fn spans_described(before: &LaneData, after: &LaneData, arr: &m2_song::Arrangeme
         c => format!("{}, as it was", words(c)),
     };
     match a.iter().zip(&b).find(|(x, y)| x != y) {
-        Some((x, y)) => (inside(x), match y {
-            Clip::Audio(_) => format!("{}, changed", words(y)),
-            y => inside(y),
-        }),
+        Some((x, y)) => (
+            inside(x),
+            match y {
+                Clip::Audio(_) => format!("{}, changed", words(y)),
+                y => inside(y),
+            },
+        ),
         None => ("no change".into(), "no change".into()),
     }
 }

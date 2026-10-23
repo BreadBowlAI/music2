@@ -212,7 +212,14 @@ pub(crate) fn matching(k: &Keep, new: &Flat, shapes: &[Option<Shape>], blobs: &[
 
 /// Wire `new` against what `k` says plays. `shapes` are `new`'s nodes' shapes, and `blobs` the
 /// committed state each of its plugins loads. Lanes only ghosts read are added to `lanes`.
-pub(crate) fn wire(k: &Keep, new: &Flat, shapes: &[Option<Shape>], blobs: &[Option<Sha>], packages: &PackageSet, lanes: &mut LanePlan) -> Wiring {
+pub(crate) fn wire(
+    k: &Keep,
+    new: &Flat,
+    shapes: &[Option<Shape>],
+    blobs: &[Option<Sha>],
+    packages: &PackageSet,
+    lanes: &mut LanePlan,
+) -> Wiring {
     let (old, info) = (k.old, k.info);
     let n = new.nodes.len();
     let mut w = Wiring::fresh(new);

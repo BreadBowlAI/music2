@@ -1,6 +1,6 @@
 # Music basics
 
-The music ideas music2 uses, in plain words, for someone who has never made a song. Each part ends with where the idea lives in music2. Words about the app itself (track, lane, clip, knob…) are in the README's [Words you'll see](../README.md#words-youll-see).
+The music ideas music2 uses, in plain words, for someone who has never made a song. Each part ends with where the idea lives in music2. Words about the app itself (track, lane, clip, knob…) are in the manual's [Words you'll see](manual.md#words-youll-see).
 
 **New to all this?** In the app, **Help ▸ Make Your First Song** walks you through a first song in seven steps: drums, a beat, a bass, some bass notes, a listen, a new sound, and an export. Each step ticks itself when you do it. The start screen has the same link: "New to making music? Make your first song". Hold the mouse over any button to see what it does.
 

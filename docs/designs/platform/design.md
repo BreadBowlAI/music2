@@ -1,6 +1,6 @@
 # The platform layer: design
 
-Revision 2. Written 2026-10-14 on the Linux server `jerry-ax102`, against `main` at `f126d03` (revision 1: label
+Revision 2. Written 2026-10-14 on the Linux server, against `main` at `f126d03` (revision 1: label
 `synthesize`; revision 2: label `revise`; a completeness critic's small fixes: label `critic`, listed in §15).
 
 Revision 1 merged two drafts, `design-small.md` (the least code) and `design-shaped.md` (shaped for later steps), section by
@@ -46,7 +46,7 @@ Every fact was checked on this machine or in source, unless it is marked *(unver
 | # | Do this on your Mac | Note |
 |---|---|---|
 | 1 | Plug the Mac in, keep the lid open, and quit other apps. | The speed tests need a quiet Mac. The check keeps the Mac awake by itself. |
-| 2 | Open Terminal on the Mac itself, not over ssh. Type `cd ~/dev/suite2/music2`, then `git switch main`, then `git pull`. | One test needs your login session. |
+| 2 | Open Terminal on the Mac itself, not over ssh. Type `cd <repo>`, then `git switch main`, then `git pull`. | One test needs your login session. |
 | 3 | Type `ci/check.sh` and press Return. | The first run may download Rust 1.99.0 and the test browser by itself. Each check prints a line when it starts. |
 | 4 | If it stops at once and says your plugins are in the wrong folder, move Surge XT and Airwindows from `/Library/Audio/Plug-Ins/CLAP` to `~/Library/Audio/Plug-Ins/CLAP`, and run it again. | music2's tests need them out of the shared folder. Other music apps still find them there: the CLAP standard names both folders. |
 | 5 | If one line says `running` for more than 30 minutes, press Ctrl-C once. | It stops that check and still prints the summary. |
@@ -368,7 +368,7 @@ So on Linux:
 
 This closes OS-26 now: the Linux app can host plugins. Measured here: Surge XT 1.3.4 and Airwindows Consolidated pass
 live3b's plugin part (51 of 51 checks) in the headless server with no timer or fd extension
-(`~/m2-runs/logs/live3b-plugins-1014-210631-833394.log`), and with the `gettid` fix the with-plugins Rust tests pass
+(`$SCRATCH/logs/live3b-plugins-1014-210631-833394.log`), and with the `gettid` fix the with-plugins Rust tests pass
 (`main_thread.rs` with Surge XT, the gates' harness 6 of 6, `m2-play`'s live tests; `av-plugtests*.log`). The app's
 test (`app_main_thread.rs`, §3.5 OS-30) runs the app's own hook on Linux without a window.
 
@@ -460,7 +460,7 @@ deletes the file for good, and a missing `music2.toml` makes the folder "not a p
 `write_new_wav` (`core/runtime/src/audio.rs:73-89`), the bounce's provenance file (`apps/m2/src/main.rs`), an export's
 part file (`render.rs` `write_as`), and a new song's copied files (`project.rs` `create_at`). Then `m2 bounce --place`
 commits a Tx that pins the WAV's hash, and that Tx is synced. Measured here: a 40 MB file written and linked the way
-`name_new` does stayed without disk blocks for 35.2 s after a Tx-like sync (`~/m2-runs/logs/ad-delalloc-*.log`). A
+`name_new` does stayed without disk blocks for 35.2 s after a Tx-like sync (`$SCRATCH/logs/ad-delalloc-*.log`). A
 power cut in that window leaves a durable lane pointing at an asset with no bytes. So each of the four places pushes
 the file (`fs::push`) before it gets its name, and syncs its folder (`fs::sync_dir`) before anything names it. Cost:
 one `fsync` of the file, tens of ms for 40 MB here, next to a render that takes seconds. On macOS the placing Tx's
@@ -469,7 +469,7 @@ barrier makes the pushed bytes durable.
 **The tidy at open (S7).** When a writer takes the lock, the scan removes a completed journal after a barrier on that
 journal file (`journal.rs:291-302`). If the commit was killed after its renames but before it pushed its folders, the
 renames exist only in memory. On Linux that barrier is an `fsync` of an unchanged file, which forced 0 journal commits
-in 300 rounds (`~/m2-runs/logs/ad-jbd2.log`); `fsync` of the folder forced 300. ext4 is safe anyway, since it commits
+in 300 rounds (`$SCRATCH/logs/ad-jbd2.log`); `fsync` of the folder forced 300. ext4 is safe anyway, since it commits
 its one journal in order. A file system that logs per file, such as btrfs, might make the removal durable before the
 renames *(unverified: no btrfs here)*. So the scan first pushes the completed journal's target folders, as the commit's
 step 8 does, then runs its barrier, then removes the journal. A folder `fsync` with nothing new costs about 0 ms here,
@@ -510,7 +510,7 @@ and the scan runs once per lock.
   blocks in `poll` on the inotify fd, then reads and dispatches under the instance's mutex, then **sleeps 10 ms with
   the mutex free** before it polls again. That is FSEvents' latency (`fsevents.rs`: 10 ms with `NO_DEFER`): the first
   event after a quiet spell goes out at once, and the kernel merges a writer's events meanwhile. Measured with a probe
-  of this design (`~/m2-runs/logs/aw-probes.txt`): 1 GB written in 4 KB writes woke a reader that reads at once
+  of this design (`$SCRATCH/logs/aw-probes.txt`): 1 GB written in 4 KB writes woke a reader that reads at once
   161,874 to 182,735 times (0.50 s of its CPU); with the pause, 76 times (0.001 s). 8,000 new folders (105,000 events)
   still went through with no overflow.
 - **Watches.** At start, the source walks `root` and adds a watch on each folder `enter` allows (never `.git`,
@@ -643,7 +643,7 @@ Not an OS piece, found by `design-shaped`: QuickJS's `Math` and `**` call the OS
 | id | Piece | This step | Linux | Windows |
 |---|---|---|---|---|
 | OS-68 | Unix-only APIs in tests outside `cfg(unix)` | No change: they compile on both OSes | — | the Windows step's list (§8) |
-| OS-69 | permission tests | No change; never run checks as root | runs as `jerry` | ACLs |
+| OS-69 | permission tests | No change; never run checks as root | runs as the user | ACLs |
 | OS-70 | symlink tests | No change | — | Developer Mode |
 | OS-71 | `temp_dir()` is case-sensitive | No change: the case-folding paths are tested on the Mac run (a casefold or vfat volume needs root here) | — | NTFS folds case |
 | OS-72 | core dumps from the kill tests | Built (S6): the test children that abort on purpose (`kill_tests::child`, `hook_tests::hook_child`) call `prctl(PR_SET_DUMPABLE, 0)` under `cfg(target_os = "linux")`, a test fixture. macOS: nothing, as today. | apport takes about 1.1 s per dump even with `ulimit -c 0`; the kill test drops from 473 s to 104 s (measured). `RLIMIT_CORE` 0 alone is not enough. | crash reports off for the child |
@@ -696,7 +696,7 @@ listed in `HANDOFF.md` as a flake, fails every time in a checkout whose path is 
 module name into a 64-byte buffer for its messages (`ATOM_GET_STR_BUF_SIZE`, `quickjs.c:3821`), and a package module is
 named by its absolute path (`core/script/src/lib.rs` `resolve`). Measured by `attack-verification` in a 52-character
 scratch path: "Could not find export 'nope' in module 'std/src/ds'". The workflow's review agents check in
-`~/m2-runs/scratch-<label>/` copies, so the check would say FAIL at every slice there. S1 names package modules as
+`$SCRATCH/scratch-<label>/` copies, so the check would say FAIL at every slice there. S1 names package modules as
 `display()` already shows them (`std/src/dsp.ts`), and the loader maps the name back to its file. A user whose app sits
 in `~/Applications` would see the same cut-off name *(unverified in the app)*.
 
@@ -736,7 +736,7 @@ lists every lint with a run without `-D warnings`, as `ground/tests.md` did.
 | live3b-proj (PART) | no plugins on `CLAP_PATH` | `ci/plugins.sh` (S1) unpacks them without sudo; `ci/check.sh` finds them. Measured: 51 of 51. |
 
 With all of these, `attack-verification` measured **29 of 29 runs ok, 1,034 of 1,034 checks**, twice (once inside the
-design's `ci/check.sh`), in a scratch copy built as this section writes it (`~/m2-runs/logs/av-e2e1-*.log`).
+design's `ci/check.sh`), in a scratch copy built as this section writes it (`$SCRATCH/logs/av-e2e1-*.log`).
 
 The pieces, all small:
 
@@ -890,7 +890,7 @@ three lines, so the change is one readable diff.
 | `e2e/renders.sha256` (new in S1) | `examples-resample.wav` | `6ac6fcb117fe5b1dd1545bf3cf1fd38e03a0fc09864d0b339a499a32c925eea7` | `39f9476492e997a86aec5f94b6d0edf56c098e275186260915a3830bd9cfe0da` |
 | same | `examples-resample-from4-for6.wav` | `a360d04c9fba10e4eee079360fa93e52578a2c2b3312dc209f192b609f9c1dbf` | `d752521b47b66bcb9076f43715baedaa5c018f428ec90546465e6cae031560eb` |
 
-- **Measured on Linux** with exactly the §5.1 patch (`design-shaped` A2, `~/m2-runs/logs/dsh-libm-*`): `renders.json`
+- **Measured on Linux** with exactly the §5.1 patch (`design-shaped` A2, `$SCRATCH/logs/dsh-libm-*`): `renders.json`
   gives `b3daee50…`; the release `m2` renders `39f94764…` and `d752521b…`, and the other renders are unchanged. Both WAV
   hashes equal what `facts.md` §6e predicted with `libm` swapped in through `LD_PRELOAD`: two methods agree. The debug
   `m2` gives the same 8 (`attack-verification`).
@@ -900,14 +900,14 @@ three lines, so the change is one readable diff.
 - The commit message says: "Deliberate change of recorded renders (decided): host math uses the libm crate;
   examples/resample changes in renders.json and e2e/renders.sha256; no other render changes."
 - `e2e/renders.sha256` uses the names `baseline.sh` writes (`…-from4-for6.wav`; `HANDOFF.md` writes `…-from4.wav`).
-  `baseline.sh` gains the eighth case (`templates/empty --from 4 --seconds 6`), which `~/m2-runs/check.sh` adds by hand
+  `baseline.sh` gains the eighth case (`templates/empty --from 4 --seconds 6`), which `$SCRATCH/check.sh` adds by hand
   today.
 
 ### 5.4 `std.wasm` rebuilds the same everywhere (OS-63, OS-64, OS-65)
 
 | Fact | Source |
 |---|---|
-| `std.wasm` holds the Mac's path `/Users/jerryxu/dev/suite2/music2/core/kernel/src/lib.rs` | `facts.md` §7 |
+| `std.wasm` holds the Mac's path `<repo>/core/kernel/src/lib.rs` | `facts.md` §7 |
 | A path remap rebuilt the committed file only from `650f842`'s sources. At HEAD 10 bytes (panic line numbers) differ: `933f4de` added 10 lines to `core/kernel/src/lib.rs` after the last rebuild. | `facts.md` §7 |
 | A remap is not enough: `m2-kernel` is a path dependency outside the kernels' workspace, so cargo hashes its absolute path into `-C metadata`, which reorders the layout (1,003 bytes differed between two folders for `sounds`). | `branches.md` §4.3 |
 | With `m2-kernel` inside the kernels' workspace, two folders gave identical bytes, with no machine path. Another target folder too. | `branches.md` §4.3; `attack-verification` |
@@ -1505,7 +1505,7 @@ step's gates ask), and the desktop app itself (never launched).
 
 ### 7.2 The two stubs for the macOS lint (`ci/stub-cc`, `ci/stub-ar`)
 
-The versions measured by `design-shaped` (`~/m2-runs/logs/dsh-stub-cc.txt`, `dsh-stub-ar.txt`). They answer both
+The versions measured by `design-shaped` (`$SCRATCH/logs/dsh-stub-cc.txt`, `dsh-stub-ar.txt`). They answer both
 compiler families' output flags, need no clang, and are only ever set for `aarch64-apple-darwin`, never for the host.
 
 ```sh
@@ -1634,9 +1634,9 @@ c923a148e888048021d5cb5ba866bb94927a17e8136547882a9b2efdc7118f20  Surge XT.clap
 ```
 
 `ci/plugins.sh` was run here offline from the kept archives into a scratch folder: both `.clap` files matched these
-hashes (§11). In S1 the lead seeds `~/.local/share/m2-test-plugins/dl/` from `~/m2-runs/plugins/dl/` (about 260 MB)
-before the first run, so the Airwindows zip is kept outside `~/m2-runs`, which gets cleaned. Until then that zip exists
-only in `~/m2-runs/plugins/dl/` (checked at revision 2's critic pass), so no clean-up of `~/m2-runs` may run before it
+hashes (§11). In S1 the lead seeds `~/.local/share/m2-test-plugins/dl/` from `$SCRATCH/plugins/dl/` (about 260 MB)
+before the first run, so the Airwindows zip is kept outside `$SCRATCH`, which gets cleaned. Until then that zip exists
+only in `$SCRATCH/plugins/dl/` (checked at revision 2's critic pass), so no clean-up of `$SCRATCH` may run before it
 is copied.
 
 Also needed: `e2e/renders.sha256` and the eighth case in `e2e/baseline.sh` (S1), and `run.mjs` taking its default
@@ -1646,9 +1646,9 @@ Chrome from `chrome.mjs` (S2). `ci/check.sh`, `ci/stub-cc`, `ci/stub-ar`, `ci/pl
 ### 7.4 On this server
 
 ```sh
-cd ~/dev/suite2/music2
-~/m2-runs/tw check-<label> 'CARGO_TARGET_DIR=$HOME/m2-runs/target-<label> M2_CHECK_OUT=$HOME/m2-runs/check-<label> ci/check.sh'
-# tw waits 9.5 minutes; a full check may take longer, so then: ~/m2-runs/tw-wait <channel> <log> (tw prints it)
+cd <repo>
+$SCRATCH/tw check-<label> 'CARGO_TARGET_DIR=$SCRATCH/target-<label> M2_CHECK_OUT=$SCRATCH/check-<label> ci/check.sh'
+# tw waits 9.5 minutes; a full check may take longer, so then: $SCRATCH/tw-wait <channel> <log> (tw prints it)
 ```
 
 - The command has no double quotes or parentheses, so `tw`'s echo line stays intact (`ground/tests.md`).
@@ -1656,7 +1656,7 @@ cd ~/dev/suite2/music2
   server-specific is in the repo.
 - `M2_CHECK_OUT` must be a folder of its own: the script refuses a folder an earlier check didn't make.
 - The summary is in `$M2_CHECK_OUT/summary.txt`, every check's log beside it, and all logs in `$M2_CHECK_OUT.tgz`. It
-  replaces `~/m2-runs/check.sh`.
+  replaces `$SCRATCH/check.sh`.
 - `--gates` adds the timing gates, recorded for information (PLAT-1).
 - Delete the target folder after the workflow (20 to 60 GB).
 - Time here: revision 1's script took **8 min 11 s** with a warm target folder on an idle server
@@ -1772,7 +1772,7 @@ taken in. "Accepted" means the fix is in this revision as proposed or close to i
 | 14 | `ci/check.sh` runs `rm -rf` on its output folder with no guard | simplicity | low | **Accepted** | It replaces only a folder holding its `.m2-check` marker (smoke-tested here: a folder it didn't make is left alone, exit 2). |
 | 15 | Timed gates have no Mac procedure, so step 7's Mac run can't judge step 7, and G11 is never re-run on a Mac after S6/S8 | verification | high | **Accepted** | On macOS `ci/check.sh` runs the gates `ci/gates.txt` names, in release, with one row and each gate's verdict in the summary; `--gates` does the same on Linux for information. This step: `--server tx-data watcher`. §6.1's acceptance text, §7.6 and §7.7 now name it. Still one command for the owner. |
 | 16 | One flaky run on the Mac costs a second 30–45 minute owner run | verification | medium | **Accepted, retry changed** | Each failed test binary runs once more alone (cargo's own "to rerun pass" arguments, which also covers the no-harness tests), and each failed browser run too; a pass then shows as "passed on a retry" for the lead to judge. Each failure's first failing line is printed. Every log is packed into one `.tgz` without renders or kept projects. The Mac stays awake (with 8). |
-| 17 | A run without plugins says PASS; the Linux plugin builds can't be fetched again | verification | medium | **Accepted** | The headline says `PASS without plugins`, which is not a pass (PLAT-6). `ci/plugins.sh` and `ci/plugins.sha256` install the recorded builds into `~/.local/share/m2-test-plugins` from kept archives, outside `~/m2-runs` (run here offline: hashes match); `ci/check.sh` finds them by itself. The summary names the plugins' versions (macOS) or whether they are the recorded builds (Linux). |
+| 17 | A run without plugins says PASS; the Linux plugin builds can't be fetched again | verification | medium | **Accepted** | The headline says `PASS without plugins`, which is not a pass (PLAT-6). `ci/plugins.sh` and `ci/plugins.sha256` install the recorded builds into `~/.local/share/m2-test-plugins` from kept archives, outside `$SCRATCH` (run here offline: hashes match); `ci/check.sh` finds them by itself. The summary names the plugins' versions (macOS) or whether they are the recorded builds (Linux). |
 | 18 | HANDOFF's "long-path flake" always fails when the checkout path is over 48 characters | verification | low | **Accepted** | Checked: `ATOM_GET_STR_BUF_SIZE 64` (`quickjs.c:3821`), package modules named by absolute path. S1 names them as `display()` does (§4.1); S9 removes the line from HANDOFF's flakes. |
 | 19 | In S1 and S2, `check.sh` runs the old `std/build.sh`, which ignores `--check` and rebuilds `std.wasm` in place | verification | low | **Accepted** | The new `std/build.sh` ships in S1; its row says FAIL until S3 (§5.4, §13). |
 
@@ -1806,7 +1806,7 @@ taken in. "Accepted" means the fix is in this revision as proposed or close to i
 | live3b with plugins on Linux | "unverified" | "51 of 51, measured" | **shaped** | the log confirms it (§11) |
 | `s6-fixes.mjs:112` race | fix now | after `taste` merges | **small** | the trial merge is clean |
 | `notes.mjs` against `taste` | expected clean | a conflict | **small** | measured clean (§11) |
-| `CLAP_PATH` default on Linux | `~/.clap` | `~/m2-runs/plugins/clap` | **neither**: `~/.local/share/m2-test-plugins/clap`, filled by `ci/plugins.sh` (revision 2) | `~/.clap` must stay empty (`fx-fixes`); `~/m2-runs` gets cleaned; the recorded builds are kept outside it |
+| `CLAP_PATH` default on Linux | `~/.clap` | `$SCRATCH/plugins/clap` | **neither**: `~/.local/share/m2-test-plugins/clap`, filled by `ci/plugins.sh` (revision 2) | `~/.clap` must stay empty (`fx-fixes`); `$SCRATCH` gets cleaned; the recorded builds are kept outside it |
 | macOS target in `rust-toolchain.toml` | yes | no; the script adds it | **shaped** | the pin file stays minimal; only Linux needs the cross target |
 | Check script rows | no toolchain, plugin-folder or repo-unchanged rows | has them, and kernels' clippy | **shaped**, plus gates on the Mac (revision 2) | each catches a real mistake (a moved plugin, a stray write, an unpinned Rust); the Mac is where timings are judged |
 | Owner questions | Q1–Q4 (Q3: no plugins in the Linux app) | Q1–Q3 | **shaped's three** | the Linux-app question goes away with plugins built |
@@ -1816,9 +1816,9 @@ taken in. "Accepted" means the fix is in this revision as proposed or close to i
 
 ## 11. Measured for this design
 
-All on `jerry-ax102` at `f126d03`.
+All on the Linux server at `f126d03`.
 
-**Revision 1** (scratch clone `~/m2-runs/scratch-synthesize`, deleted afterwards; no build needed):
+**Revision 1** (scratch clone `$SCRATCH/scratch-synthesize`, deleted afterwards; no build needed):
 - **Trial merge of the suite lines.** On a clone of `main`: `notes.mjs:97` and `s6-fixes.mjs:112` replaced by the
   waits of §4.4, and `native.ts:16` by the new `isMac`. `git merge --no-commit` of `origin/taste`, `origin/wip/step7`
   and `origin/sounds`: no conflicts.
@@ -1831,7 +1831,7 @@ All on `jerry-ax102` at `f126d03`.
   files. Conflicts: `taste` in `docs/architecture.md` (WRITE-17's *Today*); `wip/step7` in `docs/architecture.md`
   (PLANE-5's line, and the gates table around rows 7–8); `sounds` none. `Cargo.lock` was not simulated.
 - **Claims checked in logs:** live3b with plugins: 51 passed, 0 failed (`live3b-plugins-1014-210631-833394.log`). The
-  plugins' sha256 in `~/m2-runs/plugins/SHA256SUMS`. The macOS lint of the real tree exits 0
+  plugins' sha256 in `$SCRATCH/plugins/SHA256SUMS`. The macOS lint of the real tree exits 0
   (`dsh-cross-macos-clippy.log`). The `libm` renders (`dsh-renders-libm-SHA256SUMS`: `39f94764…`, `d752521b…`;
   `dsh-libm-*.log`: `b3daee50…`).
 - **Claims checked in source:** `linux-schema.json` is byte-identical to `macOS-schema.json`; `renders.json` holds
@@ -1842,7 +1842,7 @@ All on `jerry-ax102` at `f126d03`.
   (the watcher reads the hint paths alone); `e2e/run.mjs`'s summary lines (`FAIL <run>`, `  PART: <run>`,
   `  failed: <run> (exit N) <log>`).
 
-**By the attacks** (their logs in `~/m2-runs/logs/`): the design's S1–S3 and the ground patches in a scratch copy gave
+**By the attacks** (their logs in `$SCRATCH/logs/`): the design's S1–S3 and the ground patches in a scratch copy gave
 29 of 29 browser runs (1,034 checks, twice), the with-plugins Rust tests passing, `std.wasm` rebuilt to the same bytes
 in another source and target folder, the kernels' clippy clean, the renders unchanged by the rebuild, and revision 1's
 `ci/check.sh` working under Linux bash in 8 min 11 s (`av-*.log`); a 40 MB file without disk blocks 35.2 s after a
@@ -1851,7 +1851,7 @@ Tx-like sync (`ad-delalloc-*.log`); 0 journal commits forced by `fsync` of an un
 (`aw-probes.txt`); the same `std.wasm` metadata and bytes under a `rustc` that says it is an arm Mac
 (`am-stdhost-*.log`).
 
-**Revision 2** (scratch folder `~/m2-runs/scratch-revise`, deleted afterwards; no cargo build):
+**Revision 2** (scratch folder `$SCRATCH/scratch-revise`, deleted afterwards; no cargo build):
 - **Checked in source, for each attack:** `stage.rs` 141-206 (the barrier's fallback calls `sync_all`; the clone copies
   on any error but `AlreadyExists`; macOS's rename list `ENOTSUP | EINVAL`), 640-700 (the fallback moves the target
   aside) and 752-775 (its rollback leaves the target missing between two renames); `Before` holds the before bytes in
@@ -1997,7 +1997,7 @@ Only real decisions. Each has a recommended answer. Q1 and Q2 are needed before 
 |---|---|---|---|
 | Q1 | On Linux, should a new song's folder name count as taken when a folder with the same name in other capitals exists ("exports 2" next to "Exports 2")? | **Yes, on every computer.** | The Mac already works this way, so nothing changes there. Song folders stay safe to copy between computers. The `fx-fixes` suite then passes unchanged (measured). If no: the suite asks the disk whether it ignores capitals. |
 | Q2 | On Linux, the browser suites test the Mac's keys (⌘) and labels, by telling Chrome it is a Mac. Ctrl gets its own small suite later, with the key table on `taste`. OK? | **Yes.** | Two suite lines change on `main`, so `taste` merges without suite conflicts. The Mac is the reference. Until the key table, nothing tests the Ctrl keys a Linux user presses. |
-| Q3 | Lock messages on the server say "Ubuntu-2404-noble-amd64-base". Rename the server to `jerry-ax102`? | **Yes, if you like; skipping it is fine.** | It is a system setting only you should change: `sudo hostnamectl set-hostname jerry-ax102`, and the same new name on the two lines of `/etc/hosts` that name the old one (otherwise `sudo` warns that it can't find the host). Nothing in music2 depends on it: music2 tells computers apart by their machine id. |
+| Q3 | Lock messages on the server say "Ubuntu-2404-noble-amd64-base". Rename the server to a name of your choice? | **Yes, if you like; skipping it is fine.** | It is a system setting only you should change: `sudo hostnamectl set-hostname <name>`, and the same new name on the two lines of `/etc/hosts` that name the old one (otherwise `sudo` warns that it can't find the host). Nothing in music2 depends on it: music2 tells computers apart by their machine id. |
 
 
 ### Owner answers (2026-10-14, after revision 2)
@@ -2048,7 +2048,7 @@ five attacks, `docs/architecture.md` and the code.
 | 9 | §5.1 | `.powi(` is banned too (not correctly rounded; debug and release may differ), and "powi is exact" is gone. The probe plugin's synth and the gates' test signals are listed as left alone. |
 | 10 | §5.2, §12 | oxc's option is now named (`es2016.exponentiation_operator`, read in `oxc_transformer` 0.153.0). "Changes no recorded hash" is marked as checked in S4. |
 | 11 | §6.2 PLAT-6, §7.1 step 9 | No fixed "8" renders: `sounds`' merge adds one. The renders row counts the lines of `e2e/renders.sha256`. |
-| 12 | §7.3 | The Airwindows zip exists only in `~/m2-runs/plugins/dl/` until S1 copies it (checked). |
+| 12 | §7.3 | The Airwindows zip exists only in `$SCRATCH/plugins/dl/` until S1 copies it (checked). |
 | 13 | §8 | Step 7's row gives G7f the Linux facts on wasmtime's reservations (`facts.md` §8). |
 | 14 | §13.1 | How the clippy column is read until S8: a run without `-D warnings`, since `-D warnings` stops at the first crate; the mac lint covers shared code meanwhile. |
 | 15 | §13.2 S1 | PLAT-6's *Today* says Linux passes from S8, so the contract is true at every slice. |
@@ -2059,7 +2059,7 @@ five attacks, `docs/architecture.md` and the code.
 **Left for the lead** (bigger than a text fix; also returned to the workflow):
 - PLAT-6 and §7.6 ask for a Mac run at the end of *every* step. The owner asked for as few as possible. Confirm that
   with the owner, or narrow it to steps with timed gates or macOS-only changes.
-- Copy `~/m2-runs/plugins/dl/` to `~/.local/share/m2-test-plugins/dl/` before any clean-up of `~/m2-runs`.
+- Copy `$SCRATCH/plugins/dl/` to `~/.local/share/m2-test-plugins/dl/` before any clean-up of `$SCRATCH`.
 - `ground/e2e.md` said that unpacking the plugins into a user folder needs the owner's OK. Confirm it was given before S1
   installs them in `~/.local/share`.
 - The Mac's fallbacks on exFAT and SMB (rename, clone, lock and now the barrier's error list) stay unrun by any check
@@ -2079,7 +2079,7 @@ five attacks, `docs/architecture.md` and the code.
   It saves a screenshot of each run to the log folder with a tiny X11 tool built on the fly from `ci/xshot.c`
   (X11 and libpng; about 40 lines; the row still passes without the screenshot when the headers are missing, and
   says so). The lead sends the screenshots to the owner once per step.
-- **The plugin archives.** Before any clean-up of `~/m2-runs`, copy `~/m2-runs/plugins/dl/` (Surge XT 1.3.4's
+- **The plugin archives.** Before any clean-up of `$SCRATCH`, copy `$SCRATCH/plugins/dl/` (Surge XT 1.3.4's
   `.deb`, Airwindows Consolidated `2026-10-11-8a67b80`'s zip, sha256 `9144dc8b…f12c`, deleted upstream since) to
   where S1's `ci/plugins.sh` keeps its archives.
 - **Two libm hashes in the ground notes.** `facts.md` reports `39f94764…` for `examples/resample` with `libm`;

@@ -87,7 +87,11 @@ fn text(v: &serde_json::Value) -> String {
 fn filters(v: &serde_json::Value) -> Vec<(String, Vec<String>)> {
     v["filters"]
         .as_array()
-        .map(|fs| fs.iter().map(|f| (text(&f["name"]), f["extensions"].as_array().map(|e| e.iter().map(text).collect()).unwrap_or_default())).collect())
+        .map(|fs| {
+            fs.iter()
+                .map(|f| (text(&f["name"]), f["extensions"].as_array().map(|e| e.iter().map(text).collect()).unwrap_or_default()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -145,7 +149,9 @@ fn open_file(app: &AppHandle, arg: Option<String>) -> anyhow::Result<Option<Stri
         dialog = dialog.set_parent(&w);
     }
     let paths: Option<Vec<String>> = match ask.multiple {
-        true => dialog.blocking_pick_files().map(|ps| ps.into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.display().to_string()).collect()),
+        true => dialog
+            .blocking_pick_files()
+            .map(|ps| ps.into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.display().to_string()).collect()),
         false => dialog.blocking_pick_file().and_then(|p| p.into_path().ok()).map(|p| vec![p.display().to_string()]),
     };
     Ok(paths.map(|p| serde_json::to_string(&p).expect("paths serialise")))
@@ -423,7 +429,10 @@ mod tests {
     fn the_save_dialog_takes_its_ask_from_the_page() {
         let arg = r#"{"title": "Export MIDI", "name": "First.mid", "start": "/Users/me/Music/music2/Exports", "filters": [{"name": "MIDI file", "extensions": ["mid", "midi"]}]}"#;
         let ask = save_ask(Some(arg));
-        assert_eq!((ask.title.as_str(), ask.name.as_str(), ask.start.as_str()), ("Export MIDI", "First.mid", "/Users/me/Music/music2/Exports"));
+        assert_eq!(
+            (ask.title.as_str(), ask.name.as_str(), ask.start.as_str()),
+            ("Export MIDI", "First.mid", "/Users/me/Music/music2/Exports")
+        );
         assert_eq!(ask.filters, [("MIDI file".to_string(), vec!["mid".to_string(), "midi".to_string()])]);
         assert_eq!(save_ask(None), SaveAsk::default());
     }

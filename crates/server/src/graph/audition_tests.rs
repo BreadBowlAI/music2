@@ -18,12 +18,7 @@ fn opened(song: &str) -> (Fixture, Graph) {
 }
 
 fn on(lane: &str, h: u32, pitch: f64) -> Audition {
-    Audition {
-        module: Some("kick".into()),
-        lane: Some(lane.into()),
-        on: vec![Strike { h, pitch, velocity: 0.8 }],
-        ..Audition::default()
-    }
+    Audition { module: Some("kick".into()), lane: Some(lane.into()), on: vec![Strike { h, pitch, velocity: 0.8 }], ..Audition::default() }
 }
 
 fn off(h: u32) -> Audition {

@@ -1,0 +1,44 @@
+# .config/nextest.toml: how cargo-nextest runs music2's Rust tests (ci/pr.sh rust, the PR tier).
+#
+# In short: nextest runs each test in its own process, many at once, where `cargo test` runs one test
+# binary at a time with its tests on threads. Some tests take a lock so that, inside their binary,
+# only one of them runs at a time (they spin up thread pools or live engines, and tests beside them
+# wait on clocks). In separate processes a lock guards nothing, so the groups below put back "one at
+# a time" for exactly those tests. Keep them in step with the locks: WORKERS (core/play/src/tests.rs),
+# ALONE (core/play/tests/stream.rs, churn.rs), ONE (core/pool, core/play/tests/engine_threads.rs) and
+# POOLS (core/play/tests/bit_identity.rs, core/runtime/src/tests.rs).
+
+[test-groups]
+pools = { max-threads = 1 }
+play-workers = { max-threads = 1 }
+play-stream = { max-threads = 1 }
+play-churn = { max-threads = 1 }
+
+[profile.default]
+# Every test runs, as in ci/check.sh (--no-fail-fast). A test still running after 2 minutes is
+# named as slow every minute, and ended after 10 (a hang).
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 10 }
+# A test that fails runs once more; one that passes then is reported FLAKY, and ci/pr.sh names it.
+retries = 1
+failure-output = "immediate-final"
+status-level = "fail"
+final-status-level = "flaky"
+
+# One thread pool spinning at a time, across every binary: a single lock per binary did that under
+# cargo test, which ran the binaries one after another.
+[[profile.default.overrides]]
+filter = 'binary_id(m2-play::bit_identity) | binary_id(m2-play::engine_threads) | (binary_id(m2-pool) & test(/^tests::/)) | (binary_id(m2-runtime) & (test(/^tests::parts::/) | test(=tests::live::keep::a_trap_on_any_thread_count_gives_the_same_bits) | test(=tests::live::keep::an_edit_window_renders_the_same_bits_on_1_and_n_threads)))'
+test-group = 'pools'
+
+[[profile.default.overrides]]
+filter = 'binary_id(m2-play) & (test(=tests::a_device_player_let_go_stops_its_stream_and_frees_its_engine_elsewhere) | test(=engines::tests::a_device_without_real_time_plays_on_one_thread))'
+test-group = 'play-workers'
+
+[[profile.default.overrides]]
+filter = 'binary_id(m2-play::stream)'
+test-group = 'play-stream'
+
+[[profile.default.overrides]]
+filter = 'binary_id(m2-play::churn)'
+test-group = 'play-churn'

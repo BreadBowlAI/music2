@@ -55,14 +55,14 @@ How each was shown red: the three Rust tests with the change stubbed (`input_ref
 
 ## Pictures
 
-From the desktop app on the invisible screen `:96`, first-song on a copy of std whose noise kernel traps (`~/m2-runs/app-shots/ex-9167e95/`):
+From the desktop app on the invisible screen `:96`, first-song on a copy of std whose noise kernel traps (`$SCRATCH/app-shots/ex-9167e95/`):
 
 | File | Shows |
 |---|---|
 | `pill-and-hats-mark.png` | playing: the pill says "1 problem", Hats' header has a red mark |
 | `popover-stopped-sound.png` | the pill clicked: "The instrument on Hats stopped working, so music2 made it silent. The rest of the song plays on. To start it again, choose Transport ▸ Stop All Sound." |
 
-After the merge of `main` (`~/m2-runs/app-shots/ex-01c5dbc/`, same setup):
+After the merge of `main` (`$SCRATCH/app-shots/ex-01c5dbc/`, same setup):
 
 | File | Shows |
 |---|---|
@@ -100,14 +100,14 @@ The first full check after the merge failed one test: the CLI's crash test asked
 
 ## The final check
 
-`ci/check.sh --gates` at `6d212a8` (Linux, run with `~/m2-runs/tw`). Nothing passed only on a retry. The summary, word for word:
+`ci/check.sh --gates` at `6d212a8` (Linux, run with `$SCRATCH/tw`). Nothing passed only on a retry. The summary, word for word:
 
 ```
 music2 check: PASS
 commit   6d212a8405c9 on ex (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 33 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
 build            PASS  
@@ -120,12 +120,12 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  71/71 suites ok
 renders          PASS  12 of 12 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
 repo unchanged   PASS  
 ```
 
-Logs: `~/m2-runs/sex/check-6d212a8.tgz`. Before the review it passed at `9efece3` (1,682 Rust tests; logs `~/m2-runs/sex/check-9efece3.tgz`). The Mac's run is owed.
+Logs: `$SCRATCH/sex/check-6d212a8.tgz`. Before the review it passed at `9efece3` (1,682 Rust tests; logs `$SCRATCH/sex/check-9efece3.tgz`). The Mac's run is owed.
 
 ## A check by ear
 

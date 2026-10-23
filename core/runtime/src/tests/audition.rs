@@ -321,7 +321,8 @@ fn events(rig: &Rig) -> Vec<Event> {
 // 1 whatever channel moved it; the latest of each wins. Anything but the wheels is refused.
 #[test]
 fn a_live_bend_merges_before_the_notes() {
-    let data = with_notes(json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 0.5}]}]}), at_bpm(120.0));
+    let data =
+        with_notes(json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 0.5}]}]}), at_bpm(120.0));
     let (mut rig, g) = rig(&synth(0.0, json!([]), "v"), &data);
     rig.cmd(Cmd::Play);
     rig.send(wheel(g, 1, [0xE4, 0, 0x60]));
@@ -337,7 +338,11 @@ fn a_live_bend_merges_before_the_notes() {
     rig.send(off(g, 1, 7));
     rig.send(wheel(g, 1, [0xE0, 0, 0x40]));
     rig.run(BLOCK);
-    assert!(matches!(events(&rig)[..], [Event::Midi { frame: 0, bytes: [0xE0, 0, 0x40] }, Event::Off { frame: 0, .. }]), "{:?}", events(&rig));
+    assert!(
+        matches!(events(&rig)[..], [Event::Midi { frame: 0, bytes: [0xE0, 0, 0x40] }, Event::Off { frame: 0, .. }]),
+        "{:?}",
+        events(&rig)
+    );
     for bad in [[0xB0, 7, 100], [0x90, 60, 100], [0xE0, 0x80, 0], [0xF8, 0, 0]] {
         rig.send(wheel(g, 1, bad));
     }
@@ -363,7 +368,11 @@ fn held_for_an_export_a_wheel_waits_for_the_resume() {
     assert_eq!((rig.e.refused_live(), rig.e.status().wheels), (0, 1), "taken: the bend is centred, the mod wheel up");
     rig.send(Msg::Hold(false));
     rig.run(BLOCK);
-    assert_eq!(events(&rig), [Event::Midi { frame: 0, bytes: [0xE0, 0, 0x40] }, Event::Midi { frame: 0, bytes: [0xB0, 1, 50] }], "sent at the resume");
+    assert_eq!(
+        events(&rig),
+        [Event::Midi { frame: 0, bytes: [0xE0, 0, 0x40] }, Event::Midi { frame: 0, bytes: [0xB0, 1, 50] }],
+        "sent at the resume"
+    );
     rig.send(Msg::Live { generation: g, slot: 0, ev: LiveEv::Release { source: 1 } });
     rig.run(BLOCK);
     assert!(events(&rig).is_empty() && rig.e.status().wheels == 1, "source 1's bend was at rest already, and 2's wheel is 2's");

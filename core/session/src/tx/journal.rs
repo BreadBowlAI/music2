@@ -544,8 +544,7 @@ pub fn discard_tx(dir: &Path, j: &Journal, states: &[At]) -> Option<Tx> {
 pub fn restores(dir: &Path, j: &Journal, tx: &Tx) -> bool {
     // Judged as the scan that offered it judged the targets, newer journals included.
     let all = journals(dir);
-    let newer: Vec<&Journal> =
-        all.iter().filter(|(id, _)| order(id) > order(&j.id)).filter_map(|(_, x)| x.as_ref().ok()).collect();
+    let newer: Vec<&Journal> = all.iter().filter(|(id, _)| order(id) > order(&j.id)).filter_map(|(_, x)| x.as_ref().ok()).collect();
     let states = states(dir, j, &newer);
     if states.contains(&At::Neither) {
         return false;

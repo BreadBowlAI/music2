@@ -764,7 +764,9 @@ fn bused() -> Ir {
             json!({"id": "o0", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "i", "by": "h"}}),
         ];
         for k in 0..kernels {
-            nodes.push(json!({"id": format!("o{}", k + 1), "op": "kernel", "kernel": "std:scale", "inputs": {"in": format!("o{k}"), "by": "h"}}));
+            nodes.push(
+                json!({"id": format!("o{}", k + 1), "op": "kernel", "kernel": "std:scale", "inputs": {"in": format!("o{k}"), "by": "h"}}),
+            );
         }
         json!({"key": key, "track": true, "bus": true, "nodes": nodes, "exports": {"out": format!("o{kernels}")}})
     };
@@ -788,13 +790,7 @@ fn bused() -> Ir {
         k("m2", "std:add", json!({"a": "m1", "b": "gv"})),
         k("m3", "std:add", json!({"a": "m2", "b": "ge"}))],
      "exports": {"out": "m3", "bus:verb": "fv", "bus:echo": "fe"}});
-    let modules = json!([
-        module("a", a.0, a.1),
-        module("b", b.0, b.1),
-        bus("verb", 0.9, 4),
-        bus("echo", 0.8, 2),
-        song,
-    ]);
+    let modules = json!([module("a", a.0, a.1), module("b", b.0, b.1), bus("verb", 0.9, 4), bus("echo", 0.8, 2), song,]);
     serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": modules})).unwrap()
 }
 
@@ -823,7 +819,14 @@ fn a_song_and_its_buses_split_into_partitions_with_no_cycle() {
         let (l, d) = parts.label(parts.part_of(i));
         (l.to_string(), d)
     };
-    for (node, part) in [("song/sa", ("a", 0)), ("song/sb", ("b", 0)), ("song/fv", ("song", 0)), ("verb/o4", ("verb", 1)), ("echo/o2", ("verb", 1)), ("song/m3", ("song", 2))] {
+    for (node, part) in [
+        ("song/sa", ("a", 0)),
+        ("song/sb", ("b", 0)),
+        ("song/fv", ("song", 0)),
+        ("verb/o4", ("verb", 1)),
+        ("echo/o2", ("verb", 1)),
+        ("song/m3", ("song", 2)),
+    ] {
         assert_eq!(at(node), (part.0.to_string(), part.1), "{node}");
     }
     let one = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render(1.0).unwrap();

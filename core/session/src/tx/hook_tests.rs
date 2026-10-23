@@ -298,7 +298,8 @@ fn the_hook_is_never_called_for_a_refused_tx() {
     assert!(matches!(s.commit(tx).unwrap_err(), Refusal::Conflict { .. }));
     d.write("data/kick/hits.json", TWO);
     // Its expectation broken: a lane it doesn't confine.
-    let tx = based(&d, vec![Op::Clips { lane: kick_hits(), put: vec![clip("a", "D1")], delete: vec![] }], Expect::Confined(Confined::default()));
+    let tx =
+        based(&d, vec![Op::Clips { lane: kick_hits(), put: vec![clip("a", "D1")], delete: vec![] }], Expect::Confined(Confined::default()));
     let e = s.commit(tx).unwrap_err();
     assert!(e.to_string().contains("the edit was refused"), "{e}");
     // The planner says no.

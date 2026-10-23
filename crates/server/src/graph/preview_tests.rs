@@ -337,10 +337,13 @@ fn an_undo_right_after_a_lane_write_waits_for_it_and_is_previewed() {
     let (graph, token, revision) = kick(&fixture, None);
     let graph = Arc::new(graph);
     let held = graph.hold();
-    let (g, w) = (graph.clone(), std::thread::spawn({
-        let g = graph.clone();
-        move || g.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1", "D1"]))
-    }));
+    let (g, w) = (
+        graph.clone(),
+        std::thread::spawn({
+            let g = graph.clone();
+            move || g.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1", "D1"]))
+        }),
+    );
     // Queued behind the write.
     std::thread::sleep(Duration::from_millis(50));
     let u = std::thread::spawn(move || g.undo(token));

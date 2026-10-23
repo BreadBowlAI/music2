@@ -183,7 +183,7 @@ gate as built today doesn't see them: P2 over P1 stays where it was.
 - The 8 recorded renders match `e2e/renders.sha256`, and the 4-minute p16 render is
   `ebc87e0b57c0cbb5a019ef3bdf2157d36c5343d25559268327ff538dfb56da5e`, for HEAD, HV1, HV3, HV4 and
   HV1+HV3+HV4 (`scripts/renders.sh`; p16 made with `cargo run -p m2-server --example reference -- <dir>
-  --tracks 16`, then `m2 render`, as `~/m2-runs/g7f-linux/renders.sh` did).
+  --tracks 16`, then `m2 render`, as `$SCRATCH/g7f-linux/renders.sh` did).
 - `cargo test -p m2-runtime -p m2-play` (debug, with the test plugins): 174 passed, 0 failed, on HEAD and
   on all cuts together (two test call sites adapted to the prototype's changed internal signatures).
   That includes `bit_identity` and `no_alloc` (RENDER-28).
@@ -208,12 +208,12 @@ gate as built today doesn't see them: P2 over P1 stays where it was.
 ## Tools, and how to run it again
 
 Built for this, kept:
-- `~/m2-runs/tools/valgrind/inst/bin/valgrind`: valgrind 3.27.1 from source, two limits raised so it
+- `$SCRATCH/tools/valgrind/inst/bin/valgrind`: valgrind 3.27.1 from source, two limits raised so it
   copes with thousands of 4 GiB reservations (`coregrind/m_aspacemgr/aspacemgr-linux.c`:
-  `aspacem_maxAddr` 127 TiB, `VG_N_SEGMENTS` 400,000). Source in `~/m2-runs/tools/valgrind/src`.
-- `~/m2-runs/tools/addr2line/bin/addr2line`: gimli's, for inlined frames' names.
+  `aspacem_maxAddr` 127 TiB, `VG_N_SEGMENTS` 400,000). Source in `$SCRATCH/tools/valgrind/src`.
+- `$SCRATCH/tools/addr2line/bin/addr2line`: gimli's, for inlined frames' names.
 
-In `/home/jerry/m2-runs/speed/prof`:
+In `$SCRATCH/speed/prof`:
 - `src-<tree>`: pristine `git archive` copies (S `8aa301e`, plat `b90bacf`, head `ed7fc8e`; S built on
   Linux with no change but the harness) and the variants: `sv1`, `hv1`, `hv3`, `hv4`, `hv13`, `hv134`,
   `hv1345`, and `-prof` copies (call counters, wasmtime's perf map on `M2_PERFMAP`, the sampler).

@@ -15,6 +15,8 @@ M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs graph        # one s
 M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs start empty  # one suite, another fixture kind
 M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs all          # every suite, each on a fresh server
 M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs all --jobs 4 # the same, 4 at a time (ci/check.sh on Linux)
+M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs all --tier pr --shard 1/2 --jobs 2
+                                     # half of the PR tier's runs, 2 at a time (one CI job; ci/pr.sh suites 1/2)
 CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs all
                                      # the same, with live3b's plugin part (Surge XT, Airwindows) included
 ```
@@ -126,6 +128,62 @@ time alone too (6 of 11 runs by itself), always on the same check, "which sits n
 in": the view pages to the playhead a frame before the playhead is drawn there (150 ms later it is
 194 px in, as the check wants). That is a race of its own, not of running in parallel (branch `dn`
 fixes it), so no suite needed `serial`. Run 1 shared the machine with another track's check.
+
+### Tiers and parts (`--tier`, `--shard`)
+
+In short: every pull request runs the PR tier, `all --tier pr` (52 of the 74 runs), split over CI
+machines with `--shard`. The other 22 runs are tagged `tier: "nightly"` in `run.mjs`, each with
+why, and run every night with all the rest (`ci/check.sh --nightly`: `all`, one at a time).
+
+- `--tier pr` keeps the runs with no tag; `--tier nightly` only the tagged ones. Without `--tier`,
+  `all` is every run, as `ci/check.sh` wants.
+- A run is tagged for one of two reasons only. **speed**: it judges how fast something happens (a
+  bound under 2 s, a rate), so a slow or busy machine fails it with correct code. A wait that
+  only fails when something never happens is not one: nearly every suite has those, and they stay.
+  **flake**: it failed on correct code in a recorded run (HANDOFF.md's "Known flakes", or the
+  open-source audit of 2026-10-21) and the cause isn't fixed. A tagged suite is never weakened to
+  move back: fix the cause, then take the tag away.
+- `--shard i/n` runs part i of n. The runs are dealt out longest first, by the `s` seconds each
+  has in `SUITES`, to the part with the least so far, so the parts take about as long; each part
+  keeps the list's order. Every run is in exactly one part: the parts of one `--tier` together are
+  that `--tier` without `--shard`.
+- `--list` prints the runs that would run and stops (no server, no browser), so the parts can be
+  checked:
+
+```sh
+node e2e/run.mjs all --tier pr --list | sort > /tmp/one
+for i in 1 2; do node e2e/run.mjs all --tier pr --shard $i/2 --list; done | sort | cmp - /tmp/one && echo same
+```
+
+- `--no-clap` leaves out the runs that need the test plugins (`live3b`, `ph-window`), for a machine
+  without them (CI's Mac), and says so. Without it, such a run is `PART`, never `ok`.
+
+The nightly runs and why:
+
+| run | why it is nightly |
+|-----|-------------------|
+| `nx-effects-fix` | flake: a tooltip read before it changed (HANDOFF.md) |
+| `s8-audition-fix` | speed: a closed page lets go of its note within 1 s |
+| `st-record-fix` | speed: R records within 2 s |
+| `s8-meters-fix` | speed: 20 to 40 meter messages a second |
+| `attention-attn` | flake: first runs failed in three checks, 2026-10-15 to 10-17; cause not recorded |
+| `st-errors-fix` | flake: waited over 30 s for a Needs attention row, under load (HANDOFF.md) |
+| `newsong-none` | flake: the New Song dialog didn't open after Cmd-N, at half CPU (2026-10-21) |
+| `export-export` | speed: the server answers within 300 ms while exporting |
+| `st-midi-fix` | flake: a first run failed (2026-10-18); cause not recorded |
+| `s8-clips-fix` | flake: the left edge dragged a bar right read 8+28 (HANDOFF.md) |
+| `s8-leases-fix` | speed: a lease closes within 1 s, and 3 or more tempos are seen mid-drag |
+| `st-audio-fix` | flake: the revision moved after an MP3 was refused (HANDOFF.md) |
+| `live3a-fix` | speed: a ruler click and a seek land within 1 s |
+| `live3b-proj` | speed: previews answer within 150 ms during a compile; flake: its release writes another db() (HANDOFF.md; twice at half CPU, 2026-10-21) |
+| `s5-knobs-fix` | flake: the page detached after a double-click on a knob (HANDOFF.md) |
+| `taste-fix` | flake: the Bass header's click didn't select it within 30 s (HANDOFF.md) |
+| `gestures-fix` | flake: a first run failed (2026-10-18); cause not recorded |
+| `s8-tracks-fix` | speed: within 1.5 s; flake: it reads the new track's tab a moment too soon (twice at half CPU, 2026-10-21) |
+| `s8-mute-export` | speed: overlays.json within 1.5 s; flake: once on the Mac at e7518f4 (HANDOFF.md) |
+| `pl-mix-fix` | speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18) |
+| `bus-mix-fix` | flake: with nothing sent, the Reverb's meter rose above the floor in 3 of 31 runs, 2 of them in 28 runs alone on 4 cores (2026-10-21); cause not known |
+| `pl-ids-fix` | flake: a rename took more than one revision, at half CPU (2026-10-21) |
 
 ## Byte-identity of renders
 

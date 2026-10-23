@@ -6,7 +6,9 @@ exclude = ["std/kernels-src"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "MIT OR Apache-2.0"
+# None of our crates goes to crates.io (cargo-deny allows path dependencies only in crates that say so).
+publish = false
 
 [workspace.dependencies]
 m2-server = { path = "crates/server" }

@@ -1,0 +1,37 @@
+# .github/dependabot.yml: Dependabot opens pull requests that bring music2's pinned versions up to
+# date, once a week, grouped so that each ecosystem is one pull request, not dozens.
+#
+# In short: the GitHub Actions in .github/workflows (pinned by commit, with the version in a
+# comment, which Dependabot keeps in step), the Rust crates in Cargo.lock (both workspaces), and
+# the npm packages of web/ and e2e/. Each pull request goes through the PR tier like any other;
+# a Cargo.lock change also needs the full ci/check.sh before it lands (HANDOFF.md: --locked,
+# never cargo update by hand).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /std/kernels-src
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directories:
+      - /web
+      - /e2e
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns: ["*"]

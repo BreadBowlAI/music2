@@ -29,6 +29,22 @@
 //                  marked `serial` in SUITES run after the others, alone. Results print in the
 //                  list's order whatever the order they finish in, with the same counts, rules and
 //                  exit status as at --jobs 1.
+//   --tier <pr|nightly>
+//                  with `all`: only the runs of that tier. Each run in SUITES is in the PR tier unless
+//                  it says tier: "nightly", with why (a speed bound, a known flake). Without --tier,
+//                  `all` is every run, as ci/check.sh wants. Nightly runs are never weakened to move
+//                  back: their cause is fixed, then the tag goes.
+//   --shard <i>/<n>
+//                  with `all`: only the i-th of n parts of the runs (after --tier), so n machines
+//                  can share them. Each run is in exactly one part: the runs are dealt out longest
+//                  first (by their `s`) to the part with the least so far, so the parts take about
+//                  as long; within a part they keep the list's order. The parts of one --tier
+//                  together are exactly the runs of that --tier without --shard.
+//   --no-clap      with `all`: leave out the runs marked `clap` (live3b, ph-window), for a machine
+//                  without the test plugins (CI's Mac); said at the start. Without it, a run that
+//                  needs them and lacks them is PART, never ok
+//   --list         print the runs that would run, one name a line (with --tier, --shard and
+//                  --no-clap), and stop: no server, no browser
 //
 // Environment:
 //   M2_HEADLESS  the server: `cargo build -p m2-server --example headless` → target/<profile>/examples/headless
@@ -66,93 +82,100 @@ const E2E = path.dirname(fileURLToPath(import.meta.url));
 // 51 include the 11 of its plugin part: without CLAP_PATH it passes 40 and prints a SKIP.
 // `serial`: with --jobs above 1, the suite runs after the others, alone, for the reason its comment
 // gives (none needs it at present: what suites share was checked, see the README's "In parallel").
+// `s`: about how many seconds the run takes, one at a time on the Linux server (2026-10-21), so
+// --shard can make parts of about the same length; it needn't be exact. `tier: "nightly"`, with
+// `why`: the run is left out of the PR tier (--tier pr) and runs in the nightly one, for one of
+// two reasons only. speed: it judges how fast something happens (a bound under 2 s, a rate), so
+// a slow or busy machine fails it with correct code; a wait that only fails if something never
+// happens isn't one. flake: it failed on correct code in a recorded run, and the cause isn't
+// fixed yet (HANDOFF.md's "Known flakes").
 export const SUITES = [
-  ["graph", "proj", { expect: 19 }],
-  ["cables", "cables", { expect: 12 }],
-  ["undo", "cables", { expect: 10 }],
-  ["nx-undo", "fix", { expect: 18 }],
-  ["effects", "proj", { expect: 12 }],
-  ["nx-effects", "fix", { expect: 47 }],
-  ["layout", "proj", { expect: 39 }],
-  ["views", "proj", { expect: 30 }],
-  ["code", "proj", { expect: 58 }],
-  ["notes", "proj", { expect: 63 }],
-  ["s8-audition", "fix", { expect: 51 }],
-  ["nx-piano", "fix", { expect: 39 }],
-  ["nx-midi", "fix", { expect: 24 }],
-  ["st-record", "fix", { expect: 66 }],
-  ["io-record", "fix", { expect: 38 }],
-  ["pl-notes", "fix", { expect: 102 }],
-  ["pl-lanes", "fix", { expect: 28 }],
-  ["ports", "proj", { expect: 46 }],
-  ["s8-meters", "fix", { expect: 24 }],
-  ["dsp", "proj", { expect: 33 }],
-  ["start", "proj", { expect: 24 }],
-  ["start", "empty", { expect: 14 }],
-  ["st-guide", "none", { expect: 38 }],
-  ["fixes-graph", "fix", { expect: 42 }],
-  ["fixes-notes", "fix", { expect: 37 }],
-  ["attention", "attn", { expect: 57 }],
-  ["st-errors", "fix", { expect: 34 }],
-  ["newsong", "none", { expect: 71 }],
-  ["pl-projects", "none", { expect: 66 }],
-  ["nx-settings", "none", { expect: 42 }],
-  ["nx-nodevice", "none", { expect: 11 }],
-  ["sound-stops", "none", { expect: 13 }],
-  ["ex-faults", "none", { expect: 10 }],
-  ["export", "export", { expect: 37 }],
-  ["st-midi", "fix", { expect: 41 }],
-  ["st-stems", "export", { expect: 49 }],
-  ["fx-fixes", "none", { expect: 75 }],
-  ["s4-clips", "fix", { expect: 28 }],
-  ["s8-clips", "fix", { expect: 94 }],
-  ["s8-automation", "fix", { expect: 45 }],
-  ["s8-leases", "fix", { expect: 55 }],
-  ["st-audio", "fix", { expect: 94 }],
-  ["pl-zoom", "fix", { expect: 62 }],
-  ["pl-arrange", "fix", { expect: 60 }],
-  ["nx-nits", "fix", { expect: 27 }],
-  ["s4-attn", "fix", { expect: 13 }],
-  ["s4-problems", "fix", { expect: 18 }],
-  ["s4-meter", "fix", { expect: 8 }],
-  ["live3a", "fix", { expect: 49 }],
-  ["live3b", "proj", { clap: true, expect: 60 }],
-  ["ph-window", "none", { clap: true, expect: 9 }],
-  ["s5-knobs", "fix", { expect: 120 }],
-  ["s6-builders", "fix", { expect: 56 }],
-  ["s6-write", "fix", { expect: 36 }],
-  ["s6-fixes", "fix", { expect: 19 }],
-  ["taste", "fix", { expect: 39 }],
-  ["st-tips", "fix", { expect: 45 }],
-  ["gestures", "fix", { expect: 30 }],
-  ["g11-play", "fix", { expect: 24 }],
-  ["s8-tracks", "fix", { expect: 75 }],
-  ["pl-tracks", "fix", { expect: 20 }],
-  ["s8-mute", "export", { expect: 152 }],
-  ["s8-songbar", "fix", { expect: 84 }],
-  ["nx-click", "fix", { expect: 20 }],
-  ["s8-mix", "fix", { expect: 80 }],
-  ["pl-mix", "fix", { expect: 47 }],
-  ["bus-mix", "fix", { expect: 37 }],
-  ["pl-sounds", "fix", { expect: 46 }],
-  ["pl-ids", "fix", { expect: 39 }],
-  ["pc-keys", "fix", { expect: 37 }],
-  ["ab-sampler", "export", { expect: 23 }],
-  ["sx-follow", "fix", { expect: 22 }],
-  ["br-plugins", "fix", { probe: true, expect: 19 }],
-  ["br-presets", "fix", { probe: true, expect: 29 }],
+  ["graph", "proj", { expect: 19, s: 3 }],
+  ["cables", "cables", { expect: 12, s: 5 }],
+  ["undo", "cables", { expect: 10, s: 6 }],
+  ["nx-undo", "fix", { expect: 18, s: 2 }],
+  ["effects", "proj", { expect: 12, s: 7 }],
+  ["nx-effects", "fix", { expect: 47, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
+  ["layout", "proj", { expect: 39, s: 8 }],
+  ["views", "proj", { expect: 30, s: 2 }],
+  ["code", "proj", { expect: 58, s: 7 }],
+  ["notes", "proj", { expect: 63, s: 9 }],
+  ["s8-audition", "fix", { expect: 51, s: 10, tier: "nightly", why: "speed: a closed page lets go of its note within 1 s" }],
+  ["nx-piano", "fix", { expect: 39, s: 6 }],
+  ["nx-midi", "fix", { expect: 24, s: 3 }],
+  ["st-record", "fix", { expect: 66, s: 24, tier: "nightly", why: "speed: R records within 2 s" }],
+  ["io-record", "fix", { expect: 38, s: 7 }],
+  ["pl-notes", "fix", { expect: 102, s: 16 }],
+  ["pl-lanes", "fix", { expect: 28, s: 4 }],
+  ["ports", "proj", { expect: 46, s: 5 }],
+  ["s8-meters", "fix", { expect: 24, s: 17, tier: "nightly", why: "speed: 20 to 40 meter messages a second" }],
+  ["dsp", "proj", { expect: 33, s: 3 }],
+  ["start", "proj", { expect: 24, s: 3 }],
+  ["start", "empty", { expect: 14, s: 2 }],
+  ["st-guide", "none", { expect: 38, s: 7 }],
+  ["fixes-graph", "fix", { expect: 42, s: 8 }],
+  ["fixes-notes", "fix", { expect: 37, s: 6 }],
+  ["attention", "attn", { expect: 57, s: 6, tier: "nightly", why: "flake: first runs failed in three checks, 2026-10-15 to 10-17; cause not recorded" }],
+  ["st-errors", "fix", { expect: 34, s: 5, tier: "nightly", why: "flake: waited over 30 s for a Needs attention row, under load (HANDOFF.md)" }],
+  ["newsong", "none", { expect: 71, s: 10, tier: "nightly", why: "flake: the New Song dialog didn't open after Cmd-N, at half CPU (2026-10-21)" }],
+  ["pl-projects", "none", { expect: 66, s: 10 }],
+  ["nx-settings", "none", { expect: 42, s: 12 }],
+  ["nx-nodevice", "none", { expect: 11, s: 2 }],
+  ["sound-stops", "none", { expect: 13, s: 8 }],
+  ["ex-faults", "none", { expect: 10, s: 6 }],
+  ["export", "export", { expect: 37, s: 6, tier: "nightly", why: "speed: the server answers within 300 ms while exporting" }],
+  ["st-midi", "fix", { expect: 41, s: 4, tier: "nightly", why: "flake: a first run failed (2026-10-18); cause not recorded" }],
+  ["st-stems", "export", { expect: 49, s: 6 }],
+  ["fx-fixes", "none", { expect: 75, s: 34 }],
+  ["s4-clips", "fix", { expect: 28, s: 3 }],
+  ["s8-clips", "fix", { expect: 94, s: 11, tier: "nightly", why: "flake: the left edge dragged a bar right read 8+28 (HANDOFF.md)" }],
+  ["s8-automation", "fix", { expect: 45, s: 4 }],
+  ["s8-leases", "fix", { expect: 55, s: 14, tier: "nightly", why: "speed: a lease closes within 1 s, and 3 or more tempos are seen mid-drag" }],
+  ["st-audio", "fix", { expect: 94, s: 8, tier: "nightly", why: "flake: the revision moved after an MP3 was refused (HANDOFF.md)" }],
+  ["pl-zoom", "fix", { expect: 62, s: 20 }],
+  ["pl-arrange", "fix", { expect: 60, s: 8 }],
+  ["nx-nits", "fix", { expect: 27, s: 6 }],
+  ["s4-attn", "fix", { expect: 13, s: 2 }],
+  ["s4-problems", "fix", { expect: 18, s: 2 }],
+  ["s4-meter", "fix", { expect: 8, s: 2 }],
+  ["live3a", "fix", { expect: 49, s: 15, tier: "nightly", why: "speed: a ruler click and a seek land within 1 s" }],
+  ["live3b", "proj", { clap: true, expect: 60, s: 37, tier: "nightly", why: "speed: previews answer within 150 ms during a compile; flake: its release writes another db() (HANDOFF.md; twice at half CPU, 2026-10-21)" }],
+  ["ph-window", "none", { clap: true, expect: 9, s: 3 }],
+  ["s5-knobs", "fix", { expect: 120, s: 5, tier: "nightly", why: "flake: the page detached after a double-click on a knob (HANDOFF.md)" }],
+  ["s6-builders", "fix", { expect: 56, s: 5 }],
+  ["s6-write", "fix", { expect: 36, s: 7 }],
+  ["s6-fixes", "fix", { expect: 19, s: 4 }],
+  ["taste", "fix", { expect: 39, s: 27, tier: "nightly", why: "flake: the Bass header's click didn't select it within 30 s (HANDOFF.md)" }],
+  ["st-tips", "fix", { expect: 45, s: 11 }],
+  ["gestures", "fix", { expect: 30, s: 8, tier: "nightly", why: "flake: a first run failed (2026-10-18); cause not recorded" }],
+  ["g11-play", "fix", { expect: 24, s: 11 }],
+  ["s8-tracks", "fix", { expect: 75, s: 5, tier: "nightly", why: "speed: within 1.5 s; flake: it reads the new track's tab a moment too soon (twice at half CPU, 2026-10-21)" }],
+  ["pl-tracks", "fix", { expect: 20, s: 4 }],
+  ["s8-mute", "export", { expect: 152, s: 28, tier: "nightly", why: "speed: overlays.json within 1.5 s; flake: once on the Mac at e7518f4 (HANDOFF.md)" }],
+  ["s8-songbar", "fix", { expect: 84, s: 13 }],
+  ["nx-click", "fix", { expect: 20, s: 8 }],
+  ["s8-mix", "fix", { expect: 80, s: 23 }],
+  ["pl-mix", "fix", { expect: 47, s: 14, tier: "nightly", why: "speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18)" }],
+  ["bus-mix", "fix", { expect: 37, s: 8, tier: "nightly", why: "flake: with nothing sent, the Reverb's meter rose above the floor in 3 of 31 runs, 2 of them in 28 runs alone on 4 cores (2026-10-21); cause not known" }],
+  ["pl-sounds", "fix", { expect: 46, s: 4 }],
+  ["pl-ids", "fix", { expect: 39, s: 3, tier: "nightly", why: "flake: a rename took more than one revision, at half CPU (2026-10-21)" }],
+  ["pc-keys", "fix", { expect: 37, s: 3 }],
+  ["ab-sampler", "export", { expect: 23, s: 4 }],
+  ["sx-follow", "fix", { expect: 22, s: 2 }],
+  ["br-plugins", "fix", { probe: true, expect: 19, s: 2 }],
+  ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 
 function usage(msg) {
   if (msg) console.error(`run.mjs: ${msg}`);
-  console.error("usage: M2_HEADLESS=<bin> node e2e/run.mjs <suite|all> [kind] [--repo DIR] [--out DIR] [--keep] [--quiet] [--jobs N]");
+  console.error("usage: M2_HEADLESS=<bin> node e2e/run.mjs <suite|all> [kind] [--repo DIR] [--out DIR] [--keep] [--quiet] [--jobs N] [--tier pr|nightly] [--shard I/N] [--no-clap] [--list]");
   console.error(`suites: ${[...new Set(SUITES.map(([s]) => s))].join(" ")}`);
   process.exit(2);
 }
 
 const argv = process.argv.slice(2);
-const opts = { repo: path.resolve(E2E, ".."), out: null, keep: false, quiet: false, jobs: 1 };
+const opts = { repo: path.resolve(E2E, ".."), out: null, keep: false, quiet: false, jobs: 1, tier: null, shard: null, list: false, noClap: false };
 const pos = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -164,7 +187,17 @@ for (let i = 0; i < argv.length; i++) {
     const n = a === "--jobs" ? argv[++i] : a.slice("--jobs=".length);
     if (!/^[1-9][0-9]*$/.test(n ?? "")) usage("--jobs needs a whole number, 1 or more");
     opts.jobs = Number(n);
-  }
+  } else if (a === "--tier" || a.startsWith("--tier=")) {
+    const t = a === "--tier" ? argv[++i] : a.slice("--tier=".length);
+    if (t !== "pr" && t !== "nightly") usage("--tier is pr or nightly");
+    opts.tier = t;
+  } else if (a === "--shard" || a.startsWith("--shard=")) {
+    const v = a === "--shard" ? argv[++i] : a.slice("--shard=".length);
+    const m = /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(v ?? "");
+    if (!m || Number(m[1]) > Number(m[2])) usage("--shard needs i/n, with i from 1 to n");
+    opts.shard = [Number(m[1]), Number(m[2])];
+  } else if (a === "--list") opts.list = true;
+  else if (a === "--no-clap") opts.noClap = true;
   else if (a === "-h" || a === "--help") usage();
   else if (a.startsWith("--")) usage(`unknown option ${a}`);
   else pos.push(a);
@@ -172,6 +205,64 @@ for (let i = 0; i < argv.length; i++) {
 const [which, kindArg] = pos;
 if (!which) usage();
 if (kindArg && !KINDS.includes(kindArg)) usage(`unknown kind ${kindArg} (${KINDS.join(", ")})`);
+if ((opts.tier || opts.shard || opts.noClap) && which !== "all") usage("--tier, --shard and --no-clap go with all");
+
+// shard(list, i, n): the i-th of n parts of list, dealt out longest first (by `s`, ties in the
+// list's order) to the part with the least so far (ties: the first), in the list's order.
+function shard(list, i, n) {
+  const secs = (k) => list[k][2]?.s ?? 10;
+  const order = list.map((_, k) => k).sort((a, b) => secs(b) - secs(a) || a - b);
+  const load = new Array(n).fill(0);
+  const part = new Array(list.length);
+  for (const k of order) {
+    let best = 0;
+    for (let j = 1; j < n; j++) if (load[j] < load[best]) best = j;
+    part[k] = best;
+    load[best] += secs(k);
+  }
+  return list.filter((_, k) => part[k] === i - 1);
+}
+
+let runs;
+// What --tier and --shard chose, said at the start of the run.
+let chose = "";
+if (which === "all") {
+  if (kindArg) usage("all takes no kind");
+  runs = SUITES;
+  // Two runs of one name would share a folder and a log.
+  const names = SUITES.map(([s, k]) => `${s}-${k}`);
+  const twice = names.find((n, i) => names.indexOf(n) !== i);
+  if (twice) usage(`SUITES lists ${twice} twice`);
+  const untagged = SUITES.find(([, , o]) => o.tier && (o.tier !== "nightly" || !o.why));
+  if (untagged) usage(`SUITES: ${untagged[0]}-${untagged[1]} needs tier: "nightly" and a why`);
+  if (opts.tier) {
+    runs = runs.filter(([, , o]) => (o.tier ?? "pr") === opts.tier);
+    chose = `tier ${opts.tier}: ${runs.length} of ${SUITES.length} runs`;
+  }
+  if (opts.noClap) {
+    const gone = runs.filter(([, , o]) => o.clap).map(([s, k]) => `${s}-${k}`);
+    runs = runs.filter(([, , o]) => !o.clap);
+    chose += `${chose ? "; " : ""}--no-clap: ${gone.length ? `${gone.join(", ")} left out` : "nothing to leave out"}`;
+  }
+  if (opts.shard) {
+    const [i, n] = opts.shard;
+    const of = runs.length;
+    runs = shard(runs, i, n);
+    const secs = runs.reduce((a, [, , o]) => a + (o.s ?? 10), 0);
+    chose += `${chose ? "; " : ""}shard ${i}/${n}: ${runs.length} of ${of} runs (about ${secs} s one at a time)`;
+  }
+} else {
+  const known = SUITES.filter(([s]) => s === which);
+  if (!known.length) usage(`unknown suite ${which}`);
+  if (!kindArg) runs = known.slice(0, 1);
+  // A kind SUITES doesn't list for this suite: its options, but no count to expect.
+  else runs = [known.find(([, k]) => k === kindArg) ?? [which, kindArg, { ...known[0][2], expect: undefined }]];
+}
+
+if (opts.list) {
+  for (const [s, k] of runs) console.log(`${s}-${k ?? "proj"}`);
+  process.exit(0);
+}
 
 const headless = process.env.M2_HEADLESS && path.resolve(process.env.M2_HEADLESS);
 if (!headless || !fs.existsSync(headless)) usage("set M2_HEADLESS to the headless server binary");
@@ -182,22 +273,6 @@ const clapPath = process.env.CLAP_PATH ? path.resolve(process.env.CLAP_PATH) : n
 const timeout = Number(process.env.E2E_TIMEOUT ?? 600) * 1000;
 if (!fs.existsSync(path.join(opts.repo, "examples/first-song"))) usage(`${opts.repo} has no examples/first-song`);
 if (!fs.existsSync(path.join(E2E, "node_modules/puppeteer-core"))) usage(`run \`npm ci\` in ${E2E} first`);
-
-let runs;
-if (which === "all") {
-  if (kindArg) usage("all takes no kind");
-  runs = SUITES;
-  // Two runs of one name would share a folder and a log.
-  const names = SUITES.map(([s, k]) => `${s}-${k}`);
-  const twice = names.find((n, i) => names.indexOf(n) !== i);
-  if (twice) usage(`SUITES lists ${twice} twice`);
-} else {
-  const known = SUITES.filter(([s]) => s === which);
-  if (!known.length) usage(`unknown suite ${which}`);
-  if (!kindArg) runs = known.slice(0, 1);
-  // A kind SUITES doesn't list for this suite: its options, but no count to expect.
-  else runs = [known.find(([, k]) => k === kindArg) ?? [which, kindArg, { ...known[0][2], expect: undefined }]];
-}
 
 const made = opts.out ?? fs.mkdtempSync(path.join(os.tmpdir(), "m2-e2e-"));
 fs.mkdirSync(made, { recursive: true });
@@ -230,6 +305,7 @@ if (builtIn(headless, opts.repo) === false) {
       `"Open an Example" from the checkout it was compiled in, whatever --repo says. Pass that checkout as --repo.`,
   );
 }
+if (chose) console.log(chose);
 if (runs.some(([, , o]) => o?.clap) && !clapPath) {
   console.log(
     "note: CLAP_PATH is not set, so live3b skips its plugin part (11 checks) and is reported PART. " +

@@ -414,7 +414,9 @@ impl Recorder {
 pub(super) fn label_of(cp: &ControlPlane, module: &str) -> String {
     cp.open
         .as_ref()
-        .and_then(|p| p.shown.timeline.tracks.iter().find(|t| t.module == module).and_then(|t| t.head.get("label")?.as_str().map(String::from)))
+        .and_then(|p| {
+            p.shown.timeline.tracks.iter().find(|t| t.module == module).and_then(|t| t.head.get("label")?.as_str().map(String::from))
+        })
         .unwrap_or_else(|| module.to_string())
 }
 
@@ -860,7 +862,8 @@ impl Graph {
                 if let Err(err) = self.name_step(e.token, revision, format!("recording on {label}"), false) {
                     eprintln!("music2: couldn't name the recording's undo step: {err:#}");
                 }
-                let mut w = json!({"revision": revision, "made": v["made"], "module": e.module, "lane": e.lane, "asset": written.0.asset.as_str()});
+                let mut w =
+                    json!({"revision": revision, "made": v["made"], "module": e.module, "lane": e.lane, "asset": written.0.asset.as_str()});
                 let notes: Vec<&str> = written.2.as_deref().into_iter().chain((written.1 > 0).then_some(take_audio::TOO_SLOW)).collect();
                 if !notes.is_empty() {
                     w["note"] = json!(notes.join(" "));
@@ -933,7 +936,6 @@ impl Inner {
             None => Value::Null,
         }
     }
-
 }
 
 #[cfg(test)]

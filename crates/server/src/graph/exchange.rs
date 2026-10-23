@@ -122,7 +122,8 @@ impl Graph {
             let o = a.open.as_ref().filter(|o| o.token == token).ok_or_else(|| anyhow!("the song was closed"))?;
             let seconds = m2_editor::render::bounce_seconds(&rev.compiled.data);
             // Offline renders run at the project's rate (RENDER-31a).
-            Render::new(stem, &o.session.packages, rev.project.sample_rate(), 0.0, Length::Seconds(seconds), threads).map_err(super::plainly)
+            Render::new(stem, &o.session.packages, rev.project.sample_rate(), 0.0, Length::Seconds(seconds), threads)
+                .map_err(super::plainly)
         })
     }
 }

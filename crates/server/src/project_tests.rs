@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::*;
 use crate::graph::Graph;
 
-const MANIFEST: &str = "[project]\nname = \"Night Drive\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+const MANIFEST: &str =
+    "[project]\nname = \"Night Drive\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
 const SONG: &str = "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n";
 
 /// A temporary folder holding `songs/Night Drive` (with a `.music2/` and a `.git` of its own) and
@@ -86,11 +87,13 @@ fn save_as_copies_the_song_without_its_local_folder() {
 fn save_as_opens_the_copy_and_leaves_the_original() {
     let songs = Songs::new();
     let state = songs.open();
-    let before: Vec<String> = ["music2.toml", "song.ts", "data/arrangement.json", ".music2/view.json"].iter().map(|f| read(&songs.song(), f)).collect();
+    let before: Vec<String> =
+        ["music2.toml", "song.ts", "data/arrangement.json", ".music2/view.json"].iter().map(|f| read(&songs.song(), f)).collect();
     let opened = save_as(&state, &SaveAs { session: token(&state), name: "Summer".into(), dir: None }).unwrap();
     assert_eq!(opened["name"], json!("Summer"));
     assert_eq!(state.graph.dir(), Some(songs.0.join("songs/Summer")), "the copy is the open song");
-    let after: Vec<String> = ["music2.toml", "song.ts", "data/arrangement.json", ".music2/view.json"].iter().map(|f| read(&songs.song(), f)).collect();
+    let after: Vec<String> =
+        ["music2.toml", "song.ts", "data/arrangement.json", ".music2/view.json"].iter().map(|f| read(&songs.song(), f)).collect();
     assert_eq!(after, before, "the original is as it was");
     assert_eq!(names(&state), ["Summer", "Night Drive"], "both in the recent list, the copy first");
     // Another folder; and a name whose folder is there is refused, making nothing.
@@ -98,7 +101,9 @@ fn save_as_opens_the_copy_and_leaves_the_original() {
     std::fs::create_dir_all(&other).unwrap();
     save_as(&state, &SaveAs { session: token(&state), name: "Autumn".into(), dir: Some(other.clone()) }).unwrap();
     assert_eq!(state.graph.dir(), Some(other.join("Autumn")));
-    let e = save_as(&state, &SaveAs { session: token(&state), name: "night drive".into(), dir: Some(songs.0.join("songs")) }).unwrap_err().to_string();
+    let e = save_as(&state, &SaveAs { session: token(&state), name: "night drive".into(), dir: Some(songs.0.join("songs")) })
+        .unwrap_err()
+        .to_string();
     assert_eq!(e, "A folder called night drive is already there. Pick another name.");
     let e = save_as(&state, &SaveAs { session: token(&state) + 1, name: "Winter".into(), dir: None }).unwrap_err().to_string();
     assert!(e.contains("open song changed"), "{e}");
@@ -170,7 +175,10 @@ fn rename_with_its_folder_asks_about_unsaved_code() {
     let state = songs.open();
     state.graph.set_unsaved(token(&state), vec!["song.ts".into()]).unwrap();
     let e = rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true, anyway: false }).unwrap_err().to_string();
-    assert_eq!(e, "song.ts has unsaved edits in the code editor. Renaming the folder closes the song without saving them. Save first, or rename anyway.");
+    assert_eq!(
+        e,
+        "song.ts has unsaved edits in the code editor. Renaming the folder closes the song without saving them. Save first, or rename anyway."
+    );
     assert_eq!(manifest_name(&songs.song()), "Night Drive", "nothing was written");
     assert_eq!(state.graph.dir(), Some(songs.song()));
     state.graph.set_unsaved(token(&state), vec!["song.ts".into(), "tracks/bass.ts".into()]).unwrap();

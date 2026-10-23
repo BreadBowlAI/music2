@@ -248,7 +248,10 @@ impl Timed {
         out.info(format!("{on}of what is counted, the server's before it sends"), Summary::of(&self.prepare));
         out.info(format!("{on}then waiting for the next callback to take it (one device buffer at most)"), Summary::of(&self.taken));
         if !self.durable.is_empty() {
-            out.info(format!("{on}heard as its preview (PLANE-5): from the request until its commit is durable"), Summary::of(&self.durable));
+            out.info(
+                format!("{on}heard as its preview (PLANE-5): from the request until its commit is durable"),
+                Summary::of(&self.durable),
+            );
         }
         out.check(format!("{on}audible within compile + {budget:.0} ms"), heard.max <= budget, format!("past the session's work: {heard}"));
     }
@@ -297,7 +300,8 @@ pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let song = lab.compile(&dir)?;
     let graph = open_at(Arc::new(Graph::default()), &dir, &song, o.at)?;
     let rules = "RENDER-8, RENDER-25, RENDER-25a";
-    let mut out = Outcome::new("G5 and G7a add effect, through the server", rules, &format!("server on {} from {:.0} s", o.reference.name(), o.at));
+    let mut out =
+        Outcome::new("G5 and G7a add effect, through the server", rules, &format!("server on {} from {:.0} s", o.reference.name(), o.at));
     let call = {
         let s = lab.session(&dir)?;
         let site = s.accepted().compiled.sites.iter().find(|x| x.in_project && x.file == "tracks/t02.ts" && x.callee == "pluck").cloned();

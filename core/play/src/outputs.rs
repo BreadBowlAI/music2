@@ -77,7 +77,13 @@ impl Audio {
             Audio::Silent(names) => names
                 .iter()
                 .enumerate()
-                .map(|(i, name)| Output { id: name.clone(), name: name.clone(), default: i == 0, rate: SILENT_RATE, frames: Some(SILENT_FRAMES) })
+                .map(|(i, name)| Output {
+                    id: name.clone(),
+                    name: name.clone(),
+                    default: i == 0,
+                    rate: SILENT_RATE,
+                    frames: Some(SILENT_FRAMES),
+                })
                 .collect(),
             Audio::Fail => vec![],
         }
@@ -165,7 +171,8 @@ pub(crate) fn listed(seen: &[(String, String)], default: Option<&str>, mut opens
     }
     let mut out = vec![];
     for name in names {
-        let mut ways: Vec<(u8, usize)> = seen.iter().enumerate().filter(|(_, (_, n))| n == name).filter_map(|(i, (id, _))| Some((rank(id)?, i))).collect();
+        let mut ways: Vec<(u8, usize)> =
+            seen.iter().enumerate().filter(|(_, (_, n))| n == name).filter_map(|(i, (id, _))| Some((rank(id)?, i))).collect();
         ways.sort_by_key(|&(r, _)| r);
         if let Some((i, (rate, frames))) = ways.into_iter().find_map(|(_, i)| Some((i, opens(i)?))) {
             let id = seen[i].0.clone();

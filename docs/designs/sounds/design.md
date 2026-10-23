@@ -1,7 +1,7 @@
 # The sounds merge: design
 
 Written 2026-10-17, at the end of the merge's fourth slice, on the branch `sounds-merge` (from `main` at
-`cbac57c`). It is the plan (`~/m2-runs/sounds/plan.md`, 2026-10-16), trimmed to what was built and why, with
+`cbac57c`). It is the plan (`$SCRATCH/sounds/plan.md`, 2026-10-16), trimmed to what was built and why, with
 its attack and the lead's decisions L1 to L7 folded in. What each slice did, its checks, its red-first runs and
 its numbers are in `build-notes.md` beside this file.
 

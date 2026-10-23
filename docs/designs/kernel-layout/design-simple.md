@@ -3,9 +3,9 @@
 Label: design-simple. This is research only: nothing was built, run or measured for it.
 
 How to read the citations:
-- A bare path such as `core/runtime/src/lib.rs:332` is under `/home/jerry/m2-runs/idea3/src` (step 7, `ed7fc8e`). `cut1.diff:N` is `/home/jerry/m2-runs/idea3/cut1.diff`.
+- A bare path such as `core/runtime/src/lib.rs:332` is under `$SCRATCH/idea3/src` (step 7, `ed7fc8e`). `cut1.diff:N` is `$SCRATCH/idea3/cut1.diff`.
 - `W/…`, `E/…` and `CG/…` are `wasmtime-49.0.2/src`, `wasmtime-environ-49.0.2/src` and `cranelift-codegen-meta-0.136.2/src`, all under `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`.
-- `results.md` is `~/m2-runs/speed/prof/results.md`, `plan.md` is `~/m2-runs/speed/plan.md`, and `refresh.md` is `~/m2-runs/s8a/refresh.md`. `code-map §N` and `external §N` are the two notes beside this one.
+- `results.md` is `$SCRATCH/speed/prof/results.md`, `plan.md` is `$SCRATCH/speed/plan.md`, and `refresh.md` is `$SCRATCH/s8a/refresh.md`. `code-map §N` and `external §N` are the two notes beside this one.
 - "Unverified" marks what I couldn't check. "Estimate" marks arithmetic on measured numbers or on counts from the code, and each one shows its sums.
 
 ---

@@ -85,7 +85,8 @@ impl Preset {
     /// The file's text: two-space JSON, keys in the format's order, values by name.
     pub fn text(&self) -> String {
         let s = |x: &str| serde_json::to_string(x).expect("a string is JSON");
-        let mut out = format!("{{\n  \"m2preset\": {FORMAT},\n  \"name\": {},\n  \"sound\": {},\n  \"values\": {{", s(&self.name), s(&self.sound));
+        let mut out =
+            format!("{{\n  \"m2preset\": {FORMAT},\n  \"name\": {},\n  \"sound\": {},\n  \"values\": {{", s(&self.name), s(&self.sound));
         for (i, (k, v)) in self.values.iter().enumerate() {
             out += if i == 0 { "\n" } else { ",\n" };
             // Rust writes the shortest form that reads back as the same number: `4500`, `0.25`.
@@ -174,7 +175,8 @@ pub fn list(dir: &Path, sound: &str) -> Vec<Listed> {
 
 /// The preset for `sound` called `name` in `dir`, read.
 pub fn read(dir: &Path, sound: &str, name: &str) -> Result<Preset, String> {
-    let found = list(dir, sound).into_iter().find(|l| l.name == name).ok_or_else(|| format!("There is no preset called {name} any more."))?;
+    let found =
+        list(dir, sound).into_iter().find(|l| l.name == name).ok_or_else(|| format!("There is no preset called {name} any more."))?;
     let text = std::fs::read_to_string(&found.file).map_err(|e| format!("{name} couldn't be read: {e}"))?;
     Preset::parse(&text)
 }
@@ -306,7 +308,8 @@ fn slots(s: &Session, sound: &Sound) -> Vec<(ControlDesc, Slotted)> {
     let desc = &sound.desc;
     let mut out = vec![];
     for d in desc.controls.iter().filter(|d| d.each.is_none()) {
-        let found = all.iter().find(|c| c.calls.contains(&sound.site.id) && c.declared.iter().any(|x| x.component == desc.id && x.slot == d.name));
+        let found =
+            all.iter().find(|c| c.calls.contains(&sound.site.id) && c.declared.iter().any(|x| x.component == desc.id && x.slot == d.name));
         let slotted = match found {
             Some(c) if c.unit != d.unit => Slotted::Kept(Why::Units),
             Some(c) if c.calls.len() == 1 && c.declared.len() == 1 => Slotted::Mine(c.clone()),
@@ -432,7 +435,8 @@ pub fn load(s: &mut Session, at: u64, node: &str, preset: &Preset) -> Result<Loa
         let edited = Edited { revision: s.accepted().number, file: site.file.clone(), before: said.clone(), after: said };
         return Ok(Loaded { edited, kept });
     }
-    let joined = lens::together(&inserts).ok_or_else(|| EditError::Rejected("these settings can't be written into the call at once".into()))?;
+    let joined =
+        lens::together(&inserts).ok_or_else(|| EditError::Rejected("these settings can't be written into the call at once".into()))?;
     rewrites.entry(site.file.clone()).or_default().extend(joined);
     let mut ops = vec![];
     for (file, mut edits) in rewrites {
@@ -532,7 +536,9 @@ pub fn plugin_call(s: &Session, at: u64, node: &str) -> Result<PluginCall, EditE
     let mut made = vec![];
     for m in &rev.compiled.ir.modules {
         walk(&m.nodes, &mut |n| {
-            if matches!(n.op, Op::Plugin { .. }) && (n.origin.as_ref().is_some_and(|o| o.site == site.id) || calls_of(m, n).any(|f| f == site.id)) {
+            if matches!(n.op, Op::Plugin { .. })
+                && (n.origin.as_ref().is_some_and(|o| o.site == site.id) || calls_of(m, n).any(|f| f == site.id))
+            {
                 made.push((m, n.clone()));
             }
         });
@@ -541,7 +547,8 @@ pub fn plugin_call(s: &Session, at: u64, node: &str) -> Result<PluginCall, EditE
     let Op::Plugin { plugin, inputs, .. } = &n.op else { unreachable!("a plugin node") };
     let info = s.packages.plugin_info(plugin);
     let label = info.map_or_else(|| plugin.strip_prefix("clap:").unwrap_or(plugin).to_string(), |i| i.found.name.clone());
-    let state = n.op.state_path().and_then(|p| Some((Key::new(&m.key).ok()?, p.iter().map(|k| Key::new(k).ok()).collect::<Option<Vec<_>>>()?)));
+    let state =
+        n.op.state_path().and_then(|p| Some((Key::new(&m.key).ok()?, p.iter().map(|k| Key::new(k).ok()).collect::<Option<Vec<_>>>()?)));
     let all = controls::controls(s);
     let text = rev.snapshot.files.get(Path::new(&site.file)).map_or("", |t| &t[..]);
     let mut params = vec![];

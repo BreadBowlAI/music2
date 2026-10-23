@@ -234,7 +234,12 @@ impl Errors {
 
     fn read(&self) -> DeviceErrors {
         let n = |e: DeviceEvent| self.0[e as usize].load(Ordering::Relaxed);
-        DeviceErrors { xruns: n(DeviceEvent::Xrun), changes: n(DeviceEvent::Changed), gone: n(DeviceEvent::Gone), other: n(DeviceEvent::Other) }
+        DeviceErrors {
+            xruns: n(DeviceEvent::Xrun),
+            changes: n(DeviceEvent::Changed),
+            gone: n(DeviceEvent::Gone),
+            other: n(DeviceEvent::Other),
+        }
     }
 }
 
@@ -319,8 +324,9 @@ impl Player {
         let mut open = self.inputs.open.lock().unwrap_or_else(|e| e.into_inner());
         // The same input, unless its device went away, or the one chosen wasn't there: then it
         // opens again, and finds the one chosen once it is plugged in.
-        if let Some(o) =
-            open.as_ref().filter(|o| o.choice == *choice && o.listen.rate == rate && o.errors.read().gone == 0 && o.listen.missing.is_none())
+        if let Some(o) = open
+            .as_ref()
+            .filter(|o| o.choice == *choice && o.listen.rate == rate && o.errors.read().gone == 0 && o.listen.missing.is_none())
         {
             return Ok(o.listen.clone());
         }
@@ -431,7 +437,14 @@ impl Player {
     /// Open a device's input stream on a thread of its own (cpal streams can't move between threads
     /// on every OS), its callback a [`Feed`]: its name, its channels (1 or 2), what keeps it, and
     /// whether it is the one chosen (always, when none is).
-    fn open_device(&self, choice: &InputChoice, engine: Arc<Ring>, take: Arc<Ring>, rate: u32, errors: Arc<Errors>) -> Result<(String, u16, Arc<()>, bool)> {
+    fn open_device(
+        &self,
+        choice: &InputChoice,
+        engine: Arc<Ring>,
+        take: Arc<Ring>,
+        rate: u32,
+        errors: Arc<Errors>,
+    ) -> Result<(String, u16, Arc<()>, bool)> {
         let host = cpal::default_host();
         let by_id = |id: &str| host.device_by_id(&id.parse().ok()?);
         // The one chosen; else the output's own device, when it records; else the default input.

@@ -21,7 +21,8 @@ use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2).
-const PURE: [&str; 6] = ["examples/first-song", "examples/resample", "examples/sounds", "examples/sampler", "templates/starter", "templates/empty"];
+const PURE: [&str; 6] =
+    ["examples/first-song", "examples/resample", "examples/sounds", "examples/sampler", "templates/starter", "templates/empty"];
 
 /// `song` live through the player, from 0 for `frames`, with a no-op swap of every lane at
 /// frame `swap_at` when given.
@@ -277,10 +278,11 @@ fn points(song: &Song) -> Vec<usize> {
 
 /// The fixtures G7c plays: every pure one but the silent templates/empty, and p16.
 fn g7c() -> Vec<(String, Song)> {
-    let mut out: Vec<(String, Song)> = ["examples/first-song", "examples/resample", "examples/sounds", "examples/sampler", "templates/starter"]
-        .into_iter()
-        .map(|n| (n.to_string(), fixture(n)))
-        .collect();
+    let mut out: Vec<(String, Song)> =
+        ["examples/first-song", "examples/resample", "examples/sounds", "examples/sampler", "templates/starter"]
+            .into_iter()
+            .map(|n| (n.to_string(), fixture(n)))
+            .collect();
     out.push(("p16".into(), p16()));
     out
 }
@@ -697,7 +699,9 @@ fn renders_through_the_host_process_are_the_same_bits() {
 
     let clap = std::env::var_os("CLAP_PATH").map(std::path::PathBuf::from);
     if !clap.is_some_and(|c| c.join("Surge XT.clap").exists() && c.join("Airwindows Consolidated.clap").exists()) {
-        eprintln!("renders_through_the_host_process_are_the_same_bits: no Surge XT and Airwindows in CLAP_PATH, so with-plugins wasn't rendered");
+        eprintln!(
+            "renders_through_the_host_process_are_the_same_bits: no Surge XT and Airwindows in CLAP_PATH, so with-plugins wasn't rendered"
+        );
         return;
     }
     let render = |host: Option<Arc<dyn m2_plugins::PluginHost>>| {
@@ -708,7 +712,8 @@ fn renders_through_the_host_process_are_the_same_bits() {
     };
     let (a, b) = (render(None), render(Some(remote())));
     assert_eq!(a.len(), b.len());
-    let level = |x: &[[f32; 2]]| (x.iter().map(|f| (f[0] as f64).powi(2) + (f[1] as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt() + 1e-9;
+    let level =
+        |x: &[[f32; 2]]| (x.iter().map(|f| (f[0] as f64).powi(2) + (f[1] as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt() + 1e-9;
     // Each whole second of the song; the second past its end is a tail, Surge XT's own noise.
     let song = a.len() / SR as usize - 1;
     for (s, (x, y)) in a.chunks(SR as usize).zip(b.chunks(SR as usize)).take(song).enumerate() {
@@ -723,7 +728,9 @@ fn renders_through_the_host_process_are_the_same_bits() {
 #[test]
 fn no_fixture_gets_a_delay() {
     let mut songs: Vec<(String, Song)> =
-        ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"].map(|n| (n.to_string(), fixture(n))).into();
+        ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"]
+            .map(|n| (n.to_string(), fixture(n)))
+            .into();
     songs.push(("p16".into(), p16()));
     let clap = std::env::var_os("CLAP_PATH").map(std::path::PathBuf::from);
     match clap.is_some_and(|c| c.join("Surge XT.clap").exists() && c.join("Airwindows Consolidated.clap").exists()) {

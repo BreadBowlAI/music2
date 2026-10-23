@@ -57,16 +57,28 @@ fn import_places_a_clip_and_takes_the_lock() {
     // With no track named: a new audio track, named after the file, at the end.
     let new = m2(&["import", dir, a.to_str().unwrap(), "--at", "3"]);
     assert!(new.status.success(), "{}", String::from_utf8_lossy(&new.stderr));
-    assert!(String::from_utf8_lossy(&new.stdout).contains("onto a new track Lead Vox (ID lead-vox) from beat 8"), "{}", String::from_utf8_lossy(&new.stdout));
+    assert!(
+        String::from_utf8_lossy(&new.stdout).contains("onto a new track Lead Vox (ID lead-vox) from beat 8"),
+        "{}",
+        String::from_utf8_lossy(&new.stdout)
+    );
     assert!(std::fs::read_to_string(song.join("tracks/lead-vox.ts")).unwrap().contains("lane.audio(\"clips\")"));
-    assert!(std::fs::read_to_string(song.join("data/lead-vox/clips.json")).unwrap().contains(r#""start": 8, "length": 2, "asset": "Lead Vox.wav""#));
+    assert!(
+        std::fs::read_to_string(song.join("data/lead-vox/clips.json"))
+            .unwrap()
+            .contains(r#""start": 8, "length": 2, "asset": "Lead Vox.wav""#)
+    );
     // Refused in words: a track with no audio lane, a file that isn't a WAV.
     let none = m2(&["import", dir, b.to_str().unwrap(), "--track", "keys"]);
     assert!(!none.status.success() && String::from_utf8_lossy(&none.stderr).contains("has no audio lane"));
     let text = temp.0.join("notes.wav");
     std::fs::write(&text, "words").unwrap();
     let bad = m2(&["import", dir, text.to_str().unwrap(), "--track", "chops"]);
-    assert!(String::from_utf8_lossy(&bad.stderr).contains("notes.wav isn't a WAV file. music2 reads WAV files."), "{}", String::from_utf8_lossy(&bad.stderr));
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("notes.wav isn't a WAV file. music2 reads WAV files."),
+        "{}",
+        String::from_utf8_lossy(&bad.stderr)
+    );
     // While another program holds the song, it copies nothing and names the holder (WRITE-18).
     let held = m2_session::lock::acquire(&song, "music2", m2_session::lock::RETRY).unwrap();
     let c = temp.0.join("c.wav");

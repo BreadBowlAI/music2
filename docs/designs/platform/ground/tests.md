@@ -1,8 +1,8 @@
 # Rust tests, clippy and builds on Linux: the root causes
 
-Ground work for the platform design. Measured on jerry-ax102 (Ubuntu 24.04, glibc 2.39, Ryzen 9 7950X3D, ext4; `/tmp`
-is on that ext4) at f126d03, with rustc 1.99.0. Logs are in `~/m2-runs/base-f126d03/` (the lead's baseline) and
-`~/m2-runs/logs/gt-*.log` (mine).
+Ground work for the platform design. Measured on the Linux server (Ubuntu 24.04, glibc 2.39, Ryzen 9 7950X3D, ext4; `/tmp`
+is on that ext4) at f126d03, with rustc 1.99.0. Logs are in `$SCRATCH/base-f126d03/` (the lead's baseline) and
+`$SCRATCH/logs/gt-*.log` (mine).
 
 ## In short
 

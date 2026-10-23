@@ -29,8 +29,8 @@ use crate::cable::{Inlet, Outlet, inlets, outlets};
 use crate::controls::{Control, Declared, controls, declared, not_insertable};
 use crate::effect::{Listens, bypass_refused, calls_of, effect_at, is_bypassed, listens, move_row};
 use crate::sampler::{self, SamplerCard};
-use crate::voices;
 use crate::sites::{Params, fn_params};
+use crate::voices;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct GraphView {
@@ -760,7 +760,9 @@ pub fn view(session: &Session) -> GraphView {
             let title = match (&component, n.map(|n| &n.op)) {
                 (Some(c), _) if kind == "call" => rev.compiled.components.get(c.as_str()).map(|d| d.label.clone()),
                 // A hosted plugin by its own name ("Surge XT"), as its window is titled.
-                (None, Some(Op::Plugin { plugin, .. })) if kind == "call" => session.packages.plugin_info(plugin).map(|i| i.found.name.clone()),
+                (None, Some(Op::Plugin { plugin, .. })) if kind == "call" => {
+                    session.packages.plugin_info(plugin).map(|i| i.found.name.clone())
+                }
                 _ => None,
             };
             let bypassed = matches!(g, Group::Site(s) if effect.is_some() && is_bypassed(&rev.compiled, *s));
@@ -878,9 +880,9 @@ pub fn view(session: &Session) -> GraphView {
             let audio = |r: &str| matches!(kind_of(session, &m.key, r), Some(Kind::Audio(_)));
             let input: HashSet<&str> = reads.iter().filter(|(to, _, r, _)| to == g && audio(r)).map(|x| x.2).collect();
             let around = |to: &Group| match to {
-                Group::Site(t) => sites.get(t).is_some_and(|x| {
-                    x.id != effect.id && x.file == effect.file && x.start <= effect.start && effect.end <= x.end
-                }),
+                Group::Site(t) => sites
+                    .get(t)
+                    .is_some_and(|x| x.id != effect.id && x.file == effect.file && x.start <= effect.start && effect.end <= x.end),
                 _ => false,
             };
             for read in reads.iter_mut().filter(|(to, _, r, _)| to != g && input.contains(r) && around(to)) {

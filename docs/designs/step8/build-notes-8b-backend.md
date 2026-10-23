@@ -2,7 +2,7 @@
 
 The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 8b.5 (clips), 8b.6 (audition) and
 8b.8 (meters): engine, IR, session, Tx builders, routes, CLI and contract. No UI. The plan is
-`backend-plan.md` beside this file (written as `~/m2-runs/s8b/refresh.md`; its Attack and Decisions win) on top
+`backend-plan.md` beside this file (written as `$SCRATCH/s8b/refresh.md`; its Attack and Decisions win) on top
 of `design-8b.md`.
 
 ## In short
@@ -755,7 +755,7 @@ to 0, so `out` never reads `f32::MAX`. The design and the contract promise nothi
 
 ## The final check
 
-**In short:** `ci/check.sh --gates` at `a8199ff`, once, in tmux (`M2_CHECK_OUT=~/m2-runs/check-be-fg`).
+**In short:** `ci/check.sh --gates` at `a8199ff`, once, in tmux (`M2_CHECK_OUT=$SCRATCH/check-be-fg`).
 Linux timings are information only (PLAT-1).
 
 ```
@@ -763,7 +763,7 @@ music2 check: PASS
 commit   a8199fff7fa6 on 8b-backend (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 33 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -776,7 +776,7 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  29/29 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 6 runs ci/gates.txt names
 repo unchanged   PASS  
 
@@ -822,7 +822,7 @@ gates:
         skip  callback within S's + 320 µs, by the mean: would pass: -115 µs (5 pairs, -384 to +202) over S, measured here (bound 320). p99, not judged: -229 µs (5 pairs, -2733 to +3478); not judged off the reference Ma
         ok    the slowest activation block under half the device buffer's period: 3054 µs, p50 1908; the block before it p50 2641, max 3973 (bound 5333 µs; the run's p99 callback 27372)
 
-logs     /home/jerry/m2-runs/check-be-fg.tgz
+logs     $SCRATCH/check-be-fg.tgz
 ```
 
 ---

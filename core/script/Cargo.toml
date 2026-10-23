@@ -4,6 +4,7 @@ description = "The music2 TypeScript sandbox: runs a song's modules and returns 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 m2-ir.workspace = true

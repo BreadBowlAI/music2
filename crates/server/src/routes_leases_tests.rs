@@ -59,7 +59,8 @@ fn lane_leases_through_the_routes() {
     let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
-    let (status, begun) = call(url, "POST", "/api/graph/lane/lease/begin", &json!({"session": session, "gesture": moved(1.0, None), "client": "w1"}));
+    let (status, begun) =
+        call(url, "POST", "/api/graph/lane/lease/begin", &json!({"session": session, "gesture": moved(1.0, None), "client": "w1"}));
     assert_eq!(status, 200, "{begun:#}");
     assert_eq!((&begun["previewable"], &begun["lanes"]), (&json!(true), &json!([{"module": "bass", "lane": "notes"}])));
     let lease = begun["lease"].clone();
@@ -74,7 +75,8 @@ fn lane_leases_through_the_routes() {
     assert!(done["revision"].is_u64() && done["made"].is_array(), "{done:#}");
     assert!(std::fs::read_to_string(dir.join("data/bass/notes.json")).unwrap().contains("\"start\": 2"));
     assert_eq!(call(url, "GET", "/api/graph/leases", &Value::Null).1, json!([]));
-    let (status, why) = call(url, "POST", "/api/graph/lane/lease/begin", &json!({"session": session, "gesture": moved(1.0, Some("0000000000000000"))}));
+    let (status, why) =
+        call(url, "POST", "/api/graph/lane/lease/begin", &json!({"session": session, "gesture": moved(1.0, Some("0000000000000000"))}));
     assert_eq!((status, &why["changed"]), (409, &json!(true)), "{why:#}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -117,7 +119,8 @@ fn a_read_only_window_begins_no_lane_lease() {
     let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
     let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
-    let (status, answer) = call(&running.url, "POST", "/api/graph/lane/lease/begin", &json!({"session": session, "gesture": moved(1.0, None)}));
+    let (status, answer) =
+        call(&running.url, "POST", "/api/graph/lane/lease/begin", &json!({"session": session, "gesture": moved(1.0, None)}));
     assert_eq!(status, 423, "{answer:#}");
     assert!(answer["error"].as_str().unwrap().contains("nothing was changed"), "{answer:#}");
     assert_eq!(call(&running.url, "POST", "/api/graph/lane/lease/commit", &json!({"lease": 1, "gesture": moved(1.0, None)})).0, 423);

@@ -2,7 +2,7 @@
 
 > **As built (offline half, branch `8a`).** The partitions, the pool (`core/pool`, `m2-pool`) and the executor are
 > built, and every offline render uses them; live playback renders through the same executor on one thread. Six
-> decisions differ from this design (the plan is `~/m2-runs/s8a/plan.md`; the build notes are `build-notes-8a.md`):
+> decisions differ from this design (the plan is `$SCRATCH/s8a/plan.md`; the build notes are `build-notes-8a.md`):
 >
 > | # | This design | As built |
 > |---|---|---|
@@ -17,7 +17,7 @@
 > (`Cores.per_cache`; the live half changed this on a Mac, row 9 below).
 >
 > **As built (live half, branch `8a`).** Live playback renders on a pool of engine threads with the same bits as one
-> thread, and G12's live run is built. What differs from this design (the plan is `~/m2-runs/s8a/plan-live.md`):
+> thread, and G12's live run is built. What differs from this design (the plan is `$SCRATCH/s8a/plan-live.md`):
 >
 > | # | This design | As built |
 > |---|---|---|

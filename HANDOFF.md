@@ -24,7 +24,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
   sounds and plugins (#26, FMT-22, HOST-8). Linux green at `1fb6caa`; macOS owed (in the next Mac run). Build notes
   `docs/designs/step9/build-notes-br.md`.
 - **Checks on Linux are faster, and check no less** (track `cs`): `ci/check.sh --gates=auto` skips the timing gates only when HEAD holds, in every file they read, what an earlier check on this machine passed them on, and the browser suites run 4 at a time; its own check passed at `b5e3a0f` with the gates (`ci/` changed): 1,771 Rust tests, 74/74 browser suites in 2.7 min, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry. See "The check" below.
-- What the app does: [README.md](README.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
+- **Ready to open up** (track `os`): MIT OR Apache-2.0, a fast pull request tier on GitHub (`ci/check.sh --pr` runs the same here), a nightly tier, the timing gates every night on a quiet machine (`ci/nightly.sh`), and the docs for contributors and agents (README, CONTRIBUTING, AGENTS, goals, SECURITY). `ci/check.sh --gates=auto` passed at `e405740` with the gates (`ci/` changed): its new lint, advisories and nightly list rows, 1,772 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry; `ci/check.sh --pr` passed there too, cold and warm (341 s), nothing on a retry. The commits after it change only docs. The owner's GitHub steps: [docs/maintainers.md](docs/maintainers.md). See "The tiers" below.
+- What the app does: [docs/manual.md](docs/manual.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
 - Next: that one Mac run (after `mf2` is merged), then fix what it finds. Then Windows, as its own step, or the top gaps.
 
@@ -44,7 +45,7 @@ a Mac for the first time) and judges G12 at its designed set-up. The sweep need 
 
 After a green run the lead writes in the contract's PLAT-6 and the gates table: "macOS: green at <commit>", with
 G7f's numbers. If a row fails, fix it on Linux, check the mac lint, and ask for one more run. The Mac's pasted runs
-are kept in `~/m2-runs/mac-runs/` (`check-and-sweep-e7518f4.txt` is the last).
+are kept in `$SCRATCH/mac-runs/` on the server (`check-and-sweep-e7518f4.txt` is the last).
 
 ## The owner's Mac command
 
@@ -57,7 +58,7 @@ back what it says. (Paste 2, the sweep, is done.)
 |---|---|---|
 | 1 | Plug the Mac in, keep the lid open, and quit other apps. | The speed tests need a quiet Mac. |
 | 2 | Open Terminal on the Mac itself, not over ssh. | One test needs your login session. |
-| 3 | Type `cd ~/dev/suite2/music2`, then `git fetch`, then `git switch main`, then `git pull`. | This gets everything on `main`. |
+| 3 | Type `cd`, a space and the path of your music2 folder (the one you cloned), then `git fetch`, then `git switch main`, then `git pull`. | This gets everything on `main`. |
 | 4 | Type `ci/check.sh` and press Return. | It runs every check and the speed tests. |
 | 5 | If one line says `running` for more than 30 minutes, press Ctrl-C once. | It stops that check and still prints the summary. |
 | 6 | Copy the last lines, from `music2 check:` to the `logs` line, and paste them back. | That is all the lead needs. |
@@ -69,7 +70,7 @@ says "not the designed set-up" and what to set.
 other apps quit, built-in speakers at 48 kHz):
 
 ```sh
-cd ~/dev/suite2/music2 && git fetch && git switch main && git pull && ci/sweep.sh
+cd <your music2 folder> && git fetch && git switch main && git pull && ci/sweep.sh
 ```
 
 Paste back what is in `~/m2-8a.txt`. Its steps: the pool's models (a FAIL: stop, fix on Linux first), `m2-os`'s
@@ -134,6 +135,7 @@ these or a real failure, and fixes the real ones (most were a read a moment too 
    recording (#24, #25), audio clips (#18), the Sampler (#22),
    meters after the fader (#20), sections (#23), scale help (#16).
 4. **Open owner decisions** (below): ask them, with the recommendation.
+5. **Opening the repository to everyone:** the owner's one-time GitHub steps are in [docs/maintainers.md](docs/maintainers.md).
 
 The owner wants the app finished clean, with tokens conserved: no new features unless asked, no polish passes.
 
@@ -174,10 +176,10 @@ invisible Xvfb screen, with pictures sent to the owner.
 | What each step and track built, decided and left | `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
 | Kernel ABI v1 | `docs/kernel-abi.md` |
 | The look | `docs/designs/step8/taste.md` |
-| Each check's logs and summary | `~/m2-runs/check-<label>/` and `.tgz` (step 9's finals: `check-io`, `-ab`, `-ph`, `-sx`, `-pm`, `-ex`, `-br`, `-bus`) |
-| Pictures for the owner | `~/m2-runs/app-shots/<track>-<commit>/` |
-| Logs of long jobs | `~/m2-runs/logs/` |
-| The Mac's pasted runs | `~/m2-runs/mac-runs/` |
+| Each check's logs and summary | `$SCRATCH/check-<label>/` and `.tgz` (step 9's finals: `check-io`, `-ab`, `-ph`, `-sx`, `-pm`, `-ex`, `-br`, `-bus`) |
+| Pictures for the owner | `$SCRATCH/app-shots/<track>-<commit>/` |
+| Logs of long jobs | `$SCRATCH/logs/` |
+| The Mac's pasted runs | `$SCRATCH/mac-runs/` |
 | Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. `origin/taste` and `origin/sounds` are old, all merged |
 
 Engine and tooling items left by steps 7 and 8 that are not user gaps are in each build notes' "Left" or "For the
@@ -200,8 +202,8 @@ lead" sections. The ones a next session most needs:
 - **Pace** (since 2026-10-17): tracks in parallel, one full check per track, quality kept. For each track: plan,
   attack, build in green slices, review, fix (each with a test shown red first), `ci/check.sh --gates`, land.
 - **Simple yet elegant**, a tasteful professional DAW. No built-in AI in the app. No backwards compatibility.
-- **Worktrees:** each track works in its own, `~/m2-runs/wt/<name>` on branch `<name>`. Never touch
-  `~/dev/suite2/music2` or another track's worktree. Never push from a track; the lead lands it.
+- **Worktrees:** each track works in its own, `$SCRATCH/wt/<name>` on branch `<name>`. Never touch
+  the main checkout or another track's worktree. Never push from a track; the lead lands it.
 - **Builds:** `--locked`, never `cargo update`. On a merge, take `main`'s `Cargo.lock` and let `cargo build` add the
   branch's edges; never take a side on `std.wasm`: rebuild it (`std/build.sh`). OS code outside `core/os` fails
   `core/os/tests/one_place.rs` (PLAT-2).
@@ -211,14 +213,31 @@ lead" sections. The ones a next session most needs:
 
 | What | How |
 |---|---|
-| The machine | `jerry-ax102`: Ubuntu 24.04, Ryzen 9 7950X3D (32 threads), 124 GB, ext4 on RAID. No sound card. Other agents' jobs often run beside yours: Linux timings are information only (PLAT-1). |
-| Long jobs | Anything over 2 minutes: `~/m2-runs/tw <name> '<command>'` runs it in a window of tmux session `m2-sh`, which the owner watches; the log goes to `~/m2-runs/logs/`. It waits 9.5 minutes (`TW_WAIT=<seconds>` for longer, `TW_WAIT=1` to wait), then prints `~/m2-runs/tw-wait <channel> <log>` to wait again. No double quotes or parentheses in the command. Never send keys to the tmux sessions `m2`, `1`, `2` or `ssh_tmux`. |
-| Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` under `~/m2-runs/`, `M2_AUDIO=none` and `M2_MIDI=none`, and then `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
+| `$SCRATCH` | The maintainer's scratch folder on the server, outside the repo: worktrees, logs, each check's folder, and the `tw` helper. Paths in this page and in `docs/designs/` use this name (set it in your own shell). |
+| The machine | The maintainer's Linux server: Ubuntu 24.04, Ryzen 9 7950X3D (32 threads), 124 GB, ext4 on RAID. No sound card. Other agents' jobs often run beside yours: Linux timings are information only (PLAT-1). |
+| Long jobs | Anything over 2 minutes: `$SCRATCH/tw <name> '<command>'` (a small helper kept outside the repo) runs it in a window of tmux session `m2-sh`, which the owner watches; the log goes to `$SCRATCH/logs/`. It waits 9.5 minutes (`TW_WAIT=<seconds>` for longer, `TW_WAIT=1` to wait), then prints `$SCRATCH/tw-wait <channel> <log>` to wait again. No double quotes or parentheses in the command. Never send keys to the tmux sessions `m2`, `1`, `2` or `ssh_tmux`. |
+| Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` under `$SCRATCH`, `M2_AUDIO=none` and `M2_MIDI=none`, and then `CARGO_HOME` and `RUSTUP_HOME` set to your real home's `.cargo` and `.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
 | Disk | Scratch `target/` folders once filled 390 GB: share or clean them after each track. Never move a `target/` between worktrees uncleaned (it keeps the old paths). |
-| Test plugins | `ci/plugins.sh` (once): Surge XT 1.3.4 and Airwindows Consolidated into `~/.local/share/m2-test-plugins/clap`, from the archives in `~/.local/share/m2-test-plugins/dl` (Airwindows' zip is gone upstream: keep that copy). Never into `~/.clap` or `/usr/lib/clap`. Never delete anything under `~/m2-runs/plugins`. |
+| Test plugins | `ci/plugins.sh` (once): Surge XT 1.3.4 and Airwindows Consolidated into `~/.local/share/m2-test-plugins/clap`, from the archives in `~/.local/share/m2-test-plugins/dl` (Airwindows' zip is gone upstream: keep that copy). Never into `~/.clap` or `/usr/lib/clap`. Never delete anything under `$SCRATCH/plugins`. |
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |
+
+## The tiers: what runs where
+
+Every check runs from a script in `ci/`, so whatever CI runs, you run with the same command.
+
+| Tier | Where and when | The command | What |
+|---|---|---|---|
+| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences, actionlint, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
+| Nightly | GitHub, every day on `main`, only once the repo is public (`.github/workflows/nightly.yml`) | `ci/check.sh --nightly` | the full check without the timing gates (so every PR-tier check and the advisories too), the browser suites one at a time, the tests tagged nightly; and a Mac: the Rust tests, the pool's models, the browser suites, the renders. A failed or timed-out job opens or comments on one issue, "Nightly failed". |
+| Timing gates | a quiet maintainer machine, every night, by cron | `ci/nightly.sh --report` | `ci/check.sh --gates` on a fresh clone of `origin/main`; posts the status `nightly/gates`. It runs as an OS user of its own, with a fine-grained token that can only write commit statuses (docs/maintainers.md, part 5). Not set up yet. |
+| Full check | your machine; the server with `--gates=auto` | `ci/check.sh` | everything, below: every check of the other tiers. |
+
+- **Which tier a test is in.** A Rust test that judges speed or is a known flake is listed in `ci/nightly-tests.txt`, with why; a browser suite gets `tier: "nightly"` and a `why` in `e2e/run.mjs`. Unchanged either way: it runs every night.
+- **Times** (`ci/check.sh --pr` in a clean clone on 8 threads of the server, at `2141096` and `d4681ab`): about 10 minutes cold (607 s), 7.5 warm (447 and 451 s), with music2's own crates rebuilt. On GitHub's 4-core runner each job is one part of that; its real times are still to be measured (gaps.md).
+- **What the first real runs found.** A test that hosts Surge XT or Airwindows in this process could pass, then crash as its process exited: a destroy is queued to the plugin main thread, and the exit ran the plugin library's destructors under it. nextest runs each test in a process of its own, so it showed at once (one test crashed 40 runs of 40 alone). Now `test_main_thread()` drains that thread when the test's thread ends (`d4681ab`).
+- **Verdicts.** `--pr` says PASS only when CI would pass. A docs-only change needs no plugins. `M2_NO_PLUGINS=1` skips the plugin tests and says PART. A browser suite that was PART fails it, even when another run failed and then passed alone. "What failed" names a Rust test whose process crashed (nextest's `SEGV`). The cases are in `ci/pr-test.sh` and `ci/nightly-test.sh`, which the lint step runs (in quick, and in the full check).
 
 ## The check: `ci/check.sh`
 
@@ -226,9 +245,10 @@ One script checks everything, on the server and on the Mac ([PLAT-6](docs/archit
 line says `music2 check: PASS`, `FAIL` or `PART`. PART means no row failed but the gates couldn't judge G7f (the Mac
 isn't the one S's records name). Only PASS is a pass.
 
-Rows: gates rule (`--gates=auto`'s rule tried on its 51 cases), toolchain, web build, build, app (Linux: the desktop
-app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, clippy (a warning is an error),
-pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
+Rows: gates rule (`--gates=auto`'s rule tried on its 51 cases), toolchain, lint (`ci/pr.sh lint`: fmt, actionlint,
+licences, the CI scripts' own cases), advisories (`ci/pr.sh advisories`: RustSec's), web build, build, app (Linux: the
+desktop app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, nightly list (Linux: every
+test `ci/nightly-tests.txt` names is there), clippy (a warning is an error), pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
 type-checked), browser suites, renders (against `e2e/renders.sha256`, one record for every OS), old engine S (with
 the gates), gates (the 7 runs `ci/gates.txt` names), repo unchanged.
 
@@ -275,7 +295,7 @@ Times on the server, warm `target/`:
 On the server, a track's check (with a warm `target/`):
 
 ```sh
-TW_WAIT=3500 ~/m2-runs/tw check-<label> 'M2_CHECK_OUT=$HOME/m2-runs/check-<label> ci/check.sh --gates=auto'
+TW_WAIT=3500 $SCRATCH/tw check-<label> 'M2_CHECK_OUT=$SCRATCH/check-<label> ci/check.sh --gates=auto'
 ```
 
 `--gates` instead runs the gates whatever changed.

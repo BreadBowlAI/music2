@@ -84,7 +84,8 @@ impl Drag {
     /// The Ons the renderer played, by transport frame and pitch, and the Offs by frame.
     fn heard(&mut self) -> (Vec<(u64, f32)>, Vec<u64>) {
         let entries = self.driver.engine().unwrap().current().unwrap().trace_entries();
-        let ons = entries.iter().filter_map(|e| if let TraceKind::On { pitch } = e.kind { Some((e.transport, pitch)) } else { None }).collect();
+        let ons =
+            entries.iter().filter_map(|e| if let TraceKind::On { pitch } = e.kind { Some((e.transport, pitch)) } else { None }).collect();
         let offs = entries.iter().filter(|e| e.kind == TraceKind::Off).map(|e| e.transport).collect();
         (ons, offs)
     }
@@ -316,7 +317,8 @@ fn a_fresh_engine_before_the_commit_plays_what_was_let_go() {
         }
         let entries = driver.engine().unwrap().current().unwrap().trace_entries();
         // At 44.1 kHz, 22050 frames a beat.
-        let ons: Vec<f64> = entries.iter().filter(|e| e.kind == TraceKind::On { pitch: E2 }).map(|e| e.transport as f64 / 22_050.0).collect();
+        let ons: Vec<f64> =
+            entries.iter().filter(|e| e.kind == TraceKind::On { pitch: E2 }).map(|e| e.transport as f64 / 22_050.0).collect();
         go.send(()).unwrap();
         assert!(polled.join().unwrap());
         assert!(matches!(commit.join().unwrap().unwrap(), Answer::Done(_)));
@@ -422,7 +424,12 @@ fn an_audio_lane_gesture_is_not_previewable() {
             Some((t["module"].as_str()?.to_string(), l["key"].as_str()?.to_string(), l["clips"][0]["id"].as_str()?.to_string()))
         })
         .expect("an audio clip");
-    let g = Gesture::Move { clips: vec![ClipRef { lane: LaneAddr::new(&module, &lane).unwrap(), id: Some(id), at: None, sha: None }], by: 4.0, to: None, copy: false };
+    let g = Gesture::Move {
+        clips: vec![ClipRef { lane: LaneAddr::new(&module, &lane).unwrap(), id: Some(id), at: None, sha: None }],
+        by: 4.0,
+        to: None,
+        copy: false,
+    };
     let begun = graph.lane_begin(token, g, None, None).unwrap().unwrap();
     assert_eq!((begun.previewable, begun.lease), (false, None));
     assert!(graph.lane_leases().is_empty());

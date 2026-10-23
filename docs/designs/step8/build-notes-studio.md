@@ -1,7 +1,7 @@
 # Studio: build notes
 
 What each part of the studio track built, its tests, the red run before each change, and what is
-left. The plan is `~/m2-runs/sst/plan.md`. Each part writes only under its own heading.
+left. The plan is `$SCRATCH/sst/plan.md`. Each part writes only under its own heading.
 
 ## P0
 
@@ -1443,7 +1443,7 @@ Add drums: the guide is made for an empty song.
 
 **The app on `:97`** (`tools/app-shot.sh`, the Linux build at `b5beccc`'s web): Help lists Make Your First Song,
 Keyboard Shortcuts, then About music2; picking the first shows the card at the top of the side browser, "1 Add
-drums. Press Ctrl+T and pick Drum kit." (shots in `~/m2-runs/sst/scratch/shots/d2/`, for the End's pictures).
+drums. Press Ctrl+T and pick Drum kit." (shots in `$SCRATCH/sst/scratch/shots/d2/`, for the End's pictures).
 
 **For gaps.md:** #11: Help ▸ Make Your First Song, seven steps that tick themselves, in the side browser.
 
@@ -1511,7 +1511,7 @@ nothing of it to merge. P0 never landed, so lane A's copies of its pieces are th
 **Checks at the merge** (the server and `m2` built from `67b2197`, copied to `bin/st-67b2197`; the page from
 the same tree)
 
-| Check | Result | Log (`~/m2-runs/logs/`) |
+| Check | Result | Log (`$SCRATCH/logs/`) |
 |---|---|---|
 | `cargo build --locked` (server, `m2`); `Cargo.lock` unchanged | ok | `st-int-build-*`, `st-int-build2-*` |
 | `cargo test --locked --no-fail-fast` of `m2-song`, `m2-runtime`, `m2-play`, `m2-ir`, `m2-script`, `m2-session`, `m2-editor`, `m2-server`, `music2-desktop`, `m2` | 1,374 passed, 0 failed (editor 378, server 356, desktop 22, and the rest) | `st-int-tests-*` |
@@ -1558,7 +1558,7 @@ The lead's last checks, docs and pictures.
 ### The review's fixes
 
 The End's review confirmed 12 findings (R1 to R7, R9, F1 to F3, F6; R3 and F2 are one). Each is fixed in a commit of
-its own, with a test that failed first. Red runs: the Rust tests in `~/m2-runs/logs/st-end-red1-*`, the browser checks
+its own, with a test that failed first. Red runs: the Rust tests in `$SCRATCH/logs/st-end-red1-*`, the browser checks
 on the page and server from `37a6936` (`bin/st-67b2197`, the same Rust) in `st-end-e2e-red-*`.
 
 #### R1. Recording while the code doesn't compile
@@ -1695,7 +1695,7 @@ And the Export dialog's MIDI choice never ticked "Export it."
 
 #### Two flaky tests the first full check found
 
-The first full check, at `ee2012c` (`~/m2-runs/check-studio`), passed every row, but two only on a retry. Both read a
+The first full check, at `ee2012c` (`$SCRATCH/check-studio`), passed every row, but two only on a retry. Both read a
 result before the app had made it, under the check's load. Neither is new in `studio`.
 
 | Test | What it read too soon | Fix |
@@ -1712,7 +1712,7 @@ result before the app had made it, under the check's load. Neither is new in `st
 
 #### The second full check: one more flaky suite, and a gate run beside another track's
 
-The second full check, at `4fe49f9` (`~/m2-runs/check-studio-2`), passed every row but two:
+The second full check, at `4fe49f9` (`$SCRATCH/check-studio-2`), passed every row but two:
 
 - `attention` passed only on a retry: "the move's toast Undo says it can't any more", then "and undoes nothing". A
   toast's Undo judges by the revision the page shows. The suite waited until the page had received its new read of
@@ -1731,7 +1731,7 @@ The second full check, at `4fe49f9` (`~/m2-runs/check-studio-2`), passed every r
 
 #### The third full check, and `main` moving
 
-The third, at `eb76768` (`~/m2-runs/check-studio-3`), ran beside 8a's own `ci/check.sh --gates`, started a minute
+The third, at `eb76768` (`$SCRATCH/check-studio-3`), ran beside 8a's own `ci/check.sh --gates`, started a minute
 after it. `pl-mix` failed, and again on its retry: the Hats meters read the floor in nearly all ten reads. `main` had
 fixed that meanwhile (`e66e6cd`: first-song's hats are 45 ms hits, and ten reads 150 ms apart can all land between
 them). The check was stopped at its gates, so as not to time them beside 8a's.
@@ -1764,13 +1764,13 @@ first.
 lint; the web build; `st-audio` 94, `st-record` 66, `st-guide` 38, `st-midi` 19, `nx-settings` 42, `taste` 39,
 `st-tips` 45, `st-stems` 49, `st-errors` 34.
 
-**Pictures** (the Linux app on `:97`, at `ee2012c`): `~/m2-runs/app-shots/studio-ee2012c/`, six with
+**Pictures** (the Linux app on `:97`, at `ee2012c`): `$SCRATCH/app-shots/studio-ee2012c/`, six with
 `captions.txt`: an audio clip trimmed and faded, a take recording, the Export dialog with Stems, a MIDI file in a
 track (through the server's route: the app has no way in yet), the guide half done, and a code mistake in plain
 words with Details closed.
 
 **The final check** at `ad5f111` (the three before it are above), with `main` at `44b104a` merged in:
-`TW_WAIT=5400 ~/m2-runs/tw check-studio-5 'cd ~/m2-runs/wt/st && M2_CHECK_OUT=$HOME/m2-runs/check-studio-5
+`TW_WAIT=5400 $SCRATCH/tw check-studio-5 'cd $SCRATCH/wt/st && M2_CHECK_OUT=$SCRATCH/check-studio-5
 ci/check.sh --gates'`, verbatim:
 
 ```
@@ -1778,7 +1778,7 @@ music2 check: PASS
 commit   ad5f11157c08 on studio (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 37 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -1792,7 +1792,7 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  66/66 suites ok
 renders          PASS  10 of 10 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 gates            PASS  the 7 runs ci/gates.txt names
 repo unchanged   PASS  
 
@@ -1840,7 +1840,7 @@ gates:
   === m2-gates realtime --reference 50 --minutes 1
   PASS  G12 live (RENDER-28, RENDER-28a) on the silent clock on p50, 128 frames
 
-logs     /home/jerry/m2-runs/check-studio-5.tgz
+logs     $SCRATCH/check-studio-5.tgz
 ```
 
 **What's left**

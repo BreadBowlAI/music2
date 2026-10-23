@@ -133,8 +133,12 @@ pub(crate) fn place(flat: &Flat, old: Option<&Flat>, w: &mut Wiring, fades: usiz
             PortRef { node: base + nodes.len() - 1, port: 0 }
         };
         // Fades of changed edges, on continuing nodes and on the output.
-        let mut changed: Vec<(Consumer, usize)> =
-            w.rewire.iter().filter(|r| (fades..fades + w.fades.len()).contains(&r.2)).filter_map(|&(i, e, f)| Some((consumer(w.same[i]?, e), f))).collect();
+        let mut changed: Vec<(Consumer, usize)> = w
+            .rewire
+            .iter()
+            .filter(|r| (fades..fades + w.fades.len()).contains(&r.2))
+            .filter_map(|&(i, e, f)| Some((consumer(w.same[i]?, e), f)))
+            .collect();
         if let Some(f) = out_fade {
             changed.push((Consumer::Out, f));
         }

@@ -98,7 +98,8 @@ fn header(name: &str, mut r: Box<dyn Read + '_>) -> Result<Header, EditError> {
     if !is_wav(&head[..n]) {
         return Err(refused(not_wav(name)));
     }
-    let reader = hound::WavReader::new(std::io::Cursor::new(head).chain(r)).map_err(|e| refused(format!("{name} doesn't read as a WAV file ({e})")))?;
+    let reader = hound::WavReader::new(std::io::Cursor::new(head).chain(r))
+        .map_err(|e| refused(format!("{name} doesn't read as a WAV file ({e})")))?;
     let spec = reader.spec();
     let h = Header { channels: spec.channels, rate: spec.sample_rate, frames: reader.duration() };
     if !RATES.contains(&h.rate) {
@@ -108,9 +109,7 @@ fn header(name: &str, mut r: Box<dyn Read + '_>) -> Result<Header, EditError> {
         return Err(refused(format!("{name} has no sound in it.")));
     }
     if h.frames as f64 / h.rate as f64 > LONGEST {
-        return Err(refused(format!(
-            "{name} is longer than 3 hours: music2 takes files up to 3 hours."
-        )));
+        return Err(refused(format!("{name} is longer than 3 hours: music2 takes files up to 3 hours.")));
     }
     Ok(h)
 }
@@ -364,14 +363,22 @@ pub fn place(s: &mut Session, files: &[Imported], at: &Target) -> Result<Placed,
             };
             let new: Vec<NewTrack> = files
                 .iter()
-                .map(|f| NewTrack { play: Play::Audio, label: Some(track_label(f)), key: None, clips: vec![clip_json(f, beat, length_at(&tempo, beat, f.seconds))] })
+                .map(|f| NewTrack {
+                    play: Play::Audio,
+                    label: Some(track_label(f)),
+                    key: None,
+                    clips: vec![clip_json(f, beat, length_at(&tempo, beat, f.seconds))],
+                })
                 .collect();
             let made = tracks::add_tracks(s, &new, after, None)?;
             let data = &s.accepted().compiled.data;
             let mut clips = vec![];
             for m in &made {
                 let lane = LaneAddr { module: Key::new(&m.module).map_err(refused)?, lane: Key::new(AUDIO_LANE).map_err(refused)? };
-                let ids = data.lane(&m.module, AUDIO_LANE).map(|d| d.ids().into_iter().flatten().map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+                let ids = data
+                    .lane(&m.module, AUDIO_LANE)
+                    .map(|d| d.ids().into_iter().flatten().map(str::to_string).collect::<Vec<_>>())
+                    .unwrap_or_default();
                 clips.extend(ids.into_iter().map(|id| (lane.clone(), id)));
             }
             let edited = made[0].edited.clone();
@@ -385,7 +392,11 @@ fn audio_lane(s: &Session, addr: &LaneAddr) -> Result<(), EditError> {
     let rev = s.accepted();
     let m = rev.compiled.ir.modules.iter().find(|m| m.key == addr.module.as_str());
     let m = m.ok_or_else(|| EditError::Missing(format!("There's no track `{}`.", addr.module)))?;
-    let decl = m.lanes.iter().find(|l| l.key == addr.lane.as_str()).ok_or_else(|| EditError::Missing(format!("{} has no lane `{}`.", m.label(), addr.lane)))?;
+    let decl = m
+        .lanes
+        .iter()
+        .find(|l| l.key == addr.lane.as_str())
+        .ok_or_else(|| EditError::Missing(format!("{} has no lane `{}`.", m.label(), addr.lane)))?;
     match m2_runtime::lane_kind(decl.kind) {
         LaneKind::Audio => Ok(()),
         _ => Err(refused(format!("{}'s {} lane plays notes or automation: drop audio on an audio track.", m.label(), decl.label()))),

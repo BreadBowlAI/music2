@@ -233,7 +233,8 @@ impl Monitor {
     /// Whether any monitoring mute or solo changes what is heard (the export's `overlays.active`).
     pub(super) fn active(&self) -> bool {
         let s = &self.song;
-        values(&s.sites, &s.routes, &self.set, &s.muted, &s.tracks) != values(&s.sites, &s.routes, &Overlays::default(), &s.muted, &s.tracks)
+        values(&s.sites, &s.routes, &self.set, &s.muted, &s.tracks)
+            != values(&s.sites, &s.routes, &Overlays::default(), &s.muted, &s.tracks)
     }
 
     /// Set to `set`: marked to be written.
@@ -291,7 +292,12 @@ impl super::Published {
     /// What its overlays still owe the file, if anything.
     pub(super) fn owed(&self) -> Option<Owed> {
         let m = &self.overlays;
-        (m.writer && m.version != m.written).then(|| Owed { token: self.engine.token, dir: m.dir.clone(), set: m.set.clone(), version: m.version })
+        (m.writer && m.version != m.written).then(|| Owed {
+            token: self.engine.token,
+            dir: m.dir.clone(),
+            set: m.set.clone(),
+            version: m.version,
+        })
     }
 }
 
@@ -339,7 +345,11 @@ impl Graph {
         }
         for (map, into) in [(&change.mute, &mut set.mute), (&change.solo, &mut set.solo)] {
             for (k, on) in map {
-                if *on { into.insert(k.clone()) } else { into.remove(k) };
+                if *on {
+                    into.insert(k.clone())
+                } else {
+                    into.remove(k)
+                };
             }
         }
         let before = p.overlays.set.clone();

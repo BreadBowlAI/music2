@@ -314,7 +314,10 @@ fn t_kernels() -> PathBuf {
         .to_string()
         + &process_v1(
             "sore",
-            &format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then (f32.store (i32.const 4096) (f32.const 1)))) {}", out("(f32.const 1)")),
+            &format!(
+                "(if (f32.gt (local.get $x) (f32.const 0.5)) (then (f32.store (i32.const 4096) (f32.const 1)))) {}",
+                out("(f32.const 1)")
+            ),
         );
     // The factors are loaded from memory, so no compiler multiplies them ahead of time.
     let product = "(f32.mul (f32.load (i32.const 4100)) (f32.load (i32.const 4104)))";
@@ -327,7 +330,8 @@ fn t_kernels() -> PathBuf {
            (func (export "tiny_active") (param i32) (result i32) (f32.ne {product} (f32.const 0)))"#
     ) + &process_v1("tiny", &out("(f32.mul (f32.mul (f32.load (i32.const 4096)) (f32.const 1e30)) (f32.const 1e10))"));
     let wat = module_v1(
-        &[each("latch", &latch), each("spike", &spike), each("denan", &denan), each("trap", &trap), each("hog", &hog), fat, sore, tiny].concat(),
+        &[each("latch", &latch), each("spike", &spike), each("denan", &denan), each("trap", &trap), each("hog", &hog), fat, sore, tiny]
+            .concat(),
     );
     std::fs::write(dir.join("k.wasm"), crate::tests::wasm(&wat)).unwrap();
     let kernel = |k: &str, input: &str| format!("[[kernel]]\nname = \"{k}\"\ninputs = [\"in: {input}\"]\noutputs = [\"out: audio<1>\"]\n");
@@ -470,10 +474,14 @@ fn trapped(pk: &PackageSet, trap: bool, blocks: usize, threads: Option<Spread>) 
 
 /// What `faults` was told since the last look, by node, oldest first (RENDER-25).
 fn told(faults: &Faults) -> Vec<(usize, Code)> {
-    faults.drain().into_iter().map(|f| match f.subject {
-        Subject::Node(n) => (n as usize, f.code),
-        s => panic!("a fault about {s:?}, not a node"),
-    }).collect()
+    faults
+        .drain()
+        .into_iter()
+        .map(|f| match f.subject {
+            Subject::Node(n) => (n as usize, f.code),
+            s => panic!("a fault about {s:?}, not a node"),
+        })
+        .collect()
 }
 
 /// What the plan that plays in `rig` reported since the last look.

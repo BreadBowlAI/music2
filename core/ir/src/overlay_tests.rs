@@ -46,7 +46,8 @@ fn node(ir: &Ir, name: &str) -> usize {
 // ID-11: an IR without `muted` keeps its JSON, so its hash; `false` reads as absent.
 #[test]
 fn a_song_without_muted_has_the_same_ir_hash() {
-    let text = r#"{"ir":2,"modules":[{"key":"kick","track":true,"lanes":[],"nodes":[],"exports":{}}],"root":{"module":"song","export":"out"}}"#;
+    let text =
+        r#"{"ir":2,"modules":[{"key":"kick","track":true,"lanes":[],"nodes":[],"exports":{}}],"root":{"module":"song","export":"out"}}"#;
     let ir: Ir = serde_json::from_str(text).unwrap();
     assert_eq!(serde_json::to_string(&ir).unwrap(), text);
     let off: Ir = serde_json::from_str(&text.replace(r#""track":true"#, r#""track":true,"muted":false"#)).unwrap();
@@ -134,7 +135,10 @@ fn a_voice_capture_and_a_feedback_are_sites() {
     let (v, fb) = (node(&ir, "song/v"), node(&ir, "song/fb"));
     assert_eq!(
         sites(&ir),
-        [("kick".into(), "song".into(), Consumer::Capture { poly: v, index: 0 }), ("kick".into(), "song".into(), Consumer::Feedback { node: fb })]
+        [
+            ("kick".into(), "song".into(), Consumer::Capture { poly: v, index: 0 }),
+            ("kick".into(), "song".into(), Consumer::Feedback { node: fb })
+        ]
     );
 }
 
@@ -150,7 +154,10 @@ fn a_track_reading_a_track_is_a_site_into_it() {
         {"key": "song", "nodes": [{"id": "b", "op": "import", "module": "bus", "export": "out"}], "exports": {"out": "b"}}]}))
     .unwrap();
     let g = node(&ir, "bus/g");
-    assert_eq!(sites(&ir), [("vox".into(), "bus".into(), Consumer::Input { node: g, input: 0 }), ("bus".into(), "song".into(), Consumer::Out)]);
+    assert_eq!(
+        sites(&ir),
+        [("vox".into(), "bus".into(), Consumer::Input { node: g, input: 0 }), ("bus".into(), "song".into(), Consumer::Out)]
+    );
 }
 
 // MON-1, MON-5: only a track is muted in the song; the list is its keys, sorted.

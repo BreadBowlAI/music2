@@ -3,10 +3,10 @@
 Label: code-map. Read-only. Nothing was built, run or measured for these notes.
 
 How to read the citations:
-- A bare path such as `core/runtime/src/lib.rs:200` is under `/home/jerry/m2-runs/idea3/src` (the frozen copy of step 7).
-- `cut1.diff:N` is a line of `/home/jerry/m2-runs/idea3/cut1.diff`.
-- `wasmtime-49.0.2/…`, `wasmtime-environ-49.0.2/…` are under `/home/jerry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`.
-- `results.md` is `/home/jerry/m2-runs/speed/prof/results.md`, `plan.md` is `/home/jerry/m2-runs/speed/plan.md`, `refresh.md` is `/home/jerry/m2-runs/s8a/refresh.md`.
+- A bare path such as `core/runtime/src/lib.rs:200` is under `$SCRATCH/idea3/src` (the frozen copy of step 7).
+- `cut1.diff:N` is a line of `$SCRATCH/idea3/cut1.diff`.
+- `wasmtime-49.0.2/…`, `wasmtime-environ-49.0.2/…` are under `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`.
+- `results.md` is `$SCRATCH/speed/prof/results.md`, `plan.md` is `$SCRATCH/speed/plan.md`, `refresh.md` is `$SCRATCH/s8a/refresh.md`.
 - A fact about `std/kernels/std.wasm`'s binary layout comes from a small read-only section parse I ran on the file (sections, memory limits, globals, exports, data segments). No wasm tool is installed. These facts are marked "(parsed)".
 - "unverified" means I could not check it against source on this machine.
 - Every estimate shows its arithmetic, and starts only from measured numbers or counts taken from the code.

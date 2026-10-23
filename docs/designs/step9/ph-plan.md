@@ -1,12 +1,12 @@
 # Step 9, synth and plugin turns 1 to 3: the plan (track `ph`)
 
-Written 2026-10-18. Read only; nothing built. Base: `ph` at `258275b` (= `main`), worktree `~/m2-runs/wt/ph`.
+Written 2026-10-18. Read only; nothing built. Base: `ph` at `258275b` (= `main`), worktree `$SCRATCH/wt/ph`.
 Read: `docs/architecture.md` (HOST-1 to HOST-7, RENDER-1, 2a, 17 to 21, 25, 26b, 28, HOME-4 to 6, MON-6, FMT-17,
 PLAT-1 to 6, the diagnostics table, Order of work 9, Deferred), `HANDOFF.md`, `docs/gaps.md`, and the code named below.
 
 ## In short
 
-- **Three slices, in this order.** Each ends green on Linux, with `ci/check.sh` run through `~/m2-runs/tw`.
+- **Three slices, in this order.** Each ends green on Linux, with `ci/check.sh` run through `$SCRATCH/tw`.
 
   | # | Slice | What you get |
   |---|---|---|
@@ -26,14 +26,14 @@ PLAT-1 to 6, the diagnostics table, Order of work 9, Deferred), `HANDOFF.md`, `d
 
 | Step | Command or rule |
 |---|---|
-| Environment | every cargo or music2 command: `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`; every run: `HOME=~/m2-runs/sph/home M2_AUDIO=none M2_MIDI=none` |
+| Environment | every cargo or music2 command: `CARGO_HOME=/home/<user>/.cargo RUSTUP_HOME=/home/<user>/.rustup`; every run: `HOME=$SCRATCH/sph/home M2_AUDIO=none M2_MIDI=none` |
 | Base sound | at `258275b`: render the 10 records (`e2e/baseline.sh`), and `m2 render examples/with-plugins` **twice** with the test plugins. Write both hashes in the build notes. If the two runs differ, say so; then "same bytes" falls back to G7e's 1 dB per second |
-| Per-commit check | `~/m2-runs/sph/check.sh <crates>`, copied from `~/m2-runs/s8a/s2-check.sh` with this worktree and scratch: builds `m2` and `m2-plugin-host`, the 10 renders, with-plugins against the base hash, the crates' tests, clippy, the Mac lint, fmt of new files |
-| Red runs | each new test is run once red, by a small stub or bug in `~/m2-runs/sph/red/<name>.diff`, log beside it |
-| Long jobs | `TW_WAIT=1 ~/m2-runs/tw ph-<what> '<cmd>'` (tmux `m2-sh`); `uptime` first, said in the notes |
-| Screens | the app and every window test only on Xvfb `:96` (`~/m2-runs/sph/tools/app-shot.sh`, scratch paths under `sph`) |
+| Per-commit check | `$SCRATCH/sph/check.sh <crates>`, copied from `$SCRATCH/s8a/s2-check.sh` with this worktree and scratch: builds `m2` and `m2-plugin-host`, the 10 renders, with-plugins against the base hash, the crates' tests, clippy, the Mac lint, fmt of new files |
+| Red runs | each new test is run once red, by a small stub or bug in `$SCRATCH/sph/red/<name>.diff`, log beside it |
+| Long jobs | `TW_WAIT=1 $SCRATCH/tw ph-<what> '<cmd>'` (tmux `m2-sh`); `uptime` first, said in the notes |
+| Screens | the app and every window test only on Xvfb `:96` (`$SCRATCH/sph/tools/app-shot.sh`, scratch paths under `sph`) |
 | Disk | `df -h /` at each slice's end; delete the second worktree's `target/` when it is merged |
-| Never | touch `main`'s checkout or other worktrees; push; rebase; `cargo update`; delete under `~/m2-runs/plugins` |
+| Never | touch `main`'s checkout or other worktrees; push; rebase; `cargo update`; delete under `$SCRATCH/plugins` |
 | Notes | `docs/designs/step9/build-notes-ph.md`, written as the slices land |
 
 ---
@@ -94,7 +94,7 @@ Offline renders give the same bits.
 **Done when:** the tests above are green; renders 10 of 10; `m2 render examples/with-plugins` matches the base hash;
 `m2-gates plugins` (G1 to G5, G7) and `m2-gates --server export` (G7e) pass; on Xvfb `:96` the app plays with-plugins,
 and `kill -9` of the host process leaves the app open, says what happened in plain words, and the lead plays again
-(pictures in `~/m2-runs/app-shots/ph-1/`); the call's round trip is measured and written down (information, PLAT-1);
+(pictures in `$SCRATCH/app-shots/ph-1/`); the call's round trip is measured and written down (information, PLAT-1);
 `ci/check.sh` passes.
 
 ---
@@ -160,7 +160,7 @@ an override latch. A changed state becomes the song's state file and sidecar thr
 
 **Done when:** the tests are green; on Xvfb `:96` Surge XT's window opens and closes from the lead's box; `xkey`
 drags its filter cutoff knob (lane-driven: a latch shows) and a knob code doesn't set (one Undo step saves it)
-(pictures in `~/m2-runs/app-shots/ph-2/`); renders 10 of 10 and with-plugins unchanged; G5 and G7e pass; the Mac lint
+(pictures in `$SCRATCH/app-shots/ph-2/`); renders 10 of 10 and with-plugins unchanged; G5 and G7e pass; the Mac lint
 passes; `ci/check.sh` passes.
 
 ---

@@ -60,8 +60,16 @@ pub(crate) fn run(k: &Kernel, r: &Run, sink: &mut dyn FnMut(&[&[f32]]) -> Result
     let name = &k.prefix;
     let mut sb = Sandbox::new(&k.engine, &k.module).with_context(|| format!("`{name}`"))?;
     let assets = [Some(r.source.clone())];
-    let spec =
-        Spec { inputs: 0, outputs: 1, channels: &[ch as u32], audio: ch as u8, sample_rate: r.rate, values: r.values, assets: &assets, offline: Some(r.map) };
+    let spec = Spec {
+        inputs: 0,
+        outputs: 1,
+        channels: &[ch as u32],
+        audio: ch as u8,
+        sample_rate: r.rate,
+        values: r.values,
+        assets: &assets,
+        offline: Some(r.map),
+    };
     let state = match sb.state(&k.prefix, &spec) {
         Ok(s) => s,
         Err(e) => return Err(sb.ran_out(name, e).context(format!("`{name}`"))),

@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use parking_lot::Mutex;
 use m2_editor::EditError;
 use m2_editor::clips::Gesture;
+use parking_lot::Mutex;
 use serde_json::{Value, json};
 
 use super::Graph;

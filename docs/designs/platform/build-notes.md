@@ -21,11 +21,11 @@ for the slices, §16 for the lead's notes).
 | Package modules named `std/src/dsp.ts`, not by their absolute path (attack 18) | `core/script/src/lib.rs` |
 | The acceptance-gates text, the Platforms section (PLAT-1 to PLAT-7), the order-of-work entry 6b | `docs/architecture.md` |
 
-The plugin archives were copied (not moved) from `~/m2-runs/plugins/dl/` to `~/.local/share/m2-test-plugins/dl/`, and
+The plugin archives were copied (not moved) from `$SCRATCH/plugins/dl/` to `~/.local/share/m2-test-plugins/dl/`, and
 `ci/plugins.sh` unpacked them there; both `.clap` files match `ci/plugins.sha256`.
 
 The long-path test: `files::tests::diagnostics_say_where_in_the_project_each_problem_is` in a checkout whose path is
-81 characters fails before the change ("in module '/home/jerry/m2-runs/scratch-build-S1/a-checkout-path-over-sixty'")
+81 characters fails before the change ("in module '$SCRATCH/scratch-build-S1/a-checkout-path-over-sixty'")
 and passes after it.
 
 **Deviations**
@@ -40,7 +40,7 @@ and passes after it.
 | The app row's "never says plugins can't be hosted" is a note in the row until S5, not a failure | As the task and §13.1 say: the Linux app can't host plugins until S5. S5 turns the note into a failure. |
 | The check's steps are renumbered (the app row is step 4) | It runs right after the build, as §16 says. |
 
-**The check** at `a504a60` (`ci/check.sh`, 13 min, logs and the app's screenshots in `~/m2-runs/check-build-S1/`):
+**The check** at `a504a60` (`ci/check.sh`, 13 min, logs and the app's screenshots in `$SCRATCH/check-build-S1/`):
 exactly §13.1's S1 row.
 
 | Row | Result |
@@ -58,7 +58,7 @@ exactly §13.1's S1 row.
 
 A trial run just before (while this file was being written, so its "repo unchanged" failed) also saw two known
 flakes, each passing on its retry: `live3a` ("dragging across the ruler loops beats 4–12", HANDOFF's ruler-drag flake)
-and `notes-proj` (the file-then-revision race S2 fixes). Its logs: `~/m2-runs/check-build-S1-trial.tgz`.
+and `notes-proj` (the file-then-revision race S2 fixes). Its logs: `$SCRATCH/check-build-S1-trial.tgz`.
 
 ## S2. The browser suites
 
@@ -79,7 +79,7 @@ check, `run.mjs all` with no `E2E_CHROME` (so the new Linux default) gave 29 of 
 **Deviations:** none. Left as the design has it: `create_at` (`m2 new <dir>`) still makes exactly the folder it is
 given, so on Linux it makes `exports 2` beside `Exports 2`. Q1's rule is for `make()`, New Song's numbering.
 
-**The check** at `c60372a` (`ci/check.sh`, 17 min, logs in `~/m2-runs/check-build-S2/`): exactly §13.1's S2 row.
+**The check** at `c60372a` (`ci/check.sh`, 17 min, logs in `$SCRATCH/check-build-S2/`): exactly §13.1's S2 row.
 
 | Row | Result |
 |---|---|
@@ -135,7 +135,7 @@ each) and this file with them. The design's §5.1 names `core/kernel/src/lib.rs:
 has no OS code.
 
 **The check** at `319c804` (`ci/check.sh`, 22 min while three other slices' checks ran; logs in
-`~/m2-runs/check-build-S3/`): §13.1's S1 row with the std.wasm row now PASS, and one flake.
+`$SCRATCH/check-build-S3/`): §13.1's S1 row with the std.wasm row now PASS, and one flake.
 
 | Row | Result |
 |---|---|
@@ -154,7 +154,7 @@ cells. The load average was about 36 to 43 on 32 threads then (four slices' chec
 reader gets a turn. This slice changes no code it runs (`CellSlots` in `m2-runtime`). Re-run afterwards: 50 of 50
 alone, and m2-runtime's whole test binary 10 of 10. No earlier log kept here shows it failing.
 
-**The independent check** (label `check-S3`, at `e891a0b`; logs in `~/m2-runs/check-check-S3/`)
+**The independent check** (label `check-S3`, at `e891a0b`; logs in `$SCRATCH/check-check-S3/`)
 
 | What | Result |
 |---|---|
@@ -171,7 +171,7 @@ alone, and m2-runtime's whole test binary 10 of 10. No earlier log kept here sho
 |---|---|
 | `std/build.sh`'s `build()` turns a relative target folder into a full path before it runs cargo | cargo runs inside `std/kernels-src`, so it built into `std/kernels-src/<folder>` while `cp` read `<folder>` from where the script was run. `CARGO_TARGET_DIR=target std/build.sh` failed. Worse: when that folder already held an older `m2_std_kernels.wasm`, the script copied the old file over `std.wasm` and said nothing (shown in a scratch copy with a planted file). A relative `TMPDIR` made `--check` fail the same way. Now all of them build the committed bytes; `--check` still fails on a changed byte. |
 
-**The check again** at the fix (`bd608d7`, 14 min, logs in `~/m2-runs/check-check-S3-fix/`): the same rows. All 7 of
+**The check again** at the fix (`bd608d7`, 14 min, logs in `$SCRATCH/check-check-S3-fix/`): the same rows. All 7 of
 §4.4's suites failed this time; `notes-proj` passed on its retry. Renders: the same 8 files. One new flake, not this
 slice's: `m2-plugins`' `tests::surge_plays_notes` failed once ("nothing before the note's sample offset") and passed
 on its retry. Its code is the same as at S1. Run alone it fails 6 times in 150, and the whole test binary 4 in 60:
@@ -229,7 +229,7 @@ sha256 of the WAV file `m2 render` writes (`e2e/renders.sha256`). The final code
 in three dependency lists), `docs/architecture.md` (RENDER-2's rule and *Today* lines, PLAT-4's *Today* line), and
 this section.
 
-**The check** at `01edbf1` (`ci/check.sh`, 18 min, logs in `~/m2-runs/check-build-S4/`): §13.1's S1 row changed only
+**The check** at `01edbf1` (`ci/check.sh`, 18 min, logs in `$SCRATCH/check-build-S4/`): §13.1's S1 row changed only
 by S4, as asked.
 
 | Row | Result |
@@ -250,7 +250,7 @@ poll loop while a save had renamed it aside (`ENOENT`): the missing-file gap of 
 reads a project file in a poll loop", which names s4-clips), which S6 closes. Not this slice's code: S4 changes only
 math. Run alone 10 more times on this build: 9 passed in full, 1 crashed the same way.
 
-**Independent check** (label `check-S4`, at `fa09cf0`; `ci/check.sh`, 13 min, logs in `~/m2-runs/check-check-S4/`):
+**Independent check** (label `check-S4`, at `fa09cf0`; `ci/check.sh`, 13 min, logs in `$SCRATCH/check-check-S4/`):
 §13.1's S1 row changed only by S4. Rust tests: the 10 S4 leaves (9 tests and the `main_thread` binary), 689 passed,
 `fixture_renders_change_only_with_stds_version` passes. Clippy: lint 1 first; without `-D warnings` exactly §4.2's 15,
 none in S4's crates. std kernels PASS, std.wasm FAIL (S3), mac lint PASS. Browser suites: 23 of 29, the 6 key and
@@ -271,7 +271,7 @@ Reported, not fixed (design choices or bigger than a fix): song code's `**` on B
 with literals still works; oxc lowers only the others to `Math.pow`); `**` inside `eval` or `new Function` skips the
 lowering and uses the OS's `pow`.
 
-The check again at `00ff1c7` (the fix; logs in `~/m2-runs/check-check-S4-fix/`): the same rows, plus one flake that
+The check again at `00ff1c7` (the fix; logs in `$SCRATCH/check-check-S4-fix/`): the same rows, plus one flake that
 passed on its retry: `tests::cell::cell_heard_never_runs_ahead` ("drained while writing": the writer finished before
 the first drain, while other checks loaded the server). S4 doesn't touch it.
 
@@ -301,7 +301,7 @@ the first drain, while other checks loaded the server). S4 doesn't touch it.
 | Linux's `AppMain` loop starts on any thread; macOS's refuses to start off the main thread | Only on macOS is that loop the main thread. The app calls it on the main thread anyway. |
 | `run_main` now checks it runs on the process's main thread on Linux too | macOS always did; every caller is a `main`. |
 
-**The check** at `9d200a4` (`ci/check.sh`, 17 min, logs and screenshots in `~/m2-runs/check-build-S5/`): S1's row, changed only
+**The check** at `9d200a4` (`ci/check.sh`, 17 min, logs and screenshots in `$SCRATCH/check-build-S5/`): S1's row, changed only
 by S5, plus two flakes that are not S5's (below).
 
 | Row | Result |
@@ -323,10 +323,10 @@ by S5, plus two flakes that are not S5's (below).
 | `notes-proj` passed, where S1's check failed it twice | The file-then-revision race S2 fixes (§4.4) depends on timing. It passed 5 of 5 times alone on this build, and S3's check, which doesn't touch saves either, passed it too. |
 
 **The Linux app with plugins.** Opened once more by hand on Xvfb with `examples/with-plugins` and the test plugins: its
-song has no problems (S1's screenshot showed two `plugin.missing`), and it plays. Screenshots in `~/m2-runs/check-build-S5/`:
+song has no problems (S1's screenshot showed two `plugin.missing`), and it plays. Screenshots in `$SCRATCH/check-build-S5/`:
 `app-first-song.png`, `app-with-plugins.png`, `app-with-plugins-playing.png`.
 
-**The independent check** (label `check-S5`, at `eefa929`; logs in `~/m2-runs/check-check-S5/`)
+**The independent check** (label `check-S5`, at `eefa929`; logs in `$SCRATCH/check-check-S5/`)
 
 | What | Result |
 |---|---|
@@ -349,7 +349,7 @@ Left as they are, for the lead:
   shows they load.
 - On macOS, `run_main` after `use_app_main_thread` is now an error (before, both were the main queue). Nothing does that.
 
-The check again at `0a68727`, with the fix (logs in `~/m2-runs/check-check-S5b/`): the same rows. Rust tests 696 passed
+The check again at `0a68727`, with the fix (logs in `$SCRATCH/check-check-S5b/`): the same rows. Rust tests 696 passed
 (one more: the new test), the same 10 failed. Suites: 6 of S1's 7 failed again, and `notes-proj` passed. `live3a`
 failed "dragging across the ruler loops beats 4–12" once and passed on its retry. That is `HANDOFF.md`'s ruler-drag flake,
 which S1's trial saw too; `live3a` hosts no plugin, so S5's loop only idles there. Alone it failed 1 of 6 runs more.
@@ -394,7 +394,7 @@ The rebase gave the slices' commits new hashes. The notes above name the old one
   samples early), `m2-runtime`'s `cell_heard_never_runs_ahead` under heavy load, and G10's timing in
   `the_live_engine_passes_every_gate` under load.
 
-**The check** at `7e20eba` (`ci/check.sh`, 8 min on a quiet server, logs in `~/m2-runs/check-integrate/`): exactly
+**The check** at `7e20eba` (`ci/check.sh`, 8 min on a quiet server, logs in `$SCRATCH/check-integrate/`): exactly
 §13.1's S5 row, with no retries.
 
 | Row | Result |
@@ -457,7 +457,7 @@ The rebase gave the slices' commits new hashes. The notes above name the old one
 | `host::name()` gives "this computer" when the OS gives no name | As `lock.rs` did. |
 | `create_at` and `make()` share one helper, `taken()` | The lead's decision on Q1 for `m2 new`. |
 
-**The check** at `6f9f602` (`ci/check.sh`, 8 min, logs and the app's screenshots in `~/m2-runs/check-build-S6/`):
+**The check** at `6f9f602` (`ci/check.sh`, 8 min, logs and the app's screenshots in `$SCRATCH/check-build-S6/`):
 exactly §13.1's S6 row, on its first run, with no retry.
 
 | Row | Result |
@@ -475,7 +475,7 @@ exactly §13.1's S6 row, on its first run, with no retry.
 - Only the Mac run tests the macOS bodies: the barrier's `fsync` fallback, the error numbers 45 and 102, and the moved `renamex_np`, `clonefile`, `getattrlist` and `gethostuuid` calls. The mac lint only type-checks them.
 - `m2 new NIGHT/../night` beside `Night` is refused, but on Linux it first makes an empty `NIGHT`: `create_at` makes the parent folder before any check. That is older than this slice and needs `..` in the path.
 
-**The independent check** (label `check-S6`, at `5ef6613`; logs in `~/m2-runs/check-check-S6/`)
+**The independent check** (label `check-S6`, at `5ef6613`; logs in `$SCRATCH/check-check-S6/`)
 
 | What | Result |
 |---|---|
@@ -495,12 +495,12 @@ exactly §13.1's S6 row, on its first run, with no retry.
 | `is_local` says no for the kernel's own AFS (kAFS) too: its number, `0x6B414653` (`AFS_FS_MAGIC`), joins the list, with a test that feeds the list by libc's names | The list had only OpenAFS's `AFS_SUPER_MAGIC` (`0x5346414F`), from design §3.2. This kernel's `kafs.ko` holds `0x6B414653` once and `0x5346414F` never, so a kAFS volume counted as local: no `lock.local` (and from S8, events trusted where only walks see other computers' writes), where WRITE-17 says AFS is a network volume. |
 
 Left for the lead:
-- `notes` failed "the timeline shows it shorter" once in 25 runs (8 alone, 16 more alone, 1 in the check). It waits until the file on disk says 16 beats, then measures the clip on screen once, without waiting for the screen. That is the file-then-screen race §4.4 fixed at `notes.mjs:97`. No earlier check log in `~/m2-runs` shows it. S6 doesn't change the order (the file is renamed before the revision goes out); an `until` around the width in `notes.mjs:155` would close it. Left alone: suite lines on `main` are kept few for `taste`'s merge.
+- `notes` failed "the timeline shows it shorter" once in 25 runs (8 alone, 16 more alone, 1 in the check). It waits until the file on disk says 16 beats, then measures the clip on screen once, without waiting for the screen. That is the file-then-screen race §4.4 fixed at `notes.mjs:97`. No earlier check log in `$SCRATCH` shows it. S6 doesn't change the order (the file is renamed before the revision goes out); an `until` around the width in `notes.mjs:155` would close it. Left alone: suite lines on `main` are kept few for `taste`'s merge.
 - macOS only: when `clonefile` works but the push after it fails, `stage.rs` now copies, which fails with "File exists". The commit still fails, but its error names the copy, not the disk's error (before S6 it named the push's error).
 - `m2 new` (and New Song since S2) now lists the parent folder first. In a folder that can be written but not listed (mode 300), `m2 new dropbox/song` fails with "reading dropbox: Permission denied"; before S6 it made the song. Rare, and the capitals rule can't be checked there.
 - The real home on this server holds `~/Library/Caches/music2/hashes.json`, written 2026-10-14 20:29, before this slice, by a run with the real `HOME`. Not from this check; left as it is.
 
-The check again at `8616d15`, with the fix (logs in `~/m2-runs/check-check-S6b/`): exactly §13.1's S6 row, with no retry.
+The check again at `8616d15`, with the fix (logs in `$SCRATCH/check-check-S6b/`): exactly §13.1's S6 row, with no retry.
 Rust tests 715 passed (one more: the new test), the same 5 failed; `m2-session`'s binary 93.5 s. clippy fails at lint 4,
 with only lints 4 to 6. Suites 29 of 29, renders 8 of 8, and every other row PASS.
 
@@ -548,7 +548,7 @@ with only lints 4 to 6. Suites 29 of 29, renders 8 of 8, and every other row PAS
 Shared files this slice touches, each edit small: `Cargo.lock` (2 lines), `docs/architecture.md` (WRITE-1, WRITE-15 and WRITE-16, 3 lines), this file (this section). Not `ci/check.sh`, not `one_place.rs`.
 
 **The check** at `758e583` (`ci/check.sh`, 14 min while other slices' checks ran; logs and the app's screenshots in
-`~/m2-runs/check-build-s7/`): §13.1's S7 row, with one known flake.
+`$SCRATCH/check-build-s7/`): §13.1's S7 row, with one known flake.
 
 | Row | Result |
 |---|---|
@@ -571,7 +571,7 @@ the same message. S7 changes nothing in `core/plugins` or `core/os`.
   folder sync fails), the WAV goes but the provenance file stays, so a retry with that name is refused. Older than
   this slice.
 
-**The independent check** (label `check-s7`, at `a0b217e`; logs in `~/m2-runs/check-check-s7/`)
+**The independent check** (label `check-s7`, at `a0b217e`; logs in `$SCRATCH/check-check-s7/`)
 
 | What | Result |
 |---|---|
@@ -605,7 +605,7 @@ Left for the lead:
   disk that can't swap is untested there. It passes when changed (above): 2 lines.
 - The Windows step: `push_tree` opens each file read-only to push it; `FlushFileBuffers` needs write access.
 
-The check again at `7ec6404`, with the fix (logs in `~/m2-runs/check-check-s7b/`): exactly §13.1's S7 row, with no
+The check again at `7ec6404`, with the fix (logs in `$SCRATCH/check-check-s7b/`): exactly §13.1's S7 row, with no
 retry. Rust tests 717 passed, the same 5 failed; `m2-session`'s binary 138.7 s. clippy fails at lint 4, with only lints
 4 to 6. Suites 29 of 29 (1,034 of 1,034 checks; live3b 51 of 51 with the plugins), renders 8 of 8, and every other row
 PASS.
@@ -656,7 +656,7 @@ So the "one revision" case at 400 ms is for FSEvents, which names such a file wh
 | `m2-server`'s whole test binary (135 tests, one inotify instance shared by all) | 5 of 5 |
 
 **G11 on Linux**, for information (PLAT-1; `m2-gates --server tx-data watcher`, release, a quiet server; the log is
-`~/m2-runs/logs/build-s8-gates-g11.log`)
+`$SCRATCH/logs/build-s8-gates-g11.log`)
 
 | Gate | Result |
 |---|---|
@@ -688,7 +688,7 @@ the *Today* lines of PLAT-2 and PLAT-3), `core/os/tests/one_place.rs` (S8's thre
 line and the header in `core/os/src/lib.rs`, `linux/mod.rs` and `mac/mod.rs`, and this section. `Cargo.lock` and
 `ci/check.sh` are unchanged (`m2-server` already used `m2-os`).
 
-**The check** at `edcee5f` (`ci/check.sh`, 10 min, logs and the app's screenshots in `~/m2-runs/check-build-s8/`):
+**The check** at `edcee5f` (`ci/check.sh`, 10 min, logs and the app's screenshots in `$SCRATCH/check-build-s8/`):
 `music2 check: PASS`, on its first run, with no retry. That is §13.1's S8 row: Linux fully green.
 
 | Row | Result |
@@ -713,7 +713,7 @@ them). Both suites passed (52 of 52, 28 of 28).
 - One inotify instance and its reader thread live until the process ends, by design.
 - §13.3 still applies after `taste` merges: re-run s8-tracks' "layout.json within a second" on this watcher.
 
-**The independent check** (label `check-s8`, at `e4e1504`; logs in `~/m2-runs/check-check-s8/`)
+**The independent check** (label `check-s8`, at `e4e1504`; logs in `$SCRATCH/check-check-s8/`)
 
 | What | Result |
 |---|---|
@@ -730,7 +730,7 @@ them). Both suites passed (52 of 52, 28 of 28).
 | A rebuild keeps watching past a folder it can't watch (`watch_under`) | The walk that adds watches stopped at the first watch that failed (`ENOSPC` when the user's watches run out, `ENOMEM`). A rebuild (a folder moved, an overflow) then let go of every folder it hadn't reached yet, though they were watched: with one such folder, only the project folder stayed watched. Design §3.4 says only that folder is left to the walks. The walk now goes on, and still asks for a walk. New test `a_folder_that_cant_be_watched_leaves_the_others_watched`, with a test-only list of folders whose watch fails; it fails 5 of 5 without the fix. |
 | `a_file_written_while_open_is_named_at_each_write` takes the watch tests' shared lock | The overflow test's `Rescan` could land between its halves. 3 of 100 runs of `m2-os`'s tests failed; run beside the overflow test alone, 84 of 100. After the fix, 0 of 100 each. |
 
-The check again at `02a9164`, with the fix (logs in `~/m2-runs/check-check-s8b/`): `music2 check: PASS`, with no
+The check again at `02a9164`, with the fix (logs in `$SCRATCH/check-check-s8b/`): `music2 check: PASS`, with no
 retry. Rust tests 734 passed, 0 failed (one more: the new test); clippy PASS, and without `-D warnings` nothing; 29 of
 29 suites; renders 8 of 8; every other row PASS. That is §13.1's S8 row.
 
@@ -820,7 +820,7 @@ section. No `Cargo.lock`, `ci/check.sh` or `one_place.rs` change.
   removing the two would be one line beside `Date`.
 
 **The check** at `7d37b6b` (`ci/check.sh`, 13 min while other slices' checks loaded the server, logs and the app's
-screenshots in `~/m2-runs/check-build-script/`): §13.1's S6 row, with this slice's 3 new tests passing, and one known
+screenshots in `$SCRATCH/check-build-script/`): §13.1's S6 row, with this slice's 3 new tests passing, and one known
 kind of flake that passed on its retry.
 
 | Row | Result |
@@ -839,9 +839,9 @@ retry. Run alone 10 more times on this build: 10 of 10 passed. The step waits un
 then clicks the toast's Undo, whose answer depends on the revision the page holds (`Attention.tsx`): while the undo's
 revision hasn't reached the page, it asks the server to undo instead of saying it can't. Most likely that happened
 under load (the file-then-revision race S2 and S6's checker met in other suites); this is read from the code, not
-caught in the act. This slice changes nothing on that path. No earlier check log in `~/m2-runs` shows this failure.
+caught in the act. This slice changes nothing on that path. No earlier check log in `$SCRATCH` shows this failure.
 
-**The independent check** (label `check-script`, at `198cdbb`; logs in `~/m2-runs/check-check-script/`)
+**The independent check** (label `check-script`, at `198cdbb`; logs in `$SCRATCH/check-check-script/`)
 
 | What | Result |
 |---|---|
@@ -860,7 +860,7 @@ caught in the act. This slice changes nothing on that path. No earlier check log
 | `import_at` reads each file's imports after the TypeScript strip the build runs (`Transformer`, as in `strip`), so it sees only the imports the build keeps. Its own type-only checks went: the strip drops those. Test: `a_missing_export_is_named_in_full_at_the_import`, with this case and the circular form, which had no test. | The strip drops an import that only types use. With `import { Foo }` used as a type in `tracks/a.ts` and as a value in `tracks/b.ts` (where it fails), the error pointed at `tracks/a.ts:1:10`, whose import is fine. Now `tracks/b.ts:1:10`. The new case failed without the fix. |
 
 The `attention-attn` retry: both checks of this branch failed the same check once, "the move's toast Undo says it
-can't any more". No other check log in `~/m2-runs` (19 of them) has it. So I ran the suite alone, taking turns between
+can't any more". No other check log in `$SCRATCH` (19 of them) has it. So I ran the suite alone, taking turns between
 `main`'s build (`8616d15`, without this slice) and this branch's:
 
 | Load | `main` | this branch |
@@ -886,7 +886,7 @@ on disk show the undo, which can be before the undo's revision reaches the page.
   `SharedArrayBuffer`, `Atomics`, `atob`, `btoa`, `DOMException`, ...) are the same on every computer, and
   `Atomics.wait` can't block here (QuickJS's `can_block` is off), so it can't outlast the 10 s limit.
 
-The check again at `2dd9c2d`, with the fix (11 min, logs in `~/m2-runs/check-check-script-b/`): exactly §13.1's S6 row
+The check again at `2dd9c2d`, with the fix (11 min, logs in `$SCRATCH/check-check-script-b/`): exactly §13.1's S6 row
 with the 3 new tests, with no retry. Rust tests 718 passed, the same 5 failed. clippy fails at lint 4; without
 `-D warnings` it lists exactly lints 4 to 6. Suites 29 of 29 (1,034 of 1,034 checks, `attention-attn` 56 of 56),
 live3b 51 of 51, renders 8 of 8, and every other row PASS.
@@ -947,7 +947,7 @@ and on `main`'s script the same way:
 row's copy, the test count and the last line) and this section. Not touched: `Cargo.lock`, `docs/architecture.md`,
 `one_place.rs`.
 
-**The check** at `c9c163b` (`ci/check.sh`, 13 min, logs and the app's screenshots in `~/m2-runs/check-build-flakes/`):
+**The check** at `c9c163b` (`ci/check.sh`, 13 min, logs and the app's screenshots in `$SCRATCH/check-build-flakes/`):
 exactly §13.1's S6 row, with no retry.
 
 | Row | Result |
@@ -966,7 +966,7 @@ gate's `s % GATE == 0`. `c9c163b` writes it `s.is_multiple_of(GATE)` (the same m
 again on it.
 
 **The check without the plugins** at `c9c163b` (a scratch `HOME` with no plugins, no `CLAP_PATH`; 9 min, logs in
-`~/m2-runs/check-build-flakes-noplugins/`): it fails, as PLAT-6 says. "plugins none: … doesn't hold both", and the
+`$SCRATCH/check-build-flakes-noplugins/`): it fails, as PLAT-6 says. "plugins none: … doesn't hold both", and the
 first line of "what failed" says where they were looked for; exit status 1. The rows are as above, but the browser
 suites row is PART (28 of 29, live3b without plugins), and G10's timing failed once in the rust tests ("bar 64 takes no
 longer than the same length from bar 1": 2.57 s against 2.12 s, while other agents' checks loaded the server) and
@@ -977,7 +977,7 @@ Left alone, as asked: G10's timing under load (PLAT-1). Not this task's: the `no
 `HANDOFF.md` and S6's checker name.
 
 **The independent check** (label `check-flakes`, at `5587530`, then `010a49d` with the fix below; logs in
-`~/m2-runs/check-check-flakes/` and `~/m2-runs/check-check-flakes-noplugins/`). "Under load" means beside 32 busy loops,
+`$SCRATCH/check-check-flakes/` and `$SCRATCH/check-check-flakes-noplugins/`). "Under load" means beside 32 busy loops,
 one per thread.
 
 | What | Result |
@@ -1076,7 +1076,7 @@ PLAT-6's *Today* now says Linux passes the check since S8, first at `9f0b19a`.
 - §13.3: after `taste` merges, re-run s8-tracks' "layout.json within a second" on the inotify watcher.
 
 **The checks** at `9f0b19a` (`ci/check.sh`, 8 min each on a quiet server; logs and the app's screenshots in
-`~/m2-runs/check-integrate-b/` and `~/m2-runs/check-integrate-b2/`). Both: "music2 check: PASS", every row PASS, nothing
+`$SCRATCH/check-integrate-b/` and `$SCRATCH/check-integrate-b2/`). Both: "music2 check: PASS", every row PASS, nothing
 passed only on a retry, "what failed" empty.
 
 | Row | First run | Second run |
@@ -1092,7 +1092,7 @@ passed only on a retry, "what failed" empty.
 
 No log of either run says a watcher fell back to walks.
 
-**Tidied.** The four worktrees in `~/m2-runs/wt/plat-*` are removed (about 190 GB of `target/`), and the branches
+**Tidied.** The four worktrees in `$SCRATCH/wt/plat-*` are removed (about 190 GB of `target/`), and the branches
 `plat/s7`, `plat/s8`, `plat/script` and `plat/flakes` are deleted, each after `git merge-base --is-ancestor` showed it
 on `main`.
 
@@ -1143,7 +1143,7 @@ where one is practical. Then `ci/check.sh` passed twice at `57062a7`, with no re
 | evt-2 is in `apply`, by a stamp's fields | The settle rule keeps the change time: it catches a write that sets the modified time back. |
 
 **The checks** at `57062a7` (`ci/check.sh`, 8 min each on a quiet server; logs and the app's screenshots in
-`~/m2-runs/check-fix-c/` and `~/m2-runs/check-fix-c2/`). Both: "music2 check: PASS", every row PASS, nothing passed
+`$SCRATCH/check-fix-c/` and `$SCRATCH/check-fix-c2/`). Both: "music2 check: PASS", every row PASS, nothing passed
 only on a retry, "what failed" empty.
 
 | Row | First run | Second run |
@@ -1208,7 +1208,7 @@ probed in scratch folders. Two small bugs found and fixed, each with a test that
 - D4's words: `inotify_init1` gives `EMFILE` for the process's own file limit too, which they don't name.
 
 **The checks** (`ci/check.sh`, 8 and 10 min on a quiet server). At `049f0d1`, before the fixes (logs in
-`~/m2-runs/check-final/`), and at `63c45da` (logs and the app's screenshots in `~/m2-runs/check-final2/`): both
+`$SCRATCH/check-final/`), and at `63c45da` (logs and the app's screenshots in `$SCRATCH/check-final2/`): both
 "music2 check: PASS", every row PASS, nothing passed only on a retry, "what failed" empty.
 
 | Row | At `049f0d1` | At `63c45da` |
@@ -1221,7 +1221,7 @@ probed in scratch folders. Two small bugs found and fixed, each with a test that
 | renders | PASS: 8 of 8 match `e2e/renders.sha256` | PASS |
 | repo unchanged | PASS | PASS |
 
-The app's two screenshots at `63c45da` are copied for the owner to `~/m2-runs/app-shots/platform-63c45da/`.
+The app's two screenshots at `63c45da` are copied for the owner to `$SCRATCH/app-shots/platform-63c45da/`.
 
 ## S9. Handoff, the contract's rows, and the last Linux check
 
@@ -1251,7 +1251,7 @@ the step's end. The Mac run (the owner) and the push (the lead) are what is left
 | Only §19's "CoreMIDI" in design-8b changed | §15, §18 and §20 record the question as it was asked. |
 
 **The check** at `1a24fee` (`ci/check.sh`, 8 min on a quiet server; logs and the app's screenshots in
-`~/m2-runs/check-s9/`, all logs in `~/m2-runs/check-s9.tgz`): `music2 check: PASS`, every row PASS.
+`$SCRATCH/check-s9/`, all logs in `$SCRATCH/check-s9.tgz`): `music2 check: PASS`, every row PASS.
 
 | Row | Result |
 |---|---|
@@ -1265,13 +1265,13 @@ the step's end. The Mac run (the owner) and the push (the lead) are what is left
 
 Nothing passed only on a retry, and "what failed" is empty.
 
-**A first run that I spoiled** (logs in `~/m2-runs/check-s9-run1/`). It said `music2 check: FAIL (1 of 12 checks)`: only
+**A first run that I spoiled** (logs in `$SCRATCH/check-s9-run1/`). It said `music2 check: FAIL (1 of 12 checks)`: only
 "repo unchanged" failed, "1 entries changed". That entry was `HANDOFF.md`, which I edited in this checkout while the
 check ran; the row compares `git status` before and after. Every other row passed with the same numbers as above
 (753 tests, `m2-session` 132.9 s, 29 of 29 suites, renders 8 of 8). So I put the file back as committed, touched
 nothing, and ran the check again: the run above. Lesson for the next session: edit no tracked file while a check runs.
 
-The app's two screenshots are copied for the owner to `~/m2-runs/app-shots/platform-1a24fee/`.
+The app's two screenshots are copied for the owner to `$SCRATCH/app-shots/platform-1a24fee/`.
 
 **Left for later:** nothing new. `HANDOFF.md` lists the items above ("Left for later" here and in each slice's notes),
 one line each.

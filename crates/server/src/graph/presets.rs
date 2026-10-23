@@ -31,7 +31,9 @@ fn yours() -> Result<PathBuf> {
 /// The folder presets `from` (`std` or `yours`) for `sound` are in.
 fn folder(from: &str, sound: &str) -> Result<PathBuf> {
     match from {
-        "std" => presets::factory(&crate::resources::std_dir(), sound).ok_or_else(|| anyhow!("music2 has no presets of its own for this sound")),
+        "std" => {
+            presets::factory(&crate::resources::std_dir(), sound).ok_or_else(|| anyhow!("music2 has no presets of its own for this sound"))
+        }
         "yours" => Ok(yours()?.join(presets::folder(sound))),
         other => bail!("there are no presets from `{other}`"),
     }
@@ -148,7 +150,8 @@ impl Graph {
                 p.keyed().map_err(|e| anyhow!("{e}"))?;
                 let (preset, blob) = match from {
                     "plugin" => {
-                        let found = found.ok_or_else(|| anyhow!("{} isn't installed on this computer, so its presets can't be loaded.", p.label))?;
+                        let found = found
+                            .ok_or_else(|| anyhow!("{} isn't installed on this computer, so its presets can't be loaded.", p.label))?;
                         self.scratch(&found, &p, name)?
                     }
                     _ => {
@@ -183,7 +186,8 @@ impl Graph {
         })();
         host.destroy(h);
         let (blob, values) = made.map_err(|e| anyhow!("{} couldn't load {name}: {e:#}", p.label))?;
-        let preset = Preset { name: name.into(), sound: p.plugin.clone(), values, plugin_version: Some(found.version.clone()), state: None };
+        let preset =
+            Preset { name: name.into(), sound: p.plugin.clone(), values, plugin_version: Some(found.version.clone()), state: None };
         Ok((preset, blob))
     }
 }

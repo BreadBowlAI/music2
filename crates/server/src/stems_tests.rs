@@ -72,7 +72,11 @@ fn stems_write_one_file_per_track_in_a_folder() {
     for n in names(&folder) {
         let wav = hound::WavReader::open(folder.join(&n)).unwrap();
         let spec = wav.spec();
-        assert_eq!((spec.channels, spec.bits_per_sample, spec.sample_format, wav.duration()), (2, 32, hound::SampleFormat::Float, frames), "{n}");
+        assert_eq!(
+            (spec.channels, spec.bits_per_sample, spec.sample_format, wav.duration()),
+            (2, 32, hound::SampleFormat::Float, frames),
+            "{n}"
+        );
     }
     // Each stem says it started, in order, with how many there are; progress only goes forward.
     let started: Vec<(String, u64)> = seen

@@ -6,8 +6,8 @@ use m2_session::Session;
 use super::*;
 use crate::Gestures;
 use crate::import::{self, Imported, Source};
-use crate::{EditError, Edited};
 use crate::testing::fixture;
+use crate::{EditError, Edited};
 
 /// A short WAV whose bytes differ by `seed`.
 fn tone(seed: f32) -> Vec<u8> {
@@ -23,7 +23,8 @@ fn tone(seed: f32) -> Vec<u8> {
 
 /// The id of the project's call to `callee`, and its site.
 fn call(s: &Session, callee: &str) -> (String, u32) {
-    let site = s.accepted().compiled.sites.iter().find(|x| x.in_project && x.callee == callee).unwrap_or_else(|| panic!("no call `{callee}`"));
+    let site =
+        s.accepted().compiled.sites.iter().find(|x| x.in_project && x.callee == callee).unwrap_or_else(|| panic!("no call `{callee}`"));
     (format!("{}#{}", site.file, site.ordinal), site.id)
 }
 
@@ -58,8 +59,14 @@ fn dropping_a_wav_sets_the_sample_and_undo_takes_it_back() {
     let name = kick.asset.as_str().to_string();
     let undo_before = s.accepted().number;
     let done = drop_on(&mut s, "sampler", &kick).unwrap();
-    assert_eq!(f.read(&code), before.replace("sampler(lane.notes(\"notes\"))", &format!("sampler(lane.notes(\"notes\"), {{ sample: \"{name}\" }})")));
-    assert_eq!((done.before.as_str(), done.after.as_str()), ("sampler(lane.notes(\"notes\"))", format!("sampler(lane.notes(\"notes\"), {{ sample: \"{name}\" }})").as_str()));
+    assert_eq!(
+        f.read(&code),
+        before.replace("sampler(lane.notes(\"notes\"))", &format!("sampler(lane.notes(\"notes\"), {{ sample: \"{name}\" }})"))
+    );
+    assert_eq!(
+        (done.before.as_str(), done.after.as_str()),
+        ("sampler(lane.notes(\"notes\"))", format!("sampler(lane.notes(\"notes\"), {{ sample: \"{name}\" }})").as_str())
+    );
     // The graph: its voices read the file, which the revision knows by its hash, so it plays at once.
     assert_eq!(files(&s), std::slice::from_ref(&name));
     assert_eq!(shown(&s), Some(SamplerCard { files: vec![name.clone()] }), "its card names the file");

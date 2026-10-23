@@ -56,11 +56,16 @@ fn bytes(name: &str, b: &[u8]) -> Source {
 /// The lane file's clips, without their ids.
 fn clips(dir: &Path) -> Vec<Value> {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("data/vox/clips.json")).unwrap()).unwrap();
-    v["clips"].as_array().unwrap().iter().map(|c| {
-        let mut c = c.clone();
-        c.as_object_mut().unwrap().remove("id");
-        c
-    }).collect()
+    v["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            c.as_object_mut().unwrap().remove("id");
+            c
+        })
+        .collect()
 }
 
 // A2: an offline render right after the import has the file's samples from the beat it was
@@ -123,7 +128,11 @@ fn a_read_only_window_refuses_an_import() {
 fn a_refused_import_adds_nothing() {
     let dir = project("refused");
     let (graph, session) = opened(&dir);
-    let why = graph.import_audio(session, vec![bytes("x.wav", &float_wav(480).0)], Target::Lane { module: "vox".into(), lane: "nope".into(), beat: 0.0 });
+    let why = graph.import_audio(
+        session,
+        vec![bytes("x.wav", &float_wav(480).0)],
+        Target::Lane { module: "vox".into(), lane: "nope".into(), beat: 0.0 },
+    );
     assert!(why.unwrap_err().to_string().contains("no lane `nope`"));
     let why = graph.import_audio(session, vec![bytes("song.mp3", b"ID3 not a wav")], onto_vox(0.0)).unwrap_err().to_string();
     assert!(why.starts_with("song.mp3 isn't a WAV file. music2 reads WAV files."), "{why}");

@@ -662,7 +662,9 @@ mod tests {
         let line = format!("{out}").lines().nth(1).unwrap().to_string();
         let kept = String::from_utf8_lossy(&line.as_bytes()[..220.min(line.len())]).to_string();
         assert!(
-            kept.contains("against S's: -108 µs (the app's layout), -123 (its control); each turn's first callback over the mean: +16182 µs"),
+            kept.contains(
+                "against S's: -108 µs (the app's layout), -123 (its control); each turn's first callback over the mean: +16182 µs"
+            ),
             "{kept}"
         );
     }

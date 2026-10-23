@@ -10,8 +10,8 @@ export const meta = {
   ],
 }
 
-const MAIN = '/Users/jerryxu/dev/suite2/music2'
-const S = '/private/tmp/claude-501/-Users-jerryxu-dev-suite2-music2/07b91ec3-d8c4-49ce-985f-b33193c681f7/scratchpad'
+const MAIN = '<repo>'
+const S = '<scratchpad>'
 const WT = `${S}/wt-sounds`
 const TGT = `${S}/target-sounds`
 const W = `${S}/sounds`
@@ -24,7 +24,7 @@ Hard rules:
 - Do NOT commit, push, stash, reset, rebase or create branches; leave changes uncommitted in ${WT}.
 - EXISTING components and kernels must not change behaviour: every fixture's offline render stays byte-identical (baseline hashes ${S}/baseline/SHA256SUMS; render with HOME=${S}/home e2e/baseline.sh --tree ${WT} <out> plus templates/empty --from 4 --seconds 6 by hand). Templates and examples stay unchanged; add a NEW example (examples/sounds/: a short pop demo using every new sound, format v1 with keys, data files canonical) instead.
 - Determinism (RENDER-2): same input, same bits; noise seeded; no time or randomness from outside; every kernel passes the debug input-memory check; no allocation in process; denormals handled.
-- Do NOT launch music2-desktop; never use the real ~/.music2 or ~/Music (HOME=${S}/home-sounds). Cargo with HOME changed needs RUSTUP_HOME=/Users/jerryxu/.rustup CARGO_HOME=/Users/jerryxu/.cargo PATH=/Users/jerryxu/.cargo/bin:$PATH.
+- Do NOT launch music2-desktop; never use the real ~/.music2 or ~/Music (HOME=${S}/home-sounds). Cargo with HOME changed needs RUSTUP_HOME=/Users/<user>/.rustup CARGO_HOME=/Users/<user>/.cargo PATH=/Users/<user>/.cargo/bin:$PATH.
 - DISK/CPU: ONE cargo target dir CARGO_TARGET_DIR=${TGT} for the workspace (kernels-src may use ${TGT}-kernels); run cargo and std/build.sh with nice -n 19 (a timing-sensitive workflow runs beside you).
 - Match the surrounding code and comment style; short "why" comments.
 `

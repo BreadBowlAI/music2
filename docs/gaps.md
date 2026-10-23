@@ -1,7 +1,7 @@
 # What music2 can't do yet
 
 **In short**
-- This page lists only what is missing. What the app does today is in the README: [In short: what you can do](../README.md#in-short-what-you-can-do).
+- This page lists only what is missing. What the app does today is in the manual: [In short: what you can do](manual.md#in-short-what-you-can-do).
 - The gaps are grouped by area. The areas you notice first when making a song are at the top.
 - Each line is one gap. The big ones have a number (#18, #24, …), which stays the same everywhere. Small loose ends are listed under them, without numbers.
 - Size: **small** is one focused change; **medium** touches the window, the server and the core; **large** is new engine work.
@@ -199,7 +199,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; Open an Example names it plainly), and the docs past [Music basics](music-basics.md) and the README's first sections are technical. | Many people who open music2 are new to making music. | Yes | small |
+| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; Open an Example names it plainly), and the docs past [Music basics](music-basics.md) and the manual's first sections are technical. | Many people who open music2 are new to making music. | Yes | small |
 
 - **A problem from a sound or plugin that stopped can't be dismissed**: it stays in the status popover until the part plays again.
 - **A sound that stops in the moment between Stop All Sound and its reset** stays listed, though the reset starts it again (ex-1).
@@ -259,7 +259,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 37 | **`m2` commands** for change instrument, markers, the song's key, a track's ID, Save As and Follow tempo. Agents can send these to the app's routes, or as a Tx (Follow tempo: `POST /api/graph/clips` with `{"op": "audio", "follow": true}`). | Scripts and agents need the same basics as the app. | Yes (in `music2-cli`) | small |
-| 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. | An agent has to read the README or the source to learn the routes. | Yes | medium |
+| 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. | An agent has to read the manual or the source to learn the routes. | Yes | medium |
 
 ## Checked on Linux only
 
@@ -274,6 +274,10 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **The Confined check's rewire to a node made inside the edit** (WRITE-8, `core/session/src/tx/expect.rs` `made_inside`) has no test in `core/session`: only the editor's bus tests cover it.
 - **`--gates=auto` sees only what git sees**: what the gates take from outside the repo (`RUSTFLAGS` and other settings, a `.cargo/config.toml` above the repo or in `CARGO_HOME`, the machine itself) isn't in its record, so a skip trusts that these are as they were at the recorded pass.
 - **A check whose gates `--gates=auto` skipped still begins `music2 check: PASS`** (it goes on "without running the gates", and the gates row says SKIP): a script that must know the gates ran at this very commit has to read the gates row.
+- **The pull request tier's time on GitHub is still a guess.** It was timed on the server pinned to 4 cores. GitHub's runner is slower per core, so a warm run likely takes 10 to 11 minutes and a cold Rust job 16 to 17 (the goals: 10 and 15). Time the first real runs; if they miss, split `rust` into 4 parts.
+- **The push to `main` runs the whole pull request tier again**, on the tree the merge queue just tested, only to save the build caches. Running just the parts that save caches there (`quick`, `clippy`, `rust 1/3`, `suites 1/2`) would cut a merged pull request from 27 jobs to about 24.
+- **A hang in the nightly run waits out the job's 180 minutes** before "Nightly failed" opens: the full check's `cargo test` has no limit per test.
+- **CI saves the test plugins' cache only when a job passes** (`actions/cache` saves at the job's end). After a failed run on `main`, later runs download the plugins again, from upstream or the `test-plugins` release. Saving it right after `ci/plugins.sh` (`actions/cache`'s separate restore and save steps) would fix that.
 - **The browser logs an error with no song open**: `GET /api/graph` answers 400, which is how the window knows to show the start screen. Answering "no project" without an error status would be quieter.
 
 ## The old app's parts not back yet

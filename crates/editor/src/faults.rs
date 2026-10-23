@@ -146,7 +146,9 @@ impl Namer {
                     }
                     (_, Subject::Clip { .. }) => {
                         let (file, place) = self.clip(s)?;
-                        format!("{file} {place} can't be read, so it plays silent. It may be damaged, or on a drive that isn't plugged in. {on}")
+                        format!(
+                            "{file} {place} can't be read, so it plays silent. It may be damaged, or on a drive that isn't plugged in. {on}"
+                        )
                     }
                     (_, Subject::Asset { node, .. }) => {
                         let (file, who) = (self.asset(s)?, lower(&self.sound_named(node as usize)));
@@ -224,7 +226,9 @@ impl Namer {
                 None => format!("A warped clip can't be stretched, {not}{detail}"),
             },
             (Code::Unreadable, Subject::Asset { node, .. }) => match self.asset(f.subject) {
-                Some(file) => format!("{file}, which {} plays, can't be read, {not} It may be damaged.", lower(&self.sound_named(node as usize))),
+                Some(file) => {
+                    format!("{file}, which {} plays, can't be read, {not} It may be damaged.", lower(&self.sound_named(node as usize)))
+                }
                 None => format!("A file the song plays can't be read, {not}"),
             },
             (Code::Unreadable, _) => format!("{part} can't be read, {not} It may be damaged, or on a drive that isn't plugged in."),

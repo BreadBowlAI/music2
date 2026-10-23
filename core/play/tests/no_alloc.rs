@@ -599,7 +599,9 @@ fn export_with(song: &Song, lent: &std::collections::HashMap<usize, Arc<m2_runti
 fn the_audio_thread_never_allocates_with_plugins() {
     let (a, b) = (probes(1.0), probes(0.5));
     let owner = m2_plugins::Owner::discard();
-    let mut ra = Renderer::prepare(&a.flat, &a.data, &a.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, m2_runtime::Basis::Fresh).unwrap();
+    let mut ra =
+        Renderer::prepare(&a.flat, &a.data, &a.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, m2_runtime::Basis::Fresh)
+            .unwrap();
     ra.set_strict(false);
     let handles = ra.plugin_handles();
     let rb = b.after(&a, &ra.info());
@@ -710,7 +712,9 @@ fn the_audio_thread_never_allocates_with_plugins_in_the_host_process() {
     let host: Arc<dyn m2_plugins::PluginHost> = Arc::new(m2_plugins::Remote::for_tests());
     let (a, b) = (probes_on(1.0, Some(host.clone())), probes_on(0.5, Some(host)));
     let owner = m2_plugins::Owner::discard();
-    let mut ra = Renderer::prepare(&a.flat, &a.data, &a.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, m2_runtime::Basis::Fresh).unwrap();
+    let mut ra =
+        Renderer::prepare(&a.flat, &a.data, &a.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, m2_runtime::Basis::Fresh)
+            .unwrap();
     ra.set_strict(false);
     let rb = b.after(&a, &ra.info());
     let gain = CellTarget { slots: rb.cell_slots(), cells: rb.cell_map().cells(&cells()[0]).into() };
@@ -773,7 +777,9 @@ fn the_audio_thread_never_allocates_with_plugins_in_the_host_process() {
 fn an_allocation_in_the_callback_is_counted() {
     let a = probes(1.0);
     let owner = m2_plugins::Owner::discard();
-    let r = Renderer::prepare(&a.flat, &a.data, &a.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, m2_runtime::Basis::Fresh).unwrap();
+    let r =
+        Renderer::prepare(&a.flat, &a.data, &a.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, m2_runtime::Basis::Fresh)
+            .unwrap();
     let probe = m2_plugins::probe::stats(r.plugin_handles()[0]).unwrap();
     let (player, mut d) = Player::driven(SR);
     player.open(r).unwrap();

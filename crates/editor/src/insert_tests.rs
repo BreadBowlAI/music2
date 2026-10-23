@@ -221,9 +221,15 @@ fn a_long_call_is_shown_around_what_was_written() {
 fn a_first_options_object_goes_on_its_own_line() {
     let head = format!("{HEAD}import {{ master, mixer }} from \"std/mix\";\nexport default song(() =>\n");
     let cases = [
-        ("  master(\n    mixer({ a: osc.sine(220) }),\n  ),\n", "  master(\n    mixer({ a: osc.sine(220) }),\n    { ceiling: -3 },\n  ),\n"),
+        (
+            "  master(\n    mixer({ a: osc.sine(220) }),\n  ),\n",
+            "  master(\n    mixer({ a: osc.sine(220) }),\n    { ceiling: -3 },\n  ),\n",
+        ),
         ("  master(\n    mixer({ a: osc.sine(220) })\n  ),\n", "  master(\n    mixer({ a: osc.sine(220) }),\n    { ceiling: -3 }\n  ),\n"),
-        ("  master(\n\tmixer({ a: osc.sine(220) }), // the mix\n  ),\n", "  master(\n\tmixer({ a: osc.sine(220) }),\n\t{ ceiling: -3 }, // the mix\n  ),\n"),
+        (
+            "  master(\n\tmixer({ a: osc.sine(220) }), // the mix\n  ),\n",
+            "  master(\n\tmixer({ a: osc.sine(220) }),\n\t{ ceiling: -3 }, // the mix\n  ),\n",
+        ),
         ("  master(mixer({ a: osc.sine(220) })),\n", "  master(mixer({ a: osc.sine(220) }), { ceiling: -3 }),\n"),
         ("  master(mixer({\n    a: osc.sine(220),\n  })),\n", "  master(mixer({\n    a: osc.sine(220),\n  }), { ceiling: -3 }),\n"),
     ];

@@ -52,7 +52,8 @@ fn a_take_through_the_routes() {
     let mut events = state.events.subscribe();
     use m2_os::midi::Event;
     state.midi(Event::Plugged("Keys"));
-    let (status, take) = post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "bass", "lane": "notes", "count_in": false}));
+    let (status, take) =
+        post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "bass", "lane": "notes", "count_in": false}));
     assert_eq!(status, 200, "{take:#}");
     assert_eq!((&take["phase"], &take["module"], &take["lane"]), (&json!("take"), &json!("bass"), &json!("notes")));
     assert_eq!(state.graph.state().unwrap()["record"]["phase"], json!("take"));
@@ -158,12 +159,21 @@ fn an_audio_take_through_the_routes() {
     assert!(first["id"].is_string() && first["name"].is_string() && first["default"] == json!(true), "{inputs:#}");
     let (status, set) = post(&running.url, "/api/settings", &json!({"input": {"device": first["id"], "monitor": true}}));
     assert_eq!(status, 200, "{set:#}");
-    assert_eq!((&set["input"]["device"], &set["input"]["name"], &set["input"]["monitor"]), (&first["id"], &first["name"], &json!(true)), "{set:#}");
+    assert_eq!(
+        (&set["input"]["device"], &set["input"]["name"], &set["input"]["monitor"]),
+        (&first["id"], &first["name"], &json!(true)),
+        "{set:#}"
+    );
     let session = state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let mut events = state.events.subscribe();
-    let (status, take) = post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "vox", "lane": "clips", "count_in": false}));
+    let (status, take) =
+        post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "vox", "lane": "clips", "count_in": false}));
     assert_eq!(status, 200, "{take:#}");
-    assert_eq!((&take["phase"], &take["kind"], &take["hear"]), (&json!("take"), &json!("audio"), &json!(true)), "Settings' Hear yourself reaches the take: {take:#}");
+    assert_eq!(
+        (&take["phase"], &take["kind"], &take["hear"]),
+        (&json!("take"), &json!("audio"), &json!(true)),
+        "Settings' Hear yourself reaches the take: {take:#}"
+    );
     let tone = json!({"tone": {"hz": 440.0, "seconds": 0.5, "gain": 0.5}});
     let (status, injected) = post(&running.url, "/api/graph/input/inject", &tone);
     assert_eq!(status, 200, "{injected:#}");
@@ -220,7 +230,8 @@ fn the_inject_api_unplugs_the_input() {
     let state = running.state.clone();
     let session = state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let mut events = state.events.subscribe();
-    let (status, take) = post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "vox", "lane": "clips", "count_in": false}));
+    let (status, take) =
+        post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "vox", "lane": "clips", "count_in": false}));
     assert_eq!(status, 200, "{take:#}");
     post(&running.url, "/api/graph/input/inject", &json!({"tone": {"hz": 440.0, "seconds": 0.5}}));
     std::thread::sleep(Duration::from_millis(300));
@@ -246,7 +257,8 @@ fn the_inject_api_unplugs_the_input() {
     assert!(listed("input.lost"), "the unplug is a problem");
     // `{"refuse": true}` plays a Mac's Don't Allow: the take is dropped, and said.
     state.graph.transport("stop").unwrap();
-    let (status, take) = post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "vox", "lane": "clips", "count_in": false}));
+    let (status, take) =
+        post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "vox", "lane": "clips", "count_in": false}));
     assert_eq!(status, 200, "{take:#}");
     let (status, answer) = post(&running.url, "/api/graph/input/inject", &json!({"refuse": true}));
     assert_eq!(status, 200, "{answer:#}");

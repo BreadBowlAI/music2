@@ -182,7 +182,9 @@ pub fn remove_changes(s: &mut Session, beat: f64) -> Result<Edited, EditError> {
     let t = a.tempo.iter().position(|t| t.beat == beat).filter(|&i| i > 0);
     let m = a.meter.iter().position(|m| m.beat == beat).filter(|&i| i > 0);
     let words = |a: &Arrangement, t: Option<&Tempo>, m: Option<&Meter>| match (t, m) {
-        (Some(t), Some(m)) if m.beat > 0.0 && t.beat == m.beat => format!("{} and {}/{} from {}", bpm_words(t.bpm), m.beats, m.unit, at_words(a, m.beat)),
+        (Some(t), Some(m)) if m.beat > 0.0 && t.beat == m.beat => {
+            format!("{} and {}/{} from {}", bpm_words(t.bpm), m.beats, m.unit, at_words(a, m.beat))
+        }
         (Some(t), Some(m)) => format!("{} and {}", tempo_words(a, t), meter_words(a, m)),
         (Some(t), None) => tempo_words(a, t),
         (None, Some(m)) => meter_words(a, m),
@@ -316,7 +318,8 @@ pub fn title(s: &mut Session, name: &str) -> Result<Edited, EditError> {
     if name == before {
         return Ok(Edited { revision: rev.number, file: file.into(), before: before.clone(), after: before });
     }
-    let span = name_span(&text).ok_or_else(|| EditError::Rejected(format!("{file} doesn't say the song's name where it can be changed")))?;
+    let span =
+        name_span(&text).ok_or_else(|| EditError::Rejected(format!("{file} doesn't say the song's name where it can be changed")))?;
     // A JSON string of one line is a TOML basic string: `"`, `\` and controls escaped.
     let written = serde_json::to_string(name).expect("a string serialises");
     let op = plan::text_edit(&path(file)?, &text, &[(span.start as u32, span.end as u32, written)]);

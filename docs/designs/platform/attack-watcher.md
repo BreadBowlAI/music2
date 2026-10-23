@@ -1,9 +1,9 @@
 # Attack: the file watcher on Linux
 
-Written 2026-10-14 on `jerry-ax102`, against `design.md` revision 1 and `main` at `f126d03` (label `attack-watcher`).
+Written 2026-10-14 on the Linux server, against `design.md` revision 1 and `main` at `f126d03` (label `attack-watcher`).
 It covers §3.4 (the inotify source), §2.5 (why in-tree, why one instance) and slice S8. The code read is
 `crates/server/src/graph/{watcher,fsevents,watch_tests,tests}.rs`, `core/session/src/watch.rs`, `core/session/src/tx/stage.rs`,
-`crates/server/src/{graph,lib}.rs`. Probes ran here. Their sources and output are in `~/m2-runs/logs/aw-probes.txt`.
+`crates/server/src/{graph,lib}.rs`. Probes ran here. Their sources and output are in `$SCRATCH/logs/aw-probes.txt`.
 
 ## In short
 

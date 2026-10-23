@@ -110,7 +110,8 @@ async fn audio_import(State(s): S, Query(q): Query<ImportQuery>, headers: Header
             let session = q.session.ok_or_else(|| anyhow::anyhow!("an upload names its session"))?;
             let files: Vec<Uploaded> =
                 serde_json::from_str(q.files.as_deref().unwrap_or("")).map_err(|e| anyhow::anyhow!("an upload names its files: {e}"))?;
-            let to: Target = serde_json::from_str(q.to.as_deref().unwrap_or("")).map_err(|e| anyhow::anyhow!("where the files go doesn't read: {e}"))?;
+            let to: Target =
+                serde_json::from_str(q.to.as_deref().unwrap_or("")).map_err(|e| anyhow::anyhow!("where the files go doesn't read: {e}"))?;
             let total = files.iter().try_fold(0usize, |sum, f| sum.checked_add(f.size));
             if total != Some(body.len()) {
                 return Err(anyhow::anyhow!("the upload was cut short: try again").into());

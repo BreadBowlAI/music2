@@ -13,8 +13,8 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/jerryxu/dev/suite2/music2'
-const S = '/private/tmp/claude-501/-Users-jerryxu-dev-suite2-music2/07b91ec3-d8c4-49ce-985f-b33193c681f7/scratchpad'
+const REPO = '<repo>'
+const S = '<scratchpad>'
 const D = `${REPO}/.git/m2-step7`
 const TGT = `${S}/target-s7`
 const W = `${S}/s7`
@@ -26,7 +26,7 @@ Owner decisions (taken): SiteId is a point (file + the call's "("), never a coun
 THE OWNER wants a tasteful, professional DAW that is "simple yet elegant": prefer the simplest code that meets each gate, DELETE what the design lists as deleted (§14), and keep core small (report core line counts before/after for core/*). Never weaken a guarantee a producer would hear (no clicks, no stuck notes, tails of untouched tracks intact, exports exact, no audio-thread allocation or locks).
 Hard rules:
 - Do NOT commit, push, stash, reset, rebase or create branches; leave changes uncommitted. Never touch refs/backup/* or the "taste" branch/worktree (another workflow restyles web/ in ${S}/wt-taste; never edit it; avoid gratuitous web/ edits here).
-- Do NOT launch music2-desktop; never kill music2-desktop processes. Never use the real ~/.music2 or ~/Music: HOME=${S}/home. Cargo needs RUSTUP_HOME=/Users/jerryxu/.rustup CARGO_HOME=/Users/jerryxu/.cargo PATH=/Users/jerryxu/.cargo/bin:$PATH when HOME is changed (set HOME only for the commands that need it). CLAP: CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP when needed.
+- Do NOT launch music2-desktop; never kill music2-desktop processes. Never use the real ~/.music2 or ~/Music: HOME=${S}/home. Cargo needs RUSTUP_HOME=/Users/<user>/.rustup CARGO_HOME=/Users/<user>/.cargo PATH=/Users/<user>/.cargo/bin:$PATH when HOME is changed (set HOME only for the commands that need it). CLAP: CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP when needed.
 - DISK: ONE shared cargo target dir CARGO_TARGET_DIR=${TGT}. Worktrees or scratch copies (e.g. for G7f's HEAD measurement) share it or use ${TGT}-scratch, deleted when done. No other target dirs.
 - Every slice lands GREEN before the next starts: build, tests, clippy, offline byte-identity, RENDER-33, the allocation trap, the existing gates. Never weaken a test or gate; when a test's expectation must change because behaviour intentionally improves (e.g. tails now survive), say exactly which and why.
 - Apply each slice's contract edits (§15) in the same slice, with Today lines that match the code.

@@ -100,11 +100,19 @@ fn mute_wins_over_solo() {
 fn a_track_muted_in_song_stays_silent_when_soloed() {
     let muted = ["vox".to_string()];
     assert_eq!(values(&bus(), &[], &set(&[], &["vox"]), &muted, &four()), [0.0, 0.0, 1.0, 0.0, 0.0]);
-    let song = Song { tracks: ["vox", "backing", "bus", "lead"].map(String::from).to_vec(), sites: bus(), muted: muted.to_vec(), ..Song::default() };
+    let song = Song {
+        tracks: ["vox", "backing", "bus", "lead"].map(String::from).to_vec(),
+        sites: bus(),
+        muted: muted.to_vec(),
+        ..Song::default()
+    };
     let m = Monitor { set: set(&["lead"], &["vox"]), version: 0, written: 0, dir: PathBuf::new(), writer: true, song: Arc::new(song) };
     let s = m.state();
     assert_eq!(s["heard"], json!({"vox": "muted-in-song", "backing": "silenced", "bus": "heard", "lead": "muted"}), "{s:#}");
-    assert_eq!((&s["mute"], &s["solo"], &s["muted_in_song"], &s["saved"]), (&json!(["lead"]), &json!(["vox"]), &json!(["vox"]), &json!(true)));
+    assert_eq!(
+        (&s["mute"], &s["solo"], &s["muted_in_song"], &s["saved"]),
+        (&json!(["lead"]), &json!(["vox"]), &json!(["vox"]), &json!(true))
+    );
 }
 
 /// Kick and bass tracks into std's mixer.
@@ -216,7 +224,8 @@ fn a_mute_just_before_a_close_or_a_reopen_is_kept() {
     let mut rig = Rig::new();
     rig.mute("kick", true).unwrap();
     rig.graph.close();
-    let saved: Value = serde_json::from_str(&std::fs::read_to_string(rig.fixture.0.join(".music2/overlays.json")).unwrap_or_default()).unwrap_or_default();
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(rig.fixture.0.join(".music2/overlays.json")).unwrap_or_default()).unwrap_or_default();
     assert_eq!(saved, json!({"mute": ["kick"], "solo": []}), "written at the close");
     rig.graph.open(&rig.fixture.0).unwrap();
     rig.fill(1);

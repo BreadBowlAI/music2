@@ -102,14 +102,18 @@ fn post(url: &str, path: &str, kind: &str, body: &[u8]) -> (u16, serde_json::Val
     let addr = url.trim_start_matches("http://");
     let mut s = std::net::TcpStream::connect(addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
-    let head = format!("POST {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: t0k\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: t0k\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
     s.write_all(head.as_bytes()).unwrap();
     s.write_all(body).unwrap();
     let mut answer = vec![];
     s.read_to_end(&mut answer).unwrap();
     let text = String::from_utf8_lossy(&answer).to_string();
     let status = text[9..12].parse().unwrap();
-    let json = text.split_once("\r\n\r\n").map_or(serde_json::Value::Null, |(_, b)| serde_json::from_str(b).unwrap_or(serde_json::Value::Null));
+    let json =
+        text.split_once("\r\n\r\n").map_or(serde_json::Value::Null, |(_, b)| serde_json::from_str(b).unwrap_or(serde_json::Value::Null));
     (status, json)
 }
 
@@ -138,14 +142,16 @@ fn an_upload_and_paths_import_through_the_route() {
     assert_eq!((done["name"].as_str(), done["made"].as_array().map(Vec::len)), (Some("importing 2 files"), Some(2)), "{done:#}");
     // tone.wav's bytes are there already: used again. b.wav is new.
     assert_eq!(done["assets"], serde_json::json!(["tone.wav", "b.wav"]));
-    let starts: Vec<f64> = clips_of(&dir).iter().filter(|c| c["start"].as_f64() >= Some(8.0)).map(|c| c["start"].as_f64().unwrap()).collect();
+    let starts: Vec<f64> =
+        clips_of(&dir).iter().filter(|c| c["start"].as_f64() >= Some(8.0)).map(|c| c["start"].as_f64().unwrap()).collect();
     // 0.1 s at 120 BPM is 0.2 beats.
     assert_eq!(starts.len(), 2);
     assert!((starts[0] - 8.0).abs() < 1e-9 && (starts[1] - 8.2).abs() < 1e-9, "{starts:?}");
     // The app's paths.
     let outside = dir.join("outside.wav");
     std::fs::write(&outside, &other).unwrap();
-    let json = serde_json::json!({"session": session, "paths": [outside], "to": {"kind": "lane", "module": "vox", "lane": "clips", "beat": 12}});
+    let json =
+        serde_json::json!({"session": session, "paths": [outside], "to": {"kind": "lane", "module": "vox", "lane": "clips", "beat": 12}});
     let (status, done) = post(&running.url, "/api/graph/audio/import", "application/json", json.to_string().as_bytes());
     assert_eq!((status, &done["assets"]), (200, &serde_json::json!(["b.wav"])), "{done:#}");
     // A body cut short is refused.
@@ -181,7 +187,8 @@ fn an_audio_track_through_the_route() {
     copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir);
     let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
-    let (status, done) = post(&running.url, "/api/graph/audio/track", "application/json", serde_json::json!({"session": session}).to_string().as_bytes());
+    let (status, done) =
+        post(&running.url, "/api/graph/audio/track", "application/json", serde_json::json!({"session": session}).to_string().as_bytes());
     assert_eq!((status, &done["module"], &done["label"]), (200, &serde_json::json!("audio"), &serde_json::json!("Audio")), "{done:#}");
     assert!(std::fs::read_to_string(dir.join("tracks/audio.ts")).unwrap().contains("lane.audio(\"clips\")"));
     let state = running.state.graph.state().unwrap();

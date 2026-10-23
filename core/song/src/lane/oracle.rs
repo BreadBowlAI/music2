@@ -4,7 +4,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{AudioClip, ControlClip, LaneData, LaneError, LaneKind, Note, NoteClip, at, noun, note_order, number, shape_hint, string};
+use super::{AudioClip, ControlClip, LaneData, LaneError, LaneKind, Note, NoteClip, at, note_order, noun, number, shape_hint, string};
 
 /// [`Note`] with the pitch read through the untagged enum it had.
 #[derive(Deserialize)]
@@ -230,7 +230,9 @@ pub fn read(text: &str, kind: &LaneKind) -> Result<LaneData, LaneError> {
             for (i, c) in clips.iter_mut().enumerate() {
                 let at = at(i, c.start);
                 if c.length <= 0.0 || c.offset < 0.0 || c.fade_in < 0.0 || c.fade_out < 0.0 {
-                    return Err(invalid(format!("{at}: `length` must be above 0, and `offset`, `fade_in` and `fade_out` can't be negative")));
+                    return Err(invalid(format!(
+                        "{at}: `length` must be above 0, and `offset`, `fade_in` and `fade_out` can't be negative"
+                    )));
                 }
                 c.warp.sort_by(|a, b| a.1.total_cmp(&b.1));
                 if c.warp.windows(2).any(|w| w[1].0 <= w[0].0 || w[1].1 <= w[0].1) {

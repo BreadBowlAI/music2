@@ -223,7 +223,11 @@ impl Mono {
                 if alloc.mode == Mode::Legato && self.gate && self.count >= 2 {
                     self.slide(s.pitch, glide);
                 } else {
-                    if alloc.mode == Mode::Mono && self.started { self.slide(s.pitch, glide) } else { self.jump(s.pitch) }
+                    if alloc.mode == Mode::Mono && self.started {
+                        self.slide(s.pitch, glide)
+                    } else {
+                        self.jump(s.pitch)
+                    }
                     again = true;
                 }
                 self.velocity = s.velocity;

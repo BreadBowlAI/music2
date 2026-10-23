@@ -20,7 +20,12 @@ fn the_card_says_how_an_instrument_plays() {
         (8, alloc(Mode::Poly, true, Steal::Quietest), Glide::None, "Plays up to 8 notes at once. One more stops the quietest."),
         (8, alloc(Mode::Poly, false, Steal::None), Glide::None, "Plays up to 8 notes at once. More are not played until one ends."),
         (1, poly, Glide::None, "Plays one note at a time. A new note stops the one sounding."),
-        (1, alloc(Mode::Mono, true, Steal::Oldest), Glide::Secs(0.07), "Plays one note at a time. Each note starts again, sliding from the last over 70 ms."),
+        (
+            1,
+            alloc(Mode::Mono, true, Steal::Oldest),
+            Glide::Secs(0.07),
+            "Plays one note at a time. Each note starts again, sliding from the last over 70 ms.",
+        ),
         (1, alloc(Mode::Mono, false, Steal::Oldest), Glide::None, "Plays one note at a time. Each note starts again."),
         (
             1,

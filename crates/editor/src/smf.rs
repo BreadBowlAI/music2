@@ -42,14 +42,27 @@ pub struct SmfTrack {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     /// A Note On with a velocity of 1 to 127.
-    NoteOn { channel: u8, key: u8, velocity: u8 },
+    NoteOn {
+        channel: u8,
+        key: u8,
+        velocity: u8,
+    },
     /// A Note Off, or a Note On with velocity 0.
-    NoteOff { channel: u8, key: u8 },
-    Program { channel: u8, program: u8 },
+    NoteOff {
+        channel: u8,
+        key: u8,
+    },
+    Program {
+        channel: u8,
+        program: u8,
+    },
     /// Microseconds per quarter note.
     Tempo(u32),
     /// A time signature: `beats` over 2 to the power `unit_pow` (as written: maybe nonsense).
-    Meter { beats: u8, unit_pow: u8 },
+    Meter {
+        beats: u8,
+        unit_pow: u8,
+    },
 }
 
 /// A note found in a track: its channel, key and velocity, and its start and end in ticks.
@@ -300,7 +313,9 @@ impl SmfTrack {
                     close(&mut out, slot, (channel, key), tick, false);
                     *slot = Some((tick, velocity));
                 }
-                Event::NoteOff { channel, key } => close(&mut out, &mut open[channel as usize * 128 + key as usize], (channel, key), tick, true),
+                Event::NoteOff { channel, key } => {
+                    close(&mut out, &mut open[channel as usize * 128 + key as usize], (channel, key), tick, true)
+                }
                 _ => {}
             }
         }

@@ -3,7 +3,7 @@ name = "m2-std-kernels"
 description = "The std package's kernels, compiled to std/kernels/std.wasm"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 publish = false
 
 # Built for wasm32-unknown-unknown by std/build.sh, separately from the main workspace.

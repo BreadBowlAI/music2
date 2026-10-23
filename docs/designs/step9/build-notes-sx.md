@@ -37,7 +37,7 @@ The engine's own WSOLA and `WARP_VERSION` are gone. A stretch's file is named by
 | Follow tempo: markers at the clip's start, end and each tempo change, from the tempo now; off clears them | `crates/editor/src/clips.rs` | `follow_tempo_keeps_the_clip_where_it_plays_and_undo_takes_it_back`, `follow_tempo_through_the_clips_route` |
 | The menu row and its hint; a warped clip's waveform drawn by its markers | `web/src/components/Wave.tsx`, `ClipMenu.tsx` | browser suite `sx-follow` (22 checks); `st-audio` knows the new row |
 
-Pictures (Linux, Xvfb): `~/m2-runs/app-shots/sx-3/`. `menu/app-10s.png` is the clip menu with Follow tempo and its hint. `followed/app-10s.png` is the song at 60 BPM after Follow tempo on its first clip: that clip shows the same part of its file as at 120, and the clip beside it, not followed, shows more. `followed/app-20s.png` is the menu again, Follow tempo checked.
+Pictures (Linux, Xvfb): `$SCRATCH/app-shots/sx-3/`. `menu/app-10s.png` is the clip menu with Follow tempo and its hint. `followed/app-10s.png` is the song at 60 BPM after Follow tempo on its first clip: that clip shows the same part of its file as at 120, and the clip beside it, not followed, shows more. `followed/app-20s.png` is the menu again, Follow tempo checked.
 
 ## The review
 
@@ -56,7 +56,7 @@ Decisions:
 - A live cache with no folder now makes its stretch in the background too (it waited before).
 - Live, a stretch that fails is still silent, with a log line. Only an offline render fails.
 
-Picture (Linux, Xvfb :98): `~/m2-runs/app-shots/sx-000dd72/`. Resample exported with its cache folder read-only: "Exported out.wav", byte for byte the export made with a writable folder.
+Picture (Linux, Xvfb :98): `$SCRATCH/app-shots/sx-000dd72/`. Resample exported with its cache folder read-only: "Exported out.wav", byte for byte the export made with a writable folder.
 
 ## The final check
 
@@ -68,7 +68,7 @@ music2 check: PASS
 commit   000dd72c9054 on sx (clean)
 machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
 tools    rustc 1.99.0, node v24.21.0, 36 min
-plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+plugins  ~/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
 
 toolchain        PASS  rustc 1.99.0
 web build        PASS  
@@ -82,7 +82,7 @@ std.wasm         PASS  rebuilt to the same bytes in another folder
 mac lint         PASS  the macOS code type-checks and lints
 browser suites   PASS  70/70 suites ok
 renders          PASS  12 of 12 match e2e/renders.sha256
-old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in ~/.cache/m2-check/s-8aa301e
 ```
 
 ## Renders (FMT-3)

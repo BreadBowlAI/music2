@@ -619,7 +619,10 @@ impl Project {
                 Some((None, _)) => "isn't in assets/".to_string(),
                 None => "isn't a file name inside assets/".to_string(),
             };
-            let message = format!("`{name}` {why}, so the sound on track `{}` that plays it is silent. Put the file in assets/, or fix its name", d.module);
+            let message = format!(
+                "`{name}` {why}, so the sound on track `{}` that plays it is silent. Put the file in assets/, or fix its name",
+                d.module
+            );
             diags.push(Diagnostic::error("asset.missing", message).module(d.module.as_str()));
         }
         out

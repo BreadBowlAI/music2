@@ -629,13 +629,16 @@ return plugin("clap:fx", { in: r, key: "tune" });"#)
             _ => None,
         })
         .collect();
-    assert_eq!(plugins, [
-        (Some("tune"), vec!["chain-l"]),
-        (None, vec!["chain-l"]),
-        (Some("tune"), vec!["chain-r", "inner"]),
-        (None, vec!["chain-r", "inner"]),
-        (Some("tune"), vec![]),
-    ]);
+    assert_eq!(
+        plugins,
+        [
+            (Some("tune"), vec!["chain-l"]),
+            (None, vec!["chain-l"]),
+            (Some("tune"), vec!["chain-r", "inner"]),
+            (None, vec!["chain-r", "inner"]),
+            (Some("tune"), vec![]),
+        ]
+    );
     let plugin_nodes = ir.modules[1].nodes.iter().filter(|n| matches!(n.op, Op::Plugin { .. }));
     let paths: Vec<Option<Vec<String>>> = plugin_nodes.map(|n| n.op.state_path()).collect();
     assert_eq!(paths[0].as_deref(), Some(&["chain-l".to_string(), "tune".to_string()][..]));
@@ -1011,7 +1014,10 @@ return lowpass(c, x);"#;
     assert_eq!(frames_of(&b, "lowpass").len(), 4, "{:?}", m.frames);
     let ctl = controls_of(&b);
     let at = |frame: u32| -> Vec<(&str, f64, bool, Vec<&str>)> {
-        ctl.iter().filter(|c| c.0 == frame).map(|(_, s, v, _, o)| (s.as_str(), *v, o.inherited(), o.arg.iter().map(String::as_str).collect())).collect()
+        ctl.iter()
+            .filter(|c| c.0 == frame)
+            .map(|(_, s, v, _, o)| (s.as_str(), *v, o.inherited(), o.arg.iter().map(String::as_str).collect()))
+            .collect()
     };
     // Left out: the descriptor's defaults, inherited, at the call with no argument path.
     assert_eq!(at(0), [("cutoff", 1000.0, true, vec![]), ("q", 0.707, true, vec![])]);
@@ -1099,20 +1105,29 @@ const y = kernel("std:sine");
 return mix({ kick: x, hats: { in: y, db: db(-6), pan: 0.3 }, keys: { in: y, pan: -0.25 } });"#;
     let b = described_ok(body);
     let ctl = controls_of(&b);
-    let slots: Vec<(&str, f64, Vec<&str>, bool)> = ctl.iter().map(|c| (c.1.as_str(), c.2, c.4.arg.iter().map(String::as_str).collect(), c.4.control.as_ref().unwrap().smooth)).collect();
-    assert_eq!(slots, [
-        ("channels.hats.db", -6.0, vec!["0"], false),
-        ("channels.hats.pan", 0.3, vec!["0", "hats", "pan"], true),
-        ("channels.keys.pan", -0.25, vec!["0", "keys", "pan"], true),
-    ]);
+    let slots: Vec<(&str, f64, Vec<&str>, bool)> = ctl
+        .iter()
+        .map(|c| (c.1.as_str(), c.2, c.4.arg.iter().map(String::as_str).collect(), c.4.control.as_ref().unwrap().smooth))
+        .collect();
+    assert_eq!(
+        slots,
+        [
+            ("channels.hats.db", -6.0, vec!["0"], false),
+            ("channels.hats.pan", 0.3, vec!["0", "hats", "pan"], true),
+            ("channels.keys.pan", -0.25, vec!["0", "keys", "pan"], true),
+        ]
+    );
     let db = site_of(&b, "song.ts", &song_src(body), "db(-6)");
     assert_eq!(ctl[0].4.site, db.id);
     // The body sums the strips in the caller's order: kick, hats, keys.
     let nodes = song_nodes(&b);
-    let kinds: Vec<&str> = nodes.iter().filter_map(|n| match &n.op {
-        Op::Kernel { kernel, .. } => Some(kernel.as_str()),
-        _ => None,
-    }).collect();
+    let kinds: Vec<&str> = nodes
+        .iter()
+        .filter_map(|n| match &n.op {
+            Op::Kernel { kernel, .. } => Some(kernel.as_str()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(kinds, ["std:saw", "std:sine", "std:pan", "std:gain", "std:pan", "std:add", "std:add"]);
     for (body, want) in [
         ("return mix({ Hats: kernel(\"std:sine\") });", "the channels key \"Hats\" is not a valid key"),
@@ -1189,14 +1204,18 @@ export default song(() => key("chain", () => echo(twice(kernel("std:saw")), 900)
             (f.component.as_deref(), f.key.as_deref(), f.occurrence, f.parent, s.callee.as_str())
         })
         .collect();
-    assert_eq!(shown, [
-        (None, Some("chain"), 0, None, "key"),
-        (Some("lowpass"), None, 0, Some(0), "fx.lowpass"),
-        (Some("lowpass"), None, 1, Some(0), "fx.lowpass"),
-        (Some("lowpass"), None, 0, Some(0), "echo"),
-    ]);
+    assert_eq!(
+        shown,
+        [
+            (None, Some("chain"), 0, None, "key"),
+            (Some("lowpass"), None, 0, Some(0), "fx.lowpass"),
+            (Some("lowpass"), None, 1, Some(0), "fx.lowpass"),
+            (Some("lowpass"), None, 0, Some(0), "echo"),
+        ]
+    );
     // The svf each call made is in its frame, inside the key() frame.
-    let svf_frames: Vec<Option<u32>> = m.nodes.iter().filter(|n| matches!(&n.op, Op::Kernel { kernel, .. } if kernel == "std:svf")).map(|n| n.frame).collect();
+    let svf_frames: Vec<Option<u32>> =
+        m.nodes.iter().filter(|n| matches!(&n.op, Op::Kernel { kernel, .. } if kernel == "std:svf")).map(|n| n.frame).collect();
     assert_eq!(svf_frames, [Some(1), Some(2), Some(3)]);
     assert_eq!(m.chain(Some(3)).iter().map(|f| f.site).collect::<Vec<_>>(), [m.frames[0].site, m.frames[3].site]);
     // The component calls a node was made inside are the component frames of its chain.
@@ -1283,7 +1302,9 @@ return sum(kernel("std:sine", { freq: f[0] }), ...ys, ...z);"#;
     assert!(b.ir.modules[0].frames.iter().all(|f| f.site != map.id));
     // Its controls are constants with no origin, as any number a native call passes.
     let nodes = song_nodes(&b);
-    let consts = |v: f64| nodes.iter().filter(|n| matches!(n.op, Op::Const { value, .. } if value == v)).map(|n| n.origin.is_some()).collect::<Vec<_>>();
+    let consts = |v: f64| {
+        nodes.iter().filter(|n| matches!(n.op, Op::Const { value, .. } if value == v)).map(|n| n.origin.is_some()).collect::<Vec<_>>()
+    };
     assert_eq!(consts(440.0), [false], "square's freq, inherited, with no instance to name");
     assert_eq!(consts(110.0).iter().filter(|o| **o).count(), 0, "hz(110) made by map has no site");
     // The old form takes no site from native code either (std no longer uses it, so a project declares one).
@@ -1522,19 +1543,22 @@ export default song(() => {call});
 fn descriptors_and_the_unit_table_are_emitted() {
     let b = described_ok("return delay(kernel(\"std:saw\"));");
     let units: Vec<(&str, &str, f64, bool)> = b.units.iter().map(|u| (u.name.as_str(), u.unit.name(), u.scale, u.canonical)).collect();
-    assert_eq!(units, [
-        ("hz", "hz", 1.0, true),
-        ("khz", "hz", 1000.0, false),
-        ("db", "db", 1.0, true),
-        ("linear", "gain", 1.0, true),
-        ("semis", "semitones", 1.0, true),
-        ("secs", "seconds", 1.0, true),
-        ("ms", "seconds", 0.001, false),
-        ("beats", "beats", 1.0, true),
-        ("frac", "unit01", 1.0, true),
-        ("bipolar", "bipolar", 1.0, true),
-        ("scalar", "scalar", 1.0, true),
-    ]);
+    assert_eq!(
+        units,
+        [
+            ("hz", "hz", 1.0, true),
+            ("khz", "hz", 1000.0, false),
+            ("db", "db", 1.0, true),
+            ("linear", "gain", 1.0, true),
+            ("semis", "semitones", 1.0, true),
+            ("secs", "seconds", 1.0, true),
+            ("ms", "seconds", 0.001, false),
+            ("beats", "beats", 1.0, true),
+            ("frac", "unit01", 1.0, true),
+            ("bipolar", "bipolar", 1.0, true),
+            ("scalar", "scalar", 1.0, true),
+        ]
+    );
     for u in m2_ir::Unit::ALL {
         let canonical: Vec<&UnitCtor> = b.units.iter().filter(|c| c.unit == u && c.canonical).collect();
         assert_eq!(canonical.len(), 1, "{u:?}");
@@ -1677,10 +1701,13 @@ export function makeGain(n: number) {
         let song = format!("import {{ song, kernel }} from \"@m2/core\";\nimport {{ makeGain }} from \"./lib/g\";\n{song_body}\n");
         build_full(&options(&[("lib/g.ts", lib), ("song.ts", &song)]))
     };
-    let b = build_with("const a = makeGain(0);\nconst b = makeGain(0);\nexport default song(() => b(a(kernel(\"std:sine\"))));").unwrap_or_else(|e| panic!("{e:?}"));
+    let b = build_with("const a = makeGain(0);\nconst b = makeGain(0);\nexport default song(() => b(a(kernel(\"std:sine\"))));")
+        .unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(b.components.len(), 1);
     assert_eq!(b.ir.modules[0].frames.iter().filter(|f| f.component.as_deref() == Some("gain")).count(), 2);
-    let e = build_with("const a = makeGain(0);\nconst b = makeGain(-6);\nexport default song(() => b(a(kernel(\"std:sine\"))));").err().expect("two descriptors from one site");
+    let e = build_with("const a = makeGain(0);\nconst b = makeGain(-6);\nexport default song(() => b(a(kernel(\"std:sine\"))));")
+        .err()
+        .expect("two descriptors from one site");
     assert!(e[0].message.contains("declared again here with another descriptor"), "{}", e[0]);
     let two = r#"import { component, port } from "@m2/core";
 export const a = component({ id: "dup", inputs: { in: port.audio() } }, (x: any) => x);
@@ -1766,14 +1793,17 @@ fn describe_lists_components_and_problems() {
         )
     };
     let (a, b) = (delay("delay"), delay("delay"));
-    let pkg = TempPackage::new("describe", &[
-        ("fx.ts", FX),
-        ("uses.ts", "export { lowpass as lp } from \"./fx\";\nexport * from \"./fx\";\n"),
-        ("a.ts", &a),
-        ("b.ts", &b),
-        ("broken.ts", "throw new Error(\"boom\");\n"),
-        ("broken-user.ts", "import \"./broken\";\nexport const x = 1;\n"),
-    ]);
+    let pkg = TempPackage::new(
+        "describe",
+        &[
+            ("fx.ts", FX),
+            ("uses.ts", "export { lowpass as lp } from \"./fx\";\nexport * from \"./fx\";\n"),
+            ("a.ts", &a),
+            ("b.ts", &b),
+            ("broken.ts", "throw new Error(\"boom\");\n"),
+            ("broken-user.ts", "import \"./broken\";\nexport const x = 1;\n"),
+        ],
+    );
     let catalog = describe(&[("pkg".into(), pkg.0.clone())]);
     assert_eq!(catalog.components.keys().collect::<Vec<_>>(), ["pkg:lowpass", "pkg:saw", "pkg:sine"]);
     let lp = &catalog.components["pkg:lowpass"];
@@ -1782,7 +1812,8 @@ fn describe_lists_components_and_problems() {
     assert_eq!(exports("pkg:lowpass"), ["pkg/fx.lowpass", "pkg/uses.lowpass", "pkg/uses.lp"]);
     assert_eq!(exports("pkg:saw"), ["pkg/fx.osc.saw", "pkg/uses.osc.saw"]);
     assert_eq!(catalog.effects().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["pkg:lowpass"]);
-    let problems: Vec<(&str, &str, Option<&str>)> = catalog.problems.iter().map(|d| (d.code, d.message.as_str(), d.src.as_deref())).collect();
+    let problems: Vec<(&str, &str, Option<&str>)> =
+        catalog.problems.iter().map(|d| (d.code, d.message.as_str(), d.src.as_deref())).collect();
     assert_eq!(problems.len(), 3, "{problems:?}");
     assert!(problems.iter().all(|p| p.0 == "pkg.invalid"));
     let says = |want: &[&str]| problems.iter().any(|(_, m, _)| want.iter().all(|w| m.contains(w)));
@@ -1885,14 +1916,18 @@ fn a_nested_dictionary_control_is_found() {
     let channels = r#"{ vox: { in: vox, sends: { verb: db(-12), echo: -18 } }, keys: { in: keys, to: "verb", sends: { verb: { db: -6, pre: true } } } }"#;
     let b = routed(channels).unwrap_or_else(|e| panic!("{e:?}"));
     let ctl = controls_of(&b);
-    let slots: Vec<(&str, f64, Vec<&str>)> = ctl.iter().map(|c| (c.1.as_str(), c.2, c.4.arg.iter().map(String::as_str).collect())).collect();
-    assert_eq!(slots, [
-        ("channels.vox.db", 0.0, vec![]),
-        ("channels.vox.sends.verb.db", -12.0, vec!["0"]),
-        ("channels.vox.sends.echo.db", -18.0, vec!["0", "vox", "sends", "echo"]),
-        ("channels.keys.db", 0.0, vec![]),
-        ("channels.keys.sends.verb.db", -6.0, vec!["0", "keys", "sends", "verb", "db"]),
-    ]);
+    let slots: Vec<(&str, f64, Vec<&str>)> =
+        ctl.iter().map(|c| (c.1.as_str(), c.2, c.4.arg.iter().map(String::as_str).collect())).collect();
+    assert_eq!(
+        slots,
+        [
+            ("channels.vox.db", 0.0, vec![]),
+            ("channels.vox.sends.verb.db", -12.0, vec!["0"]),
+            ("channels.vox.sends.echo.db", -18.0, vec!["0", "vox", "sends", "echo"]),
+            ("channels.keys.db", 0.0, vec![]),
+            ("channels.keys.sends.verb.db", -6.0, vec!["0", "keys", "sends", "verb", "db"]),
+        ]
+    );
     // The settings reach the body: keys goes to "verb" (4 letters), and its send reads its input.
     let nodes = song_nodes(&b);
     assert!(nodes.iter().any(|n| matches!(n.op, Op::Const { value, unit: None } if value == 4.0)), "to: \"verb\"");
@@ -1906,7 +1941,8 @@ fn a_nested_dictionary_control_is_found() {
     assert!(d.control("channels.vox.sends").is_some_and(|c| c.each.is_some()));
     assert!(d.control("channels.vox.sends.verb").is_none() && d.control("channels.vox.sends.verb.pre").is_none());
     let entry = d.controls[0].each.as_ref().unwrap();
-    let settings = |e: &component::EachDesc| e.settings.iter().map(|s| (s.name.clone(), s.kind, s.default.clone(), s.optional)).collect::<Vec<_>>();
+    let settings =
+        |e: &component::EachDesc| e.settings.iter().map(|s| (s.name.clone(), s.kind, s.default.clone(), s.optional)).collect::<Vec<_>>();
     assert_eq!(settings(entry), [("to".into(), component::SettingKind::Key, None, true)]);
     let sends = entry.controls.iter().find(|c| c.name == "sends").unwrap().each.as_ref().unwrap();
     assert_eq!(settings(sends), [("pre".into(), component::SettingKind::Bool, Some(serde_json::json!(false)), false)]);

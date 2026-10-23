@@ -233,7 +233,11 @@ impl Told {
     /// The problems listed now for session `token`, oldest first, as the news carries them.
     pub(super) fn problems(&self, token: u64) -> Vec<Value> {
         match token == self.token {
-            true => self.live.iter().map(|l| serde_json::to_value(Diagnostic { message: said(l), ..l.problem.clone() }).expect("JSON")).collect(),
+            true => self
+                .live
+                .iter()
+                .map(|l| serde_json::to_value(Diagnostic { message: said(l), ..l.problem.clone() }).expect("JSON"))
+                .collect(),
             false => vec![],
         }
     }

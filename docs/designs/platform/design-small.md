@@ -1,6 +1,6 @@
 # The platform layer: the smallest design
 
-Label `design-small`. Written 2026-10-14 on `jerry-ax102`, against `main` at `f126d03`. Angle: the least code that
+Label `design-small`. Written 2026-10-14 on the Linux server, against `main` at `f126d03`. Angle: the least code that
 makes Linux green and keeps macOS identical (except the one deliberate `libm` change), with one obvious place per OS.
 
 Inputs: `docs/architecture.md` (normative), `survey-code.md` (OS-01…OS-85), `survey-later.md`, and the ground notes
@@ -34,7 +34,7 @@ in the source is marked *(unverified)*.
 
 | # | Do this on your Mac | |
 |---|---|---|
-| 1 | Open Terminal. Type `cd ~/dev/suite2/music2` and then `git pull`. | |
+| 1 | Open Terminal. Type `cd <repo>` and then `git pull`. | |
 | 2 | Type `ci/check.sh` and press Return. | The first run may download Rust 1.99.0 and the test browser by itself. |
 | 3 | Copy the last lines it prints (from `music2 check:` to `RESULT:`) and paste them to me. | |
 
@@ -351,7 +351,7 @@ fixed first thing when step 7 is finished, because step 7's export `Hold` needs 
 | id | Piece | This step | Linux | Windows |
 |---|---|---|---|---|
 | OS-68 | unix-only APIs outside `cfg(unix)` | No change (they compile on both) | — | fix in the Windows step |
-| OS-69 | permission tests | No change; never run checks as root | runs as `jerry` | ACLs |
+| OS-69 | permission tests | No change; never run checks as root | runs as the user | ACLs |
 | OS-70 | symlink tests | No change | — | Developer Mode |
 | OS-71 | `temp_dir()` is case-sensitive | No change. The case-folding paths are tested on the Mac only: a casefold or vfat volume needs root here. | — | NTFS folds case |
 | OS-72 | core dumps from the kill tests | Built: `m2_os::no_crash_report()` in `kill_tests::child` and `hook_tests::hook_child` (Linux `prctl(PR_SET_DUMPABLE, 0)`; macOS does nothing, as today) | apport takes ~1.1 s per dump even with `ulimit -c 0`; the kill test drops from 473 s to 104 s (measured) | WER off for the child |
@@ -428,7 +428,7 @@ Slices S0–S8 are in §8.
 | export-export | FAIL | `isMac` reads `navigator.platform`: "Ctrl+E" | `native.ts`: `isMac` follows `__M2__.platform` |
 | fx-fixes-none | FAIL | ext4 tells "exports 2" from "Exports 2" | Q1: a folder name taken in any case, on every OS (`project.rs`). If Q1 is no: the suite asks the disk whether it folds case (`e2e.md`). |
 | notes-proj | FAIL | the suite reads the file before the server publishes the revision (2.7 ms gap, hidden on the Mac by `F_FULLFSYNC`) | `notes.mjs:97`, one line: wait until the revision moves, wait 300 ms, then check it moved by exactly one |
-| live3b-proj | PART | no plugins on `CLAP_PATH` | `CLAP_PATH=~/m2-runs/plugins/clap` (unpacked there at 21:06, `ldd` finds every library). Its 11 checks with the Mac-saved Surge state on Linux are *unverified* until S7 runs them. If they need CLAP's timer or fd extensions, live3b stays PART on Linux until step 9, and says why. |
+| live3b-proj | PART | no plugins on `CLAP_PATH` | `CLAP_PATH=$SCRATCH/plugins/clap` (unpacked there at 21:06, `ldd` finds every library). Its 11 checks with the Mac-saved Surge state on Linux are *unverified* until S7 runs them. If they need CLAP's timer or fd extensions, live3b stays PART on Linux until step 9, and says why. |
 | the other 21 | ok | — | — |
 
 The pieces, all small:
@@ -861,9 +861,9 @@ at f126d03; run them when a step's gates ask), and the desktop app itself (never
 ### 7.2 On this server
 
 ```sh
-cd ~/dev/suite2/music2
-~/m2-runs/tw check-<label> 'CARGO_TARGET_DIR=$HOME/m2-runs/target-<label> CLAP_PATH=$HOME/m2-runs/plugins/clap ci/check.sh'
-# tw waits 9.5 minutes; a full check takes longer, so then: ~/m2-runs/tw-wait <channel> <log> (tw prints it)
+cd <repo>
+$SCRATCH/tw check-<label> 'CARGO_TARGET_DIR=$SCRATCH/target-<label> CLAP_PATH=$SCRATCH/plugins/clap ci/check.sh'
+# tw waits 9.5 minutes; a full check takes longer, so then: $SCRATCH/tw-wait <channel> <log> (tw prints it)
 ```
 
 - The command has no double quotes or parentheses, so `tw`'s echo line stays intact (`ground/tests.md`'s warning).
@@ -993,14 +993,14 @@ Only real decisions. Each has a recommended answer.
 | Q1 | On Linux, should a new song's folder name count as taken when a folder with the same name in other capitals exists ("exports 2" next to "Exports 2")? | **Yes**, on every OS. | The Mac already works this way, so nothing changes there. Song folders stay safe to copy to a Mac or Windows. The `fx-fixes` suite then passes unchanged. If no: the suite asks the disk instead. |
 | Q2 | On Linux, the browser suites test the Mac's keys (⌘) and labels, by telling Chrome it is a Mac. Ctrl gets its own small suite later, with the key table on `taste`. OK? | **Yes.** | No suite file changes on `main`, so `taste` merges without suite conflicts. The Mac is the reference. Ctrl is tested once the key table defines it. |
 | Q3 | The Linux desktop app: no plugins inside it and no Linux install package (deb, AppImage) in this step. Plugins come with step 9; a package when someone needs the app on Linux. OK? | **Yes.** | The server has no screen, so nobody runs the app there now. Plugins in the Linux app need the main loop step 9 builds anyway. |
-| Q4 | Lock messages show the server as "Ubuntu-2404-noble-amd64-base". Rename it to `jerry-ax102`? It is one command (`sudo hostnamectl set-hostname jerry-ax102`), a system change only you should make. | **Yes, optional.** | Messages name the right machine. Nothing else depends on it. |
+| Q4 | Lock messages show the server as "Ubuntu-2404-noble-amd64-base". Rename it to a name of your choice? It is one command (`sudo hostnamectl set-hostname <name>`), a system change only you should make. | **Yes, optional.** | Messages name the right machine. Nothing else depends on it. |
 
 ---
 
 ## A. Probes made for this design
 
-All on `jerry-ax102` at `f126d03`, with my own target dir and scratch folder (both deleted afterwards). Logs:
-`~/m2-runs/logs/ds-*.log`.
+All on the Linux server at `f126d03`, with my own target dir and scratch folder (both deleted afterwards). Logs:
+`$SCRATCH/logs/ds-*.log`.
 
 ### A.1 The macOS code checked from Linux
 
@@ -1018,7 +1018,7 @@ All on `jerry-ax102` at `f126d03`, with my own target dir and scratch folder (bo
 
 ### A.2 The Linux plugins, headless
 
-- `~/m2-runs/plugins/clap` holds `Surge XT.clap` (1.3.4, sha256 `c923a148…`) and `Airwindows Consolidated.clap`
+- `$SCRATCH/plugins/clap` holds `Surge XT.clap` (1.3.4, sha256 `c923a148…`) and `Airwindows Consolidated.clap`
   (nightly 2026-10-11-8a67b80, sha256 `9bd19011…`), with `SurgeXTData` one level up. `ldd` on both: nothing missing.
 - `cargo test -p m2-plugins` with a scratch `HOME`, `M2_AUDIO=none`, no `DISPLAY`, `CLAP_PATH` set: 13 of 13 unit tests
   pass, `surge_plays_notes`, `airwindows_processes_audio`, `state_round_trips` and `parameter_values_have_display_text`

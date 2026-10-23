@@ -187,7 +187,10 @@ fn groove() -> Vec<u8> {
 fn an_import_below_asks_then_writes() {
     let dir = project("below");
     // New tracks need a mixer to go into.
-    let mixed = SONG.replace("export default song(() => b.out);", "import { master, mixer } from 'std/mix';\nexport default song(() => master(mixer({ bass: b.out })));");
+    let mixed = SONG.replace(
+        "export default song(() => b.out);",
+        "import { master, mixer } from 'std/mix';\nexport default song(() => master(mixer({ bass: b.out })));",
+    );
     std::fs::write(dir.join("song.ts"), mixed).unwrap();
     let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();

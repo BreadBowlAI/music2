@@ -213,13 +213,26 @@ pub const LIVE_ROOM: usize = 2 * LIVE;
 /// belongs to a source (a window, a keyboard), which names its own notes by handle.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LiveEv {
-    On { source: u32, handle: u32, pitch: f32, velocity: f32 },
-    Off { source: u32, handle: u32 },
+    On {
+        source: u32,
+        handle: u32,
+        pitch: f32,
+        velocity: f32,
+    },
+    Off {
+        source: u32,
+        handle: u32,
+    },
     /// Every note of the source, on every lane, and the wheels it moved back at rest.
-    Release { source: u32 },
+    Release {
+        source: u32,
+    },
     /// A wheel of the lane (RENDER-14's `Midi`, D8): pitch bend, the mod wheel (CC 1) or reset all
     /// controllers (CC 121), on any channel; [`is_wheel`] says which bytes are one.
-    Midi { source: u32, bytes: [u8; 3] },
+    Midi {
+        source: u32,
+        bytes: [u8; 3],
+    },
 }
 
 /// The wheels a lane keeps: the pitch wheel and the mod wheel. A block sends at most one event for

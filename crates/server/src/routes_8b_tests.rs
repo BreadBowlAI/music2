@@ -188,7 +188,12 @@ fn audition_over_http_and_the_websocket() {
     let (status, answer) = post(url, "/api/graph/audition", Some("t0k"), &json!({"client": "agent", "off": [1]}));
     assert_eq!((status, answer), (200, json!({})));
     live_becomes(url, 0);
-    let (status, answer) = post(url, "/api/graph/audition", Some("t0k"), &json!({"client": "agent", "module": "kick", "lane": "hits", "on": [{"h": 1, "pitch": 300}]}));
+    let (status, answer) = post(
+        url,
+        "/api/graph/audition",
+        Some("t0k"),
+        &json!({"client": "agent", "module": "kick", "lane": "hits", "on": [{"h": 1, "pitch": 300}]}),
+    );
     assert_eq!(status, 400);
     assert!(answer["error"].as_str().unwrap().contains("pitch"), "{answer:#}");
 
@@ -227,7 +232,8 @@ fn mute_in_song_is_refused_read_only() {
     let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
     let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
-    let (status, answer) = post(&running.url, "/api/graph/track/mute", Some("t0k"), &json!({"session": session, "modules": ["kick"], "muted": true}));
+    let (status, answer) =
+        post(&running.url, "/api/graph/track/mute", Some("t0k"), &json!({"session": session, "modules": ["kick"], "muted": true}));
     assert_eq!(status, 423, "{answer:#}");
     assert!(answer["error"].as_str().unwrap().contains("nothing was changed"), "{answer:#}");
     assert_eq!(std::fs::read_to_string(dir.join("song.ts")).unwrap(), song);
@@ -333,7 +339,8 @@ fn the_rolls_lane_write_takes_clips_as_the_timeline_shows_them() {
     )
     .unwrap();
     std::fs::create_dir_all(dir.join("data/kick")).unwrap();
-    std::fs::write(dir.join("data/kick/hits.json"), "{\"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"notes\": []}]}\n").unwrap();
+    std::fs::write(dir.join("data/kick/hits.json"), "{\"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"notes\": []}]}\n")
+        .unwrap();
     let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
     let state = running.state.graph.open(&dir).unwrap();
     let (session, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
@@ -361,7 +368,11 @@ fn remove_automation_over_http() {
                 export default song(({ lane }) => osc.sine(lane.control(\"freq\", \"hz\", hz(440))));\n";
     std::fs::write(dir.join("song.ts"), song).unwrap();
     std::fs::create_dir_all(dir.join("data/song")).unwrap();
-    std::fs::write(dir.join("data/song/freq.json"), "{\"unit\": \"hz\", \"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"points\": [[0, 200], [4, 600]]}]}\n").unwrap();
+    std::fs::write(
+        dir.join("data/song/freq.json"),
+        "{\"unit\": \"hz\", \"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"points\": [[0, 200], [4, 600]]}]}\n",
+    )
+    .unwrap();
     let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let body = json!({"session": session, "module": "song", "lane": "freq", "beat": 2});
@@ -393,7 +404,8 @@ fn follow_tempo_through_the_clips_route() {
     let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let follow = |on: bool, lane: &str, id: &str| {
-        let gesture = json!({"op": "audio", "clip": {"module": lane.split('/').next(), "lane": lane.split('/').nth(1), "id": id}, "follow": on});
+        let gesture =
+            json!({"op": "audio", "clip": {"module": lane.split('/').next(), "lane": lane.split('/').nth(1), "id": id}, "follow": on});
         post(&running.url, "/api/graph/clips", Some("t0k"), &json!({"session": session, "gesture": gesture}))
     };
     let line = || {

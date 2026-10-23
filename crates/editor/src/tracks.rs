@@ -339,7 +339,8 @@ pub(crate) fn adds_one(checked: &Checked, key: &str, channel: &str) -> Result<()
 fn adds(checked: &Checked, made: &[(String, String)]) -> Result<(), EditError> {
     let d = &checked.delta;
     let refused = |why: &str| EditError::Rejected(format!("adding the track would {why}"));
-    let mut want = made.iter().map(|(k, _)| Key::new(k).map(ModuleChange::Added).map_err(EditError::Rejected)).collect::<Result<Vec<_>, _>>()?;
+    let mut want =
+        made.iter().map(|(k, _)| Key::new(k).map(ModuleChange::Added).map_err(EditError::Rejected)).collect::<Result<Vec<_>, _>>()?;
     let mut got = d.modules.clone();
     want.sort_by_key(|m| format!("{m:?}"));
     got.sort_by_key(|m| format!("{m:?}"));
@@ -472,12 +473,18 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
             },
         };
         let file = match track_file(rev, &key) {
-            f if files.contains(&f) => (2..).map(|n| format!("tracks/{key}-{n}.ts")).find(|f| !files.contains(f) && rev.snapshot.taken(Path::new(f)).is_none()).expect("a free file"),
+            f if files.contains(&f) => (2..)
+                .map(|n| format!("tracks/{key}-{n}.ts"))
+                .find(|f| !files.contains(f) && rev.snapshot.taken(Path::new(f)).is_none())
+                .expect("a free file"),
             f => f,
         };
         let mut binding = free_binding(&song_text, &camel(&key));
         if bindings.contains(&binding) {
-            binding = (2..).map(|n| format!("{binding}{n}")).find(|b| !bindings.contains(b) && free_binding(&song_text, b) == *b).expect("a free binding");
+            binding = (2..)
+                .map(|n| format!("{binding}{n}"))
+                .find(|b| !bindings.contains(b) && free_binding(&song_text, b) == *b)
+                .expect("a free binding");
         }
         entries.push(format!("{}: {binding}.out", prop_key(&key)));
         imports.push(import_edit(&song_text, &mixer.file, &file, &binding));
@@ -567,7 +574,11 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
         adds(checked, &made)
     })?;
     let edited = Edited { revision: done.number, file: files[0].clone(), before: String::new(), after: shown };
-    Ok(keys_made.into_iter().zip(labels).map(|(module, label)| Made { module, label, edited: edited.clone(), new_channel: false }).collect())
+    Ok(keys_made
+        .into_iter()
+        .zip(labels)
+        .map(|(module, label)| Made { module, label, edited: edited.clone(), new_channel: false })
+        .collect())
 }
 
 /// What `data/arrangement.json` is now, as a Tx's base: the bytes on disk, or none.
@@ -580,7 +591,8 @@ fn rev_base(s: &Session, file: &TxPath) -> m2_song::tx::Base {
 
 /// `label`, or `label 2`… free among the tracks and the names `also` already took in this Tx.
 pub(crate) fn unique_label_among(rev: &Revision, label: &str, also: &[String]) -> String {
-    let used: Vec<&str> = rev.compiled.ir.modules.iter().filter(|m| m.track).map(|m| m.label()).chain(also.iter().map(String::as_str)).collect();
+    let used: Vec<&str> =
+        rev.compiled.ir.modules.iter().filter(|m| m.track).map(|m| m.label()).chain(also.iter().map(String::as_str)).collect();
     if !used.contains(&label) {
         return label.to_string();
     }
@@ -844,7 +856,16 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
             let ch = mx.channels.iter().find(|x| x.key == key).expect("its channel");
             let module = ch.tracks.first().cloned().unwrap_or_else(|| key.clone());
             let label = crate::bus::named(rev, ch);
-            dependents.push(Dependent { module, label, component: what.into(), file: mx.file.clone(), line, removable: true, site: None, cut });
+            dependents.push(Dependent {
+                module,
+                label,
+                component: what.into(),
+                file: mx.file.clone(),
+                line,
+                removable: true,
+                site: None,
+                cut,
+            });
         }
     }
     if dependents.iter().any(|d| !d.removable) {

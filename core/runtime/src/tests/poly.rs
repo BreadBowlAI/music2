@@ -221,7 +221,8 @@ fn steal_none_drops_the_note() {
 
 /// A live engine playing `f` over `data` from 0, and its renderer's generation.
 fn live_rig(f: &Flat, data: &DataSet) -> (Rig, u64) {
-    let mut r = Renderer::prepare(f, data, &packages(), SR, &mut audio::Cache::default(), &m2_plugins::Owner::discard(), Basis::Fresh).unwrap();
+    let mut r =
+        Renderer::prepare(f, data, &packages(), SR, &mut audio::Cache::default(), &m2_plugins::Owner::discard(), Basis::Fresh).unwrap();
     r.set_strict(false);
     r.set_transport(Transport::new(0, false));
     let g = r.generation();

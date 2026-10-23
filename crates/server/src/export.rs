@@ -243,7 +243,9 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                     json!({"done": true, "path": path, "seconds": r.seconds(), "peak_db": r.peak_db, "problems": carried})
                 }
                 // A fault that stopped it carries its code (RENDER-1).
-                Err(e) => json!({"error": format!("{e:#}"), "code": m2_editor::faults::Faulted::of(&e).map(|f| f.code), "path": thread_path}),
+                Err(e) => {
+                    json!({"error": format!("{e:#}"), "code": m2_editor::faults::Faulted::of(&e).map(|f| f.code), "path": thread_path})
+                }
             };
             state.announce(with(&about, event).to_string());
         })?;
@@ -686,8 +688,12 @@ pub(crate) mod tests {
         start(&state, Some(project.0.join("out.wav"))).unwrap();
         let done = until_finished(&mut events).pop().unwrap();
         assert_eq!(done["done"], true, "{done}");
-        let problems: Vec<(&str, &str)> =
-            done["problems"].as_array().unwrap().iter().map(|p| (p["code"].as_str().unwrap(), p["module"].as_str().unwrap_or(""))).collect();
+        let problems: Vec<(&str, &str)> = done["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["code"].as_str().unwrap(), p["module"].as_str().unwrap_or("")))
+            .collect();
         assert_eq!(problems, [("asset.missing", "drums")], "{done}");
     }
 

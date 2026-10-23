@@ -262,7 +262,8 @@ fn random_edits_and_jumps_never_strand_a_gate() {
     let mut seed = 11;
     let first = notes_of(&mut seed);
     let song = pad(first.clone());
-    let delayed = synth(0.05, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d", first, at_bpm(120.0));
+    let delayed =
+        synth(0.05, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d", first, at_bpm(120.0));
     let songs = [&song, &delayed];
     let r = song.renderer();
     let mut sent = (0, r.info());

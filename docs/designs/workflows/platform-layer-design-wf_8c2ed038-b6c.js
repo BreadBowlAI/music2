@@ -8,7 +8,7 @@ export const meta = {
     { title: 'Revise', detail: 'final design with build slices' },
   ],
 }
-const REPO = '/Users/jerryxu/dev/suite2/music2'
+const REPO = '<repo>'
 const D = `${REPO}/.git/m2-platform`
 const RULES = `
 Repository: ${REPO} (music2: a DAW where TypeScript defines the music; Rust core core/{ir,script,runtime,song,session,play,plugins,kernel}, std/ (wasm kernels), crates/{server,gates,editor}, web/ (React), apps/{music2-desktop (Tauri), m2 (CLI)}). The contract ${REPO}/docs/architecture.md is normative. Designs: step 7 ${REPO}/.git/m2-step7/design-7.md (being built now in the working tree), step 8a ${REPO}/.git/m2-step8/design-8a.md (macOS audio workgroups, time-constraint threads), 8b design-8b.md, step 9 only in the contract's order of work (plugin host process, plugin windows, latency compensation, mono/legato/glide, MIDI input; disk streaming, kernel ABI v1 and the sampler, stretching, recording).

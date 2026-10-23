@@ -1,7 +1,7 @@
 # music2 UI audit at HEAD cbf5eb9, written before step 8
 
 Read-only audit of the app as built through step 6. Every claim below points at a screenshot in
-`/private/tmp/claude-501/-Users-jerryxu-dev-suite2-music2/07b91ec3-d8c4-49ce-985f-b33193c681f7/scratchpad/ux8/shots/`
+`<scratchpad>/ux8/shots/`
 (98 PNGs, 1440x900, plus five 2x crops named `f05`–`f09`). It has three parts:
 
 - **Part 1:** the critique of a pop producer working at A. G. Cook's level, screen by screen.

@@ -8,8 +8,26 @@
 fn the_audio_side_never_blocks_or_allocates() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let forbidden = [
-        ".lock(", "Mutex", "RwLock", "Condvar", ".send(", ".recv(", ".join(", "sleep(", "String", "format!", "to_string", "to_owned",
-        "vec!", "Vec::", "Box::new", "Arc::new", "thread_local!", "println!", "eprintln!", "collect(",
+        ".lock(",
+        "Mutex",
+        "RwLock",
+        "Condvar",
+        ".send(",
+        ".recv(",
+        ".join(",
+        "sleep(",
+        "String",
+        "format!",
+        "to_string",
+        "to_owned",
+        "vec!",
+        "Vec::",
+        "Box::new",
+        "Arc::new",
+        "thread_local!",
+        "println!",
+        "eprintln!",
+        "collect(",
     ];
     let mut found = vec![];
     for file in ["src/audio.rs", "src/remote/slot.rs"] {
