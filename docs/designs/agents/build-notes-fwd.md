@@ -72,7 +72,9 @@ Under "Scripts, agents and the command line" in [gaps.md](../../gaps.md): `m2` c
 
 - The crates touched: every test passes (`m2-session` 188, `m2-server` 436, every test of `m2`, `music2-desktop`'s session test), and clippy on the whole workspace.
 - `e2e/ag-notice.mjs`: 53 of 53. Screenshots of the agent's notice: `~/m2-runs/sag/fwd-shots/agent-notice.png` and `agent-notice-near.png` (made by `AG_SHOT=<folder>` with the suite).
-- `ci/check.sh --pr`: see below.
+- Every browser suite, 4 at a time (`e2e/run.mjs all`): 75 of 75, `live3b` and `ph-window` with the test plugins.
+- `ci/check.sh --pr` at `c9b3429` failed `suites`: `nx-settings` gave its first page no key (the suites read `page_token` now), and `st-stems` passed only on a retry (its poll looked at a part file the export renamed meanwhile). Both fixed at `f2610f6`, the cause of each.
+- `ci/check.sh --pr` at `a1bd3b9`: `music2 check --pr: PASS` (quick, clippy, rust, suites, renders, repo unchanged; 5 min), nothing passed only on a retry. Logs: `~/m2-runs/check-fwd.tgz`.
 
 ## Left for later
 
