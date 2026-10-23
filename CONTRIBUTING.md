@@ -94,7 +94,7 @@ cargo run --locked --release -p music2-desktop
 ## Building and testing
 
 - `cargo test --workspace` runs the Rust tests. Tests that play plugins need the plugin program built first: `cargo build -p m2-plugins --bin m2-plugin-host`.
-- To test the UI with no window and no sound: `M2_AUDIO=none cargo run -p m2-server --example headless -- <song-folder | -> <session.json> <token>`, then point a headless browser at the URL in the session file. `-` opens no song, for the start screen. Outside the app, the UI reads its token from `window.__M2__ = {native: false, token}`.
+- To test the UI with no window and no sound: `M2_AUDIO=none cargo run -p m2-server --example headless -- <song-folder | -> <session.json> <token>`, then point a headless browser at the URL in the session file. `-` opens no song, for the start screen. `<token>` is the page's key, which the session file names `page_token` beside the tools key (`token`, an agent's). Outside the app, the UI reads its key from `window.__M2__ = {native: false, token}`.
 - The browser suites are in `e2e/`: each drives the UI in headless Chrome against the headless server, on a fresh copy of a song ([e2e/README.md](e2e/README.md)).
 - `std/build.sh` rebuilds std's kernels (it needs the `wasm32-unknown-unknown` Rust target, which `rust-toolchain.toml` adds). The built `std/kernels/std.wasm` is checked in; `std/build.sh --check` proves it rebuilds to the same bytes.
 - `cargo run --release -p m2-runtime --example bench` compares WebAssembly and native speed.
