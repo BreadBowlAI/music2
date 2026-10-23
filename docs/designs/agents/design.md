@@ -7,36 +7,36 @@
 - While the app has the song open, `m2` no longer refuses to write. It builds the edit, checks it, and hands
   it to the app. The app is still the only writer. This reopens owner decision 10.
 - Every change is one undo step with a source: you, the agent by name, or "outside the app". `m2 undo` takes
-  back only the agent's own. *Pending D1:* your ⌘Z takes back the newest step, whoever made it.
+  back only the agent's own. Your ⌘Z takes back the newest step, whoever made it (D1).
 - You win every clash with a change that comes through `m2`. If you are dragging a knob, a note or the
   tempo, recording, comparing, or have unsaved code in a file, the agent's change is refused. If you start a
   drag while its change is landing, the app takes the change back before you hear it. Nothing you hold ends.
 - So with the app open, agents change files with `m2 edit` and `m2 write`. A file an agent writes itself is
   still an outside write, as today: one undo step, but the app can't refuse it, so it can end your drag.
 - The app tells you and an agent apart by key: the page has its own, and agents use the one in
-  `session.json`. *Pending D6:* agents can't play, record, solo, move your view or open plugin windows.
-- You see each change as it lands: a quiet notice with Undo, and a glow on what changed. *Pending D2:* press
-  V to flip the newest change off and on, to hear before and after. While you compare, agents wait.
+  `session.json`. Agents can't play, record, solo, move your view or open plugin windows (D6).
+- You see each change as it lands: a quiet notice with Undo, and a glow on what changed. Press V to flip the
+  newest change off and on, to hear before and after (D2). While you compare, agents wait.
 - The agent can see what you look at (`m2 focus`), follow what happens (`m2 watch`), point at things to
   teach (`m2 point`), and measure the sound (`m2 listen`).
 - Listening is an offline render in its own low-priority process. A new gate counts dropouts while it and
   agents' edits run.
-- The app gets no AI. It only shares focus, shows changes and takes actions. *Pending D3:* there is no
-  "agents may change the song" switch.
-- Five tracks, smallest first. D1 to D3 wait for your yes before track 1; D4 to D6 before the tracks that
-  need them (section 9).
+- The app gets no AI. It only shares focus, shows changes and takes actions. There is no "agents may change
+  the song" switch (D3).
+- Five tracks, smallest first. The owner chose the recommended answer to all six decisions, D1 to D6
+  (2026-10-23, section 9).
 
 | | Today | After |
 |---|---|---|
 | `m2` write while the app has the song open | refused (WRITE-18) | done in the app, one undo step |
 | A text file saved outside the app | taken in, not undoable | taken in, one undo step (git's changes aside) |
-| An agent's change in the app | no sign, unless it failed or the disk was slow | a notice and a glow; ⌘Z can take it back (pending D1) |
+| An agent's change in the app | no sign, unless it failed or the disk was slow | a notice and a glow; ⌘Z can take it back (D1) |
 | An agent's change (HTTP or `m2`) to a knob you are dragging | your drag ends | the agent is refused; your drag goes on |
 | An agent writing that file directly | your drag ends | your drag still ends: so agents use `m2 edit` |
 | The page and an agent | one key: the app can't tell them apart | two keys |
 | What you are looking at | hidden from agents | `m2 focus` |
 | The sound | a WAV and its peak | loudness, peaks, bands, masking, stereo |
-| Actions with no `m2` command | 59 (HTTP only) | song changes: `m2 call`; your controls stay yours (pending D6) |
+| Actions with no `m2` command | 59 (HTTP only) | song changes: `m2 call`; your controls stay yours (D6) |
 
 Written 2026-10-21 on branch `ag`, from `main` at `381e02d`, against `docs/architecture.md` (normative).
 Revision 3. Revision 2 answered a skeptic's six major findings; this one answers its 13 minor ones and makes
@@ -77,7 +77,7 @@ an agent can and can't see). Nothing here is built yet. The build starts after t
 ## 4. The invariants, as contract rules
 
 New rules, in a new section "Agents" of `docs/architecture.md`, after "Writes". The prefix `AGENT` is unused
-there today. Rules marked *pending* wait for the owner's answer in section 9.
+there today. The owner's answers in section 9 are written into the rules.
 
 **AGENT-1.** While a music2 app holds a project's lock ([WRITE-17](#the-project-lock)), an `m2` command that
 writes the project MUST hand its Tx to that app instead of failing. It builds the Tx on a read-only session
@@ -110,7 +110,7 @@ redo, the newest undone). Undo's name says the source.
 write route) with status 423 and a `busy` answer that names what the musician holds, when the write touches:
 a file in which a knob lease lives; a lane file a lane lease holds; `data/arrangement.json` while a tempo
 lease lives; a plugin's state while its window has changes not yet saved; a file the code editor has unsaved
-text in; or anything, while a take records or the Compare pill (pending D2) is open. The app checks when the
+text in; or anything, while a take records or the Compare pill (D2) is open. The app checks when the
 write arrives, and again at the start of the settle that follows, under the control plane's lock, before
 anything of the change is carried, sent to the engine or shown. If the second check finds something the
 musician began meanwhile, the app takes the agent's change back and answers busy. An agent's write is never
@@ -121,8 +121,8 @@ drag.
   are told to write through it.
 
 **AGENT-4.** An undo sent with the tools key (`m2 undo`) MUST take back the newest step only when its source
-is an agent of the same name, and otherwise refuse, naming the newest step and its source. *Pending D1:*
-the page's Undo takes the newest step, whatever its source.
+is an agent of the same name, and otherwise refuse, naming the newest step and its source. The page's Undo
+takes the newest step, whatever its source (D1).
 - *Why:* one history in one line; an agent may only take back its own work.
 
 **AGENT-5.** Every step not made by the page MUST be shown as it lands: a notice that never takes the
@@ -148,8 +148,8 @@ agents may call it, plain words and an example body. The router, the read-only w
 - *Why:* a list kept by hand drifts. Agents learn the API from it, not from the source.
 
 **AGENT-9.** The app MUST contain no model and call none. It only shares focus, shows what changed and takes
-actions. *Pending D3:* there is no "agents may change the song" switch; when an agent changes things is
-decided by what the musician asks it.
+actions. There is no "agents may change the song" switch (D3); when an agent changes things is decided by
+what the musician asks it.
 - *Why:* owner rule: no AI in the app, simple yet elegant.
 
 **AGENT-10.** The app MUST give its page a key of its own, handed only to its window, and publish a different
@@ -159,7 +159,7 @@ and AGENT-11 go by the key, never by what a request says about itself. What an a
 name, why it made a change, a pointer's note) is plain text, at most 80 characters.
 - *Why:* with one key, a script that leaves out its name passes as the musician and skips every refusal.
 
-**AGENT-11.** *Pending D6.* The transport (play, stop, seek, the loop, Stop All Sound), recording, listening
+**AGENT-11.** (D6.) The transport (play, stop, seek, the loop, Stop All Sound), recording, listening
 mute and solo, the view, plugin windows and their latches, auditions and the MIDI keyboard's target, redo,
 naming steps, the code editor's save and unsaved list, settings, and opening, closing, making or renaming
 songs are the musician's. The app MUST answer them 403 with plain words when the tools key asks. Every read
@@ -183,7 +183,7 @@ The changes:
   ([AGENT-2](#agents))".
 - **WRITE-22** (`:959-974`): its Today gains: a drag begun while an agent's change lands takes the change
   back ([AGENT-3](#agents)).
-- **MON-4** (`:1224`), pending D4: "…exports, or an agent render that didn't ask for them (`m2 listen
+- **MON-4** (`:1224`), as D4 decided: "…exports, or an agent render that didn't ask for them (`m2 listen
   --as-heard`, which says so)."
 - **Acceptance gates**: a row "agents" with each track's gate (section 7).
 
@@ -387,7 +387,7 @@ its own Tx's step. Its inverse, for each path that changed between the revision 
 | removed a text file | `Write` of the text before | `Absent` |
 | made a binary file, beside text changes | none: it stays, and an asset no lane names plays nothing | — |
 | only made binary files (new assets) | none: the batch makes no step and no notice | — |
-| changed or removed a binary file | none: the batch makes no step, and its notice says "can't be undone" (pending D5) | — |
+| changed or removed a binary file | none: the batch makes no step, and its notice says "can't be undone" (D5) | — |
 | was written by git (the watcher held it for `.git/index.lock`, `core/session/src/watch.rs:8`) | none: no step; its notice says "git changed 40 files", since git can undo it and ⌘Z shouldn't | — |
 
 - **The before-image.** The revision before the batch holds each text file's text (`snapshot.files`, shared
@@ -634,7 +634,7 @@ buffers, so a test checks every pure fixture renders the same bits with and with
   difference.
 - `--as-heard` applies the listening mute and solo, read from the app (or `.music2/overlays.json`), through
   the overlay cells the plan already has (MON-1). The result says `"as_heard": true`. MON-4 forbids this today
-  (`docs/architecture.md:1224`); pending D4 amends it.
+  (`docs/architecture.md:1224`); D4 amends it.
 - `--png` writes a picture of the bands over time (third-octave rows, 50 ms columns), one block per track
   with `--tracks`, with the `png` crate already in `Cargo.lock` (0.17.16).
 
@@ -652,7 +652,7 @@ buffers, so a test checks every pure fixture renders the same bits with and with
   recorded (PLAT-1).
 - The agent reports numbers as numbers. It never says it heard anything, and it asks you to press V.
 
-### 5.12 The Compare key (pending D2)
+### 5.12 The Compare key (D2)
 
 V, for "versus". The page's single keys are taken by c, a, e, x, b, m, s, z, k and r
 (`web/src/App.tsx:69`); V is free.
@@ -697,11 +697,11 @@ tells `m2 watch`. This is how an agent says "listen to bars 9-16": it points, an
 
 ## 7. Build order
 
-Before track 1, the owner answers D1 to D3 (section 9). Each track is one branch, merged to `main`, with one
+The owner answered D1 to D6 (section 9). Each track is one branch, merged to `main`, with one
 full check (`ci/check.sh`, `music2 check: PASS` on Linux) at its end. Every test below is written first and
 shown failing before its code lands (G13 aside, see track 5). "Proves" says what the full check then shows.
 
-| Track | What | Waits for | Size |
+| Track | What | Decided by | Size |
 |---|---|---|---|
 | 1 `ag-steps` | Step ids and sources; undo and redo by step id; outside batches become steps in the watcher's job; the `step` event; the notice and the glow; Undo's name; the README fixes | D1 | small |
 | 2 `ag-fwd` | Two keys and `session.json` written whole; forwarding with `seen`, assets, `--as`, `--why`; `m2 edit`, `m2 write`; the busy checks on arrival and at the settle, and `retract`; `m2 undo`; the contract's changes | D1, D3 | medium |
@@ -816,12 +816,12 @@ Two more, found while checking: `README.md:746` says the WebSocket has "three ev
 `midi`, `take`, `graph`'s fields); and `README.md:230` says `.music2/` holds undo (it doesn't). Both are
 fixed in track 1 too.
 
-## 9. Decisions for the owner (all six pending)
+## 9. Decisions for the owner (all six decided)
 
-D1 to D3 are recommended and wait for your yes before the build starts. D4 to D6 are new questions; each
-waits only for the track that needs it (section 7). Until you answer, the rules that use them say *pending*.
+The owner answered on 2026-10-23: "all recommended". Each decision below is decided with its recommended
+answer, and the rules that use it say so.
 
-| # | The question | Recommended | Why |
+| # | The question | Decided | Why |
 |---|---|---|---|
 | D1 | One shared undo line? Your ⌘Z can take back Claude's newest change. Claude can take back only its own. | Yes | One history, nothing to keep in step. The notice and Undo's name say whose step is next. |
 | D2 | How do you hear before and after? Claude makes the change, and you press V to flip it. Or a second "trial" song with Keep and Back. | Write, then V | One song: what you see is what you hear, and every state is saved. |
@@ -845,7 +845,7 @@ Where a finding's fix was taken only in part, the table says why.
 | M3: an agent's step could clear Compare's redo; the notice's Undo could take back another step | Agents are busy while comparing (5.12); undo and redo name their step by id (5.7) |
 | M4: an import made outside steps; new assets made empty steps | Outside steps only in the watcher's job; asset-only batches make no step; forwarded assets are taken in by the commit's job (5.2, 5.4) |
 | M5: the page and agents shared one key | Two keys, AGENT-10 (5.1). Rejected from its fix: the `m2` process id in agent names. Each `m2` call is a new process, so `m2 undo` would never match the step its own earlier call made. |
-| M6: `m2 call` reached the musician's controls with no rule | AGENT-11 and the 403 from the route table (5.8), pending D6 |
+| M6: `m2 call` reached the musician's controls with no rule | AGENT-11 and the 403 from the route table (5.8), decided by D6 |
 
 **The minor findings.** Each was checked against the code, and each was real.
 
