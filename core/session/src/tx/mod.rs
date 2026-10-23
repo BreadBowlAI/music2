@@ -37,6 +37,8 @@ mod share_tests;
 #[cfg(test)]
 mod stage_tests;
 #[cfg(test)]
+mod steps_tests;
+#[cfg(test)]
 mod take_tests;
 #[cfg(test)]
 mod tests;
@@ -295,12 +297,16 @@ pub(crate) struct TxStep {
     /// What it is called, as the window that made it says ("Hats pan"), and whether it adds or
     /// removes a part (WRITE-21's names; gaps #29). None: named from its file.
     pub name: Option<(String, bool)>,
+    /// Its id, given as it is recorded and never reused in this history, and who made it
+    /// (AGENT-2): both follow it through undo and redo.
+    pub id: u64,
+    pub source: crate::session::Source,
 }
 
 impl TxStep {
     pub fn new(inverse: Tx, raw: bool, data_only: bool, file: String) -> TxStep {
         let size = retained(&inverse);
-        TxStep { inverse, raw, data_only, file, size, made: 0, name: None }
+        TxStep { inverse, raw, data_only, file, size, made: 0, name: None, id: 0, source: crate::session::Source::Page }
     }
 
     /// The before-images in `blobs/` it needs.

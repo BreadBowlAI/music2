@@ -989,23 +989,30 @@ fn tops_are_the_steps_undo_and_redo_take() {
     let second = s.commit(pan(&d, 0.6)).unwrap().number;
     assert!(s.name_step(first, "Hats pan", false), "a step below the top is named too");
     assert!(!s.name_step(second + 7, "nothing", false), "no step made that revision");
-    let unnamed = crate::StepName { name: None, structural: false, file: "song.ts".into() };
-    assert_eq!(s.step_names(), (Some(unnamed.clone()), None));
+    // What a window names a step by: its name, whether it is structural, its file.
+    type Named = (Option<String>, bool, String);
+    let tops = |s: &Session| {
+        let named = |n: crate::StepName| (n.name, n.structural, n.file);
+        let (u, r) = s.step_names();
+        (u.map(named), r.map(named))
+    };
+    let unnamed: Named = (None, false, "song.ts".into());
+    assert_eq!(tops(&s), (Some(unnamed.clone()), None));
     assert!(s.name_step(second, "adding Reverb", true));
-    let reverb = crate::StepName { name: Some("adding Reverb".into()), structural: true, file: "song.ts".into() };
-    let hats = crate::StepName { name: Some("Hats pan".into()), ..unnamed.clone() };
-    assert_eq!(s.step_names(), (Some(reverb.clone()), None));
+    let reverb: Named = (Some("adding Reverb".into()), true, "song.ts".into());
+    let hats: Named = (Some("Hats pan".into()), false, "song.ts".into());
+    assert_eq!(tops(&s), (Some(reverb.clone()), None));
     s.undo().unwrap();
-    assert_eq!(s.step_names(), (Some(hats.clone()), Some(reverb.clone())), "the undone step is redo's, with its name");
+    assert_eq!(tops(&s), (Some(hats.clone()), Some(reverb.clone())), "the undone step is redo's, with its name");
     s.undo().unwrap();
-    assert_eq!(s.step_names(), (None, Some(hats.clone())));
+    assert_eq!(tops(&s), (None, Some(hats.clone())));
     s.redo().unwrap();
-    assert_eq!(s.step_names(), (Some(hats.clone()), Some(reverb.clone())));
+    assert_eq!(tops(&s), (Some(hats.clone()), Some(reverb.clone())));
     s.undo().unwrap();
-    assert_eq!(s.step_names(), (None, Some(hats)), "undo, redo, undo: the same name");
+    assert_eq!(tops(&s), (None, Some(hats)), "undo, redo, undo: the same name");
     // A new change ends redo; its step has no name until its window gives one.
     let third = s.commit(pan(&d, 0.7)).unwrap().number;
-    assert_eq!(s.step_names(), (Some(unnamed), None));
+    assert_eq!(tops(&s), (Some(unnamed), None));
     assert!(s.name_step(third, "Hats pan", false));
 }
 

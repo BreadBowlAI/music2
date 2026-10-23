@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use m2_song::tx::{Base, Expect, Op, Payload, Tx, TxPath};
-use m2_song::{DataPath, Diagnostic, LaneKind, Sha, Snapshot};
+use m2_song::{DataPath, Diagnostic, LaneKind, Sha, Snapshot, Stored};
 
 use crate::session::Session;
 use crate::tx::stage::{Before, Target};
@@ -59,6 +59,23 @@ pub struct Accepted {
 pub struct TakenIn {
     pub draft_changed: bool,
     pub accepted: Option<Accepted>,
+}
+
+/// What an outside batch is for undo (AGENT-2).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Outside {
+    /// No step, and nothing to say: nothing was accepted, or the batch only made binary files
+    /// (new assets), which an undo would leave anyway.
+    #[default]
+    Nothing,
+    /// One undo step, with this id.
+    Step(u64),
+    /// No step: git wrote it (the watcher waited for its `index.lock`), and git can undo it. How
+    /// many files it changed.
+    Git(usize),
+    /// No step: it changed or removed this binary file (an asset, a plugin's state), or one that
+    /// couldn't be read, whose bytes before are gone (the agents design's D5).
+    Binary(String),
 }
 
 /// What a save did.
@@ -130,6 +147,68 @@ impl Session {
         let mut only = overlay(&self.draft, &snapshot, paths);
         crate::tx::settle_assets(&mut only);
         self.take_in(only)
+    }
+
+    /// Take in the watcher's batch, as [`Session::take_in_only`] does, and make what it changed
+    /// one undo step (AGENT-2), source outside: its inverse writes back each text file it changed
+    /// or removed, guarded by the hash the batch left, and removes each text file it made. `git`:
+    /// the watcher waited for git's `index.lock` while the batch settled. Only the watcher's job
+    /// calls this: files the app takes in for its own Tx (an import's) make no step.
+    pub fn take_in_batch(&mut self, snapshot: Snapshot, paths: &BTreeSet<PathBuf>, git: bool) -> (TakenIn, Outside) {
+        let before = self.accepted.clone();
+        let taken = self.take_in_only(snapshot, paths);
+        if taken.accepted.is_none() {
+            return (taken, Outside::Nothing);
+        }
+        let after = self.accepted.clone();
+        // From the last accepted revision: a batch that waited rides along with the one that
+        // made it build.
+        let changed = changed_paths(&before.snapshot, &after.snapshot);
+        if git {
+            return (taken, Outside::Git(changed.len()));
+        }
+        let (was, is) = (&before.snapshot, &after.snapshot);
+        let mut ops = vec![];
+        let mut bases = vec![];
+        for p in &changed {
+            let name = m2_song::path::slashed(p);
+            // Its bytes before are gone, or were never read: nothing can put them back (D5).
+            if binary(was, p) || was.unreadable.contains_key(p) || is.unreadable.contains_key(p) {
+                return (taken, Outside::Binary(name));
+            }
+            let Ok(file) = TxPath::new(&name) else { return (taken, Outside::Binary(name)) };
+            let op = match (text_of(was, p), text_of(is, p)) {
+                (Some(old), _) => Op::Write { file: file.clone(), bytes: Payload::Text(old.clone()) },
+                (None, Some(_)) => Op::Remove { file: file.clone() },
+                // A binary file it made stays: an asset no lane names plays nothing.
+                (None, None) => continue,
+            };
+            // Guarded by what the batch left there (WRITE-21).
+            let left = match (is.files.get(p), is.binaries.get(p)) {
+                (Some(t), _) => Base::Sha(is.not_utf8.get(p).copied().unwrap_or_else(|| Sha::of(t.as_bytes()))),
+                (None, Some(Stored::Hash(sha))) => Base::Sha(*sha),
+                (None, Some(_)) => return (taken, Outside::Binary(name)),
+                (None, None) => Base::Absent,
+            };
+            bases.push((file, left));
+            ops.push(op);
+        }
+        if ops.is_empty() {
+            return (taken, Outside::Nothing);
+        }
+        let file = bases[0].0.to_string();
+        let shown = match (&ops[..], text_of(was, Path::new(&file)), text_of(is, Path::new(&file))) {
+            ([_], Some(old), Some(new)) => summarize(old, new),
+            ([_], ..) => (file.clone(), file.clone()),
+            (many, ..) => (format!("{} files", many.len()), format!("{} files", many.len())),
+        };
+        let mut inverse = Tx::new("undo-outside", (shown.1, shown.0), ops, Expect::Identical);
+        inverse.base.extend(bases);
+        // Raw, as a save's step is: taken in like an outside write when undone (WRITE-21).
+        let mut step = TxStep::new(inverse, true, false, file);
+        step.source = crate::session::Source::Outside;
+        let id = self.record_tx(step);
+        (taken, Outside::Step(id))
     }
 
     /// Accept what `batch` changed in the draft, as the module's table says. Whether a revision
@@ -232,6 +311,17 @@ impl Session {
         }
         Ok(Saved { taken, recorded })
     }
+}
+
+/// The text `s` has at `p`: none when it isn't there, or isn't UTF-8 (its entry in `files` isn't its
+/// bytes then).
+fn text_of<'a>(s: &'a Snapshot, p: &Path) -> Option<&'a Arc<str>> {
+    s.files.get(p).filter(|_| !s.not_utf8.contains_key(p))
+}
+
+/// Whether `s` has at `p` what isn't text: a binary, or a text file that isn't UTF-8.
+fn binary(s: &Snapshot, p: &Path) -> bool {
+    s.binaries.contains_key(p) || s.not_utf8.contains_key(p)
 }
 
 /// The plane a change from `a` to `b` took: the slowest of its paths' (PLANE-2).

@@ -92,14 +92,40 @@ pub struct Stepped {
     pub committed: crate::tx::Committed,
 }
 
-/// The step on top of undo or of redo, as the app names it (WRITE-21, gaps #29): the name the
-/// window that made it gave, whether it adds or removes a part, and the file it is shown as (what
-/// a step nobody named is called by).
+/// Who made an undo step (AGENT-2). Track 2 of the agents design adds agents, by the name each
+/// gives, once they have a key of their own (AGENT-10).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Source {
+    /// The app's page, and until then every write through the app's API.
+    #[default]
+    Page,
+    /// Files saved outside the app, which the watcher took in (WRITE-19).
+    Outside,
+}
+
+impl Source {
+    /// As the app's API says it: `page` or `outside`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Source::Page => "page",
+            Source::Outside => "outside",
+        }
+    }
+}
+
+/// The step on top of undo or of redo, as the app names it (WRITE-21, gaps #29, AGENT-2): its id,
+/// the revision the change made, who made it, the name the window that made it gave, whether it
+/// adds or removes a part, the file it is shown as (what a step nobody named is called by), and
+/// every file it changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StepName {
+    pub id: u64,
+    pub made: u64,
+    pub source: Source,
     pub name: Option<String>,
     pub structural: bool,
     pub file: String,
+    pub files: Vec<String>,
 }
 
 /// Why an undo or a redo didn't go ahead.
@@ -152,6 +178,8 @@ pub struct Session {
     pub(crate) history: Vec<TxStep>,
     /// Undone changes, as their inverses, newest last. Any new edit clears it.
     pub(crate) redo: Vec<TxStep>,
+    /// The id the last step recorded got: ids are never reused while the session lives (AGENT-2).
+    pub(crate) steps: u64,
     /// What every revision accepted so far declared, so data a rename left behind is named as
     /// its track was and offered only to lanes that read it.
     pub(crate) seen: Seen,
@@ -313,6 +341,7 @@ impl Session {
             past: VecDeque::new(),
             history: vec![],
             redo: vec![],
+            steps: 0,
             catalog,
             problems: vec![],
             access,
@@ -524,12 +553,21 @@ impl Session {
         }
     }
 
-    /// A new Tx's undo step: remembered, ending any redo. It is named by the revision it made: the
-    /// accepted one now.
-    pub(crate) fn record_tx(&mut self, mut step: TxStep) {
+    /// A new change's undo step: remembered, ending any redo. It is named by the revision it made
+    /// (the accepted one now), and gets the next id (AGENT-2). Its id.
+    pub(crate) fn record_tx(&mut self, mut step: TxStep) -> u64 {
         step.made = self.accepted.number;
+        self.steps += 1;
+        step.id = self.steps;
         self.push_history(step);
         self.redo.clear();
+        self.steps
+    }
+
+    /// The id the newest step recorded got, 0 before the first: a change that records a step makes
+    /// it larger (AGENT-2).
+    pub fn last_step(&self) -> u64 {
+        self.steps
     }
 
     /// Name the undo step of the change that made revision `made` (gaps #29): "Hats pan", and
@@ -548,9 +586,13 @@ impl Session {
     /// The steps on top of undo and of redo, as the app names them (read only).
     pub fn step_names(&self) -> (Option<StepName>, Option<StepName>) {
         let named = |t: &TxStep| StepName {
+            id: t.id,
+            made: t.made,
+            source: t.source.clone(),
             name: t.name.as_ref().map(|n| n.0.clone()),
             structural: t.name.as_ref().is_some_and(|n| n.1),
             file: t.file.clone(),
+            files: t.inverse.touched().iter().map(|p| p.to_string()).collect(),
         };
         (self.history.last().map(named), self.redo.last().map(named))
     }
@@ -607,8 +649,10 @@ impl Session {
         match result {
             Ok((done, inverse)) => {
                 if let Some(mut inverse) = inverse {
-                    // The step it pushes is the same change: it keeps its name.
+                    // The step it pushes is the same change: it keeps its id, its source and its
+                    // name (AGENT-2).
                     (inverse.made, inverse.name) = (done.number, step.name.clone());
+                    (inverse.id, inverse.source) = (step.id, step.source.clone());
                     if redo { &mut self.history } else { &mut self.redo }.push(inverse);
                 }
                 let (before, after) = tx.label.clone();

@@ -270,6 +270,8 @@ struct Pending {
 struct Batch {
     last_change: Instant,
     paths: BTreeMap<String, Pending>,
+    /// Git was writing at some poll while it settled: git wrote it (AGENT-2).
+    git: bool,
 }
 
 /// Git's state for the project.
@@ -305,6 +307,8 @@ pub struct Settle {
     told: bool,
     /// A Notice for the session to show: `git.locked`, once.
     pub notice: Option<m2_song::Diagnostic>,
+    /// Whether the last batch made ready waited for git: git wrote it, so it makes no undo step.
+    by_git: bool,
 }
 
 /// Whether `p`, last seen as `seen`, differs in `now` (a poll's entry for it). A text input whose
@@ -352,7 +356,7 @@ impl Settle {
     /// Start from `listing`, taken when the project was read (`read_ns`, wall clock).
     pub fn new(listing: &Listing, read_ns: i128) -> Settle {
         let baseline = listing.entries.iter().map(|(p, (t, s))| (p.clone(), seen(*t, *s, None, read_ns))).collect();
-        Settle { quiet: QUIET, baseline, batch: None, told: false, notice: None }
+        Settle { quiet: QUIET, baseline, batch: None, told: false, notice: None, by_git: false }
     }
 
     /// Whether a batch is open.
@@ -472,7 +476,7 @@ impl Settle {
         if changed.is_empty() && self.batch.is_none() {
             return Poll::Idle;
         }
-        let batch = self.batch.get_or_insert_with(|| Batch { last_change: now, paths: BTreeMap::new() });
+        let batch = self.batch.get_or_insert_with(|| Batch { last_change: now, paths: BTreeMap::new(), git: false });
         for p in changed {
             let entry = listing.entries.get(&p).copied();
             match batch.paths.get_mut(&p) {
@@ -526,6 +530,7 @@ impl Settle {
                 false
             }
         };
+        batch.git |= git_busy;
         let quiet = now.duration_since(batch.last_change) >= self.quiet;
         let stable = batch.paths.values().all(|p| p.same >= 1);
         // A scoped poll can't tell that nothing else changed: events for the rest of a change may
@@ -534,6 +539,7 @@ impl Settle {
             return Poll::Settling;
         }
         let batch = self.batch.take().expect("open");
+        self.by_git = batch.git;
         let mut out = BTreeSet::new();
         for (p, pending) in batch.paths {
             match pending.now {
@@ -547,6 +553,12 @@ impl Settle {
             out.insert(PathBuf::from(p));
         }
         Poll::Ready(out)
+    }
+
+    /// Whether git wrote the batch the last `Ready` named: it waited for git's `index.lock` while
+    /// it settled (AGENT-2). Git can undo what it wrote, so the app makes no undo step of it.
+    pub fn by_git(&self) -> bool {
+        self.by_git
     }
 
     /// After a `Ready`, the snapshot read for it: which of the batch's `paths` read as they settled

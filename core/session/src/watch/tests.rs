@@ -52,10 +52,12 @@ fn git_holds_a_batch_while_it_writes() {
     assert_eq!(s.poll(t0 + Duration::from_secs(1), WALL, &changed, busy, &mut hash), Poll::Settling);
     let stale = Git { lock_age: Some(Duration::from_secs(11)) };
     assert!(matches!(s.poll(t0 + Duration::from_secs(2), WALL, &changed, stale, &mut hash), Poll::Ready(_)));
+    assert!(s.by_git(), "it waited for git: git wrote it (AGENT-2)");
     assert_eq!(s.notice.take().map(|n| n.code), Some("git.locked"));
     let again = list(&[("song.ts", Track::Text, stamp(12, OLD))]);
     s.poll(t0 + Duration::from_secs(3), WALL, &again, stale, &mut hash);
-    s.poll(t0 + Duration::from_secs(4), WALL, &again, stale, &mut hash);
+    assert!(matches!(s.poll(t0 + Duration::from_secs(4), WALL, &again, stale, &mut hash), Poll::Ready(_)));
+    assert!(!s.by_git(), "a stale lock is no git writing");
     assert!(s.notice.is_none(), "said once");
 }
 
