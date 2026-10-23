@@ -550,6 +550,11 @@ async fn graph_relink(State(s): S, Json(r): Json<RelinkReq>) -> ApiResult {
 #[derive(Deserialize)]
 struct FixReq {
     session: u64,
+    /// An agent's name and words for its step (AGENT-10): only with the tools key.
+    #[serde(default, rename = "as")]
+    by: Option<String>,
+    #[serde(default)]
+    why: Option<String>,
     /// The fix as a problem carried it, `{code, title, likely, tx}`: its Tx is what is committed
     /// (DIAG-1).
     fix: Value,
@@ -559,7 +564,8 @@ struct FixReq {
 /// offered on files that changed since is a conflict (DIAG-1). Undo takes it back.
 async fn graph_fix(State(s): S, Json(r): Json<FixReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.fix(r.session, &r.fix)).await;
+    let caller = crate::caller::now().saying(r.by.as_deref(), r.why.as_deref());
+    let result = blocking(move || crate::caller::as_caller(caller, || state.graph.fix(r.session, &r.fix))).await;
     s.graph_changed();
     Ok(Json(result?))
 }
@@ -856,6 +862,9 @@ struct SessionReq {
 struct StepReq {
     session: u64,
     step: Option<u64>,
+    /// An agent's name (AGENT-4): its undo takes back only its own step. Only with the tools key.
+    #[serde(default, rename = "as")]
+    by: Option<String>,
 }
 
 async fn graph_undo(State(s): S, Json(r): Json<StepReq>) -> Response {
@@ -868,11 +877,14 @@ async fn graph_redo(State(s): S, Json(r): Json<StepReq>) -> Response {
 
 async fn stepped(s: Arc<AppState>, r: StepReq, redo: bool) -> Response {
     let state = s.clone();
-    let result = crate::caller::blocking(move || match (r.step, redo) {
-        (Some(step), false) => state.graph.undo_step(r.session, step),
-        (Some(step), true) => state.graph.redo_step(r.session, step),
-        (None, false) => state.graph.undo(r.session),
-        (None, true) => state.graph.redo(r.session),
+    let caller = crate::caller::now().saying(r.by.as_deref(), None);
+    let result = crate::caller::blocking(move || {
+        crate::caller::as_caller(caller, || match (r.step, redo) {
+            (Some(step), false) => state.graph.undo_step(r.session, step),
+            (Some(step), true) => state.graph.redo_step(r.session, step),
+            (None, false) => state.graph.undo(r.session),
+            (None, true) => state.graph.redo(r.session),
+        })
     })
     .await;
     s.graph_changed();

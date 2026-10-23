@@ -1837,10 +1837,12 @@ impl Actor {
         if let (Some(a), Value::Object(more)) = (answer.as_object_mut(), more) {
             a.extend(more);
         }
-        // The undo step it made, by its id: what its toast's Undo names (AGENT-2).
+        // The undo step it made, by its id: what its toast's Undo names (AGENT-2); and its name, as
+        // the state says it, which `m2` says (AGENT-1).
         let made = self.open.as_ref().map(|o| o.session.last_step()).filter(|id| *id > steps);
-        if let Some(id) = made {
+        if let (Some(id), Some(o)) = (made, self.open.as_ref()) {
             answer["step"] = json!(id);
+            answer["undo_name"] = super::steps::named(o.session.step_names().0.as_ref(), &o.timeline);
         }
         Ok(answer)
     }
@@ -2065,8 +2067,9 @@ impl Actor {
         Ok(match done {
             Ok(c) => {
                 let mut answer = m2_editor::json::committed(&c);
-                if let Some(id) = made {
+                if let (Some(id), Some(o)) = (made, self.open.as_ref()) {
                     answer["step"] = json!(id);
+                    answer["undo_name"] = super::steps::named(o.session.step_names().0.as_ref(), &o.timeline);
                 }
                 (200, answer)
             }

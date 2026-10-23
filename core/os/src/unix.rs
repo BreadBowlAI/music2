@@ -242,6 +242,13 @@ pub(crate) fn take_stdout() -> io::Result<File> {
     }
 }
 
+pub(crate) fn alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else { return false };
+    // SAFETY: signal 0 sends nothing: it only asks whether the process exists. A process of
+    // another user exists too (EPERM).
+    unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
+}
+
 pub(crate) fn exit_now(code: i32) -> ! {
     // SAFETY: ends the process at once, running no exit handler.
     unsafe { libc::_exit(code) }

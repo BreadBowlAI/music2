@@ -79,6 +79,12 @@ pub fn take_stdout() -> std::io::Result<std::fs::File> {
     os::take_stdout()
 }
 
+/// Whether process `pid` lives: `m2` waits for the app while it does (AGENT-1). Windows
+/// (designed): `OpenProcess` and `GetExitCodeProcess`.
+pub fn alive(pid: u32) -> bool {
+    os::alive(pid)
+}
+
 /// End the process at once with `code`, running no exit handler: a process whose plugin code may
 /// still run on other threads must not unload it under them.
 pub fn exit_now(code: i32) -> ! {

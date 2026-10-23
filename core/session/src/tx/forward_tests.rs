@@ -9,7 +9,7 @@ use m2_song::Sha;
 use m2_song::tx::{Expect, Op, Tx, TxPath};
 
 use super::tests::{Dir, based, p, pan, std_packages};
-use crate::forward::{Forward, Landed};
+use crate::forward::{Forward, Landed, Sent as Sending};
 use crate::{Refusal, Session, Source, StepError, Uncommitted};
 
 /// What the holder was sent: each Tx, with its `seen` and its assets.
@@ -24,8 +24,9 @@ struct Holder {
 }
 
 impl Forward for Holder {
-    fn commit(&mut self, tx: &Tx, seen: Sha, assets: &[TxPath]) -> Result<Landed, Refusal> {
-        self.sent.lock().unwrap().push((tx.clone(), seen, assets.to_vec()));
+    fn commit(&mut self, s: &Sending) -> Result<Landed, Refusal> {
+        let (tx, seen) = (s.tx, s.seen);
+        self.sent.lock().unwrap().push((tx.clone(), seen, s.assets.clone()));
         let mut s = self.s.lock().unwrap();
         s.act_as(Source::Agent("Claude".into()), Some("brighter hats".into()));
         let done = s.commit_with(tx.clone(), |_, c| if c.hash == seen { Ok(()) } else { Err(c.hash) });

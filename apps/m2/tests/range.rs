@@ -20,7 +20,7 @@ impl Drop for Temp {
 }
 
 fn m2(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_m2")).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", std::env::temp_dir().join("m2-tests-no-app")).args(args).output().unwrap()
 }
 
 fn stdout(o: &Output) -> String {

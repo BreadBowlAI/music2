@@ -49,6 +49,7 @@ m2-server graph::tests::a_host_crash_is_one_plugin_crashed_problem  speed: withi
 m2-server graph::tests::a_hung_host_process_is_ended_and_said  speed: ended within 480 ms to 3 s; also a flake: named one silent plugin of two (2026-10-21)
 m2-server graph::watch_tests::an_event_wakes_an_idle_watcher_and_a_batch_wakes_it_when_due  speed: within 100 ms (crates/server/src/graph/watch_tests.rs)
 m2-gates::harness the_live_engine_passes_every_gate  speed: the gates at CI sizes, e.g. G1 audible within 50 ms (crates/gates/tests/harness.rs)
+m2::forward a_forwarded_write_doesnt_wait_for_the_lock  speed: reaches the app within 200 ms of a local write's time (apps/m2/tests/forward.rs)
 
 # flake: failed on correct code, cause not fixed
 m2-runtime tests::live::keep::an_edit_window_renders_the_same_bits_on_1_and_n_threads  flake: asserts work crossed threads, which the scheduler decides; 3 of 5 runs on 4 cores (2026-10-21)

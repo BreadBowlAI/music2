@@ -11,7 +11,9 @@ use m2_runtime::{PackageSet, Renderer};
 use m2_session::{Compiled, Session};
 use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project, TxOp};
 
+mod app;
 mod edits;
+mod text;
 
 const USAGE: &str = "m2: build, check and render music2 projects
 
@@ -119,13 +121,26 @@ USAGE:
                                          take a knob's automation out: what the lane plays at the place
                                          (else its fallback) is written back where the lane is read, and
                                          the lane file goes, as one edit that undo takes back
+  m2 edit <project> <file> --old <text> --new <text> [--all]
+                                         replace text found once in a file of the song (every time, with
+                                         --all), as one edit: how an agent changes a file while the app
+                                         has the song open
+  m2 write <project> <file> [<from> | -] write a whole text file of the song (from a file, or standard
+                                         input), as one edit
+  m2 undo <project>                      take back your own newest change in the open app (by --as):
+                                         never the musician's, nor another agent's
 
 Every command that reads a project prints what needs attention in it, such as data no lane reads,
 with the commands that fix it.
 
-One program writes a project at a time (its lock is .music2/lock): while the app has it open, a
-command that writes it stops before changing anything and names the app. Reading, rendering and
-bounce without --place work all the same.
+One program writes a project at a time (its lock is .music2/lock). While the app has the song open,
+a command that writes it hands its edit to the app, which makes it one undo step, named by --as <name>
+(or M2_AS) and --why <words>: you see it there, and m2 undo takes it back. While you (the musician)
+drag what it changes, record, or have unsaved code in its file, the app refuses it: m2 waits up to
+30 s, then exits 3, changing nothing. Don't write the song's files directly while the app has it
+open: the app can't refuse that, and it ends a drag on what it changes. With the app closed, m2
+writes the files itself, and undo isn't kept once it exits. Reading, rendering and bounce without
+--place work all the same.
 
 std, the templates and the examples are found at $M2_STD, $M2_TEMPLATES and $M2_EXAMPLES, inside
 music2.app when m2 runs from there, or else in this source tree.
@@ -144,14 +159,21 @@ fn main() -> ExitCode {
     m2_plugins::run_main(|| {
         m2_server::resources::keep_hashes();
         match run() {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(()) => {
+                // A write the open app took: that it is one undo step there (AGENT-1).
+                for line in app::after() {
+                    println!("{line}");
+                }
+                ExitCode::SUCCESS
+            }
             Err(e) => {
                 // A fault that stopped a render says its code too (RENDER-1, DIAG-2).
                 match m2_editor::faults::Faulted::of(&e) {
                     Some(f) => eprintln!("error: {e:#} ({})", f.code),
                     None => eprintln!("error: {e:#}"),
                 }
-                ExitCode::FAILURE
+                // Busy is 3: nothing changed, try later (AGENT-3).
+                app::exit_code().map_or(ExitCode::FAILURE, ExitCode::from)
             }
         }
     })
@@ -262,8 +284,19 @@ fn writer_saying(dir: &Path, also: &str) -> Result<Session> {
 }
 
 /// Open a project for writing, whether its code compiles or not: what recovery needs, which
-/// puts back recorded bytes whatever they compile to (P3, the step 6 design's 6.5).
+/// puts back recorded bytes whatever they compile to (P3, the step 6 design's 6.5). While the app
+/// holds its lock, a read-only session whose commits go to the app (AGENT-1), at background
+/// priority, so its builds never compete with playback; no wait for the lock.
 fn locked(dir: &Path, also: &str) -> Result<Session> {
+    if let Some(holder) = app::holder(dir) {
+        let to = app::reach(dir, &holder, also)?;
+        let mut s = Session::open_read_only(dir, packages()?).map_err(report)?;
+        if let Err(e) = m2_os::thread::background() {
+            eprintln!("m2: couldn't lower its priority beside the app ({e})");
+        }
+        s.forward_to(Box::new(to));
+        return Ok(s);
+    }
     let s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
     if let Some(r) = s.access().refusal() {
         bail!("{}{also}", r.message);
@@ -361,7 +394,10 @@ fn report(diags: Vec<Diagnostic>) -> anyhow::Error {
 }
 
 fn run() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // Who writes, and why: for the step it makes in the open app (AGENT-10).
+    app::take_who(&mut args)?;
+    let args = args;
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument\n\n{USAGE}"));
     match args.first().map(String::as_str) {
         Some("new") => {
@@ -500,16 +536,20 @@ fn run() -> Result<()> {
             let threads = threads(&args, &project.dir, false)?;
             // Placing it is a Tx on a lane file, so the lock is taken (a writer session) before
             // anything is rendered (WRITE-18); a bounce alone only creates new assets, and needs
-            // none.
-            let mut placer = match &place {
-                Some(p) => Some(writer_saying(
-                    &project.dir,
-                    &format!(
-                        "\nThe clip goes on {}: add it by writing that file directly, or bounce without --place.",
-                        m2_song::path::slashed(&p.rel)
-                    ),
-                )?),
-                None => None,
+            // none. While the app has the song open, the song is read after the render and the
+            // clip placed through the app (AGENT-1): a long render never plans on old reads.
+            let also = |p: &Place| {
+                format!("\nThe clip goes on {}: bounce without --place, then place it with m2 clips.", m2_song::path::slashed(&p.rel))
+            };
+            let holder = app::holder(&project.dir);
+            let mut placer = match (&place, &holder) {
+                (Some(p), None) => Some(writer_saying(&project.dir, &also(p))?),
+                // An app m2 can't reach fails before anything is rendered.
+                (Some(p), Some(h)) => {
+                    app::reach(&project.dir, h, &also(p))?;
+                    None
+                }
+                (None, _) => None,
             };
             let mut bounced = ir.root.clone();
             if let Some(track) = flag(&args, "--track") {
@@ -599,10 +639,19 @@ fn run() -> Result<()> {
                 path.display(),
                 if n == 1 { "" } else { "s" }
             );
-            if let (Some(place), Some(session)) = (place, placer.as_mut()) {
+            if let Some(place) = place {
+                let (place, mut session) = match placer.take() {
+                    Some(s) => (place, s),
+                    None => {
+                        let s = writer_saying(&project.dir, &also(&place))?;
+                        let raw = flag(&args, "--place").expect("placing");
+                        let again = Place::parse(&raw, &s.accepted().compiled.ir, &s.accepted().project)?;
+                        (again, s)
+                    }
+                };
                 let length = tempo.beat_at(tempo.seconds_at(place.beat) + seconds) - place.beat;
                 let hash = m2_song::Sha::of_file(&path)?.pin();
-                place.put(session, &asset, hash, length)?;
+                place.put(&mut session, &asset, hash, length)?;
             }
         }
         Some("graph") => {
@@ -949,6 +998,15 @@ change that code first",
                 t.elapsed().as_secs_f64() * 1000.0
             );
         }
+        Some("fix") if app::holder(Path::new(&arg(1)?)).is_some() => {
+            // The app knows which journals are still being written: its fix applies (the review's m1).
+            let dir = PathBuf::from(arg(1)?);
+            let holder = app::holder(&dir).context("the app let go of the song")?;
+            let src = m2_song::path::slashed(&in_project(&dir, &arg(2)?));
+            let e = app::reach(&dir, &holder, "")?.fix(&src, &arg(3)?)?;
+            let text = |k: &str| e[k].as_str().unwrap_or_default().to_string();
+            println!("{}: `{}` → `{}` (revision {})", text("file"), text("before"), text("after"), e["revision"]);
+        }
         Some(command @ ("relink" | "delete-data" | "fix")) => {
             // What needs attention is printed after: the fix may have settled it.
             let dir = PathBuf::from(arg(1)?);
@@ -1044,6 +1102,17 @@ change that code first",
             attention(&dir, s.problems());
         }
         Some("tx") => tx(&args)?,
+        Some("edit") => text::edit(&args)?,
+        Some("write") => text::write(&args)?,
+        Some("undo") => {
+            // Undo lives in the open app (AGENT-4): history is in its memory.
+            let dir = PathBuf::from(arg(1)?);
+            let Some(holder) = app::holder(&dir) else {
+                bail!("nothing to undo: undo lives in the open app, and music2 doesn't have this song open");
+            };
+            let v = app::reach(&dir, &holder, "")?.undo()?;
+            println!("undid {} in the open app", v["name"].as_str().unwrap_or("the newest change"));
+        }
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         _ => print!("{USAGE}"),
     }
@@ -1122,8 +1191,14 @@ impl Place {
             pitch: 0.0,
             warp: vec![],
         };
-        m2_editor::data::place_clip(s, &self.addr, self.was.as_deref(), clip)
-            .map_err(|e| anyhow!("{e}; {asset} is bounced, place it on {} by hand", self.rel.display()))?;
+        let put = serde_json::to_value(&clip)?;
+        m2_editor::data::place_clip(s, &self.addr, self.was.as_deref(), clip).map_err(|e| {
+            // Assets are never replaced: the bounce stays, and this command places it.
+            let gesture = m2_editor::clips::Gesture::Set { lane: self.addr.clone(), put: vec![put], delete: vec![] };
+            let json = serde_json::to_string(&gesture).unwrap_or_default();
+            let dir = quote(&s.accepted().project.dir.display().to_string());
+            anyhow!("{e}; {asset} is bounced: place it with\n  echo {} | m2 clips {dir} json -", quote(&json))
+        })?;
         println!("placed it on {}.{} at beat {} ({})", self.addr.module, self.addr.lane, self.beat, self.rel.display());
         Ok(())
     }

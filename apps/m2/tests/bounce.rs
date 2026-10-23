@@ -30,6 +30,7 @@ fn bounce_of_a_track_still_writes_its_file() {
     let song = temp.0.join("first-song");
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
     let out = Command::new(env!("CARGO_BIN_EXE_m2"))
+        .env("HOME", std::env::temp_dir().join("m2-tests-no-app"))
         .args(["bounce", song.to_str().unwrap(), "bass-stem", "--track", "bass"])
         .env("M2_AUDIO", "none")
         .env("M2_MIDI", "none")

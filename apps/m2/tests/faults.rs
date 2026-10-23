@@ -25,6 +25,7 @@ fn put(dir: &Path, name: &str, bytes: &[u8]) {
 /// `m2 <args>`, the probe plugin playable, with no audio device and no MIDI one.
 fn m2(args: &[&std::ffi::OsStr]) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_m2"));
+    c.env("HOME", std::env::temp_dir().join("m2-tests-no-app"));
     c.args(args).env("M2_PROBE", "1").env("M2_AUDIO", "none").env("M2_MIDI", "none");
     c.output().unwrap()
 }

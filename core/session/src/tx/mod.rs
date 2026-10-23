@@ -814,8 +814,19 @@ impl Session {
     /// answers is this check's, with the holder's numbers: nothing was written here.
     fn forward_prepared(&mut self, tx: &Tx, p: Prepared) -> Result<Committed, Refusal> {
         let assets: Vec<TxPath> = self.forward_assets.iter().filter_map(|a| TxPath::new(&m2_song::path::slashed(a)).ok()).collect();
+        // What each target holds once it landed, files by their bytes' hash.
+        let after = tx
+            .touched()
+            .into_iter()
+            .filter_map(|t| match known(&p.candidate.snapshot, &t) {
+                None => Some((t, None)),
+                Some(Some(sha)) => Some((t, Some(sha))),
+                Some(None) => None,
+            })
+            .collect();
+        let sent = crate::forward::Sent { tx, seen: p.hash, assets, after };
         let to = self.forward.as_mut().expect("a forwarding session");
-        let landed = to.commit(tx, p.hash, &assets)?;
+        let landed = to.commit(&sent)?;
         let paths = crate::forward::landed_paths(self, tx, &self.forward_assets);
         if let Ok(snapshot) = Snapshot::read_paths(&self.dir, &paths, &|_| true, BTreeSet::new()) {
             self.take_in_only(snapshot, &paths);
@@ -823,17 +834,12 @@ impl Session {
         self.forward_assets.clear();
         self.cache = None;
         self.landed = Some(landed);
+        // A holder that went away once it wrote it says no numbers: this session's own, then.
+        let a = &self.accepted;
+        let (number, code_rev, data_rev) =
+            if landed.number == 0 { (a.number, a.code_rev, a.data_rev) } else { (landed.number, landed.code_rev, landed.data_rev) };
         let Prepared { delta, hash, diagnostics, planned, .. } = p;
-        Ok(Committed {
-            number: landed.number,
-            code_rev: landed.code_rev,
-            data_rev: landed.data_rev,
-            delta,
-            hash,
-            diagnostics,
-            patches: planned.patches,
-            wrote: vec![],
-        })
+        Ok(Committed { number, code_rev, data_rev, delta, hash, diagnostics, patches: planned.patches, wrote: vec![] })
     }
 
     /// Commit `tx` (WRITE-5): checked as `check` does, then journaled, staged and renamed into

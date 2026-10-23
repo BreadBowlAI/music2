@@ -3,7 +3,7 @@
 //! assertion, and sent with the hash of that check; the holder commits it only while its delta has
 //! that hash. Undo and redo are the holder's.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use m2_song::tx::{Tx, TxPath};
@@ -14,9 +14,20 @@ use crate::tx::Refusal;
 
 /// The lock's holder, which takes a read-only session's commits (AGENT-1).
 pub trait Forward: Send {
-    /// Commit `tx` in the holder, only if its delta's hash is `seen`, taking in `assets` first: the
-    /// new files under `assets/` it names.
-    fn commit(&mut self, tx: &Tx, seen: Sha, assets: &[TxPath]) -> Result<Landed, Refusal>;
+    /// Commit `sent.tx` in the holder, only if its delta's hash is `sent.seen`.
+    fn commit(&mut self, sent: &Sent) -> Result<Landed, Refusal>;
+}
+
+/// A Tx checked here, as it is sent to the holder.
+pub struct Sent<'a> {
+    pub tx: &'a Tx,
+    /// The hash of the delta this session's check found.
+    pub seen: Sha,
+    /// The new files under `assets/` it names: the holder takes them in first.
+    pub assets: Vec<TxPath>,
+    /// What each file it touches holds once it landed, by this check (None: nothing): how a
+    /// sender that lost the holder on the way tells whether it landed.
+    pub after: BTreeMap<TxPath, Option<Sha>>,
 }
 
 /// Where a forwarded Tx landed: the holder's undo step, and its revision's numbers.
