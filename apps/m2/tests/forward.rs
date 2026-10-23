@@ -112,6 +112,10 @@ fn every_write_command_forwards() {
         let args: Vec<&str> = row.iter().map(String::as_str).chain(["--as", "Claude"]).collect();
         let o = a.m2_with(&args, &[("M2_PROBE", "1")]);
         assert!(o.status.success(), "{row:?}: {}", said(&o));
+        if row[0] == "tx" {
+            let v: Value = serde_json::from_slice(&o.stdout).expect("m2 tx answers in JSON alone");
+            assert!(v["committed"]["hash"].is_string(), "{v}");
+        }
         assert!(said(&o).contains("in the open app: one undo step"), "{row:?}: {}", said(&o));
         let top = a.top();
         assert!(step(&a) > before, "{row:?}: a new step: {top}");

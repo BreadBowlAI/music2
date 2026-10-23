@@ -1259,6 +1259,10 @@ fn tx(args: &[String]) -> Result<()> {
     match out {
         Ok(v) => {
             println!("{}", serde_json::to_string_pretty(&v)?);
+            // Its answer is JSON alone: that it is one undo step in the open app goes to stderr.
+            for line in app::after() {
+                eprintln!("{line}");
+            }
             Ok(())
         }
         Err(r) => {
