@@ -43,7 +43,9 @@ async function finished(dir, count) {
   return until(() => {
     if (!fs.existsSync(dir)) return false;
     const files = fs.readdirSync(dir);
-    const now = files.map((f) => `${f}:${fs.statSync(`${dir}/${f}`).size}`).join();
+    // A part file the export renames between the listing and the look at it is gone: the next look
+    // lists its new name.
+    const now = files.map((f) => `${f}:${fs.statSync(`${dir}/${f}`, { throwIfNoEntry: false })?.size ?? "gone"}`).join();
     const done = files.filter((f) => f.endsWith(".wav") && !f.startsWith(".")).length === count && !files.some((f) => f.endsWith(".part")) && now === last;
     last = now;
     return done;

@@ -148,7 +148,7 @@ const toasts = (page) => page.$$eval("[data-testid=toast]", (els) => els.map((e)
 
 {
   const sess = JSON.parse(fs.readFileSync(`${HOME}/.music2/session.json`, "utf8"));
-  const { page, close } = await pageOn({ url: sess.url, token: sess.page_token });
+  const { page, close } = await pageOn(sess);
   check(!!(await page.$("[data-testid=start]")), "the run's server shows the start screen");
   check(!(await shown(page)), "no Settings window at first");
   await key(page, "Meta+Comma");
