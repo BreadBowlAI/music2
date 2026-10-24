@@ -4,7 +4,7 @@
 
 ## What music2 is
 
-A desktop DAW where a song is a TypeScript program: a Rust server and engine, std's sound kernels in WebAssembly, a React UI in a Tauri shell, CLAP plugins in a separate host process. The app has no AI features; agents work on songs from the outside, through the files and the local API.
+A desktop DAW where a song is a TypeScript program: a Rust server and engine, std's sound kernels in WebAssembly, a React UI in a Tauri shell, CLAP plugins in a separate host process. The app has no AI features; agents work on songs from the outside, through the files and the local API (`m2 routes` lists it, `m2 call` sends one route).
 
 ## Read before you change anything
 
