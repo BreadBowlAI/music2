@@ -66,4 +66,5 @@ In [gaps.md](../../gaps.md):
 - The crates touched, `m2-server` and `m2`: every test passes (477 of the server's own, and every test of `m2`), and clippy on both, with every warning an error.
 - The routes' writes are the same 53 the old hand lists held, so a read-only window refuses what it refused before; the musician's routes hold every one the old 403 list held.
 - No UI text or page changed, so no screenshots were taken.
-- `ci/check.sh --pr`: below.
+- `ci/check.sh --pr` at `d95d892`: `music2 check --pr: PASS` (quick, clippy, rust, suites, renders, repo unchanged; 6 min), the first run, nothing failed or passed only on a retry.
+- After it, `api.rs` was made to name each file of routes once (`e435c65`). `ci/check.sh --pr` at `e435c65`: `music2 check --pr: PASS`, 1,866 Rust tests, 54 of 54 browser suites (1,966 checks), 6 min, the first run, nothing failed or passed only on a retry. Logs: `~/m2-runs/check-routes.tgz` and `~/m2-runs/check-routes-2.tgz` on the build server.
