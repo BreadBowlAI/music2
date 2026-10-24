@@ -513,6 +513,45 @@ fn the_tools_key_cant_end_the_musicians_drags_or_clear_their_unsaved_code() {
     assert!(graph.unsaved().is_empty());
 }
 
+// AGENT-3, AGENT-11 (track 4): `POST /api/graph/set` is a song change for agents too, but an
+// agent's set that names the musician's drag by its gesture never commits it: it is a plain value
+// edit, busy while the drag lives, and the drag goes on.
+#[test]
+fn an_agents_set_never_commits_the_musicians_drag() {
+    let (fixture, running, session) = serving();
+    let graph = &running.state.graph;
+    let (t, revision, id) = knob(graph, -0.25);
+    let owner = Owner { client: Some("page".into()), gesture: Some("drag-1".into()), ..Owner::default() };
+    let lease = graph.begin(t, revision, &id, owner).unwrap().lease;
+    let text = fixture.read("song.ts");
+    let body = json!({"session": session, "revision": revision, "id": id, "gesture": "drag-1", "value": 0.1});
+    let (status, said) = post(&running.url, "/api/graph/set", "t00ls", &[], &body);
+    assert_eq!((status, &said["busy"]["what"]), (423, &json!("knob")), "{said}");
+    assert!(graph.leases().iter().any(|l| l.lease == lease), "the drag goes on");
+    assert_eq!(fixture.read("song.ts"), text, "nothing was written");
+    // The page's set with that gesture is its drag's commit, as ever.
+    let (status, said) = post(&running.url, "/api/graph/set", "t0k", &[], &body);
+    assert_eq!(status, 200, "{said}");
+    assert!(graph.leases().is_empty(), "the musician's set ends their drag");
+}
+
+// AGENT-3 (track 4): an agent's change through a gesture route (here a track's label), which is
+// checked on arrival only against a take, and taken back at its settle because the musician has
+// unsaved code in its file, answers busy with `taken_back`: never as if it landed. Nothing is
+// written, and no step is left.
+#[test]
+fn an_agents_gesture_taken_back_at_its_settle_answers_busy() {
+    let (fixture, running, session) = serving();
+    let graph = &running.state.graph;
+    graph.set_unsaved(session, vec!["tracks/keys.ts".into()]).unwrap();
+    let text = fixture.read("tracks/keys.ts");
+    let body = json!({"session": session, "module": "keys", "label": "Piano"});
+    let (status, said) = post(&running.url, "/api/graph/label", "t00ls", &[("x-m2-as", "Claude")], &body);
+    assert_eq!((status, &said["busy"]["what"], &said["busy"]["taken_back"]), (423, &json!("code"), &json!(true)), "{said}");
+    assert_eq!(fixture.read("tracks/keys.ts"), text, "nothing was written");
+    assert_eq!(graph.state().unwrap()["undo_name"], Value::Null, "no step is left");
+}
+
 // AGENT-10 (the review's F11): keys are compared in constant time: every byte is looked at,
 // whatever the first difference.
 #[test]

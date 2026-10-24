@@ -1500,11 +1500,13 @@ impl Graph {
     }
 
     /// Commit a value to code: the gesture's lease on that control when it has one, else a plain
-    /// verified value edit (an agent's). Errors carry what went wrong (stale, conflict, …). While
-    /// the draft doesn't compile, a gesture's commit is pending: `{"pending": true, "errors": …}`
-    /// (C5).
+    /// verified value edit. An agent's is always the plain edit: agents hold no leases, so its set
+    /// never commits the musician's drag, whatever gesture it names (AGENT-3), and is busy while
+    /// one lives. Errors carry what went wrong (stale, conflict, …). While the draft doesn't
+    /// compile, a gesture's commit is pending: `{"pending": true, "errors": …}` (C5).
     pub fn set(&self, token: u64, revision: u64, id: &str, gesture: &str, value: f64, expect: Option<f64>) -> Result<Value> {
-        match self.lease_of(token, revision, id, gesture)? {
+        let lease = if crate::caller::now().is_agent() { None } else { self.lease_of(token, revision, id, gesture)? };
+        match lease {
             Some(lease) => match self.commit(lease, value, expect)? {
                 Committed::Written(v) => Ok(v),
                 Committed::Pending { errors } => Ok(json!({"pending": true, "errors": errors})),

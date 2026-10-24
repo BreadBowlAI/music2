@@ -187,10 +187,11 @@ impl Actor {
     }
 
     /// The job's answer, `r`: or busy, when its agent's change was taken back at its settle
-    /// (AGENT-3). What follows is the app's own work again.
+    /// (AGENT-3), read before what follows is the app's own work again.
     pub(super) fn answered<T>(&mut self, r: Result<T>) -> Result<T> {
+        let taken_back = self.taken_back.take();
         self.asked_by(crate::caller::Caller::Page);
-        match self.taken_back.take() {
+        match taken_back {
             Some(busy) => Err(busy.into()),
             None => r,
         }
