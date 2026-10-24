@@ -66,8 +66,9 @@ impl Actor {
 
 impl Graph {
     /// V (D2): undo step `step` of song `token`, or with `redo` redo it, as Undo and Redo do, only
-    /// while it is the newest (for redo, the newest undone); the pill then compares it, Before or
-    /// After. The answer is the undo's or the redo's.
+    /// while it is the newest (for redo, the newest undone), and only a step an agent or another
+    /// program made ([`steps::NotElsewhere`]); the pill then compares it, Before or After. The
+    /// answer is the undo's or the redo's, with `comparing`.
     pub fn compare(&self, token: u64, step: u64, redo: bool) -> Result<Value> {
         self.call(move |a| {
             let o = a.open.as_ref().context("no project is open")?;
@@ -75,8 +76,10 @@ impl Graph {
             let (undo, again) = o.session.step_names();
             let top = if redo { again } else { undo };
             let name = steps::said(&steps::named(top.as_ref(), &o.timeline)).unwrap_or_default();
-            let v = steps::stepped(a, token, redo, Some(step), true)?;
+            let mut v = steps::stepped(a, token, redo, Some(step), true)?;
             *a.inner.comparing.lock() = Some(Comparing { token, step, after: redo, name });
+            // What the pill says: the step compared, by the name Undo gives it.
+            v["comparing"] = a.inner.compared(token);
             Ok(v)
         })
     }

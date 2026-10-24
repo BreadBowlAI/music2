@@ -963,7 +963,7 @@ async fn stepped(s: Arc<AppState>, r: StepReq, redo: bool) -> Response {
 /// An undo's, a redo's or a skip's answer: 409 when its step isn't the newest (`newest`), or
 /// when undo can't take it back and it can be skipped (`stuck`), with words either way (AGENT-2).
 fn step_answer(result: Result<anyhow::Result<Value>, tokio::task::JoinError>) -> Response {
-    use crate::graph::steps::{NotNewest, NotTheirs, Stuck};
+    use crate::graph::steps::{NotElsewhere, NotNewest, NotTheirs, Stuck};
     match result {
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => {
@@ -971,6 +971,9 @@ fn step_answer(result: Result<anyhow::Result<Value>, tokio::task::JoinError>) ->
                 return (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "newest": n.newest}))).into_response();
             }
             if let Some(n) = e.downcast_ref::<NotTheirs>() {
+                return (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "newest": n.newest}))).into_response();
+            }
+            if let Some(n) = e.downcast_ref::<NotElsewhere>() {
                 return (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "newest": n.newest}))).into_response();
             }
             if let Some(s) = e.downcast_ref::<Stuck>() {

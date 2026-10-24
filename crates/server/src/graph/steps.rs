@@ -171,6 +171,10 @@ pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>, 
     {
         return Err(NotNewest { redo, newest: took }.into());
     }
+    // D2: V opens Compare only on a change an agent or another program made.
+    if compare && !redo && top.as_ref().is_some_and(|t| t.source == Source::Page) {
+        return Err(NotElsewhere { newest: took }.into());
+    }
     let files = top.as_ref().map(|t| t.files.clone()).unwrap_or_default();
     // AGENT-3: checked as its writes are, by the files it puts back.
     a.arrive(Some(&files))?;
@@ -333,6 +337,21 @@ impl std::fmt::Display for NotTheirs {
 }
 
 impl std::error::Error for NotTheirs {}
+
+/// V on a change that wasn't made elsewhere (D2): Compare is for the newest change an agent or
+/// another program made. Nothing changed; `newest` is that step as the state names it.
+#[derive(Debug)]
+pub struct NotElsewhere {
+    pub newest: Value,
+}
+
+impl std::fmt::Display for NotElsewhere {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "V compares the newest change an agent or another program made. The newest change is yours.")
+    }
+}
+
+impl std::error::Error for NotElsewhere {}
 
 #[cfg(test)]
 #[path = "steps_tests.rs"]

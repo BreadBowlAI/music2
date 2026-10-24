@@ -136,3 +136,21 @@ fn any_other_change_ends_compare() {
     let why = ended(&heard(&mut told, |e| ended(e).len() == 4));
     assert_eq!(why, ["changed", "changed", "page", "song"], "each end is heard, with why");
 }
+
+// D2: V compares the newest change an agent or another program made. On the musician's own newest
+// change it is refused, saying so and naming it, and nothing changes; with nothing to undo, too.
+#[test]
+fn v_compares_only_a_change_made_elsewhere() {
+    let (fixture, graph) = first_song();
+    let t = token(&graph);
+    let e = graph.compare(t, 0, false).unwrap_err();
+    assert!(e.to_string().contains("nothing to undo"), "{e}");
+    set(&graph, 0.3, 0.4);
+    let mine = graph.state().unwrap()["undo_name"]["step"].as_u64().unwrap();
+    let e = graph.compare(t, mine, false).unwrap_err();
+    let refused = e.downcast_ref::<super::super::steps::NotElsewhere>().expect("refused as the musician's own");
+    assert_eq!(refused.newest["step"], json!(mine));
+    assert!(e.to_string().contains("The newest change is yours"), "{e}");
+    assert!(fixture.read("song.ts").contains("pan: 0.4"), "nothing undone");
+    assert_eq!(graph.comparing(), Value::Null);
+}
