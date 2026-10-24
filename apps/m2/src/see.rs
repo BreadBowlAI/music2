@@ -87,24 +87,29 @@ pub fn watch(args: &[String]) -> Result<()> {
         .map_err(|e| anyhow!("couldn't follow the app: {e}"))?;
     // The socket is read on a thread of its own, always, so the app never waits for this one; what
     // waits for whoever reads this one is kept up to WAITING, and the rest counted.
-    let (tx, rx) = mpsc::sync_channel::<Option<Value>>(WAITING);
+    let (tx, rx) = mpsc::sync_channel::<Heard>(WAITING);
     let dropped = Arc::new(AtomicU64::new(0));
     let counted = dropped.clone();
     std::thread::spawn(move || {
-        while let Ok(Some(m)) = socket.message() {
+        let ended = loop {
+            let m = match socket.message() {
+                Ok(Some(m)) => m,
+                Ok(None) => break None,
+                Err(e) => break Some(e.to_string()),
+            };
             let Ok(v) = serde_json::from_str::<Value>(&m) else { continue };
             if v["t"] == "meters" && !meters {
                 continue;
             }
-            match tx.try_send(Some(v)) {
+            match tx.try_send(Heard::Event(v)) {
                 Ok(()) => {}
                 Err(mpsc::TrySendError::Full(_)) => {
                     counted.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(mpsc::TrySendError::Disconnected(_)) => return,
             }
-        }
-        let _ = tx.send(None);
+        };
+        let _ = tx.send(Heard::End(ended));
     });
     let mut out = Out(std::io::stdout().lock());
     let ours = json!(session);
@@ -134,7 +139,7 @@ pub fn watch(args: &[String]) -> Result<()> {
             }
         }
         match rx.recv_timeout(TRANSPORT_EVERY.saturating_sub(polled.elapsed())) {
-            Ok(Some(v)) => {
+            Ok(Heard::Event(v)) => {
                 let missed = dropped.swap(0, Ordering::Relaxed);
                 if missed > 0 && !out.say(&mine(json!({"t": "lagged", "missed": missed, "by": "m2"})))? {
                     return Ok(());
@@ -148,13 +153,25 @@ pub fn watch(args: &[String]) -> Result<()> {
                     return Ok(());
                 }
             }
-            Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Ok(Heard::End(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 out.say(&mine(json!({"t": "closed", "why": "app"})))?;
                 return Ok(());
+            }
+            // The socket said what it can't read (a message past its limit): it can't go on.
+            Ok(Heard::End(Some(e))) => {
+                out.say(&mine(json!({"t": "closed", "why": "error", "error": e})))?;
+                bail!("couldn't follow the app any more: {e}");
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
+}
+
+/// What `m2 watch`'s reader heard: an event, or the end of the socket (with why, when it was an
+/// error).
+enum Heard {
+    Event(Value),
+    End(Option<String>),
 }
 
 /// Where `m2 watch` writes its lines.

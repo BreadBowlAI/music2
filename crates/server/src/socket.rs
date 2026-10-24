@@ -1,7 +1,9 @@
 //! The app's WebSocket as a client reads it (RFC 6455): `m2 watch` follows the open song through it
 //! (AGENT-6), and the tests read what a socket hears. Small on purpose: text messages in, a pong
 //! for each ping, and a close; plain TCP to 127.0.0.1, as `m2` speaks HTTP to the app. No client
-//! crate: one would change `Cargo.lock`.
+//! crate: one would change `Cargo.lock`. A length it can't hold or past [`LARGEST`] is an error, not
+//! a panic or a wait; a message's parts are kept across a read that timed out. The answer's
+//! `Sec-WebSocket-Accept` isn't checked (gaps: a SHA-1 this crate doesn't have).
 
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
@@ -12,7 +14,13 @@ pub struct Socket {
     stream: TcpStream,
     /// Bytes read past what was taken: the next frame's start.
     buf: Vec<u8>,
+    /// The parts of a message read so far, kept when a read times out before its last.
+    message: Vec<u8>,
 }
+
+/// The largest message read, and so the largest frame: 16 MiB, far more than any event the app
+/// sends (a step names its files; a graph event its problems).
+pub const LARGEST: usize = 16 << 20;
 
 /// A frame's opcodes (RFC 6455, 5.2).
 const TEXT: u8 = 0x1;
@@ -48,13 +56,12 @@ impl Socket {
             return Err(io::Error::other(format!("the app didn't open a socket: {first}")));
         }
         buf.drain(..end);
-        Ok(Socket { stream, buf })
+        Ok(Socket { stream, buf, message: vec![] })
     }
 
     /// The next text message, or None once the socket closed (a close frame, or the connection
     /// ending: the app went away). A ping is answered with a pong on the way.
     pub fn message(&mut self) -> io::Result<Option<String>> {
-        let mut message: Vec<u8> = vec![];
         loop {
             let Some((fin, op, payload)) = self.frame()? else { return Ok(None) };
             match op {
@@ -65,9 +72,14 @@ impl Socket {
                 PING => self.send(0xA, &payload)?,
                 // A text message, or the rest of one (a continuation, 0x0): binary is never sent.
                 0x0 | TEXT => {
-                    message.extend_from_slice(&payload);
+                    if self.message.len() + payload.len() > LARGEST {
+                        self.message.clear();
+                        return Err(too_big());
+                    }
+                    self.message.extend_from_slice(&payload);
                     if fin {
-                        return Ok(Some(String::from_utf8_lossy(&message).into_owned()));
+                        let whole = std::mem::take(&mut self.message);
+                        return Ok(Some(String::from_utf8_lossy(&whole).into_owned()));
                     }
                 }
                 _ => {}
@@ -105,10 +117,14 @@ impl Socket {
                 }
                 let mut b = [0u8; 8];
                 b.copy_from_slice(&self.buf[2..10]);
-                (u64::from_be_bytes(b) as usize, 10)
+                // Past what a message may be, or what this machine holds: refused before any wait.
+                (usize::try_from(u64::from_be_bytes(b)).ok().filter(|n| *n <= LARGEST).ok_or_else(too_big)?, 10)
             }
             n => (n as usize, 2),
         };
+        if len > LARGEST {
+            return Err(too_big());
+        }
         let mask = if masked {
             if !self.fill(at + 4)? {
                 return Ok(None);
@@ -166,6 +182,11 @@ impl Socket {
     }
 }
 
+/// A frame or a message longer than [`LARGEST`]: the socket can't go on.
+fn too_big() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, format!("the app sent a message longer than {} MiB", LARGEST >> 20))
+}
+
 /// 16 bytes no one can guess ahead: the handshake's key and each frame's mask. From the standard
 /// library's random hash keys.
 fn random_bytes() -> [u8; 16] {
@@ -195,6 +216,87 @@ fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    /// A server on 127.0.0.1 that answers the handshake, then sends `frames`, each after its wait
+    /// (ms), and keeps the connection open a while: its url.
+    fn serving(frames: Vec<(u64, Vec<u8>)>) -> String {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = c.read(&mut buf);
+            c.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n").unwrap();
+            for (wait, bytes) in frames {
+                std::thread::sleep(Duration::from_millis(wait));
+                let _ = c.write_all(&bytes);
+            }
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        format!("http://{addr}")
+    }
+
+    /// An unmasked server frame: `fin`, `op` and `payload`.
+    fn frame(fin: bool, op: u8, payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![if fin { 0x80 | op } else { op }];
+        match payload.len() {
+            n if n < 126 => f.push(n as u8),
+            n => {
+                f.push(127);
+                f.extend_from_slice(&(n as u64).to_be_bytes());
+            }
+        }
+        f.extend_from_slice(payload);
+        f
+    }
+
+    // The review of ag-see, F7: a frame that says it is longer than anything is an error, never a
+    // panic, and never a wait for it.
+    #[test]
+    fn any_length_is_an_error_or_a_message_never_a_panic() {
+        for len in [u64::MAX, u64::MAX - 9, 1 << 63, (usize::MAX as u64) - 4] {
+            let mut head = vec![0x81, 127];
+            head.extend_from_slice(&len.to_be_bytes());
+            let mut s = Socket::open(&serving(vec![(0, head)]), "/api/ws").unwrap();
+            s.wait_at_most(Some(Duration::from_secs(1))).unwrap();
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.message()));
+            let r = r.unwrap_or_else(|_| panic!("a length of {len} panicked"));
+            assert_eq!(r.map_err(|e| e.kind()), Err(io::ErrorKind::InvalidData), "a length of {len}");
+        }
+    }
+
+    // F7: a frame or a message bigger than the limit is refused as soon as its header says so,
+    // without waiting for it or growing to hold it.
+    #[test]
+    fn a_message_bigger_than_the_limit_is_refused_at_once() {
+        let mut head = vec![0x81, 127];
+        head.extend_from_slice(&(1u64 << 30).to_be_bytes());
+        let mut s = Socket::open(&serving(vec![(0, head)]), "/api/ws").unwrap();
+        s.wait_at_most(Some(Duration::from_secs(2))).unwrap();
+        let t = Instant::now();
+        assert_eq!(s.message().map_err(|e| e.kind()), Err(io::ErrorKind::InvalidData), "a 1 GiB frame");
+        assert!(t.elapsed() < Duration::from_secs(1), "at once: {:?}", t.elapsed());
+        // Fragments that add up to more than it.
+        let part = vec![b'x'; LARGEST / 4 + 1];
+        let frames = (0..5).map(|i| (0, frame(false, if i == 0 { TEXT } else { 0 }, &part))).collect();
+        let mut s = Socket::open(&serving(frames), "/api/ws").unwrap();
+        s.wait_at_most(Some(Duration::from_secs(5))).unwrap();
+        assert_eq!(s.message().map_err(|e| e.kind()), Err(io::ErrorKind::InvalidData), "fragments past the limit");
+    }
+
+    // F7: a message in two fragments with a wait between them longer than the read timeout is read
+    // whole once its second part comes: the first part is kept, not lost.
+    #[test]
+    fn a_message_split_across_a_wait_is_kept_whole() {
+        let url = serving(vec![(0, frame(false, TEXT, b"hello ")), (600, frame(true, 0, b"world"))]);
+        let mut s = Socket::open(&url, "/api/ws").unwrap();
+        s.wait_at_most(Some(Duration::from_millis(200))).unwrap();
+        let first = s.message();
+        assert!(first.as_ref().is_err_and(|e| matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)), "{first:?}");
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(s.message().unwrap(), Some("hello world".to_string()));
+    }
 
     #[test]
     fn base64_is_rfc_4648s() {
