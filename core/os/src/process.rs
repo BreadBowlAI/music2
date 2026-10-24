@@ -79,6 +79,23 @@ pub fn take_stdout() -> std::io::Result<std::fs::File> {
     os::take_stdout()
 }
 
+/// This whole process at background priority, beside playback (AGENT-7: an agent's listen, and
+/// its plugin host): every thread it has now, and so every thread they start. macOS: the process's
+/// Darwin background state (`setpriority(PRIO_DARWIN_PROCESS, 0, PRIO_DARWIN_BG)`): its threads
+/// run on the efficiency cores, and its disk reads are throttled. Linux: a nice of 10 on each of
+/// its threads (`/proc/self/task`), or the one a thread has when that is higher; a new thread
+/// takes its creator's. Never fatal: the caller says what it got.
+pub fn background() -> std::io::Result<()> {
+    os::background_process()
+}
+
+/// Whether process `pid` runs at background priority, as [`background`] sets it: on Linux, every
+/// thread of it has a nice of 10 or more. None when the OS doesn't say (it ended, or it isn't
+/// this user's).
+pub fn in_background(pid: u32) -> Option<bool> {
+    os::in_background(pid)
+}
+
 /// Whether process `pid` lives: `m2` waits for the app while it does (AGENT-1). Windows
 /// (designed): `OpenProcess` and `GetExitCodeProcess`.
 pub fn alive(pid: u32) -> bool {

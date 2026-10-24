@@ -52,6 +52,8 @@ pub const LIMIT: Duration = Duration::from_secs(30);
 pub const FLAG: &str = "--m2-plugin-host";
 /// Its second flag: install the probe there too (tests).
 pub(crate) const PROBE_FLAG: &str = "--m2-probe";
+/// Another: run at background priority (AGENT-7).
+pub(crate) const BACKGROUND_FLAG: &str = "--m2-background";
 
 /// Plugins in a host process of their own (HOST-3). Cheap to clone: one set of instances.
 #[derive(Clone)]
@@ -76,6 +78,8 @@ struct Shared {
     watchdog: Once,
     /// [`LIMIT`] in ns, or what [`Remote::set_limit`] set.
     limit: AtomicU64,
+    /// Its processes run at background priority ([`Remote::background`]).
+    background: AtomicBool,
 }
 
 /// An instance, as this side knows it. The audio thread reads only its atomics.
@@ -164,6 +168,7 @@ impl Remote {
                 procs: AtomicU64::new(0),
                 watchdog: Once::new(),
                 limit: AtomicU64::new(LIMIT.as_nanos() as u64),
+                background: AtomicBool::new(false),
             }),
         }
     }
@@ -198,6 +203,13 @@ impl Remote {
         self.s.limit.store(limit.as_nanos() as u64, Ordering::Relaxed);
     }
 
+    /// Host processes it starts from now on run at background priority, every thread of theirs
+    /// (`m2_os::process::background`): an agent's listen's, whose plugins never play beside the
+    /// musician (AGENT-7). Before its first plugin, so that its first process does.
+    pub fn background(&self) {
+        self.s.background.store(true, Ordering::Relaxed);
+    }
+
     /// End the host process: quit. Its instances aren't said to have crashed; their calls fail.
     pub fn shutdown(&self) {
         if let Some(p) = locked(&self.s.current).take() {
@@ -227,6 +239,9 @@ impl Remote {
         cmd.args(&self.s.args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
         if crate::probe::installed() {
             cmd.arg(PROBE_FLAG);
+        }
+        if self.s.background.load(Ordering::Relaxed) {
+            cmd.arg(BACKGROUND_FLAG);
         }
         let mut child = cmd.spawn().with_context(|| format!("starting the plugin host {}", self.s.program.display()))?;
         let (stdin, stdout) = (child.stdin.take().context("its input")?, child.stdout.take().context("its output")?);
@@ -653,5 +668,29 @@ impl PluginHost for Remote {
 
     fn counts(&self) -> (u64, u64) {
         (self.s.created.load(Ordering::Acquire), self.s.destroyed.load(Ordering::Acquire))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // AGENT-7: a host process started for a caller that asked runs at background priority, every
+    // thread of it; one started for any other caller runs as that caller does.
+    #[test]
+    fn a_host_asked_to_runs_at_background_priority() {
+        let (normal, background) = (Remote::for_tests(), Remote::for_tests());
+        background.background();
+        let pid = |r: &Remote| {
+            let p = r.running().expect("the host process starts");
+            locked(&p.child).id()
+        };
+        let (n, b) = (pid(&normal), pid(&background));
+        assert_eq!(m2_os::process::in_background(b), Some(true), "asked");
+        if m2_os::process::in_background(std::process::id()) == Some(false) {
+            assert_eq!(m2_os::process::in_background(n), Some(false), "not asked");
+        }
+        normal.shutdown();
+        background.shutdown();
     }
 }

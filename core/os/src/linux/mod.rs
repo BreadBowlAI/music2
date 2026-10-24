@@ -147,6 +147,46 @@ pub(crate) fn background() -> io::Result<()> {
     }
 }
 
+/// A nice of 10 on each thread of this process, or the one it has when that is higher. A thread
+/// that ends meanwhile is passed over.
+pub(crate) fn background_process() -> io::Result<()> {
+    for e in std::fs::read_dir("/proc/self/task")? {
+        let Some(tid) = e?.file_name().to_str().and_then(|n| n.parse::<libc::id_t>().ok()) else { continue };
+        // SAFETY: plain system calls on a thread of this process. getpriority may return -1 as a
+        // nice, so errno is cleared first and read after.
+        unsafe {
+            *libc::__errno_location() = 0;
+            let nice = libc::getpriority(libc::PRIO_PROCESS, tid);
+            if nice == -1 && *libc::__errno_location() != 0 {
+                continue;
+            }
+            if nice < 10 && libc::setpriority(libc::PRIO_PROCESS, tid, 10) != 0 {
+                let e = io::Error::last_os_error();
+                if e.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every thread of process `pid` has a nice of 10 or more: field 19 of each
+/// `/proc/<pid>/task/<tid>/stat`.
+pub(crate) fn in_background(pid: u32) -> Option<bool> {
+    let mut seen = false;
+    for e in std::fs::read_dir(format!("/proc/{pid}/task")).ok()?.flatten() {
+        // A thread that ended meanwhile is passed over.
+        let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else { continue };
+        let nice: i64 = stat.get(stat.rfind(')')? + 2..)?.split(' ').nth(16)?.parse().ok()?;
+        if nice < 10 {
+            return Some(false);
+        }
+        seen = true;
+    }
+    seen.then_some(true)
+}
+
 /// The second field of each thread's `/proc/self/task/<tid>/schedstat`: nanoseconds it waited on
 /// a run queue.
 pub(crate) fn waited() -> Option<std::time::Duration> {

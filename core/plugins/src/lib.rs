@@ -250,6 +250,14 @@ pub fn host_process() -> Option<u32> {
     REMOTE.get().and_then(Remote::process_id)
 }
 
+/// The program's host processes run at background priority from now on ([`Remote::background`]):
+/// `m2 listen`'s (AGENT-7). Nothing in a program that installed none.
+pub fn background_host() {
+    if let Some(r) = REMOTE.get() {
+        r.background();
+    }
+}
+
 /// The host process's instances alive (0 in a program that installed none).
 pub(crate) fn remote_live() -> u64 {
     REMOTE.get().map_or(0, |r| r.live())

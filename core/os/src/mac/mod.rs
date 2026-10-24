@@ -167,6 +167,25 @@ pub(crate) fn background() -> io::Result<()> {
     }
 }
 
+/// The process's Darwin background state: every thread on the efficiency cores, disk reads
+/// throttled.
+pub(crate) fn background_process() -> io::Result<()> {
+    // SAFETY: sets this process's own background state.
+    check(unsafe { libc::setpriority(libc::PRIO_DARWIN_PROCESS, 0, libc::PRIO_DARWIN_BG) })
+}
+
+/// Process `pid`'s Darwin background state, as `getpriority(PRIO_DARWIN_PROCESS)` says it: not 0
+/// when it is in the background.
+pub(crate) fn in_background(pid: u32) -> Option<bool> {
+    // SAFETY: reads a process's background state; errno is cleared first and read after, as -1 is
+    // no error by itself.
+    unsafe {
+        *libc::__error() = 0;
+        let r = libc::getpriority(libc::PRIO_DARWIN_PROCESS, pid as libc::id_t);
+        (r != -1 || *libc::__error() == 0).then_some(r != 0)
+    }
+}
+
 /// P-cores and E-cores from `hw.perflevel0` and `hw.perflevel1`, and the P-cores sharing one L2;
 /// a Mac with one kind of core has no perflevels: `hw.physicalcpu`, all in one cache.
 pub(crate) fn cores() -> crate::process::Cores {

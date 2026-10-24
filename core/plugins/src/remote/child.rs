@@ -69,6 +69,12 @@ fn reply(id: u64, r: Result<impl FnOnce(&mut W)>) {
 pub fn serve() -> ! {
     // A crash is seen by the app when this process has ended: no core dump holds it up.
     m2_os::process::no_core_dump();
+    // First, so every thread it starts takes it (AGENT-7).
+    if std::env::args().any(|a| a == super::BACKGROUND_FLAG)
+        && let Err(e) = m2_os::process::background()
+    {
+        eprintln!("music2's plugin host: couldn't lower its priority ({e})");
+    }
     if std::env::args().any(|a| a == super::PROBE_FLAG) {
         crate::probe::install();
     }
