@@ -24,9 +24,11 @@ mod routes_plugins;
 mod routes_presets;
 mod routes_project;
 mod routes_record;
+mod routes_see;
 mod routes_settings;
 mod routes_view;
 pub mod settings;
+pub mod socket;
 pub mod stems;
 
 use std::net::SocketAddr;
@@ -47,6 +49,22 @@ pub const TX_BODY: usize = 144 << 20;
 /// Startup can't produce more than a few; the newest are kept.
 const MAX_UNHEARD: usize = 8;
 
+/// The toasts no page has heard, and how many pages' sockets listen now.
+#[derive(Default)]
+struct Unheard {
+    pages: usize,
+    kept: Vec<String>,
+}
+
+/// A page's socket, while it listens: a toast sent meanwhile is its to hear, so none is kept.
+pub(crate) struct PageListens(Arc<Mutex<Unheard>>);
+
+impl Drop for PageListens {
+    fn drop(&mut self) {
+        self.0.lock().pages -= 1;
+    }
+}
+
 pub struct AppState {
     /// One-shot events for every connected client: toasts, and `graph` when the open
     /// project changed.
@@ -62,9 +80,10 @@ pub struct AppState {
     pub graph: graph::Graph,
     /// Export Audio, which renders the song on a thread of its own.
     pub exports: export::Exports,
-    /// Toasts sent while no window was connected, such as why the folder given at launch
-    /// didn't open. The next client to connect gets them.
-    unheard: Mutex<Vec<String>>,
+    /// Toasts sent while no page's socket was connected, such as why the folder given at launch
+    /// didn't open. The next page to connect gets them: an agent's socket (`m2 watch`) hears them
+    /// live but never takes one (AGENT-6).
+    unheard: Arc<Mutex<Unheard>>,
     /// The latest meters message (8b.8), for every window: only the latest is kept, so a window
     /// that falls behind skips to it (empty until the first).
     pub meters: watch::Sender<String>,
@@ -93,7 +112,7 @@ impl AppState {
             page_token: String::new(),
             graph,
             exports: Default::default(),
-            unheard: Mutex::default(),
+            unheard: Arc::default(),
             meters: watch::channel(String::new()).0,
             recent: OnceLock::new(),
             settings: OnceLock::new(),
@@ -172,21 +191,28 @@ impl AppState {
         self.announce(json!({"t": "toast", "text": msg.into()}).to_string());
     }
 
-    /// Send an event every client should hear, even one that connects later.
+    /// Send an event every window should hear, even one that connects later: kept until a page's
+    /// socket hears it. An agent's socket hears it live, but it is kept for the page all the same.
     fn announce(&self, ev: String) {
-        // Held across the send so a client subscribing right now can't miss it.
+        // Held across the send so a page subscribing right now can't miss it.
         let mut unheard = self.unheard.lock();
-        if self.events.send(ev.clone()).is_err() {
-            unheard.push(ev);
-            let extra = unheard.len().saturating_sub(MAX_UNHEARD);
-            unheard.drain(..extra);
+        let _ = self.events.send(ev.clone());
+        if unheard.pages == 0 {
+            unheard.kept.push(ev);
+            let extra = unheard.kept.len().saturating_sub(MAX_UNHEARD);
+            unheard.kept.drain(..extra);
         }
     }
 
-    /// Listen for events, starting with the toasts no client has heard yet.
-    fn subscribe(&self) -> (Vec<String>, broadcast::Receiver<String>) {
+    /// Listen for events: a page's socket (`page`) starts with the toasts no page has heard yet,
+    /// and while its [`PageListens`] lives none is kept; an agent's starts with none (AGENT-6).
+    fn subscribe(&self, page: bool) -> (Vec<String>, broadcast::Receiver<String>, Option<PageListens>) {
         let mut unheard = self.unheard.lock();
-        (std::mem::take(&mut *unheard), self.events.subscribe())
+        if !page {
+            return (vec![], self.events.subscribe(), None);
+        }
+        unheard.pages += 1;
+        (std::mem::take(&mut unheard.kept), self.events.subscribe(), Some(PageListens(self.unheard.clone())))
     }
 
     /// Tell every client to fetch the project again: it was opened, closed or edited. The
@@ -506,16 +532,39 @@ mod tests {
     fn a_toast_no_client_heard_goes_to_the_next_one() {
         let s = state();
         s.toast("Couldn't open my-song");
-        let (unheard, mut events) = s.subscribe();
+        let (unheard, mut events, _page) = s.subscribe(true);
         assert_eq!(unheard.len(), 1);
         assert!(unheard[0].contains("Couldn't open my-song"));
         // Heard once is enough: the next client doesn't get it again.
-        assert!(s.subscribe().0.is_empty());
+        assert!(s.subscribe(true).0.is_empty());
         // While a client listens, toasts go out live and aren't kept.
         s.toast("live");
         assert!(events.try_recv().unwrap().contains("live"));
         drop(events);
-        assert!(s.subscribe().0.is_empty());
+        assert!(s.subscribe(true).0.is_empty());
+    }
+
+    /// AGENT-6: `m2 watch`'s socket (the tools key) hears a toast live but never takes it from the
+    /// page: one sent while no page listens waits for the page's socket.
+    #[test]
+    fn a_toast_a_tools_socket_heard_still_waits_for_the_page() {
+        let s = state();
+        let (unheard, mut tools, _) = s.subscribe(false);
+        assert!(unheard.is_empty());
+        s.toast("Couldn't open my-song");
+        assert!(tools.try_recv().unwrap().contains("Couldn't open my-song"), "the agent hears it live");
+        let (unheard, _, page) = s.subscribe(true);
+        assert_eq!(unheard.len(), 1, "it still waits for the page");
+        assert!(unheard[0].contains("Couldn't open my-song"));
+        // While the page listens, nothing is kept; once it went, a toast waits for the next page,
+        // and a tools socket that connects meanwhile takes none.
+        s.toast("live");
+        drop(page);
+        s.toast("again");
+        assert!(s.subscribe(false).0.is_empty(), "a tools socket takes no kept toast");
+        let (unheard, _, _page) = s.subscribe(true);
+        assert_eq!(unheard.len(), 1, "{unheard:?}");
+        assert!(unheard[0].contains("again"));
     }
 
     /// Every change is announced with what needs attention in the revision it leaves.
@@ -530,7 +579,7 @@ mod tests {
         std::fs::write(dir.join("song.ts"), song).unwrap();
         std::fs::write(dir.join("data/kick/old.json"), r#"{"clips": []}"#).unwrap();
         let s = AppState::new(String::new(), graph::Graph::silent());
-        let (_, mut events) = s.subscribe();
+        let (_, mut events, _page) = s.subscribe(true);
         s.graph_changed();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&events.try_recv().unwrap()).unwrap(), json!({"t": "graph"}));
         s.graph.open(&dir).unwrap();
@@ -552,7 +601,7 @@ mod tests {
         for i in 0..20 {
             s.toast(format!("toast {i}"));
         }
-        let (unheard, _) = s.subscribe();
+        let (unheard, _, _) = s.subscribe(true);
         assert_eq!(unheard.len(), MAX_UNHEARD);
         assert!(unheard.last().unwrap().contains("toast 19"));
     }

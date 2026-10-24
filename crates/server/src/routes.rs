@@ -110,6 +110,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .merge(crate::routes_exchange::router(state.clone()))
         .merge(crate::routes_plugins::router(state.clone()))
         .merge(crate::routes_presets::router(state.clone()))
+        .merge(crate::routes_see::router(state.clone()))
         .route("/api/project/templates", get(project_templates))
         .route("/api/project/new", post(project_new))
         // An unknown API path is a clear error, not the UI's index.html.
@@ -134,8 +135,8 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
     let caller = if carries(&s.page_token) {
         crate::caller::Caller::Page
     } else if carries(&s.token) {
-        if MUSICIANS.contains(&req.uri().path()) {
-            let why = "agents can't do this: it acts on what the musician holds in the app (a drag, unsaved code, undo, a take)";
+        if MUSICIANS.contains(&req.uri().path()) || (req.method() == axum::http::Method::POST && req.uri().path() == "/api/focus") {
+            let why = "agents can't do this: it acts on what the musician holds in the app (a drag, unsaved code, undo, a take, Compare, their focus)";
             return (StatusCode::FORBIDDEN, Json(json!({"error": why}))).into_response();
         }
         let said = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
@@ -158,10 +159,10 @@ pub(crate) fn same_key(given: &str, key: &str) -> bool {
 }
 
 /// The routes that act on what the musician holds (AGENT-3): their drags after the begin, the code
-/// editor's list of unsaved files, undo's skip, and a take's stop and cancel. The tools key can't
-/// use them: an agent's change is one edit, refused while the musician holds what it touches, and
+/// editor's list of unsaved files, undo's skip, a take's stop and cancel, and closing Compare; and
+/// what the musician looks at, `POST /api/focus` (AGENT-6). The tools key can't use them: an agent's change is one edit, refused while the musician holds what it touches, and
 /// it never ends what they hold.
-const MUSICIANS: [&str; 17] = [
+const MUSICIANS: [&str; 18] = [
     "/api/graph/lease/update",
     "/api/graph/lease/keepalive",
     "/api/graph/lease/commit",
@@ -179,6 +180,7 @@ const MUSICIANS: [&str; 17] = [
     "/api/graph/undo/skip",
     "/api/graph/record/stop",
     "/api/graph/record/cancel",
+    "/api/graph/compare",
 ];
 
 /// The routes that write the open project, or begin a gesture whose commit would.
@@ -240,21 +242,30 @@ struct WsQuery {
 }
 
 async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) -> Response {
+    // The page's socket, or an agent's (`m2 watch`, AGENT-6).
+    let page = !crate::caller::now().is_agent();
     upgrade.on_upgrade(move |socket| async move {
-        ws_loop(s.clone(), socket, q.client.clone()).await;
+        ws_loop(s.clone(), socket, q.client.clone(), page).await;
         if let Some(client) = q.client {
             // Off the async threads: putting values back may wait for room in the player's queue.
             let state = s.clone();
             let _ = crate::caller::blocking(move || state.graph.client_gone(&client)).await;
             s.graph_changed();
         }
+        // The page went away: the Compare pill closes with it (D2).
+        if page {
+            let state = s.clone();
+            let _ = crate::caller::blocking(move || state.graph.page_gone()).await;
+        }
     })
 }
 
 /// Forward every event (toasts, `graph`) and the latest meters to one client until it goes away,
 /// and take what it sends: audition, whose answers go to this socket only (`routes_8b::ws_text`).
-async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>) {
-    let (unheard, mut events) = state.subscribe();
+/// A socket that falls behind is told how many events it missed (AGENT-6): `{"t": "lagged",
+/// "missed": n}`, then hears on from the oldest still kept.
+async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>, page: bool) {
+    let (unheard, mut events, _page) = state.subscribe(page);
     let mut meters = state.meters.subscribe();
     for text in unheard {
         if socket.send(Message::Text(text.into())).await.is_err() {
@@ -270,9 +281,12 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<Str
                 }
             }
             ev = events.recv() => {
-                if let Ok(text) = ev
-                    && socket.send(Message::Text(text.into())).await.is_err()
-                {
+                let text = match ev {
+                    Ok(text) => text,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => json!({"t": "lagged", "missed": missed}).to_string(),
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                if socket.send(Message::Text(text.into())).await.is_err() {
                     break;
                 }
             }
@@ -905,6 +919,10 @@ struct StepReq {
     /// An agent's name (AGENT-4): its undo takes back only its own step. Only with the tools key.
     #[serde(default, rename = "as")]
     by: Option<String>,
+    /// V, the Compare key (D2): the undo opens the pill on Before, the redo flips it to After.
+    /// Only with the page key, and only naming its step.
+    #[serde(default)]
+    compare: bool,
 }
 
 async fn graph_undo(State(s): S, Json(r): Json<StepReq>) -> Response {
@@ -918,8 +936,19 @@ async fn graph_redo(State(s): S, Json(r): Json<StepReq>) -> Response {
 async fn stepped(s: Arc<AppState>, r: StepReq, redo: bool) -> Response {
     let state = s.clone();
     let caller = crate::caller::now().saying(r.by.as_deref(), None);
+    if r.compare {
+        // Compare is the musician's (AGENT-3).
+        if caller.is_agent() {
+            let why = "agents can't do this: Compare is the musician's (V in the app)";
+            return (StatusCode::FORBIDDEN, Json(json!({"error": why}))).into_response();
+        }
+        if r.step.is_none() {
+            return err("Compare names the step it flips: `step`").into_response();
+        }
+    }
     let result = crate::caller::blocking(move || {
         crate::caller::as_caller(caller, || match (r.step, redo) {
+            (Some(step), _) if r.compare => state.graph.compare(r.session, step, redo),
             (Some(step), false) => state.graph.undo_step(r.session, step),
             (Some(step), true) => state.graph.redo_step(r.session, step),
             (None, false) => state.graph.undo(r.session),

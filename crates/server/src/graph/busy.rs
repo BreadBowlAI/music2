@@ -13,7 +13,7 @@ use super::{ControlPlane, Inner};
 /// An agent's write refused because the musician holds what it touches (AGENT-3): status 423.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Busy {
-    /// `knob`, `lane`, `tempo`, `plugin`, `code` or `take`.
+    /// `knob`, `lane`, `tempo`, `plugin`, `code`, `take` or `compare`.
     pub what: &'static str,
     /// The file held, if one is (a take holds everything).
     pub file: Option<String>,
@@ -68,11 +68,13 @@ pub(super) enum Held {
     /// A plugin window's changes not saved yet, by its instance.
     Plugin(m2_plugins::Handle),
     Code,
+    /// The Compare pill (D2): it holds everything, so no agent's step clears redo.
+    Compare,
 }
 
 /// What the musician holds in project `o` now (AGENT-3): their knob, clip and tempo drags, a
-/// plugin window's changes not yet saved, the code editor's unsaved text, and a take. Read under
-/// the control plane's lock, `cp`, where drags, unsaved text and takes begin.
+/// plugin window's changes not yet saved, the code editor's unsaved text, a take, and the Compare
+/// pill. Read under the control plane's lock, `cp`, where drags, unsaved text and takes begin.
 pub(super) fn held(cp: &ControlPlane, o: &Open, inner: &Inner) -> Vec<Hold> {
     let token = o.token;
     let view = cp.open.as_ref().filter(|p| p.engine.token == token).map(|p| &p.shown.state["view"]["modules"]);
@@ -112,6 +114,10 @@ pub(super) fn held(cp: &ControlPlane, o: &Open, inner: &Inner) -> Vec<Hold> {
             out.push(Hold { of: Held::Plugin(h), what: "plugin", file: Some(file), words: format!("you're changing {who} in its window") });
         }
     }
+    // Compare holds everything: an agent's step would clear redo and take After away (D2).
+    if let Some(c) = inner.comparing.lock().as_ref().filter(|c| c.token == token) {
+        out.push(Hold { of: Held::Compare, what: "compare", file: None, words: format!("you're comparing {}", c.name) });
+    }
     let unsaved = inner.unsaved.lock();
     if unsaved.0 == token {
         for f in &unsaved.1 {
@@ -140,4 +146,4 @@ pub(super) fn check(holds: &[Hold], files: Option<&[String]>, ends: &[Held]) -> 
 
 #[cfg(test)]
 #[path = "busy_tests.rs"]
-mod tests;
+pub(in crate::graph) mod tests;

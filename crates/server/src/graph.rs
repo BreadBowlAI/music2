@@ -40,9 +40,11 @@ mod actor;
 pub mod audition;
 pub mod busy;
 pub mod clips;
+mod compare;
 mod events;
 pub(crate) mod exchange;
 mod faults;
+pub mod focus;
 mod fx;
 mod import;
 mod instrument;
@@ -332,7 +334,7 @@ struct Published {
 /// What `begin`, `update`, `cancel` and every read use, behind one short lock. The actor holds it
 /// only to publish a change: never over a compile, a build or a wait for the main thread. Lock
 /// order: `control`, then `player`, then the leaf locks (`timing`, `last_edit`, `unsaved`,
-/// `busy`, `notices`, `saving`).
+/// `busy`, `notices`, `saving`, `attention`, `comparing`).
 #[derive(Default)]
 struct ControlPlane {
     open: Option<Published>,
@@ -422,9 +424,14 @@ struct Inner {
     busy: Mutex<Busy>,
     /// What the actor ended or saved on its own (a pending commit), for the watcher to toast.
     notices: Mutex<Vec<String>>,
-    /// Where the actor sends each `step` event (AGENT-5): every window's events, once the app's
-    /// state is made around this Graph ([`Graph::tell_steps`]).
+    /// Where the actor sends each `step` event (AGENT-5), and the undo, redo, compare, focus and
+    /// point events (AGENT-6): every window's events, once the app's state is made around this
+    /// Graph ([`Graph::tell_steps`]).
     steps_to: Mutex<Option<tokio::sync::broadcast::Sender<String>>>,
+    /// What the musician looks at and what an agent points at (AGENT-6): memory only. A leaf lock.
+    attention: Mutex<focus::Attention>,
+    /// What the Compare pill compares, while it is open (D2, AGENT-3). A leaf lock.
+    comparing: Mutex<Option<compare::Comparing>>,
     /// The app's one fault ring (RENDER-25): every live plan reports into it, and so does the
     /// actor. The notices thread reads it ([`Graph::hear_faults`]).
     faults: Arc<m2_runtime::fault::Faults>,
@@ -600,6 +607,8 @@ impl Inner {
             busy: Mutex::default(),
             notices: Mutex::default(),
             steps_to: Mutex::default(),
+            attention: Mutex::default(),
+            comparing: Mutex::default(),
             faults,
             told: Mutex::default(),
             disk: Mutex::default(),
@@ -772,7 +781,18 @@ impl Inner {
         state["midi"] = self.midi_state();
         state["record"] = self.record_state();
         state["plugins"] = self.plugins.lock().clone();
+        // Attention (AGENT-6): a pointer an agent shows, and what Compare compares, for a window
+        // that loads later.
+        state["point"] = self.pointer(token);
+        state["comparing"] = self.compared(token);
         Some(state)
+    }
+
+    /// Tell every window and agent `event` now (AGENT-6): what needs no order with the steps.
+    fn tell(&self, event: Value) {
+        if let Some(to) = self.steps_to.lock().clone() {
+            let _ = to.send(event.to_string());
+        }
     }
 
     /// End every lease, as the project they belong to closes. A pending commit's release was
@@ -928,12 +948,17 @@ impl Graph {
         let (tx, rx) = mpsc::sync_channel(1);
         self.jobs
             .send(Box::new(move |a: &mut Actor| {
+                let before = a.before();
                 a.asked_by(caller);
                 let r = f(a);
                 let r = a.answered(r);
                 // A change may let a pending commit be written (C5): before the reply, so the
                 // caller sees it.
                 a.retry_pending();
+                // Its step told, and whether Compare stays open decided, before the reply too: what
+                // the caller reads next, and the next job, see it (AGENT-5, D2).
+                a.told_step(before);
+                a.kept_compare();
                 let _ = tx.send(r);
             }))
             .map_err(|_| anyhow!("the session has stopped"))?;

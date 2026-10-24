@@ -16,13 +16,13 @@ use crate::caller::{Caller, as_caller};
 use crate::graph::{Graph, Inner, Owner};
 
 /// `f` as the agent Claude would send it, saying why.
-fn agent<T>(f: impl FnOnce() -> T) -> T {
+pub(in crate::graph) fn agent<T>(f: impl FnOnce() -> T) -> T {
     as_caller(Caller::agent(Some("Claude"), Some("brighter hats")), f)
 }
 
 /// A `Values` Tx writing `new` over the literal `old` that `context` holds in `file`, based on the
 /// file as it is now.
-fn values_tx(f: &super::super::tests::Fixture, file: &str, context: &str, old: &str, new: &str) -> Value {
+pub(in crate::graph) fn values_tx(f: &super::super::tests::Fixture, file: &str, context: &str, old: &str, new: &str) -> Value {
     let text = f.read(file);
     let at = text.find(context).unwrap_or_else(|| panic!("no `{context}`")) + context.find(old).unwrap();
     let (start, end) = (at as u32, (at + old.len()) as u32);
@@ -38,7 +38,7 @@ fn values_tx(f: &super::super::tests::Fixture, file: &str, context: &str, old: &
 }
 
 /// A `Clips` Tx putting one note clip on the bass's notes lane, confined to it.
-fn notes_tx(f: &super::super::tests::Fixture, id: &str) -> Value {
+pub(in crate::graph) fn notes_tx(f: &super::super::tests::Fixture, id: &str) -> Value {
     let lane = m2_song::LaneAddr::new("bass", "notes").unwrap();
     let put = json!({"id": id, "start": 0, "length": 4, "notes": [{"pitch": "E1", "start": 0, "length": 0.25}]});
     let mut tx = Tx::new(

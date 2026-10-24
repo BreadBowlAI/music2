@@ -91,11 +91,12 @@ pub(crate) struct Actor {
     pub(super) at_landing: Option<Hook>,
 }
 
-/// A `step` event to send once what its step changed is worked out (AGENT-5).
+/// An event to send in order with the steps: a `step` event once what its step changed is worked
+/// out from the revisions before and after it (AGENT-5), or one with nothing to work out (`undo`,
+/// `redo`, `compare`: AGENT-6).
 pub(super) struct Told {
     event: Value,
-    before: Arc<Revision>,
-    after: Arc<Revision>,
+    changed: Option<(Arc<Revision>, Arc<Revision>)>,
     to: tokio::sync::broadcast::Sender<String>,
 }
 
@@ -105,9 +106,11 @@ pub(super) struct Told {
 fn changes() -> mpsc::Sender<Told> {
     let (tell, told) = mpsc::channel::<Told>();
     let work = move || {
-        for Told { mut event, before, after, to } in told {
-            let c = m2_editor::changed::changed(&before, &after);
-            (event["tracks"], event["lanes"], event["knobs"]) = (json!(c.tracks), json!(c.lanes), json!(c.knobs));
+        for Told { mut event, changed, to } in told {
+            if let Some((before, after)) = changed {
+                let c = m2_editor::changed::changed(&before, &after);
+                (event["tracks"], event["lanes"], event["knobs"]) = (json!(c.tracks), json!(c.lanes), json!(c.knobs));
+            }
             let _ = to.send(event.to_string());
         }
     };
@@ -144,10 +147,11 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         actor.inner.busy.lock().since = start.max(1);
         // What a step changed is read from the revision before it (AGENT-5): a plugin window's
         // commit or autosave is told apart from the job's.
-        let before = actor.open.as_ref().map(|o| (o.token, o.session.accepted_arc()));
+        let before = actor.before();
         actor.heard_plugins();
         actor.told_step(before);
-        let before = actor.open.as_ref().map(|o| (o.token, o.session.accepted_arc()));
+        actor.kept_compare();
+        let before = actor.before();
         // The app's own work, unless the job says who asked (`Graph::call`).
         actor.asked_by(crate::caller::Caller::Page);
         // A request that panics answers with an error (its reply is dropped unsent), and the
@@ -157,6 +161,8 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         }
         actor.told_watcher();
         actor.told_step(before);
+        // Compare stays open only while V's flip is where it left the history (D2).
+        actor.kept_compare();
         let mut busy = actor.inner.busy.lock();
         busy.since = 0;
         if start > 0 {
@@ -226,18 +232,30 @@ impl Actor {
         self.settle_as(None, view)
     }
 
+    /// The open song and its accepted revision now: what a step told after the job is read from.
+    pub(super) fn before(&self) -> Option<(u64, Arc<Revision>)> {
+        self.open.as_ref().map(|o| (o.token, o.session.accepted_arc()))
+    }
+
     /// Tell every window of the step just recorded, if one was (AGENT-5): its id, who made it, its
     /// name, whether undo can take it back, and what changed since `before`, the revision before
     /// it. What changed is worked out on the `changes` thread, from the two revisions, so the next
-    /// request never waits for it. An undo or a redo makes no new step, so it tells nothing.
-    fn told_step(&mut self, before: Option<(u64, Arc<Revision>)>) {
+    /// request never waits for it. An undo or a redo makes no new step, so it tells nothing. Told
+    /// once: a job's own call tells it before its reply, the actor's loop after any other job.
+    pub(super) fn told_step(&mut self, before: Option<(u64, Arc<Revision>)>) {
         let Some(o) = self.open.as_mut() else { return };
         let Some(top) = o.session.step_names().0.filter(|t| t.id > o.told_step) else { return };
         o.told_step = top.id;
         let Some((_, before)) = before.filter(|(token, _)| *token == o.token) else { return };
         let Some(to) = self.inner.steps_to.lock().clone() else { return };
         let event = super::steps::event(o.token, &top, o.session.can_undo(), &o.timeline);
-        let _ = self.changes.send(Told { event, before, after: o.session.accepted_arc(), to });
+        let _ = self.changes.send(Told { event, changed: Some((before, o.session.accepted_arc())), to });
+    }
+
+    /// Tell every window and agent `event` after the steps told before it (AGENT-6).
+    pub(super) fn tell_in_order(&mut self, event: Value) {
+        let Some(to) = self.inner.steps_to.lock().clone() else { return };
+        let _ = self.changes.send(Told { event, changed: None, to });
     }
 
     /// Tell the watcher what the session wrote itself, so its own writes make no batch (R12).
@@ -1341,6 +1359,9 @@ impl Actor {
         // opened again, whose file is read below (MON-4).
         let owed = self.inner.control.lock().open.as_ref().and_then(|p| p.owed());
         self.inner.save_owed(owed);
+        // What was looked at, pointed at and compared goes with the song before (AGENT-6).
+        self.end_compare("song");
+        self.inner.forget_attention();
         let token = self.inner.next_session.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let (number, code_rev) = (session.accepted().number, session.accepted().code_rev);
         let controls = Arc::new(session.controls_by_id());
@@ -1470,6 +1491,9 @@ impl Actor {
         };
         // A mute or solo made since the file was last written is saved before the project goes.
         self.inner.save_owed(owed);
+        // What was looked at, pointed at and compared goes with it (AGENT-6).
+        self.end_compare("song");
+        self.inner.forget_attention();
         if let Some(d) = self.inner.current_device() {
             let _ = d.player.unload();
         }
@@ -1918,6 +1942,8 @@ impl Actor {
             return false;
         }
         o.sent = None;
+        // A file written directly landed while the pill was open: it closes, saying so (D2).
+        self.end_compare("outside");
         let compiled_ns = self.inner.now_ns();
         let s = self.settle(None);
         let seq = self.open.as_ref().and_then(|o| o.sent);

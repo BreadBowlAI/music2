@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail};
 use m2_session::{Source, StepName};
 use serde_json::{Value, json};
 
+use super::actor::Actor;
 use super::{Graph, Inner, Timeline};
 
 /// A step's name as the state says it: `{name, structural, given, step, source, by}`; null with
@@ -143,54 +144,70 @@ impl Graph {
     /// `structural`), read before it, in the same turn of the session. With `step`, only while
     /// that step is the newest (for redo, the newest undone): else [`NotNewest`] (AGENT-2).
     pub(super) fn step(&self, token: u64, redo: bool, step: Option<u64>) -> Result<Value> {
-        self.call(move |a| {
-            let o = a.open.as_ref().context("no project is open")?;
-            o.check_token(token)?;
-            let (undo, again) = o.session.step_names();
-            let top = if redo { again } else { undo };
-            let took = named(top.as_ref(), &o.timeline);
-            // AGENT-4: an agent's undo takes back only its own newest step.
-            if let crate::caller::Caller::Agent { name, .. } = &a.caller
-                && !redo
-                && top.as_ref().and_then(|t| t.source.by()) != Some(name.as_str())
-            {
-                return Err(NotTheirs { newest: took, agent: name.clone() }.into());
-            }
-            if let Some(id) = step
-                && top.as_ref().map(|t| t.id) != Some(id)
-            {
-                return Err(NotNewest { redo, newest: took }.into());
-            }
-            let files = top.as_ref().map(|t| t.files.clone()).unwrap_or_default();
-            // AGENT-3: checked as its writes are, by the files it puts back.
-            a.arrive(Some(&files))?;
-            let mut v = if redo {
-                a.edit(token, m2_editor::redo)?
-            } else {
-                match a.edit(token, m2_editor::undo) {
-                    Ok(v) => v,
-                    // Refused for good, maybe: the window may offer to skip it (AGENT-2).
-                    Err(e) => match a.open.as_ref() {
-                        Some(o) if o.session.undo_stuck() && o.session.step_names().0.map(|t| t.id) == took["step"].as_u64() => {
-                            return Err(Stuck { stuck: took, files }.into());
-                        }
-                        _ => return Err(e),
-                    },
-                }
-            };
-            v["name"] = took["name"].clone();
-            v["structural"] = json!(took["structural"].as_bool().unwrap_or(false));
-            // The step it took back, by its id, and the tops after it: what the window's next Undo
-            // and Redo name, before its state is read again (AGENT-2).
-            v["step"] = took["step"].clone();
-            if let Some(o) = a.open.as_ref() {
-                let (undo, redo) = o.session.step_names();
-                v["undo_name"] = named(undo.as_ref(), &o.timeline);
-                v["redo_name"] = named(redo.as_ref(), &o.timeline);
-            }
-            Ok(v)
-        })
+        self.call(move |a| stepped(a, token, redo, step, false))
     }
+}
+
+/// [`Graph::step`] on the actor: `compare` when V asked for it (D2), which its `undo` or `redo`
+/// event says. Every window and agent hears which step went or came back, after the steps before
+/// it (AGENT-6).
+pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>, compare: bool) -> Result<Value> {
+    a.open.as_ref().context("no project is open")?.check_token(token)?;
+    // AGENT-3: while a take records or Compare is open, an agent's is busy, whatever it would undo.
+    a.arrive(None)?;
+    let o = a.open.as_ref().context("no project is open")?;
+    let (undo, again) = o.session.step_names();
+    let top = if redo { again } else { undo };
+    let took = named(top.as_ref(), &o.timeline);
+    // AGENT-4: an agent's undo takes back only its own newest step.
+    if let crate::caller::Caller::Agent { name, .. } = &a.caller
+        && !redo
+        && top.as_ref().and_then(|t| t.source.by()) != Some(name.as_str())
+    {
+        return Err(NotTheirs { newest: took, agent: name.clone() }.into());
+    }
+    if let Some(id) = step
+        && top.as_ref().map(|t| t.id) != Some(id)
+    {
+        return Err(NotNewest { redo, newest: took }.into());
+    }
+    let files = top.as_ref().map(|t| t.files.clone()).unwrap_or_default();
+    // AGENT-3: checked as its writes are, by the files it puts back.
+    a.arrive(Some(&files))?;
+    let mut v = if redo {
+        a.edit(token, m2_editor::redo)?
+    } else {
+        match a.edit(token, m2_editor::undo) {
+            Ok(v) => v,
+            // Refused for good, maybe: the window may offer to skip it (AGENT-2).
+            Err(e) => match a.open.as_ref() {
+                Some(o) if o.session.undo_stuck() && o.session.step_names().0.map(|t| t.id) == took["step"].as_u64() => {
+                    return Err(Stuck { stuck: took, files }.into());
+                }
+                _ => return Err(e),
+            },
+        }
+    };
+    v["name"] = took["name"].clone();
+    v["structural"] = json!(took["structural"].as_bool().unwrap_or(false));
+    // The step it took back, by its id, and the tops after it: what the window's next Undo
+    // and Redo name, before its state is read again (AGENT-2).
+    v["step"] = took["step"].clone();
+    if let Some(o) = a.open.as_ref() {
+        let (undo, redo) = o.session.step_names();
+        v["undo_name"] = named(undo.as_ref(), &o.timeline);
+        v["redo_name"] = named(redo.as_ref(), &o.timeline);
+    }
+    a.tell_in_order(json!({
+        "t": if redo { "redo" } else { "undo" },
+        "session": token,
+        "step": took["step"],
+        "source": took["source"],
+        "by": took["by"],
+        "name": took["name"],
+        "compare": compare,
+    }));
+    Ok(v)
 }
 
 impl Graph {

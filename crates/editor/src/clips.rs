@@ -1318,7 +1318,7 @@ pub fn position(arr: &m2_song::Arrangement, text: &str) -> Result<f64, String> {
 }
 
 /// The beat bar `n` starts at (the first is 0), counted in the song's time signatures.
-fn bar_start(arr: &m2_song::Arrangement, n: u64) -> f64 {
+pub fn bar_start(arr: &m2_song::Arrangement, n: u64) -> f64 {
     let meters = if arr.meter.is_empty() { vec![m2_song::Meter::COMMON] } else { arr.meter.clone() };
     let mut before = 0;
     for (i, m) in meters.iter().enumerate() {

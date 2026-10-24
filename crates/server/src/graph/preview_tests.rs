@@ -640,7 +640,7 @@ fn the_server_says_a_slow_save_while_an_outside_save_waits_behind_it() {
     let disk = Faulty::default();
     let (graph, token, revision) = kick(&fixture, Some(disk.clone()));
     let state = Arc::new(crate::AppState::new(String::new(), graph));
-    let (_, mut events) = state.subscribe();
+    let (_, mut events, _page) = state.subscribe(true);
     crate::spawn_graph_watch(&state);
     disk.at("barrier", Act::Sleep(Duration::from_millis(3000)));
     let from = disk.calls.lock().len();
