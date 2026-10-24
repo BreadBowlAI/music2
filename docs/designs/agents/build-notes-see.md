@@ -60,7 +60,7 @@ Under "Scripts, agents and the command line" in [gaps.md](../../gaps.md): one fo
 - The crates touched: `m2-server`, `m2-editor` and `m2` (`watch.rs` among them): every test passes, and clippy.
 - `e2e/ag-focus.mjs`: 54 of 54, several runs in a row. Every PR-tier browser suite, 4 at a time: 54 of 54 (1,927 checks). Every nightly-tier suite: 22 of 22 (1,322 checks).
 - Screenshots, taken by the suite under Xvfb (`AG_SHOT=~/m2-runs/sag/see-shots`): `pointer.png` and `pointer-near.png` (a note beside Kick's header), `pointer-edge.png` (out of view, at the right edge with Show), `pointer-shown.png` (after Show, under bar 8), `compare-before.png`, `compare-before-near.png`, `compare-after.png` and `compare-after-near.png` (the pill). Looking at them changed three things: the note sat on the header it pointed at, and the edge note on the zoom tools (the card's rise animation overrode its placing; an outer box places it now), and "Before:" and the name were two items, which read as a double space.
-- The PR tier: below.
+- `ci/check.sh --pr` at `841b7ca`: `music2 check --pr: PASS` (quick, clippy, rust, suites, renders, repo unchanged; 6 min), the first run: 1,837 Rust tests, 54 of 54 browser suites (1,929 checks), nothing passed only on a retry. Logs: `~/m2-runs/check-see.tgz` on the build server.
 
 ## Left for later
 
