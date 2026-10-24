@@ -110,7 +110,7 @@ pub fn holder(dir: &Path) -> Option<Holder> {
 }
 
 /// A step as the app names it, after "one undo step, ": an agent's by its name first.
-fn step_said(step: &Value) -> String {
+pub(crate) fn step_said(step: &Value) -> String {
     let name = step["name"].as_str().unwrap_or("this change");
     match (step["source"].as_str(), step["by"].as_str()) {
         (Some("agent"), Some(by)) => format!("{by}: {name}"),
@@ -140,6 +140,9 @@ fn too_big(bytes: usize) -> String {
         mib(m2_server::TX_BODY)
     )
 }
+
+/// An answer as it came: its status, the status's reason and its body, de-chunked.
+type Raw = (u16, String, Vec<u8>);
 
 /// The app that holds a song's lock, reached: its url, the tools key, its pid, and the song it
 /// has open, by the token the app checks each commit against.
@@ -202,15 +205,22 @@ impl App {
     /// answer. While the app takes its time (a long compile), it waits, saying so every 5 s, as
     /// long as the app's process lives.
     fn ask(&self, method: &str, path: &str, body: Option<&Value>) -> Result<(u16, Value), Gone> {
+        let (status, reason, bytes) = self.exchange(method, path, &[], body)?;
+        Ok((status, json_of(status, &reason, &bytes)))
+    }
+
+    /// [`App::ask`] with `headers` too: the status, its reason and the answer's body as it came.
+    fn exchange(&self, method: &str, path: &str, headers: &[(&str, String)], body: Option<&Value>) -> Result<Raw, Gone> {
         let body = body.map(Value::to_string).unwrap_or_default();
         if body.len() > m2_server::TX_BODY {
             return Err(Gone::TooBig(body.len()));
         }
         let addr = self.url.trim_start_matches("http://");
         let mut s = TcpStream::connect(addr).map_err(|_| Gone::Before)?;
+        let more: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
         let req = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: \
-             close\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: {}\r\n{more}Content-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
             self.key,
             body.len()
         );
@@ -232,7 +242,7 @@ impl App {
                 Err(_) => return Err(Gone::During),
             }
         }
-        parse(&answer).ok_or(Gone::During)
+        split(&answer).ok_or(Gone::During)
     }
 
     /// The app's url (`http://127.0.0.1:port`), its tools key, and the open song's token.
@@ -296,17 +306,56 @@ impl App {
     /// `method path` with `body`, asked again every 250 ms while the musician holds what it touches
     /// (busy), for up to [`patience`]: the answer, or why it gave up waiting (its exit is busy's).
     fn sending(&self, method: &str, path: &str, body: &Value) -> Result<Result<(u16, Value), String>, Gone> {
+        let answer = self.sending_with(method, path, &[], Some(body))?;
+        Ok(answer.map(|(status, reason, bytes)| (status, json_of(status, &reason, &bytes))))
+    }
+
+    /// [`App::sending`] with `headers`, and the answer's body as it came.
+    fn sending_with(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, String)],
+        body: Option<&Value>,
+    ) -> Result<Result<Raw, String>, Gone> {
         let start = Instant::now();
         let mut said = None;
         loop {
-            let (status, v) = self.ask(method, path, Some(body))?;
-            if status == 423 && v["busy"].is_object() {
+            let (status, reason, bytes) = self.exchange(method, path, headers, body)?;
+            if status == 423
+                && let Ok(v) = serde_json::from_slice::<Value>(&bytes)
+                && v["busy"].is_object()
+            {
                 match busy(&v["busy"], start, &mut said) {
                     Some(why) => return Ok(Err(why)),
                     None => continue,
                 }
             }
-            return Ok(Ok((status, v)));
+            return Ok(Ok((status, reason, bytes)));
+        }
+    }
+
+    /// `m2 call` (AGENT-8): `method path` with `body`, as the agent `--as` names, saying `--why`, in
+    /// the `x-m2-as` and `x-m2-why` headers (percent-encoded UTF-8, AGENT-10), waiting while the
+    /// musician holds what it changes, as every write does: the status and the answer's body as it
+    /// came. `writes`: it would make a step, so a missing name is said.
+    pub fn call(&mut self, method: &str, path: &str, body: Option<&Value>, writes: bool) -> Result<(u16, Vec<u8>)> {
+        let w = who();
+        if writes {
+            self.unnamed(&w);
+        }
+        let named = [("x-m2-as", &w.by), ("x-m2-why", &w.why)];
+        let headers: Vec<(&str, String)> =
+            named.iter().filter_map(|(k, v)| v.as_deref().map(|v| (*k, m2_server::caller::encoded(v)))).collect();
+        match self.sending_with(method, path, &headers, body) {
+            Ok(Ok((status, _, bytes))) => Ok((status, bytes)),
+            Ok(Err(busy)) => bail!("{busy}"),
+            Err(Gone::TooBig(n)) => bail!("{}", too_big(n)),
+            Err(Gone::Before) => bail!("nothing was changed: the app closed first"),
+            Err(Gone::During) if writes => {
+                bail!("the app went away while it answered: m2 can't tell whether this landed. Read the song again before you retry.")
+            }
+            Err(Gone::During) => bail!("the app went away while it answered"),
         }
     }
 
@@ -492,44 +541,54 @@ fn rejected(r: &Value) -> Refusal {
     Refusal::Rejected { diagnostics, unexpected: None }
 }
 
-/// An HTTP/1.1 answer: its status and its JSON body (`Content-Length` or chunked). A body that isn't
-/// JSON (the server's own refusal of a request, before the app reads it) is said in words, with the
-/// status, as `error`: a 4xx changed nothing, and anything else can't be told apart from a write
-/// that landed.
+/// An HTTP/1.1 answer: its status and its JSON body (`Content-Length` or chunked), as
+/// [`json_of`] reads it.
+#[cfg(test)]
 fn parse(answer: &[u8]) -> Option<(u16, Value)> {
-    let text = std::str::from_utf8(answer).ok()?;
-    let (head, body) = text.split_once("\r\n\r\n")?;
+    let (status, reason, body) = split(answer)?;
+    Some((status, json_of(status, &reason, &body)))
+}
+
+/// An HTTP/1.1 answer: its status, the status's reason and its body as it came, de-chunked: JSON,
+/// or bytes (a waveform's peaks).
+fn split(answer: &[u8]) -> Option<Raw> {
+    let at = answer.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let (head, body) = (std::str::from_utf8(&answer[..at]).ok()?, &answer[at + 4..]);
     let status: u16 = head.get(9..12)?.parse().ok()?;
-    let reason = head.lines().next().and_then(|l| l.get(13..)).unwrap_or("").trim();
+    let reason = head.lines().next().and_then(|l| l.get(13..)).unwrap_or("").trim().to_string();
     let chunked = head.lines().any(|l| l.to_ascii_lowercase().starts_with("transfer-encoding:") && l.contains("chunked"));
-    let body = if chunked {
-        let (mut out, mut rest) = (String::new(), body);
-        loop {
-            let (size, after) = rest.split_once("\r\n")?;
-            let n = usize::from_str_radix(size.trim(), 16).ok()?;
-            if n == 0 {
-                break;
-            }
-            out.push_str(after.get(..n)?);
-            rest = after.get(n + 2..)?;
+    if !chunked {
+        return Some((status, reason, body.to_vec()));
+    }
+    let (mut out, mut rest) = (vec![], body);
+    loop {
+        let line = rest.windows(2).position(|w| w == b"\r\n")?;
+        let n = usize::from_str_radix(std::str::from_utf8(&rest[..line]).ok()?.trim(), 16).ok()?;
+        if n == 0 {
+            return Some((status, reason, out));
         }
-        out
-    } else {
-        body.to_string()
-    };
-    let said = || {
-        let answered = format!("the app answered {status} {reason}: {}", body.trim());
-        match status {
-            400..=499 => format!("nothing was changed: {answered}"),
-            _ => format!("m2 can't tell whether this landed: {answered}. Read the song again before you retry."),
-        }
-    };
-    let v = match serde_json::from_str(&body) {
+        let after = &rest[line + 2..];
+        out.extend_from_slice(after.get(..n)?);
+        rest = after.get(n + 2..)?;
+    }
+}
+
+/// An answer's body as JSON. One that isn't (the server's own refusal of a request, before the app
+/// reads it) is said in words, with the status, as `error`: a 4xx changed nothing, and anything
+/// else can't be told apart from a write that landed.
+fn json_of(status: u16, reason: &str, body: &[u8]) -> Value {
+    match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(_) if status == 200 => Value::Null,
-        Err(_) => json!({"error": said()}),
-    };
-    Some((status, v))
+        Err(_) => {
+            let answered = format!("the app answered {status} {reason}: {}", String::from_utf8_lossy(body).trim());
+            let said = match status {
+                400..=499 => format!("nothing was changed: {answered}"),
+                _ => format!("m2 can't tell whether this landed: {answered}. Read the song again before you retry."),
+            };
+            json!({"error": said})
+        }
+    }
 }
 
 /// What `p` holds on disk now, by its hash (a folder's directory hash): None when nothing is there,

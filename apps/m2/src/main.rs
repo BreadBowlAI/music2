@@ -12,6 +12,7 @@ use m2_session::{Compiled, Session};
 use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project, TxOp};
 
 mod app;
+mod call;
 mod edits;
 mod see;
 mod text;
@@ -141,6 +142,16 @@ USAGE:
                                          show a note in the open app at track:bass, clip:bass/notes:<id>,
                                          lane:bass/cutoff, knob:<id> or bars:9-16 (by --as); it never
                                          moves the musician's view: they press play. --clear takes it away
+  m2 routes [--json]                     every route of the app's API, from its one table: the ones for
+                                         agents first, each with what it does, whether it writes and an
+                                         example body; the musician's own (play, record, the view…) last
+  m2 call <project> <path> [<json> | -] [--method M]
+                                         send one route's request to the open app, as an agent (by --as):
+                                         song changes with no command of their own (an effect's bypass,
+                                         markers, the song's key) and every read. The song's session is
+                                         filled in; a GET's keys go in its query; it prints the answer
+                                         and exits 1 when the app refuses. The musician's controls are
+                                         refused before anything is sent
 
 Every command that reads a project prints what needs attention in it, such as data no lane reads,
 with the commands that fix it.
@@ -153,7 +164,9 @@ drag what it changes, record, or have unsaved code in its file, the app refuses 
 30 s, then exits 3, changing nothing. Don't write the song's files directly while the app has it
 open: the app can't refuse that, and it ends a drag on what it changes. With the app closed, m2
 writes the files itself, and undo isn't kept once it exits. Reading, rendering and bounce without
---place work all the same.
+--place work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and
+solo while listening, the view, plugin windows, redo, exports, settings, opening and closing songs)
+no agent can do: m2 call refuses it, and m2 point shows them where instead.
 
 std, the templates and the examples are found at $M2_STD, $M2_TEMPLATES and $M2_EXAMPLES, inside
 music2.app when m2 runs from there, or else in this source tree.
@@ -1129,6 +1142,8 @@ change that code first",
         Some("focus") => see::focus(&args)?,
         Some("watch") => see::watch(&args)?,
         Some("point") => see::point(&args)?,
+        Some("routes") => call::routes(&args)?,
+        Some("call") => call::call(&args)?,
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         _ => print!("{USAGE}"),
     }
