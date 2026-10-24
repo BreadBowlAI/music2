@@ -54,11 +54,10 @@ impl Route {
     /// What the app answers an agent that calls a route not for agents, and what `m2 call` says
     /// before it sends one (AGENT-11).
     pub fn refusal(&self) -> String {
-        let mut words = self.words.chars();
-        let first = words.next().into_iter();
-        // "Play or stop" reads "play or stop" in the sentence; "MIDI…" stays.
-        let lower = match (words.clone().next(), self.words.chars().next()) {
-            (Some(next), Some(_)) if next.is_lowercase() => first.flat_map(char::to_lowercase).chain(words).collect::<String>(),
+        // "Play or stop" reads "play or stop" in the sentence; "MIDI…" stays as it is.
+        let mut chars = self.words.chars();
+        let lower: String = match (chars.next(), chars.clone().next()) {
+            (Some(first), Some(next)) if next.is_lowercase() => first.to_lowercase().chain(chars).collect(),
             _ => self.words.to_string(),
         };
         format!(
@@ -68,28 +67,41 @@ impl Route {
     }
 }
 
-/// Every file's part of the table.
-const TABLES: &[&[Route]] = &[
-    crate::routes::ROUTES,
-    crate::routes_8b::ROUTES,
-    crate::routes_audio::ROUTES,
-    crate::routes_exchange::ROUTES,
-    crate::routes_fx::ROUTES,
-    crate::routes_leases::ROUTES,
-    crate::routes_mix::ROUTES,
-    crate::routes_notes::ROUTES,
-    crate::routes_plugins::ROUTES,
-    crate::routes_presets::ROUTES,
-    crate::routes_project::ROUTES,
-    crate::routes_record::ROUTES,
-    crate::routes_see::ROUTES,
-    crate::routes_settings::ROUTES,
-    crate::routes_view::ROUTES,
+/// One file's routes, as [`routes!`] makes them from the same lines: its part of the table, and
+/// its router.
+pub(crate) struct Part {
+    routes: &'static [Route],
+    router: fn() -> axum::Router<Arc<AppState>>,
+}
+
+impl Part {
+    pub(crate) const fn new(routes: &'static [Route], router: fn() -> axum::Router<Arc<AppState>>) -> Part {
+        Part { routes, router }
+    }
+}
+
+/// Every file's routes, each named once.
+const PARTS: [Part; 15] = [
+    crate::routes::PART,
+    crate::routes_8b::PART,
+    crate::routes_audio::PART,
+    crate::routes_exchange::PART,
+    crate::routes_fx::PART,
+    crate::routes_leases::PART,
+    crate::routes_mix::PART,
+    crate::routes_notes::PART,
+    crate::routes_plugins::PART,
+    crate::routes_presets::PART,
+    crate::routes_project::PART,
+    crate::routes_record::PART,
+    crate::routes_see::PART,
+    crate::routes_settings::PART,
+    crate::routes_view::PART,
 ];
 
 /// Every route, by path, then method: the one table.
 pub fn all() -> Vec<&'static Route> {
-    let mut all: Vec<&'static Route> = TABLES.iter().flat_map(|t| t.iter()).collect();
+    let mut all: Vec<&'static Route> = PARTS.iter().flat_map(|p| p.routes).collect();
     all.sort_by_key(|r| (r.path, r.method));
     all
 }
@@ -97,29 +109,14 @@ pub fn all() -> Vec<&'static Route> {
 /// The route `method path` names, if the table has it. A HEAD is a GET's.
 pub fn find(method: &str, path: &str) -> Option<&'static Route> {
     let method = if method == "HEAD" { "GET" } else { method };
-    TABLES.iter().flat_map(|t| t.iter()).find(|r| r.method == method && r.path == path)
+    PARTS.iter().flat_map(|p| p.routes).find(|r| r.method == method && r.path == path)
 }
 
 /// The routes of the table, each file's router made from its part, and a clear 404 for any other
 /// `/api` path, not the page's index.html.
 pub(crate) fn router() -> axum::Router<Arc<AppState>> {
-    axum::Router::new()
-        .merge(crate::routes::router())
-        .merge(crate::routes_8b::router())
-        .merge(crate::routes_audio::router())
-        .merge(crate::routes_exchange::router())
-        .merge(crate::routes_fx::router())
-        .merge(crate::routes_leases::router())
-        .merge(crate::routes_mix::router())
-        .merge(crate::routes_notes::router())
-        .merge(crate::routes_plugins::router())
-        .merge(crate::routes_presets::router())
-        .merge(crate::routes_project::router())
-        .merge(crate::routes_record::router())
-        .merge(crate::routes_see::router())
-        .merge(crate::routes_settings::router())
-        .merge(crate::routes_view::router())
-        .route("/api/{*rest}", axum::routing::any(no_such_api))
+    let routed = PARTS.iter().fold(axum::Router::new(), |r, p| r.merge((p.router)()));
+    routed.route("/api/{*rest}", axum::routing::any(no_such_api))
 }
 
 async fn no_such_api() -> Response {
@@ -150,8 +147,8 @@ pub(crate) async fn gate(State(s): State<Arc<AppState>>, req: axum::extract::Req
 /// METHOD "path" => handler [up to LIMIT]; writes|reads, agents|musician, "words", r#"example"#;
 /// ```
 ///
-/// `up to` raises the largest body it takes. It makes the file's `ROUTES`, its part of the one
-/// table, and its `router()`, from the same lines.
+/// `up to` raises the largest body it takes. It makes the file's `PART`: its part of the one table
+/// and its router, from the same lines.
 macro_rules! routes {
     (@writes writes) => { true };
     (@writes reads) => { false };
@@ -161,8 +158,11 @@ macro_rules! routes {
     (@method POST $h:ident) => { axum::routing::post($h) };
     (@method PUT $h:ident) => { axum::routing::put($h) };
     ($($method:ident $path:literal => $handler:ident $(up to $limit:expr)?; $writes:ident, $who:ident, $words:literal, $example:literal;)*) => {
-        /// This file's routes: its part of the one route table (AGENT-8).
-        pub(crate) const ROUTES: &[$crate::api::Route] = &[$($crate::api::Route {
+        /// This file's routes and its router, made from the same lines: its part of the one route
+        /// table (AGENT-8).
+        pub(crate) const PART: $crate::api::Part = $crate::api::Part::new(ROUTES, router);
+
+        const ROUTES: &[$crate::api::Route] = &[$($crate::api::Route {
             method: stringify!($method),
             path: $path,
             writes: $crate::api::routes!(@writes $writes),
@@ -171,8 +171,7 @@ macro_rules! routes {
             example: $example,
         }),*];
 
-        /// This file's router, made from the same lines as [`ROUTES`].
-        pub(crate) fn router() -> axum::Router<std::sync::Arc<$crate::AppState>> {
+        fn router() -> axum::Router<std::sync::Arc<$crate::AppState>> {
             axum::Router::new()$(.route($path, $crate::api::routes!(@method $method $handler)$(.layer(axum::extract::DefaultBodyLimit::max($limit)))?))*
         }
     };
