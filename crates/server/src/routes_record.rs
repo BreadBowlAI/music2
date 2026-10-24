@@ -1,16 +1,15 @@
-//! Lane B's routes, in a router of their own, merged into the API's: Record (gaps #24), on a notes
-//! lane or an audio lane (the io plan's slice 3). Each is a write: a read-only window answers 423
-//! with WRITE-18's message, as `routes.rs` answers its own. None waits for the session: a take
-//! starts and ends on the control plane, and the take thread writes it (`graph/record.rs`).
-//! `POST /api/graph/input/inject` feeds the silent input, for browser suites (D24).
+//! Lane B's routes, in the one route table (AGENT-8): Record (gaps #24), on a notes lane or an audio
+//! lane (the io plan's slice 3). Each is a write, and the musician's (AGENT-11). None waits for the
+//! session: a take starts and ends on the control plane, and the take thread writes it
+//! (`graph/record.rs`). `POST /api/graph/input/inject` feeds the silent input, for browser suites
+//! (D24).
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
-use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -21,26 +20,19 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-/// The routes here that write the open project.
-pub const WRITES_RECORD: &[&str] = &["/api/graph/record/start", "/api/graph/record/stop", "/api/graph/record/cancel"];
-
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/graph/record/start", post(record_start))
-        .route("/api/graph/record/stop", post(record_stop))
-        .route("/api/graph/record/cancel", post(record_cancel))
-        .route("/api/graph/input/inject", post(input_inject))
-        .route_layer(axum::middleware::from_fn_with_state(state, writes))
-}
-
-/// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if WRITES_RECORD.contains(&req.uri().path())
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
+crate::api::routes! {
+    POST "/api/graph/record/start" => record_start; writes, musician,
+        "Record a take on a notes lane or an audio lane",
+        r#"{"session": 7, "module": "keys", "lane": "chords", "count_in": true}"#;
+    POST "/api/graph/record/stop" => record_stop; writes, musician,
+        "End the take where it is heard; play goes on",
+        r#"{"session": 7}"#;
+    POST "/api/graph/record/cancel" => record_cancel; writes, musician,
+        "Drop the take, or stop counting in",
+        r#"{"session": 7}"#;
+    POST "/api/graph/input/inject" => input_inject; reads, musician,
+        "What the sound input would hear next (only with M2_AUDIO_INPUT=inject, for the browser suites)",
+        r#"{"tone": {"hz": 440, "seconds": 1}}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
@@ -139,7 +131,9 @@ fn half() -> f32 {
 /// Not a write: it plays what a microphone would.
 async fn input_inject(State(s): S, Json(r): Json<InjectReq>) -> Result<Response, ApiError> {
     if !crate::input_injects() {
-        return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "no such API"}))).into_response());
+        return Ok(
+            (StatusCode::NOT_FOUND, Json(json!({"error": "no such API here: it answers only with M2_AUDIO_INPUT=inject"}))).into_response()
+        );
     }
     blocking(move || {
         s.graph.inject_input(&r.samples, r.tone.map(|t| (t.hz, t.seconds, t.gain)))?;

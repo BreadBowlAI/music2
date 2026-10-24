@@ -199,12 +199,6 @@ impl Graph {
         });
     }
 
-    /// AGENT-3: whether the caller may close the open song or open another (a new one too). An
-    /// agent may not while a take records or the Compare pill is open: busy, as its writes are.
-    pub fn may_end_song(&self) -> Result<()> {
-        self.call(|a| a.arrive(None))
-    }
-
     /// What the pill compares in the open song, or null.
     pub fn comparing(&self) -> Value {
         match self.inner.control.lock().open.as_ref().map(|p| p.engine.token) {

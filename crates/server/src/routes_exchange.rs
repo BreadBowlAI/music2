@@ -1,21 +1,17 @@
-//! Swapping files with other music apps (studio lane C), in a router of its own merged into the
-//! API's: the song or a clip written as a MIDI file, a MIDI file brought in, and the song's stems
-//! (`crate::stems`). A route here that writes the open project is
-//! in [`WRITES_EXCHANGE`], and a read-only window answers it 423 with WRITE-18's message, as
-//! `routes.rs` answers its own. A MIDI file goes to the songs folder's Exports (a new name), or to
-//! a file the user picked (replaced, as Export Audio replaces one), never into the project.
+//! Swapping files with other music apps (studio lane C), in the one route table (AGENT-8): the song
+//! or a clip written as a MIDI file, a MIDI file brought in, and the song's stems
+//! (`crate::stems`). A MIDI file goes to the songs folder's Exports (a new name), or to a file the
+//! user picked (replaced, as Export Audio replaces one), never into the project.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use axum::routing::post;
-use axum::{Json, Router};
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, header};
 use m2_editor::midifile::{ClipAt, TempoChoice};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -27,27 +23,22 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-/// The routes here that write the open project.
-pub const WRITES_EXCHANGE: &[&str] = &["/api/graph/midifile/import"];
-
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/graph/midifile/where", post(midifile_where))
-        .route("/api/graph/midifile/export", post(midifile_export))
-        .route("/api/graph/midifile/import", post(midifile_import).layer(DefaultBodyLimit::max(m2_editor::smf::MAX_BYTES + 1024)))
-        .route("/api/graph/stems", post(stems_start))
-        .route("/api/graph/stems/check", post(stems_check))
-        .route_layer(axum::middleware::from_fn_with_state(state, writes))
-}
-
-/// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if WRITES_EXCHANGE.contains(&req.uri().path())
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
+crate::api::routes! {
+    POST "/api/graph/midifile/where" => midifile_where; reads, agents,
+        "Where a MIDI file of the song, or of a clip, would go: a new name in the songs folder's Exports",
+        r#"{"session": 7}"#;
+    POST "/api/graph/midifile/export" => midifile_export; reads, agents,
+        "Write the song, or a clip, as a MIDI file: to the path given, else to a new file in Exports",
+        r#"{"session": 7, "clip": {"module": "keys", "lane": "chords", "id": "k3f9q2zt"}}"#;
+    POST "/api/graph/midifile/import" => midifile_import up to m2_editor::smf::MAX_BYTES + 1024; writes, agents,
+        "Bring a MIDI file on this computer in: into a lane, on new tracks after one, or on new tracks below (tempo: keep or use the file's)",
+        r#"{"session": 7, "path": "/Users/you/Downloads/riff.mid", "to": {"kind": "below", "beat": 0}, "tempo": "keep"}"#;
+    POST "/api/graph/stems" => stems_start; reads, musician,
+        "Export the song's stems, which may pause playback (agents render with m2 bounce)",
+        r#"{"session": 7}"#;
+    POST "/api/graph/stems/check" => stems_check; reads, agents,
+        "Whether the song's stems can be exported now, and why not",
+        r#"{"session": 7}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {

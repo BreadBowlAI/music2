@@ -1,14 +1,13 @@
-//! What an agent sees beside the musician (AGENT-6; track 3 of the agents design): the focus
-//! record the page posts, a pointer an agent posts, and the Compare pill (D2). None is a write:
-//! they work in a read-only window too, and change no file, revision or undo step, but Esc on
-//! Compare's Before, which undoes the step it compares.
+//! What an agent sees beside the musician (AGENT-6; track 3 of the agents design), in the one route
+//! table (AGENT-8): the focus record the page posts, a pointer an agent posts, and the Compare pill
+//! (D2). None is a write: they work in a read-only window too, and change no file, revision or undo
+//! step, but Esc on Compare's Before, which undoes the step it compares.
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
 use axum::response::Response;
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -18,12 +17,19 @@ use crate::routes::{ApiError, blocking};
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/focus", get(focus_get).post(focus_post))
-        .route("/api/point", post(point))
-        .route("/api/graph/compare", post(compare))
-        .with_state(state)
+crate::api::routes! {
+    GET "/api/focus" => focus_get; reads, agents,
+        "What the musician looks at, as m2 focus prints it: the view, the selected track, clips and notes, the knob last touched, the bars shown, where playback is",
+        r#"{}"#;
+    POST "/api/focus" => focus_post; reads, musician,
+        "Say what the musician looks at (the page posts it)",
+        r#"{"session": 7, "revision": 42, "view": "notes", "track": "keys"}"#;
+    POST "/api/point" => point; reads, agents,
+        "Point at a track, a clip, a lane, a knob or bars, with words, as m2 point does; or clear the pointer",
+        r#"{"session": 7, "target": "bars:5-8", "words": "listen here"}"#;
+    POST "/api/graph/compare" => compare; reads, musician,
+        "Hear the newest change made elsewhere Before or After it (V), or close the pill",
+        r#"{"session": 7, "step": 57, "before": true, "client": "w1"}"#;
 }
 
 /// What the musician looks at, as the page last said, with where playback is, the loop, the
@@ -32,7 +38,7 @@ async fn focus_get(State(s): S) -> Json<Value> {
     Json(s.graph.focus())
 }
 
-/// The page's focus record (only the page key: `auth` refuses the tools key's). Every window and
+/// The page's focus record (only the page key: the tools key gets 403, AGENT-11). Every window and
 /// agent hears it.
 async fn focus_post(State(s): S, Json(f): Json<crate::graph::focus::Focus>) -> ApiResult {
     Ok(Json(s.graph.post_focus(f)?))

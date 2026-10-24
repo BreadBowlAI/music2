@@ -221,6 +221,49 @@ fn audition_over_http_and_the_websocket() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// AGENT-11: a WebSocket opened with the tools key hears what the page hears, but what it sends is
+// ignored: an agent can't play notes through it, nor aim the MIDI keyboard. The page's socket can.
+#[test]
+fn a_tools_socket_cant_audition_or_aim_the_midi_keyboard() {
+    let dir = std::env::temp_dir().join(format!("m2-routes-8b-tools-socket-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    std::fs::write(
+        dir.join("song.ts"),
+        "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+         const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+    )
+    .unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
+    running.state.graph.open(&dir).unwrap();
+    let url = &running.url;
+    let mut agent = Ws::connect(url, "client=agent&token=t00ls");
+    agent.send(&json!({"t": "midi", "module": "kick", "lane": "hits"}));
+    agent.send(&json!({"t": "audition", "module": "kick", "lane": "hits", "on": [{"h": 7, "pitch": 36}]}));
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(500) {
+        assert_eq!(get(url, "/api/graph/status", "t0k")["live"], json!(0), "no note sounds");
+        assert_eq!(running.state.graph.midi_state()["target"], Value::Null, "the MIDI keyboard aims nowhere");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // It hears what the page hears.
+    running.state.toast("hello");
+    assert_eq!(agent.next("toast")["text"], json!("hello"));
+    // The page's socket aims the MIDI keyboard, and plays.
+    let mut page = Ws::connect(url, "client=w1&token=t0k");
+    page.send(&json!({"t": "midi", "module": "kick", "lane": "hits"}));
+    page.send(&json!({"t": "audition", "module": "kick", "lane": "hits", "on": [{"h": 7, "pitch": 36}]}));
+    live_becomes(url, 1);
+    assert_eq!(running.state.graph.midi_state()["target"], json!({"module": "kick", "lane": "hits"}));
+    drop(page);
+    live_becomes(url, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // WRITE-17, G5: a window open read-only answers mute in song 423 with WRITE-18's message, and
 // writes nothing; mute while listening still works there.
 #[test]

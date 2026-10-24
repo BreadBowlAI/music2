@@ -1,16 +1,12 @@
-//! The routes of polish's lane C, in a router of their own, merged into the API's: the recent
-//! songs list, Save As and Rename Song. (The view settings' route is `routes_view.rs`.)
-//! A route here that writes the open project is in [`WRITES_PROJECT`], and a read-only window
-//! answers it 423 with WRITE-18's message, as `routes.rs` answers its own.
+//! The routes of polish's lane C, in the one route table (AGENT-8): the recent songs list, Save As
+//! and Rename Song. (The view settings' route is `routes_view.rs`.) Save As only reads the song: a
+//! read-only window has it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -20,26 +16,22 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-/// The routes here that write the open project. Save As only reads it: a read-only window has it.
-pub const WRITES_PROJECT: &[&str] = &["/api/project/rename"];
-
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/project/recent", get(recent_list))
-        .route("/api/project/recent/forget", post(recent_forget))
-        .route("/api/project/save-as", get(save_as_start).post(save_as))
-        .route("/api/project/rename", post(rename))
-        .route_layer(axum::middleware::from_fn_with_state(state, writes))
-}
-
-/// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if WRITES_PROJECT.contains(&req.uri().path())
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
+crate::api::routes! {
+    GET "/api/project/recent" => recent_list; reads, agents,
+        "The songs opened lately, newest first",
+        r#"{}"#;
+    POST "/api/project/recent/forget" => recent_forget; reads, musician,
+        "Take a song off the recent list",
+        r#"{"path": "/Users/you/Music/music2/Night drive"}"#;
+    GET "/api/project/save-as" => save_as_start; reads, agents,
+        "Where Save As starts: the folder the song is in, and the first free name",
+        r#"{}"#;
+    POST "/api/project/save-as" => save_as; reads, musician,
+        "Save a copy of the song, and open the copy",
+        r#"{"session": 7, "name": "Night drive 2"}"#;
+    POST "/api/project/rename" => rename; writes, musician,
+        "Rename the song, and its folder too with folder",
+        r#"{"session": 7, "name": "Night drive", "folder": true}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {

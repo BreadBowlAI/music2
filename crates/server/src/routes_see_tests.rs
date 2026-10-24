@@ -106,8 +106,10 @@ fn agent_step(dir: &std::path::Path, url: &str, session: u64, id: &str) -> u64 {
     body["step"].as_u64().unwrap()
 }
 
-// AGENT-3 (the review's F4): while the pill is open, an agent can't end it by closing the song,
-// opening it or another, or making a new song: each is busy, and Compare stays open. The page can.
+// AGENT-3 (the review's F4), AGENT-11: while the pill is open, an agent can't end it by closing
+// the song, opening it or another, or making a new song. Since track 4 each is the musician's, so
+// the tools key gets 403 for them always, not only while the pill is open (it was busy, 423), and
+// Compare stays open. The page can.
 #[test]
 fn while_comparing_an_agent_cant_close_or_open_a_song() {
     let (dir, running, session) = serving();
@@ -116,12 +118,12 @@ fn while_comparing_an_agent_cant_close_or_open_a_song() {
     let (status, body) = ask(url, "POST", "/api/graph/compare", "t0k", &json!({"session": session, "step": step, "before": true}));
     assert_eq!(status, 200, "{body}");
     let (status, body) = ask(url, "POST", "/api/graph/close", "t00ls", &json!({}));
-    assert_eq!((status, &body["busy"]["what"]), (423, &json!("compare")), "closing the song: {body}");
+    assert_eq!(status, 403, "closing the song: {body}");
     let (status, body) = ask(url, "POST", "/api/graph/open", "t00ls", &json!({"path": dir}));
-    assert_eq!((status, &body["busy"]["what"]), (423, &json!("compare")), "opening it again: {body}");
+    assert_eq!(status, 403, "opening it again: {body}");
     let new = json!({"template": "empty", "name": "Agent's song"});
     let (status, body) = ask(url, "POST", "/api/project/new", "t00ls", &new);
-    assert_eq!((status, &body["busy"]["what"]), (423, &json!("compare")), "a new song: {body}");
+    assert_eq!(status, 403, "a new song: {body}");
     assert_eq!(running.state.graph.comparing()["step"], json!(step), "Compare stays open");
     assert_eq!(running.state.graph.dir().as_deref(), Some(dir.canonicalize().unwrap().as_path()), "on the same song");
     let (status, body) = ask(url, "POST", "/api/graph/close", "t0k", &json!({}));

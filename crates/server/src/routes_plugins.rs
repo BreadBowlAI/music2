@@ -9,9 +9,8 @@
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use serde_json::{Value, json};
 
 use crate::AppState;
@@ -20,8 +19,13 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new().route("/api/plugins", get(list)).route("/api/plugins/scan", post(scan))
+crate::api::routes! {
+    GET "/api/plugins" => list; reads, agents,
+        "The installed CLAP plugins: id, name, vendor, version, and whether each is an instrument or an effect",
+        r#"{}"#;
+    POST "/api/plugins/scan" => scan; reads, agents,
+        "Look for installed plugins again, and list them",
+        r#"{}"#;
 }
 
 /// `{plugins: [{id: "clap:…", name, vendor, version, instrument, effect}], errors, folder}`: the

@@ -12,9 +12,8 @@
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Query, State};
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -24,11 +23,16 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/graph/presets", get(list))
-        .route("/api/graph/preset/save", post(save))
-        .route("/api/graph/preset/load", post(load))
+crate::api::routes! {
+    GET "/api/graph/presets" => list; reads, agents,
+        "A sound's presets: std's, yours and the plugin's own, by name",
+        r#"{"session": 7, "node": "tracks/keys.ts#1"}"#;
+    POST "/api/graph/preset/save" => save; reads, musician,
+        "Save a sound's settings as one of the musician's own presets",
+        r#"{"session": 7, "node": "tracks/keys.ts#1", "name": "Warm keys"}"#;
+    POST "/api/graph/preset/load" => load; writes, agents,
+        "Load a preset into a sound: std, yours or the plugin's",
+        r#"{"session": 7, "at": 42, "node": "tracks/keys.ts#1", "from": "std", "name": "Glass"}"#;
 }
 
 /// Run `f` off the async threads: presets are files.

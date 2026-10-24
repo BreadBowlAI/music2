@@ -1,19 +1,14 @@
-//! The timeline's view routes, in a router of their own, merged into the API's: the page's view
-//! settings, kept per song in `.music2/view.json` (Q16), which is not a write: a read-only window
-//! keeps them in memory only; and the ruler's markers (Q13), which are. A route here that writes
-//! the project is in [`WRITES_VIEW`], and a read-only window answers it 423 with WRITE-18's
-//! message, as `routes.rs` answers its own.
+//! The timeline's view routes, in the one route table (AGENT-8): the page's view settings, kept per
+//! song in `.music2/view.json` (Q16), which is not a write: a read-only window keeps them in memory
+//! only; and the ruler's markers (Q13), which are.
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::post;
-use axum::{Json, Router};
 use m2_editor::markers::Marker;
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::AppState;
 use crate::routes::ApiError;
@@ -21,24 +16,13 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-/// The routes here that write the open project.
-pub const WRITES_VIEW: &[&str] = &["/api/graph/markers"];
-
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/graph/view", post(graph_view))
-        .route("/api/graph/markers", post(graph_markers))
-        .route_layer(axum::middleware::from_fn_with_state(state, writes))
-}
-
-/// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if WRITES_VIEW.contains(&req.uri().path())
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
+crate::api::routes! {
+    POST "/api/graph/view" => graph_view; reads, musician,
+        "The timeline's view: zoom, follow, track heights, hidden lanes, the grid, audition, the metronome and the guide",
+        r#"{"session": 7, "set": {"zoom": 2}}"#;
+    POST "/api/graph/markers" => graph_markers; writes, agents,
+        "Write the ruler's markers, the whole list, into layout.json",
+        r#"{"session": 7, "markers": [{"beat": 32, "name": "Chorus"}]}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {

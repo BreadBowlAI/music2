@@ -1,19 +1,16 @@
-//! Audio in the app (lane A), in a router of its own, merged into the API's: an audio file's
-//! waveform peaks (Q9), and bringing audio files in (A2). A route here that writes the project is
-//! in [`WRITES_AUDIO`], and a read-only window answers it 423 with WRITE-18's message, as
-//! `routes.rs` answers its own.
+//! Audio in the app (lane A), in the one route table (AGENT-8): an audio file's waveform peaks
+//! (Q9), and bringing audio files in (A2).
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use m2_editor::import::{Source, Target};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::AppState;
 use crate::peaks::Store;
@@ -21,32 +18,25 @@ use crate::routes::ApiError;
 
 type S = State<Arc<AppState>>;
 
-/// The routes here that write the open project.
-pub const WRITES_AUDIO: &[&str] = &["/api/graph/audio/import", "/api/graph/audio/track", "/api/graph/sample"];
+crate::api::routes! {
+    GET "/api/graph/audio/peaks" => audio_peaks; reads, agents,
+        "An audio file's waveform peaks, as bytes",
+        r#"{"session": 7, "asset": "vox.wav"}"#;
+    POST "/api/graph/audio/import" => audio_import up to UPLOAD; writes, agents,
+        "Bring audio files on this computer in, and place their clips: on a lane, on a new track after one, or on new tracks below",
+        r#"{"session": 7, "paths": ["/Users/you/Samples/vox.wav"], "to": {"kind": "below", "beat": 0}}"#;
+    POST "/api/graph/audio/track" => audio_track; writes, agents,
+        "Add an audio track",
+        r#"{"session": 7, "label": "Vox", "after": "keys"}"#;
+    POST "/api/graph/sample" => sample up to UPLOAD; writes, agents,
+        "Give a Sampler a WAV file on this computer",
+        r#"{"session": 7, "at": 42, "call": "tracks/drums.ts#2", "file": "/Users/you/Samples/kick.wav"}"#;
+}
 
 /// The most one upload may be, all its files together: 1 GiB. A 15-minute stereo file of 32 bits at
 /// 96 kHz is 691 MB; a longer, wider or faster one, or several together, can be more, and the page
 /// says so in words before it sends them (the review's R9). The app sends paths: no limit.
 const UPLOAD: usize = 1 << 30;
-
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/graph/audio/peaks", get(audio_peaks))
-        .route("/api/graph/audio/import", post(audio_import).layer(DefaultBodyLimit::max(UPLOAD)))
-        .route("/api/graph/audio/track", post(audio_track))
-        .route("/api/graph/sample", post(sample).layer(DefaultBodyLimit::max(UPLOAD)))
-        .route_layer(axum::middleware::from_fn_with_state(state, writes))
-}
-
-/// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if WRITES_AUDIO.contains(&req.uri().path())
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
-}
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
     crate::caller::blocking(f).await.map_err(anyhow::Error::from)?.map_err(ApiError::from)

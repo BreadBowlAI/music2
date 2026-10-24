@@ -1,17 +1,12 @@
-//! Lane D's routes (next): turn an effect off and on, move it before or after another, and choose
-//! what a Duck listens to. In a router of its own, merged into the
-//! API's, as `routes_mix.rs` is; a route here that writes the project is in [`WRITES_FX`], and a
-//! read-only window answers it 423 with WRITE-18's message.
+//! Lane D's routes (next), in the one route table (AGENT-8): turn an effect off and on, move it
+//! before or after another, and choose what a Duck listens to.
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::post;
-use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::AppState;
 use crate::routes::ApiError;
@@ -19,25 +14,16 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-/// The routes here that write the open project.
-pub const WRITES_FX: &[&str] = &["/api/graph/effect/bypass", "/api/graph/effect/move", "/api/graph/effect/sidechain"];
-
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/graph/effect/bypass", post(effect_bypass))
-        .route("/api/graph/effect/move", post(effect_move))
-        .route("/api/graph/effect/sidechain", post(effect_sidechain))
-        .route_layer(axum::middleware::from_fn_with_state(state, writes))
-}
-
-/// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if WRITES_FX.contains(&req.uri().path())
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
+crate::api::routes! {
+    POST "/api/graph/effect/bypass" => effect_bypass; writes, agents,
+        "Turn an effect off (on: true bypasses it), or on again",
+        r#"{"session": 7, "revision": 42, "node": "tracks/keys.ts#1", "on": true}"#;
+    POST "/api/graph/effect/move" => effect_move; writes, agents,
+        "Move an effect before the one written around it (earlier), or after the one around it",
+        r#"{"session": 7, "revision": 42, "node": "tracks/keys.ts#1", "earlier": true}"#;
+    POST "/api/graph/effect/sidechain" => effect_sidechain; writes, agents,
+        "Make a Duck listen to another track",
+        r#"{"session": 7, "revision": 42, "node": "song.ts#4", "track": "kick"}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {

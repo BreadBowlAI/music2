@@ -1,17 +1,12 @@
-//! The routes of the polish track's lane D, in a router of their own, merged into the API's: the
-//! song's key. A route here that writes the project is in [`WRITES_NOTES`], and a read-only window
-//! answers it 423 with WRITE-18's message, as `routes.rs` answers its own.
+//! The routes of the polish track's lane D, in the one route table (AGENT-8): the song's key.
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::post;
-use axum::{Json, Router};
 use m2_editor::songkey::SongKey;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::AppState;
 use crate::routes::ApiError;
@@ -19,21 +14,10 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-/// The routes here that write the open project.
-pub const WRITES_NOTES: &[&str] = &["/api/graph/song-key"];
-
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new().route("/api/graph/song-key", post(song_key)).route_layer(axum::middleware::from_fn_with_state(state, writes))
-}
-
-/// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if WRITES_NOTES.contains(&req.uri().path())
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
+crate::api::routes! {
+    POST "/api/graph/song-key" => song_key; writes, agents,
+        "Set the song's key, or take it away (null)",
+        r#"{"session": 7, "key": {"root": "A", "scale": "minor"}}"#;
 }
 
 #[derive(Deserialize)]

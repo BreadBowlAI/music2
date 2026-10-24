@@ -4,6 +4,7 @@
 //! `music2-desktop` hosts it in-process. Local scripts and agents use the same API with the tools
 //! key that `~/.music2/session.json` publishes; the page has a key of its own (AGENT-10).
 
+pub mod api;
 pub mod caller;
 pub mod export;
 mod files;
@@ -308,7 +309,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
     listener.set_nonblocking(true)?;
     let url = format!("http://{}", listener.local_addr()?);
-    let app = routes::router(state.clone(), &opts.web_dir);
+    let app = routes::app(state.clone(), &opts.web_dir);
     std::thread::Builder::new().name("music2-http".into()).spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async move {

@@ -76,6 +76,39 @@ pub fn words(s: &str) -> String {
     cut
 }
 
+/// An agent's words as a header carries them (AGENT-10): UTF-8, percent-encoded, so any name fits
+/// in one, whatever its letters. `m2` sends `x-m2-as` and `x-m2-why` so, and a GET's keys in its
+/// query, which is encoded the same way.
+pub fn encoded(words: &str) -> String {
+    words
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (b as char).to_string(),
+            b => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// A header's words (AGENT-10): each `%XX` the byte it names, the rest as it is, read as UTF-8. A
+/// plain name sent as it is reads the same.
+pub fn decoded(said: &str) -> String {
+    let (b, mut out, mut i) = (said.as_bytes(), vec![], 0);
+    let hex = |c: Option<&u8>| c.and_then(|&c| (c as char).to_digit(16));
+    while i < b.len() {
+        match (b[i], hex(b.get(i + 1)), hex(b.get(i + 2))) {
+            (b'%', Some(high), Some(low)) => {
+                out.push((high * 16 + low) as u8);
+                i += 3;
+            }
+            (c, ..) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Whether an agent's name reads as the app's own words for a change it didn't make: the notice's
 /// "Changed outside the app", the Edit menu's "outside change" (AGENT-10). Such a name is `agent`,
 /// so no agent's change passes for an outside one.
@@ -162,5 +195,18 @@ mod tests {
         }
         assert_eq!(name("Outsider"), "Outsider");
         assert_eq!(name("Claude"), "Claude");
+    }
+
+    // AGENT-10 (track 4): words cross a header whole, percent-encoded, whatever their letters; a
+    // plain name sent as it is reads the same, and a stray `%` is kept.
+    #[test]
+    fn an_agents_words_cross_a_header_whole() {
+        for words in ["Clåude", "mark the drop: 100% «louder» 🎹", "Claude 2", ""] {
+            let sent = encoded(words);
+            assert!(sent.bytes().all(|b| b.is_ascii_graphic()), "{sent}");
+            assert_eq!(decoded(&sent), words);
+        }
+        assert_eq!(decoded("Codex"), "Codex");
+        assert_eq!(decoded("100% sure %4"), "100% sure %4");
     }
 }

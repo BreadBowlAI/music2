@@ -1,17 +1,12 @@
-//! Lane A's routes (polish): change a track's instrument, and its ID; and the bus routes
-//! (RENDER-34): add a bus, change a send, route a channel. In a router of its own,
-//! merged into the API's, as `routes_8b.rs` is; a route here that writes the project is in
-//! [`WRITES_MIX`], and a read-only window answers it 423 with WRITE-18's message.
+//! Lane A's routes (polish), in the one route table (AGENT-8): change a track's instrument, and its
+//! ID; and the bus routes (RENDER-34): add a bus, change a send, route a channel.
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::post;
-use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::AppState;
 use crate::routes::ApiError;
@@ -19,29 +14,25 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-/// The routes here that write the open project.
-pub const WRITES_MIX: &[&str] =
-    &["/api/graph/track/instrument", "/api/graph/track/rekey", "/api/graph/mix/bus", "/api/graph/mix/send", "/api/graph/mix/route"];
-
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/graph/track/instrument", post(track_instrument))
-        .route("/api/graph/track/rekey", post(track_rekey))
-        .route("/api/graph/track/rekey/check", post(track_rekey_check))
-        .route("/api/graph/mix/bus", post(mix_bus))
-        .route("/api/graph/mix/send", post(mix_send))
-        .route("/api/graph/mix/route", post(mix_route))
-        .route_layer(axum::middleware::from_fn_with_state(state, writes))
-}
-
-/// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if WRITES_MIX.contains(&req.uri().path())
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
+crate::api::routes! {
+    POST "/api/graph/track/instrument" => track_instrument; writes, agents,
+        "Change a track's instrument, by its component id as the state's instruments list it",
+        r#"{"session": 7, "module": "keys", "component": "std:synth-pad"}"#;
+    POST "/api/graph/track/rekey" => track_rekey; writes, agents,
+        "Change a track's ID (its key)",
+        r#"{"session": 7, "module": "keys", "key": "piano"}"#;
+    POST "/api/graph/track/rekey/check" => track_rekey_check; reads, agents,
+        "Whether a track's ID can be changed to this one",
+        r#"{"session": 7, "module": "keys", "key": "piano"}"#;
+    POST "/api/graph/mix/bus" => mix_bus; writes, agents,
+        "Add a bus: reverb, delay or group",
+        r#"{"session": 7, "kind": "reverb", "label": "Room"}"#;
+    POST "/api/graph/mix/send" => mix_send; writes, agents,
+        "Add or remove a send from a channel to a bus, or put it before or after the fader (pre)",
+        r#"{"session": 7, "channel": "keys", "bus": "reverb", "action": "add"}"#;
+    POST "/api/graph/mix/route" => mix_route; writes, agents,
+        "Send a channel to a group bus, or back to the master (to: null)",
+        r#"{"session": 7, "channel": "keys", "to": "group"}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {

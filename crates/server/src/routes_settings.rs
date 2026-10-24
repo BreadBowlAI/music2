@@ -1,13 +1,13 @@
-//! Lane C's routes, in a router of their own, merged into the API's: this machine's settings (gaps
-//! #31) and the sound inputs there are (the io plan's D13), and undo's names (gaps #29). Settings aren't a project write: no session, no undo; they
-//! work with no song open and in a read-only window. Naming an undo step writes nothing either.
+//! Lane C's routes, in the one route table (AGENT-8): this machine's settings (gaps #31) and the
+//! sound inputs there are (the io plan's D13), and undo's names (gaps #29). Settings aren't a
+//! project write: no session, no undo; they work with no song open and in a read-only window.
+//! Naming an undo step writes nothing either.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 
@@ -18,11 +18,19 @@ use crate::{AppState, project};
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/settings", get(settings_get).post(settings_set))
-        .route("/api/audio/inputs", get(audio_inputs))
-        .route("/api/graph/step", post(graph_step))
+crate::api::routes! {
+    GET "/api/settings" => settings_get; reads, agents,
+        "This computer's settings: the sound output, where new songs go, Record's options, the MIDI keyboards and the sound input",
+        r#"{}"#;
+    POST "/api/settings" => settings_set; reads, musician,
+        "Change this computer's settings",
+        r#"{"record": {"count_in": true, "quantize": false}}"#;
+    GET "/api/audio/inputs" => audio_inputs; reads, agents,
+        "The sound inputs there are, the default first",
+        r#"{}"#;
+    POST "/api/graph/step" => graph_step; reads, musician,
+        "Name the undo step the window's own edit made",
+        r#"{"session": 7, "revision": 42, "name": "Keys brightness"}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {

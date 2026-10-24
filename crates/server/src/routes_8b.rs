@@ -1,15 +1,12 @@
-//! The routes of 8b's back ends, in a router of their own, merged into the API's (G5): mute and
-//! solo, clip gestures, and audition, also read off the WebSocket ([`ws_text`]). A route here that writes the
-//! project is in [`WRITES_8B`], and a read-only window answers it 423 with WRITE-18's message, as
-//! `routes.rs` answers its own.
+//! The routes of 8b's back ends, in the one route table (AGENT-8): mute and solo, clip gestures,
+//! and audition, also read off a page's WebSocket ([`ws_text`]).
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
-use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -22,30 +19,31 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-/// The routes here that write the open project.
-pub const WRITES_8B: &[&str] = &["/api/graph/track/mute", "/api/graph/clips", "/api/graph/automate/remove"];
-
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/graph/overlay", post(graph_overlay))
-        .route("/api/graph/track/mute", post(track_mute))
-        .route("/api/graph/clips", post(graph_clips))
-        .route("/api/graph/automate/remove", post(automate_remove))
-        .route("/api/graph/audition", post(graph_audition))
-        .route("/api/graph/midi/inject", post(midi_inject))
-        .route("/api/graph/plugin/window", post(plugin_window))
-        .route("/api/graph/plugin/latch", post(plugin_latch))
-        .route_layer(axum::middleware::from_fn_with_state(state, writes))
-}
-
-/// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if WRITES_8B.contains(&req.uri().path())
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
+crate::api::routes! {
+    POST "/api/graph/overlay" => graph_overlay; reads, musician,
+        "Mute or solo tracks while listening, which never changes the song",
+        r#"{"session": 7, "solo": {"keys": true}}"#;
+    POST "/api/graph/track/mute" => track_mute; writes, agents,
+        "Mute tracks in the song, written in their code, or unmute them",
+        r#"{"session": 7, "modules": ["keys"], "muted": true}"#;
+    POST "/api/graph/clips" => graph_clips; writes, agents,
+        "A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio or set",
+        r#"{"session": 7, "gesture": {"op": "move", "clips": [{"module": "keys", "lane": "chords", "id": "k3f9q2zt"}], "by": 4}}"#;
+    POST "/api/graph/automate/remove" => automate_remove; writes, agents,
+        "Take a knob's automation out: the lane's value at the beat (else its fallback) goes back into the code",
+        r#"{"session": 7, "module": "bass", "lane": "cutoff", "beat": 16}"#;
+    POST "/api/graph/audition" => graph_audition; reads, musician,
+        "Play or let go of notes on a lane, as the piano roll and the keyboard do",
+        r#"{"client": "w1", "module": "keys", "lane": "chords", "on": [{"h": 1, "pitch": 60}]}"#;
+    POST "/api/graph/midi/inject" => midi_inject; reads, musician,
+        "What a MIDI keyboard would send (only with M2_MIDI=inject, for the browser suites)",
+        r#"{"device": "Keys", "plugged": true, "bytes": [144, 60, 100]}"#;
+    POST "/api/graph/plugin/window" => plugin_window; reads, musician,
+        "Open or close a plugin's own window",
+        r#"{"session": 7, "node": "synth", "open": true}"#;
+    POST "/api/graph/plugin/latch" => plugin_latch; reads, musician,
+        "Let a lane or a cable drive a plugin's parameter again",
+        r#"{"session": 7, "node": "synth"}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
@@ -204,7 +202,7 @@ struct InjectReq {
 /// in where no keyboard can be opened; otherwise there is no such API (404).
 async fn midi_inject(State(s): S, Json(r): Json<InjectReq>) -> Result<Response, ApiError> {
     if !crate::midi_injects() {
-        return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "no such API"}))).into_response());
+        return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "no such API here: it answers only with M2_MIDI=inject"}))).into_response());
     }
     blocking(move || {
         use m2_os::midi::Event;

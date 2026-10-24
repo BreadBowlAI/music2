@@ -4,10 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{DefaultBodyLimit, Query, State};
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -47,84 +46,172 @@ pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Resu
     crate::caller::blocking(f).await.map_err(|e| err(e.to_string()))?.map_err(ApiError::from)
 }
 
-pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
+crate::api::routes! {
+    GET "/api/ws" => ws; reads, agents,
+        "Hear what happens in the app as it happens: a WebSocket of events, one JSON object each, as m2 watch prints them",
+        r#"{}"#;
+    GET "/api/graph" => graph_get; reads, agents,
+        "The open song as the app shows it: its session, the graph view with its revision and every knob's id, the timeline, the Mix view, problems, undo's names and where playback is",
+        r#"{}"#;
+    POST "/api/graph/open" => graph_open; reads, musician,
+        "Open a song",
+        r#"{"path": "/Users/you/Music/music2/Night drive"}"#;
+    POST "/api/graph/close" => graph_close; reads, musician,
+        "Close the open song",
+        r#"{}"#;
+    GET "/api/graph/status" => graph_status; reads, agents,
+        "Where playback is: playing or not, the beat, the tempo there and the loop, with the open song's session",
+        r#"{}"#;
+    POST "/api/graph/preview" => graph_preview; writes, musician,
+        "Hear a knob's new value while it is dragged (the first one begins the drag)",
+        r#"{"session": 7, "revision": 42, "id": "tracks/keys.ts#1/@brightness", "gesture": "drag-1", "value": 0.6, "client": "w1"}"#;
+    POST "/api/graph/preview/cancel" => graph_cancel_preview; reads, musician,
+        "End a knob drag without saving: the code's value plays again",
+        r#"{"session": 7, "id": "tracks/keys.ts#1/@brightness", "gesture": "drag-1"}"#;
+    POST "/api/graph/set" => graph_set; writes, agents,
+        "Write a knob's value into the code, as one undo step (for an agent, never a drag's commit)",
+        r#"{"session": 7, "revision": 42, "id": "song.ts#2/0.hats.pan", "gesture": "set", "value": 0.45}"#;
+    GET "/api/graph/leases" => graph_leases; reads, agents,
+        "The drags in progress: knobs, clips and the tempo",
+        r#"{}"#;
+    POST "/api/graph/lease/begin" => lease_begin; writes, musician,
+        "Begin a knob drag",
+        r#"{"session": 7, "revision": 42, "id": "tracks/keys.ts#1/@brightness", "client": "w1", "gesture": "drag-1"}"#;
+    POST "/api/graph/lease/update" => lease_update; reads, musician,
+        "Hear a knob drag's newest value",
+        r#"{"lease": 3, "seq": 12, "value": 0.6}"#;
+    POST "/api/graph/lease/keepalive" => lease_keepalive; reads, musician,
+        "Keep a knob drag going while the knob is held still",
+        r#"{"lease": 3}"#;
+    POST "/api/graph/lease/commit" => lease_commit; writes, musician,
+        "Save a knob drag's value, as one undo step",
+        r#"{"lease": 3, "value": 0.6}"#;
+    POST "/api/graph/lease/cancel" => lease_cancel; reads, musician,
+        "End a knob drag without saving",
+        r#"{"lease": 3}"#;
+    POST "/api/graph/connect" => graph_connect; writes, agents,
+        "Connect a named signal to a knob's input: a cable, written in code",
+        r#"{"session": 7, "revision": 42, "from": "kick.env", "to": "song.ts#5/0"}"#;
+    POST "/api/graph/disconnect" => graph_disconnect; writes, agents,
+        "Take a cable out: the input's default is written in its place",
+        r#"{"session": 7, "revision": 42, "id": "song.ts#5/0"}"#;
+    POST "/api/graph/effect/add" => graph_add_effect; writes, agents,
+        "Put an effect after a call's sound, by its component id as the state's effects list it",
+        r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "std:delay"}"#;
+    POST "/api/graph/effect/remove" => graph_remove_effect; writes, agents,
+        "Take an effect out, keeping what it was applied to",
+        r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1"}"#;
+    POST "/api/graph/lane" => graph_lane; writes, agents,
+        "Write every clip of a notes lane (pitches as numbers or names, notes from their clip's start)",
+        r#"{"session": 7, "revision": 42, "module": "keys", "lane": "chords", "clips": [{"id": "k3f9q2zt", "start": 0, "length": 4, "notes": [{"pitch": "C4", "start": 0, "length": 1}]}]}"#;
+    POST "/api/graph/relink" => graph_relink; writes, agents,
+        "Move data no lane or plugin reads to where it is read now: a lane file, a track's folder or a plugin state",
+        r#"{"session": 7, "revision": 42, "from": "data/kick/hits.json", "to": "data/kicks/hits.json"}"#;
+    POST "/api/graph/data/delete" => graph_delete_data; writes, agents,
+        "Delete data no lane or plugin reads",
+        r#"{"session": 7, "revision": 42, "file": "data/kick/old.json"}"#;
+    POST "/api/graph/fix" => graph_fix up to crate::TX_BODY; writes, agents,
+        "Apply a fix a problem offers, as the state's problems list it, whole",
+        r#"{"session": 7, "fix": {"code": "delete-data", "title": "Delete it", "likely": false, "tx": {"id": "fix-delete-old", "base": {"data/kick/old.json": "sha256:9b74c9897bac770ffc029102a200c5de7d2a5d3e5d4c0f2f8b1c4e3a7d6f5e4c"}, "ops": [{"op": "remove", "file": "data/kick/old.json"}], "expect": "identical"}}}"#;
+    POST "/api/graph/label" => graph_label; writes, agents,
+        "Rename a track's label (its key stays)",
+        r#"{"session": 7, "module": "keys", "label": "Piano"}"#;
+    POST "/api/graph/automate" => graph_automate; writes, agents,
+        "Automate a knob: a new, empty lane plays its value",
+        r#"{"session": 7, "revision": 42, "id": "tracks/keys.ts#1/@brightness"}"#;
+    POST "/api/graph/track/add" => track_add; writes, agents,
+        "Add a track playing an instrument, by its component id as the state's instruments list it",
+        r#"{"session": 7, "component": "std:synth-pluck", "label": "Pluck", "after": "keys"}"#;
+    POST "/api/graph/track/duplicate" => track_duplicate; writes, agents,
+        "Copy a track: its code, its clips with new ids, its plugin states and its channel",
+        r#"{"session": 7, "module": "keys"}"#;
+    POST "/api/graph/track/delete" => track_delete; writes, agents,
+        "Delete a track (with cascade, out of the effects that read it too)",
+        r#"{"session": 7, "module": "keys", "cascade": false}"#;
+    POST "/api/graph/mix/insert" => mix_insert; writes, agents,
+        "Write a mixer channel's first pan into its entry",
+        r#"{"session": 7, "channel": "keys", "control": "pan", "value": -0.2}"#;
+    POST "/api/graph/layout" => graph_layout; writes, agents,
+        "Reorder the tracks, or recolour one, in layout.json",
+        r#"{"session": 7, "colour": {"module": "keys", "colour": "teal"}}"#;
+    POST "/api/graph/tempo" => graph_tempo; writes, agents,
+        "Set the tempo at a beat, or add or remove a tempo change there",
+        r#"{"session": 7, "at": 0, "bpm": 96}"#;
+    POST "/api/graph/meter" => graph_meter; writes, agents,
+        "Set the time signature at a beat, or add or remove a change there",
+        r#"{"session": 7, "at": 0, "beats": 7, "unit": 8}"#;
+    POST "/api/graph/title" => graph_title; writes, agents,
+        "Name the song: its name in music2.toml",
+        r#"{"session": 7, "name": "Night drive"}"#;
+    POST "/api/graph/panic" => graph_panic; reads, musician,
+        "Stop all sound at once",
+        r#"{}"#;
+    POST "/api/graph/lock/retry" => graph_lock_retry; reads, musician,
+        "Try the song's lock again, in a window open read-only",
+        r#"{"session": 7}"#;
+    POST "/api/tx/check" => tx_check up to crate::TX_BODY; reads, agents,
+        "Check a Tx: its delta, the delta's hash and the diagnostics; nothing is written",
+        r#"{"session": 7, "tx": {"id": "tx-delete-old", "base": {"data/kick/old.json": "sha256:9b74c9897bac770ffc029102a200c5de7d2a5d3e5d4c0f2f8b1c4e3a7d6f5e4c"}, "ops": [{"op": "remove", "file": "data/kick/old.json"}], "expect": "identical"}}"#;
+    POST "/api/tx/commit" => tx_commit up to crate::TX_BODY; writes, agents,
+        "Commit a Tx, as one undo step: m2 sends its writes here",
+        r#"{"session": 7, "tx": {"id": "tx-delete-old", "base": {"data/kick/old.json": "sha256:9b74c9897bac770ffc029102a200c5de7d2a5d3e5d4c0f2f8b1c4e3a7d6f5e4c"}, "ops": [{"op": "remove", "file": "data/kick/old.json"}], "expect": "identical"}}"#;
+    POST "/api/graph/undo" => graph_undo; writes, agents,
+        "Take back the newest change (an agent's only when it is its own)",
+        r#"{"session": 7}"#;
+    POST "/api/graph/undo/skip" => graph_undo_skip; writes, musician,
+        "Skip the newest step, which undo can't take back",
+        r#"{"session": 7, "step": 57}"#;
+    POST "/api/graph/redo" => graph_redo; writes, musician,
+        "Put back the change undone last",
+        r#"{"session": 7, "step": 57}"#;
+    POST "/api/graph/transport" => graph_transport; reads, musician,
+        "Play or stop: play, stop, toggle or restart",
+        r#"{"action": "play"}"#;
+    POST "/api/graph/seek" => graph_seek; reads, musician,
+        "Move the playhead to a beat",
+        r#"{"beat": 32}"#;
+    POST "/api/graph/loop" => graph_loop; reads, musician,
+        "Set the loop's beats, or turn it on or off",
+        r#"{"start": 32, "end": 64, "on": true}"#;
+    GET "/api/graph/files" => graph_files; reads, agents,
+        "The song's code files, as the code editor lists them",
+        r#"{}"#;
+    PUT "/api/graph/file" => graph_put_file up to crate::TX_BODY; writes, agents,
+        "Save a code file over the text it had, as the code editor does (an agent's lands only if the song then builds)",
+        r#"{"session": 7, "path": "tracks/keys.ts", "base": "the text it had", "text": "the new text"}"#;
+    GET "/api/graph/types" => graph_types; reads, agents,
+        "The type declarations the code editor checks with",
+        r#"{}"#;
+    POST "/api/graph/unsaved" => graph_unsaved; reads, musician,
+        "Say which files have changes not yet saved in the code editor",
+        r#"{"session": 7, "files": ["tracks/keys.ts"]}"#;
+    POST "/api/graph/export" => graph_export; reads, musician,
+        "Export the song's audio, which may pause playback (agents render with m2 render)",
+        r#"{"path": "/Users/you/Music/Night drive.wav"}"#;
+    GET "/api/project/templates" => project_templates; reads, agents,
+        "The templates and examples a new song can start from, and the songs folder",
+        r#"{}"#;
+    POST "/api/project/new" => project_new; reads, musician,
+        "Make a new song from a template or an example, and open it",
+        r#"{"name": "Night drive", "template": "starter", "dir": "/Users/you/Music/music2"}"#;
+}
+
+/// The app's whole router: the route table's routes behind its gate (AGENT-8) and `auth`, and the
+/// page for every other path.
+pub fn app(state: Arc<AppState>, web_dir: &Path) -> Router {
     let spa = ServeDir::new(web_dir).fallback(ServeFile::new(web_dir.join("index.html")));
-    Router::new()
-        .route("/api/ws", get(ws))
-        .route("/api/graph", get(graph_get))
-        .route("/api/graph/open", post(graph_open))
-        .route("/api/graph/close", post(graph_close))
-        .route("/api/graph/status", get(graph_status))
-        .route("/api/graph/preview", post(graph_preview))
-        .route("/api/graph/preview/cancel", post(graph_cancel_preview))
-        .route("/api/graph/set", post(graph_set))
-        .route("/api/graph/leases", get(graph_leases))
-        .route("/api/graph/lease/begin", post(lease_begin))
-        .route("/api/graph/lease/update", post(lease_update))
-        .route("/api/graph/lease/keepalive", post(lease_keepalive))
-        .route("/api/graph/lease/commit", post(lease_commit))
-        .route("/api/graph/lease/cancel", post(lease_cancel))
-        .route("/api/graph/connect", post(graph_connect))
-        .route("/api/graph/effect/add", post(graph_add_effect))
-        .route("/api/graph/effect/remove", post(graph_remove_effect))
-        .route("/api/graph/lane", post(graph_lane))
-        .route("/api/graph/relink", post(graph_relink))
-        .route("/api/graph/data/delete", post(graph_delete_data))
-        .route("/api/graph/fix", post(graph_fix).layer(DefaultBodyLimit::max(crate::TX_BODY)))
-        .route("/api/graph/label", post(graph_label))
-        .route("/api/graph/automate", post(graph_automate))
-        .route("/api/graph/track/add", post(track_add))
-        .route("/api/graph/track/duplicate", post(track_duplicate))
-        .route("/api/graph/track/delete", post(track_delete))
-        .route("/api/graph/mix/insert", post(mix_insert))
-        .route("/api/graph/layout", post(graph_layout))
-        .route("/api/graph/tempo", post(graph_tempo))
-        .route("/api/graph/meter", post(graph_meter))
-        .route("/api/graph/title", post(graph_title))
-        .route("/api/graph/panic", post(graph_panic))
-        .route("/api/graph/lock/retry", post(graph_lock_retry))
-        .route("/api/tx/check", post(tx_check).layer(DefaultBodyLimit::max(crate::TX_BODY)))
-        .route("/api/tx/commit", post(tx_commit).layer(DefaultBodyLimit::max(crate::TX_BODY)))
-        .route("/api/graph/undo", post(graph_undo))
-        .route("/api/graph/undo/skip", post(graph_undo_skip))
-        .route("/api/graph/redo", post(graph_redo))
-        .route("/api/graph/disconnect", post(graph_disconnect))
-        .route("/api/graph/transport", post(graph_transport))
-        .route("/api/graph/seek", post(graph_seek))
-        .route("/api/graph/loop", post(graph_loop))
-        .route("/api/graph/files", get(graph_files))
-        .route("/api/graph/file", put(graph_put_file).layer(DefaultBodyLimit::max(crate::TX_BODY)))
-        .route("/api/graph/types", get(graph_types))
-        .route("/api/graph/unsaved", post(graph_unsaved))
-        .route("/api/graph/export", post(graph_export))
-        .merge(crate::routes_8b::router(state.clone()))
-        .merge(crate::routes_mix::router(state.clone()))
-        .merge(crate::routes_notes::router(state.clone()))
-        .merge(crate::routes_project::router(state.clone()))
-        .merge(crate::routes_view::router(state.clone()))
-        .merge(crate::routes_fx::router(state.clone()))
-        .merge(crate::routes_settings::router(state.clone()))
-        .merge(crate::routes_leases::router(state.clone()))
-        .merge(crate::routes_audio::router(state.clone()))
-        .merge(crate::routes_record::router(state.clone()))
-        .merge(crate::routes_exchange::router(state.clone()))
-        .merge(crate::routes_plugins::router(state.clone()))
-        .merge(crate::routes_presets::router(state.clone()))
-        .merge(crate::routes_see::router(state.clone()))
-        .route("/api/project/templates", get(project_templates))
-        .route("/api/project/new", post(project_new))
-        // An unknown API path is a clear error, not the UI's index.html.
-        .route("/api/{*rest}", any(no_such_api))
+    crate::api::router()
         .fallback_service(spa)
-        .layer(axum::middleware::from_fn_with_state(state.clone(), writes))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::api::gate))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
 }
 
 /// Reject `/api` calls without one of the two keys (AGENT-10), and serve each as its caller: the
 /// page's key is the musician's; the tools key an agent's, named by its `x-m2-as` header (else
-/// `agent`), saying why with `x-m2-why`, and refused on the musician's routes (AGENT-3). The key
-/// decides, never what a request says about itself.
+/// `agent`), saying why with `x-m2-why`, both percent-encoded UTF-8. The key decides, never what a
+/// request says about itself; the table's gate then refuses the agent the musician's routes
+/// (AGENT-11).
 async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     if !req.uri().path().starts_with("/api/") {
         return next.run(req).await;
@@ -135,12 +222,8 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
     let caller = if carries(&s.page_token) {
         crate::caller::Caller::Page
     } else if carries(&s.token) {
-        if MUSICIANS.contains(&req.uri().path()) || (req.method() == axum::http::Method::POST && req.uri().path() == "/api/focus") {
-            let why = "agents can't do this: it acts on what the musician holds in the app (a drag, unsaved code, undo, a take, Compare, their focus)";
-            return (StatusCode::FORBIDDEN, Json(json!({"error": why}))).into_response();
-        }
-        let said = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
-        crate::caller::Caller::agent(said("x-m2-as"), said("x-m2-why"))
+        let said = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok()).map(crate::caller::decoded);
+        crate::caller::Caller::agent(said("x-m2-as").as_deref(), said("x-m2-why").as_deref())
     } else {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
     };
@@ -156,81 +239,6 @@ pub(crate) fn same_key(given: &str, key: &str) -> bool {
         return false;
     }
     std::hint::black_box(a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y))) == 0
-}
-
-/// The routes that act on what the musician holds (AGENT-3): their drags after the begin, the code
-/// editor's list of unsaved files, undo's skip, a take's stop and cancel, and Compare; and what the
-/// musician looks at, `POST /api/focus` (AGENT-6). The tools key can't use them: an agent's change
-/// is one edit, refused while the musician holds what it touches, and it never ends what they hold.
-/// An agent's song open, close and new song meet the holds of everything instead (busy: a take,
-/// Compare), until track 4 refuses them.
-const MUSICIANS: [&str; 18] = [
-    "/api/graph/lease/update",
-    "/api/graph/lease/keepalive",
-    "/api/graph/lease/commit",
-    "/api/graph/lease/cancel",
-    "/api/graph/preview/cancel",
-    "/api/graph/lane/lease/update",
-    "/api/graph/lane/lease/keepalive",
-    "/api/graph/lane/lease/commit",
-    "/api/graph/lane/lease/cancel",
-    "/api/graph/tempo/lease/update",
-    "/api/graph/tempo/lease/keepalive",
-    "/api/graph/tempo/lease/commit",
-    "/api/graph/tempo/lease/cancel",
-    "/api/graph/unsaved",
-    "/api/graph/undo/skip",
-    "/api/graph/record/stop",
-    "/api/graph/record/cancel",
-    "/api/graph/compare",
-];
-
-/// The routes that write the open project, or begin a gesture whose commit would.
-const WRITES: [&str; 28] = [
-    "/api/graph/preview",
-    "/api/graph/set",
-    "/api/graph/lease/begin",
-    "/api/graph/lease/commit",
-    "/api/graph/connect",
-    "/api/graph/disconnect",
-    "/api/graph/effect/add",
-    "/api/graph/effect/remove",
-    "/api/graph/lane",
-    "/api/graph/relink",
-    "/api/graph/data/delete",
-    "/api/graph/fix",
-    "/api/graph/label",
-    "/api/graph/automate",
-    "/api/graph/track/add",
-    "/api/graph/track/duplicate",
-    "/api/graph/track/delete",
-    "/api/graph/mix/insert",
-    "/api/graph/preset/load",
-    "/api/graph/layout",
-    "/api/graph/tempo",
-    "/api/graph/meter",
-    "/api/graph/title",
-    "/api/graph/undo",
-    "/api/graph/undo/skip",
-    "/api/graph/redo",
-    "/api/graph/file",
-    "/api/tx/commit",
-];
-
-/// A write to a project open read-only answers 423 with WRITE-18's message, before anything is
-/// planned (WRITE-17). Checks, reads, the transport and exports go on.
-async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    let path = req.uri().path();
-    if WRITES.contains(&path)
-        && let Some(why) = s.graph.read_only()
-    {
-        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-    }
-    next.run(req).await
-}
-
-async fn no_such_api() -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({"error": "no such API"}))).into_response()
 }
 
 // ---------------------------------------------------------------- events
@@ -264,9 +272,10 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
 }
 
 /// Forward every event (toasts, `graph`) and the latest meters to one client until it goes away,
-/// and take what it sends: audition, whose answers go to this socket only (`routes_8b::ws_text`).
-/// A socket that falls behind is told how many events it missed (AGENT-6): `{"t": "lagged",
-/// "missed": n}`, then hears on from the oldest still kept.
+/// and take what a page's socket sends: audition, whose answers go to this socket only, and the
+/// MIDI keyboard's target (`routes_8b::ws_text`). What an agent's socket sends is ignored: those
+/// are the musician's (AGENT-11). A socket that falls behind is told how many events it missed
+/// (AGENT-6): `{"t": "lagged", "missed": n}`, then hears on from the oldest still kept.
 async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>, page: bool) {
     let (unheard, mut events, _page) = state.subscribe(page);
     let mut meters = state.meters.subscribe();
@@ -298,7 +307,7 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<Str
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                    Some(Ok(Message::Text(text))) => {
+                    Some(Ok(Message::Text(text))) if page => {
                         if let Some(reply) = crate::routes_8b::ws_text(&state, client.as_deref(), &text).await
                             && socket.send(Message::Text(reply.into())).await.is_err()
                         {
@@ -323,7 +332,6 @@ async fn project_templates() -> ApiResult {
 async fn project_new(State(s): S, Json(r): Json<crate::project::NewSong>) -> ApiResult {
     let state = s.clone();
     let v = blocking(move || {
-        state.graph.may_end_song()?;
         let v = crate::project::new_song(&state.graph, &r)?;
         state.opened();
         Ok(v)
@@ -348,11 +356,7 @@ struct GraphOpenReq {
 
 async fn graph_open(State(s): S, Json(r): Json<GraphOpenReq>) -> ApiResult {
     let state = s.clone();
-    let v = blocking(move || {
-        state.graph.may_end_song()?;
-        state.open_song(&r.path)
-    })
-    .await?;
+    let v = blocking(move || state.open_song(&r.path)).await?;
     s.graph_changed();
     Ok(Json(v))
 }
@@ -360,7 +364,6 @@ async fn graph_open(State(s): S, Json(r): Json<GraphOpenReq>) -> ApiResult {
 async fn graph_close(State(s): S) -> ApiResult {
     let state = s.clone();
     blocking(move || {
-        state.graph.may_end_song()?;
         state.graph.close();
         state.closed();
         Ok(())
