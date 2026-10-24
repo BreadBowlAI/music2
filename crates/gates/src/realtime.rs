@@ -34,6 +34,7 @@ use crate::paired::{Diffs, Side, in_turns, median, rank};
 use crate::report::Outcome;
 use crate::{Lab, Song, songs};
 
+pub mod beside;
 pub mod live;
 
 /// Where every timed run starts: 3:00, as G7f's.

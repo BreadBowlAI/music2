@@ -68,6 +68,12 @@ GATES (default: all):
                   at 48 kHz and --frames. Judged everywhere: no crash or non-finite sample, and
                   the engine as far as the device. Then each count's live p99 beside its back-to-
                   back p99, and how late workers came into a block.
+                  --beside agents: G13, the same while agents work beside it, each a process of
+                  its own: m2 listen back to back on 8 bars, and m2 set edits forwarded to an
+                  app (this process's server) that has the song open. Judged everywhere: listens
+                  and edits landed, every listen at background priority; its timings are
+                  recorded, on a Mac too until its first runs there are. Needs the m2 beside
+                  m2-gates (cargo build --release -p m2)
                   --offline: a song rendered on more threads, on the runtime alone: each count of
                   --sweep twice, back to back, against one thread (mean, p99, speed-up); the same
                   bits on every count and the pure fixtures matching e2e/renders.sha256 (judged);
@@ -104,6 +110,7 @@ OPTIONS:
   --audible        realtime live: play it aloud (default: rendered, and zeros to the device)
   --song DIR       realtime live: another song than the reference project (one with plugins
                    renders on the device's thread alone, HOST-2)
+  --beside agents  realtime live: G13, agents listening and editing beside it
   --work DIR       where projects are generated (default: a new folder under the temp dir)
   --keep           keep the work folder afterwards
 ";
@@ -175,6 +182,7 @@ fn run() -> Result<bool> {
             "--between" => asked.between = live::between(value()?)?,
             "--audible" => asked.audible = true,
             "--song" => asked.song = Some(PathBuf::from(value()?)),
+            "--beside" => asked.beside = live::beside(value()?)?,
             "--seconds" => {
                 sweep.seconds =
                     value()?.parse().ok().filter(|s: &f64| *s > 0.0 && s.is_finite()).context("--seconds takes a number of seconds")?
@@ -328,5 +336,18 @@ mod tests {
             assert!(entry.contains("$M2_GATES_S"), "{gate}: {entry}");
         }
         assert!(!USAGE.contains("p99 playing"), "the p99 is printed, not judged");
+    }
+
+    // G13 (the agents design's track 5): --help says what realtime --beside agents adds, and the
+    // option takes `agents` only.
+    #[test]
+    fn the_help_says_what_g13_adds() {
+        let mut lines = USAGE.lines().skip_while(|l| !l.starts_with("  realtime "));
+        let realtime: String = std::iter::once(lines.next().unwrap()).chain(lines.take_while(|l| l.starts_with("      "))).collect();
+        for says in ["--beside agents", "G13", "m2 listen", "m2 set", "background priority", "recorded"] {
+            assert!(realtime.contains(says), "realtime's help says {says}: {realtime}");
+        }
+        assert!(USAGE.contains("  --beside agents"));
+        assert!(super::live::beside("agents").unwrap() && super::live::beside("musicians").is_err());
     }
 }

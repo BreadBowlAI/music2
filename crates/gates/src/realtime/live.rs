@@ -54,13 +54,26 @@ pub struct Asked {
     pub audible: bool,
     /// Another song than the reference project (`--song`).
     pub song: Option<PathBuf>,
+    /// G13 (`--beside agents`): agents listen and edit beside the run ([`super::beside`]).
+    pub beside: bool,
 }
 
 impl Default for Asked {
     fn default() -> Asked {
-        Asked { frames: 128, counts: None, between: vec![BETWEEN], audible: false, song: None }
+        Asked { frames: 128, counts: None, between: vec![BETWEEN], audible: false, song: None, beside: false }
     }
 }
+
+/// `--beside`: who works beside the live run; `agents` only (G13).
+pub fn beside(text: &str) -> Result<bool> {
+    match text.trim() {
+        "agents" => Ok(true),
+        other => bail!("--beside takes agents: not `{other}`"),
+    }
+}
+
+/// Why G13's timings aren't judged on a Mac yet (the agents design, section 7).
+const G13_RECORDED: &str = "recorded, not judged yet: G13's first runs on the Mac are recorded, then judged (the agents design, section 7)";
 
 /// `--frames`: a device buffer of 16 to 4096 frames.
 pub fn frames(text: &str) -> Result<u32> {
@@ -416,7 +429,10 @@ pub fn live(lab: &mut Lab, o: &Opts, asked: &Asked) -> Result<Outcome> {
         Place::Device => format!("the output device on {name}, {} frames", asked.frames),
         Place::Clock => format!("the silent clock on {name}, {} frames", asked.frames),
     };
-    let mut out = Outcome::new("G12 live", "RENDER-28, RENDER-28a", &rig);
+    let mut out = match asked.beside {
+        false => Outcome::new("G12 live", "RENDER-28, RENDER-28a", &rig),
+        true => Outcome::new("G13", "AGENT-7, RENDER-28", &format!("{rig}, agents beside it")),
+    };
     let cores = m2_os::process::cores();
     out.info("cores", format!("{} fast ({} per cache), {} slow", cores.fast, cores.per_cache, cores.slow));
     out.info("load", load());
@@ -436,18 +452,53 @@ pub fn live(lab: &mut Lab, o: &Opts, asked: &Asked) -> Result<Outcome> {
         Place::Clock => Some(m2_play::live_count(None, &cores, None, true)),
     };
     let counts: Vec<Option<usize>> = asked.counts.as_ref().map_or_else(|| vec![rule], |c| c.iter().map(|&n| Some(n)).collect());
+    // G13: the agents start before the first run and stop after the last.
+    let agents = match asked.beside {
+        true => Some(super::beside::start(&dir, &lab.work)?),
+        false => None,
+    };
+    if let Some(a) = &agents {
+        out.info("agents", format!("m2 listen back to back on bars {}; m2 set {} forwarded to the app, one after another", super::beside::BARS, a.knob));
+    }
     let mut rows = vec![];
     for count in counts {
         let ways = if count == Some(1) { &asked.between[..1] } else { &asked.between[..] };
         for &between in ways {
             let f = play(lab, &song, place, asked, LiveThreads { count, between }, o.loop_minutes)?;
             let label = format!("{} thread{}, {}", f.threads.count, if f.threads.count == 1 { "" } else { "s" }, way(between));
-            for c in verdict(&f, asked.frames, place == Place::Device) {
+            for mut c in verdict(&f, asked.frames, place == Place::Device && !asked.beside) {
+                if asked.beside && place == Place::Device {
+                    c.detail = c.detail.replace("not judged on Linux (PLAT-1)", G13_RECORDED);
+                }
                 out.checks.push(Check { name: format!("{label}: {}", c.name), ..c });
             }
             out.info(format!("{label}: engine threads"), engines_said(&f.steady));
             rows.push(f);
         }
+    }
+    if let Some(a) = agents {
+        let did = a.stop();
+        let landed = |runs: &[super::beside::Ran]| runs.iter().any(|r| r.ok) && runs.iter().all(|r| r.ok);
+        out.checks.push(Check {
+            name: "listens beside it".into(),
+            verdict: if landed(&did.listens) { Verdict::Pass } else { Verdict::Fail },
+            detail: super::beside::Did::said(&did.listens),
+        });
+        out.checks.push(Check {
+            name: "edits forwarded beside it".into(),
+            verdict: if landed(&did.edits) { Verdict::Pass } else { Verdict::Fail },
+            detail: super::beside::Did::said(&did.edits),
+        });
+        let background = did.listens.iter().filter(|r| r.ok).all(|r| r.background == Some(true));
+        out.checks.push(Check {
+            name: "listens at background priority".into(),
+            verdict: if background && !did.listens.is_empty() { Verdict::Pass } else { Verdict::Fail },
+            detail: format!(
+                "{} of {} said their threads ran at background priority",
+                did.listens.iter().filter(|r| r.background == Some(true)).count(),
+                did.listens.iter().filter(|r| r.ok).count()
+            ),
+        });
     }
     // Each count's back-to-back p99 (offline, plain threads) beside its live one: what pacing and
     // waking cost.

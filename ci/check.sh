@@ -824,7 +824,8 @@ if [ -n "$GATES" ]; then
   grep -v -e '^#' -e '^[[:space:]]*$' ci/gates.txt > "$SCR/gates"
   bad=
   : > "$OUT/gates.log"
-  if quiet gates-build.log cargo build --locked --release -p m2-gates; then
+  # G13 runs the m2 beside m2-gates (crates/gates/src/realtime/beside.rs).
+  if quiet gates-build.log cargo build --locked --release -p m2-gates -p m2; then
     while read -r args; do
       echo "=== m2-gates $args" >> "$OUT/gates.log"
       # The line's m2-gates options: split into words on purpose.
