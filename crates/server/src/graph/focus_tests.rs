@@ -133,10 +133,10 @@ fn a_point_is_not_a_write() {
     let revision = graph.state().unwrap()["view"]["revision"].clone();
     let before = files(&fixture.0);
     let claude = |f: &dyn Fn() -> Result<Value>| as_caller(Caller::agent(Some("Claude"), None), f);
-    let p = claude(&|| graph.point(t, Some(("bars:9-16", "listen to the\u{7} hats here")))).unwrap();
+    let p = claude(&|| graph.point(t, Some(("bars:5-8", "listen to the\u{7} hats here")))).unwrap();
     assert_eq!(
         (&p["target"], &p["kind"], &p["beats"], &p["words"], &p["by"]),
-        (&json!("bars:9-16"), &json!("bars"), &json!([32.0, 64.0]), &json!("listen to the hats here"), &json!("Claude")),
+        (&json!("bars:5-8"), &json!("bars"), &json!([16.0, 32.0]), &json!("listen to the hats here"), &json!("Claude")),
         "{p}"
     );
     assert_eq!(graph.pointer(), p);
@@ -166,6 +166,8 @@ fn a_point_is_not_a_write() {
         assert_eq!((&p["target"], &p["kind"]), (&json!(target), &json!(kind)), "{p}");
     }
     assert_eq!(graph.pointer()["beats"], json!([8.0, 12.0]), "bar 3, in 4/4");
+    let p = claude(&|| graph.point(t, Some((&format!("knob:{knob}"), "here")))).unwrap();
+    assert!(p["track"].is_string() && p["label"].as_str().is_some_and(|l| !l.is_empty()), "a knob says its track and its name: {p}");
     // What the song hasn't, or what isn't a target, is refused, and the pointer stays.
     let kept = graph.pointer();
     for bad in ["track:nope", "clip:bass/notes:nope", "lane:bass/nope", "knob:nope", "bars:0-2", "bars:5-3", "elsewhere:x", "bass"] {
@@ -192,4 +194,24 @@ fn a_point_is_not_a_write() {
     graph.close();
     assert_eq!(graph.pointer(), Value::Null);
     drop(held);
+}
+
+// AGENT-6 (the review's F10): bars past the song's end aren't a target the song has. They are
+// refused, saying how many bars it has; its last bar is a target.
+#[test]
+fn bars_past_the_songs_end_are_refused() {
+    let (_fixture, graph) = first_song();
+    let t = token(&graph);
+    let claude = |target: &str| as_caller(Caller::agent(Some("Claude"), None), || graph.point(t, Some((target, "here"))));
+    // first-song is in 4/4 all through: its bars are its end's beats in fours.
+    let end = graph.state().unwrap()["timeline"]["end"].as_f64().unwrap();
+    let bars = (end / 4.0).ceil() as u64;
+    assert!(bars > 1, "{end}");
+    let p = claude(&format!("bars:1-{bars}")).unwrap();
+    assert_eq!(p["bars"], json!([1, bars]), "the whole song: {p}");
+    for bad in [format!("bars:{}", bars + 1), format!("bars:{bars}-{}", bars + 1), "bars:9999".into(), "bars:1-18446744073709551615".into()]
+    {
+        let e = claude(&bad).unwrap_err();
+        assert!(e.to_string().contains(&format!("{bars} bars")), "{bad}: {e}");
+    }
 }

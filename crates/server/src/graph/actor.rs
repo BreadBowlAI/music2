@@ -534,11 +534,13 @@ pub(super) struct Install {
     value: f64,
 }
 
-/// When a settle's two phases ended, and whether what plays changed.
-struct Settled {
+/// When a settle's two phases ended, and whether what plays changed; why what it should play
+/// couldn't be sent, if it couldn't.
+pub(super) struct Settled {
     changed: bool,
     sent_ns: u64,
     published_ns: u64,
+    pub(super) failed: Option<String>,
 }
 
 /// What preparing the last activation took: naming what continues, and the plan (nanoseconds);
@@ -583,22 +585,23 @@ pub(super) fn unbuilt(e: &anyhow::Error) -> String {
     }
 }
 
-/// A plan for the accepted revision at the project's rate (RENDER-31), built without playing
-/// anything: the engine puts it where it is (RENDER-8). Assets and clip renders come from `audio`,
-/// which then keeps only what this one uses (the plan it replaces holds its own until it is
-/// retired). Against `basis` it keeps every instance that continues; the rest are created,
-/// reporting to `owner`, on the plugin main thread while the old plan plays (RENDER-25).
+/// A plan for `rev` (the accepted revision, or Compare's Before) at the project's rate
+/// (RENDER-31), built without playing anything: the engine puts it where it is (RENDER-8). Assets
+/// and clip renders come from `audio`, which then keeps only what this one uses (the plan it
+/// replaces holds its own until it is retired). Against `basis` it keeps every instance that
+/// continues; the rest are created, reporting to `owner`, on the plugin main thread while the old
+/// plan plays (RENDER-25).
 fn build(
-    session: &Session,
+    rev: &Revision,
+    packages: &PackageSet,
     audio: &mut audio::Cache,
     owner: &m2_plugins::Owner,
     basis: Basis,
     data: Option<&m2_song::DataSet>,
 ) -> Result<Renderer> {
-    let rev = session.accepted();
     // A tempo drag's arrangement in place of the accepted one (RENDER-27a).
     let (flat, data, rate) = (&rev.compiled.flat, data.unwrap_or(&rev.compiled.data), rev.project.sample_rate());
-    let r = Renderer::prepare(flat, data, &session.packages, rate, audio, owner, basis)?;
+    let r = Renderer::prepare(flat, data, packages, rate, audio, owner, basis)?;
     audio.prune();
     Ok(r)
 }
@@ -621,15 +624,15 @@ impl Open {
         self.plays.as_ref().is_some_and(|p| p.epoch == device.epoch)
     }
 
-    /// What the engine plays once `r`, built from the accepted revision, plays in `device`'s player.
-    fn describe(&self, r: &Renderer, device: &Device) -> Plays {
+    /// What the engine plays once `r`, built from `revision`, plays in `device`'s player.
+    fn describe(&self, r: &Renderer, device: &Device, revision: Arc<Revision>) -> Plays {
         let info = r.info();
         Plays {
             epoch: device.epoch,
             generation: info.id,
             rate: info.rate,
             refused: device.player.refused(),
-            revision: self.session.accepted_arc(),
+            revision,
             cells: info.cell_map.clone(),
             info,
             controls: self.controls.clone(),
@@ -637,12 +640,11 @@ impl Open {
         }
     }
 
-    /// The renderer plays the accepted revision now (a value commit set what differed, or its
-    /// lanes were swapped, or its cells written): the next settle's delta starts from it.
-    /// Refused (false) when the accepted graph numbers its cells otherwise, so what plays can't
-    /// reach its values: a new renderer must play it.
-    fn adopt(&mut self) -> bool {
-        let rev = self.session.accepted_arc();
+    /// The renderer plays `rev` now, the accepted revision or Compare's Before (D2): its lanes
+    /// were swapped, or its cells written. The next settle's delta starts from it. Refused (false)
+    /// when its graph numbers its cells otherwise, so what plays can't reach its values: a new
+    /// renderer must play it.
+    fn adopt(&mut self, rev: Arc<Revision>) -> bool {
         let Some(p) = &mut self.plays else { return true };
         if Arc::ptr_eq(&p.revision, &rev) {
             return true;
@@ -674,9 +676,19 @@ impl Open {
         Ok(())
     }
 
-    /// What turns what `p` plays into the accepted revision without a new plan ([`reach_to`]).
-    fn reach(&self, p: &Plays) -> Option<Reach> {
-        reach_to(&p.revision, &p.info, self.session.accepted())
+    /// What turns what `p` plays into `to` without a new plan ([`reach_to`]).
+    fn reach(&self, p: &Plays, to: &Revision) -> Option<Reach> {
+        reach_to(&p.revision, &p.info, to)
+    }
+
+    /// Whether what `device` plays is behind what it should play: `hear`, Compare's Before
+    /// ([`super::compare::hearing`]), else the accepted revision.
+    fn behind(&self, device: &Device, hear: Option<&Arc<Revision>>) -> bool {
+        let plays = match hear {
+            Some(h) => self.plays.as_ref().is_some_and(|p| Arc::ptr_eq(&p.revision, h)),
+            None => self.playing == Some(self.session.accepted().number),
+        };
+        !self.loaded(device) || !plays || !self.restarts.is_empty() || self.relatent || self.refused(device)
     }
 
     /// Whether `device`'s engine refused the last activation it was sent: it plays what it played,
@@ -685,17 +697,19 @@ impl Open {
         self.plays.as_ref().is_some_and(|p| p.epoch == device.epoch && device.player.refused() != p.refused)
     }
 
-    /// How the accepted revision reaches `device`'s engine, its plan prepared if it needs one, and
-    /// what preparing it took.
+    /// How the accepted revision, or Compare's Before (`hear`, D2), reaches `device`'s engine, its
+    /// plan prepared if it needs one, and what preparing it took.
     fn way(
         &mut self,
         device: &Device,
         owner: &m2_plugins::Owner,
         fail: bool,
         tempo: Option<&Arc<m2_song::Arrangement>>,
+        hear: Option<&Arc<Revision>>,
     ) -> (Way, Prepared) {
-        let rev = self.session.accepted();
-        let (number, rate) = (rev.number, rev.project.sample_rate());
+        let accepted = self.session.accepted_arc();
+        let target = hear.unwrap_or(&accepted).clone();
+        let rate = target.project.sample_rate();
         let refused = self.refused(device);
         // What a tempo drag plays (RENDER-27a), as what plays has it.
         let same_tempo = self.plays.as_ref().is_some_and(|p| match (&p.tempo, tempo) {
@@ -703,11 +717,12 @@ impl Open {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
             _ => false,
         });
-        if self.loaded(device) && self.playing == Some(number) && self.restarts.is_empty() && !self.relatent && !refused && same_tempo {
+        if !self.behind(device, hear) && same_tempo {
             return (Way::Same, Prepared::default());
         }
         // Opened with code that doesn't compile (WRITE-20): silent until it does, then loaded.
-        if !rev.has_code() {
+        // Compare's Before was built from code that compiled (a candidate's has no code revision).
+        if hear.is_none() && !target.has_code() {
             return (Way::Same, Prepared::default());
         }
         enum Kind {
@@ -723,7 +738,7 @@ impl Open {
             Some(_) if !self.restarts.is_empty() || self.relatent => Kind::Activate,
             // A tempo drag plays, or ends: only a plan carries a tempo map (RENDER-27a).
             Some(p) if p.tempo.is_some() || tempo.is_some() => Kind::Activate,
-            Some(p) => self.reach(p).map_or(Kind::Activate, |r| Kind::Reach(p.generation, r)),
+            Some(p) => self.reach(p, &target).map_or(Kind::Activate, |r| Kind::Reach(p.generation, r)),
             None => Kind::Load,
         };
         if let Kind::Reach(generation, reach) = kind {
@@ -738,13 +753,12 @@ impl Open {
         let Open { session, audio, plays, restarts, .. } = self;
         let mut prepared = Prepared::default();
         let t = std::time::Instant::now();
-        let accepted = session.accepted();
         // A tempo drag's data, and what plays' own when it plays one (RENDER-27a): lanes shared.
-        let leased = tempo.map(|a| accepted.compiled.data.with_arrangement(a.clone()));
+        let leased = tempo.map(|a| target.compiled.data.with_arrangement(a.clone()));
         let played = plays.as_ref().and_then(|p| Some(p.revision.compiled.data.with_arrangement(p.tempo.clone()?)));
         let keep = match (&kind, plays.as_ref()) {
             (Kind::Activate, Some(p)) => {
-                let cont = continuing(&p.revision, accepted);
+                let cont = continuing(&p.revision, &target);
                 prepared.continues_ns = t.elapsed().as_nanos() as u64;
                 Some((p, cont))
             }
@@ -757,15 +771,17 @@ impl Open {
             }
             None => Basis::Fresh,
         };
-        let built =
-            if fail { Err(anyhow!("the renderer failed to build (a test)")) } else { build(session, audio, owner, basis, leased.as_ref()) };
+        let built = match fail {
+            true => Err(anyhow!("the renderer failed to build (a test)")),
+            false => build(&target, &session.packages, audio, owner, basis, leased.as_ref()),
+        };
         prepared.prepare_ns = t.elapsed().as_nanos() as u64 - prepared.continues_ns;
         let r = match built {
             Ok(r) => Box::new(r),
             Err(e) => return (Way::Unbuilt(e), prepared),
         };
         prepared.fresh = r.stats().fresh;
-        let mut plays = self.describe(&r, device);
+        let mut plays = self.describe(&r, device, target);
         plays.tempo = tempo.cloned();
         let way = match kind {
             Kind::Activate => Way::Activate(r, plays),
@@ -949,13 +965,13 @@ impl Actor {
 
     /// [`Actor::settle`]; with `view` false (a tempo drag's preview) the view isn't published
     /// again while it shows the accepted revision: only what plays changed.
-    fn settle_as(&mut self, install: Option<Install>, view: bool) -> Settled {
+    pub(super) fn settle_as(&mut self, install: Option<Install>, view: bool) -> Settled {
         let inner = self.inner.clone();
         #[cfg(test)]
         let fail = self.fail_builds;
         #[cfg(not(test))]
         let fail = false;
-        let Some(o) = self.open.as_mut() else { return Settled { changed: false, sent_ns: 0, published_ns: 0 } };
+        let Some(o) = self.open.as_mut() else { return Settled { changed: false, sent_ns: 0, published_ns: 0, failed: None } };
         let token = o.token;
         let (number, code_rev) = (o.session.accepted().number, o.session.accepted().code_rev);
         // WRITE-13: the session's code revision; a lane write leaves it, and with it every id.
@@ -974,15 +990,20 @@ impl Actor {
             p.controls = o.controls.clone();
         }
 
+        // What the engine plays: the accepted revision, or the Compare pill's Before, built in
+        // memory and never written, while it says Before (D2).
+        let hear = super::compare::hearing(&inner, o);
+        let target = hear.clone().unwrap_or_else(|| o.session.accepted_arc());
+
         // A tempo drag (RENDER-27a): the arrangement it plays and its value, unless a lane plays
         // audio (Q23's fallback: heard on release).
         let audio = o.plays.as_ref().is_some_and(|p| p.info.lanes.iter().any(|l| matches!(l.lane.kind, Kind::Audio(_))));
-        let leased = super::tempo_lease::wanted(&mut inner.control.lock(), token, o.session.accepted(), audio);
+        let leased = super::tempo_lease::wanted(&mut inner.control.lock(), token, &target, audio);
 
         // Prepared off every lock: the swaps, or the renderer built.
         let device = inner.device();
         let (mut way, prepared) = match &device {
-            Ok(d) => o.way(d, &inner.owner, fail, leased.as_ref().map(|l| &l.0)),
+            Ok(d) => o.way(d, &inner.owner, fail, leased.as_ref().map(|l| &l.0), hear.as_ref()),
             Err(e) => (Way::Failed(anyhow!("{e:#}")), Prepared::default()),
         };
         o.prepared = prepared;
@@ -996,7 +1017,7 @@ impl Actor {
         let mut said: Vec<String> = vec![];
         let mut feedback = None;
         if let Some(r) = way.renderer() {
-            let (rev, rate) = (o.session.accepted(), o.session.accepted().project.sample_rate() as f64);
+            let (rev, rate) = (&*target, target.project.sample_rate() as f64);
             let named = |node: usize| plugin_named(rev, &o.session.packages, node);
             let looped: Vec<String> = r.info().latency.in_feedback.iter().map(|&n| named(n)).collect();
             if looped != o.told_feedback {
@@ -1015,8 +1036,9 @@ impl Actor {
             }));
         }
         // A renderer that didn't build: the version before plays on, and the user is told, once
-        // for each revision, though the catch-up tries again every 300 ms.
-        let unbuilt_now = matches!(way, Way::Unbuilt(_)) && o.told_unbuilt != Some(number);
+        // for each revision, though the catch-up tries again every 300 ms. Compare's Before that
+        // didn't is said by V's answer instead.
+        let unbuilt_now = matches!(way, Way::Unbuilt(_)) && o.told_unbuilt != Some(number) && hear.is_none();
         if let Way::Unbuilt(e) = &way
             && unbuilt_now
         {
@@ -1138,7 +1160,7 @@ impl Actor {
             }
             // Its overlays where the plan before had them: no glide at entry (MON-1, A7).
             if let Some(p) = cp.open.as_ref().filter(|p| p.engine.token == token) {
-                r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, o.session.accepted()));
+                r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, &target));
             }
         }
         let sent = (|| -> Result<Sent> {
@@ -1148,7 +1170,7 @@ impl Actor {
                     let d = device.as_ref().map_err(|e| anyhow!("{e:#}"))?;
                     let p = o.plays.as_ref().expect("what plays is reached");
                     // Muted or unmuted in the song: the overlay cells glide, no rebuild (MON-5).
-                    let (was, now) = (&p.revision.compiled.flat.muted, &o.session.accepted().compiled.flat.muted);
+                    let (was, now) = (&p.revision.compiled.flat.muted, &target.compiled.flat.muted);
                     if was != now
                         && let Some(set) = cp.open.as_ref().filter(|q| q.engine.token == token).map(|q| &q.overlays.set)
                     {
@@ -1164,8 +1186,8 @@ impl Actor {
                     for (slot, data) in reach.swaps {
                         o.sent = Some(d.player.swap_lane(generation, slot, data)?);
                     }
-                    // Its cells hold the accepted values now, and its lanes the accepted data.
-                    o.adopt();
+                    // Its cells hold the target's values now, and its lanes its data.
+                    o.adopt(target.clone());
                     Ok(Sent::Reached(written))
                 }
                 Way::Activate(r, plays) => {
@@ -1206,11 +1228,17 @@ impl Actor {
                 Way::Deferred => Ok(Sent::Deferred),
             }
         })();
+        let unsent = match &sent {
+            Err(e) => Some(format!("{e:#}")),
+            Ok(_) => None,
+        };
         match &sent {
             Ok(Sent::Deferred) => {}
             Ok(_) => {
-                o.playing = Some(number);
-                let rev = o.session.accepted();
+                // Compare's Before is no accepted revision: the next settle that plays the accepted
+                // one sends what turns Before into it.
+                o.playing = hear.is_none().then_some(number);
+                let rev = &*target;
                 if let Some(t) = inner.timing.lock().as_mut() {
                     // A tempo drag's map while it plays (RENDER-27a).
                     let tempo = o.plays.as_ref().and_then(|p| p.tempo.as_ref()).map_or_else(|| rev.tempo(), |a| a.tempo_map());
@@ -1312,7 +1340,8 @@ impl Actor {
         // drag's preview leaves the view as it is, when it shows the accepted revision.
         let current = inner.control.lock().open.as_ref().is_some_and(|p| p.engine.token == token && p.shown.revision == number);
         if !view && current && !code_changed {
-            return Settled { changed: matches!(sent, Ok(Sent::Reached(_) | Sent::Renderer)), sent_ns, published_ns: inner.now_ns() };
+            let changed = matches!(sent, Ok(Sent::Reached(_) | Sent::Renderer));
+            return Settled { changed, sent_ns, published_ns: inner.now_ns(), failed: unsent };
         }
         let shown = Arc::new(o.shown());
         let aliases = code_changed.then(|| Arc::new(o.aliases()));
@@ -1328,7 +1357,7 @@ impl Actor {
         // The view it replaces is a tree of every note: freed elsewhere, neither under the lock
         // nor before the reply (or the next request) on this thread.
         retire(old);
-        Settled { changed: matches!(sent, Ok(Sent::Reached(_) | Sent::Renderer)), sent_ns, published_ns: inner.now_ns() }
+        Settled { changed: matches!(sent, Ok(Sent::Reached(_) | Sent::Renderer)), sent_ns, published_ns: inner.now_ns(), failed: unsent }
     }
 
     pub(super) fn open(&mut self, dir: &Path) -> Result<Value> {
@@ -1393,9 +1422,10 @@ impl Actor {
         let monitor = super::overlay::Monitor::open(&accepted.project.dir, o.session.access().refusal().is_none(), accepted);
         let built = match o.session.accepted().has_code() {
             true => {
-                let mut r = build(&o.session, &mut o.audio, &self.inner.owner, Basis::Fresh, None)?;
-                r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, o.session.accepted()));
-                let plays = o.describe(&r, &device);
+                let accepted = o.session.accepted_arc();
+                let mut r = build(&accepted, &o.session.packages, &mut o.audio, &self.inner.owner, Basis::Fresh, None)?;
+                r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, &accepted));
+                let plays = o.describe(&r, &device, accepted);
                 Some((r, plays))
             }
             false => None,
@@ -1973,14 +2003,7 @@ impl Actor {
         let behind = match self.inner.device() {
             // An export's end settles what waited for it.
             Ok(_) if o.exporting => false,
-            Ok(d) => {
-                has_code
-                    && (!o.loaded(&d)
-                        || o.playing != Some(o.session.accepted().number)
-                        || !o.restarts.is_empty()
-                        || o.relatent
-                        || o.refused(&d))
-            }
+            Ok(d) => has_code && o.behind(&d, super::compare::hearing(&self.inner, o).as_ref()),
             // Let go of: the settle starts a new one, and loads the project into it where it was,
             // stopped. Let go of here, no action failed to say why: if it played, the user is told.
             Err(_) => {

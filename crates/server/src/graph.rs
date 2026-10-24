@@ -40,7 +40,7 @@ mod actor;
 pub mod audition;
 pub mod busy;
 pub mod clips;
-mod compare;
+pub(crate) mod compare;
 mod events;
 pub(crate) mod exchange;
 mod faults;
@@ -432,6 +432,9 @@ struct Inner {
     attention: Mutex<focus::Attention>,
     /// What the Compare pill compares, while it is open (D2, AGENT-3). A leaf lock.
     comparing: Mutex<Option<compare::Comparing>>,
+    /// The number of the last change of the Compare pill told (D2): counts up, so a window keeps
+    /// the newest it heard.
+    compare_n: AtomicU64,
     /// The app's one fault ring (RENDER-25): every live plan reports into it, and so does the
     /// actor. The notices thread reads it ([`Graph::hear_faults`]).
     faults: Arc<m2_runtime::fault::Faults>,
@@ -609,6 +612,7 @@ impl Inner {
             steps_to: Mutex::default(),
             attention: Mutex::default(),
             comparing: Mutex::default(),
+            compare_n: AtomicU64::default(),
             faults,
             told: Mutex::default(),
             disk: Mutex::default(),
@@ -789,7 +793,15 @@ impl Inner {
     }
 
     /// Tell every window and agent `event` now (AGENT-6): what needs no order with the steps.
-    fn tell(&self, event: Value) {
+    /// Tell every window and agent `event`, with the session of the song it is about: the open
+    /// one's, unless it says (AGENT-6).
+    fn tell(&self, mut event: Value) {
+        if let Some(fields) = event.as_object_mut()
+            && !fields.contains_key("session")
+        {
+            let token = self.control.lock().open.as_ref().map(|p| p.engine.token);
+            fields.insert("session".into(), json!(token));
+        }
         if let Some(to) = self.steps_to.lock().clone() {
             let _ = to.send(event.to_string());
         }
@@ -1015,6 +1027,11 @@ impl Graph {
     }
 
     /// The open project's folder.
+    /// The open song's session, its token: None with no song open.
+    pub fn session(&self) -> Option<u64> {
+        self.inner.control.lock().open.as_ref().map(|p| p.engine.token)
+    }
+
     pub fn dir(&self) -> Option<PathBuf> {
         Some(self.inner.control.lock().open.as_ref()?.shown.dir.clone())
     }

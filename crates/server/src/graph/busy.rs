@@ -68,7 +68,7 @@ pub(super) enum Held {
     /// A plugin window's changes not saved yet, by its instance.
     Plugin(m2_plugins::Handle),
     Code,
-    /// The Compare pill (D2): it holds everything, so no agent's step clears redo.
+    /// The Compare pill (D2): it holds everything, so no agent's step changes what it compares.
     Compare,
 }
 
@@ -114,7 +114,7 @@ pub(super) fn held(cp: &ControlPlane, o: &Open, inner: &Inner) -> Vec<Hold> {
             out.push(Hold { of: Held::Plugin(h), what: "plugin", file: Some(file), words: format!("you're changing {who} in its window") });
         }
     }
-    // Compare holds everything: an agent's step would clear redo and take After away (D2).
+    // Compare holds everything: an agent's step would change what it compares (D2).
     if let Some(c) = inner.comparing.lock().as_ref().filter(|c| c.token == token) {
         out.push(Hold { of: Held::Compare, what: "compare", file: None, words: format!("you're comparing {}", c.name) });
     }

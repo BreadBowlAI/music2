@@ -188,12 +188,30 @@ impl AppState {
     }
 
     pub fn toast(&self, msg: impl Into<String>) {
-        self.announce(json!({"t": "toast", "text": msg.into()}).to_string());
+        self.announce(json!({"t": "toast", "text": msg.into()}));
+    }
+
+    /// `ev` as every window and agent hears it: with the session of the song it is about, the open
+    /// one's unless it says (null with none), so an agent never takes another song's event for its
+    /// own (AGENT-6).
+    fn stamped(&self, mut ev: serde_json::Value) -> String {
+        if let Some(fields) = ev.as_object_mut()
+            && !fields.contains_key("session")
+        {
+            fields.insert("session".into(), json!(self.graph.session()));
+        }
+        ev.to_string()
+    }
+
+    /// Send an event every window and agent hears now, with its session.
+    pub(crate) fn send(&self, ev: serde_json::Value) {
+        let _ = self.events.send(self.stamped(ev));
     }
 
     /// Send an event every window should hear, even one that connects later: kept until a page's
     /// socket hears it. An agent's socket hears it live, but it is kept for the page all the same.
-    fn announce(&self, ev: String) {
+    fn announce(&self, ev: serde_json::Value) {
+        let ev = self.stamped(ev);
         // Held across the send so a page subscribing right now can't miss it.
         let mut unheard = self.unheard.lock();
         let _ = self.events.send(ev.clone());
@@ -202,6 +220,11 @@ impl AppState {
             let extra = unheard.kept.len().saturating_sub(MAX_UNHEARD);
             unheard.kept.drain(..extra);
         }
+    }
+
+    /// How many pages' sockets listen now.
+    pub(crate) fn pages(&self) -> usize {
+        self.unheard.lock().pages
     }
 
     /// Listen for events: a page's socket (`page`) starts with the toasts no page has heard yet,
@@ -224,7 +247,7 @@ impl AppState {
             _ => serde_json::Map::new(),
         };
         event.insert("t".into(), json!("graph"));
-        let _ = self.events.send(serde_json::Value::Object(event).to_string());
+        self.send(serde_json::Value::Object(event));
     }
 }
 
@@ -243,7 +266,7 @@ impl AppState {
 
     /// Tell every window the keyboards plugged in and what they play: `{"t": "midi", "midi": …}`.
     pub fn midi_changed(&self) {
-        let _ = self.events.send(json!({"t": "midi", "midi": self.graph.midi_state()}).to_string());
+        self.send(json!({"t": "midi", "midi": self.graph.midi_state()}));
     }
 }
 
@@ -405,7 +428,7 @@ fn spawn_takes(state: &Arc<AppState>) {
                 let Some(state) = weak.upgrade() else { return };
                 for said in state.graph.record_tick() {
                     let written = said.get("written").is_some();
-                    let _ = state.events.send(said.to_string());
+                    state.send(said);
                     if written {
                         state.graph_changed();
                     }
@@ -581,7 +604,8 @@ mod tests {
         let s = AppState::new(String::new(), graph::Graph::silent());
         let (_, mut events, _page) = s.subscribe(true);
         s.graph_changed();
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&events.try_recv().unwrap()).unwrap(), json!({"t": "graph"}));
+        // With no song open, it says so (AGENT-6).
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&events.try_recv().unwrap()).unwrap(), json!({"t": "graph", "session": null}));
         s.graph.open(&dir).unwrap();
         s.graph_changed();
         let event: serde_json::Value = serde_json::from_str(&events.try_recv().unwrap()).unwrap();

@@ -110,6 +110,7 @@ impl Graph {
     /// The page's focus record for the open song (AGENT-6): kept in memory, the newest post
     /// winning, and told to every window and agent. Answers it as [`Graph::focus`] serves it.
     pub fn post_focus(&self, focus: Focus) -> Result<Value> {
+        let session = focus.session;
         {
             // Under the control plane's lock, so a song closing or opening meanwhile never keeps it.
             let cp = self.inner.control.lock();
@@ -120,7 +121,7 @@ impl Graph {
             self.inner.attention.lock().focus = Some(focus);
         }
         let served = self.focus();
-        self.inner.tell(json!({"t": "focus", "focus": served}));
+        self.inner.tell(json!({"t": "focus", "session": session, "focus": served}));
         Ok(served)
     }
 
@@ -172,7 +173,7 @@ impl Graph {
             self.inner.attention.lock().point = (!shown.is_null()).then(|| (token, shown.clone()));
             shown
         };
-        self.inner.tell(json!({"t": "point", "point": shown}));
+        self.inner.tell(json!({"t": "point", "session": token, "point": shown}));
         Ok(shown)
     }
 
@@ -232,12 +233,16 @@ fn target_of(target: &str, p: &Published) -> Result<Value> {
             if !p.engine.controls.contains_key(what) {
                 bail!("the song has no knob {what} now (m2 controls lists them)");
             }
-            // The track whose device shows it: Show selects it.
-            let module = p.shown.state["view"]["modules"].as_array().into_iter().flatten().find_map(|m| {
+            // The track whose device shows it, and its name there, "Bass Cutoff": while the dock
+            // doesn't show it, the note waits beside that track's header, naming it.
+            let found = p.shown.state["view"]["modules"].as_array().into_iter().flatten().find_map(|m| {
                 let nodes = m["nodes"].as_array()?;
-                nodes.iter().flat_map(|n| n["knobs"].as_array().into_iter().flatten()).any(|k| k["id"] == what).then(|| m["key"].clone())
+                let k = nodes.iter().flat_map(|n| n["knobs"].as_array().into_iter().flatten()).find(|k| k["id"] == what)?;
+                let label = [m["label"].as_str(), k["label"].as_str()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+                Some((m["key"].clone(), label))
             });
-            json!({"kind": "knob", "knob": what, "track": module})
+            let (module, label) = found.unzip();
+            json!({"kind": "knob", "knob": what, "track": module, "label": label})
         }
         "bars" => {
             let bar = |s: &str| s.trim().parse::<u64>().ok().filter(|n| *n >= 1);
@@ -250,6 +255,16 @@ fn target_of(target: &str, p: &Published) -> Result<Value> {
                 bail!("bars:{what} ends before it starts");
             }
             let arrangement = &p.engine.accepted.compiled.data.arrangement;
+            // Bars past the song's end aren't the song's: as many as start before it.
+            let end = timeline.head.get("end").and_then(Value::as_f64).unwrap_or(0.0);
+            let mut bars = 0;
+            while bars < 100_000 && m2_editor::clips::bar_start(arrangement, bars) < end - 1e-9 {
+                bars += 1;
+            }
+            if to > bars {
+                let one = if bars == 1 { "bar" } else { "bars" };
+                bail!("the song has {bars} {one}, so bars:{what} is past its end");
+            }
             let beats = [m2_editor::clips::bar_start(arrangement, from - 1), m2_editor::clips::bar_start(arrangement, to)];
             json!({"kind": "bars", "bars": [from, to], "beats": beats})
         }

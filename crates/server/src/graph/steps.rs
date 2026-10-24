@@ -144,14 +144,13 @@ impl Graph {
     /// `structural`), read before it, in the same turn of the session. With `step`, only while
     /// that step is the newest (for redo, the newest undone): else [`NotNewest`] (AGENT-2).
     pub(super) fn step(&self, token: u64, redo: bool, step: Option<u64>) -> Result<Value> {
-        self.call(move |a| stepped(a, token, redo, step, false))
+        self.call(move |a| stepped(a, token, redo, step))
     }
 }
 
-/// [`Graph::step`] on the actor: `compare` when V asked for it (D2), which its `undo` or `redo`
-/// event says. Every window and agent hears which step went or came back, after the steps before
-/// it (AGENT-6).
-pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>, compare: bool) -> Result<Value> {
+/// [`Graph::step`] on the actor. Every window and agent hears which step went or came back, after
+/// the steps before it (AGENT-6).
+pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>) -> Result<Value> {
     a.open.as_ref().context("no project is open")?.check_token(token)?;
     // AGENT-3: while a take records or Compare is open, an agent's is busy, whatever it would undo.
     a.arrive(None)?;
@@ -170,10 +169,6 @@ pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>, 
         && top.as_ref().map(|t| t.id) != Some(id)
     {
         return Err(NotNewest { redo, newest: took }.into());
-    }
-    // D2: V opens Compare only on a change an agent or another program made.
-    if compare && !redo && top.as_ref().is_some_and(|t| t.source == Source::Page) {
-        return Err(NotElsewhere { newest: took }.into());
     }
     let files = top.as_ref().map(|t| t.files.clone()).unwrap_or_default();
     // AGENT-3: checked as its writes are, by the files it puts back.
@@ -209,7 +204,6 @@ pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>, 
         "source": took["source"],
         "by": took["by"],
         "name": took["name"],
-        "compare": compare,
     }));
     Ok(v)
 }

@@ -82,8 +82,7 @@ fn start_in(state: &Arc<AppState>, token: u64, exports: &Path) -> Result<PathBuf
                     if last.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
                         *last = Some(Instant::now());
                         let progress = (i as f64 + done) / of as f64;
-                        let _ =
-                            state.events.send(with(&about, json!({"progress": progress, "stem": label, "n": i + 1, "of": of})).to_string());
+                        state.send(with(&about, json!({"progress": progress, "stem": label, "n": i + 1, "of": of})));
                     }
                 };
                 // Each stem says it started, whatever the clock says.
@@ -116,7 +115,7 @@ fn start_in(state: &Arc<AppState>, token: u64, exports: &Path) -> Result<PathBuf
         };
         // Free before saying so: a client may export again as soon as it hears.
         drop(slot);
-        state.announce(with(&about, event).to_string());
+        state.announce(with(&about, event));
     })?;
     Ok(folder)
 }

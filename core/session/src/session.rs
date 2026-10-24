@@ -722,6 +722,27 @@ impl Session {
         self.step(true)
     }
 
+    /// The song with the newest step taken back, built in memory and written nowhere: what the
+    /// Compare key's Before plays (D2, AGENT-3). Refused as its undo would be, before anything is
+    /// built: nothing to undo, read-only, or code while the draft doesn't build; and as a check of
+    /// its inverse refuses it, naming what changed since. The undo that may follow reuses what was
+    /// built, when nothing moved meanwhile ([`Session::check`]'s cache).
+    pub fn undone(&mut self) -> Result<Arc<Revision>, StepError> {
+        if self.forward.is_some() {
+            return Err(StepError::ReadOnly("undo lives in the open app".into()));
+        }
+        let Some(step) = self.history.last() else { return Err(StepError::Nothing("nothing to undo")) };
+        let (tx, raw) = (self.step_tx(step), step.raw);
+        if let Some(r) = self.writable() {
+            return Err(StepError::ReadOnly(r.message));
+        }
+        let code = tx.touched().iter().any(|p| matches!(p.class(), m2_song::Class::Code | m2_song::Class::Manifest));
+        if code && !self.draft_errors.is_empty() {
+            return Err(StepError::DraftInvalid(self.draft_errors.clone()));
+        }
+        self.built(&tx, raw).map_err(StepError::Refused)
+    }
+
     /// Whether undo would go ahead, judged without compiling (WRITE-21): writer access, the draft
     /// rule, no target waiting, and every base of its inverse applies. A change something else
     /// edited over stays, and can be undone again once that edit is taken back.

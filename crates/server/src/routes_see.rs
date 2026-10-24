@@ -1,14 +1,16 @@
 //! What an agent sees beside the musician (AGENT-6; track 3 of the agents design): the focus
-//! record the page posts, a pointer an agent posts, and closing the Compare pill (D2). None is a
-//! write: they work in a read-only window too, and change no file, revision or undo step.
+//! record the page posts, a pointer an agent posts, and the Compare pill (D2). None is a write:
+//! they work in a read-only window too, and change no file, revision or undo step, but Esc on
+//! Compare's Before, which undoes the step it compares.
 
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::AppState;
 use crate::routes::{ApiError, blocking};
@@ -71,18 +73,32 @@ async fn point(State(s): S, Json(r): Json<PointReq>) -> ApiResult {
 #[derive(Deserialize)]
 struct CompareReq {
     session: u64,
-    /// Only `false`: the pill closes. It opens with V's undo (`compare: true`).
-    open: bool,
+    /// The step V compares: with `before`, play it Before (true) or After (false).
+    #[serde(default)]
+    step: Option<u64>,
+    #[serde(default)]
+    before: Option<bool>,
+    /// `false`: the pill closes, at After; with `keep` (Esc), keeping what plays.
+    #[serde(default)]
+    open: Option<bool>,
+    #[serde(default)]
+    keep: bool,
+    /// The window's id, as its socket gives it (`?client=`): that socket closing ends what it opened.
+    #[serde(default)]
+    client: Option<String>,
 }
 
-/// Close the Compare pill (Esc, or any other action), keeping what plays.
-async fn compare(State(s): S, Json(r): Json<CompareReq>) -> ApiResult {
-    if r.open {
-        return Err(ApiError::from(anyhow::anyhow!("Compare opens with V: an undo with `compare: true`")));
-    }
+/// V (D2): play the newest change made elsewhere Before or After, or close the pill.
+async fn compare(State(s): S, Json(r): Json<CompareReq>) -> Response {
     let state = s.clone();
-    let v = blocking(move || state.graph.close_compare(r.session)).await?;
-    Ok(Json(json!({"comparing": v})))
+    let result = crate::caller::blocking(move || match (r.open, r.step, r.before) {
+        (Some(false), ..) => state.graph.close_compare(r.session, r.keep),
+        (_, Some(step), Some(before)) => state.graph.compare(r.session, step, before, r.client),
+        _ => Err(anyhow::anyhow!("Compare names its step and the side to play: `step` and `before`, or `open: false`")),
+    })
+    .await;
+    s.graph_changed();
+    crate::routes::step_answer(result)
 }
 
 #[cfg(test)]

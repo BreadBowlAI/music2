@@ -417,3 +417,33 @@ fn a_redone_step_keeps_its_id_and_source() {
     s.undo().unwrap();
     assert_eq!(d.read("tracks/bass.ts"), text, "and it still undoes");
 }
+
+// AGENT-3, D2 (the review of ag-see, F3): Compare's Before is the song with the newest step taken
+// back, built in memory: nothing is written, and undo and redo stay as they were. The undo that may
+// follow takes back the same, and an outside step's Before is built the same way.
+#[test]
+fn undone_builds_before_and_writes_nothing() {
+    let d = Dir::first_song();
+    let mut s = d.open();
+    assert!(matches!(s.undone(), Err(StepError::Nothing(_))), "nothing to undo");
+    let was = d.read("song.ts");
+    s.commit(pan(&d, 0.4)).unwrap();
+    let after = d.read("song.ts");
+    let (number, was_top) = (s.accepted().number, top(&s));
+    let before = s.undone().unwrap();
+    assert!(before.snapshot.files[Path::new("song.ts")].contains("pan: 0.3"), "Before: the change taken back");
+    assert_eq!(d.read("song.ts"), after, "nothing written");
+    assert_eq!((s.accepted().number, top(&s), s.step_names().1.is_none()), (number, was_top, true), "undo and redo as they were");
+    s.undo().unwrap();
+    assert_eq!(d.read("song.ts"), was, "the undo takes back the same");
+    assert_eq!(s.accepted().snapshot.files[Path::new("song.ts")], before.snapshot.files[Path::new("song.ts")]);
+    // An outside step.
+    s.redo().unwrap();
+    let saved = d.read("song.ts").replacen("pan: 0.4", "pan: 0.5", 1);
+    d.write("song.ts", &saved);
+    let made = batch(&d, &mut s, &["song.ts"]);
+    let Outside::Step(_) = made else { panic!("an outside step: {made:?}") };
+    let before = s.undone().unwrap();
+    assert!(before.snapshot.files[Path::new("song.ts")].contains("pan: 0.4"), "the outside save taken back");
+    assert_eq!(d.read("song.ts"), saved, "never rewritten");
+}

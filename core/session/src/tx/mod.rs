@@ -756,6 +756,20 @@ impl Session {
         Ok(checked)
     }
 
+    /// `tx`'s candidate, built as a commit would build it and written nowhere: unjudged, as a raw
+    /// commit is when `raw`. A judged one is kept for the commit of the same Tx that may follow, as
+    /// [`Session::check`] keeps it.
+    pub(crate) fn built(&mut self, tx: &Tx, raw: bool) -> Result<Arc<Revision>, Refusal> {
+        let currents = self.read_all(tx)?;
+        let mut p = self.prepare(tx, &currents)?;
+        let candidate = p.candidate.clone();
+        if !raw {
+            p.key = Some(self.key(tx, &currents));
+            self.cache = Some(p);
+        }
+        Ok(candidate)
+    }
+
     /// Check `tx`, let `assert` judge the checked candidate (what a planner says its gesture means,
     /// WRITE-9), then commit it: what `check`, the assertion and `commit` do one after the other,
     /// with one read of the targets, one plan and one candidate (WRITE-4, WRITE-5). Nothing moves

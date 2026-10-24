@@ -1,6 +1,7 @@
-//! What an agent sees over HTTP and the socket (AGENT-6; track 3 of the agents design): the tools
-//! key reads the focus record but can't post it, and can't flip or close Compare; a socket that
-//! falls behind is told how many events it missed.
+//! What an agent sees over HTTP and the socket (AGENT-6; track 3 of the agents design and its
+//! review): the tools key reads the focus record but can't post it, can't open, flip or close
+//! Compare, and can't end it by closing or opening a song; every event says its session; a socket
+//! that falls behind is told how many events it missed.
 
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -54,8 +55,8 @@ fn ask(url: &str, method: &str, path: &str, key: &str, body: &Value) -> (u16, Va
     (status, answer.split_once("\r\n\r\n").map_or(Value::Null, |(_, b)| serde_json::from_str(b).unwrap_or(Value::Null)))
 }
 
-// AGENT-6, AGENT-3: the focus record is the page's to post; the tools key reads it. Compare's flips
-// and close are the musician's: the tools key gets 403 and nothing changes.
+// AGENT-6, AGENT-3: the focus record is the page's to post; the tools key reads it. Compare is the
+// musician's: the tools key gets 403 opening, flipping or closing it, and nothing changes.
 #[test]
 fn the_tools_key_reads_focus_but_cant_post_it_or_compare() {
     let (dir, running, session) = serving();
@@ -76,18 +77,100 @@ fn the_tools_key_reads_focus_but_cant_post_it_or_compare() {
     let (status, body) = ask(url, "POST", "/api/tx/commit", "t00ls", &json!({"session": session, "tx": tx, "as": "Claude"}));
     assert_eq!(status, 200, "{body}");
     let step = body["step"].as_u64().unwrap();
-    let (status, _) =
-        ask(url, "POST", "/api/graph/undo", "t00ls", &json!({"session": session, "step": step, "compare": true, "as": "Claude"}));
+    let v = json!({"session": session, "step": step, "before": true});
+    let (status, _) = ask(url, "POST", "/api/graph/compare", "t00ls", &v);
     assert_eq!(status, 403, "an agent can't open Compare");
     assert_eq!(running.state.graph.comparing(), Value::Null);
-    let (status, body) = ask(url, "POST", "/api/graph/undo", "t0k", &json!({"session": session, "step": step, "compare": true}));
+    let (status, body) = ask(url, "POST", "/api/graph/compare", "t0k", &v);
     assert_eq!(status, 200, "{body}");
     assert_eq!(running.state.graph.comparing()["step"], json!(step));
+    let (status, _) = ask(url, "POST", "/api/graph/compare", "t00ls", &json!({"session": session, "step": step, "before": false}));
+    assert_eq!(status, 403, "nor flip it");
     let (status, _) = ask(url, "POST", "/api/graph/compare", "t00ls", &json!({"session": session, "open": false}));
     assert_eq!(status, 403, "nor close it");
     assert_eq!(running.state.graph.comparing()["step"], json!(step), "still open");
     let (status, body) = ask(url, "POST", "/api/graph/compare", "t0k", &json!({"session": session, "open": false}));
     assert_eq!((status, &body["comparing"]), (200, &Value::Null), "{body}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// An agent's step on the bass notes, by the tools key: its id.
+fn agent_step(dir: &std::path::Path, url: &str, session: u64, id: &str) -> u64 {
+    let notes = std::fs::read_to_string(dir.join("data/bass/notes.json")).unwrap();
+    let sha = format!("sha256:{}", m2_song::Sha::of(notes.as_bytes()).hex());
+    let tx = json!({"id": format!("tx-{id}"), "base": {"data/bass/notes.json": sha},
+        "ops": [{"op": "clips", "lane": ["bass", "notes"], "put": [{"id": id, "start": 0, "length": 4, "notes": [{"pitch": "E1", "start": 0, "length": 0.25}]}], "delete": []}],
+        "expect": {"confined": {"ranges": {}, "lanes": [["bass", "notes"]], "modules": []}}});
+    let (status, body) = ask(url, "POST", "/api/tx/commit", "t00ls", &json!({"session": session, "tx": tx, "as": "Claude"}));
+    assert_eq!(status, 200, "{body}");
+    body["step"].as_u64().unwrap()
+}
+
+// AGENT-3 (the review's F4): while the pill is open, an agent can't end it by closing the song,
+// opening it or another, or making a new song: each is busy, and Compare stays open. The page can.
+#[test]
+fn while_comparing_an_agent_cant_close_or_open_a_song() {
+    let (dir, running, session) = serving();
+    let url = &running.url;
+    let step = agent_step(&dir, url, session, "a1");
+    let (status, body) = ask(url, "POST", "/api/graph/compare", "t0k", &json!({"session": session, "step": step, "before": true}));
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = ask(url, "POST", "/api/graph/close", "t00ls", &json!({}));
+    assert_eq!((status, &body["busy"]["what"]), (423, &json!("compare")), "closing the song: {body}");
+    let (status, body) = ask(url, "POST", "/api/graph/open", "t00ls", &json!({"path": dir}));
+    assert_eq!((status, &body["busy"]["what"]), (423, &json!("compare")), "opening it again: {body}");
+    let new = json!({"template": "empty", "name": "Agent's song"});
+    let (status, body) = ask(url, "POST", "/api/project/new", "t00ls", &new);
+    assert_eq!((status, &body["busy"]["what"]), (423, &json!("compare")), "a new song: {body}");
+    assert_eq!(running.state.graph.comparing()["step"], json!(step), "Compare stays open");
+    assert_eq!(running.state.graph.dir().as_deref(), Some(dir.canonicalize().unwrap().as_path()), "on the same song");
+    let (status, body) = ask(url, "POST", "/api/graph/close", "t0k", &json!({}));
+    assert_eq!(status, 200, "the musician can: {body}");
+    assert_eq!(running.state.graph.comparing(), Value::Null);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// AGENT-6 (F6): every event a socket hears says the session of the song it is about, and so does the
+// transport's status: an agent never takes another song's event for its own.
+#[test]
+fn every_event_says_its_session() {
+    let (dir, running, session) = serving();
+    let url = &running.url;
+    let mut socket = Socket::open(url, "/api/ws?token=t00ls").unwrap();
+    socket.wait_at_most(Some(Duration::from_secs(10))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let step = agent_step(&dir, url, session, "a1");
+    running.state.toast("a toast");
+    running.state.graph_changed();
+    running.state.midi_changed();
+    let (status, _) = ask(url, "POST", "/api/focus", "t0k", &json!({"session": session, "view": "mix"}));
+    assert_eq!(status, 200);
+    let (status, _) = ask(url, "POST", "/api/point", "t00ls", &json!({"session": session, "target": "track:bass", "words": "here"}));
+    assert_eq!(status, 200);
+    let (status, _) = ask(url, "POST", "/api/point", "t0k", &json!({"session": session, "clear": true}));
+    assert_eq!(status, 200);
+    ask(url, "POST", "/api/graph/compare", "t0k", &json!({"session": session, "step": step, "before": true}));
+    ask(url, "POST", "/api/graph/compare", "t0k", &json!({"session": session, "open": false}));
+    let (mut seen, t) = (vec![], Instant::now());
+    let kinds = ["step", "toast", "graph", "midi", "focus", "point", "compare"];
+    while t.elapsed() < Duration::from_secs(10) && !kinds.iter().all(|k| seen.iter().any(|e: &Value| e["t"] == *k)) {
+        let Some(m) = socket.message().expect("a message within 10 s") else { break };
+        let v: Value = serde_json::from_str(&m).unwrap();
+        if v["t"] != "meters" {
+            seen.push(v);
+        }
+    }
+    for k in kinds {
+        assert!(seen.iter().any(|e| e["t"] == k), "heard a {k}: {seen:?}");
+    }
+    let without: Vec<&Value> = seen.iter().filter(|e| e["session"] != json!(session)).collect();
+    assert!(without.is_empty(), "every event names session {session}: {without:?}");
+    let (status, body) = ask(url, "GET", "/api/graph/status", "t00ls", &Value::Null);
+    assert_eq!((status, &body["session"]), (200, &json!(session)), "{body}");
+    running.state.graph.close();
+    let (_, body) = ask(url, "GET", "/api/graph/status", "t00ls", &Value::Null);
+    assert_eq!(body["session"], Value::Null, "none with no song open: {body}");
+    socket.close();
     let _ = std::fs::remove_dir_all(dir);
 }
 

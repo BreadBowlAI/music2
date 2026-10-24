@@ -87,7 +87,7 @@ impl Graph {
     /// idle. Reads and resets the taps of the plan that plays, and reads the load.
     pub fn meters(&self) -> Option<Value> {
         let device = self.inner.current_device();
-        let (peaks, load, dropouts, input) = {
+        let (token, peaks, load, dropouts, input) = {
             let mut cp = self.inner.control.lock();
             let ControlPlane { open, meters, record, .. } = &mut *cp;
             let (Some(open), Some(device)) = (open.as_ref(), device) else {
@@ -105,12 +105,13 @@ impl Graph {
                 return None;
             }
             let input = record.input().map(|ring| meters.input_level(ring));
-            (plays.info.taps.as_ref()?.take(), meters.load(), player.device_errors().xruns + meters.late, input)
+            (open.engine.token, plays.info.taps.as_ref()?.take(), meters.load(), player.device_errors().xruns + meters.late, input)
         };
         let tracks: Map<String, Value> =
             peaks.tracks.iter().map(|(k, p)| (k.clone(), json!(p.iter().map(|&x| short(x)).collect::<Vec<_>>()))).collect();
         let mut m = json!({
             "t": "meters",
+            "session": token,
             "tracks": tracks,
             "out": peaks.out.map(short),
             "dsp": {"load": (load as f64 * 1e4).round() / 1e4, "dropouts": dropouts},

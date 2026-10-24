@@ -204,7 +204,7 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
             let progress = |progress: f64| {
                 if progress < 1.0 && last.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
                     last = Some(Instant::now());
-                    let _ = state.events.send(with(&about, json!({"progress": progress})).to_string());
+                    state.send(with(&about, json!({"progress": progress})));
                 }
             };
             let written = match taken {
@@ -247,7 +247,7 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                     json!({"error": format!("{e:#}"), "code": m2_editor::faults::Faulted::of(&e).map(|f| f.code), "path": thread_path})
                 }
             };
-            state.announce(with(&about, event).to_string());
+            state.announce(with(&about, event));
         })?;
         Ok(path)
     })();

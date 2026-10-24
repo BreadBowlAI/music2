@@ -159,9 +159,11 @@ pub(crate) fn same_key(given: &str, key: &str) -> bool {
 }
 
 /// The routes that act on what the musician holds (AGENT-3): their drags after the begin, the code
-/// editor's list of unsaved files, undo's skip, a take's stop and cancel, and closing Compare; and
-/// what the musician looks at, `POST /api/focus` (AGENT-6). The tools key can't use them: an agent's change is one edit, refused while the musician holds what it touches, and
-/// it never ends what they hold.
+/// editor's list of unsaved files, undo's skip, a take's stop and cancel, and Compare; and what the
+/// musician looks at, `POST /api/focus` (AGENT-6). The tools key can't use them: an agent's change
+/// is one edit, refused while the musician holds what it touches, and it never ends what they hold.
+/// An agent's song open, close and new song meet the holds of everything instead (busy: a take,
+/// Compare), until track 4 refuses them.
 const MUSICIANS: [&str; 18] = [
     "/api/graph/lease/update",
     "/api/graph/lease/keepalive",
@@ -246,16 +248,17 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
     let page = !crate::caller::now().is_agent();
     upgrade.on_upgrade(move |socket| async move {
         ws_loop(s.clone(), socket, q.client.clone(), page).await;
-        if let Some(client) = q.client {
+        if let Some(client) = q.client.clone() {
             // Off the async threads: putting values back may wait for room in the player's queue.
             let state = s.clone();
             let _ = crate::caller::blocking(move || state.graph.client_gone(&client)).await;
             s.graph_changed();
         }
-        // The page went away: the Compare pill closes with it (D2).
+        // A page went away: the Compare pill closes with the window that opened it, or with the
+        // last page (D2).
         if page {
-            let state = s.clone();
-            let _ = crate::caller::blocking(move || state.graph.page_gone()).await;
+            let (state, others) = (s.clone(), s.pages() > 0);
+            let _ = crate::caller::blocking(move || state.graph.page_gone(q.client.as_deref(), others)).await;
         }
     })
 }
@@ -283,7 +286,9 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<Str
             ev = events.recv() => {
                 let text = match ev {
                     Ok(text) => text,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => json!({"t": "lagged", "missed": missed}).to_string(),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                        json!({"t": "lagged", "missed": missed, "session": state.graph.session()}).to_string()
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
                 if socket.send(Message::Text(text.into())).await.is_err() {
@@ -318,6 +323,7 @@ async fn project_templates() -> ApiResult {
 async fn project_new(State(s): S, Json(r): Json<crate::project::NewSong>) -> ApiResult {
     let state = s.clone();
     let v = blocking(move || {
+        state.graph.may_end_song()?;
         let v = crate::project::new_song(&state.graph, &r)?;
         state.opened();
         Ok(v)
@@ -342,7 +348,11 @@ struct GraphOpenReq {
 
 async fn graph_open(State(s): S, Json(r): Json<GraphOpenReq>) -> ApiResult {
     let state = s.clone();
-    let v = blocking(move || state.open_song(&r.path)).await?;
+    let v = blocking(move || {
+        state.graph.may_end_song()?;
+        state.open_song(&r.path)
+    })
+    .await?;
     s.graph_changed();
     Ok(Json(v))
 }
@@ -350,6 +360,7 @@ async fn graph_open(State(s): S, Json(r): Json<GraphOpenReq>) -> ApiResult {
 async fn graph_close(State(s): S) -> ApiResult {
     let state = s.clone();
     blocking(move || {
+        state.graph.may_end_song()?;
         state.graph.close();
         state.closed();
         Ok(())
@@ -361,6 +372,8 @@ async fn graph_close(State(s): S) -> ApiResult {
 
 async fn graph_status(State(s): S) -> Json<Value> {
     let mut v = json!(s.graph.status());
+    // Which song it is of (AGENT-6): `m2 watch` ends when another opens.
+    v["session"] = json!(s.graph.session());
     s.graph.activity().put(&mut v);
     Json(v)
 }
@@ -919,10 +932,6 @@ struct StepReq {
     /// An agent's name (AGENT-4): its undo takes back only its own step. Only with the tools key.
     #[serde(default, rename = "as")]
     by: Option<String>,
-    /// V, the Compare key (D2): the undo opens the pill on Before, the redo flips it to After.
-    /// Only with the page key, and only naming its step.
-    #[serde(default)]
-    compare: bool,
 }
 
 async fn graph_undo(State(s): S, Json(r): Json<StepReq>) -> Response {
@@ -936,19 +945,8 @@ async fn graph_redo(State(s): S, Json(r): Json<StepReq>) -> Response {
 async fn stepped(s: Arc<AppState>, r: StepReq, redo: bool) -> Response {
     let state = s.clone();
     let caller = crate::caller::now().saying(r.by.as_deref(), None);
-    if r.compare {
-        // Compare is the musician's (AGENT-3).
-        if caller.is_agent() {
-            let why = "agents can't do this: Compare is the musician's (V in the app)";
-            return (StatusCode::FORBIDDEN, Json(json!({"error": why}))).into_response();
-        }
-        if r.step.is_none() {
-            return err("Compare names the step it flips: `step`").into_response();
-        }
-    }
     let result = crate::caller::blocking(move || {
         crate::caller::as_caller(caller, || match (r.step, redo) {
-            (Some(step), _) if r.compare => state.graph.compare(r.session, step, redo),
             (Some(step), false) => state.graph.undo_step(r.session, step),
             (Some(step), true) => state.graph.redo_step(r.session, step),
             (None, false) => state.graph.undo(r.session),
@@ -962,7 +960,7 @@ async fn stepped(s: Arc<AppState>, r: StepReq, redo: bool) -> Response {
 
 /// An undo's, a redo's or a skip's answer: 409 when its step isn't the newest (`newest`), or
 /// when undo can't take it back and it can be skipped (`stuck`), with words either way (AGENT-2).
-fn step_answer(result: Result<anyhow::Result<Value>, tokio::task::JoinError>) -> Response {
+pub(crate) fn step_answer(result: Result<anyhow::Result<Value>, tokio::task::JoinError>) -> Response {
     use crate::graph::steps::{NotElsewhere, NotNewest, NotTheirs, Stuck};
     match result {
         Ok(Ok(v)) => Json(v).into_response(),
@@ -975,6 +973,9 @@ fn step_answer(result: Result<anyhow::Result<Value>, tokio::task::JoinError>) ->
             }
             if let Some(n) = e.downcast_ref::<NotElsewhere>() {
                 return (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "newest": n.newest}))).into_response();
+            }
+            if let Some(n) = e.downcast_ref::<crate::graph::compare::Stale>() {
+                return (StatusCode::CONFLICT, Json(json!({"error": n.to_string(), "comparing": n.comparing}))).into_response();
             }
             if let Some(s) = e.downcast_ref::<Stuck>() {
                 return (StatusCode::CONFLICT, Json(json!({"error": s.to_string(), "stuck": s.stuck}))).into_response();
