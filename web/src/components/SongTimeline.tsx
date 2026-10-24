@@ -60,6 +60,7 @@ import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { followNow, roundZoom, setFollow, setZoom, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
 import { useStore } from "../lib/store";
+import { look } from "../lib/focus";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import { listedInstrument } from "../lib/plugins";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, useReorder } from "./Tracks";
@@ -366,6 +367,8 @@ export default function SongTimeline({
 
   // Where the timeline scrolled itself last (a page, a zoom): any other scroll across is by hand.
   const ours = useRef<number | null>(null);
+  // The Song row's height at the foot, as last drawn: the lanes on screen end above it.
+  const songRow = useRef(0);
   const scrollTo = (left: number) => {
     const el = scroller.current;
     if (!el) return;
@@ -488,12 +491,42 @@ export default function SongTimeline({
     }
     useMarkerEdit.setState({ editing: { beat: bar.start, from: null } });
   };
+  /** Where beat `b` is on screen, as a client x: where a pointer at bars goes (AGENT-6). */
+  const beatX = (b: number) => {
+    const el = scroller.current;
+    return el ? el.getBoundingClientRect().left + latest.current.headerW + b * zoomNow() - el.scrollLeft : null;
+  };
+  /** The lanes' part of the timeline on screen: right of the headers, under the ruler, above the Song row. */
+  const lanesBox = () => {
+    const el = scroller.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const { headerW } = latest.current;
+    return new DOMRect(r.left + headerW, r.top + RULER_H, Math.max(0, el.clientWidth - headerW), Math.max(0, el.clientHeight - RULER_H - songRow.current));
+  };
+  /** A pointer's Show (AGENT-6): beats `start` to `end` in view, from 15% in when they fit. The only way a pointer moves the view. */
+  const showBeats = (start: number, end: number) => {
+    const el = scroller.current;
+    if (!el) return;
+    const view = el.clientWidth - latest.current.headerW;
+    const fits = (end - start) * zoomNow() <= view * 0.85;
+    scrollTo(start * zoomNow() - (fits ? view * 0.15 : 0));
+  };
   useEffect(() => {
-    Object.assign(canvas, { zoom: zoomStep, zoomFit, follow: () => setFollow(!followNow()), height, marker });
+    Object.assign(canvas, { zoom: zoomStep, zoomFit, follow: () => setFollow(!followNow()), height, marker, beatX, lanesBox, reveal: showBeats });
     return () => {
-      for (const k of ["zoom", "zoomFit", "follow", "height", "marker"] as const) delete canvas[k];
+      for (const k of ["zoom", "zoomFit", "follow", "height", "marker", "beatX", "lanesBox", "reveal"] as const) delete canvas[k];
     };
   });
+  // What the timeline shows, for agents beside the musician (AGENT-6): the beats in view.
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const say = () => look({ seen: [el.scrollLeft / zoomNow(), (el.scrollLeft + Math.max(0, el.clientWidth - latest.current.headerW)) / zoomNow()] });
+    say();
+    el.addEventListener("scroll", say, { passive: true });
+    return () => el.removeEventListener("scroll", say);
+  }, [ppb, visible]);
   // A pinch, or ⌘-scroll (Ctrl-scroll): around the pointer. Chrome and WebKitGTK send a pinch as a
   // wheel with Ctrl held; WebKit on the Mac as gesture events, which must never zoom the page.
   useEffect(() => {
@@ -1289,6 +1322,7 @@ export default function SongTimeline({
   const songShown = songRows.controls.filter((l) => !songHidden.has(l.key)).length;
   const songLanesH = songShown * LANE_H + (songShown < songRows.controls.length ? HIDDEN_ROW_H : 0);
   const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songLanesH : 0);
+  songRow.current = songH;
   const all = [...rows, song].filter((t) => t.lanes.some((l) => l.kind === "control")).map((t) => t.module);
   const anyOpen = all.some((m) => open.has(m));
   return (

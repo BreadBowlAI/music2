@@ -13,6 +13,7 @@ import KeyField from "./KeyField";
 import MidiStatus from "./MidiStatus";
 import { MeterField, SongTitle, TempoField } from "./SongBar";
 import OverlayPill from "./OverlayPill";
+import ComparePill from "./ComparePill";
 import Status from "./Status";
 import { Button, keepFocus } from "./ui";
 import RecordButton from "./RecordButton";
@@ -205,6 +206,8 @@ export default function TopBar({
       <MidiStatus graph={graph} />
       <Status graph={graph} status={status} onShowCode={onShowCode} />
       <OverlayPill graph={graph} />
+      {/* V's pill (D2): before or after the newest change an agent or another program made. */}
+      <ComparePill session={graph.session} />
       <Divider />
       <BarButton
         onClick={() => void undoTop(graph, "undo")}

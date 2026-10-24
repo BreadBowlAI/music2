@@ -208,4 +208,10 @@ export const canvas: {
   height?: (dir: 1 | -1) => void;
   /** Transport ▸ Add Marker (at the playhead's bar), Previous and Next Marker. */
   marker?: (op: "add" | "prev" | "next") => void;
+  /** Where beat `b` is on screen, as a client x (an agent's pointer at bars, AGENT-6). */
+  beatX?: (b: number) => number | null;
+  /** The timeline's lanes on screen: right of the headers, under the ruler, above the Song row. */
+  lanesBox?: () => DOMRect | null;
+  /** A pointer's Show: beats `start` to `end` in view. */
+  reveal?: (start: number, end: number) => void;
 } = {};

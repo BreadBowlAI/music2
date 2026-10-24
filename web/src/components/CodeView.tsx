@@ -12,6 +12,7 @@ import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import TrackIdDialog from "./TrackIdDialog";
 import { technical, Words } from "../lib/plain";
+import { look } from "../lib/focus";
 import { Button, Details, MenuRow, Popover } from "./ui";
 
 type Kit = typeof import("../lib/codeMonaco");
@@ -142,6 +143,22 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
       for (const m of kit.monaco.editor.getModels()) if (isLib(m.uri.path.replace(/^\//, ""))) m.dispose();
     };
   }, [kit]);
+
+  // The file and the cursor's line, for agents beside the musician (AGENT-6): a project file's only.
+  useEffect(() => {
+    const ed = editor.current;
+    if (!ed) return;
+    const say = () => {
+      const file = activeRef.current;
+      look({ code: file && !isLib(file) ? { file, line: ed.getPosition()?.lineNumber ?? 1 } : null });
+    };
+    say();
+    const d = ed.onDidChangeCursorPosition(say);
+    return () => {
+      d.dispose();
+      look({ code: null });
+    };
+  }, [kit, active]);
 
   /** Show a project file, or a library file read-only; keeps each file's cursor and scroll. */
   const open = useCallback(

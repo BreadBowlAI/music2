@@ -2,6 +2,10 @@ import { LucideProvider, WifiOff } from "lucide-react";
 import { useEffect } from "react";
 import { connect, on } from "./lib/events";
 import { heard as heardStep } from "./lib/notice";
+import { followFocus, postFocus } from "./lib/focus";
+import { heardPoint, syncPointer } from "./lib/pointer";
+import { compare, followCompare, heardCompare, syncCompare } from "./lib/compare";
+import PointerNote from "./components/PointerNote";
 import { useStore } from "./lib/store";
 import Toasts from "./components/Toasts";
 import GraphCanvas, { closeSong, undoTop } from "./components/GraphCanvas";
@@ -67,7 +71,7 @@ function key(e: KeyboardEvent): string | null {
   if (e.key === "Enter" || e.key === "Home") return "home";
   if (e.key === "Escape") return "deselect";
   if (e.shiftKey) return null;
-  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo", z: "zoom_fit", k: "metronome", r: "record" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
+  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo", z: "zoom_fit", k: "metronome", r: "record", v: "compare" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
 }
 
 /** ⌘1 to ⌘4, View's grid rows: the command ids, in order. */
@@ -130,14 +134,37 @@ export default function App() {
       on("graph", () => void refreshGraph()),
       on("step", heardStep),
       on("export", (msg) => void onExportEvent(msg)),
+      // Agents beside the musician (AGENT-6): a pointer shown or cleared, the Compare pill closed.
+      on("point", heardPoint),
+      on("compare", heardCompare),
+      // The socket fell behind and missed events: read the song again.
+      on("lagged", () => void refreshGraph()),
     ];
     const stop = connect((c) => {
       set({ connected: c });
-      if (c) void refreshGraph();
+      // Connected: the song as it is, its pointer and Compare as the server has them, and what the
+      // musician looks at, said once (AGENT-6).
+      if (c)
+        void refreshGraph().then(() => {
+          syncPointer();
+          syncCompare();
+          postFocus(true);
+        });
     });
+    // Another song: its own pointer and Compare.
+    const opened = useStore.subscribe((s, was) => {
+      if (s.graph?.session === was.graph?.session) return;
+      syncPointer();
+      syncCompare();
+    });
+    const offFocus = followFocus();
+    const offCompare = followCompare();
     return () => {
       stop();
       heard.forEach((off) => off());
+      opened();
+      offFocus();
+      offCompare();
     };
   }, []);
 
@@ -212,6 +239,7 @@ export default function App() {
         <Shortcuts />
         <SettingsDialog />
         <Toasts />
+        {graph && <PointerNote session={graph.session} />}
         <DropLayer />
         <KeyboardPiano />
         {/* With a song open, the top bar's status pill says it; on the start screen, this one does. */}
@@ -434,5 +462,8 @@ export function appCommand(id: string) {
     case "guide":
       // Help ▸ Make Your First Song (the studio plan's Q47).
       return openGuide();
+    case "compare":
+      // V (D2): before and after the newest change an agent or another program made.
+      return void compare();
   }
 }

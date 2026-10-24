@@ -43,6 +43,7 @@ import { Button, EmptyState, keepFocus, Segment } from "./ui";
 import { afterLaneWrites, hasOwnId } from "../lib/graph";
 import { serverRef, type Gesture as ClipGesture } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
+import { look } from "../lib/focus";
 
 // The roll's sizes (taste.md §3.5); its ruler is the arrangement's, 28px. The key column is 56 px,
 // or 88 where its keys say drum names (`keysWidth`, polish A4).
@@ -416,6 +417,11 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   };
 
   const picked = clip ? [...selected].filter((i) => i < clip.notes.length) : [];
+  // The selected notes, by what they are, for agents beside the musician (AGENT-6).
+  const pickedNotes = clip ? picked.map((i) => ({ pitch: clip.notes[i].pitch, start: clip.notes[i].start, length: clip.notes[i].length })) : [];
+  const said = JSON.stringify(pickedNotes);
+  useEffect(() => look({ notes: pickedNotes.length ? { clip: { track: module, lane, id: ref.id }, notes: pickedNotes } : null }), [said, module, lane, ref.id]);
+  useEffect(() => () => look({ notes: null }), []);
 
   /** Delete the notes at `which` (the selected ones). */
   const remove = (which: readonly number[] = picked, name?: string) => {

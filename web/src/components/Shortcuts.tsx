@@ -26,6 +26,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     name: "Edit",
     keys: [
       ["Undo / redo", `${chord("Z")} / ${chord("Z", { shift: true })}`],
+      ["Hear before / after an agent's or an outside change", "V"],
       ["Cut / copy / paste clips", `${chord("X")} / ${chord("C")} / ${chord("V")}`],
       ["Delete the selected clips or notes", keyName("Backspace")],
       ["Select more clips / one in or out", `${mod.shift}-click / ${mod.cmd}-click`],
