@@ -25,13 +25,18 @@ fn project(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// `POST path` with `body` and the token: the status and the JSON answer.
+/// `POST path` with `body` and the page's key: the status and the JSON answer.
 fn post(url: &str, path: &str, body: &Value) -> (u16, Value) {
+    post_as(url, path, "t0k", body)
+}
+
+/// `POST path` with `body` and `key`: the status and the JSON answer.
+fn post_as(url: &str, path: &str, key: &str, body: &Value) -> (u16, Value) {
     let addr = url.trim_start_matches("http://");
     let mut s = std::net::TcpStream::connect(addr).unwrap();
     let body = body.to_string();
     let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: t0k\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: {key}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     s.write_all(req.as_bytes()).unwrap();
@@ -58,28 +63,79 @@ fn the_song_and_a_clip_are_written_where_picked() {
             .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
-    let out = dir.join("out");
-    std::fs::write(dir.join("out.mid"), "old").unwrap();
+    let picked = dir.with_extension("picked");
+    let _ = std::fs::remove_dir_all(&picked);
+    std::fs::create_dir_all(&picked).unwrap();
+    let out = picked.join("out");
+    std::fs::write(picked.join("out.mid"), "old").unwrap();
     let (status, done) = post(url, "/api/graph/midifile/export", &json!({"session": session, "path": out}));
     assert_eq!(status, 200, "{done:#}");
-    let path = dir.join("out.mid");
+    let path = picked.join("out.mid");
     assert_eq!(done["path"], json!(path));
     // E2 a beat into a clip at beat 4: beat 5 of the song, 960 ticks a beat.
     assert_eq!(notes(&path), [(40, 4800, 5760)]);
     let clip = json!({"module": "bass", "lane": "notes", "id": "a"});
-    let (status, done) = post(url, "/api/graph/midifile/export", &json!({"session": session, "path": dir.join("clip.midi"), "clip": clip}));
+    let (status, done) =
+        post(url, "/api/graph/midifile/export", &json!({"session": session, "path": picked.join("clip.midi"), "clip": clip}));
     assert_eq!(status, 200, "{done:#}");
-    assert_eq!(notes(&dir.join("clip.midi")), [(40, 960, 1920)]);
+    assert_eq!(notes(&picked.join("clip.midi")), [(40, 960, 1920)]);
     let gone = json!({"module": "bass", "lane": "notes", "id": "zzzz"});
-    let (status, why) = post(url, "/api/graph/midifile/export", &json!({"session": session, "path": dir.join("x.mid"), "clip": gone}));
+    let (status, why) = post(url, "/api/graph/midifile/export", &json!({"session": session, "path": picked.join("x.mid"), "clip": gone}));
     assert_eq!((status, why["error"].as_str()), (400, Some("That clip isn't there any more.")));
-    let (status, why) = post(url, "/api/graph/midifile/export", &json!({"session": session + 1, "path": dir.join("x.mid")}));
+    let (status, why) = post(url, "/api/graph/midifile/export", &json!({"session": session + 1, "path": picked.join("x.mid")}));
     assert!(status == 400 && why["error"].as_str().unwrap().contains("changed"), "{why:#}");
-    assert!(!dir.join("x.mid").exists());
+    assert!(!picked.join("x.mid").exists());
     // Nothing left beside the files.
-    let parts: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".part")).collect();
+    let parts: Vec<_> =
+        std::fs::read_dir(&picked).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".part")).collect();
     assert!(parts.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&picked);
+}
+
+// Studio lane C (the review of ag-routes' F5): a MIDI file is never written into the open song's
+// folder, whoever asks, the musician too: a file picked there, through a link to it too, is refused
+// in words, and nothing is written. So an agent's export, a read, never writes into the song.
+#[test]
+fn a_midi_file_is_never_written_into_the_song() {
+    let dir = project("inside");
+    for folder in ["tracks", "assets"] {
+        std::fs::create_dir_all(dir.join(folder)).unwrap();
+    }
+    let beside = dir.with_extension("beside");
+    let _ = std::fs::remove_dir_all(&beside);
+    std::fs::create_dir_all(&beside).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let url = &running.url;
+    let before = std::fs::read_dir(&dir).unwrap().count();
+    #[allow(unused_mut)]
+    let mut inside = vec![dir.join("tracks/keys.mid"), dir.join("assets/keys.mid"), dir.join("keys")];
+    // A link to the song's folder, beside it, leads into it all the same.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&dir, beside.join("link")).unwrap();
+        inside.push(beside.join("link/keys.mid"));
+    }
+    for key in ["t00ls", "t0k"] {
+        for path in &inside {
+            let (status, why) = post_as(url, "/api/graph/midifile/export", key, &json!({"session": session, "path": path}));
+            assert_eq!(status, 400, "{} with {key}: {why}", path.display());
+            assert!(why["error"].as_str().unwrap().contains("outside the song's folder"), "{why}");
+        }
+    }
+    for p in [dir.join("tracks/keys.mid"), dir.join("assets/keys.mid"), dir.join("keys.mid")] {
+        assert!(!p.exists(), "{} was written", p.display());
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), before, "nothing new in the song's folder");
+    // Beside it, as picked.
+    let (status, done) = post_as(url, "/api/graph/midifile/export", "t00ls", &json!({"session": session, "path": beside.join("keys.mid")}));
+    assert_eq!(status, 200, "{done}");
+    assert!(beside.join("keys.mid").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&beside);
 }
 
 // Q38: a new file in Exports takes the first free name, and never replaces a file, not even one

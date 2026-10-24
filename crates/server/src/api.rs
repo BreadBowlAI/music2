@@ -1,9 +1,10 @@
 //! The one route table (AGENT-8): every HTTP route of the app, declared once, with its method, its
-//! path, whether it writes the open song, whether agents may call it, plain words and an example
-//! body. Each `routes*.rs` declares its routes with [`routes!`], which makes that file's router and
-//! its part of the table from the same lines, so neither can drift from the other; [`all`] joins
-//! the parts. The read-only window's 423 (WRITE-17) and the tools key's 403 (AGENT-11) are one
-//! middleware, [`gate`], that reads it, and `m2 routes` prints it.
+//! path, the largest body it takes, whether it writes the open song, whether agents may call it,
+//! plain words and an example body. Each `routes*.rs` declares its routes with [`routes!`], which
+//! makes that file's router and its part of the table from the same lines, so neither can drift
+//! from the other; [`all`] joins the parts. One middleware, [`gate`], answers from it: any other
+//! `/api` path or method (404, 405), the tools key's 403 (AGENT-11) and the read-only window's 423
+//! (WRITE-17). `m2 routes` prints it.
 
 use std::sync::Arc;
 
@@ -21,6 +22,9 @@ pub struct Route {
     /// `GET`, `POST` or `PUT`.
     pub method: &'static str,
     pub path: &'static str,
+    /// The largest body it takes, in bytes: [`BODY`], unless its line says `up to`. The router
+    /// refuses a bigger one, 413, and `m2 call` before sending it.
+    pub limit: usize,
     /// It writes the open song, or begins a drag whose commit would: a window open read-only
     /// answers it 423 (WRITE-17).
     pub writes: bool,
@@ -33,6 +37,9 @@ pub struct Route {
     pub example: &'static str,
 }
 
+/// The largest body a route takes unless its line says more: 2 MiB, axum's own.
+pub const BODY: usize = 2 << 20;
+
 impl Route {
     /// The example body, as JSON.
     pub fn example(&self) -> Value {
@@ -44,6 +51,7 @@ impl Route {
         json!({
             "method": self.method,
             "path": self.path,
+            "limit": self.limit,
             "writes": self.writes,
             "agents": self.agents,
             "words": self.words,
@@ -112,31 +120,37 @@ pub fn find(method: &str, path: &str) -> Option<&'static Route> {
     PARTS.iter().flat_map(|p| p.routes).find(|r| r.method == method && r.path == path)
 }
 
-/// The routes of the table, each file's router made from its part, and a clear 404 for any other
-/// `/api` path, not the page's index.html.
+/// The routes of the table, each file's router made from its part.
 pub(crate) fn router() -> axum::Router<Arc<AppState>> {
-    let routed = PARTS.iter().fold(axum::Router::new(), |r, p| r.merge((p.router)()));
-    routed.route("/api/{*rest}", axum::routing::any(no_such_api))
+    PARTS.iter().fold(axum::Router::new(), |r, p| r.merge((p.router)()))
 }
 
-async fn no_such_api() -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({"error": "no such API"}))).into_response()
-}
-
-/// The table's gate, inside `auth`, which says who asks: the tools key on a route not for agents
-/// is 403, with the route's refusal (AGENT-11); a write while the song is open read-only is 423,
-/// with WRITE-18's message (WRITE-17). Anything else goes on; a path the table hasn't got, to the
-/// router's 404.
+/// The table's gate, inside `auth`, which says who asks. An `/api` path the table hasn't got is
+/// 404, and a method it hasn't got on a path it has 405, whoever asks: deny by default, so no
+/// route outside the table answers (AGENT-8). Then the tools key on a route not for agents is 403,
+/// with the route's refusal (AGENT-11); a write while the song is open read-only is 423, with
+/// WRITE-18's message (WRITE-17). Any other path is the page's files.
 pub(crate) async fn gate(State(s): State<Arc<AppState>>, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    if let Some(route) = find(req.method().as_str(), req.uri().path()) {
-        if !route.agents && crate::caller::now().is_agent() {
-            return (StatusCode::FORBIDDEN, Json(json!({"error": route.refusal()}))).into_response();
+    let path = req.uri().path();
+    if !path.starts_with("/api/") {
+        return next.run(req).await;
+    }
+    let Some(route) = find(req.method().as_str(), path) else {
+        let methods: Vec<&str> = all().into_iter().filter(|r| r.path == path).map(|r| r.method).collect();
+        if methods.is_empty() {
+            return (StatusCode::NOT_FOUND, Json(json!({"error": "no such API"}))).into_response();
         }
-        if route.writes
-            && let Some(why) = s.graph.read_only()
-        {
-            return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
-        }
+        let takes = methods.join(" or ");
+        let said = Json(json!({"error": format!("{path} takes {takes}, not {}", req.method())}));
+        return (StatusCode::METHOD_NOT_ALLOWED, [(axum::http::header::ALLOW, methods.join(", "))], said).into_response();
+    };
+    if !route.agents && crate::caller::now().is_agent() {
+        return (StatusCode::FORBIDDEN, Json(json!({"error": route.refusal()}))).into_response();
+    }
+    if route.writes
+        && let Some(why) = s.graph.read_only()
+    {
+        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
     }
     next.run(req).await
 }
@@ -147,8 +161,8 @@ pub(crate) async fn gate(State(s): State<Arc<AppState>>, req: axum::extract::Req
 /// METHOD "path" => handler [up to LIMIT]; writes|reads, agents|musician, "words", r#"example"#;
 /// ```
 ///
-/// `up to` raises the largest body it takes. It makes the file's `PART`: its part of the one table
-/// and its router, from the same lines.
+/// `up to` raises the largest body it takes from [`BODY`]. It makes the file's `PART`: its part of
+/// the one table and its router, from the same lines, so the limit the router keeps is the table's.
 macro_rules! routes {
     (@writes writes) => { true };
     (@writes reads) => { false };
@@ -157,6 +171,8 @@ macro_rules! routes {
     (@method GET $h:ident) => { axum::routing::get($h) };
     (@method POST $h:ident) => { axum::routing::post($h) };
     (@method PUT $h:ident) => { axum::routing::put($h) };
+    (@limit) => { $crate::api::BODY };
+    (@limit $limit:expr) => { $limit };
     ($($method:ident $path:literal => $handler:ident $(up to $limit:expr)?; $writes:ident, $who:ident, $words:literal, $example:literal;)*) => {
         /// This file's routes and its router, made from the same lines: its part of the one route
         /// table (AGENT-8).
@@ -165,6 +181,7 @@ macro_rules! routes {
         const ROUTES: &[$crate::api::Route] = &[$($crate::api::Route {
             method: stringify!($method),
             path: $path,
+            limit: $crate::api::routes!(@limit $($limit)?),
             writes: $crate::api::routes!(@writes $writes),
             agents: $crate::api::routes!(@who $who),
             words: $words,
@@ -172,7 +189,11 @@ macro_rules! routes {
         }),*];
 
         fn router() -> axum::Router<std::sync::Arc<$crate::AppState>> {
-            axum::Router::new()$(.route($path, $crate::api::routes!(@method $method $handler)$(.layer(axum::extract::DefaultBodyLimit::max($limit)))?))*
+            axum::Router::new()$(.route(
+                $path,
+                $crate::api::routes!(@method $method $handler)
+                    .layer(axum::extract::DefaultBodyLimit::max($crate::api::routes!(@limit $($limit)?))),
+            ))*
         }
     };
 }

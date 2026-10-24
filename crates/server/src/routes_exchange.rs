@@ -1,7 +1,9 @@
 //! Swapping files with other music apps (studio lane C), in the one route table (AGENT-8): the song
 //! or a clip written as a MIDI file, a MIDI file brought in, and the song's stems
 //! (`crate::stems`). A MIDI file goes to the songs folder's Exports (a new name), or to a file the
-//! user picked (replaced, as Export Audio replaces one), never into the project.
+//! user picked (replaced, as Export Audio replaces one), never into the project: a file picked in
+//! the open song's folder is refused, whoever asks, so an agent's export, a read, writes nothing of
+//! the song.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -87,6 +89,13 @@ fn picked(path: PathBuf) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Whether `path` is in the song's folder `song` (as `Graph::dir` names it), through a link too: a
+/// MIDI file never goes there, being no file of the song.
+fn in_song(path: &Path, song: &Path) -> bool {
+    let song = song.canonicalize().unwrap_or_else(|_| song.to_path_buf());
+    path.parent().and_then(|p| p.canonicalize().ok()).is_some_and(|p| p.starts_with(&song))
+}
+
 /// Write `bytes` to `path` whole: beside it first, then renamed over it, so `path` is never half
 /// a file. With `fresh`, only as a new file: the next free name when `path` is taken meanwhile.
 fn write_file(path: &Path, bytes: &[u8], fresh: Option<&str>) -> Result<PathBuf> {
@@ -156,15 +165,22 @@ struct ExportReq {
 
 /// Write the song (or `clip`) as a MIDI file (Q37, Q38): `{session, path?, clip?: {module, lane,
 /// id}}`. Answers `{path}`, the file written. Writes no part of the project, so a read-only window
-/// may.
+/// may: a file in the song's folder is refused, with nothing written.
 async fn midifile_export(State(s): S, Json(r): Json<ExportReq>) -> ApiResult {
     let state = s.clone();
     let path = blocking(move || {
         let (bytes, base) = state.graph.midi_file(r.session, r.clip)?;
-        match r.path {
-            Some(p) => write_file(&picked(p)?, &bytes, None),
-            None => write_file(&free_path(&base)?, &bytes, Some(&base)),
+        let (to, fresh) = match r.path {
+            Some(p) => (picked(p)?, None),
+            None => (free_path(&base)?, Some(base.as_str())),
+        };
+        if let Some(song) = state.graph.dir().filter(|song| in_song(&to, song)) {
+            bail!(
+                "save it outside the song's folder ({}): a MIDI file is no part of the song, and that folder keeps the song's own files",
+                song.display()
+            );
         }
+        write_file(&to, &bytes, fresh)
     })
     .await?;
     Ok(Json(json!({"path": path})))

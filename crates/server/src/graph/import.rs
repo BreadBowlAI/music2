@@ -1,11 +1,14 @@
 //! Audio files in the open song (lane A): where an asset's file is, for its waveform's peaks
-//! (A1); and bringing files in (A2): copied into `assets/` on the calling thread, their peaks made
-//! from that one decode, then placed by one actor job as one undo step, named on the server.
+//! (A1); and bringing files in (A2): copied on the calling thread to a hidden part file in
+//! `assets/`, their peaks made from that one decode, then named and placed by one actor job as one
+//! undo step, named on the server (by an agent's words when it gives some, AGENT-2). An agent's is
+//! checked before anything is copied, and again in that job: refused, nothing of it is left
+//! (AGENT-3).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
-use m2_editor::import::{self, Imported, Source, Target};
+use anyhow::{Context, Result, anyhow, bail};
+use m2_editor::import::{self, Imported, Source, Staged, Target};
 use m2_song::AssetName;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -13,7 +16,8 @@ use serde_json::{Value, json};
 use super::Graph;
 use crate::peaks::{Peaks, Store};
 
-/// One import at a time in this server: two never share a part file (D2).
+/// One import at a time in this server, from its copy to the job that names its files: two never
+/// share a part file (D2).
 static IMPORTING: Mutex<()> = Mutex::new(());
 
 /// What an import of `files` is called as an undo step (Q16).
@@ -68,72 +72,111 @@ impl Graph {
         Ok(p.shown.dir.clone())
     }
 
-    /// Bring `sources` into the open song and place them at `target` (Q6, Q7): each copied into
-    /// `assets/` (or the same bytes there used again) and its peaks made, here; then one actor job
-    /// places their clips (one Tx, one undo step named "importing vox.wav"). Answers the edit with
-    /// `made` (the clips, to select), `tracks` (any added) and `notes` (what to tell: a file whose
-    /// extra channels don't play). A file refused says why: nothing is added to the song, and any
-    /// file copied before it stays in `assets/` (D16).
+    /// AGENT-3: whether an agent's write may begin, before anything of it is made off the session's
+    /// thread (an import's copy): busy while a take records or the Compare pill is open. The job
+    /// that lands it checks again.
+    fn arriving(&self, token: u64) -> Result<()> {
+        if !crate::caller::now().is_agent() {
+            return Ok(());
+        }
+        self.call(move |a| {
+            a.open.as_ref().context("no project is open")?.check_token(token)?;
+            a.arrive(None)
+        })
+    }
+
+    /// `sources`, each copied to a hidden part file in `dir`'s `assets/` (or the same bytes there
+    /// found), its peaks made from that one decode (D31): none is in the song yet. One refused says
+    /// why, and those staged before it go. The caller holds [`IMPORTING`] until they are named.
+    fn stage(dir: &Path, sources: Vec<Source>) -> Result<Vec<Staged>> {
+        let mut staged = vec![];
+        for src in sources {
+            let mut peaks = Peaks::builder();
+            let f = import::stage(dir, src, &mut |piece| peaks.add(piece)).map_err(|e| anyhow!("{}", words(&e)))?;
+            let file = f.file();
+            // A file used again has its own peaks.
+            match file.reused {
+                false => drop(Store::global().put(file.hash, peaks.done(file.rate))),
+                true => drop(Store::global().of(&dir.join(m2_song::path::ASSETS).join(file.asset.as_str()))),
+            }
+            staged.push(f);
+        }
+        Ok(staged)
+    }
+
+    /// Bring `sources` into the open song and place them at `target` (Q6, Q7): each copied and its
+    /// peaks made, here ([`Graph::stage`]); then one actor job names them into `assets/` and places
+    /// their clips (one Tx, one undo step named "importing vox.wav", or by an agent's words).
+    /// Answers the edit with `made` (the clips, to select), `tracks` (any added), `assets` and
+    /// `reused` (each file's asset, and whether its bytes were there already) and `notes` (what to
+    /// tell: a file whose extra channels don't play). A file refused says why, and nothing is added
+    /// to the song; nor is anything while the musician holds the song (AGENT-3), which is checked
+    /// before anything is copied, and again when the files would be named.
     pub fn import_audio(&self, token: u64, sources: Vec<Source>, target: Target) -> Result<Value> {
         if sources.is_empty() {
             bail!("No file to bring in.");
         }
         let dir = self.import_dir(token, &target)?;
-        let files = {
-            let _one = IMPORTING.lock();
-            let mut files = vec![];
-            for src in sources {
-                let mut peaks = Peaks::builder();
-                let f = import::audio(&dir, src, &mut |piece| peaks.add(piece)).map_err(|e| anyhow::anyhow!("{}", words(&e)))?;
-                // The peaks from the decode the import made (D31); a file used again has its own.
-                match f.reused {
-                    false => drop(Store::global().put(f.hash, peaks.done(f.rate))),
-                    true => drop(Store::global().of(&dir.join(m2_song::path::ASSETS).join(f.asset.as_str()))),
-                }
-                files.push(f);
-            }
-            files
-        };
-        let name = step_name(&files);
-        let structural = !matches!(target, Target::Lane { .. });
-        let notes: Vec<String> = files
-            .iter()
-            .filter(|f| f.dropped_channels > 0)
-            .map(|f| format!("{} has {} channels: music2 plays the first two.", f.name, f.dropped_channels + 2))
-            .collect();
-        let placing = files.clone();
-        let mut done = self.call(move |a| {
-            a.edit_and(token, |s| {
-                let p = import::place(s, &placing, &target)?;
-                let made: Vec<Value> =
-                    p.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();
-                let tracks: Vec<Value> = p.tracks.iter().map(|(m, l)| json!({"module": m, "label": l})).collect();
-                Ok((p.edited, json!({"made": made, "tracks": tracks})))
-            })
-        })?;
-        if let Some(revision) = done["revision"].as_u64() {
-            let named = self.name_step(token, revision, name.clone(), structural)?;
-            done["undo_name"] = named["undo_name"].clone();
+        self.arriving(token)?;
+        let assets = dir.join(m2_song::path::ASSETS);
+        let _one = IMPORTING.lock();
+        let made_folder = !assets.exists();
+        let done = self.import_staged(token, &dir, sources, target);
+        if done.is_err() && made_folder {
+            // The folder this import made for files that never came in.
+            let _ = std::fs::remove_dir(&assets);
         }
+        let done = done?;
         // A new track under a key a gone track's mute or solo was kept for starts heard (Q7).
         let keys: Vec<String> =
             done["tracks"].as_array().into_iter().flatten().filter_map(|t| t["module"].as_str().map(String::from)).collect();
         if !keys.is_empty() {
             self.forget_overlays(&keys);
         }
+        Ok(done)
+    }
+
+    /// [`Graph::import_audio`]'s copy, then its job.
+    fn import_staged(&self, token: u64, dir: &Path, sources: Vec<Source>, target: Target) -> Result<Value> {
+        let staged = Graph::stage(dir, sources)?;
+        let files: Vec<Imported> = staged.iter().map(|f| f.file().clone()).collect();
+        // AGENT-2: an agent's step is named by its words.
+        let name = crate::caller::now().why().unwrap_or_else(|| step_name(&files));
+        let structural = !matches!(target, Target::Lane { .. });
+        let notes: Vec<String> = files
+            .iter()
+            .filter(|f| f.dropped_channels > 0)
+            .map(|f| format!("{} has {} channels: music2 plays the first two.", f.name, f.dropped_channels + 2))
+            .collect();
+        let named = name.clone();
+        let mut done = self.call(move |a| {
+            a.edit_and(token, |s| {
+                // Into the song only now, after this job's check (AGENT-3).
+                let files = staged.into_iter().map(Staged::name).collect::<Result<Vec<_>, _>>()?;
+                let p = import::place(s, &files, &target)?;
+                s.name_step(p.edited.revision, &named, structural);
+                let made: Vec<Value> =
+                    p.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();
+                let tracks: Vec<Value> = p.tracks.iter().map(|(m, l)| json!({"module": m, "label": l})).collect();
+                let assets: Vec<&str> = files.iter().map(|f| f.asset.as_str()).collect();
+                let reused: Vec<bool> = files.iter().map(|f| f.reused).collect();
+                Ok((p.edited, json!({"made": made, "tracks": tracks, "assets": assets, "reused": reused})))
+            })
+        })?;
         done["name"] = json!(name);
         done["notes"] = json!(notes);
-        done["assets"] = json!(files.iter().map(|f| f.asset.as_str()).collect::<Vec<_>>());
         Ok(done)
     }
 }
 
 impl Graph {
-    /// A WAV dropped on a sampler's card (track ab): `source` is copied into the open song's
-    /// `assets/` (or the same bytes there used again), here, then one actor job writes its name into
-    /// sampler call `call` of revision `at` (one Tx, one undo step, "setting Sampler to kick.wav").
-    /// Undo takes the code back; the file stays. A file that isn't a WAV is refused in words, and
-    /// nothing is copied. Answers the edit with `name` (the step's) and `asset`.
+    /// A WAV dropped on a sampler's card (track ab): `source` is copied here, as an import's file is
+    /// ([`Graph::stage`]), then one actor job names it into the open song's `assets/` (or the same
+    /// bytes there are used again) and writes its name into sampler call `call` of revision `at`
+    /// (one Tx, one undo step, "setting Sampler to kick.wav", or an agent's words). Undo takes the
+    /// code back; the file stays. A file that isn't a WAV is refused in words, and nothing is
+    /// copied; nor is anything while the musician holds the song (AGENT-3). Answers the edit with
+    /// `name` (the step's) and `asset`.
     pub fn set_sample(&self, token: u64, at: u64, call: String, source: Source) -> Result<Value> {
         let dir = {
             let cp = self.inner.control.lock();
@@ -149,47 +192,43 @@ impl Graph {
             }
             p.shown.dir.clone()
         };
-        let file = {
-            let _one = IMPORTING.lock();
-            let mut peaks = Peaks::builder();
-            let f = import::audio(&dir, source, &mut |piece| peaks.add(piece)).map_err(|e| anyhow::anyhow!("{}", words(&e)))?;
-            match f.reused {
-                false => drop(Store::global().put(f.hash, peaks.done(f.rate))),
-                true => drop(Store::global().of(&dir.join(m2_song::path::ASSETS).join(f.asset.as_str()))),
-            }
-            f
-        };
-        let name = format!("setting Sampler to {}", file.asset.as_str());
-        let asset = file.asset.as_str().to_string();
-        let mut done = self.call(move |a| {
-            a.edit_and(token, |s| {
-                let e = m2_editor::sampler::set_sample(s, at, &call, &file)?;
-                Ok((e, json!({})))
+        self.arriving(token)?;
+        let assets = dir.join(m2_song::path::ASSETS);
+        let _one = IMPORTING.lock();
+        let made_folder = !assets.exists();
+        let words = crate::caller::now().why();
+        let done = Graph::stage(&dir, vec![source]).map(|mut s| s.remove(0)).and_then(|staged| {
+            self.call(move |a| {
+                a.edit_and(token, |s| {
+                    // Into the song only now, after this job's check (AGENT-3).
+                    let file = staged.name()?;
+                    let e = m2_editor::sampler::set_sample(s, at, &call, &file)?;
+                    // AGENT-2: an agent's step is named by its words.
+                    let name = words.unwrap_or_else(|| format!("setting Sampler to {}", file.asset.as_str()));
+                    s.name_step(e.revision, &name, false);
+                    Ok((e, json!({"name": name, "asset": file.asset.as_str()})))
+                })
             })
-        })?;
-        if let Some(revision) = done["revision"].as_u64() {
-            let named = self.name_step(token, revision, name.clone(), false)?;
-            done["undo_name"] = named["undo_name"].clone();
+        });
+        if done.is_err() && made_folder {
+            let _ = std::fs::remove_dir(&assets);
         }
-        done["name"] = json!(name);
-        done["asset"] = json!(asset);
-        Ok(done)
+        done
     }
 
     /// The + Track list's Audio track (Q8): an audio track named `label` (else "Audio"), after
-    /// track `after` (else last), as one undo step named "adding Audio". Answers `{module, label,
-    /// revision}`.
+    /// track `after` (else last), as one undo step named "adding Audio" (or by an agent's words,
+    /// AGENT-2). Answers `{module, label, revision}`.
     pub fn add_audio_track(&self, token: u64, label: Option<String>, after: Option<String>) -> Result<Value> {
+        let words = crate::caller::now().why();
         let added = self.call(move |a| {
             a.edit_and(token, |s| {
                 let new = m2_editor::tracks::NewTrack { play: m2_editor::tracks::Play::Audio, label, key: None, clips: vec![] };
                 let made = m2_editor::tracks::add_tracks(s, &[new], after.as_deref(), None)?.remove(0);
+                s.name_step(made.edited.revision, &words.unwrap_or_else(|| format!("adding {}", made.label)), true);
                 Ok((made.edited, json!({"module": made.module, "label": made.label})))
             })
         })?;
-        if let (Some(revision), Some(label)) = (added["revision"].as_u64(), added["label"].as_str()) {
-            self.name_step(token, revision, format!("adding {label}"), true)?;
-        }
         if let Some(k) = added["module"].as_str() {
             self.forget_overlays(&[k.to_string()]);
         }

@@ -1341,3 +1341,58 @@ fn while_a_take_records_every_agents_write_is_busy() {
     let (status, body) = as_caller(agent, || r.graph.tx_commit(Some(r.token), &tx.to_json(), None, &[])).unwrap();
     assert_eq!(status, 200, "{body}");
 }
+
+// AGENT-3 (the review of ag-routes' F2): a take the musician begins while an agent's import copies
+// its file, once its first check passed, makes the import busy when it lands, and its copy goes:
+// nothing is left in the song, no file in `assets/`, no part file, not the folder either.
+#[test]
+fn a_take_begun_while_an_agents_import_copies_leaves_nothing() {
+    use crate::caller::{Caller, as_caller};
+    use m2_editor::import::{Source, Target};
+    // The rig's song, with an audio track to bring the file onto.
+    let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+                const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\n\
+                const k = track('keys', { name: 'Keys' }, ({ lane }) => kick(lane.notes('notes')));\n\
+                const v = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\
+                export default song(() => sum(sum(b.out, k.out), v.out));\n";
+    let r = Rig::with(&[("song.ts", song), ("data/vox/clips.json", "{\"clips\": []}\n")]);
+    let (arrived, at) = std::sync::mpsc::channel::<()>();
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    // The first check an agent's write passes waits here while the take begins.
+    let mut once = Some((arrived, wait));
+    r.graph.inspect(move |a| {
+        a.after_arrival = Some(Box::new(move |_| {
+            if let Some((arrived, wait)) = once.take() {
+                let _ = arrived.send(());
+                let _ = wait.recv();
+            }
+        }))
+    });
+    let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let mut wav = std::io::Cursor::new(vec![]);
+    let mut w = hound::WavWriter::new(&mut wav, spec).unwrap();
+    for i in 0..4_800 {
+        w.write_sample(((i as f32 * 0.03).sin() * 8_000.0) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+    let source = Source::Bytes { name: "vox.wav".into(), bytes: wav.into_inner() };
+    let clips = r.fixture.read("data/vox/clips.json");
+    std::thread::scope(|s| {
+        let (graph, token) = (&r.graph, r.token);
+        let onto = Target::Lane { module: "vox".into(), lane: "clips".into(), beat: 0.0 };
+        let import = s.spawn(move || as_caller(Caller::agent(Some("Claude"), None), || graph.import_audio(token, vec![source], onto)));
+        at.recv().unwrap();
+        r.start(false, None);
+        go.send(()).unwrap();
+        let e = import.join().unwrap().unwrap_err();
+        let busy = e.downcast_ref::<crate::graph::busy::Busy>().unwrap_or_else(|| panic!("busy: {e:#}"));
+        assert_eq!(busy.what, "take", "{e:#}");
+    });
+    r.graph.inspect(|a| a.after_arrival = None);
+    let assets = r.fixture.0.join("assets");
+    let left: Vec<String> =
+        std::fs::read_dir(&assets).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    assert_eq!(left, Vec::<String>::new(), "nothing was left in assets/");
+    assert!(!assets.exists(), "not even the folder, which the import made");
+    assert_eq!(r.fixture.read("data/vox/clips.json"), clips, "no clip was placed");
+}

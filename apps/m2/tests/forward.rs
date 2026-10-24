@@ -485,3 +485,48 @@ fn an_answer_that_isnt_json_is_said_with_its_status() {
     assert!(!err.contains("null"), "{err}");
     assert!(std::fs::read_to_string(temp.0.join("song/song.ts")).unwrap().contains("pan: 0.3"));
 }
+
+/// What the song's `assets/` holds, hidden part files too (empty when there is none).
+fn assets(a: &App) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(a.song.join("assets"))
+        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+// AGENT-1, AGENT-3 (the review of ag-routes' F2): `m2 import` while the musician compares hands its
+// file to the app's import, which is busy: `m2` waits, then exits 3, and nothing reaches the song,
+// no file in `assets/`, and the pill stays open. Once it closes, the import lands as one step of the
+// agent's, named by the import (F10: not after `layout.json`).
+#[test]
+fn m2_import_while_comparing_copies_nothing() {
+    let a = App::open("first-song", |_| {});
+    let files = a.temp.0.join("files");
+    std::fs::create_dir_all(&files).unwrap();
+    let tone = files.join("tone.wav");
+    wav(&tone, 0.5);
+    let tone = tone.to_str().unwrap();
+    ok(&a, &["title", a.dir(), "Night Drive", "--as", "Claude"]);
+    let step = step(&a);
+    let graph = &a.running.state.graph;
+    graph.compare(a.session, step, true, Some("w1".into())).unwrap();
+    let before = assets(&a);
+    let o = a.m2_with(&["import", a.dir(), tone, "--as", "Claude"], &[("M2_BUSY_WAIT", "1")]);
+    assert_eq!(o.status.code(), Some(3), "{}", said(&o));
+    assert!(said(&o).contains("comparing"), "{}", said(&o));
+    assert_eq!(assets(&a), before, "nothing was copied into the song");
+    let t = Instant::now();
+    while t.elapsed() < Duration::from_millis(2500) {
+        assert_eq!(graph.comparing()["step"], json!(step), "the pill stays open");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    graph.close_compare(a.session, false).unwrap();
+    let out = ok(&a, &["import", a.dir(), tone, "--as", "Claude"]);
+    assert!(out.contains("imported tone.wav as assets/tone.wav"), "{out}");
+    assert!(out.contains("onto a new track Tone"), "{out}");
+    assert!(out.contains("in the open app: one undo step, Claude: importing tone.wav"), "{out}");
+    let top = a.top();
+    assert_eq!((&top["by"], &top["name"]), (&json!("Claude"), &json!("importing tone.wav")), "{top}");
+    assert_eq!(assets(&a), ["tone.wav"]);
+}

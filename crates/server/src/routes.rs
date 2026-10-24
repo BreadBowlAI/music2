@@ -66,7 +66,7 @@ crate::api::routes! {
         "Hear a knob's new value while it is dragged (the first one begins the drag)",
         r#"{"session": 7, "revision": 42, "id": "tracks/keys.ts#1/@brightness", "gesture": "drag-1", "value": 0.6, "client": "w1"}"#;
     POST "/api/graph/preview/cancel" => graph_cancel_preview; reads, musician,
-        "End a knob drag without saving: the code's value plays again",
+        "End a knob drag without saving, so the code's value plays again",
         r#"{"session": 7, "id": "tracks/keys.ts#1/@brightness", "gesture": "drag-1"}"#;
     POST "/api/graph/set" => graph_set; writes, agents,
         "Write a knob's value into the code, as one undo step (for an agent, never a drag's commit)",
@@ -165,7 +165,7 @@ crate::api::routes! {
         "Put back the change undone last",
         r#"{"session": 7, "step": 57}"#;
     POST "/api/graph/transport" => graph_transport; reads, musician,
-        "Play or stop: play, stop, toggle or restart",
+        "Play, stop, toggle or restart",
         r#"{"action": "play"}"#;
     POST "/api/graph/seek" => graph_seek; reads, musician,
         "Move the playhead to a beat",
@@ -199,12 +199,19 @@ crate::api::routes! {
 /// The app's whole router: the route table's routes behind its gate (AGENT-8) and `auth`, and the
 /// page for every other path.
 pub fn app(state: Arc<AppState>, web_dir: &Path) -> Router {
+    served(state, crate::api::router(), web_dir)
+}
+
+/// `routes` as the app serves them, behind `auth` and the table's gate: every `/api` path goes to
+/// them, and the gate lets through only what the table has (AGENT-8); every other path is the
+/// page's files. So no route outside the table answers, whatever else `routes` holds.
+pub(crate) fn served(state: Arc<AppState>, routes: Router<Arc<AppState>>, web_dir: &Path) -> Router {
     let spa = ServeDir::new(web_dir).fallback(ServeFile::new(web_dir.join("index.html")));
-    crate::api::router()
+    Router::new()
+        .route("/api/{*rest}", axum::routing::any_service(routes.with_state(state.clone())))
         .fallback_service(spa)
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::api::gate))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), auth))
-        .with_state(state)
+        .layer(axum::middleware::from_fn_with_state(state, auth))
 }
 
 /// Reject `/api` calls without one of the two keys (AGENT-10), and serve each as its caller: the
@@ -246,28 +253,31 @@ pub(crate) fn same_key(given: &str, key: &str) -> bool {
 #[derive(Deserialize)]
 struct WsQuery {
     /// The window's id (one per page load), which its knob drags carry: when this socket closes,
-    /// the window's gestures end (C6).
+    /// the window's gestures end (C6). Only a page's socket names a window.
     #[serde(default)]
     client: Option<String>,
 }
 
 async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) -> Response {
-    // The page's socket, or an agent's (`m2 watch`, AGENT-6).
+    // The page's socket, or an agent's (`m2 watch`, AGENT-6). An agent's names no window, whatever
+    // its query says: its closing ends nothing the musician holds (AGENT-3).
     let page = !crate::caller::now().is_agent();
+    let client = q.client.filter(|_| page);
     upgrade.on_upgrade(move |socket| async move {
-        ws_loop(s.clone(), socket, q.client.clone(), page).await;
-        if let Some(client) = q.client.clone() {
+        ws_loop(s.clone(), socket, client.clone(), page).await;
+        if !page {
+            return;
+        }
+        if let Some(gone) = client.clone() {
             // Off the async threads: putting values back may wait for room in the player's queue.
             let state = s.clone();
-            let _ = crate::caller::blocking(move || state.graph.client_gone(&client)).await;
+            let _ = crate::caller::blocking(move || state.graph.client_gone(&gone)).await;
             s.graph_changed();
         }
         // A page went away: the Compare pill closes with the window that opened it, or with the
         // last page (D2).
-        if page {
-            let (state, others) = (s.clone(), s.pages() > 0);
-            let _ = crate::caller::blocking(move || state.graph.page_gone(q.client.as_deref(), others)).await;
-        }
+        let (state, others) = (s.clone(), s.pages() > 0);
+        let _ = crate::caller::blocking(move || state.graph.page_gone(client.as_deref(), others)).await;
     })
 }
 

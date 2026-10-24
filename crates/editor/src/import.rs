@@ -7,6 +7,10 @@
 //! taken in any capitals. The same bytes already in `assets/` are used again, with no copy (Q2).
 //! A failure leaves nothing. music2 never deletes an asset (Q4).
 //!
+//! The app does it in two parts ([`stage`], then [`Staged::name`]), so the copy is made before the
+//! session is asked, but becomes an asset only inside the change that places it, after that
+//! change's check (AGENT-3): a part file is no file of the song, and one dropped unnamed goes.
+//!
 //! [`place`] puts the files' clips in the song as one Tx, one undo step, after taking the new
 //! files in (D1): onto an audio lane, one after another; or onto a new audio track each
 //! (`tracks::add_tracks`). A clip plays its file at its own speed from where it lands: it is as
@@ -154,6 +158,68 @@ pub(crate) fn assets_in(folder: &Path) -> Vec<(String, PathBuf)> {
 /// waveform is made from the same decode; none when the same bytes were there (`reused`: nothing
 /// was copied or decoded). Checks all it can before copying; a failure leaves nothing.
 pub fn audio(dir: &Path, from: Source, each: &mut dyn FnMut(&[Vec<f32>])) -> Result<Imported, EditError> {
+    stage(dir, from, each)?.name()
+}
+
+/// A file on its way into a song's `assets/` (AGENT-3): copied to a hidden part file there, locked
+/// (so no sweep takes it), pushed and decoded; or the same bytes found there already. It is no
+/// file of the song yet: [`Staged::name`] makes it an asset, inside the change that places it.
+/// Dropped unnamed, its part goes, and nothing of it is left.
+pub struct Staged {
+    /// What it will be: the asset's name it asks for, until it is named.
+    file: Imported,
+    /// Its part file, and the lock held on it until it is named.
+    part: Option<(PathBuf, File)>,
+    folder: PathBuf,
+}
+
+impl Staged {
+    /// What it will be once named; its asset's name may take a number then.
+    pub fn file(&self) -> &Imported {
+        &self.file
+    }
+
+    /// Make it an asset: its part given the first free name, create-only, and its folder synced (a
+    /// file whose bytes were there already is that asset). The lock goes after.
+    pub fn name(mut self) -> Result<Imported, EditError> {
+        let Some((part, lock)) = self.part.take() else { return Ok(self.file.clone()) };
+        let named = (|| -> std::io::Result<AssetName> {
+            let mut taken: Vec<String> = assets_in(&self.folder).into_iter().map(|(n, _)| n).collect();
+            let asset = loop {
+                let name = self.file.asset.untaken_folded(taken.iter().map(String::as_str));
+                match name_new(&part, &self.folder.join(name.as_str())) {
+                    Ok(()) => break name,
+                    // Made a moment ago by someone else: the next number.
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => taken.push(name.as_str().to_string()),
+                    Err(e) => return Err(e),
+                }
+            };
+            m2_os::fs::sync_dir(&self.folder)?;
+            Ok(asset)
+        })();
+        drop(lock);
+        match named {
+            Ok(asset) => Ok(Imported { asset, ..self.file.clone() }),
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                Err(EditError::Io(format!("couldn't bring {} in: {e}", self.file.name)))
+            }
+        }
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if let Some((part, lock)) = self.part.take() {
+            let _ = std::fs::remove_file(&part);
+            drop(lock);
+        }
+    }
+}
+
+/// The first part of [`audio`]: `from` checked, copied to a hidden part file in `dir`'s `assets/`
+/// and decoded (each piece to `each`), or the same bytes found there; not yet an asset.
+pub fn stage(dir: &Path, from: Source, each: &mut dyn FnMut(&[Vec<f32>])) -> Result<Staged, EditError> {
     let name = from.name();
     let h = match &from {
         Source::Path(p) => header(&name, Box::new(File::open(p).map_err(|e| refused(format!("{name} can't be read ({e})")))?)),
@@ -180,21 +246,23 @@ pub fn audio(dir: &Path, from: Source, each: &mut dyn FnMut(&[Vec<f32>])) -> Res
             && HashCache::global().hash(p).is_ok_and(|s| s == hash)
             && let Ok(asset) = AssetName::new(rel)
         {
-            return Ok(Imported { asset, name, hash, seconds, rate: h.rate, dropped_channels, reused: true });
+            let file = Imported { asset, name, hash, seconds, rate: h.rate, dropped_channels, reused: true };
+            return Ok(Staged { file, part: None, folder });
         }
     }
     let wanted = AssetName::for_import(&name);
     let part = part_path(&folder.join(wanted.as_str())).map_err(|e| EditError::Io(e.to_string()))?;
     sweep(&folder);
-    let copied = copy_in(&from, &part, &folder, &wanted, there.iter().map(|(n, _)| n.as_str()), each);
+    let copied = copy_in(&from, &part, each);
     if copied.is_err() {
         let _ = std::fs::remove_file(&part);
     }
-    let (asset, hash) = copied.map_err(|e| match e {
+    let (lock, hash) = copied.map_err(|e| match e {
         Copy::Io(e) => io(e),
         Copy::Decode(why) => refused(format!("{name} doesn't read as a WAV file ({why})")),
     })?;
-    Ok(Imported { asset, name, hash, seconds, rate: h.rate, dropped_channels, reused: false })
+    let file = Imported { asset: wanted, name, hash, seconds, rate: h.rate, dropped_channels, reused: false };
+    Ok(Staged { file, part: Some((part, lock)), folder })
 }
 
 enum Copy {
@@ -209,16 +277,9 @@ impl From<std::io::Error> for Copy {
 }
 
 /// The copy itself: the part made create-only and locked at once (so no sweep takes it), filled,
-/// pushed, decoded in pieces (each to `each`), then named the first free name and its folder
-/// synced. The lock goes after.
-fn copy_in<'a>(
-    from: &Source,
-    part: &Path,
-    folder: &Path,
-    wanted: &AssetName,
-    there: impl Iterator<Item = &'a str>,
-    each: &mut dyn FnMut(&[Vec<f32>]),
-) -> Result<(AssetName, Sha), Copy> {
+/// pushed and decoded in pieces (each to `each`): its lock, held until it is named, and the hash of
+/// the bytes written.
+fn copy_in(from: &Source, part: &Path, each: &mut dyn FnMut(&[Vec<f32>])) -> Result<(File, Sha), Copy> {
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(part)?;
     let _ = m2_os::fs::try_lock(&f);
     match from {
@@ -234,19 +295,7 @@ fn copy_in<'a>(
     #[cfg(test)]
     tests::DURING.with(|d| d.borrow().as_ref().map(|during| during(part)));
     decode(part, each).map_err(|e| Copy::Decode(e.root_cause().to_string()))?;
-    let mut taken: Vec<String> = there.map(str::to_string).collect();
-    let asset = loop {
-        let name = wanted.untaken_folded(taken.iter().map(String::as_str));
-        match name_new(part, &folder.join(name.as_str())) {
-            Ok(()) => break name,
-            // Made a moment ago by someone else: the next number.
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => taken.push(name.as_str().to_string()),
-            Err(e) => return Err(e.into()),
-        }
-    };
-    m2_os::fs::sync_dir(folder)?;
-    drop(f);
-    Ok((asset, hash))
+    Ok((f, hash))
 }
 
 /// Decode the WAV at `path` in pieces, as it will play, each to `each`: its rate, once every

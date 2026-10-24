@@ -18,7 +18,7 @@ type ApiResult = Result<Json<Value>, ApiError>;
 
 crate::api::routes! {
     POST "/api/graph/view" => graph_view; reads, musician,
-        "The timeline's view: zoom, follow, track heights, hidden lanes, the grid, audition, the metronome and the guide",
+        "Set the timeline's view (zoom, follow, track heights, hidden lanes, the grid, audition, the metronome and the guide)",
         r#"{"session": 7, "set": {"zoom": 2}}"#;
     POST "/api/graph/markers" => graph_markers; writes, agents,
         "Write the ruler's markers, the whole list, into layout.json",

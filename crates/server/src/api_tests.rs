@@ -22,7 +22,7 @@ const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } fro
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
 
 /// What AGENT-11 names as the musician's: each is in the table, and not for agents.
-const THE_MUSICIANS: [(&str, &str); 44] = [
+const THE_MUSICIANS: [(&str, &str); 45] = [
     ("POST", "/api/graph/transport"),
     ("POST", "/api/graph/seek"),
     ("POST", "/api/graph/loop"),
@@ -35,6 +35,7 @@ const THE_MUSICIANS: [(&str, &str); 44] = [
     ("POST", "/api/graph/view"),
     ("POST", "/api/graph/plugin/window"),
     ("POST", "/api/graph/plugin/latch"),
+    ("POST", "/api/plugins/scan"),
     ("POST", "/api/graph/audition"),
     ("POST", "/api/graph/midi/inject"),
     ("POST", "/api/graph/redo"),
@@ -211,9 +212,9 @@ fn ask(url: &str, method: &str, path: &str, key: &str, body: &Value) -> (u16, St
     (status, kind, body.to_string())
 }
 
-// AGENT-8: every route is declared once, with its method, its path, whether it writes, whether
-// agents may call it, words and an example; the router, the 423 and the 403 come from that table,
-// so no file of the server adds a route or keeps a list of paths but through it.
+// AGENT-8: every route is declared once, with its method, its path, the largest body it takes,
+// whether it writes, whether agents may call it, words and an example; the router, the 423 and the
+// 403 come from that table, so no file of the server keeps a list of paths but through it.
 #[test]
 fn every_route_is_declared_once() {
     let all = api::all();
@@ -226,13 +227,16 @@ fn every_route_is_declared_once() {
         assert!(!(r.writes && r.method == "GET"), "{at}: a GET never writes");
         assert!(!r.words.is_empty() && !r.words.ends_with('.'), "{at}: its words, with no full stop: {:?}", r.words);
         assert!(r.example().is_object(), "{at}: its example is a JSON object: {}", r.example);
+        assert!(r.limit >= api::BODY, "{at}: the largest body it takes: {}", r.limit);
+        assert_eq!(r.json()["limit"], json!(r.limit), "{at}: m2 routes --json lists it");
         assert!(std::ptr::eq(api::find(r.method, r.path).unwrap(), *r), "{at} is found");
     }
     assert_eq!(api::find("HEAD", "/api/graph").map(|r| r.method), Some("GET"), "a HEAD is a GET's");
     assert!(api::find("POST", "/api/graph/nope").is_none());
 
-    // No hand list is left: outside `api.rs`, no file of the server adds a route, merges a router,
-    // or keeps a list of the routes that write or are the musician's.
+    // No hand list is left: outside `api.rs`, no file of the server keeps a list of the routes that
+    // write or are the musician's. (A route added outside the table answers no one:
+    // `a_route_outside_the_table_answers_no_one`.)
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut rust = vec![];
     let mut stack = vec![src.clone()];
@@ -255,14 +259,14 @@ fn every_route_is_declared_once() {
         let text = std::fs::read_to_string(&file).unwrap();
         for (n, line) in text.lines().enumerate() {
             let code = line.split("//").next().unwrap_or("");
-            for pattern in [".route(", ".route_layer(", ".merge(", ".nest(", "const WRITES", "MUSICIANS"] {
+            for pattern in ["const WRITES", "MUSICIANS"] {
                 if code.contains(pattern) {
                     found.push(format!("{}:{}: {}", file.strip_prefix(&src).unwrap().display(), n + 1, line.trim()));
                 }
             }
         }
     }
-    assert!(found.is_empty(), "routes or lists of them outside the table:\n{}", found.join("\n"));
+    assert!(found.is_empty(), "lists of routes outside the table:\n{}", found.join("\n"));
 }
 
 /// The routes that close the open song or open another: sent last, so the rest meet the song open.
@@ -368,4 +372,109 @@ fn the_tools_key_gets_403_on_every_route_not_for_agents() {
     assert_eq!(state["record"], Value::Null, "no take");
     assert_eq!(files(&song), before, "nothing was written");
     let _ = std::fs::remove_dir_all(song.parent().unwrap());
+}
+
+// AGENT-8 (the review of ag-routes' F7): the router takes each route's body up to the limit the
+// table gives it, and refuses one byte more, 413.
+#[test]
+fn each_route_takes_bodies_up_to_its_limit() {
+    let song = song("limits");
+    let (running, session) = serve(&song);
+    let route = api::find("POST", "/api/graph/title").unwrap();
+    assert_eq!(route.limit, api::BODY, "a route with no `up to`: 2 MiB");
+    let body = json!({"session": session, "name": "Night drive"}).to_string();
+    // Padded with spaces to the limit, it reads; a byte more is refused.
+    for (size, status) in [(route.limit, 200), (route.limit + 1, 413)] {
+        let padded = format!("{body}{}", " ".repeat(size - body.len()));
+        let addr = running.url.trim_start_matches("http://");
+        let mut s = std::net::TcpStream::connect(addr).unwrap();
+        let head = format!(
+            "POST /api/graph/title HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: {PAGE}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            padded.len()
+        );
+        s.write_all(head.as_bytes()).unwrap();
+        let _ = s.write_all(padded.as_bytes());
+        let mut answer = vec![];
+        let _ = s.read_to_end(&mut answer);
+        let answer = String::from_utf8_lossy(&answer);
+        assert_eq!(answer.get(9..12), Some(status.to_string().as_str()), "a body of {size} bytes: {}", answer.lines().next().unwrap_or(""));
+    }
+    let _ = std::fs::remove_dir_all(song.parent().unwrap());
+}
+
+/// A server of `routes`, as the app serves them (`routes::served`), with no song open: its url.
+fn serving_routes(routes: axum::Router<std::sync::Arc<crate::AppState>>) -> String {
+    let mut state = crate::AppState::new(TOOLS.into(), Graph::silent());
+    state.page_token = PAGE.into();
+    let app = crate::routes::served(std::sync::Arc::new(state), routes, Path::new("no-web"));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async move {
+            let _ = axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app).await;
+        })
+    });
+    url
+}
+
+// AGENT-8 (the review of ag-routes' F8): only the table's routes answer. Routes added to the router
+// outside the table, however they are added, answer no one, whichever key asks: an `/api` path the
+// table hasn't got is 404, "no such API"; a method the table hasn't got on a path it has, 405; any
+// other path is the page's. (Every route of the table reaches its handler: `every_example_body_reads`.)
+#[test]
+fn a_route_outside_the_table_answers_no_one() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let stray = |hits: &std::sync::Arc<AtomicUsize>| {
+        let hits = hits.clone();
+        move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+            async { "a stray route" }
+        }
+    };
+    let service = axum::routing::any(stray(&hits)).with_state::<()>(());
+    let routes = api::router()
+        .route("/api/graph/stray", axum::routing::any(stray(&hits)))
+        .route("/stray", axum::routing::get(stray(&hits)))
+        .route_service("/api/stray/service", service)
+        .merge(axum::Router::new().route("/api/graph/merged", axum::routing::post(stray(&hits))))
+        .nest("/api/nested", axum::Router::new().route("/x", axum::routing::get(stray(&hits))));
+    let url = serving_routes(routes);
+    let asked = [
+        ("GET", "/api/graph/stray", 404),
+        ("POST", "/api/graph/stray", 404),
+        ("POST", "/api/graph/merged", 404),
+        ("GET", "/api/nested/x", 404),
+        ("GET", "/api/stray/service", 404),
+        ("GET", "/api/graph/transport", 405),
+        ("PUT", "/api/graph/title", 405),
+    ];
+    for key in [PAGE, TOOLS] {
+        for (method, path, status) in asked {
+            let (got, _, text) = ask(&url, method, path, key, &json!({}));
+            assert_eq!(got, status, "{method} {path} with {key}: {text}");
+            if status == 404 {
+                assert_eq!(text, r#"{"error":"no such API"}"#, "{method} {path}");
+            }
+        }
+        let (_, _, text) = ask(&url, "GET", "/stray", key, &json!({}));
+        assert!(!text.contains("a stray route"), "GET /stray is the page's: {text}");
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 0, "no route outside the table answered");
+}
+
+// AGENT-11 (the review of ag-routes' F9): each refusal reads as one sentence, its route's words
+// after one colon, and the contract quotes the transport's as the app says it.
+#[test]
+fn the_refusals_read_as_the_contract_quotes_them() {
+    for r in api::all().into_iter().filter(|r| !r.agents) {
+        let said = r.refusal();
+        assert_eq!(said.matches(':').count(), 1, "{} {}: {said}", r.method, r.path);
+        assert_eq!(said.matches(". ").count(), 1, "{} {}: {said}", r.method, r.path);
+    }
+    let play = api::find("POST", "/api/graph/transport").unwrap().refusal();
+    let contract = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/architecture.md")).unwrap();
+    let quoted = contract.lines().find(|l| l.contains("`Route::refusal`")).unwrap_or_default();
+    assert!(quoted.contains(&format!("\"{play}\"")), "AGENT-11's Today quotes {play:?}:\n{quoted}");
 }

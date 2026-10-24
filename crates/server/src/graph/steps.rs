@@ -87,7 +87,7 @@ pub(super) fn plain(file: &str, timeline: &Timeline) -> String {
     }
     match file {
         "music2.toml" => "the song's settings".into(),
-        "layout.json" => "the track order, colours or markers".into(),
+        "layout.json" => "the track order, colours, markers or the song's key".into(),
         _ if file.starts_with("assets/") => format!("the audio file {}", &file["assets/".len()..]),
         _ => format!("the file {file}"),
     }

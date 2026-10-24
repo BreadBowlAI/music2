@@ -127,7 +127,8 @@ fn a_step_made_elsewhere_gets_a_plain_name() {
     assert_eq!(plain("data/arrangement.json", &t), "the tempo or time signature");
     assert_eq!(plain("data/bass/cutoff.json", &t), "Bass cutoff automation");
     assert_eq!(plain("tracks/bass.ts", &t), "the code in tracks/bass.ts");
-    assert_eq!(plain("layout.json", &t), "the track order, colours or markers");
+    // The review of ag-routes' F10: the song's key lives there too.
+    assert_eq!(plain("layout.json", &t), "the track order, colours, markers or the song's key");
 }
 
 // WRITE-21: an undo refused (what it would take back changed since) keeps both names as they were.

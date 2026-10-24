@@ -174,7 +174,8 @@ impl Graph {
         use m2_editor::midifile::{self, Imported, Place};
         let (name, bytes) = midi_bytes(source)?;
         let file = m2_editor::smf::read(&bytes).map_err(|e| anyhow!("{name} {e}"))?;
-        let step = format!("importing {name}");
+        // AGENT-2: an agent's step is named by its words.
+        let step = crate::caller::now().why().unwrap_or_else(|| format!("importing {name}"));
         // Into the lane only a file of one part; anything else is new tracks (Q36).
         let one_part = midifile::bring(&file, &name, &|c| c.to_string()).is_ok_and(|b| b.parts.len() == 1);
         let place = match &target {
@@ -188,33 +189,35 @@ impl Graph {
         // The question, kept beside the edit, which wrote nothing.
         let asked: Arc<Mutex<Option<midifile::Asks>>> = Arc::default();
         let found = asked.clone();
+        let named = step.clone();
         let done = self.call(move |a| {
-            a.edit_and(token, |s| match (&target, &place) {
-                (MidiTarget::Lane { module, lane, beat }, None) => {
-                    let done = midifile::import_into(s, &file, &name, module, lane, *beat)?;
-                    Ok((done.edited, json!({"made": made_json(&done.made), "tracks": []})))
-                }
-                (_, Some(place)) => match midifile::import_tracks(s, &file, &name, place, tempo)? {
-                    Imported::Tracks(t) => {
-                        let tracks: Vec<Value> = t.tracks.iter().map(|(m, l)| json!({"module": m, "label": l})).collect();
-                        Ok((t.edited, json!({"made": made_json(&t.made), "tracks": tracks})))
+            a.edit_and(token, |s| {
+                let (edited, more) = match (&target, &place) {
+                    (MidiTarget::Lane { module, lane, beat }, None) => {
+                        let done = midifile::import_into(s, &file, &name, module, lane, *beat)?;
+                        (done.edited, json!({"made": made_json(&done.made), "tracks": []}))
                     }
-                    Imported::Asks(q) => {
-                        *found.lock() = Some(q);
-                        Err(m2_editor::EditError::Rejected("the tempo question waits for an answer".into()))
-                    }
-                },
-                (_, None) => unreachable!("only a lane takes a file without new tracks"),
+                    (_, Some(place)) => match midifile::import_tracks(s, &file, &name, place, tempo)? {
+                        Imported::Tracks(t) => {
+                            let tracks: Vec<Value> = t.tracks.iter().map(|(m, l)| json!({"module": m, "label": l})).collect();
+                            (t.edited, json!({"made": made_json(&t.made), "tracks": tracks}))
+                        }
+                        Imported::Asks(q) => {
+                            *found.lock() = Some(q);
+                            return Err(m2_editor::EditError::Rejected("the tempo question waits for an answer".into()));
+                        }
+                    },
+                    (_, None) => unreachable!("only a lane takes a file without new tracks"),
+                };
+                // Named in the same job, so its event and the answer say the name (AGENT-2).
+                s.name_step(edited.revision, &named, structural);
+                Ok((edited, more))
             })
         });
         if let Some(q) = asked.lock().take() {
             return Ok(json!({"asks": {"file_bpm": q.file_bpm, "song_bpm": q.song_bpm}}));
         }
         let mut done = done?;
-        if let Some(revision) = done["revision"].as_u64() {
-            let named = self.name_step(token, revision, step.clone(), structural)?;
-            done["undo_name"] = named["undo_name"].clone();
-        }
         // A new track under a key a gone track's mute or solo was kept for starts heard (Q7).
         let keys: Vec<String> =
             done["tracks"].as_array().into_iter().flatten().filter_map(|t| t["module"].as_str().map(String::from)).collect();

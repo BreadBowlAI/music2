@@ -118,6 +118,18 @@ pub(crate) fn step_said(step: &Value) -> String {
     }
 }
 
+/// What a write's answer `v` says it did in the open app (AGENT-8): the undo step it made, when
+/// undo's newest step is the one it names (`step`); what an undo took back, when redo's newest is.
+/// None when it made no step.
+pub(crate) fn done_in_app(v: &Value) -> Option<String> {
+    let step = v.get("step")?.as_u64()?;
+    let is = |top: &Value| top.is_object() && top["step"].as_u64() == Some(step);
+    if is(&v["undo_name"]) {
+        return Some(format!("in the open app: one undo step, {}", step_said(&v["undo_name"])));
+    }
+    is(&v["redo_name"]).then(|| format!("in the open app: took back {}", step_said(&v["redo_name"])))
+}
+
 /// How the connection to the app ended without an answer.
 #[derive(Debug)]
 enum Gone {
@@ -278,6 +290,22 @@ impl App {
         self.write("/api/graph/fix", &json!({"session": self.session, "fix": fix, "as": w.by, "why": w.why}), true)
     }
 
+    /// `m2 import` while the app has the song open (AGENT-1): `body` (`{paths, to}`) sent to the
+    /// app's own import, as this agent, so the files come into the song only inside the change that
+    /// lands (AGENT-3); waiting while busy, as every write does. The app's answer.
+    pub fn import(&mut self, mut body: Value) -> Result<Value> {
+        body["session"] = json!(self.session);
+        let (status, bytes) = self.call("POST", "/api/graph/audio/import", Some(&body), true)?;
+        let v = json_of(status, "", &bytes);
+        if status != 200 {
+            bail!("{}", words(&v));
+        }
+        if let Some(done) = done_in_app(&v) {
+            say_after(done);
+        }
+        Ok(v)
+    }
+
     /// `m2 undo` (AGENT-4): take back the newest step in the app, only while it is this agent's.
     pub fn undo(&self) -> Result<Value> {
         let w = who();
@@ -293,8 +321,8 @@ impl App {
         })?;
         match answer {
             Ok((200, v)) => {
-                if let Some(made) = v.get("undo_name").filter(|s| step && s.is_object()) {
-                    say_after(format!("in the open app: one undo step, {}", step_said(made)));
+                if let Some(done) = done_in_app(&v).filter(|_| step) {
+                    say_after(done);
                 }
                 Ok(v)
             }
@@ -432,8 +460,8 @@ impl Forward for App {
             200 => {
                 let c = &v["committed"];
                 let n = |k: &str| c[k].as_u64().unwrap_or(0);
-                if let Some(step) = v.get("undo_name").filter(|s| s.is_object()) {
-                    say_after(format!("in the open app: one undo step, {}", step_said(step)));
+                if let Some(done) = done_in_app(&v) {
+                    say_after(done);
                 }
                 Ok(Landed {
                     step: v["step"].as_u64().unwrap_or(0),
@@ -465,8 +493,8 @@ impl Forward for App {
         };
         match status {
             200 => {
-                if let Some(step) = v.get("undo_name").filter(|s| s.is_object() && v["step"].is_u64()) {
-                    say_after(format!("in the open app: one undo step, {}", step_said(step)));
+                if let Some(done) = done_in_app(&v) {
+                    say_after(done);
                 }
                 let number = v["view"]["revision"].as_u64().unwrap_or(0);
                 Ok(Landed { step: v["step"].as_u64().unwrap_or(0), number, ..Landed::default() })

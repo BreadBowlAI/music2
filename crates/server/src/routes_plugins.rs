@@ -1,8 +1,9 @@
 //! The installed plugins, as the side browser and + Track list them (gaps #32). The host process
 //! finds them (`PluginHost::scan`, HOST-3): the app never loads plugin code. A scan loads every
 //! plugin library, so it runs once per app run, on the first ask, off the async threads, and its
-//! list is kept until Look again (`POST /api/plugins/scan`). A song with no plugins starts no host
-//! process until a list is opened.
+//! list is kept until Look again (`POST /api/plugins/scan`), which is the musician's (AGENT-11):
+//! it loads every plugin library in the host where the song's plugins play. Agents read the list
+//! kept. A song with no plugins starts no host process until a list is opened.
 //!
 //! Adding one goes through the add routes std's sounds use: `POST /api/graph/effect/add` and
 //! `/api/graph/track/add` take `clap:<id>` as their `component`.
@@ -23,8 +24,8 @@ crate::api::routes! {
     GET "/api/plugins" => list; reads, agents,
         "The installed CLAP plugins: id, name, vendor, version, and whether each is an instrument or an effect",
         r#"{}"#;
-    POST "/api/plugins/scan" => scan; reads, agents,
-        "Look for installed plugins again, and list them",
+    POST "/api/plugins/scan" => scan; reads, musician,
+        "Look for installed plugins again (Look again), which loads each one in the host where the song's plugins play",
         r#"{}"#;
 }
 

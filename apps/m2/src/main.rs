@@ -804,25 +804,14 @@ fn run() -> Result<()> {
             if files.is_empty() {
                 bail!("m2 import names the WAV files to bring in\n\n{USAGE}");
             }
+            // While the app has the song open, the app's own import brings the files in, so they
+            // come into the song only inside the change that lands (AGENT-1, AGENT-3).
+            if let Some(holder) = app::holder(&dir) {
+                return import_in_app(&dir, &holder, &files, &args);
+            }
             let mut s = session(&dir)?;
-            let beat = match flag(&args, "--at") {
-                Some(p) => m2_editor::clips::position(&s.accepted().project.arrangement, &p).map_err(|e| anyhow!("--at: {e}"))?,
-                None => 0.0,
-            };
-            let target = match flag(&args, "--track") {
-                Some(key) => {
-                    let ir = &s.accepted().compiled.ir;
-                    let m = ir
-                        .modules
-                        .iter()
-                        .find(|m| m.key == key)
-                        .ok_or_else(|| anyhow!("there's no track `{key}`: the tracks are {}", tracks(ir)))?;
-                    let lane = m.lanes.iter().find(|l| m2_runtime::lane_kind(l.kind) == LaneKind::Audio);
-                    let lane = lane.ok_or_else(|| anyhow!("`{key}` has no audio lane: bring audio onto a track that plays one (lane.audio), or leave out --track for new ones"))?;
-                    m2_editor::import::Target::Lane { module: key, lane: lane.key.clone(), beat }
-                }
-                None => m2_editor::import::Target::Below { beat },
-            };
+            let target = import_target(&s, &args)?;
+            let beat = target.beat();
             let words = |e: m2_editor::EditError| anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
             let mut imported = vec![];
             for f in files {
@@ -1147,6 +1136,66 @@ change that code first",
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         _ => print!("{USAGE}"),
     }
+    Ok(())
+}
+
+/// Where `m2 import` puts its files in the song `s`: on `--track`'s audio lane, else on new tracks
+/// below, from `--at` (the start when it is left out).
+fn import_target(s: &Session, args: &[String]) -> Result<m2_editor::import::Target> {
+    let beat = match flag(args, "--at") {
+        Some(p) => m2_editor::clips::position(&s.accepted().project.arrangement, &p).map_err(|e| anyhow!("--at: {e}"))?,
+        None => 0.0,
+    };
+    Ok(match flag(args, "--track") {
+        Some(key) => {
+            let ir = &s.accepted().compiled.ir;
+            let m = ir
+                .modules
+                .iter()
+                .find(|m| m.key == key)
+                .ok_or_else(|| anyhow!("there's no track `{key}`: the tracks are {}", tracks(ir)))?;
+            let lane = m.lanes.iter().find(|l| m2_runtime::lane_kind(l.kind) == LaneKind::Audio);
+            let lane = lane.ok_or_else(|| {
+                anyhow!(
+                    "`{key}` has no audio lane: bring audio onto a track that plays one (lane.audio), or leave out --track for new ones"
+                )
+            })?;
+            m2_editor::import::Target::Lane { module: key, lane: lane.key.clone(), beat }
+        }
+        None => m2_editor::import::Target::Below { beat },
+    })
+}
+
+/// `m2 import` while the app `holder` has the song at `dir` open (AGENT-1): the target read from
+/// the song as a local import reads it, then the files' paths sent to the app's own import, which
+/// copies them into the song only inside the change that lands (AGENT-3). It prints what a local
+/// import prints.
+fn import_in_app(dir: &Path, holder: &m2_session::lock::Holder, files: &[PathBuf], args: &[String]) -> Result<()> {
+    let mut app = app::reach(dir, holder, "")?;
+    let target = import_target(&reader(dir)?, args)?;
+    let beat = target.beat();
+    // The app reads each file where it is: by its whole path.
+    let paths: Vec<PathBuf> = files.iter().map(std::path::absolute).collect::<std::io::Result<_>>()?;
+    let v = app.import(serde_json::json!({"paths": paths, "to": target}))?;
+    for note in v["notes"].as_array().into_iter().flatten().filter_map(|n| n.as_str()) {
+        eprintln!("{note}");
+    }
+    let assets = v["assets"].as_array().cloned().unwrap_or_default();
+    for (i, f) in files.iter().enumerate() {
+        let name = f.file_name().map_or_else(|| f.display().to_string(), |n| n.to_string_lossy().into_owned());
+        let again = if v["reused"][i] == serde_json::json!(true) { " (the same bytes were there)" } else { "" };
+        println!("imported {name} as assets/{}{again}", assets.get(i).and_then(|a| a.as_str()).unwrap_or("?"));
+    }
+    let onto: Vec<String> = match &target {
+        m2_editor::import::Target::Lane { module, .. } => vec![module.clone()],
+        _ => v["tracks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|t| format!("a new track {} (ID {})", t["label"].as_str().unwrap_or("?"), t["module"].as_str().unwrap_or("?")))
+            .collect(),
+    };
+    println!("onto {} from beat {} (revision {})", onto.join(", "), m2_song::lane::number(beat), v["revision"].as_u64().unwrap_or(0));
     Ok(())
 }
 

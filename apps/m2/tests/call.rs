@@ -36,6 +36,9 @@ fn m2_routes_lists_every_route() {
     assert!(bypass["words"].as_str().is_some_and(|w| !w.is_empty()) && bypass["example"]["node"].is_string(), "{bypass}");
     let play = route("POST", "/api/graph/transport");
     assert_eq!((&play["writes"], &play["agents"]), (&json!(false), &json!(false)), "the musician's: {play}");
+    // The largest body each takes (the review of ag-routes' F7): 2 MiB, or more where it says.
+    assert_eq!(bypass["limit"], json!(2 << 20), "{bypass}");
+    assert_eq!(route("POST", "/api/tx/commit")["limit"], json!(m2_server::TX_BODY));
     let o = m2_in(&home.0, &["routes"], &[]);
     assert!(o.status.success(), "{}", said(&o));
     let text = String::from_utf8_lossy(&o.stdout);
@@ -137,4 +140,65 @@ fn m2_call_is_busy_as_every_write_is() {
     assert_eq!(o.status.code(), Some(3), "{}", said(&o));
     assert!(said(&o).contains("unsaved") && said(&o).contains("Don't write the file directly"), "{}", said(&o));
     assert_eq!(a.read("tracks/keys.ts"), before);
+}
+
+/// `m2 args…` with the app open, `input` on its standard input.
+fn m2_fed(a: &App, args: &[&str], input: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut c = Command::new(env!("CARGO_BIN_EXE_m2"));
+    c.args(args).env("HOME", &a.home).env("M2_AUDIO", "none").env("M2_MIDI", "none").env_remove("M2_AS");
+    let mut child = c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let input = input.to_vec();
+    let feeding = std::thread::spawn(move || drop(stdin.write_all(&input)));
+    let out = child.wait_with_output().unwrap();
+    let _ = feeding.join();
+    out
+}
+
+// AGENT-8 (the review of ag-routes' F3): an undo through `m2 call` says what it took back, the
+// agent's own step, and never "one undo step" named after the musician's step under it.
+#[test]
+fn m2_call_undo_says_what_it_took_back() {
+    let a = App::open("first-song", |_| {});
+    a.running.state.graph.title(a.session, "Mine").unwrap();
+    let mine = a.top();
+    let key = r#"{"key": {"root": "A", "scale": "minor"}}"#;
+    let o = a.m2(&["call", a.dir(), "/api/graph/song-key", key, "--as", "Claude", "--why", "A minor"]);
+    assert!(o.status.success(), "{}", said(&o));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("in the open app: one undo step, Claude: A minor"), "{}", said(&o));
+    let o = a.m2(&["call", a.dir(), "/api/graph/undo", "--as", "Claude"]);
+    assert!(o.status.success(), "{}", said(&o));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("in the open app: took back Claude: A minor"), "{err}");
+    assert!(!err.contains("one undo step"), "an undo makes no step: {err}");
+    assert_eq!(a.top()["step"], mine["step"], "the musician's step is undo's newest again");
+}
+
+// AGENT-2, AGENT-8 (the review of ag-routes' F4): `--why` names the step of every route, those the
+// app names itself too (an audio track, an import): the app shows the name `m2 call` says.
+#[test]
+fn m2_call_names_every_step_by_its_why() {
+    let a = App::open("first-song", |_| {});
+    let o = a.m2(&["call", a.dir(), "/api/graph/audio/track", r#"{"label": "Vox"}"#, "--as", "Claude", "--why", "a vox track"]);
+    assert!(o.status.success(), "{}", said(&o));
+    let top = a.top();
+    assert_eq!((&top["by"], &top["name"]), (&json!("Claude"), &json!("a vox track")), "{top}");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("in the open app: one undo step, Claude: a vox track"), "{}", said(&o));
+}
+
+// AGENT-8 (the review of ag-routes' F7): a body bigger than its route takes is refused before it is
+// sent, saying how big each is and that nothing was sent; nothing changes in the app.
+#[test]
+fn m2_call_refuses_a_body_too_big_before_sending() {
+    let a = App::open("first-song", |_| {});
+    let before = a.running.state.graph.state().unwrap()["name"].clone();
+    let big = json!({"name": "x".repeat(3 << 20)}).to_string();
+    let o = m2_fed(&a, &["call", a.dir(), "/api/graph/title", "-", "--as", "Claude"], big.as_bytes());
+    assert_eq!(o.status.code(), Some(1), "{}", said(&o));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("nothing was sent") && err.contains("2 MiB") && err.contains("/api/graph/title"), "{err}");
+    assert!(o.stdout.is_empty(), "nothing to print: {}", said(&o));
+    assert_eq!(a.running.state.graph.state().unwrap()["name"], before);
 }

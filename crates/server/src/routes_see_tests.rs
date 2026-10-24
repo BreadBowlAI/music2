@@ -13,8 +13,13 @@ use crate::socket::Socket;
 
 /// A server on examples/first-song with both keys, the page's `t0k` and the tools key `t00ls`.
 fn serving() -> (std::path::PathBuf, crate::Running, u64) {
+    serving_example("first-song")
+}
+
+/// A server on a copy of example `name` (without its audio) with both keys.
+fn serving_example(name: &str) -> (std::path::PathBuf, crate::Running, u64) {
     let dir = std::env::temp_dir().join(format!("m2-see-{}-{}", std::process::id(), rand_part()));
-    copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir);
+    copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(name), &dir);
     let options = crate::ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
     let running = crate::start_with(options, Graph::silent()).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
@@ -208,4 +213,151 @@ fn a_socket_that_falls_behind_hears_lagged() {
     assert!(missed > 0 && after > 0, "it missed {missed}, then heard {after} more");
     socket.close();
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The leases live now, as an agent reads them: (kind, lease).
+fn live(url: &str) -> Vec<(String, u64)> {
+    let (status, leases) = ask(url, "GET", "/api/graph/leases", "t00ls", &Value::Null);
+    assert_eq!(status, 200, "{leases}");
+    let mut live: Vec<(String, u64)> = leases
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["state"] == "live" || l["state"].is_null())
+        .map(|l| (l["kind"].as_str().unwrap_or("knob").to_string(), l["lease"].as_u64().unwrap()))
+        .collect();
+    live.sort();
+    live
+}
+
+// AGENT-3, AGENT-11 (the review of ag-routes' F1): a WebSocket opened with the tools key names no
+// window. One that gives the id of the window the musician drags in, closed, ends none of its
+// drags (a knob's, a clip's, the tempo's), and the musician's next update is heard. The closing of
+// the window's own socket ends them (C6).
+#[test]
+fn a_tools_socket_naming_a_window_ends_none_of_its_drags() {
+    let (dir, running, session) = serving();
+    let url = &running.url;
+    let page = Socket::open(url, "/api/ws?client=w2&token=t0k").unwrap();
+    let revision = running.state.graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+    let knob = json!({"session": session, "revision": revision, "id": "tracks/kick.ts#1/@tune", "client": "w2", "gesture": "d1"});
+    let (status, knob) = ask(url, "POST", "/api/graph/lease/begin", "t0k", &knob);
+    assert_eq!(status, 200, "a knob drag: {knob}");
+    let (status, tempo) = ask(url, "POST", "/api/graph/tempo/lease/begin", "t0k", &json!({"session": session, "at": 0, "client": "w2"}));
+    assert_eq!(status, 200, "the tempo's drag: {tempo}");
+    let clip = json!({"module": "kick", "lane": "hits", "id": "my53vvkc"});
+    let lane = json!({"session": session, "client": "w2", "gesture": {"op": "move", "clips": [clip], "by": 1}});
+    let (status, lane) = ask(url, "POST", "/api/graph/lane/lease/begin", "t0k", &lane);
+    assert_eq!(status, 200, "a clip's drag: {lane}");
+    let held = live(url);
+    assert_eq!(held.len(), 3, "{held:?}");
+    let agent = Socket::open(url, "/api/ws?client=w2&token=t00ls").unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    agent.close();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(live(url), held, "the agent's socket ended none of the window's drags");
+    let update = json!({"lease": knob["lease"], "seq": 2, "value": 0.6});
+    let (status, body) = ask(url, "POST", "/api/graph/lease/update", "t0k", &update);
+    assert_eq!(status, 200, "the musician's next update is heard: {body}");
+    // The window's own socket closing ends them.
+    page.close();
+    let t = Instant::now();
+    while !live(url).is_empty() && t.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(live(url), vec![], "the window's own socket ended its drags");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// What the song's `assets/` holds, hidden part files too; None when there is no `assets/`.
+fn assets(dir: &std::path::Path) -> Option<Vec<String>> {
+    let mut names: Vec<String> =
+        std::fs::read_dir(dir.join("assets")).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    Some(names)
+}
+
+/// A mono WAV of a quarter second at `path`.
+fn wav(path: &std::path::Path) {
+    let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let mut w = hound::WavWriter::create(path, spec).unwrap();
+    for i in 0..12_000 {
+        w.write_sample(((i as f32 * 0.03).sin() * 8_000.0) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+}
+
+/// Whether the Compare pill stays open on `step` for `long`: the watcher took nothing in meanwhile.
+fn stays_open(graph: &Graph, step: u64, long: Duration) -> bool {
+    let t = Instant::now();
+    while t.elapsed() < long {
+        if graph.comparing()["step"] != json!(step) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
+// AGENT-3 (the review of ag-routes' F2): while the musician compares, an agent's audio import and a
+// Sampler's file are busy, and nothing of them reaches the song: its `assets/` is as it was, with
+// no part file either, and the pill stays open (the watcher took nothing in). Once the pill closes,
+// the same import lands, as one step named on the server.
+#[test]
+fn an_agents_import_while_comparing_copies_nothing() {
+    let (dir, running, session) = serving();
+    let url = &running.url;
+    let outside = dir.with_extension("files");
+    std::fs::create_dir_all(&outside).unwrap();
+    let vox = outside.join("vox.wav");
+    wav(&vox);
+    let step = agent_step(&dir, url, session, "a1");
+    let (status, body) = ask(url, "POST", "/api/graph/compare", "t0k", &json!({"session": session, "step": step, "before": true}));
+    assert_eq!(status, 200, "{body}");
+    let before = assets(&dir);
+    let import = json!({"session": session, "paths": [vox], "to": {"kind": "below", "beat": 0}});
+    let (status, body) = ask(url, "POST", "/api/graph/audio/import", "t00ls", &import);
+    assert_eq!((status, &body["busy"]["what"]), (423, &json!("compare")), "{body}");
+    assert_eq!(assets(&dir), before, "nothing was copied into the song");
+    assert!(
+        stays_open(&running.state.graph, step, Duration::from_millis(2500)),
+        "the pill stays open: {}",
+        running.state.graph.comparing()
+    );
+    assert_eq!(assets(&dir), before);
+    // Closed, the import lands.
+    let (status, body) = ask(url, "POST", "/api/graph/compare", "t0k", &json!({"session": session, "open": false}));
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = ask(url, "POST", "/api/graph/audio/import", "t00ls", &import);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(assets(&dir), Some(vec!["vox.wav".to_string()]), "{body}");
+    assert_eq!((&body["undo_name"]["name"], &body["undo_name"]["by"]), (&json!("importing vox.wav"), &json!("agent")), "{body}");
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(outside);
+
+    // A Sampler's file, the same.
+    let (dir, running, session) = serving_example("sampler");
+    let url = &running.url;
+    let outside = dir.with_extension("files");
+    std::fs::create_dir_all(&outside).unwrap();
+    let clap = outside.join("clap.wav");
+    wav(&clap);
+    let (status, body) = ask(url, "POST", "/api/graph/title", "t00ls", &json!({"session": session, "name": "Claps"}));
+    assert_eq!(status, 200, "{body}");
+    let step = body["step"].as_u64().unwrap();
+    let (status, body) = ask(url, "POST", "/api/graph/compare", "t0k", &json!({"session": session, "step": step, "before": true}));
+    assert_eq!(status, 200, "{body}");
+    let revision = running.state.graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+    let before = assets(&dir);
+    let sample = json!({"session": session, "at": revision, "call": "tracks/drums.ts#1", "file": clap});
+    let (status, body) = ask(url, "POST", "/api/graph/sample", "t00ls", &sample);
+    assert_eq!((status, &body["busy"]["what"]), (423, &json!("compare")), "{body}");
+    assert_eq!(assets(&dir), before, "nothing was copied into the song");
+    assert!(
+        stays_open(&running.state.graph, step, Duration::from_millis(2500)),
+        "the pill stays open: {}",
+        running.state.graph.comparing()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(outside);
 }

@@ -25,11 +25,13 @@ pub fn routes(args: &[String]) -> Result<()> {
         "The open app's routes, from its one route table (AGENT-8). Send one to the app that has a song open\n\
          with m2 call <song> <path> [<json> | -]: the song's session is filled in when the body leaves it\n\
          out, and a GET's keys go in its query. A route that writes makes one undo step, the agent's,\n\
-         named by --as and --why, and waits while the musician holds what it changes.\n\nFor agents:\n",
+         named by --as and --why, and waits while the musician holds what it changes. A body may be up\n\
+         to 2 MiB, unless the route says more.\n\nFor agents:\n",
     );
     for r in all.iter().filter(|r| r.agents) {
         let writes = if r.writes { "  (writes)" } else { "" };
-        text += &format!("  {} {}{writes}\n      {}\n      {}\n", r.method, r.path, r.words, r.example);
+        let big = if r.limit > api::BODY { format!("  (bodies up to {})", mib(r.limit)) } else { String::new() };
+        text += &format!("  {} {}{writes}{big}\n      {}\n      {}\n", r.method, r.path, r.words, r.example);
     }
     text += "\nThe musician's (an agent gets 403, AGENT-11):\n";
     for r in all.iter().filter(|r| !r.agents) {
@@ -87,13 +89,26 @@ pub fn call(args: &[String]) -> Result<()> {
         let at = if query.is_empty() { path.to_string() } else { format!("{path}?{}", query.join("&")) };
         app.call("GET", &at, None, false)?
     } else {
+        // Bigger than the route takes: the app would refuse it, so it isn't sent (AGENT-8).
+        let size = body.to_string().len();
+        if size > route.limit {
+            bail!(
+                "nothing was sent: this body is {}, more than {} {} takes ({}), as m2 routes --json says",
+                mib(size),
+                route.method,
+                route.path,
+                mib(route.limit)
+            );
+        }
         let at = query.map_or_else(|| path.to_string(), |q| format!("{path}?{q}"));
         app.call(route.method, &at, Some(&body), route.writes)?
     };
     let json = serde_json::from_slice::<Value>(&answer).ok();
     match &json {
         Some(v) => say(&format!("{}\n", serde_json::to_string_pretty(v)?).into_bytes())?,
-        None => say(&answer)?,
+        // An answer that isn't JSON: its bytes (a waveform's peaks), or a refusal's words, said below.
+        None if status < 400 => say(&answer)?,
+        None => {}
     }
     if status >= 400 {
         let said = json
@@ -102,11 +117,18 @@ pub fn call(args: &[String]) -> Result<()> {
             .unwrap_or_else(|| format!("the app answered {status}: {}", String::from_utf8_lossy(&answer).trim()));
         bail!("{said}");
     }
-    // A step: said on stderr, so what is printed stays the app's answer alone.
-    if let Some(made) = json.as_ref().and_then(|v| v.get("undo_name")).filter(|s| route.writes && s.is_object()) {
-        eprintln!("in the open app: one undo step, {}", app::step_said(made));
+    // The step it made, or what an undo took back: said on stderr, so what is printed stays the
+    // app's answer alone.
+    if let Some(done) = json.as_ref().filter(|_| route.writes).and_then(app::done_in_app) {
+        eprintln!("{done}");
     }
     Ok(())
+}
+
+/// `n` bytes in MiB, as a person reads it: `2 MiB`, `3.1 MiB`.
+fn mib(n: usize) -> String {
+    let m = n as f64 / f64::from(1u32 << 20);
+    if m.fract() == 0.0 { format!("{m:.0} MiB") } else { format!("{m:.1} MiB") }
 }
 
 /// The route `path` names, by `method` when it is given: a path with two methods needs it.

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use m2_editor::import::{Source, Target};
 use m2_editor::render::Length;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::graph::Graph;
 use crate::peaks::Store;
@@ -190,4 +190,41 @@ fn a_track_an_import_makes_starts_heard() {
     assert_eq!(done["tracks"][0]["module"], "vox", "{done:#}");
     let o = &graph.state().unwrap()["overlays"];
     assert_eq!((&o["mute"], &o["heard"]["vox"]), (&serde_json::json!([]), &serde_json::json!("heard")));
+}
+
+// AGENT-2 (the review of ag-routes' F4): an agent's import is named by the words it gives, in the
+// same job as the change: the step, its event and the answer all say them. With no words, the step
+// has the import's own name, "importing vox.wav", as the page's has. (An audio track's, through
+// `m2 call`: `apps/m2/tests/call.rs`.)
+#[test]
+fn an_agents_step_is_named_by_its_words_in_the_same_job() {
+    use crate::caller::{Caller, as_caller};
+    use crate::graph::steps::tests::{heard, steps_of};
+    let dir = project("words");
+    let (graph, session) = opened(&dir);
+    let mut steps = steps_of(&graph);
+    let (wav, _) = float_wav(4_800);
+    let named = |words: Option<&str>| Caller::agent(Some("Claude"), words);
+    let done = as_caller(named(Some("a vox")), || graph.import_audio(session, vec![bytes("vox.wav", &wav)], onto_vox(0.0))).unwrap();
+    assert_eq!((&done["name"], &done["undo_name"]["name"]), (&json!("a vox"), &json!("a vox")), "{done:#}");
+    assert_eq!(graph.state().unwrap()["undo_name"]["name"], json!("a vox"));
+    // The step's event, once worked out off the session's thread.
+    let told = |steps: &mut tokio::sync::broadcast::Receiver<String>| {
+        let t = std::time::Instant::now();
+        loop {
+            let names: Vec<Value> = heard(steps).into_iter().map(|e| e["name"].clone()).collect();
+            if !names.is_empty() || t.elapsed() > std::time::Duration::from_secs(10) {
+                return names;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    assert_eq!(told(&mut steps), [json!("a vox")], "its event says them too");
+    let done =
+        as_caller(named(None), || graph.import_audio(session, vec![bytes("drums.wav", &float_wav(2_400).0)], onto_vox(8.0))).unwrap();
+    assert_eq!(done["undo_name"]["name"], json!("importing drums.wav"), "{done:#}");
+    assert_eq!(told(&mut steps), [json!("importing drums.wav")]);
+    let done = graph.import_audio(session, vec![bytes("bells.wav", &float_wav(1_200).0)], onto_vox(12.0)).unwrap();
+    assert_eq!(done["undo_name"]["name"], json!("importing bells.wav"), "the page's: {done:#}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -88,7 +88,8 @@ struct Uploaded {
 /// `?session=&files=&to=` (a browser's upload; `files` as JSON, `[{name, size}]` in the body's
 /// order; `to` as JSON). `to` is `{kind: "lane", module, lane, beat}`, `{kind: "track", module,
 /// beat}` or `{kind: "below", beat}`. A write. Answers the edit with `made`, `tracks`, `name` (the
-/// undo step's), `notes` and `assets`.
+/// undo step's), `notes`, `assets` and `reused`. An agent's copies nothing while the musician holds
+/// the song (AGENT-3): its files come into `assets/` only inside the change that lands.
 async fn audio_import(State(s): S, Query(q): Query<ImportQuery>, headers: HeaderMap, body: Bytes) -> Result<Json<Value>, ApiError> {
     let json = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("application/json"));
     let (session, sources, to) = match json {

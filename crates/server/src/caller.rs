@@ -63,10 +63,12 @@ impl Caller {
 }
 
 /// Plain text an agent gives to be shown (AGENT-10): no control or invisible characters (bidi
-/// controls, zero-width marks: what a Tx's path may not hold either), no spaces at either end, and
-/// at most [`WORDS`] characters, the last of them "…" when it is cut.
+/// controls, zero-width marks: what a Tx's path may not hold either), a line break or a tab read as
+/// a space (one space between words), no spaces at either end, and at most [`WORDS`] characters,
+/// the last of them "…" when it is cut.
 pub fn words(s: &str) -> String {
-    let plain: String = s.chars().filter(|c| !m2_song::tx::hidden(*c)).collect();
+    let spaced: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).filter(|c| !m2_song::tx::hidden(*c)).collect();
+    let plain = spaced.split(' ').filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
     let plain = plain.trim();
     if plain.chars().count() <= WORDS {
         return plain.to_string();
@@ -208,5 +210,14 @@ mod tests {
         }
         assert_eq!(decoded("Codex"), "Codex");
         assert_eq!(decoded("100% sure %4"), "100% sure %4");
+    }
+
+    // AGENT-10 (the review of ag-routes' F9): a line break or a tab in an agent's words reads as a
+    // space, so what it sent on two lines doesn't run together.
+    #[test]
+    fn a_line_break_in_an_agents_words_reads_as_a_space() {
+        assert_eq!(words("Evil\r\nx-m2-token: nope\r\nX: y"), "Evil x-m2-token: nope X: y");
+        assert_eq!(words("warmer\tkeys"), "warmer keys");
+        assert_eq!(Caller::agent(Some("Claude\n2"), None), Caller::Agent { name: "Claude 2".into(), why: None });
     }
 }
