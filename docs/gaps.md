@@ -284,6 +284,14 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A pointer's note looks where its target is every frame** while it shows: a pointer is rare and goes with OK, and the timeline's zoom says nothing when it changes, so events alone would miss it (the review of `ag-see`, F10).
 - **Compare's Before is heard, not shown**: while Before plays, the window shows the song as it is (After), with the pill saying Before. Showing Before in every view would be a second world (the agents design's out of scope).
 - **V compares only the newest change**: an agent's change under a newer one of yours can't be heard before and after on its own (taking back an older step alone is out of the design's scope).
+- **`m2 listen` judges masking over the whole range**, band by band, not moment by moment: two tracks that take turns in one band (a kick and a bass that never sound at once) are named as masking.
+- **`m2 listen` finds a track as it reaches the mix in std's mixer only**: in a song that mixes in code of its own, or a channel two tracks share, it measures each track's own sound, and says its masking isn't measured.
+- **An automated fader is found by its channel's place** among the faders std's mixer made, in the order the channels are written: a channel whose key reads as a whole number (`"808"`) comes first in JavaScript's own order, and the wrong fader would be read for it.
+- **`m2 listen` measures on one thread**, after each piece of its render: the render itself takes most of its time (8 bars of p50: about 15 s on Linux, on one thread beside playback).
+- **`m2 listen --png` writes its PNG uncompressed** (deflate's stored blocks, with no crate): about 2 MB for 3 minutes of five blocks. And it has no labels: the JSON says which block is which (`png.blocks`) and which row which band (`png.rows_hz`).
+- **`m2 listen` has no loudness range** (LRA, EBU Tech 3342) and no momentary loudness: integrated and the short-term maximum only, as the design asks.
+- **`m2 listen` stops at the song's last clip**: bars past it are refused, so a song with no clips (a drone in code) can't be listened to by bars.
+- **G13 measures the gate's own player, not the app's**: the app in its process takes the forwarded edits and compiles them beside the live run, but what plays is G12's player (G12 through the app's server, `--server`, isn't built).
 
 ## Checked on Linux only
 
