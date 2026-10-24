@@ -431,6 +431,12 @@ pub(crate) struct Plan {
     pub(crate) window_held: Vec<(usize, usize)>,
     /// Its taps, written after each block: a live plan's only.
     pub(crate) taps: Option<Taps>,
+    /// What a copy tap at each top-level node reads (AGENT-7): its first output's audio channels
+    /// (0 when it isn't sound) and when it arrives, in frames after the song time it carries: its
+    /// offset and its latency (RENDER-18).
+    pub(crate) sound: Box<[(u8, u32)]>,
+    /// The same for each overlay site, with its exec node.
+    pub(crate) sites: Box<[(usize, u8, u32)]>,
     /// What its parts report faults through (RENDER-25): [`PlanInfo::faults`], as this plan.
     pub(crate) report: Reporter,
     /// Its plugin nodes whose inputs arrive late: told the transport that much earlier (HOST-6).

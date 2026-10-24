@@ -114,3 +114,47 @@ fn a_muted_tracks_tap_reads_silence() {
         assert_eq!(p.out[0], bass, "the output is the bass alone");
     }
 }
+
+// AGENT-7: a copy tap at a site copies the track's own sound where it enters the song, one at a
+// node copies that node, and the output's the output: each block from the one that holds the frame
+// asked, none before it. Nothing in this song is late.
+#[test]
+fn copy_taps_copy_each_block_from_the_frame_asked() {
+    let ir = two(false, None);
+    let f = flat(&ir);
+    let kick = f.overlays.iter().position(|s| s.module == "kick").unwrap();
+    let bass = f.nodes.iter().position(|n| n.name == "bass/o").unwrap();
+    let mut r = offline(&ir);
+    r.copy_taps(&[TapAt::Site(kick), TapAt::Node(bass), TapAt::Out], 3 * BLOCK as u64 + 5).unwrap();
+    let out = blocks(&mut r, 6);
+    let (k, b) = (blocks(&mut offline(&two(false, Some("kick"))), 6), blocks(&mut offline(&two(false, Some("bass"))), 6));
+    let c = r.copies().expect("copies");
+    let starts: Vec<u64> = (3..6).map(|n| (n * BLOCK) as u64).collect();
+    assert_eq!(c.blocks(), &starts[..], "from the block that holds the frame asked");
+    assert_eq!((c.taps(), c.channels(0), c.channels(1), c.channels(2)), (3, 1, 1, 2));
+    assert_eq!((c.late(0), c.late(1), c.late(2)), (0, 0, 0));
+    for (n, &at) in c.blocks().iter().enumerate() {
+        let at = at as usize;
+        let mono = |x: &[[f32; 2]]| x[at..at + BLOCK].iter().map(|f| f[0].to_bits()).collect::<Vec<u32>>();
+        let copied = |t: usize| c.block(t, n).iter().map(|x| x.to_bits()).collect::<Vec<u32>>();
+        assert_eq!(copied(0), mono(&k), "the kick's own sound, block {n}");
+        assert_eq!(copied(1), mono(&b), "the bass node, block {n}");
+        let both: Vec<u32> = (0..2).flat_map(|ch| out[at..at + BLOCK].iter().map(move |f| f[ch].to_bits())).collect();
+        assert_eq!(copied(2), both, "the output, one channel after the other, block {n}");
+    }
+    c.clear();
+    assert!(c.blocks().is_empty(), "cleared");
+}
+
+// AGENT-7: only an offline plan gets copy taps. A live plan refuses them, and so does a tap at a
+// node with no audio output or a site the song hasn't got.
+#[test]
+fn copy_taps_are_offline_only() {
+    let ir = two(false, None);
+    assert!(prepared(&ir).copy_taps(&[TapAt::Out], 0).is_err(), "a live plan");
+    let f = flat(&ir);
+    let constant = f.nodes.iter().position(|n| n.name == "bass/t").unwrap();
+    assert!(offline(&ir).copy_taps(&[TapAt::Node(constant)], 0).is_err(), "a constant is no sound");
+    assert!(offline(&ir).copy_taps(&[TapAt::Site(f.overlays.len())], 0).is_err(), "no such site");
+    assert!(offline(&ir).copy_taps(&[TapAt::Node(f.nodes.len())], 0).is_err(), "no such node");
+}

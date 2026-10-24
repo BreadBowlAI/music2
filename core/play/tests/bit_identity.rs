@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use common::*;
 use m2_play::Player;
-use m2_runtime::{BLOCK, Cmd, Continues, LaneSwap, PlanInfo, Pool, Renderer, Runner, Stats, notes_data};
+use m2_runtime::{BLOCK, Cmd, Continues, LaneSwap, PlanInfo, Pool, Renderer, Runner, Stats, TapAt, notes_data};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -67,6 +67,42 @@ fn live_is_the_export_on_every_pure_fixture() {
         let song = fixture(name);
         let frames = (song.seconds() * song.rate as f64) as usize;
         check(name, &song, frames, None);
+    }
+}
+
+// AGENT-7: copy taps change no bit of what renders. Every pure fixture renders the same bits with a
+// copy tap on the output, on every node with an audio output and on every overlay site, from its
+// first frame; and the output's copy is what was rendered, block by block.
+#[test]
+fn copy_taps_change_no_bit() {
+    for name in PURE {
+        let song = fixture(name);
+        let frames = ((song.seconds().min(20.0) * song.rate as f64) as usize).div_ceil(BLOCK) * BLOCK;
+        let export = offline(&song, frames);
+        let mut at = vec![TapAt::Out];
+        at.extend((0..song.flat.overlays.len()).map(TapAt::Site));
+        let audio = |i: usize| matches!(song.flat.nodes[i].outputs.first(), Some(m2_ir::Kind::Audio(_)));
+        at.extend((0..song.flat.nodes.len()).filter(|&i| audio(i)).map(TapAt::Node));
+        let mut r = song.renderer();
+        r.copy_taps(&at, 0).unwrap();
+        let (mut tapped, mut copied) = (vec![[0.0f32; 2]; frames], vec![]);
+        for chunk in tapped.chunks_mut(4096) {
+            r.process(chunk).unwrap();
+            let c = r.copies().unwrap_or_else(|| panic!("{name}: copies"));
+            assert_eq!(c.taps(), at.len(), "{name}: every tap");
+            for k in 0..c.blocks().len() {
+                assert_eq!(c.blocks()[k], (copied.len() / BLOCK * BLOCK) as u64, "{name}: block {k} in order");
+                for t in 0..c.taps() {
+                    assert_eq!(c.block(t, k).len(), c.channels(t) * BLOCK, "{name}: tap {t} copied whole");
+                }
+                let out = c.block(0, k);
+                copied.extend((0..BLOCK).map(|f| [out[f], out[BLOCK + f]]));
+            }
+            c.clear();
+        }
+        assert!(peak(&export) > 0.0 || name.contains("empty"), "{name} makes sound");
+        assert_eq!(first_diff(&tapped, &export), None, "{name}: a copy tap changed what renders");
+        assert_eq!(first_diff(&copied[..frames], &export), None, "{name}: the output's copy is what rendered");
     }
 }
 

@@ -85,7 +85,7 @@ pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, Plu
 pub use plugins::PluginInstance;
 pub use sandbox::{OutOfMemory, TooManySounds};
 pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
-pub use taps::{Peaks, TapSlots};
+pub use taps::{Copies, Peaks, TapAt, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
@@ -2578,6 +2578,8 @@ pub struct Renderer {
     lead: u64,
     /// The transport over the last blocks, for plugins told it late (HOST-6).
     past: delay::Past,
+    /// Copy taps, an offline render's only (AGENT-7).
+    copies: Option<Box<Copies>>,
 }
 
 impl Renderer {
@@ -2851,6 +2853,19 @@ impl Renderer {
             Box::new(Entry { after: k.info.id, moves: w.moves, lanes: lanes.moves, cells: pairs, voice_cells, release: w.release })
         });
         let overlays = flat.overlays.iter().enumerate().map(|(k, s)| (s.module.clone(), s.into.clone(), cells.overlay(k))).collect();
+        // What copy taps read (AGENT-7): when each node's output arrives (RENDER-18); a delay's is
+        // its input's, that many frames later. Delays come after the checked nodes.
+        let mut arrive: Vec<u32> = (0..checked.nodes.len()).map(|i| l.offset[i] + lat[i]).collect();
+        for n in &flat.nodes[checked.nodes.len()..] {
+            arrive.push(match n.op {
+                FOp::Delay { input, frames } => arrive[input.node] + frames,
+                _ => 0,
+            });
+        }
+        let audio = |k: Option<&Kind>| if let Some(Kind::Audio(c)) = k { *c } else { 0 };
+        let sound: Box<[(u8, u32)]> = flat.nodes.iter().zip(&arrive).map(|(n, &a)| (audio(n.outputs.first()), a)).collect();
+        let copy_sites: Box<[(usize, u8, u32)]> =
+            flat.overlays.iter().enumerate().map(|(k, s)| (base + k, placed.nodes[k].channels, arrive[s.src.node])).collect();
         // A live plan's meters (8b.8): its output, and each celled overlay by its track.
         let taps = (mode == m2_plugins::RenderMode::Realtime).then(|| {
             let sites: Vec<(usize, &str, u8)> =
@@ -2901,6 +2916,8 @@ impl Renderer {
             window_overlays,
             window_held,
             taps,
+            sound,
+            sites: copy_sites,
             report,
             late_plugins,
         };
@@ -2928,6 +2945,7 @@ impl Renderer {
             latency: total,
             lead: total as u64,
             past: delay::Past::new(reach),
+            copies: None,
         })
     }
 
@@ -2966,6 +2984,39 @@ impl Renderer {
         let mut r = Renderer::new(flat, data, packages, sample_rate)?;
         r.transport = Transport::starting(t0);
         Ok(r)
+    }
+
+    /// Copy taps at `at` (AGENT-7): after each block from transport frame `from` on, a copy of
+    /// each tapped buffer, for an offline render's analysis. Only offline: refused on a renderer
+    /// the live engine plays.
+    pub fn copy_taps(&mut self, at: &[TapAt], from: u64) -> Result<()> {
+        // A live plan: one the engine plays, or one prepared for it, which has meters.
+        if self.live || self.plan.taps.is_some() {
+            bail!("copy taps are an offline render's only (AGENT-7): this plan plays live");
+        }
+        let mut taps = Vec::with_capacity(at.len());
+        for &a in at {
+            let (node, channels, late) = match a {
+                TapAt::Out => (None, 2, self.latency),
+                TapAt::Node(i) => match self.plan.sound.get(i) {
+                    Some(&(c, late)) if c > 0 => (Some(i), c, late),
+                    Some(_) => bail!("node {i} makes no sound to copy"),
+                    None => bail!("there's no node {i}"),
+                },
+                TapAt::Site(k) => match self.plan.sites.get(k) {
+                    Some(&(node, c, late)) => (Some(node), c, late),
+                    None => bail!("there's no overlay site {k}"),
+                },
+            };
+            taps.push(taps::Copied { node, channels: channels as usize, late });
+        }
+        self.copies = Some(Box::new(Copies::new(taps, from)));
+        Ok(())
+    }
+
+    /// What its copy taps copied since they were last cleared.
+    pub fn copies(&mut self) -> Option<&mut Copies> {
+        self.copies.as_deref_mut()
     }
 
     /// Its audio lanes are filled by a disk thread from now on, never by its own blocks: a player
@@ -3139,6 +3190,10 @@ impl Renderer {
         // The meters (8b.8): read after the graph ran, so they change no bit.
         if let Some(t) = &self.plan.taps {
             t.write(&self.plan.graph.bufs, &self.frames);
+        }
+        // An offline render's copy taps (AGENT-7), likewise after the graph ran.
+        if let Some(c) = &mut self.copies {
+            c.copy(b.runs.first().at, &self.plan.graph.bufs, &self.frames);
         }
         Ok(())
     }
