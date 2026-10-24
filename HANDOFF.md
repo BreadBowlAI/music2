@@ -123,6 +123,7 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `st-errors` | waited over 30 s for the Needs attention row of a missing sound file | once, at load 9; alone it passes |
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
+| `bus-mix` | "with nothing sent, the Reverb's meter stays at the floor" | once, in a full check of `ag-see`, passed on its retry; 18 runs alone and four at a time pass |
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
 
