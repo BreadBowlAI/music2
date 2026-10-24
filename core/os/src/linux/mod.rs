@@ -147,39 +147,55 @@ pub(crate) fn background() -> io::Result<()> {
     }
 }
 
-/// A nice of 10 on each thread of this process, or the one it has when that is higher. A thread
-/// that ends meanwhile is passed over.
+/// `ioprio_set`'s `which` for one thread, and the idle I/O class (`IOPRIO_CLASS_IDLE`, 3, in the
+/// value's top bits): its reads and writes wait while anything else's are queued.
+const IOPRIO_WHO_PROCESS: libc::c_int = 1;
+const IOPRIO_IDLE: libc::c_int = 3 << 13;
+/// `SCHED_IDLE` in a thread's `stat` (field 41).
+const IDLE_POLICY: i64 = libc::SCHED_IDLE as i64;
+
+/// Each thread of this process beside playback: `SCHED_IDLE`, the class that runs only on a core
+/// nothing else wants, so any thread of playback's takes the core from it at once; the idle I/O
+/// class; and a nice of 10 (or the one it has when that is higher), which `ps` shows. A thread
+/// takes all three from the thread that starts it. Raising them needs no rights. A thread that
+/// ends meanwhile is passed over.
 pub(crate) fn background_process() -> io::Result<()> {
     for e in std::fs::read_dir("/proc/self/task")? {
-        let Some(tid) = e?.file_name().to_str().and_then(|n| n.parse::<libc::id_t>().ok()) else { continue };
+        let Some(tid) = e?.file_name().to_str().and_then(|n| n.parse::<libc::pid_t>().ok()) else { continue };
+        let gone = |e: io::Error| if e.raw_os_error() == Some(libc::ESRCH) { Ok(()) } else { Err(e) };
         // SAFETY: plain system calls on a thread of this process. getpriority may return -1 as a
-        // nice, so errno is cleared first and read after.
+        // nice, so errno is cleared first and read after; `param` outlives its call.
         unsafe {
             *libc::__errno_location() = 0;
-            let nice = libc::getpriority(libc::PRIO_PROCESS, tid);
+            let nice = libc::getpriority(libc::PRIO_PROCESS, tid as libc::id_t);
             if nice == -1 && *libc::__errno_location() != 0 {
                 continue;
             }
-            if nice < 10 && libc::setpriority(libc::PRIO_PROCESS, tid, 10) != 0 {
-                let e = io::Error::last_os_error();
-                if e.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(e);
-                }
+            if nice < 10 && libc::setpriority(libc::PRIO_PROCESS, tid as libc::id_t, 10) != 0 {
+                gone(io::Error::last_os_error())?;
+            }
+            let param = libc::sched_param { sched_priority: 0 };
+            if libc::sched_setscheduler(tid, libc::SCHED_IDLE, &param) != 0 {
+                gone(io::Error::last_os_error())?;
+            }
+            if libc::syscall(libc::SYS_ioprio_set, IOPRIO_WHO_PROCESS, tid, IOPRIO_IDLE) != 0 {
+                gone(io::Error::last_os_error())?;
             }
         }
     }
     Ok(())
 }
 
-/// Every thread of process `pid` has a nice of 10 or more: field 19 of each
-/// `/proc/<pid>/task/<tid>/stat`.
+/// Every thread of process `pid` runs beside playback, as [`background_process`] sets it: a nice
+/// of 10 or more and `SCHED_IDLE`, fields 19 and 41 of each `/proc/<pid>/task/<tid>/stat`.
 pub(crate) fn in_background(pid: u32) -> Option<bool> {
     let mut seen = false;
     for e in std::fs::read_dir(format!("/proc/{pid}/task")).ok()?.flatten() {
         // A thread that ended meanwhile is passed over.
         let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else { continue };
-        let nice: i64 = stat.get(stat.rfind(')')? + 2..)?.split(' ').nth(16)?.parse().ok()?;
-        if nice < 10 {
+        let fields: Vec<&str> = stat.get(stat.rfind(')')? + 2..)?.split(' ').collect();
+        let (nice, policy): (i64, i64) = (fields.get(16)?.parse().ok()?, fields.get(38)?.parse().ok()?);
+        if nice < 10 || policy != IDLE_POLICY {
             return Some(false);
         }
         seen = true;

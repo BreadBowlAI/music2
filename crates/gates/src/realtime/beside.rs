@@ -8,8 +8,9 @@
 //!   playback, as the app's run beside its own.
 //! - **Edits**: `m2 set` of a channel's fader, one after another, alternating two values, each one
 //!   undo step in the app.
-//! - **Listens**: `m2 listen` back to back on 8 bars of the song, each at background priority on
-//!   the slow cores, its plugin host too (AGENT-7).
+//! - **Listens**: `m2 listen` back to back on 8 bars of the song, each at background priority
+//!   (AGENT-7); every other one on 4 bars of `examples/with-plugins` when the test plugins are
+//!   there, so its plugin host, at background priority too, runs beside playback.
 //!
 //! When the run ends, the agent at work is ended, and what landed is counted: each listen, each
 //! edit, how long each took, and whether each listen said it ran in the background.
@@ -26,6 +27,8 @@ use anyhow::{Context, Result, bail};
 /// The bars each listen measures: 8 bars from bar 33, past the song's start, so each is the range
 /// render agents listen with (RENDER-4).
 pub const BARS: &str = "33-40";
+/// The bars each listen of the song with plugins measures.
+pub const PLUGIN_BARS: &str = "1-4";
 
 /// One agent's command that ran to its end.
 #[derive(Clone, Debug)]
@@ -36,6 +39,8 @@ pub struct Ran {
     pub said: String,
     /// A listen's: whether it said its threads ran at background priority.
     pub background: Option<bool>,
+    /// A listen's of the song with plugins: whether it said its plugin host did.
+    pub host: Option<bool>,
 }
 
 /// The agents at work beside a live run.
@@ -72,8 +77,9 @@ fn command(m2: &Path, home: &Path, args: &[&str]) -> Command {
     c
 }
 
-/// Start the agents on the song in `dir`, their scratch files in `work`.
-pub fn start(dir: &Path, work: &Path) -> Result<Agents> {
+/// Start the agents on the song in `dir`, their scratch files in `work`; every other listen on the
+/// song with plugins in `plugins`, when there is one.
+pub fn start(dir: &Path, work: &Path, plugins: Option<&Path>) -> Result<Agents> {
     let m2 = m2()?;
     let home = work.join("g13-home");
     std::fs::create_dir_all(home.join(".music2"))?;
@@ -97,12 +103,26 @@ pub fn start(dir: &Path, work: &Path) -> Result<Agents> {
     let song = dir.to_string_lossy().into_owned();
     let listens = {
         let (m2, home, song, stop) = (m2.clone(), home.clone(), song.clone(), stop.clone());
+        let plugins = plugins.map(|p| p.to_string_lossy().into_owned());
         std::thread::Builder::new().name("g13-listens".into()).spawn(move || {
-            // What it says of its own priority, in its JSON: `"threads": "background"`.
+            // What it says of its own priority, and its plugin host's, in its JSON's `priority`.
             agent(
                 &stop,
-                |_| command(&m2, &home, &["listen", &song, "--bars", BARS, "--json"]),
-                |o| Some(String::from_utf8_lossy(&o.stdout).contains(r#""threads": "background""#)),
+                |n| match &plugins {
+                    Some(p) if n % 2 == 1 => command(&m2, &home, &["listen", p, "--bars", PLUGIN_BARS, "--json"]),
+                    _ => command(&m2, &home, &["listen", &song, "--bars", BARS, "--json"]),
+                },
+                |o| {
+                    // As its JSON says it: `"threads": "background"`, and `"plugin_host"` the same,
+                    // `"normal"`, or null with no host.
+                    let text = String::from_utf8_lossy(&o.stdout);
+                    let said = |who: &str| match () {
+                        _ if text.contains(&format!(r#""{who}": "background""#)) => Some(true),
+                        _ if text.contains(&format!(r#""{who}": "normal""#)) => Some(false),
+                        _ => None,
+                    };
+                    (Some(said("threads") == Some(true)), said("plugin_host"))
+                },
             )
         })?
     };
@@ -110,15 +130,20 @@ pub fn start(dir: &Path, work: &Path) -> Result<Agents> {
         let (m2, home, knob, stop) = (m2.clone(), home.clone(), knob.clone(), stop.clone());
         std::thread::Builder::new().name("g13-edits".into()).spawn(move || {
             let value = |n: usize| if n.is_multiple_of(2) { "-11" } else { "-12" };
-            agent(&stop, |n| command(&m2, &home, &["set", &song, &knob, value(n), "--as", "G13", "--why", "an agent's edit"]), |_| None)
+            agent(
+                &stop,
+                |n| command(&m2, &home, &["set", &song, &knob, value(n), "--as", "G13", "--why", "an agent's edit"]),
+                |_| (None, None),
+            )
         })?
     };
     Ok(Agents { stop, listens, edits, _app: app, knob })
 }
 
-/// Run `make(n)` for n = 0, 1, … one after another until `stop`: what each that ran to its end did.
-/// The one at work when `stop` comes is ended, and not counted.
-fn agent(stop: &AtomicBool, make: impl Fn(usize) -> Command, background: impl Fn(&Output) -> Option<bool>) -> Vec<Ran> {
+/// Run `make(n)` for n = 0, 1, … one after another until `stop`: what each that ran to its end did,
+/// with what `background` says of its priority and its plugin host's. The one at work when `stop`
+/// comes is ended, and not counted.
+fn agent(stop: &AtomicBool, make: impl Fn(usize) -> Command, background: impl Fn(&Output) -> (Option<bool>, Option<bool>)) -> Vec<Ran> {
     let mut ran = vec![];
     for n in 0.. {
         if stop.load(Ordering::Relaxed) {
@@ -126,12 +151,13 @@ fn agent(stop: &AtomicBool, make: impl Fn(usize) -> Command, background: impl Fn
         }
         let t = Instant::now();
         let Ok(mut child) = make(n).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() else {
-            ran.push(Ran { ok: false, seconds: 0.0, said: "it didn't start".into(), background: None });
+            ran.push(Ran { ok: false, seconds: 0.0, said: "it didn't start".into(), background: None, host: None });
             break;
         };
         let Some(out) = until_done(&mut child, stop) else { break };
         let said = String::from_utf8_lossy(&out.stderr).lines().find(|l| l.starts_with("error")).unwrap_or_default().to_string();
-        ran.push(Ran { ok: out.status.success(), seconds: t.elapsed().as_secs_f64(), said, background: background(&out) });
+        let (background, host) = background(&out);
+        ran.push(Ran { ok: out.status.success(), seconds: t.elapsed().as_secs_f64(), said, background, host });
     }
     ran
 }

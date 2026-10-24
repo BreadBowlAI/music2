@@ -353,14 +353,18 @@ fn m2_listen_runs_at_background_priority() {
     until_said(&rx, "waiting for another m2 listen");
     #[cfg(target_os = "linux")]
     {
+        // Each thread's nice (field 19 of its stat) and scheduling policy (field 41): SCHED_IDLE, 5,
+        // the class that runs only when nothing else wants the core (the review of ag-listen, F6).
         let tasks = format!("/proc/{}/task", child.id());
-        let nice: Vec<i64> = std::fs::read_dir(&tasks)
+        let field = |s: &str, n: usize| -> i64 { s[s.rfind(')').unwrap() + 2..].split(' ').nth(n - 3).unwrap().parse().unwrap() };
+        let threads: Vec<(i64, i64)> = std::fs::read_dir(&tasks)
             .unwrap()
             .flatten()
             .filter_map(|t| std::fs::read_to_string(t.path().join("stat")).ok())
-            .map(|s| s[s.rfind(')').unwrap() + 2..].split(' ').nth(16).unwrap().parse().unwrap())
+            .map(|s| (field(&s, 19), field(&s, 41)))
             .collect();
-        assert!(!nice.is_empty() && nice.iter().all(|&n| n >= 10), "every thread's nice: {nice:?}");
+        assert!(!threads.is_empty() && threads.iter().all(|&(nice, _)| nice >= 10), "every thread's nice: {threads:?}");
+        assert!(threads.iter().all(|&(_, policy)| policy == 5), "every thread's policy is SCHED_IDLE: {threads:?}");
     }
     drop(held);
     let v = json_of(&child.wait_with_output().unwrap());

@@ -452,15 +452,41 @@ pub fn live(lab: &mut Lab, o: &Opts, asked: &Asked) -> Result<Outcome> {
         Place::Clock => Some(m2_play::live_count(None, &cores, None, true)),
     };
     let counts: Vec<Option<usize>> = asked.counts.as_ref().map_or_else(|| vec![rule], |c| c.iter().map(|&n| Some(n)).collect());
-    // G13: the agents start before the first run and stop after the last.
+    // G13: the agents start before the first run and stop after the last; every other listen is of
+    // the song with plugins, when the test plugins are there, so its plugin host runs beside it.
+    let plugins = match asked.beside {
+        true => {
+            let p = lab.copy(&crate::fixture("examples/with-plugins"), "g13-with-plugins")?;
+            let missing = lab.session(&p)?.problems().iter().find(|d| d.code == "plugin.missing").map(|d| d.to_string());
+            match missing {
+                None => Some(p),
+                Some(d) => {
+                    out.info(
+                        "plugins",
+                        format!("no listen of examples/with-plugins: {d} (CLAP_PATH says where Surge XT and Airwindows are)"),
+                    );
+                    None
+                }
+            }
+        }
+        false => None,
+    };
     let agents = match asked.beside {
-        true => Some(super::beside::start(&dir, &lab.work)?),
+        true => Some(super::beside::start(&dir, &lab.work, plugins.as_deref())?),
         false => None,
     };
     if let Some(a) = &agents {
+        let also = match &plugins {
+            Some(_) => format!(", every other one on bars {} of examples/with-plugins", super::beside::PLUGIN_BARS),
+            None => String::new(),
+        };
         out.info(
             "agents",
-            format!("m2 listen back to back on bars {}; m2 set {} forwarded to the app, one after another", super::beside::BARS, a.knob),
+            format!(
+                "m2 listen back to back on bars {}{also}; m2 set {} forwarded to the app, one after another",
+                super::beside::BARS,
+                a.knob
+            ),
         );
     }
     let mut rows = vec![];
@@ -502,6 +528,19 @@ pub fn live(lab: &mut Lab, o: &Opts, asked: &Asked) -> Result<Outcome> {
                 did.listens.iter().filter(|r| r.ok).count()
             ),
         });
+        if plugins.is_some() {
+            let hosted: Vec<&super::beside::Ran> = did.listens.iter().filter(|r| r.ok && r.host.is_some()).collect();
+            let all = !hosted.is_empty() && hosted.iter().all(|r| r.host == Some(true));
+            out.checks.push(Check {
+                name: "plugin hosts at background priority".into(),
+                verdict: if all { Verdict::Pass } else { Verdict::Fail },
+                detail: format!(
+                    "{} of {} listens of examples/with-plugins said their plugin host ran at background priority",
+                    hosted.iter().filter(|r| r.host == Some(true)).count(),
+                    hosted.len()
+                ),
+            });
+        }
     }
     // Each count's back-to-back p99 (offline, plain threads) beside its live one: what pacing and
     // waking cost.
