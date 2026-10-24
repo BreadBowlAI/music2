@@ -13,6 +13,7 @@ use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project, T
 
 mod app;
 mod edits;
+mod see;
 mod text;
 
 const USAGE: &str = "m2: build, check and render music2 projects
@@ -130,6 +131,16 @@ USAGE:
                                          input), as one edit; while the code doesn't build, as m2 edit
   m2 undo <project>                      take back your own newest change in the open app (by --as):
                                          never the musician's, nor another agent's
+  m2 focus <project>                     what the musician looks at in the open app, as JSON: the view,
+                                         the selected track, clips and notes, the knob last touched,
+                                         the bars shown, the code's file and line, where playback is
+  m2 watch <project> [--meters]          follow the open app: each change, undo, toast, focus, pointer
+                                         and transport change as one JSON object a line, `t` first, until
+                                         the app quits (then `closed`); meters too with --meters
+  m2 point <project> <target> <words> | --clear
+                                         show a note in the open app at track:bass, clip:bass/notes:<id>,
+                                         lane:bass/cutoff, knob:<id> or bars:9-16 (by --as); it never
+                                         moves the musician's view: they press play. --clear takes it away
 
 Every command that reads a project prints what needs attention in it, such as data no lane reads,
 with the commands that fix it.
@@ -1115,6 +1126,9 @@ change that code first",
             let v = app::reach(&dir, &holder, "")?.undo()?;
             println!("undid {} in the open app", v["name"].as_str().unwrap_or("the newest change"));
         }
+        Some("focus") => see::focus(&args)?,
+        Some("watch") => see::watch(&args)?,
+        Some("point") => see::point(&args)?,
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         _ => print!("{USAGE}"),
     }

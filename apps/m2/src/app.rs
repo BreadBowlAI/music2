@@ -72,7 +72,7 @@ pub fn take_who(args: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn who() -> Who {
+pub(crate) fn who() -> Who {
     WHO.lock().unwrap().clone()
 }
 
@@ -159,15 +159,26 @@ pub struct App {
 /// `~/.music2/session.json`, which must name the same process, and only while the app has this
 /// song open. `also` follows the refusal when it can't be reached.
 pub fn reach(dir: &Path, holder: &Holder, also: &str) -> Result<App> {
-    let cant = || {
+    reach_saying(dir, holder, || {
         anyhow!(
             "nothing was changed: this song is open in music2 (pid {}), which m2 can't reach. Make the edit there, or close it there and \
              run this again.{also}",
             holder.pid
         )
-    };
-    let file = m2_os::dirs::home().ok_or_else(cant)?.join(".music2/session.json");
-    let published: Value = std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str(&t).ok()).ok_or_else(cant)?;
+    })
+}
+
+/// Reach the app that has the song at `dir` open, to see what happens there or point at something
+/// (AGENT-6): `m2 focus`, `m2 watch` and `m2 point`, which write nothing.
+pub fn looking(dir: &Path) -> Result<App> {
+    let holder = holder(dir).ok_or_else(|| anyhow!("music2 doesn't have this song open: open it there, then run this again"))?;
+    reach_saying(dir, &holder, || anyhow!("this song is open in music2 (pid {}), which m2 can't reach", holder.pid))
+}
+
+/// [`reach`], saying `cant` when the app can't be reached.
+fn reach_saying(dir: &Path, holder: &Holder, cant: impl Fn() -> anyhow::Error) -> Result<App> {
+    let file = m2_os::dirs::home().ok_or_else(&cant)?.join(".music2/session.json");
+    let published: Value = std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str(&t).ok()).ok_or_else(&cant)?;
     let (Some(url), Some(key), Some(pid)) = (published["url"].as_str(), published["token"].as_str(), published["pid"].as_u64()) else {
         return Err(cant());
     };
@@ -222,6 +233,25 @@ impl App {
             }
         }
         parse(&answer).ok_or(Gone::During)
+    }
+
+    /// The app's url (`http://127.0.0.1:port`), its tools key, and the open song's token.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    pub fn session(&self) -> u64 {
+        self.session
+    }
+
+    /// `method path` with `body`, which writes nothing: the status and the JSON answer, or that
+    /// the app went away.
+    pub fn looked(&self, method: &str, path: &str, body: Option<&Value>) -> Result<(u16, Value)> {
+        self.ask(method, path, body).map_err(|_| anyhow!("the app went away"))
     }
 
     /// Apply the fix `code` that the problem at `src` offers in the app (the review's m1): the app
@@ -426,7 +456,7 @@ fn busy(b: &Value, start: Instant, said: &mut Option<String>) -> Option<String> 
 }
 
 /// What an answer that isn't 200 says, in words.
-fn words(v: &Value) -> String {
+pub(crate) fn words(v: &Value) -> String {
     let said = v["error"].as_str().or(v["io"]["message"].as_str()).map(str::to_string).unwrap_or_else(|| v.to_string());
     if said.contains("the open project changed") || said.contains("no project is open") { OPENING.into() } else { said }
 }

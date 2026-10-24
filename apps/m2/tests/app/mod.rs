@@ -127,8 +127,8 @@ pub type Asked = (String, String, Value);
 
 /// A fake app: an HTTP server on 127.0.0.1 that answers `GET /api/graph` with `state`, and every
 /// other request with what `answer` says: a status and a body, or None to close the connection
-/// without a word, as an app that quit does; `{"__raw": text}` answers `text` as it is. What it was asked
-/// is kept.
+/// without a word, as an app that quit does; `{"__raw": text}` answers `text` as it is; `{"__ws":
+/// [text, …]}` opens a WebSocket, sends those messages and drops it. What it was asked is kept.
 pub fn fake(state: Value, answer: impl FnMut(&Asked) -> Option<(u16, Value)> + Send + 'static) -> (String, Arc<Mutex<Vec<Asked>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -164,6 +164,24 @@ pub fn fake(state: Value, answer: impl FnMut(&Asked) -> Option<(u16, Value)> + S
             kept.lock().unwrap().push(asked.clone());
             let reply =
                 if asked.0 == "GET" && asked.1 == "/api/graph" { Some((200, state.clone())) } else { (answer.lock().unwrap())(&asked) };
+            // `{"__ws": [text, …]}` opens the socket, sends each text as a message, then drops the
+            // connection with no close frame, as an app that quits does.
+            if let Some(Some(sent)) = reply.as_ref().map(|(_, v)| v.get("__ws").and_then(Value::as_array)) {
+                let _ = write!(stream, "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: upgrade\r\n\r\n");
+                for text in sent.iter().filter_map(Value::as_str) {
+                    let mut frame = vec![0x81u8];
+                    match text.len() {
+                        n if n < 126 => frame.push(n as u8),
+                        n => {
+                            frame.push(126);
+                            frame.extend_from_slice(&(n as u16).to_be_bytes());
+                        }
+                    }
+                    frame.extend_from_slice(text.as_bytes());
+                    let _ = stream.write_all(&frame);
+                }
+                continue;
+            }
             if let Some((status, v)) = reply {
                 // `{"__raw": text}` answers `text` as it is, not as JSON, as a server's own refusal is.
                 let (kind, text) = match v.get("__raw").and_then(Value::as_str) {
