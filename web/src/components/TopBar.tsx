@@ -127,12 +127,14 @@ export default function TopBar({
         <PanelLeft size={16} />
       </BarButton>
       <Divider />
-      <BarButton onClick={() => onSeek(0)} title={`Go to start (${keyName("Enter")})`} aria-label="Back to start" className="w-ctl !px-0">
+      {/* The transport's controls (`data-transport`): listening, which keeps V's Compare pill open. */}
+      <BarButton data-transport onClick={() => onSeek(0)} title={`Go to start (${keyName("Enter")})`} aria-label="Back to start" className="w-ctl !px-0">
         <SkipBack size={16} fill="currentColor" />
       </BarButton>
       {/* Playing is the lit state; it stops (there is no pause), so the glyph is a square. */}
       <button
         data-testid="play"
+        data-transport
         onMouseDown={keepFocus}
         onClick={() => canvas.play?.()}
         title={status.playing ? "Stop (Space)" : "Play (Space)"}
@@ -148,6 +150,7 @@ export default function TopBar({
       <RecordButton />
       <BarButton
         data-testid="loop-toggle"
+        data-transport
         aria-label="Loop"
         aria-pressed={!!l?.on}
         active={!!l?.on}
@@ -160,6 +163,7 @@ export default function TopBar({
       {/* The metronome (gaps #19), after Loop (taste.md §3.3). */}
       <BarButton
         data-testid="metronome-toggle"
+        data-transport
         aria-label="Metronome"
         aria-pressed={metronome}
         active={metronome}

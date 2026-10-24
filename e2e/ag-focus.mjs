@@ -6,9 +6,9 @@
 //     view or the selection; off screen it waits at the edge with Show, and only Show moves the
 //     view; OK takes it away for everyone;
 //   - V flips the newest outside step while the loop plays: the pill says Before, then After, and
-//     the file follows; an agent's write while the pill is open is refused, busy (`m2` exits 3),
-//     and After stays; Esc closes the pill and keeps what plays; V on the musician's own change
-//     says what V is for;
+//     the file follows; Space stops and plays again and the pill stays (comparing is listening); an
+//     agent's write while the pill is open is refused, busy (`m2` exits 3), and After stays; Esc
+//     closes the pill and keeps what plays; V on the musician's own change says what V is for;
 //   - a file written outside while the pill is open closes it, saying so;
 //   - lint, no console errors.
 //
@@ -175,6 +175,11 @@ await shot("compare-before", "[data-testid=compare-pill]");
 await key("KeyV");
 check(await until(async () => /^After:/.test((await pill()) ?? "")), `V again: After: ${await pill()}`);
 check(await until(() => read("tracks/bass.ts") === changed), "the change is back");
+// Comparing is listening: Space stops and plays again, and the pill stays.
+await key("Space");
+check(await until(async () => !(await status()).playing) && /^After:/.test((await pill()) ?? ""), `Space stops playback and the pill stays: ${await pill()}`);
+await key("Space");
+check(await until(async () => (await status()).playing) && /^After:/.test((await pill()) ?? ""), "Space plays again, still comparing");
 check((await page.evaluate(lint, "[data-testid=compare-pill]")).length === 0, `the pill is in the design system: ${(await page.evaluate(lint, "[data-testid=compare-pill]")).slice(0, 3)}`);
 await shot("compare-after", "[data-testid=compare-pill]");
 // An agent's write while it is open: busy, and After stays.

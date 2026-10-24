@@ -4,8 +4,9 @@
 // V undoes that step (`compare: true`), and the pill in the top bar says "Before: Claude: brighter
 // hats"; V again redoes it: "After". Each flip is an undo or a redo, heard as one is. While the pill
 // is open, agents wait: no agent's step can clear redo and take After away. Esc, or any other
-// action, closes the pill and keeps what plays: on Before, the change stays undone, and Redo has it
-// until the next change. A file written directly while it is open closes it, saying so.
+// action but listening (play, stop, the loop, a seek), closes the pill and keeps what plays: on
+// Before, the change stays undone, and Redo has it until the next change. A file written directly
+// while it is open closes it, saying so.
 
 import { create } from "zustand";
 import type { StepName } from "./history";
@@ -114,14 +115,18 @@ const MODIFIERS = new Set(["Shift", "Meta", "Alt", "Control", "CapsLock", "Fn"])
 /** Whether `t` takes typing. */
 const typing = (t: EventTarget | null) => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || (t instanceof HTMLElement && t.isContentEditable);
 
+/** Keys that only listen (play or stop, back to the start, the loop, the metronome) and V itself. */
+const LISTENING = new Set(["KeyV", "Space", "Enter", "Home", "KeyC", "KeyK"]);
+
 /**
- * Any action of the musician's but V closes the pill (D2): a key (Esc only closes it), or a press
- * anywhere but on the pill. Returns how to stop.
+ * Any action of the musician's but V and listening closes the pill (D2): a key (Esc only closes
+ * it), or a press anywhere but on the pill, the transport's controls and the ruler. Comparing is
+ * listening: playing, stopping, looping and moving the playhead keep it. Returns how to stop.
  */
 export function followCompare(): () => void {
   const key = (e: KeyboardEvent) => {
     if (!useCompare.getState().pill || MODIFIERS.has(e.key)) return;
-    if (e.code === "KeyV" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !typing(e.target)) return;
+    if (LISTENING.has(e.code) && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !typing(e.target)) return;
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -130,7 +135,7 @@ export function followCompare(): () => void {
   };
   const press = (e: PointerEvent) => {
     if (!useCompare.getState().pill) return;
-    if (e.target instanceof Element && e.target.closest("[data-testid=compare-pill]")) return;
+    if (e.target instanceof Element && e.target.closest("[data-testid=compare-pill], [data-transport], [data-testid=ruler]")) return;
     closeCompare();
   };
   window.addEventListener("keydown", key, true);
