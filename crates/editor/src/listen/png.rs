@@ -3,10 +3,9 @@
 //! bottom, in columns of 50 ms; a cell's colour is its level, from black (−80 dBFS or quieter)
 //! through violet and orange to pale yellow (−10 dBFS or louder).
 //!
-//! Written as an 8-bit RGB PNG by a writer of its own: deflate's stored blocks, so no compression
-//! and no crate (the `png` crate isn't a dependency of the workspace's own crates).
+//! Written as an 8-bit RGB PNG, compressed, by the `png` crate.
 
-use std::io::Write;
+use std::io::BufWriter;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -76,72 +75,57 @@ fn colour(level: Option<f32>) -> [u8; 3] {
     std::array::from_fn(|c| (STOPS[i][c] + (STOPS[i + 1][c] - STOPS[i][c]) * f).round() as u8)
 }
 
-/// An 8-bit RGB PNG of `rows` (each `3 × width` bytes), each row unfiltered, in stored blocks.
+/// An 8-bit RGB PNG of `rows` (each `3 × width` bytes), compressed.
 fn write(path: &Path, width: usize, height: usize, rows: &[Vec<u8>]) -> Result<()> {
-    let mut raw = Vec::with_capacity(height * (1 + 3 * width));
-    for r in rows {
-        raw.push(0);
-        raw.extend_from_slice(r);
-    }
-    // zlib: its header, deflate's stored blocks of at most 65,535 bytes, and Adler-32.
-    let mut z = vec![0x78, 0x01];
-    let pieces: Vec<&[u8]> = if raw.is_empty() { vec![&[][..]] } else { raw.chunks(65_535).collect() };
-    for (i, piece) in pieces.iter().enumerate() {
-        z.push(u8::from(i + 1 == pieces.len()));
-        let n = piece.len() as u16;
-        z.extend_from_slice(&n.to_le_bytes());
-        z.extend_from_slice(&(!n).to_le_bytes());
-        z.extend_from_slice(piece);
-    }
-    z.extend_from_slice(&adler32(&raw).to_be_bytes());
-    let mut ihdr = Vec::with_capacity(13);
-    ihdr.extend_from_slice(&(width as u32).to_be_bytes());
-    ihdr.extend_from_slice(&(height as u32).to_be_bytes());
-    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
-    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-    for (kind, data) in [(b"IHDR", &ihdr[..]), (b"IDAT", &z[..]), (b"IEND", &[][..])] {
-        png.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        let start = png.len();
-        png.extend_from_slice(kind);
-        png.extend_from_slice(data);
-        let crc = crc32(&png[start..]);
-        png.extend_from_slice(&crc.to_be_bytes());
-    }
-    let mut f = std::fs::File::create(path).with_context(|| format!("couldn't write {}", path.display()))?;
-    f.write_all(&png).with_context(|| format!("couldn't write {}", path.display()))
-}
-
-/// CRC-32 as PNG checks its chunks (ISO 3309).
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut c = 0xffff_ffffu32;
-    for &b in bytes {
-        c ^= b as u32;
-        for _ in 0..8 {
-            c = if c & 1 == 1 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
-        }
-    }
-    !c
-}
-
-/// Adler-32, as zlib checks what it holds (RFC 1950).
-fn adler32(bytes: &[u8]) -> u32 {
-    let (mut a, mut b) = (1u64, 0u64);
-    for piece in bytes.chunks(5552) {
-        for &x in piece {
-            a += x as u64;
-            b += a;
-        }
-        (a, b) = (a % 65_521, b % 65_521);
-    }
-    ((b << 16) | a) as u32
+    let file = std::fs::File::create(path).with_context(|| format!("couldn't write {}", path.display()))?;
+    let mut png = png::Encoder::new(BufWriter::new(file), width as u32, height as u32);
+    png.set_color(png::ColorType::Rgb);
+    png.set_depth(png::BitDepth::Eight);
+    png.set_compression(png::Compression::Balanced);
+    let written = png.write_header().and_then(|mut w| {
+        w.write_image_data(&rows.concat())?;
+        w.finish()
+    });
+    written.with_context(|| format!("couldn't write {}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
-    // RFC 1950's and ISO 3309's own check values.
+    use super::*;
+
+    // AGENT-7: a PNG decoder reads back every pixel `draw` drew (8-bit RGB: the bands of the first block,
+    // the gap's grey, the second block's silence), and the file is compressed: far smaller than its
+    // pixels (gaps: it was deflate's stored blocks, a little larger than them).
     #[test]
-    fn the_checks_are_the_standards() {
-        assert_eq!(super::adler32(b"Wikipedia"), 0x11E6_0398);
-        assert_eq!(super::crc32(b"123456789"), 0xCBF4_3926);
+    fn the_picture_reads_back_as_drawn_and_is_compressed() {
+        // A minute of columns, one pixel wide: levels that vary along both ways, and silence.
+        let level = |c: usize, b: usize| Some(FLOOR + ((c / 7 + 3 * b) % 75) as f32);
+        let bands = Picture { columns: (0..1200).map(|c| std::array::from_fn(|b| level(c, b))).collect() };
+        let silent = Picture { columns: vec![[None; 31]; 1200] };
+        let path = std::env::temp_dir().join(format!("m2-listen-png-{}.png", std::process::id()));
+        let drawn = draw(&[&bands, &silent], &path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!((drawn.merged, drawn.column_px, drawn.width, drawn.height), (1, 1, 1200, 2 * 31 * ROW_PX + GAP_PX));
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&bytes)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        let read = (info.width as usize, info.height as usize, info.color_type, info.bit_depth);
+        assert_eq!(read, (drawn.width, drawn.height, png::ColorType::Rgb, png::BitDepth::Eight));
+        let block = 31 * ROW_PX;
+        for y in 0..drawn.height {
+            for x in 0..drawn.width {
+                let want = match y {
+                    // Band 0 is the lowest, at the block's bottom.
+                    y if y < block => colour(level(x, 30 - y / ROW_PX)),
+                    y if y < block + GAP_PX => [96; 3],
+                    _ => [0; 3],
+                };
+                let at = 3 * (y * drawn.width + x);
+                assert_eq!(pixels[at..at + 3], want, "the pixel at {x}, {y}");
+            }
+        }
+        let raw = drawn.width * drawn.height * 3;
+        assert!(bytes.len() * 4 < raw, "compressed: {} bytes for {raw} bytes of pixels", bytes.len());
     }
 }

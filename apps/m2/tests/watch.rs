@@ -129,6 +129,42 @@ fn m2_watch_ends_when_the_app_quits() {
     drop(held);
 }
 
+// AGENT-6 (the review of ag-see, F7): a message past the socket's 16 MiB is an error it can't go
+// on from: `m2 watch` prints what it heard, then `closed` with `why: error`, and exits 1.
+#[test]
+fn m2_watch_says_a_socket_error_and_exits_1() {
+    let temp = Temp::new("watch-error");
+    let song = temp.0.join("song");
+    copy(&example("first-song"), &song);
+    let held = m2_session::lock::acquire(&song, "music2", m2_session::lock::RETRY).unwrap();
+    let state = json!({"session": 1, "dir": song.canonicalize().unwrap(), "problems": []});
+    let huge = format!(r#"{{"t":"toast","text":"{}"}}"#, "x".repeat(16 << 20));
+    let (url, _) = fake(state, move |asked| match asked.1.as_str() {
+        "/api/ws" => Some((101, json!({"__ws": [r#"{"t":"toast","text":"before"}"#, huge]}))),
+        "/api/graph/status" => Some((200, json!({"playing": false, "beat": 0.0, "bpm": 120.0, "loop": null}))),
+        _ => Some((404, json!({"error": "no such API"}))),
+    });
+    let home = temp.0.join("home");
+    publish(&home, &url, "tools", std::process::id());
+    let t = Instant::now();
+    let (mut child, rx) = watch(&home, song.to_str().unwrap(), &[]);
+    let lines = lines_until(&rx, 20, |l| l.iter().any(|l| l.contains("closed")));
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        assert!(t.elapsed() < Duration::from_secs(20), "it ends: {lines:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(1), "exit 1: {status:?}; {lines:?}");
+    let events = parsed(&lines);
+    assert!(events.iter().any(|e| e["t"] == "toast" && e["text"] == "before"), "what it heard first: {lines:?}");
+    let last = events.last().cloned().unwrap_or_default();
+    assert_eq!((&last["t"], &last["why"]), (&json!("closed"), &json!("error")), "{lines:?}");
+    assert!(last["error"].as_str().is_some_and(|e| e.contains("16 MiB")), "it says why: {last}");
+    drop(held);
+}
+
 // AGENT-6 (the review's F6): `m2 watch A` follows song A only. When the app opens another song, it
 // prints none of that song's events: it says the song went (`closed`, `why: song`) and exits 0.
 #[test]

@@ -20,6 +20,7 @@ toml.workspace = true
 hound.workspace = true
 oxc.workspace = true
 icu_normalizer.workspace = true
+png.workspace = true
 
 [dev-dependencies]
 # A plan prepared against what plays, in the effect tests: what the engine keeps (ID-13).

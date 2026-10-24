@@ -216,26 +216,17 @@ fn chunks(png: &[u8]) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-/// The rows of pixels of an RGB PNG whose deflate stream is stored blocks, as `m2 listen` writes.
+/// The rows of pixels of an 8-bit RGB PNG, as a decoder reads them.
 fn pixels(png: &[u8]) -> (usize, usize, Vec<Vec<[u8; 3]>>) {
     let c = chunks(png);
     let ihdr = &c[0].1;
     let (w, h) = (u32::from_be_bytes(ihdr[0..4].try_into().unwrap()) as usize, u32::from_be_bytes(ihdr[4..8].try_into().unwrap()) as usize);
     assert_eq!(&ihdr[8..], &[8, 2, 0, 0, 0], "8-bit RGB");
-    let z: Vec<u8> = c.iter().filter(|c| c.0 == "IDAT").flat_map(|c| c.1.clone()).collect();
-    let (mut at, mut raw) = (2, vec![]);
-    loop {
-        let last = z[at] & 1 == 1;
-        assert_eq!(z[at] >> 1, 0, "stored blocks");
-        let n = u16::from_le_bytes([z[at + 1], z[at + 2]]) as usize;
-        raw.extend_from_slice(&z[at + 5..at + 5 + n]);
-        at += 5 + n;
-        if last {
-            break;
-        }
-    }
-    assert_eq!(raw.len(), h * (1 + 3 * w));
-    let rows = raw.chunks(1 + 3 * w).map(|r| r[1..].chunks(3).map(|p| [p[0], p[1], p[2]]).collect()).collect();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+    let mut raw = vec![0; reader.output_buffer_size().unwrap()];
+    reader.next_frame(&mut raw).unwrap();
+    assert_eq!(raw.len(), h * 3 * w);
+    let rows = raw.chunks(3 * w).map(|r| r.chunks(3).map(|p| [p[0], p[1], p[2]]).collect()).collect();
     (w, h, rows)
 }
 

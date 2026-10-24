@@ -54,6 +54,11 @@ libc = "0.2"
 # Math with the same bits on every OS and CPU, the code std.wasm's math runs (PLAT-4).
 libm = "0.2"
 icu_normalizer = "2"
+# `m2 watch`'s WebSocket client (`m2_server::socket`): the version axum's `ws` already builds, with
+# its default features only (the handshake), so nothing new is compiled.
+tungstenite = "0.29"
+# `m2 listen --png`'s picture: the version Tauri already builds (0.17 is there too, for another crate).
+png = "0.18"
 
 [profile.dev]
 opt-level = 1

@@ -2445,7 +2445,9 @@ dependencies = [
  "m2-server",
  "m2-session",
  "m2-song",
+ "png 0.18.1",
  "serde_json",
+ "tungstenite",
 ]
 
 [[package]]
@@ -2463,6 +2465,7 @@ dependencies = [
  "m2-session",
  "m2-song",
  "oxc",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "toml 1.1.8+spec-1.1.0",
@@ -2600,6 +2603,7 @@ dependencies = [
  "tokio",
  "toml 1.1.8+spec-1.1.0",
  "tower-http 0.7.1",
+ "tungstenite",
 ]
 
 [[package]]

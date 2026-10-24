@@ -145,16 +145,18 @@ pub fn fake(state: Value, answer: impl FnMut(&Asked) -> Option<(u16, Value)> + S
             }
             let mut parts = line.split_whitespace();
             let (method, path) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").to_string());
-            let mut length = 0;
+            let (mut length, mut key) = (0, String::new());
             loop {
                 let mut h = String::new();
                 if reader.read_line(&mut h).is_err() || h == "\r\n" || h.is_empty() {
                     break;
                 }
-                if let Some((k, v)) = h.split_once(':')
-                    && k.eq_ignore_ascii_case("content-length")
-                {
-                    length = v.trim().parse().unwrap_or(0);
+                if let Some((k, v)) = h.split_once(':') {
+                    if k.eq_ignore_ascii_case("content-length") {
+                        length = v.trim().parse().unwrap_or(0);
+                    } else if k.eq_ignore_ascii_case("sec-websocket-key") {
+                        key = v.trim().to_string();
+                    }
                 }
             }
             let mut body = vec![0; length];
@@ -167,14 +169,22 @@ pub fn fake(state: Value, answer: impl FnMut(&Asked) -> Option<(u16, Value)> + S
             // `{"__ws": [text, …]}` opens the socket, sends each text as a message, then drops the
             // connection with no close frame, as an app that quits does.
             if let Some(Some(sent)) = reply.as_ref().map(|(_, v)| v.get("__ws").and_then(Value::as_array)) {
-                let _ = write!(stream, "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: upgrade\r\n\r\n");
+                let accept = tungstenite::handshake::derive_accept_key(key.as_bytes());
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: upgrade\r\nsec-websocket-accept: {accept}\r\n\r\n"
+                );
                 for text in sent.iter().filter_map(Value::as_str) {
                     let mut frame = vec![0x81u8];
                     match text.len() {
                         n if n < 126 => frame.push(n as u8),
-                        n => {
+                        n if n <= u16::MAX as usize => {
                             frame.push(126);
                             frame.extend_from_slice(&(n as u16).to_be_bytes());
+                        }
+                        n => {
+                            frame.push(127);
+                            frame.extend_from_slice(&(n as u64).to_be_bytes());
                         }
                     }
                     frame.extend_from_slice(text.as_bytes());

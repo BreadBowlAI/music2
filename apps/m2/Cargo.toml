@@ -22,3 +22,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 hound.workspace = true
+# The fake app's WebSocket handshake (its `Sec-WebSocket-Accept`), and reading `m2 listen --png`'s picture.
+tungstenite.workspace = true
+png.workspace = true
