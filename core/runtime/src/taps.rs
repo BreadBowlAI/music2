@@ -10,13 +10,17 @@
 //!
 //! Copy taps (AGENT-7) are an offline render's instead, for an agent's listen: after each block,
 //! from the one that holds a given transport frame on, a copy of each tapped buffer ([`Copies`]),
-//! which the analysis reads and clears between chunks. A live plan never has them. They read
-//! buffers once the graph ran, as the meters do, so no render changes.
+//! which the analysis reads and clears between chunks. They read buffers once the graph ran, as the
+//! meters do, so no render changes. Only a [`Copying`] has them: it owns its renderer and never
+//! gives it up, and a [`crate::Renderer`], which the live engine takes, holds none, so no live
+//! plan can have them.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::BLOCK;
+use anyhow::Result;
+
+use crate::{BLOCK, Renderer, Runner};
 
 /// A plan's peaks since they were last taken: the song's output (two channels), then each track's.
 #[derive(Debug, Default)]
@@ -215,6 +219,39 @@ impl Copies {
                 }
             }
         }
+    }
+}
+
+/// An offline render that copies its taps (AGENT-7): its renderer, which it owns and never gives
+/// up, and what it copied. The live engine takes a [`Renderer`], which holds no copy taps, so none
+/// ride into it.
+pub struct Copying {
+    r: Renderer,
+    copies: Copies,
+}
+
+impl Copying {
+    /// `r`, with copy taps at `at`: after each block from transport frame `from` on, a copy of each
+    /// tapped buffer. Refused for a renderer the live engine plays, or one prepared for it.
+    pub fn new(r: Renderer, at: &[TapAt], from: u64) -> Result<Copying> {
+        let taps = r.copied(at)?;
+        Ok(Copying { r, copies: Copies::new(taps, from) })
+    }
+
+    /// Render the next `out.len()` frames on `runner`'s threads, as [`Renderer::process_on`] does,
+    /// copying each block's taps.
+    pub fn process_on(&mut self, out: &mut [[f32; 2]], runner: &mut Runner) -> Result<()> {
+        self.r.process_into(out, runner, Some(&mut self.copies))
+    }
+
+    /// What it copied since it was last cleared.
+    pub fn copies(&mut self) -> &mut Copies {
+        &mut self.copies
+    }
+
+    /// Its renderer, to read.
+    pub fn renderer(&self) -> &Renderer {
+        &self.r
     }
 }
 

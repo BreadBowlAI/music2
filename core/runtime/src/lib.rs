@@ -85,7 +85,7 @@ pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, Plu
 pub use plugins::PluginInstance;
 pub use sandbox::{OutOfMemory, TooManySounds};
 pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
-pub use taps::{Copies, Peaks, TapAt, TapSlots};
+pub use taps::{Copies, Copying, Peaks, TapAt, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
@@ -2578,8 +2578,6 @@ pub struct Renderer {
     lead: u64,
     /// The transport over the last blocks, for plugins told it late (HOST-6).
     past: delay::Past,
-    /// Copy taps, an offline render's only (AGENT-7).
-    copies: Option<Box<Copies>>,
 }
 
 impl Renderer {
@@ -2945,7 +2943,6 @@ impl Renderer {
             latency: total,
             lead: total as u64,
             past: delay::Past::new(reach),
-            copies: None,
         })
     }
 
@@ -2986,11 +2983,10 @@ impl Renderer {
         Ok(r)
     }
 
-    /// Copy taps at `at` (AGENT-7): after each block from transport frame `from` on, a copy of
-    /// each tapped buffer, for an offline render's analysis. Only offline: refused on a renderer
-    /// the live engine plays.
-    pub fn copy_taps(&mut self, at: &[TapAt], from: u64) -> Result<()> {
-        // A live plan: one the engine plays, or one prepared for it, which has meters.
+    /// What copy taps at `at` read (AGENT-7): each tap's exec node (None: the song's output), its
+    /// channels and its lateness. Refused on a renderer the live engine plays, or one prepared for
+    /// it (it has meters): [`Copying`] is an offline render's only.
+    pub(crate) fn copied(&self, at: &[TapAt]) -> Result<Vec<taps::Copied>> {
         if self.live || self.plan.taps.is_some() {
             bail!("copy taps are an offline render's only (AGENT-7): this plan plays live");
         }
@@ -3010,13 +3006,7 @@ impl Renderer {
             };
             taps.push(taps::Copied { node, channels: channels as usize, late });
         }
-        self.copies = Some(Box::new(Copies::new(taps, from)));
-        Ok(())
-    }
-
-    /// What its copy taps copied since they were last cleared.
-    pub fn copies(&mut self) -> Option<&mut Copies> {
-        self.copies.as_deref_mut()
+        Ok(taps)
     }
 
     /// Its audio lanes are filled by a disk thread from now on, never by its own blocks: a player
@@ -3101,6 +3091,12 @@ impl Renderer {
     /// here once the block is done, as a panic in a node always was. Never allocates while it
     /// succeeds (RENDER-28).
     pub fn render_block_on(&mut self, clock: u64, runner: &mut Runner) -> Result<&[[f32; 2]; BLOCK]> {
+        self.render_block_into(clock, runner, None)
+    }
+
+    /// [`Renderer::render_block_on`], and the block copied into `copies` once the graph ran: an
+    /// offline render's copy taps ([`Copying`], AGENT-7), which no renderer holds itself.
+    fn render_block_into(&mut self, clock: u64, runner: &mut Runner, copies: Option<&mut Copies>) -> Result<&[[f32; 2]; BLOCK]> {
         // One floating-point mode for the block, and the caller's back after it (RENDER-2a).
         let _mode = fpenv::Canon::enter();
         let alone = &mut Runner::one();
@@ -3110,6 +3106,9 @@ impl Renderer {
         let b = self.pre(clock, runner);
         let failed = run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner, &self.plan.report);
         self.post(&b, failed)?;
+        if let Some(c) = copies {
+            c.copy(b.runs.first().at, &self.plan.graph.bufs, &self.frames);
+        }
         self.faulted()?;
         Ok(&self.frames)
     }
@@ -3191,10 +3190,6 @@ impl Renderer {
         if let Some(t) = &self.plan.taps {
             t.write(&self.plan.graph.bufs, &self.frames);
         }
-        // An offline render's copy taps (AGENT-7), likewise after the graph ran.
-        if let Some(c) = &mut self.copies {
-            c.copy(b.runs.first().at, &self.plan.graph.bufs, &self.frames);
-        }
         Ok(())
     }
 
@@ -3232,10 +3227,15 @@ impl Renderer {
 
     /// [`Renderer::process`] on `runner`'s threads: the same bits.
     pub fn process_on(&mut self, out: &mut [[f32; 2]], runner: &mut Runner) -> Result<()> {
+        self.process_into(out, runner, None)
+    }
+
+    /// [`Renderer::process_on`], each block copied into `copies` as it is rendered ([`Copying`]).
+    pub(crate) fn process_into(&mut self, out: &mut [[f32; 2]], runner: &mut Runner, mut copies: Option<&mut Copies>) -> Result<()> {
         for frame in out.iter_mut() {
             loop {
                 if self.pending.is_empty() {
-                    self.render_block_on(self.clock, runner)?;
+                    self.render_block_into(self.clock, runner, copies.as_deref_mut())?;
                     self.pending.load(&self.frames, &self.runs, self.transport.pos());
                 }
                 // Offline, the song's first `L` frames are dropped: they come before song time 0

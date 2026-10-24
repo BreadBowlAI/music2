@@ -366,3 +366,331 @@ fn m2_listen_runs_at_background_priority() {
     let v = json_of(&child.wait_with_output().unwrap());
     assert_eq!(v["priority"], json!({"threads": "background", "plugin_host": "background"}), "{v:#}");
 }
+
+/// A song in a temp folder: first-song's manifest and tempo, its hats and their clips (8 bars of
+/// them), and `files` over them; and a home of its own.
+fn song_of(name: &str, files: &[(&str, &str)]) -> (Temp, PathBuf, PathBuf) {
+    let temp = Temp::new(name);
+    let song = temp.0.join("song");
+    let first = example("first-song");
+    for rel in ["music2.toml", "data/arrangement.json", "data/hats/hits.json", "tracks/hats.ts"] {
+        std::fs::create_dir_all(song.join(rel).parent().unwrap()).unwrap();
+        std::fs::copy(first.join(rel), song.join(rel)).unwrap();
+    }
+    for (rel, text) in files {
+        std::fs::create_dir_all(song.join(rel).parent().unwrap()).unwrap();
+        std::fs::write(song.join(rel), text).unwrap();
+    }
+    let home = temp.0.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    (temp, song, home)
+}
+
+/// A track of std's sine at `hz`, its peaks at `db` dBFS.
+fn sine_track(key: &str, hz: f64, db: f64) -> String {
+    format!(
+        "import {{ db, track }} from \"@m2/core\";\nimport {{ gain, osc }} from \"std/dsp\";\n\nexport default track(\"{key}\", {{ name: \
+         \"{key}\" }}, () => gain(osc.sine({hz}), db({db})));\n"
+    )
+}
+
+/// A Tx that replaces `was` in `file` of the song at `song` with `now`, written beside it as `name`.
+fn tx_text(song: &Path, at: &Path, name: &str, file: &str, was: &str, now: &str) -> PathBuf {
+    let text = std::fs::read_to_string(song.join(file)).unwrap();
+    let start = text.find(was).unwrap_or_else(|| panic!("{was} in {file}"));
+    let sha = m2_song::Sha::of(text.as_bytes()).prefixed();
+    let tx = json!({"id": format!("tx-{name}"), "base": {file: sha}, "label": [was, now],
+        "ops": [{"op": "text_edit", "file": file, "edits": [{"start": start, "end": start + was.len(), "expected": was, "text": now}]}],
+        "expect": {"confined": {"ranges": {file: "whole"}}}});
+    let path = at.join(format!("{name}.json"));
+    std::fs::write(&path, tx.to_string()).unwrap();
+    path
+}
+
+/// The masking pairs in `v`'s `masking`, each as (band, its two tracks sorted, share).
+fn pairs(v: &Value) -> Vec<(f64, Vec<String>, f64)> {
+    v.as_array()
+        .unwrap_or_else(|| panic!("masking: {v}"))
+        .iter()
+        .map(|m| {
+            let mut t: Vec<String> = m["tracks"].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect();
+            t.sort();
+            (number(&m["hz"], "hz"), t, number(&m["share"], "share"))
+        })
+        .collect()
+}
+
+// The review of ag-listen, F1: a range that starts while a sound is loud reads it as it is. A
+// sustained tone with its peaks at -1 dBFS reads the same true peak from bar 2 on, where it starts
+// on a peak, as over the whole song: no inter-sample over that the song hasn't got.
+#[test]
+fn a_range_that_starts_on_a_loud_sound_reads_its_true_peak() {
+    let song_ts = "import { song, db } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport hats from \"./tracks/hats\";\n\
+                   import kick from \"./tracks/kick\";\n\nexport default song(() => master(mixer({ kick: kick.out, hats: { in: hats.out, db: \
+                   db(-90) } })));\n";
+    let kick = sine_track("kick", 54.896, -1.0);
+    let (_temp, song, home) = song_of("listen-cold", &[("song.ts", song_ts), ("tracks/kick.ts", &kick)]);
+    let dir = song.to_str().unwrap();
+    let whole = json_of(&listen(&home, &[dir, "--json"]));
+    let want = number(&whole["mix"]["true_peak"], "the whole song's true peak");
+    assert!(want <= -0.95, "the whole song: {want}");
+    for bars in ["2-8", "2-2"] {
+        let v = json_of(&listen(&home, &[dir, "--bars", bars, "--json"]));
+        for (what, tp) in [
+            ("the mix", &v["mix"]["true_peak"]),
+            ("the kick", &v["tracks"]["kick"]["own"]["true_peak"]),
+            ("as heard", &v["tracks"]["kick"]["heard"]["true_peak"]),
+        ] {
+            let tp = number(tp, what);
+            assert!((tp - want).abs() <= 0.05, "--bars {bars}, {what}: {tp} dBTP against the whole song's {want}");
+        }
+    }
+}
+
+/// first-song with `.music2/overlays.json` saying `overlays`.
+fn first_song_with(name: &str, overlays: &str) -> (Temp, PathBuf, PathBuf) {
+    let (temp, song, home) = first_song(name);
+    std::fs::create_dir_all(song.join(".music2")).unwrap();
+    std::fs::write(song.join(".music2/overlays.json"), overlays).unwrap();
+    (temp, song, home)
+}
+
+// The review of ag-listen, F2 and F9: --as-heard mutes tracks by key, in the song as it is and in
+// the change: a Tx that takes the kick out of the mixer shifts which tracks come where, and the
+// muted keys stay muted after it. The difference says the kick no longer reaches the mix.
+#[test]
+fn as_heard_mutes_by_key_in_the_change_too() {
+    let (temp, song, home) = first_song_with("listen-shift", r#"{"mute": ["keys"], "solo": []}"#);
+    let dir = song.to_str().unwrap();
+    let tx = tx_text(&song, &temp.0, "drop-kick", "song.ts", "      kick: kick.out,\n", "");
+    let v = json_of(&listen(&home, &[dir, "--bars", "1-4", "--as-heard", "--with", tx.to_str().unwrap(), "--json"]));
+    for side in ["before", "after"] {
+        for way in ["own", "heard"] {
+            assert_eq!(v[side]["tracks"]["keys"][way]["silent"], json!(true), "{side}, the keys muted, {way}: {v:#}");
+            assert_eq!(v[side]["tracks"]["hats"][way]["silent"], json!(false), "{side}, the hats, {way}");
+        }
+    }
+    let kick = &v["difference"]["tracks"]["kick"]["heard"];
+    assert!(kick["was"].is_object() && kick["now"].is_null(), "the kick no longer reaches the mix: {:#}", v["difference"]);
+}
+
+// The review of ag-listen, F9: a track that goes silent shows in the difference, in JSON and words.
+#[test]
+fn the_difference_says_a_track_went_silent() {
+    let (temp, song, home) = first_song("listen-silent");
+    let dir = song.to_str().unwrap();
+    let tx = tx_text(&song, &temp.0, "hats-off", "song.ts", "db: db(-6), pan: 0.3", "db: db(-96), pan: 0.3");
+    let v = json_of(&listen(&home, &[dir, "--bars", "1-4", "--with", tx.to_str().unwrap(), "--json"]));
+    let hats = &v["difference"]["tracks"]["hats"]["heard"];
+    assert_eq!(hats["silent"], json!({"was": false, "now": true}), "{:#}", v["difference"]);
+    assert!(hats["lufs"]["was"].is_number() && hats["lufs"]["now"].is_null(), "{:#}", v["difference"]);
+    let o = listen(&home, &[dir, "--bars", "1-4", "--with", tx.to_str().unwrap()]);
+    assert!(said(&o).contains("hats as heard now silent"), "{}", said(&o));
+}
+
+// The review of ag-listen, F8: --with a change of tempo listens to the same bars before and after,
+// each at its own tempo, and says so.
+#[test]
+fn a_change_of_tempo_compares_the_same_bars() {
+    let (temp, song, home) = first_song("listen-tempo");
+    let dir = song.to_str().unwrap();
+    let tx = tx_text(&song, &temp.0, "half-time", "data/arrangement.json", "\"bpm\": 124", "\"bpm\": 62");
+    let v = json_of(&listen(&home, &[dir, "--bars", "7-8", "--with", tx.to_str().unwrap(), "--json"]));
+    let bar = 4.0 * 60.0 / 124.0;
+    let seconds = |side: &str| (number(&v[side]["seconds"][0], side), number(&v[side]["seconds"][1], side));
+    let (b, a) = (seconds("before"), seconds("after"));
+    assert!((b.0 - 6.0 * bar).abs() < 1e-3 && (b.1 - 8.0 * bar).abs() < 1e-3, "before: {b:?}");
+    assert!((a.0 - 12.0 * bar).abs() < 1e-3 && (a.1 - 16.0 * bar).abs() < 1e-3, "after, bars 7-8 at 62 bpm: {a:?}");
+    let o = listen(&home, &[dir, "--bars", "7-8", "--with", tx.to_str().unwrap()]);
+    assert!(said(&o).contains("tempo or meter"), "it says the bars moved: {}", said(&o));
+}
+
+/// A song with a group bus: the kick and the hats go to `drums`, whose fader is at `drums_db`, and
+/// the bass to the master; the kick a 60 Hz sine and the bass a 64 Hz one, each at -6 dBFS.
+fn grouped(name: &str, drums_db: &str) -> (Temp, PathBuf, PathBuf) {
+    let song_ts = format!(
+        "import {{ song, db }} from \"@m2/core\";\nimport {{ master, mixer }} from \"std/mix\";\nimport bass from \"./tracks/bass\";\n\
+         import drums from \"./tracks/drums\";\nimport hats from \"./tracks/hats\";\nimport kick from \"./tracks/kick\";\n\n\
+         export default song(() =>\n  master(\n    mixer({{\n      kick: {{ in: kick.out, to: \"drums\" }},\n      hats: {{ in: hats.out, \
+         db: db(-6), to: \"drums\" }},\n      bass: bass.out,\n      drums: {{ in: drums.out, db: db({drums_db}) }},\n    }}),\n  ),\n);\n"
+    );
+    let drums = "import { bus } from \"@m2/core\";\n\nexport default bus(\"drums\", { name: \"Drums\" }, ({ input }) => input);\n";
+    song_of(
+        name,
+        &[
+            ("song.ts", &song_ts),
+            ("tracks/drums.ts", drums),
+            ("tracks/kick.ts", &sine_track("kick", 60.0, -6.0)),
+            ("tracks/bass.ts", &sine_track("bass", 64.0, -6.0)),
+        ],
+    )
+}
+
+// The review of ag-listen, F5: a track that goes to a group bus reaches the mix inside it: the bus
+// is measured as a strip of its own, and masking is among what the master sums. With the drums
+// group 30 dB down, its kick masks the bass nowhere; with it at 0 dB, the drums and the bass mask
+// each other at 63 Hz all the time.
+#[test]
+fn a_group_bus_is_measured_as_it_reaches_the_mix() {
+    let (temp, song, home) = grouped("listen-bus", "-30");
+    let dir = song.to_str().unwrap();
+    let v = json_of(&listen(&home, &[dir, "--json"]));
+    let drums = &v["tracks"]["drums"];
+    assert_eq!(drums["channel"], json!("drums"), "{v:#}");
+    number(&drums["heard"]["lufs"], "the drums as they reach the mix");
+    number(&drums["own"]["lufs"], "the drums' own sound");
+    let kick = &v["tracks"]["kick"];
+    assert_eq!(kick["to"], json!("drums"), "{v:#}");
+    assert!(kick["why"].as_str().is_some_and(|w| w.contains("drums")), "{kick:#}");
+    let low: Vec<_> = pairs(&v["masking"]).into_iter().filter(|p| p.0 == 63.0).collect();
+    assert_eq!(low, vec![], "the drums 30 dB down mask nothing at 63 Hz: {:#}", v["masking"]);
+    let tx = tx_text(&song, &temp.0, "drums-up", "song.ts", "db: db(-30)", "db: db(0)");
+    let v = json_of(&listen(&home, &[dir, "--with", tx.to_str().unwrap(), "--json"]));
+    let low: Vec<_> = pairs(&v["after"]["masking"]).into_iter().filter(|p| p.0 == 63.0).collect();
+    assert!(
+        low.len() == 1 && low[0].1 == ["bass", "drums"] && low[0].2 > 0.9,
+        "the drums at 0 dB and the bass, at 63 Hz: {:#}",
+        v["after"]["masking"]
+    );
+}
+
+// The review of ag-listen, F4: two tracks that take turns, a bar each, never sound at once, so
+// they mask each other hardly at all: only where one's release meets the other's start.
+#[test]
+fn tracks_that_take_turns_hardly_mask_each_other() {
+    let track = |key: &str| {
+        format!(
+            "import {{ track }} from \"@m2/core\";\nimport {{ bass }} from \"std/instruments\";\n\nexport default track(\"{key}\", {{ name: \
+             \"{key}\" }}, ({{ lane }}) => bass(lane.notes(\"notes\")));\n"
+        )
+    };
+    let notes = |first: f64| {
+        let n: Vec<Value> = (0..4).map(|i| json!({"pitch": "A1", "start": first + 8.0 * i as f64, "length": 3, "velocity": 0.8})).collect();
+        json!({"clips": [{"id": "c", "start": 0, "length": 32, "notes": n}]}).to_string()
+    };
+    let song_ts = "import { song } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport a from \"./tracks/a\";\n\
+                   import b from \"./tracks/b\";\n\nexport default song(() => master(mixer({ a: a.out, b: b.out })));\n";
+    let (_temp, song, home) = song_of(
+        "listen-turns",
+        &[
+            ("song.ts", song_ts),
+            ("tracks/a.ts", &track("a")),
+            ("tracks/b.ts", &track("b")),
+            ("data/a/notes.json", &notes(0.0)),
+            ("data/b/notes.json", &notes(4.0)),
+        ],
+    );
+    let v = json_of(&listen(&home, &[song.to_str().unwrap(), "--json"]));
+    for (hz, tracks, share) in pairs(&v["masking"]) {
+        assert!(share < 0.05, "{hz} Hz {tracks:?}: {share} of the range: {:#}", v["masking"]);
+    }
+}
+
+// The review of ag-listen, F11: a track named twice is measured once, and never masks itself.
+#[test]
+fn a_track_named_twice_is_measured_once() {
+    let (_temp, song, home) = first_song("listen-twice");
+    let v = json_of(&listen(&home, &[song.to_str().unwrap(), "--bars", "1-2", "--tracks", "kick,kick", "--json"]));
+    assert_eq!(v["tracks"].as_object().unwrap().keys().collect::<Vec<_>>(), ["kick"]);
+    assert_eq!(v["masking"], json!([]), "{v:#}");
+}
+
+// The review of ag-listen, F12: a flag `m2 listen` doesn't know is refused, and so is a flag where
+// a value should be; a picture is never written into the song, and one that can't be written is
+// refused before anything is rendered.
+#[test]
+fn m2_listen_refuses_what_it_doesnt_know() {
+    let (temp, song, home) = first_song("listen-flags");
+    let dir = song.to_str().unwrap();
+    for (args, word) in
+        [(vec!["--bras", "1-2"], "--bras"), (vec!["--track", "kick"], "--track"), (vec!["--bars", "2", "--png", "--json"], "--png")]
+    {
+        let o = Command::new(env!("CARGO_BIN_EXE_m2"))
+            .arg("listen")
+            .arg(dir)
+            .args(&args)
+            .current_dir(&temp.0)
+            .env("HOME", &home)
+            .env("M2_AUDIO", "none")
+            .env("M2_MIDI", "none")
+            .output()
+            .unwrap();
+        assert!(!o.status.success() && said(&o).contains(word), "{args:?}: {}", said(&o));
+    }
+    assert!(!temp.0.join("--json").exists(), "no picture named --json");
+    let before = tree(&song);
+    let inside = song.join("bands.png");
+    let o = listen(&home, &[dir, "--bars", "1", "--png", inside.to_str().unwrap()]);
+    assert!(!o.status.success() && said(&o).contains("song"), "{}", said(&o));
+    assert_eq!(tree(&song), before, "nothing written into the song");
+    let o = listen(&home, &[dir, "--png", "/no-such-folder/bands.png"]);
+    assert!(!o.status.success() && said(&o).contains("nothing was rendered"), "{}", said(&o));
+}
+
+// The review of ag-listen, F13: a song with no clips has no bars to listen to, and says so once,
+// the same with --bars as without.
+#[test]
+fn a_song_with_no_clips_says_so_once() {
+    let song_ts = "import { song } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport kick from \"./tracks/kick\";\n\n\
+                   export default song(() => master(mixer({ kick: kick.out })));\n";
+    let (_temp, song, home) = song_of("listen-drone", &[("song.ts", song_ts), ("tracks/kick.ts", &sine_track("kick", 55.0, -6.0))]);
+    std::fs::remove_dir_all(song.join("data/hats")).unwrap();
+    std::fs::remove_file(song.join("tracks/hats.ts")).unwrap();
+    let dir = song.to_str().unwrap();
+    let error = |o: &std::process::Output| {
+        assert!(!o.status.success(), "{}", said(o));
+        String::from_utf8_lossy(&o.stderr).lines().find(|l| l.starts_with("error")).unwrap_or_default().to_string()
+    };
+    let (plain, bars) = (error(&listen(&home, &[dir])), error(&listen(&home, &[dir, "--bars", "1-4"])));
+    assert_eq!(plain, bars, "one message");
+    assert!(plain.contains("no clips") && !plain.contains("--bars"), "{plain}");
+}
+
+/// A song whose lock a session of this process holds, as the app holds it, with a `session.json`
+/// naming a server that takes each request and never answers: an app that is busy for good.
+fn held_by_a_silent_app(name: &str) -> (Temp, PathBuf, PathBuf, m2_session::Session) {
+    let (temp, song, home) = first_song(name);
+    let writer = m2_session::Session::open(&song, app::packages()).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let mut kept = vec![];
+        for s in listener.incoming() {
+            kept.push(s);
+        }
+    });
+    app::publish(&home, &url, "tools", std::process::id());
+    (temp, song, home, writer)
+}
+
+/// `m2 listen args…` in `home`, ended if it takes longer than `limit`: its output, or None.
+fn listen_within(home: &Path, args: &[&str], limit: Duration) -> Option<std::process::Output> {
+    let (mut child, _err) = spawn_listen(home, args, &[]);
+    let t = Instant::now();
+    while t.elapsed() < limit {
+        if child.try_wait().unwrap().is_some() {
+            return Some(child.wait_with_output().unwrap());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
+}
+
+// The review of ag-listen, F15: with the app open, `m2 listen` asks it only for what the range or
+// --as-heard need, and gives up on an app that doesn't answer: with bars named it doesn't ask; with
+// --as-heard it reads the files' mute and solo, and says the app didn't answer.
+#[test]
+fn a_busy_app_never_holds_up_a_listen() {
+    let (_temp, song, home, _writer) = held_by_a_silent_app("listen-silent-app");
+    let dir = song.to_str().unwrap();
+    let limit = Duration::from_secs(60);
+    let o = listen_within(&home, &[dir, "--bars", "1-1", "--json"], limit).expect("it didn't wait for the app");
+    let v = json_of(&o);
+    assert!(v["app"].is_null(), "it didn't ask: {v:#}");
+    let o = listen_within(&home, &[dir, "--bars", "1-1", "--as-heard", "--json"], limit).expect("it gave up on the app");
+    let v = json_of(&o);
+    assert!(v["app"].as_str().is_some_and(|s| s.contains("didn't answer")), "{v:#}");
+    assert_eq!(v["as_heard"], json!(true));
+}

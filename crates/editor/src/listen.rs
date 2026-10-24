@@ -11,23 +11,28 @@
 //!   filter's gain bounds what they can make.
 //! - **Peak, RMS and crest**: the largest |sample|, the mean square of both sides, and peak minus
 //!   RMS (a sine's crest is 3 dB). Clipped: samples over 0 dBFS. Silent: none louder than −90 dBFS.
-//! - **Octave bands**: ten one-octave bands, 31.5 Hz to 16 kHz, each a 4th-order Butterworth
-//!   band-pass (two biquads, by the bilinear transform with both edges pre-warped), its mean square
-//!   over both sides, in dBFS (a full-scale sine is −3 dB).
+//! - **Octave bands**: ten one-octave bands, 31.5 Hz to 16 kHz, each an 8th-order Butterworth
+//!   band-pass (four biquads, by the bilinear transform with both edges pre-warped), its mean square
+//!   over both sides, in dBFS (a full-scale sine is −3 dB). A tone at the centre of the band beside
+//!   one reads 26 dB down in it, which IEC 61260's class 1 octave filters ask for and more.
 //! - **Stereo**: the correlation of the two sides; the width, the side's energy against the mid's
 //!   in dB; and whether the lows under 120 Hz are mono, their side 20 dB or more under their mid.
-//! - **Masking** ([`masking`]), from the tracks' bands as they reach the mix.
+//! - **Masking** ([`masking`]), from the tracks' octave bands as they reach the mix, moment by
+//!   moment ([`MOMENT`]): two tracks mask each other only where they sound at once.
 //! - **The picture** ([`Picture`]): third-octave levels every 50 ms, which `m2 listen --png` draws.
 //!
 //! A [`Meter`] takes a signal a piece at a time, as a render hands it, and keeps only sums, so a
-//! song's length costs no memory but the 10 ms steps and the picture's columns.
+//! song's length costs no memory but the 10 ms steps, the moments and the picture's columns. It is
+//! warmed first with what came before the range ([`Meter::warm`]), so a range that starts while a
+//! sound is loud reads it as it is, not as a step from silence. A sample that isn't a number is
+//! counted and read as 0.
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
 mod hear;
 pub mod png;
 
-pub use hear::{Ask, Heard, Tapped, TrackHeard, difference, difference_words, hear, tapped};
+pub use hear::{Ask, Heard, Overlaid, Tapped, TrackHeard, difference, difference_words, hear, tapped};
 
 /// The ten octave bands' centres, as they are named, in Hz: each is 1 kHz times a power of two
 /// (31.25, 62.5…), named as ISO 266 names it.
@@ -41,6 +46,9 @@ pub const THIRDS: [f64; 31] = [
 
 /// The picture's columns, in seconds.
 pub const COLUMN: f64 = 0.05;
+
+/// Masking's moments, in seconds: two tracks mask each other only where they sound at once.
+pub const MOMENT: f64 = 0.05;
 
 /// Quieter than this (−90 dBFS) is silence, as a render's tail counts it.
 const SILENT: f64 = 3.2e-5;
@@ -56,13 +64,14 @@ const STEPS_PER_WINDOW: usize = 300;
 /// The lows the stereo reading asks to be mono: under 120 Hz.
 const LOWS: f64 = 120.0;
 
-/// Masking: a track quieter than this in a band (dBFS) masks nothing there…
+/// Masking, moment by moment: a track quieter than this in a band (dBFS) masks nothing there…
 pub const AUDIBLE: f64 = -60.0;
-/// …two tracks within this of a band's loudest track mask each other there…
+/// …nor does one this far or more under a band beside it: that is the band-pass letting its
+/// neighbour's sound through (a tone at the centre of the band beside reads 26 dB down, one a
+/// quarter of an octave past their edge 15 dB down), not sound of its own…
+pub const LEAK: f64 = 16.0;
+/// …and two tracks within this of the loudest of the rest there mask each other.
 pub const CLOSE: f64 = 6.0;
-/// …when the band is one of each one's own: within this of its loudest band, not what leaks into
-/// the band beside it.
-pub const OWN: f64 = 10.0;
 
 /// What a meter measures besides loudness and peaks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -71,6 +80,8 @@ pub struct Wants {
     pub stereo: bool,
     /// The picture's third-octave columns.
     pub picture: bool,
+    /// The octave bands moment by moment ([`MOMENT`]), for masking.
+    pub moments: bool,
 }
 
 /// What a meter read. A level of a signal that is all zeros is None, as is loudness under the gate
@@ -91,6 +102,8 @@ pub struct Measures {
     pub crest: Option<f64>,
     /// Samples over 0 dBFS, both sides counted.
     pub clipped: u64,
+    /// Samples that weren't numbers (NaN or infinity), both sides counted: each read as 0.
+    pub non_finite: u64,
     pub silent: bool,
     /// Each octave band's level, in dBFS ([`OCTAVES`]).
     pub bands: Option<[Option<f64>; 10]>,
@@ -106,6 +119,13 @@ pub struct Stereo {
     pub width: Option<f64>,
     /// The lows under 120 Hz: their side 20 dB or more under their mid, or no lows at all.
     pub lows_mono: bool,
+}
+
+/// One moment of a signal ([`MOMENT`]): its mean square over both sides, and in each octave band.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Moment {
+    pub all: f32,
+    pub bands: [f32; 10],
 }
 
 /// Third-octave levels every 50 ms ([`THIRDS`], [`COLUMN`]), of the mid (both sides' mean).
@@ -177,25 +197,32 @@ pub(crate) fn k_weighting(rate: f64) -> [Biquad; 2] {
     [shelf, high_pass]
 }
 
-/// A band-pass from `lo` to `hi` Hz at `rate`: a 2nd-order Butterworth low-pass made a band-pass
-/// (4th order), its edges pre-warped, as two biquads. An edge past 0.45 of the rate is put there.
-fn band(lo: f64, hi: f64, rate: f64) -> [Biquad; 2] {
+/// A Butterworth band-pass from `lo` to `hi` Hz at `rate`, of order `2 * N`: an `N`th-order
+/// Butterworth low-pass made a band-pass, its edges pre-warped, as `N` biquads. An edge past 0.45 of
+/// the rate is put there.
+fn band<const N: usize>(lo: f64, hi: f64, rate: f64) -> [Biquad; N] {
     let warp = |f: f64| 2.0 * rate * (PI * f.min(0.45 * rate) / rate).tan();
     let (wl, wh) = (warp(lo), warp(hi));
     let (w0, bw) = (wl * wh, wh - wl);
-    // The prototype's pole (−1 + j)/√2 gives two band-pass poles, the roots of s² − p·bw·s + w0²;
-    // each makes a section with its conjugate (the prototype's other pole's).
-    let pb = C(-FRAC_1_SQRT_2 * bw, FRAC_1_SQRT_2 * bw);
-    let root = pb.mul(pb).sub(C(4.0 * w0, 0.0)).sqrt();
     let section = |s: C| Biquad::analog([0.0, bw, 0.0], [1.0, -2.0 * s.0, s.0 * s.0 + s.1 * s.1], rate);
-    [section(pb.add(root).half()), section(pb.sub(root).half())]
+    // Each prototype pole above the axis, at angle π(2k + N − 1)/2N, gives two band-pass poles, the
+    // roots of s² − p·bw·s + w0²; each makes a section with its conjugate (the prototype's other
+    // pole's).
+    let mut out = [Biquad::default(); N];
+    for k in 0..N / 2 {
+        let angle = PI * (2 * (k + 1) + N - 1) as f64 / (2 * N) as f64;
+        let pb = C(bw * angle.cos(), bw * angle.sin());
+        let root = pb.mul(pb).sub(C(4.0 * w0, 0.0)).sqrt();
+        out[2 * k] = section(pb.add(root).half());
+        out[2 * k + 1] = section(pb.sub(root).half());
+    }
+    out
 }
 
-/// `x` through two biquads, one after the other.
+/// `x` through biquads, one after another.
 #[inline]
-fn two(f: &mut [Biquad; 2], x: f64) -> f64 {
-    let y = f[0].run(x);
-    f[1].run(y)
+fn run<const N: usize>(f: &mut [Biquad; N], x: f64) -> f64 {
+    f.iter_mut().fold(x, |y, b| b.run(y))
 }
 
 /// A 4th-order Butterworth low-pass at `hz`: two biquads.
@@ -265,12 +292,13 @@ impl TruePeak {
         TruePeak { phases, gain, ring: [0.0; 2 * TAPS], at: 0, max: 0.0 }
     }
 
-    /// The next samples; `loudest` is their largest |x|.
-    fn push(&mut self, x: &[f32], loudest: f64) {
+    /// The next samples; `loudest` is their largest |x|. Uncounted (`count` false), they only fill
+    /// the history the filter reads.
+    fn push(&mut self, x: &[f32], loudest: f64, count: bool) {
         // Points between these samples (and the last ones before them, which the filter still
         // reads) can't pass `gain` times the loudest of them.
         let before = self.ring[..TAPS].iter().fold(0.0f64, |m, s| m.max(s.abs()));
-        let skip = self.gain * loudest.max(before) <= self.max;
+        let skip = !count || self.gain * loudest.max(before) <= self.max;
         for &s in x {
             let s = s as f64;
             self.ring[self.at] = s;
@@ -302,6 +330,9 @@ pub struct Meter {
     squares: f64,
     frames: u64,
     clipped: u64,
+    non_finite: u64,
+    /// The samples being read, each side's, with what isn't a number read as 0.
+    clean: [Vec<f32>; 2],
     bands: Option<Box<Bands>>,
     stereo: Option<Box<Sums>>,
     picture: Option<Box<Columns>>,
@@ -309,8 +340,15 @@ pub struct Meter {
 
 /// The octave bands' filters, each side's, and their sums of squares.
 struct Bands {
-    filters: [[[Biquad; 2]; 10]; 2],
+    filters: [[[Biquad; 4]; 10]; 2],
     sums: [f64; 10],
+    /// Each whole moment, when asked for; and the one being filled: its sum of squares, and each
+    /// band's.
+    moments: Option<Vec<Moment>>,
+    moment: usize,
+    filled: usize,
+    all: f64,
+    now: [f64; 10],
 }
 
 /// What the stereo reading sums.
@@ -344,17 +382,26 @@ impl Meter {
         let k = k_weighting(rate);
         let octave = |c: usize| {
             let hz = 1000.0 * 2f64.powi(c as i32 - 5);
-            band(hz * FRAC_1_SQRT_2, hz / FRAC_1_SQRT_2, rate)
+            band::<4>(hz * FRAC_1_SQRT_2, hz / FRAC_1_SQRT_2, rate)
         };
         let bands = wants.bands.then(|| {
-            let one: [[Biquad; 2]; 10] = std::array::from_fn(octave);
-            Box::new(Bands { filters: [one, one], sums: [0.0; 10] })
+            let one: [[Biquad; 4]; 10] = std::array::from_fn(octave);
+            let moment = (MOMENT * rate).round().max(1.0) as usize;
+            Box::new(Bands {
+                filters: [one, one],
+                sums: [0.0; 10],
+                moments: wants.moments.then(Vec::new),
+                moment,
+                filled: 0,
+                all: 0.0,
+                now: [0.0; 10],
+            })
         });
         let stereo = wants.stereo.then(|| Box::new(Sums { lows: [low_pass(LOWS, rate); 2], ..Sums::default() }));
         let picture = wants.picture.then(|| {
             let third = |c: usize| {
                 let hz = 1000.0 * 2f64.powf((c as f64 - 17.0) / 3.0);
-                band(hz * 2f64.powf(-1.0 / 6.0), hz * 2f64.powf(1.0 / 6.0), rate)
+                band::<2>(hz * 2f64.powf(-1.0 / 6.0), hz * 2f64.powf(1.0 / 6.0), rate)
             };
             let len = (COLUMN * rate).round().max(1.0) as usize;
             Box::new(Columns { filters: std::array::from_fn(third), len, filled: 0, sums: [0.0; 31], done: vec![] })
@@ -371,20 +418,45 @@ impl Meter {
             squares: 0.0,
             frames: 0,
             clipped: 0,
+            non_finite: 0,
+            clean: [vec![], vec![]],
             bands,
             stereo,
             picture,
         }
     }
 
-    /// The next frames: `left` and `right`, as long as each other.
+    /// The next frames of the range: `left` and `right`, as long as each other.
     pub fn push(&mut self, left: &[f32], right: &[f32]) {
+        self.read(left, right, true);
+    }
+
+    /// Frames from before the range, which settle its filters and the true peak's history as the
+    /// song has them there: nothing in them is counted.
+    pub fn warm(&mut self, left: &[f32], right: &[f32]) {
+        self.read(left, right, false);
+    }
+
+    /// `left` and `right` through every filter; counted (`count`) or only heard.
+    fn read(&mut self, left: &[f32], right: &[f32], count: bool) {
         debug_assert_eq!(left.len(), right.len());
         let n = left.len().min(right.len());
-        let (left, right) = (&left[..n], &right[..n]);
+        // What isn't a number is read as 0, and counted.
+        let mut clean = std::mem::take(&mut self.clean);
+        for (c, x) in clean.iter_mut().zip([&left[..n], &right[..n]]) {
+            c.clear();
+            c.extend(x.iter().map(|&s| if s.is_finite() { s } else { 0.0 }));
+            if count {
+                self.non_finite += x.iter().filter(|s| !s.is_finite()).count() as u64;
+            }
+        }
+        let (left, right) = (&clean[0][..], &clean[1][..]);
         for (&l, &r) in left.iter().zip(right) {
             let (l, r) = (l as f64, r as f64);
-            let (kl, kr) = (two(&mut self.k[0], l), two(&mut self.k[1], r));
+            let (kl, kr) = (run(&mut self.k[0], l), run(&mut self.k[1], r));
+            if !count {
+                continue;
+            }
             self.sum += kl * kl + kr * kr;
             self.filled += 1;
             if self.filled == self.step {
@@ -394,43 +466,69 @@ impl Meter {
             self.squares += l * l + r * r;
             self.clipped += (l.abs() > 1.0) as u64 + (r.abs() > 1.0) as u64;
         }
-        self.frames += n as u64;
+        if count {
+            self.frames += n as u64;
+        }
         for (side, x) in [left, right].into_iter().enumerate() {
             for piece in x.chunks(128) {
                 let loudest = piece.iter().fold(0.0f64, |m, &s| m.max((s as f64).abs()));
-                self.peak = self.peak.max(loudest);
-                self.peaks[side].push(piece, loudest);
+                if count {
+                    self.peak = self.peak.max(loudest);
+                }
+                self.peaks[side].push(piece, loudest, count);
             }
         }
         if let Some(b) = &mut self.bands {
-            let Bands { filters, sums } = &mut **b;
-            for (side, x) in [left, right].into_iter().enumerate() {
-                for &s in x {
-                    let s = s as f64;
-                    for (f, sum) in filters[side].iter_mut().zip(sums.iter_mut()) {
-                        let y = two(f, s);
-                        *sum += y * y;
+            let Bands { filters, sums, moments, moment, filled, all, now } = &mut **b;
+            let [lf, rf] = filters;
+            for (&l, &r) in left.iter().zip(right) {
+                let (l, r) = (l as f64, r as f64);
+                for (((fl, fr), sum), at) in lf.iter_mut().zip(rf.iter_mut()).zip(sums.iter_mut()).zip(now.iter_mut()) {
+                    let (a, b) = (run(fl, l), run(fr, r));
+                    if count {
+                        let e = a * a + b * b;
+                        *sum += e;
+                        *at += e;
                     }
+                }
+                if !count {
+                    continue;
+                }
+                *all += l * l + r * r;
+                *filled += 1;
+                if *filled == *moment {
+                    if let Some(m) = moments {
+                        let n = 2.0 * *moment as f64;
+                        m.push(Moment { all: (*all / n) as f32, bands: now.map(|e| (e / n) as f32) });
+                    }
+                    (*all, *now, *filled) = (0.0, [0.0; 10], 0);
                 }
             }
         }
         if let Some(s) = &mut self.stereo {
             for (&l, &r) in left.iter().zip(right) {
                 let (l, r) = (l as f64, r as f64);
-                s.ll += l * l;
-                s.rr += r * r;
-                s.lr += l * r;
-                let (a, b) = (two(&mut s.lows[0], l), two(&mut s.lows[1], r));
-                s.low_mid += (a + b) * (a + b) / 4.0;
-                s.low_side += (a - b) * (a - b) / 4.0;
+                let (a, b) = (run(&mut s.lows[0], l), run(&mut s.lows[1], r));
+                if count {
+                    s.ll += l * l;
+                    s.rr += r * r;
+                    s.lr += l * r;
+                    s.low_mid += (a + b) * (a + b) / 4.0;
+                    s.low_side += (a - b) * (a - b) / 4.0;
+                }
             }
         }
         if let Some(c) = &mut self.picture {
             for (&l, &r) in left.iter().zip(right) {
                 let mid = (l as f64 + r as f64) / 2.0;
                 for (f, sum) in c.filters.iter_mut().zip(c.sums.iter_mut()) {
-                    let y = two(f, mid);
-                    *sum += y * y;
+                    let y = run(f, mid);
+                    if count {
+                        *sum += y * y;
+                    }
+                }
+                if !count {
+                    continue;
                 }
                 c.filled += 1;
                 if c.filled == c.len {
@@ -440,6 +538,12 @@ impl Meter {
                 }
             }
         }
+        self.clean = clean;
+    }
+
+    /// Each whole moment of the range ([`MOMENT`]), when asked for: what [`masking`] reads.
+    pub fn moments(&self) -> Option<&[Moment]> {
+        self.bands.as_ref().and_then(|b| b.moments.as_deref())
     }
 
     /// What it read so far.
@@ -457,6 +561,7 @@ impl Meter {
             rms,
             crest: peak.zip(rms).map(|(p, r)| p - r),
             clipped: self.clipped,
+            non_finite: self.non_finite,
             silent: self.peak < SILENT,
             bands: self.bands.as_ref().map(|b| b.sums.map(|s| db(s / (2.0 * frames)))),
             stereo: self.stereo.as_ref().map(|s| {
@@ -513,39 +618,73 @@ impl Meter {
     }
 }
 
-/// Tracks that mask each other in one band: every two of them.
+/// Two tracks that mask each other in one band.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Masked {
     /// The band's centre, as it is named ([`OCTAVES`]).
     pub hz: f64,
-    /// Two or more, the loudest first.
+    /// The two, the louder first.
     pub tracks: Vec<String>,
-    /// Their levels in the band, in dBFS.
+    /// Their levels in the band in the moments they mask each other, in dBFS.
     pub db: Vec<f64>,
+    /// How much of the range they mask each other for, from 0 to 1: their moments of it.
+    pub share: f64,
 }
 
-/// Masking, from each track's octave bands as it reaches the mix (`heard`, by key): in each band,
-/// the tracks within [`CLOSE`] dB of the band's loudest track, each louder there than [`AUDIBLE`]
-/// and within [`OWN`] dB of its own loudest band. Every two of them mask each other there; a band
-/// with one or none has no masking. Band by band, the loudest first.
-pub fn masking(heard: &[(&str, [Option<f64>; 10])]) -> Vec<Masked> {
-    let mut found = vec![];
-    for (b, &hz) in OCTAVES.iter().enumerate() {
-        let loudest = heard.iter().filter_map(|(_, x)| x[b]).fold(f64::NEG_INFINITY, f64::max);
-        let mut here: Vec<(&str, f64)> = heard
-            .iter()
-            .filter_map(|&(key, x)| {
-                let level = x[b]?;
-                let own = x.iter().flatten().copied().fold(f64::NEG_INFINITY, f64::max);
-                (level >= AUDIBLE && level >= loudest - CLOSE && level >= own - OWN).then_some((key, level))
-            })
-            .collect();
-        here.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
-        if here.len() >= 2 {
-            found.push(Masked { hz, tracks: here.iter().map(|t| t.0.to_string()).collect(), db: here.iter().map(|t| t.1).collect() });
+/// Masking, from each track's moments as it reaches the mix (`heard`, by key: [`Meter::moments`],
+/// the same moments of the range for each). In each moment, the tracks that sound in it (louder
+/// than [`AUDIBLE`]); in each band, those of them louder there than [`AUDIBLE`] and less than
+/// [`LEAK`] under a band beside it; any two of those within [`CLOSE`] dB of the loudest of them mask
+/// each other in that moment. Two tracks that never sound at once never mask each other, though a
+/// band-pass rings on a moment after a track stops. Each pair, band by band, the most of the range
+/// first: how much of the range it holds, and their levels in the moments it does.
+pub fn masking(heard: &[(&str, &[Moment])]) -> Vec<Masked> {
+    let n = heard.iter().map(|h| h.1.len()).min().unwrap_or(0);
+    // By band and pair (their places in `heard`): the moments they mask each other in, and each
+    // one's power summed over them.
+    let mut met: std::collections::BTreeMap<(usize, usize, usize), (usize, f64, f64)> = Default::default();
+    let mut here: Vec<(usize, f64)> = vec![];
+    for w in 0..n {
+        for b in 0..OCTAVES.len() {
+            here.clear();
+            for (i, (_, m)) in heard.iter().enumerate() {
+                if db(m[w].all as f64).is_none_or(|l| l < AUDIBLE) {
+                    continue;
+                }
+                let x = &m[w].bands;
+                let Some(level) = db(x[b] as f64) else { continue };
+                let beside = [b.wrapping_sub(1), b + 1].into_iter().filter_map(|c| x.get(c).and_then(|&e| db(e as f64)));
+                if level >= AUDIBLE && beside.fold(f64::NEG_INFINITY, f64::max) - LEAK < level {
+                    here.push((i, level));
+                }
+            }
+            let loudest = here.iter().map(|h| h.1).fold(f64::NEG_INFINITY, f64::max);
+            here.retain(|h| h.1 >= loudest - CLOSE);
+            for (k, &(i, _)) in here.iter().enumerate() {
+                for &(j, _) in &here[k + 1..] {
+                    let (i, j) = (i.min(j), i.max(j));
+                    let e = met.entry((b, i, j)).or_default();
+                    e.0 += 1;
+                    e.1 += heard[i].1[w].bands[b] as f64;
+                    e.2 += heard[j].1[w].bands[b] as f64;
+                }
+            }
         }
     }
-    found
+    let mut found: Vec<(usize, Masked)> = met
+        .into_iter()
+        .map(|((b, i, j), (moments, ei, ej))| {
+            let level = |e: f64| db(e / moments as f64).unwrap_or(f64::NEG_INFINITY);
+            let (mut a, mut c) = ((heard[i].0, level(ei)), (heard[j].0, level(ej)));
+            if c.1 > a.1 || (c.1 == a.1 && c.0 < a.0) {
+                std::mem::swap(&mut a, &mut c);
+            }
+            let share = moments as f64 / n as f64;
+            (b, Masked { hz: OCTAVES[b], tracks: vec![a.0.to_string(), c.0.to_string()], db: vec![a.1, c.1], share })
+        })
+        .collect();
+    found.sort_by(|(b, x), (c, y)| b.cmp(c).then(y.share.total_cmp(&x.share)).then(x.tracks.cmp(&y.tracks)));
+    found.into_iter().map(|f| f.1).collect()
 }
 
 #[cfg(test)]

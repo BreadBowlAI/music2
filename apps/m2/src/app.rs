@@ -168,13 +168,15 @@ pub struct App {
     state: Value,
     /// It was said that no name was given.
     told: bool,
+    /// How long one request may wait for the app's answer; as long as the app lives when None.
+    patience: Option<Duration>,
 }
 
 /// Reach the app `holder` names, which holds the lock of the song at `dir`: through
 /// `~/.music2/session.json`, which must name the same process, and only while the app has this
 /// song open. `also` follows the refusal when it can't be reached.
 pub fn reach(dir: &Path, holder: &Holder, also: &str) -> Result<App> {
-    reach_saying(dir, holder, || {
+    reach_saying(dir, holder, None, || {
         anyhow!(
             "nothing was changed: this song is open in music2 (pid {}), which m2 can't reach. Make the edit there, or close it there and \
              run this again.{also}",
@@ -187,11 +189,17 @@ pub fn reach(dir: &Path, holder: &Holder, also: &str) -> Result<App> {
 /// (AGENT-6): `m2 focus`, `m2 watch` and `m2 point`, which write nothing.
 pub fn looking(dir: &Path) -> Result<App> {
     let holder = holder(dir).ok_or_else(|| anyhow!("music2 doesn't have this song open: open it there, then run this again"))?;
-    reach_saying(dir, &holder, || anyhow!("this song is open in music2 (pid {}), which m2 can't reach", holder.pid))
+    reach_saying(dir, &holder, None, || anyhow!("this song is open in music2 (pid {}), which m2 can't reach", holder.pid))
+}
+
+/// [`looking`] at the app `holder` names, waiting no longer than `patience` for each answer: what
+/// `m2 listen` asks, which goes on without the app rather than wait on a busy one (AGENT-7).
+pub fn looking_within(dir: &Path, holder: &Holder, patience: Duration) -> Result<App> {
+    reach_saying(dir, holder, Some(patience), || anyhow!("this song is open in music2 (pid {}), which m2 can't reach", holder.pid))
 }
 
 /// [`reach`], saying `cant` when the app can't be reached.
-fn reach_saying(dir: &Path, holder: &Holder, cant: impl Fn() -> anyhow::Error) -> Result<App> {
+fn reach_saying(dir: &Path, holder: &Holder, patience: Option<Duration>, cant: impl Fn() -> anyhow::Error) -> Result<App> {
     let file = m2_os::dirs::home().ok_or_else(&cant)?.join(".music2/session.json");
     let published: Value = std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str(&t).ok()).ok_or_else(&cant)?;
     let (Some(url), Some(key), Some(pid)) = (published["url"].as_str(), published["token"].as_str(), published["pid"].as_u64()) else {
@@ -201,7 +209,8 @@ fn reach_saying(dir: &Path, holder: &Holder, cant: impl Fn() -> anyhow::Error) -
         return Err(cant());
     }
     let dir = dir.canonicalize()?;
-    let mut app = App { url: url.into(), key: key.into(), pid: holder.pid, dir: dir.clone(), session: 0, state: Value::Null, told: false };
+    let mut app =
+        App { url: url.into(), key: key.into(), pid: holder.pid, dir: dir.clone(), session: 0, state: Value::Null, told: false, patience };
     let (status, state) = app.ask("GET", "/api/graph", None).map_err(|_| cant())?;
     let open = state["dir"].as_str().and_then(|d| Path::new(d).canonicalize().ok());
     if status != 200 || open.as_deref() != Some(dir.as_path()) {
@@ -237,7 +246,9 @@ impl App {
             body.len()
         );
         s.write_all(req.as_bytes()).map_err(|_| Gone::During)?;
-        let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+        let wait = self.patience.map_or(Duration::from_secs(5), |p| p.min(Duration::from_secs(5)));
+        let _ = s.set_read_timeout(Some(wait.max(Duration::from_millis(1))));
+        let asked = std::time::Instant::now();
         let mut answer = vec![];
         let mut buf = [0u8; 1 << 16];
         loop {
@@ -245,7 +256,7 @@ impl App {
                 Ok(0) => break,
                 Ok(n) => answer.extend_from_slice(&buf[..n]),
                 Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
-                    if !m2_os::process::alive(self.pid) {
+                    if !m2_os::process::alive(self.pid) || self.patience.is_some_and(|p| asked.elapsed() >= p) {
                         return Err(Gone::During);
                     }
                     eprintln!("waiting for the app…");
@@ -268,6 +279,12 @@ impl App {
 
     pub fn session(&self) -> u64 {
         self.session
+    }
+
+    /// The app's state as it answered when it was reached (`GET /api/graph`), for the song this
+    /// folder is.
+    pub fn state(&self) -> &Value {
+        &self.state
     }
 
     /// `method path` with `body`, which writes nothing: the status and the JSON answer, or that
@@ -660,6 +677,7 @@ mod tests {
             session: 0,
             state: Value::Null,
             told: false,
+            patience: None,
         };
         let big = json!({"text": "x".repeat(m2_server::TX_BODY)});
         assert!(matches!(app.ask("POST", "/api/tx/commit", Some(&big)), Err(Gone::TooBig(_))), "never sent");

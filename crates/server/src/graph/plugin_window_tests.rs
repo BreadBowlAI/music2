@@ -488,3 +488,16 @@ fn an_agents_change_that_would_drop_a_window_not_saved_yet_is_taken_back() {
     assert_eq!(r.song(), text, "taken back");
     assert!(!r.graph().inspect(|a| a.open.as_ref().unwrap().windows.unsaved().is_empty()), "the window's change is still theirs");
 }
+
+// The review of ag-listen, F17: the graph state's `plugins` says which plugin's window changed its
+// sound, not saved yet (`unsaved`), so an agent's listen, which hears the saved state, can say so.
+#[test]
+fn the_state_says_a_plugin_window_has_changes_not_saved_yet() {
+    let mut r = Rig::new("0.5", "dirty-at-10-400");
+    r.tick();
+    assert_eq!(r.plugin().1["unsaved"], serde_json::json!(false), "{:?}", r.plugin());
+    r.fill_to(20);
+    until_unsaved(&mut r);
+    r.tick();
+    assert_eq!(r.plugin().1["unsaved"], serde_json::json!(true), "{:?}", r.plugin());
+}

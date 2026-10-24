@@ -1,93 +1,182 @@
 //! `m2 listen` (AGENT-7; track 5 of the agents design): what a song's bars measure, for an agent
 //! that can't hear them. An offline range render in this process, never the app's engine: at
-//! background priority with its plugin host, on the cores playback doesn't need, one at a time on
-//! the machine. It reads the song's files (or a Tx it checks and never writes, `--with`), and
-//! writes nothing into the song.
+//! background priority with its plugin host, off the cores playback needs, one at a time on the
+//! machine. It reads the song's files (or a Tx it checks and never writes, `--with`), and writes
+//! nothing into the song.
 //!
 //! The range: `--bars 9-16` (counted from 1), else the loop when one is on (the open app's, else
 //! `.music2/view.json`'s), else the song to the end of its last clip; 2 bars of preroll, so it is
-//! approximate unless the preroll reaches the start (RENDER-5). `--as-heard` hears the listening
-//! mute and solo (the open app's, else `.music2/overlays.json`), and says so (MON-4).
+//! approximate unless the preroll reaches the start (RENDER-5). With `--with`, each revision turns
+//! the same bars into its own seconds. `--as-heard` hears the listening mute and solo (the open
+//! app's, else `.music2/overlays.json`), given to each revision by its tracks' keys, and says so
+//! (MON-4). The open app is asked only for what the range or `--as-heard` need, before the lock,
+//! and never waited on for long: a song it holds that it doesn't answer for is read from its files,
+//! and the listen says so.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use m2_editor::clips::bar_start;
-use m2_editor::listen::{self, Ask, Heard};
+use m2_editor::listen::{self, Ask, Heard, Overlaid};
 use m2_editor::render::Threads;
 use m2_server::graph::overlay::{self, Overlays};
 use m2_session::{Revision, Session};
 use serde_json::{Value, json};
 
-use crate::{app, flag, report};
+use crate::app;
 
 const USAGE: &str = "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]";
 /// Bars rendered before the range and dropped (RENDER-4).
 const PREROLL_BARS: u64 = 2;
+/// How long `m2 listen` waits for the open app's answer before it reads the song's files instead.
+const PATIENCE: Duration = Duration::from_secs(5);
+
+/// What `m2 listen` was asked.
+struct Args {
+    dir: PathBuf,
+    bars: Option<String>,
+    tracks: Option<Vec<String>>,
+    as_heard: bool,
+    with: Option<String>,
+    png: Option<PathBuf>,
+    json: bool,
+}
+
+/// The arguments after `listen`: the song, then the flags, each once. A flag it doesn't know, a
+/// second song, and a flag where a value should be are refused.
+fn args(all: &[String]) -> Result<Args> {
+    let mut a = Args { dir: PathBuf::new(), bars: None, tracks: None, as_heard: false, with: None, png: None, json: false };
+    let mut dir: Option<PathBuf> = None;
+    let mut it = all.iter().skip(1);
+    let mut seen: Vec<&str> = vec![];
+    while let Some(arg) = it.next() {
+        if !arg.starts_with("--") {
+            if dir.is_some() {
+                bail!("m2 listen takes one song, not `{arg}` too: {USAGE}");
+            }
+            dir = Some(PathBuf::from(arg));
+            continue;
+        }
+        if seen.contains(&arg.as_str()) {
+            bail!("{arg} is named twice: {USAGE}");
+        }
+        seen.push(arg);
+        let mut value = || -> Result<String> {
+            match it.next() {
+                Some(v) if !v.starts_with("--") => Ok(v.clone()),
+                Some(v) => bail!("{arg} needs a value, not the flag {v}: {USAGE}"),
+                None => bail!("{arg} needs a value: {USAGE}"),
+            }
+        };
+        match arg.as_str() {
+            "--bars" => a.bars = Some(value()?),
+            "--tracks" => {
+                let text = value()?;
+                let mut keys: Vec<String> = vec![];
+                for k in text.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+                    if !keys.iter().any(|x| x == k) {
+                        keys.push(k.to_string());
+                    }
+                }
+                a.tracks = Some(keys);
+            }
+            "--with" => a.with = Some(value()?),
+            "--png" => a.png = Some(PathBuf::from(value()?)),
+            "--as-heard" => a.as_heard = true,
+            "--json" => a.json = true,
+            other => bail!("m2 listen doesn't know {other}: {USAGE}"),
+        }
+    }
+    a.dir = dir.context(USAGE)?;
+    Ok(a)
+}
 
 /// `m2 listen <project> …`.
-pub fn listen(args: &[String]) -> Result<()> {
-    let dir = PathBuf::from(args.get(1).filter(|a| !a.starts_with("--")).context(USAGE)?);
+pub fn listen(all: &[String]) -> Result<()> {
+    let a = args(all)?;
     // Its own process at background priority, every thread of it, and its plugin host too: first,
     // so every thread it starts takes it (AGENT-7).
     if let Err(e) = m2_os::process::background() {
         eprintln!("m2: couldn't lower its priority ({e})");
     }
     m2_plugins::background_host();
+    // The picture's path, before anything renders: never in the song, and one it can write.
+    let mut png = a.png.as_deref().map(|p| Claimed::new(p, &a.dir)).transpose()?;
+    // The open app, only for what the range or --as-heard need, before the lock: a busy app holds
+    // up no other listen.
+    let app = Asked::of(&a.dir, a.bars.is_none(), a.as_heard);
     let _one = one_at_a_time()?;
-    let s = crate::reader(&dir)?;
+    let mut s = crate::reader(&a.dir)?;
     let rev = Arc::new(s.accepted().duplicate());
-    // The open app, when it has this song: its loop, and its mute and solo. Read, never written.
-    let app = app::holder(&dir).and_then(|_| app::looking(&dir).ok()).and_then(|a| a.looked("GET", "/api/graph", None).ok()).map(|v| v.1);
-    let range = range(&rev, flag(args, "--bars").as_deref(), app.as_ref(), &dir)?;
-    let as_heard = args.iter().any(|a| a == "--as-heard").then(|| listening(&rev, app.as_ref(), &dir));
-    let png = flag(args, "--png").map(PathBuf::from);
-    let tracks = flag(args, "--tracks").map(|t| t.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect());
-    let ask = Ask {
-        from: range.seconds.0,
-        to: range.seconds.1,
-        preroll: range.seconds.0 - range.preroll,
-        tracks,
-        overlays: as_heard.as_ref().map(|h| h.values.clone()),
-        picture: png.is_some(),
-        threads: Threads::Beside,
+    let range = range(&rev, a.bars.as_deref(), app.state(), &a.dir)?;
+    let heard_as = a.as_heard.then(|| listening(app.state(), &a.dir));
+    let overlays: Option<Overlaid> = heard_as.as_ref().map(|h| {
+        let set = h.set.clone();
+        Arc::new(move |rev: &Revision| values(rev, &set)) as Overlaid
+    });
+    let ask = |rev: &Revision| {
+        let span = span(rev, &range);
+        let ask = Ask {
+            from: span.from,
+            to: span.to,
+            preroll: span.from - span.start,
+            tracks: a.tracks.clone(),
+            overlays: overlays.clone(),
+            picture: png.is_some(),
+            threads: Threads::Beside,
+        };
+        (span, ask)
     };
-    let mut out = json!({"song": dir.canonicalize().unwrap_or(dir.clone()), "bars": [range.bars.0, range.bars.1], "beats": [range.beats.0, range.beats.1], "range": range.from});
-    let heard = match flag(args, "--with") {
+    let (span, first) = ask(&rev);
+    let mut out = json!({"song": a.dir.canonicalize().unwrap_or(a.dir.clone()), "bars": [range.bars.0, range.bars.1], "beats": [range.beats.0, range.beats.1], "range": range.from});
+    let (heard, preroll_bar) = match &a.with {
         None => {
-            let heard = listen::hear(rev, &s.packages, &ask)?;
+            let heard = listen::hear(rev, &s.packages, &first)?;
             merge(&mut out, heard.json());
-            heard
+            (heard, span.preroll_bar)
         }
         Some(file) => {
-            let candidate = checked(&dir, &file)?;
-            let before = listen::hear(rev, &s.packages, &ask)?;
-            let after = listen::hear(candidate, &s.packages, &ask)?;
+            // Checked on the session that read the song as it is: both share one base.
+            let candidate = checked(&mut s, file)?;
+            let (after_span, second) = ask(&candidate);
+            let before = listen::hear(rev, &s.packages, &first)?;
+            let after = listen::hear(candidate, &s.packages, &second)?;
             merge(&mut out, json!({"before": before.json(), "after": after.json(), "difference": listen::difference(&before, &after)}));
             for k in ["exact", "reproducible", "seconds"] {
                 out[k] = after.json()[k].clone();
             }
-            after
+            if (span.from - after_span.from).abs() > 5e-4 || (span.to - after_span.to).abs() > 5e-4 {
+                out["moved"] = json!(format!(
+                    "the change moves these bars from {:.3}-{:.3} s to {:.3}-{:.3} s: its tempo or meter changed, and both measure the same bars",
+                    span.from, span.to, after_span.from, after_span.to
+                ));
+            }
+            (after, after_span.preroll_bar)
         }
     };
     if !heard.exact {
         out["approximate"] = json!(format!(
-            "it started at bar {} with nothing playing, so notes held from before then and the tails of what played earlier are missing",
-            range.preroll_bar
+            "it started at bar {preroll_bar} with nothing playing, so notes held from before then and the tails of what played earlier are missing"
         ));
     }
-    out["as_heard"] = json!(as_heard.is_some());
-    if let Some(h) = &as_heard {
+    out["as_heard"] = json!(heard_as.is_some());
+    if let Some(h) = &heard_as {
         out["muted"] = json!(h.set.mute);
         out["soloed"] = json!(h.set.solo);
     }
-    if let Some(path) = &png {
+    out["app"] = app.said(a.bars.is_none(), a.as_heard).map_or(Value::Null, Value::from);
+    if let Asked::Answered(state) = &app {
+        out["unsaved_plugins"] = json!(unsaved_plugins(state));
+    }
+    if let Some(claimed) = &mut png {
         let blocks: Vec<&listen::Picture> = heard.pictures.iter().map(|p| &p.1).collect();
-        let drawn = listen::png::draw(&blocks, path)?;
+        let drawn = listen::png::draw(&blocks, &claimed.path)?;
+        claimed.done = true;
         out["png"] = json!({
-            "path": path,
+            "path": claimed.path,
             "blocks": heard.pictures.iter().map(|p| &p.0).collect::<Vec<_>>(),
             "columns": drawn.columns,
             "column_ms": 50 * drawn.merged,
@@ -98,12 +187,111 @@ pub fn listen(args: &[String]) -> Result<()> {
         });
     }
     out["priority"] = priority();
-    if args.iter().any(|a| a == "--json") {
+    if a.json {
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
-    words(&out, &heard, as_heard.as_ref(), flag(args, "--with").is_some());
+    words(&out, &heard, heard_as.as_ref(), a.with.is_some());
     Ok(())
+}
+
+/// The picture's path, claimed before anything renders: outside the song, in a folder that is
+/// there, and writable. A file made for it is taken away again unless the picture is drawn.
+struct Claimed {
+    path: PathBuf,
+    made: bool,
+    done: bool,
+}
+
+impl Claimed {
+    fn new(path: &Path, song: &Path) -> Result<Claimed> {
+        let said = path.display();
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let folder = parent.canonicalize().with_context(|| format!("--png {said}: its folder isn't there, so nothing was rendered"))?;
+        let song = song.canonicalize().with_context(|| format!("reading {}", song.display()))?;
+        if folder.starts_with(&song) {
+            bail!("--png {said} is in the song, and m2 listen writes nothing into the song: nothing was rendered. Name a path outside it");
+        }
+        let made = !path.exists();
+        File::options()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .with_context(|| format!("--png {said} can't be written, so nothing was rendered"))?;
+        Ok(Claimed { path: path.to_path_buf(), made, done: false })
+    }
+}
+
+impl Drop for Claimed {
+    fn drop(&mut self) {
+        if self.made && !self.done {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// The open app, as far as a listen asked it.
+enum Asked {
+    /// Not asked: it doesn't have the song open, or the listen needs nothing from it.
+    Not,
+    /// Its state, for this song.
+    Answered(Value),
+    /// It has the song open, but didn't answer in time or couldn't be reached: its pid.
+    Silent(u32),
+}
+
+impl Asked {
+    /// Ask the app that has the song at `dir` open, when the listen needs its loop (`range`) or
+    /// its mute and solo (`as_heard`), waiting no longer than [`PATIENCE`].
+    fn of(dir: &Path, range: bool, as_heard: bool) -> Asked {
+        if !range && !as_heard {
+            return Asked::Not;
+        }
+        let Some(holder) = app::holder(dir) else { return Asked::Not };
+        match app::looking_within(dir, &holder, PATIENCE) {
+            Ok(a) => Asked::Answered(a.state().clone()),
+            Err(_) => Asked::Silent(holder.pid),
+        }
+    }
+
+    fn state(&self) -> Option<&Value> {
+        match self {
+            Asked::Answered(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// What was read from the app, or instead of it, in words: None when it wasn't asked.
+    fn said(&self, range: bool, as_heard: bool) -> Option<String> {
+        let what = match (range, as_heard) {
+            (true, true) => "its loop and its listening mute and solo",
+            (true, false) => "its loop",
+            _ => "its listening mute and solo",
+        };
+        match self {
+            Asked::Not => None,
+            Asked::Answered(_) => Some(format!("music2 has this song open: {what} were read from it")),
+            Asked::Silent(pid) => Some(format!(
+                "music2 has this song open (pid {pid}) but didn't answer in {} s: {what} were read from the song's .music2 files instead, \
+                 which may not be what it plays",
+                PATIENCE.as_secs()
+            )),
+        }
+    }
+}
+
+/// The plugins whose window changed their sound, not saved yet, in the app's state: by their
+/// track's and their own names where the view names them, else their node's.
+fn unsaved_plugins(state: &Value) -> Vec<String> {
+    let named = |node: &str| -> Option<String> {
+        state["view"]["modules"].as_array()?.iter().find_map(|m| {
+            let n = m["nodes"].as_array()?.iter().find(|n| n["plugin"].as_str() == Some(node))?;
+            Some(format!("{}'s {}", m["label"].as_str()?, n["label"].as_str()?))
+        })
+    };
+    let Some(plugins) = state["plugins"].as_object() else { return vec![] };
+    plugins.iter().filter(|(_, p)| p["unsaved"] == json!(true)).map(|(node, _)| named(node).unwrap_or_else(|| node.clone())).collect()
 }
 
 /// One `m2 listen` at a time on this machine (AGENT-7): `~/.music2/listen.lock`, held while it
@@ -120,17 +308,17 @@ fn one_at_a_time() -> Result<File> {
     Ok(f)
 }
 
-/// What a listen renders: its bars (from 1), its beats and seconds, and where its preroll starts.
+/// What a listen renders, in music: its bars (from 1), its beats, and where it came from: `bars`,
+/// `loop` or `song`. Each revision turns it into seconds of its own ([`span`]).
 struct Range {
     bars: (u64, u64),
     beats: (f64, f64),
-    seconds: (f64, f64),
-    /// Where the render starts: the seconds, and the bar.
-    preroll: f64,
-    preroll_bar: u64,
-    /// Where the range came from: `bars`, `loop` or `song`.
     from: &'static str,
 }
+
+/// A song with no clips has no bars to listen to.
+const NO_CLIPS: &str = "the song has no clips, so it has no bars to listen to: m2 listen measures a song's bars up to the end of its last \
+                        clip, or the loop when one is on";
 
 /// The range `--bars` names, else the loop when one is on, else the whole song.
 fn range(rev: &Revision, bars: Option<&str>, app: Option<&Value>, dir: &Path) -> Result<Range> {
@@ -143,6 +331,7 @@ fn range(rev: &Revision, bars: Option<&str>, app: Option<&Value>, dir: &Path) ->
         count += 1;
     }
     let ((first, last), beats, from) = match bars {
+        Some(_) if count == 0 => bail!("{NO_CLIPS}"),
         Some(text) => {
             let bar = |s: &str| s.trim().parse::<u64>().ok().filter(|n| *n >= 1);
             let (a, b) = match text.split_once('-') {
@@ -164,20 +353,38 @@ fn range(rev: &Revision, bars: Option<&str>, app: Option<&Value>, dir: &Path) ->
                 let bar = |beat: f64| arr.bar_at(beat).0 + 1;
                 ((bar(start), bar((stop - 1e-9).max(start))), (start, stop), "loop")
             }
-            None if count == 0 => bail!("the song has no clips to listen to: name bars, as --bars 1-4"),
+            None if count == 0 => bail!("{NO_CLIPS}"),
             None => ((1, count), (0.0, end), "song"),
         },
     };
-    let tempo = data.tempo();
+    Ok(Range { bars: (first, last), beats, from })
+}
+
+/// A range in one revision's seconds: where its render starts (its preroll), and the range.
+struct Span {
+    start: f64,
+    from: f64,
+    to: f64,
+    preroll_bar: u64,
+}
+
+/// `r` in `rev`'s own tempo and meter: bars named are those bars of it, and a loop or the whole
+/// song the same beats.
+fn span(rev: &Revision, r: &Range) -> Span {
+    let data = &rev.compiled.data;
+    let arr = &data.arrangement;
+    let (beats, first) = match r.from {
+        "bars" => ((bar_start(arr, r.bars.0 - 1), bar_start(arr, r.bars.1)), r.bars.0),
+        _ => (r.beats, arr.bar_at(r.beats.0).0 + 1),
+    };
     let preroll_bar = first.saturating_sub(PREROLL_BARS).max(1);
-    Ok(Range {
-        bars: (first, last),
-        beats,
-        seconds: (tempo.seconds_at(beats.0), tempo.seconds_at(beats.1)),
-        preroll: tempo.seconds_at(bar_start(arr, preroll_bar - 1)),
+    let tempo = data.tempo();
+    Span {
+        start: tempo.seconds_at(bar_start(arr, preroll_bar - 1)),
+        from: tempo.seconds_at(beats.0),
+        to: tempo.seconds_at(beats.1),
         preroll_bar,
-        from,
-    })
+    }
 }
 
 /// The loop's beats when one is on: the open app's, else the one `.music2/view.json` keeps.
@@ -195,31 +402,36 @@ fn looped(app: Option<&Value>, dir: &Path) -> Option<(f64, f64)> {
     (on && end > start).then_some((start, end))
 }
 
-/// The listening mute and solo, and each overlay site's value they give (MON-3).
+/// The listening mute and solo, and where they were read.
 struct Listening {
     set: Overlays,
-    values: Vec<f32>,
+    /// From the open app; else `.music2/overlays.json`.
+    from_app: bool,
 }
 
 /// The listening mute and solo: the open app's, else `.music2/overlays.json`'s.
-fn listening(rev: &Revision, app: Option<&Value>, dir: &Path) -> Listening {
-    let set = match app {
+fn listening(app: Option<&Value>, dir: &Path) -> Listening {
+    match app {
         Some(state) => {
             let keys =
                 |k: &str| state["overlays"][k].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-            Overlays { mute: keys("mute"), solo: keys("solo") }
+            Listening { set: Overlays { mute: keys("mute"), solo: keys("solo") }, from_app: true }
         }
-        None => overlay::read(dir),
-    };
-    let flat = &rev.compiled.flat;
-    let sites: Vec<overlay::Site> = flat.overlays.iter().map(|s| (s.module.clone(), s.into.clone())).collect();
-    let values = overlay::values(&sites, &flat.routes, &set, &flat.muted, &overlay::tracks(rev));
-    Listening { set, values }
+        None => Listening { set: overlay::read(dir), from_app: false },
+    }
 }
 
-/// The candidate of the Tx in `file`, checked on a read-only session of the song at `dir` and
-/// written nowhere (AGENT-7). A Tx that doesn't read or apply is refused, as `m2 tx --check` would.
-fn checked(dir: &Path, file: &str) -> Result<Arc<Revision>> {
+/// Each overlay site's value in `rev` that the mute and solo `set` give, by its tracks' keys (MON-3).
+fn values(rev: &Revision, set: &Overlays) -> Vec<f32> {
+    let flat = &rev.compiled.flat;
+    let sites: Vec<overlay::Site> = flat.overlays.iter().map(|s| (s.module.clone(), s.into.clone())).collect();
+    overlay::values(&sites, &flat.routes, set, &flat.muted, &overlay::tracks(rev))
+}
+
+/// The candidate of the Tx in `file`, checked on `s`, the read-only session that read the song as
+/// it is, and written nowhere (AGENT-7). A Tx that doesn't read or apply is refused, as
+/// `m2 tx --check` would.
+fn checked(s: &mut Session, file: &str) -> Result<Arc<Revision>> {
     let mut tx = match crate::read_tx(file)? {
         Ok(tx) => tx,
         Err(d) => {
@@ -227,8 +439,7 @@ fn checked(dir: &Path, file: &str) -> Result<Arc<Revision>> {
             bail!("--with {file} isn't a Tx: nothing was rendered: {r}")
         }
     };
-    let mut s = Session::open_read_only(dir, crate::packages()?).map_err(report)?;
-    crate::text_bases(&s, &mut tx);
+    crate::text_bases(s, &mut tx);
     let c = s.check(&tx).map_err(|r| anyhow::anyhow!("--with {file}: nothing was rendered: {r}"))?;
     Ok(Arc::new(c.candidate().duplicate()))
 }
@@ -266,6 +477,9 @@ fn words(out: &Value, heard: &Heard, as_heard: Option<&Listening>, with: bool) {
     if let Some(words) = out["approximate"].as_str() {
         println!("approximate: {words}");
     }
+    if let Some(words) = out["app"].as_str() {
+        println!("app: {words}");
+    }
     if let Some(h) = as_heard {
         let mut how = vec![];
         if !h.set.mute.is_empty() {
@@ -275,10 +489,21 @@ fn words(out: &Value, heard: &Heard, as_heard: Option<&Listening>, with: bool) {
             how.push(format!("soloed {}", h.set.solo.iter().cloned().collect::<Vec<_>>().join(", ")));
         }
         let how = if how.is_empty() { "nothing muted or soloed".to_string() } else { how.join("; ") };
-        println!("as you hear it: {how}");
+        let source = if h.from_app { "" } else { " (as .music2/overlays.json keeps it)" };
+        println!("as you hear it{source}: {how}");
+    }
+    let unsaved: Vec<&str> = out["unsaved_plugins"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if !unsaved.is_empty() {
+        println!(
+            "unsaved: {} changed in its window and not saved yet: this listen hears the saved state, not what plays in the app",
+            unsaved.join(", ")
+        );
     }
     if with {
         println!("with the change (--with), checked and never written: as it would be after it");
+        if let Some(moved) = out["moved"].as_str() {
+            println!("moved: {moved}");
+        }
     }
     println!("{}", heard.words());
     if with {
@@ -291,4 +516,43 @@ fn words(out: &Value, heard: &Heard, as_heard: Option<&Listening>, with: bool) {
         "These are measures, not listening. To hear them, point at the bars (m2 point <song> bars:{a}-{b} \"…\") and ask the musician \
          to play them; after a change, they press V to hear before and after."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The review of ag-listen, F12: the song, then flags it knows, each once, a value after each
+    // that takes one; --tracks keeps each key once.
+    #[test]
+    fn the_arguments_are_what_m2_listen_knows() {
+        let of = |s: &str| args(&s.split(' ').map(str::to_string).collect::<Vec<_>>());
+        let a = of("listen song --bars 2-3 --tracks kick,bass,kick --as-heard --json").unwrap();
+        assert_eq!((a.dir, a.bars.as_deref(), a.tracks), (PathBuf::from("song"), Some("2-3"), Some(vec!["kick".into(), "bass".into()])));
+        assert!(a.as_heard && a.json && a.with.is_none() && a.png.is_none());
+        for (bad, says) in [
+            ("listen song --bras 1-2", "--bras"),
+            ("listen song --track kick", "--track"),
+            ("listen song --bars 2 --png --json", "--png needs a value"),
+            ("listen song --png", "--png needs a value"),
+            ("listen song --bars 1 --bars 2", "named twice"),
+            ("listen song other", "one song"),
+            ("listen --json", "m2 listen <project>"),
+        ] {
+            let e = of(bad).err().map(|e| e.to_string()).unwrap_or_default();
+            assert!(e.contains(says), "{bad}: {e}");
+        }
+    }
+
+    // The review of ag-listen, F17: the plugins whose window changed their sound, not saved yet, as
+    // the app's state says, by their names in the view.
+    #[test]
+    fn the_unsaved_plugins_are_named() {
+        let state = json!({
+            "plugins": {"p/n2": {"window": "open", "latched": [], "unsaved": true}, "q/n1": {"window": "closed", "latched": [], "unsaved": false}},
+            "view": {"modules": [{"label": "Lead", "nodes": [{"label": "Probe", "plugin": "p/n2"}]}]},
+        });
+        assert_eq!(unsaved_plugins(&state), ["Lead's Probe"]);
+        assert_eq!(unsaved_plugins(&json!({})), Vec::<String>::new());
+    }
 }

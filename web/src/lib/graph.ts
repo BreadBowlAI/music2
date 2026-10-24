@@ -67,10 +67,11 @@ export interface ViewNode {
   plugin?: string;
 }
 
-/** A plugin's box (HOST-7, MON-6): its own window, and the parameters a gesture in it latched. */
+/** A plugin's box (HOST-7, MON-6): its own window, the parameters a gesture in it latched, and whether its window changed its sound, not saved yet (AGENT-3). */
 export interface PluginBox {
   window: "open" | "closed" | "none";
   latched: { id: number; name: string; value: number }[];
+  unsaved: boolean;
 }
 
 /** What flows through a port. */

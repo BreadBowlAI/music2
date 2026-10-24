@@ -151,16 +151,44 @@ fn pink_noise_has_flat_octave_bands() {
     }
 }
 
-/// A track's octave bands, as it reaches the mix: `parts` (Hz, dBFS) of sines, the same on both
-/// sides.
-fn track(parts: &[(f64, f64)]) -> [Option<f64>; 10] {
-    let mut x = vec![0.0f32; 4 * SR as usize];
+/// `parts` (Hz, dBFS) of sines summed, `seconds` long.
+fn sines(parts: &[(f64, f64)], seconds: f64) -> Vec<f32> {
+    let mut x = vec![0.0f32; (seconds * SR as f64).round() as usize];
     for &(hz, db) in parts {
-        for (s, v) in x.iter_mut().zip(sine(hz, db, 4.0, 0.0)) {
+        for (s, v) in x.iter_mut().zip(sine(hz, db, seconds, 0.0)) {
             *s += v;
         }
     }
-    measure(&x, &x, Wants { bands: true, ..Wants::default() }).bands.expect("bands")
+    x
+}
+
+/// A signal's moments, the same on both sides: a track as it reaches the mix. The meter is warmed
+/// with `warm` first, as a listen warms it with what comes before its range.
+fn warmed(warm: &[f32], x: &[f32]) -> Vec<Moment> {
+    let mut m = Meter::new(SR, Wants { bands: true, moments: true, ..Wants::default() });
+    m.warm(warm, warm);
+    for piece in x.chunks(4096) {
+        m.push(piece, piece);
+    }
+    m.moments().expect("moments").to_vec()
+}
+
+/// A signal's moments, from silence.
+fn moments(x: &[f32]) -> Vec<Moment> {
+    warmed(&[], x)
+}
+
+/// A track of `parts` (Hz, dBFS) of sines that sound through 4 s, moment by moment.
+fn track(parts: &[(f64, f64)]) -> Vec<Moment> {
+    let x = sines(parts, 5.0);
+    let (warm, range) = x.split_at(SR as usize);
+    warmed(warm, range)
+}
+
+/// [`masking`] of tracks by key.
+fn masked(tracks: &[(&str, &Vec<Moment>)]) -> Vec<Masked> {
+    let heard: Vec<(&str, &[Moment])> = tracks.iter().map(|(k, m)| (*k, m.as_slice())).collect();
+    masking(&heard)
 }
 
 // Masking: in a band, the tracks as they reach the mix within 6 dB of that band's loudest track
@@ -169,19 +197,96 @@ fn track(parts: &[(f64, f64)]) -> [Option<f64>; 10] {
 #[test]
 fn two_tracks_in_one_band_are_named_as_masking() {
     let (bass, kick, hats) = (track(&[(63.0, -12.0)]), track(&[(58.0, -15.0)]), track(&[(8_000.0, -20.0)]));
-    let found = masking(&[("hats", hats), ("kick", kick), ("bass", bass)]);
+    let found = masked(&[("hats", &hats), ("kick", &kick), ("bass", &bass)]);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!((found[0].hz, &found[0].tracks), (63.0, &vec!["bass".to_string(), "kick".to_string()]), "{found:?}");
     assert!(found[0].db[0] > found[0].db[1] && found[0].db[0] - found[0].db[1] <= 6.0, "{found:?}");
+    // They sound together all the time.
+    assert!(found[0].share > 0.99, "{found:?}");
 }
 
 // A track turned down in the mix, more than 6 dB under the band's loudest, masks nothing there.
 #[test]
 fn a_track_turned_down_in_the_mix_masks_nothing() {
     let (bass, kick) = (track(&[(63.0, -12.0)]), track(&[(58.0, -24.0)]));
-    assert_eq!(masking(&[("kick", kick), ("bass", bass)]), vec![]);
+    assert_eq!(masked(&[("kick", &kick), ("bass", &bass)]), vec![]);
     // Nor does a band no track is heard in: two near-silent tracks.
-    assert_eq!(masking(&[("a", track(&[(1000.0, -80.0)])), ("b", track(&[(1000.0, -81.0)]))]), vec![]);
+    assert_eq!(masked(&[("a", &track(&[(1000.0, -80.0)])), ("b", &track(&[(1000.0, -81.0)]))]), vec![]);
+}
+
+// The review of ag-listen, F3: a loud track's leak into the band beside its own never decides that
+// band's loudest. A kick at 60 Hz is loud at 63 Hz and leaks into 125 Hz; a bass at 125 Hz and keys
+// at 135 Hz, level with each other there, mask each other.
+#[test]
+fn a_loud_tracks_leak_never_hides_a_clash_beside_it() {
+    let (kick, bass, keys) = (track(&[(60.0, -3.0)]), track(&[(125.0, -25.0)]), track(&[(135.0, -25.5)]));
+    let found = masked(&[("kick", &kick), ("bass", &bass), ("keys", &keys)]);
+    let at = |hz: f64| found.iter().filter(|m| m.hz == hz).map(|m| m.tracks.clone()).collect::<Vec<_>>();
+    assert_eq!(at(125.0), vec![vec!["bass".to_string(), "keys".to_string()]], "{found:?}");
+    assert!(found.iter().all(|m| !m.tracks.contains(&"kick".to_string())), "the kick is alone at 63 Hz: {found:?}");
+}
+
+// The review of ag-listen, F4: two tracks that take turns, a second each, never sound at once, so
+// they never mask each other, though their bands over the whole range are level. Where they do
+// sound together they mask each other for as long as they do: here half the range.
+#[test]
+fn tracks_that_take_turns_never_mask_each_other() {
+    let tone = sines(&[(63.0, -12.0), (126.0, -18.0)], 1.0);
+    let quiet = vec![0.0f32; tone.len()];
+    let turns =
+        |first: bool| -> Vec<f32> { (0..8).flat_map(|i| if (i % 2 == 0) == first { tone.clone() } else { quiet.clone() }).collect() };
+    let (a, b) = (moments(&turns(true)), moments(&turns(false)));
+    assert_eq!(masked(&[("a", &a), ("b", &b)]), vec![], "they take turns");
+    // b also sounds in a's first two turns: they meet a quarter of the range.
+    let mut met = turns(false);
+    met[..tone.len()].copy_from_slice(&tone);
+    met[2 * tone.len()..3 * tone.len()].copy_from_slice(&tone);
+    let found = masked(&[("a", &a), ("b", &moments(&met))]);
+    let low = found.iter().find(|m| m.hz == 63.0).unwrap_or_else(|| panic!("at 63 Hz: {found:?}"));
+    assert!((low.share - 0.25).abs() < 0.03, "a quarter of the range: {found:?}");
+}
+
+// The review of ag-listen, F4: a bass ducked under each kick hit, the musician's fix for a kick and
+// a bass in one band, masks it only where they meet: not while the kick hits and the bass is
+// ducked, nor once the kick has died away. Over the whole range their 63 Hz bands are level (the
+// kick -17 dBFS, the bass -19), and in 400 ms they would meet in every beat.
+#[test]
+fn a_bass_ducked_under_each_kick_masks_it_only_where_they_meet() {
+    let (beat, n) = (SR as usize / 2, 16);
+    let mut kick = vec![0.0f32; beat * n];
+    let mut bass = vec![0.0f32; beat * n];
+    let (k, b) = (sine(60.0, 0.0, 0.5, 0.0), sine(55.0, -15.0, 8.0, 0.0));
+    for i in 0..beat * n {
+        let t = (i % beat) as f64 / SR as f64;
+        // The kick dies away over its beat; the bass is ducked 15 dB while the kick is loud.
+        kick[i] = k[i % beat] * (-t / 0.04).exp() as f32;
+        let duck = if t < 0.12 { 10f64.powf(-15.0 / 20.0) } else { 1.0 };
+        bass[i] = b[i] * duck as f32;
+    }
+    let (kick, bass) = (moments(&kick), moments(&bass));
+    let level = |m: &[Moment]| 10.0 * (m.iter().map(|x| x.bands[1] as f64).sum::<f64>() / m.len() as f64).log10();
+    assert!((level(&kick) - level(&bass)).abs() < 6.0, "level over the range: {} and {}", level(&kick), level(&bass));
+    let found = masked(&[("kick", &kick), ("bass", &bass)]);
+    let low = found.iter().find(|m| m.hz == 63.0).map_or(0.0, |m| m.share);
+    assert!(low < 0.3, "they meet only as the duck lets go: {found:?}");
+}
+
+// The review of ag-listen, F10: what a track has in a band is its masking there, however far under
+// its loudest band: a dark bass's low-mid harmonics mask a pad level with them at 250 Hz.
+#[test]
+fn a_dark_bass_and_a_pad_level_in_the_low_mids_mask_each_other() {
+    let n = 4 * SR as usize;
+    let tone: Vec<f64> = (0..n)
+        .map(|i| (1..=40).map(|k| (std::f64::consts::TAU * 55.0 * k as f64 * i as f64 / SR as f64).sin() / (k * k) as f64).sum())
+        .collect();
+    let top = tone.iter().fold(0.0f64, |m, s| m.max(s.abs()));
+    let bass: Vec<f32> = tone.iter().map(|s| (s / top * 0.5) as f32).collect();
+    let bass = moments(&bass);
+    // The bass's level at 250 Hz, and a pad's sine there as loud.
+    let at250 = 10.0 * (bass.iter().map(|m| m.bands[3] as f64).sum::<f64>() / bass.len() as f64).log10();
+    let pad = track(&[(250.0, at250 + 3.01)]);
+    let found = masked(&[("bass", &bass), ("pad", &pad)]);
+    assert!(found.iter().any(|m| m.hz == 250.0), "bass and pad at 250 Hz: {found:?}");
 }
 
 // Stereo: the same signal on both sides correlates 1, with no side and mono lows; one side inverted
@@ -219,4 +324,51 @@ fn k_weighting_at_48_khz_is_bs_1770s_table() {
             assert!((got - want).abs() < 1e-8, "{got} against the table's {want}");
         }
     }
+}
+
+// The review of ag-listen, F1: a range that starts while a sound is loud reads it as it is, not as
+// a step from silence. A meter warmed with the second before the range reads a sine at -1 dBFS,
+// read from its peak on, at -1.0 dBTP, as the whole signal reads; cold, its first samples are a
+// step whose peaks between samples aren't the sine's.
+#[test]
+fn a_meter_warmed_before_the_range_reads_no_step_from_silence() {
+    for (hz, dbfs) in [(1_000.0, -1.0), (60.0, -1.0), (1_000.0, -0.3)] {
+        let x = sine(hz, dbfs, 3.0, std::f64::consts::FRAC_PI_2);
+        let (before, range) = x.split_at(SR as usize);
+        let mut m = Meter::new(SR, Wants { bands: true, stereo: true, moments: true, ..Wants::default() });
+        m.warm(before, before);
+        for piece in range.chunks(4096) {
+            m.push(piece, piece);
+        }
+        let warm = m.measures();
+        let whole = both(&faded(x.clone()));
+        near(warm.true_peak, dbfs, 0.02, &format!("{hz} Hz at {dbfs} dBFS, its true peak"));
+        near(warm.lufs, whole.lufs.unwrap(), 0.05, &format!("{hz} Hz, its loudness"));
+        // Its band, as a steady sine has it all along: its mean square, 3 dB under its peak.
+        let band = warm.bands.unwrap()[if hz < 100.0 { 1 } else { 5 }];
+        near(band, dbfs - 3.01, 0.05, &format!("{hz} Hz, its band"));
+        // Nothing of the warming is counted: the moments are the range's.
+        assert_eq!(m.moments().unwrap().len(), (2.0 / MOMENT).round() as usize, "the range's moments");
+    }
+}
+
+// The review of ag-listen, F14: a sample that isn't a number (NaN, infinity) is counted, each side,
+// and read as 0, as the render's output reads one: everything else measures what a 0 there gives,
+// and one bad sample in 5 s changes the loudness by nothing to speak of.
+#[test]
+fn a_sample_that_isnt_a_number_is_counted_and_read_as_zero() {
+    let clean = sine(1000.0, -6.0, 5.0, 0.0);
+    let wants = Wants { bands: true, stereo: true, picture: false, moments: true };
+    let mut zeroed = clean.clone();
+    zeroed[1000] = 0.0;
+    let want = measure(&zeroed, &zeroed, wants);
+    near(want.lufs, measure(&clean, &clean, wants).lufs.unwrap(), 0.01, "one 0 in 5 s");
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut x = clean.clone();
+        x[1000] = bad;
+        let m = measure(&x, &x, wants);
+        assert_eq!(m.non_finite, 2, "{bad}: each side");
+        assert_eq!(Measures { non_finite: 0, ..m }, want, "{bad}: read as 0");
+    }
+    assert_eq!(want.non_finite, 0);
 }

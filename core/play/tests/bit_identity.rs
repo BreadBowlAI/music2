@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use common::*;
 use m2_play::Player;
-use m2_runtime::{BLOCK, Cmd, Continues, LaneSwap, PlanInfo, Pool, Renderer, Runner, Stats, TapAt, notes_data};
+use m2_runtime::{BLOCK, Cmd, Continues, Copying, LaneSwap, PlanInfo, Pool, Renderer, Runner, Stats, TapAt, notes_data};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -83,12 +83,11 @@ fn copy_taps_change_no_bit() {
         at.extend((0..song.flat.overlays.len()).map(TapAt::Site));
         let audio = |i: usize| matches!(song.flat.nodes[i].outputs.first(), Some(m2_ir::Kind::Audio(_)));
         at.extend((0..song.flat.nodes.len()).filter(|&i| audio(i)).map(TapAt::Node));
-        let mut r = song.renderer();
-        r.copy_taps(&at, 0).unwrap();
+        let mut r = Copying::new(song.renderer(), &at, 0).unwrap();
         let (mut tapped, mut copied) = (vec![[0.0f32; 2]; frames], vec![]);
         for chunk in tapped.chunks_mut(4096) {
-            r.process(chunk).unwrap();
-            let c = r.copies().unwrap_or_else(|| panic!("{name}: copies"));
+            r.process_on(chunk, &mut Runner::one()).unwrap();
+            let c = r.copies();
             assert_eq!(c.taps(), at.len(), "{name}: every tap");
             for k in 0..c.blocks().len() {
                 assert_eq!(c.blocks()[k], (copied.len() / BLOCK * BLOCK) as u64, "{name}: block {k} in order");

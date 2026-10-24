@@ -369,6 +369,37 @@ pub fn fader(rev: &Revision, m: &Mixer, key: &str) -> Option<usize> {
     kernel_in(frame)
 }
 
+/// What enters channel `key`'s strip in the song's mixer `m`: the flat node whose sound its pan
+/// reads, else its fader (its first output). What an agent's listen reads as a bus's own sound,
+/// before its channel, when no overlay site carries it (a group bus that passes its input on).
+pub fn strip_input(rev: &Revision, m: &Mixer, key: &str) -> Option<usize> {
+    let flat = &rev.compiled.flat;
+    let song = rev.compiled.ir.modules.iter().find(|x| x.key == ROOT)?;
+    let ir: HashMap<&str, &m2_ir::Node> = song.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    // The sound a kernel reads, from its first audio input.
+    let heard = |i: usize| match &flat.nodes[i].op {
+        FOp::Kernel { inputs, .. } => inputs.iter().find_map(|x| match x {
+            Input::Port { src, .. } if matches!(flat.nodes[src.node].outputs.get(src.port), Some(Kind::Audio(_))) => Some(*src),
+            _ => None,
+        }),
+        _ => None,
+    };
+    // A pan the mixer made: a kernel of a `std:pan` frame inside it.
+    let pan = |i: usize| {
+        let n = &flat.nodes[i];
+        let id = n.name.strip_prefix(ROOT).and_then(|x| x.strip_prefix('/'));
+        let frame = (n.module == ROOT).then(|| id.and_then(|id| ir.get(id)).and_then(|n| n.frame)).flatten();
+        frame
+            .and_then(|f| song.frames.get(f as usize))
+            .is_some_and(|fr| fr.component.as_deref() == Some("std:pan") && fr.parent == Some(m.frame))
+    };
+    let mut src = heard(fader(rev, m, key)?)?;
+    if pan(src.node) {
+        src = heard(src.node)?;
+    }
+    (src.port == 0).then_some(src.node)
+}
+
 impl Mixer {
     /// The channel track `module` goes into, when it is exactly one.
     pub fn channel_of(&self, module: &str) -> Option<&Channel> {

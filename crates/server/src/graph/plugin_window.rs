@@ -394,7 +394,9 @@ impl Actor {
         Ok(())
     }
 
-    /// The graph state's `plugins`: each plugin node's window, and its latched parameters.
+    /// The graph state's `plugins`: each plugin node's window, its latched parameters, and whether
+    /// its window changed its sound, not saved yet (`unsaved`, AGENT-3; an agent's listen hears the
+    /// saved state, and says so, AGENT-7).
     pub(super) fn publish_plugins(&mut self) {
         let Some(o) = self.open.as_ref() else {
             *self.inner.plugins.lock() = json!({});
@@ -421,7 +423,8 @@ impl Actor {
                 .filter(|(_, f, _)| f & LATCHED != 0)
                 .map(|(id, _, value)| json!({"id": id, "name": param_name(o, p, at.node, id), "value": value}))
                 .collect();
-            out.insert(n.name.clone(), json!({"window": window, "latched": latched}));
+            let unsaved = o.windows.unsaved().contains(&at.handle);
+            out.insert(n.name.clone(), json!({"window": window, "latched": latched, "unsaved": unsaved}));
         }
         // A window or a latch changed: the watcher tells the windows to read the state again.
         let out = Value::Object(out);

@@ -124,11 +124,11 @@ fn copy_taps_copy_each_block_from_the_frame_asked() {
     let f = flat(&ir);
     let kick = f.overlays.iter().position(|s| s.module == "kick").unwrap();
     let bass = f.nodes.iter().position(|n| n.name == "bass/o").unwrap();
-    let mut r = offline(&ir);
-    r.copy_taps(&[TapAt::Site(kick), TapAt::Node(bass), TapAt::Out], 3 * BLOCK as u64 + 5).unwrap();
-    let out = blocks(&mut r, 6);
+    let mut r = Copying::new(offline(&ir), &[TapAt::Site(kick), TapAt::Node(bass), TapAt::Out], 3 * BLOCK as u64 + 5).unwrap();
+    let mut out = vec![[0.0f32; 2]; 6 * BLOCK];
+    r.process_on(&mut out, &mut Runner::one()).unwrap();
     let (k, b) = (blocks(&mut offline(&two(false, Some("kick"))), 6), blocks(&mut offline(&two(false, Some("bass"))), 6));
-    let c = r.copies().expect("copies");
+    let c = r.copies();
     let starts: Vec<u64> = (3..6).map(|n| (n * BLOCK) as u64).collect();
     assert_eq!(c.blocks(), &starts[..], "from the block that holds the frame asked");
     assert_eq!((c.taps(), c.channels(0), c.channels(1), c.channels(2)), (3, 1, 1, 2));
@@ -151,10 +151,10 @@ fn copy_taps_copy_each_block_from_the_frame_asked() {
 #[test]
 fn copy_taps_are_offline_only() {
     let ir = two(false, None);
-    assert!(prepared(&ir).copy_taps(&[TapAt::Out], 0).is_err(), "a live plan");
+    assert!(Copying::new(prepared(&ir), &[TapAt::Out], 0).is_err(), "a live plan");
     let f = flat(&ir);
     let constant = f.nodes.iter().position(|n| n.name == "bass/t").unwrap();
-    assert!(offline(&ir).copy_taps(&[TapAt::Node(constant)], 0).is_err(), "a constant is no sound");
-    assert!(offline(&ir).copy_taps(&[TapAt::Site(f.overlays.len())], 0).is_err(), "no such site");
-    assert!(offline(&ir).copy_taps(&[TapAt::Node(f.nodes.len())], 0).is_err(), "no such node");
+    assert!(Copying::new(offline(&ir), &[TapAt::Node(constant)], 0).is_err(), "a constant is no sound");
+    assert!(Copying::new(offline(&ir), &[TapAt::Site(f.overlays.len())], 0).is_err(), "no such site");
+    assert!(Copying::new(offline(&ir), &[TapAt::Node(f.nodes.len())], 0).is_err(), "no such node");
 }
