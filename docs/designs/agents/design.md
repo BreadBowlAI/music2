@@ -16,7 +16,8 @@
 - The app tells you and an agent apart by key: the page has its own, and agents use the one in
   `session.json`. Agents can't play, record, solo, move your view or open plugin windows (D6).
 - You see each change as it lands: a quiet notice with Undo, and a glow on what changed. Press V to flip the
-  newest change off and on, to hear before and after (D2). While you compare, agents wait.
+  newest change off and on, to hear before and after (D2). Compare only plays: it never writes the song.
+  While you compare, agents wait.
 - The agent can see what you look at (`m2 focus`), follow what happens (`m2 watch`), point at things to
   teach (`m2 point`), and measure the sound (`m2 listen`).
 - Listening is an offline render in its own low-priority process. A new gate counts dropouts while it and
@@ -531,7 +532,7 @@ Not for agents, so not marked `agents`: the knob, lane and tempo lease routes an
 plugin windows and latches (`routes_8b.rs:36-37`); auditions and the inject routes (`routes_8b.rs:34-35`,
 `routes_record.rs:32`); redo (`routes.rs:82`); naming steps (`/api/graph/step`, `routes_settings.rs:25`);
 settings (`routes_settings.rs:23`); the code editor's save and unsaved list (`routes.rs:88`, `:90`: agents
-use `m2 edit`, which is a Tx); posting focus and closing Compare (5.9, 5.12), and `compare: true` on undo;
+use `m2 edit`, which is a Tx); posting focus and Compare (5.9, 5.12);
 opening, closing, making, Save As and renaming songs; and Retry (`routes.rs:78`). Every GET is for agents,
 and so is the WebSocket, for reading (`m2 watch`): what a socket with the tools key sends (an audition, the
 MIDI target, `routes_8b.rs:225-263`) is ignored.
@@ -582,8 +583,8 @@ first. The WebSocket client is `tungstenite` 0.29.0, already in `Cargo.lock`.
 | `t` | Made by | Says |
 |---|---|---|
 | `step` | new (5.6) | a change landed: its id, who, why, files, tracks, lanes, knobs |
-| `undo`, `redo` | new, from the undo and redo routes | which step went or came back, its source, and `compare` when V did it |
-| `compare` | new (5.12) | the Compare pill closed |
+| `undo`, `redo` | new, from the undo and redo routes | which step went or came back, and its source |
+| `compare` | new (5.12) | the Compare pill opened, flipped or closed: its step, Before or After, and why it closed |
 | `graph` | today (`lib.rs:181-188`) | the revision, problems, diagnostics, leases |
 | `focus` | new (5.9) | the musician's focus |
 | `point` | new (5.13) | a pointer shown or cleared |
@@ -591,9 +592,10 @@ first. The WebSocket client is `tungstenite` 0.29.0, already in `Cargo.lock`.
 | `lagged` | new | the socket fell behind and missed this many events: read the song again |
 | `transport` | `m2` itself | `playing`, `beat`, `loop`, when playing or the loop changes, or the playhead jumps |
 | `meters` | today, only with `--meters` | about 30 a second |
-| `closed` | `m2` itself | the app went away; then `m2 watch` exits 0 |
+| `watch` | `m2` itself | first: the session of the song it follows |
+| `closed` | `m2` itself | the app went away (`why: app`), or it opened another song or closed this one (`why: song`); then `m2 watch` exits 0 |
 
-Two small server changes. Today a toast is kept only while no socket at all is open, and the next socket to
+Every event says the session of the song it is about (null when no song is open), so an agent never takes another song's event for its own. Two small server changes. Today a toast is kept only while no socket at all is open, and the next socket to
 connect takes every kept toast (`lib.rs:162-176`). Now a socket opened with the tools key takes none, and a
 toast is kept until a page's socket hears it, so `m2 watch` never hides a toast from the musician. And a socket
 that falls behind (tokio's `Lagged`, dropped without a word today, `routes.rs:216`) is sent `lagged`.
@@ -659,29 +661,39 @@ buffers, so a test checks every pure fixture renders the same bits with and with
 
 V, for "versus". The page's single keys are taken by c, a, e, x, b, m, s, z, k and r
 (`web/src/App.tsx:69`); V is free.
-- When the newest step isn't yours (an agent's or an outside one), V sends `POST /api/graph/undo` with
-  `{session, step, compare: true}`. The server undoes it and keeps `comparing = step`, in memory, beside the
-  focus record. The pill says "Before: Claude: brighter hats". V again sends redo with the same step: "After".
-- While `comparing` is set, every agent write is busy (AGENT-3), so no agent step can clear redo and take
-  "After" away.
-- Esc, or any other action, closes the pill and keeps what plays: the page sends `POST /api/graph/compare`
-  `{session, open: false}`, and any other write with the page key, or the page's socket closing, ends it too. If it
-  closes on Before, the change stays undone, and Redo still has it until the next change.
-- A file written directly can still land while you compare (5.3). Any outside batch the app takes in ends
-  `comparing` (an outside step also clears redo), and the pill closes, saying "a file changed outside the app".
-- Each flip is an undo or redo sent with the page key, so it is previewed when its step is judged. An agent's
-  step from an `m2` command is judged (5.2): a data change is heard within 20 ms (PLANE-5). An outside step,
-  or one from `m2 tx --seen`, is raw: it is heard at its settle, after it is written, as a save's undo is. A
-  code change is heard after its compile, through an activation that keeps every instance (RENDER-25). None
-  glitches.
+- When the newest step isn't yours (an agent's or an outside one), V sends `POST /api/graph/compare`
+  `{session, step, before: true}`. The server builds Before in memory: the song with that step taken back (its
+  undo, checked and built, never written). The engine plays it, and the server keeps `comparing = step`, in
+  memory, beside the focus record. The pill says "Before: Claude: brighter hats". V again sends
+  `before: false`: "After", the song as it is.
+- Compare never writes the song. Its files, undo and the view stay at After all the while, so a quit or a
+  crash while Before plays leaves the song as it was, and an outside step (which may be your own save in
+  another editor) is never rewritten under that editor.
+- While `comparing` is set, every agent write is busy (AGENT-3), so no agent step can change what is compared.
+- Esc closes the pill and keeps what plays. On After nothing changes. On Before, the step is undone then: one
+  undo step of yours, which Redo brings back, and a notice says so ("Claude: brighter hats is undone", with
+  Redo). The page sends `POST /api/graph/compare` `{session, open: false, keep: true}`.
+- Anything else that ends it ends it at After, and writes nothing: any other action but listening (the page
+  sends `{session, open: false}`), any other write with the page key, an undo or a redo, the socket of the
+  window that opened it closing, the song closing or another opening.
+- A file written directly can still land while you compare (5.3). Any outside batch the app takes in ends it
+  at After, and the pill closes, saying "a file changed outside the app".
+- The page shows only what the server says: the `compare` event names the step, Before or After, and why it
+  closed, numbered so the newest wins. It sends one V at a time, and a held V's repeats are ignored. A V that
+  names a stale step is refused, and changes nothing.
+- Each flip is heard as an edit is: Before and After differ by a step's delta, so a data change is lane
+  swaps, heard within 20 ms, and a code change is heard after Before's compile, through an activation that
+  keeps every instance (RENDER-25). None glitches.
 
 ### 5.13 `m2 point`
 
 `m2 point <song> <target> "<words>"`, or `--clear`. A target is `track:bass`, `clip:bass/notes:c3`,
 `lane:bass/cutoff`, `knob:<id>` or `bars:9-16`. The words are plain text, at most 80 characters (AGENT-10).
-It sends `POST /api/point`, which isn't a write. The page shows a small note at the target, with OK to
-dismiss it. It never scrolls, zooms or selects. When the target is off screen, the note waits at the edge
-with "Show", and only that click moves the view. One pointer at a time, memory only, and the `point` event
+It sends `POST /api/point`, which isn't a write. A target the song hasn't got is refused, and so are bars
+past its end, saying how long the song is. The page shows a small note at the target, with OK to dismiss it.
+It never scrolls, zooms or selects, and takes no press but its own buttons'. When the target is off screen,
+the note waits at the edge with "Show", and only that click moves the view; Show never selects. A knob of a
+track the dock doesn't show is named beside that track's header. One pointer at a time, memory only, and the `point` event
 tells `m2 watch`. This is how an agent says "listen to bars 9-16": it points, and you press play (AGENT-11).
 
 ## 6. Out of scope
