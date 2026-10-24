@@ -246,7 +246,10 @@ fn pixels(png: &[u8]) -> (usize, usize, Vec<Vec<[u8; 3]>>) {
 fn m2_listen_png_writes_a_band_picture() {
     let (temp, song, home) = first_song("listen-png");
     let out = temp.0.join("bands.png");
-    let v = json_of(&listen(&home, &[song.to_str().unwrap(), "--bars", "1-4", "--tracks", "kick,hats", "--png", out.to_str().unwrap(), "--json"]));
+    let v = json_of(&listen(
+        &home,
+        &[song.to_str().unwrap(), "--bars", "1-4", "--tracks", "kick,hats", "--png", out.to_str().unwrap(), "--json"],
+    ));
     let png = &v["png"];
     assert_eq!((&png["path"], &png["blocks"]), (&json!(out.to_str().unwrap()), &json!(["mix", "kick", "hats"])), "{v:#}");
     let columns = number(&png["columns"], "columns") as usize;

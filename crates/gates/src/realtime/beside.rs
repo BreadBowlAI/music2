@@ -99,9 +99,11 @@ pub fn start(dir: &Path, work: &Path) -> Result<Agents> {
         let (m2, home, song, stop) = (m2.clone(), home.clone(), song.clone(), stop.clone());
         std::thread::Builder::new().name("g13-listens".into()).spawn(move || {
             // What it says of its own priority, in its JSON: `"threads": "background"`.
-            agent(&stop, |_| command(&m2, &home, &["listen", &song, "--bars", BARS, "--json"]), |o| {
-                Some(String::from_utf8_lossy(&o.stdout).contains(r#""threads": "background""#))
-            })
+            agent(
+                &stop,
+                |_| command(&m2, &home, &["listen", &song, "--bars", BARS, "--json"]),
+                |o| Some(String::from_utf8_lossy(&o.stdout).contains(r#""threads": "background""#)),
+            )
         })?
     };
     let edits = {
@@ -175,7 +177,8 @@ impl Did {
         let ok: Vec<f64> = runs.iter().filter(|r| r.ok).map(|r| r.seconds).collect();
         let mean = ok.iter().sum::<f64>() / ok.len().max(1) as f64;
         let longest = ok.iter().copied().fold(0.0, f64::max);
-        let failed = runs.iter().find(|r| !r.ok).map(|r| format!("; {} failed, the first: {}", runs.iter().filter(|r| !r.ok).count(), r.said));
+        let failed =
+            runs.iter().find(|r| !r.ok).map(|r| format!("; {} failed, the first: {}", runs.iter().filter(|r| !r.ok).count(), r.said));
         format!("{} landed, {mean:.1} s each, the longest {longest:.1} s{}", ok.len(), failed.unwrap_or_default())
     }
 }

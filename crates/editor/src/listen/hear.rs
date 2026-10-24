@@ -208,8 +208,7 @@ pub fn hear(rev: Arc<Revision>, packages: &PackageSet, ask: &Ask) -> Result<Hear
             heard: measured(heard),
         })
         .collect();
-    let bands: Vec<(&str, [Option<f64>; 10])> =
-        tracks.iter().filter_map(|t| Some((t.key.as_str(), t.heard.as_ref()?.bands?))).collect();
+    let bands: Vec<(&str, [Option<f64>; 10])> = tracks.iter().filter_map(|t| Some((t.key.as_str(), t.heard.as_ref()?.bands?))).collect();
     let mut pictures: Vec<(String, Picture)> = meters[0].picture().map(|p| ("mix".to_string(), p)).into_iter().collect();
     for (t, &(own, heard)) in tracks.iter().zip(&slots) {
         if let Some(p) = heard.or(own).and_then(|i| meters[i].picture()) {
@@ -416,9 +415,8 @@ pub fn difference(before: &Heard, after: &Heard) -> Value {
         }
     }
     // Band by band, the tracks that began masking there and those that ended.
-    let masking = |of: &Heard, hz: f64| -> Vec<String> {
-        of.masking.iter().filter(|m| m.hz == hz).flat_map(|m| m.tracks.clone()).collect()
-    };
+    let masking =
+        |of: &Heard, hz: f64| -> Vec<String> { of.masking.iter().filter(|m| m.hz == hz).flat_map(|m| m.tracks.clone()).collect() };
     let (mut began, mut ended) = (vec![], vec![]);
     for hz in OCTAVES {
         let (was, now) = (masking(before, hz), masking(after, hz));

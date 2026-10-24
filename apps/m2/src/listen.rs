@@ -17,14 +17,13 @@ use anyhow::{Context, Result, bail};
 use m2_editor::clips::bar_start;
 use m2_editor::listen::{self, Ask, Heard};
 use m2_editor::render::Threads;
-use m2_session::{Revision, Session};
 use m2_server::graph::overlay::{self, Overlays};
+use m2_session::{Revision, Session};
 use serde_json::{Value, json};
 
 use crate::{app, flag, report};
 
-const USAGE: &str =
-    "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]";
+const USAGE: &str = "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]";
 /// Bars rendered before the range and dropped (RENDER-4).
 const PREROLL_BARS: u64 = 2;
 
@@ -206,7 +205,8 @@ struct Listening {
 fn listening(rev: &Revision, app: Option<&Value>, dir: &Path) -> Listening {
     let set = match app {
         Some(state) => {
-            let keys = |k: &str| state["overlays"][k].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+            let keys =
+                |k: &str| state["overlays"][k].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
             Overlays { mute: keys("mute"), solo: keys("solo") }
         }
         None => overlay::read(dir),

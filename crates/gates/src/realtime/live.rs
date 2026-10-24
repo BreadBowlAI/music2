@@ -458,7 +458,10 @@ pub fn live(lab: &mut Lab, o: &Opts, asked: &Asked) -> Result<Outcome> {
         false => None,
     };
     if let Some(a) = &agents {
-        out.info("agents", format!("m2 listen back to back on bars {}; m2 set {} forwarded to the app, one after another", super::beside::BARS, a.knob));
+        out.info(
+            "agents",
+            format!("m2 listen back to back on bars {}; m2 set {} forwarded to the app, one after another", super::beside::BARS, a.knob),
+        );
     }
     let mut rows = vec![];
     for count in counts {
