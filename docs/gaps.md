@@ -268,11 +268,15 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **The musician's controls are still open to the tools key**: play, seek, the loop, starting a take, listening mute and solo, the view, plugin windows, redo and settings answer an agent until track 4 of the agents design (AGENT-11); so do what its WebSocket sends (an audition, the MIDI keyboard's target). Agents can't drag (AGENT-3), every change they make is checked and shown, and the routes that act on what the musician holds refuse them already (403: a drag's update, keepalive, commit and cancel, the code editor's unsaved list, undo's skip, a take's stop and cancel).
 - **A tempo drag is checked by its file**: an agent's change to `data/arrangement.json` is busy while you drag the tempo, as AGENT-3 says. The arrangement lives only in that file today; a change elsewhere that moved it would need the carry's check that knob and clip drags have now.
 - **A plugin window not saved yet is checked against the plan an agent's change makes at once**: while an export holds playback, that plan waits for the export, and the app's own settle after it could drop the window's instance, with no agent's change left to take back. Rare: an export, a window not saved, and an agent's change that takes its plugin out, all at the same time.
-- **The Compare key (V) doesn't hold agents back yet**: it comes with track 3, and with it the busy answer while you compare.
 - **A `git checkout` that finishes between two looks of the watcher** (50 ms) is taken as an outside edit, one undo step: a batch is git's only when git's `index.lock` was seen while it settled.
 - **The glow outlines every clip of a changed lane**, not only the clips that changed; notes in the piano roll and automation points don't glow. A rewrite of more than 500 lines is one change to the carry (`DIFF_LINES`), so no knob inside it glows.
 - **Outside saves aren't merged into one step**: an editor that saves every second as you type (autosave) makes a step each time, and 500 of them push the app's own changes out of undo. Merging close saves of the same files, with no other step between, would fix that.
 - **Only undo's newest step can be skipped**: a redo whose file changed since stays refused until the next change clears redo.
+- **One focus record for the app, not one per window** (AGENT-6): the newest post wins, as with the unsaved list. The app has one window, so it is that window's.
+- **The focus record names a note by its pitch, start and length**: notes have no ids, so two notes alike in all three can't be told apart.
+- **`m2 watch` reads the transport every quarter second**, as the page does: no event says it, and a seek of less than half a beat isn't said. It follows the app, not the song: if the app opens another song meanwhile, it goes on, and each event says its `session`.
+- **A pointer at an automation lane hidden one by one** (A's list) waits at its track's header; Show unfolds the track's automation but doesn't bring the hidden lane back.
+- **V compares only the newest change**: an agent's change under a newer one of yours can't be heard before and after on its own (taking back an older step alone is out of the design's scope).
 
 ## Checked on Linux only
 
