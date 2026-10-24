@@ -737,6 +737,14 @@ fn start_tick() {
         .expect("a thread for plugin requests");
 }
 
+/// What the tick does, now, and waits for it: what every instance asked for (`mark_dirty`, a
+/// restart, a latency change) reaches its owner before this returns. Tests: a plugin window's
+/// change the host has told its owner of, without waiting for the next tick.
+#[doc(hidden)]
+pub fn sweep_now() -> Result<()> {
+    crate::main_thread::main_thread()?.run(sweep)
+}
+
 /// On the main thread: what each instance asked for since the last sweep. `on_main_thread` runs
 /// here, never inside `process`; the rest goes to each instance's owner.
 fn sweep() {

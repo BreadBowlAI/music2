@@ -413,6 +413,9 @@ fn a_window_change_made_while_an_agents_state_lands_takes_it_back() {
                 driver.fill(&mut buf, 2);
                 drop(driver.drain_retired());
             }
+            // And the plugin host has told the app of it, as its tick does within 5 ms: the check
+            // hears what the windows told the app up to then (a change not told yet: gaps).
+            m2_plugins::sweep_now().unwrap();
             let _ = filled.send(());
             while !stop.load(Relaxed) {
                 let mut buf = [0.0f32; 256];

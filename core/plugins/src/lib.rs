@@ -43,7 +43,7 @@ pub use host::{
     Blob, Events, Handle, HostEvent, HostEvents, MAX_CALL_EVENTS, MAX_PRESET_FILES, MainCall, Offered, Owner, Pending, PluginHost,
     PresetAt, RenderMode, Reply, SharedBuffers, Status, WindowCall,
 };
-pub use inprocess::{InProcess, MAX_INSTANCES};
+pub use inprocess::{InProcess, MAX_INSTANCES, sweep_now};
 pub use main_thread::{DRAIN, MainThread, main_thread, on_main_thread, run_main, test_main_thread, use_app_main_thread};
 pub use remote::child::serve as serve_host;
 pub use remote::{FLAG as HOST_FLAG, HANG, Remote};
