@@ -2,7 +2,9 @@
 //! reaches the app that has the song open, as a write does (`app::looking`), and writes nothing:
 //! what the musician looks at and what an agent points at are attention, not song.
 
-use std::sync::mpsc;
+use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
@@ -66,55 +68,106 @@ fn shown(p: &Value) -> String {
 /// How often `m2 watch` reads the transport, as the page does: no event says it.
 const TRANSPORT_EVERY: Duration = Duration::from_millis(250);
 
-/// `m2 watch <song> [--meters]`: every event the page hears, one JSON object a line, `t` first, as
-/// it comes, and the transport (`transport`: playing, the beat, the loop) when it plays or stops,
-/// the loop changes or the playhead jumps. Meters (30 a second) only with `--meters`. When the app
-/// goes away it prints `closed` and exits 0.
+/// How many events `m2 watch` keeps while whoever reads it doesn't: beyond them it drops what comes,
+/// and says how many it dropped (`lagged`, `by: m2`) once it is read again.
+const WAITING: usize = 1024;
+
+/// `m2 watch <song> [--meters]`: every event the page hears about that song, one JSON object a line,
+/// `t` first, as it comes, and the transport (`transport`: playing, the beat, the loop) when it
+/// plays or stops, the loop changes or the playhead jumps. First, the song it follows (`watch`, by
+/// its session); every line says its session. Meters (30 a second) only with `--meters`. When the
+/// app goes away it prints `closed` (`why: app`) and exits 0; when the app opens another song, or
+/// closes this one, `closed` with `why: song`. When whoever reads it goes away, it ends quietly.
 pub fn watch(args: &[String]) -> Result<()> {
     let dir = song(args, "m2 watch <song> [--meters]")?;
     let meters = args.iter().any(|a| a == "--meters");
     let app = app::looking(dir.as_ref())?;
+    let session = app.session();
     let mut socket = m2_server::socket::Socket::open(app.url(), &format!("/api/ws?token={}", app.key()))
         .map_err(|e| anyhow!("couldn't follow the app: {e}"))?;
-    let (tx, rx) = mpsc::channel::<Option<String>>();
+    // The socket is read on a thread of its own, always, so the app never waits for this one; what
+    // waits for whoever reads this one is kept up to WAITING, and the rest counted.
+    let (tx, rx) = mpsc::sync_channel::<Option<Value>>(WAITING);
+    let dropped = Arc::new(AtomicU64::new(0));
+    let counted = dropped.clone();
     std::thread::spawn(move || {
-        loop {
-            match socket.message() {
-                Ok(Some(m)) => {
-                    if tx.send(Some(m)).is_err() {
-                        return;
-                    }
+        while let Ok(Some(m)) = socket.message() {
+            let Ok(v) = serde_json::from_str::<Value>(&m) else { continue };
+            if v["t"] == "meters" && !meters {
+                continue;
+            }
+            match tx.try_send(Some(v)) {
+                Ok(()) => {}
+                Err(mpsc::TrySendError::Full(_)) => {
+                    counted.fetch_add(1, Ordering::Relaxed);
                 }
-                _ => {
-                    let _ = tx.send(None);
-                    return;
-                }
+                Err(mpsc::TrySendError::Disconnected(_)) => return,
             }
         }
+        let _ = tx.send(None);
     });
+    let mut out = Out(std::io::stdout().lock());
+    let ours = json!(session);
+    let mine = |mut v: Value| {
+        v["session"] = ours.clone();
+        v
+    };
+    if !out.say(&mine(json!({"t": "watch", "song": dir})))? {
+        return Ok(());
+    }
     let mut transport = Transport::default();
     let mut polled = Instant::now() - TRANSPORT_EVERY;
     loop {
         if polled.elapsed() >= TRANSPORT_EVERY {
             polled = Instant::now();
-            if let Ok((200, status)) = app.looked("GET", "/api/graph/status", None)
-                && let Some(said) = transport.heard(&status)
-            {
-                println!("{}", line(&said));
+            if let Ok((200, status)) = app.looked("GET", "/api/graph/status", None) {
+                // Another song, or none: this one went.
+                if status.get("session").is_some_and(|s| *s != ours) {
+                    out.say(&mine(json!({"t": "closed", "why": "song"})))?;
+                    return Ok(());
+                }
+                if let Some(said) = transport.heard(&status)
+                    && !out.say(&mine(said))?
+                {
+                    return Ok(());
+                }
             }
         }
         match rx.recv_timeout(TRANSPORT_EVERY.saturating_sub(polled.elapsed())) {
-            Ok(Some(m)) => {
-                let Ok(v) = serde_json::from_str::<Value>(&m) else { continue };
-                if v["t"] != "meters" || meters {
-                    println!("{}", line(&v));
+            Ok(Some(v)) => {
+                let missed = dropped.swap(0, Ordering::Relaxed);
+                if missed > 0 && !out.say(&mine(json!({"t": "lagged", "missed": missed, "by": "m2"})))? {
+                    return Ok(());
+                }
+                // An event of another song, or of none: this one went.
+                if v.get("session").is_some_and(|s| *s != ours) {
+                    out.say(&mine(json!({"t": "closed", "why": "song"})))?;
+                    return Ok(());
+                }
+                if !out.say(&v)? {
+                    return Ok(());
                 }
             }
             Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                println!("{}", line(&json!({"t": "closed"})));
+                out.say(&mine(json!({"t": "closed", "why": "app"})))?;
                 return Ok(());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
+/// Where `m2 watch` writes its lines.
+struct Out<W: Write>(W);
+
+impl<W: Write> Out<W> {
+    /// Write `v` as one line, `t` first. False when whoever read it went away (a broken pipe):
+    /// then `m2 watch` ends quietly.
+    fn say(&mut self, v: &Value) -> Result<bool> {
+        match writeln!(self.0, "{}", line(v)).and_then(|()| self.0.flush()) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+            Err(e) => Err(e.into()),
         }
     }
 }
