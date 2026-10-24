@@ -1,15 +1,21 @@
-// Track 3 of the agents design (ag-see): what an agent sees beside the musician (AGENT-6), and the
-// Compare key, V (D2). On the run's server with first-song open:
+// Track 3 of the agents design (ag-see) and its review: what an agent sees beside the musician
+// (AGENT-6), and the Compare key, V (D2). On the run's server with first-song open:
 //   - Bass selected and two of its notes picked in the roll is what `m2 focus` says, by key and by
 //     note; the page posts its focus record, which changes no file;
 //   - a pointer (`m2 point`) shows a note at its target, by the agent's name, and never moves the
 //     view or the selection; off screen it waits at the edge with Show, and only Show moves the
-//     view; OK takes it away for everyone;
-//   - V flips the newest outside step while the loop plays: the pill says Before, then After, and
-//     the file follows; Space stops and plays again and the pill stays (comparing is listening); an
-//     agent's write while the pill is open is refused, busy (`m2` exits 3), and After stays; Esc
-//     closes the pill and keeps what plays; V on the musician's own change says what V is for;
-//   - a file written outside while the pill is open closes it, saying so;
+//     view; OK takes it away for everyone; a knob of a track the dock doesn't show is named beside
+//     that track's header, and nothing is selected; a press on the note's words reaches what is
+//     under it;
+//   - V on the newest outside step while the loop plays: the pill says Before, then After, and
+//     Compare writes nothing; Space stops and plays again and the pill stays (comparing is
+//     listening); an agent's write while the pill is open is refused, busy (`m2` exits 3); a
+//     pointer's OK keeps the pill; Esc on After keeps After; Esc on Before undoes the step, saying
+//     so, with Redo; a click elsewhere on Before goes back to After; V on the musician's own change
+//     says what V is for;
+//   - a file written outside while the pill is open closes it, saying so, and the change stays;
+//   - two quick Vs, V V on the open pill, and V held: the pill always says what the server plays;
+//   - a page that missed a pointer and Compare reads both again once it hears `lagged`;
 //   - lint, no console errors.
 //
 //   node e2e/ag-focus.mjs <root> <home> <project> <m2>     (the `export` kind)
@@ -150,6 +156,33 @@ await page.click("[data-testid=pointer-ok]");
 check(await until(async () => !(await pointerNote())), "OK takes it away");
 check(await until(async () => (await state()).point === null), "for everyone");
 check(JSON.stringify(files()) === JSON.stringify(before), "pointers change no file");
+// A knob of a track the dock doesn't show (the review's F10): the note names it beside that track's
+// header, and Show selects nothing, so the MIDI keyboard's target stays too.
+const kickMod = (await state()).view.modules.find((m) => m.key === "kick");
+const kickKnob = kickMod?.nodes.flatMap((n) => n.knobs ?? [])[0];
+seen = await steady();
+const midi = JSON.stringify((await asAgent("/api/focus")).midi);
+o = m2(["point", PROJ, `knob:${kickKnob?.id}`, "this one", "--as", "Claude"]);
+check(o.status === 0 && (await until(async () => (await pointerNote())?.text.includes("this one"))), `a pointer at one of Kick's knobs: ${o.out}${o.err}`);
+const noted = await (await page.$("[data-testid=pointer-note]")).boundingBox();
+const kickHead = await (await page.$('[data-module-tab="kick"]')).boundingBox();
+check(
+  (await pointerNote()).text.includes(kickKnob?.label) && Math.abs(noted.y + noted.height / 2 - (kickHead.y + kickHead.height / 2)) < 24 && noted.x >= kickHead.x + kickHead.width - 4,
+  `beside Kick's header, naming the knob: ${JSON.stringify(await pointerNote())} ${JSON.stringify(noted)} ${JSON.stringify(kickHead)}`,
+);
+await shot("pointer-knob", "[data-testid=pointer-note]");
+if (await page.$("[data-testid=pointer-show]")) await page.click("[data-testid=pointer-show]");
+await sleep(400);
+check(JSON.parse(await viewNow()).tab === JSON.parse(seen).tab && JSON.stringify((await asAgent("/api/focus")).midi) === midi, `nothing is selected: ${await viewNow()}`);
+// The note takes no press but its own buttons': one on its words reaches what is under it.
+const reaches = await page.evaluate(() => {
+  const words = document.querySelector("[data-testid=pointer-note] span")?.getBoundingClientRect();
+  const at = words && document.elementFromPoint(words.left + words.width / 2, words.top + words.height / 2);
+  return !!at && !at.closest("[data-testid=pointer-note]");
+});
+check(reaches, "a press on the note's words reaches what is under it");
+await page.click("[data-testid=pointer-ok]");
+check(await until(async () => !(await pointerNote())), "OK takes it away");
 
 // ---------------------------------------------------------------- Compare (V)
 
@@ -167,14 +200,15 @@ await page.mouse.move(1200, 880);
 await key("KeyV");
 check(await until(async () => /^Before:/.test((await pill()) ?? "")), `V: the pill says Before: ${await pill()}`);
 check((await pill())?.includes("outside change: the code in tracks/bass.ts"), `naming the change: ${await pill()}`);
-check(await until(() => read("tracks/bass.ts") === bass), "and the change is undone");
+await sleep(500);
+check(read("tracks/bass.ts") === changed && (await state()).undo_name?.step === step, "Compare writes nothing: the saved file and undo stay as they were");
 let s = await status();
 check(s.playing && s.loop?.on, "the loop plays on");
 check((await asAgent("/api/focus")).comparing?.step === step, "an agent sees what is compared");
 await shot("compare-before", "[data-testid=compare-pill]");
 await key("KeyV");
 check(await until(async () => /^After:/.test((await pill()) ?? "")), `V again: After: ${await pill()}`);
-check(await until(() => read("tracks/bass.ts") === changed), "the change is back");
+check(read("tracks/bass.ts") === changed, "still as saved");
 // Comparing is listening: Space stops and plays again, and the pill stays.
 await key("Space");
 check(await until(async () => !(await status()).playing) && /^After:/.test((await pill()) ?? ""), `Space stops playback and the pill stays: ${await pill()}`);
@@ -200,13 +234,46 @@ o = m2(["tempo", PROJ, "130", "--as", "Claude"], { M2_BUSY_WAIT: "1" });
 check(o.status === 3 && /you're comparing/.test(o.err), `m2 waits, then exits 3 saying why: ${o.status} ${o.err.trim().split("\n").at(-1)}`);
 check(read("data/bass/notes.json") === notes && read("tracks/bass.ts") === changed, "nothing changed: After stays");
 check(/^After:/.test((await pill()) ?? "") && (await state()).undo_name?.step === step, "the pill and the step are as they were");
-// Esc closes it, keeping what plays.
+// An agent's pointer: its OK leaves the pill open (the review's F10).
+o = m2(["point", PROJ, "track:kick", "the kick", "--as", "Claude"]);
+check(await until(async () => !!(await page.$("[data-testid=pointer-ok]"))), `a pointer shows while comparing: ${o.out}${o.err}`);
+await page.click("[data-testid=pointer-ok]");
+await sleep(400);
+check(/^After:/.test((await pill()) ?? "") && (await asAgent("/api/focus")).comparing?.step === step, `a pointer's OK keeps the pill: ${await pill()}`);
+// Esc on After closes it, keeping what plays.
 await key("Escape");
 check(await until(async () => (await pill()) === null), "Esc closes the pill");
 check(await until(async () => (await asAgent("/api/focus")).comparing === null), "for the server too");
 s = await status();
-check(read("tracks/bass.ts") === changed && s.playing, "what plays stays");
+check(read("tracks/bass.ts") === changed && s.playing && (await state()).undo_name?.step === step, "what plays stays, and so does the song");
 check((await sendTx()).status === 200, "agents write again");
+const agentStep = (await state()).undo_name;
+// Esc on Before keeps Before: the agent's change is undone then, one undo step, saying so, with Redo.
+const withHit = read("data/bass/notes.json");
+check(await until(async () => (await state()).undo_name?.source === "agent"), "the agent's step is the newest");
+await page.mouse.move(1200, 880);
+await key("KeyV");
+check(await until(async () => /^Before: Claude: a new bass hit/.test((await pill()) ?? "")), `V: Before: ${await pill()}`);
+check(read("data/bass/notes.json") === withHit, "the file still has the agent's hit");
+await key("Escape");
+check(await until(async () => (await pill()) === null), "Esc on Before closes the pill");
+check(await until(() => read("data/bass/notes.json") === notes), "and keeps Before: the agent's hit is undone");
+check(await until(async () => (await toasts()).some((t) => /Claude: a new bass hit is undone/.test(t))), `saying so: ${await toasts()}`);
+check(await until(async () => !(await page.$("[data-testid=notice]"))), "and its notice offers no Undo any more");
+check(await until(async () => (await state()).redo_name?.step === agentStep.step), "Redo has it");
+await shot("compare-kept-before", "[data-testid=toast]");
+await page.click("[data-testid=toast] button");
+check(await until(() => read("data/bass/notes.json") === withHit), "the toast's Redo brings it back");
+// Anything else on Before goes back to the song as it is.
+check(await until(async () => (await state()).undo_name?.step === agentStep.step), "the agent's step is the newest again");
+await page.mouse.move(1200, 880);
+await key("KeyV");
+check(await until(async () => /^Before:/.test((await pill()) ?? "")), `V: Before: ${await pill()}`);
+const tl = await (await page.$("[data-testid=timeline]")).boundingBox();
+await page.mouse.click(tl.x + tl.width - 60, tl.y + tl.height - 30);
+check(await until(async () => (await pill()) === null && (await asAgent("/api/focus")).comparing === null), "a click elsewhere closes it");
+await sleep(400);
+check(read("data/bass/notes.json") === withHit && (await state()).undo_name?.step === agentStep.step, "at After: the song as it is, nothing undone");
 // The newest change is the musician's own: V says what it is for.
 await api("/transport", { method: "POST", body: JSON.stringify({ action: "stop" }) });
 const own = await state();
@@ -230,5 +297,97 @@ check(await until(async () => /^Before: Claude: another hit/.test((await pill())
 write("tracks/hats.ts", read("tracks/hats.ts").replace("track(", "// a line from another editor\ntrack("));
 check(await until(async () => (await pill()) === null, 4000), "a file written outside closes the pill");
 check(await until(async () => (await toasts()).some((t) => /A file changed outside the app, so Compare closed/.test(t))), `saying so: ${await toasts()}`);
+check(read("data/bass/notes.json").includes('"agentcm2"'), "and the agent's change is still in the song");
+
+// ---------------------------------------------------------------- V, quickly (the review's F1, F2)
+
+const sha = (t) => `sha256:${createHash("sha256").update(t).digest("hex")}`;
+let hits = 0;
+/** An agent's step: a bass clip `id` at `start`, by Claude, saying `why`. */
+const hit = async (id, start, why) => {
+  const t = { id: `agent-hit-${++hits}`, base: { "data/bass/notes.json": sha(read("data/bass/notes.json")) }, ops: [{ ...tx.ops[0], put: [{ ...tx.ops[0].put[0], id, start }] }], expect: tx.expect };
+  const res = await fetch(`${sess.url}/api/tx/commit`, { method: "POST", headers: { "x-m2-token": sess.token, "content-type": "application/json" }, body: JSON.stringify({ tx: t, as: "Claude", why }) });
+  return { status: res.status, body: await res.json() };
+};
+const has = (id) => read("data/bass/notes.json").includes(`"${id}"`);
+const comparing = async () => (await asAgent("/api/focus")).comparing;
+check((await hit("older1", 8, "older bass hit")).status === 200, "an older agent step");
+const newer = await hit("newer1", 12, "newer bass hit");
+check(newer.status === 200 && (await until(async () => (await state()).undo_name?.step === newer.body.step)), "and a newer one, which the page knows");
+// Two quick Vs with the pill closed: one compares the newest change, the other changes nothing.
+await page.mouse.move(1200, 880);
+await page.keyboard.press("v");
+await page.keyboard.press("v");
+await sleep(1500);
+let c = await comparing();
+const shows = await pill();
+check(c?.step === newer.body.step && shows !== null && shows.includes("newer bass hit") && shows.startsWith(c.after ? "After:" : "Before:"), `two quick Vs compare the newest change, and the pill says what the server plays: ${shows} / ${JSON.stringify(c)}`);
+check(has("older1") && has("newer1"), "nothing was undone");
+// V V on the open pill: the pill and the server agree.
+await page.keyboard.press("v");
+await page.keyboard.press("v");
+await sleep(1500);
+c = await comparing();
+check(c !== null && (await pill())?.startsWith(c.after ? "After:" : "Before:"), `V V on the open pill: the pill says what the server plays: ${await pill()} / ${JSON.stringify(c)}`);
+// V held: its repeats change nothing.
+await page.mouse.click(tl.x + tl.width - 60, tl.y + tl.height - 30);
+check(await until(async () => (await comparing()) === null && (await pill()) === null), "a click closes it");
+check(has("older1") && has("newer1"), "at After");
+const held = await hit("held1", 28, "held hit");
+check(held.status === 200 && (await until(async () => (await state()).undo_name?.step === held.body.step)), "another agent step");
+await page.mouse.move(1200, 880);
+await page.keyboard.down("v");
+for (let i = 0; i < 8; i++) {
+  await page.keyboard.down("v", { autoRepeat: true });
+  await sleep(35);
+}
+await page.keyboard.up("v");
+await sleep(1500);
+c = await comparing();
+check(c?.step === held.body.step && c.after === false && /^Before: Claude: held hit/.test((await pill()) ?? ""), `V held is one V: Before: ${await pill()} / ${JSON.stringify(c)}`);
+await page.mouse.click(tl.x + tl.width - 60, tl.y + tl.height - 30);
+check(await until(async () => (await comparing()) === null && (await pill()) === null), "a click closes it, for both");
+check(has("held1"), "at After");
+// ---------------------------------------------------------------- a page that fell behind (F9)
+
+// What the page's socket hears, held back as when it falls behind, then `lagged`: the page reads the
+// pointer and the pill again, not only the song.
+await page.evaluateOnNewDocument(() => {
+  const Real = window.WebSocket;
+  window.__sockets = [];
+  window.WebSocket = class extends Real {
+    constructor(...a) {
+      super(...a);
+      window.__sockets.push(this);
+    }
+  };
+});
+await page.reload({ waitUntil: "domcontentloaded" });
+await page.waitForSelector("[data-testid=timeline] [data-module-tab]", { timeout: 10000 });
+check(await until(async () => (await page.evaluate(() => window.__sockets?.at(-1)?.readyState)) === 1), "the page connects again");
+await sleep(500);
+await page.evaluate(() => {
+  const ws = window.__sockets.at(-1);
+  window.__heard = ws.onmessage;
+  ws.onmessage = () => {};
+});
+o = m2(["point", PROJ, "track:kick", "you missed this", "--as", "Claude"]);
+const missed = await hit("missed1", 20, "missed hit");
+const session = (await state()).session;
+const opened = await fetch(`${sess.url}/api/graph/compare`, {
+  method: "POST",
+  headers: { "x-m2-token": sess.page_token, "content-type": "application/json" },
+  body: JSON.stringify({ session, step: missed.body.step, before: true }),
+});
+check(o.status === 0 && missed.status === 200 && opened.status === 200, `a pointer, a step and Compare the page didn't hear: ${opened.status}`);
+await sleep(500);
+check(!(await pointerNote()) && (await pill()) === null, "the page missed them");
+await page.evaluate((session) => {
+  const ws = window.__sockets.at(-1);
+  ws.onmessage = window.__heard;
+  ws.onmessage({ data: JSON.stringify({ t: "lagged", missed: 3, session }) });
+}, session);
+check(await until(async () => (await pointerNote())?.text.includes("you missed this")), `after lagged, it reads the pointer again: ${JSON.stringify(await pointerNote())}`);
+check(await until(async () => /^Before: Claude: missed hit/.test((await pill()) ?? "")), `and the pill: ${await pill()}`);
 
 done(errors);

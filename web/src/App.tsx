@@ -3,8 +3,8 @@ import { useEffect } from "react";
 import { connect, on } from "./lib/events";
 import { heard as heardStep } from "./lib/notice";
 import { followFocus, postFocus } from "./lib/focus";
-import { heardPoint, syncPointer } from "./lib/pointer";
-import { compare, followCompare, heardCompare, syncCompare } from "./lib/compare";
+import { heardPoint, pointHeard, syncPointer } from "./lib/pointer";
+import { compare, compareHeard, followCompare, heardCompare, syncCompare } from "./lib/compare";
 import PointerNote from "./components/PointerNote";
 import { useStore } from "./lib/store";
 import Toasts from "./components/Toasts";
@@ -129,6 +129,15 @@ export default function App() {
 
   useEffect(() => {
     const { set, toast } = useStore.getState();
+    // The song read again, and its pointer and Compare pill as the state has them, unless one was
+    // heard after the read began (AGENT-6).
+    const reread = () => {
+      const since = [pointHeard(), compareHeard()] as const;
+      return refreshGraph().then(() => {
+        syncPointer(since[0]);
+        syncCompare(since[1]);
+      });
+    };
     const heard = [
       on("toast", (msg) => toast(msg.text, undefined, true)),
       on("graph", () => void refreshGraph()),
@@ -137,19 +146,14 @@ export default function App() {
       // Agents beside the musician (AGENT-6): a pointer shown or cleared, the Compare pill closed.
       on("point", heardPoint),
       on("compare", heardCompare),
-      // The socket fell behind and missed events: read the song again.
-      on("lagged", () => void refreshGraph()),
+      // The socket fell behind and missed events: read the song again, its pointer and Compare too.
+      on("lagged", () => void reread()),
     ];
     const stop = connect((c) => {
       set({ connected: c });
       // Connected: the song as it is, its pointer and Compare as the server has them, and what the
       // musician looks at, said once (AGENT-6).
-      if (c)
-        void refreshGraph().then(() => {
-          syncPointer();
-          syncCompare();
-          postFocus(true);
-        });
+      if (c) void reread().then(() => postFocus(true));
     });
     // Another song: its own pointer and Compare.
     const opened = useStore.subscribe((s, was) => {
@@ -186,6 +190,8 @@ export default function App() {
       if (e.key === "Enter" && e.target instanceof HTMLButtonElement) return;
       const id = key(e);
       if (!id) return;
+      // V held is one V: its repeats would flip it back and forth (D2).
+      if (id === "compare" && e.repeat) return;
       // ⌥← and ⌥→ never go back a page in WebKitGTK.
       if (id === "play" || id.startsWith("view_") || id === "shortcuts" || id.endsWith("_marker")) e.preventDefault();
       appCommand(id);
