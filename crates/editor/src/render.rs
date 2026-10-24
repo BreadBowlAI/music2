@@ -166,7 +166,7 @@ impl Rendered {
 }
 
 /// Whether `flat` renders the same bits every time: it plays no hosted plugin (RENDER-2).
-fn pure(flat: &Flat) -> bool {
+pub(crate) fn pure(flat: &Flat) -> bool {
     !flat.order.iter().any(|&i| matches!(flat.nodes[i].op, FOp::Plugin { .. }))
 }
 

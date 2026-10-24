@@ -327,6 +327,48 @@ fn reached(rev: &Revision, song: &Module, frame: u32) -> Reached {
     out
 }
 
+/// The flat node of channel `key`'s fader in the song's mixer `m`: its strip's gain, after its pan,
+/// which reads `channels.<key>.db` (std's mixer: `gain(pan(in), db)`, PKG-6). A fader a signal
+/// sets (an automation lane) reads no constant there: then it is the gain the mixer made for that
+/// channel, by the channel's place, at the call that made the first channel's (the strips come
+/// first in std's mixer). What an agent's listen reads as a track reaches the mix (AGENT-7).
+pub fn fader(rev: &Revision, m: &Mixer, key: &str) -> Option<usize> {
+    let flat = &rev.compiled.flat;
+    let song = rev.compiled.ir.modules.iter().find(|x| x.key == ROOT)?;
+    let ir: HashMap<&str, &m2_ir::Node> = song.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let frame_of = |n: &FNode| -> Option<u32> {
+        let id = n.name.strip_prefix(ROOT)?.strip_prefix('/')?;
+        (n.module == ROOT).then(|| ir.get(id).and_then(|n| n.frame)).flatten()
+    };
+    let gains: Vec<u32> = (0..song.frames.len() as u32)
+        .filter(|&f| {
+            let fr = &song.frames[f as usize];
+            fr.component.as_deref() == Some("std:gain") && fr.parent == Some(m.frame)
+        })
+        .collect();
+    let kernel_in = |frame: u32| flat.nodes.iter().position(|n| matches!(n.op, FOp::Kernel { .. }) && frame_of(n) == Some(frame));
+    // The gain that reads the channel's `db`, as a constant.
+    let slot = format!("channels.{key}.db");
+    let db = flat.nodes.iter().position(|n| {
+        matches!(n.op, FOp::Const(_))
+            && n.origin.as_ref().and_then(|o| o.control.as_ref()).is_some_and(|c| c.frame == m.frame && c.slot == slot)
+    });
+    if let Some(db) = db {
+        let reads = |n: &FNode| match &n.op {
+            FOp::Kernel { inputs, .. } => inputs.iter().any(|i| matches!(i, Input::Port { src, .. } if src.node == db)),
+            _ => false,
+        };
+        if let Some(i) = flat.nodes.iter().position(|n| reads(n) && frame_of(n).is_some_and(|f| gains.contains(&f))) {
+            return Some(i);
+        }
+    }
+    // Else by the channel's place, among the gains made where the first channel's was.
+    let site = song.frames[*gains.first()? as usize].site;
+    let place = m.channels.iter().position(|c| c.key == key)? as u32;
+    let frame = gains.iter().copied().find(|&f| song.frames[f as usize].site == site && song.frames[f as usize].occurrence == place)?;
+    kernel_in(frame)
+}
+
 impl Mixer {
     /// The channel track `module` goes into, when it is exactly one.
     pub fn channel_of(&self, module: &str) -> Option<&Channel> {

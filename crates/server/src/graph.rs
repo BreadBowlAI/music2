@@ -65,7 +65,7 @@ mod songkey;
 pub(crate) mod steps;
 mod take_audio;
 mod tempo_lease;
-mod view_file;
+pub mod view_file;
 mod watcher;
 
 use std::collections::{HashMap, HashSet, VecDeque};

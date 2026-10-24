@@ -14,6 +14,7 @@ use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project, T
 mod app;
 mod call;
 mod edits;
+mod listen;
 mod see;
 mod text;
 
@@ -35,6 +36,17 @@ USAGE:
                                          the tails of what played earlier, are missing), so it is never
                                          written into assets/. --threads renders on N threads (1 to 64,
                                          or M2_THREADS), the same file on any number
+  m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png]
+            [--json]
+                                         measure the song as an agent can't hear it: loudness (LUFS),
+                                         true peak, crest, ten octave bands, stereo and masking, for the
+                                         mix and each track, its own sound and as it reaches the mix.
+                                         The bars (from 1; else the loop when one is on, else the song),
+                                         with 2 bars of preroll; --tracks those alone; --as-heard with
+                                         the musician's listening mute and solo; --with a Tx checked and
+                                         never written, before and after; --png the bands over time. Its
+                                         own process, at background priority, one at a time; it writes
+                                         nothing into the song
   m2 kernels [--json]                    list every kernel and its typed ports
   m2 bounce <project> <asset-name> [--track KEY] [--export out] [--from S] [--seconds N]
             [--place track.lane@beat] [--threads N]
@@ -1128,6 +1140,7 @@ change that code first",
             let v = app::reach(&dir, &holder, "")?.undo()?;
             println!("undid {} in the open app", v["name"].as_str().unwrap_or("the newest change"));
         }
+        Some("listen") => listen::listen(&args)?,
         Some("focus") => see::focus(&args)?,
         Some("watch") => see::watch(&args)?,
         Some("point") => see::point(&args)?,
@@ -1291,16 +1304,9 @@ impl Place {
 fn tx(args: &[String]) -> Result<()> {
     let dir = PathBuf::from(args.get(1).context("m2 tx <project> <tx.json | -> [--check] [--seen HASH]")?);
     let from = args.get(2).context("m2 tx <project> <tx.json | -> [--check] [--seen HASH]")?;
-    let text = match from.as_str() {
-        "-" => std::io::read_to_string(std::io::stdin())?,
-        file => std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?,
-    };
     // A Tx that doesn't read is rejected as any other refusal is, in JSON on stdout (the step 6
     // design's 1.2: `tx.invalid`, or `tx.path` for a path WRITE-3a refuses).
-    let parsed = serde_json::from_str::<serde_json::Value>(&text)
-        .map_err(|e| vec![m2_song::Diagnostic::error("tx.invalid", format!("the Tx isn't JSON: {e}"))])
-        .and_then(|json| m2_song::Tx::from_json(&json));
-    let mut tx = match parsed {
+    let mut tx = match read_tx(from)? {
         Ok(tx) => tx,
         Err(diagnostics) => {
             let r = m2_session::Refusal::Rejected { diagnostics, unexpected: None };
@@ -1319,18 +1325,7 @@ fn tx(args: &[String]) -> Result<()> {
         true => Session::open_read_only(&dir, packages()?).map_err(report)?,
         false => locked(&dir, "")?,
     };
-    for (p, base) in tx.base.iter_mut() {
-        if let m2_song::Base::Sha(sha) = base
-            && p.is_text()
-        {
-            let text = s.text(sha).map(|t| t.to_string()).or_else(|| {
-                std::fs::read_to_string(s.accepted().project.dir.join(p.path())).ok().filter(|t| m2_song::Sha::of(t.as_bytes()) == *sha)
-            });
-            if let Some(text) = text {
-                *base = m2_song::Base::text(&text);
-            }
-        }
-    }
+    text_bases(&s, &mut tx);
     let out = match check {
         true => s.check(&tx).map(|c| m2_editor::json::checked(&c)),
         false => s.commit(tx).map(|c| m2_editor::json::committed(&c)),
@@ -1348,6 +1343,34 @@ fn tx(args: &[String]) -> Result<()> {
         Err(r) => {
             println!("{}", serde_json::to_string_pretty(&m2_editor::json::refusal(&r))?);
             bail!("nothing was changed: {r}")
+        }
+    }
+}
+
+/// The Tx in `from`, a file or `-` for standard input; what is wrong with it when it doesn't read.
+fn read_tx(from: &str) -> Result<Result<m2_song::Tx, Vec<m2_song::Diagnostic>>> {
+    let text = match from {
+        "-" => std::io::read_to_string(std::io::stdin())?,
+        file => std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?,
+    };
+    Ok(serde_json::from_str::<serde_json::Value>(&text)
+        .map_err(|e| vec![m2_song::Diagnostic::error("tx.invalid", format!("the Tx isn't JSON: {e}"))])
+        .and_then(|json| m2_song::Tx::from_json(&json)))
+}
+
+/// Each text file's base a Tx names by its hash, as its text, when the session or the file on
+/// disk has that text: its edits then apply as a base's do.
+fn text_bases(s: &Session, tx: &mut m2_song::Tx) {
+    for (p, base) in tx.base.iter_mut() {
+        if let m2_song::Base::Sha(sha) = base
+            && p.is_text()
+        {
+            let text = s.text(sha).map(|t| t.to_string()).or_else(|| {
+                std::fs::read_to_string(s.accepted().project.dir.join(p.path())).ok().filter(|t| m2_song::Sha::of(t.as_bytes()) == *sha)
+            });
+            if let Some(text) = text {
+                *base = m2_song::Base::text(&text);
+            }
         }
     }
 }

@@ -87,7 +87,7 @@ pub(super) fn metronome(local: &Map<String, Value>) -> bool {
 }
 
 /// The loop it had: its range in beats, and whether it was on.
-pub(super) fn looped(dir: &Path) -> Option<((f64, f64), bool)> {
+pub fn looped(dir: &Path) -> Option<((f64, f64), bool)> {
     let l = read(dir).remove("loop")?;
     let (start, end) = (l.get("start")?.as_f64()?, l.get("end")?.as_f64()?);
     Some(((start, end), l.get("on").and_then(Value::as_bool).unwrap_or(false)))
