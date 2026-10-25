@@ -96,7 +96,10 @@ check(onDisk(60).length === 0 && (await revision()) === rev, "a single click on 
 await page.mouse.click(c4.x, c4.y, { count: 2 });
 check(await until(async () => json(onDisk(60)) === json([{ pitch: "C4", start: 1, length: 0.25, velocity: 0.8 }])), `a double-click adds C4 at beat 1, a 1/16 long, written as a note name, in the canonical form (FMT-8a): ${json(onDisk(60))}`);
 check(await until(async () => (await at(60)).length === 1 && (await at(60))[0].selected), "the new note shows, selected");
-check((await revision()) === rev + 1, "one write");
+// The server writes the lane's file before it publishes the revision the write made (its settle
+// comes between), so the file can be new while /api/graph still says the old revision: the count
+// is read once the revision has moved, as for the drag below.
+check((await until(async () => (await revision()) > rev)) && (await sleep(300), (await revision()) === rev + 1), "one write");
 
 // Move: drag it two beats right and two semitones up, as one write.
 rev = await revision();
