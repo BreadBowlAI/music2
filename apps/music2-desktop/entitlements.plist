@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- What music2.app (and the m2 inside it) may do under the hardened runtime, which notarizing needs.
+     Used only when the release is signed with a Developer ID (ci/release.sh's signing, PLAT-8);
+     the ad hoc build keeps the hardened runtime off (tauri.conf.json). Not yet tried on a Mac.
+     - allow-jit, allow-unsigned-executable-memory: wasmtime compiles std's kernels to machine code
+       as the app runs; without these macOS kills the app at its first kernel.
+     - disable-library-validation: CLAP plugins are other developers' code, signed by them.
+     - device.audio-input: recording from the microphone (Info.plist says why). -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
