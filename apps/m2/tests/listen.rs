@@ -372,7 +372,10 @@ fn m2_listen_runs_at_background_priority() {
         assert!(threads.iter().all(|&(_, policy)| policy == 5), "every thread's policy is SCHED_IDLE: {threads:?}");
     }
     drop(held);
-    let v = json_of(&child.wait_with_output().unwrap());
+    let o = child.wait_with_output().unwrap();
+    // Its standard error went to `rx`: what it said, should it fail.
+    assert!(o.status.success(), "m2 listen: {:?}", the_rest(&rx));
+    let v = json_of(&o);
     assert_eq!(v["priority"], json!({"threads": "background", "plugin_host": "background"}), "{v:#}");
 }
 
@@ -672,19 +675,30 @@ fn held_by_a_silent_app(name: &str) -> (Temp, PathBuf, PathBuf, m2_session::Sess
     (temp, song, home, writer)
 }
 
-/// `m2 listen args…` in `home`, ended if it takes longer than `limit`: its output, or None.
-fn listen_within(home: &Path, args: &[&str], limit: Duration) -> Option<std::process::Output> {
-    let (mut child, _err, _one) = spawn_listen(home, args, &[]);
+/// `m2 listen args…` in `home`, ended if it takes longer than `limit`: its output, or what it said
+/// before it was ended.
+fn listen_within(home: &Path, args: &[&str], limit: Duration) -> Result<std::process::Output, Vec<String>> {
+    let (mut child, err, _one) = spawn_listen(home, args, &[]);
     let t = Instant::now();
     while t.elapsed() < limit {
         if child.try_wait().unwrap().is_some() {
-            return Some(child.wait_with_output().unwrap());
+            return Ok(child.wait_with_output().unwrap());
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     let _ = child.kill();
     let _ = child.wait();
-    None
+    Err(the_rest(&err))
+}
+
+/// What `rx` still has to say: its lines until it ends, or until 5 s pass with nothing new (a
+/// plugin host it started may hold its standard error a moment longer).
+fn the_rest(rx: &std::sync::mpsc::Receiver<String>) -> Vec<String> {
+    let mut got = vec![];
+    while let Ok(l) = rx.recv_timeout(Duration::from_secs(5)) {
+        got.push(l);
+    }
+    got
 }
 
 // The review of ag-listen, F15: with the app open, `m2 listen` asks it only for what the range or
@@ -695,10 +709,12 @@ fn a_busy_app_never_holds_up_a_listen() {
     let (_temp, song, home, _writer) = held_by_a_silent_app("listen-silent-app");
     let dir = song.to_str().unwrap();
     let limit = Duration::from_secs(60);
-    let o = listen_within(&home, &[dir, "--bars", "1-1", "--json"], limit).expect("it didn't wait for the app");
+    let o = listen_within(&home, &[dir, "--bars", "1-1", "--json"], limit)
+        .unwrap_or_else(|said| panic!("it didn't wait for the app: {said:?}"));
     let v = json_of(&o);
     assert!(v["app"].is_null(), "it didn't ask: {v:#}");
-    let o = listen_within(&home, &[dir, "--bars", "1-1", "--as-heard", "--json"], limit).expect("it gave up on the app");
+    let o = listen_within(&home, &[dir, "--bars", "1-1", "--as-heard", "--json"], limit)
+        .unwrap_or_else(|said| panic!("it gave up on the app: {said:?}"));
     let v = json_of(&o);
     assert!(v["app"].as_str().is_some_and(|s| s.contains("didn't answer")), "{v:#}");
     assert_eq!(v["as_heard"], json!(true));
