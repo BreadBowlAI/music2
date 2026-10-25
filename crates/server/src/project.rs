@@ -523,7 +523,11 @@ pub fn agents_text(m2: Option<&resources::M2>) -> String {
         None => return SONG_AGENTS.to_string(),
         Some(resources::M2::At(at)) => format!("{M2_LINE}`{}`", at.display()),
         Some(resources::M2::Unbuilt { at, tree }) => {
-            format!("{M2_LINE}`{}`, once it is built: `cargo build --locked --release -p m2` in `{}`", at.display(), tree.display())
+            format!(
+                "{M2_LINE}`{}`, once it is built: `cargo build --locked --release -p m2 --target-dir target` in `{}`",
+                at.display(),
+                tree.display()
+            )
         }
     };
     SONG_AGENTS
@@ -957,7 +961,7 @@ mod tests {
         assert_eq!(
             lines(&agents_text(Some(&unbuilt))),
             [
-                "m2 for this song: `/src/music2/target/release/m2`, once it is built: `cargo build --locked --release -p m2` in `/src/music2`"
+                "m2 for this song: `/src/music2/target/release/m2`, once it is built: `cargo build --locked --release -p m2 --target-dir target` in `/src/music2`"
             ]
         );
         // Only that line changes.
