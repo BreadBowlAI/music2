@@ -22,6 +22,7 @@
   song's `AGENTS.md` names the exact path of the `m2` that made it (section 2).
 - About 9 commits. The owner answered the three choices on 2026-10-25 (section 11), all as
   recommended, and moved `m2` inside `music2.app` into this track.
+- Built on branch `docsite`: what was built and decided is in [build-notes.md](build-notes.md).
 
 ## 1. What is there today
 
