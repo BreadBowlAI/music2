@@ -8,7 +8,7 @@
 //!   playback, as the app's run beside its own.
 //! - **Edits**: `m2 set` of a channel's fader, one after another, alternating two values, each one
 //!   undo step in the app.
-//! - **Listens**: `m2 listen` back to back on 8 bars of the song, each at background priority
+//! - **Listens**: `m2 listen` back to back on 2 bars of the song, each at background priority
 //!   (AGENT-7); every other one on 4 bars of `examples/with-plugins` when the test plugins are
 //!   there, so its plugin host, at background priority too, runs beside playback.
 //!
@@ -24,9 +24,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-/// The bars each listen measures: 8 bars from bar 33, past the song's start, so each is the range
-/// render agents listen with (RENDER-4).
-pub const BARS: &str = "33-40";
+/// The bars each listen measures: 2 bars from bar 33, past the song's start, so each is the range
+/// render agents listen with (RENDER-4), with its 2 bars of preroll. Two, so that several land in
+/// the minute on the slowest machine it is judged on: on the Mac's efficiency cores, at background
+/// priority, one listen of 8 bars of p50 (13.6 s of one fast core on Linux) didn't end in the
+/// minute (the Mac's first full check); 2 bars take 5.0 s there.
+pub const BARS: &str = "33-34";
 /// The bars each listen of the song with plugins measures.
 pub const PLUGIN_BARS: &str = "1-4";
 
@@ -43,11 +46,15 @@ pub struct Ran {
     pub host: Option<bool>,
 }
 
+/// What one agent did: each command that ran to its end, and how long the one at work when the run
+/// ended had run (it was ended, and isn't counted).
+type Runs = (Vec<Ran>, Option<f64>);
+
 /// The agents at work beside a live run.
 pub struct Agents {
     stop: Arc<AtomicBool>,
-    listens: JoinHandle<Vec<Ran>>,
-    edits: JoinHandle<Vec<Ran>>,
+    listens: JoinHandle<Runs>,
+    edits: JoinHandle<Runs>,
     /// The app: kept open until they stop.
     _app: m2_server::Running,
     pub knob: String,
@@ -58,6 +65,10 @@ pub struct Agents {
 pub struct Did {
     pub listens: Vec<Ran>,
     pub edits: Vec<Ran>,
+    /// How long the listen at work when the run ended had run, when one was.
+    pub listening: Option<f64>,
+    /// How long the edit at work when the run ended had run, when one was.
+    pub editing: Option<f64>,
 }
 
 /// The `m2` beside this program.
@@ -142,8 +153,8 @@ pub fn start(dir: &Path, work: &Path, plugins: Option<&Path>) -> Result<Agents> 
 
 /// Run `make(n)` for n = 0, 1, … one after another until `stop`: what each that ran to its end did,
 /// with what `background` says of its priority and its plugin host's. The one at work when `stop`
-/// comes is ended, and not counted.
-fn agent(stop: &AtomicBool, make: impl Fn(usize) -> Command, background: impl Fn(&Output) -> (Option<bool>, Option<bool>)) -> Vec<Ran> {
+/// comes is ended, and not counted: how long it had run is returned beside them.
+fn agent(stop: &AtomicBool, make: impl Fn(usize) -> Command, background: impl Fn(&Output) -> (Option<bool>, Option<bool>)) -> Runs {
     let mut ran = vec![];
     for n in 0.. {
         if stop.load(Ordering::Relaxed) {
@@ -154,12 +165,12 @@ fn agent(stop: &AtomicBool, make: impl Fn(usize) -> Command, background: impl Fn
             ran.push(Ran { ok: false, seconds: 0.0, said: "it didn't start".into(), background: None, host: None });
             break;
         };
-        let Some(out) = until_done(&mut child, stop) else { break };
+        let Some(out) = until_done(&mut child, stop) else { return (ran, Some(t.elapsed().as_secs_f64())) };
         let said = String::from_utf8_lossy(&out.stderr).lines().find(|l| l.starts_with("error")).unwrap_or_default().to_string();
         let (background, host) = background(&out);
         ran.push(Ran { ok: out.status.success(), seconds: t.elapsed().as_secs_f64(), said, background, host });
     }
-    ran
+    (ran, None)
 }
 
 /// `child`'s output once it ends; None when `stop` came first (it is ended then).
@@ -193,18 +204,55 @@ impl Agents {
     /// Stop: the agent at work is ended; what landed before.
     pub fn stop(self) -> Did {
         self.stop.store(true, Ordering::Relaxed);
-        Did { listens: self.listens.join().unwrap_or_default(), edits: self.edits.join().unwrap_or_default() }
+        let (listens, listening) = self.listens.join().unwrap_or_default();
+        let (edits, editing) = self.edits.join().unwrap_or_default();
+        Did { listens, edits, listening, editing }
     }
 }
 
 impl Did {
-    /// What landed, in words: how many of each, how long they took, and the first failure.
-    pub fn said(runs: &[Ran]) -> String {
+    /// What landed, in words: how many, how long they took, the first failure, and how long the one
+    /// at work when the run ended (`cut`) had run.
+    pub fn said(runs: &[Ran], cut: Option<f64>) -> String {
         let ok: Vec<f64> = runs.iter().filter(|r| r.ok).map(|r| r.seconds).collect();
-        let mean = ok.iter().sum::<f64>() / ok.len().max(1) as f64;
-        let longest = ok.iter().copied().fold(0.0, f64::max);
-        let failed =
-            runs.iter().find(|r| !r.ok).map(|r| format!("; {} failed, the first: {}", runs.iter().filter(|r| !r.ok).count(), r.said));
-        format!("{} landed, {mean:.1} s each, the longest {longest:.1} s{}", ok.len(), failed.unwrap_or_default())
+        let mut words = format!("{} landed", ok.len());
+        if !ok.is_empty() {
+            let mean = ok.iter().sum::<f64>() / ok.len() as f64;
+            let longest = ok.iter().copied().fold(0.0, f64::max);
+            words += &format!(", {mean:.1} s each, the longest {longest:.1} s");
+        }
+        if let Some(r) = runs.iter().find(|r| !r.ok) {
+            words += &format!("; {} failed, the first: {}", runs.iter().filter(|r| !r.ok).count(), r.said);
+        }
+        if let Some(cut) = cut {
+            words += &format!("; one was still at work after {cut:.1} s, and was ended");
+        }
+        words
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ran(ok: bool, seconds: f64) -> Ran {
+        Ran { ok, seconds, said: if ok { String::new() } else { "error: it broke".into() }, background: Some(true), host: None }
+    }
+
+    // G13 on the Mac's first full check said "0 landed, -0.0 s each, the longest 0.0 s": its one
+    // listen was still at work when the run ended, and nothing said so. What was at work then is
+    // said, with how long it had run; with nothing landed there is no mean to give.
+    #[test]
+    fn what_was_still_at_work_when_the_run_ended_is_said() {
+        assert_eq!(Did::said(&[], Some(61.24)), "0 landed; one was still at work after 61.2 s, and was ended");
+        assert_eq!(Did::said(&[], None), "0 landed");
+        assert_eq!(
+            Did::said(&[ran(true, 20.0), ran(true, 22.0)], Some(5.0)),
+            "2 landed, 21.0 s each, the longest 22.0 s; one was still at work after 5.0 s, and was ended"
+        );
+        assert_eq!(
+            Did::said(&[ran(true, 2.0), ran(false, 1.0)], None),
+            "1 landed, 2.0 s each, the longest 2.0 s; 1 failed, the first: error: it broke"
+        );
     }
 }

@@ -51,7 +51,7 @@ chmod +x "$TMP/bin/cargo" "$TMP/bin/npm" "$TMP/bin/node" "$TMP/chrome" "$TMP/bin
 # sources), and the folders the steps go into.
 fixture() {
   mkdir -p "$1/ci" "$1/web" "$1/e2e" && cp "$HERE/check.sh" "$1/ci/check.sh" && cp "$2" "$1/ci/pr.sh" &&
-    cp "$HERE/nightly-list.sh" "$1/ci/nightly-list.sh" &&
+    cp "$HERE/nightly-list.sh" "$1/ci/nightly-list.sh" && cp "$HERE/tally.sh" "$1/ci/tally.sh" &&
     echo '# a song-as-program DAW' > "$1/README.md" && echo '{}' > "$1/web/package.json" &&
     echo '{}' > "$1/e2e/package.json" && printf 'target/\n' > "$1/.gitignore" &&
     (cd "$1" && git init -q && git symbolic-ref HEAD refs/heads/main && git add -A && git commit -q -m fixture)

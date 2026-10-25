@@ -162,7 +162,11 @@ pub struct App {
     url: String,
     key: String,
     pid: u32,
+    /// The song's folder, its real path, as the app names it.
     dir: PathBuf,
+    /// The song's folder as it was named: what `m2` prints, as every command does (a temp folder
+    /// on a Mac is named through a link, `/var` to `/private/var`).
+    named: PathBuf,
     session: u64,
     /// The app's state when it was reached: the song's problems, with the fixes they offer.
     state: Value,
@@ -208,9 +212,19 @@ fn reach_saying(dir: &Path, holder: &Holder, patience: Option<Duration>, cant: i
     if pid != u64::from(holder.pid) {
         return Err(cant());
     }
+    let named = dir.to_path_buf();
     let dir = dir.canonicalize()?;
-    let mut app =
-        App { url: url.into(), key: key.into(), pid: holder.pid, dir: dir.clone(), session: 0, state: Value::Null, told: false, patience };
+    let mut app = App {
+        url: url.into(),
+        key: key.into(),
+        pid: holder.pid,
+        dir: dir.clone(),
+        named,
+        session: 0,
+        state: Value::Null,
+        told: false,
+        patience,
+    };
     let (status, state) = app.ask("GET", "/api/graph", None).map_err(|_| cant())?;
     let open = state["dir"].as_str().and_then(|d| Path::new(d).canonicalize().ok());
     if status != 200 || open.as_deref() != Some(dir.as_path()) {
@@ -448,7 +462,7 @@ impl App {
         }
         if journaled(&self.dir, &sent.tx.id) {
             // Its fixes, as every command prints them, once the app let go of the lock.
-            crate::attention(&self.dir, &m2_session::journal_problems(&self.dir));
+            crate::attention(&self.named, &m2_session::journal_problems(&self.dir));
             return io(
                 "nothing may have changed: the app stopped while it wrote this. Finish it or put it back with one of the commands above.",
             );
@@ -674,6 +688,7 @@ mod tests {
             key: "k".into(),
             pid: 0,
             dir: PathBuf::new(),
+            named: PathBuf::new(),
             session: 0,
             state: Value::Null,
             told: false,

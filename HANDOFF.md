@@ -19,7 +19,15 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **Draw mode (B) draws as GarageBand does** (landed `40685ca`): a press adds a note, a drag sets its length, ⌥-drag paints one a grid step. `ci/check.sh --gates` passed at `ce91acb`: 1,771 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes, nothing on a retry. Its first run caught two old races, now fixed: a take started right after the one before on the same track failed ("File exists"), and the playhead lagged Follow by a frame. By ear: mac-run step 133.
 - **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
   (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by
-  far. 8a's sweep is done. **One more `ci/check.sh` on the Mac is owed, with the output at 48 kHz.**
+  far. 8a's sweep is done.
+- **The Mac ran everything again at `a1e3c77`** (2026-10-25): 13 of 16 rows. Branch `mf3` fixes what failed, from the
+  logs, on Linux: macOS read a plugin host's background state wrongly; a song's build counted its wait for a CPU as
+  work, so listens at background priority stopped as "endless loops"; a forwarded commit's fixes named the song
+  through `/private/var`; the listen tests ran ten listens at once; G13's listens of 8 bars didn't land in its minute
+  on the slow cores (now 2 bars); the check named a line of JSON as a test. G12 failed only its set-up again: the
+  output was at 44.1 kHz. G13's first Mac numbers, recorded: callback p99 1,292 µs (45%), 0 dropouts, with one listen
+  at work all the minute. Notes: `docs/designs/agents/build-notes-mac.md`. **One more `ci/check.sh` on the Mac is
+  owed, with the output at 48 kHz.**
 - **Track `br` landed** (2026-10-18, `054e338`): add an installed plugin from the app (#32), and presets for std
   sounds and plugins (#26, FMT-22, HOST-8). Linux green at `1fb6caa`; macOS owed (in the next Mac run). Build notes
   `docs/designs/step9/build-notes-br.md`.
@@ -38,7 +46,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **The docs plan** (branch `docsite`; [design](docs/designs/docs/design.md), [build notes](docs/designs/docs/build-notes.md)): the user docs are **the guide**, `docs/guide/` (the manual split one page a topic, in four parts), also a website (mdBook, published by `.github/workflows/pages.yml` from `main` once the repo is public) and built into `m2` (`m2 docs`). Every `m2` command is declared once (`apps/m2/src/commands.rs`): the usage and the guide's commands page are made from it, and an unknown command exits 2. Every new song gets `AGENTS.md`, naming its `m2` by its exact path, and `CLAUDE.md` (FMT-23); `music2.app` carries `m2` at `Contents/MacOS/m2` (AGENT-12, FMT-23). A link check covers every Markdown file. A change to `docs/guide/` or the contract runs the whole PR tier. `ci/check.sh --pr` passed at `941d887`: 1,938 Rust tests, 54/54 browser suites, 12 of 12 renders. Owed: the owner's clicks for Pages (the design's section 4), mac-run steps 134 to 136, and the full `ci/check.sh`.
 - What the app does: the guide, [docs/guide/](docs/guide/welcome.md) (`m2 docs` prints it). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
-- Next: that one Mac run (`mf2` is on `main`), then fix what it finds. Then Windows, as its own step, or the top gaps.
+- Next: merge `mf3`, then one more Mac run at 48 kHz, then fix what it finds. Then Windows, as its own step, or the top gaps.
 
 ## Mac runs owed
 
@@ -48,13 +56,16 @@ design for whatever you pick up. Older versions of this page, with each track's 
 | 2 | (dropped) G7f store on the old gain | Not needed any more. It asked whether the Mac's +135 µs a block since step 7 was the 32 MiB store layout (O1). Track `ab` replaced that layout with one sandbox per box, so run 1's G7f rows now judge the new layout. The old std (ABI v0) can't load on `main` anyway. | — |
 | 3 | 8a's Mac sweep, `ci/sweep.sh` | **Done at `e7518f4`.** It confirmed `live_count` 4 and `BETWEEN` = park (spin was far worse), so no code changed. Gate 8: 4 threads, 10 minutes, p99 1,308 µs (45%), 0 dropouts; provisional, at 44.1 kHz. Exports on 8 fast cores, 6.4× one thread | about 40 min |
 | 4 | By ear, steps 7 to 136 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116), `br` (117–125), `bus` (126–132), `dn` (133), `docsite` (134–136) | about 2 hours, in parts |
-| 5 | `ci/check.sh` on `main` (the same run as row 1's next one) | Also runs `br`'s plugin preset search and preset load on a Mac for the first time (HOST-8) | about 45 min |
+| 5 | `ci/check.sh` on `main` (the same run as row 1's next one) | **Done at `a1e3c77`** (2026-10-25): `br`'s plugin preset search and preset load passed on a Mac (HOST-8: its preset tests, `br-presets` and `br-plugins`). The run's other failures are fixed on `mf3`; one more run, at 48 kHz, is owed | about 45 min |
 
-**Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main`. It checks the two fixes (the plugin window's `closed` callback now runs on the next main-queue turn: run on
-a Mac for the first time) and judges G12 at its designed set-up. The sweep need not run again. The same run covers
-`br`, `gb`, `bus` and the agents tracks (`br`'s plugin presets touch the host process; `ag-listen` adds the Mac's
-background priority for `m2 listen`; `gb` and `bus` add no Mac-only code). It also records G13's first Mac run (its dropouts and callback times while agents listen
-and edit beside p50): record them, then G13 is judged as G12 is (`crates/gates/src/realtime/live.rs`, `G13_RECORDED`).
+**Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main` once `mf3` is
+merged. The run at `a1e3c77` (2026-10-25) covered `br`, `gb`, `bus` and the agents tracks, and passed 13 of 16 rows;
+`mf3` fixes the rest but G12's rate, which is the Mac's setting
+([build-notes-mac.md](docs/designs/agents/build-notes-mac.md) says what each row should show next). The next run
+judges G12 at its designed set-up, reads the plugin host's background state with the new macOS code, and shows how
+long a listen of 2 bars takes on the efficiency cores. G13's first Mac numbers are recorded (callback p99 1,292 µs,
+0 dropouts, at 44.1 kHz); once a run lands its listens, G13 is judged as G12 is
+(`crates/gates/src/realtime/live.rs`, `G13_RECORDED`).
 
 After a green run the lead writes in the contract's PLAT-6 and the gates table: "macOS: green at <commit>", with
 G7f's numbers. If a row fails, fix it on Linux, check the mac lint, and ask for one more run. The Mac's pasted runs
@@ -131,7 +142,8 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `st-errors` | waited over 30 s for the Needs attention row of a missing sound file | once, at load 9; alone it passes |
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
-| `bus-mix` | "with nothing sent, the Reverb's meter stays at the floor" | 3 of 31 runs (2026-10-21), 2 of them alone; cause not known. In the nightly tier |
+| `bus-mix` | "with nothing sent, the Reverb's meter stays at the floor" | 3 of 31 runs (2026-10-21), 2 of them alone; on the Mac at `a1e3c77`, 2 of 2. Cause not known: its message doesn't say the level it read. In the nightly tier |
+| `sx-follow` | Chrome's page closed 2 s in ("Target closed", during a `$$eval`) | once on the Mac at `a1e3c77`; passed on its retry, 22 of 22 |
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
 

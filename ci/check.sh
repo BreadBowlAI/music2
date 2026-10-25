@@ -214,32 +214,8 @@ panicked() {
   grep -A1 -E "^thread '$1' (\([0-9]+\) )?panicked at " "$2" | head -2 | tr '\n' ' ' |
     sed -E "s/^thread '[^']*' (\([0-9]+\) )?panicked at //; s/ *$//" | cut -c1-160
 }
-# tally <log> <prefix>: the failed tests in <log>, one name a line, in $SCR/<prefix>tests, and in
-# $SCR/<prefix>whole each failed test binary that names no failed test: cargo's rerun arguments, a
-# tab, and why. One with no harness, or that crashed, says why by its first panic (or its own "hung"
-# or "FAILED" line), and counts as one failure; a failed doctest by its first FAILED line. Prints
-# the counts.
-tally() {
-  grep -E '^    [A-Za-z0-9_:]+$' "$1" | sed 's/^ *//' | sort -u > "$SCR/$2tests"
-  awk -v W="$SCR/$2whole" '
-    BEGIN { printf "" > W }
-    /^     Running |^   Doc-tests / { result = 0; failed = 0; named = 0; why = ""; grab = 0; test = "" }
-    grab { why = why " " $0; grab = 0 }
-    why == "" && /panicked at / { why = $0; sub(/^thread .* panicked at /, "", why); grab = 1 }
-    why == "" && /^[a-z_]+: (hung|FAILED)/ { why = $0 }
-    test == "" && /^test .* \.\.\. FAILED$/ { test = $0 }
-    /^    [A-Za-z0-9_:]+$/ { named++ }
-    /^test result:/ { p += $4; f += $6; result = 1; failed = $6 }
-    /^error: (test|doctest) failed, to rerun pass / {
-      lone = !(result && failed)
-      if (lone) { f++; whole++ }
-      if (lone || !named) {
-        args = $0; sub(/^[^`]*`/, "", args); sub(/`.*$/, "", args)
-        print args "\t" substr(lone ? why : test, 1, 160) > W
-      }
-    }
-    END { printf "%d passed, %d failed", p, f; if (whole) printf " (%d of them a whole test binary)", whole }' "$1"
-}
+# tally <log> <prefix>: ci/tally.sh, which ci/tally-test.sh tries on made-up logs.
+. ci/tally.sh || exit 2
 # failures <prefix> <log>: what failed, for "what failed": each test with where it panicked, each
 # whole test binary with why.
 failures() {
@@ -504,9 +480,10 @@ else
 fi
 
 # 1b. The PR tier's checks that build nothing (ci/pr.sh lint: rustfmt, actionlint, licences, the
-#     links and the guide's site (ci/guide.sh check), and the cases of the docs rule, of the PR tier's verdicts and of ci/nightly.sh), then RustSec's
-#     advisories (ci/pr.sh advisories: they fetch RustSec's database, so their answer changes with
-#     the date). Their tools come from ci/tools.sh; when it can't get one, the row says FAIL and why.
+#     links and the guide's site (ci/guide.sh check), and the cases of the docs rule, of the PR
+#     tier's verdicts, of ci/nightly.sh and of ci/tally.sh), then RustSec's advisories (ci/pr.sh
+#     advisories: they fetch RustSec's database, so their answer changes with the date). Their
+#     tools come from ci/tools.sh; when it can't get one, the row says FAIL and why.
 pr lint "1 min" lint
 pr advisories "seconds" advisories
 
