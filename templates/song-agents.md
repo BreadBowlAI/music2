@@ -21,7 +21,7 @@
 
 ## Finding m2
 
-m2 for this song: `music2.app/Contents/MacOS/m2` in the app, or `target/release/m2` in music2's source folder
+m2 for this song: `music2.app/Contents/MacOS/m2` in the Mac app, `/usr/bin/m2` from the Linux `.deb`, `bin/m2` in the `.tar.gz` of m2 beside the AppImage, or `target/release/m2` in music2's source folder
 
 If `m2` alone isn't found, use that whole path. If it doesn't run, ask the musician where music2 is.
 Below, `.` is this song's folder.

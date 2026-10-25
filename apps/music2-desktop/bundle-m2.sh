@@ -1,8 +1,11 @@
 #!/bin/bash
 # apps/music2-desktop/bundle-m2.sh: builds the m2 that music2.app carries (FMT-23). `tauri build`
 # runs it as tauri.conf.json's build.beforeBundleCommand, after it builds the app and before it
-# bundles it; bundle.macOS.files then copies target/release/m2 to music2.app/Contents/MacOS/m2,
-# beside the app's own program, where a new song's AGENTS.md finds it.
+# bundles it, and makes target/notices/THIRD-PARTY-NOTICES.txt (ci/notices.mjs), which every
+# bundle carries beside music2's licences; bundle.macOS.files then copies target/release/m2 to
+# music2.app/Contents/MacOS/m2,
+# and bundle.linux.deb.files and bundle.linux.appimage.files to /usr/bin/m2 (PLAT-8), beside the
+# app's own program, where a new song's AGENTS.md finds it.
 #
 #   apps/music2-desktop/bundle-m2.sh              build m2, and on a Mac sign it
 #   apps/music2-desktop/bundle-m2.sh --sign-args  only print what it would sign m2 with, one
@@ -61,6 +64,9 @@ fi
 # Asked before the build, so a refusal costs nothing.
 args=$(sign_args)
 cargo build --locked --release -p m2 --target-dir target
+# The notices of what others wrote, which every bundle carries (PLAT-8): made from this build's
+# own lockfiles, for the machine's own kind of CPU, as the app is.
+node ci/notices.mjs "$host" target/notices/THIRD-PARTY-NOTICES.txt
 if [ "$(uname -s)" = Darwin ] && [ -n "$args" ]; then
   set --
   while IFS= read -r a; do set -- "$@" "$a"; done << EOF
@@ -68,4 +74,4 @@ $args
 EOF
   codesign "$@" target/release/m2
 fi
-echo "bundle-m2.sh: target/release/m2 is ready for music2.app/Contents/MacOS/m2"
+echo "bundle-m2.sh: target/release/m2 is ready for the bundle"

@@ -40,9 +40,11 @@ listening, the view, plugin windows, redo, exports, settings, opening and closin
 do: `m2 call` refuses it, and `m2 point` shows them where instead.
 
 std, the templates and the examples are found at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, \
-inside `music2.app` when `m2` runs from there, or else in the source tree it was built from.
+in the app or package `m2` came in (`music2.app/Contents/Resources`, or `lib/music2` beside the \
+`bin` that holds `m2` on Linux, as in `/usr/lib/music2`), or else in the source tree it was built \
+from.
 
-`m2` alone, `m2 help` or `m2 --help` prints this. A command `m2` doesn't know is refused, with exit \
+`m2` alone, `m2 help` or `m2 --help` prints this; `m2 --version` (or `-V`) prints which `m2` this is. A command `m2` doesn't know is refused, with exit \
 status 2. `m2 docs` prints the guide, built into this `m2`.";
 
 /// The guide's page only: commands to try, on a copy of an example.
@@ -490,7 +492,7 @@ pub fn page() -> String {
          `--as <your name> --why \"<a few words>\"`.\n\
          - This page is made from `m2`'s own table, so `m2 docs commands` prints it as that `m2` has it.\n\n\
          From source, `cargo build --locked --release -p m2` builds `m2` as `target/release/m2`; in `music2.app` it is \
-         `music2.app/Contents/MacOS/m2`. In the examples below it is called `m2`. `<project>` is a song's folder.\n\n\
+         `music2.app/Contents/MacOS/m2`, and from the Linux `.deb` `/usr/bin/m2`. In the examples below it is called `m2`. `<project>` is a song's folder.\n\n\
          ## How every command behaves\n\n",
     );
     out += NOTES;
