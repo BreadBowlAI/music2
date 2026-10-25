@@ -511,12 +511,12 @@ pub fn live(lab: &mut Lab, o: &Opts, asked: &Asked) -> Result<Outcome> {
         out.checks.push(Check {
             name: "listens beside it".into(),
             verdict: if landed(&did.listens) { Verdict::Pass } else { Verdict::Fail },
-            detail: super::beside::Did::said(&did.listens),
+            detail: super::beside::Did::said(&did.listens, did.listening),
         });
         out.checks.push(Check {
             name: "edits forwarded beside it".into(),
             verdict: if landed(&did.edits) { Verdict::Pass } else { Verdict::Fail },
-            detail: super::beside::Did::said(&did.edits),
+            detail: super::beside::Did::said(&did.edits, did.editing),
         });
         let background = did.listens.iter().filter(|r| r.ok).all(|r| r.background == Some(true));
         out.checks.push(Check {
