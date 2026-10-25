@@ -5,7 +5,7 @@
 - Do them after the check in [HANDOFF.md](../HANDOFF.md) ("The owner's Mac command") has passed.
 - About two hours in all. You can do one part at a time, on different days.
 - After each part, tell the lead what you saw and heard. That is the last step of each part.
-- The steps are numbered 7 to 133, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
+- The steps are numbered 7 to 136, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
 - **Examples** is a button on the start screen. If a song is open, press ⌘W (Close Song) first.
 
 **What you need**
@@ -233,3 +233,11 @@ that has a pitch wheel and a mod wheel):
 | # | Do this | You should see and hear |
 |---|---|---|
 | 133 | Click **Examples**, then **First song**. Double-click the Bass clip, press B, then press on an empty row and drag right about a bar, up and down a little too, and let go. Then hold ⌥ and drag across a few grid steps on another row. Press ⌘Z twice. | The first drag makes one note that grows as you drag, on the row you pressed; you hear it while you hold and it stops when you let go. The ⌥-drag adds a short note in each step, each heard. Each ⌘Z takes back one drag's notes. Tell the lead what you saw and heard. |
+
+**`m2` inside the app** (`docsite`, about 5 minutes):
+
+| # | Do this | You should see and hear |
+|---|---|---|
+| 134 | Build the app as in `io` above: `(cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build --bundles app)`. Then in Terminal, in the music2 folder: `target/release/bundle/macos/music2.app/Contents/MacOS/m2 docs \| head -2` | The build says `bundle-m2.sh: target/release/m2 is ready` before it bundles. `m2 docs` prints "music2's guide, built into this m2 (0.1.0)…": the app carries `m2`. |
+| 135 | Open that `music2.app`. Click **New Song…**, name it "Agents test", and press **Create**. In Terminal: `grep "m2 for this song" ~/Music/music2/"Agents test"/AGENTS.md`, then `cat ~/Music/music2/"Agents test"/CLAUDE.md` | The first names the app's own `m2`: `…/music2.app/Contents/MacOS/m2`. The second says `@AGENTS.md`. The app shows neither file. |
+| 136 | Tell the lead what you saw at 134 and 135. | |

@@ -55,6 +55,7 @@ cargo run --locked --release -p music2-desktop
 | `ci/check.sh` | The full check: every check of the pull request tier, every test, every browser suite, and on a Mac the timing gates. | Before a big change lands. The nightly run does this every day, without the timing gates. |
 | `ci/pr.sh <part>` | One part of the pull request checks, as one CI job runs it: `quick`, `advisories`, `clippy`, `rust 1/3` (and `2/3`, `3/3`), `suites 1/2` (and `2/2`), `renders`. Smaller parts: `lint` (the checks that build nothing: fmt, actionlint, licences, the checks' own cases) and `models` (the pool's models). `ci/pr.sh changes` says whether your change is docs only, and whether it touches a `Cargo.lock`. | When one CI job failed, to run just that part. |
 | `ci/check.sh --nightly` | The nightly tier as CI runs it: everything but the timing gates, the browser suites one at a time. | To repeat a failed nightly run. |
+| `ci/guide.sh check` | The docs check: every link in every Markdown file (`ci/links.mjs`), then the guide's website, built by mdBook into `target/guide`. `gen` writes the guide's two pages made from code again (`commands.md`, `routes.md`); `serve` previews the site at http://localhost:3000. | After changing a doc. A test fails when `gen` is owed. |
 | `ci/tools.sh` | Fetches the four tools the checks use beyond Rust and Node (cargo-nextest, cargo-deny, actionlint, mdBook), each checked against its sha256, into `~/.cache/m2-tools`. | `ci/check.sh --pr` runs it for you. |
 | `node e2e/run.mjs all --tier pr --list` | Lists the browser suites a pull request runs (`--tier nightly`: the ones only the nightly run has). | To see which tier a suite is in. |
 
@@ -123,11 +124,12 @@ cargo run --locked --release -p music2-desktop
 | `examples/` | `first-song`, `resample`, `with-plugins`, `sounds` and `sampler`, each with an `example.toml` for the start screen (and the plugins it needs) |
 | `e2e/` | The browser suites |
 | `crates/gates` | The timing gates (`m2-gates`) that `ci/check.sh` runs |
-| `ci/` | `check.sh` (the full check; `--pr` the pull request tier), `pr.sh` (one CI job's part), `nightly.sh` (the timing gates on a quiet machine), `nightly-tests.txt` (the Rust tests only the nightly tier runs) and `nightly-list.sh` (that list as cargo-nextest sees it), `docs-only.sh` (the docs-only rule), the checks' own cases (`docs-only-test.sh`, `gates-auto-test.sh`, `pr-test.sh`, `nightly-test.sh`), `tools.sh`, `apt.sh` and `plugins.sh` (what the checks need), `gates.txt`, `sweep.sh` (a Mac's thread sweep) |
-| `.github/` | The workflows (`ci.yml`, the pull request tier; `nightly.yml`), Dependabot's settings, and the issue and pull request forms |
+| `ci/` | `check.sh` (the full check; `--pr` the pull request tier), `pr.sh` (one CI job's part), `nightly.sh` (the timing gates on a quiet machine), `nightly-tests.txt` (the Rust tests only the nightly tier runs) and `nightly-list.sh` (that list as cargo-nextest sees it), `docs-only.sh` (the docs-only rule), `guide.sh` and `links.mjs` (the docs check and the guide's website), the checks' own cases (`docs-only-test.sh`, `gates-auto-test.sh`, `pr-test.sh`, `nightly-test.sh`), `tools.sh`, `apt.sh` and `plugins.sh` (what the checks need), `gates.txt`, `sweep.sh` (a Mac's thread sweep) |
+| `.github/` | The workflows (`ci.yml`, the pull request tier; `nightly.yml`; `pages.yml`, the guide's website), Dependabot's settings, and the issue and pull request forms |
 | `.config/nextest.toml` | How cargo-nextest runs the Rust tests in CI |
 | `deny.toml` | cargo-deny's rules for the Rust dependencies: the licences allowed, security advisories, crates.io only |
-| `docs/` | The manual, the goals, the contract, the design notes and the gap list |
+| `docs/` | `guide/`, the user guide (one page a topic; `SUMMARY.md` is its menu; also the website and `m2 docs`); then, for contributors, the goals, the contract, the design notes and the gap list |
+| `templates/song-agents.md` | The `AGENTS.md` every new song gets, and the guide's "Working on a music2 song" page |
 
 ## Licence of your contribution
 

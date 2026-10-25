@@ -4,7 +4,7 @@
 
 ## What music2 is
 
-A desktop DAW where a song is a TypeScript program: a Rust server and engine, std's sound kernels in WebAssembly, a React UI in a Tauri shell, CLAP plugins in a separate host process. The app has no AI features; agents work on songs from the outside, through the files and the local API (`m2 routes` lists it, `m2 call` sends one route), and measure what they can't hear with `m2 listen`.
+A desktop DAW where a song is a TypeScript program: a Rust server and engine, std's sound kernels in WebAssembly, a React UI in a Tauri shell, CLAP plugins in a separate host process. The app has no AI features; agents work on songs from the outside, through the files and the local API (`m2 routes` lists it, `m2 call` sends one route), and measure what they can't hear with `m2 listen`. Every new song gets an `AGENTS.md` for them (from `templates/song-agents.md`), and `m2 docs` prints the user guide, `docs/guide/`.
 
 ## Read before you change anything
 
@@ -30,6 +30,9 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 | Rust tests | `cargo test --locked --workspace` (build `m2-plugin-host` first: `cargo build --locked -p m2-plugins --bin m2-plugin-host`) |
 | Browser suites | see [e2e/README.md](e2e/README.md) |
 | Rebuild std's kernels | `std/build.sh` (`std/build.sh --check` proves the committed `std.wasm`) |
+| Check the docs: every link, and the guide's website | `ci/guide.sh check` (`ci/pr.sh docs` runs it) |
+| Make the guide's two pages made from code again (`commands.md`, `routes.md`) | `ci/guide.sh gen`, after changing `apps/m2/src/commands.rs` or a route |
+| Preview the guide's website while you write | `ci/guide.sh serve` (http://localhost:3000) |
 | Test plugins (Linux) | `ci/plugins.sh` |
 
 ## Rules
@@ -43,7 +46,7 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 7. **`--locked` builds. Never `cargo update`.** A dependency change is its own pull request.
 8. **Merges, not rebases.** Merge `main` into your branch; never force-push shared history.
 9. **OS-specific Rust code only in `core/os`** (PLAT-2; `core/os/tests/one_place.rs` checks it).
-10. **Plain words** in docs, UI text and commit messages. Every doc starts with "In short".
+10. **Plain words** in docs, UI text and commit messages. Every doc starts with "In short". The guide, `docs/guide/`, is for musicians new to music and for agents: short sentences, tables, a one-line meaning for any jargon.
 11. **A big change starts with a design note** under `docs/designs/` and the owner's yes.
 12. **Keep `ci/check.sh` working in bash 3.2** (macOS's bash).
 13. **Don't edit `std/kernels/std.wasm` by hand** or take a side on it in a merge: rebuild it with `std/build.sh`.
