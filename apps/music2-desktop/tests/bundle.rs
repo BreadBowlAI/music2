@@ -125,9 +125,13 @@ fn the_linux_packages_carry_the_m2_its_build_makes() {
     for t in ["app", "deb", "appimage"] {
         assert!(targets.contains(&t), "bundle.targets has {t}: {targets:?}");
     }
-    // Tauri names the resource folder after the product: /usr/lib/<productName>.
+    // Tauri names the resource folder after the product: /usr/lib/<productName>. The program is
+    // /usr/bin/music2 (music2.app/Contents/MacOS/music2), so `music2` starts it from a shell.
     assert_eq!(c["productName"], "music2");
-    // What the programs link beyond what Tauri adds itself (WebKitGTK and GTK): ALSA and D-Bus.
+    assert_eq!(c["mainBinaryName"], "music2");
+    // What the programs link beyond what Tauri adds itself (WebKitGTK and GTK): ALSA and D-Bus;
+    // and the glibc of ubuntu-24.04, which builds them (ci/release.sh check compares it with the
+    // newest glibc symbol the programs use), so an older system is told by apt, not by a crash.
     let depends: Vec<&str> = c["bundle"]["linux"]["deb"]["depends"].as_array().unwrap().iter().map(|d| d.as_str().unwrap()).collect();
-    assert_eq!(depends, ["libasound2", "libdbus-1-3"]);
+    assert_eq!(depends, ["libc6 (>= 2.39)", "libasound2", "libdbus-1-3"]);
 }
