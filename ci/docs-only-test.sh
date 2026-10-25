@@ -25,7 +25,8 @@ edit() { mkdir -p "$(dirname "$1")" && echo "changed $RANDOM" >> "$1"; }
 F=$TMP/fixture
 mkdir -p "$F" && cd "$F" && git init -q && git symbolic-ref HEAD refs/heads/main || exit 2
 for f in core/a.rs core/a.md crates/gates/README.md web/src/app.tsx e2e/run.mjs e2e/README.md \
-  docs/architecture.md docs/designs/step9/plan.md std/src/dsp.ts ci/check.sh Cargo.toml Cargo.lock \
+  docs/architecture.md docs/gaps.md docs/designs/step9/plan.md docs/guide/window.md docs/guide/SUMMARY.md \
+  docs/book.toml std/src/dsp.ts ci/check.sh Cargo.toml Cargo.lock \
   README.md HANDOFF.md CONTRIBUTING.md LICENSE-MIT .github/workflows/ci.yml .github/ISSUE_TEMPLATE/bug.yml; do
   edit "$f"
 done
@@ -65,13 +66,31 @@ case_() {
 case_ "README.md" docs "only README.md changed since" main \
   'edit README.md && c readme'
 case_ "the counts and the base" docs "changed since $(cd "$F" && git rev-parse --short=12 HEAD) (3 files)" main \
-  'edit docs/architecture.md && edit docs/designs/step9/plan.md && edit docs/new.png && c docs'
+  'edit docs/gaps.md && edit docs/designs/step9/plan.md && edit docs/new.png && c docs'
 case_ "every top-level document" docs "only README.md, HANDOFF.md, CONTRIBUTING.md, AGENTS.md, CLAUDE.md, CODE_OF_CONDUCT.md, SECURITY.md, GOVERNANCE.md, LICENSE-MIT, LICENSE-APACHE changed" main \
   'for f in README.md HANDOFF.md CONTRIBUTING.md AGENTS.md CLAUDE.md CODE_OF_CONDUCT.md SECURITY.md GOVERNANCE.md LICENSE-MIT LICENSE-APACHE; do edit $f; done && c top'
 case_ "GitHub's issue and pull request forms" docs "only .github/ISSUE_TEMPLATE/, .github/PULL_REQUEST_TEMPLATE.md changed" main \
   'edit .github/ISSUE_TEMPLATE/bug.yml && edit .github/ISSUE_TEMPLATE/config.yml && edit .github/PULL_REQUEST_TEMPLATE.md && c forms'
 case_ "a deleted doc" docs "only docs/ changed" main \
+  'git rm -q docs/gaps.md && c gone'
+case_ "a design note" docs "only docs/ changed" main \
+  'edit docs/designs/step9/plan.md && c note'
+case_ "the site's settings, which only mdBook reads" docs "only docs/ changed" main \
+  'edit docs/book.toml && c book'
+case_ "a page of the guide, which m2 embeds (D1)" full "docs/guide/window.md changed since" main \
+  'edit docs/guide/window.md && c guide'
+case_ "a new page of the guide, and the menu" full "docs/guide/SUMMARY.md changed since" main \
+  'edit docs/guide/new.md && edit docs/guide/SUMMARY.md && c guide'
+case_ "a picture in the guide" full "docs/guide/images/a.png changed since" main \
+  'edit docs/guide/images/a.png && c picture'
+case_ "a guide page beside a design note" full "docs/guide/window.md changed since" main \
+  'edit docs/designs/step9/plan.md && edit docs/guide/window.md && c both'
+case_ "the contract, which a test reads (D2)" full "docs/architecture.md changed since" main \
+  'edit docs/architecture.md && c contract'
+case_ "the contract deleted" full "docs/architecture.md changed since" main \
   'git rm -q docs/architecture.md && c gone'
+case_ "a file named like the contract elsewhere under docs/" docs "only docs/ changed" main \
+  'edit docs/designs/architecture.md && c note'
 case_ "a name with a space" docs "only docs/ changed" main \
   'edit "docs/my notes.md" && c space'
 case_ "main moved on with code; the branch changed only docs" docs "only docs/ changed" main \
