@@ -18,6 +18,13 @@ use crate::resources;
 
 /// What a song is called when the name given is empty.
 pub const DEFAULT_NAME: &str = "My song";
+/// A new song's `AGENTS.md`, for agents working on it (FMT-23); also the guide's agents page,
+/// which includes it.
+pub const SONG_AGENTS: &str = include_str!("../../../templates/song-agents.md");
+/// The start of the one line of [`SONG_AGENTS`] that names the `m2` to use.
+pub const M2_LINE: &str = "m2 for this song: ";
+/// A new song's `CLAUDE.md`: Claude Code reads it, and imports the file named after `@`.
+const CLAUDE_MD: &str = "@AGENTS.md\n";
 /// The template a new song starts from unless another is asked for.
 pub const DEFAULT_TEMPLATE: &str = "starter";
 /// Longest song name, in characters: folder names stay readable in Finder.
@@ -366,7 +373,7 @@ fn make(parent: &Path, name: &str, from: &Path, songs: Option<&Path>) -> Result<
         // Creating the folder claims the name: one that appeared meanwhile is never written into.
         match std::fs::create_dir(&dir) {
             Ok(()) => {
-                fill(&dir, &name, from)?;
+                fill(&dir, &name, from, true)?;
                 return Ok(dir);
             }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
@@ -434,18 +441,19 @@ pub fn create_at(dir: &Path, from: &Path) -> Result<PathBuf> {
         Err(e) if e.kind() == ErrorKind::AlreadyExists => bail!("{} already exists", dir.display()),
         Err(e) => return Err(e).with_context(|| format!("making {}", dir.display())),
     }
-    fill(dir, &clean_name(&name), from)?;
+    fill(dir, &clean_name(&name), from, true)?;
     Ok(dir.to_path_buf())
 }
 
-/// Copy `from` into the new, empty `dir` and name the song. On failure `dir` is removed
-/// again: it only holds what was copied. Every file is pushed and every folder synced, `dir`'s
-/// own entry last, so the song's first Tx makes them durable by its barrier at the latest
-/// (WRITE-1).
-fn fill(dir: &Path, name: &str, from: &Path) -> Result<()> {
+/// Copy `from` into the new, empty `dir` and name the song; a new song (`new`, not Save As's copy)
+/// gets the files for agents too. On failure `dir` is removed again: it only holds what was
+/// copied. Every file is pushed and every folder synced, `dir`'s own entry last, so the song's
+/// first Tx makes them durable by its barrier at the latest (WRITE-1).
+fn fill(dir: &Path, name: &str, from: &Path, new: bool) -> Result<()> {
     let result = copy_tree(from, dir, true)
         .and_then(|()| set_name(dir, name))
         .and_then(|()| ignore_local(dir))
+        .and_then(|()| if new { for_agents(dir) } else { Ok(()) })
         .and_then(|()| push_tree(dir))
         .and_then(|()| {
             let parent = m2_os::fs::folder_of(dir);
@@ -495,6 +503,33 @@ fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// FMT-23: a new song's `AGENTS.md`, naming this computer's `m2`, and `CLAUDE.md`, which imports it;
+/// each unless the copy brought its own.
+fn for_agents(dir: &Path) -> Result<()> {
+    if !dir.join("AGENTS.md").exists() {
+        std::fs::write(dir.join("AGENTS.md"), agents_text(resources::m2_program().as_ref())).context("writing AGENTS.md")?;
+    }
+    if !dir.join("CLAUDE.md").exists() {
+        std::fs::write(dir.join("CLAUDE.md"), CLAUDE_MD).context("writing CLAUDE.md")?;
+    }
+    Ok(())
+}
+
+/// [`SONG_AGENTS`] with its m2 line naming `m2`; as it is when there's none to name (FMT-23).
+pub fn agents_text(m2: Option<&resources::M2>) -> String {
+    let named = match m2 {
+        None => return SONG_AGENTS.to_string(),
+        Some(resources::M2::At(at)) => format!("{M2_LINE}`{}`", at.display()),
+        Some(resources::M2::Unbuilt { at, tree }) => {
+            format!("{M2_LINE}`{}`, once it is built: `cargo build --locked --release -p m2` in `{}`", at.display(), tree.display())
+        }
+    };
+    SONG_AGENTS
+        .split_inclusive('\n')
+        .map(|l| if l.starts_with(M2_LINE) { format!("{named}{}", if l.ends_with('\n') { "\n" } else { "" }) } else { l.to_string() })
+        .collect()
 }
 
 /// `.music2/` is this machine's, never the song's: a new project keeps it out of git (FMT-20).
@@ -607,7 +642,8 @@ pub(crate) fn copy_into(from: &Path, parent: &Path, folder: &str, name: &str) ->
         Err(e) if e.kind() == ErrorKind::AlreadyExists => bail!("A folder called {folder} is already there. Pick another name."),
         Err(e) => return Err(e).with_context(|| format!("making {}", dir.display())),
     }
-    fill(&dir, name, from)?;
+    // Save As copies the song as it is: no files for agents it hadn't (FMT-23).
+    fill(&dir, name, from, false)?;
     Ok(dir)
 }
 
@@ -906,6 +942,62 @@ mod tests {
         let project = m2_song::Project::open(&dir).unwrap();
         assert_eq!(project.manifest.project.name, "Night/drive");
         assert_eq!(project.manifest.project.entry, "song.ts");
+    }
+
+    // FMT-23: the song's AGENTS.md is templates/song-agents.md with its one m2 line naming the m2
+    // found, as it is when none is.
+    #[test]
+    fn agents_md_names_the_m2_found_on_its_one_line() {
+        let lines = |t: &str| t.lines().filter(|l| l.starts_with(M2_LINE)).map(String::from).collect::<Vec<_>>();
+        assert_eq!(lines(SONG_AGENTS).len(), 1, "templates/song-agents.md has one line that starts {M2_LINE:?}");
+        assert_eq!(agents_text(None), SONG_AGENTS);
+        let at = agents_text(Some(&resources::M2::At("/Applications/music2.app/Contents/MacOS/m2".into())));
+        assert_eq!(lines(&at), ["m2 for this song: `/Applications/music2.app/Contents/MacOS/m2`"]);
+        let unbuilt = resources::M2::Unbuilt { at: "/src/music2/target/release/m2".into(), tree: "/src/music2".into() };
+        assert_eq!(
+            lines(&agents_text(Some(&unbuilt))),
+            [
+                "m2 for this song: `/src/music2/target/release/m2`, once it is built: `cargo build --locked --release -p m2` in `/src/music2`"
+            ]
+        );
+        // Only that line changes.
+        let other = |t: &str| t.lines().filter(|l| !l.starts_with(M2_LINE)).map(String::from).collect::<Vec<_>>();
+        assert_eq!(other(&at), other(SONG_AGENTS));
+        assert!(at.ends_with('\n'));
+    }
+
+    // FMT-23: a new song, from a template or an example, gets AGENTS.md naming this computer's m2,
+    // and CLAUDE.md, which imports it.
+    #[test]
+    fn a_new_song_gets_agents_md_and_claude_md() {
+        let t = Temp::new();
+        let want = agents_text(resources::m2_program().as_ref());
+        for (name, from) in [("From template", template("starter")), ("From example", Source::Example("first-song".into()).dir().unwrap())]
+        {
+            let dir = create(&t.0, name, &from).unwrap();
+            assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), want, "{name}");
+            assert_eq!(std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n", "{name}");
+        }
+        let dir = create_at(&t.0.join("by-m2-new"), &template("empty")).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), want);
+        assert_eq!(std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
+        // Neither is committed into a template or an example: the code writes them.
+        for from in [template("starter"), template("empty"), Source::Example("first-song".into()).dir().unwrap()] {
+            assert!(!from.join("AGENTS.md").exists() && !from.join("CLAUDE.md").exists(), "{}", from.display());
+        }
+    }
+
+    // FMT-23: what a template brings of its own wins.
+    #[test]
+    fn a_templates_own_agents_md_wins() {
+        let t = Temp::new();
+        let own = t.0.join("own-template");
+        std::fs::create_dir(&own).unwrap();
+        copy_tree(&template("starter"), &own, false).unwrap();
+        std::fs::write(own.join("AGENTS.md"), "# Ours\n").unwrap();
+        let dir = create(&t.0, "Ours", &own).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), "# Ours\n");
+        assert_eq!(std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n", "the one it hasn't got is written");
     }
 
     // NS-3, FMT-13: New Song's Tempo is written into the new song's arrangement, the rest of it as

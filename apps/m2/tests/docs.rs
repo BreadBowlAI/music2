@@ -1,7 +1,8 @@
 //! AGENT-12: `m2 docs` prints the guide built into this `m2`, the pages made from code are what
 //! `m2` makes, a command `m2` doesn't know is refused, and the guide names only commands and
 //! routes there are. (The command table's own tests, one table and every flag shown, are in
-//! `src/commands.rs`: they read its consts.)
+//! `src/commands.rs`: they read its consts.) FMT-23: `m2 new` gives a song AGENTS.md, naming this
+//! `m2`, and CLAUDE.md.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -99,7 +100,7 @@ fn each_page_prints_as_its_markdown_with_includes_filled_in() {
     let mut all = vec![];
     for topic in summary() {
         let printed = stdout(&["docs", &topic]);
-        if !MADE.contains(&topic.as_str()) {
+        if !MADE.contains(&topic.as_str()) && topic != "agents" {
             assert!(printed == expanded(&topic), "m2 docs {topic} isn't docs/guide/{topic}.md with its includes filled in");
         }
         assert!(!printed.contains("{{#"), "m2 docs {topic} prints an mdBook command");
@@ -110,11 +111,34 @@ fn each_page_prints_as_its_markdown_with_includes_filled_in() {
     assert!(stdout(&["docs", "window.md"]) == expanded("window"));
 }
 
-// The song's AGENTS.md text is the guide's agents page (the owner's D3).
+/// templates/song-agents.md as a song made by this m2 gets it: its m2 line naming this m2.
+fn agents_md() -> String {
+    let template = std::fs::read_to_string(root().join("templates/song-agents.md")).unwrap();
+    let me = Path::new(env!("CARGO_BIN_EXE_m2")).canonicalize().unwrap();
+    let line = format!("m2 for this song: `{}`", me.display());
+    let lines: Vec<&str> = template.lines().map(|l| if l.starts_with("m2 for this song: ") { line.as_str() } else { l }).collect();
+    assert!(lines.contains(&line.as_str()), "templates/song-agents.md has no m2 line");
+    lines.join("\n") + "\n"
+}
+
+// The song's AGENTS.md text is the guide's agents page (the owner's D3); `m2 docs agents` prints
+// it as a song this m2 makes gets it, naming this m2 (AGENT-12, FMT-23).
 #[test]
-fn the_agents_page_is_the_songs_agents_md() {
+fn the_agents_page_is_the_songs_agents_md_naming_this_m2() {
     let template = std::fs::read_to_string(root().join("templates/song-agents.md")).unwrap();
     assert_eq!(expanded("agents"), template);
+    assert_eq!(stdout(&["docs", "agents"]), agents_md());
+}
+
+// FMT-23: `m2 new` makes a song with AGENTS.md, naming this m2, and CLAUDE.md, which imports it.
+#[test]
+fn m2_new_gives_the_song_agents_md_and_claude_md() {
+    let home = Home::new("new");
+    let song = home.0.join("songs/Night drive");
+    let out = m2_in(&home.0, &["new", song.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(std::fs::read_to_string(song.join("AGENTS.md")).unwrap(), agents_md());
+    assert_eq!(std::fs::read_to_string(song.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
 }
 
 // AGENT-12: an unknown page is said, exit 1; a command m2 doesn't know is refused, exit 2. Neither

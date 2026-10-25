@@ -43,11 +43,13 @@ pub fn docs(args: &[String]) -> ExitCode {
 }
 
 /// The page as `m2 docs` prints it: those made from code are made now, from this `m2`'s own
-/// tables, not the committed copies.
+/// tables, not the committed copies; the agents page names this `m2`.
 fn text(p: &Page) -> String {
     match p.topic {
         "commands" => crate::commands::page(),
         "routes" => crate::call::page(),
+        // As a song this m2 makes gets it: its m2 line names this m2 (FMT-23).
+        "agents" => m2_server::project::agents_text(m2_server::resources::m2_program().as_ref()),
         _ => p.text.to_string(),
     }
 }

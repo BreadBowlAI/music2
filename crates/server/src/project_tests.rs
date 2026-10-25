@@ -79,8 +79,22 @@ fn save_as_copies_the_song_without_its_local_folder() {
     assert_eq!(manifest_name(&copy), "Night Drive 2");
     assert!(!copy.join(".music2/view.json").exists() && !copy.join(".git").exists(), "no .music2/ and no .git");
     assert_eq!(read(&copy, ".gitignore"), ".music2/\n");
+    // Save As copies the song as it is: no AGENTS.md or CLAUDE.md it hadn't (FMT-23).
+    assert!(!copy.join("AGENTS.md").exists() && !copy.join("CLAUDE.md").exists(), "Save As adds nothing");
     // The next copy counts on.
     assert_eq!(save_as_start(&state.graph).unwrap()["name"], json!("Night Drive 3"));
+}
+
+// FMT-23: a song's own AGENTS.md and CLAUDE.md are copied as they are.
+#[test]
+fn save_as_copies_the_songs_agents_md_as_it_is() {
+    let songs = Songs::new();
+    std::fs::write(songs.song().join("AGENTS.md"), "# Notes of ours\n").unwrap();
+    let state = songs.open();
+    save_as(&state, &SaveAs { session: token(&state), name: "Ours".into(), dir: None }).unwrap();
+    let copy = songs.0.join("songs/Ours");
+    assert_eq!(read(&copy, "AGENTS.md"), "# Notes of ours\n");
+    assert!(!copy.join("CLAUDE.md").exists());
 }
 
 #[test]

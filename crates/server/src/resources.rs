@@ -3,6 +3,7 @@
 //! Each is found, in order: at its environment override (`$M2_STD`, `$M2_TEMPLATES`,
 //! `$M2_EXAMPLES`), in the app bundle's `Contents/Resources` next to the running program
 //! (`music2.app/Contents/MacOS/music2`), or in this source tree, for `cargo run` and tests.
+//! And the `m2` a new song's `AGENTS.md` names ([`m2_program`], FMT-23).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -57,6 +58,46 @@ fn bundled(exe: &Path, name: &str) -> Option<PathBuf> {
     let contents = exe.parent()?.parent()?;
     let dir = contents.join("Resources").join(name);
     dir.is_dir().then_some(dir)
+}
+
+/// The `m2` a new song's `AGENTS.md` names (FMT-23).
+#[derive(Clone, Debug, PartialEq)]
+pub enum M2 {
+    /// This one, built: its real path.
+    At(PathBuf),
+    /// From source, not built yet: where `cargo build --locked --release -p m2` in `tree` puts it.
+    Unbuilt { at: PathBuf, tree: PathBuf },
+}
+
+/// The `m2` to name in a new song's `AGENTS.md` (FMT-23), in order: the running program when it
+/// is `m2` (`m2 new`); `m2` beside it (`music2.app/Contents/MacOS/m2`, which the app carries, or
+/// `target/release/m2` beside `target/release/music2-desktop`); the source tree's
+/// `target/release/m2`, then `target/debug/m2`; that release one not built yet. None when there is
+/// no source tree either (an app that carries no m2).
+pub fn m2_program() -> Option<M2> {
+    let exe = std::env::current_exe().ok();
+    let real = exe.as_deref().and_then(|e| e.canonicalize().ok());
+    find_m2(&[exe.as_deref(), real.as_deref()], &source_tree())
+}
+
+/// [`m2_program`], for the running program `exes` (as named, and its real path) and the source
+/// tree `tree`.
+fn find_m2(exes: &[Option<&Path>], tree: &Path) -> Option<M2> {
+    let name = format!("m2{}", std::env::consts::EXE_SUFFIX);
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let exes: Vec<&Path> = exes.iter().flatten().copied().collect();
+    if let Some(me) = exes.iter().find(|e| e.file_name().is_some_and(|n| *n == *name) && e.is_file()) {
+        return Some(M2::At(real(me)));
+    }
+    let beside = exes.iter().filter_map(|e| Some(e.parent()?.join(&name)));
+    let built = ["release", "debug"].map(|profile| tree.join("target").join(profile).join(&name));
+    if let Some(m2) = beside.chain(built).find(|p| p.is_file()) {
+        return Some(M2::At(real(&m2)));
+    }
+    tree.join("apps/m2/Cargo.toml").is_file().then(|| {
+        let tree = real(tree);
+        M2::Unbuilt { at: tree.join("target/release").join(&name), tree }
+    })
 }
 
 /// The repository this was built from.
@@ -126,6 +167,71 @@ mod tests {
         assert_eq!(find(None, &[], "templates"), source_tree().join("templates"));
         // The source tree's std is the real package.
         assert!(std_dir().join("m2pkg.toml").is_file() || std::env::var_os("M2_STD").is_some());
+    }
+
+    /// An empty file at `path`, its folders made.
+    fn touch(path: &Path) -> PathBuf {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+        path.canonicalize().unwrap()
+    }
+
+    /// A folder shaped like the source tree: `apps/m2/Cargo.toml`.
+    fn fake_tree(root: &Path) -> PathBuf {
+        touch(&root.join("tree/apps/m2/Cargo.toml"));
+        root.join("tree").canonicalize().unwrap()
+    }
+
+    fn m2_name() -> String {
+        format!("m2{}", std::env::consts::EXE_SUFFIX)
+    }
+
+    // FMT-23: m2 itself names itself (`m2 new`, `m2 docs agents`), wherever it is.
+    #[test]
+    fn m2_names_itself() {
+        let t = Temp::new("m2-self");
+        let me = touch(&t.0.join("bin").join(m2_name()));
+        let tree = fake_tree(&t.0);
+        touch(&tree.join("target/release").join(m2_name()));
+        assert_eq!(find_m2(&[Some(&me)], &tree), Some(M2::At(me)));
+    }
+
+    // FMT-23: the app names the m2 music2.app carries beside it, Contents/MacOS/m2.
+    #[test]
+    fn the_app_names_the_m2_beside_it_in_its_bundle() {
+        let t = Temp::new("m2-bundle");
+        let exe = fake_bundle(&t.0);
+        let tree = fake_tree(&t.0);
+        touch(&tree.join("target/release").join(m2_name()));
+        let bundled = touch(&exe.parent().unwrap().join(m2_name()));
+        assert_eq!(bundled, t.0.join("music2.app/Contents/MacOS").join(m2_name()).canonicalize().unwrap());
+        assert_eq!(find_m2(&[Some(&exe), None], &tree), Some(M2::At(bundled)));
+    }
+
+    // FMT-23: run from source, the app names the m2 built beside it, then the source tree's
+    // release m2, then its debug one, then the release one not built yet, with the line that
+    // builds it; with no source tree there, none.
+    #[test]
+    fn from_source_the_app_names_the_m2_it_finds_in_target() {
+        let t = Temp::new("m2-source");
+        let tree = fake_tree(&t.0);
+        let exe = touch(&t.0.join("elsewhere/release/music2-desktop"));
+        assert_eq!(
+            find_m2(&[Some(&exe)], &tree),
+            Some(M2::Unbuilt { at: tree.join("target/release").join(m2_name()), tree: tree.clone() }),
+            "not built yet"
+        );
+        let debug = touch(&tree.join("target/debug").join(m2_name()));
+        assert_eq!(find_m2(&[Some(&exe)], &tree), Some(M2::At(debug)));
+        let release = touch(&tree.join("target/release").join(m2_name()));
+        assert_eq!(find_m2(&[Some(&exe)], &tree), Some(M2::At(release)), "release before debug");
+        let beside = touch(&exe.parent().unwrap().join(m2_name()));
+        assert_eq!(find_m2(&[Some(&exe)], &tree), Some(M2::At(beside)), "the one beside the app first");
+        // An app that carries no m2, on a computer without the source.
+        let bare = fake_bundle(&t.0.join("bare"));
+        assert_eq!(find_m2(&[Some(&bare)], &t.0.join("no-tree")), None);
+        // This repo is a source tree.
+        assert!(source_tree().join("apps/m2/Cargo.toml").is_file());
     }
 
     #[cfg(unix)]

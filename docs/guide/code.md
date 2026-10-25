@@ -20,6 +20,8 @@ my-song/
       cutoff.json      # (a key that is a Windows device name, such as aux, is written aux-)
   assets/              # audio files (WAV), never overwritten
   layout.json          # the tracks' order and colours: shown, never heard
+  AGENTS.md            # for AI agents working on the song: what is here, the rules, where m2 is
+  CLAUDE.md            # the same for Claude Code: one line, @AGENTS.md. The app ignores both
   .music2/             # this machine's: not part of the song, and not in git
 ```
 

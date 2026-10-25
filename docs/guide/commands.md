@@ -24,7 +24,7 @@ std, the templates and the examples are found at `$M2_STD`, `$M2_TEMPLATES` and 
 m2 new <folder> [--template ID | --example ID]
 ```
 
-Make a new song in exactly `<folder>` from a template (`starter`, the default, or `empty`) or a copy of an example (`--example first-song`). A folder that is there, in any capitals, is refused. The song is named after its folder. Try the commands below on such a copy, never on the examples themselves.
+Make a new song in exactly `<folder>` from a template (`starter`, the default, or `empty`) or a copy of an example (`--example first-song`). A folder that is there, in any capitals, is refused. The song is named after its folder. It gets `AGENTS.md`, for agents working on it, which names this `m2` by its full path, and `CLAUDE.md`, which imports it for Claude Code. Try the commands below on such a copy, never on the examples themselves.
 
 ## m2 check
 
@@ -371,7 +371,7 @@ Send one route's request to the open app, as an agent (by `--as`): song changes 
 m2 docs [<page> | all]
 ```
 
-The guide, built into this `m2`: its pages, or one page as Markdown, or all of them. It needs no song and no app. A link to another page, such as `window.md`, is `m2 docs window`. `m2 docs commands` and `m2 docs routes` are made from the code when asked.
+The guide, built into this `m2`: its pages, or one page as Markdown, or all of them. It needs no song and no app. A link to another page, such as `window.md`, is `m2 docs window`. `m2 docs commands` and `m2 docs routes` are made from the code when asked. `m2 docs agents` is the `AGENTS.md` a new song gets from this `m2`, naming it: `m2 docs agents > AGENTS.md` gives a song made before them its own.
 
 ## Try them on a copy
 

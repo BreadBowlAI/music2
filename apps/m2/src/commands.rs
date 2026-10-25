@@ -67,8 +67,9 @@ pub const COMMANDS: &[Command] = &[
         usage: "m2 new <folder> [--template ID | --example ID]",
         words: "make a new song in exactly `<folder>` from a template (`starter`, the default, or `empty`) or a copy \
                 of an example (`--example first-song`). A folder that is there, in any capitals, is refused",
-        more: "The song is named after its folder. Try the commands below on such a copy, never on the examples \
-               themselves.",
+        more: "The song is named after its folder. It gets `AGENTS.md`, for agents working on it, which names this \
+               `m2` by its full path, and `CLAUDE.md`, which imports it for Claude Code. Try the commands below on \
+               such a copy, never on the examples themselves.",
     },
     Command {
         name: "check",
@@ -430,7 +431,8 @@ pub const COMMANDS: &[Command] = &[
         words: "the guide, built into this `m2`: its pages, or one page as Markdown, or all of them. It needs no \
                 song and no app",
         more: "A link to another page, such as `window.md`, is `m2 docs window`. `m2 docs commands` and \
-               `m2 docs routes` are made from the code when asked.",
+               `m2 docs routes` are made from the code when asked. `m2 docs agents` is the `AGENTS.md` a new song \
+               gets from this `m2`, naming it: `m2 docs agents > AGENTS.md` gives a song made before them its own.",
     },
 ];
 
