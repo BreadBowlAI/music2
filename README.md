@@ -84,6 +84,17 @@ You are welcome, and so are AI coding agents. Read [CONTRIBUTING.md](CONTRIBUTIN
 - Found a security problem? Please report it in private: [SECURITY.md](SECURITY.md).
 - Everyone follows the [Code of Conduct](CODE_OF_CONDUCT.md). Who decides what: [GOVERNANCE.md](GOVERNANCE.md).
 
+## Stars over time
+
+How many people starred music2 on GitHub, day by day (drawn by [star-history.com](https://star-history.com)).
+
+<a href="https://star-history.com/#BreadBowlAI/music2&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=BreadBowlAI/music2&type=Date&theme=dark">
+    <img alt="A chart of music2's GitHub stars over time" src="https://api.star-history.com/svg?repos=BreadBowlAI/music2&type=Date">
+  </picture>
+</a>
+
 ## Licence
 
 music2 is yours to use under either of
