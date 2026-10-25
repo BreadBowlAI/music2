@@ -153,6 +153,13 @@ fn unknown_pages_and_commands_are_refused_and_nothing_is_written() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("m2 has no command `nosuch`"), "{out:?}");
     assert!(out.stdout.is_empty());
+    // --as or --why put first isn't an unknown command: m2 says where they go (the review's R5).
+    for first in ["--as", "--why"] {
+        let out = m2_in(&home.0, &[first, "Claude", "set", "song", "id", "1"]);
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{said}");
+        assert!(said.contains("--as and --why go at the end, after the command's own arguments"), "{said}");
+    }
     for args in [&["docs"][..], &["docs", "all"], &["docs", "commands"]] {
         assert!(m2_in(&home.0, args).status.success());
     }

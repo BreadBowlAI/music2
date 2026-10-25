@@ -30,6 +30,8 @@ fn main() -> ExitCode {
         Some("docs") => return docs::docs(&args),
         // m2 run again as the plugin host for a song it plays (`m2_plugins::run_main` serves it).
         Some(word) if word == m2_plugins::HOST_FLAG => {}
+        // Put first, these aren't a command: app::take_who says where they go.
+        Some(word) if ["--as", "--why"].contains(&word) => {}
         Some(word) if commands::find(word).is_none() => {
             eprintln!("error: m2 has no command `{word}`: m2 alone lists them, and m2 docs commands says what each does");
             return ExitCode::from(2);
@@ -1014,6 +1016,7 @@ change that code first",
         Some("call") => call::call(&args)?,
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         // main refused every word the table doesn't hold, and a test holds the table to these arms.
+        None => bail!("name a command first: m2 <command> … --as <name> --why \"<words>\""),
         _ => bail!("m2 has no command `{cmd}`"),
     }
     Ok(())
