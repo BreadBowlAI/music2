@@ -133,6 +133,8 @@ pub struct Options {
     /// project code may import (FMT-3).
     pub dependencies: Vec<String>,
     pub memory_limit: usize,
+    /// The CPU time a build may use before it is stopped as an endless loop: the build thread's
+    /// own work, never the time it waited for a CPU (see [`Limit`]).
     pub time_limit: Duration,
 }
 
@@ -705,7 +707,7 @@ fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
         ..Default::default()
     }));
 
-    let (_rt, ctx, deadline) = sandbox(&state, opts.memory_limit, opts.time_limit).map_err(|e| err(e.to_string()))?;
+    let (_rt, ctx, limit) = sandbox(&state, opts.memory_limit, opts.time_limit).map_err(|e| err(e.to_string()))?;
 
     let result: Result<[String; 4], Vec<Diagnostic>> = ctx.with(|ctx| {
         let run = || -> rquickjs::Result<[String; 4]> {
@@ -716,7 +718,7 @@ fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
             Module::evaluate(ctx.clone(), "<main>", main)?.finish::<()>()?;
             Ok([g.get("__m2_out")?, g.get("__m2_outputs")?, g.get("__m2_components")?, g.get("__m2_units")?])
         };
-        run().catch(&ctx).map_err(|e| vec![caught(&mut state.borrow_mut(), e, Instant::now() > deadline)])
+        run().catch(&ctx).map_err(|e| vec![caught(&mut state.borrow_mut(), e, limit.passed())])
     });
     let [json, outputs, components, units] = result?;
     let outputs: Vec<Output> = serde_json::from_str(&outputs).map_err(|e| err(format!("the SDK produced invalid outputs: {e}")))?;
@@ -732,16 +734,41 @@ fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     Ok(Build { ir, sites: st.sites.clone(), outputs, package_files: st.package_files.clone(), components, units })
 }
 
-/// A sandbox for one run: QuickJS with the prelude, the loader over `state` and the limits.
-fn sandbox(state: &Rc<RefCell<State>>, memory_limit: usize, time_limit: Duration) -> rquickjs::Result<(Runtime, Context, Instant)> {
+/// How long a run may work before it is stopped as an endless loop: CPU time of the thread it runs
+/// on, from its start. Not the clock: a build at background priority on a busy machine (an agent's
+/// `m2 listen` on a Mac's efficiency cores, AGENT-7) waits for a CPU far longer than it works, and
+/// its wait is no loop. The thread's CPU time is read only once the clock passed the limit too (a
+/// thread never works longer than the clock runs), so the many checks before cost a clock read.
+#[derive(Clone, Copy)]
+struct Limit {
+    started: Instant,
+    worked: Duration,
+    limit: Duration,
+}
+
+impl Limit {
+    /// From now, on the calling thread: the thread that runs the sandbox.
+    fn new(limit: Duration) -> Limit {
+        Limit { started: Instant::now(), worked: m2_os::thread::cpu_time(), limit }
+    }
+
+    /// Whether the run worked longer than its limit: asked on its own thread.
+    fn passed(&self) -> bool {
+        self.started.elapsed() > self.limit && m2_os::thread::cpu_time().saturating_sub(self.worked) > self.limit
+    }
+}
+
+/// A sandbox for one run, on the thread that runs it: QuickJS with the prelude, the loader over
+/// `state` and the limits.
+fn sandbox(state: &Rc<RefCell<State>>, memory_limit: usize, time_limit: Duration) -> rquickjs::Result<(Runtime, Context, Limit)> {
     let rt = Runtime::new()?;
     rt.set_memory_limit(memory_limit);
     rt.set_max_stack_size(JS_STACK);
-    let deadline = Instant::now() + time_limit;
-    rt.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
+    let limit = Limit::new(time_limit);
+    rt.set_interrupt_handler(Some(Box::new(move || limit.passed())));
     rt.set_loader(Resolve(state.clone()), Load(state.clone()));
     let ctx = Context::full(&rt)?;
-    Ok((rt, ctx, deadline))
+    Ok((rt, ctx, limit))
 }
 
 /// Put `Math` on libm and run the prelude, then give the SDK what it asks the host while it runs:
@@ -904,7 +931,7 @@ fn describe_here(packages: &[(String, PathBuf)], spec: &str) -> (Vec<(PathBuf, S
         ..Default::default()
     }));
     let invalid = |m: String| Diagnostic::error("pkg.invalid", m);
-    let (_rt, ctx, deadline) = match sandbox(&state, 256 << 20, Duration::from_secs(10)) {
+    let (_rt, ctx, limit) = match sandbox(&state, 256 << 20, Duration::from_secs(10)) {
         Ok(s) => s,
         Err(e) => return (vec![], Err(invalid(e.to_string()))),
     };
@@ -916,7 +943,7 @@ fn describe_here(packages: &[(String, PathBuf)], spec: &str) -> (Vec<(PathBuf, S
             Module::evaluate(ctx.clone(), "<main>", main)?.finish::<()>()?;
             ctx.globals().get("__m2_out")
         };
-        run().catch(&ctx).map_err(|e| caught(&mut state.borrow_mut(), e, Instant::now() > deadline))
+        run().catch(&ctx).map_err(|e| caught(&mut state.borrow_mut(), e, limit.passed()))
     });
     let read = state.borrow().read.clone();
     let result = match result {

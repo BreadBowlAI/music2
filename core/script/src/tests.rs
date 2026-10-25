@@ -127,6 +127,57 @@ fn syntax_errors_and_endless_loops() {
     assert!(t.elapsed() < Duration::from_secs(5));
 }
 
+// The build's time limit counts the build's own work, not the time it waited for a CPU: a build at
+// background priority on a busy machine (an agent's `m2 listen` on a Mac, AGENT-7) is no endless
+// loop. On the Mac's first full check four listens failed "the song took too long to build". Here
+// the build starts in `SCHED_IDLE` on one CPU, where a busy thread runs for 3 s, past the 2 s limit.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_build_that_waits_for_a_cpu_is_no_endless_loop() {
+    const SET: usize = std::mem::size_of::<libc::cpu_set_t>();
+    // SAFETY: a zeroed cpu_set_t is an empty set; the calls read and write this thread's own mask
+    // and policy.
+    let mut mask: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    assert_eq!(unsafe { libc::sched_getaffinity(0, SET, &mut mask) }, 0);
+    let cpu = (0..libc::CPU_SETSIZE as usize).find(|&c| unsafe { libc::CPU_ISSET(c, &mask) }).expect("a CPU this test may use");
+    let pin = move || {
+        let mut one: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::CPU_SET(cpu, &mut one) };
+        assert_eq!(unsafe { libc::sched_setaffinity(0, SET, &one) }, 0);
+    };
+    let started = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let busy = {
+        let started = started.clone();
+        std::thread::spawn(move || {
+            pin();
+            let until = Instant::now() + Duration::from_secs(3);
+            started.wait();
+            while Instant::now() < until {
+                std::hint::spin_loop();
+            }
+        })
+    };
+    started.wait();
+    // A song that works a while as it builds (about 0.1 s of CPU), more than a thread in
+    // `SCHED_IDLE` gets in 3 s beside a busy one.
+    let song = "import { song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nlet f = 0;\n\
+                for (let i = 0; i < 3000000; i++) f = (f + i) % 440;\nexport default song(() => osc.sine(440 + f));\n";
+    let o = options(&[("song.ts", song)]);
+    let (built, took) = std::thread::spawn(move || {
+        pin();
+        let idle = libc::sched_param { sched_priority: 0 };
+        assert_eq!(unsafe { libc::sched_setscheduler(0, libc::SCHED_IDLE, &idle) }, 0);
+        // The build's own thread takes this one's CPU and policy.
+        let t = Instant::now();
+        (build(&o), t.elapsed())
+    })
+    .join()
+    .unwrap();
+    busy.join().unwrap();
+    assert!(took > Duration::from_secs(2), "it waited past the limit for a CPU: {took:?}");
+    assert!(built.is_ok(), "{built:?}");
+}
+
 #[test]
 fn std_modules_load() {
     let b = build_full(&options(&[(
