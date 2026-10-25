@@ -629,9 +629,9 @@ Simplified for now:
 
 #### The canvas today
 
-This describes the app as it was at commit `92a19a3`, plus steps 1, 4 and 5 of the [order of work](architecture.md#order-of-work), not the contract. The [manual](manual.md) says what it does now.
+This describes the app as it was at commit `92a19a3`, plus steps 1, 4 and 5 of the [order of work](architecture.md#order-of-work), not the contract. The [guide](guide/welcome.md) says what it does now.
 
-In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop <project-folder>`, opens a project. The window shows the timeline above a panel with a tab for each module, and three views of it: Graph, Code and Notes. The [manual](manual.md) describes how to use them.
+In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop <project-folder>`, opens a project. The window shows the timeline above a panel with a tab for each module, and three views of it: Graph, Code and Notes. The [guide](guide/window.md) describes how to use them.
 
 - **The view** (`crates/editor/src/view.rs`) shows the calls written in the project, not the kernels they expand into. Each component call is a frame in the IR, with its ComponentId (`std:bass`), and every node names the frame it was made in, so everything `bass(...)` builds is one node.
   - Knobs sit on the innermost call that contains where their number is written.
@@ -661,7 +661,7 @@ In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop
 
 ## Agents
 
-Agents use the files and `m2`. While the app has the song open, `m2` hands each write to the app as one undo step the musician sees; `m2 focus`, `m2 watch` and `m2 point` see what the musician looks at, follow the app and point at things; `m2 routes` and `m2 call` reach the app's API; `m2 listen` measures the sound ([Agents](architecture.md#agents), the manual's [Scripts and agents](manual.md#scripts-and-agents)). MCP is not built yet. In the design, agents connect to the host's MCP server, whose tools are generated from the core API and installed tools.
+Agents use the files and `m2`. While the app has the song open, `m2` hands each write to the app as one undo step the musician sees; `m2 focus`, `m2 watch` and `m2 point` see what the musician looks at, follow the app and point at things; `m2 routes` and `m2 call` reach the app's API; `m2 listen` measures the sound ([Agents](architecture.md#agents), the guide's [The local API](guide/api.md)). MCP is not built yet. In the design, agents connect to the host's MCP server, whose tools are generated from the core API and installed tools.
 
 Agents may keep writing files directly: that is the save path, and every problem comes back as a diagnostic. An agent that wants its edit verified calls `check`, shows the delta, and commits with `Seen(hash)` ([WRITE-11](architecture.md#expectations-and-the-delta)). To listen without waiting for a full render, it uses a range render ([RENDER-4](architecture.md#range-render): `m2 render --preroll`, and `m2 listen`). `m2 render --from` renders a section exactly, replaying from the start.
 
@@ -678,7 +678,7 @@ Agents may keep writing files directly: that is the save path, and every problem
 
 ### Ears
 
-**Built in part**, as `m2 listen` ([Listening](manual.md#listening)): loudness and peak, octave bands, masking between tracks and stereo, for the mix and each track, and a picture of the bands over time. Key and onset detection, and `std/meters`, are not built. Agents can't listen, so they need another way to judge the result. `render` with `std/meters` taps, plus the host's analysis tool, gives them:
+**Built in part**, as `m2 listen` ([Listening](guide/listening.md)): loudness and peak, octave bands, masking between tracks and stereo, for the mix and each track, and a picture of the bands over time. Key and onset detection, and `std/meters`, are not built. Agents can't listen, so they need another way to judge the result. `render` with `std/meters` taps, plus the host's analysis tool, gives them:
 - loudness and peak per section
 - spectral balance
 - **masking between tracks** (e.g. "the bass is masking the kick at 60 Hz")

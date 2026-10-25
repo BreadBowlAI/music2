@@ -10,7 +10,7 @@
 Done on 2026-10-23 to 2026-10-25, the owner's choices:
 - The repository stays on the `BreadBowlAI` account. GitHub's merge queue needs an organization, so part 2's ruleset asks instead that each pull request is up to date with `main`. Moving to an organization later keeps the issues, the stars and the links (GitHub redirects the old address).
 - The Code of Conduct's contact is `mxudev@gmail.com`.
-- A new app icon, drawn for music2 (`apps/music2-desktop/icons/source.html`; its credit is in [the manual](manual.md)).
+- A new app icon, drawn for music2 (`apps/music2-desktop/icons/source.html`; its credit is in [the guide's Credits](guide/credits.md)).
 - `.github/CODEOWNERS` names `@BreadBowlAI` (part 2).
 - Commit emails stay as they are, as most projects show them. No secrets are in the history (two scans of every commit).
 - The two leftover `refs/claude-teleport/*` refs of an early session are deleted.

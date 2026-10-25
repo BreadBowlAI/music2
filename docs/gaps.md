@@ -1,7 +1,7 @@
 # What music2 can't do yet
 
 **In short**
-- This page lists only what is missing. What the app does today is in the manual: [In short: what you can do](manual.md#in-short-what-you-can-do).
+- This page lists only what is missing. What the app does today is in the guide: [What you can do](guide/what-you-can-do.md).
 - The gaps are grouped by area. The areas you notice first when making a song are at the top.
 - Each line is one gap. The big ones have a number (#18, #24, …), which stays the same everywhere. Small loose ends are listed under them, without numbers.
 - Size: **small** is one focused change; **medium** touches the window, the server and the core; **large** is new engine work.
@@ -199,7 +199,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; the start screen's Examples names it plainly), and the docs past [Music basics](music-basics.md) and the manual's first sections are technical. | Many people who open music2 are new to making music. | Yes | small |
+| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; the start screen's Examples names it plainly), and the docs past [Music basics](guide/music-basics.md) and the guide's manual part is technical. | Many people who open music2 are new to making music. | Yes | small |
 
 - **A problem from a sound or plugin that stopped can't be dismissed**: it stays in the status popover until the part plays again.
 - **A sound that stops in the moment between Stop All Sound and its reset** stays listed, though the reset starts it again (ex-1).

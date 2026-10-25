@@ -18,13 +18,15 @@
 #                               it touches a Cargo.lock or deny.toml (or git can't say), else
 #                               deps=false (both also into $GITHUB_OUTPUT when set). Exit 0 either
 #                               way, 2 on a usage error.
-#   ci/pr.sh docs               the docs job: the link check of every Markdown file (ci/links.mjs)
-#                               and the docs rule's own cases (ci/docs-only-test.sh)
+#   ci/pr.sh docs               the docs job: the link check of every Markdown file and the guide's
+#                               website, built by mdBook (ci/guide.sh check), and the docs rule's
+#                               own cases (ci/docs-only-test.sh)
 #   ci/pr.sh toolchain          the Rust toolchain rust-toolchain.toml pins, installed if missing
 #                               (CI's jobs run it before their cache step, which asks rustc)
 #   ci/pr.sh lint               the checks that build nothing: rustfmt, actionlint, licences
 #                               (cargo-deny's bans, licences and sources on both workspaces; npm),
-#                               the link check, and the cases of the docs rule, of the PR tier's own verdicts
+#                               the docs job's link check and site, and the cases of the docs rule,
+#                               of the PR tier's own verdicts
 #                               (ci/pr-test.sh) and of ci/nightly.sh (ci/nightly-test.sh)
 #   ci/pr.sh quick              lint's checks, then the cases of the gates rule, the pool's models,
 #                               the web typecheck and build, std's kernels (tests, clippy) and
@@ -57,8 +59,8 @@
 # so it never rebuilds what your own `cargo build` made. nextest runs no doctests: there are none
 # today (2026-10-21), and the nightly tier's cargo test would run any.
 #
-# Needs: rustup and Node 24 (as ci/check.sh); cargo-nextest, cargo-deny and actionlint at the
-# versions ci/tools.sh pins (it fetches them into ~/.cache/m2-tools); for rust and suites, the test
+# Needs: rustup and Node 24 (as ci/check.sh); cargo-nextest, cargo-deny, actionlint and mdBook at
+# the versions ci/tools.sh pins (it fetches them into ~/.cache/m2-tools); for rust and suites, the test
 # plugins (CLAP_PATH, or ci/check.sh's default folder; on Linux ci/plugins.sh installs them). On
 # Linux the Rust steps need the app's libraries: ci/apt.sh lists them. M2_NO_PLUGINS=1 runs without
 # the plugins, their tests skipping, and says so (the Mac's nightly job: no Mac copy is pinned).
@@ -214,7 +216,7 @@ lint() {
       cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources &&
       node ci/npm-licenses.mjs'
   fi
-  check links links.log node ci/links.mjs
+  check guide guide.log ci/guide.sh check
   check "docs rule" docs-rule.log ci/docs-only-test.sh
   check "pr verdicts" pr-test.log ci/pr-test.sh
   check "nightly.sh" nightly-test.log ci/nightly-test.sh
@@ -236,7 +238,7 @@ toolchain() {
 
 case $STEP in
   docs)
-    check links links.log node ci/links.mjs
+    check guide guide.log ci/guide.sh check
     check "docs rule" docs-rule.log ci/docs-only-test.sh ;;
 
   toolchain)

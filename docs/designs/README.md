@@ -3,6 +3,7 @@
 **In short**
 - Each folder here holds the working notes of one step or track: its plan, the reviews of the plan, and its build notes.
 - They are history. What holds today is in the contract, [docs/architecture.md](../architecture.md). Where a note and the contract disagree, the contract wins.
+- Notes written before 2026-10-25 say "the manual" (`docs/manual.md`): it is now the guide, [docs/guide/](../guide/welcome.md), one page a topic.
 - The look of the app is [step8/taste.md](step8/taste.md), the taste guide.
 - A big change starts with a new note here, before the code (see [CONTRIBUTING.md](../../CONTRIBUTING.md)).
 
