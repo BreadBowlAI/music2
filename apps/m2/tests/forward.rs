@@ -330,46 +330,65 @@ fn the_app_quitting_before_the_commit_changes_nothing() {
     assert!(std::fs::read_to_string(temp.0.join("song/song.ts")).unwrap().contains("pan: 0.3"));
 }
 
+/// The fake app's answer to a commit when it is killed half way through: the journal of a commit
+/// of `tx` to `song.ts` with none of its changes in the files, its staged file, and no answer.
+fn killed_mid_commit(writer: &mut Option<m2_session::Session>, body: &Value) -> Option<(u16, Value)> {
+    let s = writer.as_mut().unwrap();
+    let tx = m2_song::Tx::from_json(&body["tx"]).unwrap();
+    let checked = s.check(&tx).unwrap();
+    let after = checked.candidate().snapshot.files[Path::new("song.ts")].to_string();
+    let dir = s.accepted().project.dir.clone();
+    let before = std::fs::read_to_string(dir.join("song.ts")).unwrap();
+    let jid = "1791935974533-64110-0";
+    let j = m2_session::tx::journal::Journal {
+        id: jid.into(),
+        tx: tx.id.clone(),
+        host: "here".into(),
+        host_id: m2_session::lock::host_id(),
+        pid: 1,
+        program: "music2".into(),
+        label: tx.label.clone(),
+        targets: vec![m2_session::tx::journal::JTarget::File {
+            path: "song.ts".into(),
+            before: Some(m2_song::Sha::of(before.as_bytes())),
+            after: Some(m2_song::Sha::of(after.as_bytes())),
+            text: Some(before),
+            blob: false,
+            staged: Some(0),
+        }],
+    };
+    std::fs::create_dir_all(dir.join(".music2/tx").join(jid)).unwrap();
+    std::fs::write(dir.join(format!(".music2/tx/{jid}.json")), j.to_json()).unwrap();
+    std::fs::write(dir.join(".music2/tx").join(jid).join("0"), &after).unwrap();
+    writer.take();
+    None
+}
+
 // AGENT-1, WRITE-16: the app is killed half way through the commit, leaving its journal: `m2`
 // names the fixes, as every command does.
 #[test]
 fn the_app_killed_mid_commit_names_its_fixes() {
-    let (temp, dir, home) = held_by_fake("fwd-killed", |writer, body| {
-        let s = writer.as_mut().unwrap();
-        let tx = m2_song::Tx::from_json(&body["tx"]).unwrap();
-        let checked = s.check(&tx).unwrap();
-        let after = checked.candidate().snapshot.files[Path::new("song.ts")].to_string();
-        let dir = s.accepted().project.dir.clone();
-        let before = std::fs::read_to_string(dir.join("song.ts")).unwrap();
-        let jid = "1791935974533-64110-0";
-        let j = m2_session::tx::journal::Journal {
-            id: jid.into(),
-            tx: tx.id.clone(),
-            host: "here".into(),
-            host_id: m2_session::lock::host_id(),
-            pid: 1,
-            program: "music2".into(),
-            label: tx.label.clone(),
-            targets: vec![m2_session::tx::journal::JTarget::File {
-                path: "song.ts".into(),
-                before: Some(m2_song::Sha::of(before.as_bytes())),
-                after: Some(m2_song::Sha::of(after.as_bytes())),
-                text: Some(before),
-                blob: false,
-                staged: Some(0),
-            }],
-        };
-        std::fs::create_dir_all(dir.join(".music2/tx").join(jid)).unwrap();
-        std::fs::write(dir.join(format!(".music2/tx/{jid}.json")), j.to_json()).unwrap();
-        std::fs::write(dir.join(".music2/tx").join(jid).join("0"), &after).unwrap();
-        writer.take();
-        None
-    });
+    let (temp, dir, home) = held_by_fake("fwd-killed", killed_mid_commit);
     let o = m2_in(&home, &["set", &dir, "song.ts#2/0.hats.pan", "0.4"], &[]);
     assert_eq!(o.status.code(), Some(1), "{}", said(&o));
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains(&format!("m2 fix {dir} .music2/tx/1791935974533-64110-0.json finish-tx")) && err.contains("discard-tx"), "{err}");
     drop(temp);
+}
+
+// AGENT-1, DIAG-4: the fixes name the song as it was named, as every command's do, even when that
+// path goes through a symbolic link: on a Mac the temp folder's `/var` is one, to `/private/var`,
+// and the fixes once named the folder the link leads to.
+#[test]
+fn the_fixes_name_the_song_as_it_was_named() {
+    let (temp, _, home) = held_by_fake("fwd-killed-linked", killed_mid_commit);
+    let link = temp.0.join("linked");
+    std::os::unix::fs::symlink(&temp.0, &link).unwrap();
+    let dir = link.join("song").to_str().unwrap().to_string();
+    let o = m2_in(&home, &["set", &dir, "song.ts#2/0.hats.pan", "0.4"], &[]);
+    assert_eq!(o.status.code(), Some(1), "{}", said(&o));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains(&format!("m2 fix {dir} .music2/tx/1791935974533-64110-0.json finish-tx")) && err.contains("discard-tx"), "{err}");
 }
 
 // AGENT-1: the app quits once it committed, before it answered: `m2` finds every file as its check
