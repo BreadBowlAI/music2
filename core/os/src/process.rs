@@ -91,9 +91,11 @@ pub fn background() -> std::io::Result<()> {
     os::background_process()
 }
 
-/// Whether process `pid` runs at background priority, as [`background`] sets it: on Linux, every
-/// thread of it in `SCHED_IDLE` with a nice of 10 or more. None when the OS doesn't say (it ended,
-/// or it isn't this user's).
+/// Whether process `pid` runs at background priority, as [`background`] sets it, whoever set it:
+/// on macOS its Darwin background state (`proc_pidinfo`'s flags, which hold the state a process
+/// gave itself as well as one another process gave it); on Linux, every thread of it in
+/// `SCHED_IDLE` with a nice of 10 or more. None when the OS doesn't say (it ended, or it isn't this
+/// user's).
 pub fn in_background(pid: u32) -> Option<bool> {
     os::in_background(pid)
 }

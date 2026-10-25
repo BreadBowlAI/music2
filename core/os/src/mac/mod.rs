@@ -174,16 +174,23 @@ pub(crate) fn background_process() -> io::Result<()> {
     check(unsafe { libc::setpriority(libc::PRIO_DARWIN_PROCESS, 0, libc::PRIO_DARWIN_BG) })
 }
 
-/// Process `pid`'s Darwin background state, as `getpriority(PRIO_DARWIN_PROCESS)` says it: not 0
-/// when it is in the background.
+/// Process `pid`'s Darwin background state, as `proc_pidinfo` says it: in the background when the
+/// process put itself there (`PROC_FLAG_DARWINBG`) or another process put it there
+/// (`PROC_FLAG_EXT_DARWINBG`). The kernel keeps the two apart, and
+/// `getpriority(PRIO_DARWIN_PROCESS, pid)` asked of another process reads only the second (xnu's
+/// `get_background_proc`): it said a plugin host that put itself in the background was not (the
+/// Mac's first full check, `a_host_asked_to_runs_at_background_priority`).
 pub(crate) fn in_background(pid: u32) -> Option<bool> {
-    // SAFETY: reads a process's background state; errno is cleared first and read after, as -1 is
-    // no error by itself.
-    unsafe {
-        *libc::__error() = 0;
-        let r = libc::getpriority(libc::PRIO_DARWIN_PROCESS, pid as libc::id_t);
-        (r != -1 || *libc::__error() == 0).then_some(r != 0)
-    }
+    // <sys/proc_info.h>: the libc crate doesn't name them.
+    const DARWINBG: u32 = 0x8000;
+    const EXT_DARWINBG: u32 = 0x10000;
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: proc_bsdinfo is plain integers and arrays of them: all zeroes is a value of it.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    // SAFETY: proc_pidinfo writes at most `size` bytes into `info`, which has them, and says how
+    // many it wrote.
+    let got = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    (got == size).then_some(info.pbi_flags & (DARWINBG | EXT_DARWINBG) != 0)
 }
 
 /// P-cores and E-cores from `hw.perflevel0` and `hw.perflevel1`, and the P-cores sharing one L2;
