@@ -2,7 +2,8 @@
 # apps/music2-desktop/bundle-m2.sh: builds the m2 that music2.app carries (FMT-23). `tauri build`
 # runs it as tauri.conf.json's build.beforeBundleCommand, after it builds the app and before it
 # bundles it; bundle.macOS.files then copies target/release/m2 to music2.app/Contents/MacOS/m2,
-# beside the app's own program, where a new song's AGENTS.md finds it.
+# and bundle.linux.deb.files and bundle.linux.appimage.files to /usr/bin/m2 (PLAT-8), beside the
+# app's own program, where a new song's AGENTS.md finds it.
 #
 #   apps/music2-desktop/bundle-m2.sh              build m2, and on a Mac sign it
 #   apps/music2-desktop/bundle-m2.sh --sign-args  only print what it would sign m2 with, one
@@ -68,4 +69,4 @@ $args
 EOF
   codesign "$@" target/release/m2
 fi
-echo "bundle-m2.sh: target/release/m2 is ready for music2.app/Contents/MacOS/m2"
+echo "bundle-m2.sh: target/release/m2 is ready for the bundle"

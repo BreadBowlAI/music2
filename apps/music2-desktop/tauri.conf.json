@@ -22,7 +22,9 @@
   "bundle": {
     "active": true,
     "targets": [
-      "app"
+      "app",
+      "deb",
+      "appimage"
     ],
     "category": "Music",
     "shortDescription": "Music studio",
@@ -41,6 +43,22 @@
       "../../std/presets/": "std/presets/",
       "../../templates/": "templates/",
       "../../examples/": "examples/"
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libasound2",
+          "libdbus-1-3"
+        ],
+        "files": {
+          "/usr/bin/m2": "../../target/release/m2"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/bin/m2": "../../target/release/m2"
+        }
+      }
     },
     "macOS": {
       "files": {

@@ -107,3 +107,27 @@ fn m2_is_signed_with_the_apps_own_signing() {
         let _ = std::fs::remove_dir_all(c.parent().unwrap());
     }
 }
+
+// PLAT-8, FMT-23: the Linux packages carry the same m2 at /usr/bin/m2, beside the app's own
+// program, /usr/bin/music2; their resources land in /usr/lib/music2, where
+// `m2_server::resources` looks (`<program's folder>/../lib/music2`). A plain `tauri build` makes
+// the app on a Mac and the .deb and the AppImage on Linux.
+#[test]
+fn the_linux_packages_carry_the_m2_its_build_makes() {
+    let c = config();
+    let root = here().join("../..").canonicalize().unwrap();
+    for package in ["deb", "appimage"] {
+        let files = &c["bundle"]["linux"][package]["files"];
+        let source = files["/usr/bin/m2"].as_str().unwrap_or_else(|| panic!("bundle.linux.{package}.files names /usr/bin/m2"));
+        assert_eq!(from_here(source), root.join("target/release/m2"), "{package}");
+    }
+    let targets: Vec<&str> = c["bundle"]["targets"].as_array().unwrap().iter().map(|t| t.as_str().unwrap()).collect();
+    for t in ["app", "deb", "appimage"] {
+        assert!(targets.contains(&t), "bundle.targets has {t}: {targets:?}");
+    }
+    // Tauri names the resource folder after the product: /usr/lib/<productName>.
+    assert_eq!(c["productName"], "music2");
+    // What the programs link beyond what Tauri adds itself (WebKitGTK and GTK): ALSA and D-Bus.
+    let depends: Vec<&str> = c["bundle"]["linux"]["deb"]["depends"].as_array().unwrap().iter().map(|d| d.as_str().unwrap()).collect();
+    assert_eq!(depends, ["libasound2", "libdbus-1-3"]);
+}
