@@ -1476,7 +1476,7 @@ quantize and humanize, the tempo and the meters are gone. Code names stay, after
 (Q17 to Q19, Q7 to Q12, Q39 and Q42, D20, D34). The End checks those lines against what landed and trims any that
 didn't (each lane's "If late").
 
-**For gaps.md:** #11: [Music basics](music-basics.md) is up to date, and points at the guide.
+**For gaps.md:** #11: [Music basics](../../music-basics.md) is up to date, and points at the guide.
 
 **Contract:** none.
 
