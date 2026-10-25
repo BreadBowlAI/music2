@@ -142,4 +142,16 @@ The skeptic's review of `release` had eleven findings (`$SCRATCH/release/review.
 | L10 | Fixed: the workflow also runs every Monday on `main` and by hand, and its pull-request paths now take in std, the templates, the examples, `Cargo.lock`, `web/package-lock.json` and the new scripts, so a change that breaks a download shows before a tag |
 | L11 | Fixed: the `.tar.gz`'s `README.txt` (its glibc floor computed as it is made) and the notes say `m2` needs glibc 2.35 or newer and ALSA's library (`libasound2`, or `libasound2t64`), even with no sound |
 
-After the fixes, on the build server: `ci/release.sh build`, `check` (all three files, with the test plugins) and `app` (start screen, new song, with-plugins) passed again; the PR tier's result is below.
+After the fixes, on the build server: `ci/release.sh build`, `check` (all three files, with the test plugins) and `app` (start screen, new song, with-plugins) passed again. Then `M2_CHECK_OUT=$SCRATCH/release/check-pr2 ci/check.sh --pr` at `edf338f`:
+
+```
+music2 check --pr: PASS
+commit   edf338f9a328 on release (clean)
+changes          PASS  .github/workflows/release.yml changed since e847f521092d, and it isn't documentation (ci/docs-only.sh's DOCS_FREE): the whole PR tier runs
+pr quick         PASS  0 min 27 s
+pr clippy        PASS  0 min 5 s
+pr rust          PASS  2 min 18 s
+pr suites        PASS  1 min 49 s
+pr renders       PASS  0 min 7 s
+repo unchanged   PASS
+```
