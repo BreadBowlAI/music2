@@ -1,6 +1,6 @@
 // The graph view of the open song project: types, API, layout.
 
-import { editing, recorded, type Step, type StepName } from "./history";
+import { editing, recorded, type Editing, type Step, type StepName } from "./history";
 import { token } from "./native";
 
 /** A declared control a constant is (PKG-3): its instance's frame, its slot, and whether the call leaves it out. */
@@ -661,15 +661,21 @@ export const editorHooks: {
 } = {};
 
 /** An edit's call: once it commits a revision, that revision is Undo's, named `step` (lib/history). */
-function edit<T extends { revision: number; before: string; after: string; pending?: boolean }>(session: number, step: Step | ((r: T) => Step), p: Promise<T>) {
-  const sent = editing();
+function edit<T extends { revision: number; before: string; after: string; pending?: boolean }>(
+  session: number,
+  step: Step | ((r: T) => Step),
+  p: Promise<T>,
+  within?: Editing,
+) {
+  // On its way: as part of `within` (a lane write in its queue, which ends it), else as one of its own.
+  const ours = within ?? editing();
   // A value held while the code doesn't compile (`pending`) commits nothing yet; nor does an edit that changes nothing.
   return p
     .then((r) => {
-      if (!r.pending && r.before !== r.after) recorded(session, r, typeof step === "function" ? step(r) : step);
+      if (!r.pending && r.before !== r.after) recorded(session, r, typeof step === "function" ? step(r) : step, ours);
       return r;
     })
-    .finally(sent);
+    .finally(() => within || ours.end());
 }
 
 /** An edit's answer. `step`: the undo step it made, by its id (AGENT-2); an undo's or a redo's: the step it took back. */
@@ -711,8 +717,8 @@ export const graphApi = {
   removeEffect: (session: number, revision: number, node: string, step: Step) =>
     edit(session, step, call<Edit>("/effect/remove", { session, revision, call: node })),
   /** Rewrite a notes lane (module and lane keys) with every clip it is to have. Prefer `writeLane`, which queues and gives clips ids. */
-  lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[], step: Step) =>
-    edit(session, step, call<Edit>("/lane", { session, revision, module, lane, clips })),
+  lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[], step: Step, within?: Editing) =>
+    edit(session, step, call<Edit>("/lane", { session, revision, module, lane, clips }), within),
   /** Show a track, by its key, as `label` (ID-10): its `track()` call's name, nothing that plays. One undoable edit. */
   label: (session: number, module: string, label: string, step: Step) => edit(session, step, call<Edit>("/label", { session, module, label })),
   /**
@@ -766,23 +772,23 @@ export const graphApi = {
    * when that can't be taken out from here, else asking again with `cascade` takes it out too.
    */
   deleteTrack: async (session: number, module: string, name: string, cascade = false) => {
-    const sent = editing();
+    const ours = editing();
     try {
       const r = await answer<Edit & { excised?: Dependent[]; dependents?: Dependent[]; blocked?: boolean }>("/track/delete", { session, module, cascade });
       if (r.status === 409) return { asks: { dependents: r.json.dependents ?? [], blocked: !!r.json.blocked } };
-      await edit(session, { name: `deleting ${name}`, structural: true }, Promise.resolve(r.json));
+      await edit(session, { name: `deleting ${name}`, structural: true }, Promise.resolve(r.json), ours);
       return { done: r.json };
     } finally {
-      sent();
+      ours.end();
     }
   },
   /** A layout write (no revision, PLANE-3): every track in a new order, one track's colour, or the defaults. */
   // Always a step of its own, though a move says "Kick" before and after: what Undo takes back next.
   layout: (session: number, change: { order?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) => {
-    const sent = editing();
+    const ours = editing();
     return call<Edit>("/layout", { session, ...change })
-      .then((r) => (recorded(session, r, step), r))
-      .finally(sent);
+      .then((r) => (recorded(session, r, step, ours), r))
+      .finally(() => ours.end());
   },
   /**
    * Undo the step `step` names, only while it is the newest (AGENT-2); without it, the newest. A
@@ -873,28 +879,55 @@ export function writeLane(graph: GraphState, module: string, lane: string, clips
   const q = lanes;
   q.pending++;
   // On its way from now, while it waits in the queue too (Undo waits for it).
-  const done = editing();
+  const ours = editing();
   const write = q.queue
-    .then(() => graphApi.lane(graph.session, base, module, lane, sent, step))
-    .then((r) => ((q.revision = Math.max(q.revision, r.revision)), { ...r, clips: sent }))
-    .finally(() => (q.pending--, done()));
+    .then(() => graphApi.lane(graph.session, base, module, lane, sent, step, ours))
+    .then((r) => {
+      q.revision = Math.max(q.revision, r.revision);
+      wrote.set(`${module}.${lane}`, { session: graph.session, revision: r.revision, clips: shapeOf(sent) });
+      return { ...r, clips: sent };
+    })
+    .finally(() => (q.pending--, ours.end()));
   q.queue = write.catch(() => {});
   return write;
+}
+
+/**
+ * The lanes the roll wrote last, by `module.lane`: the clips it wrote, as `shapeOf` says them, and
+ * the revision the write made.
+ */
+const wrote = new Map<string, { session: number; revision: number; clips: string }>();
+
+/** Notes clips as what they hold: their ids, places and notes, in the order the file keeps them. */
+function shapeOf(clips: NoteClip[]): string {
+  const notes = (c: NoteClip) =>
+    c.notes.map((n) => [n.pitch, n.start, n.length, n.velocity]).sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+  return JSON.stringify(clips.map((c) => [c.id ?? null, c.start, c.length, notes(c)]).sort((a, b) => (a[1] as number) - (b[1] as number) || String(a[0]).localeCompare(String(b[0]))));
+}
+
+/**
+ * Whether notes lane `module.lane`, holding `clips` in `graph`, is as the roll's last write of it
+ * made it, a write that made a revision after `since`: what changed there since `since` was this
+ * window's own writing, nothing another writer did after it.
+ */
+export function wroteHere(graph: GraphState, module: string, lane: string, clips: NoteClip[], since: number): boolean {
+  const w = wrote.get(`${module}.${lane}`);
+  return !!w && w.session === graph.session && w.revision > since && w.revision <= graph.view.revision && w.clips === shapeOf(clips);
 }
 
 /**
  * Run `f` (a write of a notes lane by another route: a drag's lease, 8b.7) after the lane writes on
  * their way, in their queue, counted as one of them: it never races a roll write still on its way.
  */
-export function afterLaneWrites<T>(graph: GraphState, f: () => Promise<T & { revision: number }>): Promise<T & { revision: number }> {
+export function afterLaneWrites<T>(graph: GraphState, f: (within: Editing) => Promise<T & { revision: number }>): Promise<T & { revision: number }> {
   if (lanes.session !== graph.session) lanes = { session: graph.session, revision: 0, pending: 0, queue: Promise.resolve() };
   const q = lanes;
   q.pending++;
-  const done = editing();
+  const ours = editing();
   const write = q.queue
-    .then(f)
+    .then(() => f(ours))
     .then((r) => ((q.revision = Math.max(q.revision, r.revision)), r))
-    .finally(() => (q.pending--, done()));
+    .finally(() => (q.pending--, ours.end()));
   q.queue = write.catch(() => {});
   return write;
 }

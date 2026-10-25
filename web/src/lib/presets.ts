@@ -85,7 +85,7 @@ export const presetsApi = {
     from: PresetFrom,
     name: string,
   ) => {
-    const answered = editing();
+    const ours = editing();
     return request<Loaded>("/api/graph/preset/load", {
       session,
       at,
@@ -94,10 +94,10 @@ export const presetsApi = {
       name,
     })
       .then((r) => {
-        if (r.changed) recorded(session, r, { name: `loading ${name}` });
+        if (r.changed) recorded(session, r, { name: `loading ${name}` }, ours);
         return r;
       })
-      .finally(answered);
+      .finally(() => ours.end());
   },
 };
 

@@ -10,7 +10,7 @@ import { create } from "zustand";
 import { clipIndex, findLane, hasOwnId, laneWriting, readJson, sameClip, type ClipRef, type GraphState, type TimelineLane, type TimelineView } from "./graph";
 import { beatNow } from "./clock";
 import { clean } from "./grid";
-import { editing, recorded, type Step } from "./history";
+import { editing, recorded, type Editing, type Step } from "./history";
 import { token } from "./native";
 
 /** A lane's address, as the server writes it: module and lane keys. */
@@ -127,11 +127,12 @@ export class Refused extends Error {
  * done). Refused, it throws `Refused` with the server's words. `via`: another route that writes it
  * and answers as `/api/graph/clips` does (a drag's lease, 8b.7).
  */
-export async function send(graph: GraphState, gesture: Gesture, step: Step, via?: { path: string; body: unknown }): Promise<Done> {
+export async function send(graph: GraphState, gesture: Gesture, step: Step, via?: { path: string; body: unknown }, edit?: Editing): Promise<Done> {
   if (sent.session !== graph.session) sent = { session: graph.session, revision: 0, pending: 0 };
   const q = sent;
   q.pending++;
-  const answered = editing();
+  // On its way: as part of `edit` (a drag let go, which ends it), else as one of its own.
+  const ours = edit ?? editing();
   try {
     const res = await fetch(via?.path ?? "/api/graph/clips", {
       method: "POST",
@@ -144,11 +145,11 @@ export async function send(graph: GraphState, gesture: Gesture, step: Step, via?
     q.revision = Math.max(q.revision, done.revision);
     // A gesture that changed nothing says "no change" on both sides. One whose words read the same
     // before and after (a quantize: the same clip, its notes moved) is still a step.
-    if (done.before !== done.after || done.before !== "no change") recorded(graph.session, done, step);
+    if (done.before !== done.after || done.before !== "no change") recorded(graph.session, done, step, ours);
     return done;
   } finally {
     q.pending--;
-    answered();
+    if (!edit) ours.end();
   }
 }
 
@@ -224,7 +225,7 @@ export function copiedOf(timeline: TimelineView, picked: readonly ClipRef[]): Co
  * it throws the server's words.
  */
 export async function removeAutomation(graph: GraphState, addr: LaneAddr, beat: number, name: string) {
-  const answered = editing();
+  const ours = editing();
   try {
     const res = await fetch("/api/graph/automate/remove", {
       method: "POST",
@@ -234,9 +235,9 @@ export async function removeAutomation(graph: GraphState, addr: LaneAddr, beat: 
     const json = await readJson(res);
     if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
     const done = json as { file: string; before: string; after: string; revision: number; step?: number };
-    if (done.before !== done.after) recorded(graph.session, done, { name: `removing the ${name} automation`, structural: true });
+    if (done.before !== done.after) recorded(graph.session, done, { name: `removing the ${name} automation`, structural: true }, ours);
     return done;
   } finally {
-    answered();
+    ours.end();
   }
 }

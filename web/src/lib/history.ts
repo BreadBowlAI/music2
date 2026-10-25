@@ -66,33 +66,46 @@ let answered: { session: number; revision: number; undo: StepName | null; redo: 
 let mine: { session: number; steps: Set<number> } = { session: 0, steps: new Set() };
 
 /**
- * This window's edits on their way: sent, and not yet answered and recorded (or refused). The
- * server may have made an edit's step before its answer reaches the window, so a ⌘Z pressed then
- * would name the step below it, which isn't the newest, and be refused (AGENT-2).
+ * An edit of this window on its way: sent (or, a drag let go, waiting to be), and not yet answered
+ * and recorded, or refused. `steps`: the undo steps its answers made. `end` once it is over.
  */
-const onItsWay = new Set<Promise<void>>();
+export interface Editing {
+  readonly steps: number[];
+  readonly done: Promise<void>;
+  end(): void;
+}
 
 /**
- * An edit of this window is on its way: call what this returns once its answer is recorded, or it
- * was refused. Undo and Redo of the top wait for it (`edited`).
+ * This window's edits on their way. The server may make an edit's step before its answer reaches
+ * the window, so a ⌘Z pressed then would name the step below it, which isn't the newest, and be
+ * refused (AGENT-2): Undo and Redo of the top wait for these.
  */
-export function editing(): () => void {
-  let done = () => {};
-  const p = new Promise<void>((resolve) => (done = resolve));
-  onItsWay.add(p);
-  return () => {
-    onItsWay.delete(p);
-    done();
+const onItsWay = new Set<Editing>();
+
+/** An edit of this window is on its way from now: end what this returns once it is over. */
+export function editing(): Editing {
+  let resolve = () => {};
+  const done = new Promise<void>((r) => (resolve = r));
+  const e: Editing = {
+    steps: [],
+    done,
+    end() {
+      onItsWay.delete(e);
+      resolve();
+    },
   };
+  onItsWay.add(e);
+  return e;
 }
 
-/** Once every edit this window has on its way now is answered. */
-export function edited(): Promise<void> {
-  return Promise.all([...onItsWay]).then(() => {});
-}
+/** The edits this window has on its way now. */
+export const onTheirWay = (): Editing[] => [...onItsWay];
 
-/** Whether this window has an edit on its way. */
-export const sending = () => onItsWay.size > 0;
+/** Once one of this window's edits on their way now, other than `own`, is over; null with none. */
+export function oneEnds(own?: Editing): Promise<void> | null {
+  const others = [...onItsWay].filter((e) => e !== own);
+  return others.length ? Promise.race(others.map((e) => e.done)) : null;
+}
 
 /** Whether undo step `step` of `session` was made by an edit of this window. */
 export function madeHere(session: number, step: number | undefined): boolean {
@@ -101,13 +114,14 @@ export function madeHere(session: number, step: number | undefined): boolean {
 
 /**
  * An edit this window made has committed `answer.revision`, as `step`: the server names its undo
- * step so. Its id (`answer.step`) is kept as this window's, and Undo names it at once, so a ⌘Z
+ * step so, and `edit`, the edit on its way that made it, keeps its id. Its id (`answer.step`) is kept as this window's, and Undo names it at once, so a ⌘Z
  * pressed before the state is read again takes back this edit, not the one before.
  */
-export function recorded(session: number, answer: { revision: number; step?: number }, step: Step) {
+export function recorded(session: number, answer: { revision: number; step?: number }, step: Step, edit?: Editing) {
   const revision = answer.revision;
   const undo: StepName = { name: step.name, structural: !!step.structural, given: true, source: "page", step: answer.step };
   if (answer.step !== undefined) {
+    edit?.steps.push(answer.step);
     if (mine.session !== session) mine = { session, steps: new Set() };
     mine.steps.add(answer.step);
     const { graph, set } = useStore.getState();

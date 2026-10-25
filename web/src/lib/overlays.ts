@@ -234,12 +234,12 @@ export interface Edited {
  * read-only window (423) and while the code doesn't compile, in words.
  */
 export async function muteInSongCall(session: number, modules: string[], muted: boolean) {
-  const answered = editing();
+  const ours = editing();
   try {
     const r = await post<Edited>("/track/mute", { session, modules, muted });
-    if (r.before !== r.after) recorded(session, r, { name: muted ? "mute in song" : "unmute in song", structural: true });
+    if (r.before !== r.after) recorded(session, r, { name: muted ? "mute in song" : "unmute in song", structural: true }, ours);
     return r;
   } finally {
-    answered();
+    ours.end();
   }
 }

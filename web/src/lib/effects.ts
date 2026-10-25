@@ -81,14 +81,14 @@ async function edit(path: string, body: Record<string, unknown>, step: Step) {
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return toast(`${why}.`);
-  const answered = editing();
+  const ours = editing();
   try {
     const r = await post(path, { session: graph.session, revision: graph.view.revision, ...body });
-    if (r.before !== r.after) recorded(graph.session, r, step);
+    if (r.before !== r.after) recorded(graph.session, r, step, ours);
   } catch (error) {
     toast(message(error));
   } finally {
-    answered();
+    ours.end();
   }
 }
 

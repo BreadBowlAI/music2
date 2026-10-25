@@ -87,7 +87,7 @@ export function begin(session: number, at: number, ended: (why: string) => void)
     },
     async finish(bpm, step) {
       stop();
-      const answered = editing();
+      const ours = editing();
       try {
         const id = await lease;
         const done: TempoDone =
@@ -102,10 +102,10 @@ export function begin(session: number, at: number, ended: (why: string) => void)
                 return json;
               })
             : await post("commit", { lease: id, bpm });
-        if (done.before !== done.after) recorded(session, done, step);
+        if (done.before !== done.after) recorded(session, done, step, ours);
         return done;
       } finally {
-        answered();
+        ours.end();
       }
     },
     abort() {

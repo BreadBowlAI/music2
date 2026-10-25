@@ -70,7 +70,7 @@ export async function writeMarkers(list: Marker[], step: Step) {
   const since = markersOf(graph.timeline);
   const sorted = [...list].sort((a, b) => a.beat - b.beat);
   usePendingMarkers.setState({ pending: { list: sorted, since } });
-  const answered = editing();
+  const ours = editing();
   try {
     const res = await fetch("/api/graph/markers", {
       method: "POST",
@@ -79,11 +79,11 @@ export async function writeMarkers(list: Marker[], step: Step) {
     });
     const r = await readJson(res);
     if (!res.ok) throw new Error(r.error ?? `HTTP ${res.status}`);
-    if (r.before !== r.after) recorded(graph.session, r, step);
+    if (r.before !== r.after) recorded(graph.session, r, step, ours);
   } catch (error) {
     usePendingMarkers.setState({ pending: null });
     toast((error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, ""));
   } finally {
-    answered();
+    ours.end();
   }
 }

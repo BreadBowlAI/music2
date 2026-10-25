@@ -71,18 +71,18 @@ export async function changeId(module: string, id: string): Promise<string | nul
   const why = lockReason(graph, connected);
   if (why) return `${why}.`;
   const name = nameOf(graph, module);
-  const answered = editing();
+  const ours = editing();
   try {
     const r = await post<{ revision: number; step?: number; before: string; after: string }>("/track/rekey", { session: graph.session, module, key: id });
     // The window follows the track once the graph has its new ID (below): not before, or the
     // timeline, not knowing it yet, would pick another track.
-    recorded(graph.session, r, { name: `changing ${name}'s ID`, structural: true });
+    recorded(graph.session, r, { name: `changing ${name}'s ID`, structural: true }, ours);
     toast(`${name}'s ID is ${id} now`, undoAction(graph.session, r.step));
     return null;
   } catch (error) {
     return message(error);
   } finally {
-    answered();
+    ours.end();
   }
 }
 
