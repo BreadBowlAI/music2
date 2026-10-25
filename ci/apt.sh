@@ -8,6 +8,8 @@
 #                      renders: ALSA's headers, and Xvfb for ph-window's invisible screen
 #   ci/apt.sh check    everything ci/check.sh uses: build's, plus Xvfb and the X11 and libpng headers
 #                      for the app row's invisible screen and its screenshots (ci/xshot.c)
+#   ci/apt.sh release  what ci/release.sh needs on Linux: check's, plus file (the AppImage's
+#                      appimagetool needs it) and binutils (objdump reads the glibc the programs need)
 #
 # Found from the build itself (the -sys crates each part builds, and ldd of the binaries), on
 # ubuntu-24.04 (2026-10-21). pkg-config, a C compiler, git and curl are assumed (the GitHub runner
@@ -17,7 +19,8 @@ case ${1:-} in
   build) PKGS="libwebkit2gtk-4.1-dev libasound2-dev libdbus-1-dev" ;;
   suites) PKGS="libasound2-dev xvfb" ;;
   check) PKGS="libwebkit2gtk-4.1-dev libasound2-dev libdbus-1-dev xvfb libx11-dev libpng-dev" ;;
-  *) sed -n '2,13p' "$0" >&2; exit 2 ;;
+  release) PKGS="libwebkit2gtk-4.1-dev libasound2-dev libdbus-1-dev xvfb libx11-dev libpng-dev file binutils" ;;
+  *) sed -n '2,16p' "$0" >&2; exit 2 ;;
 esac
 SUDO=
 if [ "$(id -u)" -ne 0 ]; then SUDO=sudo; fi

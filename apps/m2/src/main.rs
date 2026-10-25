@@ -27,6 +27,10 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         None => return usage(),
         Some(word) if HELP.contains(&word) => return usage(),
+        Some(word) if VERSION.contains(&word) => {
+            println!("m2 {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
         Some("docs") => return docs::docs(&args),
         // m2 run again as the plugin host for a song it plays (`m2_plugins::run_main` serves it).
         Some(word) if word == m2_plugins::HOST_FLAG => {}
@@ -72,6 +76,9 @@ fn main() -> ExitCode {
 
 /// The words that ask for the usage, as `m2` alone does. Not commands: the table hasn't got them.
 const HELP: &[&str] = &["help", "--help", "-h"];
+
+/// The words that ask which m2 this is (PLAT-8): it prints `m2 <version>`.
+const VERSION: &[&str] = &["--version", "-V"];
 
 /// `m2`'s usage, from the one command table.
 fn usage() -> ExitCode {

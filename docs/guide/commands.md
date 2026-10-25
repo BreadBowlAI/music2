@@ -6,7 +6,7 @@
 - `m2` works on song folders, with the app open or closed. A command that writes ends with `--as <your name> --why "<a few words>"`.
 - This page is made from `m2`'s own table, so `m2 docs commands` prints it as that `m2` has it.
 
-From source, `cargo build --locked --release -p m2` builds `m2` as `target/release/m2`; in `music2.app` it is `music2.app/Contents/MacOS/m2`. In the examples below it is called `m2`. `<project>` is a song's folder.
+From source, `cargo build --locked --release -p m2` builds `m2` as `target/release/m2`; in `music2.app` it is `music2.app/Contents/MacOS/m2`, and from the Linux `.deb` `/usr/bin/m2`. In the examples below it is called `m2`. `<project>` is a song's folder.
 
 ## How every command behaves
 
@@ -14,9 +14,9 @@ Every command that reads a project prints what needs attention in it, such as da
 
 One program writes a project at a time (its lock is `.music2/lock`). While the app has the song open, a command that writes it hands its edit to the app, which makes it one undo step, named by `--as <name>` (or `M2_AS`) and `--why <words>`, which go last, after the command's own arguments: the musician sees it there, and `m2 undo` takes it back. While the musician drags what it changes, records, or has unsaved code in its file, the app refuses it: `m2` waits up to 30 s, then exits 3, changing nothing. Don't write the song's files directly while the app has it open: the app can't refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files itself, and undo isn't kept once it exits. Reading, rendering and `bounce` without `--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can do: `m2 call` refuses it, and `m2 point` shows them where instead.
 
-std, the templates and the examples are found at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, inside `music2.app` when `m2` runs from there, or else in the source tree it was built from.
+std, the templates and the examples are found at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, in the app or package `m2` came in (`music2.app/Contents/Resources`, or `lib/music2` beside the `bin` that holds `m2` on Linux, as in `/usr/lib/music2`), or else in the source tree it was built from.
 
-`m2` alone, `m2 help` or `m2 --help` prints this. A command `m2` doesn't know is refused, with exit status 2. `m2 docs` prints the guide, built into this `m2`.
+`m2` alone, `m2 help` or `m2 --help` prints this; `m2 --version` (or `-V`) prints which `m2` this is. A command `m2` doesn't know is refused, with exit status 2. `m2 docs` prints the guide, built into this `m2`.
 
 ## m2 new
 

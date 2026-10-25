@@ -1,0 +1,194 @@
+# .github/workflows/release.yml: music2's downloads (PLAT-8). A pushed tag v<version> builds the
+# Mac and Linux files and makes a draft pre-release of them; the owner publishes it by hand.
+#
+# In short: each platform's job runs ci/release.sh, the same script anyone can run on their own
+# machine: build (the Tauri CLI from web/, never a third-party action), check (unpack each file,
+# run its m2 from outside the source tree on a new song from every template and example) and, on
+# Linux, app (the .deb's app opened on an invisible screen). Then, on a tag only, one job adds
+# SHA256SUMS and makes the draft, with the notes in docs/releases/<version>.md. A pull request that
+# changes this file, ci/release.sh, the bundle's config, how resources are found, or what goes into
+# the bundle runs both builds and keeps the files as workflow artifacts, with no release; so does
+# main every Monday. This is no part of ci-ok.
+#
+# Files: music2-<v>-macos-arm64.zip (Apple silicon), music2_<v>_amd64.deb,
+# music2-<v>-linux-x86_64.AppImage, m2-<v>-linux-x86_64.tar.gz, SHA256SUMS.
+#
+# Signing: none is needed for 0.1, whose Mac app is signed ad hoc. To sign and notarize later:
+# make an environment "release" (Settings → Environments) that only v* tags may use, with the owner
+# as required reviewer; put in it, not in the repo's secrets, APPLE_CERTIFICATE (a base64 Developer
+# ID .p12), APPLE_CERTIFICATE_PASSWORD, and for notarizing APPLE_ID, APPLE_PASSWORD (an
+# app-specific password) and APPLE_TEAM_ID, optionally APPLE_SIGNING_IDENTITY; add a ruleset that
+# lets only the owner create v* tags; and give the mac job `environment: release` (a run on a
+# pull request or main then waits for the owner, so split the signing into a job of its own that
+# runs on tags only). ci/release.sh then signs with the hardened runtime and
+# apps/music2-desktop/entitlements.plist, and Tauri notarizes. Until then the secrets below are
+# empty, and the build signs ad hoc (gap #43).
+#
+# Security: the token reads only, but in the release job, which may write the repo's releases. The
+# checkout keeps no credentials. pull_request, never pull_request_target. Only GitHub's own actions
+# and Swatinem/rust-cache, each pinned by its full commit (version in the comment; dependabot.yml
+# keeps them current).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - ci/release.sh
+      - apps/music2-desktop/tauri.conf.json
+      - apps/music2-desktop/bundle-m2.sh
+      - apps/music2-desktop/entitlements.plist
+      - apps/music2-desktop/Info.plist
+      - apps/music2-desktop/icons/**
+      - crates/server/src/resources.rs
+      - docs/releases/**
+      - ci/appimage-tools.sha256
+      - ci/notices.mjs
+      - ci/licenses/**
+      - ci/apt.sh
+      - apps/music2-desktop/copyright
+      - std/**
+      - templates/**
+      - examples/**
+      - Cargo.lock
+      - web/package-lock.json
+  # Every Monday on main, and by hand: both builds and their checks, with no release, so a change
+  # elsewhere that breaks a download (a new example m2 can't check from the bundle, a crate with a
+  # licence the notices have no text for) shows before a tag; and main's Rust cache, which tags
+  # and pull requests start from (a cache saved on a tag serves only that tag).
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its run still going; a tag's run always ends.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: never
+  M2_PLUGINS_MIRROR: ${{ github.server_url }}/${{ github.repository }}/releases/download/test-plugins
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The build's libraries, Xvfb with the X11 and libpng headers for the app's pictures, file
+      # and objdump.
+      - run: ci/apt.sh release
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # The tag reaches the script through the environment, never pasted into it (a tag name can
+      # hold shell words).
+      - env:
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: ci/release.sh version "$TAG"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/m2-test-plugins/dl
+          key: m2-plugins-${{ hashFiles('ci/plugins.sha256') }}
+      # The test plugins, so the check plays with-plugins through the plugin host in the bundle.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: ci/plugins.sh
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: ci/release.sh build dist
+      - run: CLAP_PATH="$HOME/.local/share/m2-test-plugins/clap" ci/release.sh check dist
+      - run: ci/release.sh app dist pictures
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: music2-linux
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pictures-linux
+          path: pictures/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # The tag reaches the script through the environment, never pasted into it (a tag name can
+      # hold shell words).
+      - env:
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: ci/release.sh version "$TAG"
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Signing, on a tag only, when the secrets are there (above); else ad hoc.
+      - env:
+          APPLE_CERTIFICATE: ${{ github.event_name == 'push' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ github.event_name == 'push' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ github.event_name == 'push' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ github.event_name == 'push' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ github.event_name == 'push' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ github.event_name == 'push' && secrets.APPLE_TEAM_ID || '' }}
+          M2_RELEASE_SCRATCH: ${{ runner.temp }}/m2-release
+        run: ci/release.sh build dist
+      - run: ci/release.sh check dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: music2-macos
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  # On a tag: one draft pre-release with every file, SHA256SUMS and the notes. Run again, it
+  # refuses while that tag's draft is there: delete the draft first.
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, mac]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: music2-*
+          path: dist
+          merge-multiple: true
+      - run: ci/release.sh sums dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          v=$(ci/release.sh version "$TAG")
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
+            --title "music2 $v (alpha)" --notes-file "docs/releases/$v.md"

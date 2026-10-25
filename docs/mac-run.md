@@ -241,3 +241,13 @@ that has a pitch wheel and a mod wheel):
 | 134 | Build the app as in `io` above: `(cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build --bundles app)`. Then in Terminal, in the music2 folder: `target/release/bundle/macos/music2.app/Contents/MacOS/m2 docs \| head -2` | The build says `bundle-m2.sh: target/release/m2 is ready` before it bundles. `m2 docs` prints "music2's guide, built into this m2 (0.1.0)…": the app carries `m2`. |
 | 135 | Open that `music2.app`. Click **New Song…**, name it "Agents test", and press **Create**. In Terminal: `grep "m2 for this song" ~/Music/music2/"Agents test"/AGENTS.md`, then `cat ~/Music/music2/"Agents test"/CLAUDE.md` | The first names the app's own `m2`: `…/music2.app/Contents/MacOS/m2`. The second says `@AGENTS.md`. The app shows neither file. |
 | 136 | Tell the lead what you saw at 134 and 135. | |
+
+**The downloaded app** (`release`, about 10 minutes; once the release workflow has run, on a pull request or a tag):
+
+| # | Do this | You should see and hear |
+|---|---|---|
+| 137 | On GitHub, open the release workflow's run (Actions → Release), and download the artifact **music2-macos** (or, on a tag, `music2-0.1.0-macos-arm64.zip` from the draft release). Unzip it until you have `music2.app`, and drag it into **Applications**. | One `music2.app`, about the size of the one you build. |
+| 138 | Open it. Click **Done** when macOS says it can't check it. Open **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway**, type your password, then click **Open Anyway** again. | The start screen. The steps are those the release notes give (`docs/releases/0.1.0.md`); tell the lead if any word or button differs. |
+| 139 | Click **New Song…**, keep **Starter beat**, press **Create**, then press Space. Then click **Export**, keep **Song**, and save it. | The song plays. The export lands in `~/Music/music2/Exports` and plays in QuickTime. |
+| 140 | Click **Examples**, then **First song**. Then, in Terminal: `/Applications/music2.app/Contents/MacOS/m2 --version`, then `grep "m2 for this song" ~/Music/music2/"My song"/AGENTS.md` | The example opens and plays. `m2 0.1.0`, with no warning from macOS (if macOS blocks `m2`, say so: then `xattr -dr com.apple.quarantine /Applications/music2.app` and try again). The song's `AGENTS.md` names `/Applications/music2.app/Contents/MacOS/m2`. |
+| 141 | Tell the lead what you saw at 137 to 140. | |

@@ -2,7 +2,7 @@
 
 **In short**
 - Found a security problem? Report it in private on GitHub: the repository's **Security** tab, then **Report a vulnerability**. Please don't open a public issue for it.
-- Before 1.0, only `main` gets fixes. There are no releases yet.
+- Before 1.0, only `main` gets fixes, and they ship in the next release. 0.1.0 is the first release, an alpha.
 - A song is code. Opening someone's song runs that code, in a sandbox that can only describe music.
 - CLAP plugins are native programs. They run in a second process, but they are not sandboxed: trust them as you trust any app you install.
 
@@ -16,10 +16,8 @@
 
 | Version | Fixes |
 |---|---|
-| `main` | yes |
-| anything older | no |
-
-There are no releases before 1.0. Build from `main`.
+| `main` | yes, and the next release carries them |
+| a release (0.1.0) or anything older | no: update to the newest release, or build from `main` |
 
 ## The security model
 
