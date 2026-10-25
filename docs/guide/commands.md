@@ -290,7 +290,7 @@ m2 clips <project> delete <clip>…
 m2 clips <project> json <gesture.json | ->
 ```
 
-One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. `json` takes any gesture `POST /api/graph/clips` takes: also `paste`, `notes`, `points`, `audio` and `set`.
+One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste`, `notes`, `points`, `audio` and `set`.
 
 ## m2 unautomate
 
@@ -330,7 +330,7 @@ Take back your own newest change in the open app (by `--as`): never the musician
 m2 focus <project>
 ```
 
-What the musician looks at in the open app, as JSON: the view, the selected track, clips and notes, the knob last touched, the bars shown, the code's file and line, where playback is. Also `playing`, `beat`, `loop`, the files with unsaved code, what V compares (`comparing`) and the MIDI keyboard's target (`midi`). Fields the window hasn't said yet are null. It writes nothing.
+What the musician looks at in the open app, as JSON: the view, the selected track, clips and notes, the knob last touched, the bars shown, the code's file and line, where playback is. In full: the dock's view, the selected track by its key, the clips picked (`{track, lane, id}`) and a marquee's bars (`range`), the roll's selected notes by `pitch`, `start` and `length`, the knob last touched, the beats the timeline shows (`seen`), the code view's file and line; and from the app, `playing`, `beat`, `loop`, the files with unsaved code, what V compares (`comparing`) and the MIDI keyboard's target (`midi`). Fields the window hasn't said yet are null. It writes nothing.
 
 ## m2 watch
 
@@ -338,7 +338,7 @@ What the musician looks at in the open app, as JSON: the view, the selected trac
 m2 watch <project> [--meters]
 ```
 
-Follow the open app: each change, undo, toast, focus, pointer and transport change as one JSON object a line, `t` first, until the app quits (then `closed`); meters too with `--meters`. It prints the events of [the local API](api.md#events). When the app opens another song or closes this one, it says `{"t":"closed","why":"song"}` and ends. While whoever reads it doesn't, it keeps 1,024 lines, then says `{"t":"lagged","missed":n,"by":"m2"}`. It writes nothing.
+Follow the open app: each change, undo, toast, focus, pointer and transport change as one JSON object a line, `t` first, until the app quits (then `closed`); meters too with `--meters`. First it prints `{"t":"watch","session":…}`, then each event the window hears, one JSON object a line with `t` first and the song's `session`: a change landed, an undo or a redo, a toast, the focus, a pointer, the Compare pill ([the local API](api.md#events) lists them), and `transport` when it plays or stops, the loop changes or the playhead jumps (read every quarter second). The meters only with `--meters`. When the app quits it prints `{"t":"closed","why":"app"}` and exits 0; when the app opens another song or closes this one, `{"t":"closed","why":"song"}`, and it prints nothing of the other song. While whoever reads it doesn't, it keeps 1,024 lines and drops the rest, then says `{"t":"lagged","missed":n,"by":"m2"}`; when they go away (`m2 watch … | head -1`), it ends quietly. It writes nothing, and it never takes a message from the musician's window.
 
 ## m2 point
 
@@ -347,7 +347,7 @@ m2 point <project> <target> <words>
 m2 point <project> --clear
 ```
 
-Show a note in the open app at `track:bass`, `clip:bass/notes:<id>`, `lane:bass/cutoff`, `knob:<id>` or `bars:9-16` (by `--as`); it never moves the musician's view: they press play. `--clear` takes it away. A target the song hasn't got is refused, and so are bars past its end.
+Show a note in the open app at `track:bass`, `clip:bass/notes:<id>`, `lane:bass/cutoff`, `knob:<id>` or `bars:9-16` (by `--as`); it never moves the musician's view: they press play. `--clear` takes it away; so does their OK. `bars:9` is one bar. A pointer is how an agent says "listen to bars 9 to 16": the musician presses play. It never selects anything. A target the song hasn't got is refused, saying so, and so are bars past its end, saying how many bars it has.
 
 ## m2 routes
 
@@ -355,7 +355,7 @@ Show a note in the open app at `track:bass`, `clip:bass/notes:<id>`, `lane:bass/
 m2 routes [--json]
 ```
 
-Every route of the app's API, from its one table: the ones for agents first, each with what it does, whether it writes and an example body; the musician's own (play, record, the view…) last. No app needs to run. [API routes](routes.md) is the same table.
+Every route of the app's API, from its one table: the ones for agents first, each with what it does, whether it writes and an example body; the musician's own (play, record, the view…) last. No app needs to run. `--json` prints the table: `[{method, path, limit, writes, agents, words, example}]`, `limit` being the largest body the route takes (2 MiB, more for imports and Tx). [API routes](routes.md) is the same table.
 
 ## m2 call
 
@@ -363,7 +363,7 @@ Every route of the app's API, from its one table: the ones for agents first, eac
 m2 call <project> <path> [<json> | -] [--method M]
 ```
 
-Send one route's request to the open app, as an agent (by `--as`): song changes with no command of their own (an effect's bypass, markers, the song's key) and every read. The song's session is filled in; a GET's keys go in its query; it prints the answer and exits 1 when the app refuses. The musician's controls are refused before anything is sent. `--method` picks one where a path takes two (`/api/settings`). A write the musician holds waits, as every `m2` write does (exit 3).
+Send one route's request to the open app, as an agent (by `--as`): song changes with no command of their own (an effect's bypass, markers, the song's key) and every read. The song's session is filled in; a GET's keys go in its query; it prints the answer and exits 1 when the app refuses. The musician's controls are refused before anything is sent. The song changes it reaches include a track's instrument or ID, and a bus. `--method` picks one where a path takes two (`/api/settings`). Refused before anything is sent, too: a body bigger than the route takes. A write the musician holds waits, as every `m2` write does (exit 3). On standard error it says the undo step a write made, or what an undo took back.
 
 ## m2 docs
 

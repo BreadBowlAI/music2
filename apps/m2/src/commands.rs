@@ -340,8 +340,8 @@ pub const COMMANDS: &[Command] = &[
                 or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or \
                 beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app \
                 sends it",
-        more: "`json` takes any gesture `POST /api/graph/clips` takes: also `paste`, `notes`, `points`, `audio` and \
-               `set`.",
+        more: "Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste`, `notes`, \
+               `points`, `audio` and `set`.",
     },
     Command {
         name: "unautomate",
@@ -383,7 +383,10 @@ pub const COMMANDS: &[Command] = &[
         usage: "m2 focus <project>",
         words: "what the musician looks at in the open app, as JSON: the view, the selected track, clips and notes, \
                 the knob last touched, the bars shown, the code's file and line, where playback is",
-        more: "Also `playing`, `beat`, `loop`, the files with unsaved code, what V compares (`comparing`) and the MIDI \
+        more: "In full: the dock's view, the selected track by its key, the clips picked (`{track, lane, id}`) and a \
+               marquee's bars (`range`), the roll's selected notes by `pitch`, `start` and `length`, the knob last \
+               touched, the beats the timeline shows (`seen`), the code view's file and line; and from the app, \
+               `playing`, `beat`, `loop`, the files with unsaved code, what V compares (`comparing`) and the MIDI \
                keyboard's target (`midi`). Fields the window hasn't said yet are null. It writes nothing.",
     },
     Command {
@@ -392,9 +395,15 @@ pub const COMMANDS: &[Command] = &[
         usage: "m2 watch <project> [--meters]",
         words: "follow the open app: each change, undo, toast, focus, pointer and transport change as one JSON object \
                 a line, `t` first, until the app quits (then `closed`); meters too with `--meters`",
-        more: "It prints the events of [the local API](api.md#events). When the app opens another song or closes this \
-               one, it says `{\"t\":\"closed\",\"why\":\"song\"}` and ends. While whoever reads it doesn't, it keeps \
-               1,024 lines, then says `{\"t\":\"lagged\",\"missed\":n,\"by\":\"m2\"}`. It writes nothing.",
+        more: "First it prints `{\"t\":\"watch\",\"session\":…}`, then each event the window hears, one JSON object a \
+               line with `t` first and the song's `session`: a change landed, an undo or a redo, a toast, the focus, \
+               a pointer, the Compare pill ([the local API](api.md#events) lists them), and `transport` when it plays \
+               or stops, the loop changes or the playhead jumps (read every quarter second). The meters only with \
+               `--meters`. When the app quits it prints `{\"t\":\"closed\",\"why\":\"app\"}` and exits 0; when the app \
+               opens another song or closes this one, `{\"t\":\"closed\",\"why\":\"song\"}`, and it prints nothing of \
+               the other song. While whoever reads it doesn't, it keeps 1,024 lines and drops the rest, then says \
+               `{\"t\":\"lagged\",\"missed\":n,\"by\":\"m2\"}`; when they go away (`m2 watch … | head -1`), it ends \
+               quietly. It writes nothing, and it never takes a message from the musician's window.",
     },
     Command {
         name: "point",
@@ -402,8 +411,10 @@ pub const COMMANDS: &[Command] = &[
         usage: "m2 point <project> <target> <words>\nm2 point <project> --clear",
         words: "show a note in the open app at `track:bass`, `clip:bass/notes:<id>`, `lane:bass/cutoff`, `knob:<id>` \
                 or `bars:9-16` (by `--as`); it never moves the musician's view: they press play. `--clear` takes it \
-                away",
-        more: "A target the song hasn't got is refused, and so are bars past its end.",
+                away; so does their OK",
+        more: "`bars:9` is one bar. A pointer is how an agent says \"listen to bars 9 to 16\": the musician presses \
+               play. It never selects anything. A target the song hasn't got is refused, \
+               saying so, and so are bars past its end, saying how many bars it has.",
     },
     Command {
         name: "routes",
@@ -411,7 +422,9 @@ pub const COMMANDS: &[Command] = &[
         usage: "m2 routes [--json]",
         words: "every route of the app's API, from its one table: the ones for agents first, each with what it does, \
                 whether it writes and an example body; the musician's own (play, record, the view…) last",
-        more: "No app needs to run. [API routes](routes.md) is the same table.",
+        more: "No app needs to run. `--json` prints the table: `[{method, path, limit, writes, agents, words, \
+               example}]`, `limit` being the largest body the route takes (2 MiB, more for imports and Tx). \
+               [API routes](routes.md) is the same table.",
     },
     Command {
         name: "call",
@@ -421,8 +434,10 @@ pub const COMMANDS: &[Command] = &[
                 their own (an effect's bypass, markers, the song's key) and every read. The song's session is filled \
                 in; a GET's keys go in its query; it prints the answer and exits 1 when the app refuses. The \
                 musician's controls are refused before anything is sent",
-        more: "`--method` picks one where a path takes two (`/api/settings`). A write the musician holds waits, as \
-               every `m2` write does (exit 3).",
+        more: "The song changes it reaches include a track's instrument or ID, and a bus. `--method` picks one \
+               where a path takes two (`/api/settings`). Refused before anything is sent, too: a body bigger than \
+               the route takes. A write the musician holds waits, as every `m2` write does (exit 3). On standard \
+               error it says the undo step a write made, or what an undo took back.",
     },
     Command {
         name: "docs",

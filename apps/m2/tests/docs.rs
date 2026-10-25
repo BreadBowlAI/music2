@@ -219,3 +219,42 @@ fn the_guide_names_only_real_commands_and_routes() {
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+// AGENT-12, the review's R2: the made commands page keeps what the manual's table said, which
+// agents parse: m2 watch's lines, m2 focus's fields, m2 routes --json's shape, and what m2 call
+// and m2 point say.
+#[test]
+fn the_commands_page_keeps_what_the_manual_said() {
+    let page = stdout(&["docs", "commands"]);
+    let section = |name: &str| {
+        let start = page.find(&format!("\n## m2 {name}\n")).unwrap_or_else(|| panic!("no m2 {name}"));
+        let rest = &page[start + 1..];
+        rest[..rest[3..].find("\n## ").map_or(rest.len(), |e| e + 3)].to_string()
+    };
+    for (name, said) in [
+        (
+            "watch",
+            &[
+                "{\"t\":\"watch\",\"session\":…}",
+                "`transport`",
+                "every quarter second",
+                "{\"t\":\"closed\",\"why\":\"app\"}",
+                "exits 0",
+                "{\"t\":\"closed\",\"why\":\"song\"}",
+                "1,024 lines",
+                "never takes a message",
+            ][..],
+        ),
+        ("focus", &["`{track, lane, id}`", "`range`", "`pitch`, `start` and `length`", "`seen`", "`comparing`", "`midi`", "null"]),
+        ("routes", &["`[{method, path, limit, writes, agents, words, example}]`", "`limit` being the largest body"]),
+        ("call", &["On standard error it says the undo step a write made", "a body bigger than the route takes"]),
+        ("point", &["so does their OK", "saying how many bars it has"]),
+    ] {
+        let text = section(name);
+        for s in said {
+            assert!(text.contains(s), "m2 {name} on the commands page doesn't say {s}:\n{text}");
+        }
+    }
+    // Said once: the clips page's json sentence (R3).
+    assert_eq!(section("clips").matches("`json` takes any gesture").count(), 1, "{}", section("clips"));
+}
