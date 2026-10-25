@@ -18,7 +18,10 @@
   guide's "Working on a song as an agent" page.
 - A new link check covers every Markdown file in the repo. It and the site's build run in the docs job,
   which every pull request runs, docs only or not.
-- About 8 commits. Three choices need the owner (section 11).
+- `music2.app` carries `m2` beside its own program (`Contents/MacOS/m2`), built by the same build. A
+  song's `AGENTS.md` names the exact path of the `m2` that made it (section 2).
+- About 9 commits. The owner answered the three choices on 2026-10-25 (section 11), all as
+  recommended, and moved `m2` inside `music2.app` into this track.
 
 ## 1. What is there today
 
@@ -40,7 +43,7 @@
 
 | File | Text | Who reads it |
 |---|---|---|
-| `AGENTS.md` | `templates/song-agents.md`, as it is | Codex, Cursor, GitHub Copilot's agent; Gemini CLI and Aider when told to |
+| `AGENTS.md` | `templates/song-agents.md`, its one m2 line naming this computer's `m2` (below) | Codex, Cursor, GitHub Copilot's agent; Gemini CLI and Aider when told to |
 | `CLAUDE.md` | the one line `@AGENTS.md` | Claude Code, which imports the file named after `@` |
 
 - Not a symlink: `copy_tree` skips symlinks, and Windows makes them hard.
@@ -56,10 +59,38 @@
   outside the docs and gates rules' free paths.
 - Every template and every example gets them, through the code. None is committed into
   `templates/*/` or `examples/*/`.
-- Songs made before this have none. `m2 docs agents > AGENTS.md` writes one (section 6).
+- Songs made before this have none. `m2 docs agents > AGENTS.md` writes one (section 6), its m2 line
+  naming that `m2`.
 - The app ignores both: the build never reads them, and they are no part of a revision. The builder
   checks how the watcher's `DataPath` classes them, and pins with a test that editing one while the app
   has the song open makes no build and no undo step.
+
+### Which m2 it names (the owner's decision, 2026-10-25)
+
+The template's "Finding m2" section has one line that starts `m2 for this song: `. On the site it says
+where m2 is in general (`music2.app/Contents/MacOS/m2` in the app, `target/release/m2` in music2's
+source folder). In a song's copy, the writer puts the exact path there, found in this order:
+
+| # | Where | When |
+|---|---|---|
+| 1 | the running program itself, when it is `m2` | `m2 new`, `m2 docs agents` |
+| 2 | `m2` beside the running program | the app: `music2.app/Contents/MacOS/m2`; from source, `target/release/m2` beside `target/release/music2-desktop` |
+| 3 | the source tree's `target/release/m2`, then `target/debug/m2` | the app run from source (Linux has no `.app`: this is its path) |
+| 4 | the source tree's `target/release/m2`, not built yet, with the line that builds it | from source, before m2 is built |
+| 5 | none: the general line stays | an app whose bundle has no m2, on a computer without the source |
+
+The path is the real one (links resolved). The finder is `m2_server::resources::m2_program`, beside
+how std and the templates are found, with the same kind of tests (a fake `music2.app`).
+
+**`m2` inside `music2.app`.** `tauri build --bundles app` (the one command that makes the app) runs
+`build.beforeBundleCommand` after the app's own build: `apps/music2-desktop/bundle-m2.sh`, which builds
+`m2` (`cargo build --locked --release -p m2 --target-dir target`, so the path is fixed) and, on a Mac,
+signs it ad hoc as the app is signed. `bundle.macOS.files` then copies `target/release/m2` to
+`Contents/MacOS/m2`. Not `bundle.externalBin`: Tauri's build script copies an external binary at every
+`cargo build` of the app, so a plain `cargo build` or `cargo test` would fail before `m2` is built.
+The bundled `m2` finds std, the templates and the examples in `Contents/Resources`, as `resources.rs`
+already does for a program in `Contents/MacOS`, and runs itself again as the plugin host. A test pins
+the config to the finder; the Linux check's mac lint type-checks the finder for the Mac.
 
 ### What the page says
 
@@ -72,8 +103,8 @@ About one page. A test caps it at 80 lines. It has no relative links: it is read
   For more, run `m2 docs` (built into m2, it matches this version). Online: <site>/agents.html
 ## What is here         song.ts, tracks/ (how it sounds), data/ (what plays), assets/, music2.toml,
                         layout.json; .music2/ is this machine's: never touch it
-## Finding m2           if the shell can't find it: ask the musician. It is built as target/release/m2
-                        in music2's folder (cargo build --locked --release -p m2)
+## Finding m2           one line, "m2 for this song: `<path>`", the exact m2 found when the song was
+                        made (below); if it doesn't run: ask the musician
 ## The commands you'll use most   a table of about 12: check, controls, set, add-track, add-effect,
                         clips, edit, write, listen, point, focus, undo, routes and call
 ## Rules                1. Every command that writes ends with --as <your name> --why "<a few words>".
@@ -297,8 +328,8 @@ A link to another page, such as window.md, is m2 docs window.
 
 Its other tests, in the same file: `m2 docs` lists every page of `SUMMARY.md` in order; every topic
 prints its page with includes filled in; `all` prints them all; an unknown topic exits 1;
-`m2 docs agents` is `templates/song-agents.md`; and `m2 new` (scratch HOME) makes a song whose
-`AGENTS.md` is that text and whose `CLAUDE.md` is `@AGENTS.md\n`.
+`m2 docs agents` is `templates/song-agents.md` with its m2 line naming that `m2`; and `m2 new`
+(scratch HOME) makes a song whose `AGENTS.md` is that text and whose `CLAUDE.md` is `@AGENTS.md\n`.
 
 ## 7. The checks
 
@@ -345,9 +376,11 @@ dated. `docs/book.toml` stays free: only mdBook reads it, in the docs job, which
 Written first, in the commit before any code (AGENTS.md: the contract first).
 
 - **FMT-23** (Presentation and local files). A new project, from a template or an example (New Song,
-  Examples, `m2 new`), MUST get `AGENTS.md`, the text of `templates/song-agents.md`, and `CLAUDE.md`,
-  the line `@AGENTS.md`, unless what it is copied from has its own. Save As copies a song as it is. The
-  build never reads them, and they are no part of a revision. The layout block gets their line.
+  Examples, `m2 new`), MUST get `AGENTS.md`, the text of `templates/song-agents.md` with its m2 line
+  naming the exact path of the `m2` found (section 2), and `CLAUDE.md`, the line `@AGENTS.md`, unless
+  what it is copied from has its own. Save As copies a song as it is. The build never reads them, and
+  they are no part of a revision. `music2.app` MUST carry `m2` beside its own program
+  (`Contents/MacOS/m2`), built by the build that makes the app. The layout block gets their line.
 - **AGENT-12** (Agents). `m2 docs` MUST print the guide built into that `m2`: the pages `SUMMARY.md`
   names, in its order, includes filled in. Pages made from code MUST be printed from it, and a test MUST
   fail when the committed page differs. Every `m2` command MUST be declared once, in one table that
@@ -364,7 +397,8 @@ Each step is one commit that passes `ci/check.sh --pr`. One full `ci/check.sh` a
 | 3 | mdBook in `ci/tools.sh`; `docs/book.toml`; `ci/guide.sh`. Split the manual into `docs/guide/` (section 3): a mechanical move, one `##` section a page, then each page's In short and links. Move music-basics and the screenshot. Write `SUMMARY.md`, `welcome.md` and `templates/song-agents.md`. `commands.md` and `routes.md` hold the manual's hand tables for now. Update every link; delete `manual.md` | medium: most of the text moves, little is new |
 | 4 | The docs rule: `docs/guide/` and `docs/architecture.md` run everything; its cases | small |
 | 5 | `m2`: the command table, usage made from it, exit 2 for an unknown command, `m2 docs`, `build.rs`, the two made pages (`ci/guide.sh gen`), `apps/m2/tests/docs.rs` | the largest: about 900 lines, half of it text moved from USAGE and the manual |
-| 6 | New songs get `AGENTS.md` and `CLAUDE.md` (`project.rs`), with tests: a template, an example, a template with its own, Save As adds nothing, the watcher ignores them | small |
+| 6 | New songs get `AGENTS.md` and `CLAUDE.md` (`project.rs`), with tests: a template, an example, a template with its own, Save As adds nothing, the watcher ignores them. The m2 finder (`resources::m2_program`) and its m2 line | small |
+| 6b | `m2` inside `music2.app`: `beforeBundleCommand`, `apps/music2-desktop/bundle-m2.sh`, `bundle.macOS.files`; a test that pins the config to the finder | small |
 | 7 | `.github/workflows/pages.yml` | small |
 | 8 | The rest of the docs: README, AGENTS.md, CONTRIBUTING, HANDOFF, `designs/README.md`, new gaps (below); the full check | small |
 
@@ -377,20 +411,21 @@ one track.
 |---|---|
 | MCP | The owner's no, for now |
 | Help → "music2 Guide" in the app, opening the site | The site isn't public yet; a menu row needs the taste guide's review |
-| `m2` inside `music2.app`, and on PATH | A packaging change of its own. Until then the song's AGENTS.md says how to find `m2`. A new gap |
+| `m2` on PATH (a link in `/usr/local/bin`, or a menu row that makes one) | The song's AGENTS.md names m2's exact path, so an agent needs no PATH. A new gap. (`m2` inside `music2.app` moved into this track: the owner, 2026-10-25) |
 | The shortcuts page, the WebSocket events and std's sounds made from code | Each needs its own generator. New gaps |
 | The site in the app's look | One CSS file later |
 | A search command (`m2 docs --find`) | `m2 docs all \| grep` does it |
 | A copy of the site per release | There are no releases yet. The site follows main; `m2 docs` follows the binary |
 
-## 11. For the owner
+## 11. The owner's decisions
 
-Three choices this note makes that you may want to change:
+The owner answered on 2026-10-25, each as recommended, and moved one row of section 10 into the track:
 
-| # | Choice | Recommended | The other way |
-|---|---|---|---|
-| D1 | A change to `docs/guide/` runs the whole PR tier (builds, tests, browser suites), not just the docs job, since `m2` embeds the pages | Yes: a page edit can break `m2`'s build or its tests | A "guide only" path in the docs rule, which runs only the m2 build and its docs tests: more rules to get right |
-| D2 | A change to the contract alone runs the whole PR tier too, because a test reads it | Yes: it closes a hole in today's rule | Move that test's quote out of the contract, and keep the contract free |
-| D3 | The song's text lives in `templates/song-agents.md`, and the guide page includes it | Yes: the server embeds it, and `templates/` is already outside the free paths | Keep it in `docs/guide/agents.md` and carve that file out of the gates rule's free paths as well |
+| # | Decided | So |
+|---|---|---|
+| D1 | Yes: a change to `docs/guide/` runs the whole PR tier (builds, tests, browser suites), not just the docs job, since `m2` embeds the pages | the docs rule lists `docs/guide/` as not free (section 7) |
+| D2 | Yes: a change to the contract alone runs the whole PR tier too, because a test reads it | the docs rule lists `docs/architecture.md` as not free |
+| D3 | Yes: the song's text lives in `templates/song-agents.md`, and the guide page includes it | `agents.md` is one `{{#include}}` line |
+| Packaging | `m2` ships inside `music2.app`, beside the app's own program, built and bundled by the same build. The song's `AGENTS.md` names the exact path of the `m2` it finds; on Linux, the source tree's `target/release/m2` | section 2's "Which m2 it names", FMT-23, step 6b |
 
 Also yours, outside the build: making the repo public, then the clicks in section 4.
