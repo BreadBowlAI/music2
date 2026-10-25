@@ -97,3 +97,16 @@ The site was built once with the pinned mdBook (`ci/guide.sh check`): 25 HTML pa
 | `m2` on PATH | gap #42 |
 | A song's `AGENTS.md` naming an old path after the app moves | gaps, Scripts and agents |
 | The full `ci/check.sh` (the design's last step) | not run in this track: the PR tier was asked for. The timing gates read `crates/server` (changed here), so `--gates=auto` would run them |
+
+## Answers to the review
+
+The skeptic's review of `docsite` had six findings (R1 to R6). Each is fixed at its cause, with a test that failed first; then `main` was merged in (`4ebfa3c`).
+
+| Id | Answer |
+|---|---|
+| R1 | Fixed (`03a35e9`): `README.md` is `DOCS_READ`, since `apps/m2/tests/docs.rs` reads it, so a README-only change runs the whole PR tier; the audit comment is dated again. New cases: README alone, and beside a design note, are `full`; the cases that used README as a free document use HANDOFF. (The design's "the one test that reads a doc reads the contract" stopped being true at `7ad1281`.) |
+| R2 | Fixed (`767f278`): the manual's details are back in the table's `more` for `m2 watch` (its first line, `transport` lines, the closed lines and exit 0), `m2 focus` (every field), `m2 routes --json` (the shape and `limit`), `m2 call` (standard error, refused bodies, what it reaches) and `m2 point` (their OK, the bar count); `commands.md` made again by `ci/guide.sh gen`. A test holds each on the made page. |
+| R3 | Fixed (`767f278`): `m2 clips` says its `json` sentence once; `more` names only the extra gestures. The same test counts it. |
+| R4 | Fixed (`5034e72`): Tauri signs only its own programs, not `bundle.macOS.files`, and then seals the bundle, and gives no hook between; so `bundle-m2.sh` (the `beforeBundleCommand`) signs `m2` first with the app's own settings: `APPLE_SIGNING_IDENTITY`, else `signingIdentity`; a secure timestamp for a real identity; the hardened runtime, with the app's entitlements, unless it is off. `APPLE_CERTIFICATE`, which Tauri imports into its own keychain only as it bundles, is refused with words. `bundle-m2.sh --sign-args` prints the arguments, and `tests/bundle.rs` checks them on any OS. Still owed on a Mac: a bundle actually built (mac-run steps 134 to 136). |
+| R5 | Fixed (`0ce644a`): `main` passes a leading `--as` or `--why` on, so `take_who` says they go at the end (exit 1, not 2); with nothing else given, `m2` asks for a command. A new case holds it. |
+| R6 | Fixed (`115d874`): before `m2` is built, the song's line says `cargo build --locked --release -p m2 --target-dir target`, so it lands where the line points, as `bundle-m2.sh` builds it. The test pins the text. |
