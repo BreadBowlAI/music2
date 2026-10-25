@@ -12,7 +12,8 @@
 //     that is there, and its #anchor a heading too;
 //   - every https://breadbowlai.github.io/music2/<page>.html names a page of the guide;
 //   - the guide (docs/guide/): every page is in SUMMARY.md once, SUMMARY.md names only pages that
-//     are there, each page starts with "# Title" and then **In short**, a page links out of the
+//     are there, each page starts with "# Title" (after one comment line, on a page made from code)
+//     and then **In short**, a page links out of the
 //     guide only by full URL, and each {{#include}} names a file that is there;
 //   - templates/song-agents.md (every new song's AGENTS.md) has no relative link and is 80 lines
 //     at most.
@@ -239,7 +240,8 @@ if (guidePages.length > 0 || summary.length > 0) {
   for (const page of guidePages) {
     if (!listed.has(page)) say(page, 1, "not in docs/guide/SUMMARY.md: every page of the guide is listed there once");
     const lines = expanded(page);
-    const title = lines.findIndex((l) => l.trim() !== "");
+    // A page made from code says so on its first line, in a comment the site doesn't show.
+    const title = lines.findIndex((l) => l.trim() !== "" && !/^<!--.*-->\s*$/.test(l));
     if (title < 0 || !/^# \S/.test(lines[title])) {
       say(page, 1, 'a guide page starts with its title, "# Title"');
       continue;

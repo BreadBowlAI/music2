@@ -1,52 +1,391 @@
+<!-- Made by `m2 docs commands` from apps/m2/src/commands.rs: change it there, then run ci/guide.sh gen. -->
 # m2 commands
 
 **In short**
-- Every `m2` command, with what it does.
-- `m2` works on song folders, with the app open or closed.
+- Every `m2` command: how to call it, and what it does. `m2` alone prints the same, shorter.
+- `m2` works on song folders, with the app open or closed. A command that writes ends with `--as <your name> --why "<a few words>"`.
+- This page is made from `m2`'s own table, so `m2 docs commands` prints it as that `m2` has it.
 
-`m2` works on song folders, with the app open or closed. Build it once with `cargo build --locked --release -p m2`. The program is `target/release/m2`; the examples below call it `m2`. It finds std, the templates and the examples the way the app does: at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, else in this source tree.
+From source, `cargo build --locked --release -p m2` builds `m2` as `target/release/m2`; in `music2.app` it is `music2.app/Contents/MacOS/m2`. In the examples below it is called `m2`. `<project>` is a song's folder.
 
-| Command | What it does |
-|---|---|
-| `m2 new <folder>` | Makes a new song in exactly that folder (it refuses one that exists) from a template: `--template starter` (the default) or `--template empty`. `--example first-song` copies an example instead. |
-| `m2 check <song> [--json]` | Runs the code and checks the graph and the timeline. `--json` prints the compiled graph. `m2 build` is the same. |
-| `m2 render <song> <out.wav>` | Renders the song to a 24-bit WAV, the same file the app's Export (Song) writes: to the end of the last clip, then on until the sound has been silent for half a second (10 s past the end at most). It renders at the song's `sample_rate`, from `music2.toml`. `--from S` starts S seconds in (or `--from-bar N` at bar N, counted from 1), replaying the song up to there; `--seconds N` renders exactly N seconds. 3 hours at most. `--preroll P` starts only P seconds before instead of replaying: much faster late in a long song, for listening, but approximate, as it says (notes held from before then, and earlier tails, are missing), and never written into `assets/`. `--threads N` renders on N threads, the same file on any number. If a part breaks while it renders, it fails and names it. |
-| `m2 kernels [--json]` | Every kernel and its typed ports. |
-| `m2 bounce <song> <name>` | Renders a track, named by its key (`--track keys`), or the whole song to a new `assets/<name>.wav`; it never replaces one that's there. `--place keys.lane@beat` also puts it on an audio lane. |
-| `m2 graph <song> [--json]` | The graph the app shows, as text. |
-| `m2 controls <song>` | Every number the app can turn into a knob, with its id, including the controls a call leaves out (`tracks/hats.ts#1/@decay`, marked inherited). |
-| `m2 set <song> <id> <value>` | Changes one, checked by the compiler. `--expect V` refuses unless it's V now. |
-| `m2 automate <song> <id>` | Gives a knob an automation lane of its own, as the app's Automate does: the knob's number becomes the lane's fallback, so the song sounds the same. |
-| `m2 label <song> <track> <name>` | Shows a track, named by its key, as `<name>`: only its `track()` call's name changes. |
-| `m2 import <song> <file.wav>… [--track key] [--at bar]` | Brings WAV files into `assets/` and places their clips: on a track's audio lane, or each on a new audio track, as one checked edit. With the song open in the app, the app brings them in, as one undo step, and nothing is copied while you hold the song (a take, V's Compare): it waits, as every write does. |
-| `m2 mute-in-song <song> <track>… on\|off` | Mutes tracks in the song (every render and export), or unmutes them. |
-| `m2 clips <song> <gesture> <clip>…` | One clip edit: `create`, `move`, `resize`, `split`, `join`, `duplicate`, `quantize`, `delete`. A clip is `track/lane:id` or `track/lane@9.3.1` (where it starts). `m2 clips <song> json <gesture.json \| ->` takes any gesture `POST /api/graph/clips` takes, as JSON: also `paste`, `notes`, `points`, `audio` and `set`. |
-| `m2 unautomate <song> <track>/<lane> [--at place]` | Takes a knob's automation out: the lane's value there goes back into the code. |
-| `m2 add-track <song> <instrument>` | Adds a track playing an instrument (`synth.pluck` or `std:synth-pluck`), as + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track. |
-| `m2 duplicate-track <song> <track>` | Copies a track, named by its key: its code, its clips (with new ids), its plugins' saved settings and its mixer channel. |
-| `m2 delete-track <song> <track> [--cascade]` | Takes a track out: its file, its imports, its channel, its data and its place in `layout.json`. When an effect elsewhere listens to it (a duck), it lists them and changes nothing; `--cascade` takes the track out of them too. |
-| `m2 layout <song> order <keys…>` / `colour <key> <colour>` / `reset` | Reorders or recolours tracks in `layout.json` (rose, teal, amber, indigo, green, plum, olive, blue, coral, cyan, violet, lime), or writes the default layout over one that doesn't read. No revision: the layout never changes the sound. |
-| `m2 tempo <song> <bpm> [--at <bar>]` | Sets the song's tempo (20 to 999 BPM) in `data/arrangement.json`, or with `--at 9` a tempo change from bar 9. |
-| `m2 meter <song> <n/d> [--at <bar>]` | Sets the song's time signature (`7/8`: 1 to 64 beats of a 1, 2, 4, 8, 16 or 32 note), or with `--at 9` a change from bar 9. |
-| `m2 title <song> <name>` | Renames the song: its name in `music2.toml`. The folder keeps its own. |
-| `m2 cables <song>` | The named signals a cable can start from, and the inputs that cables reach. |
-| `m2 connect <song> <signal> <control>` | Writes a signal's name in place of a number. |
-| `m2 disconnect <song> <input>` | Writes the input's default back in place of the name. |
-| `m2 effects <song>` | The effects packages offer, by id (`std:delay`), and the calls they can go after. |
-| `m2 add-effect <song> <call> <effect>` | Wraps a call's sound in an effect, named by its id (`std:delay`) or where it's exported (`std/fx.delay`). |
-| `m2 remove-effect <song> <call>` | Takes an effect out, keeping what it was applied to. |
-| `m2 plugins [clap:<id>]` | Installed CLAP plugins, or one plugin's ports. |
-| `m2 plugin-state <song> <track>/<key> clap:<id>` | Saves a plugin's default settings as its saved state. |
-| `m2 relink <song> <from> <to>` | Moves data no lane or plugin reads to where it's read now, after a key was renamed in code: a track's folder (`data/kick data/kicks`), a lane file (`data/kick/hits.json data/kick/beats.json`) or a plugin's state. |
-| `m2 delete-data <song> <path>` | Deletes data no lane or plugin reads. |
-| `m2 fix <song> <path> <fix>` | Applies a fix a problem offers, such as `assign-clip-ids` or `repin-asset`, or `finish-tx` and `discard-tx` for an edit that was cut off (its path is `.music2/tx/<id>.json`). Every command prints the problems it finds with the commands that fix them. |
-| `m2 tx <song> <tx.json \| -> [--check] [--seen HASH]` | A checked edit written as Tx JSON (see [Scripts and agents](api.md)). `--check` prints what it would change and that change's hash, writing nothing; without it, it is written, and `--seen HASH` writes it only while it still makes the change with that hash. The answer is JSON; the exit status is 1 when nothing was written. |
-| `m2 edit <song> <file> --old <text> --new <text> [--all]` | Replaces text found exactly once in a text file of the song (every time, with `--all`), as one checked edit. Found no times, or more than once without `--all`, it changes nothing and says how many times. If the file changed after it was read, it reads it again and tries once more. While the song's code doesn't build, it fixes a code file: it saves it as the app's code editor does, and only if the song then builds; otherwise it changes nothing and prints the errors. |
-| `m2 write <song> <file> [<from> \| -]` | Writes a whole text file of the song (a new track's file, a rewrite), from a file or standard input, as one checked edit. It writes text only: `m2 import` brings audio in, `m2 plugin-state` saves a plugin's state. While the song's code doesn't build, it fixes a code file that is there, as `m2 edit` does. |
-| `m2 undo <song> [--as name]` | Takes back your own newest change in the open app: only while the newest change is yours, by name, never the musician's or another agent's (it says whose it is). With the app closed there is nothing to undo: undo lives in the open app. |
-| `m2 focus <song>` | What the musician looks at in the open app, as JSON: the dock's view, the selected track by its key, the clips picked (`{track, lane, id}`) and a marquee's bars (`range`), the roll's selected notes by `pitch`, `start` and `length`, the knob last touched, the beats the timeline shows (`seen`), the code view's file and line; and from the app, `playing`, `beat`, `loop`, the files with unsaved code, what V compares (`comparing`) and the MIDI keyboard's target (`midi`). Fields the window hasn't said yet are null. It writes nothing. |
-| `m2 watch <song> [--meters]` | Follows that song in the open app: first `{"t":"watch","session":…}`, then each event its window hears, one JSON object a line with `t` first and the song's `session` (a change landed, an undo or a redo, a toast, the focus, a pointer, the Compare pill; below), and `transport` when it plays or stops, the loop changes or the playhead jumps (read every quarter second). The meters only with `--meters`. When the app quits it prints `{"t":"closed","why":"app"}` and exits 0; when the app opens another song or closes this one, `{"t":"closed","why":"song"}`, and it prints nothing of the other song. While whoever reads it doesn't, it keeps 1,024 lines and drops the rest, then says `{"t":"lagged","missed":n,"by":"m2"}`; when they go away (`m2 watch … \| head -1`), it ends quietly. It writes nothing, and it never takes a message from the musician's window. |
-| `m2 point <song> <target> "<words>"` | Shows a note in the open app at `track:bass`, `clip:bass/notes:<id>`, `lane:bass/cutoff`, `knob:<id>` (as `m2 controls` names it) or `bars:9-16` (or `bars:9`), by your name (`--as`): how an agent says "listen to bars 9 to 16"; the musician presses play. It never moves their view or selects. `--clear` takes it away; so does their OK. A target the song hasn't is refused, saying so, and so are bars past its end, saying how many bars it has. |
-| `m2 listen <song> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]` | Measures the song, for an agent that can't hear it ([Listening](listening.md)): the mix and each track's loudness, true peak and crest, their octave bands, stereo and masking. The bars count from 1; without `--bars`, the loop when one is on, else the whole song. It writes nothing into the song, works with the app open or closed, and runs one at a time, at background priority. |
-| `m2 routes [--json]` | Every route of the app's API, from its one route table: the ones agents may call first, each with what it does, whether it writes and an example body, then the musician's own. `--json` prints the table: `[{method, path, limit, writes, agents, words, example}]`, `limit` being the largest body the route takes (2 MiB, more for imports and Tx). No app needs to run. |
-| `m2 call <song> <path> [<json> \| -] [--method M]` | Sends one route's request to the app that has the song open, as an agent (`--as`, `--why`): how to reach a song change with no command of its own (an effect turned off, markers, the song's key, a track's instrument or ID, a bus) or any read. The song's `session` is filled in when the body leaves it out, and a GET's keys go in its query; `--method` picks one where a path takes two (`/api/settings`). It prints the app's answer, as JSON, and exits 1 when the app refuses it; a write the musician holds waits, as every `m2` write does (exit 3). The musician's own controls, and a body bigger than the route takes, are refused before anything is sent. On standard error it says the undo step a write made, or what an undo took back. |
+## How every command behaves
+
+Every command that reads a project prints what needs attention in it, such as data no lane reads, with the commands that fix it.
+
+One program writes a project at a time (its lock is `.music2/lock`). While the app has the song open, a command that writes it hands its edit to the app, which makes it one undo step, named by `--as <name>` (or `M2_AS`) and `--why <words>`, which go last, after the command's own arguments: the musician sees it there, and `m2 undo` takes it back. While the musician drags what it changes, records, or has unsaved code in its file, the app refuses it: `m2` waits up to 30 s, then exits 3, changing nothing. Don't write the song's files directly while the app has it open: the app can't refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files itself, and undo isn't kept once it exits. Reading, rendering and `bounce` without `--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can do: `m2 call` refuses it, and `m2 point` shows them where instead.
+
+std, the templates and the examples are found at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, inside `music2.app` when `m2` runs from there, or else in the source tree it was built from.
+
+`m2` alone, `m2 help` or `m2 --help` prints this. A command `m2` doesn't know is refused, with exit status 2. `m2 docs` prints the guide, built into this `m2`.
+
+## m2 new
+
+```
+m2 new <folder> [--template ID | --example ID]
+```
+
+Make a new song in exactly `<folder>` from a template (`starter`, the default, or `empty`) or a copy of an example (`--example first-song`). A folder that is there, in any capitals, is refused. The song is named after its folder. Try the commands below on such a copy, never on the examples themselves.
+
+## m2 check
+
+```
+m2 check <project> [--json]
+```
+
+Run the TypeScript, check the graph and the data, and print a summary; `--json` prints the compiled graph instead. `m2 build` is the same. A problem is printed as the file, line and column, then what is wrong; one in the sound graph also names the module's key and the node in square brackets ([How a song is written](code.md#when-somethings-wrong)).
+
+## m2 render
+
+```
+m2 render <project> <out.wav> [--from S | --from-bar N] [--seconds N] [--preroll P] [--threads N]
+```
+
+Render to a 24-bit WAV, as the app's Export Audio does: to the last clip's end and on until it falls silent (10 s more at most), at the project's `sample_rate`. `--from` starts S seconds in, or `--from-bar` at bar N (counted from 1), replaying the song up to there; `--seconds` renders exactly N seconds. `--preroll` starts only P seconds earlier instead of replaying: fast for listening late in a long song, but approximate (notes held from before then, and the tails of what played earlier, are missing), so it is never written into `assets/`. `--threads` renders on N threads (1 to 64, or `M2_THREADS`), the same file on any number. It is the same file the app's Export (Song) writes, which falls silent when the sound has been silent for half a second. 3 hours at most. If a part breaks while it renders, it fails and names it.
+
+## m2 listen
+
+```
+m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]
+```
+
+Measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, ten octave bands, stereo and masking, for the mix and each track, its own sound and as it reaches the mix. The bars count from 1 (else the loop when one is on, else the song), with 2 bars of preroll; `--tracks` measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx checked and never written, before and after; `--png` draws the bands over time. Its own process, at background priority, one at a time; it writes nothing into the song. It works with the app open or closed. [Listening](listening.md) says what each number means.
+
+## m2 kernels
+
+```
+m2 kernels [--json]
+```
+
+List every kernel and its typed ports.
+
+## m2 bounce
+
+```
+m2 bounce <project> <asset-name> [--track KEY] [--export out] [--from S] [--seconds N] [--place track.lane@beat] [--threads N]
+```
+
+Render a track, named by its key (or the whole song), to a new `assets/<asset-name>.wav` (never over one that exists), optionally placing it as a clip on an audio lane (both by key). `--export` names which of the track's outputs to render (`out` unless you say). `--place keys.lane@beat` puts the new file on an audio lane, as one edit.
+
+## m2 graph
+
+```
+m2 graph <project> [--json]
+```
+
+The graph the canvas shows: calls, their knobs, connections.
+
+## m2 controls
+
+```
+m2 controls <project>
+```
+
+Every number written in the project that the graph can edit, with its id, and every declared control a call leaves out (inherited: its default). An id names a file, a call in it and an argument: `song.ts#2/0.hats.pan` is, in `song.ts`, call number 2 (the mixer), its first argument (`0`), and `hats.pan` inside that. A control the call leaves out is named by its call and `@` with the control's name: `tracks/hats.ts#1/@decay`.
+
+## m2 set
+
+```
+m2 set <project> <control> <value> [--expect V]
+```
+
+Change one, verified by the compiler (values in the control's units); `--expect` refuses unless it is V now.
+
+## m2 automate
+
+```
+m2 automate <project> <control>
+```
+
+Make a control's value the fallback of a new, empty control lane, read where the value was, verified to sound the same. It is what the app's Automate does: the knob gets an automation lane of its own.
+
+## m2 label
+
+```
+m2 label <project> <track> <name>
+```
+
+Show a track, named by its key, as `<name>`: its `track()` call's name, verified to change nothing that plays (its key as `<name>` takes the name out).
+
+## m2 add-track
+
+```
+m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]
+```
+
+Add a track playing an instrument (`std:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in `layout.json`, verified. It is what + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track.
+
+## m2 import
+
+```
+m2 import <project> <file.wav>… [--track ID] [--at BAR]
+```
+
+Bring WAV files into `assets/` (a copy, or the same bytes already there; a taken name numbered) and place their clips from bar BAR (1 if not given): on a track's audio lane one after another, or without `--track` each on a new audio track named after it, at the end; one edit that undo takes back. With the song open in the app, the app brings them in, as one undo step, and nothing is copied while the musician holds the song (a take, V's Compare): it waits, as every write does.
+
+## m2 duplicate-track
+
+```
+m2 duplicate-track <project> <track>
+```
+
+Copy a track, named by its key: its code, its clips (with new ids), its plugin states and its mixer channel, verified.
+
+## m2 delete-track
+
+```
+m2 delete-track <project> <track> [--cascade]
+```
+
+Take a track out: its file, its imports, its channel, its data and its layout; `--cascade` also takes it out of effects that read it (a duck's sidechain), which are otherwise listed and nothing is changed.
+
+## m2 layout
+
+```
+m2 layout <project> order <IDs…>
+m2 layout <project> colour <ID> <colour>
+m2 layout <project> reset
+```
+
+Reorder or recolour tracks in `layout.json` (no revision), or write the default layout over one that doesn't read; the colours are rose, teal, amber, indigo, green, plum, olive, blue, coral, cyan, violet and lime. No revision: the layout never changes the sound.
+
+## m2 tempo
+
+```
+m2 tempo <project> <bpm> [--at <bar>]
+```
+
+Set the song's tempo (20 to 999 BPM) in `data/arrangement.json`, or with `--at` a tempo change from bar N (counted from 1), verified.
+
+## m2 meter
+
+```
+m2 meter <project> <n/d> [--at <bar>]
+```
+
+Set the song's time signature (`7/8`: 1 to 64 beats of a 1, 2, 4, 8, 16 or 32 note), or with `--at` a change from bar N, verified.
+
+## m2 title
+
+```
+m2 title <project> <name>
+```
+
+Call the song `<name>`: its name in `music2.toml` (the folder keeps its own).
+
+## m2 cables
+
+```
+m2 cables <project>
+```
+
+Named signals a cable can start from, and the inputs cables reach.
+
+## m2 connect
+
+```
+m2 connect <project> <signal> <control>
+```
+
+Write a signal's name in place of a control's value, verified.
+
+## m2 disconnect
+
+```
+m2 disconnect <project> <input>
+```
+
+Write the input's declared default in place of the name, verified.
+
+## m2 effects
+
+```
+m2 effects <project>
+```
+
+The effects packages offer, by id (`std:delay`), and the calls they can go after.
+
+## m2 add-effect
+
+```
+m2 add-effect <project> <call> <effect>
+```
+
+Wrap a call's audio in an effect, named by its component id (`std:delay`) or its export (`std/fx.delay`), verified.
+
+## m2 remove-effect
+
+```
+m2 remove-effect <project> <call>
+```
+
+Take an effect out, leaving what it was applied to, verified.
+
+## m2 relink
+
+```
+m2 relink <project> <from> <to>
+```
+
+Move data no lane or plugin reads (left behind when a key was renamed in code) to where it is read now, verified: a lane file (`data/kick/hits.json data/kicks/hits.json`), a track's folder (`data/kick data/kicks`) or a plugin state.
+
+## m2 delete-data
+
+```
+m2 delete-data <project> <path>
+```
+
+Delete data no lane or plugin reads: a lane file, a folder, a state.
+
+## m2 fix
+
+```
+m2 fix <project> <path> <fix>
+```
+
+Apply a fix a problem offers (`assign-clip-ids`, `repin-asset`, …). `finish-tx` and `discard-tx` finish or put back an edit that was cut off (its path is `.music2/tx/<id>.json`). Every command prints the problems it finds with the commands that fix them.
+
+## m2 tx
+
+```
+m2 tx <project> <tx.json | -> [--check] [--seen HASH]
+```
+
+A verified edit as Tx JSON: `--check` prints its delta, the delta's hash and the diagnostics, writing nothing; without it, it is committed (with `--seen`, only while its delta has that hash) and the outcome printed as JSON; exit 1 when it isn't committed. [The local API](api.md#edits) says what a Tx holds.
+
+## m2 plugins
+
+```
+m2 plugins [clap:<id>]
+```
+
+List installed CLAP plugins, or one plugin's ports.
+
+## m2 plugin-state
+
+```
+m2 plugin-state <project> <track>/<key> clap:<id>
+```
+
+Save a plugin's default state to `data/<track>/<key>.state`, with the `.state.json` sidecar that says which plugin wrote it, as one edit (replacing a state that is there, which undo puts back). It saves the plugin's default settings, not the values your code gives it ([CLAP plugins](plugins.md)).
+
+## m2 mute-in-song
+
+```
+m2 mute-in-song <project> <track>… on|off
+```
+
+Mute tracks, named by their keys, in the song (every render and export), or unmute them: their `track()` calls' `muted` option, as one edit that undo takes back.
+
+## m2 clips
+
+```
+m2 clips <project> create <track>/<lane> --at <place> [--length B] [--beats]
+m2 clips <project> move <clip>… --by B [--to <track>/<lane>] [--copy] [--beats]
+m2 clips <project> resize <clip> --start <place> --length B [--beats]
+m2 clips <project> split <clip>… --at <place> [--beats]
+m2 clips <project> join <clip>…
+m2 clips <project> duplicate <clip>… [--grid B]
+m2 clips <project> quantize <clip>… --grid B [--ends]
+m2 clips <project> delete <clip>…
+m2 clips <project> json <gesture.json | ->
+```
+
+One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. `json` takes any gesture `POST /api/graph/clips` takes: also `paste`, `notes`, `points`, `audio` and `set`.
+
+## m2 unautomate
+
+```
+m2 unautomate <project> <track>/<lane> [--at <place>] [--beats]
+```
+
+Take a knob's automation out: what the lane plays at the place (else its fallback) is written back where the lane is read, and the lane file goes, as one edit that undo takes back.
+
+## m2 edit
+
+```
+m2 edit <project> <file> --old <text> --new <text> [--all]
+```
+
+Replace text found once in a file of the song (every time, with `--all`), as one edit: how an agent changes a file while the app has the song open. While the song's code doesn't build, it fixes a code file: written only if the song then builds. Found no times, or more than once without `--all`, it changes nothing and says how many times. If the file changed after it was read, it reads it again and tries once more.
+
+## m2 write
+
+```
+m2 write <project> <file> [<from> | -]
+```
+
+Write a whole text file of the song (from a file, or standard input), as one edit; while the code doesn't build, as `m2 edit`. It writes text only: `m2 import` brings audio in, `m2 plugin-state` saves a plugin's state.
+
+## m2 undo
+
+```
+m2 undo <project>
+```
+
+Take back your own newest change in the open app (by `--as`): never the musician's, nor another agent's. With the app closed there is nothing to undo: undo lives in the open app.
+
+## m2 focus
+
+```
+m2 focus <project>
+```
+
+What the musician looks at in the open app, as JSON: the view, the selected track, clips and notes, the knob last touched, the bars shown, the code's file and line, where playback is. Also `playing`, `beat`, `loop`, the files with unsaved code, what V compares (`comparing`) and the MIDI keyboard's target (`midi`). Fields the window hasn't said yet are null. It writes nothing.
+
+## m2 watch
+
+```
+m2 watch <project> [--meters]
+```
+
+Follow the open app: each change, undo, toast, focus, pointer and transport change as one JSON object a line, `t` first, until the app quits (then `closed`); meters too with `--meters`. It prints the events of [the local API](api.md#events). When the app opens another song or closes this one, it says `{"t":"closed","why":"song"}` and ends. While whoever reads it doesn't, it keeps 1,024 lines, then says `{"t":"lagged","missed":n,"by":"m2"}`. It writes nothing.
+
+## m2 point
+
+```
+m2 point <project> <target> <words>
+m2 point <project> --clear
+```
+
+Show a note in the open app at `track:bass`, `clip:bass/notes:<id>`, `lane:bass/cutoff`, `knob:<id>` or `bars:9-16` (by `--as`); it never moves the musician's view: they press play. `--clear` takes it away. A target the song hasn't got is refused, and so are bars past its end.
+
+## m2 routes
+
+```
+m2 routes [--json]
+```
+
+Every route of the app's API, from its one table: the ones for agents first, each with what it does, whether it writes and an example body; the musician's own (play, record, the view…) last. No app needs to run. [API routes](routes.md) is the same table.
+
+## m2 call
+
+```
+m2 call <project> <path> [<json> | -] [--method M]
+```
+
+Send one route's request to the open app, as an agent (by `--as`): song changes with no command of their own (an effect's bypass, markers, the song's key) and every read. The song's session is filled in; a GET's keys go in its query; it prints the answer and exits 1 when the app refuses. The musician's controls are refused before anything is sent. `--method` picks one where a path takes two (`/api/settings`). A write the musician holds waits, as every `m2` write does (exit 3).
+
+## m2 docs
+
+```
+m2 docs [<page> | all]
+```
+
+The guide, built into this `m2`: its pages, or one page as Markdown, or all of them. It needs no song and no app. A link to another page, such as `window.md`, is `m2 docs window`. `m2 docs commands` and `m2 docs routes` are made from the code when asked.
+
+## Try them on a copy
+
+Commands that change a song write into its folder, so try them on a copy, not on the examples:
+
+```bash
+m2 new /tmp/m2-scratch --example first-song                    # a copy of the example
+m2 check /tmp/m2-scratch
+m2 render /tmp/m2-scratch out.wav
+m2 controls /tmp/m2-scratch                                     # ids look like song.ts#2/0.hats.pan
+m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
+m2 set /tmp/m2-scratch 'tracks/hats.ts#1/@decay' 0.08            # a control the call leaves out: writes { decay: 0.08 }
+m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std:delay
+
+m2 new /tmp/m2-resample --example resample
+m2 bounce /tmp/m2-resample keys-again --track keys              # render the keys track to assets/keys-again.wav
+```
