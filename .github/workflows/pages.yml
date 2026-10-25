@@ -1,0 +1,57 @@
+# .github/workflows/pages.yml: the guide's website (docs/guide/, built by mdBook) on GitHub Pages,
+# at https://breadbowlai.github.io/music2/.
+#
+# In short: every push to main, and by hand (Actions → Pages → Run workflow), builds the site with
+# ci/guide.sh check (the link check, then mdBook, pinned in ci/tools.sh) and publishes it. It never
+# runs on a pull request: the docs job of ci.yml builds the same site there, so this file is no
+# part of ci-ok. While the repo is private both jobs are skipped (GitHub's free plan has Pages only
+# for public repos), so main shows no red cross before then. docs/designs/docs/design.md, section 4,
+# says what the owner clicks once.
+#
+# Security: no secrets. The workflow's token reads only; the deploy job alone may write Pages and
+# ask for the id token Pages checks. The checkout keeps no credentials. Only GitHub's own actions,
+# each pinned by its full commit (version in the comment; dependabot.yml keeps them current).
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, in the order pushed; none is cancelled halfway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/guide.sh check
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: target/guide
+
+  deploy:
+    if: ${{ !github.event.repository.private }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
