@@ -18,6 +18,7 @@
 | `step8/` | rendering on several cores (8a), the producer features (8b), the taste guide, and the tracks after them |
 | `step9/` | one plan and one set of build notes per track (`io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`) |
 | `agents/` | agents beside the musician: the design, and the build notes of its five tracks (`steps`, `fwd`, `see`, `routes`, `listen`) |
+| `docs/` | the docs plan: the guide in `docs/guide/`, `m2 docs`, the website, and the `AGENTS.md` every new song gets |
 | `workflows/` | the scripts that ran the AI agents who wrote many of these notes. They are kept as a record; nothing runs them |
 
 ## Paths in these notes
