@@ -48,7 +48,7 @@ This is the most important difference in music software.
 - A **chord** is several notes played together, usually 3 (a **triad**).
 - A **chord progression** is the order of chords, usually one per bar, repeating. Chords are named by their place in the scale with Roman numerals. The most famous pop progression is **I–V–vi–IV** (in C major: C, G, Am, F). In minor keys, **i–VI–III–VII** is a classic.
 
-**In music2:** click **Key** in the top bar and pick the song's key, such as A minor. The Notes view then shades the rows that aren't in the key, so the notes that fit stand out. More scales, chord stamps and an arpeggiator are still to come ([gap #16](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)).
+**In music2:** click **Key** in the top bar and pick the song's key, such as A minor. The Notes view then shades the rows that aren't in the key, so the notes that fit stand out. More scales ([gap #6](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)), chord stamps and an arpeggiator ([gap #16](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)) are still to come.
 
 ## The parts of a pop song
 

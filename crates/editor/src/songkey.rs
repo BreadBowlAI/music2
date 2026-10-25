@@ -1,7 +1,7 @@
 //! The song's key (the polish plan's D2, Q22): `layout.json`'s `key`, as
 //! `{ "root": "A", "scale": "minor" }`. Shared with the song in git, like the rest of the layout,
 //! and nothing that plays reads it (PLANE-3): Notes shades the rows out of the key, and nothing is
-//! locked. Major and minor only, or none; more scales come with scale help (gaps #16).
+//! locked. Major and minor only, or none; more scales are gaps #6.
 //!
 //! Written by a Tx of `layout.json` alone: no revision, one undo step, as a reorder is. Like
 //! reorder and recolour it never writes over a `layout.json` that doesn't read (R15), and it keeps
