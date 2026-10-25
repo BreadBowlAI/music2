@@ -24,7 +24,8 @@
 #   ci/pr.sh lint               the checks that build nothing: rustfmt, actionlint, licences
 #                               (cargo-deny's bans, licences and sources on both workspaces; npm),
 #                               and the cases of the docs rule, of the PR tier's own verdicts
-#                               (ci/pr-test.sh) and of ci/nightly.sh (ci/nightly-test.sh)
+#                               (ci/pr-test.sh), of ci/nightly.sh (ci/nightly-test.sh) and of
+#                               how ci/check.sh reads a test log (ci/tally-test.sh)
 #   ci/pr.sh quick              lint's checks, then the cases of the gates rule, the pool's models,
 #                               the web typecheck and build, std's kernels (tests, clippy) and
 #                               std.wasm rebuilt to the committed bytes
@@ -216,6 +217,7 @@ lint() {
   check "docs rule" docs-rule.log ci/docs-only-test.sh
   check "pr verdicts" pr-test.log ci/pr-test.sh
   check "nightly.sh" nightly-test.log ci/nightly-test.sh
+  check "test tally" tally-test.log ci/tally-test.sh
 }
 # models: the pool's models, in release, and their lint (the same commands as ci/check.sh's step
 # 6b). m2-pool needs only m2-os and libc, so this builds in seconds, with no system library.
