@@ -46,7 +46,7 @@ To build `music2.app`:
 
 The app carries everything it needs in `music2.app/Contents/Resources`: the UI (`web/`), the standard sounds (`std/`: `m2pkg.toml`, `kernels/std.wasm`, `src/` and `presets/`), the song templates (`templates/`) and the examples (`examples/`). So it runs from anywhere, without this source folder. `M2_STD`, `M2_TEMPLATES` and `M2_EXAMPLES` point it at other copies; when it runs outside a bundle (`cargo run`), it uses the ones in this source folder.
 
-`music2.app` also carries `m2`, the command line, beside the app's own program: `music2.app/Contents/MacOS/m2`. The same build makes it (`tauri build` runs `apps/music2-desktop/bundle-m2.sh` before it bundles the app). It finds std, the templates and the examples inside the app too.
+`music2.app` also carries `m2`, the command line, beside the app's own program: `music2.app/Contents/MacOS/m2`. The same build makes it (`tauri build` runs `apps/music2-desktop/bundle-m2.sh` before it bundles the app). It finds std, the templates and the examples inside the app too. It is signed as the app is, before the app is sealed: the same identity (`APPLE_SIGNING_IDENTITY`, else `signingIdentity` in `tauri.conf.json`), and the hardened runtime with the app's entitlements when that is on.
 
 ## The m2 command
 
