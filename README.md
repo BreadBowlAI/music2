@@ -48,10 +48,10 @@ Get the file for your computer from the [Releases page](https://github.com/Bread
 | Your computer | The file |
 |---|---|
 | A Mac with Apple silicon (M1 or newer) | `music2-0.1.0-macos-arm64.zip`: unzip it, and drag `music2.app` into Applications |
-| Ubuntu 24.04 or newer, Debian 13 or newer | `music2_0.1.0_amd64.deb`: `sudo apt install ./music2_0.1.0_amd64.deb` |
+| Ubuntu 22.04 or newer, Debian 12 or newer | `music2_0.1.0_amd64.deb`: `sudo apt install ./music2_0.1.0_amd64.deb` |
 | Another Linux on an x86_64 PC | `music2-0.1.0-linux-x86_64.AppImage`: `chmod +x` it, then run it |
 
-On a Mac, the first time you open it, macOS stops it, as it isn't signed by Apple yet. Click **Done**, then in **System Settings → Privacy & Security** click **Open Anyway** (once). Every step, `m2` from each file, and how to check a download: [Install and run music2](docs/guide/install.md#download).
+On a Mac, the first time you open it, macOS stops it, as it isn't signed by Apple yet. On macOS 15, click **Done**, then in **System Settings → Privacy & Security** click **Open Anyway** (once); on macOS 11 to 14, Control-click the app and choose **Open**. Every step, `m2` from each file, and how to check a download: [Install and run music2](docs/guide/install.md#download).
 
 ### Build from source
 

@@ -12,8 +12,8 @@ Each release has these files. Pick the one for your computer:
 | Your computer | The file | What it is |
 |---|---|---|
 | A Mac with Apple silicon (M1 or newer), macOS 11 or newer | `music2-<version>-macos-arm64.zip` | the app, `music2.app` |
-| Ubuntu 24.04 or newer, Debian 13 or newer | `music2_<version>_amd64.deb` | a package: installs the app and `m2` |
-| Another Linux on an x86_64 PC, as new as those | `music2-<version>-linux-x86_64.AppImage` | the app in one file: nothing to install |
+| Ubuntu 22.04 or newer, Debian 12 or newer | `music2_<version>_amd64.deb` | a package: installs the app and `m2` |
+| Another Linux on an x86_64 PC with glibc 2.38 or newer (Fedora 39, Ubuntu 24.04, Debian 13 and newer) | `music2-<version>-linux-x86_64.AppImage` | the app in one file: nothing to install |
 | Linux, the command line only | `m2-<version>-linux-x86_64.tar.gz` | `m2`, for the AppImage's users |
 
 Intel Macs and Windows aren't supported yet.
@@ -22,9 +22,11 @@ Intel Macs and Windows aren't supported yet.
 
 1. Download the `.zip` and double-click it, if your browser hasn't unpacked it already. You get `music2.app`.
 2. Drag `music2.app` into your **Applications** folder.
-3. Open it. The first time, macOS stops it: "Apple could not verify music2 is free of malware". Click **Done**.
+3. Open it. The first time, macOS stops it: "Apple could not verify music2 is free of malware". Click **Done** (not Move to Trash).
 4. Open **System Settings → Privacy & Security**. Scroll down to **Security**: it says "music2 was blocked". Click **Open Anyway**, then type your password.
 5. Open music2 again, and click **Open Anyway** once more. From then on it opens like any other app.
+
+Those are the steps on macOS 15 (Sequoia) and newer. On macOS 11 to 14, Control-click music2 in Applications, choose **Open**, then click **Open** in the message; if it still won't open, click **Open Anyway** in **System Settings → Privacy & Security** (on macOS 11 and 12, **System Preferences → Security & Privacy → General**).
 
 macOS asks because this release isn't signed with an Apple developer certificate, nor checked (notarized) by Apple. A later release may be.
 
@@ -38,7 +40,7 @@ If you use the Terminal, this one line does steps 3 to 5 instead: `xattr -dr com
 sudo apt install ./music2_0.1.0_amd64.deb      # use the name of the file you downloaded
 ```
 
-apt also installs what music2 needs: WebKitGTK 4.1 (the window's web view), GTK 3, ALSA (sound) and D-Bus, if they aren't there yet. It needs glibc 2.39 or newer, so apt refuses it on an older system. Then open music2 from your apps, or type `music2`. `m2` is installed as `/usr/bin/m2`. To remove it: `sudo apt remove music2`.
+apt also installs what music2 needs: WebKitGTK 4.1 (the window's web view), GTK 3, ALSA (sound) and D-Bus, if they aren't there yet. It needs glibc 2.35 or newer, so apt refuses it on an older system. It was tried on Ubuntu 24.04 only. Then open music2 from your apps, or type `music2`. `m2` is installed as `/usr/bin/m2`. To remove it: `sudo apt remove music2`.
 
 ### On Linux, the AppImage
 
@@ -47,9 +49,11 @@ chmod +x music2-0.1.0-linux-x86_64.AppImage     # once: let it run
 ./music2-0.1.0-linux-x86_64.AppImage
 ```
 
-The AppImage needs glibc 2.39 or newer, ALSA, and FUSE 2. On Ubuntu 24.04 install it once with `sudo apt install libfuse2t64`. Without it, run the AppImage with `--appimage-extract-and-run` at the end.
+The AppImage needs glibc 2.38 or newer, ALSA's library, and FUSE's `fusermount` program, which desktop Ubuntu and Debian have (the `fuse3` package); not FUSE 2. Without `fusermount`, run the AppImage with `--appimage-extract-and-run` at the end.
 
-For `m2` beside the AppImage, download `m2-<version>-linux-x86_64.tar.gz` too and unpack it anywhere: `tar xzf m2-0.1.0-linux-x86_64.tar.gz`. Its `bin/m2` finds what it needs in its `lib/` folder, so keep the two together.
+For `m2` beside the AppImage, download `m2-<version>-linux-x86_64.tar.gz` too and unpack it anywhere: `tar xzf m2-0.1.0-linux-x86_64.tar.gz`. Its `bin/m2` finds what it needs in its `lib/` folder, so keep the two together. It needs glibc 2.35 or newer and ALSA's library (`libasound2`, or `libasound2t64` on Ubuntu 24.04 and newer).
+
+Each download carries music2's licences (`LICENSE-MIT`, `LICENSE-APACHE`) and `THIRD-PARTY-NOTICES.txt`, the licences of the code inside it that others wrote: in `music2.app/Contents/Resources`, in `/usr/share/doc/music2` (the `.deb`, and inside the AppImage), and beside `bin` in m2's `.tar.gz`.
 
 ### Check what you downloaded
 

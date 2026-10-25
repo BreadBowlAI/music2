@@ -130,8 +130,45 @@ fn the_linux_packages_carry_the_m2_its_build_makes() {
     assert_eq!(c["productName"], "music2");
     assert_eq!(c["mainBinaryName"], "music2");
     // What the programs link beyond what Tauri adds itself (WebKitGTK and GTK): ALSA and D-Bus;
-    // and the glibc of ubuntu-24.04, which builds them (ci/release.sh check compares it with the
-    // newest glibc symbol the programs use), so an older system is told by apt, not by a crash.
+    // and the glibc they need, the newest version among their symbols that aren't weak
+    // (ci/release.sh check computes it from the built programs and refuses a .deb that differs),
+    // so an older system is told by apt, not by a crash (the review's L1).
     let depends: Vec<&str> = c["bundle"]["linux"]["deb"]["depends"].as_array().unwrap().iter().map(|d| d.as_str().unwrap()).collect();
-    assert_eq!(depends, ["libc6 (>= 2.39)", "libasound2", "libdbus-1-3"]);
+    assert_eq!(depends, ["libc6 (>= 2.35)", "libasound2", "libdbus-1-3"]);
+    // The .deb's metadata (L9): a maintainer with an address, words beyond the one line, and no
+    // icon in a size folder icon themes don't know (an `@2x` file lands in `256x256@2`).
+    assert!(c["bundle"]["publisher"].as_str().is_some_and(|p| p.contains('<') && p.ends_with('>')), "bundle.publisher is a name <address>");
+    assert!(c["bundle"]["longDescription"].as_str().is_some_and(|d| d.len() > 80));
+    for icon in c["bundle"]["icon"].as_array().unwrap() {
+        assert!(!icon.as_str().unwrap().contains('@'), "{icon}: Tauri files it in a size folder themes ignore");
+    }
+}
+
+// PLAT-8, the review's L3: every download carries music2's own licences and the notices of the
+// code inside it that others wrote, which `bundle-m2.sh` makes as it bundles (ci/notices.mjs, from
+// Cargo.lock's crates and the UI's npm packages, so it can't drift): music2.app in
+// Contents/Resources, the .deb in /usr/share/doc/music2 with its copyright file, the AppImage in
+// the same folder inside it (Tauri copies nothing to the AppImage's top folder).
+#[test]
+fn every_bundle_carries_the_licences_and_notices() {
+    let c = config();
+    let root = here().join("../..").canonicalize().unwrap();
+    let want = |files: &serde_json::Value, at: &str, what: &str| {
+        let name = format!("{at}{}", what.rsplit('/').next().unwrap());
+        let source = files[name.as_str()].as_str().unwrap_or_else(|| panic!("no {name}"));
+        assert_eq!(from_here(source), root.join(what), "{name}");
+    };
+    let all = ["LICENSE-MIT", "LICENSE-APACHE", "target/notices/THIRD-PARTY-NOTICES.txt"];
+    for (files, at) in [
+        (&c["bundle"]["macOS"]["files"], "Resources/"),
+        (&c["bundle"]["linux"]["deb"]["files"], "/usr/share/doc/music2/"),
+        (&c["bundle"]["linux"]["appimage"]["files"], "/usr/share/doc/music2/"),
+    ] {
+        for what in all {
+            want(files, at, what);
+        }
+    }
+    want(&c["bundle"]["linux"]["deb"]["files"], "/usr/share/doc/music2/", "apps/music2-desktop/copyright");
+    let script = std::fs::read_to_string(here().join("bundle-m2.sh")).unwrap();
+    assert!(script.contains("node ci/notices.mjs"), "the hook makes the notices");
 }

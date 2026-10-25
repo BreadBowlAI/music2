@@ -1,0 +1,10 @@
+# ci/appimage-tools.sha256: the tools Tauri's AppImage bundler uses, pinned (the release review's
+# L8). ci/release.sh build fetches each from its URL, checks it against the sum, and puts it where
+# Tauri looks first (~/.cache/tauri, under the name in the second column), so Tauri downloads
+# nothing; the runtime, which becomes the first part of every AppImage, goes to linuxdeploy's
+# appimage plugin through LDAI_RUNTIME_FILE. Each URL names a fixed release, never "continuous".
+# sha256 of the file as published                                   name in ~/.cache/tauri                 URL
+36a2d7e274d12e1050d0e9ecfe11d339ed54720b2bec464c286d53f8b07f5c62  linuxdeploy-07333c6-x86_64.AppImage   https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy-07333c6/linuxdeploy-x86_64.AppImage
+f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f  AppRun-x86_64                         https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64
+992d502a248e14ab185448ddf6f6e7d25558cb84d4623c354c3af350c25fccb3  linuxdeploy-plugin-appimage.AppImage  https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-appimage-x86_64.AppImage
+2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  type2-runtime-20251108-x86_64         https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64

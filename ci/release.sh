@@ -107,9 +107,27 @@ keychain() {
   say "signing as $APPLE_SIGNING_IDENTITY, with the hardened runtime"
 }
 
+# appimage_tools: the pinned tools of ci/appimage-tools.sha256 in Tauri's cache, checked; prints
+# the runtime's path, for LDAI_RUNTIME_FILE.
+appimage_tools() {
+  local cache=${XDG_CACHE_HOME:-$HOME/.cache}/tauri sum name url got runtime=
+  mkdir -p "$cache" "$SCR/tools"
+  while read -r sum name url; do
+    case $sum in '#'* | '') continue ;; esac
+    curl -fsSL --retry 3 -o "$SCR/tools/$name" "$url" >&2 || fail "couldn't fetch $url"
+    got=$( (sha256sum "$SCR/tools/$name" 2> /dev/null || shasum -a 256 "$SCR/tools/$name") | cut -d' ' -f1)
+    [ "$got" = "$sum" ] || fail "$url: sha256 $got, not $sum as ci/appimage-tools.sha256 says"
+    chmod +x "$SCR/tools/$name"
+    mv -f "$SCR/tools/$name" "$cache/$name"
+    case $name in type2-runtime-*) runtime=$cache/$name ;; esac
+  done < ci/appimage-tools.sha256
+  [ -n "$runtime" ] || fail "ci/appimage-tools.sha256 names no type2-runtime"
+  echo "$runtime"
+}
+
 # build <out>
 build() {
-  local out=$1 v bundle extra stage
+  local out=$1 v bundle extra stage runtime
   v=$(version)
   mkdir -p "$out"
   out=$(cd "$out" && pwd)
@@ -127,8 +145,11 @@ build() {
     (cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build --ci --bundles app ${1+"$@"} -- --locked)
     ditto -c -k --sequesterRsrc --keepParent "$bundle/macos/music2.app" "$out/music2-$v-macos-arm64.zip"
   else
-    # linuxdeploy is itself an AppImage: unpacked and run, as a CI runner has no FUSE.
-    (cd apps/music2-desktop && APPIMAGE_EXTRACT_AND_RUN=1 ../../web/node_modules/.bin/tauri build --ci --bundles deb,appimage ${1+"$@"} -- --locked)
+    # linuxdeploy is itself an AppImage: unpacked and run, as a CI runner may have no FUSE. Its
+    # tools and the AppImage's runtime are the pinned ones.
+    runtime=$(appimage_tools)
+    (cd apps/music2-desktop && APPIMAGE_EXTRACT_AND_RUN=1 LDAI_RUNTIME_FILE=$runtime \
+      ../../web/node_modules/.bin/tauri build --ci --bundles deb,appimage ${1+"$@"} -- --locked)
     cp "$bundle/deb/music2_${v}_amd64.deb" "$out/"
     cp "$bundle/appimage/music2_${v}_amd64.AppImage" "$out/music2-$v-linux-x86_64.AppImage"
     chmod +x "$out/music2-$v-linux-x86_64.AppImage"
@@ -139,9 +160,13 @@ build() {
     mkdir -p "$stage/bin" "$stage/lib/music2"
     cp "$extra/usr/bin/m2" "$stage/bin/"
     cp -R "$extra/usr/lib/music2/std" "$extra/usr/lib/music2/templates" "$extra/usr/lib/music2/examples" "$stage/lib/music2/"
-    cp LICENSE-MIT LICENSE-APACHE "$stage/"
+    cp "$extra/usr/share/doc/music2/LICENSE-MIT" "$extra/usr/share/doc/music2/LICENSE-APACHE" \
+      "$extra/usr/share/doc/music2/THIRD-PARTY-NOTICES.txt" "$stage/"
     cat > "$stage/README.txt" << EOF
 m2 $v: music2's command line, for Linux on x86_64.
+
+It needs glibc $(floor "$stage/bin/m2") or newer and ALSA's library, libasound.so.2 (the package
+libasound2, or libasound2t64 on Ubuntu 24.04 and newer), even on a computer that plays no sound.
 
 Run bin/m2 from this folder, or put the folder's bin on your PATH:
   export PATH="\$PATH:$(printf '%s' "\$HOME")/m2-$v-linux-x86_64/bin"
@@ -155,9 +180,17 @@ EOF
   ls -l "$out"
 }
 
-# carries <bin> <resources> <app?>: fails unless the unpacked bundle has what the app needs.
+# carries <bin> <resources> <app?> <docs>: fails unless the unpacked bundle has what the app
+# needs, and in <docs> music2's licences and the notices of what others wrote (L3).
 carries() {
-  local bin=$1 res=$2 app=$3 f n
+  local bin=$1 res=$2 app=$3 docs=$4 f n
+  for f in LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES.txt; do
+    [ -s "$docs/$f" ] || fail "no $docs/$f"
+  done
+  cmp -s "$docs/LICENSE-MIT" LICENSE-MIT && cmp -s "$docs/LICENSE-APACHE" LICENSE-APACHE || fail "$docs holds other licences than music2's"
+  for f in wasmtime tauri react monaco-editor 'Inter 4.1' "Rust's standard library"; do
+    grep -q "$f" "$docs/THIRD-PARTY-NOTICES.txt" || fail "$docs/THIRD-PARTY-NOTICES.txt doesn't name $f"
+  done
   for f in "$bin/m2" ${app:+"$bin/music2"}; do
     [ -x "$f" ] || fail "no program $f"
   done
@@ -174,14 +207,31 @@ carries() {
   cmp -s "$res/std/kernels/std.wasm" "$ROOT/std/kernels/std.wasm" || fail "$res/std/kernels/std.wasm isn't the committed std.wasm"
 }
 
-# glibc <deb> <program>...: the .deb asks for the glibc its programs need, the newest version
-# among their symbols, so apt refuses it on an older system rather than the program failing there.
+# floor <file>...: the oldest glibc the files can run on: the newest GLIBC_ version they need that
+# isn't weak (a weak one, such as Rust's pidfd_spawnp at 2.39, is looked up as the program runs,
+# and done without when it isn't there). Files that aren't ELF are skipped.
+floor() {
+  local f
+  for f in "$@"; do readelf -V -W "$f" 2> /dev/null; done | grep 'Name: GLIBC_[0-9.]*  *Flags: none' |
+    sed 's/.*Name: GLIBC_\([0-9.]*\).*/\1/' | sort -t. -k1,1n -k2,2n -k3,3n -u | tail -1
+}
+
+# glibc <deb> <program>...: the .deb asks for the glibc its programs need (floor), so apt refuses
+# it on an older system rather than the program failing there; and the notes say that number.
 glibc() {
   local deb=$1 need said
   shift
-  need=$(objdump -T "$@" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -t. -k1,1n -k2,2n -k3,3n -u | tail -1)
+  need=$(floor "$@")
   said=$(dpkg-deb -f "$deb" Depends | grep -o 'libc6 (>= [0-9.]*)' | sed 's/libc6 (>= \(.*\))/\1/')
   [ "$need" = "$said" ] || fail "$(basename "$deb") says libc6 (>= ${said:-nothing}), and its programs need glibc $need: change bundle.linux.deb.depends in tauri.conf.json"
+  said_in_notes "$(basename "$deb")" "$need"
+}
+
+# said_in_notes <file> <glibc>: the release notes name the glibc that file needs.
+said_in_notes() {
+  grep -q "glibc $2 or newer" "docs/releases/$(version).md" ||
+    fail "$1 needs glibc $2: docs/releases/$(version).md must say \"glibc $2 or newer\" for it"
+  say "$1 needs glibc $2 or newer, as the notes say"
 }
 
 # run <m2> <args>: the m2 at <m2>, from a scratch folder outside the source tree, with a scratch
@@ -249,26 +299,31 @@ check() {
         dpkg-deb -x "$f" "$u"
         say "$(basename "$f") depends on: $(dpkg-deb -f "$f" Depends)"
         glibc "$f" "$u/usr/bin/music2" "$u/usr/bin/m2"
-        carries "$u/usr/bin" "$u/usr/lib/music2" app
+        carries "$u/usr/bin" "$u/usr/lib/music2" app "$u/usr/share/doc/music2"
+        [ -s "$u/usr/share/doc/music2/copyright" ] || fail "the .deb has no /usr/share/doc/music2/copyright"
         songs "$u/usr/bin" "$u/usr/lib/music2" "$(basename "$f")" ;;
       *.AppImage)
         u=$SCR/u-appimage
         mkdir -p "$u"
         (cd "$u" && "$f" --appimage-extract > /dev/null)
-        carries "$u/squashfs-root/usr/bin" "$u/squashfs-root/usr/lib/music2" app
+        carries "$u/squashfs-root/usr/bin" "$u/squashfs-root/usr/lib/music2" app "$u/squashfs-root/usr/share/doc/music2"
+        # It runs on the system's glibc with the libraries it carries: the newest any of them needs.
+        said_in_notes "$(basename "$f")" "$(find "$u/squashfs-root" -type f -print0 | xargs -0 sh -c 'for f; do readelf -V -W "$f" 2> /dev/null; done' sh |
+          grep 'Name: GLIBC_[0-9.]*  *Flags: none' | sed 's/.*Name: GLIBC_\([0-9.]*\).*/\1/' | sort -t. -k1,1n -k2,2n -k3,3n -u | tail -1)"
         songs "$u/squashfs-root/usr/bin" "$u/squashfs-root/usr/lib/music2" "$(basename "$f")" ;;
       *.tar.gz)
         u=$SCR/u-tar
         mkdir -p "$u"
         tar -C "$u" -xzf "$f"
-        carries "$u/m2-$v-linux-x86_64/bin" "$u/m2-$v-linux-x86_64/lib/music2" ""
+        carries "$u/m2-$v-linux-x86_64/bin" "$u/m2-$v-linux-x86_64/lib/music2" "" "$u/m2-$v-linux-x86_64"
+        said_in_notes "$(basename "$f")" "$(floor "$u/m2-$v-linux-x86_64/bin/m2")"
         songs "$u/m2-$v-linux-x86_64/bin" "$u/m2-$v-linux-x86_64/lib/music2" "$(basename "$f")" ;;
       *.zip)
         u=$SCR/u-zip
         ditto -x -k "$f" "$u"
         codesign --verify --deep --strict "$u/music2.app" || fail "music2.app's signature doesn't verify"
         codesign --verify --strict "$u/music2.app/Contents/MacOS/m2" || fail "m2's signature doesn't verify"
-        carries "$u/music2.app/Contents/MacOS" "$u/music2.app/Contents/Resources" app
+        carries "$u/music2.app/Contents/MacOS" "$u/music2.app/Contents/Resources" app "$u/music2.app/Contents/Resources"
         songs "$u/music2.app/Contents/MacOS" "$u/music2.app/Contents/Resources" "$(basename "$f")" ;;
       *) fail "what is $f?" ;;
     esac
