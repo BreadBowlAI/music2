@@ -9,7 +9,7 @@
 import { undoAction } from "../components/GraphCanvas";
 import { lockReason, moduleName, readJson, type GraphState, type Instrument } from "./graph";
 import { guideDid } from "./guide";
-import { recorded } from "./history";
+import { editing, recorded } from "./history";
 import { token } from "./native";
 import { useShell } from "./shell";
 import { useStore } from "./store";
@@ -66,6 +66,7 @@ export async function changeInstrument(module: string, instrument: Instrument) {
   if (why) return toast(`${why}.`);
   const name = nameOf(graph, module);
   const session = graph.session;
+  const ours = editing();
   try {
     const res = await fetch("/api/graph/track/instrument", {
       method: "POST",
@@ -75,11 +76,13 @@ export async function changeInstrument(module: string, instrument: Instrument) {
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     const r = data as Edited;
-    recorded(session, r, { name: `changing ${name}'s instrument`, structural: true });
+    recorded(session, r, { name: `changing ${name}'s instrument`, structural: true }, ours);
     toast(`${name} plays ${instrument.label} now`, undoAction(session, r.step));
     guideDid("sound");
   } catch (error) {
     const words = message(error);
     toast(words, /in code\.$|in the Code view\.$/.test(words) ? { label: "Show code", run: () => showCode(module) } : undefined);
+  } finally {
+    ours.end();
   }
 }

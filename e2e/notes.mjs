@@ -3,6 +3,7 @@
 // Runs with `node run.mjs notes` (kind proj: a private HOME and project).
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 
 const S = process.argv[2];
 const H = process.env.M2_E2E_HOME ?? `${S}/testhome`;
@@ -96,7 +97,10 @@ check(onDisk(60).length === 0 && (await revision()) === rev, "a single click on 
 await page.mouse.click(c4.x, c4.y, { count: 2 });
 check(await until(async () => json(onDisk(60)) === json([{ pitch: "C4", start: 1, length: 0.25, velocity: 0.8 }])), `a double-click adds C4 at beat 1, a 1/16 long, written as a note name, in the canonical form (FMT-8a): ${json(onDisk(60))}`);
 check(await until(async () => (await at(60)).length === 1 && (await at(60))[0].selected), "the new note shows, selected");
-check((await revision()) === rev + 1, "one write");
+// The server writes the lane's file before it publishes the revision the write made (its settle
+// comes between), so the file can be new while /api/graph still says the old revision: the count
+// is read once the revision has moved, as for the drag below.
+check((await until(async () => (await revision()) > rev)) && (await sleep(300), (await revision()) === rev + 1), "one write");
 
 // Move: drag it two beats right and two semitones up, as one write.
 rev = await revision();
@@ -276,6 +280,210 @@ const madeOne = await until(() => JSON.parse(fs.readFileSync(cutoffFile, "utf8")
 await undo();
 const unmade = await until(() => fs.readFileSync(cutoffFile, "utf8") === cutoffWas);
 check(gone && back && madeOne && unmade, `an automation clip picked is deleted by Delete and undo brings it back; a double-click on its lane makes a one-bar automation clip there, and undo takes it away (${gone}, ${back}, ${madeOne}, ${unmade})`);
+
+// What a slow machine can do: the answers to requests for `urls` sent from now on are held until
+// `release`, which lets them through in the order they came. Each is paused as it is sent (requests
+// sent before never are), and again with its answer, which is held. Interception can take a moment
+// to reach the browser's network: a request of the suite's own is paused before it counts as on.
+const holder = async (urls) => {
+  const cdp = await page.createCDPSession();
+  const held = [];
+  let on = () => {};
+  const armed = new Promise((resolve) => (on = resolve));
+  cdp.on("Fetch.requestPaused", (e) => {
+    const probe = e.request.url.endsWith("?armed");
+    if (probe) on();
+    if (probe || e.responseStatusCode === undefined) {
+      cdp.send("Fetch.continueRequest", { requestId: e.requestId, interceptResponse: !probe }).catch(() => {});
+    } else held.push(e);
+  });
+  await cdp.send("Fetch.enable", { patterns: [...urls, "/api/graph?armed"].map((u) => ({ urlPattern: `*${u}`, requestStage: "Request" })) });
+  await page.evaluate((token) => fetch("/api/graph?armed", { headers: { "x-m2-token": token } }).then((r) => r.text()), sess.page_token);
+  await armed;
+  return {
+    held,
+    release: async () => {
+      for (const e of held.splice(0)) {
+        const body = await cdp.send("Fetch.getResponseBody", { requestId: e.requestId });
+        const base64 = body.base64Encoded ? body.body : Buffer.from(body.body).toString("base64");
+        await cdp.send("Fetch.fulfillRequest", { requestId: e.requestId, responseCode: e.responseStatusCode, responseHeaders: e.responseHeaders, body: base64 });
+      }
+      await cdp.send("Fetch.disable");
+      await cdp.detach();
+    },
+  };
+};
+const refusals = [];
+page.on("response", (r) => r.status() === 409 && refusals.push(r.url()));
+/** Until the window shows the revision the server is at: each case below starts from a window caught up. */
+const caughtUp = () => until(async () => Number(await page.$eval("[data-revision]", (e) => e.dataset.revision)) === (await revision()));
+
+// ⌘Z pressed after an edit made its step but before its answer came back to the window takes back
+// that edit: the window waits for its edits on their way, never naming the step below, which the
+// server refuses as not the newest (AGENT-2). Here the delete's answer, and the state the window
+// reads after it, are held until after ⌘Z.
+await caughtUp();
+await page.mouse.click(cutoff.x + 30, cutoff.y + 3);
+let hold = await holder(["/api/graph/clips", "/api/graph"]);
+await page.keyboard.press("Delete");
+const deleted = await until(() => hold.held.some((e) => e.request.url.endsWith("/clips")) && JSON.parse(fs.readFileSync(cutoffFile, "utf8")).clips.length === 0);
+await undo();
+await sleep(500);
+await hold.release();
+const undone = await until(() => fs.readFileSync(cutoffFile, "utf8") === cutoffWas);
+check(deleted && undone && refusals.length === 0, `⌘Z pressed before the delete's answer came back takes the delete back, never refused (${deleted}, ${undone}, ${refusals.length} refused)`);
+
+// A clip dragged in the timeline right after a note is added in the roll, before the window has
+// read the state that write made: the drag waits for it, and moves the clip as it is now, the note
+// with it (the window's own edit, not a change made elsewhere). Here that state is held until after
+// the drag is let go.
+await caughtUp();
+await page.mouse.click(clipBox.x + 60, clipBox.y + clipBox.height / 2, { count: 2 });
+await until(async () => /bars 1–8/.test(await header()) && (await notes()).length === 48);
+await page.$eval("[data-testid=roll-scroller]", (el, row, ruler) => { el.scrollTop = ruler + (127 - 60) * row - el.clientHeight / 2; el.scrollLeft = 0; }, ROW, RULER);
+await sleep(150);
+const g4 = await box("[data-testid=roll-grid]");
+hold = await holder(["/api/graph"]);
+await page.mouse.click(g4.x + 1.1 * ppb, g4.y + (127 - 60) * ROW + ROW / 2, { count: 2 });
+const noted = await until(() => onDisk(60).length === 1);
+await drag({ x: clipBox.x + 60, y: clipBox.y + clipBox.height / 2 }, { x: clipBox.x + 60 + 4 * PPB, y: clipBox.y + clipBox.height / 2 }, 10);
+await sleep(500);
+await hold.release();
+const carried = await until(() => disk().clips[0].start === 4 && onDisk(60).length === 1);
+await undo();
+await sleep(300);
+await undo();
+const unwound = await until(() => fs.readFileSync(FILE, "utf8") === original);
+check(noted && carried && unwound && refusals.length === 0, `a clip dragged right after a note is added in the roll, before the window reads the state that made, moves with the note; two undos put it back (${noted}, ${carried}, ${unwound}, ${refusals.length} refused)`);
+
+// The cases below (the review of notesflake) need an agent beside the window: a Tx with the tools key.
+const tools = { "x-m2-token": sess.token, "content-type": "application/json" };
+const sessionId = (await (await fetch(`${sess.url}/api/graph`, { headers: tools })).json()).session;
+/** An agent's Tx putting `put` into lane `lane` of file `rel`: its answer, with the step it made. */
+const agentPut = async (rel, lane, put) => {
+  const now = fs.readFileSync(`${proj}/${rel}`, "utf8");
+  const tx = {
+    id: `tx-agent-${Date.now()}`,
+    base: { [rel]: `sha256:${createHash("sha256").update(now).digest("hex")}` },
+    ops: [{ op: "clips", lane, put, delete: [] }],
+    expect: { confined: { ranges: {}, lanes: [lane], modules: [] } },
+  };
+  const res = await fetch(`${sess.url}/api/tx/commit`, { method: "POST", headers: tools, body: JSON.stringify({ tx, as: "Claude", why: "a test" }) });
+  return res.json();
+};
+/** The agent takes its step back. */
+const agentUndo = (step) => fetch(`${sess.url}/api/graph/undo`, { method: "POST", headers: tools, body: JSON.stringify({ session: sessionId, step, as: "Claude" }) }).then((r) => r.status);
+/** The console errors a refusal the case expects leaves, `n` of them, taken out once said. */
+const expected409 = async (n) => {
+  await until(() => errors.filter((e) => /status of 409/.test(e)).length >= n, 2000);
+  for (let k = 0; k < n; k++) {
+    const i = errors.findIndex((e) => /status of 409/.test(e));
+    if (i >= 0) errors.splice(i, 1);
+  }
+  refusals.length = 0;
+};
+/** The roll on Bass's first clip, middle C in view: its grid's box. */
+const rollAtC4 = async () => {
+  await page.mouse.click(clipBox.x + 60, clipBox.y + clipBox.height / 2, { count: 2 });
+  await until(async () => /bars 1–8/.test(await header()) && (await notes()).length >= 48);
+  await page.$eval("[data-testid=roll-scroller]", (el, row, ruler) => { el.scrollTop = ruler + (127 - 60) * row - el.clientHeight / 2; el.scrollLeft = 0; }, ROW, RULER);
+  await sleep(150);
+  return box("[data-testid=roll-grid]");
+};
+const keysFile = `${proj}/data/keys/chords.json`;
+const keysWas = fs.readFileSync(keysFile, "utf8");
+const cutoffNow = () => JSON.parse(fs.readFileSync(cutoffFile, "utf8")).clips;
+
+// N1: ⌘Z pressed while a drag, let go, waits for the state of the note added before it takes back
+// the drag once it lands, not the note: the waiting drag is an edit on its way too.
+await caughtUp();
+let g5 = await rollAtC4();
+let rev5 = await revision();
+hold = await holder(["/api/graph"]);
+await page.mouse.click(g5.x + 1.1 * ppb, g5.y + (127 - 60) * ROW + ROW / 2, { count: 2 });
+const noted5 = await until(() => onDisk(60).length === 1);
+await drag({ x: clipBox.x + 60, y: clipBox.y + clipBox.height / 2 }, { x: clipBox.x + 60 + 4 * PPB, y: clipBox.y + clipBox.height / 2 }, 10);
+await undo();
+await sleep(500);
+await hold.release();
+const dragUndone = await until(async () => (await revision()) === rev5 + 3 && disk().clips[0].start === 0 && onDisk(60).length === 1);
+await caughtUp();
+await undo();
+const clean5 = await until(() => fs.readFileSync(FILE, "utf8") === original);
+check(noted5 && dragUndone && clean5 && refusals.length === 0, `⌘Z pressed while a drag let go waits takes back the drag once it lands, and the note added before it stays (${noted5}, ${dragUndone}, ${clean5}, ${refusals.length} refused)`);
+
+// N2: an agent's step that lands while the window's edit is on its way is never what ⌘Z takes back:
+// it meant the window's own edit, which isn't the newest now, so nothing is undone and the agent's
+// step is named (AGENT-2).
+await caughtUp();
+await page.mouse.click(cutoff.x + 30, cutoff.y + 3);
+hold = await holder(["/api/graph/clips"]);
+await page.keyboard.press("Delete");
+const deleted6 = await until(() => hold.held.length === 1 && cutoffNow().length === 0);
+const byAgent = await agentPut("data/keys/chords.json", ["keys", "chords"], [{ id: "agentn2a", start: 64, length: 4, notes: [{ pitch: "C4", start: 0, length: 1 }] }]);
+const keysByAgent = fs.readFileSync(keysFile, "utf8");
+await caughtUp();
+await undo();
+await sleep(500);
+await hold.release();
+const refused6 = await until(() => refusals.some((u) => u.endsWith("/graph/undo")));
+await sleep(300);
+const kept6 = fs.readFileSync(keysFile, "utf8") === keysByAgent && cutoffNow().length === 0;
+const told6 = (await page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent ?? ""))).some((t) => /isn't the newest/.test(t));
+await expected409(1);
+const agentBack = (await agentUndo(byAgent.step)) === 200 && (await until(() => fs.readFileSync(keysFile, "utf8") === keysWas));
+await caughtUp();
+await undo();
+const clean6 = await until(() => fs.readFileSync(cutoffFile, "utf8") === cutoffWas);
+check(deleted6 && byAgent.step !== undefined && refused6 && kept6 && told6 && agentBack && clean6, `an agent's step landing while the window's delete is on its way isn't taken back by ⌘Z, which is refused, naming it (${deleted6}, ${byAgent.step}, ${refused6}, ${kept6}, ${told6}, ${agentBack}, ${clean6})`);
+
+// N3: the wait is bounded. An edit whose answer doesn't come within 2 s: ⌘Z takes back nothing and
+// says so; a second ⌘Z pressed while the first waits is dropped, never sent later.
+await caughtUp();
+await page.mouse.click(cutoff.x + 30, cutoff.y + 3);
+hold = await holder(["/api/graph/clips", "/api/graph"]);
+await page.keyboard.press("Delete");
+const deleted7 = await until(() => hold.held.some((e) => e.request.url.endsWith("/clips")) && cutoffNow().length === 0);
+await undo();
+await sleep(200);
+await undo();
+await sleep(2600);
+const told7 = (await page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent ?? ""))).some((t) => /isn't answered yet/.test(t));
+const none7 = cutoffNow().length === 0;
+await hold.release();
+await sleep(800);
+const still7 = cutoffNow().length === 0 && fs.readFileSync(FILE, "utf8") === original;
+await caughtUp();
+await undo();
+const clean7 = await until(() => fs.readFileSync(cutoffFile, "utf8") === cutoffWas);
+check(deleted7 && told7 && none7 && still7 && clean7 && refusals.length === 0, `⌘Z waits at most 2 s for an edit's answer, then says so and takes back nothing; a ⌘Z pressed meanwhile is dropped (${deleted7}, ${told7}, ${none7}, ${still7}, ${clean7}, ${refusals.length} refused)`);
+
+// N4: a drag pressed while the timeline draws an older picture (a note just added in the roll) still
+// names the clips of other lanes by the hash it drew: an agent's change to the dragged clip, which
+// the window hadn't shown, refuses the drag (WRITE-12), as when the timeline is caught up.
+await caughtUp();
+g5 = await rollAtC4();
+hold = await holder(["/api/graph"]);
+const changed8 = await agentPut("data/bass/cutoff.json", ["bass", "cutoff"], [{ id: "adp0sw76", start: 0, length: 16, points: [[0, 300], [16, 2000]] }]);
+const cutoffByAgent = fs.readFileSync(cutoffFile, "utf8");
+await page.mouse.click(g5.x + 1.1 * ppb, g5.y + (127 - 60) * ROW + ROW / 2, { count: 2 });
+const noted8 = await until(() => onDisk(60).length === 1);
+await page.mouse.move(cutoff.x + 30, cutoff.y + 3);
+await page.mouse.down();
+await page.mouse.move(cutoff.x + 30 + 4 * PPB, cutoff.y + 3, { steps: 10 });
+await page.mouse.up();
+await sleep(300);
+await hold.release();
+const refused8 = await until(() => refusals.some((u) => u.endsWith("/graph/clips")));
+await sleep(300);
+const kept8 = fs.readFileSync(cutoffFile, "utf8") === cutoffByAgent;
+await expected409(1);
+await caughtUp();
+await undo();
+const clean8 = await until(() => fs.readFileSync(FILE, "utf8") === original);
+const agentBack8 = (await agentUndo(changed8.step)) === 200 && (await until(() => fs.readFileSync(cutoffFile, "utf8") === cutoffWas));
+check(noted8 && changed8.step !== undefined && refused8 && kept8 && agentBack8 && clean8, `a drag pressed on an older picture is refused when an agent changed the clip of another lane meanwhile (${noted8}, ${changed8.step}, ${refused8}, ${kept8}, ${agentBack8}, ${clean8})`);
+
 check(errors.length === 0, `no console errors ${errors.join(" | ")}`);
 void ppb3;
 console.log(`\n${pass} passed, ${fail} failed`);

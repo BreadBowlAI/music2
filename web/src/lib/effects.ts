@@ -5,7 +5,7 @@
 // own.
 
 import { lockReason, readJson, type ViewNode } from "./graph";
-import { recorded, type Step } from "./history";
+import { editing, recorded, type Step } from "./history";
 import { token } from "./native";
 import { useStore } from "./store";
 
@@ -81,11 +81,14 @@ async function edit(path: string, body: Record<string, unknown>, step: Step) {
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return toast(`${why}.`);
+  const ours = editing();
   try {
     const r = await post(path, { session: graph.session, revision: graph.view.revision, ...body });
-    if (r.before !== r.after) recorded(graph.session, r, step);
+    if (r.before !== r.after) recorded(graph.session, r, step, ours);
   } catch (error) {
     toast(message(error));
+  } finally {
+    ours.end();
   }
 }
 

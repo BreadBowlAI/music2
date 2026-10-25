@@ -65,6 +65,48 @@ let answered: { session: number; revision: number; undo: StepName | null; redo: 
 /** The undo steps this window's own edits made, by id (AGENT-2): only these may ⌘Z take back unshown. */
 let mine: { session: number; steps: Set<number> } = { session: 0, steps: new Set() };
 
+/**
+ * An edit of this window on its way: sent (or, a drag let go, waiting to be), and not yet answered
+ * and recorded, or refused. `steps`: the undo steps its answers made. `end` once it is over.
+ */
+export interface Editing {
+  readonly steps: number[];
+  readonly done: Promise<void>;
+  end(): void;
+}
+
+/**
+ * This window's edits on their way. The server may make an edit's step before its answer reaches
+ * the window, so a ⌘Z pressed then would name the step below it, which isn't the newest, and be
+ * refused (AGENT-2): Undo and Redo of the top wait for these.
+ */
+const onItsWay = new Set<Editing>();
+
+/** An edit of this window is on its way from now: end what this returns once it is over. */
+export function editing(): Editing {
+  let resolve = () => {};
+  const done = new Promise<void>((r) => (resolve = r));
+  const e: Editing = {
+    steps: [],
+    done,
+    end() {
+      onItsWay.delete(e);
+      resolve();
+    },
+  };
+  onItsWay.add(e);
+  return e;
+}
+
+/** The edits this window has on its way now. */
+export const onTheirWay = (): Editing[] => [...onItsWay];
+
+/** Once one of this window's edits on their way now, other than `own`, is over; null with none. */
+export function oneEnds(own?: Editing): Promise<void> | null {
+  const others = [...onItsWay].filter((e) => e !== own);
+  return others.length ? Promise.race(others.map((e) => e.done)) : null;
+}
+
 /** Whether undo step `step` of `session` was made by an edit of this window. */
 export function madeHere(session: number, step: number | undefined): boolean {
   return step !== undefined && mine.session === session && mine.steps.has(step);
@@ -72,13 +114,14 @@ export function madeHere(session: number, step: number | undefined): boolean {
 
 /**
  * An edit this window made has committed `answer.revision`, as `step`: the server names its undo
- * step so. Its id (`answer.step`) is kept as this window's, and Undo names it at once, so a ⌘Z
+ * step so, and `edit`, the edit on its way that made it, keeps its id. Its id (`answer.step`) is kept as this window's, and Undo names it at once, so a ⌘Z
  * pressed before the state is read again takes back this edit, not the one before.
  */
-export function recorded(session: number, answer: { revision: number; step?: number }, step: Step) {
+export function recorded(session: number, answer: { revision: number; step?: number }, step: Step, edit?: Editing) {
   const revision = answer.revision;
   const undo: StepName = { name: step.name, structural: !!step.structural, given: true, source: "page", step: answer.step };
   if (answer.step !== undefined) {
+    edit?.steps.push(answer.step);
     if (mine.session !== session) mine = { session, steps: new Set() };
     mine.steps.add(answer.step);
     const { graph, set } = useStore.getState();
