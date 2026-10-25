@@ -104,8 +104,22 @@ If step 1 fails on the program's name: `mainBinaryName` makes it `Contents/MacOS
 
 ## The check
 
-`M2_CHECK_OUT=$SCRATCH/release/check-pr ci/check.sh --pr`, after these notes:
+`M2_CHECK_OUT=$SCRATCH/release/check-pr ci/check.sh --pr` at `25e18a8` (main merged in: `docsite` had landed as #15), with a scratch HOME and `CLAP_PATH` naming the test plugins:
 
 ```
-(filled in below)
+music2 check --pr: PASS
+commit   25e18a858866 on release (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 6 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+changes          PASS  .github/workflows/release.yml changed since e847f521092d, and it isn't documentation (ci/docs-only.sh's DOCS_FREE): the whole PR tier runs
+pr quick         PASS  0 min 27 s
+pr clippy        PASS  0 min 4 s
+pr rust          PASS  3 min 22 s
+pr suites        PASS  1 min 52 s
+pr renders       PASS  0 min 7 s
+repo unchanged   PASS
 ```
+
+1,950 Rust tests (48 skipped, none passed only on a retry), 54/54 browser suites (1,966 checks), 12 of 12 renders. The first run, with the scratch HOME alone, failed only its two plugin rows: the test plugins live in the real HOME, so `CLAP_PATH` names them. The commit after it changes only these notes.
