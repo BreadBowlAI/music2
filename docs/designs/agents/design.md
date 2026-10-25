@@ -85,26 +85,26 @@ an agent can and can't see). Track 1 (`ag-steps`) is built on branch `ag`: what 
 New rules, in a new section "Agents" of `docs/architecture.md`, after "Writes". The prefix `AGENT` is unused
 there today. The owner's answers in section 9 are written into the rules.
 
-**AGENT-1.** While a music2 app holds a project's lock ([WRITE-17](#the-project-lock)), an `m2` command that
+**AGENT-1.** While a music2 app holds a project's lock ([WRITE-17](../../architecture.md#the-project-lock)), an `m2` command that
 writes the project MUST hand its Tx to that app instead of failing. It builds the Tx on a read-only session
 from the files on disk and checks it there, under its own expectation and its planner's assertion. It sends
 it to the app's `POST /api/tx/commit` with `seen`, the hash of that check, and the new assets it names, using
-the url and the tools key in `~/.music2/session.json` ([AGENT-10](#agents)). The app commits it only if its
+the url and the tools key in `~/.music2/session.json` ([AGENT-10](../../architecture.md#agents)). The app commits it only if its
 delta has that hash. `m2` forwards only when the lock's holder is the program `music2` with the pid that file
 names, and the app says this folder is the song it has open. Otherwise it fails before changing anything,
-naming the holder ([WRITE-18](#the-project-lock)). `m2 edit` and `m2 write` make a change to a song file a Tx
+naming the holder ([WRITE-18](../../architecture.md#the-project-lock)). `m2 edit` and `m2 write` make a change to a song file a Tx
 with a base, so an agent changes files through the app while it is open. A forwarded write prints what a
 local one prints, and says it is one undo step in the app.
 - *Why:* while the song is open there must be one writer and one history, and only a change that comes
   through the writer can be refused when the musician holds what it touches.
 
 **AGENT-2.** Every change the app accepts while it has the song open (a Tx, a save, or a watcher batch that
-builds, [WRITE-19](#outside-writers)), other than an undo or a redo, MUST be exactly one undo step, with an
+builds, [WRITE-19](../../architecture.md#outside-writers)), other than an undo or a redo, MUST be exactly one undo step, with an
 id that is never reused in that history, and a source: the page, an agent by its name, or outside the app.
 An agent's step is named by the words it gives. Only the watcher's job makes outside steps: files the app
 takes in for its own Tx (an import's) make none. An outside step's inverse puts back each text file the
 batch changed or removed, guarded by the hash the batch left, as a save's inverse is
-([WRITE-21](#undo)), and removes each text file it made. A watcher batch makes no step when it only adds
+([WRITE-21](../../architecture.md#undo)), and removes each text file it made. A watcher batch makes no step when it only adds
 files under `assets/`; when git wrote it (it says so: git can undo it); or when it changes or removes a binary
 file, an asset or a plugin state (it says that can't be undone). A step undone and redone keeps its id and
 its source. Undo and redo name the step they mean by its id, and are refused when it isn't the newest (for
@@ -121,7 +121,7 @@ write arrives, and again at the start of the settle that follows, under the cont
 anything of the change is carried, sent to the engine or shown. If the second check finds something the
 musician began meanwhile, the app takes the agent's change back and answers busy. An agent's write is never
 previewed, so the musician never hears a refused change, and nothing they hold ends or waits. A file an agent
-writes itself is an outside write ([WRITE-19](#outside-writers)): this rule can't refuse it, and it can end a
+writes itself is an outside write ([WRITE-19](../../architecture.md#outside-writers)): this rule can't refuse it, and it can end a
 drag.
 - *Why:* the musician wins every clash. Only a write that comes through the app can be refused, so agents
   are told to write through it.
@@ -141,7 +141,7 @@ posts a pointer. The server keeps them in memory only and sends them as events. 
 file, a revision or undo. A pointer MUST NOT move the musician's view or change their selection.
 - *Why:* what someone looks at is not the song, and the agent must never take the musician's place.
 
-**AGENT-7.** Agent listening MUST be an offline range render ([RENDER-4](#range-render)) in a process of its
+**AGENT-7.** Agent listening MUST be an offline range render ([RENDER-4](../../architecture.md#range-render)) in a process of its
 own, on the cores playback doesn't need, at background priority, its plugin host process included, and one
 at a time on a machine. It reads committed files, or a Tx it checked and never wrote. It MUST NOT touch the
 live engine, the app's plugin instances or the audio thread. Gate G13 counts playback's dropouts while it
@@ -150,7 +150,7 @@ runs, and while agents' edits are forwarded.
 
 **AGENT-8.** Every HTTP route MUST be declared once, with its method, its path, whether it writes, whether
 agents may call it, plain words and an example body. The router, the read-only window's 423
-([WRITE-17](#the-project-lock)), AGENT-11's 403 and `m2 routes --json` are all made from that one table.
+([WRITE-17](../../architecture.md#the-project-lock)), AGENT-11's 403 and `m2 routes --json` are all made from that one table.
 - *Why:* a list kept by hand drifts. Agents learn the API from it, not from the source.
 
 **AGENT-9.** The app MUST contain no model and call none. It only shares focus, shows what changed and takes
@@ -180,15 +180,15 @@ WRITE-22's text and Deferred. Track 3: AGENT-6. Track 4: AGENT-8 and AGENT-11. T
 The changes:
 - **Owner decision 10** (`docs/architecture.md:41`): forwarding is adopted (2026-10-21), as AGENT-1.
 - **WRITE-18** (`:913-930`): "Forwarding writes to the holder is deferred" becomes "A writer that finds the
-  app holding the lock forwards ([AGENT-1](#agents)); a lock held by any other program fails as above." Its
+  app holding the lock forwards ([AGENT-1](../../architecture.md#agents)); a lock held by any other program fails as above." Its
   Why stays true: the safe writer is no longer blocked, only asked to wait while the musician holds a file.
 - **Deferred** (`:1424`): the forwarding row goes.
 - **WRITE-19** (`:934`): "accepts it as one revision" gains "and, in the app, one undo step unless git wrote
-  it ([AGENT-2](#agents))".
+  it ([AGENT-2](../../architecture.md#agents))".
 - **WRITE-21** (`:949`): "One Tx is one undo step" gains "and so is a watcher batch that builds
-  ([AGENT-2](#agents))".
+  ([AGENT-2](../../architecture.md#agents))".
 - **WRITE-22** (`:959-974`): its Today gains: a drag begun while an agent's change lands takes the change
-  back ([AGENT-3](#agents)).
+  back ([AGENT-3](../../architecture.md#agents)).
 - **MON-4** (`:1224`), as D4 decided: "…exports, or an agent render that didn't ask for them (`m2 listen
   --as-heard`, which says so)."
 - **Acceptance gates**: a row "agents" with each track's gate (section 7).

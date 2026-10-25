@@ -266,7 +266,8 @@ fn imports_resolve_only_to_the_snapshots_code() {
     assert_eq!(s.draft_errors.iter().map(|d| d.code).collect::<Vec<_>>(), ["import.outside-code"]);
 }
 
-// PLANE-3, FMT-19, FMT-20: presentation and local files never make a revision.
+// PLANE-3, FMT-19, FMT-20, FMT-23: presentation, local files and the files for agents never make a
+// revision.
 #[test]
 fn editing_layout_json_creates_no_revision() {
     let f = Fixture::first_song();
@@ -276,6 +277,9 @@ fn editing_layout_json_creates_no_revision() {
         ("layout.json", "{\"tracks\": {}}"),
         (".music2/overlays.json", "{}"),
         ("README.md", "notes"),
+        // FMT-23: the song's files for agents.
+        ("AGENTS.md", "# Working on a music2 song\n"),
+        ("CLAUDE.md", "@AGENTS.md\n"),
     ] {
         f.write(file, text);
         assert!(!s.refresh(), "{file}");

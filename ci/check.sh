@@ -37,7 +37,7 @@
 # (ci/pr.sh changes). When git proves your committed change is documentation only
 # (ci/docs-only.sh, on a clean tree), it runs only the docs rule's cases, as CI does. It builds into
 # <target>/pr without debug info, as CI does, so it never rebuilds what your own cargo build made.
-# It needs what ci/pr.sh needs (its top says): cargo-nextest, cargo-deny and actionlint come from
+# It needs what ci/pr.sh needs (its top says): cargo-nextest, cargo-deny, actionlint and mdBook come from
 # ci/tools.sh.
 #
 # When --gates=auto skips the gates (ci/gates-auto.sh holds the rule, ci/gates-auto-test.sh its
@@ -79,8 +79,8 @@
 # there, muted, and judges that set-up.
 #
 # Needs rustup and Node 24. The first run installs Rust 1.99.0 (rust-toolchain.toml) and
-# chrome-headless-shell 133.0.6943.141, and ci/tools.sh fetches cargo-nextest, cargo-deny and
-# actionlint into ~/.cache/m2-tools (the advisories row fetches RustSec's database). On a Mac, run it in Terminal on the Mac itself, not over
+# chrome-headless-shell 133.0.6943.141, and ci/tools.sh fetches cargo-nextest, cargo-deny,
+# actionlint and mdBook into ~/.cache/m2-tools (the advisories row fetches RustSec's database). On a Mac, run it in Terminal on the Mac itself, not over
 # ssh: the app's test needs your login session. On Linux with Xvfb it also opens the desktop app
 # on an invisible screen. Written for bash 3.2, which macOS ships.
 
@@ -479,11 +479,11 @@ else
   record toolchain FAIL "not Rust 1.99.0: see toolchain.log"
 fi
 
-# 1b. The PR tier's checks that build nothing (ci/pr.sh lint: rustfmt, actionlint, licences, and the
-#     cases of the docs rule, of the PR tier's verdicts, of ci/nightly.sh and of ci/tally.sh), then
-#     RustSec's advisories (ci/pr.sh advisories: they fetch RustSec's database, so their answer
-#     changes with the date). Their tools come from ci/tools.sh; when it can't get one, the row
-#     says FAIL and why.
+# 1b. The PR tier's checks that build nothing (ci/pr.sh lint: rustfmt, actionlint, licences, the
+#     links and the guide's site (ci/guide.sh check), and the cases of the docs rule, of the PR
+#     tier's verdicts, of ci/nightly.sh and of ci/tally.sh), then RustSec's advisories (ci/pr.sh
+#     advisories: they fetch RustSec's database, so their answer changes with the date). Their
+#     tools come from ci/tools.sh; when it can't get one, the row says FAIL and why.
 pr lint "1 min" lint
 pr advisories "seconds" advisories
 

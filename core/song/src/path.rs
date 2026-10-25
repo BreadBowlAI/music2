@@ -367,6 +367,9 @@ mod tests {
     fn unknown_paths() {
         for p in [
             "README.md",
+            // FMT-23: the song's files for agents.
+            "AGENTS.md",
+            "CLAUDE.md",
             "song.js",
             "lib/x.mjs",
             "tsconfig.json",

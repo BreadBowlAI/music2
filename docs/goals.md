@@ -10,7 +10,7 @@
 
 | Goal | What it means in practice |
 |---|---|
-| **Beginner-first, in plain words** | The app, its messages and its docs speak plainly to someone who has never made a song. A mistake in the code is said with a fix, pointing at your own line. Music words are explained in [Music basics](music-basics.md). Short sentences and tables, in docs too. |
+| **Beginner-first, in plain words** | The app, its messages and its docs speak plainly to someone who has never made a song. A mistake in the code is said with a fix, pointing at your own line. Music words are explained in [Music basics](guide/music-basics.md). Short sentences and tables, in docs too. |
 | **A song is a program** | A song is a folder: TypeScript says how it sounds, data files say what plays ([Song as a program](song-as-program.md)). You can diff it, review it, keep it in git and share it. The app, the `m2` command line, scripts, agents, text editors and git all write the same files (contract P2). |
 | **Exact export** | An export renders from the first sample, the same way every time. A song made only of std's sounds renders the same bits on every computer and every supported OS ([PLAT-4](architecture.md#platforms)). |
 | **Simple yet elegant** | A tasteful, professional DAW: "Logic's clarity, Live's speed, and nothing on screen that isn't the music or a control for it". The look is in the taste guide, [taste.md](designs/step8/taste.md). |

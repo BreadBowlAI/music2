@@ -1,7 +1,7 @@
 # What music2 can't do yet
 
 **In short**
-- This page lists only what is missing. What the app does today is in the manual: [In short: what you can do](manual.md#in-short-what-you-can-do).
+- This page lists only what is missing. What the app does today is in the guide: [What you can do](guide/what-you-can-do.md).
 - The gaps are grouped by area. The areas you notice first when making a song are at the top.
 - Each line is one gap. The big ones have a number (#18, #24, …), which stays the same everywhere. Small loose ends are listed under them, without numbers.
 - Size: **small** is one focused change; **medium** touches the window, the server and the core; **large** is new engine work.
@@ -199,7 +199,9 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; the start screen's Examples names it plainly), and the docs past [Music basics](music-basics.md) and the manual's first sections are technical. | Many people who open music2 are new to making music. | Yes | small |
+| 40 | **The guide from inside the app**: Help ▸ music2 Guide, opening the guide's website (it is public once the repo is), the site in the app's look (one CSS file for mdBook), and a copy of the site for each release once there are releases (today it follows `main`, and `m2 docs` its own version). | A musician looks for help in the Help menu, not on GitHub. | No | small |
+| 41 | **More of the guide made from code**: the shortcuts page from the web app's own table, the WebSocket events (in [The local API](guide/api.md)) from the server's, and std's sounds and their knobs from std's descriptors. Today these are written by hand; `commands.md` and `routes.md` are made by `m2 docs` and a test keeps them fresh (AGENT-12). | A page written twice drifts from what the app does. | No | medium |
+| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; the start screen's Examples names it plainly), and the docs past [Music basics](guide/music-basics.md) and the guide's manual part is technical. | Many people who open music2 are new to making music. | Yes | small |
 
 - **A problem from a sound or plugin that stopped can't be dismissed**: it stays in the status popover until the part plays again.
 - **A sound that stops in the moment between Stop All Sound and its reset** stays listed, though the reset starts it again (ex-1).
@@ -259,8 +261,10 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 37 | **`m2` commands** for change instrument, markers, the song's key, a track's ID, Save As and Follow tempo, with the app closed. With the song open in the app, `m2 call` reaches each but Save As, which is the musician's (AGENT-11): `/api/graph/track/instrument`, `/api/graph/markers`, `/api/graph/song-key`, `/api/graph/track/rekey`, and Follow tempo as `/api/graph/clips` with `{"op": "audio", "follow": true}`. With it closed, `m2 clips <song> json` takes that Follow tempo gesture too; the others need a Tx or the files. | Scripts and agents need the same basics as the app. | Yes (in `music2-cli`) | small |
+| 42 | **`m2` on your PATH**: a link in `/usr/local/bin` to the `m2` inside `music2.app` (or from source, `target/release/m2`), or a menu row that makes one. Today a song's `AGENTS.md` names its `m2` by its full path, so an agent needs no PATH, but you type the whole path. | Typing `m2` alone in Terminal. | No | small |
 | 38 | **A schema for the API**: `m2 routes --json` lists every route with its words and an example body (AGENT-8), but no JSON Schema of what each takes and answers; and a short summary of the song, and MCP. | An agent learns a body from one example, not every field it may give. | Yes | medium |
 
+- **A song's `AGENTS.md` names the `m2` it was made with, by its path then** (FMT-23): moving `music2.app`, or a first launch macOS ran from a copy it moved aside (App Translocation: an app downloaded and not yet moved to Applications), leaves it naming an old path. `m2 docs agents > AGENTS.md` writes it again, as does a song made before 2026-10-25, which has none.
 - **While a song's code doesn't build, only `m2 edit` and `m2 write` of a code file that is there work** (the agents design's review, m8; the review of `ag-fwd`, F12): they save it as the code editor does, and only if the song then builds, as one undo step. Every other `m2` write waits for the code to build: `m2` can't plan without built code, though the app plays the last version that built and would take a data edit (WRITE-14). A fix that needs two files changed at once can't be made from `m2`, since each save must build on its own, and neither can a new code file (the app's save route saves only files that are there): fix those in the app's code editor, or write the files directly (an outside change, one undo step).
 - **A knob drag holds its whole file for agents** (AGENT-3): while you drag a fader in `song.ts`, every agent write to `song.ts` waits, `add-track` included. Matching by the call the drag holds would be finer; a drag lasts seconds, and `m2` waits up to 30 s.
 - **On arrival, an agent's write through a gesture route** (`/api/graph/set`, `/connect`, …, as `m2 call` sends them) **is checked only against a take and the Compare pill**: its files aren't known before it is planned. A drag or unsaved code in its file is found at the settle, after the compile, and the change is taken back then, answered busy. `m2`'s own write commands send Tx, whose files are known, so they are refused at once.

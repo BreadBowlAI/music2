@@ -1,0 +1,22 @@
+# The guide's website, built by mdBook from docs/guide/ (ci/guide.sh; the pinned version is in
+# ci/tools.sh). Every key here is checked against that version: it refuses one it doesn't know.
+
+[book]
+title = "music2"
+language = "en"
+src = "guide"
+
+[build]
+# Under target/, which git ignores.
+build-dir = "../target/guide"
+# A page SUMMARY.md names but isn't there fails the build.
+create-missing = false
+
+[output.html]
+site-url = "/music2/"
+git-repository-url = "https://github.com/BreadBowlAI/music2"
+# {path} is the page's path from this folder: guide/window.md.
+edit-url-template = "https://github.com/BreadBowlAI/music2/edit/main/docs/{path}"
+
+[output.html.search]
+enable = true

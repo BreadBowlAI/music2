@@ -7,7 +7,7 @@
 - It is made for people new to making music, and it aims to stay simple yet elegant enough for a producer.
 - There's no AI inside the app. Scripts and AI agents can work on a song through the same files, the `m2` command and a local API. While the song is open, an agent's change goes through the app: you see each one land, you can take it back, and it waits while you hold what it changes. Press V to hear before and after it: that only changes what you hear, never the song. An agent can see what you select (`m2 focus`), follow what happens (`m2 watch`), point at things to show you where they are (`m2 point`), and measure what it can't hear (`m2 listen`: loudness, peaks, bands, stereo and masking, in a program of its own that never touches playback). It can make any change to the song the window can (`m2 call`; `m2 routes` lists them all), but playing, recording, soloing and your view stay yours.
 
-![The music2 window: six tracks on the timeline, and the Bass clip open in the piano roll below](docs/screenshot.png)
+![The music2 window: six tracks on the timeline, and the Bass clip open in the piano roll below](docs/guide/images/screenshot.png)
 
 *The Starter beat, with its Bass clip open in the piano roll (Linux).*
 
@@ -37,7 +37,7 @@ What works today:
 | Export the song, its stems, or the notes as MIDI | **Export** (⇧⌘E) |
 | Edit the song's code, with type checks | **Code** (⌥4) |
 
-Keys are shown as on a Mac. On Linux, Ctrl does what ⌘ does, and Alt what ⌥ does. The full list, and how to do each thing, is in [the manual](docs/manual.md#in-short-what-you-can-do). What is missing is in [What music2 can't do yet](docs/gaps.md).
+Keys are shown as on a Mac. On Linux, Ctrl does what ⌘ does, and Alt what ⌥ does. The full list, and how to do each thing, is in the guide's [What you can do](docs/guide/what-you-can-do.md). What is missing is in [What music2 can't do yet](docs/gaps.md).
 
 ## Quick start
 
@@ -60,21 +60,23 @@ cargo run --locked --release -p music2-desktop
 
 The first build takes a while. Then the start screen opens.
 
-**3. Make a song.** Click **New Song…**, keep **Starter beat**, and press **Create**. Press **Space** to play. The song lives in `~/Music/music2/<its name>`. To learn step by step, open **Help → Make Your First Song**, or read [Your first song](docs/manual.md#your-first-song).
+**3. Make a song.** Click **New Song…**, keep **Starter beat**, and press **Create**. Press **Space** to play. The song lives in `~/Music/music2/<its name>`. To learn step by step, open **Help → Make Your First Song**, or read [Your first song](docs/guide/first-song.md).
 
-Other ways to run it (the UI with hot reload, `music2.app` for the Mac, the `m2` command line) are in [the manual](docs/manual.md#run-the-app).
+Other ways to run it (the UI with hot reload, `music2.app` for the Mac, the `m2` command line) are in [Install and run music2](docs/guide/install.md).
 
 ## Learn more
 
 | To | Read |
 |---|---|
-| Use the app | [The manual](docs/manual.md) |
-| Learn the music words | [Music basics](docs/music-basics.md) |
-| Write songs as code | [How a song is written](docs/manual.md#how-a-song-is-written) and [Song as a program](docs/song-as-program.md) |
-| Drive the app from a script or an agent | [Scripts and agents](docs/manual.md#scripts-and-agents) |
+| Use the app | [The guide](docs/guide/welcome.md) |
+| Learn the music words | [Music basics](docs/guide/music-basics.md) |
+| Write songs as code | [How a song is written](docs/guide/code.md) and [Song as a program](docs/song-as-program.md) |
+| Drive the app from a script or an agent | [Working on a music2 song](templates/song-agents.md) (every new song gets it as its `AGENTS.md`) and [the local API](docs/guide/api.md) |
 | Know where the project is going | [Goals](docs/goals.md) |
 | See what is missing | [What music2 can't do yet](docs/gaps.md) |
 | Read the rules every part is built to | [The contract](docs/architecture.md) |
+
+The guide (`docs/guide/`) is also a website, <https://breadbowlai.github.io/music2/>, once the repo is public, and `m2 docs` prints it in the terminal.
 
 ## Help build it
 
@@ -104,4 +106,4 @@ music2 is yours to use under either of
 
 at your option. Unless you say otherwise, anything you send for inclusion is under the same two licences, with no extra terms.
 
-The app's font, [Inter](https://rsms.me/inter/), is under the SIL Open Font License 1.1 (`web/public/fonts/OFL.txt`). Credits: [the manual](docs/manual.md#credits).
+The app's font, [Inter](https://rsms.me/inter/), is under the SIL Open Font License 1.1 (`web/public/fonts/OFL.txt`). Credits: [the guide](docs/guide/credits.md).

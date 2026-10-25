@@ -38,7 +38,8 @@ env:
   M2_PLUGINS_MIRROR: ${{ github.server_url }}/${{ github.repository }}/releases/download/test-plugins
 
 jobs:
-  # Whether the change is documentation only, then the docs job's own check (seconds).
+  # Whether the change is documentation only, then the docs job: the link check, the guide's site
+  # (ci/guide.sh check; pages.yml publishes the same build from main) and the docs rule's cases.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

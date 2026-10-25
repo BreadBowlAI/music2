@@ -664,13 +664,13 @@ code they describe (noted in brackets).
   renames checked at each step (an exchange and a create-only rename: `renamex_np` on macOS, `renameat2` on Linux,
   `m2_os::fs::rename`), rolled back in process when one finds an outside change. A volume without them (FAT, exFAT, SMB,
   NFS) takes the fallback: the target moves aside into the staging folder as `old-<k>`, then the new file comes in;
-  recovery can finish or undo that middle state ([WRITE-16](#commit-journal-and-recovery))."
+  recovery can finish or undo that middle state ([WRITE-16](../../architecture.md#commit-journal-and-recovery))."
 
 **WRITE-16** (S6)
 - Rule: "Each fix is allowed only while every target still matches the hash the journal recorded before or after the
   Tx." → "Each fix is allowed only while every target still matches the hash the journal recorded before or after the
   Tx; a target the commit itself moved aside, unchanged, into its staging folder counts as at its before hash (the
-  fallback's middle state, [WRITE-15](#commit-journal-and-recovery))."
+  fallback's middle state, [WRITE-15](../../architecture.md#commit-journal-and-recovery))."
 - *Today*: "another host is told by its hardware UUID" → "another host is told by `m2_os::host::id()` (the hardware
   UUID on macOS, `/etc/machine-id` on Linux)". Add: "The kill test runs on a disk that swaps and on one that can't."
 
@@ -698,7 +698,7 @@ code they describe (noted in brackets).
   another host's journal (the hardware UUID on macOS, `/etc/machine-id` on Linux)".
 
 **RENDER-30** (S5)
-- "cached in `~/Library/Caches/music2/`" → "cached in the OS's cache folder ([FMT-16](#assets-and-hashes))".
+- "cached in `~/Library/Caches/music2/`" → "cached in the OS's cache folder ([FMT-16](../../architecture.md#assets-and-hashes))".
 - The layout block's last line: "`~/Library/Caches/music2/     outside the project: decoded and warped renders, the hash
   cache`" → "`<cache>/music2/              outside the project, in the OS's cache folder (FMT-16): decoded and warped
   renders, the hash cache`".
@@ -725,11 +725,11 @@ code they describe (noted in brackets).
 
 **Acceptance gates** (S9)
 - "A step is done when its gates pass in CI or, for timings, in a recorded run on the reference projects." → "A step is
-  done when its gates pass in `ci/check.sh` on Linux and on the reference Mac ([PLAT-4](#platforms)) or, for timings,
+  done when its gates pass in `ci/check.sh` on Linux and on the reference Mac ([PLAT-4](../../architecture.md#platforms)) or, for timings,
   in a recorded run on the reference projects."
 - After "Timings are taken on the **reference Mac**, the oldest supported Apple-silicon Mac (an M1), at 48 kHz." add:
   "Other machines run the same gates and record their timings with the machine named; only the reference Mac's are
-  judged ([PLAT-7](#platforms))."
+  judged ([PLAT-7](../../architecture.md#platforms))."
 - "These gates keep running in CI once their step lands:" → "These gates keep running in `ci/check.sh` once their step
   lands:".
 
@@ -783,7 +783,7 @@ Under item 6, after its bullets, add (S1):
 > **6b. The platform layer** (about 2 weeks; built on main before step 7 is finished, when the work moved to a Linux
 > server). `m2-os` with one folder per OS; Linux green natively; macOS checked by `ci/check.sh` on the owner's Mac;
 > Windows compile-checked from Linux. Deterministic host and song-code math (`libm`), a reproducible `std.wasm`, and a
-> fallback rename that recovery can finish or undo ([PLAT-1](#platforms) to [PLAT-8](#platforms)). Steps 8a and 9 add
+> fallback rename that recovery can finish or undo ([PLAT-1](../../architecture.md#platforms) to [PLAT-8](../../architecture.md#platforms)). Steps 8a and 9 add
 > their OS pieces to `m2-os`.
 
 ### 6.4 Deferred, with triggers (new rows, S9)
