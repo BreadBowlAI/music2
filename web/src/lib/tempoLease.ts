@@ -9,7 +9,7 @@
 // tempo they were made in).
 
 import { clientId, readJson } from "./graph";
-import { recorded, type Step } from "./history";
+import { editing, recorded, type Step } from "./history";
 import { token } from "./native";
 
 /** How often a still drag tells the server it lives (its lease ends after 10 s of nothing). */
@@ -87,21 +87,26 @@ export function begin(session: number, at: number, ended: (why: string) => void)
     },
     async finish(bpm, step) {
       stop();
-      const id = await lease;
-      const done: TempoDone =
-        id === null
-          ? await fetch("/api/graph/tempo", {
-              method: "POST",
-              headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
-              body: JSON.stringify({ session, at, bpm }),
-            }).then(async (res) => {
-              const json = await readJson(res);
-              if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-              return json;
-            })
-          : await post("commit", { lease: id, bpm });
-      if (done.before !== done.after) recorded(session, done, step);
-      return done;
+      const answered = editing();
+      try {
+        const id = await lease;
+        const done: TempoDone =
+          id === null
+            ? await fetch("/api/graph/tempo", {
+                method: "POST",
+                headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
+                body: JSON.stringify({ session, at, bpm }),
+              }).then(async (res) => {
+                const json = await readJson(res);
+                if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+                return json;
+              })
+            : await post("commit", { lease: id, bpm });
+        if (done.before !== done.after) recorded(session, done, step);
+        return done;
+      } finally {
+        answered();
+      }
     },
     abort() {
       if (over) return;

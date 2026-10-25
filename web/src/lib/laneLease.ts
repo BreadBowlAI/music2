@@ -11,7 +11,7 @@
 import { playingNow } from "./clock";
 import { send, type Done, type Gesture } from "./clips";
 import { clientId, readJson, type GraphState } from "./graph";
-import type { Step } from "./history";
+import { editing, type Step } from "./history";
 import { token } from "./native";
 
 /** How often a still drag tells the server it lives (its lease ends after 10 s of nothing). */
@@ -84,9 +84,15 @@ export function begin(graph: GraphState, gesture: Gesture, ended: (why: string) 
     },
     async finish(g, step) {
       stop();
-      const id = await lease;
-      if (id === null) return send(graph, g, step);
-      return send(graph, g, step, { path: "/api/graph/lane/lease/commit", body: { lease: id, gesture: g } });
+      // On its way from the drag's end, while its lease's begin is still answering too.
+      const answered = editing();
+      try {
+        const id = await lease;
+        if (id === null) return await send(graph, g, step);
+        return await send(graph, g, step, { path: "/api/graph/lane/lease/commit", body: { lease: id, gesture: g } });
+      } finally {
+        answered();
+      }
     },
     abort() {
       if (over) return;

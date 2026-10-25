@@ -65,6 +65,35 @@ let answered: { session: number; revision: number; undo: StepName | null; redo: 
 /** The undo steps this window's own edits made, by id (AGENT-2): only these may ⌘Z take back unshown. */
 let mine: { session: number; steps: Set<number> } = { session: 0, steps: new Set() };
 
+/**
+ * This window's edits on their way: sent, and not yet answered and recorded (or refused). The
+ * server may have made an edit's step before its answer reaches the window, so a ⌘Z pressed then
+ * would name the step below it, which isn't the newest, and be refused (AGENT-2).
+ */
+const onItsWay = new Set<Promise<void>>();
+
+/**
+ * An edit of this window is on its way: call what this returns once its answer is recorded, or it
+ * was refused. Undo and Redo of the top wait for it (`edited`).
+ */
+export function editing(): () => void {
+  let done = () => {};
+  const p = new Promise<void>((resolve) => (done = resolve));
+  onItsWay.add(p);
+  return () => {
+    onItsWay.delete(p);
+    done();
+  };
+}
+
+/** Once every edit this window has on its way now is answered. */
+export function edited(): Promise<void> {
+  return Promise.all([...onItsWay]).then(() => {});
+}
+
+/** Whether this window has an edit on its way. */
+export const sending = () => onItsWay.size > 0;
+
 /** Whether undo step `step` of `session` was made by an edit of this window. */
 export function madeHere(session: number, step: number | undefined): boolean {
   return step !== undefined && mine.session === session && mine.steps.has(step);

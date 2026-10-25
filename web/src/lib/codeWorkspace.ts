@@ -6,7 +6,7 @@
 import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api";
 import { codeApi, onDisk, type ProjectFiles } from "./code";
 import type { GraphState, Problem } from "./graph";
-import { recorded } from "./history";
+import { editing, recorded } from "./history";
 import { useStore } from "./store";
 
 export interface Doc {
@@ -158,6 +158,7 @@ export class Workspace {
     const version = d.model.getAlternativeVersionId();
     d.saving = text;
     this.emit();
+    const answered = editing();
     try {
       const was = useStore.getState().graph?.view.revision ?? Infinity;
       const r = await codeApi.save(this.session, d.path, d.base, text);
@@ -176,6 +177,7 @@ export class Workspace {
         d.conflict = true;
       }
     } finally {
+      answered();
       d.saving = undefined;
       this.epoch++;
       this.emit();

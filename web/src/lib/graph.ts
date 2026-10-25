@@ -1,6 +1,6 @@
 // The graph view of the open song project: types, API, layout.
 
-import { recorded, type Step, type StepName } from "./history";
+import { editing, recorded, type Step, type StepName } from "./history";
 import { token } from "./native";
 
 /** A declared control a constant is (PKG-3): its instance's frame, its slot, and whether the call leaves it out. */
@@ -662,11 +662,14 @@ export const editorHooks: {
 
 /** An edit's call: once it commits a revision, that revision is Undo's, named `step` (lib/history). */
 function edit<T extends { revision: number; before: string; after: string; pending?: boolean }>(session: number, step: Step | ((r: T) => Step), p: Promise<T>) {
+  const sent = editing();
   // A value held while the code doesn't compile (`pending`) commits nothing yet; nor does an edit that changes nothing.
-  return p.then((r) => {
-    if (!r.pending && r.before !== r.after) recorded(session, r, typeof step === "function" ? step(r) : step);
-    return r;
-  });
+  return p
+    .then((r) => {
+      if (!r.pending && r.before !== r.after) recorded(session, r, typeof step === "function" ? step(r) : step);
+      return r;
+    })
+    .finally(sent);
 }
 
 /** An edit's answer. `step`: the undo step it made, by its id (AGENT-2); an undo's or a redo's: the step it took back. */
@@ -763,15 +766,24 @@ export const graphApi = {
    * when that can't be taken out from here, else asking again with `cascade` takes it out too.
    */
   deleteTrack: async (session: number, module: string, name: string, cascade = false) => {
-    const r = await answer<Edit & { excised?: Dependent[]; dependents?: Dependent[]; blocked?: boolean }>("/track/delete", { session, module, cascade });
-    if (r.status === 409) return { asks: { dependents: r.json.dependents ?? [], blocked: !!r.json.blocked } };
-    await edit(session, { name: `deleting ${name}`, structural: true }, Promise.resolve(r.json));
-    return { done: r.json };
+    const sent = editing();
+    try {
+      const r = await answer<Edit & { excised?: Dependent[]; dependents?: Dependent[]; blocked?: boolean }>("/track/delete", { session, module, cascade });
+      if (r.status === 409) return { asks: { dependents: r.json.dependents ?? [], blocked: !!r.json.blocked } };
+      await edit(session, { name: `deleting ${name}`, structural: true }, Promise.resolve(r.json));
+      return { done: r.json };
+    } finally {
+      sent();
+    }
   },
   /** A layout write (no revision, PLANE-3): every track in a new order, one track's colour, or the defaults. */
   // Always a step of its own, though a move says "Kick" before and after: what Undo takes back next.
-  layout: (session: number, change: { order?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) =>
-    call<Edit>("/layout", { session, ...change }).then((r) => (recorded(session, r, step), r)),
+  layout: (session: number, change: { order?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) => {
+    const sent = editing();
+    return call<Edit>("/layout", { session, ...change })
+      .then((r) => (recorded(session, r, step), r))
+      .finally(sent);
+  },
   /**
    * Undo the step `step` names, only while it is the newest (AGENT-2); without it, the newest. A
    * step that isn't the newest is a 409: nothing changed, and `newest` names the newest.
@@ -860,10 +872,12 @@ export function writeLane(graph: GraphState, module: string, lane: string, clips
   });
   const q = lanes;
   q.pending++;
+  // On its way from now, while it waits in the queue too (Undo waits for it).
+  const done = editing();
   const write = q.queue
     .then(() => graphApi.lane(graph.session, base, module, lane, sent, step))
     .then((r) => ((q.revision = Math.max(q.revision, r.revision)), { ...r, clips: sent }))
-    .finally(() => q.pending--);
+    .finally(() => (q.pending--, done()));
   q.queue = write.catch(() => {});
   return write;
 }
@@ -876,10 +890,11 @@ export function afterLaneWrites<T>(graph: GraphState, f: () => Promise<T & { rev
   if (lanes.session !== graph.session) lanes = { session: graph.session, revision: 0, pending: 0, queue: Promise.resolve() };
   const q = lanes;
   q.pending++;
+  const done = editing();
   const write = q.queue
     .then(f)
     .then((r) => ((q.revision = Math.max(q.revision, r.revision)), r))
-    .finally(() => q.pending--);
+    .finally(() => (q.pending--, done()));
   q.queue = write.catch(() => {});
   return write;
 }

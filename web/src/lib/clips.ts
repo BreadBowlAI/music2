@@ -10,7 +10,7 @@ import { create } from "zustand";
 import { clipIndex, findLane, hasOwnId, laneWriting, readJson, sameClip, type ClipRef, type GraphState, type TimelineLane, type TimelineView } from "./graph";
 import { beatNow } from "./clock";
 import { clean } from "./grid";
-import { recorded, type Step } from "./history";
+import { editing, recorded, type Step } from "./history";
 import { token } from "./native";
 
 /** A lane's address, as the server writes it: module and lane keys. */
@@ -131,6 +131,7 @@ export async function send(graph: GraphState, gesture: Gesture, step: Step, via?
   if (sent.session !== graph.session) sent = { session: graph.session, revision: 0, pending: 0 };
   const q = sent;
   q.pending++;
+  const answered = editing();
   try {
     const res = await fetch(via?.path ?? "/api/graph/clips", {
       method: "POST",
@@ -147,6 +148,7 @@ export async function send(graph: GraphState, gesture: Gesture, step: Step, via?
     return done;
   } finally {
     q.pending--;
+    answered();
   }
 }
 
@@ -222,14 +224,19 @@ export function copiedOf(timeline: TimelineView, picked: readonly ClipRef[]): Co
  * it throws the server's words.
  */
 export async function removeAutomation(graph: GraphState, addr: LaneAddr, beat: number, name: string) {
-  const res = await fetch("/api/graph/automate/remove", {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
-    body: JSON.stringify({ session: graph.session, module: addr.module, lane: addr.lane, beat }),
-  });
-  const json = await readJson(res);
-  if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-  const done = json as { file: string; before: string; after: string; revision: number; step?: number };
-  if (done.before !== done.after) recorded(graph.session, done, { name: `removing the ${name} automation`, structural: true });
-  return done;
+  const answered = editing();
+  try {
+    const res = await fetch("/api/graph/automate/remove", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
+      body: JSON.stringify({ session: graph.session, module: addr.module, lane: addr.lane, beat }),
+    });
+    const json = await readJson(res);
+    if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+    const done = json as { file: string; before: string; after: string; revision: number; step?: number };
+    if (done.before !== done.after) recorded(graph.session, done, { name: `removing the ${name} automation`, structural: true });
+    return done;
+  } finally {
+    answered();
+  }
 }

@@ -60,6 +60,7 @@ import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { followNow, roundZoom, setFollow, setZoom, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
 import { useStore } from "../lib/store";
+import { edited, sending } from "../lib/history";
 import { look } from "../lib/focus";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import { listedInstrument } from "../lib/plugins";
@@ -610,6 +611,22 @@ export default function SongTimeline({
       return graph && !busy(graph) && !latest.current.locked ? graph : null;
     };
     /**
+     * `ready`, once it is: after this window's edits on their way, when the state shows what they
+     * made. Null when the song closed or can't be written meanwhile.
+     */
+    const readySoon = async (session: number) => {
+      for (;;) {
+        const graph = useStore.getState().graph;
+        if (!graph || graph.session !== session || latest.current.locked) return null;
+        if (!busy(graph)) return graph;
+        // Busy with a write on its way, or one the state doesn't show yet: its answer, or the next state.
+        let off = () => {};
+        const changed = new Promise<void>((resolve) => (off = useStore.subscribe((s) => s.graph !== graph && resolve())));
+        await (sending() ? Promise.race([changed, edited()]) : changed);
+        off();
+      }
+    };
+    /**
      * What a drag writes when let go, and its undo step's name: null when it changes nothing, or
      * names a clip the timeline doesn't draw now. Over a lane that can't take the clips, the clips
      * where they were (letting go there writes nothing).
@@ -627,17 +644,23 @@ export default function SongTimeline({
     };
     /**
      * A dropped drag: one gesture, through its lease when one lives (heard as it went, 8b.7). Drawn
-     * where it went until the timeline shows it; refused, it goes back.
+     * where it went until the timeline shows it; refused, it goes back. Let go while the timeline
+     * can't take a gesture (this window's last edit not shown yet), it goes once it can. `behind`:
+     * pressed on a picture older than the window's state (most often its own edit not drawn yet: a
+     * note added in the roll a moment before), so its clips are named as the timeline draws them
+     * when it goes. Else as drawn when pressed: a clip changed since is refused (WRITE-12).
      */
-    const drop = (d: Drag, lease: LaneLease | null) => {
-      const graph = ready();
-      const made = gestureOf(d);
+    const drop = async (d: Drag, lease: LaneLease | null, behind: boolean) => {
+      setDrag({ ...d, landed: Infinity });
+      const session = useStore.getState().graph?.session;
+      const graph = session === undefined ? null : await readySoon(session);
+      const now = graph && behind ? { ...d, clips: d.clips.map((c) => ({ ...c, lane: findLane(graph.timeline, c.ref.module, c.ref.lane) ?? c.lane })) } : d;
+      const made = gestureOf(now);
       if (!graph || !made || !made.step) {
         lease?.abort();
-        return setDrag(null);
+        return setDrag((was) => (was?.landed === Infinity ? null : was));
       }
       const { gesture, step } = made;
-      setDrag({ ...d, landed: Infinity });
       (lease ? lease.finish(gesture, { name: step }) : send(graph, gesture, { name: step })).then(
         (done) => {
           setDrag((now) => (now?.landed === Infinity ? { ...now, landed: done.revision } : now));
@@ -948,6 +971,9 @@ export default function SongTimeline({
         // What moves: every picked clip when this one is picked, each as drawn now (its hash is
         // what this window saw: one changed since is refused when it lands).
         const { timeline } = latest.current;
+        // Unless what is drawn now is older than the window's state: then as drawn when it goes.
+        const shown = useStore.getState().graph;
+        const behind = !shown || busy(shown) || shown.view.revision !== latest.current.revision;
         const group = (isPicked(useClipSelection.getState().picked, ref) && !edge ? useClipSelection.getState().picked : [ref]).flatMap((r) => {
           const l = findLane(timeline, r.module, r.lane);
           const k = l ? clipIndex(l.clips, r) : -1;
@@ -1028,7 +1054,7 @@ export default function SongTimeline({
           }
           // Let go over a lane that can't take the clips, or the drag cancelled: nothing happens.
           if (ev.type !== "pointerup" || !now || now.refused) return cancel();
-          drop(now, lease);
+          void drop(now, lease, behind);
         };
         // Esc during the drag puts it back, and is the drag's alone (not the page's deselect).
         const esc = (ev: KeyboardEvent) => {

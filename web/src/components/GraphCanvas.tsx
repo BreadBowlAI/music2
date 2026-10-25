@@ -17,7 +17,7 @@ import {
 } from "../lib/graph";
 import { setClock } from "../lib/clock";
 import { pickedIn, useClipSelection } from "../lib/clips";
-import { madeHere, said, tookBack, type StepName } from "../lib/history";
+import { edited, madeHere, said, tookBack, type StepName } from "../lib/history";
 import { forget, stepped } from "../lib/notice";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
 import { flushLocal } from "../lib/local";
@@ -362,8 +362,11 @@ async function skipStep(session: number, step: number) {
  * shown, 0, which is never the newest: the server says what is.
  */
 export function undoTop(graph: GraphState, id: "undo" | "redo") {
+  // After this window's edits on their way when it was pressed, so a ⌘Z right after an edit takes
+  // back that edit: until its answer comes the window would name the step below it.
+  const sent = edited();
   // One after another, each naming the top the one before left: ⌘Z held down takes back step by step.
-  topped = topped.then(() => {
+  topped = topped.then(() => sent).then(() => {
     const now = useStore.getState().graph ?? graph;
     if (now.session !== graph.session) return;
     return graphUndo(now.session, id, (id === "redo" ? now.redo_name : now.undo_name)?.step ?? 0, true);

@@ -8,7 +8,7 @@
 import { create } from "zustand";
 import { moduleName, readJson, type GraphState } from "./graph";
 import type { Heard, OverlayState } from "./graph8b";
-import { recorded } from "./history";
+import { editing, recorded } from "./history";
 import { token } from "./native";
 import { useStore } from "./store";
 
@@ -234,7 +234,12 @@ export interface Edited {
  * read-only window (423) and while the code doesn't compile, in words.
  */
 export async function muteInSongCall(session: number, modules: string[], muted: boolean) {
-  const r = await post<Edited>("/track/mute", { session, modules, muted });
-  if (r.before !== r.after) recorded(session, r, { name: muted ? "mute in song" : "unmute in song", structural: true });
-  return r;
+  const answered = editing();
+  try {
+    const r = await post<Edited>("/track/mute", { session, modules, muted });
+    if (r.before !== r.after) recorded(session, r, { name: muted ? "mute in song" : "unmute in song", structural: true });
+    return r;
+  } finally {
+    answered();
+  }
 }

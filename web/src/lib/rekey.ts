@@ -9,7 +9,7 @@
 import { create } from "zustand";
 import { undoAction } from "../components/GraphCanvas";
 import { lockReason, moduleName, readJson, type ClipRef, type GraphState } from "./graph";
-import { recorded } from "./history";
+import { editing, recorded } from "./history";
 import { getLocal, setLocal } from "./local";
 import { token } from "./native";
 import { useShell } from "./shell";
@@ -71,6 +71,7 @@ export async function changeId(module: string, id: string): Promise<string | nul
   const why = lockReason(graph, connected);
   if (why) return `${why}.`;
   const name = nameOf(graph, module);
+  const answered = editing();
   try {
     const r = await post<{ revision: number; step?: number; before: string; after: string }>("/track/rekey", { session: graph.session, module, key: id });
     // The window follows the track once the graph has its new ID (below): not before, or the
@@ -80,6 +81,8 @@ export async function changeId(module: string, id: string): Promise<string | nul
     return null;
   } catch (error) {
     return message(error);
+  } finally {
+    answered();
   }
 }
 

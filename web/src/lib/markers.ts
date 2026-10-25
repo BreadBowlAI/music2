@@ -4,7 +4,7 @@
 import { create } from "zustand";
 import { readJson, type Meter } from "./graph";
 import { barAt } from "./graph";
-import { recorded, type Step } from "./history";
+import { editing, recorded, type Step } from "./history";
 import { token } from "./native";
 import { useStore } from "./store";
 
@@ -70,6 +70,7 @@ export async function writeMarkers(list: Marker[], step: Step) {
   const since = markersOf(graph.timeline);
   const sorted = [...list].sort((a, b) => a.beat - b.beat);
   usePendingMarkers.setState({ pending: { list: sorted, since } });
+  const answered = editing();
   try {
     const res = await fetch("/api/graph/markers", {
       method: "POST",
@@ -82,5 +83,7 @@ export async function writeMarkers(list: Marker[], step: Step) {
   } catch (error) {
     usePendingMarkers.setState({ pending: null });
     toast((error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, ""));
+  } finally {
+    answered();
   }
 }
