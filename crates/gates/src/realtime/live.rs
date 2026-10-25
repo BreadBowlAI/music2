@@ -191,7 +191,8 @@ pub fn verdict(f: &Found, asked: u32, judged: bool) -> Vec<Check> {
         wrong.push(m.clone());
     }
     let setup = format!(
-        "{} thread{} ({}), {}; workers real time {}/{workers}, in the workgroup {}/{workers}; the device's thread {}; {} Hz, {} frames; its FP register {:#x}",
+        "{} thread{} ({}), {}; workers real time {}/{workers}, in the workgroup {}/{workers}; the device's thread {}; {} Hz, {} frames; \
+         the device's thread's own floating-point mode {:#x} (information)",
         t.count,
         if t.count == 1 { "" } else { "s" },
         t.advice.map_or_else(|| "no workgroup's advice".into(), |n| format!("the workgroup advises {n}")),
@@ -213,7 +214,7 @@ pub fn verdict(f: &Found, asked: u32, judged: bool) -> Vec<Check> {
         designed,
         match designed {
             true => setup,
-            false => format!("{setup}: not the designed set-up: {}", wrong.join("; ")),
+            false => format!("not the designed set-up: {}. The set-up: {setup}", wrong.join("; ")),
         },
     );
     // The callback, from 5 s after Play.
@@ -656,6 +657,24 @@ mod tests {
             assert!(judged.len() == 1 && judged[0].contains(named), "{named}: {judged:#?}");
             assert_eq!(failed(&f, false).len(), usize::from(everywhere), "{named}: judged on Linux too: {everywhere}");
         }
+    }
+
+    // G12: a set-up that isn't the designed one says what is wrong first. On the Mac's first full
+    // check the line ended "its FP register 0x0: not the designed set-up: the output plays at
+    // 44100 Hz", which read as if the register were wrong; the device thread's own floating-point
+    // mode is information (each callback puts it back, RENDER-2a), and FPCR 0 is arm64's default.
+    #[test]
+    fn the_set_up_says_what_is_wrong_first() {
+        let mut f = clean();
+        (f.rate, f.song_rate) = (44_100, 44_100);
+        let said = failed(&f, true);
+        assert!(
+            said.len() == 1 && said[0].starts_with("set-up: not the designed set-up: the output plays at 44100 Hz: set it to 48 kHz"),
+            "{said:?}"
+        );
+        assert!(said[0].contains("the device's thread's own floating-point mode 0x0 (information)"), "{said:?}");
+        let fine = verdict(&clean(), 128, true).into_iter().find(|c| c.name == "set-up").unwrap();
+        assert!(fine.detail.starts_with("4 threads") && fine.detail.ends_with("floating-point mode 0x0 (information)"), "{}", fine.detail);
     }
 
     // G12 (8a's live half, D17): a Mac plays its output device (none: the run fails); anything
