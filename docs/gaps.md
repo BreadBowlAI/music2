@@ -113,7 +113,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A plugin preset of yours keeps only the numbers its call's code wrote when you saved it**: load it into a call whose code writes another one, and the code's number stays, without a word.
 - **A plugin preset saved by another version of the plugin** loads without a word.
 - **A plugin whose own preset loads only once it plays** would give its old state (Surge XT's load at once).
-- **No `m2 preset` commands** (save, load, list) for agents (#37).
+- **No `m2 preset` commands** (save, load, list) for agents (#37). With the song open in the app, `m2 call` lists and loads presets (`/api/graph/presets`, `/api/graph/preset/load`); saving one is the musician's.
 - **A Sampler played far above its root sounds harsh**: it isn't band-limited, so high notes alias, and past 6 octaves up it plays no faster.
 - **A Sampler's files are held in memory**, decoded whole (clips stream from disk). The kernel ABI allows streaming them ([kernel-abi.md](kernel-abi.md#the-asset-import)).
 - **A WAV dropped on a Sampler that then refuses it** (one with `zones` in its code) is still copied into `assets/`, though the page says "Nothing was changed" (the ab review's 3).
@@ -199,7 +199,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; Open an Example names it plainly), and the docs past [Music basics](music-basics.md) and the manual's first sections are technical. | Many people who open music2 are new to making music. | Yes | small |
+| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; the start screen's Examples names it plainly), and the docs past [Music basics](music-basics.md) and the manual's first sections are technical. | Many people who open music2 are new to making music. | Yes | small |
 
 - **A problem from a sound or plugin that stopped can't be dismissed**: it stays in the status popover until the part plays again.
 - **A sound that stops in the moment between Stop All Sound and its reset** stays listed, though the reset starts it again (ex-1).
@@ -236,7 +236,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **The dock and the browser panel start over at each launch** (which view the dock shows, and its height): the browser's storage starts empty, as the page gets a new address each time.
 - **Renaming a song's folder starts Undo over**: the song closes and opens again from there (Rename Song… says so).
 - **A song asking for std "0.2" or "0.3"** gets `pkg.unsatisfied` in this app (std 0.4.0); its message names the line to write (`std = "0.4"`). A "0.2" song may sound a little different (one-note sounds now keep each note's own velocity); a "0.3" song sounds the same, though the message says it may not.
-- **A song's std line names no patch version**, so a song that needs a later patch (`examples/sampler` asks for "0.2.1") gets a missing import in an app with an earlier one, not `pkg.unsatisfied`.
+- **A song's std line names no patch version** (`std = "0.4"`), so a song that needs a later patch gets a missing import in an app with an earlier one, not `pkg.unsatisfied`.
 
 ## Code editor
 
@@ -258,7 +258,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 37 | **`m2` commands** for change instrument, markers, the song's key, a track's ID, Save As and Follow tempo, with the app closed. With the song open in the app, `m2 call` reaches each but Save As, which is the musician's (AGENT-11): `/api/graph/track/instrument`, `/api/graph/markers`, `/api/graph/song-key`, `/api/graph/track/rekey`, and Follow tempo as `/api/graph/clips` with `{"op": "audio", "follow": true}`. With it closed, they need a Tx or the files. | Scripts and agents need the same basics as the app. | Yes (in `music2-cli`) | small |
+| 37 | **`m2` commands** for change instrument, markers, the song's key, a track's ID, Save As and Follow tempo, with the app closed. With the song open in the app, `m2 call` reaches each but Save As, which is the musician's (AGENT-11): `/api/graph/track/instrument`, `/api/graph/markers`, `/api/graph/song-key`, `/api/graph/track/rekey`, and Follow tempo as `/api/graph/clips` with `{"op": "audio", "follow": true}`. With it closed, `m2 clips <song> json` takes that Follow tempo gesture too; the others need a Tx or the files. | Scripts and agents need the same basics as the app. | Yes (in `music2-cli`) | small |
 | 38 | **A schema for the API**: `m2 routes --json` lists every route with its words and an example body (AGENT-8), but no JSON Schema of what each takes and answers; and a short summary of the song, and MCP. | An agent learns a body from one example, not every field it may give. | Yes | medium |
 
 - **While a song's code doesn't build, only `m2 edit` and `m2 write` of a code file that is there work** (the agents design's review, m8; the review of `ag-fwd`, F12): they save it as the code editor does, and only if the song then builds, as one undo step. Every other `m2` write waits for the code to build: `m2` can't plan without built code, though the app plays the last version that built and would take a data edit (WRITE-14). A fix that needs two files changed at once can't be made from `m2`, since each save must build on its own, and neither can a new code file (the app's save route saves only files that are there): fix those in the app's code editor, or write the files directly (an outside change, one undo step).
@@ -302,7 +302,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 ## For developers
 
 - **The app still starts its own plugin main loop**, which now serves nothing: it can be folded away.
-- **Tests that use the plugin program** need `m2-plugin-host` built first (`cargo build -p m2-plugins --bin m2-plugin-host`); `ci/check.sh` builds it.
+- **Tests that use the plugin program** need `m2-plugin-host` built first (`cargo build --locked -p m2-plugins --bin m2-plugin-host`); `ci/check.sh` builds it.
 - **`m2-gates realtime --offline`'s step 7 loop** gives a late plugin or poly no notes (timing only).
 - **std's kernel test `odd_db_values` fails in a debug build** (a NaN's sign bit); `ci/check.sh` runs those tests in release, where it passes.
 - **The Confined check's rewire to a node made inside the edit** (WRITE-8, `core/session/src/tx/expect.rs` `made_inside`) has no test in `core/session`: only the editor's bus tests cover it.

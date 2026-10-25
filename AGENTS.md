@@ -50,6 +50,6 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 
 ## Pull requests
 
-Use the template. Paste the summary of `ci/check.sh --pr` (from `music2 check --pr:` down). Only `PASS` is a pass; `PART` with `M2_NO_PLUGINS` means the plugin tests didn't run here (say so). Say which agent wrote the change. The one required check is `ci-ok`; merges go through the merge queue.
+Use the template. Paste the summary of `ci/check.sh --pr` (from `music2 check --pr:` down). Only `PASS` is a pass; `PART` with `M2_NO_PLUGINS` means the plugin tests didn't run here (say so). Say which agent wrote the change. The one required check is `ci-ok`; a pull request merges with a merge commit, once it is up to date with `main`.
 
 What you send is under MIT OR Apache-2.0 (Apache-2.0, section 5). No CLA.

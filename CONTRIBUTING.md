@@ -117,7 +117,7 @@ cargo run --locked --release -p music2-desktop
 | `std/`, `std/kernels-src` | The standard package, and its kernels' Rust source |
 | `apps/m2` | The command line |
 | `apps/music2-desktop` | The desktop app (Tauri), on the Mac and Linux: window, menus, dialogs |
-| `crates/server` | The app's local server: `graph.rs` (the open song), `files.rs` (the code editor's files), `project.rs` (new songs and the songs folder), `export.rs` (Export), `resources.rs` (finding std, the templates and the examples), `routes.rs` (the API) |
+| `crates/server` | The app's local server: `graph.rs` (the open song), `files.rs` (the code editor's files), `project.rs` (new songs and the songs folder), `export.rs` (Export), `resources.rs` (finding std, the templates and the examples), `api.rs` (the one route table) and the `routes*.rs` files (the API) |
 | `web/` | The UI: `StartScreen`, `NewSongDialog`, `GraphCanvas` (the window's shell), `TopBar`, `Status`, `Browser`, `SongTimeline`, `Dock` (`NodeGraph`, `NoteView`, `CodeView`), `EffectBrowser`, `Shortcuts`; `lib/shell.ts` holds the dock's view and the selection |
 | `templates/` | What new songs start from: `starter` and `empty`, each a whole song plus a `template.toml` (its name and description) |
 | `examples/` | `first-song`, `resample`, `with-plugins`, `sounds` and `sampler`, each with an `example.toml` for the start screen (and the plugins it needs) |

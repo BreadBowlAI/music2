@@ -17,6 +17,7 @@
 | `sounds/` | the sounds merge: std's new sounds |
 | `step8/` | rendering on several cores (8a), the producer features (8b), the taste guide, and the tracks after them |
 | `step9/` | one plan and one set of build notes per track (`io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`) |
+| `agents/` | agents beside the musician: the design, and the build notes of its five tracks (`steps`, `fwd`, `see`, `routes`, `listen`) |
 | `workflows/` | the scripts that ran the AI agents who wrote many of these notes. They are kept as a record; nothing runs them |
 
 ## Paths in these notes

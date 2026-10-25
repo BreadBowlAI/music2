@@ -1,6 +1,6 @@
 # Music basics
 
-The music ideas music2 uses, in plain words, for someone who has never made a song. Each part ends with where the idea lives in music2. Words about the app itself (track, lane, clip, knob…) are in the manual's [Words you'll see](manual.md#words-youll-see).
+**In short:** the music ideas music2 uses, in plain words, for someone who has never made a song. Each part ends with where the idea lives in music2. Words about the app itself (track, lane, clip, knob…) are in the manual's [Words you'll see](manual.md#words-youll-see).
 
 **New to all this?** In the app, **Help ▸ Make Your First Song** walks you through a first song in seven steps: drums, a beat, a bass, some bass notes, a listen, a new sound, and an export. Each step ticks itself when you do it. The start screen has the same link: "New to making music? Make your first song". Hold the mouse over any button to see what it does.
 
@@ -123,4 +123,4 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Chop** or **slice** | Cut a recording into short pieces and replay them as a new rhythm | Audio clips with an `offset` into the file |
 | **Formant** | The "vowel" character of a voice; shifting it makes a voice sound smaller or bigger without changing the note | Not in music2 |
 | **Latency** | A delay some effects add; the software has to make up for it so everything stays in time | music2 makes up for a plugin's latency, so every track stays in time, live and in exports |
-| **True peak** | The real loudest point of the audio, which streaming services check | Not measured yet. The meters show each track's level, red at 0 dB ([gap #20](gaps.md#mixing)) |
+| **True peak** | The real loudest point of the audio, which streaming services check | Not shown in the app yet: its meters show each track's level, red at 0 dB ([gap #20](gaps.md#mixing)). `m2 listen` measures it, for agents |

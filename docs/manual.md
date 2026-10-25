@@ -41,7 +41,7 @@ Every change is written into the song's files at once, and Undo (⌘Z) takes it 
 
 ## Run the app
 
-You need a Mac, or Linux (Ubuntu 24.04), with [Rust](https://rustup.rs) and [Node.js](https://nodejs.org). On Linux, install the system libraries first:
+You need a Mac, or Linux (Ubuntu 24.04), with [Rust](https://rustup.rs) and [Node.js](https://nodejs.org) 24. On Linux, install the system libraries first:
 
 ```bash
 sudo apt install pkg-config build-essential libasound2-dev libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev libdbus-1-dev
@@ -50,9 +50,9 @@ sudo apt install pkg-config build-essential libasound2-dev libwebkit2gtk-4.1-dev
 Then, on either:
 
 ```bash
-(cd web && npm ci && npm run build)                            # the window's UI: once, and after UI changes
-cargo run --release -p music2-desktop                           # the app, on its start screen
-cargo run --release -p music2-desktop -- ~/Music/music2/Demo    # or opened on a song folder
+(cd web && npm ci && npm run build)                                      # the window's UI: once, and after UI changes
+cargo run --locked --release -p music2-desktop                           # the app, on its start screen
+cargo run --locked --release -p music2-desktop -- ~/Music/music2/Demo    # or opened on a song folder
 ```
 
 The start screen has three ways in:
@@ -67,7 +67,7 @@ To work on the UI with hot reload:
 
 ```bash
 cd web && npm run dev                                                 # the UI on :5173 (it passes /api on to :4100)
-MUSIC2_DEV_URL=http://localhost:5173 cargo run -p music2-desktop      # the app, its server on :4100, the UI from Vite
+MUSIC2_DEV_URL=http://localhost:5173 cargo run --locked -p music2-desktop   # the app, its server on :4100, the UI from Vite
 ```
 
 To build `music2.app`:
@@ -76,7 +76,7 @@ To build `music2.app`:
 (cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build --bundles app)   # → target/release/bundle/macos/music2.app
 ```
 
-The app carries everything it needs in `music2.app/Contents/Resources`: the UI (`web/`), the standard sounds (`std/`: `m2pkg.toml`, `kernels/std.wasm` and `src/`), the song templates (`templates/`) and the examples (`examples/`). So it runs from anywhere, without this source folder. `M2_STD`, `M2_TEMPLATES` and `M2_EXAMPLES` point it at other copies; when it runs outside a bundle (`cargo run`), it uses the ones in this source folder.
+The app carries everything it needs in `music2.app/Contents/Resources`: the UI (`web/`), the standard sounds (`std/`: `m2pkg.toml`, `kernels/std.wasm`, `src/` and `presets/`), the song templates (`templates/`) and the examples (`examples/`). So it runs from anywhere, without this source folder. `M2_STD`, `M2_TEMPLATES` and `M2_EXAMPLES` point it at other copies; when it runs outside a bundle (`cargo run`), it uses the ones in this source folder.
 
 The build signs the app ad hoc (with no developer certificate) and isn't notarized by Apple. On the Mac that built it, it just opens. A copy downloaded, AirDropped or sent in Messages to another Mac is held back the first time: macOS says it can't check the app. Open **System Settings → Privacy & Security** there and click **Open Anyway** (once). It runs on Apple silicon Macs only. The hardened runtime is off (`tauri.conf.json`): under it, macOS kills the app as soon as it compiles std's kernels. Notarizing will need it on, with entitlements that allow that (and loading other developers' plugins).
 
@@ -260,7 +260,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
 - If another program changes a clip while you're editing it in the piano roll, your edit of that clip is refused, saying which clip, and the other program's version stays. Edits to different clips of one lane both stay.
 - You win every clash with an agent. While you drag a knob, a clip or the tempo, record a take, compare with V, change a plugin's sound in its window before it is saved, or have unsaved code in a file, an agent's change to what you hold is refused (anything at all while you record or compare); it waits and tries again, and nothing you hold ends or waits for it. If you start a drag while its change is landing, the app takes the change back before you hear it. This only covers changes that come through `m2`: a file an agent writes directly can end your drag, as any outside save can.
 - One program writes a song at a time. While the app has a song open, `m2` commands that write it hand their edit to the app, which makes it one undo step, the agent's; ones that only read it, render it or bounce a track work as they always did. A song that's open for writing elsewhere (another music2 window, say) opens read-only: the status pill says **Read only**, and its popover says where it is open, with **Retry** to take it over once it's free. You can play it and see its changes; nothing offers to edit it meanwhile.
-- The lock and the edits being written live in the song's `.music2/` folder, which git ignores. If the app or the Mac stops in the middle of writing an edit, the status pill says so when the song opens next, with **Finish** and **Discard**: either leaves every file as it was before the edit or after it, never half.
+- The lock and the edits being written live in the song's `.music2/` folder, which git ignores. If the app or the Mac stops in the middle of writing an edit, the status pill says so when the song opens next, with **Finish it** and **Discard it**: either leaves every file as it was before the edit or after it, never half.
 - Problems that don't stop the song, such as data no lane reads after a key was renamed in code, a data file that doesn't read, or a missing sample or plugin, are counted by the status pill in the top bar ("2 problems"); click it for each one, with its fixes (and its code, under Details). So is a part that breaks while the song plays: a sound, a plugin, an audio file that can't be read, a stretch that failed, or the sound input. That part goes silent alone, the rest plays on, a message says so once, and it stays listed, with its track, until it plays again (Transport → Stop All Sound starts a stopped sound again). A fix runs only when you click it, and Undo takes it back. When a track's key was renamed in code, **Move all to …** moves its whole data folder to the new key at once.
 
 ## Shortcuts
@@ -618,7 +618,7 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 
 ## The command line (`m2`)
 
-`m2` works on song folders without the app. Build it once with `cargo build --release -p m2`. The program is `target/release/m2`; the examples below call it `m2`. It finds std, the templates and the examples the way the app does: at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, else in this source tree.
+`m2` works on song folders, with the app open or closed. Build it once with `cargo build --locked --release -p m2`. The program is `target/release/m2`; the examples below call it `m2`. It finds std, the templates and the examples the way the app does: at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, else in this source tree.
 
 | Command | What it does |
 |---|---|
@@ -758,8 +758,8 @@ An agent can't hear the song, so `m2 listen` measures it. It renders the bars on
 - **The mix**: loudness in LUFS (integrated, and the loudest 3 seconds), as ITU-R BS.1770 and EBU R128 measure it; the true peak in dBTP, between samples too; the sample peak, RMS and crest (peak minus RMS) in dB; ten octave bands, 31.5 Hz to 16 kHz, in dBFS; stereo: how alike the two sides are (correlation, from −1 to 1), the side's level against the middle's (width, in dB), and whether the lows under 120 Hz are mono; samples over 0 dBFS; and samples that weren't numbers (NaN, infinity), counted and read as 0, for the mix and each track.
 - **Each track, two ways**: its own sound, before its mixer channel, as a stem is; and as it reaches the mix, after its channel's pan and fader, with its bands and stereo too. A track whose channel goes to a group bus (`to: "drums"`) is read at its own fader, and says so (`to`); the bus is measured as a track of its own, as it reaches the mix. A track in no channel, in two, or in one with another track has only its own sound, and says why. `--tracks kick,bass` measures those alone.
 - **Masking**: which tracks cover each other, among what the master adds up (a group bus, not the tracks inside it), moment by moment, every 50 ms: two tracks mask each other in a band only in a moment where both sound, each has sound of its own in that band (louder than −60 dBFS, and not just what the band beside lets through), and each is within 6 dB of the loudest there. Each pair says its band, how much of the range they mask each other for (`share`, 0 to 1), and their levels then; two tracks that take turns never mask each other, and a bass ducked under the kick masks it only where the duck lets go. The words show the 12 pairs that mask the most; `--json` has them all (`jq '.masking[] | select(.share > 0.2)'`). Silent tracks are listed.
-- `--as-heard` hears what you hear: your listening mute and solo (the open app's, else the ones the song keeps in `.music2/`), by each track's name, in a change too. It says so (`"as_heard": true`, with what is muted and soloed). Without it, every track is heard, whatever you muted.
-- `--with tx.json` checks a Tx (as `m2 tx --check` does) and writes nothing: it measures the same bars of the song as it is and as it would be after the change, each at its own tempo (a change of tempo moves them, and it says so, `moved`), and says both and the difference: only what changed, tracks by name, what was measured and isn't now (a track gone silent: `"silent": {"was": false, "now": true}`), tracks added or taken out, and masking that began, ended or changed how long.
+- `--as-heard` hears what you hear: your listening mute and solo (the open app's, else the ones the song keeps in `.music2/`), by each track's key, in a change too. It says so (`"as_heard": true`, with what is muted and soloed). Without it, every track is heard, whatever you muted.
+- `--with tx.json` checks a Tx (as `m2 tx --check` does) and writes nothing: it measures the same bars of the song as it is and as it would be after the change, each at its own tempo (a change of tempo moves them, and it says so, `moved`), and says both and the difference: only what changed, tracks by key, what was measured and isn't now (a track gone silent: `"silent": {"was": false, "now": true}`), tracks added or taken out, and masking that began, ended or changed how long.
 - `--png out.png` draws the bands over time: 31 third-octave rows, low at the bottom, in columns of 50 ms, dark for quiet and pale yellow for loud (−80 to −10 dBFS). One block for the mix, and with `--tracks` one for each track, in that order, as heard.
 - `--json` prints it all as one JSON object; without it, in words. These are numbers, not listening: an agent says them as numbers, and asks you to listen. It can point at the bars (`m2 point <song> bars:9-16 "…"`) for you to play, and after its change you press V to hear before and after.
 

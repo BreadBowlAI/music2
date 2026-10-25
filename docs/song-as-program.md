@@ -1,6 +1,6 @@
 # Song as a program
 
-The design of music2.
+**In short:** the design of music2, and why: a song is a program whose only input is time.
 
 Status: design (2026-10-11), partly built. What exists is listed under [Implementation status](#implementation-status); anything marked **Not built yet** is design only.
 
@@ -8,7 +8,7 @@ Status: design (2026-10-11), partly built. What exists is listed under [Implemen
 
 | Here | Status | In the contract |
 |---|---|---|
-| [Principles](#principles) 3, 5 and 9 | Superseded in part | [Principles](architecture.md#principles), [Writes](architecture.md#writes), [Deferred](architecture.md#deferred-with-triggers) |
+| [Principles](#principles) 3, 5, 8 and 9 | Superseded in part | [Principles](architecture.md#principles), [Writes](architecture.md#writes), [Agents](architecture.md#agents), [Deferred](architecture.md#deferred-with-triggers) |
 | [Time](#time), [Signals](#signals), [Nodes](#nodes) | Current | How notes reach instruments: [Events](architecture.md#events); [Latency](architecture.md#latency) |
 | [Lanes and clips](#lanes-and-clips), [Audio clips](#audio-clips) | Current; files superseded | [Project format v1](architecture.md#project-format-v1), [Audio lanes](architecture.md#audio-lanes) |
 | [Modules and tracks](#modules-and-tracks) | Syntax superseded | [Identity](architecture.md#identity) |
@@ -128,7 +128,7 @@ A node is one of three things:
 Every node is:
 - **Causal.** Its output at time `t` depends only on its inputs up to `t`, plus any **look-ahead** it declares. (Declaring look-ahead is **Not built yet**.)
 - **Deterministic** (kernels). Kernels run in a sandbox with no access to a clock, randomness, threads or I/O. Random numbers come from seeds passed in as inputs. Plugins are the exception and are marked impure.
-- **Explicit about latency.** Every kernel declares its latency, and the planner compensates automatically. (Compensation is **Not built yet**: nonzero latency is refused. Its semantics are in [Latency](architecture.md#latency).)
+- **Explicit about latency.** Every kernel declares its latency, and the planner compensates automatically. (Compensation is built since step 9; latency inside a `poly` voice is still refused. Its semantics are in [Latency](architecture.md#latency).)
 
 ### Lanes and clips
 
@@ -143,7 +143,7 @@ A **lane** is a typed input of a module that the timeline fills in.
 
 A lane's key is its saved identity ([Keys](architecture.md#keys)). Lane files, clip ids and how strictly they are read are in [Project format v1](architecture.md#project-format-v1).
 
-The song itself also has lanes for **tempo** and **sections**. Sections are arrangement markers such as `intro` and `chorus`, stored as `Events<Section>`. (Sections are **Not built yet**. The tempo lives in `data/arrangement.json`, with the meter.)
+The song itself also has lanes for **tempo** and **sections**. Sections are arrangement markers such as `intro` and `chorus`, stored as `Events<Section>`. (Sections are **Not built yet**: the ruler's markers, in `layout.json`, only name places, and nothing that plays reads them. The tempo lives in `data/arrangement.json`, with the meter.)
 
 **Clips are always data and never code.** Where automation or mask clips overlap, the one that starts later wins. Overlapping notes clips all play, and overlapping audio clips are mixed together. In gaps, the lane's default value applies.
 
@@ -157,7 +157,7 @@ Behaviour that needs its own effect chain (one chop through its own delay) goes 
 
 Audio is the centre of a lot of modern production, so audio clips are first-class:
 - **A clip** refers to an asset in `assets/` by name, with a start offset, a length, gain, fades, reverse, and a pitch shift in semitones. Under format v1 the reference is pinned by the asset's hash, and assets are never overwritten ([Assets and hashes](architecture.md#assets-and-hashes)). Content-addressed storage is deferred.
-- **Warping:** warp markers pin positions in the source to beats. Between markers, the audio is time-stretched to follow the tempo map. Stretching is a package kernel (std ships one), applied offline and cached, so playback stays cheap and deterministic. (Today stretching is in the core runtime; see [Implementation status](#implementation-status). It moves into a package once the offline-kernel ABI exists. Live playback will stream the cached renders from disk once the trigger for [Audio lanes](architecture.md#audio-lanes) arrives.)
+- **Warping:** warp markers pin positions in the source to beats. Between markers, the audio is time-stretched to follow the tempo map. Stretching is a package kernel (std ships one), applied offline and cached, so playback stays cheap and deterministic. (Built: std's offline kernel `std:stretch` stretches each warped clip ([Offline kernels](kernel-abi.md#offline-kernels)), and live playback streams audio lanes from the disk ([Audio lanes](architecture.md#audio-lanes)).)
 - **Takes and comping** (**Not built yet**): a recording pass adds takes to a lane. A comp is clip data that picks regions from takes.
 - **Bounce and resample:** any signal over any time range can be rendered to a new asset and dropped onto an audio lane, to chop it, reverse it and process it again. Because rendering is deterministic, a bounce of open kernels can always be reproduced. This loop (render, chop, render again) is central to sound design, and it is data all the way down.
 
@@ -260,24 +260,24 @@ Each module also lists its `exports`. The **validator** checks the IR independen
 - signal kinds and units
 - ports exist and are connected
 - no cycles
-- rates and latency are consistent (today any nonzero latency is refused; look-ahead is **Not built yet**)
+- rates and latency are consistent (today latency inside a `poly` voice is refused; look-ahead is **Not built yet**)
 
 ### 2. Planner
 
 The planner turns validated IR into a plan the runtime can execute:
 - flatten modules into one graph
 - sort into a processing order
-- insert latency compensation (**Not built yet**; see [Latency](architecture.md#latency))
+- insert latency compensation (built since step 9; see [Latency](architecture.md#latency))
 - assign buffers
 - prune anything that doesn't reach the root output
-- give each node a stable identity. **Superseded:** not "an id from its position, overridable with `.id()`", but the SiteIds, InstancePaths and RuntimeIds of [Derived identity](architecture.md#derived-identity), matched across revisions, with `key()` as the escape hatch. (**Not built yet**: ids are counters. `key()` exists, and so far only files plugin state.)
+- give each node a stable identity. **Superseded:** not "an id from its position, overridable with `.id()`", but the SiteIds, InstancePaths and RuntimeIds of [Derived identity](architecture.md#derived-identity), matched across revisions, with `key()` as the escape hatch. (Built since step 7: a node keeps its state across revisions by its name in the delta.)
 
 ### 3. Runtime and kernel host
 
-> **Superseded in part** by [Render](architecture.md#render): offline renders are exact from sample 0; live playback is a persistent engine with an engine clock and a transport clock, where a seek or a loop wrap is a transport event and never a reset, and where live playback never replays. Hot swap, the fast path for values (cells), latency, streaming audio lanes and the sample rate are specified there. Kernel ABI rules and reservations are in [Kernel ABI reservations](architecture.md#kernel-abi-reservations).
+> **Superseded in part** by [Render](architecture.md#render): offline renders are exact from sample 0; live playback is a persistent engine with an engine clock and a transport clock, where a seek or a loop wrap is a transport event and never a reset, and where live playback never replays. Hot swap, the fast path for values (cells), latency, streaming audio lanes and the sample rate are specified there. Kernel ABI rules and reservations are in [Kernel ABI reservations](architecture.md#kernel-abi-reservations). The kernel exports and imports listed below are the first ABI's: [Kernel ABI v1](kernel-abi.md), frozen in step 9, replaces them.
 
 - Processes audio in blocks, either in real time to the audio device or offline as fast as possible.
-- **Hot swap:** a new plan is compiled on a worker thread and handed to the audio thread without locking. Instances whose RuntimeIds and shapes match carry their state over, so reverb tails don't cut off. (Carrying state over is **Not built yet**: today a new renderer is built and replayed up to the playhead.)
+- **Hot swap:** a new plan is compiled on a worker thread and handed to the audio thread without locking. Instances whose RuntimeIds and shapes match carry their state over, so reverb tails don't cut off. (Built since step 7: [RENDER-25](architecture.md#plans-data-and-arrangement-swaps).)
 - **The kernel ABI: WebAssembly**, run with wasmtime (Cranelift). Relaxed SIMD is disabled, so output is bit-identical on every machine.
   - NaN bit patterns are the one thing WebAssembly doesn't pin down. Canonicalising them cost 4.6× in the M1 benchmark, so the runtime doesn't. Instead it silences any non-finite output sample and reports it, because a NaN means a kernel is broken anyway.
   - A package ships one `.wasm` module that can hold many kernels, and every graph node gets **its own instance**, so a kernel's state is just its instance's memory. For a kernel named `k`, the module exports:
@@ -290,26 +290,26 @@ The planner turns validated IR into a plan the runtime can execute:
     - plus `m2_abi()` (checked against the runtime's ABI version at load) and `memory`, once per module
   - **No host imports.** A module that imports anything is rejected at load, so a kernel can't reach anything outside its own ports.
   - **Inputs are read-only.** A kernel never writes its input memory, and `k_reset` leaves it alone ([ABI-1](architecture.md#kernel-abi-reservations)).
-  - Each instance's memory is capped (32 MB). A CPU budget is still to come.
+  - Each sandbox's memory is capped (256 MB, taken only while it is born). A CPU budget is still to come.
   - Rust kernels use the `m2-kernel` crate: implement `Kernel` and call `export!(name, Type)`.
-  - Assets (for samplers and impulse responses) are passed in as read-only data when the kernel starts. (**Not built yet.**)
+  - Assets (for samplers and impulse responses) are passed in as read-only data when the kernel starts. (Built in ABI v1: [The asset import](kernel-abi.md#the-asset-import).)
 - **The realtime model.** A professional session has 50–150 tracks and hundreds of plugin instances, so:
   - **Parallel.** The planner splits the graph into partitions, about one per track (a mixer strip runs with its track; the sum and the master run last), and a pool of threads runs them as their inputs complete. Partitions never share mutable state, so the output is the same bits on any number of threads ([RENDER-2](architecture.md#offline)). An export with nothing else playing uses one die's fast cores on a two-die PC and every fast core on a Mac; beside playback, the slow cores. Live playback uses the device's own thread and real-time workers: as many as the fast cores that share one cache, in the output's audio workgroup on a Mac ([RENDER-28a](architecture.md#plans-data-and-arrangement-swaps)). A song with plugins renders on one thread for now (step 8a). The target is 50 tracks.
   - **Realtime-safe.** Nothing on the audio thread allocates, locks or waits on the compiler. Voice pools, buffers and plans are built off-thread and handed over.
   - **A fast path for values.** Changing a constant (a knob) writes its cell in the running plan without recompiling ([Cells](architecture.md#cells)). Only structural changes (adding, removing or rewiring nodes) build a new plan, which is swapped in at a block boundary.
-  - **Latency compensation** (**Not built yet**) is required once plugins are hosted: plugins report latency, and the planner delays parallel paths to match ([Latency](architecture.md#latency)).
-  - **Live input** (**Not built yet**). Recording and playing an instrument take a low-latency path that skips caches; notes merge into a lane's event buffer. (Monitoring mute and solo are something else: [Monitoring overlays](architecture.md#monitoring-overlays-and-mute-in-song).)
-- **Render and taps.** `render(range, taps)` renders a time range and returns audio, plus the values of any signal you ask for (for example, a meter kernel's output). Rendered results are **cached by a hash of what produced them** and invalidated only downstream of an edit. Freezing a track just means keeping its cache. (Rendering a range offline is built. The faster range render for agents, approximate in its tails, is [RENDER-4](architecture.md#range-render), **Not built yet** (step 3a). Taps and caching are **Not built yet**.)
-- **The audio device:** output, input and MIDI in. This is the one place the core touches hardware. It runs at the project's sample rate, converting at the device boundary when the device runs at another one ([RENDER-31](architecture.md#sample-rate)). (Output is built, in `core/play`; input and MIDI in are **Not built yet**.)
+  - **Latency compensation** (built since step 9) is required once plugins are hosted: plugins report latency, and the planner delays parallel paths to match ([Latency](architecture.md#latency)).
+  - **Live input** (built: recording, and playing a MIDI keyboard or the computer's keys). Recording and playing an instrument take a low-latency path that skips caches; notes merge into a lane's event buffer. (Monitoring mute and solo are something else: [Monitoring overlays](architecture.md#monitoring-overlays-and-mute-in-song).)
+- **Render and taps.** `render(range, taps)` renders a time range and returns audio, plus the values of any signal you ask for (for example, a meter kernel's output). Rendered results are **cached by a hash of what produced them** and invalidated only downstream of an edit. Freezing a track just means keeping its cache. (Rendering a range offline is built, and so is the faster range render for agents, approximate in its tails: [RENDER-4](architecture.md#range-render), `m2 render --preroll`. Taps are built, for the meters and `m2 listen`; caching is **Not built yet**.)
+- **The audio device:** output, input and MIDI in. This is the one place the core touches hardware. It runs at the project's sample rate, converting at the device boundary when the device runs at another one ([RENDER-31](architecture.md#sample-rate)). (Output and input are built, in `core/play`, and MIDI in, in `core/os` and the server.)
 
 ### Hosted plugins
 
 Producers rely on plugins that will never be rewritten as WebAssembly, so hosting them is part of the core runtime, not an optional extra:
-- **CLAP first** (open standard, clean threading and state model), then VST3, then AU on macOS. (CLAP is built; VST3 and AU are **Not built yet**.)
+- **CLAP first** (open standard, clean threading and state model), then VST3, then AU on macOS. (CLAP is built. VST3 and AU are not planned: see [goals](goals.md).)
 - A plugin is a graph node with typed ports: audio in and out, notes in for instruments, and its parameters exposed as control inputs, so they can be automated and connected like any other input. Under format v1 a parameter is addressed by its name and CLAP id, `mix_12`, and bound by the id ([FMT-18](architecture.md#plugin-state-and-parameters)); a plugin that isn't installed silences only its own node ([FMT-18a](architecture.md#plugin-state-and-parameters)).
-- **Its state is data.** **Superseded in detail:** a plugin with saved state gets a `key` in code, and its state blob lives in its module's data folder, `data/<module>/…/<key>.state`, beside a `.state.json` sidecar that names the plugin; parameters set in code (connected, or written as a literal) own their value ([Plugin state and parameters](architecture.md#plugin-state-and-parameters), [HOME-4](architecture.md#homes-of-values)). The key, the state file and its sidecar are built (step 4); the precedence of HOME-4 is not.
-- **Out of process** (**Not built yet**). **Superseded in detail:** the engine reaches plugins only through `PluginHost`. A sandboxed host process, with its own main thread for plugin windows, comes before plugin windows. From step 3 until then, plugins run in process, with their main-thread calls on the app's real main thread; today they are called from whichever thread builds or plays the renderer ([PluginHost](architecture.md#pluginhost)).
-- **Impure:** never cached, never assumed reproducible. A render that includes them should say so. (`m2 bounce` does, in its output and its provenance file; `m2 render` doesn't yet.)
+- **Its state is data.** **Superseded in detail:** a plugin with saved state gets a `key` in code, and its state blob lives in its module's data folder, `data/<module>/…/<key>.state`, beside a `.state.json` sidecar that names the plugin; parameters set in code (connected, or written as a literal) own their value ([Plugin state and parameters](architecture.md#plugin-state-and-parameters), [HOME-4](architecture.md#homes-of-values)). The key, the state file and its sidecar are built (step 4), and the precedence of HOME-4 too (step 7).
+- **Out of process** (built in step 9: plugins run in `m2-plugin-host`, a process of their own, which also opens their windows). **Superseded in detail:** the engine reaches plugins only through `PluginHost` ([PluginHost](architecture.md#pluginhost)).
+- **Impure:** never cached, never assumed reproducible. A render that includes them should say so. (`m2 bounce` does, in its output and its provenance file, and `m2 render` in its output.)
 
 ### 4. Script sandbox
 
@@ -337,7 +337,7 @@ These are the only commands the core provides. Hosts expose them over HTTP/WS an
 
 > **Superseded for writes** by [Writes](architecture.md#writes): the write commands are `save`, `check(Tx)` and `commit(Tx)`, plus undo and redo, and the ops a Tx can contain are listed in [WRITE-3](architecture.md#the-two-write-primitives). The rest of this section is still the design for reads, render and transport.
 
-**Not built yet.** Today the session (`core/session`) offers specific edits (set a value, connect, disconnect, add or remove an effect, write a notes lane, save a file, undo, redo), and the app's server exposes them as the `/api/graph` routes listed under [The canvas today](#the-canvas-today). `m2 check` and `m2 render` are the CLI's versions of `check` and `render`.
+**Built in part.** Since step 6 every write is a `save()` or a Tx: `m2 tx` (and `/api/tx/check`, `/api/tx/commit`) checks and commits one, and each gesture of the app and the CLI builds one (`crates/editor`). The app's routes are in one table, which `m2 routes` prints. `m2 check` and `m2 render` are the CLI's versions of `check` and `render`.
 
 | Command | Purpose |
 |---|---|
@@ -349,7 +349,7 @@ These are the only commands the core provides. Hosts expose them over HTTP/WS an
 | `transport` | play, stop, seek, loop, live input monitoring |
 | `subscribe` | patches whenever the revision changes (not built yet; today clients get a graph event and fetch again) |
 
-The ops a `tx` can contain are now [WRITE-3](architecture.md#the-two-write-primitives) (**Not built yet**). Package ops (`pkg.add`, `pkg.remove`) wait for package resolution.
+The ops a `tx` can contain are now [WRITE-3](architecture.md#the-two-write-primitives) (built in step 6). Package ops (`pkg.add`, `pkg.remove`) wait for package resolution.
 
 Higher-level edits are **tools** (**Not built yet**; deferred until the Tx JSON is stable): pure TypeScript functions from packages that take data and return Tx ops. Examples include quantize, transpose, humanize, the node editor's code edits, and generators. The core's command set never grows.
 
@@ -366,7 +366,7 @@ These live elsewhere on purpose:
 
 ## The standard library
 
-`std` is a set of ordinary packages, versioned separately from the app. Today it is one package in `std/`: one WebAssembly module with 36 kernels (`std/kernels/std.wasm`, built from `std/kernels-src`) and the TypeScript modules below (`std/src`).
+`std` is a set of ordinary packages, versioned separately from the app. Today it is one package in `std/`: one WebAssembly module with 37 kernels, one of them the offline kernel `std:stretch` (`std/kernels/std.wasm`, built from `std/kernels-src`) and the TypeScript modules below (`std/src`).
 
 **Built:**
 
@@ -382,8 +382,9 @@ These live elsewhere on purpose:
 | `std/synth` | one polysynth: `synth.supersaw`, `lead`, `pad`, `pluck`, `sub`, `bass`, `strings`, `custom`; and `mono` |
 | `std/fm` | one FM synth: `fm.keys`, `bell`, `metal`, `custom` |
 | `std/drums` | an 808/909-style drum machine: `drums.kit`, and each drum alone: `kick`, `snare`, `clap`, `hats`, `tom`, `rim`, `cowbell`, `cymbal`, `shaker` |
+| `std/sampler` | `sampler`: plays a WAV file on each note, higher or lower by the note |
 
-Seventeen of these are offered by the editor as effects (`[[effect]]` in `std/m2pkg.toml`): the four filters, the `std/fx` effects except `duck`, and `gain` and `pan`. Step 5 rewrites std on [component descriptors](architecture.md#component-descriptors), whose `editor` field replaces `[[effect]]`.
+Seventeen of these are offered by the editor as effects: the four filters, the `std/fx` effects except `duck`, and `gain` and `pan`. Each says so in its [component descriptor](architecture.md#component-descriptors)'s `editor` field, which replaced `[[effect]]` in `std/m2pkg.toml` in step 5.
 
 **Not built yet:**
 
@@ -395,10 +396,9 @@ Seventeen of these are offered by the editor as effects (`[[effect]]` in `std/m2
 | `std/gen` | `euclid`, `arp`, `chords`, `scale`, `strum` | tools (generators that output lane data) |
 | `std/edit` | `quantize`, `transpose`, `humanize`, `legato`, `bake` | tools |
 | `std/theory` | keys, scales, chord names | plain TypeScript |
-| `std/instruments` | `lead`, `keys`, `strings`, `drums`, `sampler` | modules |
 | `std/fx` | `pump` (ducking in time with the beat, with no sidechain) | modules |
 
-Also not built: unison and FM oscillators, and sends and buses in `std/mix`. ("Mute in song" is not a mixer control but a track option in `@m2/core`: [MON-5](architecture.md#monitoring-overlays-and-mute-in-song).)
+Built since: a lead, keys, strings, drums and a sampler (`synth.lead`, `fm.keys`, `synth.strings`, `std/drums`, `std/sampler`), unison (`std/synth`), FM (`std/fm`), and sends and buses in `std/mix`. ("Mute in song" is not a mixer control but a track option in `@m2/core`: [MON-5](architecture.md#monitoring-overlays-and-mute-in-song).)
 
 The standard library is also the main test of principle 2. If writing `std/mix` or `std/instruments/drums` needs something kernels and modules can't express, the core gets a general mechanism for it, never a special case.
 
@@ -406,7 +406,7 @@ The standard library is also the main test of principle 2. If writing `std/mix` 
 
 ## Packages and the ecosystem
 
-> **Superseded in part:** a package's API is its [component descriptors](architecture.md#component-descriptors), written in TypeScript. `m2pkg.toml` keeps only the ABI side (kernels, their ports, the wasm file); `[[effect]]` and its `args` are deleted in step 5.
+> **Superseded in part:** a package's API is its [component descriptors](architecture.md#component-descriptors), written in TypeScript. `m2pkg.toml` keeps only the ABI side (kernels, their ports, the wasm file); `[[effect]]` and its `args` were deleted in step 5.
 
 ### What a package contains
 
@@ -440,12 +440,12 @@ outputs = { out = "audio<2>" }
 index = "src/index.ts"
 ```
 
-The real format is a little different. The `wasm` file is named once for the whole package, ports are `"name: kind = default"` strings, `[[effect]]` entries list what the editor offers as effects, and modules are found as `src/<name>.ts` (imported as `std/<name>`):
+The real format is a little different. The `wasm` file is named once for the whole package, ports are `"name: kind = default"` strings, and modules are found as `src/<name>.ts` (imported as `std/<name>`):
 
 ```toml
 [package]
 name = "std"
-version = "0.2.0"
+version = "0.4.0"
 wasm = "kernels/std.wasm"
 
 [[kernel]]
@@ -453,13 +453,6 @@ name = "sine"
 description = "Sine oscillator"
 inputs = ["freq: control<hz> = 440"]
 outputs = ["out: audio<1>"]
-
-[[effect]]
-module = "std/filter"
-name = "lowpass"
-category = "Filter"
-description = "Darker: removes the highs above the cutoff"
-args = "1000"
 ```
 
 ### Three levels of trust
@@ -467,8 +460,8 @@ args = "1000"
 | Level | What | Safety | Reproducible |
 |---|---|---|---|
 | Graph modules and tools | TypeScript run in the sandbox | describe graphs only | yes |
-| Kernels | WebAssembly with no host imports | memory- and CPU-bounded | yes, bit-identical |
-| Hosted plugins (CLAP/VST3/AU) | the plugins producers already use | full trust, like any DAW; optionally out of process | no: marked impure, never cached |
+| Kernels | WebAssembly with one host import, `m2.asset_read` | memory- and CPU-bounded | yes, bit-identical |
+| Hosted plugins (CLAP/VST3/AU) | the plugins producers already use | full trust, like any DAW; in a process of their own | no: marked impure, never cached |
 
 ### Versioning and lockfile
 
@@ -502,7 +495,7 @@ Format v1 is built (step 4); the 5 fixtures were converted from format 0 once, b
 - `data/<track key>/<lane key>.json` holds one lane's clips, each with an id; a control lane records its unit. Files are written in one canonical form.
 - `data/<track key>/<plugin key>.state` holds a plugin's saved state, with its `.state.json` sidecar.
 - `assets/` holds audio files, never overwritten; clips pin them by hash.
-- **Not built yet:** `music2.lock`, anything that writes `layout.json` (it is already ignored by the build), `tests/`, sections, and content-addressed assets.
+- **Not built yet:** `music2.lock`, `tests/`, sections, and content-addressed assets. (`layout.json` is written now, by the app and `m2 layout`; the build still ignores it.)
 
 ## Authoring
 
@@ -620,7 +613,7 @@ Simplified for now:
 **Built (first slice):**
 - **Call-site instrumentation** (`core/script/src/sites.rs`). Each call records its site right before it is invoked: `f(a, __m2s(7, b))`, `__m2s(7, obj).m()`, `(__m2s(7), f)()`. Evaluation order and `this` are unchanged. A site table keeps every call's byte range and argument structure.
 - **Exact source locations.** The IR's `origin` names the site and argument path of every node, so `src` locations are exact.
-- **The session** (`core/session/src/edit.rs`):
+- **The session** (then `core/session/src/edit.rs`; now `crates/editor/src/controls.rs` and `value.rs`):
   - `controls()` lists every number in the project's own files that is written directly at a control input; those are the knobs. A control's id is `file#call/arg`, e.g. `song.ts#2/0.hats.pan`. Such ids are build-local and never outlive their revision ([ID-12](architecture.md#derived-identity)); core will take structured anchors instead ([WRITE-7](architecture.md#expectations-and-the-delta)).
   - `set(id, value, expect)` writes the shortest decimal that reads back exactly, keeping unit spelling (`khz(2.5)` set to 900 Hz becomes `khz(0.9)`). It verifies, writes, and bumps the revision.
   - `undo()` is guarded.
@@ -636,11 +629,11 @@ Simplified for now:
 
 #### The canvas today
 
-This describes the app as it is (commit `92a19a3`, plus steps 1, 4 and 5 of the [order of work](architecture.md#order-of-work)), not the contract.
+This describes the app as it was at commit `92a19a3`, plus steps 1, 4 and 5 of the [order of work](architecture.md#order-of-work), not the contract. The [manual](manual.md) says what it does now.
 
 In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop <project-folder>`, opens a project. The window shows the timeline above a panel with a tab for each module, and three views of it: Graph, Code and Notes. The [manual](manual.md) describes how to use them.
 
-- **The view** (`core/session/src/view.rs`) shows the calls written in the project, not the kernels they expand into. Each component call is a frame in the IR, with its ComponentId (`std:bass`), and every node names the frame it was made in, so everything `bass(...)` builds is one node.
+- **The view** (`crates/editor/src/view.rs`) shows the calls written in the project, not the kernels they expand into. Each component call is a frame in the IR, with its ComponentId (`std:bass`), and every node names the frame it was made in, so everything `bass(...)` builds is one node.
   - Knobs sit on the innermost call that contains where their number is written.
   - Knobs are named by property path (`hats.pan`, `hats.db`) or by the control they are (`hi`, `period`), with the range and log scale the component's descriptor declares for the value's unit. A control the call leaves out is a knob too, at its declared default; its first turn writes the number into the call.
   - `m2 graph <project>` prints the same view.
@@ -648,10 +641,10 @@ In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop
   - The running renderer isn't rebuilt for a value commit, because the committed graph equals the playing one with that value.
   - Edits made elsewhere are picked up every 300 ms and rebuild the renderer at the current position.
   - `M2_AUDIO=none` runs it silently on a clock, for tests.
-- **Cables** (`core/session/src/edit/cable.rs`), within one file. An outlet is a `const` bound to a call that returned one signal. Connecting writes its name in place of a control's written value; disconnecting writes the default the input declares, and is refused when it declares none.
-- **Effects** (`core/session/src/edit/effect.rs`). The effect browser lists the components whose descriptors give an editor category: 17 in std, in seven categories. Adding one wraps a call's audio where it is written (`pluck(…)` → `reverb(pluck(…), {…})`), with what its descriptor's `insert` says; removing one unwraps it. A call is an effect by its ComponentId, whatever name the code imports it as.
+- **Cables** (`crates/editor/src/cable.rs`), within one file. An outlet is a `const` bound to a call that returned one signal. Connecting writes its name in place of a control's written value; disconnecting writes the default the input declares, and is refused when it declares none.
+- **Effects** (`crates/editor/src/effect.rs`). The effect browser lists the components whose descriptors give an editor category: 17 in std, in seven categories. Adding one wraps a call's audio where it is written (`pluck(…)` → `reverb(pluck(…), {…})`), with what its descriptor's `insert` says; removing one unwraps it. A call is an effect by its ComponentId, whatever name the code imports it as.
 - **The timeline** (`web/src/components/SongTimeline.tsx`) shows every lane of every track. Notes clips can be added, moved and deleted there; automation, mask and audio clips are shown only.
-- **Notes editing** (`NoteView.tsx`, `core/session/src/lanes.rs`): the piano roll rewrites one notes lane's clips at a time, checked like any other edit.
+- **Notes editing** (`NoteView.tsx`, `crates/editor/src/notes.rs`): the piano roll rewrites one notes lane's clips at a time, checked like any other edit.
 - **The code editor** (`CodeView.tsx`, `crates/server/src/files.rs`): Monaco, type-checked against the SDK and the package sources. A save is written only if the file still says what the editor read. Code that doesn't compile is saved too, and the last revision that did keeps playing.
 - **Needs attention** (`web/src/components/Attention.tsx`; `core/session/src/unclaimed.rs` and `core/song`; steps 1 and 4). The status pill's popover in the top bar lists what doesn't stop the song but needs a person, each a diagnostic with a severity, a stable code and its fixes ([DIAG-1](architecture.md#model)): data no lane or plugin reads (`data.unclaimed`, such as a track's folder left behind when its key was renamed in code), a lane file that doesn't read (`lane.invalid`: the lane plays what it had), clips without ids, an asset missing or changed, a plugin that isn't installed. Each item says in plain words what happened and what fixes it. The fix it plainly calls for is one click (a renamed track's whole folder moves in one step); other moves are a choice; Delete removes it. Each fix is a named session edit, checked like any edit and undone by Undo, nothing is fixed until asked, and fixes wait while the code doesn't compile. `m2 relink`, `m2 delete-data` and `m2 fix` do the same, and every CLI command that opens the project prints the problems with those commands.
 - **Undo and redo** cover every edit made through the session (knobs, cables, effects, notes, code saves, and the fixes above). The history is in memory.
@@ -660,17 +653,17 @@ In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop
   - `POST` under `/api/graph/`: `open`, `close`, `preview`, `preview/cancel`, `set`, `connect`, `disconnect`, `effect/add`, `effect/remove`, `lane`, `relink`, `data/delete`, `fix`, `undo`, `redo`, `transport`, `seek`, `unsaved` and `export`.
   - `PUT /api/graph/file`.
   - New songs: `GET /api/project/templates` lists the templates (`templates/`) and the examples; `POST /api/project/new` copies one into a new folder in `~/Music/music2` (or a folder given) and opens it (`crates/server/src/project.rs`).
-  - Export Audio (`crates/server/src/export.rs`) renders the accepted revision on a thread of its own with `m2_session::render`, the same render `m2 render` uses.
+  - Export Audio (`crates/server/src/export.rs`) renders the accepted revision on a thread of its own with `m2_editor::render`, the same render `m2 render` uses.
   - Clients refresh on the `{"t":"graph"}` event from the `/api/ws` WebSocket. Since step 1 it carries the session, the accepted revision, that revision's warnings with their fixes, and the draft's problems, so a client that only listens hears every warning. The socket also carries `{"t":"toast"}` messages and `{"t":"export"}` progress.
-- **A headless UI test** (`crates/server/examples/headless.rs` plus a puppeteer script) caught a real bug: releasing a knob committed a stale mid-drag value (0.65) while you heard the final one (0.7). It now commits exactly the value shown at release, and a fast-drag check guards it. The puppeteer script isn't in the repo (puppeteer isn't in `web/package.json`); the headless server is.
+- **A headless UI test** (`crates/server/examples/headless.rs` plus a puppeteer script) caught a real bug: releasing a knob committed a stale mid-drag value (0.65) while you heard the final one (0.7). It now commits exactly the value shown at release, and a fast-drag check guards it. That puppeteer script wasn't kept; the browser suites in `e2e/` do this work now, on the same headless server.
 
 **Next:** cables across files (exports and imports), adding and deleting nodes, automating a knob, and saved node positions.
 
 ## Agents
 
-Agents use the files, `~/.music2/session.json` and the `/api/graph` routes; MCP is not built yet. In the design, agents connect to the host's MCP server, whose tools are generated from the core API and installed tools.
+Agents use the files and `m2`. While the app has the song open, `m2` hands each write to the app as one undo step the musician sees; `m2 focus`, `m2 watch` and `m2 point` see what the musician looks at, follow the app and point at things; `m2 routes` and `m2 call` reach the app's API; `m2 listen` measures the sound ([Agents](architecture.md#agents), the manual's [Scripts and agents](manual.md#scripts-and-agents)). MCP is not built yet. In the design, agents connect to the host's MCP server, whose tools are generated from the core API and installed tools.
 
-Agents may keep writing files directly: that is the save path, and every problem comes back as a diagnostic. An agent that wants its edit verified calls `check`, shows the delta, and commits with `Seen(hash)` ([WRITE-11](architecture.md#expectations-and-the-delta)). To listen without waiting for a full render, it will use a range render ([RENDER-4](architecture.md#range-render); **Not built yet**, step 3a). Today `m2 render --from` renders a section exactly, replaying from the start.
+Agents may keep writing files directly: that is the save path, and every problem comes back as a diagnostic. An agent that wants its edit verified calls `check`, shows the delta, and commits with `Seen(hash)` ([WRITE-11](architecture.md#expectations-and-the-delta)). To listen without waiting for a full render, it uses a range render ([RENDER-4](architecture.md#range-render): `m2 render --preroll`, and `m2 listen`). `m2 render --from` renders a section exactly, replaying from the start.
 
 ### What agents write
 
@@ -685,7 +678,7 @@ Agents may keep writing files directly: that is the save path, and every problem
 
 ### Ears
 
-**Not built yet.** Agents can't listen, so they need another way to judge the result. `render` with `std/meters` taps, plus the host's analysis tool, gives them:
+**Built in part**, as `m2 listen` ([Listening](manual.md#listening)): loudness and peak, octave bands, masking between tracks and stereo, for the mix and each track, and a picture of the bands over time. Key and onset detection, and `std/meters`, are not built. Agents can't listen, so they need another way to judge the result. `render` with `std/meters` taps, plus the host's analysis tool, gives them:
 - loudness and peak per section
 - spectral balance
 - **masking between tracks** (e.g. "the bass is masking the kick at 60 Hz")
@@ -753,15 +746,17 @@ Agents may keep writing files directly: that is the save path, and every problem
 | Package loading, kernel host, `poly`, `feedback`, audio clips, renderer | `core/runtime` (`m2-runtime`) |
 | TypeScript sandbox (oxc + QuickJS) and the `@m2/core` SDK | `core/script` (`m2-script`, `sdk/core.ts`) |
 | Kernel authoring kit for Rust | `std/kernels-src/kernel` (`m2-kernel`) |
-| Compiling, revisions, the graph view, edits (values, cables, effects, notes lanes, file saves) and undo | `core/session` (`m2-session`) |
-| CLAP plugin hosting | `core/plugins` (`m2-plugins`) |
-| Playback on the audio device | `core/play` (`m2-play`) |
-| The `std` package: manifest, 36 kernels, 17 effects, TypeScript modules | `std/` (kernels built with `std/build.sh`) |
-| CLI: 19 commands (`new`, `check`, `render`, `kernels`, `bounce`, `graph`, `controls`, `set`, `cables`, `connect`, `disconnect`, `effects`, `add-effect`, `remove-effect`, `relink`, `delete-data`, `fix`, `plugins`, `plugin-state`) | `apps/m2` |
-| The app's server: the open project and playback (`graph.rs`), the code editor's files (`files.rs`), new songs (`project.rs`), Export Audio (`export.rs`), the bundled resources (`resources.rs`), the `/api/graph` and `/api/project` routes | `crates/server` (`m2-server`) |
+| Compiling, revisions, Tx, undo and the journal | `core/session` (`m2-session`) |
+| Every gesture's edit (values, cables, effects, notes, clips, tracks, the mix…), the graph view, renders and `m2 listen`'s measures | `crates/editor` (`m2-editor`) |
+| CLAP plugin hosting, in a process of its own (`m2-plugin-host`) | `core/plugins` (`m2-plugins`) |
+| Playback on the audio device, and its input | `core/play` (`m2-play`) |
+| The engine's thread pool; what differs on each OS | `core/pool` (`m2-pool`), `core/os` (`m2-os`) |
+| The `std` package: manifest, 37 kernels (one offline), 17 effects, TypeScript modules | `std/` (kernels built with `std/build.sh`) |
+| CLI: 42 commands (`m2` alone lists them) | `apps/m2` |
+| The app's server: the open project and playback (`graph.rs`), the code editor's files (`files.rs`), new songs (`project.rs`), Export Audio (`export.rs`), the bundled resources (`resources.rs`), every route, in one table (`api.rs`; `m2 routes` prints it) | `crates/server` (`m2-server`) |
 | The desktop app and its UI: start screen, New Song dialog, timeline, graph, piano roll, code editor, effect browser, Export | `apps/music2-desktop`, `web/` |
 | Song templates (Starter beat, Empty) | `templates/` |
-| Example songs | `examples/first-song`, `examples/with-plugins`, `examples/resample` |
+| Example songs | `examples/first-song`, `examples/with-plugins`, `examples/resample`, `examples/sampler`, `examples/sounds` |
 
 **Measured:**
 - **The decision gate passes.** The same kernel source runs **1.62× slower as WebAssembly than native**: 16 voices of saw → filter → envelope render **48× faster than real time** (`cargo run --release -p m2-runtime --example bench`). The correctness milestone below (fixed schedule, exact note starts, strict checks) costs about 10%: now **1.78×**, 44× real time.
@@ -774,11 +769,11 @@ Agents may keep writing files directly: that is the save path, and every problem
 - **Voices end** when their note is over, their output is quiet, and no kernel in them is `active`, so echoes inside a voice survive note-off.
 - **Seeking.** `seek(s)` resets and replays, so a section render is byte-identical to the same slice of a full render (`m2 render --from`). This stays the rule for offline renders; live playback stops replaying in step 3 ([RENDER-8](architecture.md#live-engine-and-its-two-clocks), [RENDER-9](architecture.md#seek-and-loop)).
 - **NaN and infinity.** A non-finite sample is an error in strict mode (the default) that names the kernel, e.g. `song/hz produced inf at 0.000s`. In live mode it is silenced and counted.
-- **`check` means playable.** `m2 check` and `m2 render` share one compile step (`m2-session`). It reads every lane's data against the lane's declaration; since step 4 a lane file that doesn't read is an Error that never blocks (its lane plays empty, or in a running session what it had: [FMT-9](architecture.md#strictness)), and track keys can't share files, since a key is filed as written. It also rejects nonzero kernel latency and events feeding kernels until they are supported. (Audio lanes were rejected at first too; they work now, see below.) Lane files no lane reads are warnings (`data.unclaimed`) with Relink and Delete fixes, shown by every CLI command that opens the project and in the app (step 1, [DIAG-6](architecture.md#fixes)).
-- **Packages** must not import anything, must export the full ABI, and must report the runtime's ABI version.
+- **`check` means playable.** `m2 check` and `m2 render` share one compile step (`m2-session`). It reads every lane's data against the lane's declaration; since step 4 a lane file that doesn't read is an Error that never blocks (its lane plays empty, or in a running session what it had: [FMT-9](architecture.md#strictness)), and track keys can't share files, since a key is filed as written. It also rejects latency inside a `poly` voice, and events feeding kernels, until they are supported. (Audio lanes were rejected at first too; they work now, see below.) Lane files no lane reads are warnings (`data.unclaimed`) with Relink and Delete fixes, shown by every CLI command that opens the project and in the app (step 1, [DIAG-6](architecture.md#fixes)).
+- **Packages** may import only `m2.asset_read`, must export the full ABI, and must say the runtime's ABI version in their `m2_abi` section ([Kernel ABI v1](kernel-abi.md)).
 
 **Settled while building:**
-- `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/filter`, `std/fx`, `std/mix`, `std/instruments`, `std/synth`, `std/fm` and `std/drums`. Kernel ids are `package:kernel`, e.g. `std:svf`.
+- `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/filter`, `std/fx`, `std/mix`, `std/instruments`, `std/synth`, `std/fm`, `std/drums` and `std/sampler`. Kernel ids are `package:kernel`, e.g. `std:svf`.
 - Units in TypeScript are functions (`hz(800)`), and plain numbers are untyped literals.
 - `feedback()` declares its kind up front (`feedback("audio<1>")`), and its input is given later with `.set()`.
 - Inside `poly`, a voice can read any signal from its module. Lanes and imports are always created at module level, so voices never contain them. So is `time` read in a track's own code outside any `key()` frame. Read inside a component call or a `key()` frame, it is made in that frame, one node per frame, and a voice has its own (since the `sounds` merge: [WRITE-8](architecture.md#expectations-and-the-delta)).
@@ -799,7 +794,7 @@ What it taught:
 - **Much of a plugin's sound lives in its state,** not its parameters. Surge's default patch has the filter off; Airwindows chooses its algorithm in state. Code should be able to name stepped values (`a_filter_1_type: "LP 24 dB"`); `value_text` exists in the host for this.
 - **Parameters are normalised 0..1,** so the `scalar` unit is right but says little. Display text per parameter is the useful information.
 
-Not done yet: running plugins out of process, plugin editor windows, and latency compensation (plugins that report latency are rejected for now).
+Not done then, done since step 9: running plugins out of process, plugin editor windows, and latency compensation.
 
 **Experiment: audio first, done.**
 - **Audio lanes:** `lane.audio("clips")`. A clip carries an asset, offset, gain, fades, reverse and pitch, plus warp markers `[source_seconds, beat]`.
@@ -811,20 +806,18 @@ Not done yet: running plugins out of process, plugin editor windows, and latency
   - `examples/resample` runs the whole loop: bounce a synth, then chop, reverse, pitch and stretch it.
 
 What it taught:
-- **Pre-rendering clips is simple and exact,** but costs memory for long sessions. The realtime engine will stream from a disk cache keyed by the clip's content.
-- **Stretching is in the core runtime for now** (`core/runtime/src/audio.rs`). Moving it into a package, as the design wants, needs an *offline kernel* ABI: whole buffers in, whole buffers out, with a time map. That's a small, well-defined extension.
+- **Pre-rendering clips is simple and exact,** but costs memory for long sessions. The realtime engine will stream from a disk cache keyed by the clip's content. (It streams now: [Audio lanes](architecture.md#audio-lanes).)
+- **Stretching was in the core runtime at first** (`core/runtime/src/audio.rs`); since track sx it is std's offline kernel `std:stretch` ([Offline kernels](kernel-abi.md#offline-kernels)). Moving it into a package, as the design wants, needs an *offline kernel* ABI: whole buffers in, whole buffers out, with a time map. That's a small, well-defined extension.
 
 **Not built yet** (each belongs to a later milestone):
-- latency compensation (rejected at check time until then; [Latency](architecture.md#latency))
 - sections
-- stable identity across revisions (ids are counters; [Derived identity](architecture.md#derived-identity))
 - per-kernel CPU budgets
 - event-producing kernels: today only a notes lane can feed `poly` ([Kernel ABI reservations](architecture.md#kernel-abi-reservations))
-- render caching and checkpoints (seeking replays from 0)
+- render caching and checkpoints (an offline seek replays from 0)
 
 ## Build plan
 
-> **Superseded for the core** by the [order of work](architecture.md#order-of-work) and its [acceptance gates](architecture.md#acceptance-gates) (2026-10-12). This list is kept as the history of the product milestones. In particular: stable ids for tracks and lanes are keys written in code, clips get random ids, transactions are content-hash based and multi-file, and `[locks]` are deferred.
+> **Superseded for the core** by the [order of work](architecture.md#order-of-work) and its [acceptance gates](architecture.md#acceptance-gates) (2026-10-12). This list is kept as the history of the product milestones. Its notes on what is done are old: what is built now is in the contract's *Today* lines and [What music2 can't do yet](gaps.md). In particular: stable ids for tracks and lanes are keys written in code, clips get random ids, transactions are content-hash based and multi-file, and `[locks]` are deferred.
 
 The old engine was removed in October 2026; the app runs only on this core. After review, the plan proves editing early and defers breadth. For the list of what's missing from a user's point of view, most important first, see [What music2 can't do yet](gaps.md).
 
@@ -844,6 +837,6 @@ The old engine was removed in October 2026; the app runs only on this core. Afte
    - local packages pinned by hash before any fetching from git: not built yet
 5. **One complete workflow in the desktop app:** open the example → play → move a clip → edit automation → change code while a note is held → have an invalid edit rejected → undo → save and reopen. Seeking uses reset-and-replay at first. This milestone also includes hot swap with stable ids, real-time playback, and the parallel, realtime-safe runtime model. Partly done: everything but editing automation works, with seeking by replay and real-time playback. Hot swap with stable ids and the parallel runtime are not built yet.
 6. **The node editor on the code-first model:** the house-style operations from the experiment, in the app. Partly done: knobs, cables and effects.
-7. **The agent surface:** MCP generated from the session API, `render` taps, `std/meters`, the analysis tool and spectrograms, variants. Not built yet.
+7. **The agent surface:** MCP generated from the session API, `render` taps, `std/meters`, the analysis tool and spectrograms, variants. Partly done: `m2 listen` measures the sound and draws its bands; MCP, `std/meters` and variants are not built yet.
 8. **Breadth:** a complete `std` (port the missing instruments and effects: lead, keys, strings, drums, sampler, pump), sections, latency compensation, audio lanes, git package resolution, render caching and checkpoints. Partly done: audio lanes work, and std has grown to 17 effects; the rest is not built yet.
 9. **The full node editor:** group nodes, opening project modules, multi-file edits. Not built yet.
