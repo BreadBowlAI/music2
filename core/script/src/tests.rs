@@ -121,10 +121,88 @@ fn syntax_errors_and_endless_loops() {
     assert!(e.src.as_deref().unwrap_or("").starts_with("song.ts:3:"), "{e}");
     assert_eq!(e.code, "code.build");
 
-    let t = Instant::now();
-    let e = error_of(&[("song.ts", "import { song } from \"@m2/core\";\nexport default song(() => { while (true) {} });\n")]);
-    assert!(e.message.contains("too long"), "{e}");
-    assert!(t.elapsed() < Duration::from_secs(5));
+    // Stopped after its 2 s of work, as its own thread's CPU time says: however much of a core the
+    // machine gives it (the review of mf3, S1: a bound on the clock held only with 40% of one).
+    let (built, worked, _) = build_measured(options(&[("song.ts", ENDLESS)]), || {});
+    let e = built.expect_err("an endless loop is stopped");
+    assert!(e.len() == 1 && e[0].message.contains("too long"), "{e:?}");
+    assert!(worked < Duration::from_secs(5), "it worked {worked:?}");
+}
+
+/// A song whose build never ends.
+const ENDLESS: &str = "import { song } from \"@m2/core\";\nexport default song(() => { while (true) {} });\n";
+
+/// Build `o` on a thread of this test's own, with the stack a build has, after `first` ran there
+/// (what it sets of its policy and its CPU): the build's result, the CPU time that thread used for
+/// it, and how long it took by the clock.
+fn build_measured(o: Options, first: impl FnOnce() + Send + 'static) -> (Result<(), Vec<Diagnostic>>, Duration, Duration) {
+    std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(move || {
+            first();
+            m2_os::thread::c_numbers();
+            let (t, w) = (Instant::now(), m2_os::thread::cpu_time());
+            let built = build_here(&o).map(drop);
+            (built, m2_os::thread::cpu_time() - w, t.elapsed())
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// The first CPU this process may use, and a function that holds the calling thread to it.
+#[cfg(target_os = "linux")]
+fn one_cpu() -> impl Fn() + Copy + Send + 'static {
+    const SET: usize = std::mem::size_of::<libc::cpu_set_t>();
+    // SAFETY: a zeroed cpu_set_t is an empty set; the calls read and write the calling thread's own
+    // mask.
+    let mut mask: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    assert_eq!(unsafe { libc::sched_getaffinity(0, SET, &mut mask) }, 0);
+    let cpu = (0..libc::CPU_SETSIZE as usize).find(|&c| unsafe { libc::CPU_ISSET(c, &mask) }).expect("a CPU this test may use");
+    move || {
+        let mut one: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::CPU_SET(cpu, &mut one) };
+        assert_eq!(unsafe { libc::sched_setaffinity(0, SET, &one) }, 0);
+    }
+}
+
+// The clock is the build's backstop at ten times its limit: an endless loop that gets almost no CPU
+// (at background priority beside other work) still ends, and an agent's listen doesn't hold
+// `~/.music2/listen.lock` for good (the review of mf3, S1). Here the loop runs in `SCHED_IDLE` on
+// one CPU beside a busy thread, which stays busy until the build ends (20 s at most): it is stopped
+// at 3 s by the clock, having worked far less than its 0.3 s.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_starved_endless_loop_is_stopped_by_the_clock() {
+    let pin = one_cpu();
+    let (started, done) = (std::sync::Arc::new(std::sync::Barrier::new(2)), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    let busy = {
+        let (started, done) = (started.clone(), done.clone());
+        std::thread::spawn(move || {
+            pin();
+            let t = Instant::now();
+            started.wait();
+            while !done.load(std::sync::atomic::Ordering::Relaxed) && t.elapsed() < Duration::from_secs(20) {
+                std::hint::spin_loop();
+            }
+            t.elapsed() < Duration::from_secs(20)
+        })
+    };
+    started.wait();
+    let mut o = options(&[("song.ts", ENDLESS)]);
+    o.time_limit = Duration::from_millis(300);
+    let (built, worked, took) = build_measured(o, move || {
+        pin();
+        let idle = libc::sched_param { sched_priority: 0 };
+        // SAFETY: sets the calling thread's own policy.
+        assert_eq!(unsafe { libc::sched_setscheduler(0, libc::SCHED_IDLE, &idle) }, 0);
+    });
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    let busy_all_along = busy.join().unwrap();
+    let e = built.expect_err("a starved endless loop is stopped");
+    assert!(e.len() == 1 && e[0].message.contains("too long"), "{e:?}");
+    assert!(busy_all_along && took >= Duration::from_secs(3), "stopped by the clock's backstop, beside the busy thread: after {took:?}");
+    assert!(worked < Duration::from_millis(300), "not by its work: it worked {worked:?}");
 }
 
 // The build's time limit counts the build's own work, not the time it waited for a CPU: a build at

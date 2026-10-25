@@ -134,7 +134,8 @@ pub struct Options {
     pub dependencies: Vec<String>,
     pub memory_limit: usize,
     /// The CPU time a build may use before it is stopped as an endless loop: the build thread's
-    /// own work, never the time it waited for a CPU (see [`Limit`]).
+    /// own work, not the time it waited for a CPU; by the clock, ten times this at most (see
+    /// [`Limit`]).
     pub time_limit: Duration,
 }
 
@@ -739,6 +740,8 @@ fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
 /// `m2 listen` on a Mac's efficiency cores, AGENT-7) waits for a CPU far longer than it works, and
 /// its wait is no loop. The thread's CPU time is read only once the clock passed the limit too (a
 /// thread never works longer than the clock runs), so the many checks before cost a clock read.
+/// The clock is a backstop at [`BACKSTOP`] times the limit: an endless loop that gets almost no CPU
+/// still ends, and an agent's listen doesn't hold `~/.music2/listen.lock` for good.
 #[derive(Clone, Copy)]
 struct Limit {
     started: Instant,
@@ -746,15 +749,20 @@ struct Limit {
     limit: Duration,
 }
 
+/// How many times its limit a run may take by the clock, whatever CPU it got.
+const BACKSTOP: u32 = 10;
+
 impl Limit {
     /// From now, on the calling thread: the thread that runs the sandbox.
     fn new(limit: Duration) -> Limit {
         Limit { started: Instant::now(), worked: m2_os::thread::cpu_time(), limit }
     }
 
-    /// Whether the run worked longer than its limit: asked on its own thread.
+    /// Whether the run worked longer than its limit, or took the backstop's time by the clock:
+    /// asked on its own thread.
     fn passed(&self) -> bool {
-        self.started.elapsed() > self.limit && m2_os::thread::cpu_time().saturating_sub(self.worked) > self.limit
+        let took = self.started.elapsed();
+        took > self.limit * BACKSTOP || (took > self.limit && m2_os::thread::cpu_time().saturating_sub(self.worked) > self.limit)
     }
 }
 
