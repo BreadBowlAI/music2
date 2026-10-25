@@ -41,4 +41,4 @@ The CI logs are of pull request #17 (suites 2/2): run 1 `FAIL one write`, run 2 
 ## Checked
 
 - `e2e/notes.mjs`: 69 of 69. Under load, 30 of 30 at `82110ac`.
-- The PR tier: see the line below, after the merge of `main`.
+- The PR tier (`ci/check.sh --pr`), after the merge of `main` (`414bf8e`), at `7ba3f84`: PASS, every row (quick, clippy, rust, suites, renders, repo unchanged).
