@@ -13,7 +13,7 @@
 
 ## Status
 
-music2 is young: there is no 1.0 and no release yet. You build it from source. Before 1.0 the song format, the SDK and std can still change, and an old song may need a line changed to open ([goals](docs/goals.md)).
+music2 is young: 0.1.0 is its first release, an alpha (an early test version). Download it, or build it from source. Before 1.0 the song format, the SDK and std can still change, and an old song may need a line changed to open ([goals](docs/goals.md)).
 
 | System | State |
 |---|---|
@@ -41,6 +41,20 @@ Keys are shown as on a Mac. On Linux, Ctrl does what ⌘ does, and Alt what ⌥ 
 
 ## Quick start
 
+### Download
+
+Get the file for your computer from the [Releases page](https://github.com/BreadBowlAI/music2/releases):
+
+| Your computer | The file |
+|---|---|
+| A Mac with Apple silicon (M1 or newer) | `music2-0.1.0-macos-arm64.zip`: unzip it, and drag `music2.app` into Applications |
+| Ubuntu 24.04 or newer, Debian 13 or newer | `music2_0.1.0_amd64.deb`: `sudo apt install ./music2_0.1.0_amd64.deb` |
+| Another Linux on an x86_64 PC | `music2-0.1.0-linux-x86_64.AppImage`: `chmod +x` it, then run it |
+
+On a Mac, the first time you open it, macOS stops it, as it isn't signed by Apple yet. Click **Done**, then in **System Settings → Privacy & Security** click **Open Anyway** (once). Every step, `m2` from each file, and how to check a download: [Install and run music2](docs/guide/install.md#download).
+
+### Build from source
+
 You need [Rust](https://rustup.rs) (the repo picks the version itself) and [Node.js](https://nodejs.org) 24.
 
 **1. On Linux, install the system libraries first** (Ubuntu 24.04):
@@ -60,9 +74,11 @@ cargo run --locked --release -p music2-desktop
 
 The first build takes a while. Then the start screen opens.
 
-**3. Make a song.** Click **New Song…**, keep **Starter beat**, and press **Create**. Press **Space** to play. The song lives in `~/Music/music2/<its name>`. To learn step by step, open **Help → Make Your First Song**, or read [Your first song](docs/guide/first-song.md).
+### Make a song
 
-Other ways to run it (the UI with hot reload, `music2.app` for the Mac, the `m2` command line) are in [Install and run music2](docs/guide/install.md).
+Open music2, downloaded or built. Click **New Song…**, keep **Starter beat**, and press **Create**. Press **Space** to play. The song lives in `~/Music/music2/<its name>`. To learn step by step, open **Help → Make Your First Song**, or read [Your first song](docs/guide/first-song.md).
+
+Other ways to run it (the UI with hot reload, the app and packages built yourself, the `m2` command line) are in [Install and run music2](docs/guide/install.md).
 
 ## Learn more
 
