@@ -7,6 +7,10 @@
     "beforeBuildCommand": {
       "script": "npm run build",
       "cwd": "../../web"
+    },
+    "beforeBundleCommand": {
+      "script": "bash apps/music2-desktop/bundle-m2.sh",
+      "cwd": "../.."
     }
   },
   "app": {
@@ -39,6 +43,9 @@
       "../../examples/": "examples/"
     },
     "macOS": {
+      "files": {
+        "MacOS/m2": "../../target/release/m2"
+      },
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-",
       "hardenedRuntime": false
