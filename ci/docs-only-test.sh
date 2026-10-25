@@ -63,12 +63,16 @@ case_() {
   echo "FAIL  $1: wanted \"$2 ... $3\" (status $want), got status $st: $line"
 }
 
-case_ "README.md" docs "only README.md changed since" main \
+case_ "HANDOFF.md" docs "only HANDOFF.md changed since" main \
+  'edit HANDOFF.md && c handoff'
+case_ "README.md, which apps/m2/tests/docs.rs reads" full "README.md changed since" main \
   'edit README.md && c readme'
+case_ "README.md beside a design note" full "README.md changed since" main \
+  'edit docs/designs/step9/plan.md && edit README.md && c both'
 case_ "the counts and the base" docs "changed since $(cd "$F" && git rev-parse --short=12 HEAD) (3 files)" main \
   'edit docs/gaps.md && edit docs/designs/step9/plan.md && edit docs/new.png && c docs'
-case_ "every top-level document" docs "only README.md, HANDOFF.md, CONTRIBUTING.md, AGENTS.md, CLAUDE.md, CODE_OF_CONDUCT.md, SECURITY.md, GOVERNANCE.md, LICENSE-MIT, LICENSE-APACHE changed" main \
-  'for f in README.md HANDOFF.md CONTRIBUTING.md AGENTS.md CLAUDE.md CODE_OF_CONDUCT.md SECURITY.md GOVERNANCE.md LICENSE-MIT LICENSE-APACHE; do edit $f; done && c top'
+case_ "every top-level document a build doesn't read" docs "only HANDOFF.md, CONTRIBUTING.md, AGENTS.md, CLAUDE.md, CODE_OF_CONDUCT.md, SECURITY.md, GOVERNANCE.md, LICENSE-MIT, LICENSE-APACHE changed" main \
+  'for f in HANDOFF.md CONTRIBUTING.md AGENTS.md CLAUDE.md CODE_OF_CONDUCT.md SECURITY.md GOVERNANCE.md LICENSE-MIT LICENSE-APACHE; do edit $f; done && c top'
 case_ "GitHub's issue and pull request forms" docs "only .github/ISSUE_TEMPLATE/, .github/PULL_REQUEST_TEMPLATE.md changed" main \
   'edit .github/ISSUE_TEMPLATE/bug.yml && edit .github/ISSUE_TEMPLATE/config.yml && edit .github/PULL_REQUEST_TEMPLATE.md && c forms'
 case_ "a deleted doc" docs "only docs/ changed" main \
@@ -97,12 +101,12 @@ case_ "main moved on with code; the branch changed only docs" docs "only docs/ c
   'git checkout -q main && edit core/a.rs && c code && git checkout -q topic && edit docs/a.md && c docs'
 case_ "the branch merged main in after main changed code" docs "only docs/ changed" main \
   'edit docs/a.md && c docs && git checkout -q main && edit core/a.rs && c code && git checkout -q topic && git merge -q --no-edit main'
-case_ "a pull request's merge commit, judged against its first parent" docs "only README.md changed" HEAD^1 \
-  'edit README.md && c readme && git checkout -q main && edit core/a.rs && c code && git merge -q --no-ff --no-edit topic'
+case_ "a pull request's merge commit, judged against its first parent" docs "only HANDOFF.md changed" HEAD^1 \
+  'edit HANDOFF.md && c handoff && git checkout -q main && edit core/a.rs && c code && git merge -q --no-ff --no-edit topic'
 case_ "a merge commit whose pull request changed code" full "core/a.rs changed since" HEAD^1 \
   'edit core/a.rs && c code && git checkout -q main && edit docs/a.md && c docs && git merge -q --no-ff --no-edit topic'
 case_ "a doc and a Rust file" full "core/a.rs changed since" main \
-  'edit README.md && edit core/a.rs && c both'
+  'edit HANDOFF.md && edit core/a.rs && c both'
 case_ "a Markdown file in a code folder" full "core/a.md changed" main \
   'edit core/a.md && c md'
 case_ "e2e/README.md" full "e2e/README.md changed" main \

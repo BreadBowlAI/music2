@@ -21,10 +21,12 @@
 #     none under docs/ and none at the top level.
 #   by watching: an inotify watch on docs/, the top folder and e2e/ through every PR-tier step (1 h
 #     51 min of builds, tests, suites and renders) saw nothing below opened.
-# Checked again at d2e7d64 (2026-10-25), for the docs plan (docs/designs/docs/design.md), by hand as
-# above: one test reads docs/architecture.md (crates/server/src/api_tests.rs, the contract's quote
-# of a refusal), and from the docs plan on apps/m2/build.rs embeds docs/guide/ and
-# apps/m2/tests/docs.rs reads it; nothing else under these paths is read. So both are DOCS_READ.
+# Checked again at 7671c3c (2026-10-25), for the docs plan (docs/designs/docs/design.md) and its
+# review's R1, by hand as above (include_str!, CARGO_MANIFEST_DIR and read_to_string of a repo path
+# in every .rs file): one test reads docs/architecture.md (crates/server/src/api_tests.rs, the
+# contract's quote of a refusal); apps/m2/build.rs embeds docs/guide/ and apps/m2/tests/docs.rs
+# reads it, and README.md too (it names only real m2 commands and routes). Nothing else under these
+# paths is read. So those three are DOCS_READ.
 # Check again when a build, a test or a suite starts to read a file under one of these paths, or
 # when a path is added here.
 #   docs/                                    the design docs, the goals, gaps.md, pictures, and
@@ -42,7 +44,8 @@
 # checked before DOCS_FREE (the owner's D1 and D2, 2026-10-25):
 #   docs/guide/                              the guide: m2 embeds every page (AGENT-12), its tests read it
 #   docs/architecture.md                     the contract: api_tests.rs checks a refusal quoted in it
-DOCS_READ="docs/guide/ docs/architecture.md"
+#   README.md                                apps/m2/tests/docs.rs: it names only real commands and routes
+DOCS_READ="docs/guide/ docs/architecture.md README.md"
 DOCS_FREE="docs/ README.md HANDOFF.md CONTRIBUTING.md AGENTS.md CLAUDE.md CODE_OF_CONDUCT.md SECURITY.md GOVERNANCE.md LICENSE-MIT LICENSE-APACHE .github/ISSUE_TEMPLATE/ .github/PULL_REQUEST_TEMPLATE.md"
 
 # docs_read <file>: prints the path of DOCS_READ that <file> is, or is under, and returns 0.
