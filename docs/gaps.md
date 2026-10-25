@@ -67,7 +67,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A plugin removed since the list was made is named by its id** ("org.example.reverb isn't installed…"), not its name, when adding it is refused.
 - **A plugin whose CLAP features say neither instrument nor effect** (an analyzer, a note effect) isn't listed; it can still be written in code.
 - **All plugins share one plugin program**, so one crash silences them all for a moment (each comes back by itself). One program per plugin would silence only the one that crashed.
-- **A plugin stuck in its window, its start or a settings load** holds up edits and saves for up to 30 seconds (2 minutes in a scan); then music2 ends the plugin program and says so (the ph review's r1).
+- **A plugin stuck in its window, its start or a settings load** holds up edits and saves for up to 30 seconds (2 minutes in a scan, or a read of its own presets); then music2 ends the plugin program and says so (the ph review's r1).
 - **One broken `.clap` file that crashes the scan** makes every plugin say "not installed", and the bad file isn't named (the ph review's r4).
 - **A plugin that fails a second time is left silent with no new message**; its listed words still say music2 starts it again. Open the song again to try it (the ex review's r3).
 - **A plugin that fails in the same instant as a crash** may be told as "stopped working", not in the crash's words.
@@ -125,7 +125,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 20 | **Meters after the fader, and loudness for export.** Today's meters read each track and bus before its fader, so a fader move doesn't move them: after-fader taps need the engine (`core/runtime`). | You can't see what a fader does to a track's level. | Partly (a meter on each track) | medium |
+| 20 | **Meters after the fader, and loudness in the app.** The app's meters read each track and bus before its fader, so a fader move doesn't move them: after-fader taps need the engine (`core/runtime`). The Export dialog says nothing of loudness. (`m2 listen` already measures each track after its fader, and the mix's loudness and true peak, from the command line.) | You can't see what a fader does to a track's level, or how loud a song is. | Partly (a meter on each track) | medium |
 
 - **Soloing a bus plays its tracks' dry sound too**: a wet-only solo needs a cell per path.
 - **A send has no pan of its own**, and can't be made mono.
@@ -229,7 +229,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 |---|---|---|---|---|
 | 30 | **Crash safety**: keep unsaved code-editor text through a crash, and simple project snapshots or backups. | Edits are on disk at once and a cut-off edit is offered back, but unsaved code is lost. | No | large |
 | 29 | **Undo that survives closing the app.** | Closing the app, or the song, loses all undo. | Partly (lost on closing too) | medium |
-| 31 | **The rest of Settings**: view settings that hold for every song (zoom, grids and the audition toggle are kept per song). The sample rate stays the song's ([RENDER-31](architecture.md#sample-rate)). | Most people want one zoom for every song. | Partly (it showed the device and the folders) | small |
+| 31 | **The rest of Settings**: view settings that hold for every song (zoom, grids, the audition toggle and the metronome are kept per song). The sample rate stays the song's ([RENDER-31](architecture.md#sample-rate)). | Most people want one zoom for every song. | Partly (it showed the device and the folders) | small |
 | 12 | **A picture of each song in the recent list** (taste.md SS-2). | A small picture of each arrangement helps find the right song. | Yes (the Song Library) | small |
 | 28 | **Open a song by dropping its folder** on the window or the Dock. | Finding a song in the Finder is how many people open it. | Yes | small |
 
@@ -250,7 +250,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 39 | **Shared sound packages**: list the packages a song uses in `music2.toml`, fetch them (`github:owner/repo@tag`), pin them in `music2.lock`, and browse and add them from the app. | Only std can be loaded, so sounds other people make can't be used, except as CLAP plugins. | Partly (single sounds from GitHub) | large |
+| 39 | **Shared sound packages**: fetch a package (`github:owner/repo@tag`), pin it in `music2.lock`, and browse and add packages from the app. A song already lists its packages and their versions in `music2.toml`, and is told when one isn't installed, but std is the only one there is. | Only std can be loaded, so sounds other people make can't be used, except as CLAP plugins. | Partly (single sounds from GitHub) | large |
 
 - **Kernel ABI v1's reserved parts aren't built**: event ports, `k_save`/`k_load` and `k_latency`/`k_tail` ([kernel-abi.md](kernel-abi.md#reserved-shapes)). Each comes with the first kernel that needs it.
 
@@ -273,7 +273,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A tempo drag is checked by its file**: an agent's change to `data/arrangement.json` is busy while you drag the tempo, as AGENT-3 says. The arrangement lives only in that file today; a change elsewhere that moved it would need the carry's check that knob and clip drags have now.
 - **A plugin window not saved yet is checked against the plan an agent's change makes at once**: while an export holds playback, that plan waits for the export, and the app's own settle after it could drop the window's instance, with no agent's change left to take back. Rare: an export, a window not saved, and an agent's change that takes its plugin out, all at the same time.
 - **A `git checkout` that finishes between two looks of the watcher** (50 ms) is taken as an outside edit, one undo step: a batch is git's only when git's `index.lock` was seen while it settled.
-- **The glow outlines every clip of a changed lane**, not only the clips that changed; notes in the piano roll and automation points don't glow. A rewrite of more than 500 lines is one change to the carry (`DIFF_LINES`), so no knob inside it glows.
+- **The glow outlines every clip of a changed lane**, not only the clips that changed; notes in the piano roll and automation points don't glow. A rewrite of more than 500 lines, or of more than 500 tokens in one run of changed lines, is one change to the carry (`DIFF_LINES` in `core/session/src/text.rs`), so no knob inside it glows.
 - **Outside saves aren't merged into one step**: an editor that saves every second as you type (autosave) makes a step each time, and 500 of them push the app's own changes out of undo. Merging close saves of the same files, with no other step between, would fix that.
 - **Only undo's newest step can be skipped**: a redo whose file changed since stays refused until the next change clears redo.
 - **One focus record for the app, not one per window** (AGENT-6): the newest post wins, as with the unsaved list. The app has one window, so it is that window's.
@@ -299,7 +299,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 ## Checked on Linux only
 
-- **Owed on a Mac**: every step by ear in [mac-run.md](mac-run.md), and the Mac-only code that is only lint-checked here: the plugin program's shared memory and wake, plugin windows, real-time threads in the audio workgroup, the microphone and its permission, and G7f's numbers for one sandbox a box. HANDOFF has the table.
+- **Owed on a Mac**: every step by ear in [mac-run.md](mac-run.md) (steps 7 to 133), and one more `ci/check.sh` with the output at 48 kHz. The Mac's two full checks (at `e7518f4` and `a1e3c77`) ran its own code for the plugin program, plugin windows, the engine's real-time threads and G7f, but macOS isn't green yet. The microphone and its permission are checked only by ear. HANDOFF has the table.
 
 ## For developers
 
@@ -310,9 +310,9 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **The Confined check's rewire to a node made inside the edit** (WRITE-8, `core/session/src/tx/expect.rs` `made_inside`) has no test in `core/session`: only the editor's bus tests cover it.
 - **`--gates=auto` sees only what git sees**: what the gates take from outside the repo (`RUSTFLAGS` and other settings, a `.cargo/config.toml` above the repo or in `CARGO_HOME`, the machine itself) isn't in its record, so a skip trusts that these are as they were at the recorded pass.
 - **A check whose gates `--gates=auto` skipped still begins `music2 check: PASS`** (it goes on "without running the gates", and the gates row says SKIP): a script that must know the gates ran at this very commit has to read the gates row.
-- **The pull request tier's time on GitHub is still a guess.** It was timed on the server pinned to 4 cores. GitHub's runner is slower per core, so a warm run likely takes 10 to 11 minutes and a cold Rust job 16 to 17 (the goals: 10 and 15). Time the first real runs; if they miss, split `rust` into 4 parts.
-- **The push to `main` runs the whole pull request tier again**, on the tree the pull request just tested, only to save the build caches. Running just the parts that save caches there (`quick`, `clippy`, `rust 1/3`, `suites 1/2`) would cut a merged pull request from 27 jobs to about 24.
-- **A hang in the nightly run waits out the job's 180 minutes** before "Nightly failed" opens: the full check's `cargo test` has no limit per test.
+- **The pull request tier's time on GitHub is still a guess.** It was timed on 8 threads of the server: about 10 minutes cold, 7.5 warm. GitHub's runner has 4 slower cores, so a warm run likely takes 10 to 11 minutes and a cold Rust job 16 to 17 (the goals: 10 and 15). Time the first real runs; if they miss, split `rust` into 4 parts.
+- **The push to `main` runs the whole pull request tier again**, on the tree the pull request (or the merge queue) just tested, only to save the build caches. Running just the parts that save caches there (`quick`, `clippy`, `rust 1/3`, `suites 1/2`) would cut a merged pull request from about 18 jobs to 15 (27 to 24 with a merge queue).
+- **A hang in the nightly Linux run waits out the job's 180 minutes** before "Nightly failed" opens: the full check's `cargo test` has no limit per test. (The Mac's nightly job runs nextest, which ends a test after 10 minutes.)
 - **CI saves the test plugins' cache only when a job passes** (`actions/cache` saves at the job's end). After a failed run on `main`, later runs download the plugins again, from upstream or the `test-plugins` release. Saving it right after `ci/plugins.sh` (`actions/cache`'s separate restore and save steps) would fix that.
 - **The browser suites keep a list of their own** of the page's requests that write nothing (`unwritten` in `e2e/fixlib.mjs`: naming a step, the focus record, a pointer), to tell the page's writes apart. The route table knows which routes write (AGENT-8); `m2 routes --json` could give it to them.
 - **The browser logs an error with no song open**: `GET /api/graph` answers 400, which is how the window knows to show the start screen. Answering "no project" without an error status would be quieter.
