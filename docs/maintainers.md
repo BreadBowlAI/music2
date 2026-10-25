@@ -7,19 +7,19 @@
 
 ## 1. Before it goes public
 
-Done on 2026-10-23, the owner's choices:
+Done on 2026-10-23 to 2026-10-25, the owner's choices:
 - The repository stays on the `BreadBowlAI` account. GitHub's merge queue needs an organization, so part 2's ruleset asks instead that each pull request is up to date with `main`. Moving to an organization later keeps the issues, the stars and the links (GitHub redirects the old address).
 - The Code of Conduct's contact is `mxudev@gmail.com`.
 - A new app icon, drawn for music2 (`apps/music2-desktop/icons/source.html`; its credit is in [the manual](manual.md)).
 - `.github/CODEOWNERS` names `@BreadBowlAI` (part 2).
 - Commit emails stay as they are, as most projects show them. No secrets are in the history (two scans of every commit).
+- The two leftover `refs/claude-teleport/*` refs of an early session are deleted.
+- The macOS bundle id is `ai.breadbowl.music2` (`apps/music2-desktop/tauri.conf.json`). Changing it again means macOS asks for the microphone again.
+- The Airwindows test plugin is hosted: the pre-release **Test plugins (not a music2 release)**, tag `test-plugins`, holds the zip from `~/.local/share/m2-test-plugins/dl/`. Upstream deleted that zip, and CI needs it: `ci/plugins.sh` falls back to this release when upstream fails, and checks the file against `ci/plugins.sha256` wherever it came from. CI reads the release with its own read-only token, so it works while the repository is private; anyone else can download it once it is public. Airwindows is MIT, so it may be shared. (Surge XT's package is still upstream. It is GPL-3.0: sharing a copy would also mean offering its source, so leave it there.) When `ci/plugins.sha256` names a new Airwindows zip, upload that zip to the same release.
 
 | # | Step | Why |
 |---|---|---|
-| 1 | **Delete the two leftover `refs/claude-teleport/*` refs** on GitHub: `git push origin :refs/claude-teleport/96a7281d462f18ab :refs/claude-teleport/da2cc95787616a41`. | Leftovers of an early session: one is on `main` already, the other is unfinished work on the old engine, which is gone. They would become public too. |
-| 2 | **Decide on the macOS bundle id** `com.suite2.music2` (`apps/music2-desktop/tauri.conf.json`). Changing it means macOS asks for the microphone again. | It names an unreleased project. Keeping it is fine. |
-| 3 | **Host the Airwindows test plugin.** Make a release whose tag is `test-plugins`, and upload the Airwindows zip from `~/.local/share/m2-test-plugins/dl/` as its file (on GitHub: **Releases → Draft a new release**, tag `test-plugins`, attach the zip, **Publish**). `ci/plugins.sh` falls back to that release when upstream fails. | Upstream deleted the zip, and CI needs it: until the release is there, CI's `rust` and `suites` jobs fail at `ci/plugins.sh` whenever their cache is empty. CI reads the release with its own read-only token, so this works while the repository is still private. Anyone else can download it only once the repository is public (step 4). Airwindows is MIT, so it may be shared. (Surge XT's package is still upstream. It is GPL-3.0: sharing a copy would also mean offering its source, so leave it there.) |
-| 4 | **Make it public:** **Settings → General → Danger Zone → Change visibility**. | The nightly tier (`nightly.yml`) starts only then: Actions minutes are free only for public repositories, and a private one's included minutes would go on the nightly alone. |
+| 1 | **Make it public:** **Settings → General → Danger Zone → Change visibility**. | The nightly tier (`nightly.yml`) starts only then: Actions minutes are free only for public repositories, and a private one's included minutes would go on the nightly alone. |
 
 ## 2. Pull requests and merging
 

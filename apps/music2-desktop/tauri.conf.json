@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "music2",
   "version": "0.1.0",
-  "identifier": "com.suite2.music2",
+  "identifier": "ai.breadbowl.music2",
   "build": {
     "beforeBuildCommand": {
       "script": "npm run build",
