@@ -10,7 +10,7 @@ mod app;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use app::{App, Temp, copy, example, fake, m2_in, packages, publish, said};
+use app::{App, Temp, copy, example, fake, m2_in, m2_started, packages, publish, said, until_said};
 use serde_json::{Value, json};
 
 /// The id of the step on top of the app's undo.
@@ -213,25 +213,24 @@ fn a_song_held_by_an_app_m2_cant_reach_fails_naming_it() {
 }
 
 // AGENT-3: a write on a file the musician drags a knob in waits, saying so, while the drag goes
-// on; once the drag ends, it lands.
+// on; once the drag ends, it lands. The drag ends only once `m2` said it waits: on the Mac's first
+// full check `m2` reached the app only after 1.5 s, when the drag had ended, and said nothing.
 #[test]
 fn a_write_on_a_file_with_a_knob_drag_is_busy_and_the_drag_goes_on() {
     let a = App::open("first-song", |_| {});
     let graph = &a.running.state.graph;
     let revision = graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
     let lease = graph.begin(a.session, revision, "song.ts#2/0.keys.pan", Default::default()).unwrap().lease;
-    std::thread::scope(|s| {
-        let m2 = s.spawn(|| a.m2(&["set", a.dir(), "song.ts#2/0.hats.pan", "0.4", "--as", "Claude"]));
-        std::thread::sleep(Duration::from_millis(1500));
-        assert!(graph.leases().iter().any(|l| l.lease == lease), "the drag goes on while the agent waits");
-        graph.update(lease, Some(1), -0.3).unwrap();
-        assert!(a.read("song.ts").contains("pan: 0.3"), "nothing landed meanwhile");
-        graph.commit(lease, -0.3, None).unwrap();
-        let o = m2.join().unwrap();
-        assert!(o.status.success(), "{}", said(&o));
-        let err = String::from_utf8_lossy(&o.stderr);
-        assert!(err.contains("waiting: you're dragging"), "{err}");
-    });
+    let (m2, err) = m2_started(&a.home, &["set", a.dir(), "song.ts#2/0.hats.pan", "0.4", "--as", "Claude"], &[]);
+    let said = until_said(&err, "waiting: you're dragging");
+    // Several of its tries, each one busy.
+    std::thread::sleep(Duration::from_millis(1000));
+    assert!(graph.leases().iter().any(|l| l.lease == lease), "the drag goes on while the agent waits");
+    graph.update(lease, Some(1), -0.3).unwrap();
+    assert!(a.read("song.ts").contains("pan: 0.3"), "nothing landed meanwhile");
+    graph.commit(lease, -0.3, None).unwrap();
+    let o = m2.wait_with_output().unwrap();
+    assert!(o.status.success(), "{said:?} {:?}", err.try_iter().collect::<Vec<_>>());
     let song = a.read("song.ts");
     assert!(song.contains("pan: 0.4") && song.contains("pan: -0.3"), "both landed: {song}");
 }
