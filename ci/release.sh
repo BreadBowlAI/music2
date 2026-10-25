@@ -135,6 +135,11 @@ build() {
   mkdir -p "$SCR"
   [ -x web/node_modules/.bin/tauri ] || (cd web && npm ci)
   set --
+  # Tauri takes a variable that is set but empty as given, and then tries to import an empty
+  # certificate: the workflow passes every Apple variable, empty when there's no secret.
+  for var in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+    eval "[ -n \"\${$var:-}\" ]" || unset "$var"
+  done
   if [ $OS = mac ] && [ -n "${APPLE_CERTIFICATE:-}" ]; then
     keychain
     set -- --config "$SCR/signed.json"
