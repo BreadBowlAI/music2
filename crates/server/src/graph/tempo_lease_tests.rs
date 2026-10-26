@@ -113,32 +113,44 @@ fn the_tempo_is_heard_at_the_first_block_after_its_prepare() {
     assert_eq!((d.revision(), d.fixture.0.join("data/arrangement.json").exists()), (revision, file), "nothing written");
 }
 
-// RENDER-27a, Q22, X24: one prepare in flight. Fifty updates while the first prepare is held: an
-// update that finds the drag's job queued or running queues none, and the job runs again while a
-// newer value waits. So a few jobs run, not fifty, and the last plays the 50th value. The prepare
-// is held until the 50th update is sent, not for a time: a sleep lasts what the OS makes it (on
-// GitHub's Mac, about four times what was asked), so timed updates could outlast timed prepares.
+// RENDER-27a, Q22, X24: one prepare in flight. Updates while a prepare is held, twice: 2 to 25
+// while the first job is held, 26 to 50 while the rerun it queued is. An update that finds the
+// drag's job queued or running queues none, and the job runs again while a newer value waits. So
+// three jobs run, not fifty, and the last plays the 50th value. The prepares are held until the
+// updates are sent, not for a time: a sleep lasts what the OS makes it (on GitHub's Mac, about four
+// times what was asked), so timed updates could outlast timed prepares. Two held cycles: updates
+// that land while a rerun is held coalesce too, not only those behind the first job.
 #[test]
 fn one_tempo_prepare_in_flight() {
     let mut d = Drag::new();
     let lease = d.begin().lease;
     let jobs = Arc::new(AtomicU32::new(0));
     let ran = jobs.clone();
-    let (sent, all_sent) = std::sync::mpsc::channel::<()>();
+    let wait = Duration::from_secs(10);
+    // The job tells it holds; the updates tell it may go on.
+    let (held, holding) = std::sync::mpsc::channel::<u32>();
+    let (go, going) = std::sync::mpsc::channel::<()>();
     d.graph.inspect(move |a| {
         a.between_phases = Some(Box::new(move |_| {
-            if ran.fetch_add(1, Ordering::Relaxed) == 0 {
-                all_sent.recv_timeout(Duration::from_secs(10)).expect("the 50th update was sent");
+            let n = ran.fetch_add(1, Ordering::Relaxed);
+            if n < 2 {
+                held.send(n + 1).unwrap();
+                going.recv_timeout(wait).expect("the updates were sent");
             }
         }))
     });
     let graph = &d.graph;
     std::thread::scope(|s| {
-        s.spawn(|| {
-            for i in 1..=50 {
-                graph.tempo_update(lease, Some(i), 120.0 + i as f64).unwrap();
+        s.spawn(move || {
+            let update = |i: u64| graph.tempo_update(lease, Some(i), 120.0 + i as f64).unwrap();
+            update(1);
+            for (job, values) in [(1, 2..=25), (2, 26..=50)] {
+                assert_eq!(holding.recv_timeout(wait).ok(), Some(job), "job {job} holds");
+                for i in values {
+                    update(i);
+                }
+                go.send(()).unwrap();
             }
-            sent.send(()).unwrap();
         });
     });
     d.heard(170.0);
