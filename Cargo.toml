@@ -29,26 +29,26 @@ serde = { version = "1", features = ["derive", "rc"] }
 # Exact float parsing: data files write numbers in their shortest round-trip form, and the
 # default parser misreads about one in nine of those with all their digits (FMT-8a).
 serde_json = { version = "1", features = ["float_roundtrip"] }
-parking_lot = "0.12"
+parking_lot = "0.13"
 crossbeam-channel = "0.5"
 hound = "3.5"
 cpal = "0.18"
 # MIDI input (8b.10), only through m2-os's `midi` feature, which only m2-server turns on.
-midir = "=0.11.0"
+midir = "=0.11.1"
 dirs = "7"
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.7", features = ["fs"] }
 open = "5"
 toml = "1"
-wasmtime = { version = "49", default-features = false, features = ["anyhow", "cranelift", "runtime", "std"] }
+wasmtime = { version = "50", default-features = false, features = ["anyhow", "cranelift", "runtime", "std"] }
 # Tests' hand-written kernels, text to wasm bytes: the version wasmtime's `wat` feature already
 # builds, so nothing new is compiled.
 wat = "1.261"
 rquickjs = { version = "0.14", features = ["loader"] }
-oxc = { version = "0.153", features = ["transformer", "codegen", "semantic", "ast_visit"] }
+oxc = { version = "0.155", features = ["transformer", "codegen", "semantic", "ast_visit"] }
 bytemuck = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 memchr = "2"
 libc = "0.2"
 # Math with the same bits on every OS and CPU, the code std.wasm's math runs (PLAT-4).
@@ -56,7 +56,7 @@ libm = "0.2"
 icu_normalizer = "2"
 # `m2 watch`'s WebSocket client (`m2_server::socket`): the version axum's `ws` already builds, with
 # its default features only (the handshake), so nothing new is compiled.
-tungstenite = "0.29"
+tungstenite = "0.30"
 # `m2 listen --png`'s picture: the version Tauri already builds (0.17 is there too, for another crate).
 png = "0.18"
 
