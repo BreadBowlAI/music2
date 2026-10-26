@@ -108,7 +108,7 @@ check(await until(async () => (await field()).bpm === 124), "and the field follo
 await page.click("[data-testid=meter-field]");
 const picker = await page.waitForSelector("[data-testid=meter-picker]", { timeout: 2000 }).catch(() => null);
 check(!!picker, "a click on 4/4 opens the time signature picker");
-await page.click("[data-testid=meter-beats]", { clickCount: 3 });
+await page.click("[data-testid=meter-beats]", { count: 3 });
 await page.keyboard.type("7");
 await page.keyboard.press("Enter");
 await until(() => same(arrangement().meter, [{ beat: 0, beats: 7, unit: 4 }]));

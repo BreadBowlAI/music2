@@ -63,7 +63,7 @@ await key("Escape");
 const row = await box('[data-lane="kick.decay"] > div:last-child');
 const L0 = await lane();
 let n = posts.length;
-await page.mouse.click(row.x + 5 * PPB, row.y + row.height / 2, { clickCount: 2 });
+await page.mouse.click(row.x + 5 * PPB, row.y + row.height / 2, { count: 2 });
 check(await until(async () => (await clips()).length === 1), "a double-click on the lane's empty space makes a clip");
 const c0 = (await clips())[0];
 const v0 = L0.default;

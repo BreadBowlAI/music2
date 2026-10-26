@@ -3,7 +3,7 @@
 // (a knob, a cable, another editor) is never overwritten unasked. A clean file follows the
 // disk in place; a file with unsaved edits keeps them and holds what the disk says instead.
 
-import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api";
+import type * as Monaco from "monaco-editor/editor";
 import { codeApi, onDisk, type ProjectFiles } from "./code";
 import type { GraphState, Problem } from "./graph";
 import { editing, recorded } from "./history";

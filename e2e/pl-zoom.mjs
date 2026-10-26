@@ -214,7 +214,7 @@ const mute = await box('[data-mute="bass"]'), solo = await box('[data-solo="bass
 check(near(mute.y - top, 12) && near(solo.y - top, 12) && near(meter.y - top, 8) && near(meter.height, 28), `M, S and the meter stay in its top 44 px: M ${mute.y - top}, S ${solo.y - top}, meter ${meter.y - top} and ${meter.height} tall`);
 check(await until(() => view().heights?.bass === 72), `kept in view.json: ${JSON.stringify(view().heights)}`);
 edge = await box('[data-height-edge="bass"]');
-await page.mouse.click(edge.x + 100, edge.y + 3, { clickCount: 2 });
+await page.mouse.click(edge.x + 100, edge.y + 3, { count: 2 });
 check(await until(async () => near(await rowH("bass.notes"), 44)), `a double-click puts back 44: ${await rowH("bass.notes")}`);
 check(await until(() => view().heights === undefined), "and view.json keeps no height for it");
 
