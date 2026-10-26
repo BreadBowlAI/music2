@@ -56,8 +56,14 @@ impl Wake {
         self.told.notify_all();
     }
 
+    /// What woke it is spent: a tick took what the events said (WRITE-19). An event after this
+    /// wakes it again; one just before may too, for a tick that finds nothing new, never too few.
+    pub fn spend(&self) {
+        *self.heard.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    }
+
     /// Wait until `until`, or, with `heard`, until an event named a path since the last wait that
-    /// returned for one. Whether one did.
+    /// returned for one, or the last tick that took what they said. Whether one did.
     pub fn wait(&self, until: std::time::Instant, heard: bool) -> bool {
         let mut h = self.heard.lock().unwrap_or_else(|e| e.into_inner());
         loop {
@@ -270,10 +276,7 @@ impl Plan {
         let after = match (all, &self.stream) {
             (true, Some(s)) => {
                 s.flush();
-                let h = s.take();
-                let after = h.paths.clone();
-                s.put_back(h);
-                after
+                s.named()
             }
             _ => BTreeSet::new(),
         };
