@@ -70,7 +70,9 @@ jobs:
             . -> target/nightly
             std/kernels-src -> ../../target/nightly
           shared-key: nightly
+      # Under the job's timeout, so a hang fails the step and the logs are still kept.
       - run: ci/check.sh --nightly
+        timeout-minutes: 170
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -121,7 +123,7 @@ jobs:
         run: ci/pr.sh suites --all
       - if: ${{ !cancelled() }}
         run: ci/pr.sh renders
-      - if: failure()
+      - if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nightly-macos
