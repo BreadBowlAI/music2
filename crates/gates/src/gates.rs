@@ -1243,12 +1243,14 @@ fn range_engine(_: &Lab, _: &Song, out: &mut Outcome) -> Result<()> {
 }
 
 /// The runtime's range render (`Renderer::starting_at`): `preroll` beats before `from`, then
-/// `beats` of range, in frames, timed on a CPU: the wall clock less the time this process's threads
-/// waited for one, where the OS says (Linux; a Mac's runs are quiet).
+/// `beats` of range, in frames, timed on a CPU: the CPU time of the thread that renders it, which
+/// is the only one (`Renderer::process` runs on the caller's). Not the wall clock: on a machine
+/// other work shares, it counts the waits for a CPU too, which macOS doesn't say (the Mac nightly
+/// of 2026-10-26 failed on them, beside the other tests).
 #[cfg(feature = "engine")]
 fn range_engine(lab: &Lab, song: &Song, out: &mut Outcome) -> Result<()> {
     let render = |from: f64, preroll: f64, beats: f64| -> Result<(f64, Vec<[f32; 2]>)> {
-        let (t, waited) = (Instant::now(), m2_os::process::waited());
+        let cpu = m2_os::thread::cpu_time();
         let t0 = song.frame((from - preroll).max(0.0));
         let mut r = Renderer::starting_at(&song.flat, &song.data, &lab.packages, song.rate, t0)?;
         r.set_strict(false);
@@ -1256,8 +1258,7 @@ fn range_engine(lab: &Lab, song: &Song, out: &mut Outcome) -> Result<()> {
         r.process(&mut pre)?;
         let mut range = vec![[0.0; 2]; (song.frame(from + beats) - song.frame(from)) as usize];
         r.process(&mut range)?;
-        let waited = waited.zip(m2_os::process::waited()).map_or(std::time::Duration::ZERO, |(a, b)| b.saturating_sub(a));
-        Ok((t.elapsed().saturating_sub(waited).as_secs_f64(), range))
+        Ok((m2_os::thread::cpu_time().saturating_sub(cpu).as_secs_f64(), range))
     };
     // The best of three of each, in turns: load from elsewhere only ever slows a render. One
     // wall-clock timing of each, on a busy server, made bar 64 look up to 1.8 times slower.

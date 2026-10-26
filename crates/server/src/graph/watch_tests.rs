@@ -294,6 +294,10 @@ fn an_event_wakes_an_idle_watcher_and_a_batch_wakes_it_when_due() {
     fixture.put("data/kick/hits.json", &hits_of(4));
     let graph = fixture.open();
     walked_once(&graph);
+    // Every event for what the fixture wrote before the open is heard (FSEvents may name a write
+    // made a moment before its stream started), and a tick takes it.
+    graph.inner.watch.lock().as_ref().unwrap().flush();
+    graph.watch();
     // Nothing pending: the wait lasts.
     let t = std::time::Instant::now();
     graph.watch_wait(Duration::from_millis(300));
@@ -311,6 +315,26 @@ fn an_event_wakes_an_idle_watcher_and_a_batch_wakes_it_when_due() {
     assert!(waited >= Duration::from_millis(100) && waited < Duration::from_secs(1), "woken when due: {waited:?}");
     assert!(graph.watch(), "taken in by the tick it was woken for");
     assert_eq!(revs(&graph).0, number + 1);
+}
+
+// WRITE-19: an event a tick already took wakes no later wait. The tick looked at what it named, so
+// the idle wait after it lasts, as the first wait after an open does when FSEvents names a write
+// made just before its stream started (the Mac nightly of 2026-10-26).
+#[test]
+fn an_event_a_tick_took_wakes_no_later_wait() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    fixture.put("data/kick/hits.json", &hits_of(4));
+    let graph = fixture.open();
+    walked_once(&graph);
+    let number = revs(&graph).0;
+    fixture.put("data/kick/hits.json", &hits_of(5));
+    // Ticks alone, with no wait between them, as the first ones after an open are.
+    watching(&graph, 2000, |g| revs(g).0 > number);
+    assert_eq!(revs(&graph).0, number + 1, "taken in");
+    let t = std::time::Instant::now();
+    graph.watch_wait(Duration::from_millis(300));
+    assert!(t.elapsed() >= Duration::from_millis(290), "woken by an event a tick took: {:?}", t.elapsed());
 }
 
 /// Only an event can make a tick look: the walk of everything comes every 60 s, not 5 s, and a

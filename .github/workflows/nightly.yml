@@ -5,7 +5,8 @@
 # (ci/check.sh --nightly: every Rust test, every browser suite one at a time, the tests the PR tier
 # leaves out among them, the pool's models, the app on an invisible screen, the mac lint, every
 # check of the PR tier, and RustSec's advisories for both Cargo.lock files), and a Mac: the build,
-# every Rust test and every browser suite, and the pool's models. Only once the repo is public:
+# every Rust test and every browser suite but those that need sleeps on time (M2_LATE_SLEEPS,
+# below), and the pool's models. Only once the repo is public:
 # Actions minutes are free only for public repos, and a private repo's included minutes would go on
 # this alone. When a job fails or is cancelled (a job that runs past its timeout is cancelled: a
 # hang), one issue, "Nightly failed", gets the run's link.
@@ -109,6 +110,11 @@ jobs:
       # No Mac copy of the test plugins is pinned yet: their tests skip, and the suites that need
       # them are left out (and said).
       M2_NO_PLUGINS: 1
+      # Its sleeps last about four times what they ask (the first nightly, run 40296575023), so the
+      # tests whose clock is a sleep fail there with correct code: ci/pr.sh leaves out those
+      # ci/sleeps-tests.txt and e2e/run.mjs's sleeps tags name, and its "late sleeps" row says
+      # which. They run everywhere else, on a real Mac too.
+      M2_LATE_SLEEPS: 1
       M2_PR_JOBS: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -49,6 +49,9 @@
 #                               that was PART (passed, but not in full) fails the step
 #   ci/pr.sh renders            the 12 offline renders, against e2e/renders.sha256
 #   rust and suites take --all: the nightly-tagged tests too (the Mac's nightly job).
+#   With M2_LATE_SLEEPS=1 (the Mac's nightly job: GitHub's Mac's sleeps run long), rust and suites
+#   leave out the tests that need a sleep to last what it asks (ci/sleeps-tests.txt, and the runs
+#   e2e/run.mjs tags `sleeps`), and a "late sleeps" row names them. Nowhere else is it set.
 #
 # Each step prints a line per check, "PASS", "FAIL" or "SKIP" and why, then
 # "ci/pr.sh <step>: PASS|FAIL in <time>", and exits 0 only when every check passed. A failed
@@ -202,9 +205,19 @@ suites() { env E2E_CHROME="$CHROME" M2_HEADLESS="$TARGET/debug/examples/headless
 # build: the binaries the browser suites and the renders use, in one cargo run (two would resolve
 # features apart and build the shared crates twice).
 build() { cargo build --locked -p m2-server --example headless -p m2 -p m2-plugins --bin m2 --bin m2-plugin-host; }
-# nightly_filter, nightly_list <dir>: ci/nightly-tests.txt as nextest sees it (ci/check.sh judges
-# the list with the same functions).
+# nightly_filter, nightly_list <dir>, sleeps_filter, sleeps_list <dir>: ci/nightly-tests.txt and
+# ci/sleeps-tests.txt as nextest sees them (ci/check.sh judges the lists with the same functions).
 . ci/nightly-list.sh || exit 2
+# late_sleeps <what>: with M2_LATE_SLEEPS, the row that says what this step leaves out and why.
+late_sleeps() {
+  row "late sleeps" SKIP "M2_LATE_SLEEPS is set: this machine's sleeps run long, so what needs them on time is left out: $1"
+}
+# sleeps_runs: the browser suites' runs e2e/run.mjs tags sleeps, comma-separated: every run, less
+# those --late-sleeps keeps.
+sleeps_runs() {
+  node e2e/run.mjs all --late-sleeps --list | sort > "$OUT/sleeps-kept.txt" &&
+    node e2e/run.mjs all --list | sort | comm -23 - "$OUT/sleeps-kept.txt" | tr '\n' ' ' | sed 's/ $//; s/ /, /g'
+}
 # lint: the PR tier's checks that build nothing (its own step, and the start of quick).
 lint() {
   check fmt fmt.log sh -c 'cargo fmt --all --check && cd std/kernels-src && cargo fmt --all --check'
@@ -278,6 +291,10 @@ case $STEP in
   rust)
     filter="not (binary(=main_thread) | binary(=app_main_thread))"
     if [ -z "$ALL" ]; then filter="$filter and not ($(nightly_filter))"; fi
+    if [ -n "${M2_LATE_SLEEPS:-}" ]; then
+      filter="$filter and not ($(sleeps_filter))"
+      late_sleeps "$(sleeps_names) (ci/sleeps-tests.txt)"
+    fi
     if tools nextest && plugins && check "web build" web.log web &&
        check "build tests" build.log cargo nextest run --locked --workspace --no-run -E "$filter"; then
       check "rust tests" test.log env HOME="$OUT/home" cargo nextest run --locked --workspace --no-tests=warn \
@@ -293,7 +310,10 @@ case $STEP in
         check "own-main tests" main-thread.log env HOME="$OUT/home" cargo test --locked --workspace --test main_thread --test app_main_thread
         # Every line of ci/nightly-tests.txt names a test that is there, so a renamed test can't
         # slip back into the PR tier unseen (Linux: some names are Linux's own modules).
-        if [ $OS = linux ]; then check "nightly list" nightly-list.log nightly_list "$OUT"; fi
+        if [ $OS = linux ]; then
+          check "nightly list" nightly-list.log nightly_list "$OUT"
+          check "sleeps list" sleeps-list.log sleeps_list "$OUT"
+        fi
       fi
     fi ;;
 
@@ -304,16 +324,20 @@ case $STEP in
     if [ -n "${M2_NO_PLUGINS:-}" ] && [ -z "${CLAP_PATH:-}" ] && ! { [ -e "$PLUGINS/Surge XT.clap" ] && [ -e "$PLUGINS/Airwindows Consolidated.clap" ]; }; then
       tier="$tier --no-clap"
     fi
+    if [ -n "${M2_LATE_SLEEPS:-}" ]; then
+      tier="$tier --late-sleeps"
+      late_sleeps "$(sleeps_runs) (e2e/run.mjs's sleeps tags)"
+    fi
     if plugins && check "web build" web.log web &&
        check build build.log build &&
        check "e2e npm" e2e-npm.log sh -c 'cd e2e && npm ci --no-audit --no-fund' &&
        { [ -x "$CHROME" ] || check chrome chrome.log sh -c "cd e2e && node_modules/.bin/browsers install chrome-headless-shell@$CHROME_VERSION --path \"\$HOME/.cache/puppeteer\""; }; then
-      # $tier: no option, "--tier pr", "--no-clap" or both: split into words on purpose.
+      # $tier: no option, or any of "--tier pr", "--no-clap", "--late-sleeps": split into words on purpose.
       t0=$(date +%s)
       suites all $tier --shard "$PART" --jobs "$JOBS" --out "$OUT/e2e" > "$OUT/e2e.log" 2>&1 < /dev/null
       st=$?
       took="$(( $(date +%s) - t0 )) s"
-      grep -E '^(tier|shard|--no-clap|[0-9]+/[0-9]+ suites ok|time:)|^  (PART|failed):' "$OUT/e2e.log" | sed 's/^/                       /'
+      grep -E '^(tier|shard|--no-clap|--late-sleeps|[0-9]+/[0-9]+ suites ok|time:)|^  (PART|failed):' "$OUT/e2e.log" | sed 's/^/                       /'
       # Judged on what run.mjs said, whatever its exit status: every PART line and every failed
       # run, as ci/check.sh does. A run that failed runs once more, alone: if it passes then, it is
       # named (a flake to tag); if it fails again, the step fails. A PART run always fails the step:

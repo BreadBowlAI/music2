@@ -1,0 +1,15 @@
+# ci/sleeps-tests.txt: the Rust tests that need a sleep to last what it asks, each with why.
+#
+# In short: on a machine whose sleeps run long, these fail with correct code, every time, because a
+# sleep is their clock: a silent player's callbacks, a tick. GitHub's Mac runner is one (the first
+# nightly, run 40296575023: its sleeps lasted about four times what they asked; HANDOFF.md's "Known
+# flakes"). ci/pr.sh rust leaves them out only when M2_LATE_SLEEPS is set, as .github/workflows/
+# nightly.yml's macos job sets it, and says so in a "late sleeps" row; everywhere else (the PR tier,
+# the Linux nightly, ci/check.sh on a Mac) they run as before. A test here is never weakened: make
+# its clock something other than a sleep, then take its line out.
+#
+# One line a test, as in ci/nightly-tests.txt: <nextest binary id> <test name> <why...>. Names must
+# match exactly: the "sleeps list" row (ci/pr.sh rust, ci/check.sh, on Linux) fails on a name
+# nextest can't find. The browser suites of the same kind are tagged `sleeps` in e2e/run.mjs.
+
+m2-server graph::tests::previews_never_wait_for_a_compile  each update's stamp within 50 ms, from a silent player clocked by 10 ms sleeps (crates/server/src/graph/tests.rs)
