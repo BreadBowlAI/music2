@@ -47,6 +47,11 @@ Repository **Settings → Advanced Security** (called "Code security" on some ac
 | Dependabot alerts, and Dependabot security updates | `.github/dependabot.yml` asks for weekly version updates: the minor and patch bumps of each ecosystem in one pull request, each major bump alone, and only releases at least 7 days old. These add alerts and fixes for known holes, which come at once: the 7 days hold only version updates. |
 | Secret Protection (secret scanning), and push protection | A pushed token is caught, or refused before it lands. |
 
+A fix Dependabot can't make: when a library pins an exact version of one it uses, an alert on that one stays open
+until the library moves. Then `overrides` in `web/package.json` names the fixed version. Today: Monaco 0.57 pins
+DOMPurify 3.4.15, so `web/package.json` asks for 3.4.17 (five alerts, October 2026). Once a Monaco update pins 3.4.17
+or later, delete that `overrides` entry.
+
 ## 4. The community
 
 | Where | Do | Why |
