@@ -7,7 +7,7 @@ prints one `PASS`/`FAIL` line per check. Nothing reads or writes the real `~/.mu
 ## Running
 
 ```sh
-(cd e2e && npm ci)                   # puppeteer-core 24.43.1 (no browser download)
+(cd e2e && npm ci)                   # puppeteer-core 25.16.0 (no browser download)
 (cd e2e && node_modules/.bin/browsers install chrome-headless-shell@133.0.6943.141 --path ~/.cache/puppeteer)
                                      # the browser, once (as ci/check.sh gets it)
 cargo build --locked -p m2-server --example headless && cargo build --locked -p m2   # the server; the CLI for `export`

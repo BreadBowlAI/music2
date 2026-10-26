@@ -195,7 +195,7 @@ await undo(); await sleep(250); await undo();
 check(await until(async () => fs.readFileSync(FILE, "utf8") === original && json((await notes()).filter((x) => x.start < 2).map((x) => x.pitch)) === json(first.map((x) => x.pitch))), "two undos put them back");
 
 // The clip's length.
-await lengthInput.click({ clickCount: 3 });
+await lengthInput.click({ count: 3 });
 await page.keyboard.type("4");
 await page.keyboard.press("Enter");
 check(await until(async () => disk().clips[0].length === 16), "typing 4 bars makes the clip 16 beats long");

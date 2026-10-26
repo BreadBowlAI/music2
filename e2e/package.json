@@ -8,6 +8,6 @@
     "test": "node run.mjs all"
   },
   "dependencies": {
-    "puppeteer-core": "24.43.1"
+    "puppeteer-core": "25.16.0"
   }
 }

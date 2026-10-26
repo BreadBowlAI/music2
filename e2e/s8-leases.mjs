@@ -161,7 +161,7 @@ check(await until(async () => (await undoNow()).startsWith("Undo moving a Cutoff
 // ---------------------------------------------------------------- a note dragged in Notes while playing
 const cb = await box(bassClip);
 await transport("stop");
-await page.mouse.click(cb.x + 20, cb.y + cb.height / 2, { clickCount: 2 });
+await page.mouse.click(cb.x + 20, cb.y + cb.height / 2, { count: 2 });
 await page.waitForSelector("[data-testid=roll-grid] [data-note]");
 await play();
 n = posts.length;

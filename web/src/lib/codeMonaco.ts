@@ -2,12 +2,14 @@
 // the compiler options songs are written for. Loaded on first use of the code view, so the editor
 // (a few MB) stays out of the app's first load.
 
-import "monaco-editor/esm/vs/editor/edcore.main";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
-import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution";
-import "monaco-editor/esm/vs/language/typescript/monaco.contribution";
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import TsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+// Monaco's own entry points (its package's exports): the editor, all its features, and TypeScript
+// alone of its languages (its colouring, then its checker and suggestions).
+import "monaco-editor/features/register.all";
+import * as monaco from "monaco-editor/editor";
+import "monaco-editor/languages/definitions/typescript/register";
+import * as ts from "monaco-editor/languages/features/typescript/register";
+import EditorWorker from "monaco-editor/editor/editor.worker?worker";
+import TsWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
 import type { TypeFile } from "./code";
 
 export { monaco };
@@ -116,8 +118,6 @@ monaco.editor.defineTheme(THEME, {
     "scrollbar.shadow": "#00000000",
   },
 });
-
-const ts = monaco.languages.typescript;
 
 // Songs run as ES modules in a sandbox with no DOM, built by the bundled SDK.
 ts.typescriptDefaults.setCompilerOptions({

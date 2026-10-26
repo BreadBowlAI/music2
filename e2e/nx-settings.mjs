@@ -211,18 +211,18 @@ check(await until(async () => /Playback stopped\. Press Play to go on\./.test((a
 // The songs folder, typed (a browser page has a field): kept, and shown by New Song.
 const songs = `${ROOT}/settings/My Songs`;
 const field = "[data-testid=settings-songs]";
-await page.click(field, { clickCount: 3 });
+await page.click(field, { count: 3 });
 await page.keyboard.type("Songs");
 await page.keyboard.press("Enter");
 check(await until(async () => /Type a full path/.test((await text(page, "[data-testid=settings-songs-error]")) ?? "")), `a relative folder is refused in words: ${await text(page, "[data-testid=settings-songs-error]")}`);
-await page.click(field, { clickCount: 3 });
+await page.click(field, { count: 3 });
 await page.keyboard.type(`${song}/tracks`);
 await page.keyboard.press("Enter");
 check(
   await until(async () => (await text(page, "[data-testid=settings-songs-error]")) === "That folder is inside the song First Song. Pick a folder outside any song."),
   `a folder inside a song is refused in words: ${await text(page, "[data-testid=settings-songs-error]")}`,
 );
-await page.click(field, { clickCount: 3 });
+await page.click(field, { count: 3 });
 await page.keyboard.type(songs);
 await page.keyboard.press("Enter");
 check(await until(async () => (await s.api("settings")).json?.songs === songs), `the folder typed is where new songs go: ${(await s.api("settings")).json?.songs}`);
@@ -274,14 +274,14 @@ await page.click("[data-testid=settings-songs-default]");
 check(await until(async () => (await s.api("settings")).json?.songs_chosen === false), "\"Use the default\" goes back to the default folder");
 // A folder typed, then Done at once: a refusal keeps the window open and says why; a folder taken
 // closes it (R4).
-await page.click(field, { clickCount: 3 });
+await page.click(field, { count: 3 });
 await page.keyboard.type("Songs");
 await page.click("[data-testid=settings-done]");
 check(
   (await until(async () => /Type a full path/.test((await text(page, "[data-testid=settings-songs-error]")) ?? ""))) && (await shown(page)),
   `a relative folder typed, then Done: the window stays open and says why: ${await text(page, "[data-testid=settings-songs-error]")}`,
 );
-await page.click(field, { clickCount: 3 });
+await page.click(field, { count: 3 });
 await page.keyboard.type(songs);
 await page.click("[data-testid=settings-done]");
 check((await until(async () => !(await shown(page)), 3000)) && (await s.api("settings")).json?.songs === songs, "a full path typed, then Done: it is where new songs go, and Done closes the window");
