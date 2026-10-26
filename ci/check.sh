@@ -67,6 +67,10 @@
 #                     failed. With --pr, as in CI: the steps that host plugins (rust, suites) fail
 #                     without them, M2_NO_PLUGINS=1 skips those tests and the summary says PART,
 #                     and a docs-only change needs none.
+#   M2_LATE_SLEEPS    with --pr: a machine whose sleeps last longer than they ask (GitHub's Mac
+#                     runner). ci/pr.sh leaves out the tests that need them on time
+#                     (ci/sleeps-tests.txt, e2e/run.mjs's sleeps tags) and the summary says PART.
+#                     The full check and --nightly run them whatever it says.
 #   CARGO_TARGET_DIR  where cargo builds (default: target/ in the repo)
 #   M2_CHECK_OUT      where the logs go (default: ~/m2-check/<commit>). Only a folder an earlier
 #                     check made is ever replaced.
@@ -272,10 +276,15 @@ summary() {
   # docs-only change needs none). A step without them fails, unless M2_NO_PLUGINS skipped them.
   noplugins=
   if [ -n "$PR" ]; then noplugins=$(grep -lE '^plugins +SKIP ' "$OUT"/pr-*.log 2> /dev/null | sed 's/.*pr-//; s/\.log$//' | tr '\n' ' ' | sed 's/ $//; s/ /, /g'); fi
+  # --pr with M2_LATE_SLEEPS: the steps that left out the tests that need sleeps on time.
+  latesleeps=
+  if [ -n "$PR" ]; then latesleeps=$(grep -lE '^late sleeps +SKIP ' "$OUT"/pr-*.log 2> /dev/null | sed 's/.*pr-//; s/\.log$//' | tr '\n' ' ' | sed 's/ $//; s/ /, /g'); fi
   if [ "$fails" -gt 0 ]; then
     verdict="FAIL ($fails of $total checks)"
   elif [ -n "$PR" ] && [ -n "$noplugins" ]; then
     verdict="PART: no row failed, but M2_NO_PLUGINS left out the tests that host plugins ($noplugins), so it isn't all CI runs"
+  elif [ -n "$PR" ] && [ -n "$latesleeps" ]; then
+    verdict="PART: no row failed, but M2_LATE_SLEEPS left out the tests that need sleeps on time ($latesleeps), so it isn't all CI runs"
   elif [ -z "$PR" ] && [ -z "$TESTPLUGINS" ]; then
     verdict="FAIL: no row failed, but the test plugins weren't there, so it isn't a pass (PLAT-6)"
   elif [ -n "$partial" ]; then
@@ -647,7 +656,8 @@ fi
 
 # 5b. Linux: every line of ci/nightly-tests.txt names a test that is there (ci/nightly-list.sh, as
 #     ci/pr.sh rust's row of the same name), so a renamed test can't slip back into the PR tier
-#     unseen (some names are Linux's own modules). nextest lists the test binaries step 5 built.
+#     unseen (some names are Linux's own modules); and so does every line of ci/sleeps-tests.txt
+#     (the "sleeps list" row). nextest lists the test binaries step 5 built.
 if [ $OS = linux ]; then
   begin "nightly list" "seconds"
   if ! p=$(ci/tools.sh nextest 2> "$OUT/tools.log" | tail -1) || [ -z "$p" ]; then
@@ -660,6 +670,13 @@ if [ $OS = linux ]; then
     else
       record "nightly list" FAIL "see nightly-list.log"
       grep '^[<>]' "$OUT/nightly-list.log" | sed 's/^/nightly list: /' | cut -c1-160 >> "$OUT/failed"
+    fi
+    begin "sleeps list" "seconds"
+    if quiet sleeps-list.log sleeps_list "$OUT"; then
+      record "sleeps list" PASS "$(head -1 "$OUT/sleeps-list.log")"
+    else
+      record "sleeps list" FAIL "see sleeps-list.log"
+      grep '^[<>]' "$OUT/sleeps-list.log" | sed 's/^/sleeps list: /' | cut -c1-160 >> "$OUT/failed"
     fi
   fi
 fi

@@ -43,8 +43,11 @@
 //   --no-clap      with `all`: leave out the runs marked `clap` (live3b, ph-window), for a machine
 //                  without the test plugins (CI's Mac); said at the start. Without it, a run that
 //                  needs them and lacks them is PART, never ok
-//   --list         print the runs that would run, one name a line (with --tier, --shard and
-//                  --no-clap), and stop: no server, no browser
+//   --late-sleeps  with `all`: leave out the runs tagged `sleeps`, for a machine whose sleeps
+//                  last longer than they ask (GitHub's Mac runner: ci/pr.sh passes it when
+//                  M2_LATE_SLEEPS is set); said at the start. Everywhere else they run
+//   --list         print the runs that would run, one name a line (with --tier, --shard,
+//                  --no-clap and --late-sleeps), and stop: no server, no browser
 //
 // Environment:
 //   M2_HEADLESS  the server: `cargo build -p m2-server --example headless` → target/<profile>/examples/headless
@@ -88,7 +91,10 @@ const E2E = path.dirname(fileURLToPath(import.meta.url));
 // two reasons only. speed: it judges how fast something happens (a bound under 2 s, a rate), so
 // a slow or busy machine fails it with correct code; a wait that only fails if something never
 // happens isn't one. flake: it failed on correct code in a recorded run, and the cause isn't
-// fixed yet (HANDOFF.md's "Known flakes").
+// fixed yet (HANDOFF.md's "Known flakes"). `sleeps`, a why: the run needs a sleep to last what it
+// asks (the capture's clock, the meters' tick, are sleeps), so a machine whose sleeps run long
+// fails it with correct code, every time; --late-sleeps leaves it out there, and only there (the
+// Rust tests of this kind: ci/sleeps-tests.txt). It says nothing of the run's tier.
 export const SUITES = [
   ["graph", "proj", { expect: 19, s: 3 }],
   ["cables", "cables", { expect: 12, s: 5 }],
@@ -105,12 +111,12 @@ export const SUITES = [
   ["s8-audition", "fix", { expect: 51, s: 10, tier: "nightly", why: "speed: a closed page lets go of its note within 1 s" }],
   ["nx-piano", "fix", { expect: 39, s: 6 }],
   ["nx-midi", "fix", { expect: 24, s: 3 }],
-  ["st-record", "fix", { expect: 66, s: 24, tier: "nightly", why: "speed: R records within 2 s" }],
+  ["st-record", "fix", { expect: 66, s: 24, tier: "nightly", why: "speed: R records within 2 s", sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["io-record", "fix", { expect: 38, s: 7 }],
   ["pl-notes", "fix", { expect: 102, s: 16 }],
   ["pl-lanes", "fix", { expect: 28, s: 4 }],
   ["ports", "proj", { expect: 46, s: 5 }],
-  ["s8-meters", "fix", { expect: 24, s: 17, tier: "nightly", why: "speed: 20 to 40 meter messages a second" }],
+  ["s8-meters", "fix", { expect: 24, s: 17, tier: "nightly", why: "speed: 20 to 40 meter messages a second", sleeps: "the meters' 33 ms tick is a sleep" }],
   ["dsp", "proj", { expect: 33, s: 3 }],
   ["start", "proj", { expect: 24, s: 3 }],
   ["start", "empty", { expect: 14, s: 2 }],
@@ -155,7 +161,7 @@ export const SUITES = [
   ["pl-tracks", "fix", { expect: 20, s: 4 }],
   ["s8-mute", "export", { expect: 152, s: 28, tier: "nightly", why: "speed: overlays.json within 1.5 s; flake: once on the Mac at e7518f4 (HANDOFF.md)" }],
   ["s8-songbar", "fix", { expect: 84, s: 13 }],
-  ["nx-click", "fix", { expect: 20, s: 8 }],
+  ["nx-click", "fix", { expect: 20, s: 8, sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["s8-mix", "fix", { expect: 80, s: 23 }],
   ["pl-mix", "fix", { expect: 47, s: 14, tier: "nightly", why: "speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18)" }],
   ["bus-mix", "fix", { expect: 37, s: 8, tier: "nightly", why: "flake: with nothing sent, the Reverb's meter rose above the floor in 3 of 31 runs, 2 of them in 28 runs alone on 4 cores (2026-10-21); cause not known" }],
@@ -171,13 +177,13 @@ const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 
 function usage(msg) {
   if (msg) console.error(`run.mjs: ${msg}`);
-  console.error("usage: M2_HEADLESS=<bin> node e2e/run.mjs <suite|all> [kind] [--repo DIR] [--out DIR] [--keep] [--quiet] [--jobs N] [--tier pr|nightly] [--shard I/N] [--no-clap] [--list]");
+  console.error("usage: M2_HEADLESS=<bin> node e2e/run.mjs <suite|all> [kind] [--repo DIR] [--out DIR] [--keep] [--quiet] [--jobs N] [--tier pr|nightly] [--shard I/N] [--no-clap] [--late-sleeps] [--list]");
   console.error(`suites: ${[...new Set(SUITES.map(([s]) => s))].join(" ")}`);
   process.exit(2);
 }
 
 const argv = process.argv.slice(2);
-const opts = { repo: path.resolve(E2E, ".."), out: null, keep: false, quiet: false, jobs: 1, tier: null, shard: null, list: false, noClap: false };
+const opts = { repo: path.resolve(E2E, ".."), out: null, keep: false, quiet: false, jobs: 1, tier: null, shard: null, list: false, noClap: false, lateSleeps: false };
 const pos = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -200,6 +206,7 @@ for (let i = 0; i < argv.length; i++) {
     opts.shard = [Number(m[1]), Number(m[2])];
   } else if (a === "--list") opts.list = true;
   else if (a === "--no-clap") opts.noClap = true;
+  else if (a === "--late-sleeps") opts.lateSleeps = true;
   else if (a === "-h" || a === "--help") usage();
   else if (a.startsWith("--")) usage(`unknown option ${a}`);
   else pos.push(a);
@@ -207,7 +214,7 @@ for (let i = 0; i < argv.length; i++) {
 const [which, kindArg] = pos;
 if (!which) usage();
 if (kindArg && !KINDS.includes(kindArg)) usage(`unknown kind ${kindArg} (${KINDS.join(", ")})`);
-if ((opts.tier || opts.shard || opts.noClap) && which !== "all") usage("--tier, --shard and --no-clap go with all");
+if ((opts.tier || opts.shard || opts.noClap || opts.lateSleeps) && which !== "all") usage("--tier, --shard, --no-clap and --late-sleeps go with all");
 
 // shard(list, i, n): the i-th of n parts of list, dealt out longest first (by `s`, ties in the
 // list's order) to the part with the least so far (ties: the first), in the list's order.
@@ -237,6 +244,8 @@ if (which === "all") {
   if (twice) usage(`SUITES lists ${twice} twice`);
   const untagged = SUITES.find(([, , o]) => o.tier && (o.tier !== "nightly" || !o.why));
   if (untagged) usage(`SUITES: ${untagged[0]}-${untagged[1]} needs tier: "nightly" and a why`);
+  const bare = SUITES.find(([, , o]) => "sleeps" in o && (typeof o.sleeps !== "string" || !o.sleeps));
+  if (bare) usage(`SUITES: ${bare[0]}-${bare[1]}'s sleeps must say why`);
   if (opts.tier) {
     runs = runs.filter(([, , o]) => (o.tier ?? "pr") === opts.tier);
     chose = `tier ${opts.tier}: ${runs.length} of ${SUITES.length} runs`;
@@ -245,6 +254,11 @@ if (which === "all") {
     const gone = runs.filter(([, , o]) => o.clap).map(([s, k]) => `${s}-${k}`);
     runs = runs.filter(([, , o]) => !o.clap);
     chose += `${chose ? "; " : ""}--no-clap: ${gone.length ? `${gone.join(", ")} left out` : "nothing to leave out"}`;
+  }
+  if (opts.lateSleeps) {
+    const gone = runs.filter(([, , o]) => o.sleeps).map(([s, k]) => `${s}-${k}`);
+    runs = runs.filter(([, , o]) => !o.sleeps);
+    chose += `${chose ? "; " : ""}--late-sleeps: ${gone.length ? `${gone.join(", ")} left out` : "nothing to leave out"}`;
   }
   if (opts.shard) {
     const [i, n] = opts.shard;

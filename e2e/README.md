@@ -159,6 +159,13 @@ for i in 1 2; do node e2e/run.mjs all --tier pr --shard $i/2 --list; done | sort
 
 - `--no-clap` leaves out the runs that need the test plugins (`live3b`, `ph-window`), for a machine
   without them (CI's Mac), and says so. Without it, such a run is `PART`, never `ok`.
+- `--late-sleeps` leaves out the runs tagged `sleeps` (with why), and says so: their clock is a
+  sleep (the capture's, the meters' tick), so a machine whose sleeps last longer than they ask fails
+  them with correct code, every time. GitHub's Mac runner is one: its sleeps last about four times
+  as long. `ci/pr.sh suites` passes it only when `M2_LATE_SLEEPS` is set, as the nightly
+  workflow's Mac job sets it; everywhere else they run. The tag says nothing of the run's tier.
+  Tagged now: `st-record-fix`, `s8-meters-fix` (both nightly) and `nx-click-fix` (PR tier). The
+  Rust tests of the same kind are in `ci/sleeps-tests.txt`.
 
 The nightly runs and why:
 

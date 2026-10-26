@@ -154,9 +154,10 @@ played about 0.6 s of sound a second, in a suite run alone too. So what a sleep 
 time: `previews_never_wait_for_a_compile` ("update …'s stamp never came": the silent player's clock), and the
 suites that listen to the capture or count meters: `nx-click`, `st-record`, `s8-meters`. On Linux, timers made
 late by hand (a timer slack of 45 to 90 ms, `prctl(PR_SET_TIMERSLACK)`, on the headless server or the test) fail
-them the same way, and they pass without. Not the code's: on a real Mac a device clocks the app. The owner decides
-what the Mac job does about it: try to make its timers exact (`sudo sysctl -w kern.timer.coalescing_enabled=0`,
-untried), or leave these out of it. `a_code_save_behind_a_previewed_write_plays_both` passed there on its retry.
+them the same way, and they pass without. Not the code's: on a real Mac a device clocks the app. The owner chose
+to leave these four out of that job alone (`M2_LATE_SLEEPS=1`: `ci/sleeps-tests.txt`, and the `sleeps` tags in
+`e2e/run.mjs`); they still run in the PR tier, the Linux nightly and a real Mac's `ci/check.sh`.
+`a_code_save_behind_a_previewed_write_plays_both` passed there on its retry.
 
 A test or suite that passed only on its retry is listed by `ci/check.sh`. The lead decides whether it is one of
 these or a real failure, and fixes the real ones (most were a read a moment too soon).
@@ -270,10 +271,10 @@ Every check runs from a script in `ci/`, so whatever CI runs, you run with the s
 | Timing gates | a quiet maintainer machine, every night, by cron | `ci/nightly.sh --report` | `ci/check.sh --gates` on a fresh clone of `origin/main`; posts the status `nightly/gates`. It runs as an OS user of its own, with a fine-grained token that can only write commit statuses (docs/maintainers.md, part 5). Not set up yet. |
 | Full check | your machine; the server with `--gates=auto` | `ci/check.sh` | everything, below: every check of the other tiers. |
 
-- **Which tier a test is in.** A Rust test that judges speed or is a known flake is listed in `ci/nightly-tests.txt`, with why; a browser suite gets `tier: "nightly"` and a `why` in `e2e/run.mjs`. Unchanged either way: it runs every night.
+- **Which tier a test is in.** A Rust test that judges speed or is a known flake is listed in `ci/nightly-tests.txt`, with why; a browser suite gets `tier: "nightly"` and a `why` in `e2e/run.mjs`. Unchanged either way: it runs every night. One more list, apart from the tiers: a test whose clock is a sleep is in `ci/sleeps-tests.txt` (Rust) or tagged `sleeps` in `e2e/run.mjs`, with why. Only GitHub's Mac job leaves them out (`M2_LATE_SLEEPS=1` in `nightly.yml`: its sleeps run long), with a "late sleeps" row that names them; they run everywhere else, a real Mac's `ci/check.sh` too.
 - **Times** (`ci/check.sh --pr` in a clean clone on 8 threads of the server, at `2141096` and `d4681ab`): about 10 minutes cold (607 s), 7.5 warm (447 and 451 s), with music2's own crates rebuilt. On GitHub's 4-core runner each job is one part of that; its real times are still to be measured (gaps.md).
 - **What the first real runs found.** A test that hosts Surge XT or Airwindows in this process could pass, then crash as its process exited: a destroy is queued to the plugin main thread, and the exit ran the plugin library's destructors under it. nextest runs each test in a process of its own, so it showed at once (one test crashed 40 runs of 40 alone). Now `test_main_thread()` drains that thread when the test's thread ends (`d4681ab`).
-- **Verdicts.** `--pr` says PASS only when CI would pass. A docs-only change needs no plugins. `M2_NO_PLUGINS=1` skips the plugin tests and says PART. A browser suite that was PART fails it, even when another run failed and then passed alone. "What failed" names a Rust test whose process crashed (nextest's `SEGV`). The cases are in `ci/pr-test.sh` and `ci/nightly-test.sh`, which the lint step runs (in quick, and in the full check).
+- **Verdicts.** `--pr` says PASS only when CI would pass. A docs-only change needs no plugins. `M2_NO_PLUGINS=1` skips the plugin tests and says PART; so does `M2_LATE_SLEEPS=1`, for what it leaves out. A browser suite that was PART fails it, even when another run failed and then passed alone. "What failed" names a Rust test whose process crashed (nextest's `SEGV`). The cases are in `ci/pr-test.sh` and `ci/nightly-test.sh`, which the lint step runs (in quick, and in the full check).
 
 ## The check: `ci/check.sh`
 
@@ -283,8 +284,8 @@ isn't the one S's records name). Only PASS is a pass.
 
 Rows: gates rule (`--gates=auto`'s rule tried on its 51 cases), toolchain, lint (`ci/pr.sh lint`: fmt, actionlint,
 licences, the CI scripts' own cases), advisories (`ci/pr.sh advisories`: RustSec's), web build, build, app (Linux: the
-desktop app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, nightly list (Linux: every
-test `ci/nightly-tests.txt` names is there), clippy (a warning is an error), pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
+desktop app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, nightly list and sleeps list (Linux: every
+test `ci/nightly-tests.txt` and `ci/sleeps-tests.txt` name is there), clippy (a warning is an error), pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
 type-checked), browser suites, renders (against `e2e/renders.sha256`, one record for every OS), old engine S (with
 the gates), gates (the 8 runs `ci/gates.txt` names), repo unchanged.
 
