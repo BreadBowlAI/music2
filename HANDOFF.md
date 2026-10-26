@@ -157,7 +157,11 @@ late by hand (a timer slack of 45 to 90 ms, `prctl(PR_SET_TIMERSLACK)`, on the h
 them the same way, and they pass without. Not the code's: on a real Mac a device clocks the app. The owner chose
 to leave these four out of that job alone (`M2_LATE_SLEEPS=1`: `ci/sleeps-tests.txt`, and the `sleeps` tags in
 `e2e/run.mjs`); they still run in the PR tier, the Linux nightly and a real Mac's `ci/check.sh`.
-`a_code_save_behind_a_previewed_write_plays_both` passed there on its retry.
+`a_code_save_behind_a_previewed_write_plays_both` passed there on its retry. G10's timing failed there too ("bar 64
+takes no longer than … from bar 1: 1.25 s against 1.05 s", in `the_live_engine_passes_every_gate`), timed by the
+wall clock beside other tests, as macOS doesn't say how long a thread waited for a CPU. It now times the rendering
+thread's CPU time (`1c1cc20`). That is unproven on a Mac: CPU time still counts a core's slowdown when something
+shares it, and a virtual machine's stolen time. G10 stays on this watch list until a Mac nightly passes it.
 
 A test or suite that passed only on its retry is listed by `ci/check.sh`. The lead decides whether it is one of
 these or a real failure, and fixes the real ones (most were a read a moment too soon).
