@@ -23,7 +23,7 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 | Check before a pull request (the PR tier, as CI runs it) | `ci/check.sh --pr` |
 | The full check (every PR-tier check, every test; the timing gates on a Mac) | `ci/check.sh` |
 | One CI job's part again | `ci/pr.sh quick`, `advisories`, `clippy`, `rust 1/3` (`2/3`, `3/3`), `suites 1/2` (`2/2`), `renders`; smaller: `lint` (what builds nothing), `models` (the pool's models); `ci/pr.sh changes` says if a change is docs only, and if it touches a `Cargo.lock` |
-| The checks' tools (nextest, cargo-deny, actionlint, mdBook) | `ci/tools.sh` |
+| The checks' tools (nextest, cargo-deny, actionlint, zizmor, mdBook) | `ci/tools.sh` |
 | Which browser suites a pull request runs | `node e2e/run.mjs all --tier pr --list` |
 | Build the UI | `(cd web && npm ci && npm run build)` |
 | Run the app | `cargo run --locked --release -p music2-desktop` |

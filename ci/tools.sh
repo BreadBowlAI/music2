@@ -1,9 +1,9 @@
 #!/bin/bash
-# ci/tools.sh: the four tools ci/pr.sh needs beyond rustup and Node, each a pinned release,
+# ci/tools.sh: the five tools ci/pr.sh needs beyond rustup and Node, each a pinned release,
 # checked against its sha256 below before it is unpacked. The same versions in CI and on your
 # machine, so a check that passes here passes there.
 #
-#   ci/tools.sh [nextest] [deny] [actionlint] [mdbook]   (no names: all four)
+#   ci/tools.sh [nextest] [deny] [actionlint] [zizmor] [mdbook]   (no names: all five)
 #
 # In short: each tool goes into its own folder under the cache (M2_TOOLS, default
 # ~/.cache/m2-tools), once; later runs find it there. The last line printed is a PATH fragment
@@ -18,11 +18,14 @@
 #   actionlint    1.7.12   the workflow files in .github/workflows
 #   mdbook        0.5.4    the guide's website, from docs/guide/ (ci/guide.sh; pinned 2026-10-25,
 #                          released 2026-07-06)
+#   zizmor        1.30.1   the workflow files' security: injection, kept credentials, too-wide
+#                          permissions (ci/pr.sh lint; pinned 2026-10-26, released 2026-09-09)
 set -u
 NEXTEST=0.9.146
 DENY=0.20.2
 ACTIONLINT=1.7.12
 MDBOOK=0.5.4
+ZIZMOR=1.30.1
 CACHE=${M2_TOOLS:-${XDG_CACHE_HOME:-$HOME/.cache}/m2-tools}
 
 case "$(uname -s) $(uname -m)" in
@@ -34,7 +37,9 @@ case "$(uname -s) $(uname -m)" in
     ACTIONLINT_FILE=actionlint_${ACTIONLINT}_linux_amd64.tar.gz
     ACTIONLINT_SUM=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
     MDBOOK_FILE=mdbook-v$MDBOOK-x86_64-unknown-linux-gnu.tar.gz
-    MDBOOK_SUM=3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7 ;;
+    MDBOOK_SUM=3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
+    ZIZMOR_FILE=zizmor-x86_64-unknown-linux-gnu.tar.gz
+    ZIZMOR_SUM=e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a ;;
   "Darwin arm64")
     NEXTEST_FILE=cargo-nextest-$NEXTEST-universal-apple-darwin.tar.gz
     NEXTEST_SUM=39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8
@@ -43,22 +48,24 @@ case "$(uname -s) $(uname -m)" in
     ACTIONLINT_FILE=actionlint_${ACTIONLINT}_darwin_arm64.tar.gz
     ACTIONLINT_SUM=aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
     MDBOOK_FILE=mdbook-v$MDBOOK-aarch64-apple-darwin.tar.gz
-    MDBOOK_SUM=03e8a6d8b13a2971e0b3280affd03b388373c1485e26f73407c3a76b0b1838df ;;
+    MDBOOK_SUM=03e8a6d8b13a2971e0b3280affd03b388373c1485e26f73407c3a76b0b1838df
+    ZIZMOR_FILE=zizmor-aarch64-apple-darwin.tar.gz
+    ZIZMOR_SUM=e28d22b087f9ebb8d99da6e740d348c930f559961c7c3f12badda54f882195a2 ;;
   *)
     echo "ci/tools.sh: no pinned builds for $(uname -s) $(uname -m). Install cargo-nextest $NEXTEST, cargo-deny $DENY,"
-    echo "actionlint $ACTIONLINT and mdbook $MDBOOK yourself (cargo install --locked cargo-nextest@$NEXTEST cargo-deny@$DENY"
-    echo "mdbook@$MDBOOK; go install github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT), put them on PATH, and set"
-    echo "M2_TOOLS=path."
+    echo "actionlint $ACTIONLINT, zizmor $ZIZMOR and mdbook $MDBOOK yourself (cargo install --locked cargo-nextest@$NEXTEST"
+    echo "cargo-deny@$DENY zizmor@$ZIZMOR mdbook@$MDBOOK; go install github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT),"
+    echo "put them on PATH, and set M2_TOOLS=path."
     if [ "${M2_TOOLS:-}" != path ]; then exit 1; fi ;;
 esac
 # M2_TOOLS=path: the tools already on PATH, whatever their versions (said, not refused).
 if [ "${M2_TOOLS:-}" = path ]; then
-  if [ $# -eq 0 ]; then set -- nextest deny actionlint mdbook; fi
+  if [ $# -eq 0 ]; then set -- nextest deny actionlint zizmor mdbook; fi
   path=
   for t in "$@"; do
     case $t in nextest) b=cargo-nextest; want=$NEXTEST ;; deny) b=cargo-deny; want=$DENY ;; actionlint) b=actionlint; want=$ACTIONLINT ;;
-      mdbook) b=mdbook; want=$MDBOOK ;;
-      *) echo "ci/tools.sh: no tool $t (nextest, deny, actionlint, mdbook)" >&2; exit 2 ;; esac
+      zizmor) b=zizmor; want=$ZIZMOR ;; mdbook) b=mdbook; want=$MDBOOK ;;
+      *) echo "ci/tools.sh: no tool $t (nextest, deny, actionlint, zizmor, mdbook)" >&2; exit 2 ;; esac
     if ! w=$(command -v $b); then echo "ci/tools.sh: M2_TOOLS=path, but $b isn't on PATH" >&2; exit 1; fi
     case $("$w" --version 2> /dev/null | head -1) in *"$want"*) ;; *) echo "ci/tools.sh: $w isn't version $want: CI uses $want" >&2 ;; esac
     path=$path${path:+:}$(dirname "$w")
@@ -99,7 +106,7 @@ get() {
   rm -rf "$tmp"
 }
 
-if [ $# -eq 0 ]; then set -- nextest deny actionlint mdbook; fi
+if [ $# -eq 0 ]; then set -- nextest deny actionlint zizmor mdbook; fi
 mkdir -p "$CACHE" || exit 1
 path=
 for t in "$@"; do
@@ -116,11 +123,15 @@ for t in "$@"; do
       get actionlint-$ACTIONLINT "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT/$ACTIONLINT_FILE" \
         $ACTIONLINT_SUM actionlint || exit 1
       path=$path${path:+:}$CACHE/actionlint-$ACTIONLINT ;;
+    zizmor)
+      get zizmor-$ZIZMOR "https://github.com/zizmorcore/zizmor/releases/download/v$ZIZMOR/$ZIZMOR_FILE" \
+        $ZIZMOR_SUM zizmor || exit 1
+      path=$path${path:+:}$CACHE/zizmor-$ZIZMOR ;;
     mdbook)
       get mdbook-$MDBOOK "https://github.com/rust-lang/mdBook/releases/download/v$MDBOOK/$MDBOOK_FILE" \
         $MDBOOK_SUM mdbook || exit 1
       path=$path${path:+:}$CACHE/mdbook-$MDBOOK ;;
-    *) echo "ci/tools.sh: no tool $t (nextest, deny, actionlint, mdbook)" >&2; exit 2 ;;
+    *) echo "ci/tools.sh: no tool $t (nextest, deny, actionlint, zizmor, mdbook)" >&2; exit 2 ;;
   esac
 done
 echo "$path"

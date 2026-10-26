@@ -3,7 +3,7 @@
 #
 # In short: run it in the repo with no arguments. It builds everything, runs every Rust test,
 # clippy, the pool's models, the web build, every browser suite, std's checks and the offline
-# renders, and every check of the PR tier besides (ci/pr.sh lint: rustfmt, actionlint, licences,
+# renders, and every check of the PR tier besides (ci/pr.sh lint: rustfmt, actionlint, zizmor, licences,
 # the CI scripts' own cases; RustSec's advisories; the nightly list), so it passes only where every
 # tier would; on a Mac it also times the gates ci/gates.txt names. First it builds the old engine
 # G7f compares with (S), in a folder of its own: ~/m2-check/s-8aa301e on a Mac,
@@ -37,7 +37,7 @@
 # (ci/pr.sh changes). When git proves your committed change is documentation only
 # (ci/docs-only.sh, on a clean tree), it runs only the docs rule's cases, as CI does. It builds into
 # <target>/pr without debug info, as CI does, so it never rebuilds what your own cargo build made.
-# It needs what ci/pr.sh needs (its top says): cargo-nextest, cargo-deny, actionlint and mdBook come from
+# It needs what ci/pr.sh needs (its top says): cargo-nextest, cargo-deny, actionlint, zizmor and mdBook come from
 # ci/tools.sh.
 #
 # When --gates=auto skips the gates (ci/gates-auto.sh holds the rule, ci/gates-auto-test.sh its
@@ -80,7 +80,7 @@
 #
 # Needs rustup and Node 24. The first run installs Rust 1.99.0 (rust-toolchain.toml) and
 # chrome-headless-shell 133.0.6943.141, and ci/tools.sh fetches cargo-nextest, cargo-deny,
-# actionlint and mdBook into ~/.cache/m2-tools (the advisories row fetches RustSec's database). On a Mac, run it in Terminal on the Mac itself, not over
+# actionlint, zizmor and mdBook into ~/.cache/m2-tools (the advisories row fetches RustSec's database). On a Mac, run it in Terminal on the Mac itself, not over
 # ssh: the app's test needs your login session. On Linux with Xvfb it also opens the desktop app
 # on an invisible screen. Written for bash 3.2, which macOS ships.
 
@@ -479,7 +479,7 @@ else
   record toolchain FAIL "not Rust 1.99.0: see toolchain.log"
 fi
 
-# 1b. The PR tier's checks that build nothing (ci/pr.sh lint: rustfmt, actionlint, licences, the
+# 1b. The PR tier's checks that build nothing (ci/pr.sh lint: rustfmt, actionlint, zizmor, licences, the
 #     links and the guide's site (ci/guide.sh check), and the cases of the docs rule, of the PR
 #     tier's verdicts, of ci/nightly.sh and of ci/tally.sh), then RustSec's advisories (ci/pr.sh
 #     advisories: they fetch RustSec's database, so their answer changes with the date). Their

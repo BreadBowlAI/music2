@@ -255,7 +255,7 @@ Every check runs from a script in `ci/`, so whatever CI runs, you run with the s
 
 | Tier | Where and when | The command | What |
 |---|---|---|---|
-| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences, actionlint, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
+| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences, actionlint and zizmor, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
 | Nightly | GitHub, every day on `main`, only once the repo is public (`.github/workflows/nightly.yml`) | `ci/check.sh --nightly` | the full check without the timing gates (so every PR-tier check and the advisories too), the browser suites one at a time, the tests tagged nightly; and a Mac: the Rust tests, the pool's models, the browser suites, the renders. A failed or timed-out job opens or comments on one issue, "Nightly failed". |
 | Timing gates | a quiet maintainer machine, every night, by cron | `ci/nightly.sh --report` | `ci/check.sh --gates` on a fresh clone of `origin/main`; posts the status `nightly/gates`. It runs as an OS user of its own, with a fine-grained token that can only write commit statuses (docs/maintainers.md, part 5). Not set up yet. |
 | Full check | your machine; the server with `--gates=auto` | `ci/check.sh` | everything, below: every check of the other tiers. |
@@ -271,7 +271,7 @@ One script checks everything, on the server and on the Mac ([PLAT-6](docs/archit
 line says `music2 check: PASS`, `FAIL` or `PART`. PART means no row failed but the gates couldn't judge G7f (the Mac
 isn't the one S's records name). Only PASS is a pass.
 
-Rows: gates rule (`--gates=auto`'s rule tried on its 51 cases), toolchain, lint (`ci/pr.sh lint`: fmt, actionlint,
+Rows: gates rule (`--gates=auto`'s rule tried on its 51 cases), toolchain, lint (`ci/pr.sh lint`: fmt, actionlint, zizmor,
 licences, the CI scripts' own cases), advisories (`ci/pr.sh advisories`: RustSec's), web build, build, app (Linux: the
 desktop app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, nightly list (Linux: every
 test `ci/nightly-tests.txt` names is there), clippy (a warning is an error), pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
