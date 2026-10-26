@@ -148,6 +148,16 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
 
+**GitHub's Mac (macos-15), the first nightly (run 40296575023, `07cd88b`):** its sleeps last about four times what
+they ask, as its logs show: the meters' 33 ms tick came 8 or 9 times a second, and the capture's 10.7 ms clock
+played about 0.6 s of sound a second, in a suite run alone too. So what a sleep clocks there runs slow, every
+time: `previews_never_wait_for_a_compile` ("update …'s stamp never came": the silent player's clock), and the
+suites that listen to the capture or count meters: `nx-click`, `st-record`, `s8-meters`. On Linux, timers made
+late by hand (a timer slack of 45 to 90 ms, `prctl(PR_SET_TIMERSLACK)`, on the headless server or the test) fail
+them the same way, and they pass without. Not the code's: on a real Mac a device clocks the app. The owner decides
+what the Mac job does about it: try to make its timers exact (`sudo sysctl -w kern.timer.coalescing_enabled=0`,
+untried), or leave these out of it. `a_code_save_behind_a_previewed_write_plays_both` passed there on its retry.
+
 A test or suite that passed only on its retry is listed by `ci/check.sh`. The lead decides whether it is one of
 these or a real failure, and fixes the real ones (most were a read a moment too soon).
 
