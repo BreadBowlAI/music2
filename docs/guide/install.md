@@ -59,6 +59,14 @@ Each download carries music2's licences (`LICENSE-MIT`, `LICENSE-APACHE`) and `T
 
 The release's `SHA256SUMS` file holds each file's checksum. In the folder you downloaded to, `sha256sum -c SHA256SUMS --ignore-missing` (Linux) or `shasum -a 256 -c SHA256SUMS --ignore-missing` (Mac) says `OK` for each file that came through whole.
 
+Releases after 0.1.0 also carry a signed provenance for each file: a record, signed by GitHub, that music2's own release workflow built that file from the release's commit. With the [GitHub CLI](https://cli.github.com) (`gh`), check a file like this:
+
+```sh
+gh attestation verify music2_<version>_amd64.deb --repo BreadBowlAI/music2   # use the name of the file you downloaded
+```
+
+It ends with `Verification succeeded!` when the file is the one the workflow built. Any other answer: don't open the file. (Provenance: where a file came from and how it was made.)
+
 ## Build from source
 
 You need a Mac, or Linux (Ubuntu 24.04), with [Rust](https://rustup.rs) and [Node.js](https://nodejs.org) 24. On Linux, install the system libraries first:

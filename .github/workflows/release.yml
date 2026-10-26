@@ -24,14 +24,18 @@
 # apps/music2-desktop/entitlements.plist, and Tauri notarizes. Until then the secrets below are
 # empty, and the build signs ad hoc (gap #43).
 #
-# Security: the token reads only, but in the release job, which may write the repo's releases. The
-# checkout keeps no credentials. pull_request, never pull_request_target. Only GitHub's own actions
-# and Swatinem/rust-cache, each pinned by its full commit (version in the comment; dependabot.yml
-# keeps them current). A tag's build reads no cache (Rust's build, npm's or the test plugins';
-# each is lookup-only then, or empty): what ships is built from the tag's own files and what their
-# lockfiles name, never from a folder an earlier run left (zizmor's cache-poisoning; zizmor can't
-# read setup-node's expression, so its two steps say so in an ignore). Pull requests and main
-# still use the caches.
+# Security: the token reads only, but in the release job, which may write the repo's releases and
+# sign the files' provenance. The checkout keeps no credentials. pull_request, never
+# pull_request_target. Only GitHub's own actions and Swatinem/rust-cache, each pinned by its full
+# commit (version in the comment; dependabot.yml keeps them current). A tag's build reads no cache
+# (Rust's build, npm's or the test plugins'; each is lookup-only then, or empty): what
+# ships is built from the tag's own files and what their lockfiles name, never from a folder an
+# earlier run left (zizmor's cache-poisoning; zizmor can't read setup-node's expression, so its
+# two steps say so in an ignore). Pull requests and main still use the caches.
+#
+# Provenance: the release job signs a statement for every file (actions/attest-build-provenance,
+# Sigstore): this repo's release.yml built it from this commit. Anyone checks a download with
+# `gh attestation verify <file> --repo BreadBowlAI/music2` (docs/guide/install.md).
 
 name: Release
 
@@ -177,15 +181,21 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # On a tag: one draft pre-release with every file, SHA256SUMS and the notes. Run again, it
-  # refuses while that tag's draft is there: delete the draft first.
+  # On a tag: one draft pre-release with every file, SHA256SUMS and the notes, and each file's
+  # signed provenance. Run again, it refuses while that tag's draft is there: delete the draft
+  # first (each run signs the files it built).
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [linux, mac]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # A job's own permissions replace the top-level ones. contents: write makes the release;
+    # id-token: write asks GitHub for the token Sigstore signs against; attestations: write
+    # stores the signed statements beside the repo. Only this job, and only on a tag.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -196,6 +206,9 @@ jobs:
           path: dist
           merge-multiple: true
       - run: ci/release.sh sums dist
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
