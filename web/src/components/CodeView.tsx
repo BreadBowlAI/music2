@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { ArrowLeft, Check, CircleAlert, FileCode2, Folder, Lock, LoaderCircle, Save, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api";
+import type * as Monaco from "monaco-editor/editor";
 import { codeApi, fileOrder, moduleFile } from "../lib/code";
 import { Workspace, type Doc } from "../lib/codeWorkspace";
 import { editorHooks, graphApi, moduleName, type GraphState, type Problem } from "../lib/graph";
@@ -106,6 +106,9 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
       model: null,
       theme: kit.THEME,
       automaticLayout: true,
+      // Type into a textarea, not Chrome's EditContext (Monaco's default since 0.57; WebKit has
+      // none): the app's keys tell a text field by its element, and leave a field's keys to it.
+      editContext: false,
       // The system's own mono (taste.md §2.1): nothing is fetched.
       fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
       fontSize: 13,
