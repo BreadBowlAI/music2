@@ -1,37 +1,55 @@
 # .github/dependabot.yml: Dependabot opens pull requests that bring music2's pinned versions up to
-# date, once a week, grouped so that each ecosystem is one pull request, not dozens.
+# date, once a week: the small bumps of each ecosystem together in one pull request, each big one
+# alone.
 #
 # In short: the GitHub Actions in .github/workflows (pinned by commit, with the version in a
 # comment, which Dependabot keeps in step), the Rust crates in Cargo.lock (both workspaces), and
 # the npm packages of web/ and e2e/. Each pull request goes through the PR tier like any other;
 # a Cargo.lock change also needs the full ci/check.sh before it lands (HANDOFF.md: --locked,
 # never cargo update by hand).
+#
+# Groups take minor and patch bumps only (update-types), so a major one, the kind that can break
+# code, comes as its own pull request, to be read and judged alone. For a Rust crate before 1.0,
+# Dependabot counts 0.20 to 0.21 as major too, as Cargo does (dependabot-core's Cargo version,
+# update_type). cooldown: a release is offered only once it is 7 days old, so one pulled or
+# broken in its first days (a bad publish, a stolen account) never reaches us. It holds only
+# version updates: security updates, which fix a known hole, come at once (Dependabot's options
+# reference: cooldown is not for security updates).
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: cargo
     directories:
       - /
       - /std/kernels-src
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       rust:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: npm
     directories:
       - /web
       - /e2e
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       npm:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
