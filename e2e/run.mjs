@@ -101,7 +101,7 @@ export const SUITES = [
   ["layout", "proj", { expect: 39, s: 8 }],
   ["views", "proj", { expect: 30, s: 2 }],
   ["code", "proj", { expect: 58, s: 7 }],
-  ["notes", "proj", { expect: 63, s: 9 }],
+  ["notes", "proj", { expect: 69, s: 11 }],
   ["s8-audition", "fix", { expect: 51, s: 10, tier: "nightly", why: "speed: a closed page lets go of its note within 1 s" }],
   ["nx-piano", "fix", { expect: 39, s: 6 }],
   ["nx-midi", "fix", { expect: 24, s: 3 }],

@@ -11,7 +11,7 @@
 import { playingNow } from "./clock";
 import { send, type Done, type Gesture } from "./clips";
 import { clientId, readJson, type GraphState } from "./graph";
-import type { Step } from "./history";
+import { editing, type Editing, type Step } from "./history";
 import { token } from "./native";
 
 /** How often a still drag tells the server it lives (its lease ends after 10 s of nothing). */
@@ -24,7 +24,7 @@ export interface LaneLease {
    * Let go: `gesture` written, one undo step named `step`, answered as `send` answers. A gesture the
    * server doesn't preview (an audio clip's) is written by `send`, as before.
    */
-  finish(gesture: Gesture, step: Step): Promise<Done>;
+  finish(gesture: Gesture, step: Step, within?: Editing): Promise<Done>;
   /** Esc, a lost pointer, the view gone: what was there plays again, and nothing is written. */
   abort(): void;
 }
@@ -82,11 +82,18 @@ export function begin(graph: GraphState, gesture: Gesture, ended: (why: string) 
       next = g;
       if (!frame && !over) frame = requestAnimationFrame(flush);
     },
-    async finish(g, step) {
+    async finish(g, step, within) {
       stop();
-      const id = await lease;
-      if (id === null) return send(graph, g, step);
-      return send(graph, g, step, { path: "/api/graph/lane/lease/commit", body: { lease: id, gesture: g } });
+      // On its way from the drag's end, while its lease's begin is still answering too: as part of
+      // `within` when one is given (which ends it), else as one of its own.
+      const ours = within ?? editing();
+      try {
+        const id = await lease;
+        if (id === null) return await send(graph, g, step, undefined, ours);
+        return await send(graph, g, step, { path: "/api/graph/lane/lease/commit", body: { lease: id, gesture: g } }, ours);
+      } finally {
+        if (!within) ours.end();
+      }
     },
     abort() {
       if (over) return;

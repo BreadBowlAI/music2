@@ -17,7 +17,7 @@ import {
 } from "../lib/graph";
 import { setClock } from "../lib/clock";
 import { pickedIn, useClipSelection } from "../lib/clips";
-import { madeHere, said, tookBack, type StepName } from "../lib/history";
+import { madeHere, onTheirWay, said, tookBack, type StepName } from "../lib/history";
 import { forget, stepped } from "../lib/notice";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
 import { flushLocal } from "../lib/local";
@@ -356,23 +356,54 @@ async function skipStep(session: number, step: number) {
   }
 }
 
+/** How long Undo and Redo wait for this window's edits on their way before they give up. */
+const EDITS_WAIT_MS = 2000;
+
 /**
  * Undo or Redo of the step on top, as the window shows it (the top bar, ⌘Z, the Edit menu): by its
  * id, so a change that landed elsewhere since is named before it can be taken back. With no step
  * shown, 0, which is never the newest: the server says what is.
+ *
+ * Pressed while edits of this window are on their way (sent, their answers not back), its step is
+ * chosen at the press: the newest step those edits make, once they are answered, or with none (each
+ * refused, or changing nothing) the step shown at the press. Never one that lands meanwhile, an
+ * agent's say, which the server then names, refusing (AGENT-2). It waits at most 2 s, then takes
+ * back nothing and says so; pressed again while it waits, it does nothing.
  */
 export function undoTop(graph: GraphState, id: "undo" | "redo") {
-  // One after another, each naming the top the one before left: ⌘Z held down takes back step by step.
-  topped = topped.then(() => {
-    const now = useStore.getState().graph ?? graph;
-    if (now.session !== graph.session) return;
-    return graphUndo(now.session, id, (id === "redo" ? now.redo_name : now.undo_name)?.step ?? 0, true);
-  });
+  const awaited = onTheirWay();
+  if (!awaited.length) {
+    // One after another, each naming the top the one before left: ⌘Z held down takes back step by step.
+    topped = topped.then(() => {
+      const now = useStore.getState().graph ?? graph;
+      if (now.session !== graph.session) return;
+      return graphUndo(now.session, id, (id === "redo" ? now.redo_name : now.undo_name)?.step ?? 0, true);
+    });
+    return topped;
+  }
+  if (waiting) return topped;
+  waiting = true;
+  const shown = useStore.getState().graph ?? graph;
+  const atPress = (id === "redo" ? shown.redo_name : shown.undo_name)?.step ?? 0;
+  const answered = Promise.all(awaited.map((e) => e.done)).then(() => true);
+  const late = new Promise<false>((resolve) => setTimeout(() => resolve(false), EDITS_WAIT_MS));
+  topped = topped
+    .then(() => Promise.race([answered, late]))
+    .then((all) => {
+      waiting = false;
+      const now = useStore.getState();
+      if (now.graph?.session !== graph.session) return;
+      if (!all) return void now.toast(`Nothing was ${id === "redo" ? "redone" : "undone"}: your last edit isn't answered yet. Try again in a moment.`);
+      const made = awaited.flatMap((e) => e.steps);
+      return graphUndo(graph.session, id, id === "undo" && made.length ? Math.max(...made) : atPress);
+    });
   return topped;
 }
 
 /** The last Undo or Redo of the top sent: the next waits for its answer. */
 let topped: Promise<void> = Promise.resolve();
+/** An Undo or Redo waits for this window's edits on their way: another pressed meanwhile does nothing. */
+let waiting = false;
 
 /**
  * A toast's Undo for the edit that made undo step `step` (its answer's `step`): the server takes it

@@ -173,6 +173,21 @@ fn unknown_pages_and_commands_are_refused_and_nothing_is_written() {
     }
 }
 
+// PLAT-8: `m2 --version` (or `-V`) says which m2 this is, as a release's check asks it, and needs
+// no song, no app and nothing in HOME.
+#[test]
+fn m2_says_its_version() {
+    let home = Home::new("version");
+    for flag in ["--version", "-V"] {
+        let out = m2_in(&home.0, &[flag]);
+        assert!(out.status.success(), "m2 {flag}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("m2 {}\n", env!("CARGO_PKG_VERSION")));
+    }
+    let left: Vec<_> = std::fs::read_dir(&home.0).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert!(left.is_empty(), "m2 --version wrote into HOME: {left:?}");
+    assert!(stdout(&[]).contains("m2 --version"), "the usage says how to ask");
+}
+
 /// The words a Markdown text shows as code: its code spans and the lines of its code blocks.
 fn code(text: &str) -> Vec<String> {
     let mut out = vec![];

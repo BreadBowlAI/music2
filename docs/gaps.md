@@ -261,7 +261,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 37 | **`m2` commands** for change instrument, markers, the song's key, a track's ID, Save As and Follow tempo, with the app closed. With the song open in the app, `m2 call` reaches each but Save As, which is the musician's (AGENT-11): `/api/graph/track/instrument`, `/api/graph/markers`, `/api/graph/song-key`, `/api/graph/track/rekey`, and Follow tempo as `/api/graph/clips` with `{"op": "audio", "follow": true}`. With it closed, `m2 clips <song> json` takes that Follow tempo gesture too; the others need a Tx or the files. | Scripts and agents need the same basics as the app. | Yes (in `music2-cli`) | small |
-| 42 | **`m2` on your PATH**: a link in `/usr/local/bin` to the `m2` inside `music2.app` (or from source, `target/release/m2`), or a menu row that makes one. Today a song's `AGENTS.md` names its `m2` by its full path, so an agent needs no PATH, but you type the whole path. | Typing `m2` alone in Terminal. | No | small |
+| 42 | **`m2` on your PATH on a Mac**: a link in `/usr/local/bin` to the `m2` inside `music2.app` (or from source, `target/release/m2`), or a menu row that makes one. The Linux `.deb` installs `/usr/bin/m2` since 0.1.0. Today a song's `AGENTS.md` names its `m2` by its full path, so an agent needs no PATH, but you type the whole path. | Typing `m2` alone in Terminal. | No | small |
 | 38 | **A schema for the API**: `m2 routes --json` lists every route with its words and an example body (AGENT-8), but no JSON Schema of what each takes and answers; and a short summary of the song, and MCP. | An agent learns a body from one example, not every field it may give. | Yes | medium |
 
 - **A song's `AGENTS.md` names the `m2` it was made with, by its path then** (FMT-23): moving `music2.app`, or a first launch macOS ran from a copy it moved aside (App Translocation: an app downloaded and not yet moved to Applications), leaves it naming an old path. `m2 docs agents > AGENTS.md` writes it again, as does a song made before 2026-10-25, which has none.
@@ -300,6 +300,21 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **`m2 listen` has no loudness range** (LRA, EBU Tech 3342) and no momentary loudness: integrated and the short-term maximum only, as the design asks.
 - **`m2 listen` stops at the song's last clip**: bars past it are refused, so a song with no clips (a drone in code) can't be listened to by bars.
 - **G13 measures the gate's own player, not the app's**: the app in its process takes the forwarded edits and compiles them beside the live run, but what plays is G12's player (G12 through the app's server, `--server`, isn't built). Its listens of `examples/with-plugins` run their plugin host beside it only when the test plugins are installed.
+
+## Releases and installing
+
+| # | What's missing | Why it matters | Old app? | Size |
+|---|---|---|---|---|
+| 43 | **A Mac app signed with a Developer ID and notarized by Apple.** 0.1.0 is signed ad hoc, so macOS asks for Open Anyway once. The switch is built (the repo's Apple secrets; `ci/release.sh`, PLAT-8): it turns the hardened runtime on with `apps/music2-desktop/entitlements.plist`, which has never been tried on a Mac. Before the secrets go in: keep them in a GitHub environment `release` that only `v*` tags may use, with the owner as required reviewer, not in the repo's secrets; give the signing its own job with `environment: release`; and add a ruleset that lets only the owner create `v*` tags (the release review's L5; `release.yml`'s head says the same). | A first launch with no trip to System Settings; some schools and companies allow only notarized apps. | No | small |
+| 44 | **More downloads**: Intel Macs (a universal or x86_64 build), Linux on ARM, an `.rpm`, Windows. | People on those computers can only build from source, or not at all. | No | medium |
+| 45 | **Updates**: the app doesn't say when a newer release is out, nor update itself. | Bugs fixed in a release reach only people who look. | No | medium |
+
+- **The first Mac build of the release workflow hasn't run yet**: what it must show is in [the release build notes](designs/release/build-notes.md#what-the-first-mac-run-must-show).
+- **Gatekeeper and the `m2` inside the app**: whether Open Anyway on `music2.app` also lets Terminal run `music2.app/Contents/MacOS/m2` from a download is untried; `xattr -dr com.apple.quarantine` on the app clears both.
+- **The AppImage can't put `m2` on your shell**: `m2` comes in its own `.tar.gz`. A song made in the AppImage's app keeps the general `m2` line in its `AGENTS.md` (the AppImage's own folder goes away when it quits).
+- **The `.deb` is tried on Ubuntu 24.04 only**: it asks for glibc 2.35 (what its programs need, computed by `ci/release.sh check`), so apt takes it on Ubuntu 22.04 and Debian 12 too, whose WebKitGTK 4.1 no one has opened it with yet. The AppImage needs glibc 2.38, for the libraries it carries from ubuntu-24.04.
+- **The AppImage's tools are pinned by checksum** (`ci/appimage-tools.sha256`), but its GTK and WebKit libraries are copied from the build machine, so a rebuild on a newer runner image carries newer ones.
+- **The AppImage's system libraries** (GTK, WebKitGTK and the rest linuxdeploy copies) carry only the Debian copyright files linuxdeploy brings; `THIRD-PARTY-NOTICES.txt` lists music2's crates, npm packages and font.
 
 ## Checked on Linux only
 

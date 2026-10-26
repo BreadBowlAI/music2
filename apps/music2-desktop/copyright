@@ -1,0 +1,12 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: music2
+Upstream-Contact: https://github.com/BreadBowlAI/music2/issues
+Source: https://github.com/BreadBowlAI/music2
+Comment: The code inside music2 that others wrote, and each of its licences, is listed in
+ /usr/share/doc/music2/THIRD-PARTY-NOTICES.txt.
+
+Files: *
+Copyright: 2026 The music2 authors
+License: MIT or Apache-2.0
+ music2 is under the MIT licence or the Apache License 2.0, at your choice. Their texts are in
+ /usr/share/doc/music2/LICENSE-MIT and /usr/share/doc/music2/LICENSE-APACHE.

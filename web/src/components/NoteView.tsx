@@ -287,7 +287,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     // A drag heard as it went (8b.7) is written by its lease: one notes gesture, in the lane writes' queue.
     const write =
       lease && gesture
-        ? afterLaneWrites(latest.current, () => lease.finish(gesture, step)).then((r) => ({ revision: r.revision, clips }))
+        ? afterLaneWrites(latest.current, (within) => lease.finish(gesture, step, within)).then((r) => ({ revision: r.revision, clips }))
         : writeLane(latest.current, module, lane, clips, b.revision, step);
     write
       .then((r) => void (written.current = { revision: r.revision, clips: r.clips }))

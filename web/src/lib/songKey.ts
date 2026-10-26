@@ -2,7 +2,7 @@
 // shading in Notes. Nothing that plays reads it, and nothing is locked to it.
 
 import { readJson } from "./graph";
-import { recorded } from "./history";
+import { editing, recorded } from "./history";
 import { token } from "./native";
 
 /** A key: its root as `layout.json` writes it ("C#", "Eb") and its scale. */
@@ -41,14 +41,19 @@ export function inKey(k: SongKey): Set<number> {
  * words.
  */
 export async function setSongKey(session: number, key: SongKey | null) {
-  const res = await fetch("/api/graph/song-key", {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
-    body: JSON.stringify({ session, key }),
-  });
-  const done = await readJson(res);
-  if (!res.ok) throw new Error(done.error ?? `HTTP ${res.status}`);
-  // Setting the key it has already changes nothing, and is no step.
-  if (done.before !== "no change") recorded(session, done, { name: key ? `key ${songKeyName(key)}` : "taking out the key" });
-  return done as { revision: number; before: string; after: string };
+  const ours = editing();
+  try {
+    const res = await fetch("/api/graph/song-key", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
+      body: JSON.stringify({ session, key }),
+    });
+    const done = await readJson(res);
+    if (!res.ok) throw new Error(done.error ?? `HTTP ${res.status}`);
+    // Setting the key it has already changes nothing, and is no step.
+    if (done.before !== "no change") recorded(session, done, { name: key ? `key ${songKeyName(key)}` : "taking out the key" }, ours);
+    return done as { revision: number; before: string; after: string };
+  } finally {
+    ours.end();
+  }
 }
