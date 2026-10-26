@@ -11,7 +11,7 @@ check(kick0.length === 1 && /^[0-9a-z]{8}$/.test(kick0[0].id), `the kick's clip 
 
 // ---------------------------------------------------------------- open by id, edit, the id stays
 const k = await box(`[data-lane="kick.hits"] [data-clip="${kick0[0].id}"]`);
-await page.mouse.click(k.x + 40, k.y + k.height / 2, { clickCount: 2 });
+await page.mouse.click(k.x + 40, k.y + k.height / 2, { count: 2 });
 check(await until(() => page.$("[data-testid=roll-grid]")), "double-clicking the clip opens the piano roll");
 // The roll's place is in the dock's header (taste.md §3.5): the track, then after the switcher the
 // bars; the Kick's one notes lane needs no name beside the Notes tab.
@@ -44,7 +44,7 @@ check(await until(async () => (await clipEls("hats.hits"))[0]?.picked), "and it 
 
 // ---------------------------------------------------------------- make a clip: a new id, picked and open
 const kr = await box('[data-lane="kick.hits"]');
-await page.mouse.click(kr.x + 240 + 24 * 34 + 5, kr.y + kr.height / 2, { clickCount: 2 });
+await page.mouse.click(kr.x + 240 + 24 * 34 + 5, kr.y + kr.height / 2, { count: 2 });
 check(await until(() => lane("data/kick/hits.json").length === 2), "double-clicking after the clip makes one");
 const made = lane("data/kick/hits.json")[1];
 check(made.start === 32 && made.length === 4 && /^[0-9a-z]{8}$/.test(made.id) && made.id !== kick0[0].id, `a bar long, with a new id (${made.id})`);
@@ -68,7 +68,7 @@ const els = await clipEls("keys.chords");
 check(els[0].id === "" && els[1].id === "x2", `named by id only when it has one (${els.map((e) => e.id || "-")})`);
 check(await until(async () => (await state()).problems?.some((p) => p.code === "clip.anonymous")), "the state carries clip.anonymous");
 const a = await box('[data-lane="keys.chords"] [data-clip=""]');
-await page.mouse.click(a.x + 20, a.y + a.height / 2, { clickCount: 2 });
+await page.mouse.click(a.x + 20, a.y + a.height / 2, { count: 2 });
 check(await until(() => page.$("[data-testid=roll-grid]")), "the anonymous clip opens");
 p = await inRoll(2);
 await page.mouse.click(p.x, p.y, { count: 2 });
