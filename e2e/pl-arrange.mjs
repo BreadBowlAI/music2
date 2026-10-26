@@ -173,7 +173,7 @@ check(markers()[1]?.beat === 40 && (await toasts()).some((t) => t.includes("A ma
 
 // A double-click renames it.
 f = await flag("Verse");
-await page.mouse.click(f.x + 6, f.y + f.height / 2, { clickCount: 2 });
+await page.mouse.click(f.x + 6, f.y + f.height / 2, { count: 2 });
 await page.waitForSelector("[data-testid=marker-field]");
 check((await page.$eval("[data-testid=marker-name]", (e) => e.value)) === "Verse" && !(await page.$("[data-testid=marker-field] [data-pick]")), "a double-click opens its name, with no list");
 await page.keyboard.type("Big Verse");
@@ -224,7 +224,7 @@ check(await until(() => same(markers(), [{ beat: 40, name: "Big Verse" }, { beat
 write("layout.json", kept);
 await until(async () => !!(await flag("Chorus")) && !(await flag("Outro")), 5000);
 f = await flag("Big Verse");
-await page.mouse.click(f.x + 6, f.y + f.height / 2, { clickCount: 2 });
+await page.mouse.click(f.x + 6, f.y + f.height / 2, { count: 2 });
 await page.waitForSelector("[data-testid=marker-field]");
 write("layout.json", withMarker({ beat: 60, name: "Outro" }));
 await until(async () => !!(await flag("Outro")), 5000);

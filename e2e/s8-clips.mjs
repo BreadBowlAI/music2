@@ -94,7 +94,7 @@ check((await dragHats(30)) === 4, `a drag then lands on a bar line: ${clips("dat
 
 // ---------------------------------------------------------------- the view last pointed at
 const hats = await box('[data-lane="hats.hits"] [data-clip]');
-await page.mouse.click(hats.x + 40, hats.y + hats.height / 2, { clickCount: 2 });
+await page.mouse.click(hats.x + 40, hats.y + hats.height / 2, { count: 2 });
 await page.waitForSelector("[data-testid=roll-grid]");
 const roll = await box("[data-testid=roll-grid]");
 await page.mouse.click(roll.x + 30, roll.y + 30);
@@ -113,7 +113,7 @@ const rollSnap = async () => (await state()).local?.grid?.notes?.on;
 const tabWas = await page.$eval("[role=tablist][aria-label=Views] [aria-selected=true]", (e) => e.dataset.viewTab).catch(() => null);
 for (const [how, away] of [["E hides the dock", "e"], ["⌥3 shows Mix there", "Alt+3"]]) {
   const bc = await box('[data-lane="bass.notes"] [data-clip]');
-  await page.mouse.click(bc.x + 20, bc.y + bc.height / 2, { clickCount: 2 });
+  await page.mouse.click(bc.x + 20, bc.y + bc.height / 2, { count: 2 });
   await page.waitForSelector("[data-testid=roll-grid]");
   check(await until(() => page.evaluate(() => !!document.activeElement?.closest("[data-grid-view=notes]")), 3000), `a double-click opens Bass's clip in Notes, which takes the keys (${how})`);
   const was = await rollSnap();

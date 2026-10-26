@@ -160,7 +160,7 @@ const shown = (page) =>
 async function openBass(page) {
   await page.waitForSelector('[data-lane="bass.notes"] [data-clip]', { timeout: 10000 });
   const c = await (await page.$('[data-lane="bass.notes"] [data-clip]')).boundingBox();
-  await page.mouse.click(c.x + 20, c.y + c.height / 2, { clickCount: 2 });
+  await page.mouse.click(c.x + 20, c.y + c.height / 2, { count: 2 });
   return !!(await page.waitForSelector("[data-testid=roll-grid]", { timeout: 5000 }).catch(() => null));
 }
 
@@ -397,7 +397,7 @@ if (part("c3")) {
   check(!(await status()).playing && same((await run.api("graph")).json.overlays.mute, []) && !!(await app.$("[data-testid=rename-song-dialog]")), "Space and M reach nothing behind it");
 
   // A taken folder: refused in words, and nothing changes.
-  await app.click("[data-testid=rename-song-name]", { clickCount: 3 });
+  await app.click("[data-testid=rename-song-name]", { count: 3 });
   await app.keyboard.type("first song");
   await app.keyboard.press("Enter");
   const refused = await app.waitForSelector("[data-testid=rename-song-error]", { timeout: 3000 }).then((e) => e.evaluate((e) => e.textContent)).catch(() => null);
@@ -405,7 +405,7 @@ if (part("c3")) {
   check(fs.existsSync(`${copy}/song.ts`) && /^name = "First Song 2"$/m.test(fs.readFileSync(`${copy}/music2.toml`, "utf8")), "and nothing changed");
 
   // With the box on: the name and the folder; the song opens again from there.
-  await app.click("[data-testid=rename-song-name]", { clickCount: 3 });
+  await app.click("[data-testid=rename-song-name]", { count: 3 });
   await app.keyboard.type("Night Drive");
   await app.keyboard.press("Enter");
   const drive = `${songs}/Night Drive`;
@@ -419,7 +419,7 @@ if (part("c3")) {
   await app.waitForSelector("[data-testid=rename-song-dialog]", { timeout: 3000 });
   await app.click("[data-testid=rename-song-folder]");
   check(!(await app.$("[data-testid=rename-song-note]")), "with the box off, the line about closing goes");
-  await app.click("[data-testid=rename-song-name]", { clickCount: 3 });
+  await app.click("[data-testid=rename-song-name]", { count: 3 });
   await app.keyboard.type("Night Ride");
   await app.keyboard.press("Enter");
   check(await until(async () => /^name = "Night Ride"$/m.test(fs.readFileSync(`${drive}/music2.toml`, "utf8"))), "with it off: only the name changes");
@@ -469,7 +469,7 @@ if (part("c3")) {
   );
   await app.evaluate(() => window.__menu("rename_song"));
   await app.waitForSelector("[data-testid=rename-song-dialog]", { timeout: 3000 });
-  await app.click("[data-testid=rename-song-name]", { clickCount: 3 });
+  await app.click("[data-testid=rename-song-name]", { count: 3 });
   await app.keyboard.type("Late Ride");
   await app.keyboard.press("Enter");
   check(await until(async () => (await run.api("graph")).json?.dir === `${elsewhere}/Late Ride`, 10000), `Rename Anyway renames it, as the dialog said: ${(await run.api("graph")).json?.dir}`);
