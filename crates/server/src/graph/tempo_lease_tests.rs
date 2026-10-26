@@ -116,7 +116,7 @@ fn the_tempo_is_heard_at_the_first_block_after_its_prepare() {
 // RENDER-27a, Q22, X24: one prepare in flight. Updates while a prepare is held, twice: 2 to 25
 // while the first job is held, 26 to 50 while the rerun it queued is. An update that finds the
 // drag's job queued or running queues none, and the job runs again while a newer value waits. So
-// three jobs run, not fifty, and the last plays the 50th value. The prepares are held until the
+// three jobs run, exactly, not fifty, and the last plays the 50th value. The prepares are held until the
 // updates are sent, not for a time: a sleep lasts what the OS makes it (on GitHub's Mac, about four
 // times what was asked), so timed updates could outlast timed prepares. Two held cycles: updates
 // that land while a rerun is held coalesce too, not only those behind the first job.
@@ -157,11 +157,10 @@ fn one_tempo_prepare_in_flight() {
     std::thread::sleep(Duration::from_millis(200));
     let l = &d.graph.tempo_leases()[0];
     let ran = jobs.load(Ordering::Relaxed);
-    assert!(
-        ran <= 4 && l.previews <= 4,
-        "{ran} jobs ran and {} plans played: one prepare in flight, the values between skipped",
-        l.previews
-    );
+    // Exactly 3, whatever the scheduling: no update comes while no job holds, so job 1 plays value 1,
+    // its rerun 25 and the last 50, each one plan. A fourth is a job some update queued while one
+    // was queued or running.
+    assert_eq!((ran, l.previews), (3, 3), "jobs run and plans played: one prepare in flight, the values between skipped");
     assert_eq!(l.heard, Some(170.0), "the last plan plays the 50th value");
     assert_eq!(d.graph.status().bpm, Some(170.0));
 }
