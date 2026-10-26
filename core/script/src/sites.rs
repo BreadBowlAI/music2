@@ -166,7 +166,8 @@ fn arg(source: &str, e: &Expression) -> Arg {
                 if p.computed || p.method || p.kind != PropertyKind::Init {
                     return Arg::Other { start: s.start, end: s.end };
                 }
-                let Some(k) = p.key.static_name() else {
+                // A key with a lone surrogate has no Rust string to compare: also unknown.
+                let Some(k) = p.key.static_name().and_then(|k| k.into_cow_str()) else {
                     return Arg::Other { start: s.start, end: s.end };
                 };
                 if props.iter().any(|(key, _)| key == k.as_ref()) {
