@@ -10,6 +10,7 @@ import {
   findLane,
   formatValue,
   hasOwnId,
+  wroteHere,
   laneTitle,
   laneValue,
   meterSpans,
@@ -60,6 +61,7 @@ import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { followNow, roundZoom, setFollow, setZoom, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
 import { useStore } from "../lib/store";
+import { editing, oneEnds, type Editing } from "../lib/history";
 import { look } from "../lib/focus";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import { listedInstrument } from "../lib/plugins";
@@ -610,6 +612,39 @@ export default function SongTimeline({
       return graph && !busy(graph) && !latest.current.locked ? graph : null;
     };
     /**
+     * `ready`, once it is: after this window's edits on their way, when the state shows what they
+     * made. Null when the song closed or can't be written meanwhile. `own`: the edit waiting, never
+     * waited for.
+     */
+    const readySoon = async (session: number, own: Editing) => {
+      for (;;) {
+        const graph = useStore.getState().graph;
+        if (!graph || graph.session !== session || latest.current.locked) return null;
+        if (!busy(graph)) return graph;
+        // Busy with a write on its way, or one the state doesn't show yet: an edit's end, or the next state.
+        let off = () => {};
+        const changed = new Promise<void>((resolve) => (off = useStore.subscribe((s) => s.graph !== graph && resolve())));
+        const ends = oneEnds(own);
+        await (ends ? Promise.race([changed, ends]) : changed);
+        off();
+      }
+    };
+    /**
+     * The drag's clips as the timeline draws them in `graph`, in each notes lane this window's roll
+     * wrote since the press drew revision `since` and nothing else changed since (`wroteHere`), for a
+     * clip with an id of its own. Every other clip as drawn at the press: changed since by another
+     * writer, it is refused (WRITE-12).
+     */
+    const retaken = (d: Drag, graph: GraphState, since: number): Drag => ({
+      ...d,
+      clips: d.clips.map((c) => {
+        const now = findLane(graph.timeline, c.ref.module, c.ref.lane);
+        const k = now ? clipIndex(now.clips, c.ref) : -1;
+        const own = now?.kind === "notes" && k >= 0 && hasOwnId(now.clips, k) && wroteHere(graph, c.ref.module, c.ref.lane, now.clips, since);
+        return own ? { ...c, lane: now } : c;
+      }),
+    });
+    /**
      * What a drag writes when let go, and its undo step's name: null when it changes nothing, or
      * names a clip the timeline doesn't draw now. Over a lane that can't take the clips, the clips
      * where they were (letting go there writes nothing).
@@ -627,32 +662,43 @@ export default function SongTimeline({
     };
     /**
      * A dropped drag: one gesture, through its lease when one lives (heard as it went, 8b.7). Drawn
-     * where it went until the timeline shows it; refused, it goes back.
+     * where it went until the timeline shows it; refused, it goes back. Let go while the timeline
+     * can't take a gesture (this window's last edit not shown yet), it goes once it can, and is an
+     * edit on its way from the moment it is let go: an Undo pressed meanwhile waits for it.
+     * `behind`: the revision the timeline drew at the press, when that was older than the window's
+     * state (most often its own edit not drawn yet: a note added in the roll a moment before); then
+     * the clips of a lane the roll wrote since are named as drawn when it goes (`retaken`).
      */
-    const drop = (d: Drag, lease: LaneLease | null) => {
-      const graph = ready();
-      const made = gestureOf(d);
-      if (!graph || !made || !made.step) {
-        lease?.abort();
-        return setDrag(null);
-      }
-      const { gesture, step } = made;
+    const drop = async (d: Drag, lease: LaneLease | null, behind: number | null) => {
       setDrag({ ...d, landed: Infinity });
-      (lease ? lease.finish(gesture, { name: step }) : send(graph, gesture, { name: step })).then(
-        (done) => {
-          setDrag((now) => (now?.landed === Infinity ? { ...now, landed: done.revision } : now));
-          // Copies and clips moved to another lane are new there: they are the selection now.
-          if (done.made.length === 0) return;
-          const refs = done.made.map((m) => ({ module: m.module, lane: m.lane, id: m.id }));
-          useClipSelection.getState().only(refs);
-          const notes = findLane(latest.current.timeline, refs[0].module, refs[0].lane)?.kind === "notes";
-          useShell.getState().select(refs[0].module, notes ? refs[0] : undefined);
-        },
-        (error) => {
-          setDrag(null);
-          toast(error);
-        },
-      );
+      const ours = editing();
+      try {
+        const session = useStore.getState().graph?.session;
+        const graph = session === undefined ? null : await readySoon(session, ours);
+        const made = graph && gestureOf(behind === null ? d : retaken(d, graph, behind));
+        if (!graph || !made || !made.step) {
+          lease?.abort();
+          return setDrag((was) => (was?.landed === Infinity ? null : was));
+        }
+        const { gesture, step } = made;
+        await (lease ? lease.finish(gesture, { name: step }, ours) : send(graph, gesture, { name: step }, undefined, ours)).then(
+          (done) => {
+            setDrag((now) => (now?.landed === Infinity ? { ...now, landed: done.revision } : now));
+            // Copies and clips moved to another lane are new there: they are the selection now.
+            if (done.made.length === 0) return;
+            const refs = done.made.map((m) => ({ module: m.module, lane: m.lane, id: m.id }));
+            useClipSelection.getState().only(refs);
+            const notes = findLane(latest.current.timeline, refs[0].module, refs[0].lane)?.kind === "notes";
+            useShell.getState().select(refs[0].module, notes ? refs[0] : undefined);
+          },
+          (error) => {
+            setDrag(null);
+            toast(error);
+          },
+        );
+      } finally {
+        ours.end();
+      }
     };
     /** The selected clips as the timeline draws them now, each with how a gesture names it. */
     const chosen = () =>
@@ -948,6 +994,10 @@ export default function SongTimeline({
         // What moves: every picked clip when this one is picked, each as drawn now (its hash is
         // what this window saw: one changed since is refused when it lands).
         const { timeline } = latest.current;
+        // Unless what is drawn now is older than the window's state: then the clips the roll wrote
+        // since are named as drawn when the drag goes (`retaken`).
+        const shown = useStore.getState().graph;
+        const behind = !shown || busy(shown) || shown.view.revision !== latest.current.revision ? latest.current.revision : null;
         const group = (isPicked(useClipSelection.getState().picked, ref) && !edge ? useClipSelection.getState().picked : [ref]).flatMap((r) => {
           const l = findLane(timeline, r.module, r.lane);
           const k = l ? clipIndex(l.clips, r) : -1;
@@ -1028,7 +1078,7 @@ export default function SongTimeline({
           }
           // Let go over a lane that can't take the clips, or the drag cancelled: nothing happens.
           if (ev.type !== "pointerup" || !now || now.refused) return cancel();
-          drop(now, lease);
+          void drop(now, lease, behind);
         };
         // Esc during the drag puts it back, and is the drag's alone (not the page's deselect).
         const esc = (ev: KeyboardEvent) => {

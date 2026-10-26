@@ -69,7 +69,7 @@ GATES (default: all):
                   the engine as far as the device. Then each count's live p99 beside its back-to-
                   back p99, and how late workers came into a block.
                   --beside agents: G13, the same while agents work beside it, each a process of
-                  its own: m2 listen back to back on 8 bars (every other one on 4 bars of
+                  its own: m2 listen back to back on 2 bars (every other one on 4 bars of
                   examples/with-plugins, when its plugins are there), and m2 set edits forwarded
                   to an app (this process's server) that has the song open. Judged everywhere:
                   listens and edits landed, each listen and its plugin host

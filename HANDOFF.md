@@ -1,11 +1,11 @@
 # Handoff
 
-Written 2026-10-18. Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-10-25 (the docs plan, then the release track). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
 
-- **Every planned step is built on Linux** (steps 1 to 9), and all of it is on `main` at `3c26fcd`, pushed.
+- **Every planned step is built on Linux** (steps 1 to 9), and so are the five tracks of the agents design. All of it is on `main` at `a1e3c77`, pushed.
 - Each track was reviewed, its findings fixed or listed in [docs/gaps.md](docs/gaps.md), and `ci/check.sh --gates`
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
   71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
@@ -19,25 +19,35 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **Draw mode (B) draws as GarageBand does** (landed `40685ca`): a press adds a note, a drag sets its length, ⌥-drag paints one a grid step. `ci/check.sh --gates` passed at `ce91acb`: 1,771 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes, nothing on a retry. Its first run caught two old races, now fixed: a take started right after the one before on the same track failed ("File exists"), and the playhead lagged Follow by a frame. By ear: mac-run step 133.
 - **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
   (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by
-  far. 8a's sweep is done. **One more `ci/check.sh` on the Mac is owed, with the output at 48 kHz.**
+  far. 8a's sweep is done.
+- **The Mac ran everything again at `a1e3c77`** (2026-10-25): 13 of 16 rows. Branch `mf3` fixes what failed, from the
+  logs, on Linux: macOS read a plugin host's background state wrongly; a song's build counted its wait for a CPU as
+  work, so listens at background priority stopped as "endless loops"; a forwarded commit's fixes named the song
+  through `/private/var`; the listen tests ran ten listens at once; G13's listens of 8 bars didn't land in its minute
+  on the slow cores (now 2 bars); the check named a line of JSON as a test. G12 failed only its set-up again: the
+  output was at 44.1 kHz. G13's first Mac numbers, recorded: callback p99 1,292 µs (45%), 0 dropouts, with one listen
+  at work all the minute. Notes: `docs/designs/agents/build-notes-mac.md`. **One more `ci/check.sh` on the Mac is
+  owed, with the output at 48 kHz.**
 - **Track `br` landed** (2026-10-18, `054e338`): add an installed plugin from the app (#32), and presets for std
   sounds and plugins (#26, FMT-22, HOST-8). Linux green at `1fb6caa`; macOS owed (in the next Mac run). Build notes
   `docs/designs/step9/build-notes-br.md`.
 - **Checks on Linux are faster, and check no less** (track `cs`): `ci/check.sh --gates=auto` skips the timing gates only when HEAD holds, in every file they read, what an earlier check on this machine passed them on, and the browser suites run 4 at a time; its own check passed at `b5e3a0f` with the gates (`ci/` changed): 1,771 Rust tests, 74/74 browser suites in 2.7 min, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry. See "The check" below.
 - **Ready to open up** (track `os`): MIT OR Apache-2.0, a fast pull request tier on GitHub (`ci/check.sh --pr` runs the same here), a nightly tier, the timing gates every night on a quiet machine (`ci/nightly.sh`), and the docs for contributors and agents (README, CONTRIBUTING, AGENTS, goals, SECURITY). `ci/check.sh --gates=auto` passed at `e405740` with the gates (`ci/` changed): its new lint, advisories and nightly list rows, 1,772 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry; `ci/check.sh --pr` passed there too, cold and warm (341 s), nothing on a retry. The commits after it change only docs. The owner's GitHub steps: [docs/maintainers.md](docs/maintainers.md). See "The tiers" below.
-- **Track `ag-steps`** (the agents design's track 1, branch `ag`, not merged): every change the app accepts is one undo step with an id and a source; a text file saved in another program is one, shown as it lands with a notice and a glow; undo never takes back your own save with someone else's change, and a step it can't take back can be skipped. `ci/check.sh --gates=auto` at `36b015d`: all but `advisories` passed (1,799 Rust tests, 75/75 browser suites, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry). `advisories` fails on `main` too: RUSTSEC-2026-0386 (tokio 1.53.2, fixed in 1.53.3) needs a lock bump. Notes: `docs/designs/agents/build-notes-steps.md`.
-- **Track `ag-fwd`** (the agents design's track 2, branch `ag-fwd`, not merged): with the song open, every `m2` write goes through the app as one undo step, the agent's, named by `--as` and `--why`; two keys (the page's, and the tools key in `session.json`, written whole); an agent's change to what you hold is refused, on arrival and again just before it is heard, and taken back if you began holding it as it landed (`m2` exits 3); `m2 edit`, `m2 write` and `m2 undo`. Notes: `docs/designs/agents/build-notes-fwd.md`.
+- **Track `ag-steps`** (the agents design's track 1, on `main`): every change the app accepts is one undo step with an id and a source; a text file saved in another program is one, shown as it lands with a notice and a glow; undo never takes back your own save with someone else's change, and a step it can't take back can be skipped. `ci/check.sh --gates=auto` at `36b015d`: all but `advisories` passed (1,799 Rust tests, 75/75 browser suites, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry). `advisories` failed there on RUSTSEC-2026-0386 (tokio 1.53.2); `main` now has tokio 1.53.3 (`8c4cb2b`). Notes: `docs/designs/agents/build-notes-steps.md`.
+- **Track `ag-fwd`** (the agents design's track 2, on `main`): with the song open, every `m2` write goes through the app as one undo step, the agent's, named by `--as` and `--why`; two keys (the page's, and the tools key in `session.json`, written whole); an agent's change to what you hold is refused, on arrival and again just before it is heard, and taken back if you began holding it as it landed (`m2` exits 3); `m2 edit`, `m2 write` and `m2 undo`. Notes: `docs/designs/agents/build-notes-fwd.md`.
 - **The review's fixes for `ag-fwd`** (F1 to F12, on `ag-fwd`): an agent's change that would end a drag or a plugin window not saved yet is taken back, whatever file it touched; the tools key can't touch what you hold; plain names; bigger forwarded writes; and `m2 edit` and `m2 write` fix a song whose code doesn't build, in the app, as one undo step. `ci/check.sh --gates=auto` at `0d3cf13`: PASS, 1,859 Rust tests, 75/75 browser suites, 12 of 12 renders, the 7 gate runs, 27 minutes, nothing on a retry. Notes: the build notes' "The review's fixes".
-- **Track `ag-see`** (the agents design's track 3, branch `ag-see`, not merged): an agent sees what you look at (`m2 focus`), follows everything that happens in the app (`m2 watch`) and points at things to show you where they are (`m2 point`), and none of it is saved; press V to hear before and after the newest change an agent or another program made, while agents wait. `ci/check.sh --pr` at `841b7ca`: PASS, 1,837 Rust tests, 54/54 browser suites, nothing on a retry. Notes: `docs/designs/agents/build-notes-see.md`.
+- **Track `ag-see`** (the agents design's track 3, on `main`): an agent sees what you look at (`m2 focus`), follows everything that happens in the app (`m2 watch`) and points at things to show you where they are (`m2 point`), and none of it is saved; press V to hear before and after the newest change an agent or another program made, while agents wait. `ci/check.sh --pr` at `841b7ca`: PASS, 1,837 Rust tests, 54/54 browser suites, nothing on a retry. Notes: `docs/designs/agents/build-notes-see.md`.
 - **The review's fixes for `ag-see`** (F1 to F11, on `ag-see`): Compare only plays: Before is built in memory and never written, so a quit or a crash on Before leaves the song as it was, and Esc on Before is one undo step, said with Redo; the pill shows only what the server says, one V at a time; while it is open an agent can't close or open a song; `m2 watch` follows one song, ends quietly, and keeps so much; every event says its session; a pointer never selects. `ci/check.sh --gates=auto` at `7177f17`: PASS, 1,891 Rust tests, 76/76 browser suites (3,288 checks), 12 of 12 renders, the 7 gate runs, 27 minutes, nothing on a retry. Notes: the build notes' "The review's fixes".
-- **Track `ag-routes`** (the agents design's track 4, branch `ag-routes`, not merged): every route of the app's API is declared once, in one table the router, the read-only 423 and the tools key's 403 are made from; agents get 403 on your controls (play, record, solo, the view, plugin windows, exports, settings, songs); `m2 routes` lists the table and `m2 call` sends any route for agents, so every change the window can make is reachable from `m2`; an agent's set can't commit your drag, and a change taken back answers busy. `ci/check.sh --pr` at `e435c65`: PASS, 1,866 Rust tests, 54/54 browser suites, nothing on a retry. Notes: `docs/designs/agents/build-notes-routes.md`.
+- **Track `ag-routes`** (the agents design's track 4, on `main`): every route of the app's API is declared once, in one table the router, the read-only 423 and the tools key's 403 are made from; agents get 403 on your controls (play, record, solo, the view, plugin windows, exports, settings, songs); `m2 routes` lists the table and `m2 call` sends any route for agents, so every change the window can make is reachable from `m2`; an agent's set can't commit your drag, and a change taken back answers busy. `ci/check.sh --pr` at `e435c65`: PASS, 1,866 Rust tests, 54/54 browser suites, nothing on a retry. Notes: `docs/designs/agents/build-notes-routes.md`.
 - **The review's fixes for `ag-routes`** (F1 to F10, on `ag-routes`): an agent's socket can't end your drags; an agent's import or Sampler file copies nothing while you hold the song, and a refused one leaves nothing (`m2 import` goes through the app's own import); every step is named by the agent's words; MIDI files never go into the song's folder; Look again is yours; each route carries its body limit, and no route outside the table answers. `ci/check.sh --gates=auto` at `31633f5`: PASS, 1,918 Rust tests, 76/76 browser suites (3,288 checks), 12 of 12 renders, the 7 gate runs, 27 minutes, nothing on a retry. Notes: the build notes' "The review's fixes".
-- **Track `ag-listen`** (the agents design's track 5, the last, branch `ag-listen`, not merged): `m2 listen` measures what an agent can't hear, for the mix and each track (its own sound, and as it reaches the mix): loudness, true peak, crest, octave bands, stereo and masking; `--with` measures a change before it is made, `--as-heard` hears your listening mute and solo, `--png` draws the bands over time. It renders in its own process at background priority, its plugin host too, one at a time, and its copy taps change no bit. Gate G13 plays p50 while agents listen and edit beside it; its timings are recorded until its first Mac runs are, then judged. All five tracks of the design are built. `ci/check.sh --pr` at `ba42c67`: PASS, 1,899 Rust tests, 54/54 browser suites, 6 min, nothing on a retry; the 8 gate runs of `ci/gates.txt` pass on Linux. [build-notes-listen.md](docs/designs/agents/build-notes-listen.md).
+- **Track `ag-listen`** (the agents design's track 5, the last, on `main`): `m2 listen` measures what an agent can't hear, for the mix and each track (its own sound, and as it reaches the mix): loudness, true peak, crest, octave bands, stereo and masking; `--with` measures a change before it is made, `--as-heard` hears your listening mute and solo, `--png` draws the bands over time. It renders in its own process at background priority, its plugin host too, one at a time, and its copy taps change no bit. Gate G13 plays p50 while agents listen and edit beside it; its timings are recorded until its first Mac runs are, then judged. All five tracks of the design are built. `ci/check.sh --pr` at `ba42c67`: PASS, 1,899 Rust tests, 54/54 browser suites, 6 min, nothing on a retry; the 8 gate runs of `ci/gates.txt` pass on Linux. [build-notes-listen.md](docs/designs/agents/build-notes-listen.md).
 - **The review's fixes for `ag-listen`** (F1 to F17, on `ag-listen`): the meters start warm, so a range that starts on a loud note reads no false true peak; masking is judged moment by moment among what the master adds up, a group bus as one, with how much of the range each pair holds; copy taps live only on an offline type the live engine can't take; mute and solo follow track names into a change, which compares the same bars; `m2 listen` refuses what it doesn't know, never waits long on a busy app, and names unsaved plugin windows; on Linux it runs in `SCHED_IDLE` (it still costs playback what one busy core does: gaps), and G13 listens to a song with plugins too. `ci/check.sh --gates=auto` at `bfe1a4c`: PASS, 1,957 Rust tests, 76/76 browser suites, 12 of 12 renders, the 8 gate runs, 29 minutes, nothing on a retry. Notes: the build notes' "The review's fixes".
-- **Two hand-written pieces are crates now** (branch `deps`, not merged): `m2 watch`'s WebSocket client is `tungstenite`'s, which also checks `Sec-WebSocket-Accept` (that gap is closed), and `m2 listen --png` writes with the `png` crate, compressed (first-song's picture: 598 KB to 56 KB, the same pixels). Both were in `Cargo.lock` already: it gains four dependency lines, no crate and no version. `ci/check.sh --gates=auto` at `c928f5d`: PASS, 1,958 Rust tests, 76/76 browser suites, 12 of 12 renders, the 8 gate runs, 31 minutes, nothing on a retry.
-- What the app does: [docs/manual.md](docs/manual.md). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
+- **Two hand-written pieces are crates now** (landed `c928f5d`): `m2 watch`'s WebSocket client is `tungstenite`'s, which also checks `Sec-WebSocket-Accept` (that gap is closed), and `m2 listen --png` writes with the `png` crate, compressed (first-song's picture: 598 KB to 56 KB, the same pixels). Both were in `Cargo.lock` already: it gains four dependency lines, no crate and no version. `ci/check.sh --gates=auto` at `c928f5d`: PASS, 1,958 Rust tests, 76/76 browser suites, 12 of 12 renders, the 8 gate runs, 31 minutes, nothing on a retry.
+- **The docs plan** (branch `docsite`; [design](docs/designs/docs/design.md), [build notes](docs/designs/docs/build-notes.md)): the user docs are **the guide**, `docs/guide/` (the manual split one page a topic, in four parts), also a website (mdBook, published by `.github/workflows/pages.yml` from `main` once the repo is public) and built into `m2` (`m2 docs`). Every `m2` command is declared once (`apps/m2/src/commands.rs`): the usage and the guide's commands page are made from it, and an unknown command exits 2. Every new song gets `AGENTS.md`, naming its `m2` by its exact path, and `CLAUDE.md` (FMT-23); `music2.app` carries `m2` at `Contents/MacOS/m2` (AGENT-12, FMT-23). A link check covers every Markdown file. A change to `docs/guide/` or the contract runs the whole PR tier. `ci/check.sh --pr` passed at `941d887`: 1,938 Rust tests, 54/54 browser suites, 12 of 12 renders. Owed: the owner's clicks for Pages (the design's section 4), mac-run steps 134 to 136, and the full `ci/check.sh`.
+- **The first release, 0.1.0 (alpha)** (branch `release`, made from `docsite`; [build notes](docs/designs/release/build-notes.md), PLAT-8): a pushed tag `v0.1.0` runs `.github/workflows/release.yml`, which builds `music2-0.1.0-macos-arm64.zip` (signed ad hoc), `music2_0.1.0_amd64.deb`, `music2-0.1.0-linux-x86_64.AppImage` and `m2-0.1.0-linux-x86_64.tar.gz`, checks each with `ci/release.sh check`, and makes a draft pre-release with `SHA256SUMS` and the notes in `docs/releases/0.1.0.md`. The owner publishes it by hand. A pull request that changes the bundle builds both platforms without a release. The Linux files were built and run here under Xvfb (start screen, New Song, play, export, plugins); **the Mac build is owed to the workflow's first run** (what it must show: the build notes), then mac-run steps 137 to 141.
+- What the app does: the guide, [docs/guide/](docs/guide/welcome.md) (`m2 docs` prints it). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
-- Next: that one Mac run (after `mf2` is merged), then fix what it finds. Then Windows, as its own step, or the top gaps.
+- Next: merge `mf3`, then one more Mac run at 48 kHz, then fix what it finds. Then Windows, as its own step, or the top gaps.
 
 ## Mac runs owed
 
@@ -46,14 +56,17 @@ design for whatever you pick up. Older versions of this page, with each track's 
 | 1 | `ci/check.sh` on `main` | **Done at `e7518f4`** (2026-10-18), 11 of 13 rows. Two tests failed, fixed on `mf2`: a take's steps looked up by the folder's real path (`7482009`), and the plugin window test asks the host process that owns the window (`e505d0b`, the SIGBUS). G12 failed only its set-up (output at 44.1 kHz). `pl-arrange-fix`'s retry (on Linux too) was a real race, fixed on `mf2`: a marker's Delete or Rename now finds it by its bar. G7f passed one sandbox a box: a block −1,018 µs over S, a callback −2,748 µs, 76 MB against 554, build 28 ms against 205 | 71 min |
 | 2 | (dropped) G7f store on the old gain | Not needed any more. It asked whether the Mac's +135 µs a block since step 7 was the 32 MiB store layout (O1). Track `ab` replaced that layout with one sandbox per box, so run 1's G7f rows now judge the new layout. The old std (ABI v0) can't load on `main` anyway. | — |
 | 3 | 8a's Mac sweep, `ci/sweep.sh` | **Done at `e7518f4`.** It confirmed `live_count` 4 and `BETWEEN` = park (spin was far worse), so no code changed. Gate 8: 4 threads, 10 minutes, p99 1,308 µs (45%), 0 dropouts; provisional, at 44.1 kHz. Exports on 8 fast cores, 6.4× one thread | about 40 min |
-| 4 | By ear, steps 7 to 133 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116), `br` (117–125), `bus` (126–132), `dn` (133) | about 2 hours, in parts |
-| 5 | `ci/check.sh` on `main` (the same run as row 1's next one) | Also runs `br`'s plugin preset search and preset load on a Mac for the first time (HOST-8) | about 45 min |
+| 4 | By ear, steps 7 to 141 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116), `br` (117–125), `bus` (126–132), `dn` (133), `docsite` (134–136), `release` (137–141) | about 2 hours, in parts |
+| 5 | `ci/check.sh` on `main` (the same run as row 1's next one) | **Done at `a1e3c77`** (2026-10-25): `br`'s plugin preset search and preset load passed on a Mac (HOST-8: its preset tests, `br-presets` and `br-plugins`). The run's other failures are fixed on `mf3`; one more run, at 48 kHz, is owed | about 45 min |
 
-**Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main`. It checks the two fixes (the plugin window's `closed` callback now runs on the next main-queue turn: run on
-a Mac for the first time) and judges G12 at its designed set-up. The sweep need not run again. The same run covers
-`br`, `gb` and `bus` (`br`'s plugin presets touch the host process; `gb` and `bus` add no Mac-only code). Once
-`ag-listen` is on `main`, it also records G13's first Mac run (its dropouts and callback times while agents listen
-and edit beside p50): record them, then G13 is judged as G12 is (`crates/gates/src/realtime/live.rs`, `G13_RECORDED`).
+**Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main` once `mf3` is
+merged. The run at `a1e3c77` (2026-10-25) covered `br`, `gb`, `bus` and the agents tracks, and passed 13 of 16 rows;
+`mf3` fixes the rest but G12's rate, which is the Mac's setting
+([build-notes-mac.md](docs/designs/agents/build-notes-mac.md) says what each row should show next). The next run
+judges G12 at its designed set-up, reads the plugin host's background state with the new macOS code, and shows how
+long a listen of 2 bars takes on the efficiency cores. G13's first Mac numbers are recorded (callback p99 1,292 µs,
+0 dropouts, at 44.1 kHz); once a run lands its listens, G13 is judged as G12 is
+(`crates/gates/src/realtime/live.rs`, `G13_RECORDED`).
 
 After a green run the lead writes in the contract's PLAT-6 and the gates table: "macOS: green at <commit>", with
 G7f's numbers. If a row fails, fix it on Linux, check the mac lint, and ask for one more run. The Mac's pasted runs
@@ -130,7 +143,8 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `st-errors` | waited over 30 s for the Needs attention row of a missing sound file | once, at load 9; alone it passes |
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
-| `bus-mix` | "with nothing sent, the Reverb's meter stays at the floor" | once, in a full check of `ag-see`, passed on its retry; 18 runs alone and four at a time pass |
+| `bus-mix` | "with nothing sent, the Reverb's meter stays at the floor" | 3 of 31 runs (2026-10-21), 2 of them alone; on the Mac at `a1e3c77`, 2 of 2. Cause not known: its message doesn't say the level it read. In the nightly tier |
+| `sx-follow` | Chrome's page closed 2 s in ("Target closed", during a `$$eval`) | once on the Mac at `a1e3c77`; passed on its retry, 22 of 22 |
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
 
@@ -148,7 +162,7 @@ these or a real failure, and fixes the real ones (most were a read a moment too 
    recording (#24, #25), audio clips (#18), the Sampler (#22),
    meters after the fader (#20), sections (#23), scale help (#16).
 4. **Open owner decisions** (below): ask them, with the recommendation.
-5. **Opening the repository to everyone:** the owner's one-time GitHub steps are in [docs/maintainers.md](docs/maintainers.md).
+5. **Opening the repository to everyone:** the owner's one-time GitHub steps are in [docs/maintainers.md](docs/maintainers.md). Part 1 is done, all but making it public.
 
 The owner wants the app finished clean, with tokens conserved: no new features unless asked, no polish passes.
 
@@ -186,18 +200,17 @@ invisible Xvfb screen, with pictures sent to the owner.
 | What | Where |
 |---|---|
 | The contract, and the order of work | `docs/architecture.md` |
-| What each step and track built, decided and left | `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
+| What each step and track built, decided and left | `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `agents/` (the agents design and its five tracks' build notes); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
 | Kernel ABI v1 | `docs/kernel-abi.md` |
 | The look | `docs/designs/step8/taste.md` |
 | Each check's logs and summary | `$SCRATCH/check-<label>/` and `.tgz` (step 9's finals: `check-io`, `-ab`, `-ph`, `-sx`, `-pm`, `-ex`, `-br`, `-bus`) |
 | Pictures for the owner | `$SCRATCH/app-shots/<track>-<commit>/` |
 | Logs of long jobs | `$SCRATCH/logs/` |
 | The Mac's pasted runs | `$SCRATCH/mac-runs/` |
-| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. `origin/taste` and `origin/sounds` are old, all merged |
+| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. On GitHub only Dependabot's branches are left beside `main` |
 
 Engine and tooling items left by steps 7 and 8 that are not user gaps are in each build notes' "Left" or "For the
 lead" sections. The ones a next session most needs:
-- The live thread count and park or spin wait for the Mac sweep (row 3): one line each in `core/play/src/engines.rs`.
 - G12 isn't built with `--server`, `--export`, `--like-m1` or `--capture resample`.
 - The recorded tests aren't in `ci/check.sh`: `cargo test -p m2-play --release --test bit_identity --test live
   --test churn -- --ignored --nocapture` (about 10 minutes).
@@ -205,8 +218,8 @@ lead" sections. The ones a next session most needs:
 - K13: a note in the very block after a state change doesn't sound in Surge XT. K14: a plugin that applies a loaded
   state late can still win over the code's values.
 - The speed work's cuts 3 and 4 are held (the owner's call, only if the Mac misses G7f).
-- Contract *Today* lines that cite old line numbers: RENDER-15, 21, 30, ID-3, ID-12, FMT-20, PKG-4, 8, 10, 11,
-  MON-1, ABI-2 and 3. Platform design §3's OS-82, 83 and 84 still say "Designed"; they are built.
+- Platform design §3's OS-82, 83 and 84 still say "Designed"; they are built. (The contract's *Today* lines no
+  longer cite old line numbers.)
 
 ## How the work is done
 
@@ -231,7 +244,7 @@ lead" sections. The ones a next session most needs:
 | Long jobs | Anything over 2 minutes: `$SCRATCH/tw <name> '<command>'` (a small helper kept outside the repo) runs it in a window of tmux session `m2-sh`, which the owner watches; the log goes to `$SCRATCH/logs/`. It waits 9.5 minutes (`TW_WAIT=<seconds>` for longer, `TW_WAIT=1` to wait), then prints `$SCRATCH/tw-wait <channel> <log>` to wait again. No double quotes or parentheses in the command. Never send keys to the tmux sessions `m2`, `1`, `2` or `ssh_tmux`. |
 | Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` under `$SCRATCH`, `M2_AUDIO=none` and `M2_MIDI=none`, and then `CARGO_HOME` and `RUSTUP_HOME` set to your real home's `.cargo` and `.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
 | Disk | Scratch `target/` folders once filled 390 GB: share or clean them after each track. Never move a `target/` between worktrees uncleaned (it keeps the old paths). |
-| Test plugins | `ci/plugins.sh` (once): Surge XT 1.3.4 and Airwindows Consolidated into `~/.local/share/m2-test-plugins/clap`, from the archives in `~/.local/share/m2-test-plugins/dl` (Airwindows' zip is gone upstream: keep that copy). Never into `~/.clap` or `/usr/lib/clap`. Never delete anything under `$SCRATCH/plugins`. |
+| Test plugins | `ci/plugins.sh` (once): Surge XT 1.3.4 and Airwindows Consolidated into `~/.local/share/m2-test-plugins/clap`, from the archives in `~/.local/share/m2-test-plugins/dl` (Airwindows' zip is gone upstream: keep that copy; the `test-plugins` release on GitHub holds one too). Never into `~/.clap` or `/usr/lib/clap`. Never delete anything under `$SCRATCH/plugins`. |
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |
@@ -263,7 +276,7 @@ licences, the CI scripts' own cases), advisories (`ci/pr.sh advisories`: RustSec
 desktop app on Xvfb with `first-song` and `with-plugins`, a picture of each), rust tests, nightly list (Linux: every
 test `ci/nightly-tests.txt` names is there), clippy (a warning is an error), pool models, std kernels, `std.wasm` (rebuilt to the same bytes elsewhere), mac lint (Linux: the Mac-only code
 type-checked), browser suites, renders (against `e2e/renders.sha256`, one record for every OS), old engine S (with
-the gates), gates (the 7 runs `ci/gates.txt` names), repo unchanged.
+the gates), gates (the 8 runs `ci/gates.txt` names), repo unchanged.
 
 - Without the test plugins it says FAIL. Edit no tracked file while it runs.
 

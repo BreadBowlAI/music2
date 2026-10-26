@@ -8,7 +8,8 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -70,6 +71,40 @@ pub fn m2_in(home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         c.env(k, v);
     }
     c.output().unwrap()
+}
+
+/// [`m2_in`], started and not waited for: the process, and each line of its standard error as it
+/// comes (the process's output keeps only its standard output).
+pub fn m2_started(home: &Path, args: &[&str], env: &[(&str, &str)]) -> (Child, Receiver<String>) {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_m2"));
+    c.args(args).env("HOME", home).env("M2_AUDIO", "none").env("M2_MIDI", "none").env_remove("M2_AS");
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    let mut child = c.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let err = child.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(err).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    (child, rx)
+}
+
+/// The lines `rx` gives until one says `what`: however long the program takes to get there on a
+/// busy machine, but no longer than it runs. Fails, with what it said, when it ends first.
+pub fn until_said(rx: &Receiver<String>, what: &str) -> Vec<String> {
+    let mut got = vec![];
+    // Five minutes stands for "it hangs": the program ends long before when it can't get there.
+    while let Ok(l) = rx.recv_timeout(std::time::Duration::from_secs(300)) {
+        let done = l.contains(what);
+        got.push(l);
+        if done {
+            return got;
+        }
+    }
+    panic!("nothing said `{what}`: {got:?}");
 }
 
 pub fn said(o: &Output) -> String {

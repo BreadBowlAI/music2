@@ -203,6 +203,24 @@ fn an_import_in_the_app_makes_one_step_and_no_outside_step() {
     assert_eq!(graph.state().unwrap()["can_undo"], json!(false), "nothing else to undo");
 }
 
+// FMT-23: the song's files for agents are no part of it: editing them while it is open makes no
+// build, no step and no event.
+#[test]
+fn editing_the_songs_agents_md_makes_no_build_and_no_step() {
+    let (fixture, graph) = first_song();
+    let mut steps = steps_of(&graph);
+    until(&graph, 400, |_| false);
+    let revision = knob(&graph, 0.3).1;
+    fixture.put("AGENTS.md", "# Working on a music2 song\n");
+    fixture.put("CLAUDE.md", "@AGENTS.md\n");
+    until(&graph, 1500, |_| false);
+    fixture.put("AGENTS.md", "# Working on a music2 song\n\nMore words.\n");
+    until(&graph, 1500, |_| false);
+    assert_eq!(heard(&mut steps), Vec::<Value>::new(), "no step");
+    assert_eq!(knob(&graph, 0.3).1, revision, "no build");
+    assert_eq!(graph.state().unwrap()["can_undo"], json!(false), "nothing to undo");
+}
+
 // AGENT-2: Undo's name says whose step is next: the page's by its name, an outside one as an
 // outside change, by its file, in the state and in the Edit menu's words.
 #[test]

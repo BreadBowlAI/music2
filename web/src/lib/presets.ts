@@ -4,7 +4,7 @@
 // file, so it has no Undo.
 
 import { readJson } from "./graph";
-import { recorded } from "./history";
+import { editing, recorded } from "./history";
 import { token } from "./native";
 
 export interface PresetName {
@@ -84,17 +84,21 @@ export const presetsApi = {
     node: string,
     from: PresetFrom,
     name: string,
-  ) =>
-    request<Loaded>("/api/graph/preset/load", {
+  ) => {
+    const ours = editing();
+    return request<Loaded>("/api/graph/preset/load", {
       session,
       at,
       node,
       from,
       name,
-    }).then((r) => {
-      if (r.changed) recorded(session, r, { name: `loading ${name}` });
-      return r;
-    }),
+    })
+      .then((r) => {
+        if (r.changed) recorded(session, r, { name: `loading ${name}` }, ours);
+        return r;
+      })
+      .finally(() => ours.end());
+  },
 };
 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

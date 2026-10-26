@@ -5,7 +5,8 @@
 - Do them after the check in [HANDOFF.md](../HANDOFF.md) ("The owner's Mac command") has passed.
 - About two hours in all. You can do one part at a time, on different days.
 - After each part, tell the lead what you saw and heard. That is the last step of each part.
-- The steps are numbered 7 to 133, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
+- The steps are numbered 7 to 136, as they always were: steps 1 to 6 are the check itself, in HANDOFF.
+- **Examples** is a button on the start screen. If a song is open, press ⌘W (Close Song) first.
 
 **What you need**
 
@@ -45,23 +46,23 @@
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 7 | Type `cargo run --release -p music2-desktop`. | The app's start screen. |
-| 8 | Click **Open an Example**, then **With plugins**. Click the loop button, then press Space. | It plays round and round 4 bars. |
+| 7 | Type `cargo run --locked --release -p music2-desktop`. | The app's start screen. |
+| 8 | Click **Examples**, then **With plugins**. Click the loop button, then press Space. | It plays round and round 4 bars. |
 | 9 | Click **Export**, then **Save**. | "Paused for export" in the top bar, and the sound stops for a moment. |
 | 10 | Listen as it comes back. | It goes on where it paused, with no click, and the chord sounds again at once. |
 | 11 | While it plays, plug in headphones (or connect AirPods). | Playback stops, and a message says the sound output moved. |
 | 12 | Press Space. | It plays on, in the headphones. |
-| 13 | Quit the app. Type `cargo run --release -p m2-server --example reference -- /tmp/p50 --tracks 50`. | It makes a 50-track test song: more than the Mac plays smoothly. |
-| 14 | Type `cargo run --release -p music2-desktop -- /tmp/p50`, press Space, and let it play for a minute. | Gaps or clicks are fine, but it keeps playing: no "the audio device stopped responding". |
+| 13 | Quit the app. Type `cargo run --locked --release -p m2-server --example reference -- /tmp/p50 --tracks 50`. | It makes a 50-track test song: more than the Mac plays smoothly. |
+| 14 | Type `cargo run --locked --release -p music2-desktop -- /tmp/p50`, press Space, and let it play for a minute. | Gaps or clicks are fine, but it keeps playing: no "the audio device stopped responding". |
 | 15 | Look at the Terminal. | It may say `music2: the audio device reported … dropouts`: the count at work. |
-| 16 | Quit. Type `cargo run -p music2-desktop` (a slower test build), and play With plugins for a minute. | The Terminal never says "the audio thread allocated". |
+| 16 | Quit. Type `cargo run --locked -p music2-desktop` (a slower test build), and play With plugins for a minute. | The Terminal never says "the audio thread allocated". |
 | 17 | Tell the lead what you saw and heard at 9 to 16. | |
 
 **A check by ear of the new sounds** (about 5 minutes):
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 18 | Quit the app. Type `cargo run --release -p music2-desktop`. Click **Open an Example**, then **Pop sounds**. Press Space. | A short pop song: supersaws, an 808, FM keys, bells and drums. It sounds full, with no clicks. |
+| 18 | Quit the app. Type `cargo run --locked --release -p music2-desktop`. Click **Examples**, then **Pop sounds**. Press Space. | A short pop song: supersaws, an 808, FM keys, bells and drums. It sounds full, with no clicks. |
 | 19 | While it still plays (in its first 20 seconds), press Space to stop. Wait about 10 seconds. Press Space again. | It plays on from where it stopped. The wobble on the keys and the strings (their chorus) carries on smoothly, with no jump. |
 | 20 | Press Space, then Return, then Space. | It stops, goes back to bar 1, and plays from there, with no click. The wobble and the drums' noise carry on from where they were, so this play may differ a tiny bit from the export. That is expected for now: it is the open question in Open owner decisions. |
 | 21 | Tell the lead what you heard at 18 to 20, and whether 20 sounded right to you. | |
@@ -70,7 +71,7 @@
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 22 | Quit the app. Type `cargo run --release -p music2-desktop`. Open **first-song**. | The new look: one bar at the top (play, the tempo "124 BPM", "4/4", the song's name in the middle, Export), the tracks, and the dock below. The Mac's own font, and the Mac's menus as before (music2, File, Edit, Track, View, Transport, Window, Help). |
+| 22 | Quit the app. Type `cargo run --locked --release -p music2-desktop`. Open **first-song**. | The new look: one bar at the top (play, the tempo "124 BPM", "4/4", the song's name in the middle, Export), the tracks, and the dock below. The Mac's own font, and the Mac's menus as before (music2, File, Edit, Track, View, Transport, Window, Help). |
 | 23 | Press ⌘T. | + Track's list: Drums, Instruments, Sound design. Pick **Synth pad**: a new track below the selected one, and it plays with the rest. ⌘Z takes it out. |
 | 24 | Press ⌥3. Press C to loop, then Space. While it plays, drag Kick's fader up and down. | The Mix view: a strip per track, Master on the right. The level changes as you drag, smoothly, with no clicks; let go and it is written into `song.ts`. |
 | 25 | Drag Kick's pan knob a little (it reads "C" in grey). | Nothing changes until it moves; then the kick moves left or right, with no click. Two ⌘Z put the code back. |
@@ -85,7 +86,7 @@
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 32 | Quit the app. Type `cargo run --release -p music2-desktop`. Click **Open an Example**, then **First song**. Press Space. | Kick, hats, bass and keys play. |
+| 32 | Quit the app. Type `cargo run --locked --release -p music2-desktop`. Click **Examples**, then **First song**. Press Space. | Kick, hats, bass and keys play. |
 | 33 | While it plays, click **M** on Kick's row (right of its name). Then click it again. | The kick goes quiet at once, and a pill at the top says "1 muted". The second click brings it back. |
 | 34 | Click **S** on Bass's row. Then click it again. | Only the bass plays. The second click brings the others back. |
 | 35 | Press Space to stop. Click Kick's **⋯** (or right-click its name), then **Mute in song**. Click **Export**, then **Save**, then **Show in Finder** in the message, and play the file. Then press ⌘Z. | Kick's name is crossed out. The file has no kick. ⌘Z brings Kick back. |
@@ -98,7 +99,7 @@ bar, its Ctrl-click, and the sound.
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 39 | Quit the app. Type `cargo run --release -p music2-desktop`. Open **First song**. Press ⌥3, then Space. | The Mix view. Each strip has M, S and two thin bars beside its fader that move with the sound. |
+| 39 | Quit the app. Type `cargo run --locked --release -p music2-desktop`. Open **First song**. Press ⌥3, then Space. | The Mix view. Each strip has M, S and two thin bars beside its fader that move with the sound. |
 | 40 | While it plays, click **M** on the Keys strip, then **S** on the Bass strip. Click each again. | Keys goes quiet; then only the bass plays. The second clicks bring them back. The headers' M and S light up too. |
 | 41 | Drag the Hats fader down a lot. | The hats get quieter, but the Hats strip's bars don't move: they show the track before its fader. |
 | 42 | Press Space to stop. On the trackpad, pinch out over the timeline, then pinch in. | The timeline zooms in and out around your fingers. The window itself never zooms. |
@@ -145,7 +146,7 @@ bar, its Ctrl-click, and the sound.
 | 80 | In System Settings ▸ Privacy & Security ▸ Microphone, turn music2 off. Back in music2, press R on the audio track. | A message: "music2 can't use the microphone. Allow it in System Settings ▸ Privacy & Security ▸ Microphone." Nothing records. Turn it back on. |
 | 81 | With a USB microphone picked in Settings, press Space, then R, and speak. While it records, unplug the microphone. | The song plays on. A message (since track `ex`): "(the microphone) was unplugged, so the take ended there. It was kept up to then. The song plays on." A clip of your voice up to there. Plug it back in and press R: it records again. |
 | 82 | Tell the lead what you saw, heard and felt at 73 to 81. | |
-| 83 | Click **Open an Example**, then **Sampler**. Press Space. | Keys play a plucked sound, Drums a kick and a snare, in time. No clicks. |
+| 83 | Click **Examples**, then **Sampler**. Press Space. | Keys play a plucked sound, Drums a kick and a snare, in time. No clicks. |
 | 84 | Press Space to stop. + Track ▸ Sampler. In the Finder, drag a short WAV (one sound, like a drum hit) onto the Sampler's card in Device. | While you drag, the card says "Play it in Sampler". Let go: the card names the file. |
 | 85 | Press ⌘K. Press A, then S, D, F. | A plays the file as it is (A is middle C). S, D and F play it a little higher each time. |
 | 86 | Press ⌘K again, then ⌘Z. | The card says "Drop a WAV here" again. The file stays in the song's `assets` folder. |
@@ -155,7 +156,7 @@ bar, its Ctrl-click, and the sound.
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 88 | Quit the app. Type `cargo run --release -p music2-desktop`. Click **Open an Example**, then **With plugins**. Press Space. | It plays the Surge XT lead as before, with no clicks. |
+| 88 | Quit the app. Type `cargo run --locked --release -p music2-desktop`. Click **Examples**, then **With plugins**. Press Space. | It plays the Surge XT lead as before, with no clicks. |
 | 89 | Open Activity Monitor and type `music2` in its search box. | Two music2 programs: the app, and a second one that runs the plugins. |
 | 90 | Back in music2, click the **lead** track, then **Device** at the bottom. On the Surge XT box, click **Open window**. | Surge XT's own window opens. The button now says **Close window**. |
 | 91 | In Surge XT's window, turn the filter cutoff knob while it plays, and let go. | You hear the sound change as you turn. |
@@ -168,7 +169,7 @@ bar, its Ctrl-click, and the sound.
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 96 | Click **Open an Example**, then **Resample**. Press Space. Listen from 3 seconds in (bar 2, beat 3) to 5 seconds, then from 6 seconds (bar 4). | At 3 s the keys come back slower, stretched over 4 beats. Their pitch is the same as at the start. No wobble, no clicks, no echo. At 6 s they come back higher and stretched, still on the beat. |
+| 96 | Click **Examples**, then **Resample**. Press Space. Listen from 3 seconds in (bar 2, beat 3) to 5 seconds, then from 6 seconds (bar 4). | At 3 s the keys come back slower, stretched over 4 beats. Their pitch is the same as at the start. No wobble, no clicks, no echo. At 6 s they come back higher and stretched, still on the beat. |
 | 97 | Tell the lead what you heard at 96. | |
 | 98 | Open **Resample** again. Right-click the first clip on Chops (bar 1). Click **Follow tempo**. Press Space from the start. | It sounds as before. |
 | 99 | Double-click the tempo (120), type 90, press Return. Press Space from the start. | The first clip keeps in time with the kick, a little slower, at the same pitch. The second clip (not followed) plays more of its sound in the same time. |
@@ -181,7 +182,7 @@ that has a pitch wheel and a mod wheel):
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 103 | Open an Example ▸ First song. Click the **Bass** track, then **Device**. | Its card says "Plays one note at a time." under its name. Hold the mouse over that line: the rest of the sentence. |
+| 103 | **Examples** ▸ First song. Click the **Bass** track, then **Device**. | Its card says "Plays one note at a time." under its name. Hold the mouse over that line: the rest of the sentence. |
 | 104 | Plug in the MIDI keyboard. Keep Bass selected. Hold a low key. While holding it, press a higher key, then let it go. | One note at a time. The higher key slides up from the low one without starting again; let go, and it slides back to the low key. |
 | 105 | Hold a key and push the pitch wheel all the way up, then let it go. | The note bends up by two keys' worth (a whole step), and comes back when the wheel springs back. No click. |
 | 106 | Click the **Keys** track. Hold a chord and push the mod wheel up slowly, then back down. | The wobble in the pitch (vibrato) gets deeper as the wheel goes up, and is as before at the bottom. |
@@ -194,10 +195,10 @@ that has a pitch wheel and a mod wheel):
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 111 | Click **Open an Example**, then **First song**. **+ Track ▸ Audio track**. Press ⌘, for Settings. Under **Sound input**, pick the USB microphone. Close Settings. Unplug the USB microphone. Press R. | A message: "(the USB microphone) isn't plugged in, so this take records from (the Mac's microphone)…". It records. The pill says "1 problem"; click it: the same words. Press R to end the take. |
+| 111 | Click **Examples**, then **First song**. **+ Track ▸ Audio track**. Press ⌘, for Settings. Under **Sound input**, pick the USB microphone. Close Settings. Unplug the USB microphone. Press R. | A message: "(the USB microphone) isn't plugged in, so this take records from (the Mac's microphone)…". It records. The pill says "1 problem"; click it: the same words. Press R to end the take. |
 | 112 | Plug the USB microphone back in. Press R, speak, press R. | It records from the USB microphone. No message. The problem is gone. |
 | 113 | Press R and speak. While it records, unplug the USB microphone. | The song plays on. One message: "(the USB microphone) was unplugged, so the take ended there. It was kept up to then. The song plays on." A clip of your voice up to there. |
-| 114 | Quit music2. In the Terminal type `tccutil reset Microphone com.suite2.music2` (started from the Terminal, macOS asks for the Terminal: then `tccutil reset Microphone com.apple.Terminal`). Open music2 again, open the song, click the audio track, press R. When macOS asks to use the microphone, click **Don't Allow**. | The take stops by itself within a moment. A message: "music2 can't use the microphone. Allow it in System Settings ▸ Privacy & Security ▸ Microphone. The take was only silence, so it wasn't kept." No clip. The song plays on. |
+| 114 | Quit music2. In the Terminal type `tccutil reset Microphone ai.breadbowl.music2` (started from the Terminal, macOS asks for the Terminal: then `tccutil reset Microphone com.apple.Terminal`). Open music2 again, open the song, click the audio track, press R. When macOS asks to use the microphone, click **Don't Allow**. | The take stops by itself within a moment. A message: "music2 can't use the microphone. Allow it in System Settings ▸ Privacy & Security ▸ Microphone. The take was only silence, so it wasn't kept." No clip. The song plays on. |
 | 115 | Press R again. | The same "music2 can't use the microphone…" words. Nothing records. Then turn music2 (or the Terminal) back on in System Settings ▸ Privacy & Security ▸ Microphone. |
 | 116 | Tell the lead what you saw and heard at 111 to 115. | |
 
@@ -205,7 +206,7 @@ that has a pitch wheel and a mod wheel):
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 117 | Click **Open an Example**, then **First song**. In the side browser, under **Effects**, open **Plugins**. | After a moment it lists the installed effect plugins, Airwindows among them. **Look again** is at its foot. |
+| 117 | Click **Examples**, then **First song**. In the side browser, under **Effects**, open **Plugins**. | After a moment it lists the installed effect plugins, Airwindows among them. **Look again** is at its foot. |
 | 118 | Drag Airwindows onto the **Bass** track. Press Space. | A message says it was added after the bass, with **Undo**. Its card shows under **Device**. The song plays on, with no click. |
 | 119 | Press ⌘Z. | The plugin goes, in one step. |
 | 120 | **+ Track ▸ Plugins ▸ Surge XT**. Click the new track, then **Device**. On the Surge XT card, click **Open window**. | A new track named Surge XT. Surge XT's own window opens. |
@@ -219,7 +220,7 @@ that has a pitch wheel and a mod wheel):
 
 | # | Do this | You should see and hear |
 |---|---|---|
-| 126 | Click **Open an Example**, then **First song**. Press ⌥3 for Mix. Click **Add bus**, then **Reverb**. | A Reverb strip after Keys, with a merge mark before its name. Every other strip has a row "+ Reverb". A message says to turn up a track's Reverb knob. |
+| 126 | Click **Examples**, then **First song**. Press ⌥3 for Mix. Click **Add bus**, then **Reverb**. | A Reverb strip after Keys, with a merge mark before its name. Every other strip has a row "+ Reverb". A message says to turn up a track's Reverb knob. |
 | 127 | Press Space. On the Keys strip, click the **+** beside Reverb. | Within a moment the keys sound like they are in a room. No click. The Reverb strip's meter moves. |
 | 128 | While it plays, drag that small Reverb knob on Keys up, then down, and let go. | More room as it goes up, less as it goes down. No clicks, no crackle. |
 | 129 | Drag the Keys fader down to the bottom. Then right-click the Reverb knob on Keys and click **Before the fader**. | With the fader down, the keys and their room both go. After **Before the fader**, only the room comes back: a ghostly keys sound. A small dot on the knob. Press ⌘Z twice: as before. |
@@ -231,4 +232,22 @@ that has a pitch wheel and a mod wheel):
 
 | # | Do this | You should see and hear |
 |---|---|---|
-| 133 | Click **Open an Example**, then **First song**. Double-click the Bass clip, press B, then press on an empty row and drag right about a bar, up and down a little too, and let go. Then hold ⌥ and drag across a few grid steps on another row. Press ⌘Z twice. | The first drag makes one note that grows as you drag, on the row you pressed; you hear it while you hold and it stops when you let go. The ⌥-drag adds a short note in each step, each heard. Each ⌘Z takes back one drag's notes. Tell the lead what you saw and heard. |
+| 133 | Click **Examples**, then **First song**. Double-click the Bass clip, press B, then press on an empty row and drag right about a bar, up and down a little too, and let go. Then hold ⌥ and drag across a few grid steps on another row. Press ⌘Z twice. | The first drag makes one note that grows as you drag, on the row you pressed; you hear it while you hold and it stops when you let go. The ⌥-drag adds a short note in each step, each heard. Each ⌘Z takes back one drag's notes. Tell the lead what you saw and heard. |
+
+**`m2` inside the app** (`docsite`, about 5 minutes):
+
+| # | Do this | You should see and hear |
+|---|---|---|
+| 134 | Build the app as in `io` above: `(cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build --bundles app)`. Then in Terminal, in the music2 folder: `target/release/bundle/macos/music2.app/Contents/MacOS/m2 docs \| head -2` | The build says `bundle-m2.sh: target/release/m2 is ready` before it bundles. `m2 docs` prints "music2's guide, built into this m2 (0.1.0)…": the app carries `m2`. |
+| 135 | Open that `music2.app`. Click **New Song…**, name it "Agents test", and press **Create**. In Terminal: `grep "m2 for this song" ~/Music/music2/"Agents test"/AGENTS.md`, then `cat ~/Music/music2/"Agents test"/CLAUDE.md` | The first names the app's own `m2`: `…/music2.app/Contents/MacOS/m2`. The second says `@AGENTS.md`. The app shows neither file. |
+| 136 | Tell the lead what you saw at 134 and 135. | |
+
+**The downloaded app** (`release`, about 10 minutes; once the release workflow has run, on a pull request or a tag):
+
+| # | Do this | You should see and hear |
+|---|---|---|
+| 137 | On GitHub, open the release workflow's run (Actions → Release), and download the artifact **music2-macos** (or, on a tag, `music2-0.1.0-macos-arm64.zip` from the draft release). Unzip it until you have `music2.app`, and drag it into **Applications**. | One `music2.app`, about the size of the one you build. |
+| 138 | Open it. Click **Done** when macOS says it can't check it. Open **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway**, type your password, then click **Open Anyway** again. | The start screen. The steps are those the release notes give (`docs/releases/0.1.0.md`); tell the lead if any word or button differs. |
+| 139 | Click **New Song…**, keep **Starter beat**, press **Create**, then press Space. Then click **Export**, keep **Song**, and save it. | The song plays. The export lands in `~/Music/music2/Exports` and plays in QuickTime. |
+| 140 | Click **Examples**, then **First song**. Then, in Terminal: `/Applications/music2.app/Contents/MacOS/m2 --version`, then `grep "m2 for this song" ~/Music/music2/"My song"/AGENTS.md` | The example opens and plays. `m2 0.1.0`, with no warning from macOS (if macOS blocks `m2`, say so: then `xattr -dr com.apple.quarantine /Applications/music2.app` and try again). The song's `AGENTS.md` names `/Applications/music2.app/Contents/MacOS/m2`. |
+| 141 | Tell the lead what you saw at 137 to 140. | |

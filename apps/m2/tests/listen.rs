@@ -8,13 +8,25 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use app::{App, Temp, copy, example, said};
 use serde_json::{Value, json};
 
+/// One `m2 listen` of these tests at a time, as on a machine (AGENT-7): each test has a home of its
+/// own, so `~/.music2/listen.lock` doesn't keep their listens apart. Many at once, each at
+/// background priority, share what is left of the machine (on a Mac its two efficiency cores), and
+/// each waits far longer for a CPU than one alone: on the Mac's first full check ten ran at once,
+/// and a listen of one bar didn't end in a minute.
+fn one_listen() -> MutexGuard<'static, ()> {
+    static ONE: Mutex<()> = Mutex::new(());
+    ONE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// `m2 listen` with `home` as HOME, no device and no MIDI.
 fn listen(home: &Path, args: &[&str]) -> std::process::Output {
+    let _one = one_listen();
     app::m2_in(home, &[&["listen"], args].concat(), &[])
 }
 
@@ -259,8 +271,10 @@ fn m2_listen_png_writes_a_band_picture() {
     assert!(bright(2, high) > 2 * bright(2, low), "the hats: high {} against low {}", bright(2, high), bright(2, low));
 }
 
-/// `m2 listen` running in `home`, its standard error read line by line.
-fn spawn_listen(home: &Path, args: &[&str], env: &[(&str, &str)]) -> (Child, std::sync::mpsc::Receiver<String>) {
+/// `m2 listen` running in `home`, its standard error read line by line, and this test's turn to
+/// listen ([`one_listen`]): kept until the listen ends.
+fn spawn_listen(home: &Path, args: &[&str], env: &[(&str, &str)]) -> (Child, std::sync::mpsc::Receiver<String>, MutexGuard<'static, ()>) {
+    let one = one_listen();
     let mut c = Command::new(env!("CARGO_BIN_EXE_m2"));
     c.arg("listen").args(args).env("HOME", home).env("M2_AUDIO", "none").env("M2_MIDI", "none").env_remove("M2_AS");
     for (k, v) in env {
@@ -274,7 +288,7 @@ fn spawn_listen(home: &Path, args: &[&str], env: &[(&str, &str)]) -> (Child, std
             let _ = tx.send(line);
         }
     });
-    (child, rx)
+    (child, rx, one)
 }
 
 /// `~/.music2/listen.lock` in `home`, held by this process.
@@ -306,7 +320,7 @@ fn until_said(rx: &std::sync::mpsc::Receiver<String>, what: &str) -> Vec<String>
 fn a_second_listen_waits_for_the_first() {
     let (_temp, song, home) = first_song("listen-waits");
     let held = hold_the_lock(&home);
-    let (mut child, rx) = spawn_listen(&home, &[song.to_str().unwrap(), "--bars", "1-1", "--json"], &[]);
+    let (mut child, rx, _one) = spawn_listen(&home, &[song.to_str().unwrap(), "--bars", "1-1", "--json"], &[]);
     until_said(&rx, "waiting for another m2 listen");
     std::thread::sleep(Duration::from_millis(800));
     assert!(child.try_wait().unwrap().is_none(), "it waits while the other listens");
@@ -340,7 +354,7 @@ fn m2_listen_runs_at_background_priority() {
     put("data/p/lead.state.json", br#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#);
     put("data/p/lead.state", &m2_plugins::probe::state("", 1.0));
     let held = hold_the_lock(&home);
-    let (child, rx) = spawn_listen(&home, &[song.to_str().unwrap(), "--bars", "1-1", "--json"], &[("M2_PROBE", "1")]);
+    let (child, rx, _one) = spawn_listen(&home, &[song.to_str().unwrap(), "--bars", "1-1", "--json"], &[("M2_PROBE", "1")]);
     until_said(&rx, "waiting for another m2 listen");
     #[cfg(target_os = "linux")]
     {
@@ -358,7 +372,10 @@ fn m2_listen_runs_at_background_priority() {
         assert!(threads.iter().all(|&(_, policy)| policy == 5), "every thread's policy is SCHED_IDLE: {threads:?}");
     }
     drop(held);
-    let v = json_of(&child.wait_with_output().unwrap());
+    let o = child.wait_with_output().unwrap();
+    // Its standard error went to `rx`: what it said, should it fail.
+    assert!(o.status.success(), "m2 listen: {:?}", the_rest(&rx));
+    let v = json_of(&o);
     assert_eq!(v["priority"], json!({"threads": "background", "plugin_host": "background"}), "{v:#}");
 }
 
@@ -658,19 +675,30 @@ fn held_by_a_silent_app(name: &str) -> (Temp, PathBuf, PathBuf, m2_session::Sess
     (temp, song, home, writer)
 }
 
-/// `m2 listen args…` in `home`, ended if it takes longer than `limit`: its output, or None.
-fn listen_within(home: &Path, args: &[&str], limit: Duration) -> Option<std::process::Output> {
-    let (mut child, _err) = spawn_listen(home, args, &[]);
+/// `m2 listen args…` in `home`, ended if it takes longer than `limit`: its output, or what it said
+/// before it was ended.
+fn listen_within(home: &Path, args: &[&str], limit: Duration) -> Result<std::process::Output, Vec<String>> {
+    let (mut child, err, _one) = spawn_listen(home, args, &[]);
     let t = Instant::now();
     while t.elapsed() < limit {
         if child.try_wait().unwrap().is_some() {
-            return Some(child.wait_with_output().unwrap());
+            return Ok(child.wait_with_output().unwrap());
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     let _ = child.kill();
     let _ = child.wait();
-    None
+    Err(the_rest(&err))
+}
+
+/// What `rx` still has to say: its lines until it ends, or until 5 s pass with nothing new (a
+/// plugin host it started may hold its standard error a moment longer).
+fn the_rest(rx: &std::sync::mpsc::Receiver<String>) -> Vec<String> {
+    let mut got = vec![];
+    while let Ok(l) = rx.recv_timeout(Duration::from_secs(5)) {
+        got.push(l);
+    }
+    got
 }
 
 // The review of ag-listen, F15: with the app open, `m2 listen` asks it only for what the range or
@@ -681,10 +709,12 @@ fn a_busy_app_never_holds_up_a_listen() {
     let (_temp, song, home, _writer) = held_by_a_silent_app("listen-silent-app");
     let dir = song.to_str().unwrap();
     let limit = Duration::from_secs(60);
-    let o = listen_within(&home, &[dir, "--bars", "1-1", "--json"], limit).expect("it didn't wait for the app");
+    let o = listen_within(&home, &[dir, "--bars", "1-1", "--json"], limit)
+        .unwrap_or_else(|said| panic!("it didn't wait for the app: {said:?}"));
     let v = json_of(&o);
     assert!(v["app"].is_null(), "it didn't ask: {v:#}");
-    let o = listen_within(&home, &[dir, "--bars", "1-1", "--as-heard", "--json"], limit).expect("it gave up on the app");
+    let o = listen_within(&home, &[dir, "--bars", "1-1", "--as-heard", "--json"], limit)
+        .unwrap_or_else(|said| panic!("it gave up on the app: {said:?}"));
     let v = json_of(&o);
     assert!(v["app"].as_str().is_some_and(|s| s.contains("didn't answer")), "{v:#}");
     assert_eq!(v["as_heard"], json!(true));

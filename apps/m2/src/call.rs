@@ -40,6 +40,45 @@ pub fn routes(args: &[String]) -> Result<()> {
     say(text.as_bytes())
 }
 
+/// The guide's page of every route, `docs/guide/routes.md`, as `m2 docs routes` prints it: made
+/// from the one route table (AGENT-8), as `m2 routes` is.
+pub fn page() -> String {
+    let all = api::all();
+    let mut out = String::from(
+        "<!-- Made by `m2 docs routes` from the app's route table (crates/server/src/routes*.rs): change it there, then run ci/guide.sh gen. -->\n\
+         # API routes\n\n\
+         **In short**\n\
+         - Every route of the app's local API, from its one route table: the ones for agents first, then the musician's own.\n\
+         - `m2 call <song> <path>` sends one as an agent. `m2 routes` prints this table in the terminal, `m2 routes --json` as JSON.\n\
+         - A route that writes makes one undo step, the agent's, and waits while the musician holds what it changes.\n\n\
+         How to reach the app, its keys and its answers: [The local API](api.md). The song's `session` is filled in by \
+         `m2 call` when the body leaves it out, and a GET's keys go in its query. A body may be up to 2 MiB, unless the \
+         route says more.\n\n\
+         ## For agents\n",
+    );
+    for r in all.iter().filter(|r| r.agents) {
+        out += &format!("\n### `{} {}`\n\n{}.", r.method, r.path, r.words.trim_end_matches('.'));
+        if r.writes {
+            out += " It writes the song: one undo step.";
+        }
+        if r.limit > api::BODY {
+            out += &format!(" Bodies up to {}.", mib(r.limit));
+        }
+        let example = r.example();
+        if example.as_object().is_some_and(|o| !o.is_empty()) {
+            let what = if r.method == "GET" { "Its query, as JSON" } else { "An example body" };
+            out += &format!("\n\n{what}:\n\n```json\n{}\n```", r.example.trim());
+        }
+        out += "\n";
+    }
+    out +=
+        "\n## The musician's own\n\nThe tools key gets 403 for these (AGENT-11): ask the musician, or show them where with `m2 point`.\n";
+    for r in all.iter().filter(|r| !r.agents) {
+        out += &format!("\n### `{} {}`\n\n{}.\n", r.method, r.path, r.words.trim_end_matches('.'));
+    }
+    out
+}
+
 /// `m2 call <song> <path> [<json> | -] [--method M]`: the route's request, sent to the app that has
 /// the song open, as an agent (`--as`, `--why`). It prints the app's answer: JSON, or the bytes
 /// it sent (a waveform's peaks). A status of 400 or more exits 1, busy 3.

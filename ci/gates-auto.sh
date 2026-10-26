@@ -47,6 +47,9 @@
 # build and the 7 runs of ci/gates.txt touched the repo only in crates/gates, crates/server,
 # examples/with-plugins, std/, target/ and rust-toolchain.toml: nothing under web/, docs/, e2e/,
 # README.md or HANDOFF.md.
+# Checked again for the docs plan at d2e7d64 (2026-10-25), by hand as above: docs/guide/ is read
+# only by apps/m2's build script and tests, and m2-gates doesn't build the m2 package (none of its
+# dependencies is m2); m2-server now embeds templates/song-agents.md, which isn't free. No change.
 GATES_FREE="web/ docs/ README.md HANDOFF.md"
 # GATES_BUILT: build output git ignores that the gates don't read as source: cargo's target/ (the
 # gates build into it, and cargo decides what to rebuild), std's kernels' target/ (std.wasm is

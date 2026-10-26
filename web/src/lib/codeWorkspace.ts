@@ -6,7 +6,7 @@
 import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api";
 import { codeApi, onDisk, type ProjectFiles } from "./code";
 import type { GraphState, Problem } from "./graph";
-import { recorded } from "./history";
+import { editing, recorded } from "./history";
 import { useStore } from "./store";
 
 export interface Doc {
@@ -158,6 +158,7 @@ export class Workspace {
     const version = d.model.getAlternativeVersionId();
     d.saving = text;
     this.emit();
+    const ours = editing();
     try {
       const was = useStore.getState().graph?.view.revision ?? Infinity;
       const r = await codeApi.save(this.session, d.path, d.base, text);
@@ -165,7 +166,7 @@ export class Workspace {
         d.base = text;
         d.saved = version;
         // A save that compiles is a new revision and an undo step: the top bar's Undo names it.
-        if (r.graph.view.revision > was && !r.graph.view.draft_errors.length) recorded(this.session, { revision: r.graph.view.revision, step: r.step }, { name: "the code edit" });
+        if (r.graph.view.revision > was && !r.graph.view.draft_errors.length) recorded(this.session, { revision: r.graph.view.revision, step: r.step }, { name: "the code edit" }, ours);
         onGraph(r.graph);
       } else if (r.current === text) {
         // Someone wrote exactly this already.
@@ -176,6 +177,7 @@ export class Workspace {
         d.conflict = true;
       }
     } finally {
+      ours.end();
       d.saving = undefined;
       this.epoch++;
       this.emit();

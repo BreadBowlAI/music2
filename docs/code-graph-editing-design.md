@@ -1,8 +1,8 @@
 # Code and graph editing design
 
-Design proposal, 11 October 2026. Responds to [the editing brief](code-graph-editing-brief.md) and builds on [Song as a program](song-as-program.md). The APIs below describe the broader design, not a claim that every operation is implemented.
+**In short:** the design proposal of 11 October 2026 for editing a song both as code and as a graph. Responds to [the editing brief](code-graph-editing-brief.md) and builds on [Song as a program](song-as-program.md). The APIs below describe the broader design, not a claim that every operation is implemented. Its **Built** and **Not built yet** notes date from 12 and 13 October (up to step 5) and aren't kept up to date: what exists now is in the contract's *Today* lines.
 
-**The [architecture contract](architecture.md) (2026-10-12) is normative** and wins wherever it disagrees with this proposal. This page keeps the reasoning, and the design of the editor side (lenses, planners, the canvas), which moves into `crates/editor`. Superseded sections are marked and point to the contract.
+**The [architecture contract](architecture.md) (2026-10-12) is normative** and wins wherever it disagrees with this proposal. This page keeps the reasoning, and the design of the editor side (lenses, planners, the canvas), which moved into `crates/editor` in step 6. Superseded sections are marked and point to the contract.
 
 | Section | Status | In the contract |
 |---|---|---|
@@ -16,20 +16,20 @@ Design proposal, 11 October 2026. Responds to [the editing brief](code-graph-edi
 | [Concurrent editing and undo](#concurrent-editing-and-undo) | Superseded | [Writes](architecture.md#writes) |
 | [The operation protocol](#the-operation-protocol) | Superseded | [WRITE-3 to WRITE-5](architecture.md#the-two-write-primitives) |
 | [The twelve hard cases](#the-twelve-hard-cases) | Current; cases 10 and 11 updated | [Opening a project](architecture.md#opening-a-project), [Identity](architecture.md#identity) |
-| [Changes to the existing implementation](#changes-to-the-existing-implementation) | Status as of 2026-10-11 | [Order of work](architecture.md#order-of-work) |
+| [Changes to the existing implementation](#changes-to-the-existing-implementation) | Status as of step 5 (2026-10-13) | [Order of work](architecture.md#order-of-work) |
 | [Prototype sequence and acceptance tests](#prototype-sequence-and-acceptance-tests) | Sequence superseded; fixture table kept as editor tests | [Order of work](architecture.md#order-of-work) |
 | [Performance budget](#performance-budget) | Superseded | [Planes of change](architecture.md#planes-of-change) |
 | [Alternatives and remaining questions](#alternatives-and-remaining-questions) | Current | — |
 
-**Current implementation:** the canvas supports a restricted literal-editing subset with a `LiteralLens` that reads a numeric source range and proposes a replacement. Identity resolution and independent candidate verification remain in `Session`. Direct literals, negative literals without intervening comments, unit constructors and unambiguous object properties are editable; computed/indirect expressions and ambiguous objects are read-only. Shared recorded unit values have a named source node and visible consumer connections. Preview requests identify the open project session, revision and control; they use the same numeric normalization as save. Invalid drafts disable edits. Unit values are opaque to JavaScript (no `.value`, no arithmetic), so every use of a written value is visible to the graph. Previews and commits carry a drag across saves that don't touch its value, which the contract keeps for leases ([WRITE-22](architecture.md#gesture-leases)). Since step 1, value undo finds its control by where its bytes are, never by a stale origin, and the app shows lane data no lane reads, with Relink and Delete fixes ([DIAG-6](architecture.md#fixes)). Cables (`edit/cable.rs`) connect and disconnect within one file: an outlet is a `const` bound to a call that returned one top-level signal (the SDK records each call's output); connecting writes its name in place of a control's written value, and disconnecting writes the default the receiving ports declare, refusing when they declare none. Both are verified by comparing graphs up to node numbering: connecting must equal the old graph with that value's constants rewired to the outlet, and disconnecting must give a graph that rewires back to the old one. Effects (`edit/effect.rs`): packages declare insertable effects in their manifest (`[[effect]]`); adding one wraps a call's audio where it is written (`pluck(…)` → `delay(pluck(…))`, importing the name if needed), and removing unwraps it. Both are verified by taking the effect call's own nodes out and reading its input in place of its output, which must give exactly the graph without it. Undo and redo cover every edit made through the session; a structural edit is reverted only while the code is exactly as that edit left it. Cross-file cables (exports/imports), adding and deleting arbitrary nodes, generalized alias tracing, multi-client preview leases and the performance measurements below remain future work.
+**The implementation on 2026-10-12:** the canvas supports a restricted literal-editing subset with a `LiteralLens` that reads a numeric source range and proposes a replacement. Identity resolution and independent candidate verification remain in `Session`. Direct literals, negative literals without intervening comments, unit constructors and unambiguous object properties are editable; computed/indirect expressions and ambiguous objects are read-only. Shared recorded unit values have a named source node and visible consumer connections. Preview requests identify the open project session, revision and control; they use the same numeric normalization as save. Invalid drafts disable edits. Unit values are opaque to JavaScript (no `.value`, no arithmetic), so every use of a written value is visible to the graph. Previews and commits carry a drag across saves that don't touch its value, which the contract keeps for leases ([WRITE-22](architecture.md#gesture-leases)). Since step 1, value undo finds its control by where its bytes are, never by a stale origin, and the app shows lane data no lane reads, with Relink and Delete fixes ([DIAG-6](architecture.md#fixes)). Cables (`edit/cable.rs`) connect and disconnect within one file: an outlet is a `const` bound to a call that returned one top-level signal (the SDK records each call's output); connecting writes its name in place of a control's written value, and disconnecting writes the default the receiving ports declare, refusing when they declare none. Both are verified by comparing graphs up to node numbering: connecting must equal the old graph with that value's constants rewired to the outlet, and disconnecting must give a graph that rewires back to the old one. Effects (`edit/effect.rs`): packages declare insertable effects in their manifest (`[[effect]]`); adding one wraps a call's audio where it is written (`pluck(…)` → `delay(pluck(…))`, importing the name if needed), and removing unwraps it. Both are verified by taking the effect call's own nodes out and reading its input in place of its output, which must give exactly the graph without it. Undo and redo cover every edit made through the session; a structural edit is reverted only while the code is exactly as that edit left it. Cross-file cables (exports/imports), adding and deleting arbitrary nodes, generalized alias tracing, multi-client preview leases and the performance measurements below remain future work.
 
 **Built:**
-- `LiteralLens` edits of written literals (`core/session/src/edit/lens.rs`), and sites (`core/script/src/sites.rs`).
-- Cables within one file (`edit/cable.rs`).
-- Adding and removing effects (`edit/effect.rs`).
+- `LiteralLens` edits of written literals (`core/session/src/edit/lens.rs`, now `crates/editor/src/lens.rs`), and sites (`core/script/src/sites.rs`).
+- Cables within one file (`edit/cable.rs`, now `crates/editor/src/cable.rs`).
+- Adding and removing effects (`edit/effect.rs`, now `crates/editor/src/effect.rs`).
 - Undo and redo through the session.
 
-**Not built yet:**
+**Not built yet then:**
 - The descriptor-style `component()` below. What was built is `component({ controls: [...] }, fn)`, which only names the control paths. (Step 5 builds the contract's shape: [Component descriptors](architecture.md#component-descriptors).)
 - `key()`. (Step 4: [ID-7](architecture.md#keys).)
 - The split into `EditCapability` and `BuildArtifacts`.
@@ -37,7 +37,7 @@ Design proposal, 11 October 2026. Responds to [the editing brief](code-graph-edi
 - Rename, automate, extract, and connecting across tracks.
 - Preview leases, the journal and crash recovery, and the editor bridge. (Leases and the journal are specified in [Writes](architecture.md#writes); the editor bridge is not planned yet.)
 - The `EditRequest`/`EditResult` prepare/commit protocol. (Superseded by `check(Tx)` and `commit(Tx)`.)
-- A `core/edit` crate. Editing lives in `core/session/src/edit/`. (Superseded: lenses, planners and the view move to `crates/editor`, and core keeps `save`, `Tx` and `GraphDelta`.)
+- A `core/edit` crate. Editing lived in `core/session/src/edit/`. (Superseded: lenses, planners and the view moved to `crates/editor` in step 6, and core keeps `save`, `Tx` and `GraphDelta`.)
 - The property tests and the performance table.
 
 **Build a source editor whose second interface is a component graph.** Compile TypeScript into both an authoring graph and the existing execution graph. Give each editable argument a small, checked source lens: a way to read its value and propose a precise text change. Let components declare their musical controls, and retain those controls as addressable values in the runtime.
@@ -274,7 +274,7 @@ Fallbacks such as `o.cutoff ?? hz(600)` in legacy builders are construction logi
 
 ### Structural gestures
 
-**Not built yet**, except connect and disconnect (within one file) and adding and removing effects, which work as described in the "Current implementation" paragraph at the top.
+**Not built yet**, except connect and disconnect (within one file) and adding and removing effects, which work as described in "The implementation on 2026-10-12" at the top.
 
 | Gesture | Source operation and restrictions |
 | --- | --- |
@@ -469,7 +469,7 @@ Lane keys and track keys are data addresses, unlike ordinary binding labels. Ren
 
 ## Changes to the existing implementation
 
-| Area | Required change | Status (October 2026) |
+| Area | Required change | Status (step 5, 2026-10-13) |
 | --- | --- | --- |
 | `core/script/src/lib.rs` | Retain original source/token/semantic indexes before stripping; instrument supported calls; load through an immutable source provider instead of reading candidate code from live disk | Partly built: calls are instrumented (`sites.rs`, with byte ranges and argument structure), and a candidate compiles from an in-memory snapshot. |
 | `core/script/sdk/core.ts` | Add component descriptors and invocation frames; normalize control inputs; record origin roles and instance paths; preserve scopes and argument ownership | Partly built: since step 5, `component(descriptor, body)` declares a component's inputs, controls (unit, default, range, smoothing), settings and editor metadata; every declared control becomes one constant whose origin names its instance and slot, and every call is a frame with its ComponentId ([Component descriptors](architecture.md#component-descriptors)). Instance paths that survive edits (SiteIds) are **Not built yet**. |
@@ -477,13 +477,13 @@ Lane keys and track keys are data addresses, unlike ordinary binding labels. Ren
 | `core/ir/src/check.rs` | Retain control addresses through flattening and constant folding; expose a canonical checked representation before pruning loses authoring information | Partly built: a constant with an origin is never folded into a kernel input, so it stays addressable. |
 | `core/runtime/src/lib.rs` | Add prepared control cells and preview messages, voice mappings, and a runtime ownership model for state retention and plan activation | Partly built: since step 5 every constant with an origin is a cell, written through its renderer's slots and heard at the next block line everywhere it is used, voices included (`core/runtime/src/cells.rs`). Kernel state kept across plans is **Not built yet**. |
 | `core/session/src/lib.rs` | Add snapshots, candidate verification, revision acceptance, journaling, conflict detection, undo, and subscription events around the current compile operation | Partly built: snapshots, candidate verification, revisions, conflict detection and undo (`core/session/src/edit.rs`). The journal and subscription events are **Not built yet**. |
-| New `core/edit` crate | Own syntax lenses, capability derivation, semantic operation planning, byte patches, and graph-delta comparison | Partly built, inside `core/session/src/edit/` rather than as its own crate: the literal lens, byte patches and graph comparison. **Superseded:** lenses, planners and the view move to `crates/editor`; core keeps `save`, `Tx`, `GraphDelta` and its checkers ([WRITE-10](architecture.md#expectations-and-the-delta)). |
+| New `core/edit` crate | Own syntax lenses, capability derivation, semantic operation planning, byte patches, and graph-delta comparison | Partly built, inside `core/session/src/edit/` rather than as its own crate: the literal lens, byte patches and graph comparison. **Superseded:** lenses, planners and the view moved to `crates/editor` in step 6; core keeps `save`, `Tx`, `GraphDelta` and its checkers ([WRITE-10](architecture.md#expectations-and-the-delta)). |
 | `core/song` | Read timeline data from snapshots; implement lane/track path migration and guarded data edits | Partly built: timeline data is read from snapshots, and notes lanes are written by a checked edit. **Superseded:** no path migration in core; format v1 and `DataPath` own every path, and the fixtures are converted once by script ([Project format v1](architecture.md#project-format-v1)). |
-| `std/src` | Generate direct kernel wrapper descriptors, declare convenience adapters, and progressively register instruments, effects, and dictionary components | Partly built: effects are registered as `[[effect]]` entries in `std/m2pkg.toml`. Generated wrappers are **Not built yet**. Step 5 rewrites std on [component descriptors](architecture.md#component-descriptors) and deletes `[[effect]]`. |
+| `std/src` | Generate direct kernel wrapper descriptors, declare convenience adapters, and progressively register instruments, effects, and dictionary components | Partly built: step 5 rewrote std on [component descriptors](architecture.md#component-descriptors), whose `editor` field replaced the `[[effect]]` entries in `std/m2pkg.toml`. Generated wrappers are **Not built yet**. |
 
 When this was written, the core had two consequential gaps. The first is closed. The checker used to fold connected constants into `Input::Const`, so a preview could not work just by updating the original IR constant. Now a constant with an origin is never folded: it stays its own node (`core/ir/src/check.rs`), and since step 5 it is a cell, which a write refills everywhere it is used, voices included, at the next block line (`core/runtime/src/cells.rs`). A knob drag previews live this way, without a separate `Input::Param` cell.
 
-The second is still open. The core runtime is a renderer with a Wasmtime store, while the session supplies compilation and timeline validation. A running-state arena and atomic plan activation are **Not built yet**: an edit that changes the graph builds a new renderer and replays it up to the playhead. The transactional editor exists for single edits (`core/session/src/edit.rs`); multi-edit transactions are **Not built yet**.
+The second was still open then; steps 3 and 6 closed it since ([Order of work](architecture.md#order-of-work)). The core runtime is a renderer with a Wasmtime store, while the session supplies compilation and timeline validation. A running-state arena and atomic plan activation are **Not built yet**: an edit that changes the graph builds a new renderer and replays it up to the playhead. The transactional editor exists for single edits (`core/session/src/edit.rs`); multi-edit transactions are **Not built yet**.
 
 ## Prototype sequence and acceptance tests
 
@@ -516,7 +516,7 @@ What was built handles these cases differently:
 - **Connecting** replaces a written literal with the outlet's name; it doesn't replace an expression such as `blend(...)`.
 - **Disconnecting** writes the default the input declares in place of the name, rather than removing the property.
 - **Adding a delay** wraps the call where it is written (`bass(…)` → `delay(bass(…), {…})`) instead of extracting bindings.
-- Deleting with bypass, adding and deleting other nodes, and automating are not built yet.
+- Deleting with bypass, adding and deleting other nodes, and automating were not built then.
 
 Adding an effect to an expression-bodied arrow necessarily changes syntax around that body. Preserve existing expression bytes and comments where possible and declare the added braces/return as part of the patch. Minimal means the smallest correct edit for that operation, not that every gesture changes a single range.
 

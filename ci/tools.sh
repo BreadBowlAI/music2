@@ -1,9 +1,9 @@
 #!/bin/bash
-# ci/tools.sh: the three tools ci/pr.sh needs beyond rustup and Node, each a pinned release,
+# ci/tools.sh: the four tools ci/pr.sh needs beyond rustup and Node, each a pinned release,
 # checked against its sha256 below before it is unpacked. The same versions in CI and on your
 # machine, so a check that passes here passes there.
 #
-#   ci/tools.sh [nextest] [deny] [actionlint]   (no names: all three)
+#   ci/tools.sh [nextest] [deny] [actionlint] [mdbook]   (no names: all four)
 #
 # In short: each tool goes into its own folder under the cache (M2_TOOLS, default
 # ~/.cache/m2-tools), once; later runs find it there. The last line printed is a PATH fragment
@@ -16,10 +16,13 @@
 #   cargo-nextest 0.9.146  the Rust test runner that splits the tests across CI jobs
 #   cargo-deny    0.20.2   licences, advisories and sources of the Rust dependencies (deny.toml)
 #   actionlint    1.7.12   the workflow files in .github/workflows
+#   mdbook        0.5.4    the guide's website, from docs/guide/ (ci/guide.sh; pinned 2026-10-25,
+#                          released 2026-07-06)
 set -u
 NEXTEST=0.9.146
 DENY=0.20.2
 ACTIONLINT=1.7.12
+MDBOOK=0.5.4
 CACHE=${M2_TOOLS:-${XDG_CACHE_HOME:-$HOME/.cache}/m2-tools}
 
 case "$(uname -s) $(uname -m)" in
@@ -29,27 +32,33 @@ case "$(uname -s) $(uname -m)" in
     DENY_DIR=cargo-deny-$DENY-x86_64-unknown-linux-musl
     DENY_SUM=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
     ACTIONLINT_FILE=actionlint_${ACTIONLINT}_linux_amd64.tar.gz
-    ACTIONLINT_SUM=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 ;;
+    ACTIONLINT_SUM=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    MDBOOK_FILE=mdbook-v$MDBOOK-x86_64-unknown-linux-gnu.tar.gz
+    MDBOOK_SUM=3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7 ;;
   "Darwin arm64")
     NEXTEST_FILE=cargo-nextest-$NEXTEST-universal-apple-darwin.tar.gz
     NEXTEST_SUM=39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8
     DENY_DIR=cargo-deny-$DENY-aarch64-apple-darwin
     DENY_SUM=fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3
     ACTIONLINT_FILE=actionlint_${ACTIONLINT}_darwin_arm64.tar.gz
-    ACTIONLINT_SUM=aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f ;;
+    ACTIONLINT_SUM=aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
+    MDBOOK_FILE=mdbook-v$MDBOOK-aarch64-apple-darwin.tar.gz
+    MDBOOK_SUM=03e8a6d8b13a2971e0b3280affd03b388373c1485e26f73407c3a76b0b1838df ;;
   *)
-    echo "ci/tools.sh: no pinned builds for $(uname -s) $(uname -m). Install cargo-nextest $NEXTEST, cargo-deny $DENY"
-    echo "and actionlint $ACTIONLINT yourself (cargo install --locked cargo-nextest@$NEXTEST cargo-deny@$DENY;"
-    echo "go install github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT), put them on PATH, and set M2_TOOLS=path."
+    echo "ci/tools.sh: no pinned builds for $(uname -s) $(uname -m). Install cargo-nextest $NEXTEST, cargo-deny $DENY,"
+    echo "actionlint $ACTIONLINT and mdbook $MDBOOK yourself (cargo install --locked cargo-nextest@$NEXTEST cargo-deny@$DENY"
+    echo "mdbook@$MDBOOK; go install github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT), put them on PATH, and set"
+    echo "M2_TOOLS=path."
     if [ "${M2_TOOLS:-}" != path ]; then exit 1; fi ;;
 esac
 # M2_TOOLS=path: the tools already on PATH, whatever their versions (said, not refused).
 if [ "${M2_TOOLS:-}" = path ]; then
-  if [ $# -eq 0 ]; then set -- nextest deny actionlint; fi
+  if [ $# -eq 0 ]; then set -- nextest deny actionlint mdbook; fi
   path=
   for t in "$@"; do
     case $t in nextest) b=cargo-nextest; want=$NEXTEST ;; deny) b=cargo-deny; want=$DENY ;; actionlint) b=actionlint; want=$ACTIONLINT ;;
-      *) echo "ci/tools.sh: no tool $t (nextest, deny, actionlint)" >&2; exit 2 ;; esac
+      mdbook) b=mdbook; want=$MDBOOK ;;
+      *) echo "ci/tools.sh: no tool $t (nextest, deny, actionlint, mdbook)" >&2; exit 2 ;; esac
     if ! w=$(command -v $b); then echo "ci/tools.sh: M2_TOOLS=path, but $b isn't on PATH" >&2; exit 1; fi
     case $("$w" --version 2> /dev/null | head -1) in *"$want"*) ;; *) echo "ci/tools.sh: $w isn't version $want: CI uses $want" >&2 ;; esac
     path=$path${path:+:}$(dirname "$w")
@@ -90,7 +99,7 @@ get() {
   rm -rf "$tmp"
 }
 
-if [ $# -eq 0 ]; then set -- nextest deny actionlint; fi
+if [ $# -eq 0 ]; then set -- nextest deny actionlint mdbook; fi
 mkdir -p "$CACHE" || exit 1
 path=
 for t in "$@"; do
@@ -107,7 +116,11 @@ for t in "$@"; do
       get actionlint-$ACTIONLINT "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT/$ACTIONLINT_FILE" \
         $ACTIONLINT_SUM actionlint || exit 1
       path=$path${path:+:}$CACHE/actionlint-$ACTIONLINT ;;
-    *) echo "ci/tools.sh: no tool $t (nextest, deny, actionlint)" >&2; exit 2 ;;
+    mdbook)
+      get mdbook-$MDBOOK "https://github.com/rust-lang/mdBook/releases/download/v$MDBOOK/$MDBOOK_FILE" \
+        $MDBOOK_SUM mdbook || exit 1
+      path=$path${path:+:}$CACHE/mdbook-$MDBOOK ;;
+    *) echo "ci/tools.sh: no tool $t (nextest, deny, actionlint, mdbook)" >&2; exit 2 ;;
   esac
 done
 echo "$path"

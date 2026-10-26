@@ -1,6 +1,6 @@
 # e2e: browser suites for the music2 UI
 
-Each suite drives the real web UI in headless Chrome against the **headless server**
+In short: each suite drives the real web UI in headless Chrome against the **headless server**
 (`crates/server/examples/headless.rs`), on a fresh copy of a fixture and a scratch `HOME`, and
 prints one `PASS`/`FAIL` line per check. Nothing reads or writes the real `~/.music2` or `~/Music`.
 
@@ -8,8 +8,10 @@ prints one `PASS`/`FAIL` line per check. Nothing reads or writes the real `~/.mu
 
 ```sh
 (cd e2e && npm ci)                   # puppeteer-core 24.43.1 (no browser download)
-cargo build -p m2-server --example headless && cargo build -p m2   # the server; the CLI for `export`
-(cd web && npm run build)            # the server serves web/dist
+(cd e2e && node_modules/.bin/browsers install chrome-headless-shell@133.0.6943.141 --path ~/.cache/puppeteer)
+                                     # the browser, once (as ci/check.sh gets it)
+cargo build --locked -p m2-server --example headless && cargo build --locked -p m2   # the server; the CLI for `export`
+(cd web && npm ci && npm run build)  # the server serves web/dist
 
 M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs graph        # one suite
 M2_HEADLESS=target/debug/examples/headless node e2e/run.mjs start empty  # one suite, another fixture kind
@@ -25,7 +27,7 @@ CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP M2_HEADLESS=target/debug/examples/headle
   suites that copy an example themselves get it as `E2E_REPO`: `live3b` copies
   `examples/with-plugins`, `fx-fixes` another `examples/first-song`. Default: this repo. It does
   **not** change what the server serves: `web/dist`, `std`, `templates/` and the projects behind
-  "Open an Example" come from the source tree the headless binary was compiled in (its
+  the start screen's **Examples** come from the source tree the headless binary was compiled in (its
   `CARGO_MANIFEST_DIR` is built in; `M2_STD`, `M2_TEMPLATES` and `M2_EXAMPLES` override the last
   three, and `run.mjs` passes your environment on). So `newsong` and `fx-fixes` test the binary's
   templates whatever `--repo` says. Use the checkout the binaries were built from; `run.mjs` prints a
@@ -131,7 +133,7 @@ fixes it), so no suite needed `serial`. Run 1 shared the machine with another tr
 
 ### Tiers and parts (`--tier`, `--shard`)
 
-In short: every pull request runs the PR tier, `all --tier pr` (52 of the 74 runs), split over CI
+In short: every pull request runs the PR tier, `all --tier pr` (54 of the 76 runs), split over CI
 machines with `--shard`. The other 22 runs are tagged `tier: "nightly"` in `run.mjs`, each with
 why, and run every night with all the rest (`ci/check.sh --nightly`: `all`, one at a time).
 
@@ -204,7 +206,7 @@ A commit from before the `sounds` merge has no `examples/sounds`: the script ski
 
 ## Suites
 
-| suite | kind | checks at 933f4de | covers |
+| suite | kind | checks | covers |
 |-------|------|------------------:|--------|
 | `graph` | proj | 19 | a header to select each module, the Song's pinned last; the Bass graph's nodes and edges; a pan's drags on its Mix strip (slow and fast) write `song.ts` and nothing else, with no toast; an outside edit shows; a broken save keeps the last good graph, with the status pill and "Show in code" in its popover; play and stop |
 | `cables` | cables | 12 | dragging a cable from an output onto a knob writes the signal's name there (and makes no toast); ✕ writes the declared default back; a cable into its own declaration is refused with a reason |
@@ -217,7 +219,7 @@ A commit from before the `sounds` merge has no `examples/sounds`: the script ski
 | `layout` | proj | 39 | the timeline above the dock: tracks and the Song's row, automation folded under its track, clips, selection both ways, the split's resize (180px at least), ruler seeks, the playhead, knob drags, playing past the end, Stop leaving the playhead where it stopped |
 | `views` | proj | 30 | the dock's Device / Notes / Mix / Code switcher: its view is the producer's, a selection changes only what it shows, and it never moves; code follows the module; Notes shows the selected clip, a double-click opens it, Esc or a removed clip leaves its empty state |
 | `code` | proj | 58 | the code editor: the files API's guards (409, 400), autocomplete, ⌘S, compile errors as markers and in the problems strip, files changed on disk under clean and edited buffers, knobs turned while a file is open |
-| `notes` | proj | 63 | the piano roll and notes clips (a click selects, a double-click adds, D4; in Draw mode a drag draws one note as long as the drag, its pitch kept, sounding while held, and ⌥-drag paints one per cell, each one write and one undo); the roll's edits are one lane write, the timeline's clip edits one `clips` gesture, each checked on disk |
+| `notes` | proj | 69 | the piano roll and notes clips (a click selects, a double-click adds, D4; in Draw mode a drag draws one note as long as the drag, its pitch kept, sounding while held, and ⌥-drag paints one per cell, each one write and one undo); the roll's edits are one lane write, the timeline's clip edits one `clips` gesture, each checked on disk; ⌘Z pressed before an edit's answer comes back takes that edit back, and a clip dragged right after a note is added in the roll moves with the note; ⌘Z waits for a drag let go, never takes back an agent's step that landed meanwhile, waits at most 2 s; a drag pressed on an older picture still names other lanes' clips by the hash it drew |
 | `s8-audition` | fix | 51 | audition in Notes (design-8b §8.4, NT-2, NT-3): a press on a note sounds it at its own velocity while held (`live` 1, then 0) and lights its key in `press`, never the track's colour; a drag across three pitches sends three Ons and three Offs (the page's WebSocket frames); a held key sounds at 0.8 and a drag along the keys plays each key; the toggle (on by default, `accent-soft`, no focus, kept over a reload) sends nothing when off; what lets go of held notes: the toggle, ⌘., Space with no pointer down (not with one down: a key plays on through play and stop), a closed page within a second; a read-only roll still sounds; the hints: silenced by the Bass solo (and still only Bass's once soloed Hats is taken out of the song, as the pill counts one), muted, muted in the song, Nothing plays this lane (and gone once it plays again); a PC page's tooltip says Ctrl+.; on a server of its own that plays into a file, a key held while stopped is heard |
 | `nx-piano` | fix | 39 | the keyboard piano (the next track's B2): off at first (A shows automation); ⌘K and the toggle in Notes' tools; the card at the timeline's lower right says "Plays Bass" and the octave; A is C4 (60) at 0.8 on `bass.notes` (the page's WebSocket frames) and lights in Bass's colour, its key up an Off; W 61, K 72 (the metronome left off); X then A 72, Z Z then A 48; while on, S, E, Z and A run no shortcut, and C, M and Space still do; typing in the song's name or the code editor plays nothing; the ⌥K sheet takes the keys and lists its rows; repeats send one On; blur and ⌘ let go; Keys selected plays Keys, the Song row nothing; the lint of the card; ⌘K from a field; the card's ×; a PC page's Ctrl+K |
 | `nx-midi` | fix | 24 | a MIDI keyboard (8b.10): the suite's usual server has no inject API (404); on a server of its own with `M2_MIDI=inject`, keys posted to `/api/graph/midi/inject` as a keyboard sends them: no mark with no keyboard; the window tells the server what plays as the selection changes (`midi.target`: bass.notes, keys.chords, none for the Song row); plugged in, a toast and a 28 px mark before the status pill, its tooltip "MIDI keyboard: Test Keys · plays Bass"; a key down and up (`live` 1, 0); Keys selected plays Keys; the sustain pedal holds an Off until it lifts; the Song row plays nothing and the tooltip says to select a track; two keyboards; the lint; a PC page loaded later shows it; unplugged while a key is held, the note stops, the mark goes in both windows, and a toast says so |
@@ -234,7 +236,7 @@ A commit from before the `sounds` merge has no `examples/sounds`: the script ski
 | `fixes-notes` | fix | 37 | the open clip follows its clip or closes; roll writes name their revision; the roll is read only while the code is broken; Enter in a field doesn't jump playback |
 | `attention` | attn | 60 | data a key rename left behind: "Needs attention" in the status popover, its one-click move, undo, Delete; per-file picks from a "Move to…" menu; every graph event carries the diagnostics; a toast's Undo after an outside edit (an undo step of its own) is refused, naming it; knob undo after an insert in an earlier file that made no step |
 | `st-errors` | fix | 34 | errors in plain words (the studio plan's D2, Q45, Q46): `db(-3)` as a lowpass cutoff in `tracks/bass.ts`: the server places it on your own line (not in `std/src/filter.ts`), with `plain`, `fix` and `inner` beside the message; the compile banner leads, in bold, with "Cutoff wants a frequency (Hz), but gets a level (dB).", then "tracks/bass.ts, line N." and the fix, the technical words not on show; Details holds the original message, `code.check` and the place inside std; Show in code opens bass.ts with your line marked; the Code view's list says it plainly at your line, with Details; `pluk(…)`: not known, "Did you mean pluck?" and its import set as code; a missing bracket: a typo on line 4; a plugin that isn't installed: Needs attention and the track's mark say it plainly, with the fix, the original under Details; a clip whose file isn't in assets/; an error of the song's own keeps its words; the taste lint and the tooltip lint on each |
-| `newsong` | none | 71 | the start screen, New Song from the templates, Open an Example, names and numbering, ⌘N with a song open; the Tempo field (the template's, Tab to it, 5 BPM refused, 140 written into the new song's `data/arrangement.json`) |
+| `newsong` | none | 71 | the start screen, New Song from the templates, Examples, names and numbering, ⌘N with a song open; the Tempo field (the template's, Tab to it, 5 BPM refused, 140 written into the new song's `data/arrangement.json`) |
 | `pl-projects` | none | 66 | songs (polish lane C; `PL_ONLY=c1`, `c2` or `c3` runs one part). View settings kept per song, on servers of its own on copies of first-song (the roll's grid, the timeline's snap and the audition toggle are as left after a new server on another port, in another browser context; `.music2/view.json` holds them; another song starts with the defaults, and the first gets its own back). Recent songs on the start screen (newest first, "… BPM · opened today", the folder in the tooltip, 560 px of 44 px rows; Return opens the newest, a click opens one; Tab lights a row accent-soft, a gone song's too; a folder that is gone says "Moved or deleted" and its × forgets it; `recent.json` and its `open` flag). Save As (⇧⌘S; a copy byte for byte without `.music2/`, opened, the song kept, both in Recent; Ctrl+Shift+S and the sheet on a PC page; Choose Folder… in the app) and Rename Song… from the app's menu (the name and the folder, the name only, a taken folder refused; Space and M reach nothing behind either dialog; with unsaved code and the folder box on it says the edits would be lost and the button says Rename Anyway, the box off takes the warning away, Esc changes nothing, the route refuses without `anyway`, Rename Anyway renames) |
 | `nx-settings` | none | 42 | the Settings window (next lane C2), on a server of its own whose silent player lists Speakers and Headphones (`M2_AUDIO_OUTPUTS`), and on the run's start screen: ⌘, opens it there and with a song open; the outputs with the default first, each with an id the choice keeps; Headphones chosen (the server's `now`, the Now row, no toast); the buffer sizes with their ms; 256 chosen ("256 samples (5.3 ms)"); a change while playing stops play and says so; while an export runs the lists are greyed and say why, and come back once it ends with the window open; the songs folder typed, refused when relative or inside a song (and Done after a refused one keeps the window open), shown by New Song, "Use the default"; `.music2/settings.json`; a reload and a new server keep them; Tab, a menu's keys, Esc; the app's menu row and its folder picker's title; Ctrl+, and the ⌥K sheet on a PC page; lint |
 | `nx-nodevice` | none | 11 | a song opens with no sound device (next lane C1): on a server of its own with `M2_AUDIO=fail`, the song opens, the status says `no_output`, the pill says "No sound output" (`warn`, VolumeX), Play moves the playhead, the popover says why and what to do (lint), its Settings… opens Settings, whose Now row says the same, and a PC page's pill says it too |

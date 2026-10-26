@@ -5,14 +5,16 @@
 # only one of them runs at a time (they spin up thread pools or live engines, and tests beside them
 # wait on clocks). In separate processes a lock guards nothing, so the groups below put back "one at
 # a time" for exactly those tests. Keep them in step with the locks: WORKERS (core/play/src/tests.rs),
-# ALONE (core/play/tests/stream.rs, churn.rs), ONE (core/pool, core/play/tests/engine_threads.rs) and
-# POOLS (core/play/tests/bit_identity.rs, core/runtime/src/tests.rs).
+# ALONE (core/play/tests/stream.rs, churn.rs), ONE (core/pool, core/play/tests/engine_threads.rs),
+# POOLS (core/play/tests/bit_identity.rs, core/runtime/src/tests.rs) and `one_listen`
+# (apps/m2/tests/listen.rs: one `m2 listen` at a time, as on a machine, AGENT-7).
 
 [test-groups]
 pools = { max-threads = 1 }
 play-workers = { max-threads = 1 }
 play-stream = { max-threads = 1 }
 play-churn = { max-threads = 1 }
+listens = { max-threads = 1 }
 
 [profile.default]
 # Every test runs, as in ci/check.sh (--no-fail-fast). A test still running after 2 minutes is
@@ -42,3 +44,7 @@ test-group = 'play-stream'
 [[profile.default.overrides]]
 filter = 'binary_id(m2-play::churn)'
 test-group = 'play-churn'
+
+[[profile.default.overrides]]
+filter = 'binary_id(m2::listen)'
+test-group = 'listens'
