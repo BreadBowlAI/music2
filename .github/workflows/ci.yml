@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -90,7 +90,7 @@ jobs:
           path: ~/.cache/m2-tools
           key: m2-tools-${{ runner.os }}-${{ hashFiles('ci/tools.sh') }}
       - run: ci/pr.sh toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: std/kernels-src -> ../../target/pr
           shared-key: quick
@@ -100,7 +100,7 @@ jobs:
       - if: ${{ !cancelled() && needs.changes.outputs.deps == 'true' }}
         run: ci/pr.sh advisories
       - if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logs-quick
           path: ~/m2-check/
@@ -132,13 +132,13 @@ jobs:
         with:
           path: /var/cache/m2-apt
           key: ${{ steps.apt.outputs.key }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: ci/pr.sh toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target/pr
           shared-key: clippy
@@ -146,7 +146,7 @@ jobs:
       - run: ci/pr.sh clippy
         timeout-minutes: 25
       - if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logs-clippy
           path: ~/m2-check/
@@ -183,7 +183,7 @@ jobs:
         with:
           path: /var/cache/m2-apt
           key: ${{ steps.apt.outputs.key }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -201,7 +201,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ci/plugins.sh
       - run: ci/pr.sh toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target/pr
           shared-key: rust
@@ -209,7 +209,7 @@ jobs:
       - run: ci/pr.sh rust "${{ matrix.part }}"
         timeout-minutes: 35
       - if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logs-rust-${{ strategy.job-index }}
           # Every log, and nextest's JUnit report: each test's time (.config/nextest.toml).
@@ -249,7 +249,7 @@ jobs:
         with:
           path: /var/cache/m2-apt
           key: ${{ steps.apt.outputs.key }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -269,7 +269,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ci/plugins.sh
       - run: ci/pr.sh toolchain
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target/pr
           shared-key: suites
@@ -279,7 +279,7 @@ jobs:
       - if: ${{ !cancelled() && matrix.part == '1/2' }}
         run: ci/pr.sh renders
       - if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logs-suites-${{ strategy.job-index }}
           path: ~/m2-check/

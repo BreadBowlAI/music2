@@ -292,15 +292,17 @@ impl State {
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(s) if name == "default" => Some(s.span),
                         _ => None,
                     });
-                    (&d.source.value, at)
+                    (d.source.value, at)
                 }
                 Statement::ExportFromDeclaration(d) => {
                     let at = d.specifiers.iter().find(|s| s.local.name() == name).map(|s| s.span);
-                    (&d.source.value, at)
+                    (d.source.value, at)
                 }
                 _ => continue,
             };
+            // A specifier with a lone surrogate names no file, so it never takes from `module`.
             if let Some(at) = at
+                && let Some(from) = from.as_str()
                 && self.resolve(file, from).is_ok_and(|m| m == module)
             {
                 let (l, c) = line_col(source, at.start as usize);
@@ -619,7 +621,7 @@ impl Loader for Load {
                 None => {
                     let file = st.package_path(name).ok_or_else(|| fail("not a file of an installed package".into()))?;
                     let bytes = std::fs::read(&file).map_err(|e| fail(e.to_string()))?;
-                    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+                    let sha256 = sha256_hex(&bytes);
                     st.read.push((file, sha256.clone()));
                     st.package_files.push(PackageFile { path: name.to_string(), sha256 });
                     String::from_utf8(bytes).map_err(|e| fail(e.to_string()))?
@@ -905,6 +907,11 @@ struct DescribedExport {
 
 type DescribeCache = HashMap<(Vec<(String, PathBuf)>, String), (Vec<(PathBuf, String)>, Result<Described, Diagnostic>)>;
 
+/// The SHA-256 of `bytes` in 64 lowercase hex digits, as a build records a package file's (FMT-6a).
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Describe the package module `spec` (`std/fx`), or take a cached run whose files are unchanged.
 // A diagnostic is 128 bytes since it carries `inner` (the studio plan's Q46); this runs once a module.
 #[allow(clippy::result_large_err)]
@@ -912,9 +919,7 @@ fn described(packages: &[(String, PathBuf)], spec: &str) -> Result<Described, Di
     static CACHE: std::sync::OnceLock<std::sync::Mutex<DescribeCache>> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let key = (packages.to_vec(), spec.to_string());
-    let same = |read: &[(PathBuf, String)]| {
-        read.iter().all(|(p, sha)| std::fs::read(p).is_ok_and(|b| format!("{:x}", Sha256::digest(&b)) == *sha))
-    };
+    let same = |read: &[(PathBuf, String)]| read.iter().all(|(p, sha)| std::fs::read(p).is_ok_and(|b| sha256_hex(&b) == *sha));
     if let Some((read, result)) = cache.lock().expect("the describe cache").get(&key)
         && same(read)
     {

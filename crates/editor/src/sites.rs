@@ -232,7 +232,9 @@ pub fn imports_of(source: &str, file: &str, target: &str) -> Vec<FileImport> {
     let mut out = vec![];
     for statement in &ret.program.body {
         let Statement::ImportDeclaration(import) = statement else { continue };
-        if resolve(file, &import.source.value).as_deref() != Some(target) {
+        // A specifier with a lone surrogate names no project file.
+        let Some(specifier) = import.source.value.as_str() else { continue };
+        if resolve(file, specifier).as_deref() != Some(target) {
             continue;
         }
         let mut default = None;
@@ -243,7 +245,7 @@ pub fn imports_of(source: &str, file: &str, target: &str) -> Vec<FileImport> {
                 _ => named = true,
             }
         }
-        out.push(FileImport { start: import.span.start, end: import.span.end, default, named, specifier: import.source.value.to_string() });
+        out.push(FileImport { start: import.span.start, end: import.span.end, default, named, specifier: specifier.to_string() });
     }
     out
 }
@@ -261,7 +263,7 @@ pub fn import_place(source: &str, file: &str, beside: &str) -> (u32, bool) {
         let Statement::ImportDeclaration(import) = statement else { continue };
         last = Some(import.span.end);
         let default = import.specifiers.iter().flatten().any(|s| matches!(s, ImportDeclarationSpecifier::ImportDefaultSpecifier(_)));
-        if default && resolve(file, &import.source.value).is_some_and(|t| folder(&t) == folder(beside)) {
+        if default && import.source.value.as_str().and_then(|s| resolve(file, s)).is_some_and(|t| folder(&t) == folder(beside)) {
             sibling = Some(import.span.end);
         }
     }
@@ -458,7 +460,7 @@ pub fn properties(source: &str, span: (u32, u32)) -> Option<Vec<Property>> {
                     ObjectPropertyKind::ObjectProperty(p) if p.kind == PropertyKind::Init && !p.computed && !p.method => {
                         let v = p.value.span();
                         Some(Property {
-                            key: p.key.static_name()?.to_string(),
+                            key: p.key.static_name()?.into_cow_str()?.into_owned(),
                             start: p.span.start,
                             end: p.span.end,
                             value: (v.start, v.end),
@@ -530,7 +532,7 @@ impl FindFn {
                     .properties
                     .iter()
                     .map(|b| Prop {
-                        key: b.key.static_name().map(|k| k.to_string()).unwrap_or_default(),
+                        key: b.key.static_name().and_then(|k| k.into_cow_str()).map(|k| k.into_owned()).unwrap_or_default(),
                         value: match (&b.value, b.computed) {
                             (BindingPattern::BindingIdentifier(id), false) => Some((id.name.to_string(), id.span)),
                             _ => None,

@@ -25,7 +25,7 @@ use super::Graph;
 pub const KEYS: [&str; 8] = ["zoom", "follow", "heights", "hidden", "grid", "audition", "metronome", "guide"];
 
 /// Held over each write's read, change and rename.
-static WRITING: Mutex<()> = parking_lot::const_mutex(());
+static WRITING: Mutex<()> = Mutex::new(());
 /// Each write's own temporary name.
 static TMP: AtomicU64 = AtomicU64::new(0);
 
