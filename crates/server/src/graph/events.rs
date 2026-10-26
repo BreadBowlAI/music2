@@ -103,8 +103,11 @@ impl Stream {
         Ok(Stream { events, shared })
     }
 
-    /// Everything said since the last take.
+    /// Everything said since the last take, for a tick: the wake it made is spent with it, so a
+    /// wait after the tick lasts unless another event comes. Spent first, then taken: an event in
+    /// between is taken now and wakes the wait once more, never one too few.
     pub fn take(&self) -> Hints {
+        self.shared.wake.spend();
         let mut h = self.shared.hints.lock();
         let events = h.events;
         let taken = std::mem::take(&mut *h);
@@ -112,15 +115,9 @@ impl Stream {
         taken
     }
 
-    /// Put back what a tick took and didn't use.
-    pub fn put_back(&self, hints: Hints) {
-        let mut h = self.shared.hints.lock();
-        h.rescan |= hints.rescan;
-        h.paths.extend(hints.paths);
-        if h.paths.len() > MAX_HINTS {
-            h.paths.clear();
-            h.rescan = true;
-        }
+    /// The paths said since the last take, left for the next.
+    pub fn named(&self) -> BTreeSet<String> {
+        self.shared.hints.lock().paths.clone()
     }
 
     /// Have every event that happened before now delivered: an event still on its way is then in

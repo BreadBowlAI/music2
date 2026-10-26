@@ -6,7 +6,7 @@
 # ok, a run that failed (and then passed or failed again alone), a run that was PART (it passed,
 # but not in full), both at once, or a crash. Second, ci/check.sh --pr: what its summary says for
 # a change that is docs only (no plugins needed), the whole tier with the plugins, with
-# M2_NO_PLUGINS, and with a step that failed. Third, ci/pr.sh changes: whether it says a change
+# M2_NO_PLUGINS, with M2_LATE_SLEEPS, and with a step that failed. Third, ci/pr.sh changes: whether it says a change
 # touches a Cargo.lock or deny.toml (deps=true), so the pull request checks RustSec's advisories
 # too. Each case runs the real script in a small git repo
 # made in a temporary folder, with stand-ins for everything else: cargo, npm, node and the browser
@@ -23,7 +23,7 @@ trap 'rm -rf "$TMP"' EXIT
 # nothing of CI's own (a case must not write into the real job's summary or outputs).
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
   GIT_CEILING_DIRECTORIES GIT_CONFIG_GLOBAL GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT \
-  GITHUB_ACTIONS GITHUB_OUTPUT GITHUB_STEP_SUMMARY CLAP_PATH M2_NO_PLUGINS M2_PR_JOBS M2_CHECK_JOBS \
+  GITHUB_ACTIONS GITHUB_OUTPUT GITHUB_STEP_SUMMARY CLAP_PATH M2_NO_PLUGINS M2_LATE_SLEEPS M2_PR_JOBS M2_CHECK_JOBS \
   CARGO_TARGET_DIR E2E_CHROME M2_PR_OUT M2_CHECK_OUT
 export HOME=$TMP/home XDG_CONFIG_HOME=$TMP/config XDG_CACHE_HOME=$TMP/cache GIT_CONFIG_NOSYSTEM=1 \
   GIT_AUTHOR_NAME=check GIT_AUTHOR_EMAIL=check@example.invalid GIT_COMMITTER_NAME=check \
@@ -196,6 +196,11 @@ cp -R "$TMP/fake-full" "$TMP/fake-noplugins" && cp -R "$TMP/fake-full" "$TMP/fak
 fake noplugins rust 0 "$PLUGINS_SKIP" 'rust tests       PASS  1 s'
 fake noplugins suites 0 "$PLUGINS_SKIP" 'browser suites   PASS  1 s'
 fake failed rust 1 "$PLUGINS_PASS" 'rust tests       FAIL  exit 100 after 1 s: see test.log'
+# The Mac's nightly job: its sleeps run long, so the steps leave out what needs them on time.
+cp -R "$TMP/fake-full" "$TMP/fake-sleeps" || exit 2
+SLEEPS_SKIP="late sleeps      SKIP  M2_LATE_SLEEPS is set: this machine's sleeps run long, so what needs them on time is left out"
+fake sleeps rust 0 "$PLUGINS_PASS" "$SLEEPS_SKIP: a_test (ci/sleeps-tests.txt)" 'rust tests       PASS  1 s'
+fake sleeps suites 0 "$PLUGINS_PASS" "$SLEEPS_SKIP: a-fix (e2e/run.mjs's sleeps tags)" 'browser suites   PASS  1 s'
 cp -R "$TMP/fake-full" "$TMP/fake-advisory" || exit 2
 fake advisory changes 0 'full  Cargo.lock changed' 'docs_only=false' 'deps=true'
 fake advisory advisories 1 'advisories       FAIL  exit 1 after 1 s: see advisories.log'
@@ -217,6 +222,7 @@ fake crash rust 1 "$PLUGINS_PASS" 'rust tests       FAIL  exit 100 after 133 s: 
 check_case "docs only, with no plugins: what CI passes" docs 0 "PASS"
 check_case "the whole tier, with the plugins" full 0 "PASS" CLAP_PATH="$TMP/clap"
 check_case "the whole tier, M2_NO_PLUGINS: not all CI runs" noplugins 1 "PART" M2_NO_PLUGINS=1
+check_case "the whole tier, M2_LATE_SLEEPS: not all CI runs" sleeps 1 "PART: no row failed, but M2_LATE_SLEEPS left out the tests that need sleeps on time (rust, suites)" CLAP_PATH="$TMP/clap" M2_LATE_SLEEPS=1
 check_case "the whole tier, a step failed" failed 1 "FAIL (1 of" CLAP_PATH="$TMP/clap"
 check_case "a Cargo.lock changed, and RustSec has an advisory" advisory 1 "FAIL (1 of" CLAP_PATH="$TMP/clap"
 NAMED="test m2-plugins tests::airwindows_processes_audio" UNNAMED="data::tests::once"

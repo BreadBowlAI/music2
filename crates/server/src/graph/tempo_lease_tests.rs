@@ -113,27 +113,43 @@ fn the_tempo_is_heard_at_the_first_block_after_its_prepare() {
     assert_eq!((d.revision(), d.fixture.0.join("data/arrangement.json").exists()), (revision, file), "nothing written");
 }
 
-// RENDER-27a, Q22, X24: one prepare in flight. Fifty updates over 100 ms while each prepare takes
-// 50 ms more: an update that finds the drag's job queued or running queues none, and the job runs
-// again while a newer value waits. So a few jobs run, not fifty, and the last plays the 50th value.
+// RENDER-27a, Q22, X24: one prepare in flight. Updates while a prepare is held, twice: 2 to 25
+// while the first job is held, 26 to 50 while the rerun it queued is. An update that finds the
+// drag's job queued or running queues none, and the job runs again while a newer value waits. So
+// three jobs run, exactly, not fifty, and the last plays the 50th value. The prepares are held until the
+// updates are sent, not for a time: a sleep lasts what the OS makes it (on GitHub's Mac, about four
+// times what was asked), so timed updates could outlast timed prepares. Two held cycles: updates
+// that land while a rerun is held coalesce too, not only those behind the first job.
 #[test]
 fn one_tempo_prepare_in_flight() {
     let mut d = Drag::new();
     let lease = d.begin().lease;
     let jobs = Arc::new(AtomicU32::new(0));
     let ran = jobs.clone();
+    let wait = Duration::from_secs(10);
+    // The job tells it holds; the updates tell it may go on.
+    let (held, holding) = std::sync::mpsc::channel::<u32>();
+    let (go, going) = std::sync::mpsc::channel::<()>();
     d.graph.inspect(move |a| {
         a.between_phases = Some(Box::new(move |_| {
-            ran.fetch_add(1, Ordering::Relaxed);
-            std::thread::sleep(Duration::from_millis(50));
+            let n = ran.fetch_add(1, Ordering::Relaxed);
+            if n < 2 {
+                held.send(n + 1).unwrap();
+                going.recv_timeout(wait).expect("the updates were sent");
+            }
         }))
     });
     let graph = &d.graph;
     std::thread::scope(|s| {
-        s.spawn(|| {
-            for i in 1..=50 {
-                graph.tempo_update(lease, Some(i), 120.0 + i as f64).unwrap();
-                std::thread::sleep(Duration::from_millis(2));
+        s.spawn(move || {
+            let update = |i: u64| graph.tempo_update(lease, Some(i), 120.0 + i as f64).unwrap();
+            update(1);
+            for (job, values) in [(1, 2..=25), (2, 26..=50)] {
+                assert_eq!(holding.recv_timeout(wait).ok(), Some(job), "job {job} holds");
+                for i in values {
+                    update(i);
+                }
+                go.send(()).unwrap();
             }
         });
     });
@@ -141,11 +157,10 @@ fn one_tempo_prepare_in_flight() {
     std::thread::sleep(Duration::from_millis(200));
     let l = &d.graph.tempo_leases()[0];
     let ran = jobs.load(Ordering::Relaxed);
-    assert!(
-        ran <= 4 && l.previews <= 4,
-        "{ran} jobs ran and {} plans played: one prepare in flight, the values between skipped",
-        l.previews
-    );
+    // Exactly 3, whatever the scheduling: no update comes while no job holds, so job 1 plays value 1,
+    // its rerun 25 and the last 50, each one plan. A fourth is a job some update queued while one
+    // was queued or running.
+    assert_eq!((ran, l.previews), (3, 3), "jobs run and plans played: one prepare in flight, the values between skipped");
     assert_eq!(l.heard, Some(170.0), "the last plan plays the 50th value");
     assert_eq!(d.graph.status().bpm, Some(170.0));
 }

@@ -56,8 +56,17 @@ impl Wake {
         self.told.notify_all();
     }
 
+    /// What woke it is spent: a tick took what the events said (WRITE-19). An event after this
+    /// wakes it again; one just before may too, for a tick that finds nothing new, never too few.
+    /// One wake serves the whole graph, every stream: while a project opens, the old watch's tick
+    /// can spend a wake the new project's stream made. That costs its first wait at most the
+    /// watcher's 50 ms; nothing is lost, as the hints stay and a new watch's first tick walks all.
+    pub fn spend(&self) {
+        *self.heard.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    }
+
     /// Wait until `until`, or, with `heard`, until an event named a path since the last wait that
-    /// returned for one. Whether one did.
+    /// returned for one, or the last tick that took what they said. Whether one did.
     pub fn wait(&self, until: std::time::Instant, heard: bool) -> bool {
         let mut h = self.heard.lock().unwrap_or_else(|e| e.into_inner());
         loop {
@@ -270,10 +279,7 @@ impl Plan {
         let after = match (all, &self.stream) {
             (true, Some(s)) => {
                 s.flush();
-                let h = s.take();
-                let after = h.paths.clone();
-                s.put_back(h);
-                after
+                s.named()
             }
             _ => BTreeSet::new(),
         };
