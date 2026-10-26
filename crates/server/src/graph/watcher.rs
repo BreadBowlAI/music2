@@ -58,6 +58,9 @@ impl Wake {
 
     /// What woke it is spent: a tick took what the events said (WRITE-19). An event after this
     /// wakes it again; one just before may too, for a tick that finds nothing new, never too few.
+    /// One wake serves the whole graph, every stream: while a project opens, the old watch's tick
+    /// can spend a wake the new project's stream made. That costs its first wait at most the
+    /// watcher's 50 ms; nothing is lost, as the hints stay and a new watch's first tick walks all.
     pub fn spend(&self) {
         *self.heard.lock().unwrap_or_else(|e| e.into_inner()) = false;
     }
