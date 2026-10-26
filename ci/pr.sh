@@ -23,7 +23,7 @@
 #                               own cases (ci/docs-only-test.sh)
 #   ci/pr.sh toolchain          the Rust toolchain rust-toolchain.toml pins, installed if missing
 #                               (CI's jobs run it before their cache step, which asks rustc)
-#   ci/pr.sh lint               the checks that build nothing: rustfmt, actionlint, licences
+#   ci/pr.sh lint               the checks that build nothing: rustfmt, actionlint, zizmor, licences
 #                               (cargo-deny's bans, licences and sources on both workspaces; npm),
 #                               the docs job's link check and site, and the cases of the docs rule,
 #                               of the PR tier's own verdicts (ci/pr-test.sh), of ci/nightly.sh
@@ -63,8 +63,8 @@
 # so it never rebuilds what your own `cargo build` made. nextest runs no doctests: there are none
 # today (2026-10-21), and the nightly tier's cargo test would run any.
 #
-# Needs: rustup and Node 24 (as ci/check.sh); cargo-nextest, cargo-deny, actionlint and mdBook at
-# the versions ci/tools.sh pins (it fetches them into ~/.cache/m2-tools); for rust and suites, the test
+# Needs: rustup and Node 24 (as ci/check.sh); cargo-nextest, cargo-deny, actionlint, zizmor and
+# mdBook at the versions ci/tools.sh pins (it fetches them into ~/.cache/m2-tools); for rust and suites, the test
 # plugins (CLAP_PATH, or ci/check.sh's default folder; on Linux ci/plugins.sh installs them). On
 # Linux the Rust steps need the app's libraries: ci/apt.sh lists them. M2_NO_PLUGINS=1 runs without
 # the plugins, their tests skipping, and says so (the Mac's nightly job: no Mac copy is pinned).
@@ -221,10 +221,14 @@ sleeps_runs() {
 # lint: the PR tier's checks that build nothing (its own step, and the start of quick).
 lint() {
   check fmt fmt.log sh -c 'cargo fmt --all --check && cd std/kernels-src && cargo fmt --all --check'
-  if tools actionlint deny; then
+  if tools actionlint zizmor deny; then
     # No shellcheck or pyflakes inside actionlint: their versions differ from machine to machine,
     # and every run: block only calls a script here.
     check workflows actionlint.log sh -c 'actionlint -color -shellcheck= -pyflakes= && node ci/ci-ok.mjs --check-workflow'
+    # The workflows' and dependabot.yml's security, zizmor's default persona, every finding a
+    # failure; a finding judged safe is ignored in place, with its reason. --offline: no audit
+    # that asks GitHub (an action's known holes change with the date, not the code).
+    check zizmor zizmor.log zizmor --offline --no-progress --color never .github
     # No advisories (the advisories step), so no advisory database is fetched: the same answer every day.
     check licences licences.log sh -c 'cargo deny --locked --color never --config deny.toml check bans licenses sources &&
       cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources &&

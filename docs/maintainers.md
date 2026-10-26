@@ -44,7 +44,7 @@ Repository **Settings → Advanced Security** (called "Code security" on some ac
 | Turn on | Why |
 |---|---|
 | Private vulnerability reporting | [SECURITY.md](../SECURITY.md) tells people to use it. |
-| Dependabot alerts, and Dependabot security updates | `.github/dependabot.yml` asks for weekly version updates; these add alerts and fixes for known holes. |
+| Dependabot alerts, and Dependabot security updates | `.github/dependabot.yml` asks for weekly version updates: the minor and patch bumps of each ecosystem in one pull request, each major bump alone, and only releases at least 7 days old. These add alerts and fixes for known holes, which come at once: the 7 days hold only version updates. |
 | Secret Protection (secret scanning), and push protection | A pushed token is caught, or refused before it lands. |
 
 ## 4. The community

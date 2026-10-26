@@ -24,10 +24,20 @@
 # apps/music2-desktop/entitlements.plist, and Tauri notarizes. Until then the secrets below are
 # empty, and the build signs ad hoc (gap #43).
 #
-# Security: the token reads only, but in the release job, which may write the repo's releases. The
-# checkout keeps no credentials. pull_request, never pull_request_target. Only GitHub's own actions
-# and Swatinem/rust-cache, each pinned by its full commit (version in the comment; dependabot.yml
-# keeps them current).
+# Security: the token reads only, but in the release job, which may write the repo's releases and
+# sign the files' provenance. The checkout keeps no credentials. pull_request, never
+# pull_request_target. Only GitHub's own actions and Swatinem/rust-cache, each pinned by its full
+# commit (version in the comment; dependabot.yml keeps them current). A tag's build reads no cache
+# (Rust's build, npm's, the test plugins' or the .debs; each is lookup-only then, or empty): what
+# ships is built from the tag's own files and what their lockfiles name, never from a folder an
+# earlier run left (zizmor's cache-poisoning; zizmor can't read setup-node's expression, so its
+# two steps say so in an ignore). Pull requests and main still use the caches.
+#
+# Provenance: the release job signs a statement for every file (actions/attest-build-provenance,
+# Sigstore): this repo's release.yml built it from this tag. Anyone checks a download with
+# `gh attestation verify <file> --repo BreadBowlAI/music2 --signer-workflow
+# BreadBowlAI/music2/.github/workflows/release.yml --source-ref refs/tags/v<version>`
+# (docs/guide/install.md).
 
 name: Release
 
@@ -57,8 +67,8 @@ on:
       - web/package-lock.json
   # Every Monday on main, and by hand: both builds and their checks, with no release, so a change
   # elsewhere that breaks a download (a new example m2 can't check from the bundle, a crate with a
-  # licence the notices have no text for) shows before a tag; and main's Rust cache, which tags
-  # and pull requests start from (a cache saved on a tag serves only that tag).
+  # licence the notices have no text for) shows before a tag; and main's Rust cache, which pull
+  # requests start from (a tag reads none: Security, above).
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
@@ -84,12 +94,30 @@ jobs:
         with:
           persist-credentials: false
       # The build's libraries, Xvfb with the X11 and libpng headers for the app's pictures, file
-      # and objdump.
+      # and objdump; the .debs from the cache when it has them (ci/apt.sh says how each is checked
+      # before use), saved straight after. On a tag, lookup-only: every cache here is only looked
+      # up, never read, and this one isn't saved.
+      - id: apt
+        run: ci/apt.sh key release
+      - id: debs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/cache/m2-apt
+          key: ${{ steps.apt.outputs.key }}
+          restore-keys: ${{ steps.apt.outputs.restore }}
+          lookup-only: ${{ startsWith(github.ref, 'refs/tags/') }}
       - run: ci/apt.sh release
+      - if: ${{ steps.debs.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/cache/m2-apt
+          key: ${{ steps.apt.outputs.key }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: npm
+          # zizmor: ignore[cache-poisoning] on a tag `cache` is empty, so no npm cache
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') && 'npm' || '' }}
+          package-manager-cache: false
           cache-dependency-path: web/package-lock.json
       # The tag reaches the script through the environment, never pasted into it (a tag name can
       # hold shell words).
@@ -100,6 +128,7 @@ jobs:
         with:
           path: ~/.local/share/m2-test-plugins/dl
           key: m2-plugins-${{ hashFiles('ci/plugins.sha256') }}
+          lookup-only: ${{ startsWith(github.ref, 'refs/tags/') }}
       # The test plugins, so the check plays with-plugins through the plugin host in the bundle.
       - env:
           GH_TOKEN: ${{ github.token }}
@@ -109,6 +138,7 @@ jobs:
         with:
           shared-key: release
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          lookup-only: ${{ startsWith(github.ref, 'refs/tags/') }}
       - run: ci/release.sh build dist
       - run: CLAP_PATH="$HOME/.local/share/m2-test-plugins/clap" ci/release.sh check dist
       - run: ci/release.sh app dist pictures
@@ -136,7 +166,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: npm
+          # zizmor: ignore[cache-poisoning] on a tag `cache` is empty, so no npm cache
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') && 'npm' || '' }}
+          package-manager-cache: false
           cache-dependency-path: web/package-lock.json
       # The tag reaches the script through the environment, never pasted into it (a tag name can
       # hold shell words).
@@ -148,6 +180,7 @@ jobs:
         with:
           shared-key: release
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          lookup-only: ${{ startsWith(github.ref, 'refs/tags/') }}
       # Signing, on a tag only, when the secrets are there (above); else ad hoc.
       - env:
           APPLE_CERTIFICATE: ${{ github.event_name == 'push' && secrets.APPLE_CERTIFICATE || '' }}
@@ -166,15 +199,21 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # On a tag: one draft pre-release with every file, SHA256SUMS and the notes. Run again, it
-  # refuses while that tag's draft is there: delete the draft first.
+  # On a tag: one draft pre-release with every file, SHA256SUMS and the notes, and each file's
+  # signed provenance. Run again, it refuses while that tag's draft is there: delete the draft
+  # first (each run signs the files it built).
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [linux, mac]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # A job's own permissions replace the top-level ones. contents: write makes the release;
+    # id-token: write asks GitHub for the token Sigstore signs against; attestations: write
+    # stores the signed statements beside the repo. Only this job, and only on a tag.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -185,6 +224,9 @@ jobs:
           path: dist
           merge-multiple: true
       - run: ci/release.sh sums dist
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
