@@ -68,8 +68,9 @@ test-group = 'listens'
 #   every_pure_fixture_renders_the_same_bits_on_1_and_n_threads  81 s alone, over 60 s nightly
 #   live_on_n_threads_is_the_export_on_1                       86 s alone, over 60 s nightly
 #   p16_renders_the_same_bits_on_1_and_4_threads               over 60 s nightly (10 s here)
-# Every other test took under 60 s everywhere (the most, 42 s here; the Mac's nightly run named
-# only 4 slow tests), three times inside the limit. A test that comes near it gets its line here,
+# Every other test took under 60 s wherever it was named (the most, 42 s here), three times inside
+# the limit. The Mac's nightly run counted 4 slow tests but didn't name them; its SLOW lines and
+# JUnit report now do: check its first run. A test that comes near the limit gets its line here,
 # with its times: never a longer limit for all.
 [[profile.default.overrides]]
 filter = '(binary_id(m2-session) & (test(=tx::kill_tests::killed_at_every_commit_step_the_project_recovers) | test(=tx::kill_tests::killed_at_every_commit_step_without_a_swap_the_project_recovers))) | (binary_id(m2-play::bit_identity) & (test(=every_pure_fixture_renders_the_same_bits_on_1_and_n_threads) | test(=live_on_n_threads_is_the_export_on_1) | test(=p16_renders_the_same_bits_on_1_and_4_threads)))'

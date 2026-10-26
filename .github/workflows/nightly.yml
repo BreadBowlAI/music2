@@ -43,14 +43,21 @@ jobs:
         with:
           persist-credentials: false
       # Ubuntu's packages, the .debs from the cache when it has them (ci/apt.sh says how each is
-      # checked before use).
+      # checked before use); saved straight after, so a job that fails later still saves them.
       - id: apt
         run: ci/apt.sh key check
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: debs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/m2-apt
+          path: /var/cache/m2-apt
           key: ${{ steps.apt.outputs.key }}
+          restore-keys: ${{ steps.apt.outputs.restore }}
       - run: ci/apt.sh check
+      - if: steps.debs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/cache/m2-apt
+          key: ${{ steps.apt.outputs.key }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -78,8 +85,12 @@ jobs:
             . -> target/nightly
             std/kernels-src -> ../../target/nightly
           shared-key: nightly
-      # Under the job's timeout, so a hang fails the step and the logs are still kept.
-      - run: ci/check.sh --nightly
+      # A hang (the full check's cargo test has no limit per test): after 165 minutes, timeout sends
+      # Ctrl-C's signal to the whole process group, so the stuck test ends and check.sh's trap still
+      # writes the summary and the logs' .tgz for the upload below. The runner's own cancel would
+      # signal only the step's shell, never check.sh, whose trap would then never run. -k: a kill 2
+      # minutes later if that hangs too; the step's limit and the job's are the last backstops.
+      - run: timeout -s INT -k 2m 165m ci/check.sh --nightly
         timeout-minutes: 170
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -135,7 +146,10 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nightly-macos
-          path: ~/m2-check/
+          # Every log, and nextest's JUnit report: each test's time (.config/nextest.toml).
+          path: |
+            ~/m2-check/
+            target/nextest/default/junit.xml
           retention-days: 14
 
   # One issue for every failed night: opened once, commented on after. A job past its timeout

@@ -62,10 +62,11 @@ The release's `SHA256SUMS` file holds each file's checksum. In the folder you do
 Releases after 0.1.0 also carry a signed provenance for each file: a record, signed by GitHub, that music2's own release workflow built that file from the release's commit. With the [GitHub CLI](https://cli.github.com) (`gh`), check a file like this:
 
 ```sh
-gh attestation verify music2_<version>_amd64.deb --repo BreadBowlAI/music2   # use the name of the file you downloaded
+gh attestation verify music2_<version>_amd64.deb --repo BreadBowlAI/music2 \
+  --signer-workflow BreadBowlAI/music2/.github/workflows/release.yml --source-ref refs/tags/v<version>
 ```
 
-It ends with `Verification succeeded!` when the file is the one the workflow built. Any other answer: don't open the file. (Provenance: where a file came from and how it was made.)
+Use the name of the file you downloaded, and put the release's version (for example `0.2.0`) in place of each `<version>`. `--signer-workflow` checks that music2's release workflow signed it, and `--source-ref` that it was built from that release's tag. When the file is the one the workflow built, it says `✓ Verification succeeded!`, then lists what it checked. If it says `Error` instead, don't open the file. (Provenance: where a file came from and how it was made.)
 
 ## Build from source
 

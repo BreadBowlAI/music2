@@ -9,9 +9,11 @@
 #
 # Logs: a job that fails keeps ~/m2-check/ (every check's log) as a workflow artifact for 7 days;
 # so does one cancelled, which is also what a job past its timeout-minutes ends as (a hang). Each
-# job's long step has a timeout of its own, 5 minutes under the job's: a hang there most often
-# fails that step, with time left for the upload; when the job's timeout comes first, the upload
-# runs on the cancel.
+# job's long step has a timeout of its own, at least 5 minutes under the job's (suites: 10, as the
+# renders step follows it): a hang there most often fails that step, with time left for the
+# upload; when the job's timeout comes first, the upload runs on the cancel. A run cancelled by a
+# newer push uploads too: GitHub can't tell that cancel from a timeout's, and the logs are small
+# and kept 7 days.
 #
 # Security: no secrets in any job here; the token is read-only (permissions below), never kept in
 # the checkout (persist-credentials: false), and handed only to ci/plugins.sh, to read this repo's
@@ -115,14 +117,21 @@ jobs:
         with:
           persist-credentials: false
       # Ubuntu's packages, the .debs from the cache when it has them (ci/apt.sh says how each is
-      # checked before use).
+      # checked before use); saved straight after, so a job that fails later still saves them.
       - id: apt
         run: ci/apt.sh key build
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: debs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/m2-apt
+          path: /var/cache/m2-apt
           key: ${{ steps.apt.outputs.key }}
+          restore-keys: ${{ steps.apt.outputs.restore }}
       - run: ci/apt.sh build
+      - if: steps.debs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/cache/m2-apt
+          key: ${{ steps.apt.outputs.key }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -159,14 +168,21 @@ jobs:
         with:
           persist-credentials: false
       # Ubuntu's packages, the .debs from the cache when it has them (ci/apt.sh says how each is
-      # checked before use).
+      # checked before use); saved straight after, so a job that fails later still saves them.
       - id: apt
         run: ci/apt.sh key build
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: debs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/m2-apt
+          path: /var/cache/m2-apt
           key: ${{ steps.apt.outputs.key }}
+          restore-keys: ${{ steps.apt.outputs.restore }}
       - run: ci/apt.sh build
+      - if: steps.debs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/cache/m2-apt
+          key: ${{ steps.apt.outputs.key }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -218,14 +234,21 @@ jobs:
         with:
           persist-credentials: false
       # Ubuntu's packages, the .debs from the cache when it has them (ci/apt.sh says how each is
-      # checked before use).
+      # checked before use); saved straight after, so a job that fails later still saves them.
       - id: apt
         run: ci/apt.sh key suites
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: debs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/m2-apt
+          path: /var/cache/m2-apt
           key: ${{ steps.apt.outputs.key }}
+          restore-keys: ${{ steps.apt.outputs.restore }}
       - run: ci/apt.sh suites
+      - if: steps.debs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/cache/m2-apt
+          key: ${{ steps.apt.outputs.key }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
