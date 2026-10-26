@@ -270,7 +270,7 @@ export default song(() => osc.sine(440));
     // FMT-6a, RENDER-2: every package file the build read is recorded with its hash.
     let dsp = b.package_files.iter().find(|f| f.path == "std/src/dsp.ts").expect("std/src/dsp.ts was read");
     let bytes = std::fs::read(std_dir().join("src/dsp.ts")).unwrap();
-    assert_eq!(dsp.sha256, format!("{:x}", Sha256::digest(&bytes)));
+    assert_eq!(dsp.sha256, sha256_hex(&bytes));
     assert!(b.package_files.iter().any(|f| f.path == "std/src/math.ts"), "dsp imports math: {:?}", b.package_files);
 }
 
