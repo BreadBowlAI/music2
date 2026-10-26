@@ -113,19 +113,23 @@ fn the_tempo_is_heard_at_the_first_block_after_its_prepare() {
     assert_eq!((d.revision(), d.fixture.0.join("data/arrangement.json").exists()), (revision, file), "nothing written");
 }
 
-// RENDER-27a, Q22, X24: one prepare in flight. Fifty updates over 100 ms while each prepare takes
-// 50 ms more: an update that finds the drag's job queued or running queues none, and the job runs
-// again while a newer value waits. So a few jobs run, not fifty, and the last plays the 50th value.
+// RENDER-27a, Q22, X24: one prepare in flight. Fifty updates while the first prepare is held: an
+// update that finds the drag's job queued or running queues none, and the job runs again while a
+// newer value waits. So a few jobs run, not fifty, and the last plays the 50th value. The prepare
+// is held until the 50th update is sent, not for a time: a sleep lasts what the OS makes it (on
+// GitHub's Mac, about four times what was asked), so timed updates could outlast timed prepares.
 #[test]
 fn one_tempo_prepare_in_flight() {
     let mut d = Drag::new();
     let lease = d.begin().lease;
     let jobs = Arc::new(AtomicU32::new(0));
     let ran = jobs.clone();
+    let (sent, all_sent) = std::sync::mpsc::channel::<()>();
     d.graph.inspect(move |a| {
         a.between_phases = Some(Box::new(move |_| {
-            ran.fetch_add(1, Ordering::Relaxed);
-            std::thread::sleep(Duration::from_millis(50));
+            if ran.fetch_add(1, Ordering::Relaxed) == 0 {
+                all_sent.recv_timeout(Duration::from_secs(10)).expect("the 50th update was sent");
+            }
         }))
     });
     let graph = &d.graph;
@@ -133,8 +137,8 @@ fn one_tempo_prepare_in_flight() {
         s.spawn(|| {
             for i in 1..=50 {
                 graph.tempo_update(lease, Some(i), 120.0 + i as f64).unwrap();
-                std::thread::sleep(Duration::from_millis(2));
             }
+            sent.send(()).unwrap();
         });
     });
     d.heard(170.0);
