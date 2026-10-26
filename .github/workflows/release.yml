@@ -28,7 +28,7 @@
 # sign the files' provenance. The checkout keeps no credentials. pull_request, never
 # pull_request_target. Only GitHub's own actions and Swatinem/rust-cache, each pinned by its full
 # commit (version in the comment; dependabot.yml keeps them current). A tag's build reads no cache
-# (Rust's build, npm's or the test plugins'; each is lookup-only then, or empty): what
+# (Rust's build, npm's, the test plugins' or the .debs; each is lookup-only then, or empty): what
 # ships is built from the tag's own files and what their lockfiles name, never from a folder an
 # earlier run left (zizmor's cache-poisoning; zizmor can't read setup-node's expression, so its
 # two steps say so in an ignore). Pull requests and main still use the caches.
@@ -92,7 +92,15 @@ jobs:
         with:
           persist-credentials: false
       # The build's libraries, Xvfb with the X11 and libpng headers for the app's pictures, file
-      # and objdump.
+      # and objdump; the .debs from the cache when it has them (ci/apt.sh says how each is checked
+      # before use). On a tag, lookup-only: every cache here is only looked up, never read.
+      - id: apt
+        run: ci/apt.sh key release
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/m2-apt
+          key: ${{ steps.apt.outputs.key }}
+          lookup-only: ${{ startsWith(github.ref, 'refs/tags/') }}
       - run: ci/apt.sh release
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
