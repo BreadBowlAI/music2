@@ -155,18 +155,17 @@ await page.waitForSelector(".monaco-editor .view-lines", { timeout: 20000 }).cat
 const lines = await box(".monaco-editor .view-lines");
 check(!!lines, `the code view shows its editor (${JSON.stringify(lines)})`);
 // An element as the messages name it, and whether it is in the code editor.
-const named = (e) => `${e?.tagName.toLowerCase()}${e?.className ? `.${String(e.className).trim().split(/\s+/).join(".")}` : ""}${e?.closest(".monaco-editor") ? " in the editor" : ""}`;
+const named = (e) => `${e?.tagName.toLowerCase()}${e?.getAttribute("class")?.trim() ? `.${e.getAttribute("class").trim().split(/\s+/).join(".")}` : ""}${e?.closest(".monaco-editor") ? " in the editor" : ""}`;
 const at = lines && { x: Math.round(lines.x + 40), y: Math.round(lines.y + 6) };
 const hit = at ? await page.evaluate(`(${named})(document.elementFromPoint(${at.x}, ${at.y}))`) : null;
 if (at) await page.mouse.click(at.x, at.y);
-const focused = () => page.evaluate(`(${named})(document.activeElement)`);
-const typedTo = await focused();
+// The keys follow the click with nothing between, as before: where the focus is, is read after them.
 const inCode = await sends(() => page.keyboard.type("asdf"));
-const after = await focused();
+const after = await page.evaluate(`(${named})(document.activeElement)`);
 const code = await page.$eval(".monaco-editor .view-lines", (e) => e.textContent).catch(() => "");
 check(
   code.includes("asdf"),
-  `the code editor gets its letters (the click at ${JSON.stringify(at)} hit ${hit}; the keys went to ${typedTo}, and after them ${after}; it shows ${JSON.stringify(code.slice(0, 60))}…)`,
+  `the code editor gets its letters (the click at ${JSON.stringify(at)} hit ${hit}; after the keys the focus was in ${after}; it shows ${JSON.stringify(code.slice(0, 60))}…)`,
 );
 check(ons(inCode).length === 0, `and nothing plays while typing in it (${JSON.stringify(ons(inCode))})`);
 for (let i = 0; i < 4; i++) await key("Meta+z");

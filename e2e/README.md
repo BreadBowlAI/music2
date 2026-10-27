@@ -191,7 +191,7 @@ The nightly runs and why:
 | `s8-tracks-fix` | speed: within 1.5 s; flake: it reads the new track's tab a moment too soon (twice at half CPU, 2026-10-21) |
 | `s8-mute-export` | speed: overlays.json within 1.5 s; flake: once on the Mac at e7518f4 (HANDOFF.md) |
 | `pl-mix-fix` | speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18) |
-| `bus-mix-fix` | flake: with nothing sent, the Reverb's meter rose above the floor in 3 of 31 runs, 2 of them in 28 runs alone on 4 cores (2026-10-21); cause not known |
+| `bus-mix-fix` | flake: with nothing sent, the Reverb's meter rose above the floor in 3 of 31 runs (2026-10-21); cause found and fixed in df8981b (a new meter had no level, read as 0 dB); kept nightly until one Mac nightly passes it |
 | `pl-ids-fix` | flake: a rename took more than one revision, at half CPU (2026-10-21) |
 
 ## Byte-identity of renders

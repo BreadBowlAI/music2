@@ -50,7 +50,7 @@ cdp.on("Network.webSocketFrameReceived", ({ response }) => {
   } catch {}
 });
 /**
- * The loudest a strip's meter reads over `ms`, and when (ms in); the reads where it said no level
+ * The loudest a strip's meter reads over `ms`, and when (ms in; 0 if it never rose above the floor); the reads where it said no level
  * (no `aria-valuenow`: not a level, and not 0 dB as `Number(null)` would have it); the meters
  * messages of that time.
  */
@@ -108,7 +108,7 @@ check((await redo()) && (await until(async () => (await strips()).includes("reve
 await page.keyboard.press("Space");
 check(await until(playing, 3000), "the song plays");
 const quiet = await loudest("reverb", 1500);
-check(quiet.top <= FLOOR, `with nothing sent, the Reverb's meter stays at the floor (it read ${quiet.top} dB at ${quiet.at} ms in; ${said("reverb", quiet)})`);
+check(quiet.top <= FLOOR, `with nothing sent, the Reverb's meter stays at the floor (it read ${quiet.top} dB${quiet.top > FLOOR ? ` at ${quiet.at} ms in` : ""}; ${said("reverb", quiet)})`);
 check(quiet.unsaid === 0, `and says its level from the start: aria-valuenow (no level in ${quiet.unsaid} of its reads)`);
 await page.click(`${slot("keys", "reverb")} [data-send-add]`);
 check(await until(() => /keys: \{ in: keys\.out, db: db\(-5\), pan: -0\.25, sends: \{ reverb: db\(-12\) \} \}/.test(read("song.ts"))), `the + writes a send at −12 dB (${read("song.ts").split("\n").find((l) => l.includes("keys:"))?.trim()})`);
