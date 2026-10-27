@@ -841,11 +841,15 @@ pub(super) fn kick_clips(pitches: &[&str]) -> Vec<NoteClip> {
     serde_json::from_value(json!([{"id": "a", "start": 0, "length": 4, "notes": notes}])).unwrap()
 }
 
-/// The renderer the player plays, once it has taken everything sent.
+/// The renderer the player plays, once it has taken everything sent: a load, and the session's
+/// last message (an activation among them), known by its stamp, never by how soon a callback
+/// comes. A cell write's seq (from 2^48) changes no generation, and an idle engine never stamps it.
 pub(super) fn generation(graph: &Graph) -> u64 {
     let p = player(graph);
     eventually("the player takes what was sent", || p.status().pending.is_none());
-    std::thread::sleep(Duration::from_millis(30));
+    if let Some(seq) = graph.inspect(|a| a.open.as_ref().and_then(|o| o.sent)).filter(|s| *s < 1 << 48) {
+        eventually("the engine applies the last message sent", || p.applied(seq).is_some());
+    }
     p.status().generation
 }
 
