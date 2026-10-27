@@ -149,6 +149,20 @@ struct Report {
     allocs: u64,
     idle: bool,
     pos: u64,
+    /// The rounds of cell writes made during the step, and whether cells were still written at
+    /// its end.
+    wrote: usize,
+    writing: bool,
+}
+
+/// Cells are written no more once this drops: a writer that panics still ends the audio
+/// thread's wait, so the join below reports the panic, never a hang.
+struct StopWriting(Arc<AtomicBool>);
+
+impl Drop for StopWriting {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 fn trap_run(device_rate: u32) {
@@ -222,15 +236,24 @@ fn trap_run(device_rate: u32) {
                 kept.extend(d.drain_retired());
             }
             let e = d.engine().unwrap();
-            reports.send(Report { allocs, idle: e.is_idle(), pos: e.status().pos }).unwrap();
+            let (wrote, writing) = (rounds.load(Ordering::Acquire) - from, writes.load(Ordering::Acquire));
+            reports.send(Report { allocs, idle: e.is_idle(), pos: e.status().pos, wrote, writing }).unwrap();
         }
         kept.extend(d.drain_retired());
         (d, kept)
     });
+    let n = std::cell::Cell::new(0);
     let step = |frames: usize, take: bool| -> Report {
+        n.set(n.get() + 1);
         steps.send(Step::Fill(frames, take)).unwrap();
         let r = back.recv().unwrap();
         assert_eq!(r.allocs, 0, "the audio thread allocated (at {device_rate} Hz); M2_TRAP_TRACE=1 shows where");
+        assert!(
+            !r.writing || r.wrote >= 2,
+            "step {} wrote {} rounds of cells while the callback ran, not 2 (at {device_rate} Hz)",
+            n.get(),
+            r.wrote
+        );
         r
     };
     let s = |x: f64| (x * device_rate as f64) as usize;
@@ -240,6 +263,7 @@ fn trap_run(device_rate: u32) {
     let writer = {
         let (player, both, target, writing, wrote) = (player.clone(), both.clone(), target.clone(), writing.clone(), wrote.clone());
         std::thread::spawn(move || {
+            let _stop = StopWriting(writing.clone());
             let mut k = 0;
             while writing.load(Ordering::Relaxed) {
                 for t in &both[target.load(Ordering::Relaxed)] {

@@ -308,6 +308,9 @@ struct Shared {
     /// Where a load not yet taken starts: its beat (f64 bits), and whether it plays.
     load_beat: AtomicU64,
     load_playing: AtomicBool,
+    /// The seq of the last activation or lane swap sent to this engine, 0 for none: what
+    /// [`Player::caught_up`] waits for the stamp of.
+    renderer_sent: AtomicU64,
     /// Its engine threads, as made and as the callback found them (8a's live half).
     engines: engines::Report,
     /// The device hears zeros: G12 plays muted ([`Player::mute_output`]).
@@ -1198,6 +1201,8 @@ impl Player {
         self.cells.sending(&mut renderer);
         self.shared.rate.store(renderer.sample_rate(), Ordering::Relaxed);
         self.shared.loads_sent.fetch_add(1, Ordering::Release);
+        // A fresh engine: what was sent to the one before is no longer waited for, the load is.
+        self.shared.renderer_sent.store(0, Ordering::Release);
         let sent = self.send(Msg::Replace { live: Box::new(Live::new(renderer, self.device_rate)), keep });
         if sent.is_err() {
             // Never taken: the position is the published one again.
@@ -1263,12 +1268,16 @@ impl Player {
         self.streaming(&mut renderer, None);
         self.cells.sending(&mut renderer);
         let generation = renderer.generation();
-        Ok((generation, self.envelope(EngineMsg::Activate { renderer: Box::new(renderer) })?))
+        let seq = self.envelope(EngineMsg::Activate { renderer: Box::new(renderer) })?;
+        self.shared.renderer_sent.fetch_max(seq, Ordering::Release);
+        Ok((generation, seq))
     }
 
     /// Replace lane `slot`'s data in the renderer `generation` (RENDER-26).
     pub fn swap_lane(&self, generation: u64, slot: u32, data: LaneSwap) -> Result<u64> {
-        self.envelope(EngineMsg::SwapLane { generation, slot, data })
+        let seq = self.envelope(EngineMsg::SwapLane { generation, slot, data })?;
+        self.shared.renderer_sent.fetch_max(seq, Ordering::Release);
+        Ok(seq)
     }
 
     /// A transport command, applied at the next block line (RENDER-9). Never waits for an edit.
@@ -1450,6 +1459,18 @@ impl Player {
     /// The engine clock after the last callback.
     pub fn clock(&self) -> u64 {
         self.shared.clock.load(Ordering::Relaxed)
+    }
+
+    /// Whether the engine took every renderer sent, so [`Status::generation`] is the one that
+    /// plays from now on: no load or seek is pending, and the last activation or lane swap sent
+    /// is stamped, applied or refused. Structural messages apply in order, so every one sent
+    /// before it was taken too. Cell writes and transport commands change no generation, and it
+    /// never waits for them. It reads the stamp while it is among the last few applied: 16 other
+    /// messages taken after it (live notes, transport commands) push it out, and it reads false
+    /// until the next activation or swap.
+    pub fn caught_up(&self) -> bool {
+        let seq = self.shared.renderer_sent.load(Ordering::Acquire);
+        self.status().pending.is_none() && (seq == 0 || self.applied(seq).is_some())
     }
 
     /// When message or cell write `seq` took effect, while it is among the last few applied.

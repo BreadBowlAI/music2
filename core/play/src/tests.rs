@@ -287,6 +287,38 @@ fn a_play_or_stop_reports_its_state_until_taken() {
     assert!(!player.status().playing);
 }
 
+// The engine has caught up once it took a load and a seek, and stamped the last activation or
+// lane swap sent: what a reader of the generation waits for (the gates' `Graph::generation`). A
+// transport command stamped after it says nothing of it, and a rate change starts the count again.
+#[test]
+fn the_engine_catches_up_with_the_last_renderer_sent() {
+    let (player, mut d) = Player::driven(48_000);
+    player.open(sine(48_000)).unwrap();
+    assert!(!player.caught_up(), "a load not taken");
+    let mut data = vec![0.0; 256];
+    d.fill(&mut data, 2);
+    assert!(player.caught_up());
+    // Not prepared against what plays: refused, and stamped so.
+    let (_, seq) = player.activate(sine(48_000)).unwrap();
+    player.play();
+    assert!(!player.caught_up(), "an activation not taken");
+    d.fill(&mut data, 2);
+    assert!(player.applied(seq).is_some_and(|a| a.refused) && player.caught_up(), "{:?}", player.applied(seq));
+    let seq = player.swap_lane(player.status().generation, 0, LaneSwap::Notes(Arc::default())).unwrap();
+    assert!(!player.caught_up(), "a lane swap not taken");
+    d.fill(&mut data, 2);
+    assert!(player.applied(seq).is_some() && player.caught_up());
+    // Sent to the engine a rate change replaces: the load is what it waits for.
+    player.activate(sine(48_000)).unwrap();
+    player.replace(sine(96_000)).unwrap();
+    assert!(!player.caught_up(), "a load not taken");
+    // A replace the inbox meets is taken at the start of the next callback.
+    d.fill(&mut data, 2);
+    d.fill(&mut data, 2);
+    assert!(player.caught_up(), "{:?}", player.status());
+    drop(d.drain_retired());
+}
+
 // RENDER-31: a rate change replaces the engine and keeps the beat, the play state and the loop;
 // the new engine's frames count at its rate.
 #[test]
