@@ -27,7 +27,24 @@ export default function Meter({
   const ref = useRef<HTMLCanvasElement>(null);
   const keys = channels.join(" ");
   useEffect(() => mount(keys.split(" "), ref.current!, bars), [keys, bars]);
-  return <canvas ref={ref} data-testid={testid} role="meter" aria-label={label} title={title} aria-valuemin={FLOOR} aria-valuemax={TOP} className={clsx("block", className)} />;
+  // Silent until the loop first draws it (up to 100 ms on): a meter always says a level. React sets
+  // these once, as it makes the canvas; the loop changes them, and React never sets them back.
+  return (
+    <canvas
+      ref={ref}
+      data-testid={testid}
+      role="meter"
+      aria-label={label}
+      title={title}
+      aria-valuemin={FLOOR}
+      aria-valuemax={TOP}
+      aria-valuenow={FLOOR}
+      aria-valuetext="Silent"
+      data-left={bars === 2 ? FLOOR : undefined}
+      data-right={bars === 2 ? FLOOR : undefined}
+      className={clsx("block", className)}
+    />
+  );
 }
 
 /**

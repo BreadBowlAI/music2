@@ -1,11 +1,12 @@
 // Buses in the Mix view (RENDER-34; the bus plan's slice 3): the Add bus menu (Reverb, Delay,
 // Group) writes a bus file and its channel, and its strip shows after the tracks, marked as a bus,
 // with M, S and a meter; one undo takes it back. Every other strip gets a slot for it: a + adds a
-// send (−12 dB after the fader), which then is a knob; the bus's meter moves once a playing track
-// sends to it; turning the knob writes its level, one undo step. The send's menu sets it before
-// the fader (a dot on the knob). The output picker takes Kick to a Group and back, one undo step.
-// A choice that would make a loop is greyed and says why. In the timeline a bus is a row with no
-// lanes, marked, whose menu has no Change instrument, and R on it records nothing. The lint.
+// send (−12 dB after the fader), which then is a knob; the bus's meter stays at the floor, and
+// says so from its first read, until a playing track sends to it, then moves; turning the knob
+// writes its level, one undo step. The send's menu sets it before the fader (a dot on the knob).
+// The output picker takes Kick to a Group and back, one undo step. A choice that would make a
+// loop is greyed and says why. In the timeline a bus is a row with no lanes, marked, whose menu
+// has no Change instrument, and R on it records nothing. The lint.
 //
 //   node e2e/bus-mix.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -38,15 +39,38 @@ const closeMenus = async () => {
   await key("Escape");
   await sleep(150);
 };
-/** The loudest a strip's meter reads over `ms`. */
+// The server's meters messages, as the page gets them: when (ms), and each track's peaks (linear).
+const meters = [];
+const cdp = await page.createCDPSession();
+await cdp.send("Network.enable");
+cdp.on("Network.webSocketFrameReceived", ({ response }) => {
+  try {
+    const m = JSON.parse(response.payloadData);
+    if (m.t === "meters") meters.push({ at: Date.now(), tracks: m.tracks ?? {} });
+  } catch {}
+});
+/**
+ * The loudest a strip's meter reads over `ms`, and when (ms in); the reads where it said no level
+ * (no `aria-valuenow`: not a level, and not 0 dB as `Number(null)` would have it); the meters
+ * messages of that time.
+ */
 const loudest = async (id, ms) => {
-  let top = FLOOR;
-  for (const t = Date.now(); Date.now() - t < ms; ) {
-    const v = Number(await page.$eval(`${strip(id)} [role=meter]`, (e) => e.getAttribute("aria-valuenow")).catch(() => FLOOR));
-    top = Math.max(top, Number.isFinite(v) ? v : FLOOR);
+  let top = FLOOR, at = 0, unsaid = 0;
+  const from = meters.length;
+  const t = Date.now();
+  while (Date.now() - t < ms) {
+    const v = await page.$eval(`${strip(id)} [role=meter]`, (e) => e.getAttribute("aria-valuenow")).catch(() => String(FLOOR));
+    if (v === null) unsaid++;
+    else if (Number(v) > top) [top, at] = [Number(v), Date.now() - t];
     await sleep(60);
   }
-  return top;
+  return { top, at, unsaid, t, msgs: meters.slice(from) };
+};
+/** What the server said of track `id` in `msgs`: its loudest peak (dB), how many said more than silence, the first such (ms in). */
+const said = (id, { msgs, t }) => {
+  const loud = msgs.map((m) => ({ at: m.at - t, p: Math.max(0, ...(m.tracks[id] ?? [])) })).filter((m) => m.p > 0);
+  const db = (x) => (20 * Math.log10(x)).toFixed(1);
+  return `the server's meters said ${id} more than silence in ${loud.length} of ${msgs.length} messages${loud.length ? `, the loudest ${db(Math.max(...loud.map((m) => m.p)))} dB, the first at ${loud[0].at} ms` : ""}; ${id} in them: ${msgs.some((m) => id in m.tracks)}`;
 };
 const playing = async () => (await api("/status")).body.playing;
 const linted = async (sel, what) => {
@@ -83,11 +107,14 @@ check((await redo()) && (await until(async () => (await strips()).includes("reve
 
 await page.keyboard.press("Space");
 check(await until(playing, 3000), "the song plays");
-check((await loudest("reverb", 1500)) <= FLOOR, "with nothing sent, the Reverb's meter stays at the floor");
+const quiet = await loudest("reverb", 1500);
+check(quiet.top <= FLOOR, `with nothing sent, the Reverb's meter stays at the floor (it read ${quiet.top} dB at ${quiet.at} ms in; ${said("reverb", quiet)})`);
+check(quiet.unsaid === 0, `and says its level from the start: aria-valuenow (no level in ${quiet.unsaid} of its reads)`);
 await page.click(`${slot("keys", "reverb")} [data-send-add]`);
 check(await until(() => /keys: \{ in: keys\.out, db: db\(-5\), pan: -0\.25, sends: \{ reverb: db\(-12\) \} \}/.test(read("song.ts"))), `the + writes a send at −12 dB (${read("song.ts").split("\n").find((l) => l.includes("keys:"))?.trim()})`);
 check(await until(async () => (await page.$eval(slot("keys", "reverb"), (e) => [e.dataset.state, e.querySelector("[data-value]")?.dataset.value]).catch(() => [])).join() === "on,-12"), "the slot is a knob now, at −12 dB");
-check((await loudest("reverb", 4000)) > FLOOR, "and the Reverb's meter moves: the send is heard");
+const heard = await loudest("reverb", 4000);
+check(heard.top > FLOOR, `and the Reverb's meter moves: the send is heard (${heard.top} dB; ${said("reverb", heard)})`);
 const knob = await box(`${slot("keys", "reverb")} [role=slider]`);
 const before = read("song.ts");
 await page.mouse.move(knob.x + knob.width / 2, knob.y + knob.height / 2);
