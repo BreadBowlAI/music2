@@ -1113,13 +1113,15 @@ impl Graph {
         Ok(())
     }
 
-    /// The renderer the player plays, once it took everything sent: what tells a lane swap from a
-    /// new renderer, for the gates. None with no player.
+    /// The renderer the player plays, once the engine took every renderer sent (a load, and the
+    /// last activation or lane swap: [`m2_play::Player::caught_up`]): what tells a lane swap from
+    /// a new renderer, for the gates. It waits up to 2 s for that, never for a callback's timing,
+    /// then reads what plays. None with no player.
     #[doc(hidden)]
     pub fn generation(&self) -> Option<u64> {
         let p = self.inner.current_device()?.player;
         let t = Instant::now();
-        while p.status().pending.is_some() && t.elapsed() < std::time::Duration::from_secs(2) {
+        while !p.caught_up() && t.elapsed() < std::time::Duration::from_secs(2) {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         Some(p.status().generation)

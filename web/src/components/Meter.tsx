@@ -7,7 +7,8 @@ import { clearClips, FLOOR, mount, TOP, useClipped } from "../lib/meters";
  * `channels` are the meters it shows the louder of: a track's key, a strip's tracks, or `OUT` for
  * the song's output. One bar (the louder side), or two for left and right. Screen readers and the
  * suites read its level as `aria-valuenow`, in dB, at most 10 times a second; a two-bar meter also
- * says each side in `data-left` and `data-right`.
+ * says each side in `data-left` and `data-right`. A new meter starts at the floor ("Silent") until
+ * the loop's first readout.
  */
 export default function Meter({
   channels,
@@ -27,7 +28,27 @@ export default function Meter({
   const ref = useRef<HTMLCanvasElement>(null);
   const keys = channels.join(" ");
   useEffect(() => mount(keys.split(" "), ref.current!, bars), [keys, bars]);
-  return <canvas ref={ref} data-testid={testid} role="meter" aria-label={label} title={title} aria-valuemin={FLOOR} aria-valuemax={TOP} className={clsx("block", className)} />;
+  // It says Silent, the floor, until the loop's next readout (at most 100 ms while frames run; in a
+  // hidden window, not until it shows), even while the song plays: a meter always says a level. The
+  // loop's shared readout keeps every meter in step, so a meter made mid-song doesn't read its own
+  // level first. React sets these once, as it makes the canvas; the loop changes them, and React
+  // never sets them back.
+  return (
+    <canvas
+      ref={ref}
+      data-testid={testid}
+      role="meter"
+      aria-label={label}
+      title={title}
+      aria-valuemin={FLOOR}
+      aria-valuemax={TOP}
+      aria-valuenow={FLOOR}
+      aria-valuetext="Silent"
+      data-left={bars === 2 ? FLOOR : undefined}
+      data-right={bars === 2 ? FLOOR : undefined}
+      className={clsx("block", className)}
+    />
+  );
 }
 
 /**

@@ -149,6 +149,20 @@ struct Report {
     allocs: u64,
     idle: bool,
     pos: u64,
+    /// The rounds of cell writes made during the step, and whether cells were still written at
+    /// its end.
+    wrote: usize,
+    writing: bool,
+}
+
+/// Cells are written no more once this drops: a writer that panics still ends the audio
+/// thread's wait, so the join below reports the panic, never a hang.
+struct StopWriting(Arc<AtomicBool>);
+
+impl Drop for StopWriting {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 fn trap_run(device_rate: u32) {
@@ -190,6 +204,11 @@ fn trap_run(device_rate: u32) {
     player.open(ra).unwrap();
     let (steps, rx) = mpsc::channel::<Step>();
     let (reports, back) = mpsc::channel::<Report>();
+    // Cells are written from another thread until the stop (below): whether it writes yet, and
+    // the rounds it wrote so far.
+    let writing = Arc::new(AtomicBool::new(true));
+    let wrote = Arc::new(AtomicUsize::new(0));
+    let (writes, rounds) = (writing.clone(), wrote.clone());
     // The audio thread: fresh, under the trap from its very first fill.
     let audio = std::thread::spawn(move || {
         let mut d = d;
@@ -197,6 +216,7 @@ fn trap_run(device_rate: u32) {
         let mut buf = vec![0.0f32; 2 * 4096];
         while let Ok(Step::Fill(frames, take)) = rx.recv() {
             let mut done = 0;
+            let from = rounds.load(Ordering::Acquire);
             let allocs = trapped(|| {
                 for n in SIZES.iter().cycle() {
                     let n = (*n).min(frames - done);
@@ -205,37 +225,52 @@ fn trap_run(device_rate: u32) {
                     }
                     d.fill(&mut buf[..2 * n], 2);
                     done += n;
+                    // While cells are written, the first buffer waits for two rounds more: they
+                    // land between this step's block lines, however little the writer runs.
+                    while done == n && writes.load(Ordering::Acquire) && rounds.load(Ordering::Acquire) < from + 2 {
+                        std::thread::yield_now();
+                    }
                 }
             });
             if take {
                 kept.extend(d.drain_retired());
             }
             let e = d.engine().unwrap();
-            reports.send(Report { allocs, idle: e.is_idle(), pos: e.status().pos }).unwrap();
+            let (wrote, writing) = (rounds.load(Ordering::Acquire) - from, writes.load(Ordering::Acquire));
+            reports.send(Report { allocs, idle: e.is_idle(), pos: e.status().pos, wrote, writing }).unwrap();
         }
         kept.extend(d.drain_retired());
         (d, kept)
     });
+    let n = std::cell::Cell::new(0);
     let step = |frames: usize, take: bool| -> Report {
+        n.set(n.get() + 1);
         steps.send(Step::Fill(frames, take)).unwrap();
         let r = back.recv().unwrap();
         assert_eq!(r.allocs, 0, "the audio thread allocated (at {device_rate} Hz); M2_TRAP_TRACE=1 shows where");
+        assert!(
+            !r.writing || r.wrote >= 2,
+            "step {} wrote {} rounds of cells while the callback ran, not 2 (at {device_rate} Hz)",
+            n.get(),
+            r.wrote
+        );
         r
     };
     let s = |x: f64| (x * device_rate as f64) as usize;
     // Cell writes from another thread all along, into whichever renderer plays, until the stop:
     // the feedback gain, the reverb's mix in every voice and the smooth level, as gestures do.
     let target = Arc::new(AtomicUsize::new(0));
-    let writing = Arc::new(AtomicBool::new(true));
     let writer = {
-        let (player, both, target, writing) = (player.clone(), both.clone(), target.clone(), writing.clone());
+        let (player, both, target, writing, wrote) = (player.clone(), both.clone(), target.clone(), writing.clone(), wrote.clone());
         std::thread::spawn(move || {
+            let _stop = StopWriting(writing.clone());
             let mut k = 0;
             while writing.load(Ordering::Relaxed) {
                 for t in &both[target.load(Ordering::Relaxed)] {
                     player.set_cells(t, 0.2 + (k % 5) as f64 * 0.1);
                 }
                 k += 1;
+                wrote.store(k, Ordering::Release);
                 std::thread::yield_now();
             }
             for t in &both[target.load(Ordering::Relaxed)] {
@@ -269,6 +304,7 @@ fn trap_run(device_rate: u32) {
     player.activate(stale).unwrap();
     step(s(0.1), true);
     writing.store(false, Ordering::Relaxed);
+    // Seven steps took two rounds or more each, waited for above.
     assert!(writer.join().unwrap() > 10, "it wrote while the callback ran");
     step(s(0.1), true);
     player.stop();

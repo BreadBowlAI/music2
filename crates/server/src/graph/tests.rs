@@ -841,12 +841,13 @@ pub(super) fn kick_clips(pitches: &[&str]) -> Vec<NoteClip> {
     serde_json::from_value(json!([{"id": "a", "start": 0, "length": 4, "notes": notes}])).unwrap()
 }
 
-/// The renderer the player plays, once it has taken everything sent.
+/// [`Graph::generation`], failing the test if the engine hasn't taken every renderer sent (a
+/// load, and the last activation or lane swap, known by its stamp, never by how soon a callback
+/// comes) within the file's wait.
 pub(super) fn generation(graph: &Graph) -> u64 {
     let p = player(graph);
-    eventually("the player takes what was sent", || p.status().pending.is_none());
-    std::thread::sleep(Duration::from_millis(30));
-    p.status().generation
+    eventually("the engine takes every renderer sent", || p.caught_up());
+    graph.generation().expect("a player")
 }
 
 // RENDER-26, PLANE-1, WRITE-22: a lane write is swapped into the playing renderer, whoever wrote

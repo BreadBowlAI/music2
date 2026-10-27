@@ -143,7 +143,8 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `st-errors` | waited over 30 s for the Needs attention row of a missing sound file | once, at load 9; alone it passes |
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
-| `bus-mix` | "with nothing sent, the Reverb's meter stays at the floor" | 3 of 31 runs (2026-10-21), 2 of them alone; on the Mac at `a1e3c77`, 2 of 2. Cause not known: its message doesn't say the level it read. In the nightly tier |
+| `bus-mix` | "with nothing sent, the Reverb's meter stays at the floor" | Cause found and fixed (`df8981b`): a new meter had no `aria-valuenow` until the meters' loop first drew it, and the suite read that as 0 dB; `Meter.tsx` now starts at the floor. Under load on Linux: 17 of 60 runs failed before, 0 of 60 after. The Mac's 2 of 2 at `a1e3c77` is probably the same cause; no Mac log proves it. In the nightly tier until a Mac nightly passes it |
+| `nx-piano-fix` | "the code editor gets its letters" | 2 of 2 on GitHub's Mac at `96d18e7` (run 40478186453); passes on Linux. Cause not found. Its check is now three (the editor's box, its text, no notes sent), each saying what it read, so the next Mac nightly says which part fails |
 | `sx-follow` | Chrome's page closed 2 s in ("Target closed", during a `$$eval`) | once on the Mac at `a1e3c77`; passed on its retry, 22 of 22 |
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
