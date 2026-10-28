@@ -90,7 +90,7 @@ cargo run --locked --release -p music2-desktop
 2. A first-time contributor's checks start after a maintainer allows them (a GitHub setting that keeps spam from using the shared machines).
 3. A maintainer reviews it. Expect questions: they are about the contract, the taste and plain words as much as the code.
 4. Once approved and up to date with `main` (its checks run again on top of the newest `main`), it merges with a merge commit.
-5. The expensive and timing-sensitive tests run every night on `main`. If the nightly run fails, it opens an issue called "Nightly failed". A test that passed there only on its retry is named in the issue "Flaky tests", with the number of nights it was named on.
+5. The expensive and timing-sensitive tests run every night on `main`. If the nightly run fails, it opens an issue called "Nightly failed". A test or browser suite that passed there only on its retry is named in the issue "Flaky tests", with the number of nights it was named on.
 
 ## Building and testing
 
@@ -124,7 +124,7 @@ cargo run --locked --release -p music2-desktop
 | `examples/` | `first-song`, `resample`, `with-plugins`, `sounds` and `sampler`, each with an `example.toml` for the start screen (and the plugins it needs) |
 | `e2e/` | The browser suites |
 | `crates/gates` | The timing gates (`m2-gates`) that `ci/check.sh` runs |
-| `ci/` | `check.sh` (the full check; `--pr` the pull request tier), `pr.sh` (one CI job's part), `nightly.sh` (the timing gates on a quiet machine), `nightly-tests.txt` (the Rust tests only the nightly tier runs), `sleeps-tests.txt` (the Rust tests GitHub's Mac leaves out, as its sleeps run long) and `nightly-list.sh` (both lists as cargo-nextest sees them), `docs-only.sh` (the docs-only rule), `guide.sh` and `links.mjs` (the docs check and the guide's website), the checks' own cases (`docs-only-test.sh`, `gates-auto-test.sh`, `pr-test.sh`, `nightly-test.sh`), `tools.sh`, `apt.sh` and `plugins.sh` (what the checks need), `gates.txt`, `sweep.sh` (a Mac's thread sweep) |
+| `ci/` | `check.sh` (the full check; `--pr` the pull request tier), `pr.sh` (one CI job's part), `nightly.sh` (the timing gates on a quiet machine), `nightly-tests.txt` (the Rust tests only the nightly tier runs), `sleeps-tests.txt` (the Rust tests GitHub's Mac leaves out, as its sleeps run long) and `nightly-list.sh` (both lists as cargo-nextest sees them), `docs-only.sh` (the docs-only rule), `guide.sh` and `links.mjs` (the docs check and the guide's website), the checks' own cases (`docs-only-test.sh`, `gates-auto-test.sh`, `pr-test.sh`, `nightly-test.sh`, `nightly-issue-test.sh`), `tools.sh`, `apt.sh` and `plugins.sh` (what the checks need), `gates.txt`, `sweep.sh` (a Mac's thread sweep) |
 | `.github/` | The workflows (`ci.yml`, the pull request tier; `nightly.yml`; `pages.yml`, the guide's website), Dependabot's settings, and the issue and pull request forms |
 | `.config/nextest.toml` | How cargo-nextest runs the Rust tests in CI |
 | `deny.toml` | cargo-deny's rules for the Rust dependencies: the licences allowed, security advisories, crates.io only |

@@ -10,8 +10,8 @@
 # Actions minutes are free only for public repos, and a private repo's included minutes would go on
 # this alone. When a job fails or is cancelled (a job that runs past its timeout is cancelled: a
 # hang), one issue, "Nightly failed", gets the run's link; when a test or suite passed only on its
-# retry, one issue, "Flaky tests", names each with the nights it was named on. Both jobs keep their
-# logs every night, 14 days.
+# retry, one issue, "Flaky tests", names each, with the number of nights it was named on. Both jobs
+# keep their logs every night, 14 days.
 # The timing gates never run here: a shared cloud machine can't judge real-time audio (ci/nightly.sh
 # runs them on a quiet maintainer machine).
 
@@ -177,7 +177,9 @@ jobs:
   # One issue for every failed night, "Nightly failed", and one for every night something passed
   # only on a retry, "Flaky tests": each opened once, commented on after. A job past its timeout
   # (a hang) ends "cancelled", not "failure", so both count; this workflow never cancels itself
-  # (cancel-in-progress: false), so a cancelled job is a timeout or a person's click.
+  # (cancel-in-progress: false), so a cancelled job is a timeout or a person's click. A job ended
+  # by its timeout may pass on no flaky list, so that night's "Flaky tests" can miss its names;
+  # "Nightly failed" still opens then, and the job's logs are kept.
   report:
     needs: [linux, macos]
     if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || needs.linux.outputs.flaky != '' || needs.macos.outputs.flaky != '') }}

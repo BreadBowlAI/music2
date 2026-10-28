@@ -376,11 +376,9 @@ pr() {
   M2_PR_OUT=$OUT/pr-$1 M2_PR_JOBS=$JOBS ci/pr.sh "$@" > "$log" 2>&1 < /dev/null
   st=$?
   said=$(grep -E '^ci/pr.sh .*: (PASS|FAIL) in ' "$log" | tail -1 | sed -E 's/^ci\/pr.sh [^:]*: (PASS|FAIL) in //; s/ \(logs in .*$//')
-  # What passed only when run again: nextest's FLAKY tests, and suites that passed alone.
-  {
-    grep -E '^ +FLAKY ' "$log" | sed -E 's/^ +FLAKY [^]]*\] (\([^)]*\) )?/test /' | sort -u
-    grep -E 'passed only on a retry alone: ' "$log" | sed 's/.*retry alone: //; s/: see .*//' | tr ',' '\n' | sed 's/^ */suite /'
-  } >> "$OUT/flaky"
+  # What passed only when run again (nextest's FLAKY tests, and suites that passed alone): the
+  # step's own list, not words in its output (a failed check's log tail can hold such words).
+  cat "$OUT/pr-$1/flaky" 2> /dev/null >> "$OUT/flaky"
   if [ $st -eq 0 ]; then
     record "$row" PASS "${said:-done}"
   else
@@ -490,9 +488,10 @@ fi
 
 # 1b. The PR tier's checks that build nothing (ci/pr.sh lint: rustfmt, actionlint, zizmor, licences, the
 #     links and the guide's site (ci/guide.sh check), and the cases of the docs rule, of the PR
-#     tier's verdicts, of ci/nightly.sh and of ci/tally.sh), then RustSec's advisories (ci/pr.sh
-#     advisories: they fetch RustSec's database, so their answer changes with the date). Their
-#     tools come from ci/tools.sh; when it can't get one, the row says FAIL and why.
+#     tier's verdicts, of ci/nightly.sh, of ci/nightly-issue.sh and of ci/tally.sh), then
+#     RustSec's advisories (ci/pr.sh advisories: they fetch RustSec's database, so their answer
+#     changes with the date). Their tools come from ci/tools.sh; when it can't get one, the row
+#     says FAIL and why.
 pr lint "1 min" lint
 pr advisories "seconds" advisories
 
