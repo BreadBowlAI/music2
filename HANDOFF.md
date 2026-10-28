@@ -164,8 +164,9 @@ wall clock beside other tests, as macOS doesn't say how long a thread waited for
 thread's CPU time (`1c1cc20`). That is unproven on a Mac: CPU time still counts a core's slowdown when something
 shares it, and a virtual machine's stolen time. G10 stays on this watch list until a Mac nightly passes it.
 
-A test or suite that passed only on its retry is listed by `ci/check.sh`. The lead decides whether it is one of
-these or a real failure, and fixes the real ones (most were a read a moment too soon).
+A test or suite that passed only on its retry is listed by `ci/check.sh`; on GitHub's nightly, also in the open
+issue "Flaky tests", with the nights each was named on, and both jobs keep their logs 14 days. The lead decides
+whether it is one of these or a real failure, and fixes the real ones (most were a read a moment too soon).
 
 ## What comes next
 

@@ -303,6 +303,9 @@ case $STEP in
       sum=$(grep -E '^ *Summary \[' "$OUT/test.log" | tail -1 | sed 's/^ *//')
       if [ -n "$sum" ]; then echo "                       $sum"; fi
       grep -E '^ *FLAKY ' "$OUT/test.log" | sed 's/^ */                       /'
+      # And in the step's folder, one a line, as ci/check.sh's own list writes them: the nightly
+      # job counts them (ci/nightly-issue.sh --flaky).
+      grep -E '^ +FLAKY ' "$OUT/test.log" | sed -E 's/^ +FLAKY [^]]*\] (\([^)]*\) )?/test /' | sort -u >> "$OUT/flaky"
       if [ -n "${GITHUB_ACTIONS:-}" ]; then
         grep -E '^ *FLAKY ' "$OUT/test.log" | sed 's/^ */::warning title=Passed only on a retry::/'
       fi
@@ -356,6 +359,7 @@ case $STEP in
         for run in $runs; do
           if suites "${run%-*}" "${run##*-}" --quiet --out "$OUT/e2e-retry" >> "$OUT/e2e-retry.log" 2>&1 < /dev/null; then
             again="$again${again:+, }$run"
+            echo "suite $run" >> "$OUT/flaky"
             if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning title=Passed only on a retry::suite $run"; fi
           else
             bad="$bad${bad:+, }$run"

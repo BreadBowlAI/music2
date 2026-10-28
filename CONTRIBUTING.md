@@ -90,7 +90,7 @@ cargo run --locked --release -p music2-desktop
 2. A first-time contributor's checks start after a maintainer allows them (a GitHub setting that keeps spam from using the shared machines).
 3. A maintainer reviews it. Expect questions: they are about the contract, the taste and plain words as much as the code.
 4. Once approved and up to date with `main` (its checks run again on top of the newest `main`), it merges with a merge commit.
-5. The expensive and timing-sensitive tests run every night on `main`. If the nightly run fails, it opens an issue called "Nightly failed".
+5. The expensive and timing-sensitive tests run every night on `main`. If the nightly run fails, it opens an issue called "Nightly failed". A test that passed there only on its retry is named in the issue "Flaky tests", with the number of nights it was named on.
 
 ## Building and testing
 
