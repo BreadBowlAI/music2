@@ -164,7 +164,7 @@ export const SUITES = [
   ["nx-click", "fix", { expect: 20, s: 8, sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["s8-mix", "fix", { expect: 80, s: 23 }],
   ["pl-mix", "fix", { expect: 47, s: 14, tier: "nightly", why: "speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18)" }],
-  ["bus-mix", "fix", { expect: 38, s: 8, tier: "nightly", why: "flake: with nothing sent, the Reverb's meter rose above the floor in 3 of 31 runs (2026-10-21); cause found and fixed in df8981b (a new meter had no level, read as 0 dB); kept nightly until one Mac nightly passes it" }],
+  ["bus-mix", "fix", { expect: 38, s: 8 }],
   ["pl-sounds", "fix", { expect: 46, s: 4 }],
   ["pl-ids", "fix", { expect: 39, s: 3, tier: "nightly", why: "flake: a rename took more than one revision, at half CPU (2026-10-21)" }],
   ["pc-keys", "fix", { expect: 37, s: 3 }],
