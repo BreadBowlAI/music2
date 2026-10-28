@@ -9,7 +9,9 @@
 # below), and the pool's models. Only once the repo is public:
 # Actions minutes are free only for public repos, and a private repo's included minutes would go on
 # this alone. When a job fails or is cancelled (a job that runs past its timeout is cancelled: a
-# hang), one issue, "Nightly failed", gets the run's link.
+# hang), one issue, "Nightly failed", gets the run's link; when a test or suite passed only on its
+# retry, one issue, "Flaky tests", names each, with the number of nights it was named on. Both jobs
+# keep their logs every night, 14 days.
 # The timing gates never run here: a shared cloud machine can't judge real-time audio (ci/nightly.sh
 # runs them on a quiet maintainer machine).
 
@@ -39,6 +41,8 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    outputs:
+      flaky: ${{ steps.flaky.outputs.list }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,6 +97,11 @@ jobs:
       # minutes later if that hangs too; the step's limit and the job's are the last backstops.
       - run: timeout -s INT -k 2m 165m ci/check.sh --nightly
         timeout-minutes: 170
+      # What passed only on a retry (ci/check.sh's list, and ci/pr.sh's in each pr-<step>/), for
+      # the report job's "Flaky tests" issue.
+      - id: flaky
+        if: always()
+        run: ci/nightly-issue.sh --list linux ~/m2-check >> "$GITHUB_OUTPUT"
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -106,6 +115,8 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
     runs-on: macos-15
     timeout-minutes: 150
+    outputs:
+      flaky: ${{ steps.flaky.outputs.list }}
     env:
       # No Mac copy of the test plugins is pinned yet: their tests skip, and the suites that need
       # them are left out (and said).
@@ -148,7 +159,12 @@ jobs:
         run: ci/pr.sh suites --all
       - if: ${{ !cancelled() }}
         run: ci/pr.sh renders
-      - if: ${{ failure() || cancelled() }}
+      # What passed only on a retry (each step's list), for the report job's "Flaky tests" issue.
+      - id: flaky
+        if: always()
+        run: ci/nightly-issue.sh --list macos ~/m2-check >> "$GITHUB_OUTPUT"
+      # Every night, as the Linux job's: a test that passed only on its retry has its logs too.
+      - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-macos
@@ -158,12 +174,15 @@ jobs:
             target/nextest/default/junit.xml
           retention-days: 14
 
-  # One issue for every failed night: opened once, commented on after. A job past its timeout
+  # One issue for every failed night, "Nightly failed", and one for every night something passed
+  # only on a retry, "Flaky tests": each opened once, commented on after. A job past its timeout
   # (a hang) ends "cancelled", not "failure", so both count; this workflow never cancels itself
-  # (cancel-in-progress: false), so a cancelled job is a timeout or a person's click.
+  # (cancel-in-progress: false), so a cancelled job is a timeout or a person's click. A job ended
+  # by its timeout may pass on no flaky list, so that night's "Flaky tests" can miss its names;
+  # "Nightly failed" still opens then, and the job's logs are kept.
   report:
     needs: [linux, macos]
-    if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || needs.linux.outputs.flaky != '' || needs.macos.outputs.flaky != '') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # A job's own permissions replace the top-level ones: contents: read again, for the checkout.
@@ -180,4 +199,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WHAT: "linux ${{ needs.linux.result }}, macos ${{ needs.macos.result }}"
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
         run: ci/nightly-issue.sh "$RUN" "$WHAT"
+      # The names reach the script through the environment, never pasted into it.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FLAKY: |
+            ${{ needs.linux.outputs.flaky }}
+            ${{ needs.macos.outputs.flaky }}
+        if: ${{ !cancelled() && (needs.linux.outputs.flaky != '' || needs.macos.outputs.flaky != '') }}
+        run: ci/nightly-issue.sh --flaky "$RUN" "$FLAKY"

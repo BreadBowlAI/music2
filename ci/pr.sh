@@ -27,7 +27,8 @@
 #                               (cargo-deny's bans, licences and sources on both workspaces; npm),
 #                               the docs job's link check and site, and the cases of the docs rule,
 #                               of the PR tier's own verdicts (ci/pr-test.sh), of ci/nightly.sh
-#                               (ci/nightly-test.sh) and of how ci/check.sh reads a test log
+#                               (ci/nightly-test.sh), of the nightly's issues
+#                               (ci/nightly-issue-test.sh) and of how ci/check.sh reads a test log
 #                               (ci/tally-test.sh)
 #   ci/pr.sh quick              lint's checks, then the cases of the gates rule, the pool's models,
 #                               the web typecheck and build, std's kernels (tests, clippy) and
@@ -56,7 +57,9 @@
 # Each step prints a line per check, "PASS", "FAIL" or "SKIP" and why, then
 # "ci/pr.sh <step>: PASS|FAIL in <time>", and exits 0 only when every check passed. A failed
 # check's log ends the output (its last 60 lines); every log is in M2_PR_OUT (default
-# ~/m2-check/pr-<commit>/<step>; only a folder a check made is ever replaced).
+# ~/m2-check/pr-<commit>/<step>; only a folder a check made is ever replaced). rust and suites
+# also write there a file named flaky: each test or browser suite that passed only on its retry,
+# one a line ("test <binary> <name>", "suite <run>"), which ci/check.sh and the nightly read.
 #
 # Builds: cargo --locked, with CARGO_PROFILE_DEV_DEBUG=0 and CARGO_INCREMENTAL=0 (a debug build
 # with debug info is 31 GB, more than a CI runner's disk), into <CARGO_TARGET_DIR or target>/pr,
@@ -238,6 +241,7 @@ lint() {
   check "docs rule" docs-rule.log ci/docs-only-test.sh
   check "pr verdicts" pr-test.log ci/pr-test.sh
   check "nightly.sh" nightly-test.log ci/nightly-test.sh
+  check "nightly issue" nightly-issue-test.log ci/nightly-issue-test.sh
   check "test tally" tally-test.log ci/tally-test.sh
 }
 # models: the pool's models, in release, and their lint (the same commands as ci/check.sh's step
@@ -303,6 +307,10 @@ case $STEP in
       sum=$(grep -E '^ *Summary \[' "$OUT/test.log" | tail -1 | sed 's/^ *//')
       if [ -n "$sum" ]; then echo "                       $sum"; fi
       grep -E '^ *FLAKY ' "$OUT/test.log" | sed 's/^ */                       /'
+      # And in the step's folder, one a line, as ci/check.sh's own list writes them: ci/check.sh
+      # reads this file (no other script reads nextest's log for them), and the nightly job counts
+      # them (ci/nightly-issue.sh --flaky).
+      grep -E '^ +FLAKY ' "$OUT/test.log" | sed -E 's/^ +FLAKY [^]]*\] (\([^)]*\) )?/test /' | sort -u >> "$OUT/flaky"
       if [ -n "${GITHUB_ACTIONS:-}" ]; then
         grep -E '^ *FLAKY ' "$OUT/test.log" | sed 's/^ */::warning title=Passed only on a retry::/'
       fi
@@ -356,6 +364,7 @@ case $STEP in
         for run in $runs; do
           if suites "${run%-*}" "${run##*-}" --quiet --out "$OUT/e2e-retry" >> "$OUT/e2e-retry.log" 2>&1 < /dev/null; then
             again="$again${again:+, }$run"
+            echo "suite $run" >> "$OUT/flaky"
             if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning title=Passed only on a retry::suite $run"; fi
           else
             bad="$bad${bad:+, }$run"

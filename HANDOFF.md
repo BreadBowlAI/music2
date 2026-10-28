@@ -164,8 +164,9 @@ wall clock beside other tests, as macOS doesn't say how long a thread waited for
 thread's CPU time (`1c1cc20`). That is unproven on a Mac: CPU time still counts a core's slowdown when something
 shares it, and a virtual machine's stolen time. G10 stays on this watch list until a Mac nightly passes it.
 
-A test or suite that passed only on its retry is listed by `ci/check.sh`. The lead decides whether it is one of
-these or a real failure, and fixes the real ones (most were a read a moment too soon).
+A test or suite that passed only on its retry is listed by `ci/check.sh`; on GitHub's nightly, also in the open
+issue "Flaky tests", with the nights each was named on, and both jobs keep their logs 14 days. The lead decides
+whether it is one of these or a real failure, and fixes the real ones (most were a read a moment too soon).
 
 ## What comes next
 
@@ -272,14 +273,14 @@ Every check runs from a script in `ci/`, so whatever CI runs, you run with the s
 | Tier | Where and when | The command | What |
 |---|---|---|---|
 | Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences, actionlint and zizmor, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
-| Nightly | GitHub, every day on `main`, only once the repo is public (`.github/workflows/nightly.yml`) | `ci/check.sh --nightly` | the full check without the timing gates (so every PR-tier check and the advisories too), the browser suites one at a time, the tests tagged nightly; and a Mac: the Rust tests, the pool's models, the browser suites, the renders. A failed or timed-out job opens or comments on one issue, "Nightly failed". |
+| Nightly | GitHub, every day on `main`, only once the repo is public (`.github/workflows/nightly.yml`) | `ci/check.sh --nightly` | the full check without the timing gates (so every PR-tier check and the advisories too), the browser suites one at a time, the tests tagged nightly; and a Mac: the Rust tests, the pool's models, the browser suites, the renders. A failed or timed-out job opens or comments on one issue, "Nightly failed"; a test or suite that passed only on its retry is named in another, "Flaky tests", with the number of nights it was named on. |
 | Timing gates | a quiet maintainer machine, every night, by cron | `ci/nightly.sh --report` | `ci/check.sh --gates` on a fresh clone of `origin/main`; posts the status `nightly/gates`. It runs as an OS user of its own, with a fine-grained token that can only write commit statuses (docs/maintainers.md, part 5). Not set up yet. |
 | Full check | your machine; the server with `--gates=auto` | `ci/check.sh` | everything, below: every check of the other tiers. |
 
 - **Which tier a test is in.** A Rust test that judges speed or is a known flake is listed in `ci/nightly-tests.txt`, with why; a browser suite gets `tier: "nightly"` and a `why` in `e2e/run.mjs`. Unchanged either way: it runs every night. One more list, apart from the tiers: a test whose clock is a sleep is in `ci/sleeps-tests.txt` (Rust) or tagged `sleeps` in `e2e/run.mjs`, with why. Only GitHub's Mac job leaves them out (`M2_LATE_SLEEPS=1` in `nightly.yml`: its sleeps run long), with a "late sleeps" row that names them; they run everywhere else, a real Mac's `ci/check.sh` too.
 - **Times** (`ci/check.sh --pr` in a clean clone on 8 threads of the server, at `2141096` and `d4681ab`): about 10 minutes cold (607 s), 7.5 warm (447 and 451 s), with music2's own crates rebuilt. On GitHub's 4-core runner each job is one part of that; its real times are still to be measured (gaps.md).
 - **What the first real runs found.** A test that hosts Surge XT or Airwindows in this process could pass, then crash as its process exited: a destroy is queued to the plugin main thread, and the exit ran the plugin library's destructors under it. nextest runs each test in a process of its own, so it showed at once (one test crashed 40 runs of 40 alone). Now `test_main_thread()` drains that thread when the test's thread ends (`d4681ab`).
-- **Verdicts.** `--pr` says PASS only when CI would pass. A docs-only change needs no plugins. `M2_NO_PLUGINS=1` skips the plugin tests and says PART; so does `M2_LATE_SLEEPS=1`, for what it leaves out. A browser suite that was PART fails it, even when another run failed and then passed alone. "What failed" names a Rust test whose process crashed (nextest's `SEGV`). The cases are in `ci/pr-test.sh` and `ci/nightly-test.sh`, which the lint step runs (in quick, and in the full check).
+- **Verdicts.** `--pr` says PASS only when CI would pass. A docs-only change needs no plugins. `M2_NO_PLUGINS=1` skips the plugin tests and says PART; so does `M2_LATE_SLEEPS=1`, for what it leaves out. A browser suite that was PART fails it, even when another run failed and then passed alone. "What failed" names a Rust test whose process crashed (nextest's `SEGV`). The cases are in `ci/pr-test.sh`, `ci/nightly-test.sh` and `ci/nightly-issue-test.sh`, which the lint step runs (in quick, and in the full check).
 
 ## The check: `ci/check.sh`
 
