@@ -1,416 +1,453 @@
-# Packs: the library, the registry and search
+# Packs: instruments, effects, sounds and samples anyone can publish
 
-Written 2026-10-29, from `main` at `e38c131`. A plan, waiting for the owner's yes. Nothing here is built.
-It is gap #39 (shared sound packages), grown into the whole library.
+| | |
+|---|---|
+| **Status** | Draft: open for comments. Nothing here is built. |
+| **Written** | 2026-10-29, from `main` at `e38c131` |
+| **Gaps** | #39 (shared sound packages), with #22 (the rest of the Sampler) and #18 (more audio file types) |
+| **Decides** | the owner, after comments ([§17](#17-how-this-proposal-goes)) |
 
 **In short**
-- The app ships small: std (its instruments and effects, about 220 KB of code), std's presets, and one
-  small drum kit, so a new song makes sound with no internet.
-- Everything else comes as **packs**: a pack is one folder of instruments, effects, sounds (presets) and
-  samples, with one file that says what is in it. Anyone can make one. It is a GitHub repo.
-- The **library** is everything you can search: what came with the app, the packs you have, and the packs
-  you could get.
-- The **registry** is one public GitHub repo with a small file per pack: who made it, where it is, each
-  version and its fingerprint (a hash). music2's own packs and the community's are in the same list, with
-  a badge that says which.
-- **⌘F** opens one search over all of it, like Spotlight: instruments, sounds, effects and samples. Space
-  plays a preview. Enter or a drag adds it. A sample can be got on its own, without its whole pack.
-- A sample you add is copied into your song, with a note of where it came from and its licence. A song
-  pins the exact version of each pack it uses, so it sounds the same on every computer, for years.
-- A pack can't hurt your computer: no programs in it, only sandboxed code (the same sandbox std runs in),
-  presets and audio.
+- **One interface for every sound.** To music2, an instrument is "notes in, sound out" and an effect is
+  "sound in, sound out". What is inside is the pack's business: code, recordings, or both. So a synth, a
+  sampled piano, and a sampled piano with modelled strings are the same kind of thing.
+- **A song sounds the same forever because every file is named by its fingerprint (hash), not by where it
+  is kept.** Any host that hands back the right bytes will do. Where files are kept matters for keeping
+  them forever, not for exactness.
+- **Three kinds of data, three homes.** The list of packs is a GitHub repo (people review it there). The
+  bytes (recordings, code, previews) sit in a storage bucket, named by hash, copied there by a robot.
+  The search catalog is built from the two by that robot. No server to run; storage is the only bill
+  (about $15 a month a terabyte; downloads free).
+- **The registry repo decides what search shows.** A pack is listed when its pull request is merged.
+  Everything else is made from that.
+- **Search finds items inside packs** (one sample, one piano, one sound), plays a preview the robot made,
+  and gets only what that item needs, never the whole pack.
+- **A pack can't hurt your computer.** No programs in it, only code that runs in music2's sandbox, data
+  and audio.
 
-| Part | Like | What it is here |
+## 1. The problem
+
+The app should ship small, and most sounds should come from other people. Today:
+- std is the only package. A song lists packages in `music2.toml`, and is told when one is missing, but
+  nothing can fetch one (#39).
+- A recording-based instrument is std's Sampler with files in the song's own `assets/`. It has zones, but
+  no velocity layers, round robin, loops, pedal or release sounds (#22), and it holds every file in memory.
+- Search covers what the app ships: std's instruments and effects, and installed plugins.
+
+## 2. Goals and non-goals
+
+| Goals | Non-goals (for this proposal) |
+|---|---|
+| Any kind of instrument or effect: code, recordings, or both | Paid packs, a store, accounts in the app |
+| Anyone can publish from GitHub, with no special access | CLAP plugins in packs (plugins are programs: they come from their makers) |
+| A song sounds the same on any computer, years later | Ratings and comments (GitHub issues serve) |
+| Search over every item in every listed pack, with previews, before any download | AI search ([goals](../../goals.md#non-goals); see [§9.4](#94-later-search-by-sound)) |
+| Cheap to run for an open source project | Packs that need other packs (later, its own design) |
+| Safe to get a stranger's pack | |
+
+## 3. First principles
+
+Six facts the design follows from. Each later section points back to one.
+
+| # | Fact | So |
 |---|---|---|
-| Pack | an Ableton Pack, a Splice pack | a folder with `m2pkg.toml`; one download |
-| Library | Ableton's browser | everything search can find |
-| Registry | crates.io, Homebrew's list, Obsidian's plugin list | one GitHub repo of small files; its robot checks every pack |
-| Search | Spotlight, Splice's search | ⌘F; runs on your computer, works offline for what you have |
-| Lock | `Cargo.lock`, `package-lock.json` | `music2.lock` in each song: the exact pack versions it uses |
+| F1 | A song must sound the same forever. | Name every byte by its hash, and pin the hashes in the song. Exactness comes from hashes, never from a host. |
+| F2 | music2 shouldn't care how a sound is made. | One interface by shape (notes or sound in, sound out); what is inside is free. |
+| F3 | A stranger's pack must be safe, and exact on every computer. | Only sandboxed code (TypeScript in QuickJS, wasm kernels), data and audio. No native programs. |
+| F4 | A 3 GB piano shouldn't be downloaded to be judged. | Previews, and getting one item with only the files it uses. |
+| F5 | Someone must decide what is listed, in the open. | One reviewable list, in git. Everything else is built from it, never typed by hand. |
+| F6 | It must be cheap to run forever. | Static files and a robot. No app server; pay only for storage. |
 
-## 1. Words
+## 4. The model: items, engines, assets
 
-| Word | Meaning |
-|---|---|
-| **Pack** | One download: a folder with `m2pkg.toml` and the things it lists. Named `@owner/name`, as `@alice/felt-piano`. std is a pack too. |
-| **Item** | One thing in a pack that search shows: an instrument, an effect, a sound or a sample. |
-| **Instrument** | Code that turns notes into sound (a synth, a sampled piano). Written in TypeScript, like std's. |
-| **Effect** | Code that changes sound (a reverb, a distortion). |
-| **Sound** | An instrument or effect with its knobs set, under a name: a preset ([FMT-22](../../architecture.md#presets)). "Warm Pad" is a sound of std's synth. Most packs are sounds. |
-| **Sample** | A short recording: a **one-shot** (one hit: a kick, a "hey") or a **loop** (a bar or more that repeats, with its own tempo). |
-| **Kernel** | The fast part of an instrument or effect, compiled to WebAssembly (wasm), as std's are. Only new kinds of sound need one; most packs have none. |
-| **Registry** | The list of packs you can get, kept in one GitHub repo. |
-| **Store** | Where packs you got live on your computer: `~/Music/music2/Packs/`. |
-| **Hash** | A fingerprint of a file's bytes (SHA-256). One changed byte gives another hash, so the app knows the file is the one the registry checked. |
+This is the abstraction layer: what you search for, what makes the sound, and the bytes it reads.
 
-## 2. What the app ships, and what comes as packs
+```
+  ITEMS: what you search and add        ENGINES: what makes sound        ASSETS: bytes
+  ┌────────────────────────────┐        ┌───────────────────────┐        ┌──────────────┐
+  │ Instrument  notes → sound  │──uses─▶│ code: a TypeScript    │─reads─▶│ recordings,  │
+  │ Effect      sound → sound  │        │ component, and wasm   │        │ named by     │
+  │ Sound       an item, set   │        │ kernels if it needs   │        │ hash         │
+  │ Sample      one recording ─┼────────┼───────────────────────┼───────▶│              │
+  └────────────────────────────┘        └───────────────────────┘        └──────────────┘
+```
 
-| Ships with the app | Comes as a pack |
-|---|---|
-| std: its oscillators, filters, effects, synths, FM, drum machine and Sampler (code only) | sampled instruments: pianos, guitars, strings, choirs |
-| std's presets | more sounds for std's synths |
-| one small drum kit of samples, a few MB, so the Sampler has something to play offline | sample packs: drums, vocal chops, loops, textures, foley |
-| | new instruments and effects with kernels of their own |
+### 4.1 One interface
 
-std stays in the app: every template and example uses it, and it is tiny. What makes a library big is
-samples, and those are what move out.
+music2 already tells instruments and effects apart by shape, not by a label
+(`core/script/sdk/core.ts`, in `component()`): a component whose first input is notes and whose output is
+audio is an instrument; one whose first input is audio is an effect. CLAP plugins say so in their own
+features. This proposal keeps that rule, and adds nothing to it. So every way of making sound fits:
 
-## 3. The primitives
-
-Nine building blocks. Each is small, and each has one job.
-
-| # | Primitive | Its job | Section |
+| Instrument | Engine | Assets | To music2 |
 |---|---|---|---|
-| 1 | **Pack** | a folder and its `m2pkg.toml`: one unit to make, check, publish and get | §4 |
-| 2 | **Items and tags** | four kinds of item, each with fixed fields search can filter on | §5 |
-| 3 | **Pack version** | a version never changes once published; it is named by the hash of its file list | §4.3 |
-| 4 | **Registry** | one GitHub repo; a file per pack; a robot that checks | §7 |
-| 5 | **Sources** | where packs come from: the registry, a GitHub repo given by hand, a folder on your disk | §7.3 |
-| 6 | **Store** | packs on your computer, read-only, several versions side by side | §8 |
-| 7 | **Lock** | `music2.lock`: each song's exact pack versions and hashes | §8 |
-| 8 | **Search index** | a copy of the registry's list on your computer, so search is instant and private | §6 |
-| 9 | **Provenance** | a note beside each sample you add: which pack, which version, who made it, its licence | §8 |
+| A synth | std's synth (code only) | none | notes → sound |
+| A sampled piano | std's Sampler | 300 recordings | notes → sound |
+| A piano with modelled strings | a pack's own kernel, and the Sampler | the hammer recordings | notes → sound |
+| A granular texture | a pack's own kernel | one long recording | notes → sound |
+| A drum kit | std's drum machine for the kick, the Sampler for the rest | the hits | notes → sound |
 
-## 4. A pack
+Later kinds follow the same rule: a **note effect** (notes → notes: an arpeggiator, chords) when kernels
+get event ports ([ABI-2](../../architecture.md#kernel-abi-reservations)'s reserved shapes).
 
-### 4.1 On disk
+### 4.2 Two ways to write an instrument
+
+| Way | For | What it is |
+|---|---|---|
+| **Code** | sound designers who write code | a TypeScript component, as std's are (`component(descriptor, body)`, PKG-1). Free to mix engines. |
+| **Data** | musicians who record | a file that names an engine and its data, such as a sample map (below). music2 turns it into the same component, as if `sampler({ … })` were written in code. No code to write. |
+
+Both end as the same thing to music2, so search, presets, the Device view and the lock don't know which.
+
+### 4.3 The sample map
+
+A recording-based instrument is a list of **regions**: which file plays for which notes, how hard, and
+when. We don't invent this: SFZ, an open text format with thousands of free instruments, has had it for
+20 years. The map uses SFZ's ideas, in TOML:
+
+```toml
+# instruments/felt-piano.toml: a data instrument
+label = "Felt Piano"
+category = "Keys"
+engine = "std:sampler"
+
+[[region]]
+file = "samples/C4-soft-1.flac"
+root = 60            # the note it was recorded at
+keys = [58, 62]      # the notes it plays
+velocity = [1, 60]   # how hard (1 to 127)
+round_robin = 1      # take 1 of several, played in turn
+release = "samples/C4-release.flac"   # the sound when the key is let go
+```
+
+`m2 pack import-sfz` (and later Decent Sampler's format) turns an existing free instrument into a pack.
+The Salamander Grand Piano (SFZ, CC-BY 3.0, by Alexander Holm) is the first test.
+
+### 4.4 What the engines need
+
+| Need | Today | Where |
+|---|---|---|
+| Regions by note, velocity and round robin; release sounds; loop points; sustain pedal; choke groups | zones by note only | Sampler v2 (#22, grown) |
+| A pack's own files as assets | assets are the song's `assets/` only | slice 1 |
+| FLAC (half the size of WAV) | WAV only | slice 2 (#18) |
+| Big instruments (1 to 10 GB) | every file decoded whole into memory | host streaming: keep the first moments of each file in memory, read the rest from disk. Kernel ABI v1 already allows it: live, a frame not loaded yet plays silence and is counted; an export never misses ([ABI-2](../../architecture.md#kernel-abi-reservations)) |
+
+## 5. The contract
+
+What each side promises. Each line becomes a numbered rule (`PACK-1` …) in the contract,
+[architecture.md](../../architecture.md), in the pull request that builds it.
+
+### 5.1 music2 promises a pack
+
+| # | Promise |
+|---|---|
+| M1 | Your items run with the same API as std: the `@m2/core` version you name. |
+| M2 | Your code runs the same on every computer: wasm with the features whose results differ by CPU turned off (relaxed SIMD; `core/runtime/src/packages.rs`), QuickJS with music2's own maths ([PLAT-4](../../architecture.md#platforms)). |
+| M3 | Your files reach your code only through music2 (`asset_read`), by name in your pack; you never see a path. |
+| M4 | Live, a recording not loaded yet plays silence and is counted. An export never misses one. |
+| M5 | A song that uses your version keeps that version, until its owner moves it. |
+
+### 5.2 A pack promises music2
+
+| # | Promise | Checked by |
+|---|---|---|
+| P1 | Every item says what it is through its shape (§4.1) and has a label and a category. | loading it |
+| P2 | Every file is listed in `m2pack.json` with its size and hash, and nothing else is in the pack. | the robot |
+| P3 | Only these files: `.ts`, `.wasm` (kernel ABI v1), `.toml`, `.json`, `.md`, `.txt`, `.wav`, `.flac`. | the robot |
+| P4 | Kernels keep the real-time rules ([ABI-5](../../architecture.md#kernel-abi-reservations)). | loading them sealed |
+| P5 | A version is never changed or reused. | the registry |
+| P6 | A licence that lets anyone share the pack and use it in a song they sell (D6). | the robot |
+| P7 | Tags come from the registry's word list; what can be measured is measured, never typed. | the robot |
+
+### 5.3 The registry promises the app
+
+| # | Promise |
+|---|---|
+| R1 | The registry repo is the one list of what is listed. |
+| R2 | Every byte is served by its hash, from a copy the registry keeps. It is never changed, and is removed only for a legal reason (§9.3). |
+| R3 | Previews are made by the robot, from the pack itself, at one loudness for all. |
+
+## 6. A pack
+
+### 6.1 On disk
 
 ```
-felt-piano/                 a GitHub repo: github.com/alice/felt-piano
-  m2pkg.toml                what the pack is (below)
+felt-piano/                      github.com/alice/felt-piano
+  m2pkg.toml                     what the pack is
   README.md  LICENSE
-  src/*.ts                  instruments and effects: components, as std/src/ has (PKG-1)
-  kernels/*.wasm            optional: new DSP, kernel ABI v1 (docs/kernel-abi.md)
-  kernels-src/              optional: the Rust the wasm is built from
-  presets/<component>/*.json   sounds (FMT-22)
-  samples/**/*.wav|flac     samples
-  samples.toml              the samples' tags: made by `m2 pack init`, fixed by hand
-  .github/workflows/publish.yml   made by `m2 pack new`: publishes on a tag (§7.4)
+  src/*.ts                       instruments and effects in code (optional)
+  instruments/*.toml             instruments as data (optional)
+  kernels/*.wasm  kernels-src/   new DSP (optional)
+  presets/<item>/*.json          sounds (FMT-22)
+  samples/**                     recordings: the instruments' and the loose samples
+  samples.toml                   the loose samples' tags, made by `m2 pack init`, checked by hand
 ```
 
-The publish robot adds `previews/` (§6.3) and `m2pack.json` (§4.3). Nobody writes those by hand.
+The recordings don't have to be in git: `m2 pack publish` uploads them (§8). The code and the small files
+are in git, as for any project.
 
-### 4.2 `m2pkg.toml`
-
-std's file today has `[package]` and `[[kernel]]`. A pack adds a few fields:
+### 6.2 `m2pkg.toml`
 
 ```toml
 [package]
-name = "@alice/felt-piano"      # @owner/name; owner is the GitHub account that publishes it
-version = "1.2.0"               # semver; never reused
-license = "CC-BY-4.0"           # SPDX; the registry accepts only some (§7.5)
+name = "@alice/felt-piano"      # @owner/name: owner is the GitHub account that publishes it
+version = "1.2.0"
+license = "CC-BY-4.0"
 description = "A soft felt piano, recorded close"
 authors = ["Alice Example"]
 repository = "https://github.com/alice/felt-piano"
 tags = ["keys", "piano", "lofi"]
-wasm = "kernels/felt.wasm"      # optional, as std's
 
-[dependencies]                  # only "@m2/core" and std (§4.4)
+[dependencies]                  # only "@m2/core" and std, in version 1 of packs
 "@m2/core" = "1"
 std = "0.4"
 ```
 
-A song imports from it as it imports from std: `import { feltPiano } from "@alice/felt-piano"`. Its
-ComponentIds are `@alice/felt-piano:felt-piano` ([PKG-9](../../architecture.md#component-descriptors)),
-and its kernels' ids `@alice/felt-piano:felt` (the "kernel ids relative to their package" the
-[Deferred](../../architecture.md#deferred-with-triggers) table waits for).
+A song imports it as it imports std: `import { feltPiano } from "@alice/felt-piano"`. Its ids carry its
+name: `@alice/felt-piano:felt-piano` ([PKG-9](../../architecture.md#component-descriptors)).
 
-### 4.3 A version never changes
+### 6.3 What publishing makes
 
-- Publishing `1.2.0` makes `m2pack.json`: every file in the pack, with its size and hash. The hash of that
-  list is the version's hash. The registry and every song's lock keep it.
-- The download is one file, `felt-piano-1.2.0.m2pack`: a zip, its files stored as they are (no
-  compression: FLAC is compressed already). So one file can be read out of it on its own: that is how one
-  sample is got without the whole pack (§6.2).
-- A published version is never changed or reused. A fix is `1.2.1`. This is crates.io's and npm's rule,
-  and the reason a song from 2026 still sounds the same in 2030.
-
-### 4.4 Packs don't depend on packs
-
-A pack may use `@m2/core` and std, nothing else. So the app never has to solve which versions of five
-packs fit together (npm's hardest problem), and removing a pack never breaks another. If packs need each
-other later, that is its own design.
-
-## 5. Items and their tags
-
-Search is only as good as the tags. Two rules make them good:
-- **What can be measured is measured**, by `m2 pack check` and the registry's robot, never typed: a
-  sample's length, channels, rate, loudness and hash.
-- **What can't is chosen from a short list** kept in the registry repo (`vocabulary.toml`), and the robot
-  refuses a word not on it. Free tags are allowed too, for search only. Core holds no list
-  ([PKG-7](../../architecture.md#component-descriptors)); the list lives with the registry.
-
-| Kind | Fields (bold: required) | Search filters |
+| File | Holds | Why |
 |---|---|---|
-| Instrument | **label**, **category** (Drums, Bass, Keys, Pad, Lead, Pluck, Strings, Brass & Wind, Vocals, FX & Texture), description, tags | category |
-| Effect | **label**, **category** (std's: Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility), description, tags | category |
-| Sound | **name**, **sound** (its instrument or effect), the category of that, character tags (warm, bright, dark, wide, dirty, soft) | category, character |
-| Sample | **type** (one-shot or loop), **instrument** (kick, snare, hat, clap, perc, bass, keys, guitar, vocal, fx, texture, …); for a loop **bpm**; key if it has one; root note for a one-shot played by the Sampler; genre | type, instrument, bpm, key, "fits my song" |
+| `m2pack.json` | every file: path, size, hash. Its own hash is the version's hash. | P2; a song's lock pins this one hash |
+| `items.json` | every item: kind, label, category, tags, measured facts, and **the files it uses** | search, and getting one item alone (§10) |
 
-Instruments and effects already have `label`, `editor.category`, description and keywords in their
-descriptors; packs use the same fields. Sounds and samples get theirs from the preset file and
-`samples.toml`.
+Both are made by tools, never by hand. The registry's robot makes them again and refuses a pack whose
+own copies differ.
 
-`samples.toml` sets tags by folder, and by file where one differs:
+## 7. Where things are kept
 
-```toml
-[folder."drums/kicks"]
-type = "one-shot"
-instrument = "kick"
+### 7.1 Three kinds of data
 
-[folder."loops"]
-type = "loop"
+| Data | Size | Changes | Needs | Home |
+|---|---|---|---|---|
+| **The list** | a few lines a pack | at each publish | review, history, who did what | a GitHub repo, `BreadBowlAI/music2-registry` |
+| **The bytes**: pack files, previews | KB to GB | never | cheap, permanent, one file at a time | a storage bucket, by hash: `blobs/sha256/<hash>` |
+| **The catalog**: what search reads | a few MB | at each publish | fast to download | the same bucket, made by the robot |
 
-[file."loops/dusty keys 90 Am.wav"]
-bpm = 90                  # m2 pack init guessed 90 and Am from the name; the author checks
-key = "A minor"
-tags = ["dusty", "lofi"]
-```
+### 7.2 Why not GitHub alone
 
-## 6. Search: ⌘F
+GitHub stays where people work: the list, the packs' code, and each author's upload (§8). It isn't
+enough for the bytes:
+- **An author can delete a repo**, and every song that used the pack goes quiet. crates.io, npm and Go keep
+  their own copy for this reason (R2 above).
+- **Previews and single samples need one file at a time.** A release holds at most 1,000 files, each under
+  2 GiB; a sampled piano has more files than that.
+- **Git LFS** (GitHub's large files) charges by the gigabyte downloaded.
 
-### 6.1 How it looks
+### 7.3 The bucket
 
-- **⌘F** anywhere opens it (Live's key; free in [taste.md](../step8/taste.md)'s key table). The side
-  browser's search field is the same search, so there is one, not two.
-- One list, in groups: Instruments, Sounds, Effects, Samples, Packs. Typing filters as you type.
-- ↓ and ↑ move. **Space** plays a preview. **Enter** adds it to the selected track (an instrument makes a
-  track; an effect goes after the last one, as the browser does today; a sample goes on the track at the
-  playhead, or onto a Sampler). Dragging works as the browser's does now.
-- Filters are words you can type or click: `loop`, `one-shot`, `kick`, `90 bpm`, `Am`. One switch, **Fits
-  my song**, keeps loops near the song's tempo and in a key that fits.
-- What you have comes first. Below it, **From the library**: items in packs you don't have, each with
-  **Get** and a badge (§7.3).
+Recommended: **Cloudflare R2** behind a name of our own (`packs.<our domain>`). Downloads cost nothing,
+and storage $0.015 a GB a month, with 10 GB free:
 
-### 6.2 Getting one sample
-
-Get on a sample fetches that one file out of its pack's download (an HTTP "range" read of the zip, §4.3),
-checks its hash, and adds it. A 2 GB pack isn't needed for one clap. Get on an instrument or a sound
-fetches its whole pack: its code and samples go together.
-
-### 6.3 Previews
-
-- A sample's preview is the sample itself (fetched as in §6.2, kept in the cache folder).
-- An instrument's or a sound's preview is a short phrase the publish robot renders with the pack's own
-  code (`m2 render`), at one loudness for all. A preview can't oversell: it is the pack playing.
-- Later: a loop previewed at the song's tempo and key (std's stretch already does tempo, offline).
-
-### 6.4 Where search runs
-
-On your computer. The app keeps a copy of the registry's search list (a few MB), and fetches a fresh one
-when it is a day old. So search is instant, works offline for what you have, and what you type is never
-sent anywhere. Matching is by words and tags, ranked: name, then tags, then description; what you have
-and music2's own packs first; then most downloaded (GitHub counts each release's downloads; no tracking
-in the app). No AI ([goals](../../goals.md#non-goals)).
-
-### 6.5 Your own folders
-
-**Add a folder** puts a folder of your own samples in the library (Live's "Places"). The app measures each
-file as the robot would, guesses bpm and key from names, and search finds them with everything else. They
-are never copied until you add one to a song. This is the "I have 4,000 samples on a drive" case.
-
-## 7. The registry
-
-### 7.1 One repo of small files
-
-A public repo, `BreadBowlAI/music2-packs`, with one file a pack:
-
-```toml
-# packs/@alice/felt-piano.toml
-repo = "github.com/alice/felt-piano"
-badge = "community"            # or "music2" for our own
-
-[[version]]
-version = "1.2.0"
-hash = "sha256:…"              # of m2pack.json (§4.3)
-url = "https://github.com/alice/felt-piano/releases/download/v1.2.0/felt-piano-1.2.0.m2pack"
-size = 412_000_000
-published = 2026-11-02
-```
-
-Its CI builds the search list (§6.4) from these files and the packs' `m2pack.json`, and puts it on GitHub
-Pages. That is the whole server: no database, no accounts, no bill. Homebrew, Obsidian, Zed and Flathub
-run their lists this way.
-
-### 7.2 Where the files are
-
-Each pack's download is a file on its own repo's GitHub Release. GitHub keeps release files of public
-repos for free, with no bandwidth limit, up to 2 GB a file. music2's own packs are releases of
-`BreadBowlAI` repos.
-
-One risk: an author who deletes their repo takes their pack with it, and every song that used it goes
-quiet. crates.io, npm and Go keep a copy of everything for this reason. So later the registry keeps a copy
-of every version (a mirror, such as Cloudflare R2, which charges nothing for downloads). The registry's
-files already allow several `url`s a version, and the hash checks whichever answers. Trigger: the first
-pack that disappears, or 1.0, whichever comes first.
-
-### 7.3 Three kinds of source
-
-| Source | How it gets in | What the app shows |
-|---|---|---|
-| **music2** (ours) | made by the owner; the same checks | a music2 badge; ranked first |
-| **Community** | a pull request to the registry repo; the robot checks every version, and a person looks at the first one | a Community badge |
-| **By hand** (not listed) | you paste `github:owner/repo` | "Not in the music2 library: no one has checked its sounds or licence." It still runs in the sandbox (§9). Not in search for others |
-
-A folder on your disk (§6.5) is a fourth, for your own files.
-
-### 7.4 Publishing a pack
-
-| Step | The author does | What happens |
-|---|---|---|
-| 1 | `m2 pack new felt-piano` | a folder with `m2pkg.toml`, `samples.toml`, a README, a licence to pick, and the publish workflow |
-| 2 | adds sounds and samples; `m2 pack init` | tags guessed and written into `samples.toml` to check |
-| 3 | `m2 pack check` | the same checks the registry runs (§7.5), on their computer |
-| 4 | tries it in a song: `"@alice/felt-piano" = { path = "../felt-piano" }` | the song uses the folder as it is, with no publishing |
-| 5 | pushes a tag, `v1.0.0` | music2's GitHub Action checks, builds the kernels the same way every time, renders the previews, makes the `.m2pack`, puts it on the release with an attestation (GitHub's proof it was built from that commit), and opens a pull request to the registry |
-| 6 | — | first version: a person at music2 looks and merges. Later versions from the same repo merge themselves when the robot passes |
-
-Agents can do every step too: they are `m2` commands.
-
-### 7.5 What the robot checks
-
-| Check | Why |
+| Stored | A month |
 |---|---|
-| `m2pkg.toml` reads strictly; the name's owner is the repo's owner | no one publishes as someone else |
-| the version is new | a version never changes (§4.3) |
-| only these files: `.ts`, `.wasm` (kernel ABI v1), `.json`, `.toml`, `.md`, `.txt`, `.wav`, `.flac` | no programs, no surprises |
-| every kernel loads in the sandbox; every component builds; every preset loads on its sound | it works in the app |
-| every sample decodes; tags are measured; words come from the vocabulary | search is right |
-| size: a sample up to 100 MB, a pack up to 2 GB | GitHub's limit, and a sane download |
-| a licence from the allowed list: code MIT, Apache-2.0, BSD, ISC; sounds and samples CC0-1.0 or CC-BY-4.0 | everything in the library can be used in a song you sell (owner decision D6) |
-| a README; previews made | people know what they get |
+| 10 GB | free |
+| 100 GB | about $1.50 |
+| 1 TB | about $15 |
 
-### 7.6 Yank and take-down
+The design doesn't depend on R2. A blob's address is only its hash, and the app checks every hash, so any
+bucket, a second copy, or a folder on a drive serves the same files. Moving host changes one URL.
 
-- **Yank** (the author's choice, or ours for a bad version): hidden from search; a song that locks it can
-  still get it, with a note.
-- **Take-down** (a licence or legal problem): the registry drops it. A song that used it says so in words.
-  Samples already in songs stay: they are the song's files.
+## 8. Publishing
 
-## 8. Using a pack in a song
+```
+ author                 author's GitHub             registry repo                   bucket
+ ──────                 ───────────────             ─────────────                   ──────
+ m2 pack check
+ m2 pack publish ─────▶ a release with the pack
+                 ─────────────────────────────────▶ a pull request: the pack's file
+                                                    robot, no secrets: fetch, check
+                                                    hashes, load every item, render
+                                                    previews, measure tags; report
+                                                    on the pull request
+                                                    merge (a person, the first time)
+                                                    robot, on main, with the bucket's
+                                                    key: copy each new blob ─────────▶ blobs/…
+                                                    rebuild the catalog ─────────────▶ catalog/…
+```
 
-- **The store.** A pack you get goes to `~/Music/music2/Packs/@alice/felt-piano/1.2.0/`, read-only, under
-  `$HOME` ([PLAT-7](../../architecture.md#platforms)). Several versions sit side by side, so an old song
-  keeps its version while a new song uses the newest. (This also gives the "several std versions" the
-  contract waits for, [FMT-3](../../architecture.md#manifest-and-versions).)
-- **Adding an instrument, effect or sound** writes the pack into the song's `[dependencies]` and its exact
-  version into `music2.lock`, with the edit: one Undo step.
+- **Identity is GitHub.** `@alice` may publish only from repos `alice` owns; the robot checks with
+  GitHub's API. `@m2/` is ours.
+- **The first version is looked at by a person**: the name, the licence, the content. Later versions
+  from the same repo merge themselves when the robot passes, as Homebrew and Flathub do.
+- **Secrets stay on `main`.** Checks on a pull request run with no key to the bucket; only the job after a
+  merge can write. A pull request can't reach the key (GitHub's "pwn request" trap).
+- **Once copied, the bucket's copy is the truth.** The author's release can go; songs don't notice.
+- Agents can publish too: every step is an `m2` command.
 
-  ```toml
-  # music2.lock: made by music2. The exact pack versions this song uses.
-  [[pack]]
-  name = "@alice/felt-piano"
-  version = "1.2.0"
-  hash = "sha256:…"
-  source = "registry"          # or "github:alice/felt-piano"
-  ```
-- **Adding a sample** copies the file into the song's `assets/` ([FMT-14](../../architecture.md#assets-and-hashes):
-  a song holds its own audio), as a WAV or FLAC, with a note beside it, `assets/<file>.json`:
-  `{"from": {"pack": "@alice/felt-piano", "version": "1.2.0", "file": "samples/…", "author": "Alice
-  Example", "license": "CC-BY-4.0"}}`. The song never needs the pack for its samples, and `m2 credits`
-  (later) lists who to credit.
-- **A song whose pack you don't have** still opens. Its tracks that use the pack play silent, as a missing
-  plugin does ([FMT-18a](../../architecture.md#plugin-state-and-parameters)), and the status says "This
-  song uses Felt Piano 1.2.0" with **Get**. One click gets that exact version, checks the hash, and plays.
-- **Updates are never automatic** for a song. The library shows "1.3 is out". A song moves when you choose
-  Update in its pack list: one Undo step. **Clean up** lists versions no song locks.
-- **From the command line** (for scripts and agents): `m2 search "vocal chop" --loop --key Am`,
-  `m2 get @alice/felt-piano`, `m2 add <song> <item>`.
+## 9. What search shows
 
-## 9. Why a pack can't hurt your computer
+### 9.1 The source of truth
+
+| Question | Answered by |
+|---|---|
+| Is a pack listed? | its file in the registry repo, merged |
+| Which versions? | that file: each version and its hash |
+| Is it ours or the community's? | its scope: `@m2/` is ours, with a music2 badge |
+| What is in it? | its `items.json`, remade by the robot |
+| Hidden? | `yanked` or `removed` in its file, with why |
+
+The catalog is made from these by the robot. No one edits it, and git's history says who listed or
+removed what, and when.
+
+### 9.2 Search in the app
+
+- **⌘F** anywhere (Live's key; free in [taste.md](../step8/taste.md)'s table). The side browser's field is
+  the same search.
+- It searches **items**, not packs: "felt piano" finds the instrument, "vocal chop Am" finds samples inside
+  packs. Groups: Instruments, Sounds, Effects, Samples, Packs. Filters you can type or click: `loop`,
+  `one-shot`, `kick`, `90 bpm`, `Am`; and **Fits my song** (the song's tempo and key).
+- **What you have first**, then **From the library**, each with **Get** and its badge.
+- **Space** plays a preview. **Enter** or a drag adds it.
+- **It runs on your computer**, over the catalog the app downloads (a few MB, fresh once a day): instant,
+  offline for what you have, and what you type is never sent. Ranked by name, then tags, then
+  description; ours and what you have first; then downloads.
+
+### 9.3 Yank and take-down
+
+- **Yank**: hidden from search; a song that locks the version still gets it.
+- **Take-down** (a licence or legal problem): removed from the bucket. A song that used it says so in
+  words. Samples already in songs stay: they are the song's files.
+
+### 9.4 Later: search by sound
+
+Search by "sounds like this" works with numbers the robot computes for each preview (embeddings), and
+the app compares them. The catalog's format has room for them. They come from a trained model, so they
+need the owner to change the non-goal "no AI in the app" first, or to decide that a number made on the
+registry is not AI in the app. Not in this proposal.
+
+## 10. Previews, and getting only what you need
+
+| Item | Preview (made by the robot) | Get fetches |
+|---|---|---|
+| Sample | its first seconds, small and compressed | that one file |
+| Instrument | a short phrase for its category (chords for Keys, a line for Bass, a beat for Drums), played by the pack's own code | its code and the files it uses (`items.json`) |
+| Sound | the same phrase, with its settings | its instrument, as above |
+| Effect | a fixed loop, without it then with it | its code |
+
+The robot renders previews with `m2 render`, so a preview can't oversell: it is the pack playing. Later:
+**Try** an instrument from your keyboard before getting it, its recordings streamed (§4.4, M4).
+
+## 11. In a song
+
+- **The store.** What you get goes to `~/Music/music2/Packs/` ([PLAT-7](../../architecture.md#platforms)),
+  read-only, by hash, so two versions share the files they share.
+- **The lock.** Adding an item writes the pack into `[dependencies]` and its exact version and hash into
+  `music2.lock`: one Undo step ([Deferred](../../architecture.md#deferred-with-triggers): this is the
+  trigger it waits for).
+- **Samples are copied into the song**, into `assets/` ([FMT-14](../../architecture.md#assets-and-hashes)),
+  with a note beside it: the pack, version, author and licence. `m2 credits` (later) lists them.
+- **A pack you don't have**: the song still opens; its tracks that use it play silent, as a missing
+  plugin does ([FMT-18a](../../architecture.md#plugin-state-and-parameters)), with **Get**.
+- **Updates are never automatic.** A song moves to a new version when you choose.
+- **Collect and save** (later, as Live's): a copy of the song with every file it uses from packs, to play
+  with no internet. The licences (D6) allow it.
+
+## 12. Safety
 
 | A pack holds | Why it is safe |
 |---|---|
-| TypeScript | runs in the app's sandbox (QuickJS): no files, no network, no clock |
-| Kernels | wasm in a sealed sandbox with one import, `asset_read` ([ABI-3](../../architecture.md#kernel-abi-reservations)); it can't grow memory or reach anything else |
-| Presets, tags | data, read strictly |
-| Audio | decoded by music2's own decoder, size-checked |
-| A download | its hash checked before use; paths in the zip checked (nothing outside the pack's folder) |
+| TypeScript | runs in QuickJS: no files, no network, no clock |
+| Kernels | wasm in a sealed sandbox, one import ([ABI-3](../../architecture.md#kernel-abi-reservations)) |
+| Data | read strictly |
+| Audio | decoded by music2, size-checked |
+| A download | each file's hash checked before use; paths checked |
 
-**No native programs in packs, ever.** So no CLAP plugin inside a pack: CLAP plugins are programs, and
-come from their makers ([goals](../../goals.md#non-goals): CLAP only). A pack may hold sounds for a CLAP
-plugin; search then says "needs Vital" until you have it.
+No native programs, ever (D3). A pack may hold sounds for a CLAP plugin; search then says which plugin
+it needs.
 
-The same sandbox makes packs exact: wasm and std's maths give the same bits on every computer
-([PLAT-4](../../architecture.md#platforms)), so a song that uses only std and packs exports the same bits
-everywhere.
+## 13. Alternatives
 
-## 10. music2's own packs, to start
-
-Content, not code: someone has to make or gather the sounds. Ideas:
-
-| Pack | What | Where the sounds could come from |
-|---|---|---|
-| `@m2/synth-sounds` | 100+ sounds for std's synths, FM and drum machine | made in music2; tiny, no samples |
-| `@m2/drums` | acoustic and electronic kits, one-shots, Sampler kits | recorded, or CC0 |
-| `@m2/chops` | vocal one-shots and phrases, for chopping | recorded with singers, with their written OK |
-| `@m2/keys` | piano, electric piano, organ (sampled) | recorded, or CC0 |
-| `@m2/textures` | vinyl, tape, rooms, field recordings, foley | recorded, or CC0 |
-
-CC0 means the maker gave up every right: anyone may pack and share it. Freesound has many such sounds.
-
-## 11. Freesound, later
-
-Freesound is a public library of hundreds of thousands of recordings under Creative Commons licences, with
-a search API and previews. It could be a source in ⌘F: results under "Freesound", each with its licence.
-Before building it: read its API terms (free use is for non-commercial projects), and getting a sound's
-original file needs a Freesound login. Owner decision D8.
-
-## 12. What changes in the contract
-
-| Where | Change |
+| Alternative | Why not, for now |
 |---|---|
-| a new section, Packs (`PACK-1` …) | the pack, its versions and hash, the store, the lock, sources, the checks, the sandbox rule (no native code) |
-| [FMT-2](../../architecture.md#manifest-and-versions) | package names `@owner/name`; a `{ path = … }` dependency |
-| Layout, [Deferred](../../architecture.md#deferred-with-triggers) | `music2.lock` and package fetching: their trigger ("the first package other than std") arrives |
-| [FMT-14](../../architecture.md#assets-and-hashes) | an asset's `<file>.json` may say which pack it came from |
-| [PKG-9](../../architecture.md#component-descriptors) | ComponentIds and kernel ids carry the pack's scoped name |
-| [PLAT-7](../../architecture.md#platforms) | `~/Music/music2/Packs/` |
-| [PKG-7](../../architecture.md#component-descriptors) | unchanged: the vocabulary lives in the registry repo, not in core |
+| Our own upload server, as crates.io has | accounts, logins and a server to keep up; GitHub gives identity and review for free |
+| GitHub alone (releases, LFS) | §7.2: packs vanish with their repos, previews need single files, LFS costs |
+| Peer to peer (IPFS, BitTorrent) | slow to start, and a file is there only while someone shares it |
+| Hugging Face's free storage | someone else's rules, made for AI models |
+| Plugins (native code) in packs | not safe to get from strangers (F3) |
+| A list only of ours, no community | the goal is that most sounds come from others |
 
-## 13. Order of work
+## 14. Risks
 
-Each slice lands green on its own, as every track has.
+| Risk | What we do |
+|---|---|
+| Someone uploads sounds they don't own | a person looks at each first version; take-down (§9.3); a licence on every pack |
+| Storage grows fast | 10 GB a pack at first; the cost is in the open |
+| Name squatting (`@m2-official`) | GitHub scopes; the registry's rules |
+| A big piano is too heavy for a laptop | streaming (§4.4) comes before big instruments are listed |
+| The robot's CI time | GitHub's runners are free for public repos; a pack over the runner's disk waits for a bigger runner |
 
-| # | Slice | What you get | Size |
-|---|---|---|---|
-| 1 | **Packs from a folder** | the format, the store, `music2.lock`, `path` packs, scoped names; the browser lists a pack's instruments, effects and sounds | medium |
-| 2 | **Samples as items** | `samples.toml`, measured tags, a Samples group, Space to preview, drag in with provenance; FLAC, AIFF and MP3 import (part of gap #18); Add a folder | medium |
-| 3 | **⌘F search** | one search over everything you have; filters; Fits my song | medium |
-| 4 | **The registry** | the registry repo and its robot, the publish Action, `m2 pack new/init/check`, Get from search, Get on open, one sample on its own. First: confirm GitHub's release downloads allow range reads (§6.2); if not, the mirror (§7.2) comes now, as it serves single files | large |
-| 5 | **music2's packs** | the first packs, made with the tools of slice 4: the real test of the format | ongoing |
-| 6 | **Later, each at its trigger** | packs by hand from GitHub (when someone asks), the mirror (§7.2), Freesound (D8), favourites, a loop previewed at the song's tempo | small each |
-
-## 14. Decisions for the owner
+## 15. Decisions for the owner
 
 | # | Decision | Recommended |
 |---|---|---|
-| D1 | Where the registry lives | one GitHub repo of small files (§7.1); downloads on each pack's GitHub Release; a mirror later |
-| D2 | Pack names | `@owner/name`, owner = the GitHub account; ours under `@m2/`; std stays `std` |
-| D3 | Programs in packs | never: no native code, no CLAP inside a pack |
-| D4 | Packs that need other packs | not in version 1: only `@m2/core` and std |
-| D5 | Packs by hand from any GitHub repo | yes, with a plain warning; after the registry works |
-| D6 | Licences the registry accepts | only ones that let you sell a song made with it: CC0 and CC-BY for sounds; MIT, Apache, BSD, ISC for code. No "non-commercial" packs, so a beginner never gets caught out |
-| D7 | The search key | ⌘F (Live's); the side browser's field is the same search |
-| D8 | Freesound as a source | later, after its terms are read |
-| D9 | What the app ships | std, std's presets, one small drum kit |
+| D1 | Where the bytes are kept | R2 (or any bucket with free downloads), behind our own name; the list on GitHub |
+| D2 | Names | `@owner/name`, owner = a GitHub account; ours `@m2/`; std stays `std` |
+| D3 | Programs in packs | never |
+| D4 | Packs that need packs | not in version 1 |
+| D5 | Packs from any GitHub repo, unlisted | later, with a plain warning |
+| D6 | Licences | for sounds CC0, CC-BY 3.0 and 4.0; for code MIT, Apache-2.0, BSD, ISC. Nothing "non-commercial", so a beginner never gets caught out |
+| D7 | The search key | ⌘F |
+| D8 | What the app ships | std, std's presets, one small drum kit |
+| D9 | The largest pack | 10 GB, and the first big ones only after streaming |
+| D10 | A domain for the bucket | the owner's choice |
 
-## 15. Where each idea comes from
+## 16. Plan
+
+### 16.1 Spikes first
+
+Small throwaway builds that answer what reading can't. Each ends in a note here.
+
+| Spike | Answers |
+|---|---|
+| S1: the Salamander piano as a data instrument | is the sample map right? how much memory, and how much must streaming hold? |
+| S2: a toy registry on a fork, end to end | publish, robot, bucket, catalog, search with preview: does each step hold? |
+| S3: a catalog of 100,000 made-up items | its size, and search speed on a slow laptop |
+
+### 16.2 Slices
+
+Each lands green on its own, with its contract rules first.
+
+| # | Slice | You get |
+|---|---|---|
+| 1 | Packs from a folder | the format, a pack's own files as assets, the store, `music2.lock`, scoped names |
+| 2 | Samples | `samples.toml`, measured tags, the Samples group, preview, drag in with credits; FLAC; Add a folder of your own |
+| 3 | ⌘F | one search over what you have |
+| 4 | Sampler v2 and data instruments | regions, velocity, round robin, release, loops, pedal; `m2 pack import-sfz` |
+| 5 | Streaming | big instruments in little memory |
+| 6 | The registry | the repo, the robot, the bucket, the catalog; Get; previews; `m2 pack new/check/publish` |
+| 7 | Our first packs | `@m2/salamander-grand` (with credit), `@m2/synth-sounds`, a drum pack |
+| 8 | Open to everyone | the pack author's guide, the registry's rules, a call for packs |
+
+## 17. How this proposal goes
+
+As serious open source projects run a big change (Rust's RFCs, Python's PEPs), fitted to
+[CONTRIBUTING.md](../../../CONTRIBUTING.md): a design note first, and the owner's yes.
+
+| Stage | What happens | Where | Done when |
+|---|---|---|---|
+| 1. Idea | the problem, in a few lines | an Idea issue, linked to #39 | people can find it |
+| 2. Draft | this note, open for comments | a draft pull request; talk in a Discussion | comments slow down |
+| 3. Spikes | S1 to S3 (§16.1) | branches; results added here | each question answered |
+| 4. Last call | the owner fills §15 and says "last call: 7 days" | the pull request | 7 days with no new problem |
+| 5. Accepted | the note merges with Status: Accepted | `main` | merged |
+| 6. Build | one issue a slice, in a tracking issue; claim first; one small pull request each | issues | every slice merged |
+| 7. Launch | the guide's pages, release notes, a call for packs | a release | the first community pack is listed |
+
+A change of mind after stage 5 is a new pull request to this note, with why.
+
+## 18. Where each idea comes from
 
 | Idea | From |
 |---|---|
-| Packs, a browser over everything, your own folders as places | Ableton Live |
-| Get one sample; filter by key, bpm, one-shot or loop; fits my song | Splice |
-| A fixed list of tags; a preview for every sound | Native Instruments' NKS |
+| Packs; a browser over everything; Collect and save | Ableton Live |
+| One sample at a time; key, bpm and Fits my song | Splice |
+| A fixed word list; a preview for every sound | Native Instruments' NKS |
+| Regions, velocity layers, round robin | SFZ |
 | Versions never change; yank; a lockfile; scoped names | crates.io, npm |
-| The registry keeps a copy; the source is a repo | Go's module proxy |
-| The list is a GitHub repo; a pull request to add | Homebrew, Obsidian, Zed, Flathub |
-| Built by CI with an attestation | npm's and PyPI's trusted publishing |
-| Licences you can trust | Creative Commons, Freesound |
-
-## 16. Not in this design
-
-- **Paid packs, a store, accounts in the app.** Free packs first; a paid store is its own design.
-- **Ratings and comments.** GitHub's issues on each pack's repo serve for now.
-- **AI tagging or AI search** ([goals](../../goals.md#non-goals)).
-- **CLAP plugins from the registry** (D3).
+| The registry keeps a copy of everything | Go's module proxy, crates.io |
+| Files named by their hash | git, Nix, container registries |
+| The list is a repo; a pull request to add | Homebrew, Flathub, Obsidian |
+| An RFC, then a last call | Rust, Python |
