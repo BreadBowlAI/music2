@@ -510,7 +510,8 @@ Applied when the engine matches instances; a `key()` frame has no occurrence; a 
 
 ```
 music2.toml                  [project] name, entry, format = 1, sample_rate = 48000
-                             [dependencies] "@m2/core" = "1", std = "0.2"
+                             [dependencies] "@m2/core" = "1", std = "0.2", "@alice/felt-piano" = "1.2"
+music2.lock                  the exact version and hash of each pack the song uses (PACK-8)
 song.ts  tracks/*.ts  lib/   code
 data/arrangement.json        {"tempo": [{"beat", "bpm"}], "meter": [{"beat", "beats", "unit"}]}   a beat is a quarter note
 data/<module>/<lane>.json    one lane's clips
@@ -539,6 +540,8 @@ sample_rate = 48000     # required: the rate the engine runs and exports at
 [dependencies]
 "@m2/core" = "1"        # required: the SDK version the code is written against
 std = "0.2"             # every package the code imports from must be listed
+"@alice/felt-piano" = "1.2"                   # a pack from the store (PACK-7)
+"@bob/strings" = { path = "../strings" }      # a pack in a folder, for its author trying it
 ```
 
 **FMT-2.** `format` versions only the file layout. `[dependencies] "@m2/core"` versions only the code API. A data addition bumps only `format`; an SDK break bumps only `@m2/core`. Each reader checks only its own field. A requirement follows Cargo's caret rule: `"0.1"` means at least 0.1.0 and below 0.2.0, and `"1"` means at least 1.0.0 and below 2.0.0. A package declares its own version in `m2pkg.toml`.
@@ -561,7 +564,7 @@ std = "0.2"             # every package the code imports from must be listed
 
 ```rust
 enum DataPath {
-    Manifest, Code(PathBuf), Arrangement, Module { module: Key }, Lane { module: Key, lane: Key },
+    Manifest, Lock, Code(PathBuf), Arrangement, Module { module: Key }, Lane { module: Key, lane: Key },
     PluginState { module: Key, path: Vec<Key> }, Asset(AssetName), Presentation, Local, Unknown,
 }
 impl DataPath { fn path(&self) -> PathBuf; fn parse(p: &Path) -> DataPath; fn class(&self) -> Class }
@@ -570,6 +573,7 @@ impl DataPath { fn path(&self) -> PathBuf; fn parse(p: &Path) -> DataPath; fn cl
 | Path | `DataPath` | Class | Plane |
 |---|---|---|---|
 | `music2.toml` | `Manifest` | Manifest | code |
+| `music2.lock` | `Lock` | Manifest | code |
 | `*.ts` outside `data/`, `assets/`, `.music2/` and `node_modules/` | `Code` | Code | code |
 | `data/arrangement.json` | `Arrangement` | Arrangement | arrangement |
 | `data/<module>/`, the folder itself | `Module` | Data | data (renamed only by a `Rename` op) |
@@ -584,7 +588,7 @@ impl DataPath { fn path(&self) -> PathBuf; fn parse(p: &Path) -> DataPath; fn cl
 - *Why:* every copy of a path rule drifts.
 - *Today:* matches since step 4: paths are spelled only by `DataPath` (`core/song/src/path.rs`), and lane files are written by `m2_song::canonical`.
 
-**FMT-6.** A snapshot MUST read only Manifest, Code, Arrangement and Lane files and `.state.json` sidecars. Assets and state blobs are not part of a snapshot; revisions record their hashes.
+**FMT-6.** A snapshot MUST read only Manifest (`music2.toml` and `music2.lock`), Code, Arrangement and Lane files and `.state.json` sidecars. Assets and state blobs are not part of a snapshot; revisions record their hashes.
 - *Why:* only those files define the song, and binary files are too big to snapshot.
 - *Today:* matches since step 4: revisions record the hashes of the assets their lanes name and of state blobs (`core/song/src/lib.rs`).
 
@@ -661,7 +665,7 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 
 ### Assets and hashes
 
-**FMT-14.** An asset MUST never be overwritten: a new version gets a new name, and assets are created with create-only semantics (`O_EXCL`). An asset name is a relative path under `assets/`, with `/` between folders. It is NFC, and has no empty, `.` or `..` segment, no segment that starts with `.`, and no `\` or control character. An import whose name is taken gets a numeric suffix (`kick 2.wav`). An asset is always inside the project: importing copies the file. `m2 bounce --force` is removed.
+**FMT-14.** An asset MUST never be overwritten: a new version gets a new name, and assets are created with create-only semantics (`O_EXCL`). An asset name is a relative path under `assets/`, with `/` between folders. It is NFC, and has no empty, `.` or `..` segment, no segment that starts with `.`, and no `\`, `:` or control character. A name with a `:` is a package's file instead ([PACK-5](#packs)), so the two never collide. An import whose name is taken gets a numeric suffix (`kick 2.wav`). An asset is always inside the project: importing copies the file. `m2 bounce --force` is removed.
 - *Why:* an overwritten asset can't be undone and silently changes every clip that uses it. Sample-heavy projects need folders, and a reference outside the project breaks when the project moves.
 - *Today:* matches for what writes assets today: `m2 bounce` creates its asset create-only and `--force` is gone, an exact render that `m2 render` or Export Audio writes into `assets/` is created, never written over (`Render::write_for` in `crates/editor/src/render.rs`, since step 6), a Tx's `Write` of an asset must have the base `Absent`, and names are checked as `AssetName`s (`core/song/src/path.rs`). Since `studio`, an import (File ▸ Import Audio…, a drop, `m2 import`) copies the file in create-only under the first free name, `kick 2.wav` when `kick.wav` is taken, and the same bytes already there are used, not copied again (`crates/editor/src/import.rs`: `an_import_copies_the_file_create_only`, `a_taken_name_gets_a_number`, `the_same_bytes_use_the_asset_there`). An audio take is written into `assets/` the same way ([RENDER-30a](#audio-lanes)).
 
@@ -726,7 +730,7 @@ MIDI files are converted at the edge, and never kept in the song. Since `studio`
 - `name`: one line of 1 to 40 characters, none of `/ \ : * ? " < > |`, not starting with a dot, no space at either end and no dot at the end, so it is a file name on every OS. A name taken in other capitals is taken, as for songs ([PLAT-7](#platforms)).
 - `sound`: what it is for, a ComponentId (`std:synth-pluck`) or a plugin's id (`clap:<id>`). A preset's identity is its `sound` and its `name`, never its folder (P1): a file whose `sound` isn't the call's is left out of that call's list.
 - `values`: numbers by name: a std control by its slot, in base units (`{"brightness": 1800}`); a plugin's parameter by its CLAP id ([FMT-18](#plugin-state-and-parameters)).
-- Where: yours in `m2_os::dirs::presets()` (`~/Music/music2/Presets`, under `$HOME`, [PLAT-7](#platforms)), in a folder per sound named from its id, `<package>/<name>` (`std/synth-pluck`; every character outside `A–Z a–z 0–9 . _ -` turned to `_`). std's own in `std/presets/<component>/`, shipped with the app. A plugin's own come from the plugin, never from a file music2 writes.
+- Where: yours in `m2_os::dirs::presets()` (`~/Music/music2/Presets`, under `$HOME`, [PLAT-7](#platforms)), in a folder per sound named from its id, `<package>/<name>` (`std/synth-pluck`; every character outside `A–Z a–z 0–9 . _ -` turned to `_`). std's own in `std/presets/<component>/`, shipped with the app, and a pack's own in its folder the same way, `presets/<component>/` ([PACK-11](#packs)); a scoped sound's folder of yours is `_alice_felt-piano/felt-piano`, never nested. A plugin's own come from the plugin, never from a file music2 writes.
 - Saving writes that file and no song file: no Tx, no Undo. It is written to a temporary file, then renamed. It holds every declared control of the call that holds a number (a dictionary's are left out): the numbers written, and the defaults of the ones the call leaves out. A control a lane or other code drives is left out, and named. A plugin's holds the state its instance that plays saves now, and the parameters its code writes as numbers.
 - Loading is one `Values` Tx ([WRITE-6](#expectations-and-the-delta)), one Undo step. A number written in the call is rewritten through its lens, keeping its spelling (`khz(0.9)`). A control the call leaves out is written in ([PKG-3](#component-descriptors)), several as one insertion. A control the preset doesn't name keeps its value, so a preset from an older std still loads. A control a lane or other code drives, a value other calls share, and one written in other units keep what they have, and are named. A preset for another sound is refused in words, and nothing is written.
 - A plugin's loads as one `Confined` Tx: its state and sidecar ([FMT-17](#plugin-state-and-parameters)), and each parameter its code writes as a number rewritten. A parameter the code doesn't write is the state's. Then the usual state load reaches the instance that plays ([RENDER-26b](#plans-data-and-arrangement-swaps)). Its plugin needs a key (its state file, [HOME-6](#homes-of-values)), else it is refused in words. The plugin's own presets load the same way, made on an instance of their own ([HOST-8](#pluginhost)).
@@ -1069,13 +1073,16 @@ The message is plain words, and names the file, the field and the fix where they
 | `key.duplicate` | Error | a key is used twice where it must be unique: two tracks, two `key()` frames in one parent, two plugin keys in one frame ([ID-5](#keys)) | — | yes |
 | `lane.conflict` | Error | a lane is declared again with another kind or other settings ([ID-6](#keys)) | — | yes |
 | `lane.shared` | Error | a lane key is declared from two `key()` frame chains without `shared: true` ([ID-6](#keys)) | — | yes |
-| `manifest.invalid` | Error | `music2.toml` doesn't parse or has unknown keys | — | yes, but never `save()` |
+| `manifest.invalid` | Error | `music2.toml` or `music2.lock` doesn't parse or has unknown keys | — | yes, but never `save()` |
 | `format.missing` | Error | `music2.toml` has no `format`: a format-0 project | — | the project doesn't open |
 | `format.older` | Error | the project's `format` is older than this app reads | — | the project doesn't open |
 | `format.newer` | Error | the project's `format` is newer than this app | — | the project doesn't open |
 | `sdk.unsatisfied` | Error | the `@m2/core` requirement isn't met; names both versions | — | yes |
 | `pkg.unsatisfied` | Error | another package's requirement isn't met; names both versions. For an older std than the bundled one, says how to move ([FMT-3](#manifest-and-versions)) | — | yes |
 | `pkg.undeclared` | Error | code imports a package `[dependencies]` doesn't list | — | yes |
+| `pkg.missing` | Error | a pack the song uses isn't there: the version `music2.lock` names isn't installed, or a path dependency's folder doesn't hold that pack; says what to install and how ([PACK-9](#packs)) | — | yes |
+| `pkg.changed` | Error | the installed version's hash differs from the one `music2.lock` names ([PACK-9](#packs)) | — | yes |
+| `pkg.broken` | Error | a pack the song uses doesn't load: its `m2pkg.toml`, its kernels, or what it needs ([PACK-2](#packs)); names why | — | yes |
 | `pkg.invalid` | Error | a package module throws while it loads, a descriptor is invalid, or two components in a package share an id ([PKG-9](#component-descriptors)); its components are left out of the catalog. On the session, not a revision | — | no |
 | `arrangement.invalid` | Error | `data/arrangement.json` breaks [FMT-13](#arrangement); names the entry | — | yes |
 | `plugin.state-collision` | Error | two stateful plugins resolve to one state path | — | yes |
@@ -1088,7 +1095,7 @@ The message is plain words, and names the file, the field and the fix where they
 | `state.unverified` | Error | a state blob has no sidecar; the blob isn't loaded | Relink, DeleteData | no |
 | `lane.invalid` | Error | a lane file doesn't parse or doesn't match its lane; it plays its last accepted data, or empty ([FMT-9](#strictness)) | — | no |
 | `lane.unit-mismatch` | Error | a control lane's `unit` differs from its declaration; it plays its last accepted data, or empty | Retag, Convert | no |
-| `asset.missing` | Error | a clip's asset is missing, unreadable, or named with other case or normalisation; that clip is silent | FixAssetName, when only case or normalisation differs | no |
+| `asset.missing` | Error | a clip's asset is missing, unreadable, or named with other case or normalisation, or a package file a kernel reads isn't there ([PACK-5](#packs)); that clip or that sound is silent | FixAssetName, when only case or normalisation differs | no |
 | `asset.changed` | Warning | an asset's hash differs from its pin | RepinAsset | no |
 | `asset.unpinned` | Notice | a clip's asset reference has no `hash` | RepinAsset | no |
 | `data.unclaimed` | Warning | data that no declared lane or plugin reads | Relink, Restore, DeleteData | no |
@@ -1214,6 +1221,53 @@ export const delay = component({
 **PKG-14.** A control MAY be declared `.smooth()`: a gain, a mix or anything else that clicks when it steps. Its cell then ramps over one block on every change ([RENDER-22a](#cells)).
 - *Why:* the descriptor knows which controls click; the engine doesn't.
 - *Today:* since step 5 std marks smooth the controls its kernels read every sample without smoothing, where a step jumps the output: every filter's `cutoff` and `q`, `delay`'s `time`, `feedback` and `mix`, `drive`'s `amount`, `pan`, `vca`, `scale`, `add`, `blend`, `when` and `choose`, `range`'s and `xrange`'s `lo` and `hi`, `lfo`'s `phase`, the square's `width`, the mixer's `pan`, and the instrument controls that reach them (`bass`'s `cutoff` and `drive`, `pluck`'s `brightness`, `pad`'s `cutoff`). `std_smooth_controls_are_the_per_sample_ones` (`core/script/tests/std.rs`) holds the list, and `a_range_bound_ramps` (`core/play/tests/knobs.rs`) hears a range's bound ramp where it sets a gain. A control whose step only changes a rate steps, as the phase runs on: an oscillator's `freq`, `mtof`'s `pitch`, the envelopes' times (and `adsr` approaches a new `sustain` at its decay rate). The effects' kernels, `gain` and `duck` glide their own levels (`compress` reaches its through its envelope). `.smooth()` helps only a kernel that reads the control every sample, and only where a ramp is a glide: `limit` reads `ceiling` once per block, where a one-block ramp arrives as one value, and `lfo` divides the song's beats by `period`, so a ramp of it would sweep the LFO through many cycles in one block; neither is marked, and gliding either would be a kernel change. A one-block ramp of `delay`'s `time` (about 3 ms) still moves the read head, so it removes the hard step but not the pitch chirp.
+
+## Packs
+
+A pack is a package other than std: instruments, effects, sounds and recordings anyone can make ([design](designs/packs/design.md)). To the build a pack is a package like std ([PKG-1](#component-descriptors) to [PKG-14](#component-descriptors)); these rules say how it is named, found, pinned and added.
+
+**PACK-1.** A package is named `std` or `@owner/name`. `owner` and `name` are 1 to 39 characters of `a-z`, `0-9` and `-`, neither starting nor ending with `-`. `@m2/` is music2's own scope, and `@m2/core` is the SDK, never a package. A name never holds `:`. One type checks it, `m2_song::PackName`, wherever a name comes in: `m2pkg.toml`, `[dependencies]`, `music2.lock` and the store.
+- *Why:* the owner is the GitHub account that publishes (design D2), and one rule written once can't drift.
+- *Today:* since packs (`core/song/src/pack.rs`; `pack_names` in its tests).
+
+**PACK-2.** `m2pkg.toml` MUST be read strictly: an unknown key anywhere is refused, as [FMT-4](#manifest-and-versions) refuses one in `music2.toml`. `[package]` holds `name`, `version`, and optionally `license`, `description`, `authors = [..]`, `repository`, `tags = [..]` and `wasm`. `[dependencies]` may name only `"@m2/core"` and `std` (packs that need packs come later, design D4), each a requirement ([FMT-2](#manifest-and-versions)) checked against the SDK and the std this app has when the pack loads. A pack the song uses that doesn't load is the build error `pkg.broken`, naming why.
+- *Today:* since packs (`PkgManifest::read` in `core/song/src/pack.rs`, used by `PackageSet::load` in `core/runtime/src/packages.rs`; `a_package_manifest_is_read_strictly`).
+
+**PACK-3.** An import's package is its first segment, or its first two when it starts with `@`: `"@alice/felt-piano"` is that pack's `src/index.ts`, `"@alice/felt-piano/keys"` its `src/keys.ts`, as `"std/dsp"` is std's `src/dsp.ts`. `pkg.undeclared` and the rest of [FMT-6a](#paths) hold for scoped names as for std.
+- *Today:* since packs (`package_of` in `core/script/src/lib.rs`; `a_scoped_package_is_imported_by_its_two_segments`).
+
+**PACK-4.** A ComponentId or a kernel id is `<package>:<id>`: `@alice/felt-piano:felt-piano`, `@alice/felt-piano:grain`. A package name holds no `:`, so an id splits at its first `:`, and so does a plugin's `clap:<id>`. One function splits them, `m2_song::pack::split_id`, in Rust; the web splits the same way, at the first `:`.
+- *Today:* since packs. `PackageSet::module_for`, the presets' folders and the bounce's provenance split at the first `:` or by the package's name (`ids_split_at_the_first_colon`).
+
+**PACK-5.** An asset reference with a `:` names a file in a package: `"@alice/felt-piano:samples/C4.wav"`, `"std:kits/…"`. One without is the song's `assets/` ([FMT-14](#assets-and-hashes)). A package file resolves inside that package's folder only: its path is relative, `/`-separated, with no empty, `.` or `..` segment and no `\`, found by listing its folders byte for byte, with no case folding ([FMT-6a](#paths)'s rules for package files), and only for std or a package the song's `[dependencies]` lists. It is resolved by its name, never by who passes it: a pack's code passes it to std's Sampler as a song would. Each revision records the hash of every package file its kernels read, beside its assets' ([RENDER-2](#offline)). One that isn't there, or leaves its package, is `asset.missing`, and that sound is silent. `@m2/core`'s `file(import.meta, "samples/C4.wav")` spells a module's own package's file, so pack code needn't spell its own name.
+- *Today:* since packs (`AssetRef` in `core/song/src/pack.rs`, read by `Project::data` and `DataSet::asset_path`; `@m2/core` 1.6.0's `file`; `package_assets_resolve_inside_their_package`).
+
+**PACK-6.** The store is `m2_os::dirs::packs()`, `~/Music/music2/Packs` on every OS ([PLAT-7](#platforms)), one folder per version: `Packs/@alice/felt-piano/1.2.0/`. Installed files are read-only. Every installed version holds `m2pack.json`: every other file of the pack, by sorted path, with its size and SHA-256, made by `m2 pack build`, never by hand. The version's hash is the SHA-256 of `m2pack.json`'s bytes, written `sha256:<hex>`. A version is never changed: installing one that is there with another hash is refused (design P5), and with the same hash does nothing.
+- *Today:* since packs (`Store` and `Listing` in `core/song/src/pack.rs`; `m2 pack install`, `crates/editor/src/packs.rs`; `installing_twice_is_a_no_op_and_a_new_hash_is_refused`).
+
+**PACK-7.** A `[dependencies]` entry other than `@m2/core` and `std` names a pack, and is a requirement ([FMT-2](#manifest-and-versions)), `"1.2"`, or a folder, `{ path = "../felt-piano" }`, relative to the project: a pack its author is trying. A key that isn't a package name ([PACK-1](#packs)) is `manifest.invalid`.
+- *Today:* since packs (`Dependency` in `core/song/src/manifest.rs`).
+
+**PACK-8.** `music2.lock` is a project file, read strictly and written canonically by `core/song` ([FMT-5](#paths)), classed with the manifest ([FMT-6](#paths)): a change rebuilds the song. It holds one `[[pack]]` per pack the song depends on from the store, sorted by name: `name`, `version`, `hash`. Path packs and std are not locked. A lock that doesn't parse is `manifest.invalid`, naming it. The app never writes it on its own (P2, P3): only the edit that adds a pack's item ([PACK-10](#packs)), and `m2 pack lock`, which writes it from what resolves now.
+- *Today:* since packs (`Lock` in `core/song/src/pack.rs`; `DataPath::Lock`; `the_lock_has_one_canonical_form`).
+
+**PACK-9.** A song builds with std and its resolved packs, resolved each build from the manifest, the lock and the store:
+- a path dependency is that folder, which must hold that package (else `pkg.missing`);
+- else the lock's version, when installed and its hash is the lock's (another hash is `pkg.changed`); a locked version not installed is `pkg.missing`, which says what to install and how (`m2 pack install <folder>`); a locked version the requirement doesn't admit is `pkg.unsatisfied`;
+- else, with no lock entry, the highest installed version the requirement admits (none is `pkg.unsatisfied`).
+
+Each blocks acceptance, as [FMT-3](#manifest-and-versions)'s do. The packs a build resolved are part of its code, so a change to the manifest, the lock or a path pack's files makes a new revision. A build whose packs differ loads them into the session's `PackageSet` first, and one that fails puts the set back as it was, so the accepted revision keeps playing what it resolved.
+- *Why:* a song keeps the version it was made with (design M5), and nothing changes it but an edit the person makes.
+- *Today:* since packs (`resolve` in `core/song/src/pack.rs`; `PackageSet::sync`; `build_code` in `core/session/src/lib.rs`; `every_resolution_case_says_what_it_is`).
+
+**PACK-10.** Adding a pack's item (a track that plays its instrument, its effect, a preset of its sound) writes its import by the scoped name, its `[dependencies]` line (`"@alice/felt-piano" = "1.2"`, the major and minor of the version used) when the song doesn't list it, and its `music2.lock` entry when the lock lacks one, as one Tx, one Undo step. The one helper is `packs::needs` in `crates/editor`, which every adder calls.
+- *Today:* since packs, for + Track and Add Effect (`adding_a_pack_instrument_writes_its_dependency_and_lock_in_one_undo`).
+
+**PACK-11.** The lists of instruments, effects and presets offer std's items and those of every pack in the store (its newest version) and of the song's path packs, each knowing its package. A pack's own presets are in its folder, `presets/<component>/*.json`, listed with std's ([FMT-22](#presets)).
+- *Today:* since packs: the catalog is made at open from `PackageSet::offered` (`crates/server/src/graph/actor.rs`), so a pack installed while a song is open shows when it opens again (gaps).
+
+**PACK-12.** `m2 pack check` checks what the registry's robot will (design P1 to P4, and P6 where it can): a strict `m2pkg.toml`; only `.ts`, `.wasm`, `.toml`, `.json`, `.md`, `.txt` and `.wav` files, and `LICENSE` with no extension; every component builds and has a category and a shape; every kernel loads sealed; every preset loads on its sound; every package file its code names resolves; and a licence is named. It prints each problem in words and exits 1 on any.
+- *Today:* since packs (`check` in `crates/editor/src/packs.rs`; `apps/m2/tests/pack.rs`).
 
 ## Homes of values
 
@@ -1474,7 +1528,7 @@ The detail of kernel ABI v1, byte by byte, is in `docs/kernel-abi.md`. These rul
 
 **PLAT-7.** Every folder music2 writes outside a project (songs, your presets, caches, the shell's `~/.music2`) MUST be under `$HOME` when `HOME` is set, so a test or a suite isolates itself by setting `HOME`. Outside the desktop shell those folders come from `m2_os::dirs`. Folders music2 only reads (the system's CLAP folders, files bundled with the app) are exempt. A new song's folder name MUST count as taken when its folder holds the same name in other capitals, on every OS, as on macOS: New Song numbers past it (a song called "Night drive" beside a folder `NIGHT DRIVE` goes into `Night drive 2`), and `m2 new` refuses it ("already exists").
 - *Why:* a test must never write to the user's real folders. Song folders stay safe to copy between computers (the owner's answer to the platform design's Q1).
-- *Today:* every such folder is under `$HOME`; they come from `m2_os::dirs` since the platform step's slice S6, which also moved Linux's cache folder from `~/Library/Caches/music2` to `~/.cache/music2`. Your presets are in `~/Music/music2/Presets` on every OS since track br (`dirs::presets`, [FMT-22](#presets)). `XDG_*` folders are not read yet. A name in other capitals is taken by New Song since slice S2 and by `m2 new` since S6 (`crates/server/src/project.rs`: `a_name_taken_in_other_capitals_is_taken`, `create_at_refuses_a_name_taken_in_other_capitals`). In a folder that can be written but not listed only the exact name can be checked (`a_song_is_made_in_a_folder_that_cant_be_listed`).
+- *Today:* every such folder is under `$HOME`; they come from `m2_os::dirs` since the platform step's slice S6, which also moved Linux's cache folder from `~/Library/Caches/music2` to `~/.cache/music2`. Your presets are in `~/Music/music2/Presets` on every OS since track br (`dirs::presets`, [FMT-22](#presets)), and installed packs in `~/Music/music2/Packs` since packs (`dirs::packs`, [PACK-6](#packs)). `XDG_*` folders are not read yet. A name in other capitals is taken by New Song since slice S2 and by `m2 new` since S6 (`crates/server/src/project.rs`: `a_name_taken_in_other_capitals_is_taken`, `create_at_refuses_a_name_taken_in_other_capitals`). In a folder that can be written but not listed only the exact name can be checked (`a_song_is_made_in_a_folder_that_cant_be_listed`).
 
 **PLAT-8.** A release MUST be built by `.github/workflows/release.yml` from a pushed tag `v<version>` that matches the app's version, with no hand step but publishing its draft: `music2.app` for Apple silicon Macs (zipped), and for Linux on x86_64 an AppImage, a `.deb` and a `.tar.gz` of `m2` with what it needs but the app (for the AppImage's users, and anyone who wants the command line only), with a `SHA256SUMS` file and the notes in `docs/releases/<version>.md`. Each MUST run with no source tree: it carries std (with `std.wasm`), the templates, the examples, the UI and `m2`, and the plugin host is the program itself run again ([HOST-1](#pluginhost)). Each MUST also carry music2's licences and the notices of the code inside it that others wrote, made as it is built from its own lockfiles; and the `.deb` MUST ask for the glibc its programs need, the newest that isn't a weak need, computed from the built programs. The programs find what they carry from where they are, in order: the override (`$M2_STD`, `$M2_TEMPLATES`, `$M2_EXAMPLES`); beside the program in a bundle, `<program's folder>/../Resources/<name>` (`music2.app/Contents/MacOS/music2`) or `<program's folder>/../lib/music2/<name>` (`/usr/bin/music2` and `/usr/lib/music2/` in the `.deb`, the same inside the AppImage, `bin/m2` and `lib/music2/` in the `.tar.gz`), where Tauri puts its resources; else the source tree it was built from. Until signing is set up the Mac app is signed ad hoc and not notarized; the workflow signs and notarizes when the repo's Apple secrets are there, and only on a tag.
 - *Why:* people who don't build from source need a download, and a downloaded app has no source tree to fall back on. One workflow from a tag makes every release the same way, and a person still decides when it goes out.
@@ -1492,7 +1546,7 @@ Each item below is decided where this page says so, and built when its trigger a
 | A saved editor index, and canvas positions in `layout.json` | Manual canvas layout. Track order and colour use track keys as soon as that feature lands. |
 | Undo that survives a restart | Crash recovery is required, or users ask for undo after reopening. The journal and inverse-Tx format already allow it. |
 | Playing a last-good copy (in `.music2/`) of a project whose code doesn't compile | Projects are often left broken, and "opens silent until fixed" becomes a complaint. |
-| `music2.lock` with content hashes, package fetching, several bundled std versions, kernel ids relative to their package | The first package other than std, or the first std release, after people have songs, that changes existing renders ([FMT-3](#manifest-and-versions)). std 0.2 (the `sounds` merge) changed none, and no one had songs. |
+| Package fetching (the registry, design packs §8), several bundled std versions, kernel ids relative to their package. `music2.lock` with content hashes and the store are built since packs ([PACK-6](#packs) to [PACK-9](#packs)) | Fetching: the owner's choice of where the bytes are kept (design packs D1, D10). Several std versions: the first std release, after people have songs, that changes existing renders ([FMT-3](#manifest-and-versions)). |
 | `m2 migrate` ([FMT-3a](#manifest-and-versions)) | The first format or SDK break after format 1. |
 | Kernel ABI v1's reserved shapes: event ports, `k_save`/`k_load`, `k_latency`/`k_tail` ([ABI-2](#kernel-abi-reservations), `docs/kernel-abi.md`) | Each with the first kernel that needs it: an arpeggiator, a kernel with state worth saving, a kernel with latency (a plugin's latency is compensated since ph-3, [RENDER-17](#latency)). |
 | rtkit, and `RLIMIT_RTTIME` with `SIGXCPU` ignored, for Linux engine threads ([RENDER-28a](#plans-data-and-arrangement-swaps)): today they ask for `SCHED_FIFO` within `RLIMIT_RTPRIO` only | Someone plays music2 live on a Linux desktop. |
