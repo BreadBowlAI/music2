@@ -443,6 +443,11 @@ export interface GraphStatus {
 /** The open project, and where playback was when it was read. */
 export interface GraphState extends GraphStatus {
   session: number;
+  /**
+   * The revision the code editor's libraries were made at: the SDK and the sources of std and the
+   * song's packs. It moves when the song's packs change (PACK-9), and the editor loads them again.
+   */
+  types?: number;
   name: string;
   dir: string;
   view: GraphView;

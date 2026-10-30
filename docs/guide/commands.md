@@ -381,6 +381,14 @@ m2 call <project> <path> [<json> | -] [--method M]
 
 Send one route's request to the open app, as an agent (by `--as`): song changes with no command of their own (an effect's bypass, markers, the song's key) and every read. The song's session is filled in; a GET's keys go in its query; it prints the answer and exits 1 when the app refuses. The musician's controls are refused before anything is sent. The song changes it reaches include a track's instrument or ID, and a bus. `--method` picks one where a path takes two (`/api/settings`). Refused before anything is sent, too: a body bigger than the route takes. A write the musician holds waits, as every `m2` write does (exit 3). On standard error it says the undo step a write made, or what an undo took back.
 
+## m2 search
+
+```
+m2 search <words…> [--kind <kind>] [--json]
+```
+
+Find what can be added to a song: instruments, sounds (presets), effects, samples and plugins, best first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where it is from, and its id, which adding it names. With the app open it asks the app, whose list has the open song's own instruments and the plugins it has listed; with the app closed it searches music2's sounds and your presets itself. Every word must match. `--kind` is `instrument`, `sound`, `effect`, `sample` or `plugin`; the same words typed in the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), which only samples carry. `--json` prints each item with all it knows: its `kind`, `id`, `label`, `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track takes), and a sound's `preset`. [Finding sounds](finding-sounds.md) says more.
+
 ## m2 docs
 
 ```

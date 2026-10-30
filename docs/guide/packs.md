@@ -47,8 +47,8 @@ A song uses the version its `music2.lock` names, even when you install a newer o
 
 | To | Do |
 |---|---|
-| move to another version | change the line in `music2.toml` (say `"1.3"`), then run `m2 pack lock <song>`. It locks the newest installed version the line allows |
-| move to the newest version the line allows | `m2 pack update <song>`, or `m2 pack update <song> @alice/felt-piano` for one pack |
+| move to another version | change the line in `music2.toml` (say `"1.3"`), then run `m2 pack lock <song>`. It locks the newest installed version the line allows that this music2 can run |
+| move to the newest version the line allows (and this music2 can run) | `m2 pack update <song>`, or `m2 pack update <song> @alice/felt-piano` for one pack |
 
 Both work while the song doesn't build, and each is one undo step. The song may sound a little different after.
 
@@ -59,7 +59,7 @@ When something is wrong, the song says so, in words, and doesn't build until it 
 | `pkg.missing` | the version the lock names isn't installed | install that version: `m2 pack install <folder>`. Or, when another version the line allows is installed, `m2 pack lock <song>` moves to it |
 | `pkg.changed` | a file of the installed version was changed after it was installed (the message names it) | install it again from its folder: `m2 pack install <folder>` puts it back |
 | `pkg.changed` | the installed version isn't the copy the song was made with | put that one back (`m2 pack remove @owner/name <version>`, then `m2 pack install <its folder>`), or `m2 pack update <song> @owner/name` to use the installed one |
-| `pkg.unsatisfied` | no installed version fits `music2.toml`'s line, or the lock names one the line no longer allows | install one that fits, or change the line; then `m2 pack lock <song>` |
+| `pkg.unsatisfied` | no installed version fits `music2.toml`'s line, or the lock names one the line no longer allows. Or the versions that fit need a newer music2: a newer music2 on this computer installed them (the message says what they need) | install one that fits, or change the line; then `m2 pack lock <song>`. For a newer music2's version: update music2 |
 | `pkg.broken` | the pack needs a newer std or `@m2/core` than this app has | update music2, or use another version of the pack |
 
 Removing a pack can't change a song: a song that locks it says `pkg.missing` until it is installed again.

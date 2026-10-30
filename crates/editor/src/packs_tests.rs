@@ -240,7 +240,7 @@ fn a_pack_this_app_cant_run_isnt_offered() {
     install_as(&f, "@test/later", "1.0.0", |t| t.replace("std = \"0.4\"", "std = \"9.0\""), None);
     let s = open(&f);
     assert_eq!(from(&s, "@test/tiny:tiny-keys").map(|p| p.version), Some("0.1.0".into()));
-    let offered: Vec<String> = m2_session::offered(&s.packages).into_iter().map(|(n, _)| n).collect();
+    let offered: Vec<String> = m2_session::offered(&s.packages).into_iter().map(|(n, ..)| n).collect();
     assert_eq!(offered, ["@test/tiny"], "@test/later needs std 9.0");
 }
 
@@ -256,4 +256,154 @@ fn a_store_pack_the_song_doesnt_use_puts_no_problem_on_it() {
     let invalid: Vec<&str> = s.problems().iter().filter(|d| d.code == "pkg.invalid").map(|d| d.message.as_str()).collect();
     assert!(invalid.is_empty(), "{invalid:?}");
     assert!(crate::tracks::instruments(&s).iter().any(|i| i.component == "@test/tiny:tiny-keys"), "the rest is still offered");
+}
+
+/// `@test/tiny` at `version` in the store at `<f>/Packs`, as an install leaves it, with a kernel of
+/// its own: `@test/tiny:sine`, std's module under its own name (`tag` as a custom section, so each
+/// version's module has its own hash), played by its instrument `tinyTone`. Its module's hash.
+fn install_with_kernel(f: &Fixture, version: &str, tag: &str) -> m2_song::Sha {
+    let v = Version::parse(version).unwrap();
+    let dir = Store::at(f.0.join("Packs")).version_dir(&PackName::new("@test/tiny").unwrap(), &v);
+    copy(&tiny(), &dir);
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
+    let toml = toml.replace("version = \"0.1.0\"", &format!("version = \"{version}\"\nwasm = \"k.wasm\""))
+        + "\n[[kernel]]\nname = \"sine\"\ndescription = \"A sine\"\ninputs = [\"freq: control<hz> = 440\"]\noutputs = [\"out: audio<1>\"]\n";
+    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
+    let mut wasm = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm")).unwrap();
+    let name = b"m2-test";
+    wasm.extend([0u8, (1 + name.len() + tag.len()) as u8, name.len() as u8]);
+    wasm.extend(name);
+    wasm.extend(tag.as_bytes());
+    std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
+    let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
+    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+                id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
+                inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
+                (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
+    std::fs::write(dir.join("src/index.ts"), index + tone).unwrap();
+    let listing = Listing::of(&dir).unwrap();
+    std::fs::write(dir.join(LISTING), listing.text()).unwrap();
+    m2_song::Sha::of(&wasm)
+}
+
+const SINE: &str = "@test/tiny:sine";
+
+/// A song at `f` whose track `tone` plays `@test/tiny`'s own kernel, `"@test/tiny" = "0.1"` and
+/// locked to 0.1.0, with 0.1.0 (module `one`) installed: its session, and the module's hash.
+fn tone_song(f: &Fixture) -> (Session, m2_song::Sha) {
+    let m1 = install_with_kernel(f, "0.1.0", "one");
+    f.write("music2.toml", format!("{MANIFEST}\"@test/tiny\" = \"0.1\"\n"));
+    f.write(
+        "song.ts",
+        "import { song } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport tone from \"./tracks/tone\";\n\nexport default song(() => master(mixer({ tone: tone.out })));\n",
+    );
+    f.write(
+        "tracks/tone.ts",
+        "import { track } from \"@m2/core\";\nimport { tinyTone } from \"@test/tiny\";\n\nexport default track(\"tone\", { name: \"Tone\" }, ({ lane }) => tinyTone(lane.notes(\"notes\")));\n",
+    );
+    let tiny = PackName::new("@test/tiny").unwrap();
+    let hash = Store::at(f.0.join("Packs")).hash(&tiny, &Version(0, 1, 0)).unwrap();
+    f.write("music2.lock", Lock::default().with(tiny, Version(0, 1, 0), hash).canonical());
+    let s = open(f);
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    assert_eq!(s.packages.module_sha(SINE), Some(m1));
+    (s, m1)
+}
+
+/// The module hash `info`'s plan gives kernel `id`.
+fn module_of(info: &m2_runtime::PlanInfo, id: &str) -> Option<m2_song::Sha> {
+    info.shapes.iter().flatten().find_map(|s| match s {
+        m2_runtime::Shape::Kernel { id: k, wasm, .. } if k == id => Some(*wasm),
+        _ => None,
+    })
+}
+
+// PACK-9, RENDER-2: a stem renders with the packs of the revision it was made from, though the
+// song moved to another version before it rendered (stems render one at a time, edits go on).
+#[test]
+fn a_stem_renders_the_view_it_was_planned_on() {
+    use crate::render::{Length, Parts, Render, Threads};
+    let f = Fixture::new();
+    let (mut s, m1) = tone_song(&f);
+    let rev = s.accepted_arc();
+    let ir = crate::render::rooted(&rev.compiled.ir, "tone", "out").unwrap();
+    let stem = std::sync::Arc::new(Parts::of(&*rev, ir, &s.packages).unwrap_or_else(|d| panic!("{d:?}")));
+    // `m2 pack update` while the stem waits: the song moves to 0.1.1.
+    let m2 = install_with_kernel(&f, "0.1.1", "two");
+    write_lock(&mut s, pack::Move::All).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(s.packages.module_sha(SINE), Some(m2), "the song moved");
+    let r = Render::new(stem, &s.packages, 48_000, 0.0, Length::Seconds(0.1), Threads::Exactly(1)).unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(module_of(&r.info(), SINE), Some(m1), "the stem plays the version it was made with");
+}
+
+// PACK-9, PACK-11: the lists follow the accepted revision's packs: `m2 pack update` while the song
+// is open moves its items to the new version's, as the list names it.
+#[test]
+fn the_lists_follow_the_accepted_view() {
+    let f = Fixture::new();
+    song_and_store(&f);
+    f.write("music2.toml", format!("{MANIFEST}\"@test/tiny\" = \"0.1\"\n"));
+    let mut s = open(&f);
+    write_lock(&mut s, pack::Move::Needed).unwrap_or_else(|e| panic!("{e}"));
+    let tone = "@test/tiny:tiny-tone";
+    assert!(!s.catalog().components.contains_key(tone), "0.1.0 has no tone");
+    install_with_kernel(&f, "0.1.1", "two");
+    write_lock(&mut s, pack::Move::All).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(s.accepted().compiled.packs[0].version, Version(0, 1, 1));
+    assert!(s.catalog().components.contains_key(tone), "the lists have 0.1.1's items");
+    assert!(crate::tracks::instruments(&s).iter().any(|i| i.component == tone));
+    assert_eq!(from(&s, tone).map(|p| p.version), Some("0.1.1".into()));
+}
+
+// PACK-11, PACK-10: an add takes the version the lists offer the item from, not one installed
+// since the lists were made.
+#[test]
+fn an_add_takes_the_version_the_lists_show() {
+    let f = Fixture::new();
+    let (mut s, hash) = song_and_store(&f);
+    assert_eq!(from(&s, "@test/tiny:tiny-keys").map(|p| p.version), Some("0.1.0".into()));
+    install_with_kernel(&f, "0.1.1", "two");
+    assert_eq!(from(&s, "@test/tiny:tiny-keys").map(|p| p.version), Some("0.1.0".into()), "the list says what it shows");
+    crate::tracks::add(&mut s, "@test/tiny:tiny-keys", None, None, None).unwrap_or_else(|e| panic!("{e}"));
+    let lock = Lock::read(&f.read("music2.lock")).unwrap();
+    assert_eq!(lock.get(&PackName::new("@test/tiny").unwrap()).map(|l| (l.version, l.hash)), Some((Version(0, 1, 0), hash)));
+}
+
+// PACK-6: a repair whose new copy can't go in (a scanner holding a file just written, on Windows)
+// puts the copy before back, read-only, and leaves nothing aside.
+#[test]
+fn a_repair_that_cant_put_the_new_copy_in_puts_the_old_one_back() {
+    let f = Fixture::new();
+    let pack = f.0.join("Packs/@a/x");
+    let (target, temp, old) = (pack.join("1.0.0"), pack.join(".1.0.0.1.tmp"), pack.join(".1.0.0.1.old"));
+    f.write("Packs/@a/x/1.0.0/m2pack.json", "before");
+    f.write("Packs/@a/x/.1.0.0.1.tmp/m2pack.json", "new");
+    read_only_inside(&target).unwrap();
+    set_read_only(&target, true).unwrap();
+    let mut rename = |a: &Path, b: &Path| match a == temp {
+        true => Err(std::io::Error::other("held by another program")),
+        false => std::fs::rename(a, b),
+    };
+    assert!(swap(&temp, &target, &old, &mut rename).is_err());
+    assert_eq!(std::fs::read_to_string(target.join("m2pack.json")).unwrap(), "before", "the version is as it was");
+    assert!(!old.exists(), "nothing is left aside");
+    assert!(std::fs::metadata(&target).unwrap().permissions().readonly(), "read-only again");
+    remove_tree(&f.0.join("Packs")).unwrap();
+}
+
+// PACK-6: the copy a stopped install left aside goes with the next install of that version.
+#[test]
+fn an_install_removes_a_copy_a_stopped_install_left_aside() {
+    let f = Fixture::new();
+    let folder = f.0.join("tiny");
+    copy(&tiny(), &folder);
+    let store = Store::at(f.0.join("Packs"));
+    let std = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    install(&folder, &store, &std).unwrap_or_else(|e| panic!("{e:?}"));
+    let left = store.dir.join("@test/tiny/.0.1.0.999999.old");
+    f.write("Packs/@test/tiny/.0.1.0.999999.old/src/index.ts", "// the changed copy\n");
+    read_only_inside(&left).unwrap();
+    assert!(matches!(install(&folder, &store, &std), Ok(Install::Already { .. })));
+    assert!(!left.exists(), "the copy left aside is gone");
+    remove_tree(&store.dir).unwrap();
 }

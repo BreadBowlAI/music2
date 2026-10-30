@@ -1,7 +1,8 @@
 // Packs from a folder (PACK-6, PACK-10, PACK-11): the fixture pack @test/tiny, installed in the
 // scratch HOME's store, shows in the browser with std's, its rows saying which pack they are from;
 // a double-click on Tiny keys adds a track that plays it, and writes the pack's [dependencies] line
-// and music2.lock in the same edit; one Undo takes all of it back. The browser's Packs list shows
+// and music2.lock in the same edit, and the code editor's libraries gain the pack's sources; one
+// Undo takes all of it back. The browser's Packs list shows
 // the pack and its version.
 //
 //   node e2e/pk-packs.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
@@ -56,6 +57,7 @@ check(std !== "" && !std.includes("From "), "std's rows name no pack");
 
 const tracks = async () => (await state()).view.modules.filter((m) => m.track).map((m) => m.key);
 const before = await tracks();
+const typesAt = (await state()).types;
 await page.click(row, { count: 2 });
 check(await until(async () => (await tracks()).length === before.length + 1, 10000), "a double-click adds a track");
 const added = (await tracks()).find((k) => !before.includes(k));
@@ -63,6 +65,11 @@ check(await until(() => read("music2.toml").includes('"@test/tiny" = "0.1"')), "
 const lock = fs.existsSync(`${PROJ}/music2.lock`) ? read("music2.lock") : "";
 check(lock.includes('name = "@test/tiny"') && lock.includes('version = "0.1.0"'), "music2.lock keeps its version");
 check(read(`tracks/${added}.ts`).includes('import { tinyKeys } from "@test/tiny";'), "the track imports it by its scoped name");
+// The code editor's libraries follow the song's packs (PACK-9), so the import it just wrote checks.
+const moved = (await state()).types;
+check(typeof typesAt === "number" && moved > typesAt, `the state says the code editor's libraries were made again (${typesAt} → ${moved})`);
+const libs = (await api("/types")).body?.files?.map((f) => f.path) ?? [];
+check(libs.includes("@test/tiny/index.ts"), "and they hold the pack's sources");
 await page.click('button[aria-label="Undo"]');
 check(await until(async () => (await tracks()).length === before.length), "one Undo takes the track away");
 check(await until(() => read("music2.toml") === manifest && !fs.existsSync(`${PROJ}/music2.lock`)), "and the pack's line and the lock with it");

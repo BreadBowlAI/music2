@@ -41,15 +41,15 @@ pub fn from(s: &Session, component: &str) -> Option<From> {
     if package == pack::STD {
         return None;
     }
-    let (version, _) = m2_session::offered_one(&s.packages, package)?;
+    let (version, _) = s.offered_one(package)?;
     Some(From { name: package.to_string(), version: version.to_string() })
 }
 
-/// The version and hash of `package` as the lists offer it from the store (PACK-11): its newest
-/// installed version this app can run, its copy checked against its listing (PACK-6).
+/// The version and hash of `package` as the lists offer it from the store (PACK-11): the version
+/// they were made from, its copy checked against its listing (PACK-6).
 fn offered_version(s: &Session, package: &str) -> Option<(Version, Result<Sha, String>)> {
     let name = PackName::new(package).ok()?;
-    let (v, _) = m2_session::offered_one(&s.packages, package)?;
+    let (v, _) = s.offered_one(package)?;
     Some((v, s.packages.store()?.check(&name, &v)))
 }
 
@@ -154,7 +154,7 @@ pub fn lock_now(s: &Session, moving: pack::Move) -> Result<Lock, EditError> {
     let text = files.get(Path::new(m2_song::path::MANIFEST)).ok_or_else(|| EditError::NotFound(m2_song::path::MANIFEST.into()))?;
     let manifest = m2_song::Manifest::read(text).map_err(|d| EditError::Rejected(d.message))?;
     let old = files.get(Path::new(m2_song::path::LOCK)).and_then(|t| Lock::read(t).ok()).unwrap_or_default();
-    pack::relock(&manifest, &old, s.packages.store(), moving)
+    pack::relock(&manifest, &old, s.packages.store(), &m2_session::app(&s.packages), moving)
         .map_err(|d| EditError::Rejected(d.into_iter().map(|d| d.message).collect::<Vec<_>>().join("\n")))
 }
 
@@ -457,6 +457,12 @@ pub fn install(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<Str
     let (name, version) = (m.package.name, m.package.version);
     let (listing, hash) = build(dir).map_err(io)?;
     let target = store.version_dir(&name, &version);
+    let parent = target.parent().expect("a version's folder is in its pack's");
+    // The changed copy an install of this version that stopped left aside goes, so no build takes
+    // the version for one being installed again (PACK-6).
+    for (_, old) in store.aside(&name).into_iter().filter(|(v, _)| *v == version) {
+        let _ = remove_tree(&old);
+    }
     let mut repair = None;
     if std::fs::symlink_metadata(&target).is_ok() {
         match store.hash(&name, &version) {
@@ -472,7 +478,6 @@ pub fn install(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<Str
             }
         }
     }
-    let parent = target.parent().expect("a version's folder is in its pack's");
     std::fs::create_dir_all(parent).map_err(io)?;
     let temp = parent.join(format!(".{version}.{}.tmp", std::process::id()));
     let _ = remove_tree(&temp);
@@ -492,19 +497,13 @@ pub fn install(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<Str
             return Err(std::io::Error::other("the pack's files changed while it was copied: install it again"));
         }
         read_only_inside(&temp)?;
-        // A changed copy is moved aside first, so the version is never half one and half the other.
-        // A folder is renamed while it can be written, on every OS, and made read-only after.
-        let old = parent.join(format!(".{version}.{}.old", std::process::id()));
-        if repair.is_some() {
-            set_read_only(&target, false)?;
-            std::fs::rename(&target, &old)?;
+        match repair {
+            Some(_) => {
+                swap(&temp, &target, &parent.join(format!(".{version}.{}.old", std::process::id())), &mut |a, b| std::fs::rename(a, b))?
+            }
+            None => std::fs::rename(&temp, &target)?,
         }
-        std::fs::rename(&temp, &target)?;
-        set_read_only(&target, true)?;
-        if repair.is_some() {
-            remove_tree(&old)?;
-        }
-        Ok(())
+        set_read_only(&target, true)
     })();
     if let Err(e) = copied {
         let _ = remove_tree(&temp);
@@ -514,6 +513,29 @@ pub fn install(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<Str
         Some(why) => Install::Repaired { name, version, why },
         None => Install::Installed { name, version, dir: target, hash },
     })
+}
+
+/// Put the copy in `temp` in place of the installed copy at `target` (a repair, PACK-6), through
+/// `rename` (`std::fs::rename` but in tests). The changed copy is moved aside to `old` first, so
+/// the version is never half one and half the other, and removed once the new one is in. Should
+/// the new one not go in, the changed one is put back as it was, read-only: a failed repair
+/// leaves the version installed, never missing.
+fn swap(temp: &Path, target: &Path, old: &Path, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> std::io::Result<()> {
+    // A folder is renamed while it can be written, on every OS, and made read-only after.
+    set_read_only(target, false)?;
+    if let Err(e) = rename(target, old) {
+        let _ = set_read_only(target, true);
+        return Err(e);
+    }
+    if let Err(e) = rename(temp, target) {
+        return match rename(old, target).and_then(|()| set_read_only(target, true)) {
+            Ok(()) => Err(e),
+            Err(back) => {
+                Err(std::io::Error::other(format!("{e}; and the copy before couldn't be put back ({back}): it is at {}", old.display())))
+            }
+        };
+    }
+    remove_tree(old)
 }
 
 /// Make every file and folder in `dir` read-only (PACK-6): its folders last, deepest first, so
