@@ -28,8 +28,9 @@
 #                               the docs job's link check and site, and the cases of the docs rule,
 #                               of the PR tier's own verdicts (ci/pr-test.sh), of ci/nightly.sh
 #                               (ci/nightly-test.sh), of the nightly's issues
-#                               (ci/nightly-issue-test.sh) and of how ci/check.sh reads a test log
-#                               (ci/tally-test.sh)
+#                               (ci/nightly-issue-test.sh), of how ci/check.sh reads a test log
+#                               (ci/tally-test.sh) and of the npm lockfiles' check
+#                               (ci/npm-licenses-test.sh)
 #   ci/pr.sh quick              lint's checks, then the cases of the gates rule, the pool's models,
 #                               the web typecheck and build, std's kernels (tests, clippy) and
 #                               std.wasm rebuilt to the committed bytes
@@ -244,6 +245,7 @@ lint() {
   check "nightly.sh" nightly-test.log ci/nightly-test.sh
   check "nightly issue" nightly-issue-test.log ci/nightly-issue-test.sh
   check "test tally" tally-test.log ci/tally-test.sh
+  check "npm licences" npm-licenses-test.log ci/npm-licenses-test.sh
 }
 # models: the pool's models, in release, and their lint (the same commands as ci/check.sh's step
 # 6b). m2-pool needs only m2-os and libc, so this builds in seconds, with no system library.
