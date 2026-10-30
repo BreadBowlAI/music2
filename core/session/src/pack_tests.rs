@@ -141,3 +141,191 @@ fn a_pack_made_for_an_older_std_still_builds() {
     assert_eq!(c.packs.len(), 1);
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// `@test/tiny` at `version` in the store at `store`, as an install leaves it, with a kernel of its
+/// own: `@test/tiny:sine`, std's sine in the pack's module (std's, with `tag` as a custom section,
+/// so each version's module has its own hash), played by its instrument `tinyTone`. Its hash, and
+/// its module's.
+fn install_tiny_with_kernel(store: &Path, version: &str, tag: &str) -> (m2_song::Sha, m2_song::Sha) {
+    let v = Version::parse(version).unwrap();
+    let dir = Store::at(store.to_path_buf()).version_dir(&PackName::new("@test/tiny").unwrap(), &v);
+    copy(&fixtures().join("tiny"), &dir);
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
+    let toml = toml.replace("version = \"0.1.0\"", &format!("version = \"{version}\"\nwasm = \"k.wasm\""))
+        + "\n[[kernel]]\nname = \"sine\"\ndescription = \"A sine\"\ninputs = [\"freq: control<hz> = 440\"]\noutputs = [\"out: audio<1>\"]\n";
+    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
+    let mut wasm = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm")).unwrap();
+    let name = b"m2-test";
+    wasm.extend([0u8, (1 + name.len() + tag.len()) as u8, name.len() as u8]);
+    wasm.extend(name);
+    wasm.extend(tag.as_bytes());
+    std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
+    let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
+    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+                id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
+                inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
+                (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
+    std::fs::write(dir.join("src/index.ts"), index + tone).unwrap();
+    let listing = Listing::of(&dir).unwrap();
+    std::fs::write(dir.join(LISTING), listing.text()).unwrap();
+    (listing.hash(), m2_song::Sha::of(&wasm))
+}
+
+/// A Tx of `ops` in the song at `dir`, each file based on what it holds now.
+fn based(dir: &Path, ops: Vec<m2_song::tx::Op>) -> m2_song::tx::Tx {
+    use m2_song::tx::{Base, Expect, Tx};
+    let mut tx = Tx::new("pack-test", ("before".into(), "after".into()), ops, Expect::Seen(m2_song::Sha::of(b"")));
+    for path in tx.touched() {
+        let base = match std::fs::read_to_string(dir.join(path.path())) {
+            Ok(text) => Base::text(&text),
+            Err(_) => Base::Absent,
+        };
+        tx.base.insert(path, base);
+    }
+    tx
+}
+
+/// Commit `tx` as `m2 tx --seen` does: checked, then committed on the delta it showed.
+fn commit_seen(s: &mut crate::Session, mut tx: m2_song::tx::Tx) -> u64 {
+    let checked = s.check(&tx).unwrap_or_else(|r| panic!("{r}"));
+    tx.expect = m2_song::tx::Expect::Seen(checked.hash);
+    s.commit(tx).unwrap_or_else(|r| panic!("{r}")).number
+}
+
+fn write(file: &str, text: String) -> m2_song::tx::Op {
+    m2_song::tx::Op::Write { file: m2_song::tx::TxPath::new(file).unwrap(), bytes: m2_song::tx::Payload::Text(text.into()) }
+}
+
+/// The module hash the plan of `rev` built from `packages` gives kernel `id`.
+fn planned_module(rev: &crate::Revision, packages: &PackageSet, id: &str) -> Option<m2_song::Sha> {
+    let r = Renderer::new(&rev.compiled.flat, &rev.compiled.data, packages, 48_000).unwrap_or_else(|e| panic!("{e:#}"));
+    r.info().shapes.iter().flatten().find_map(|s| match s {
+        m2_runtime::Shape::Kernel { id: k, wasm, .. } if k == id => Some(*wasm),
+        _ => None,
+    })
+}
+
+// PACK-9: a dry run that moves the song to another version, then an unrelated edit, leave the
+// accepted revision listing and playing the version it was built with; committing the move
+// moves it.
+#[test]
+fn a_dry_run_never_moves_what_the_accepted_revision_plays() {
+    let root = scratch("view");
+    copy(&fixtures(), &root);
+    let store = root.join("Packs");
+    let (h1, m1) = install_tiny_with_kernel(&store, "0.1.0", "one");
+    let (h2, m2) = install_tiny_with_kernel(&store, "0.2.0", "two");
+    assert_ne!(m1, m2);
+    let song = root.join("song-store");
+    let tiny = PackName::new("@test/tiny").unwrap();
+    std::fs::write(song.join(m2_song::path::LOCK), Lock::default().with(tiny.clone(), Version(0, 1, 0), h1).canonical()).unwrap();
+    std::fs::write(
+        song.join("tracks/tone.ts"),
+        "import { track } from \"@m2/core\";\nimport { tinyTone } from \"@test/tiny\";\n\nexport default track(\"tone\", { name: \"Tone\" }, ({ lane }) => tinyTone(lane.notes(\"notes\")));\n",
+    )
+    .unwrap();
+    let main = std::fs::read_to_string(song.join("song.ts")).unwrap();
+    let main = main
+        .replace("import pluck", "import tone from \"./tracks/tone\";\nimport pluck")
+        .replace("pluck: pluck.out", "pluck: pluck.out, tone: tone.out");
+    std::fs::write(song.join("song.ts"), main).unwrap();
+    let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let sine = "@test/tiny:sine";
+    let version = |s: &crate::Session| s.packages.get("@test/tiny").map(|p| p.version.clone());
+    assert_eq!((version(&s), s.packages.module_sha(sine)), (Some("0.1.0".into()), Some(m1)));
+
+    // A dry run of the move: it builds, and writes nothing.
+    let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap();
+    let lock2 = Lock::default().with(tiny.clone(), Version(0, 2, 0), h2).canonical();
+    let moving = || based(&song, vec![write("music2.toml", manifest.replace("\"0.1\"", "\"0.2\"")), write("music2.lock", lock2.clone())]);
+    s.check(&moving()).unwrap_or_else(|r| panic!("{r}"));
+    // An unrelated edit, committed: one note louder.
+    let notes = std::fs::read_to_string(song.join("data/keys/notes.json")).unwrap();
+    commit_seen(&mut s, based(&song, vec![write("data/keys/notes.json", notes.replacen("\"velocity\": 0.8", "\"velocity\": 0.9", 1))]));
+    assert!(std::fs::read_to_string(song.join("music2.toml")).unwrap().contains("\"0.1\""));
+    assert_eq!(version(&s), Some("0.1.0".into()), "the lists name the version the accepted revision uses");
+    assert_eq!(s.packages.module_sha(sine), Some(m1));
+    let accepted = s.accepted_arc();
+    assert_eq!(planned_module(&accepted, &s.packages, sine), Some(m1), "a plan of the accepted revision runs its own version's kernel");
+
+    // Committed, the move moves what plays.
+    commit_seen(&mut s, moving());
+    assert_eq!((version(&s), s.packages.module_sha(sine)), (Some("0.2.0".into()), Some(m2)));
+    assert_eq!(planned_module(&s.accepted_arc(), &s.packages, sine), Some(m2));
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The song-path fixture, taking `@test/tiny` from `pack` (a folder beside it), with the kernel
+/// pack's instrument playing too.
+fn song_from_folder(root: &Path, pack: &str) -> PathBuf {
+    let song = root.join("song-path");
+    let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap();
+    let at = manifest.find("\"@test/tiny\"").unwrap();
+    std::fs::write(song.join("music2.toml"), format!("{}\"@test/tiny\" = {{ path = \"../{pack}\" }}\n", &manifest[..at])).unwrap();
+    std::fs::write(
+        song.join("tracks/tone.ts"),
+        "import { track } from \"@m2/core\";\nimport { tinyTone } from \"@test/tiny\";\n\nexport default track(\"tone\", { name: \"Tone\" }, ({ lane }) => tinyTone(lane.notes(\"notes\")));\n",
+    )
+    .unwrap();
+    let main = std::fs::read_to_string(song.join("song.ts")).unwrap();
+    if !main.contains("tone") {
+        let main = main
+            .replace("import pluck", "import tone from \"./tracks/tone\";\nimport pluck")
+            .replace("pluck: pluck.out", "pluck: pluck.out, tone: tone.out");
+        std::fs::write(song.join("song.ts"), main).unwrap();
+    }
+    song
+}
+
+/// `@test/tiny` with its kernel, in the folder `dir` (not the store): as its author has it.
+fn tiny_with_kernel_in(root: &Path, dir: &str, tag: &str) -> m2_song::Sha {
+    let store = root.join(format!("make-{dir}"));
+    install_tiny_with_kernel(&store, "0.1.0", tag);
+    let made = Store::at(store.clone()).version_dir(&PackName::new("@test/tiny").unwrap(), &Version(0, 1, 0));
+    let _ = std::fs::remove_dir_all(root.join(dir));
+    copy(&made, &root.join(dir));
+    std::fs::remove_dir_all(&store).unwrap();
+    m2_song::Sha::of(&std::fs::read(root.join(dir).join("k.wasm")).unwrap())
+}
+
+// PACK-9: a path pack's rebuilt wasm (and m2pkg.toml) reaches the song's next build, as its
+// TypeScript does: a loaded version is known by the hashes of both.
+#[test]
+fn a_path_packs_new_wasm_reaches_the_next_build() {
+    let root = scratch("rebuilt");
+    copy(&fixtures(), &root);
+    let m1 = tiny_with_kernel_in(&root, "mine", "one");
+    let song = song_from_folder(&root, "mine");
+    let mut pk = packages(&root.join("no-store"));
+    let c = compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{d:?}"));
+    assert_eq!(pk.module_sha("@test/tiny:sine"), Some(m1));
+    drop(c);
+    let m2 = tiny_with_kernel_in(&root, "mine", "two");
+    assert_ne!(m1, m2);
+    let c = compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{d:?}"));
+    assert_eq!(pk.module_sha("@test/tiny:sine"), Some(m2), "the rebuilt module plays");
+    let out = Renderer::new(&c.flat, &c.data, &pk, 48_000).unwrap().render(0.5).unwrap();
+    assert!(out.iter().any(|f| f[0].abs() > 0.01), "the song sounds");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-9: a pack that doesn't load is pkg.broken, never a panic, even when what loaded before
+// is gone from the disk since.
+#[test]
+fn a_pack_that_fails_to_load_never_panics_the_build() {
+    let root = scratch("gone");
+    copy(&fixtures(), &root);
+    tiny_with_kernel_in(&root, "first", "one");
+    let song = song_from_folder(&root, "first");
+    let mut pk = packages(&root.join("no-store"));
+    compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{d:?}"));
+    // Its author moves to another folder, whose wasm is broken, and the first is gone.
+    tiny_with_kernel_in(&root, "second", "two");
+    std::fs::write(root.join("second/k.wasm"), b"not wasm").unwrap();
+    std::fs::remove_dir_all(root.join("first")).unwrap();
+    let song = song_from_folder(&root, "second");
+    let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+    assert_eq!(codes(&e), ["pkg.broken"]);
+    std::fs::remove_dir_all(&root).ok();
+}

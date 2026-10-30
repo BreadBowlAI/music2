@@ -594,13 +594,7 @@ fn highest(store: &Store, name: &PackName, req: &Requirement) -> Result<Resolved
     whole(store, name, v)
 }
 
-fn resolve_one(
-    project: &Path,
-    name: &PackName,
-    dep: &Dependency,
-    lock: &Lock,
-    store: Option<&Store>,
-) -> Result<Resolved, Diagnostic> {
+fn resolve_one(project: &Path, name: &PackName, dep: &Dependency, lock: &Lock, store: Option<&Store>) -> Result<Resolved, Diagnostic> {
     let req = match dep {
         Dependency::Path(p) => return in_folder(project, name, &p.path),
         Dependency::Version(req) => req,

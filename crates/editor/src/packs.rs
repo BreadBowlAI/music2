@@ -13,8 +13,8 @@ use crate::EditError;
 use crate::plan::{self, path};
 
 /// What adding an item of a pack writes besides its import (PACK-10): its `[dependencies]` line
-/// when the song doesn't list the pack, its `music2.lock` entry when the lock lacks one; and the
-/// files those writes may change, for the Tx's expectation.
+/// when the song doesn't list the pack, its `music2.lock` entry when the lock lacks one or the song
+/// didn't list it; and the files those writes may change, for the Tx's expectation.
 #[derive(Clone, Debug, Default)]
 pub struct Needs {
     pub ops: Vec<Op>,
@@ -41,17 +41,16 @@ pub fn from(s: &Session, component: &str) -> Option<From> {
     if package == pack::STD {
         return None;
     }
-    let p = s.packages.get(package).map(|p| p.version.clone());
-    let version = p.or_else(|| offered_version(s, package).map(|(v, _)| v.to_string()))?;
-    Some(From { name: package.to_string(), version })
+    let (version, _) = m2_session::offered_one(&s.packages, package)?;
+    Some(From { name: package.to_string(), version: version.to_string() })
 }
 
-/// The version and hash of `package` as the lists offer it from the store: its newest installed.
-fn offered_version(s: &Session, package: &str) -> Option<(Version, Option<Sha>)> {
+/// The version and hash of `package` as the lists offer it from the store (PACK-11): its newest
+/// installed version this app can run, its copy checked against its listing (PACK-6).
+fn offered_version(s: &Session, package: &str) -> Option<(Version, Result<Sha, String>)> {
     let name = PackName::new(package).ok()?;
-    let store = s.packages.store()?;
-    let v = *store.versions(&name).last()?;
-    Some((v, store.hash(&name, &v).ok()))
+    let (v, _) = m2_session::offered_one(&s.packages, package)?;
+    Some((v, s.packages.store()?.check(&name, &v)))
 }
 
 /// What adding an item of ComponentId `component` writes besides its import (PACK-10). Nothing for
@@ -73,17 +72,22 @@ pub fn needs_all(s: &Session, components: &[&str]) -> Result<Needs, EditError> {
         }
         let name = PackName::new(package).map_err(EditError::Rejected)?;
         let listed = manifest.dependencies.get(package);
-        if matches!(listed, Some(Dependency::Path(_))) || lock.get(&name).is_some() {
+        // Listed and locked, or taken from a folder: the song has it. A lock entry for a pack the
+        // manifest doesn't list is left from before, and is replaced with the line (PACK-10).
+        if matches!(listed, Some(Dependency::Path(_))) || (listed.is_some() && lock.get(&name).is_some()) {
             continue;
         }
-        // The version the song resolves now, else the store's newest.
-        let used = match rev.compiled.packs.iter().find(|r| r.name == name) {
-            Some(r) => Some((r.version, r.hash)),
-            None => offered_version(s, package),
+        // The version the song resolves now, else the one the lists offer.
+        let (version, hash) = match rev.compiled.packs.iter().find(|r| r.name == name) {
+            Some(r) => (r.version, r.hash.ok_or_else(|| format!("{package} {} has no m2pack.json", r.version))),
+            None => offered_version(s, package)
+                .ok_or_else(|| EditError::Rejected(format!("{package} isn't installed: install it with `m2 pack install <folder>`")))?,
         };
-        let (version, hash) =
-            used.ok_or_else(|| EditError::Rejected(format!("{package} isn't installed: install it with `m2 pack install <folder>`")))?;
-        let hash = hash.ok_or_else(|| EditError::Rejected(format!("{package} {version} has no m2pack.json: install it again")))?;
+        let hash = hash.map_err(|why| {
+            EditError::Rejected(format!(
+                "{package} {version} can't be added as it is installed ({why}): install it again with `m2 pack install <folder>`"
+            ))
+        })?;
         if listed.is_none() {
             lines.push((name.clone(), Requirement::minor(version)));
         }
@@ -141,39 +145,49 @@ pub fn dependency_line(text: &str, name: &PackName, req: &Requirement) -> Option
     Some((at as u32, format!("{newline}\"{}\" = \"{req}\"\n", name.as_str())))
 }
 
-/// `music2.lock` as `m2 pack lock` writes it (PACK-8): every pack the song resolves now from the
-/// store, by name, with its version and hash. Path packs and std aren't locked.
-pub fn lock_now(s: &Session) -> Result<Lock, EditError> {
-    let rev = s.accepted();
-    let resolution = m2_session::resolve_packs(&rev.project, &s.packages);
-    if let Some(d) = resolution.problems.first() {
-        return Err(EditError::Rejected(d.message.clone()));
-    }
-    let mut lock = Lock::default();
-    for r in resolution.packs.iter().filter(|r| !r.path) {
-        let hash = r.hash.ok_or_else(|| EditError::Rejected(format!("{} {} has no m2pack.json: install it again", r.name, r.version)))?;
-        lock = lock.with(r.name.clone(), r.version, hash);
-    }
-    Ok(lock)
+/// `music2.lock` as `m2 pack lock` and `m2 pack update` write it (PACK-8): from the manifest, the
+/// lock it replaces and the store, as the project's files are now, never from a build, so it works
+/// while the song doesn't build. What moves is `moving`'s. A lock that doesn't read is replaced
+/// whole.
+pub fn lock_now(s: &Session, moving: pack::Move) -> Result<Lock, EditError> {
+    let files = &s.draft().files;
+    let text = files.get(Path::new(m2_song::path::MANIFEST)).ok_or_else(|| EditError::NotFound(m2_song::path::MANIFEST.into()))?;
+    let manifest = m2_song::Manifest::read(text).map_err(|d| EditError::Rejected(d.message))?;
+    let old = files.get(Path::new(m2_song::path::LOCK)).and_then(|t| Lock::read(t).ok()).unwrap_or_default();
+    pack::relock(&manifest, &old, s.packages.store(), moving)
+        .map_err(|d| EditError::Rejected(d.into_iter().map(|d| d.message).collect::<Vec<_>>().join("\n")))
 }
 
-/// Write `music2.lock` from what resolves now (`m2 pack lock`, PACK-8): one Tx, one undo step;
-/// nothing when it says that already.
-pub fn write_lock(s: &mut Session) -> Result<Option<crate::Edited>, EditError> {
-    crate::ready(s)?;
-    let lock = lock_now(s)?;
+/// Write `music2.lock` (`m2 pack lock`, `m2 pack update`, PACK-8) as [`lock_now`] makes it; nothing
+/// when it says that already. While the song builds, one Tx, one undo step. While it doesn't (a
+/// new requirement its old lock doesn't meet), saved as `m2 edit` saves (AGENT-1): written only
+/// when the song then builds, as one undo step; otherwise refused with why, and nothing written.
+pub fn write_lock(s: &mut Session, moving: pack::Move) -> Result<Option<crate::Edited>, EditError> {
+    let lock = lock_now(s, moving)?;
     let text = lock.canonical();
-    let rev = s.accepted();
-    let file = path(m2_song::path::LOCK)?;
-    let now = rev.snapshot.files.get(Path::new(m2_song::path::LOCK)).map(|t| t.to_string());
+    let now = s.draft().files.get(Path::new(m2_song::path::LOCK)).cloned();
     if now.as_deref() == Some(text.as_str()) || (now.is_none() && lock.packs.is_empty()) {
         return Ok(None);
     }
-    let label = ("music2.lock".to_string(), format!("{} packs locked", lock.packs.len()));
-    let ops = vec![Op::Write { file, bytes: Payload::Text(text.into()) }];
-    let tx = plan::planned(s, label.clone(), ops, m2_song::Expect::Identical);
-    let done = plan::run(s, tx, |_, _| Ok(()))?;
-    Ok(Some(crate::Edited { revision: done.number, file: m2_song::path::LOCK.into(), before: label.0, after: label.1 }))
+    let said: Vec<String> = lock.packs.iter().map(|l| format!("{} {}", l.name, l.version)).collect();
+    let label = (m2_song::path::LOCK.to_string(), if said.is_empty() { "no packs locked".into() } else { said.join(", ") });
+    let file = path(m2_song::path::LOCK)?;
+    let revision = match s.draft_errors.is_empty() {
+        true => {
+            let ops = vec![Op::Write { file, bytes: Payload::Text(text.into()) }];
+            let tx = plan::planned(s, label.clone(), ops, m2_song::Expect::Identical);
+            plan::run(s, tx, |_, _| Ok(()))?.number
+        }
+        false => {
+            let base = match &now {
+                Some(was) => m2_song::tx::Base::text(was),
+                None => m2_song::tx::Base::Absent,
+            };
+            s.save_built(Path::new(m2_song::path::LOCK), base, &text)?;
+            s.landed().filter(|l| l.number > 0).map_or(s.accepted().number, |l| l.number)
+        }
+    };
+    Ok(Some(crate::Edited { revision, file: m2_song::path::LOCK.into(), before: label.0, after: label.1 }))
 }
 
 /// Every installed pack, newest version last, with what each holds: what `m2 pack list` and the
@@ -235,8 +249,9 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     match pack::pack_files(dir) {
         Ok(files) => {
             for (rel, _) in files {
-                let ext = Path::new(&rel).extension().and_then(|e| e.to_str()).unwrap_or("");
-                if rel != "LICENSE" && !FILE_TYPES.contains(&ext) {
+                // In any capitals: `.WAV` is a WAV.
+                let ext = Path::new(&rel).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+                if rel != "LICENSE" && !FILE_TYPES.contains(&ext.as_str()) {
                     let types: Vec<String> = FILE_TYPES.iter().map(|t| format!(".{t}")).collect();
                     out.push(format!("{rel}: a pack holds only {} files and LICENSE", types.join(" ")));
                 }
@@ -272,8 +287,9 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     out
 }
 
-/// Every preset in `presets/<component>/` is a preset of that component of the pack, and names
-/// only its controls: what loading it on its sound needs (PACK-12).
+/// Every preset in `presets/<component>/` is a preset of that component of the pack, names only
+/// its controls, and keeps each value inside its control's range where that range is strict
+/// (PKG-8): what loading it on its sound needs (PACK-12).
 fn presets_problems(dir: &Path, name: &PackName, ours: &[std::sync::Arc<m2_script::Descriptor>]) -> Vec<String> {
     let mut out = vec![];
     for folder in std::fs::read_dir(dir.join("presets")).into_iter().flatten().flatten() {
@@ -288,8 +304,16 @@ fn presets_problems(dir: &Path, name: &PackName, ours: &[std::sync::Arc<m2_scrip
                 (Ok(_), None) => out.push(format!("{rel}: {name} has no component `{id}` for it")),
                 (Ok(p), Some(_)) if p.sound != sound => out.push(format!("{rel} is for {}, but it is in {sound}'s folder", p.sound)),
                 (Ok(p), Some(d)) => {
-                    for slot in p.values.keys().filter(|k| d.control(k).is_none()) {
-                        out.push(format!("{rel}: {} has no control `{slot}`", d.label));
+                    for (slot, v) in &p.values {
+                        match d.control(slot) {
+                            None => out.push(format!("{rel}: {} has no control `{slot}`", d.label)),
+                            Some(c) => match (c.strict, c.range) {
+                                (true, Some((lo, hi))) if !(lo..=hi).contains(v) => {
+                                    out.push(format!("{rel}: `{slot}` is {v}, outside {}'s range for it, {lo} to {hi}", d.label))
+                                }
+                                _ => {}
+                            },
+                        }
                     }
                 }
             }
@@ -383,13 +407,18 @@ pub fn build(dir: &Path) -> std::io::Result<(Listing, Sha)> {
 pub enum Install {
     /// Copied into the store, at its folder, with its hash.
     Installed { name: PackName, version: Version, dir: PathBuf, hash: Sha },
-    /// That version was there with this very hash: nothing to do.
+    /// That version was there with this very hash and its files whole: nothing to do.
     Already { name: PackName, version: Version, hash: Sha },
+    /// That version was there with this very hash, but its copy no longer matched its listing
+    /// (`why`): the copy was replaced with these files (PACK-6).
+    Repaired { name: PackName, version: Version, why: String },
 }
 
-/// Check the pack in `dir`, build its listing and copy it into `store`, read-only (`m2 pack
-/// install`, PACK-6): refused when it doesn't check, or when its version is there with another
-/// hash (design P5); a no-op when it is there with the same.
+/// Check the pack in `dir`, build its listing and copy it into `store`, its files and folders
+/// read-only (`m2 pack install`, PACK-6): refused when it doesn't check, or when its version is
+/// there with another hash (design P5). With the same hash it does nothing when the installed copy
+/// still matches its listing, and replaces the copy when it doesn't. A link is never followed: a
+/// pack holding one doesn't check.
 pub fn install(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<String>> {
     let problems = check(dir, std);
     if !problems.is_empty() {
@@ -400,42 +429,93 @@ pub fn install(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<Str
     let (name, version) = (m.package.name, m.package.version);
     let (listing, hash) = build(dir).map_err(io)?;
     let target = store.version_dir(&name, &version);
-    if target.exists() {
-        return match store.hash(&name, &version) {
-            Ok(h) if h == hash => Ok(Install::Already { name, version, hash }),
-            _ => Err(vec![format!(
-                "{name} {version} is installed already with other files. A version is never changed (P5): give this one a new \
-                 version in m2pkg.toml, or remove the installed one first with `m2 pack remove {name} {version}`"
-            )]),
-        };
+    let mut repair = None;
+    if std::fs::symlink_metadata(&target).is_ok() {
+        match store.hash(&name, &version) {
+            Ok(h) if h == hash => match store.check(&name, &version) {
+                Ok(_) => return Ok(Install::Already { name, version, hash }),
+                Err(why) => repair = Some(why),
+            },
+            _ => {
+                return Err(vec![format!(
+                    "{name} {version} is installed already with other files. A version is never changed (P5): give this one a \
+                     new version in m2pkg.toml, or remove the installed one first with `m2 pack remove {name} {version}`"
+                )]);
+            }
+        }
     }
     let parent = target.parent().expect("a version's folder is in its pack's");
     std::fs::create_dir_all(parent).map_err(io)?;
     let temp = parent.join(format!(".{version}.{}.tmp", std::process::id()));
-    let _ = std::fs::remove_dir_all(&temp);
+    let _ = remove_tree(&temp);
     let copied = (|| -> std::io::Result<()> {
         for f in &listing.files {
-            let to = temp.join(&f.path);
+            let (from, to) = (dir.join(&f.path), temp.join(&f.path));
+            // Listed with no link, and copied only as a plain file, never through one.
+            if !std::fs::symlink_metadata(&from)?.file_type().is_file() {
+                return Err(std::io::Error::other(format!("{} is no longer a plain file: install it again", f.path)));
+            }
             std::fs::create_dir_all(to.parent().expect("inside the pack"))?;
-            std::fs::copy(dir.join(&f.path), &to)?;
+            std::fs::copy(&from, &to)?;
         }
         std::fs::write(temp.join(pack::LISTING), listing.text())?;
         // What is copied must be what was listed.
         if Listing::of(&temp)? != listing {
             return Err(std::io::Error::other("the pack's files changed while it was copied: install it again"));
         }
-        for (_, p) in pack::pack_files(&temp)? {
-            let mut perm = std::fs::metadata(&p)?.permissions();
-            perm.set_readonly(true);
-            std::fs::set_permissions(&p, perm)?;
+        read_only_inside(&temp)?;
+        // A changed copy is moved aside first, so the version is never half one and half the other.
+        // A folder is renamed while it can be written, on every OS, and made read-only after.
+        let old = parent.join(format!(".{version}.{}.old", std::process::id()));
+        if repair.is_some() {
+            set_read_only(&target, false)?;
+            std::fs::rename(&target, &old)?;
         }
-        std::fs::rename(&temp, &target)
+        std::fs::rename(&temp, &target)?;
+        set_read_only(&target, true)?;
+        if repair.is_some() {
+            remove_tree(&old)?;
+        }
+        Ok(())
     })();
     if let Err(e) = copied {
         let _ = remove_tree(&temp);
         return Err(io(e));
     }
-    Ok(Install::Installed { name, version, dir: target, hash })
+    Ok(match repair {
+        Some(why) => Install::Repaired { name, version, why },
+        None => Install::Installed { name, version, dir: target, hash },
+    })
+}
+
+/// Make every file and folder in `dir` read-only (PACK-6): its folders last, deepest first, so
+/// nothing can be added to, removed from or renamed in an installed version.
+fn read_only_inside(dir: &Path) -> std::io::Result<()> {
+    let mut folders = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d)? {
+            let e = e?;
+            let kind = e.file_type()?;
+            if kind.is_dir() {
+                folders.push(e.path());
+                stack.push(e.path());
+            } else if kind.is_file() {
+                set_read_only(&e.path(), true)?;
+            }
+        }
+    }
+    for d in folders.iter().rev() {
+        set_read_only(d, true)?;
+    }
+    Ok(())
+}
+
+fn set_read_only(path: &Path, on: bool) -> std::io::Result<()> {
+    let mut perm = std::fs::symlink_metadata(path)?.permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perm.set_readonly(on);
+    std::fs::set_permissions(path, perm)
 }
 
 /// Take version `version` of `name` out of `store` (`m2 pack remove`). A song that locks it then
@@ -454,14 +534,21 @@ pub fn remove(store: &Store, name: &PackName, version: &Version) -> std::io::Res
     Ok(())
 }
 
-/// Remove `dir` and everything in it, read-only files included.
+/// Remove `dir` and everything in it, read-only files and folders included. A link is removed,
+/// never followed.
 fn remove_tree(dir: &Path) -> std::io::Result<()> {
-    for (_, p) in pack::pack_files(dir).unwrap_or_default() {
-        if let Ok(meta) = std::fs::metadata(&p) {
-            let mut perm = meta.permissions();
-            #[allow(clippy::permissions_set_readonly_false)]
-            perm.set_readonly(false);
-            let _ = std::fs::set_permissions(&p, perm);
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        if !std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        let _ = set_read_only(&d, false);
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            match e.file_type() {
+                Ok(t) if t.is_dir() => stack.push(e.path()),
+                Ok(t) if t.is_file() => drop(set_read_only(&e.path(), false)),
+                _ => {}
+            }
         }
     }
     std::fs::remove_dir_all(dir)

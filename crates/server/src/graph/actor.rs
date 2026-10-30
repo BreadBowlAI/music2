@@ -606,7 +606,9 @@ fn build(
 ) -> Result<Renderer> {
     // A tempo drag's arrangement in place of the accepted one (RENDER-27a).
     let (flat, data, rate) = (&rev.compiled.flat, data.unwrap_or(&rev.compiled.data), rev.project.sample_rate());
-    let r = Renderer::prepare(flat, data, packages, rate, audio, owner, basis)?;
+    // The kernels the revision was built with (PACK-9).
+    let packages = packages.viewing(&rev.compiled.view);
+    let r = Renderer::prepare(flat, data, &packages, rate, audio, owner, basis)?;
     audio.prune();
     Ok(r)
 }

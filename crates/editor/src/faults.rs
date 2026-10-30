@@ -18,6 +18,11 @@ pub trait Song: Send + Sync {
     fn ir(&self) -> &Ir;
     fn flat(&self) -> &Flat;
     fn data(&self) -> &DataSet;
+    /// The packages it was built with (PACK-9), when it knows them: a render of it runs their
+    /// kernels, whatever the set shows now. None: what the set shows.
+    fn view(&self) -> Option<&Arc<m2_runtime::View>> {
+        None
+    }
 }
 
 impl Song for Revision {
@@ -30,6 +35,9 @@ impl Song for Revision {
     fn data(&self) -> &DataSet {
         &self.compiled.data
     }
+    fn view(&self) -> Option<&Arc<m2_runtime::View>> {
+        Some(&self.compiled.view)
+    }
 }
 
 impl Song for Compiled {
@@ -41,6 +49,9 @@ impl Song for Compiled {
     }
     fn data(&self) -> &DataSet {
         &self.data
+    }
+    fn view(&self) -> Option<&Arc<m2_runtime::View>> {
+        Some(&self.view)
     }
 }
 

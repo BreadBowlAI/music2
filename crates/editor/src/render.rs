@@ -204,6 +204,15 @@ fn bounds(data: &DataSet, sample_rate: u32, from: f64, length: Length) -> Result
     Ok((first, end))
 }
 
+/// `packages` seeing what `song` was built with (PACK-9), so a render of a revision runs that
+/// revision's kernels whatever the set shows now.
+fn seen<'a>(song: &'a dyn Song, packages: &'a PackageSet) -> std::borrow::Cow<'a, PackageSet> {
+    match song.view() {
+        Some(view) => packages.viewing(view),
+        None => std::borrow::Cow::Borrowed(packages),
+    }
+}
+
 impl Render {
     /// Render a compiled song (its graph and the data it plays) from `from` seconds in (replaying
     /// up to there first), on `threads`: exact (RENDER-1).
@@ -215,6 +224,8 @@ impl Render {
         length: Length,
         threads: Threads,
     ) -> Result<Render> {
+        let seen = seen(&*song, packages);
+        let packages = &*seen;
         let namer = Namer::new(0, song.clone(), packages);
         let (flat, data) = (song.flat(), song.data());
         let (first, end) = bounds(data, sample_rate, from, length)?;
@@ -265,6 +276,8 @@ impl Render {
         lent: &HashMap<usize, Arc<PluginInstance>>,
         threads: Threads,
     ) -> Result<Render> {
+        let seen = seen(&*song, packages);
+        let packages = &*seen;
         let namer = Namer::new(0, song.clone(), packages);
         let (flat, data) = (song.flat(), song.data());
         let (first, end) = bounds(data, sample_rate, 0.0, length)?;
@@ -303,6 +316,8 @@ impl Render {
         if t0 == 0 {
             return Render::new(song, packages, sample_rate, from, length, threads);
         }
+        let seen = seen(&*song, packages);
+        let packages = &*seen;
         let namer = Namer::new(0, song.clone(), packages);
         let (flat, data) = (song.flat(), song.data());
         let mut renderer = Renderer::starting_at(flat, data, packages, sample_rate, t0).map_err(|e| namer.faulted(e))?;

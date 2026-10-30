@@ -156,10 +156,7 @@ pub fn factory(dir: &Path, sound: &str) -> Option<PathBuf> {
 /// The folder of the package that makes `sound`, as the session has it: std's or a pack's.
 pub fn package_dir(s: &Session, sound: &str) -> Option<PathBuf> {
     let (package, _) = m2_song::pack::split_id(sound)?;
-    match s.packages.get(package) {
-        Some(p) => Some(p.dir.clone()),
-        None => s.packages.offered().into_iter().find(|(n, _)| n == package).map(|(_, d)| d),
-    }
+    m2_session::offered_one(&s.packages, package).map(|(_, dir)| dir)
 }
 
 /// A preset in a folder: its name and its file.

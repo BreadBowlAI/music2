@@ -27,14 +27,12 @@ impl Temp {
     fn clean(&self) {
         let mut stack = vec![self.0.clone()];
         while let Some(d) = stack.pop() {
+            writable(&d);
             for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-                if e.file_type().is_ok_and(|t| t.is_dir()) {
-                    stack.push(e.path());
-                } else if let Ok(m) = e.metadata() {
-                    let mut p = m.permissions();
-                    #[allow(clippy::permissions_set_readonly_false)]
-                    p.set_readonly(false);
-                    let _ = std::fs::set_permissions(e.path(), p);
+                match e.file_type() {
+                    Ok(t) if t.is_dir() => stack.push(e.path()),
+                    Ok(t) if t.is_file() => writable(&e.path()),
+                    _ => {}
                 }
             }
         }
@@ -60,6 +58,30 @@ impl Drop for Temp {
     fn drop(&mut self) {
         self.clean();
     }
+}
+
+/// Make `path` writable, as an installed (read-only) file or folder isn't.
+fn writable(path: &Path) {
+    if let Ok(m) = std::fs::symlink_metadata(path)
+        && !m.file_type().is_symlink()
+    {
+        let mut p = m.permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        p.set_readonly(false);
+        let _ = std::fs::set_permissions(path, p);
+    }
+}
+
+/// Whether `out` succeeded, saying what it said when it didn't.
+fn ok(out: Output) -> String {
+    assert!(out.status.success(), "{}", said(&out));
+    said(&out)
+}
+
+/// Whether `out` failed with exit 1, and what it said.
+fn failed(out: Output) -> String {
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    said(&out)
 }
 
 fn said(out: &Output) -> String {
@@ -163,4 +185,175 @@ fn lock_writes_what_resolves_now() {
     assert!(lock.contains("name = \"@test/tiny\"") && lock.contains("version = \"0.1.0\""), "{lock}");
     let out = t.m2(&["check", song.to_str().unwrap()]);
     assert!(out.status.success(), "{}", said(&out));
+}
+
+// PACK-6: an installed version's files and folders are read-only; one changed all the same is
+// caught (pkg.changed, naming the file), installing the same version again puts it back, and
+// remove copes with what is read-only.
+#[test]
+fn a_changed_installed_pack_is_caught_and_reinstalling_repairs_it() {
+    let t = Temp::new("repair");
+    copy(&fixtures(), &t.0.join("packs"));
+    let (tiny, song) = (t.0.join("packs/tiny"), t.0.join("packs/song-store"));
+    let (tiny, song) = (tiny.to_str().unwrap(), song.to_str().unwrap());
+    ok(t.m2(&["pack", "install", tiny]));
+    let installed = t.store().join("@test/tiny/0.1.0");
+    for d in [installed.clone(), installed.join("src"), installed.join("samples")] {
+        assert!(std::fs::metadata(&d).unwrap().permissions().readonly(), "{} is read-only", d.display());
+    }
+    ok(t.m2(&["check", song]));
+    // Changed all the same, as a sync or an editor saving in place might.
+    let index = installed.join("src/index.ts");
+    writable(&installed.join("src"));
+    writable(&index);
+    std::fs::write(&index, std::fs::read_to_string(&index).unwrap() + "// changed\n").unwrap();
+    let text = failed(t.m2(&["check", song]));
+    for want in ["pkg.changed", "src/index.ts", "m2 pack install"] {
+        assert!(text.contains(want), "says {want}: {text}");
+    }
+    // Installing the same version again puts it back, read-only again.
+    let text = ok(t.m2(&["pack", "install", tiny]));
+    assert!(text.contains("put back"), "{text}");
+    assert!(std::fs::metadata(installed.join("src")).unwrap().permissions().readonly());
+    ok(t.m2(&["check", song]));
+    ok(t.m2(&["pack", "remove", "@test/tiny", "0.1.0"]));
+    assert!(!installed.exists());
+}
+
+/// A copy of the pack `tiny` at `version`, in a folder of its own beside it.
+fn tiny_at(t: &Temp, version: &str) -> PathBuf {
+    let dir = t.0.join(format!("tiny-{version}"));
+    copy(&t.0.join("packs/tiny"), &dir);
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
+    std::fs::write(dir.join("m2pkg.toml"), toml.replace("version = \"0.1.0\"", &format!("version = \"{version}\""))).unwrap();
+    let _ = std::fs::remove_file(dir.join("m2pack.json"));
+    dir
+}
+
+/// The version `music2.lock` keeps of `@test/tiny`.
+fn locked(song: &Path) -> String {
+    let lock = std::fs::read_to_string(song.join("music2.lock")).unwrap();
+    lock.lines().find_map(|l| l.strip_prefix("version = \"")).map(|v| v.trim_end_matches('"').to_string()).unwrap_or_default()
+}
+
+// PACK-8, and the guide's recipe end to end: a song moves to another version when its line
+// changes and `m2 pack lock` runs; `m2 pack update` moves it to the newest it admits; and every
+// command a problem names works from where it is said.
+#[test]
+fn moving_a_song_to_another_version() {
+    let t = Temp::new("move");
+    copy(&fixtures(), &t.0.join("packs"));
+    let song = t.0.join("packs/song-store");
+    let s = song.to_str().unwrap();
+    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
+    ok(t.m2(&["pack", "install", tiny_at(&t, "0.2.0").to_str().unwrap()]));
+    ok(t.m2(&["check", s]));
+    assert_eq!(locked(&song), "0.1.0", "a newer version installed moves nothing");
+
+    // The guide's recipe: change the line, then lock.
+    let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap();
+    std::fs::write(song.join("music2.toml"), manifest.replace("\"@test/tiny\" = \"0.1\"", "\"@test/tiny\" = \"0.2\"")).unwrap();
+    let text = failed(t.m2(&["check", s]));
+    assert!(text.contains("pkg.unsatisfied") && text.contains("m2 pack lock"), "{text}");
+    ok(t.m2(&["pack", "lock", s]));
+    assert_eq!(locked(&song), "0.2.0");
+    ok(t.m2(&["check", s]));
+
+    // A newer version it admits: lock keeps what it has, update moves to it.
+    ok(t.m2(&["pack", "install", tiny_at(&t, "0.2.1").to_str().unwrap()]));
+    assert!(ok(t.m2(&["pack", "lock", s])).contains("says that already"));
+    assert_eq!(locked(&song), "0.2.0");
+    ok(t.m2(&["pack", "update", s]));
+    assert_eq!(locked(&song), "0.2.1");
+    ok(t.m2(&["check", s]));
+
+    // The installed copy isn't the one the lock names: what check says to do works.
+    let lock = std::fs::read_to_string(song.join("music2.lock")).unwrap();
+    let at = lock.find("sha256:").unwrap() + "sha256:".len();
+    std::fs::write(song.join("music2.lock"), format!("{}{}{}", &lock[..at], "0".repeat(64), &lock[at + 64..])).unwrap();
+    let text = failed(t.m2(&["check", s]));
+    assert!(text.contains("pkg.changed") && text.contains("m2 pack update"), "{text}");
+    let text = failed(t.m2(&["pack", "lock", s]));
+    assert!(text.contains("m2 pack install") && text.contains("m2 pack update"), "lock keeps the version, so it says how: {text}");
+    ok(t.m2(&["pack", "update", s, "@test/tiny"]));
+    ok(t.m2(&["check", s]));
+
+    // A locked version that isn't installed, while another it admits is: lock moves to that one.
+    let lock = std::fs::read_to_string(song.join("music2.lock")).unwrap();
+    std::fs::write(song.join("music2.lock"), lock.replace("version = \"0.2.1\"", "version = \"0.2.9\"")).unwrap();
+    let text = failed(t.m2(&["check", s]));
+    assert!(text.contains("pkg.missing") && text.contains("m2 pack lock"), "{text}");
+    ok(t.m2(&["pack", "lock", s]));
+    assert_eq!(locked(&song), "0.2.1");
+    ok(t.m2(&["check", s]));
+}
+
+// RENDER-2, PACK-5: a bounce's provenance names every package file its kernels read (a pack's
+// recording), with its hash, and the version hash of each pack.
+#[test]
+fn a_bounce_names_the_pack_files_it_played() {
+    let t = Temp::new("bounce");
+    copy(&fixtures(), &t.0.join("packs"));
+    let song = t.0.join("packs/song-store");
+    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
+    ok(t.m2(&["bounce", song.to_str().unwrap(), "pl", "--track", "pluck", "--seconds", "1"]));
+    let record: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(song.join("assets/pl.wav.json")).unwrap()).unwrap();
+    let tiny = &record["packages"]["@test/tiny"];
+    let wav = m2_song::Sha::of(&std::fs::read(t.0.join("packs/tiny/samples/pluck.wav")).unwrap());
+    assert_eq!(tiny["files"]["@test/tiny/samples/pluck.wav"], wav.hex(), "{record:#}");
+    let lock = std::fs::read_to_string(song.join("music2.lock")).unwrap();
+    let hash = tiny["hash"].as_str().unwrap_or("none");
+    assert!(lock.contains(hash) && hash.starts_with("sha256:"), "{record:#}");
+}
+
+// PACK-6, PACK-12: a pack holds no link: check names one, build and install refuse it, and nothing
+// outside the pack is ever copied into the store.
+#[cfg(unix)]
+#[test]
+fn links_are_refused_in_a_pack() {
+    let t = Temp::new("links");
+    let tiny = t.0.join("tiny");
+    copy(&fixtures().join("tiny"), &tiny);
+    std::fs::write(t.0.join("outside-secret.txt"), "SECRET-TOKEN-123\n").unwrap();
+    std::os::unix::fs::symlink(t.0.join("outside-secret.txt"), tiny.join("samples/notes.wav")).unwrap();
+    let dir = tiny.to_str().unwrap();
+    for args in [["pack", "check", dir], ["pack", "build", dir], ["pack", "install", dir]] {
+        let text = failed(t.m2(&args));
+        assert!(text.contains("samples/notes.wav") && text.contains("link"), "{args:?}: {text}");
+    }
+    assert!(!t.store().join("@test").exists(), "nothing was installed");
+    // A folder that is a link, too.
+    std::fs::remove_file(tiny.join("samples/notes.wav")).unwrap();
+    std::os::unix::fs::symlink(&t.0, tiny.join("more")).unwrap();
+    let text = failed(t.m2(&["pack", "check", dir]));
+    assert!(text.contains("more") && text.contains("link"), "{text}");
+}
+
+// PACK-12: a file's type is its extension in any capitals: `.WAV` is a WAV.
+#[test]
+fn a_capital_extension_is_its_type() {
+    let t = Temp::new("capitals");
+    let tiny = t.0.join("tiny");
+    copy(&fixtures().join("tiny"), &tiny);
+    std::fs::copy(tiny.join("samples/pluck.wav"), tiny.join("samples/Extra.WAV")).unwrap();
+    std::fs::write(tiny.join("NOTES.TXT"), "notes\n").unwrap();
+    ok(t.m2(&["pack", "check", tiny.to_str().unwrap()]));
+}
+
+// PACK-12: a preset's value outside its control's strict range is named; one outside a range that
+// is only a hint is not (PKG-8).
+#[test]
+fn a_preset_outside_a_strict_range_is_named() {
+    let t = Temp::new("strict");
+    let tiny = t.0.join("tiny");
+    copy(&fixtures().join("tiny"), &tiny);
+    let dark = std::fs::read_to_string(tiny.join("presets/tiny-keys/Dark.json")).unwrap();
+    let low = dark.replace("\"Dark\"", "\"Low\"").replace("600", "50");
+    assert_ne!(low, dark.replace("\"Dark\"", "\"Low\""), "the fixture's Dark sets brightness 600");
+    std::fs::write(tiny.join("presets/tiny-keys/Low.json"), low).unwrap();
+    ok(t.m2(&["pack", "check", tiny.to_str().unwrap()]));
+    let index = std::fs::read_to_string(tiny.join("src/index.ts")).unwrap();
+    std::fs::write(tiny.join("src/index.ts"), index.replace(".range(200, 20000) }", ".range(200, 20000).strict() }")).unwrap();
+    let text = failed(t.m2(&["pack", "check", tiny.to_str().unwrap()]));
+    assert!(text.contains("presets/tiny-keys/Low.json") && text.contains("brightness") && text.contains("range"), "{text}");
 }

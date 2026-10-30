@@ -131,3 +131,94 @@ fn a_packs_presets_are_its_own_and_yours_are_never_nested() {
     crate::presets::load(&mut s, at, &format!("{file}#{}", site.ordinal), &dark).unwrap_or_else(|e| panic!("{e}"));
     assert!(f.read(&file).contains("brightness: 600"), "{}", f.read(&file));
 }
+
+// PACK-10: changing a track's instrument to a pack's writes its dependency and lock with the swap,
+// in its one Tx.
+#[test]
+fn changing_an_instrument_to_a_packs_writes_its_dependency() {
+    let f = Fixture::new();
+    let (mut s, hash) = song_and_store(&f);
+    let made = crate::tracks::add(&mut s, "std:synth-pluck", None, None, None).unwrap();
+    crate::swap::swap(&mut s, &made.module, "@test/tiny:tiny-keys").unwrap_or_else(|e| panic!("{e}"));
+    assert!(f.read("music2.toml").contains("\"@test/tiny\" = \"0.1\""), "{}", f.read("music2.toml"));
+    let lock = Lock::read(&f.read("music2.lock")).unwrap();
+    assert_eq!(lock.get(&PackName::new("@test/tiny").unwrap()).map(|l| l.hash), Some(hash));
+    assert!(f.read(&format!("tracks/{}.ts", made.module)).contains("tinyKeys("));
+    // One undo takes the swap away whole.
+    s.undo().unwrap();
+    assert_eq!(f.read("music2.toml"), MANIFEST);
+}
+
+// PACK-10: a lock entry left from before, for a pack the manifest no longer lists, doesn't stop
+// adding the pack's item: its line is written again, and its entry replaced.
+#[test]
+fn a_lock_left_from_before_gets_its_line_again() {
+    let f = Fixture::new();
+    let (_, hash) = song_and_store(&f);
+    let left = Lock::default().with(PackName::new("@test/tiny").unwrap(), Version(0, 1, 0), m2_song::Sha::of(b"before"));
+    f.write("music2.lock", left.canonical());
+    let mut p = PackageSet::default().with_store(f.0.join("Packs"));
+    p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
+    let mut s = Session::open(&f.0, p).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(s.draft_errors.is_empty(), "a lock entry no line asks for stops nothing: {:?}", s.draft_errors);
+    crate::tracks::add(&mut s, "@test/tiny:tiny-keys", None, None, None).unwrap_or_else(|e| panic!("{e}"));
+    assert!(f.read("music2.toml").contains("\"@test/tiny\" = \"0.1\""), "{}", f.read("music2.toml"));
+    let lock = Lock::read(&f.read("music2.lock")).unwrap();
+    assert_eq!(lock.get(&PackName::new("@test/tiny").unwrap()).map(|l| l.hash), Some(hash), "the entry from before is replaced");
+}
+
+/// `@test/tiny` installed in the store at `<f>/Packs` as `name` at `version`, its `m2pkg.toml`
+/// changed by `edit` and its index replaced by `index` when given.
+fn install_as(f: &Fixture, name: &str, version: &str, edit: impl Fn(String) -> String, index: Option<&str>) {
+    let dir = Store::at(f.0.join("Packs")).version_dir(&PackName::new(name).unwrap(), &Version::parse(version).unwrap());
+    copy(&tiny(), &dir);
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
+    let toml = toml
+        .replace("name = \"@test/tiny\"", &format!("name = \"{name}\""))
+        .replace("version = \"0.1.0\"", &format!("version = \"{version}\""));
+    std::fs::write(dir.join("m2pkg.toml"), edit(toml)).unwrap();
+    if let Some(index) = index {
+        std::fs::write(dir.join("src/index.ts"), index).unwrap();
+    }
+    // Its presets are tiny's, for tiny's components: none of this pack's.
+    std::fs::remove_dir_all(dir.join("presets")).unwrap();
+    let listing = Listing::of(&dir).unwrap();
+    std::fs::write(dir.join(LISTING), listing.text()).unwrap();
+}
+
+/// A session of the song at `f`, with the store at `<f>/Packs`.
+fn open(f: &Fixture) -> Session {
+    let mut p = PackageSet::default().with_store(f.0.join("Packs"));
+    p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
+    Session::open(&f.0, p).unwrap_or_else(|d| panic!("{d:?}"))
+}
+
+// PACK-11, PACK-2: the lists offer the newest version of a pack this app can run, and none of a
+// pack that needs a newer SDK or std than it has.
+#[test]
+fn a_pack_this_app_cant_run_isnt_offered() {
+    let f = Fixture::new();
+    song_and_store(&f);
+    // A newer @test/tiny for an SDK this app doesn't have: 0.1.0 is still offered.
+    install_as(&f, "@test/tiny", "0.2.0", |t| t.replace("\"@m2/core\" = \"1\"", "\"@m2/core\" = \"9\""), None);
+    // A pack whose every version needs a std this app doesn't have.
+    install_as(&f, "@test/later", "1.0.0", |t| t.replace("std = \"0.4\"", "std = \"9.0\""), None);
+    let s = open(&f);
+    assert_eq!(from(&s, "@test/tiny:tiny-keys").map(|p| p.version), Some("0.1.0".into()));
+    let offered: Vec<String> = m2_session::offered(&s.packages).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(offered, ["@test/tiny"], "@test/later needs std 9.0");
+}
+
+// PACK-11: a store pack the song doesn't use, whose module doesn't load, leaves its components out
+// of the lists and puts no problem on the song; std's and the song's own packs' still would.
+#[test]
+fn a_store_pack_the_song_doesnt_use_puts_no_problem_on_it() {
+    let f = Fixture::new();
+    song_and_store(&f);
+    install_as(&f, "@test/broken", "1.0.0", |t| t, Some("throw new Error(\"broken on purpose\");\n"));
+    let s = open(&f);
+    assert!(!s.catalog().problems.is_empty(), "the catalog knows the module doesn't load");
+    let invalid: Vec<&str> = s.problems().iter().filter(|d| d.code == "pkg.invalid").map(|d| d.message.as_str()).collect();
+    assert!(invalid.is_empty(), "{invalid:?}");
+    assert!(crate::tracks::instruments(&s).iter().any(|i| i.component == "@test/tiny:tiny-keys"), "the rest is still offered");
+}

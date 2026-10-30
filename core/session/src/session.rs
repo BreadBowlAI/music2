@@ -345,6 +345,10 @@ impl Session {
         let built = Project::from_snapshot(&snapshot)
             .map_err(unread)
             .and_then(|p| crate::compile_sources(&p, &mut packages, &Seen::default(), None).map(|c| (p, c)));
+        // The session shows the accepted revision's packages (PACK-9).
+        if let Ok((_, c)) = &built {
+            packages.show(&c.view);
+        }
         // Never fails (WRITE-20): a package module that doesn't load is `pkg.invalid`, and only
         // its components are missing from the catalog. Made after the build, which loads the
         // song's packs, so a pack in a folder is offered too (PACK-11).
@@ -421,6 +425,12 @@ impl Session {
         self.accepted.clone()
     }
 
+    /// The project's files as last settled (what the watcher, a save or `refresh` took in): the
+    /// accepted revision's, and what waits with code that doesn't build (WRITE-19).
+    pub fn draft(&self) -> &Snapshot {
+        &self.draft
+    }
+
     /// Revision `number`, if it is still remembered: what a client a few revisions behind
     /// planned on. The accepted revision is [`Session::accepted`].
     pub fn past(&self, number: u64) -> Option<&Past> {
@@ -449,7 +459,11 @@ impl Session {
     }
 
     pub(crate) fn gather_problems(&self) -> Vec<m2_song::Diagnostic> {
-        let packages = self.catalog.problems.iter().cloned().map(crate::problem);
+        // Only std's and the accepted revision's packs': a module of a store pack the song doesn't
+        // use that doesn't load leaves its components out of the lists, and is no problem of the
+        // song's (PACK-11). Each names its file, `<package>/src/…`.
+        let used = |d: &&Diagnostic| d.src.as_deref().is_none_or(|src| self.packages.get(m2_script::package_of(src).0).is_some());
+        let packages = self.catalog.problems.iter().filter(used).cloned().map(crate::problem);
         self.own.iter().cloned().chain(packages).chain(self.accepted.compiled.problems.iter().cloned()).collect()
     }
 
@@ -570,6 +584,11 @@ impl Session {
                 }
                 self.texts.put_shared(t);
             }
+        }
+        // What the session shows follows the accepted revision (PACK-9): a build that wasn't
+        // accepted never moved it.
+        if compiled.view.get(m2_song::pack::STD).is_some() {
+            self.packages.show(&compiled.view);
         }
         let new = Arc::new(Revision { number, code_rev, data_rev, snapshot, project, compiled });
         let old = std::mem::replace(&mut self.accepted, new);

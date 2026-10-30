@@ -511,19 +511,32 @@ fn run() -> Result<()> {
             m2_runtime::audio::write_new_wav(&path, &channels, sr)?;
             // Where it came from, so a bounce of open kernels can always be reproduced: the module
             // by its key (ID-11), and every package file the build and the runtime read, by
-            // content (RENDER-2).
+            // content (RENDER-2): its code, its manifest and wasm, the files its kernels read (a
+            // pack's recordings, PACK-5), and a pack's version hash (PACK-6).
+            let read: Vec<(String, String)> = c
+                .data
+                .kernel_assets()
+                .iter()
+                .filter_map(|(name, sha)| m2_song::pack::split_id(name).map(|(pkg, path)| (format!("{pkg}/{path}"), sha.hex())))
+                .collect();
             let packages: std::collections::BTreeMap<&str, serde_json::Value> = pk
                 .packages()
                 .map(|p| {
+                    // A scoped name has a `/` of its own (PACK-1): the file is the package's when its path starts with it.
+                    let ours = |path: &str| path.strip_prefix(p.name.as_str()).is_some_and(|rest| rest.starts_with('/'));
                     let files: std::collections::BTreeMap<&str, &str> = c
                         .package_files
                         .iter()
-                        // A scoped name has a `/` of its own (PACK-1): the file is the package's when its path starts with it.
-                        .filter(|f| f.path.strip_prefix(p.name.as_str()).is_some_and(|rest| rest.starts_with('/')))
+                        .filter(|f| ours(&f.path))
                         .map(|f| (f.path.as_str(), f.sha256.as_str()))
                         .chain(p.files.iter().map(|(path, sha)| (path.as_str(), sha.as_str())))
+                        .chain(read.iter().filter(|(path, _)| ours(path)).map(|(path, sha)| (path.as_str(), sha.as_str())))
                         .collect();
-                    (p.name.as_str(), serde_json::json!({"version": p.version, "files": files}))
+                    let mut entry = serde_json::json!({"version": p.version, "files": files});
+                    if let Some(hash) = c.packs.iter().find(|r| r.name.as_str() == p.name).and_then(|r| r.hash) {
+                        entry["hash"] = serde_json::json!(hash.prefixed());
+                    }
+                    (p.name.as_str(), entry)
                 })
                 .collect();
             let provenance = serde_json::json!({
@@ -1080,6 +1093,9 @@ fn pack(args: &[String]) -> Result<()> {
                     println!("installed {name} {version} in {} ({hash})", dir.display())
                 }
                 packs::Install::Already { name, version, .. } => println!("{name} {version} is already installed, with these very files"),
+                packs::Install::Repaired { name, version, why } => {
+                    println!("{name} {version} was changed after it was installed ({why}): put back as it was installed")
+                }
             }
         }
         "list" => {
@@ -1099,10 +1115,19 @@ fn pack(args: &[String]) -> Result<()> {
             packs::remove(&store()?, &name, &version)?;
             println!("removed {name} {version}. A song that locks this version says so (pkg.missing) until it is installed again");
         }
-        "lock" => {
+        // Both work while the song doesn't build: that is when a song moved to another version
+        // needs them (PACK-8).
+        command @ ("lock" | "update") => {
             let dir = PathBuf::from(arg(2)?);
-            let mut s = writer(&dir)?;
-            match packs::write_lock(&mut s).map_err(|e| anyhow!("{e}"))? {
+            let only = args.get(3).map(|n| PackName::new(n).map_err(|e| anyhow!(e))).transpose()?;
+            let moving = match (command, &only) {
+                ("lock", None) => m2_song::pack::Move::Needed,
+                ("lock", Some(_)) => bail!("{}", usage_of("pack")),
+                (_, None) => m2_song::pack::Move::All,
+                (_, Some(name)) => m2_song::pack::Move::Only(name),
+            };
+            let mut s = locked(&dir, "")?;
+            match packs::write_lock(&mut s, moving).map_err(|e| anyhow!("{e}"))? {
                 Some(e) => println!("{}: {}", e.file, e.after),
                 None => println!("{} says that already", m2_song::path::LOCK),
             }
