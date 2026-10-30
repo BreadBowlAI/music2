@@ -459,3 +459,27 @@ fn relocking_moves_only_what_must_move() {
     assert!(relock(&m, &Lock::default(), None, &App::default(), Move::Needed).is_err(), "no store, nothing to lock to");
     std::fs::remove_dir_all(&root).ok();
 }
+
+// PACK-6: while `m2 pack install` repairs a version, its changed copy moved aside and the new one
+// not in place yet, a build says the version is being installed again: never that it isn't
+// installed, nor that an older one does instead.
+#[test]
+fn a_build_during_a_repair_says_it_is_being_installed() {
+    let root = scratch("aside");
+    let song = root.join("song");
+    std::fs::create_dir_all(&song).unwrap();
+    let store = Store::at(root.join("Packs"));
+    installed(&store, "@alice/felt-piano", "1.2.0");
+    let h125 = installed(&store, "@alice/felt-piano", "1.2.5");
+    let name = PackName::new("@alice/felt-piano").unwrap();
+    let dir = store.version_dir(&name, &Version(1, 2, 5));
+    std::fs::rename(&dir, dir.with_file_name(".1.2.5.4242.old")).unwrap();
+    let m = song_with("\"@alice/felt-piano\" = \"1.2\"\n");
+    let being = |r: &Resolution| r.problems.iter().any(|d| d.message.contains("being installed again"));
+    let lock = Lock::default().with(name.clone(), Version(1, 2, 5), h125);
+    let r = resolve(&song, &m, &lock, Some(&store), &App::default());
+    assert!(being(&r), "{:?}", r.problems);
+    let r = resolve(&song, &m, &Lock::default(), Some(&store), &App::default());
+    assert!(being(&r) && r.packs.is_empty(), "1.2.0 isn't taken instead: {:?} {:?}", r.problems, r.packs);
+    std::fs::remove_dir_all(&root).unwrap();
+}

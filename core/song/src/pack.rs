@@ -402,6 +402,31 @@ impl Store {
         out
     }
 
+    /// The versions of `name` being installed again (PACK-6), oldest first, each with the copy put
+    /// aside: a repair by `m2 pack install` moved the changed copy out of the way,
+    /// `.<version>.<pid>.old` beside it, and the new one may not be in place yet. One an install
+    /// that stopped left is removed by the next install of that version.
+    pub fn aside(&self, name: &PackName) -> Vec<(Version, PathBuf)> {
+        let mut out: Vec<(Version, PathBuf)> = std::fs::read_dir(self.dir.join(name.folder()))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let file = e.file_name().to_string_lossy().into_owned();
+                let (v, pid) = file.strip_prefix('.')?.strip_suffix(".old")?.rsplit_once('.')?;
+                let pid = !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit());
+                Some((Version::parse(v).filter(|_| pid)?, e.path()))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Whether version `v` of `name` is being installed again ([`Store::aside`]).
+    fn reinstalling(&self, name: &PackName, v: &Version) -> bool {
+        self.aside(name).iter().any(|(w, _)| w == v)
+    }
+
     /// The hash of an installed version: its listing's.
     pub fn hash(&self, name: &PackName, v: &Version) -> std::io::Result<Sha> {
         Sha::of_file(&self.version_dir(name, v).join(LISTING))
@@ -595,9 +620,25 @@ fn changed(name: &PackName, v: &Version, why: &str) -> Diagnostic {
     .file(LOCK)
 }
 
+/// What a build says while `m2 pack install` puts version `v` of `name` back (PACK-6): its changed
+/// copy is aside, and the new one may not be in place yet.
+fn reinstalling(name: &PackName, v: &Version) -> Diagnostic {
+    Diagnostic::error(
+        "pkg.missing",
+        format!(
+            "{name} {v} is being installed again right now (`m2 pack install` is putting it back): try again in a moment. If no \
+             install is running, one stopped: install it again from its folder with `m2 pack install <folder>`"
+        ),
+    )
+    .file(LOCK)
+}
+
 /// The store's version `v` of `name`, checked whole, as a song resolves it.
 fn whole(store: &Store, name: &PackName, v: Version) -> Result<Resolved, Diagnostic> {
-    let hash = store.check(name, &v).map_err(|why| changed(name, &v, &why))?;
+    let hash = store.check(name, &v).map_err(|why| match store.reinstalling(name, &v) {
+        true => reinstalling(name, &v),
+        false => changed(name, &v, &why),
+    })?;
     Ok(Resolved { name: name.clone(), version: v, dir: store.version_dir(name, &v), hash: Some(hash), path: false })
 }
 
@@ -628,6 +669,10 @@ fn highest(store: &Store, name: &PackName, req: &Requirement, app: &App) -> Resu
              music2, or install a version made for this one with `m2 pack install <folder>`"
         ))
     })?;
+    // A newer admitted version being installed again is never passed over for an older one.
+    if let Some((w, _)) = store.aside(name).into_iter().rev().find(|(w, _)| req.matches(*w) && v.is_none_or(|v| *w > v)) {
+        return Err(reinstalling(name, &w));
+    }
     let installed = store.versions(name);
     let Some(v) = v else {
         let have = match installed.is_empty() {
@@ -666,6 +711,9 @@ fn resolve_one(
             ),
         )
         .file(LOCK));
+    }
+    if !installed.contains(&l.version) && store.reinstalling(name, &l.version) {
+        return Err(reinstalling(name, &l.version));
     }
     if !installed.contains(&l.version) {
         let other = runnable(store, name, req, app).ok().flatten();

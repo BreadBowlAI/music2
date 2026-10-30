@@ -333,3 +333,42 @@ fn an_add_takes_the_version_the_lists_show() {
     let lock = Lock::read(&f.read("music2.lock")).unwrap();
     assert_eq!(lock.get(&PackName::new("@test/tiny").unwrap()).map(|l| (l.version, l.hash)), Some((Version(0, 1, 0), hash)));
 }
+
+// PACK-6: a repair whose new copy can't go in (a scanner holding a file just written, on Windows)
+// puts the copy before back, read-only, and leaves nothing aside.
+#[test]
+fn a_repair_that_cant_put_the_new_copy_in_puts_the_old_one_back() {
+    let f = Fixture::new();
+    let pack = f.0.join("Packs/@a/x");
+    let (target, temp, old) = (pack.join("1.0.0"), pack.join(".1.0.0.1.tmp"), pack.join(".1.0.0.1.old"));
+    f.write("Packs/@a/x/1.0.0/m2pack.json", "before");
+    f.write("Packs/@a/x/.1.0.0.1.tmp/m2pack.json", "new");
+    read_only_inside(&target).unwrap();
+    set_read_only(&target, true).unwrap();
+    let mut rename = |a: &Path, b: &Path| match a == temp {
+        true => Err(std::io::Error::other("held by another program")),
+        false => std::fs::rename(a, b),
+    };
+    assert!(swap(&temp, &target, &old, &mut rename).is_err());
+    assert_eq!(std::fs::read_to_string(target.join("m2pack.json")).unwrap(), "before", "the version is as it was");
+    assert!(!old.exists(), "nothing is left aside");
+    assert!(std::fs::metadata(&target).unwrap().permissions().readonly(), "read-only again");
+    remove_tree(&f.0.join("Packs")).unwrap();
+}
+
+// PACK-6: the copy a stopped install left aside goes with the next install of that version.
+#[test]
+fn an_install_removes_a_copy_a_stopped_install_left_aside() {
+    let f = Fixture::new();
+    let folder = f.0.join("tiny");
+    copy(&tiny(), &folder);
+    let store = Store::at(f.0.join("Packs"));
+    let std = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    install(&folder, &store, &std).unwrap_or_else(|e| panic!("{e:?}"));
+    let left = store.dir.join("@test/tiny/.0.1.0.999999.old");
+    f.write("Packs/@test/tiny/.0.1.0.999999.old/src/index.ts", "// the changed copy\n");
+    read_only_inside(&left).unwrap();
+    assert!(matches!(install(&folder, &store, &std), Ok(Install::Already { .. })));
+    assert!(!left.exists(), "the copy left aside is gone");
+    remove_tree(&store.dir).unwrap();
+}
