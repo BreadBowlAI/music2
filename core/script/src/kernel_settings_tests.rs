@@ -219,8 +219,11 @@ fn the_sampler_gives_its_kernel_its_files() {
     assert!(e.iter().any(|d| d.message.contains("must be a file name in assets/")), "{e:?}");
 }
 
+/// Kernels by name: outside a sampler's voices, and in them with their settings.
+type Kernels = (Vec<String>, Vec<(String, Settings)>);
+
 /// The kernels of the song `sampler(<notes><call>)` makes, by name, outside its voices and in them.
-fn sampler_kernels(call: &str) -> Result<(Vec<String>, Vec<(String, Settings)>), Vec<Diagnostic>> {
+fn sampler_kernels(call: &str) -> Result<Kernels, Vec<Diagnostic>> {
     let b = build_of(&format!(
         "import {{ song, track }} from \"@m2/core\";\nimport {{ sampler }} from \"std/sampler\";\n\
          const s = track(\"s\", ({{ lane }}) => sampler(lane.notes(\"notes\"){call}));\nexport default song(() => s.out);\n"
