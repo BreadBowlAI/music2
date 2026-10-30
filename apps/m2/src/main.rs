@@ -17,6 +17,7 @@ mod commands;
 mod docs;
 mod edits;
 mod listen;
+mod search;
 mod see;
 mod text;
 
@@ -49,11 +50,17 @@ fn main() -> ExitCode {
     if std::env::var_os("M2_PROBE").is_some() {
         m2_plugins::probe::install();
     }
+    // PLAT-7: a program keeps the cache folder (hashes, renders, samples' measures); a test doesn't.
+    m2_os::dirs::keep_cache();
     // HOST-2: the command runs on a worker while the main thread serves plugins as their main
     // thread, with its run loop; plugins it created are destroyed there before it exits.
     m2_plugins::run_main(|| {
         m2_server::resources::keep_hashes();
-        match run() {
+        let ran = run();
+        // What the command hashed since the project was read (an installed pack's files, checked
+        // as the song resolves them: PACK-6) is a stat for the next one (FMT-16).
+        m2_song::HashCache::global().save();
+        match ran {
             Ok(()) => {
                 // A write the open app took: that it is one undo step there (AGENT-1).
                 for line in app::after() {
@@ -141,6 +148,10 @@ fn number(x: f64) -> String {
 
 fn packages() -> Result<PackageSet> {
     let mut p = PackageSet::default();
+    // This computer's packs (PACK-6), under `$HOME` (PLAT-7).
+    if let Some(store) = m2_os::dirs::packs() {
+        p = p.with_store(store);
+    }
     // Found the way the app finds it, so both load the same std.
     p.load(&m2_server::resources::std_dir()).context("loading the std package")?;
     Ok(p)
@@ -475,7 +486,8 @@ fn run() -> Result<()> {
                 // Played through an export of the root module, which stays `song` (ID-3): as a stem is.
                 ir = render::rooted(&ir, &track, &export)?;
             }
-            let flat = m2_ir::check(&ir, &pk).map_err(report)?;
+            let stem = std::sync::Arc::new(render::Parts::of(&c, ir, &pk).map_err(report)?);
+            let flat = &stem.flat;
             let impure = flat.order.iter().any(|&i| matches!(flat.nodes[i].op, FOp::Plugin { .. }));
             let sr = render_rate(&args, &project)?;
             let tempo = data.tempo().clone();
@@ -494,9 +506,10 @@ fn run() -> Result<()> {
                 }
             }
             // A fault that changes its sound stops it, named (RENDER-1).
-            let song = render::Parts { ir: ir.clone(), flat: flat.clone(), data: data.clone() };
-            let namer = m2_editor::faults::Namer::new(0, std::sync::Arc::new(song), &pk);
-            let mut r = Renderer::new(&flat, &data, &pk, sr).map_err(|e| namer.faulted(e))?;
+            // With the packages it was built with (PACK-9), as every render of a song is.
+            let seen = render::seen(&*stem, &pk);
+            let namer = m2_editor::faults::Namer::new(0, stem.clone(), &seen);
+            let mut r = Renderer::new(flat, &data, &seen, sr).map_err(|e| namer.faulted(e))?;
             let (mut runner, _pool) = render::threads_for(&r, threads);
             r.seek_on((from * sr as f64).round() as u64, &mut runner).map_err(|e| namer.faulted(e))?;
             let frames = r.render_on(seconds, &mut runner).map_err(|e| namer.faulted(e))?;
@@ -507,18 +520,32 @@ fn run() -> Result<()> {
             m2_runtime::audio::write_new_wav(&path, &channels, sr)?;
             // Where it came from, so a bounce of open kernels can always be reproduced: the module
             // by its key (ID-11), and every package file the build and the runtime read, by
-            // content (RENDER-2).
+            // content (RENDER-2): its code, its manifest and wasm, the files its kernels read (a
+            // pack's recordings, PACK-5), and a pack's version hash (PACK-6).
+            let read: Vec<(String, String)> = c
+                .data
+                .kernel_assets()
+                .iter()
+                .filter_map(|(name, sha)| m2_song::pack::split_id(name).map(|(pkg, path)| (format!("{pkg}/{path}"), sha.hex())))
+                .collect();
             let packages: std::collections::BTreeMap<&str, serde_json::Value> = pk
                 .packages()
                 .map(|p| {
+                    // A scoped name has a `/` of its own (PACK-1): the file is the package's when its path starts with it.
+                    let ours = |path: &str| path.strip_prefix(p.name.as_str()).is_some_and(|rest| rest.starts_with('/'));
                     let files: std::collections::BTreeMap<&str, &str> = c
                         .package_files
                         .iter()
-                        .filter(|f| f.path.split('/').next() == Some(p.name.as_str()))
+                        .filter(|f| ours(&f.path))
                         .map(|f| (f.path.as_str(), f.sha256.as_str()))
                         .chain(p.files.iter().map(|(path, sha)| (path.as_str(), sha.as_str())))
+                        .chain(read.iter().filter(|(path, _)| ours(path)).map(|(path, sha)| (path.as_str(), sha.as_str())))
                         .collect();
-                    (p.name.as_str(), serde_json::json!({"version": p.version, "files": files}))
+                    let mut entry = serde_json::json!({"version": p.version, "files": files});
+                    if let Some(hash) = c.packs.iter().find(|r| r.name.as_str() == p.name).and_then(|r| r.hash) {
+                        entry["hash"] = serde_json::json!(hash.prefixed());
+                    }
+                    (p.name.as_str(), entry)
                 })
                 .collect();
             let provenance = serde_json::json!({
@@ -717,6 +744,36 @@ fn run() -> Result<()> {
                 _ => placed.tracks.iter().map(|(k, l)| format!("a new track {l} (ID {k})")).collect(),
             };
             println!("onto {} from beat {} (revision {})", onto.join(", "), m2_song::lane::number(beat), placed.edited.revision);
+        }
+        Some("add-sample") => {
+            // A sample from the library (LIB-7): copied with its note, then its clip placed.
+            let dir = PathBuf::from(arg(1)?);
+            let id = arg(2)?;
+            if let Some(holder) = app::holder(&dir) {
+                let mut app = app::reach(&dir, &holder, "")?;
+                let target = import_target(&reader(&dir)?, &args)?;
+                let v = app.add_sample(serde_json::json!({"id": id, "to": target}))?;
+                said_added(&v, &target);
+                return Ok(());
+            }
+            let mut s = session(&dir)?;
+            let target = import_target(&s, &args)?;
+            let words = |e: m2_editor::EditError| anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
+            let sample = search::song_sample(&s, &id)?;
+            m2_editor::library::samples::still_plain(&sample).map_err(|e| anyhow!("{id} can't be added: {e}."))?;
+            let staged =
+                m2_editor::import::stage(&dir, m2_editor::import::Source::Path(sample.file.clone()), &mut |_| {}).map_err(words)?;
+            let file = staged.name().map_err(words)?;
+            let noted = m2_editor::library::samples::write_note(&dir, file.asset.as_str(), &m2_editor::library::samples::note(&sample))?;
+            let song_bpm = s.accepted().compiled.data.tempo().bpm_at(target.beat());
+            let follows = m2_editor::library::samples::follows(&sample);
+            let placed = m2_editor::import::place_with(&mut s, std::slice::from_ref(&file), &target, &[follows]).map_err(words)?;
+            let tracks: Vec<serde_json::Value> = placed.tracks.iter().map(|(m, l)| serde_json::json!({"module": m, "label": l})).collect();
+            let v = serde_json::json!({
+                "asset": file.asset.as_str(), "reused": file.reused, "noted": noted, "follows": follows,
+                "tracks": tracks, "revision": placed.edited.revision, "song_bpm": song_bpm,
+            });
+            said_added(&v, &target);
         }
         Some("duplicate-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
@@ -941,6 +998,7 @@ change that code first",
             println!("{}: `{}` → `{}` (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision);
             attention(&dir, s.problems());
         }
+        Some("pack") => pack(&args)?,
         Some("plugins") => match args.get(1) {
             None => {
                 let (found, errors) = m2_plugins::scan();
@@ -1021,6 +1079,7 @@ change that code first",
         Some("point") => see::point(&args)?,
         Some("routes") => call::routes(&args)?,
         Some("call") => call::call(&args)?,
+        Some("search") => search::search(&args)?,
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         // main refused every word the table doesn't hold, and a test holds the table to these arms.
         None => bail!("name a command first: m2 <command> … --as <name> --why \"<words>\""),
@@ -1031,6 +1090,124 @@ change that code first",
 
 /// Where `m2 import` puts its files in the song `s`: on `--track`'s audio lane, else on new tracks
 /// below, from `--at` (the start when it is left out).
+/// `m2 pack …` (PACK-6, PACK-8, PACK-12): make, check, build and install packs; list and remove
+/// what is installed; lock a song's.
+fn pack(args: &[String]) -> Result<()> {
+    use m2_editor::packs;
+    use m2_song::pack::{PackName, Store};
+    let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument: {}", usage_of("pack")));
+    let std = m2_server::resources::std_dir();
+    let store = || Store::here().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"));
+    let failed = |problems: Vec<String>| {
+        for p in &problems {
+            eprintln!("problem: {p}");
+        }
+        anyhow!("{} problem{} to fix first", problems.len(), if problems.len() == 1 { "" } else { "s" })
+    };
+    // Not `Some("…")` arms: those are m2's own commands, which the one table lists (AGENT-12).
+    match args.get(1).map_or("", String::as_str) {
+        "new" => {
+            let folder = PathBuf::from(arg(2)?);
+            let name = flag(args, "--name").ok_or_else(|| anyhow!("name it: m2 pack new <folder> --name @owner/name"))?;
+            let name = PackName::new(&name).map_err(|e| anyhow!(e))?;
+            packs::new_pack(&folder, &name, &std).map_err(|e| anyhow!(e))?;
+            println!("made {name} in {}: check it with m2 pack check {}", folder.display(), folder.display());
+        }
+        "import-sfz" => {
+            let (sfz, folder) = (PathBuf::from(arg(2)?), PathBuf::from(arg(3)?));
+            let name = flag(args, "--name").ok_or_else(|| anyhow!("name it: m2 pack import-sfz <file.sfz> <folder> --name @owner/name"))?;
+            let name = PackName::new(&name).map_err(|e| anyhow!(e))?;
+            let (label, category, license) = (flag(args, "--label"), flag(args, "--category"), flag(args, "--license"));
+            let import = m2_editor::sfz::Import {
+                sfz: &sfz,
+                folder: &folder,
+                name: &name,
+                label: label.as_deref(),
+                category: category.as_deref(),
+                license: license.as_deref(),
+                std: &std,
+                check: &|dir: &Path| packs::check(dir, &std),
+            };
+            let done = m2_editor::sfz::import(&import).map_err(|e| anyhow!(e))?;
+            println!(
+                "made {name} in {}: {} plays {} region{} from {} recording{}",
+                folder.display(),
+                done.id,
+                done.regions,
+                if done.regions == 1 { "" } else { "s" },
+                done.samples,
+                if done.samples == 1 { "" } else { "s" }
+            );
+            for l in done.licence.iter().chain(&done.left_out) {
+                println!("{l}");
+            }
+            // Checked before it was kept (PACK-14).
+            println!("{} is good to install: m2 pack install {}", folder.display(), folder.display());
+        }
+        "check" => {
+            let dir = PathBuf::from(arg(2)?);
+            let problems = packs::check(&dir, &std);
+            if !problems.is_empty() {
+                return Err(failed(problems));
+            }
+            println!("{} is good to install", dir.display());
+        }
+        "build" => {
+            let dir = PathBuf::from(arg(2)?);
+            let (listing, hash) = packs::build(&dir).with_context(|| format!("listing {}", dir.display()))?;
+            println!("wrote {} ({} files): {hash}", dir.join(m2_song::pack::LISTING).display(), listing.files.len());
+        }
+        "install" => {
+            let dir = PathBuf::from(arg(2)?);
+            match packs::install(&dir, &store()?, &std).map_err(failed)? {
+                packs::Install::Installed { name, version, dir, hash } => {
+                    println!("installed {name} {version} in {} ({hash})", dir.display())
+                }
+                packs::Install::Already { name, version, .. } => println!("{name} {version} is already installed, with these very files"),
+                packs::Install::Repaired { name, version, why } => {
+                    println!("{name} {version} was changed after it was installed ({why}): put back as it was installed")
+                }
+            }
+        }
+        "list" => {
+            let all = packs::installed(&store()?);
+            if all.is_empty() {
+                println!("no packs installed: install one from its folder with m2 pack install <folder>");
+            }
+            for p in all {
+                let licence = p.license.map(|l| format!(" ({l})")).unwrap_or_default();
+                println!("{} {}{licence}  {}", p.name, p.versions.join(", "), p.description);
+            }
+        }
+        "remove" => {
+            let name = PackName::new(&arg(2)?).map_err(|e| anyhow!(e))?;
+            let v = arg(3)?;
+            let version = m2_song::Version::parse(&v).ok_or_else(|| anyhow!("`{v}` isn't a version such as 1.2.0"))?;
+            packs::remove(&store()?, &name, &version)?;
+            println!("removed {name} {version}. A song that locks this version says so (pkg.missing) until it is installed again");
+        }
+        // Both work while the song doesn't build: that is when a song moved to another version
+        // needs them (PACK-8).
+        command @ ("lock" | "update") => {
+            let dir = PathBuf::from(arg(2)?);
+            let only = args.get(3).map(|n| PackName::new(n).map_err(|e| anyhow!(e))).transpose()?;
+            let moving = match (command, &only) {
+                ("lock", None) => m2_song::pack::Move::Needed,
+                ("lock", Some(_)) => bail!("{}", usage_of("pack")),
+                (_, None) => m2_song::pack::Move::All,
+                (_, Some(name)) => m2_song::pack::Move::Only(name),
+            };
+            let mut s = locked(&dir, "")?;
+            match packs::write_lock(&mut s, moving).map_err(|e| anyhow!("{e}"))? {
+                Some(e) => println!("{}: {}", e.file, e.after),
+                None => println!("{} says that already", m2_song::path::LOCK),
+            }
+        }
+        _ => bail!("{}", usage_of("pack")),
+    }
+    Ok(())
+}
+
 fn import_target(s: &Session, args: &[String]) -> Result<m2_editor::import::Target> {
     let beat = match flag(args, "--at") {
         Some(p) => m2_editor::clips::position(&s.accepted().project.arrangement, &p).map_err(|e| anyhow!("--at: {e}"))?,
@@ -1087,6 +1264,33 @@ fn import_in_app(dir: &Path, holder: &m2_session::lock::Holder, files: &[PathBuf
     };
     println!("onto {} from beat {} (revision {})", onto.join(", "), m2_song::lane::number(beat), v["revision"].as_u64().unwrap_or(0));
     Ok(())
+}
+
+/// What `m2 add-sample` did, as it prints it: the file, its note, where its clip went, and the
+/// tempo a loop follows.
+fn said_added(v: &serde_json::Value, target: &m2_editor::import::Target) {
+    let asset = v["asset"].as_str().unwrap_or("?");
+    let again = if v["reused"] == serde_json::json!(true) { " (the same bytes were there)" } else { "" };
+    let note = if v["noted"] == serde_json::json!(true) { format!(", its note in assets/{asset}.json") } else { String::new() };
+    println!("added assets/{asset}{again}{note}");
+    let onto: Vec<String> = match target {
+        m2_editor::import::Target::Lane { module, .. } => vec![module.clone()],
+        _ => v["tracks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|t| format!("a new track {} (ID {})", t["label"].as_str().unwrap_or("?"), t["module"].as_str().unwrap_or("?")))
+            .collect(),
+    };
+    println!(
+        "onto {} from beat {} (revision {})",
+        onto.join(", "),
+        m2_song::lane::number(target.beat()),
+        v["revision"].as_u64().unwrap_or(0)
+    );
+    if let Some(bpm) = v["follows"].as_f64() {
+        println!("a loop at {} bpm: it follows the song's tempo (Follow tempo)", m2_song::lane::number(bpm));
+    }
 }
 
 /// The tracks, by key, with their labels where they differ: `kick, chops (Chops)`.

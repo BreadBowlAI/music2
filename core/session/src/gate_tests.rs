@@ -305,9 +305,17 @@ fn render_song(s: &Session) -> Vec<[f32; 2]> {
 }
 
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2). The
-/// other one, examples/with-plugins, hosts plugins, which need not.
-const PURE: [&str; 6] =
-    ["examples/first-song", "examples/resample", "examples/sounds", "examples/sampler", "templates/starter", "templates/empty"];
+/// other one, examples/with-plugins, hosts plugins, which need not. `sampler-regions` is std's
+/// Sampler playing regions (PKG-16): two velocity layers, two takes in turn, a release and a loop.
+const PURE: [&str; 7] = [
+    "examples/first-song",
+    "examples/resample",
+    "examples/sounds",
+    "examples/sampler",
+    "templates/starter",
+    "templates/empty",
+    "core/session/tests/fixtures/sampler-regions",
+];
 
 /// A copy of the repo's fixture `rel`, such as `examples/first-song`.
 pub(crate) fn fixture(rel: &str) -> Fixture {

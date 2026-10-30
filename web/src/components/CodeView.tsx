@@ -34,6 +34,8 @@ const MONACO_CHORDS: Record<string, string> = {
   // ⌘E and ⌘J split and join clips; in the editor, its find-with-selection and join lines.
   split: "actions.findWithSelection",
   join: "editor.action.joinLines",
+  // ⌘F finds sounds (the library); in the editor, its own find.
+  find: "actions.find",
   // ⌘↑ and ⌘↓ are Shorter and Taller Tracks; in the editor, to its top and foot on a Mac, and a
   // line's scroll elsewhere, as Monaco binds Ctrl+↑ and Ctrl+↓ there.
   shorter: isMac ? "cursorTop" : "scrollLineUp",
@@ -74,15 +76,19 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
     return () => void (live = false);
   }, []);
 
+  /** When the libraries loaded were made (`graph.types`): the song's packs as they were then. */
+  const typesAt = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (!kit) return;
     let live = true;
     kit.startProject(graph.session);
     const w = new Workspace(kit.monaco, graph.session, kit.fileUri);
+    const at = graph.types;
     Promise.all([codeApi.types(), codeApi.files()]).then(
       ([types, files]) => {
         if (!live) return;
         kit.setTypes(types.files);
+        typesAt.current = at;
         w.update(files);
         setWs(w);
       },
@@ -92,7 +98,25 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
       live = false;
       w.dispose();
     };
+    // `graph.types` is read once here, as the libraries load; the effect below follows it.
   }, [kit, graph.session]);
+
+  // The libraries again when the song's packs change (PACK-9): an item added from a pack the song
+  // didn't use, or a pack moved to another version, brings its own sources.
+  useEffect(() => {
+    if (!kit || !ws || graph.types === undefined || graph.types === typesAt.current) return;
+    let live = true;
+    const at = graph.types;
+    codeApi.types().then(
+      (types) => {
+        if (!live) return;
+        kit.setTypes(types.files);
+        typesAt.current = at;
+      },
+      () => {},
+    );
+    return () => void (live = false);
+  }, [kit, ws, graph.types]);
 
   const version = useSyncExternalStore(
     useCallback((f: () => void) => ws?.subscribe(f) ?? (() => {}), [ws]),

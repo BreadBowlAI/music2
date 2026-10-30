@@ -122,6 +122,14 @@ m2 import <project> <file.wav>… [--track ID] [--at BAR]
 
 Bring WAV files into `assets/` (a copy, or the same bytes already there; a taken name numbered) and place their clips from bar BAR (1 if not given): on a track's audio lane one after another, or without `--track` each on a new audio track named after it, at the end; one edit that undo takes back. With the song open in the app, the app brings them in, as one undo step, and nothing is copied while the musician holds the song (a take, V's Compare): it waits, as every write does.
 
+## m2 add-sample
+
+```
+m2 add-sample <project> <sample id> [--track ID] [--at BAR]
+```
+
+Add a sample from the library (its id, from `m2 search --kind sample`): its file copied into `assets/` with a note beside it of where it came from (a pack's name, version, author and licence; or that it is from your own folder), and its clip placed from bar BAR (1 if not given), on a track's audio lane or on a new audio track; a loop at another tempo follows the song's. One edit that undo takes back. With the song open in the app, the app adds it, as one undo step. The note is `assets/<file>.json`; the file and its note stay when the clip is undone. [Samples](samples.md) says more.
+
 ## m2 duplicate-track
 
 ```
@@ -260,6 +268,22 @@ m2 plugins [clap:<id>]
 
 List installed CLAP plugins, or one plugin's ports.
 
+## m2 pack
+
+```
+m2 pack new <folder> --name @owner/name
+m2 pack import-sfz <file.sfz> <folder> --name @owner/name [--label L] [--category C] [--license L]
+m2 pack check <folder>
+m2 pack build <folder>
+m2 pack install <folder>
+m2 pack list
+m2 pack remove @owner/name <version>
+m2 pack lock <project>
+m2 pack update <project> [@owner/name]
+```
+
+Make, check and install packs: instruments, effects, sounds and recordings in a folder. `new` makes one with an example instrument; `import-sfz` makes one from an SFZ instrument (its recordings, as an instrument written as data), saying what it couldn't keep; `check` says in words what the registry would refuse (exit 1); `build` writes its `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `list` and `remove` show and take out what is installed; `lock` writes the song's `music2.lock` from its `music2.toml`, moving only what must move; `update` moves the song to the newest installed version each line allows (or that pack's only). Your store is `~/Music/music2/Packs`, one folder a version (`Packs/@alice/felt-piano/1.2.0/`). A version is never changed: installing one that is there with other files is refused, and installing it again when its copy was changed puts it back. A song keeps the version it was made with in `music2.lock`; adding a pack's instrument or effect in the app writes it. To move a song to another version, change its line in `music2.toml`, then run `m2 pack lock`; both lock and update work while the song doesn't build. See [Packs](packs.md) and [Making a pack](making-a-pack.md).
+
 ## m2 plugin-state
 
 ```
@@ -364,6 +388,14 @@ m2 call <project> <path> [<json> | -] [--method M]
 ```
 
 Send one route's request to the open app, as an agent (by `--as`): song changes with no command of their own (an effect's bypass, markers, the song's key) and every read. The song's session is filled in; a GET's keys go in its query; it prints the answer and exits 1 when the app refuses. The musician's controls are refused before anything is sent. The song changes it reaches include a track's instrument or ID, and a bus. `--method` picks one where a path takes two (`/api/settings`). Refused before anything is sent, too: a body bigger than the route takes. A write the musician holds waits, as every `m2` write does (exit 3). On standard error it says the undo step a write made, or what an undo took back.
+
+## m2 search
+
+```
+m2 search <words…> [--kind <kind>] [--json]
+```
+
+Find what can be added to a song: instruments, sounds (presets), effects, samples and plugins, best first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where it is from, and its id, which adding it names. With the app open it asks the app, whose list has the open song's own instruments and the plugins it has listed; with the app closed it searches music2's sounds, the packs you installed, your presets and your sample folders itself. Every word must match. `--kind` is `instrument`, `sound`, `effect`, `sample` or `plugin`; the same words typed in the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), which only samples carry (a tempo within 2 bpm, a key or its relative). `--json` prints each item with all it knows: its `kind`, `id`, `label`, `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track takes), and a sound's `preset`. [Finding sounds](finding-sounds.md) says more.
 
 ## m2 docs
 

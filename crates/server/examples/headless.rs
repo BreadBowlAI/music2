@@ -21,6 +21,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
+    // PLAT-7: a program keeps the cache folder, under the HOME it is given (a suite's scratch one).
+    m2_os::dirs::keep_cache();
     // Tests: with `M2_PROBE` set, the probe plugin (`clap:m2.probe`) is installed, in the host
     // process as any plugin (e2e/br-plugins.mjs). Debug builds only, as `m2`'s.
     #[cfg(debug_assertions)]
@@ -58,6 +60,8 @@ fn serve() -> anyhow::Result<()> {
         running.state.keep_recent(home.join(".music2/recent.json"));
         running.state.keep_settings(home.join(".music2/settings.json"));
     }
+    // The library's presets and previews: this HOME's Presets folder and cache, as the app's.
+    running.state.keep_library(m2_server::library::Folders::of_this_user());
     if project != "-" {
         running.state.open_song(std::path::Path::new(project))?;
     }

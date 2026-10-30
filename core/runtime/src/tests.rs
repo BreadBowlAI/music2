@@ -641,14 +641,14 @@ fn package(wat: &str) -> PathBuf {
     package_with(wat, "outputs = [\"out: audio<1>\"]")
 }
 
-/// A package folder holding one hand-written kernel module, `t:k`, its ports as `ports` declares.
+/// A package folder holding one hand-written kernel module, `@test/t:k`, its ports as `ports` declares.
 fn package_with(wat: &str, ports: &str) -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir =
         std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("k.wasm"), wasm(wat)).unwrap();
-    let manifest = format!("[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\n{ports}\n");
+    let manifest = format!("[package]\nname = \"@test/t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\n{ports}\n");
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
     dir
 }
@@ -828,7 +828,7 @@ fn a_kernel_past_its_birth_cap_says_it_ran_out() {
         json!([
             {"id": "f", "op": "const", "value": 440, "unit": "hz"},
             {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
-            {"id": "k", "op": "kernel", "kernel": "t:k", "inputs": {"in": "o"}},
+            {"id": "k", "op": "kernel", "kernel": "@test/t:k", "inputs": {"in": "o"}},
         ]),
         "k",
         json!([]),
@@ -882,7 +882,7 @@ fn a_sealed_sandbox_never_grows() {
         json!([
             {"id": "f", "op": "const", "value": 440, "unit": "hz"},
             {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
-            {"id": "k", "op": "kernel", "kernel": "t:k", "inputs": {"in": "o"}},
+            {"id": "k", "op": "kernel", "kernel": "@test/t:k", "inputs": {"in": "o"}},
         ]),
         "k",
         json!([]),
@@ -1288,7 +1288,7 @@ fn an_export_whose_stretch_fails_names_the_clip() {
     let pkg = package_with(&module_v1(trap), "outputs = [\"out: audio<2>\"]\noffline = true");
     let mut pk = PackageSet::default();
     pk.load(&pkg).unwrap();
-    let k = offline::Kernel::of(&pk, "t:k").expect("an offline kernel");
+    let k = offline::Kernel::of(&pk, "@test/t:k").expect("an offline kernel");
     let dir = project(&[]);
     audio::write_wav(&dir.join("a.wav"), &[sine(440.0, 1.0, SR)], SR).unwrap();
     let clip: m2_song::AudioClip =
@@ -1413,7 +1413,7 @@ fn a_missing_asset_silences_only_its_clip() {
 
 // ---------------------------------------------------------------- assets kernels read (ABI v1)
 
-/// A package whose kernel `t:k`, with no input and one mono output, plays channel 0 of its first
+/// A package whose kernel `@test/t:k`, with no input and one mono output, plays channel 0 of its first
 /// asset through `m2.asset_read`, one call a process call, written straight into its output. Its
 /// state at 4096 holds its settings block's address and the frame it is at.
 fn asset_player() -> PathBuf {
@@ -1435,11 +1435,11 @@ fn asset_player() -> PathBuf {
     package(&module_v1(k).replacen("(module", import, 1))
 }
 
-/// A song whose output is `t:k` of [`asset_player`] reading `names`, in a project whose `assets/`
+/// A song whose output is `@test/t:k` of [`asset_player`] reading `names`, in a project whose `assets/`
 /// holds `files` (mono, at the song's rate): the song, its packages, its data, the project and
 /// the package.
 fn asset_song(names: &[&str], files: &[(&str, Vec<f32>)]) -> (Ir, PackageSet, DataSet, PathBuf, PathBuf) {
-    let ir = song(json!([{"id": "k", "op": "kernel", "kernel": "t:k", "assets": names}]), "k", json!([]));
+    let ir = song(json!([{"id": "k", "op": "kernel", "kernel": "@test/t:k", "assets": names}]), "k", json!([]));
     let pkg = asset_player();
     let mut pk = PackageSet::default();
     pk.load(&pkg).unwrap();
@@ -1542,7 +1542,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
     let pkg = package(&module_v1(k).replacen("(module", import, 1));
     let mut pk = PackageSet::default();
     pk.load(&pkg).unwrap();
-    let (module, prefix, _) = pk.module_for("t:k").unwrap();
+    let (module, prefix, _) = pk.module_for("@test/t:k").unwrap();
     let frames = 50_000;
     let sample = |c: usize, i: usize| (((i * (31 + 7 * c)) % 997) as f32 / 498.5 - 1.0) * 0.9;
     let mut files = vec![];

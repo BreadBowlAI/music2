@@ -130,13 +130,14 @@ fn a_file_that_doesnt_decode_says_why() {
     assert!(gone.contains("gone.wav"), "{gone}");
 }
 
-// PLAT-7: the server keeps peaks beside the hash cache, under `$HOME`.
+// PLAT-7: the server keeps peaks beside the hash cache, under `$HOME`; only a program keeps them.
 #[test]
 fn the_cache_is_under_home() {
-    let Some(home) = m2_os::dirs::home() else { return };
-    let dir = folder().unwrap();
-    assert!(dir.starts_with(&home) && dir.ends_with("peaks"), "{}", dir.display());
-    assert_eq!(dir.parent(), crate::resources::cache_dir().as_deref());
+    let home = Path::new("/h");
+    let cache = m2_os::dirs::cache_of(home);
+    let dir = folder_in(&cache);
+    assert!(dir.starts_with(home) && dir.ends_with("peaks"), "{}", dir.display());
+    assert_eq!(dir.parent(), Some(cache.as_path()));
     assert_eq!(disk(), None, "tests keep peaks in memory");
 }
 

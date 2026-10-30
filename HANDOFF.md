@@ -5,6 +5,20 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 ## In short
 
+- **The packs night (2026-10-30) made music2 a library anyone can add sounds to** (#33 to #38; each track reviewed
+  by a skeptic agent, every finding fixed with a test seen failing first, `ci/check.sh --pr` passed on each):
+  - std's Sampler plays real recorded instruments: `regions` with velocity layers, round robin, release sounds and
+    loops (PKG-15, PKG-16; std 0.5.0).
+  - ⌘F searches instruments, sounds, effects, plugins and samples, with previews rendered by music2 (LIB-1 to LIB-8).
+  - **Packs** install from a folder into `~/Music/music2/Packs`; each song pins its versions in `music2.lock`; every
+    build plays its own view of the packages (PACK-1 to PACK-14; `m2 pack new|check|build|install|list|remove|lock|update`).
+  - Samples come from std's new kit, from packs and from your own folders, and drop in as clips that keep time.
+  - A pack's instrument can be written as data, and `m2 pack import-sfz` turns an SFZ instrument into a pack. The first
+    real one, `@m2/grand-piano` (Salamander, CC-BY 3.0, 258 MB), is outside the repo, on the server at
+    `~/m2-runs/packs-night/piano/grand-piano-0.1.0.tar.gz`.
+  - No test writes your cache any more (PLAT-7, `ci/cache-left.sh`), and one wasmtime engine serves the process (#38).
+  - Songs asking for std "0.4" need `std = "0.5"`; `@m2/core` is 1.7.0. **macOS: unverified since `e38c131`.**
+  - Design: [docs/designs/packs/design.md](docs/designs/packs/design.md). Not built: the registry and streaming (below).
 - **Every planned step is built on Linux** (steps 1 to 9), and so are the five tracks of the agents design. All of it is on `main` at `a1e3c77`, pushed.
 - Each track was reviewed, its findings fixed or listed in [docs/gaps.md](docs/gaps.md), and `ci/check.sh --gates`
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
@@ -178,15 +192,21 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 3. **The top gaps**, if the owner asks for features ([docs/gaps.md](docs/gaps.md), most visible first): the rest of
    recording (#24, #25), audio clips (#18), the Sampler (#22),
    meters after the fader (#20), sections (#23), scale help (#16).
-4. **Open owner decisions** (below): ask them, with the recommendation.
-5. **Opening the repository to everyone:** the owner's one-time GitHub steps are in [docs/maintainers.md](docs/maintainers.md). Part 1 is done, all but making it public.
+4. **The rest of packs** ([design](docs/designs/packs/design.md) §16): the registry (fetching packs, Get in ⌘F,
+   publishing) waits for the owner's D1 and D10 (where the bytes are kept) and two dependency pull requests (an HTTP
+   client and a FLAC decoder); then big instruments streamed from disk (#22); then gaps #46 to #49.
+5. **Open owner decisions** (below): ask them, with the recommendation.
+6. **Opening the repository to everyone:** the owner's one-time GitHub steps are in [docs/maintainers.md](docs/maintainers.md). Part 1 is done, all but making it public.
 
-The owner wants the app finished clean, with tokens conserved: no new features unless asked, no polish passes.
+The owner wants music2 to become a full DAW whose sounds mostly come from packs (2026-10-30), with the architecture right and tokens conserved: no polish passes.
 
 ## Open owner decisions (ask, with a recommendation)
 
 | Question | What was built | Recommendation |
 |---|---|---|
+| Where pack downloads are kept (packs design D1, D10). | Nothing downloads: packs install from a folder. | A bucket with free downloads (Cloudflare R2) behind a name of ours; the list of packs in a GitHub repo. |
+| Two libraries for packs (each a `Cargo.lock` change). | None added: packs and samples are WAV only. | Yes, each its own pull request: an HTTP client (reqwest, already in `Cargo.lock` through Tauri) and a FLAC decoder. |
+| How loud ⌘F's previews are. | −23 LUFS, measured as BS.1770 does; hats and rims fall up to 2 dB short. | Keep it; −20 if previews feel quiet (hats, rims and Snare 2 then fall 2 to 4.5 dB short). |
 | G7f: O2 named a p99 rule. | The mean of 5 pairs is judged; the p99's estimate is printed beside it. The p99 moved by hundreds of µs from pair to pair, the mean by about 12. | Keep the mean. |
 | A plugin that keeps failing. | Started again once. If the new one fails within 10 s, it stays silent until the song is opened again, and you are told once. | Keep 10 s. |
 | A plugin stuck for good. | After 30 s (2 minutes in a scan) music2 ends the plugin program and says so (track `ph`). | Keep 30 s; the Mac run may move it. |

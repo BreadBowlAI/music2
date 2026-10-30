@@ -1,7 +1,10 @@
 //! The folders music2 uses outside a project. What it writes there is under `$HOME` when it is set
 //! (PLAT-7), so a test isolates itself by setting `HOME`; the system's CLAP folders it only reads.
+//! The cache folder is only a program's: none until its `main` calls [`keep_cache`], so no test
+//! writes the cache of the `HOME` it runs with.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::os;
 
@@ -22,11 +25,34 @@ pub fn presets() -> Option<PathBuf> {
     songs().map(|s| s.join("Presets"))
 }
 
+/// The store of installed packs (PACK-6): `~/Music/music2/Packs`, beside your presets, on every
+/// OS. One folder per version inside it: `Packs/@alice/felt-piano/1.2.0/`.
+pub fn packs() -> Option<PathBuf> {
+    songs().map(|s| s.join("Packs"))
+}
+
 /// Where music2 keeps what it can always rebuild, outside every project: the hash cache (FMT-16),
 /// later decoded and warped renders (RENDER-30). `~/Library/Caches/music2` on macOS,
 /// `~/.cache/music2` on Linux: from `HOME` alone, so a test's scratch `HOME` holds it too.
+/// None in a process whose `main` didn't call [`keep_cache`]: every test.
 pub fn cache() -> Option<PathBuf> {
-    home().map(|h| os::cache(&h))
+    KEEPS_CACHE.load(Ordering::Acquire).then(home).flatten().map(|h| os::cache(&h))
+}
+
+/// Whether this process keeps the cache folder.
+static KEEPS_CACHE: AtomicBool = AtomicBool::new(false);
+
+/// Keep the cache folder ([`cache`]) from now on (PLAT-7): the app, `m2`, the headless server and
+/// `m2-gates` call it first thing in `main`. A test never does: the tests of a binary share one
+/// process, so a test that did would hand every test beside it the cache of the `HOME` they run
+/// with, which may be yours.
+pub fn keep_cache() {
+    KEEPS_CACHE.store(true, Ordering::Release);
+}
+
+/// The cache folder for the home folder `home`.
+pub fn cache_of(home: &std::path::Path) -> PathBuf {
+    os::cache(home)
 }
 
 /// The OS's CLAP folders, the user's first (the CLAP standard's): `~/Library/Audio/Plug-Ins/CLAP`
@@ -46,9 +72,18 @@ mod tests {
         assert!(cache.starts_with("/h") && cache.ends_with("music2") && cache != Path::new("/h/music2"), "{}", cache.display());
         if let Some(home) = super::home() {
             assert_eq!(super::songs().unwrap(), home.join("Music/music2"));
-            assert_eq!(super::cache().unwrap(), super::os::cache(&home));
+            assert_eq!(super::cache_of(&home), super::os::cache(&home));
             assert_eq!(super::presets().unwrap(), home.join("Music/music2/Presets"));
+            assert_eq!(super::packs().unwrap(), home.join("Music/music2/Packs"));
         }
+    }
+
+    // PLAT-7: no test writes the cache folder of the HOME it runs with: only a program's main
+    // keeps it, and no test calls `keep_cache`.
+    #[test]
+    fn only_a_program_keeps_the_cache() {
+        assert_eq!(super::cache(), None, "a test process keeps no cache folder");
+        assert!(super::cache_of(Path::new("/h")).starts_with("/h"));
     }
 
     #[test]

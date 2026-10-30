@@ -1,0 +1,11 @@
+[package]
+name = "@test/tiny"
+version = "0.1.0"
+license = "CC0-1.0"
+description = "A tiny pack for music2's tests: a pluck, a recorded pluck, a crunch and a sound"
+authors = ["music2"]
+tags = ["test"]
+
+[dependencies]
+"@m2/core" = "1"
+std = "0.4"

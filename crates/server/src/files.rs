@@ -215,6 +215,17 @@ pub fn types(packages: &PackageSet) -> Value {
                 }
             }
         }
+        // Its instruments written as data, as one module, unless its code has that module (PACK-13).
+        let data = m2_script::data_files(&p.dir);
+        if !data.is_empty() && !src.join("instruments.ts").is_file() && !src.join("instruments/index.ts").is_file() {
+            let read: Vec<(String, String)> = data
+                .iter()
+                .filter_map(|f| {
+                    Some((f.strip_suffix(".toml")?.to_string(), std::fs::read_to_string(p.dir.join("instruments").join(f)).ok()?))
+                })
+                .collect();
+            files.push(json!({"path": format!("{}/instruments.ts", p.name), "text": m2_song::instrument::types(&read)}));
+        }
     }
     files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
     json!({ "files": files })
@@ -225,11 +236,12 @@ pub fn types(packages: &PackageSet) -> Value {
 pub fn diagnostics(session: &Session) -> Vec<Problem> {
     let dir = &session.accepted().project.dir;
     let mut roots = vec![(format!("{}/", dir.display()), String::new())];
-    for p in session.packages.packages() {
+    // The draft's own packages (PACK-9): one it brings in is named too, though nothing plays it yet.
+    for (name, folder) in session.draft_packages() {
         // The build names package files by the folder as given; the runtime may by the real one.
-        let at = p.dir.canonicalize().unwrap_or_else(|_| p.dir.clone());
-        roots.push((format!("{}/", p.dir.display()), format!("{}/", p.name)));
-        roots.push((format!("{}/", at.display()), format!("{}/", p.name)));
+        let at = folder.canonicalize().unwrap_or_else(|_| folder.clone());
+        roots.push((format!("{}/", folder.display()), format!("{name}/")));
+        roots.push((format!("{}/", at.display()), format!("{name}/")));
     }
     let relative = |s: &str| roots.iter().fold(s.to_string(), |s, (from, to)| s.replace(from.as_str(), to));
     // A relative path back to the file on disk: a package's by its name, else the project's.
@@ -397,7 +409,7 @@ mod tests {
             let p = Project(dir);
             p.write(
                 "music2.toml",
-                "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n",
+                "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
             );
             for (name, text) in files {
                 p.write(name, text);
@@ -672,5 +684,45 @@ mod tests {
         assert_eq!(missing["plain"], "vox.wav isn't in the song's assets folder, so its clip plays nothing.");
         assert_eq!(missing["fix"], "Put the file back, or delete the clip.");
         assert!(missing["message"].as_str().is_some_and(|m| m.contains("`vox.wav` isn't in assets/")), "{missing}");
+    }
+
+    /// A copy of the fixture pack `@test/tiny` at `to`.
+    fn tiny_at(to: &Path) {
+        fn copy(from: &Path, to: &Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                let (f, t) = (e.path(), to.join(e.file_name()));
+                if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
+            }
+        }
+        copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/session/tests/fixtures/packs/tiny"), to);
+    }
+
+    // PACK-9: a draft that brings in a pack and doesn't build is explained with that pack, which the
+    // accepted revision doesn't have: a missing module of it named among the pack's modules, and
+    // the pack's files named by the pack, never by where they are.
+    #[test]
+    fn a_failed_draft_is_explained_with_its_own_packs() {
+        let p = lead();
+        let tiny = PathBuf::from(format!("{}-tiny", p.0.display()));
+        tiny_at(&tiny);
+        let mut s = p.session();
+        let name = tiny.file_name().unwrap().to_str().unwrap();
+        p.write("music2.toml", &format!("{}\"@test/tiny\" = {{ path = \"../{name}\" }}\n", p.read("music2.toml")));
+        let importing = |line: &str| LEAD.replace("import { osc } from 'std/dsp';", &format!("import {{ osc }} from 'std/dsp';\n{line}"));
+        // Used, so the import isn't left out as one only of types.
+        p.write("tracks/lead.ts", &importing("import { tinyKeys } from '@test/tiny/nope';\nconst used = [tinyKeys];"));
+        s.refresh();
+        let missing = diagnostics(&s);
+        assert_eq!(missing[0].fix.as_deref(), Some("Check its name: @test/tiny has @test/tiny."), "{:?}", missing[0]);
+        // A problem with the pack's own files names them by the pack, never by where they are.
+        let toml = std::fs::read_to_string(tiny.join("m2pkg.toml")).unwrap();
+        std::fs::write(tiny.join("m2pkg.toml"), toml.replace("version = \"0.1.0\"", "version = \"0.1.0\"\nwasm = \"k.wasm\"")).unwrap();
+        p.write("tracks/lead.ts", LEAD);
+        s.refresh();
+        let broken = diagnostics(&s);
+        let message = &broken[0].message;
+        assert!(message.contains("@test/tiny/k.wasm") && !message.contains(&*tiny.to_string_lossy()), "{message}");
+        std::fs::remove_dir_all(&tiny).ok();
     }
 }

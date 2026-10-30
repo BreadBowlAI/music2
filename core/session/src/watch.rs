@@ -69,6 +69,7 @@ pub fn track(rel: &str, named: &BTreeSet<String>) -> Option<Track> {
 fn track_of(d: &DataPath, rel: &str, named: &BTreeSet<String>) -> Option<Track> {
     Some(match d {
         DataPath::Manifest
+        | DataPath::Lock
         | DataPath::Code(_)
         | DataPath::Arrangement
         | DataPath::Lane { .. }

@@ -127,6 +127,9 @@ pub enum SettingKind {
     Asset,
     /// MIDI notes (0 to 127) to files in `assets/`: a sampler's zones.
     Keymap,
+    /// A list of regions, a recording each with the notes, velocities and turn it plays on: a
+    /// sampler's sample map (PKG-15).
+    Regions,
     /// A string that follows the key rule (ID-1), such as the channel a mixer channel goes to.
     Key,
 }

@@ -1,0 +1,8 @@
+{
+  "m2preset": 1,
+  "name": "Dark",
+  "sound": "@test/tiny:tiny-keys",
+  "values": {
+    "brightness": 600
+  }
+}
