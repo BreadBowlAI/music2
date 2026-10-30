@@ -454,11 +454,11 @@ A change of mind after stage 5 is a new pull request to this note, with why.
 
 ## 19. The registry, as built
 
-**In short:** slice 6's robot side, built on 2026-10-30 by track `registry`. The list is a folder of small TOML files, one a pack. The robot is `m2 registry`, run by the registry repo's CI. The bucket is plain files named by their hashes. The rules are the contract's [REG-1 to REG-10](../../architecture.md#registry); this section says the same in plain words, and what changed from the plan above. The app's side (fetching the catalog, ⌘F's From the library, Get) is the next track's.
+**In short:** slice 6's robot side, built on 2026-10-30 by track `registry`, and hardened after its review the same day. The list is a folder of small TOML files, one a pack. The robot is `m2 registry`, run by the registry repo's CI. The bucket is plain files named by their hashes. A person from BreadBowlAI merges every pull request; the robot's run on a pull request is advice, and the real gate is the build after a merge, which holds the registry to what the bucket has published. The rules are the contract's [REG-1 to REG-10](../../architecture.md#registry); this section says the same in plain words, and what changed from the plan above. The app's side (fetching the catalog, ⌘F's From the library, Get) is the next track's.
 
 ### 19.1 The list
 
-The registry repo starts from music2's own `registry/` folder: a README with the rules, `tags.txt` (the words tags may use, P7), `packs/` (empty), and the two workflows. One file a pack:
+The registry repo starts from music2's own `registry/` folder: a README with the rules, `tags.txt` (the words tags may use, P7), `packs/` (empty), `CODEOWNERS`, and the two workflows. One file a pack:
 
 ```toml
 # packs/@alice/felt-piano.toml
@@ -470,15 +470,27 @@ version = "1.2.0"
 hash = "sha256:3b1f…"     # its m2pack.json's hash: what a song's music2.lock pins
 source = "https://github.com/alice/felt-piano/releases/download/v1.2.0/felt-piano-1.2.0.tar.gz"
 # yanked = "why"          hidden from search; a song that locks it still gets it
-# removed = "why"         taken down: its files are deleted from the bucket
+```
+
+A take-down is not in a pack file but in `removed.toml`, which only BreadBowlAI changes:
+
+```toml
+# removed.toml
+[[removed]]
+name = "@alice/felt-piano"
+version = "1.2.0"
+hash = "sha256:3b1f…"
+why = "the recordings aren't the author's to share"
 ```
 
 | Rule | So |
 |---|---|
-| Read strictly: an unknown key anywhere is refused | a typo never means something |
-| The repository and every source are under `https://github.com/<scope>/` (`BreadBowlAI` for `@m2/`), in plain characters | a pack comes from its owner's own GitHub, and no address can put anything into the CI's shell |
-| A listed version's hash and source never change; only `yanked` or `removed` are added | P5: a song always gets the files it was made with |
-| A pull request may change only its author's own packs; `@m2/` only music2's people | identity is GitHub's, checked from the scope, offline |
+| Read strictly: an unknown key anywhere is refused, and no link, pipe or device anywhere | a typo never means something |
+| The repository and every source are under `https://github.com/<scope>/` (`BreadBowlAI` for `@m2/`), in letters, digits and `-._/` only (no `%`) | a pack comes from its owner's own GitHub, an encoded part can't name another owner's repo, and no address can put anything into the CI's shell |
+| A hash is listed once in the whole registry | no pack can take another's version |
+| A listed version's hash and source never change; only `yanked` is added or taken back | P5: a song always gets the files it was made with |
+| A take-down is BreadBowlAI's, in `removed.toml`, and never taken back | an author can't break the songs that use their version; a legal take-down stays down |
+| A pull request may change only its author's own files, byte for byte (a comment and a dot file count); `@m2/`, `tags.txt` and `removed.toml` only music2's people | identity is GitHub's, checked from the scope, offline, and nobody edits another's words |
 
 ### 19.2 The bucket
 
@@ -486,7 +498,7 @@ source = "https://github.com/alice/felt-piano/releases/download/v1.2.0/felt-pian
 |---|---|
 | `blobs/sha256/<hash>` | every file of every version (its `m2pack.json` too) and every preview |
 | `versions/<hash>.json` | the robot's facts for one version, by the version's hash: what it says of itself, its size, every blob it uses, and its items, each as the library would list it, with its preview's hash and, for a sample, its one file |
-| `catalog/<hash>.json` | a catalog, by its own hash: every pack, its versions, its latest's items |
+| `catalog/<hash>.json` | a catalog, by its own hash: every pack, its versions (each with its hash and source), its latest's items. A version not built yet, or whose build failed, isn't in it |
 | `catalog.json` | which catalog is current: the one file that changes |
 
 Every JSON file is written in one form (RFC 8785, the form music2 already hashes JSON in), so the same inputs always give the same bytes and the same hash, and is read strictly: a newer format says to update music2, and an unknown field is refused. The readers are in `m2_song::registry`, for the app to use.
@@ -496,11 +508,22 @@ Every JSON file is written in one form (RFC 8785, the form music2 already hashes
 | Command | Who | Does |
 |---|---|---|
 | `m2 registry add <registry> <pack> --source <url>` | a pack's author | checks the pack (`m2 pack check`), writes its `m2pack.json`, and writes or extends its pack file |
-| `m2 registry check <registry> [--base <before>] [--author <login>]` | the CI, on a pull request | reads every file strictly; with `--base`, no listed version changed; with `--author`, only their packs changed |
-| `m2 registry pending <registry> --out <bucket> [--from <bucket>]` | the CI | prints each version the bucket hasn't got yet, `name version source`, so the CI fetches only those |
-| `m2 registry build <registry> --sources <folder> --out <bucket> [--from <bucket>] [--made <time>] [--to-delete <file>]` | the CI | checks each pending version's source, copies its files in by hash, renders its previews, writes its facts; then the catalog and `catalog.json` |
+| `m2 registry check <registry> [--base <before>] [--author <login>]` | the CI, on a pull request | reads every file strictly; with `--base`, no listed version changed and no take-down taken back; with `--author`, only their files changed |
+| `m2 registry pending <registry> --out <bucket> [--from <bucket>]` | the CI | prints each version the bucket hasn't got yet, `hash name version source`, so the CI fetches only those, each into a folder named by its hash |
+| `m2 registry build <registry> --sources <folder> --out <bucket> [--from <bucket>] [--made <time>] [--to-delete <file>]` | the CI | checks the registry against what the bucket publishes; then builds each pending version on its own: checks its source, copies its files in by hash, renders its previews, writes its facts; then the catalog and `catalog.json` |
 
-What `build` refuses, beyond `m2 pack check`: files that aren't the ones the hash names (checked first: nothing else is looked at then), a licence not in D6's list (as an SPDX expression: `CC0-1.0`, `CC-BY-3.0`, `CC-BY-4.0`, `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`), a tag not in `tags.txt`, more than 10 GB (D9). It writes nothing unless every pending version passes.
+What `build` refuses:
+
+| Refused | How much |
+|---|---|
+| A published version changed, a take-down taken back, a hash a published version has | the whole build, whoever made the change: nothing is written |
+| A source that isn't there, holds another version, or holds this one twice | that version alone |
+| A link, a pipe or a device in it (found before any file is opened), or more than 10 GB by its files' sizes (before any byte is hashed, D9) | that version alone |
+| Files that aren't the ones the hash names (checked next: nothing else is looked at then) | that version alone |
+| What `m2 pack check` refuses (a word with a control character among it), a licence not in D6's list (as an SPDX expression: `CC0-1.0`, `CC-BY-3.0`, `CC-BY-4.0`, `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`), a tag not in `tags.txt` | that version alone |
+| A version that takes longer than 10 minutes to check and build (a kernel that never returns: music2's engine sets kernels no time limit) | that version alone; its thread, which can't be stopped, ends with the robot |
+
+A version that fails writes nothing into the bucket, is left out of the catalog, is tried again at the next build, and is reported (`m2` exits 1 once the catalog is written). The others are built all the same.
 
 Previews are made by the app's own code: the robot writes the same song for an item that ⌘F writes (`library::preview::of`, now the one step both take) and renders it the same way, so its preview is the same bits the app makes from the installed pack, checked by a test. A sample's preview is its own file (LIB-6).
 
@@ -508,11 +531,12 @@ Previews are made by the app's own code: the robot writes the same song for an i
 
 | Workflow | Runs on | Has the bucket's key | Does |
 |---|---|---|---|
-| `pull-request.yml` | `pull_request` (never `pull_request_target`) | no; its token only reads | check, fetch the new sources with `curl` and `tar`, build into a scratch folder, and put what the robot said in the job's summary |
-| `main.yml`, job Build | a push to `main` | no | the same, into a folder kept as the job's artifact, with the list of files to delete |
-| `main.yml`, job Copy into the bucket | after Build | yes, from the `bucket` environment | copies that folder into the bucket (`aws s3 sync`, R2 speaks the S3 API), `catalog.json` last, then deletes what the list says; it runs no pack code and no `m2` |
+| `pull-request.yml` | `pull_request` (never `pull_request_target`) | no; its token only reads | advice for the person who merges: checks the change's paths (someone outside BreadBowlAI only under `packs/`, Dependabot only under `.github/`), checks the pack files, fetches the new sources with `curl` and `tar`, builds them into a scratch folder, and puts what the robot said in the job's summary. A pull request can change this file, so its tick proves nothing alone |
+| `main.yml`, job Build | a push to `main` | no | the gate: the same build, held to what the bucket publishes, into a folder kept as the job's artifact, with the list of files to delete |
+| `main.yml`, job Copy into the bucket | after Build | yes, from the `bucket` environment | checks what Build made as a stranger's (the four kinds of path, each blob and catalog against its name, deletes only of blobs), then puts each file the bucket hasn't got (never replacing one), `catalog.json` last, then deletes what the list says. It runs no pack code and no `m2` |
+| `main.yml`, job Every version built | after both | no | fails when a version was left out, so it is seen |
 
-The `m2` they run is a music2 release, pinned by version and SHA-256. music2's own lint checks these workflows with actionlint and zizmor too.
+Every pull request is merged by a person: the owner protects `main` (a required review, code owners' review, no bypass, no auto-merge), and `CODEOWNERS` gives BreadBowlAI everything outside `packs/`, `removed.toml` named too. The build job runs strangers' code on a GitHub runner, which has `sudo` and the network; it has no key, and the copy job trusts nothing it made. m2's output is fenced with `::stop-commands::`, so a pack's words can't start a workflow command. The `m2` they run is a music2 release, pinned by version and SHA-256. music2's own lint checks these workflows with actionlint and zizmor too.
 
 ### 19.5 What changed from the plan
 
@@ -522,8 +546,11 @@ The `m2` they run is a music2 release, pinned by version and SHA-256. music2's o
 | Get fetches an instrument's code and the files it uses (§10) | an instrument, an effect or a sound comes with its whole version; a sample alone, its one file | which files code reads can't be known before it runs |
 | A sample's preview is its first seconds, compressed (§10) | its own file, as the app already previews it (LIB-6) | one way, and it can't oversell; none over 64 MB |
 | The robot checks identity with GitHub's API (§8) | from the scope and the addresses alone | the same answer every time, offline, with no token |
-| The robot reports on the pull request (§8) | in the job's summary and its tick or cross | a pull request from a fork gets a token that can't comment, and the usual way round it (`workflow_run`) is the trap §8 warns of |
+| The robot reports on the pull request (§8) | in the job's summary and its tick or cross, as advice | a pull request from a fork gets a token that can't comment, the usual way round it (`workflow_run`) is the trap §8 warns of, and a pull request can change its own check |
+| Later versions merge themselves when the robot passes (§8) | a person from BreadBowlAI merges every pull request | the robot's run on a pull request is the pull request's own workflow; merging by itself needs a gate it can't change, which is later work |
+| A take-down is a line in the pack's file (§9.3) | a version listed in `removed.toml`, BreadBowlAI's, never taken back | an author must not be able to break the songs that use their version, or undo a legal take-down |
 | — | the catalog's time is given (`--made`): the CI gives the registry commit's | one commit always makes the same bytes |
 | — | a removed version's facts stay, and only its blobs no other version uses are deleted | what a pack said of itself stays; a file two versions share isn't lost |
+| — | each version is built on its own, from its own folder, with a time limit; one that fails stays pending | one author's missing release or hung kernel never stops everyone's publishing |
 
-Waiting: `--from` over https, which needs music2's download module (track H); until then the workflows can't run, and `--from` takes a folder or `file://`. A data instrument's own tags reach no catalog yet (gaps #49). The app's ⌘F with no song open, and its preview route, don't read instruments written as data (the robot does): gaps #47.
+Waiting: `--from` over https, which needs music2's download module (track H); until then the workflows can't run, and `--from` takes a folder or `file://`. A take-down needs the deleted files purged from Cloudflare's cache by hand (the README says how). A data instrument's own tags reach no catalog yet (gaps #49). The app's ⌘F with no song open, and its preview route, don't read instruments written as data (the robot does): gaps #47. A kernel that never returns has no bound in the app's own previews and plays (gaps #39).
