@@ -263,16 +263,28 @@ fn the_sampler_gives_its_regions_their_kernel() {
     ];
     let regions: Vec<_> = voices.iter().filter(|(k, _)| k == "std:regions").map(|(_, s)| s.clone()).collect();
     assert_eq!(regions, [(s(&["C4.wav", "C4-hard.wav", "kick.wav", "pad.wav"]), values)], "one std:regions in the voices");
-    assert!(voices.iter().any(|(k, _)| k == "std:drumhit") && outside.contains(&"std:hitcount".to_string()), "a turn is counted: {outside:?}");
+    assert!(
+        voices.iter().any(|(k, _)| k == "std:drumhit") && outside.contains(&"std:hitcount".to_string()),
+        "a turn is counted: {outside:?}"
+    );
     // Zones and a sample play through std:sampler, as before, with no count.
     let (outside, _) = sampler_kernels(", { sample: \"a.wav\" }").unwrap();
     assert!(!outside.contains(&"std:hitcount".to_string()), "{outside:?}");
     let (_, voices) = sampler_kernels(", { zones: { 36: \"kick.wav\" } }").unwrap();
     assert!(voices.iter().all(|(k, _)| k == "std:sampler") && !voices.is_empty());
     for (call, says) in [
-        (", { sample: \"x.wav\", regions: [{ file: \"a.wav\" }] }", "sampler(): give one of sample, zones and regions, not sample and regions"),
-        (", { zones: { 36: \"k.wav\" }, regions: [{ file: \"a.wav\" }] }", "sampler(): give one of sample, zones and regions, not zones and regions"),
-        (", { regions: [{ file: \"a.wav\", keys: [70, 60] }] }", "sampler(): regions: region 1: keys 70 to 60: the lowest is above the highest"),
+        (
+            ", { sample: \"x.wav\", regions: [{ file: \"a.wav\" }] }",
+            "sampler(): give one of sample, zones and regions, not sample and regions",
+        ),
+        (
+            ", { zones: { 36: \"k.wav\" }, regions: [{ file: \"a.wav\" }] }",
+            "sampler(): give one of sample, zones and regions, not zones and regions",
+        ),
+        (
+            ", { regions: [{ file: \"a.wav\", keys: [70, 60] }] }",
+            "sampler(): regions: region 1: keys 70 to 60: the lowest is above the highest",
+        ),
     ] {
         let e = sampler_kernels(call).err().unwrap_or_else(|| panic!("{call} builds"));
         assert!(e.iter().any(|d| d.message.contains(says)), "{call}: {e:?}");

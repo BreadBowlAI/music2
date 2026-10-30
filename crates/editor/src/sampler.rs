@@ -7,7 +7,10 @@
 //!
 //! The planner asserts against the graph: every `std:sampler` kernel the call makes reads the new
 //! file, and nothing outside the call's track changes (a new file makes its voices new, D10). A
-//! sampler whose code gives `zones`, or sets its file by code, is refused in words.
+//! sampler whose code gives `zones` or `regions`, or sets its file by code, is refused in words.
+//!
+//! A sampler that plays regions (PKG-16) says on its card what it plays, in words: "5 recordings, 2
+//! layers, round robin of 2, release sounds, loops", read from its `std:regions` kernel.
 
 use std::path::Path;
 
@@ -26,36 +29,96 @@ use crate::lens::Insertion;
 use crate::plan::{self, path, unmoved};
 use crate::{EditError, Edited, ready};
 
-/// The component a sampler is.
+/// The component a sampler is, and the kernel its voices are: `std:sampler` for one file or zones.
 pub const SAMPLER: &str = "std:sampler";
 
-/// What a sampler's card shows: the files its voices play (none yet, one, or one per zone).
+/// The kernel a sampler's voices are when it plays regions.
+const REGIONS: &str = "std:regions";
+
+/// What a sampler's card shows: the files its voices play (none yet, one, one per zone, or each its
+/// regions name once), and for regions what it plays, in words.
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct SamplerCard {
     pub files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regions: Option<String>,
+}
+
+/// The settings of the voice kernels call `site` of `m` makes, as the first of them has them: its
+/// kernel, files and values; and how many kernels it makes.
+fn voices_of(m: &Module, site: u32) -> (Option<(String, Vec<String>, Vec<f64>)>, usize) {
+    let mut first = None;
+    let mut kernels = 0;
+    walk(&m.nodes, &mut |n| {
+        if let Op::Kernel { kernel, assets, values, .. } = &n.op
+            && (kernel == SAMPLER || kernel == REGIONS)
+            && calls_of(m, n).any(|f| f == site)
+        {
+            kernels += 1;
+            first.get_or_insert_with(|| (kernel.clone(), assets.clone(), values.clone()));
+        }
+    });
+    (first, kernels)
 }
 
 /// The files the `std:sampler` kernels call `site` of `m` makes read, as the first of them reads
 /// them; and how many kernels it makes.
 fn files_of(m: &Module, site: u32) -> (Vec<String>, usize) {
-    let mut files = None;
-    let mut kernels = 0;
-    walk(&m.nodes, &mut |n| {
-        if let Op::Kernel { kernel, assets, .. } = &n.op
-            && kernel == SAMPLER
-            && calls_of(m, n).any(|f| f == site)
-        {
-            kernels += 1;
-            files.get_or_insert_with(|| assets.clone());
-        }
-    });
-    (files.unwrap_or_default(), kernels)
+    match voices_of(m, site) {
+        (Some((kernel, files, _)), n) if kernel == SAMPLER => (files, n),
+        _ => (vec![], 0),
+    }
+}
+
+/// What `std:regions`' values (its layout: `std/m2pkg.toml`) and `files` play, in words: "5
+/// recordings, 2 layers, round robin of 2, release sounds, loops". Layers are the most ranges of
+/// velocity one note is split into, each with other attack regions to play; the round robin is the
+/// most takes a region has.
+fn regions_said(files: usize, values: &[f64]) -> String {
+    let fields = values.first().map_or(0, |&f| f as usize);
+    let regions: Vec<&[f64]> = values.get(1..).filter(|_| fields > 0).map(|v| v.chunks(fields).collect()).unwrap_or_default();
+    let field = |r: &[f64], k: usize| r.get(k).copied().unwrap_or(f64::NAN);
+    let attack = |r: &&[f64]| field(r, 8) < 0.5;
+    let layers = (0..=127)
+        .map(|key| {
+            let ranges: Vec<(i64, i64)> = regions
+                .iter()
+                .filter(|r| attack(r) && field(r, 2) <= key as f64 && key as f64 <= field(r, 3))
+                .map(|r| (field(r, 4) as i64, field(r, 5) as i64))
+                .collect();
+            // Where the attack regions that play change, velocity by velocity.
+            let mut cuts: Vec<i64> = ranges.iter().flat_map(|&(soft, loud)| [soft, loud + 1]).collect();
+            cuts.sort_unstable();
+            cuts.dedup();
+            cuts.windows(2).filter(|w| ranges.iter().any(|&(soft, loud)| soft <= w[0] && w[0] <= loud)).count()
+        })
+        .max()
+        .unwrap_or(0);
+    let takes = regions.iter().map(|r| field(r, 7)).fold(1.0, f64::max);
+    let mut said = vec![if files == 1 { "1 recording".to_string() } else { format!("{files} recordings") }];
+    if layers > 1 {
+        said.push(format!("{layers} layers"));
+    }
+    if takes > 1.0 {
+        said.push(format!("round robin of {takes}"));
+    }
+    if regions.iter().any(|r| !attack(r)) {
+        said.push("release sounds".into());
+    }
+    if regions.iter().any(|r| field(r, 9) >= 0.0) {
+        said.push("loops".into());
+    }
+    said.join(", ")
 }
 
 /// The card of call `site` of `compiled`, when it is a sampler.
 pub fn card(compiled: &Compiled, site: u32) -> Option<SamplerCard> {
     let m = compiled.ir.modules.iter().find(|m| m.frames.iter().any(|f| f.site == site && f.component.as_deref() == Some(SAMPLER)))?;
-    Some(SamplerCard { files: files_of(m, site).0 })
+    Some(match voices_of(m, site).0 {
+        Some((kernel, files, values)) if kernel == REGIONS => SamplerCard { regions: Some(regions_said(files.len(), &values)), files },
+        Some((_, files, _)) => SamplerCard { files, regions: None },
+        None => SamplerCard::default(),
+    })
 }
 
 /// A string literal as TypeScript reads it: the name, quoted. Asset names hold no quote or `\`.
@@ -85,6 +148,11 @@ pub fn set_sample(s: &mut Session, at: u64, call: &str, file: &Imported) -> Resu
     });
     if props.is_some_and(|p| p.iter().any(|(k, _)| k == "zones")) {
         return Err(EditError::Rejected("This Sampler plays zones, a file for each range of notes: change them in its code.".into()));
+    }
+    if props.is_some_and(|p| p.iter().any(|(k, _)| k == "regions")) {
+        return Err(EditError::Rejected(
+            "This Sampler plays regions, recordings each set to its notes and velocities: change them in its code.".into(),
+        ));
     }
     let edit = match props.and_then(|p| p.iter().find(|(k, _)| k == "sample")) {
         Some((_, v)) => {
