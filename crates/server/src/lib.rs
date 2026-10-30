@@ -21,6 +21,7 @@ mod routes_fx;
 mod routes_leases;
 mod routes_mix;
 mod routes_notes;
+mod routes_packs;
 mod routes_plugins;
 mod routes_presets;
 mod routes_project;

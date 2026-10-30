@@ -62,6 +62,9 @@ pub struct EffectInfo {
     /// What adding it writes after the audio, from its descriptor's insert: `, 1000`, or
     /// `, { time: 0.25, feedback: 0.3, mix: 0.3 }`; empty when it inserts nothing.
     pub insert: String,
+    /// The pack it is from, with its version; none for std's and the project's (PACK-11).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack: Option<crate::packs::From>,
 }
 
 /// The component frames of `m` whose chain holds `n`, outermost first: the sites of the
@@ -180,6 +183,7 @@ pub fn effects(s: &Session) -> Vec<EffectInfo> {
                 description: d.editor.description.clone(),
                 category: d.editor.category.clone().unwrap_or_default(),
                 insert: insert_args(d, &s.accepted().compiled.units).0,
+                pack: crate::packs::from(s, &d.id),
             };
             Some((&**d, info))
         })

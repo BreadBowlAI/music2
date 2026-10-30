@@ -27,8 +27,7 @@ impl Needs {
     }
 }
 
-/// The pack an item is from, as the lists show it (PACK-11): its name and version, and whether it
-/// is the song's own folder.
+/// The pack an item is from, as the lists show it (PACK-11): its name and version.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct From {
     pub name: String,

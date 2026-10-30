@@ -488,6 +488,10 @@ An example body:
 {"session": 7}
 ```
 
+### `GET /api/packs`
+
+The packs installed on this computer: each one's name, versions (newest last), licence, description and items.
+
 ### `GET /api/plugins`
 
 The installed CLAP plugins: id, name, vendor, version, and whether each is an instrument or an effect.
