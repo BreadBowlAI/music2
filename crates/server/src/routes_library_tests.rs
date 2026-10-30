@@ -654,11 +654,14 @@ fn a_folder_is_indexed_in_the_background() {
     std::fs::write(mine.join("Loops/vox.mp3"), b"ID3 not read").unwrap();
     let running = serving(Folders { samples: Some(scratch.0.join("cache")), ..Folders::default() });
     running.state.keep_settings(scratch.0.join("settings.json"));
+    // Kept by its real path: where the temporary folder is through a link (a Mac's /var is
+    // /private/var), that is not the path asked.
+    let real = std::fs::canonicalize(&mine).unwrap();
     let (status, shown) = post(&running.url, "/api/library/folders", "t0k", &json!({"add": mine}));
     assert_eq!(status, 200, "{shown:#}");
-    assert_eq!(shown["folders"][0]["path"], json!(mine));
+    assert_eq!(shown["folders"][0]["path"], json!(real));
     let kept: Value = serde_json::from_str(&std::fs::read_to_string(scratch.0.join("settings.json")).unwrap()).unwrap();
-    assert_eq!(kept["samples"], json!([mine]));
+    assert_eq!(kept["samples"], json!([real]));
     assert!(running.state.sample_index.settled(std::time::Duration::from_secs(60)), "indexed");
     items(&running.url, "q=sample");
     let (_, _, body) = get(&running.url, "/api/library?q=sample");
