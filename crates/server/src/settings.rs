@@ -11,6 +11,9 @@
 //! - `songs`: where new songs go (and Exports with them); null is `~/Music/music2`.
 //! - `samples` (LIB-5): `["/Users/me/Samples"]`, your sample folders, whose WAV files the library
 //!   lists. Left out while there are none.
+//! - `registry` (REG-11): `"https://…"`, the registry ⌘F's From the library reads, when
+//!   `M2_REGISTRY` names none; left out, the default (none until the owner picks the bucket's
+//!   address). Read as the app starts.
 //! - `record` (lane B, Q18): `{"count_in": true, "quantize": false}`: Record counts in one bar first,
 //!   and snaps the take's notes to Notes' grid. Left out while both are the defaults.
 //! - `midi` (lane B, Q28): `{"off": ["Keystation 49"]}`: the MIDI keyboards turned off, by the names
@@ -43,6 +46,9 @@ pub struct Kept {
     /// Your sample folders (LIB-5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub samples: Vec<PathBuf>,
+    /// The registry's address (REG-11), when it isn't the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
     /// Record's options (lane B).
     #[serde(default, skip_serializing_if = "RecordKept::is_default")]
     pub record: RecordKept,
@@ -265,6 +271,20 @@ mod tests {
         // Half a record object reads with the other half's default.
         std::fs::write(&file, r#"{"record": {"quantize": true}}"#).unwrap();
         assert_eq!(s.read().record, RecordKept { count_in: true, quantize: true });
+    }
+
+    // REG-11: the registry the settings name is read, and kept through a change of another
+    // setting: a file written whole never drops it.
+    #[test]
+    fn the_registry_in_the_settings_is_kept_through_a_change() {
+        let t = Temp::new("registry");
+        let file = t.0.join("settings.json");
+        std::fs::write(&file, r#"{"registry": "https://packs.example"}"#).unwrap();
+        let s = Settings::new(file.clone());
+        assert_eq!(s.read().registry.as_deref(), Some("https://packs.example"));
+        s.change(|k| k.songs = Some("/x".into())).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(json["registry"], serde_json::json!("https://packs.example"));
     }
 
     // A file that doesn't read (half written by an older build, or edited by hand) is the

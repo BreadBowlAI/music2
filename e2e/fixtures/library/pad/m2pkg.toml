@@ -1,0 +1,12 @@
+[package]
+name = "@carol/pad"
+version = "0.1.0"
+license = "MIT"
+description = "Warm pads"
+authors = ["Carol"]
+repository = "https://github.com/carol/pad"
+tags = ["keys"]
+
+[dependencies]
+"@m2/core" = "1"
+std = "0.5"

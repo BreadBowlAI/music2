@@ -2,7 +2,8 @@
 //! With the app open it asks the app (`GET /api/library`), whose list holds the open song's own
 //! components and the plugins it has listed; with the app closed it gathers the same list itself,
 //! from std, the store's packs, your presets and your sample folders, and searches it with the same
-//! function.
+//! function. After them come From the library's items (REG-13), each marked `library`: the
+//! registry's catalog, kept on this computer, searched here, so nothing typed is sent.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -109,7 +110,11 @@ pub fn search(args: &[String]) -> Result<()> {
         Some(items) => items,
         None => {
             let all = closed()?;
-            all.search(&Query::parse(&q)).into_iter().map(serde_json::to_value).collect::<Result<_, _>>()?
+            let query = Query::parse(&q);
+            let mut found: Vec<Value> = all.search(&query).into_iter().map(serde_json::to_value).collect::<Result<_, _>>()?;
+            let offers = crate::get::offers();
+            found.extend(m2_editor::get::find(&offers, &query).into_iter().map(|o| o.json()));
+            found
         }
     };
     if json {
@@ -120,13 +125,16 @@ pub fn search(args: &[String]) -> Result<()> {
         eprintln!("Nothing in the library matches {q}.");
         return Ok(());
     }
-    let text = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
+    // A word from the registry's catalog is shown with any control character written out.
+    let text = |v: &Value, k: &str| crate::get::shown(v[k].as_str().unwrap_or_default());
     // Each item's columns: its label, its kind, what it is and where it is from, and its id.
     let rows: Vec<[String; 4]> = items
         .iter()
         .map(|i| {
-            let what = if text(i, "kind") == "sound" { i["tags"][0].as_str().unwrap_or_default().to_string() } else { text(i, "category") };
-            [text(i, "label"), text(i, "kind"), format!("{what} · {}", text(i, "package")), text(i, "id")]
+            let what =
+                if text(i, "kind") == "sound" { crate::get::shown(i["tags"][0].as_str().unwrap_or_default()) } else { text(i, "category") };
+            let library = if i.get("library").is_some() { " · library" } else { "" };
+            [text(i, "label"), text(i, "kind"), format!("{what} · {}{library}", text(i, "package")), text(i, "id")]
         })
         .collect();
     let width = |c: usize| rows.iter().map(|r| r[c].chars().count()).max().unwrap_or(0);

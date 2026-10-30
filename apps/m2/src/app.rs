@@ -242,8 +242,8 @@ fn query_value(text: &str) -> String {
         .collect()
 }
 
-/// What the open app's library answers for `q` (LIB-2, `GET /api/library`): its items, best first;
-/// None when no app is open. The app needn't have a song open. While it says samples are being
+/// What the open app's library answers for `q` (LIB-2, `GET /api/library`): its items, best first,
+/// then From the library's (REG-13); None when no app is open. The app needn't have a song open. While it says samples are being
 /// indexed (LIB-5: the app just started, a folder was just added), it is asked again once they are,
 /// up to 30 seconds: a search in the app never waits for them, but a script wants what they find.
 pub fn library(q: &str) -> Result<Option<Vec<Value>>> {
@@ -251,23 +251,46 @@ pub fn library(q: &str) -> Result<Option<Vec<Value>>> {
     loop {
         let Some(v) = library_once(q)? else { return Ok(None) };
         if v["folders"]["indexing"].as_u64().unwrap_or(0) == 0 || std::time::Instant::now() >= until {
-            return Ok(Some(v["items"].as_array().cloned().unwrap_or_default()));
+            let library = v["library"].as_array().cloned().unwrap_or_default();
+            return Ok(Some(v["items"].as_array().cloned().unwrap_or_default().into_iter().chain(library).collect()));
         }
         std::thread::sleep(Duration::from_millis(200));
     }
 }
 
+/// The open app's address and tools key, as its `session.json` publishes them, while its process
+/// lives; none with no app open.
+fn published() -> Option<(String, String)> {
+    let file = m2_os::dirs::home()?.join(".music2/session.json");
+    let published = serde_json::from_str::<Value>(&std::fs::read_to_string(file).ok()?).ok()?;
+    let (url, key, pid) = (published["url"].as_str()?, published["token"].as_str()?, published["pid"].as_u64()?);
+    u32::try_from(pid).is_ok_and(m2_os::process::alive).then(|| (url.trim_start_matches("http://").to_string(), key.to_string()))
+}
+
+/// Tell the open app the store of packs changed (`m2 pack get`, REG-17), so its open song's lists
+/// offer what came and a song that waited for it builds: whether an app was told.
+pub fn tell_store_changed() -> Result<bool> {
+    let Some((addr, key)) = published() else { return Ok(false) };
+    let Ok(mut s) = TcpStream::connect(&addr) else { return Ok(false) };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
+    let path = "/api/library/store-changed";
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: {key}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+    );
+    s.write_all(head.as_bytes())?;
+    let mut answer = vec![];
+    s.read_to_end(&mut answer)?;
+    let (status, reason, body) = split(&answer).ok_or_else(|| anyhow!("the app's answer to POST {path} can't be read"))?;
+    if status != 200 {
+        bail!("{}", json_of(status, &reason, &body)["error"].as_str().unwrap_or("the app refused to take in the packs"));
+    }
+    Ok(true)
+}
+
 /// One ask of [`library`]: the app's whole answer.
 fn library_once(q: &str) -> Result<Option<Value>> {
-    let Some(file) = m2_os::dirs::home().map(|h| h.join(".music2/session.json")) else { return Ok(None) };
-    let Some(published) = std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return Ok(None) };
-    let (Some(url), Some(key), Some(pid)) = (published["url"].as_str(), published["token"].as_str(), published["pid"].as_u64()) else {
-        return Ok(None);
-    };
-    if !u32::try_from(pid).is_ok_and(m2_os::process::alive) {
-        return Ok(None);
-    }
-    let addr = url.trim_start_matches("http://");
+    let Some((addr, key)) = published() else { return Ok(None) };
+    let addr = addr.as_str();
     let Ok(mut s) = TcpStream::connect(addr) else { return Ok(None) };
     let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
     let path = format!("/api/library?q={}", query_value(q));

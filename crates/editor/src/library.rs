@@ -288,14 +288,15 @@ impl Library {
 }
 
 /// The library with no song open (LIB-2): the components of `packages` (std, found as the app finds
-/// it, and the packs the lists offer), their presets and `yours`, `samples`, and `plugins`.
+/// it, and the packs the lists offer), their instruments written as data among them (PACK-13), as
+/// a song's build reads them; their presets and `yours`, `samples`, and `plugins`.
 pub fn without_song(
     packages: &[(String, PathBuf)],
     yours: Option<&Path>,
     plugins: &[Plugin],
     samples: &[Arc<samples::Indexed>],
 ) -> Library {
-    let catalog = m2_script::describe(packages);
+    let catalog = m2_session::describe(packages);
     Library::of(&Sources { catalog: &catalog, packages, yours, plugins, samples })
 }
 

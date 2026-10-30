@@ -1,0 +1,3 @@
+# the words a pack's tags may use
+drums
+keys

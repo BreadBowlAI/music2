@@ -119,7 +119,7 @@ export function menuTarget(graph: GraphState): Target {
 // ---------------------------------------------------------------- samples from the library (LIB-7)
 
 /** What the server answers when it adds a sample. */
-interface SampleAdded {
+export interface SampleAdded {
   step?: number;
   name: string;
   asset: string;
@@ -145,9 +145,25 @@ export async function addSample(item: LibraryItem, to: Target | { kind: "sampler
     const res = await fetch("/api/library/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
     const done = (await readJson(res)) as SampleAdded & { error?: string };
     if (!res.ok) throw new Error(done.error ?? `HTTP ${res.status}`);
+    if (to.kind === "sampler") {
+      useStore.getState().set({ graph: await graphApi.get() });
+      return void toast(`${to.title} plays ${done.asset}`, undoAction(graph.session, done.step));
+    }
+    await sampleAdded(item, graph.session, done);
+  } catch (error) {
+    toast(`Nothing was added to the song: ${words(error)}`);
+  }
+}
+
+/**
+ * A sample was added to the song at a place (LIB-7, REG-16): the song read again, its clip
+ * selected on its track, and a toast that says where, with Undo.
+ */
+export async function sampleAdded(item: LibraryItem, session: number, done: SampleAdded) {
+  const toast = useStore.getState().toast;
+  {
     const fresh = await graphApi.get();
     useStore.getState().set({ graph: fresh });
-    if (to.kind === "sampler") return void toast(`${to.title} plays ${done.asset}`, undoAction(graph.session, done.step));
     const refs = (done.made ?? []).map((m) => ({ module: m.module, lane: m.lane, id: m.id }));
     if (refs[0]) useShell.getState().select(refs[0].module);
     useClipSelection.getState().only(refs);
@@ -160,9 +176,7 @@ export async function addSample(item: LibraryItem, to: Target | { kind: "sampler
       : bpm(done.follows) === bpm(done.song_bpm ?? 0)
         ? ". Follow tempo is on, so it keeps time if the song's tempo changes"
         : `. Follow tempo is on: its ${bpm(done.follows)} bpm plays at the song's ${bpm(done.song_bpm ?? 0)}`;
-    toast(`Added ${item.label}${onto}${follows}`, undoAction(graph.session, done.step));
-  } catch (error) {
-    toast(`Nothing was added to the song: ${words(error)}`);
+    toast(`Added ${item.label}${onto}${follows}`, undoAction(session, done.step));
   }
 }
 
