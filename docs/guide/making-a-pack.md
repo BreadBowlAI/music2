@@ -3,6 +3,7 @@
 **In short**
 - A pack is a folder: `m2pkg.toml` says what it is, `src/` holds its instruments and effects in TypeScript, `presets/` its sounds, `samples/` its recordings.
 - `m2 pack new <folder> --name @you/name` makes one to start from. `m2 pack check` says what to fix; `m2 pack install` puts it where songs find it.
+- An instrument made of recordings needs no code: write it as data, `instruments/<id>.toml`, or make the whole pack from an SFZ instrument with `m2 pack import-sfz`.
 - To try it in a song while you work on it, point the song at its folder: `"@you/name" = { path = "../name" }`.
 
 ## The folder
@@ -13,6 +14,7 @@ felt-piano/
   README.md  LICENSE
   src/index.ts          its instruments and effects, each a component(…)
   src/keys.ts           more of them, imported as "@alice/felt-piano/keys"
+  instruments/*.toml    instruments written as data, imported as "@alice/felt-piano/instruments"
   presets/<id>/*.json   its sounds: presets/felt-piano/Soft.json
   samples/              recordings its code plays
 ```
@@ -78,6 +80,85 @@ export const feltSample = component(
 
 A recording is named by the pack and its path in the pack: `"@alice/felt-piano:samples/C4.wav"`. It must be inside the pack, spelled exactly as the file is named.
 
+## An instrument written as data
+
+An instrument that plays recordings needs no code. Write it as a file, `instruments/<id>.toml`: which recording plays for which notes, how hard, and when. music2 makes it into the same kind of instrument as one written in code.
+
+```toml
+# instruments/felt-piano.toml: its id is @alice/felt-piano:felt-piano
+label = "Felt Piano"
+category = "Keys"
+description = "A soft felt piano, recorded close"
+engine = "std:sampler"     # std's Sampler plays it: the only engine for now
+mode = "gate"              # stop with the note ("oneshot" plays each recording to its end)
+release = 0.4              # seconds to fade out when the note ends
+velocity = 0.7             # how much playing harder makes it louder, 0 to 1
+voices = 16                # how many notes sound at once
+
+[[region]]                 # one recording
+file = "samples/C4-soft.wav"
+root = 60                  # the note it was recorded at (60 is middle C)
+keys = [58, 62]            # the notes it plays
+velocity = [1, 64]         # how hard, 1 to 127
+
+[[region]]
+file = "samples/C4-loud.wav"
+root = 60
+keys = [58, 62]
+velocity = [65, 127]
+
+[[region]]
+file = "samples/C4-release.wav"
+root = 60
+keys = [58, 62]
+trigger = "release"        # plays when the key is let go
+volume = -20               # dB
+```
+
+| Key | What it is | Left out |
+|---|---|---|
+| `label`, `category` | its name, and the browser's group | must be there |
+| `description`, `tags` | one line about it; words for search (kept for later) | none |
+| `engine` | `"std:sampler"` | must be there |
+| `tune`, `level`, `attack`, `release`, `velocity` | the Sampler's knobs where they start: semitones, dB, seconds, seconds, 0 to 1 | the Sampler's |
+| `mode`, `voices` | `"oneshot"` or `"gate"`; notes at once | `"oneshot"`, 8 |
+
+Each `[[region]]` takes the Sampler's region fields: `file` (a path in the pack), `root`, `keys`, `velocity`, `round_robin` (`[1, 3]`: take 1 of 3, played in turn), `trigger` (`"attack"` or `"release"`), `loop` (`[start, end]` in frames, played while the note is held), `tune` (cents), `volume` (dB), `pan` (-1 to 1) and `offset` (frames). [Sounds](sounds.md) says what each does.
+
+A song imports it from the pack's `instruments`, by its id in camelCase:
+
+```ts
+import { feltPiano } from "@alice/felt-piano/instruments";
+```
+
+The browser, + Track and search offer it as they offer the pack's other instruments. Every key is checked: a key music2 doesn't know is refused, naming the nearest one (`lable`: did you mean `label`?), and every mistake names the file and its line.
+
+## Importing an SFZ instrument
+
+SFZ is the text format of thousands of free sample instruments. `m2 pack import-sfz` makes a pack of one:
+
+```
+m2 pack import-sfz "Felt Piano.sfz" felt-piano --name @alice/felt-piano --label "Felt Piano" --category Keys
+```
+
+| It writes | From |
+|---|---|
+| `instruments/felt-piano.toml` | every region of the SFZ music2 can play |
+| `samples/` | the recordings those regions play, copied |
+| `m2pkg.toml` | the name you give; the licence from `--license`, or the `LICENSE` beside the SFZ |
+| `README.md` | the credits in the SFZ's first comments, and what the import couldn't keep |
+| `LICENSE` | the one beside the SFZ, when there is one |
+
+It reads SFZ's headers (`<control>`, `<global>`, `<master>`, `<group>`, `<region>`), `#define`, `#include`, `default_path`, notes as numbers or names (`c4` is 60), and the opcodes that map to a region: `sample`, `key`, `lokey`, `hikey`, `pitch_keycenter`, `lovel`, `hivel`, `seq_length`, `seq_position`, `trigger`, `loop_mode`, `loop_start`, `loop_end`, `tune`, `transpose`, `volume`, `pan`, `offset`, `amp_veltrack`, `ampeg_attack` and `ampeg_release`. Everything else it names when it ends:
+
+```
+made @alice/felt-piano in felt-piano: felt-piano plays 208 regions from 208 recordings
+left out: 88 regions play only with a controller moved (CC 64)
+key switches: kept the default one's regions (c0)
+```
+
+Only WAV recordings: an SFZ that plays FLAC stops the import before anything is written; convert its files to WAV first. What it writes passes `m2 pack check`. Open `instruments/<id>.toml` afterwards to set what the SFZ leaves to its player, such as `level` and `release`.
+
 ## Sounds
 
 A sound is an instrument's settings under a name, one file in `presets/<id>/`:
@@ -100,11 +181,12 @@ It shows in the instrument's **Presets**, under music2's own.
 | Step | Command |
 |---|---|
 | Start one | `m2 pack new felt-piano --name @alice/felt-piano` |
+| Or make one from an SFZ instrument | `m2 pack import-sfz "Felt Piano.sfz" felt-piano --name @alice/felt-piano` |
 | Try it in a song | in the song's `music2.toml`: `"@alice/felt-piano" = { path = "../felt-piano" }` |
 | Check it | `m2 pack check felt-piano`: every problem in words, exit 1 if any |
 | List its files | `m2 pack build felt-piano` writes `m2pack.json`: every file, its size and its fingerprint |
 | Install it | `m2 pack install felt-piano` |
 
-`m2 pack check` checks what the pack registry will: the strict `m2pkg.toml`, the file types and no links, a licence, every instrument and effect has a category and builds in a song, every kernel loads, every sound is for an instrument of the pack and names only its controls (inside any range marked `.strict()`), and every recording its code names is in the pack.
+`m2 pack check` checks what the pack registry will: the strict `m2pkg.toml`, the file types and no links, a licence, every instrument and effect has a category and builds in a song, every kernel loads, every sound is for an instrument of the pack and names only its controls (inside any range marked `.strict()`), every recording its code or its data names is in the pack, and no `src/instruments.ts` hides its instruments written as data.
 
 A version is never changed once installed: to change the pack, raise its version. While you try it from its folder (`{ path = … }`), a change you save to its code, its `m2pkg.toml` or its kernels reaches the song the next time the song builds: when one of the song's own files changes, or the song opens again.
