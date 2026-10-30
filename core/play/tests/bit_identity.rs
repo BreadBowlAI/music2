@@ -493,6 +493,24 @@ fn the_sampler_example_gives_the_same_bits_on_1_to_7_threads() {
     }
 }
 
+// RENDER-2, PACK-5 (packs): a song that plays a pack from its folder, its keys on std's synth and
+// its sampler on the pack's own recording, renders the same bits on 4 threads as on one, and
+// sounds.
+#[test]
+fn a_song_using_a_pack_gives_the_same_bits_on_1_and_4_threads() {
+    let root = temp("pack");
+    copy(&repo().join("core/session/tests/fixtures/packs"), &root);
+    let song = compile(root.join("song-path"));
+    let frames = (song.seconds() * song.rate as f64) as usize;
+    let one = offline(&song, frames);
+    assert!(peak(&one) > 0.05, "the pack's song sounds");
+    for (n, diff, on_workers, _) in on_threads(&song, frames, &[4], &one) {
+        assert_eq!(diff, None, "the pack's song on {n} threads: the same bits");
+        assert!(on_workers > 0, "the pack's song on {n} threads: tasks ran on workers");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // RENDER-2 (track sx): examples/resample's warped clips are stretched by std's `std:stretch`, made
 // before the render starts, so the example renders the same bits on 2, 3, 4 and 7 threads as on
 // one; and its chops track alone sounds in both warped clips (3 to 5 s, and from 6 s).
