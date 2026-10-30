@@ -96,7 +96,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 22 | **The rest of the Sampler**: loop points, start and end, reverse, velocity layers, round robin and choke groups; zones made by dropping several WAVs (code only today); a waveform and a root picker on its card; files other than WAV. | Sampled drums and vocal chops are pop staples. | Yes | medium |
+| 22 | **The rest of the Sampler**. Since std 0.5.0 it plays `regions` (PKG-15, PKG-16): velocity layers, round robin, release sounds, loops, and each region's tune, volume, pan and offset. Still missing: a sustain pedal (needs controller events in kernels); choke groups (a closed hat cutting an open one: a voice can't hear the others yet); crossfades between velocity layers; a turn counted for each region alone, as SFZ does (std counts the lane's note starts, so on one lane a kit's takes turn together: give a drum whose takes must alternate a lane of its own); band-limited playback (a sample played far up aliases); streaming, for instruments bigger than memory (every file is decoded whole); end points and reverse; zones or regions made by dropping several WAVs (code only today); a waveform and a root picker on its card; files other than WAV. | Sampled drums, pianos and vocal chops are pop staples. | Yes | medium |
 
 - **Your presets can't be renamed or deleted** in the app, and there is no Show in Finder: tidy the Presets folder by hand.
 - **A card doesn't say which preset it came from**, or that its knobs changed since.
