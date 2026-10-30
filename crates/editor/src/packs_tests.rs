@@ -84,10 +84,9 @@ fn adding_a_pack_effect_writes_its_dependency_and_lock() {
     let made = crate::tracks::add(&mut s, "std:synth-pluck", None, None, None).unwrap();
     assert!(!f.0.join("music2.lock").exists());
     let file = format!("tracks/{}.ts", made.module);
-    let rev = s.accepted().clone();
+    let rev = s.accepted();
     let site = rev.compiled.sites.iter().find(|x| x.file == file && x.callee.ends_with("pluck")).expect("the pluck's call");
-    let call = format!("{file}#{}", site.ordinal);
-    let at = rev.number;
+    let (call, at) = (format!("{file}#{}", site.ordinal), rev.number);
     crate::effect::add_effect(&mut s, at, &call, "@test/tiny:tiny-crunch").unwrap_or_else(|e| panic!("{e}"));
     assert!(f.read("music2.toml").contains("\"@test/tiny\" = \"0.1\""));
     assert!(f.read("music2.lock").contains("@test/tiny"));

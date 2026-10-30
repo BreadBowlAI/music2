@@ -137,7 +137,7 @@ fn folder_name(part: &str) -> String {
 /// `std:synth-pluck`, `clap/org.surge-synth-team.surge-xt` for a plugin. A project's own
 /// component, which has no package, goes in `project`.
 pub fn folder(sound: &str) -> PathBuf {
-    let (package, name) = sound.split_once(':').unwrap_or(("project", sound));
+    let (package, name) = m2_song::pack::split_id(sound).unwrap_or(("project", sound));
     Path::new(&folder_name(package)).join(folder_name(name))
 }
 

@@ -514,7 +514,7 @@ fn resolve_one(project: &Path, name: &PackName, dep: &Dependency, lock: &Lock, s
         Dependency::Version(req) => req,
     };
     let installed = store.versions(name);
-    let install = format!("Install it from its folder with `m2 pack install <folder>`");
+    let install = "Install it from its folder with `m2 pack install <folder>`";
     if let Some(l) = lock.get(name) {
         if !req.matches(l.version) {
             return Err(Diagnostic::error(

@@ -294,7 +294,7 @@ impl Namer {
         let Some(n) = self.song.flat().nodes.get(node) else { return "A sound".into() };
         let what = match &n.op {
             FOp::Poly { .. } => "instrument",
-            FOp::Kernel { kernel, .. } => kernel.split_once(':').map_or(kernel.as_str(), |(_, name)| name),
+            FOp::Kernel { kernel, .. } => m2_song::pack::split_id(kernel).map_or(kernel.as_str(), |(_, name)| name),
             _ => n.name.rsplit_once('/').map_or(n.name.as_str(), |(_, id)| id),
         };
         format!("The {what} {}", self.place_of(&n.module))

@@ -285,3 +285,12 @@ fn the_store_lists_what_is_installed() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+// PACK-4: the editor names a kernel, a component and a preset folder by the same split.
+#[test]
+fn a_scoped_id_splits_into_its_whole_package() {
+    for (id, package, rest) in [("@alice/felt-piano:grain", "@alice/felt-piano", "grain"), ("std:svf", "std", "svf")] {
+        assert_eq!(split_id(id), Some((package, rest)));
+        assert!(PackName::new(package).is_ok(), "{package} is a package's name");
+    }
+}
