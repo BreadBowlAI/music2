@@ -1,4 +1,4 @@
-# .github/workflows/pull-request.yml: the robot's check of a pull request to the registry
+# .github/workflows/pull-request.yml: the robot's advice on a pull request to the registry
 # (music2's contract, REG-2, REG-5 and REG-10).
 #
 # In short: on every pull request it checks the pack files against main (no listed version
@@ -7,16 +7,22 @@
 # a scratch folder: its files, previews and facts, and a catalog. What the robot says is in the
 # job's summary, and its tick or cross is on the pull request.
 #
+# It is advice, not a gate. A pull_request run uses the workflow file of the pull request's own
+# merge commit, so a pull request can change what this file checks. Every pull request is merged
+# by one of BreadBowlAI's people, and CODEOWNERS makes one of them review any change outside
+# packs/ (this file among them). The gate that holds whatever this file says is main's build job
+# (main.yml): it checks the registry against what the bucket publishes before anything is copied.
+#
 # Security (GitHub's "pwn request" trap): this runs on `pull_request`, never
-# `pull_request_target`, so it has no secret and its token only reads. A pull request's own change
-# to this file runs here too, and still has nothing to steal. The checkouts keep no credentials.
-# A pull request's words (its author, an address in a pack file) reach the shell only through
-# environment variables, never written into a script. Every action is pinned by its full commit.
+# `pull_request_target`, so it has no secret and its token only reads. The checkout keeps no
+# credentials. A pull request's words (its author, an address in a pack file) reach the shell only
+# through environment variables, never written into a script, and m2's output can't start a
+# workflow command (::stop-commands::). Every action is pinned by its full commit.
 #
 # Before it runs, set M2_VERSION and M2_SHA256 below to a music2 release that has
 # `m2 registry` (the first is the one after 0.1.0) and the SHA-256 of its
 # m2-<version>-linux-x86_64.tar.gz (in the release's SHA256SUMS), and BUCKET_URL to the bucket's
-# public address (decision D10).
+# own address: R2's `https://pub-<id>.r2.dev`, never the cached `packs.<domain>` (README).
 
 name: Check
 
@@ -34,7 +40,7 @@ concurrency:
 env:
   M2_VERSION: "0.2.0"
   M2_SHA256: "0000000000000000000000000000000000000000000000000000000000000000"
-  BUCKET_URL: "https://packs.example.com"
+  BUCKET_URL: "https://pub-0000000000000000.r2.dev"
   M2_AUDIO: none
   M2_MIDI: none
 
@@ -44,14 +50,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      # The pull request's merge commit, and its first parent: main as the pull request found it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: head
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: base
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Get m2
@@ -69,47 +72,79 @@ jobs:
           ASSOCIATION: ${{ github.event.pull_request.author_association }}
         run: |
           set -euo pipefail
+          git -C head worktree add -q --detach ../base HEAD^1
+          # What it changes, by git's own list: a link is a change of its own, never followed, and
+          # a path counts as inside a folder only when it starts with it (packs/, never a/packs/).
+          git -C head diff --name-only --no-renames HEAD^1 HEAD > changed.txt
           case "$ASSOCIATION" in
-            OWNER|MEMBER)
-              m2 registry check head --base base ;;
-            *)
-              # Someone not of BreadBowlAI changes only pack files, and only their own.
-              if ! diff -rq --exclude=.git --exclude=packs head base > outside.txt; then
-                echo "A pull request from outside BreadBowlAI may change only files under packs/. It changes:" >&2
-                cat outside.txt >&2
-                exit 1
-              fi
-              m2 registry check head --base base --author "$AUTHOR" ;;
+            OWNER|MEMBER) allowed='' ;;
+            *) if [ "$AUTHOR" = 'dependabot[bot]' ]; then allowed='.github/'; else allowed='packs/'; fi ;;
           esac
+          if [ -n "$allowed" ]; then
+            awk -v p="$allowed" 'index($0, p) != 1' changed.txt > outside.txt
+            if [ -s outside.txt ]; then
+              echo "This pull request may change only files under $allowed. It changes:" >&2
+              cat outside.txt >&2
+              exit 1
+            fi
+          fi
+          stop=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          echo "::stop-commands::$stop"
+          status=0
+          case "$ASSOCIATION" in
+            OWNER|MEMBER) m2 registry check head --base base || status=$? ;;
+            *) m2 registry check head --base base --author "$AUTHOR" || status=$? ;;
+          esac
+          echo "::$stop::"
+          exit "$status"
 
       - name: Fetch the new versions' sources
         run: |
           set -euo pipefail
           mkdir sources
           m2 registry pending head --out bucket --from "$BUCKET_URL" > pending.txt
-          n=0
-          while read -r name version source; do
-            n=$((n + 1))
-            echo "fetching $name $version from $source"
-            mkdir "sources/$n"
-            curl -fsSL --proto '=https' --max-filesize 10000000000 -o "sources/$n.tar.gz" "$source"
-            tar xzf "sources/$n.tar.gz" -C "sources/$n" --no-same-owner --no-same-permissions
-            rm "sources/$n.tar.gz"
+          # curl and tar name what a source holds: no line of theirs starts a workflow command.
+          stop=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          echo "::stop-commands::$stop"
+          # Each into sources/<its hash's hex>/, alone: one that can't be fetched or is too big
+          # fails its own build, never the others'.
+          while read -r hash name version source; do
+            echo "fetching $name $version"
+            if ! curl -fsSL --proto '=https' --max-filesize 10000000000 -o "sources/$hash.tar.gz" "$source"; then
+              echo "couldn't fetch $name $version from $source"
+              continue
+            fi
+            # Its unpacked size, from the archive's own list, before anything is written (D9).
+            size=$(tar -tvzf "sources/$hash.tar.gz" | awk '{ s += $3 } END { print s + 0 }') || size=-1
+            if [ "$size" -lt 0 ] || [ "$size" -gt 10000000000 ]; then
+              echo "$name $version unpacks to more than 10 GB, or doesn't read as a .tar.gz"
+            else
+              mkdir "sources/$hash"
+              tar xzf "sources/$hash.tar.gz" -C "sources/$hash" --no-same-owner --no-same-permissions ||
+                echo "$name $version doesn't unpack whole"
+            fi
+            rm -f "sources/$hash.tar.gz"
           done < pending.txt
+          echo "::$stop::"
 
       - name: Build
         run: |
           set -euo pipefail
           made=$(TZ=UTC0 git -C head log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
-          m2 registry build head --sources sources --out bucket --from "$BUCKET_URL" --made "$made" 2>&1 | tee built.txt
+          stop=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          echo "::stop-commands::$stop"
+          status=0
+          m2 registry build head --sources sources --out bucket --from "$BUCKET_URL" --made "$made" 2>&1 | tee built.txt || status=$?
+          echo "::$stop::"
+          exit "$status"
 
       - name: Say what the robot found
         if: always()
         run: |
           {
-            echo "## The registry's robot"
+            echo "## The robot's advice"
             echo
-            echo '```'
+            echo '````'
             cat built.txt 2> /dev/null || echo "It didn't get as far as a build: see the job's steps."
-            echo '```'
+            echo '````'
           } >> "$GITHUB_STEP_SUMMARY"

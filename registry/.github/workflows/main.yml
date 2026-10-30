@@ -1,16 +1,24 @@
 # .github/workflows/main.yml: the robot on main, which fills the bucket (music2's contract,
 # REG-5, REG-7 and REG-10).
 #
-# In short: after a merge, the build job checks the registry, fetches each version the bucket
-# hasn't got yet, and builds it with `m2 registry build` (its files, previews and facts, and a new
-# catalog). The publish job then copies what was built into the bucket, catalog.json last, so the
-# app never sees a catalog whose files aren't there yet, and deletes the files of removed
-# versions.
+# In short: after a merge, the build job checks the registry, and checks it against what the
+# bucket publishes already (no published version changed, no take-down taken back, no hash taken):
+# that is the registry's gate, whatever a pull request's own workflow said. It then fetches each
+# version the bucket hasn't got yet and builds each on its own with `m2 registry build` (its
+# files, previews and facts, then a new catalog). A version that can't be fetched or is refused is
+# left out and stays pending; the rest are published. The publish job checks what the build made,
+# copies it into the bucket, catalog.json last, so the app never sees a catalog whose files aren't
+# there yet, and deletes the files of versions taken down. The last job fails when a version was
+# left out, so it is seen.
 #
-# Security: the build job runs a pack's code (in music2's sandbox) and has no secret. The publish
-# job, which alone has the bucket's key, runs no pack code and no m2: it copies files. The key
-# lives in the `bucket` environment, which the owner limits to main. Every action is pinned by its
-# full commit, and the checkout keeps no credentials.
+# Security: the build job runs a pack's code (in music2's sandbox) on a GitHub runner, where code
+# that got out of the sandbox could do what the runner can (it has sudo and the network), and it
+# has no secret: its token only reads. The publish job alone has the bucket's key, runs no pack
+# code and no m2, and trusts nothing the build made: it takes only files at the bucket's four kinds
+# of path, each blob and catalog checked against the hash it is named by, never replacing a file
+# the bucket has (only catalog.json changes), and deletes only blobs. The key lives in the
+# `bucket` environment, which the owner limits to main. Every action is pinned by its full commit,
+# the checkout keeps no credentials, and m2's output can't start a workflow command.
 #
 # Before it runs, set M2_VERSION, M2_SHA256 and BUCKET_URL below as in pull-request.yml, R2_BUCKET
 # to the bucket's name, and in the `bucket` environment the secrets R2_ENDPOINT
@@ -35,7 +43,7 @@ concurrency:
 env:
   M2_VERSION: "0.2.0"
   M2_SHA256: "0000000000000000000000000000000000000000000000000000000000000000"
-  BUCKET_URL: "https://packs.example.com"
+  BUCKET_URL: "https://pub-0000000000000000.r2.dev"
   R2_BUCKET: "music2-packs"
   M2_AUDIO: none
   M2_MIDI: none
@@ -45,11 +53,12 @@ jobs:
     name: Build
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    outputs:
+      status: ${{ steps.build.outputs.status }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: registry
-          fetch-depth: 2
           persist-credentials: false
 
       - name: Get m2
@@ -64,43 +73,64 @@ jobs:
       - name: Check the pack files
         run: |
           set -euo pipefail
-          # Against the commit before, as a pull request is checked, in case one came another way:
-          # no listed version changed.
-          if git -C registry rev-parse -q --verify HEAD~1 > /dev/null; then
-            git -C registry worktree add -q --detach ../before HEAD~1
-            m2 registry check registry --base before
-          else
-            m2 registry check registry
-          fi
+          stop=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          echo "::stop-commands::$stop"
+          status=0
+          m2 registry check registry || status=$?
+          echo "::$stop::"
+          exit "$status"
 
       - name: Fetch the new versions' sources
         run: |
           set -euo pipefail
           mkdir sources
           m2 registry pending registry --out out/bucket --from "$BUCKET_URL" > pending.txt
-          n=0
-          while read -r name version source; do
-            n=$((n + 1))
-            echo "fetching $name $version from $source"
-            mkdir "sources/$n"
-            curl -fsSL --proto '=https' --max-filesize 10000000000 -o "sources/$n.tar.gz" "$source"
-            tar xzf "sources/$n.tar.gz" -C "sources/$n" --no-same-owner --no-same-permissions
-            rm "sources/$n.tar.gz"
+          # curl and tar name what a source holds: no line of theirs starts a workflow command.
+          stop=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          echo "::stop-commands::$stop"
+          # Each into sources/<its hash's hex>/, alone: one that can't be fetched or is too big
+          # fails its own build, never the others'.
+          while read -r hash name version source; do
+            echo "fetching $name $version"
+            if ! curl -fsSL --proto '=https' --max-filesize 10000000000 -o "sources/$hash.tar.gz" "$source"; then
+              echo "couldn't fetch $name $version from $source"
+              continue
+            fi
+            # Its unpacked size, from the archive's own list, before anything is written (D9).
+            size=$(tar -tvzf "sources/$hash.tar.gz" | awk '{ s += $3 } END { print s + 0 }') || size=-1
+            if [ "$size" -lt 0 ] || [ "$size" -gt 10000000000 ]; then
+              echo "$name $version unpacks to more than 10 GB, or doesn't read as a .tar.gz"
+            else
+              mkdir "sources/$hash"
+              tar xzf "sources/$hash.tar.gz" -C "sources/$hash" --no-same-owner --no-same-permissions ||
+                echo "$name $version doesn't unpack whole"
+            fi
+            rm -f "sources/$hash.tar.gz"
           done < pending.txt
+          echo "::$stop::"
 
+      # The gate: against what the bucket publishes (REG-5). A refusal of the whole build writes
+      # no catalog, and nothing is published; a version left out is said, and the rest go on.
       - name: Build
+        id: build
         run: |
           set -euo pipefail
           made=$(TZ=UTC0 git -C registry log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
+          stop=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          echo "::stop-commands::$stop"
+          status=0
           m2 registry build registry --sources sources --out out/bucket --from "$BUCKET_URL" --made "$made" \
-            --to-delete out/to-delete.txt 2>&1 | tee built.txt
+            --to-delete out/to-delete.txt 2>&1 | tee built.txt || status=$?
+          echo "::$stop::"
           {
             echo "## The registry's robot"
             echo
-            echo '```'
+            echo '````'
             cat built.txt
-            echo '```'
+            echo '````'
           } >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          test -f out/bucket/catalog.json
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -121,7 +151,49 @@ jobs:
           name: bucket
           path: out
 
-      - name: Copy into the bucket, then delete the removed versions' files
+      # No pack code and no m2 here: the build ran a pack's code, so what it made is checked as a
+      # stranger's would be.
+      - name: Check what the build made
+        run: |
+          set -euo pipefail
+          cd out
+          bad=0
+          hex='[0-9a-f]{64}'
+          # Only folders and plain files, at the bucket's four kinds of path.
+          while IFS= read -r -d '' f; do
+            p=${f#./}
+            f="bucket/$p"
+            if [ -d "$f" ] && [ ! -L "$f" ]; then
+              case "$p" in blobs|blobs/sha256|versions|catalog) ;; *) echo "not a bucket folder: $p" >&2; bad=1 ;; esac
+              continue
+            fi
+            if [ ! -f "$f" ] || [ -L "$f" ]; then
+              echo "not a plain file: $p" >&2; bad=1; continue
+            fi
+            if ! printf '%s\n' "$p" | grep -Eqx "blobs/sha256/$hex|versions/$hex\.json|catalog/$hex\.json|catalog\.json"; then
+              echo "not a bucket path: $p" >&2; bad=1; continue
+            fi
+            # A blob and a catalog are named by their own SHA-256.
+            case "$p" in
+              blobs/*|catalog/*)
+                name=$(basename "$p" .json)
+                [ "$(sha256sum < "$f" | cut -d' ' -f1)" = "$name" ] || { echo "$p isn't the file its name says" >&2; bad=1; } ;;
+            esac
+          done < <(cd bucket && find . -mindepth 1 -print0)
+          # catalog.json names a catalog that is here, with its size.
+          catalog=$(jq -r '.catalog' bucket/catalog.json)
+          size=$(jq -r '.size' bucket/catalog.json)
+          if ! printf '%s\n' "$catalog" | grep -Eqx "sha256:$hex" || [ ! -f "bucket/catalog/${catalog#sha256:}.json" ] ||
+            [ "$(wc -c < "bucket/catalog/${catalog#sha256:}.json")" != "$size" ]; then
+            echo "catalog.json doesn't name a catalog that is here" >&2; bad=1
+          fi
+          # Only blobs are ever deleted.
+          if grep -Evx "blobs/sha256/$hex" to-delete.txt > not-blobs.txt; then
+            echo "to-delete.txt names more than blobs:" >&2; cat not-blobs.txt >&2; bad=1
+          fi
+          exit "$bad"
+
+      - name: Copy into the bucket, then delete the taken-down versions' files
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -132,18 +204,49 @@ jobs:
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
         run: |
           set -euo pipefail
-          cd out
-          # Every file but catalog.json is named by its hash and never changes: copy the new ones.
-          for d in blobs versions catalog; do
-            if [ -d "bucket/$d" ]; then
-              aws s3 sync "bucket/$d" "s3://$R2_BUCKET/$d" --size-only --endpoint-url "$R2_ENDPOINT" \
-                --cache-control "public, max-age=31536000, immutable" --only-show-errors
+          cd out/bucket
+          # put <key> <file> <content type>: only a key the bucket hasn't got (If-None-Match: *),
+          # so a file there is never replaced. One there already is the same file: its name is
+          # its hash, or (versions/) its version's, written once.
+          put() {
+            local err
+            if err=$(aws s3api put-object --bucket "$R2_BUCKET" --key "$1" --body "$1" --content-type "$2" \
+              --cache-control "public, max-age=31536000, immutable" --if-none-match '*' \
+              --endpoint-url "$R2_ENDPOINT" 2>&1 > /dev/null); then
+              echo "put $1"
+            elif ! printf '%s' "$err" | grep -q 'PreconditionFailed'; then
+              printf '%s\n' "$err" >&2
+              return 1
             fi
+          }
+          for d in blobs/sha256 versions catalog; do
+            [ -d "$d" ] || continue
+            type=application/json
+            [ "$d" = blobs/sha256 ] && type=application/octet-stream
+            for f in "$d"/*; do put "$f" "$type"; done
           done
           # catalog.json last: the app moves to the new catalog only once all it names is there.
-          aws s3 cp bucket/catalog.json "s3://$R2_BUCKET/catalog.json" --endpoint-url "$R2_ENDPOINT" \
-            --cache-control "public, max-age=300" --content-type application/json --only-show-errors
+          aws s3api put-object --bucket "$R2_BUCKET" --key catalog.json --body catalog.json --content-type application/json \
+            --cache-control "public, max-age=300" --endpoint-url "$R2_ENDPOINT" > /dev/null
           while read -r path; do
             echo "deleting $path"
             aws s3 rm "s3://$R2_BUCKET/$path" --endpoint-url "$R2_ENDPOINT" --only-show-errors
-          done < to-delete.txt
+          done < ../to-delete.txt
+          if [ -s ../to-delete.txt ]; then
+            echo "::notice::Taken-down files were deleted from the bucket. Purge them from Cloudflare's cache too (the README's take-down steps)."
+          fi
+
+  report:
+    name: Every version built
+    needs: [build, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Say whether a version was left out
+        env:
+          STATUS: ${{ needs.build.outputs.status }}
+        run: |
+          if [ "$STATUS" != 0 ]; then
+            echo "Some versions weren't built: the Build job's summary says which and why. They stay pending." >&2
+            exit 1
+          fi
