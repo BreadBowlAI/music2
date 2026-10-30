@@ -96,7 +96,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 22 | **The rest of the Sampler**: loop points, start and end, reverse, velocity layers, round robin and choke groups; zones made by dropping several WAVs (code only today); a waveform and a root picker on its card; files other than WAV. | Sampled drums and vocal chops are pop staples. | Yes | medium |
+| 22 | **The rest of the Sampler**. Since std 0.5.0 it plays `regions` (PKG-15, PKG-16): velocity layers, round robin, release sounds, loops, and each region's tune, volume, pan and offset. Still missing: a sustain pedal (needs controller events in kernels); choke groups (a closed hat cutting an open one: a voice can't hear the others yet); crossfades between velocity layers; a turn counted for each key or region alone, as SFZ does (std counts the lane's note starts, so on one lane notes that alternate keep their takes: give a drum whose takes must alternate a lane of its own; a count for each key needs one that sees each note's pitch, and one signal outside the voices can't say which keys of a chord started, so it waits for event ports in kernels, ABI-2, or for the poly to give each note its key's count); band-limited playback (a sample played far up aliases); streaming, for instruments bigger than memory (every file is decoded whole); from SFZ, an envelope and a velocity amount for each region (the Sampler's `attack`, `release`, `mode` and `velocity` are for all its regions), a loop that goes on after the note ends (`loop_continuous`), and a release sound that gets quieter the longer the note was held (`rt_decay`); end points and reverse; zones or regions made by dropping several WAVs (code only today); a waveform and a root picker on its card; files other than WAV. | Sampled drums, pianos and vocal chops are pop staples. | Yes | medium |
 
 - **Your presets can't be renamed or deleted** in the app, and there is no Show in Finder: tidy the Presets folder by hand.
 - **A card doesn't say which preset it came from**, or that its knobs changed since.
@@ -237,8 +237,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **The dock and the browser panel start over at each launch** (which view the dock shows, and its height): the browser's storage starts empty, as the page gets a new address each time.
 - **Renaming a song's folder starts Undo over**: the song closes and opens again from there (Rename Song… says so).
-- **A song asking for std "0.2" or "0.3"** gets `pkg.unsatisfied` in this app (std 0.4.0); its message names the line to write (`std = "0.4"`). A "0.2" song may sound a little different (one-note sounds now keep each note's own velocity); a "0.3" song sounds the same, though the message says it may not.
-- **A song's std line names no patch version** (`std = "0.4"`), so a song that needs a later patch gets a missing import in an app with an earlier one, not `pkg.unsatisfied`.
+- **A song asking for std "0.2", "0.3" or "0.4"** gets `pkg.unsatisfied` in this app (std 0.5.0); its message names the line to write (`std = "0.5"`). A "0.2" song may sound a little different (one-note sounds now keep each note's own velocity); a "0.3" or "0.4" song sounds the same, though the message says it may not.
+- **A song's std line names no patch version** (`std = "0.5"`), so a song that needs a later patch gets a missing import in an app with an earlier one, not `pkg.unsatisfied`.
 
 ## Code editor
 

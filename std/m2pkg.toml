@@ -16,7 +16,7 @@
 
 [package]
 name = "std"
-version = "0.4.0"
+version = "0.5.0"
 license = "MIT OR Apache-2.0"
 description = "Oscillators, envelopes, filters, mixing, dynamics, and the instruments built from them"
 wasm = "kernels/std.wasm"
@@ -388,7 +388,7 @@ outputs = ["out: audio<1>"]
 
 [[kernel]]
 name = "sampler"
-description = "Sampler voice: plays one of its audio files (its assets) from the start, picked when the note starts by the note ranges in its values (root, lowest, highest for each file; left out, 60, 0, 127), sped up by 2^((pitch + tune - root) / 12) and the file's rate over the song's, read with the cubic Hermite formula clips use. `mode` 0 plays to the file's end whatever the note does (one-shot); 1 stops with the note, over `release` (gated). The level follows velocity; stereo out"
+description = "Sampler voice: plays one of its audio files (its assets) from the start, picked when the note starts by the note ranges in its values (root, lowest, highest for each file; left out, 60, 0, 127), sped up by 2^((pitch + tune - root) / 12) and the file's rate over the song's, read with the cubic Hermite formula clips use. `mode` 0 plays to the file's end whatever the note does (one-shot); 1 stops with the note, over `release` (gated). The level is level × (1 - veltrack + veltrack × velocity), read when the note starts; stereo out"
 inputs = [
   "pitch: control<semitones>",
   "gate: control<unit01>",
@@ -398,12 +398,44 @@ inputs = [
   "attack: control<seconds> = 0 in 0..5",
   "release: control<seconds> = 0.05 in 0..5",
   "mode: control<scalar> = 0 in 0..1",
+  "veltrack: control<unit01> = 1 in 0..1",
+]
+outputs = ["out: audio<2>"]
+
+# std:regions plays std/sampler's `regions` (architecture.md, PKG-15 and PKG-16): the sampler voice
+# above, with regions in its values instead of zones. Its assets are the files, each once. Its values:
+#   [0]                  how many values each region takes: 15 (a region with fewer takes the
+#                        defaults for the rest; values past the ones it knows are skipped)
+#   then, region after region, 15 values each:
+#    0 file      which asset, from 0          8 trigger   0 attack, 1 release
+#    1 root      the note it was recorded at  9 loop start a frame of the file, or -1 for no loop
+#    2, 3 keys   lowest, highest note        10 loop end   the loop's last frame, both played
+#    4, 5 velocity lowest, highest, 1..127   11 tune      cents
+#    6, 7 round robin: position, of          12 volume    dB
+#                                            13 pan       -1..1
+#                                            14 offset    frames into the file it starts from
+# `count` is how many times notes have started on the lane (std:hitcount of a one-voice poly of
+# std:drumhit), read when the note starts: its turn is ((count - 1) mod of) + 1. Left out, 1.
+[[kernel]]
+name = "regions"
+description = "Sampler voice for regions: when a note starts, every attack region whose keys hold its pitch, whose velocity range holds its velocity (round(velocity × 127), 1 to 127) and whose round robin position is its turn (from `count`) plays from its offset, summed; when it ends, the release regions that match it start and play to their end. A region with a loop loops from its end to its start while the note is held, crossfaded over up to 5 ms, then plays on. Each plays as std:sampler's file does, with its tune, volume and pan; stereo out"
+inputs = [
+  "pitch: control<semitones>",
+  "gate: control<unit01>",
+  "velocity: control<unit01> = 0.8",
+  "tune: control<semitones> = 0 in -24..24",
+  "level: control<db> = 0 in -24..12",
+  "attack: control<seconds> = 0 in 0..5",
+  "release: control<seconds> = 0.05 in 0..5",
+  "mode: control<scalar> = 0 in 0..1",
+  "veltrack: control<unit01> = 1 in 0..1",
+  "count: audio<1>",
 ]
 outputs = ["out: audio<2>"]
 
 [[kernel]]
 name = "drumhit"
-description = "Marks the start of a drum note for std's drums: on its first sample, 16^group for the choke group of its drum (by General MIDI pitch, or `model`) plus 16^5 for every hit, else 0"
+description = "Marks the start of a note for std's drums (and, in one voice, the note starts std/sampler counts for its round robin): on its first sample, 16^group for the choke group of its drum (by General MIDI pitch, or `model`) plus 16^5 for every hit, else 0"
 inputs = ["pitch: control<semitones>", "model: control<scalar> = -1"]
 outputs = ["out: audio<1>"]
 

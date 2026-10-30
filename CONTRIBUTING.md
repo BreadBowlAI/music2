@@ -65,7 +65,7 @@ cargo run --locked --release -p music2-desktop
 
 | Tier | When | What |
 |---|---|---|
-| **Pull request** | every pull request and each push to `main` (and the merge queue, if one is on) | fmt, clippy, the Rust tests in 3 parts, the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences (cargo-deny, npm), the workflow files (actionlint, and zizmor for their security), and the checks' own cases. Security advisories (RustSec) only when a `Cargo.lock` or `deny.toml` changes. Only checks that give the same answer every time, on any day. |
+| **Pull request** | every pull request and each push to `main` (and the merge queue, if one is on) | fmt, clippy, the Rust tests in 3 parts, the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 14 renders, licences (cargo-deny, npm), the workflow files (actionlint, and zizmor for their security), and the checks' own cases. Security advisories (RustSec) only when a `Cargo.lock` or `deny.toml` changes. Only checks that give the same answer every time, on any day. |
 | **Nightly** | every day on `main`, on GitHub's machines, once the repository is public | the full check without the timing gates: every pull request check, with the browser suites one at a time, the tests the pull request tier leaves out, and the security advisories. On macOS too: the Rust tests, the pool's models, the browser suites and the renders, less the few whose clock is a sleep (GitHub's Mac's sleeps run long: `ci/sleeps-tests.txt`, and the suites `e2e/run.mjs` tags `sleeps`). |
 | **Timing gates** | every night on a quiet machine of a maintainer's | the gates that time real-time audio. A shared cloud machine can't judge them. |
 

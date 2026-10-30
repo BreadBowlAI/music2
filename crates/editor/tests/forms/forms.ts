@@ -712,6 +712,10 @@ export default song(({ lane, time }) => {
     sampler(lane.notes("chops"), { tune: 2, mode: "gate", release: 0.05 }),
     // song.ts:62 `sampler` leaves out release: a cable written in
     sampler(lane.notes("chops"), { tune: 2, mode: "gate", release: wobble }),
+    // song.ts:62 `sampler` leaves out velocity: a value written in
+    sampler(lane.notes("chops"), { tune: 2, mode: "gate", velocity: 1 }),
+    // song.ts:62 `sampler` leaves out velocity: a cable written in
+    sampler(lane.notes("chops"), { tune: 2, mode: "gate", velocity: wobble }),
     // song.ts:63 `master` leaves out ceiling: a value written in
     master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops }), { ceiling: -1 }),
     // song.ts:63 `master` leaves out ceiling: a cable written in
