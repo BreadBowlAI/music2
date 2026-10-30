@@ -370,6 +370,136 @@ fn a_preset_outside_a_strict_range_is_named() {
     assert!(text.contains("presets/tiny-keys/Low.json") && text.contains("brightness") && text.contains("range"), "{text}");
 }
 
+/// A copy of the pack `tiny` at `version` with a kernel of its own, in a folder beside it:
+/// `@test/tiny:sine`, std's module under its own name (`tag` as a custom section, so each copy's
+/// module has its own hash), played by the instrument `tinyTone`.
+fn tiny_with_kernel(t: &Temp, version: &str, tag: &str) -> PathBuf {
+    let dir = tiny_at(t, version);
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
+    let toml = toml.replace(&format!("version = \"{version}\""), &format!("version = \"{version}\"\nwasm = \"k.wasm\""))
+        + "\n[[kernel]]\nname = \"sine\"\ndescription = \"A sine\"\ninputs = [\"freq: control<hz> = 440\"]\noutputs = [\"out: audio<1>\"]\n";
+    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
+    let mut wasm = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm")).unwrap();
+    let name = b"m2-test";
+    wasm.extend([0u8, (1 + name.len() + tag.len()) as u8, name.len() as u8]);
+    wasm.extend(name);
+    wasm.extend(tag.as_bytes());
+    std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
+    let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
+    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+                id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
+                inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
+                (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
+    std::fs::write(dir.join("src/index.ts"), index + tone).unwrap();
+    dir
+}
+
+/// A Tx that writes `files` (path, text) in the song at `song`, each based on what it holds now.
+fn tx_writing(song: &Path, files: &[(&str, String)]) -> serde_json::Value {
+    let mut base = serde_json::Map::new();
+    let mut ops = vec![];
+    let mut ranges = serde_json::Map::new();
+    for (path, text) in files {
+        let now = std::fs::read(song.join(path)).unwrap();
+        base.insert(path.to_string(), serde_json::json!(m2_song::Sha::of(&now).prefixed()));
+        ops.push(serde_json::json!({"op": "write", "file": path, "text": text}));
+        ranges.insert(path.to_string(), serde_json::json!("whole"));
+    }
+    serde_json::json!({"id": "tx-move", "base": base, "label": ["before", "after"], "ops": ops, "expect": {"confined": {"ranges": ranges}}})
+}
+
+// PACK-9, AGENT-7: `m2 listen --with` renders each side with its own packs: the song as it is with
+// 0.1.0 (no kernel of its own), the change with 0.2.0 and the kernel it plays.
+#[test]
+fn listen_with_renders_each_side_with_its_own_packs() {
+    let t = Temp::new("listen-with");
+    copy(&fixtures(), &t.0.join("packs"));
+    let song = t.0.join("packs/song-store");
+    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
+    ok(t.m2(&["pack", "install", tiny_with_kernel(&t, "0.2.0", "two").to_str().unwrap()]));
+    ok(t.m2(&["check", song.to_str().unwrap()]));
+    assert_eq!(locked(&song), "0.1.0");
+    // The move: the line, the lock (as `m2 pack update` would write it), and the keys playing the
+    // new version's kernel.
+    let manifest =
+        std::fs::read_to_string(song.join("music2.toml")).unwrap().replace("\"@test/tiny\" = \"0.1\"", "\"@test/tiny\" = \"0.2\"");
+    let hash = m2_song::Sha::of(&std::fs::read(t.store().join("@test/tiny/0.2.0/m2pack.json")).unwrap());
+    let lock = std::fs::read_to_string(song.join("music2.lock")).unwrap();
+    let at = lock.find("sha256:").unwrap();
+    let lock = format!("{}{}{}", &lock[..at], hash.prefixed(), &lock[at + 71..]).replace("version = \"0.1.0\"", "version = \"0.2.0\"");
+    let keys = "import { track } from \"@m2/core\";\nimport { tinyTone } from \"@test/tiny\";\n\nexport default track(\"keys\", { name: \"Keys\" }, ({ lane }) => tinyTone(lane.notes(\"notes\")));\n";
+    let tx = tx_writing(&song, &[("music2.toml", manifest), ("music2.lock", lock), ("tracks/keys.ts", keys.to_string())]);
+    let file = t.0.join("move.json");
+    std::fs::write(&file, tx.to_string()).unwrap();
+    let out = ok(t.m2(&["listen", song.to_str().unwrap(), "--with", file.to_str().unwrap(), "--json"]));
+    let heard: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    let own = |side: &str| heard[side]["tracks"]["keys"]["own"].clone();
+    // Only 0.2.0 has the kernel, so "after" played it: a steady sine, 3 dB from peak to RMS.
+    let after = own("after");
+    assert!(after["silent"] == false && after["crest"].as_f64().is_some_and(|c| (c - 3.0).abs() < 0.2), "{heard:#}");
+    assert!(own("before")["silent"] == false, "before plays the pack's keys: {heard:#}");
+    assert!(heard["difference"].is_object(), "{heard:#}");
+    // Nothing was written: the song still uses 0.1.0.
+    assert_eq!(locked(&song), "0.1.0");
+}
+
+// PACK-8, PACK-9, PACK-2: a version in the store this app can't run (a newer app installed it,
+// needing a newer std) is never chosen: not by `m2 pack update`, nor by a song with no lock entry;
+// with only it installed, the song says why.
+#[test]
+fn a_version_this_app_cant_run_is_never_chosen() {
+    let t = Temp::new("runs");
+    copy(&fixtures(), &t.0.join("packs"));
+    let song = t.0.join("packs/song-store");
+    let s = song.to_str().unwrap();
+    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
+    // 0.1.1 needs std 0.9: install refuses it here, so it is put in the store as a newer app would.
+    let later = tiny_at(&t, "0.1.1");
+    let toml = std::fs::read_to_string(later.join("m2pkg.toml")).unwrap();
+    assert!(toml.contains("std = \"0.4\""), "{toml}");
+    std::fs::write(later.join("m2pkg.toml"), toml.replace("std = \"0.4\"", "std = \"0.9\"")).unwrap();
+    ok(t.m2(&["pack", "build", later.to_str().unwrap()]));
+    copy(&later, &t.store().join("@test/tiny/0.1.1"));
+
+    ok(t.m2(&["pack", "update", s]));
+    assert_eq!(locked(&song), "0.1.0", "update stays on the newest version this app runs");
+    std::fs::remove_file(song.join("music2.lock")).unwrap();
+    ok(t.m2(&["check", s]));
+    ok(t.m2(&["pack", "lock", s]));
+    assert_eq!(locked(&song), "0.1.0");
+
+    ok(t.m2(&["pack", "remove", "@test/tiny", "0.1.0"]));
+    std::fs::remove_file(song.join("music2.lock")).unwrap();
+    let text = failed(t.m2(&["check", s]));
+    for want in ["pkg.unsatisfied", "0.1.1", "std \"0.9\""] {
+        assert!(text.contains(want), "says {want}: {text}");
+    }
+}
+
+// FMT-16, PACK-6: m2 keeps the hash cache on disk as the app does, so the next command finds an
+// installed pack's unchanged files there (a stat each), not by reading them all again.
+#[test]
+fn m2_keeps_the_hashes_of_a_packs_files() {
+    let t = Temp::new("hashes");
+    copy(&fixtures(), &t.0.join("packs"));
+    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
+    ok(t.m2(&["check", t.0.join("packs/song-store").to_str().unwrap()]));
+    let mut cached = vec![];
+    let mut stack = vec![t.0.join("home")];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            match e.file_type().unwrap().is_dir() {
+                true => stack.push(e.path()),
+                false if e.file_name() == "hashes.json" => cached.push(std::fs::read_to_string(e.path()).unwrap()),
+                false => {}
+            }
+        }
+    }
+    let index = t.store().join("@test/tiny/0.1.0/src/index.ts");
+    let index = serde_json::to_string(index.to_str().unwrap()).unwrap();
+    assert!(cached.iter().any(|c| c.contains(&index)), "{index} in {cached:?}");
+}
+
 fn sfz_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/session/tests/fixtures/sfz/tiny-keys")
 }
@@ -549,133 +679,4 @@ fn an_sfz_beside_the_working_folder_reads_only_its_folder() {
     let text = failed(t.m2_in(&t.0.join("in"), &["pack", "import-sfz", "i.sfz", "../pack", "--name", "@test/x"]));
     assert!(text.contains("i.sfz:1: `sample=../secret.wav` leaves the SFZ's folder"), "{text}");
     assert!(!t.0.join("pack").exists());
-
-/// A copy of the pack `tiny` at `version` with a kernel of its own, in a folder beside it:
-/// `@test/tiny:sine`, std's module under its own name (`tag` as a custom section, so each copy's
-/// module has its own hash), played by the instrument `tinyTone`.
-fn tiny_with_kernel(t: &Temp, version: &str, tag: &str) -> PathBuf {
-    let dir = tiny_at(t, version);
-    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
-    let toml = toml.replace(&format!("version = \"{version}\""), &format!("version = \"{version}\"\nwasm = \"k.wasm\""))
-        + "\n[[kernel]]\nname = \"sine\"\ndescription = \"A sine\"\ninputs = [\"freq: control<hz> = 440\"]\noutputs = [\"out: audio<1>\"]\n";
-    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
-    let mut wasm = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm")).unwrap();
-    let name = b"m2-test";
-    wasm.extend([0u8, (1 + name.len() + tag.len()) as u8, name.len() as u8]);
-    wasm.extend(name);
-    wasm.extend(tag.as_bytes());
-    std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
-    let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
-    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
-                id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
-                inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
-                (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
-    std::fs::write(dir.join("src/index.ts"), index + tone).unwrap();
-    dir
-}
-
-/// A Tx that writes `files` (path, text) in the song at `song`, each based on what it holds now.
-fn tx_writing(song: &Path, files: &[(&str, String)]) -> serde_json::Value {
-    let mut base = serde_json::Map::new();
-    let mut ops = vec![];
-    let mut ranges = serde_json::Map::new();
-    for (path, text) in files {
-        let now = std::fs::read(song.join(path)).unwrap();
-        base.insert(path.to_string(), serde_json::json!(m2_song::Sha::of(&now).prefixed()));
-        ops.push(serde_json::json!({"op": "write", "file": path, "text": text}));
-        ranges.insert(path.to_string(), serde_json::json!("whole"));
-    }
-    serde_json::json!({"id": "tx-move", "base": base, "label": ["before", "after"], "ops": ops, "expect": {"confined": {"ranges": ranges}}})
-}
-
-// PACK-9, AGENT-7: `m2 listen --with` renders each side with its own packs: the song as it is with
-// 0.1.0 (no kernel of its own), the change with 0.2.0 and the kernel it plays.
-#[test]
-fn listen_with_renders_each_side_with_its_own_packs() {
-    let t = Temp::new("listen-with");
-    copy(&fixtures(), &t.0.join("packs"));
-    let song = t.0.join("packs/song-store");
-    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
-    ok(t.m2(&["pack", "install", tiny_with_kernel(&t, "0.2.0", "two").to_str().unwrap()]));
-    ok(t.m2(&["check", song.to_str().unwrap()]));
-    assert_eq!(locked(&song), "0.1.0");
-    // The move: the line, the lock (as `m2 pack update` would write it), and the keys playing the
-    // new version's kernel.
-    let manifest =
-        std::fs::read_to_string(song.join("music2.toml")).unwrap().replace("\"@test/tiny\" = \"0.1\"", "\"@test/tiny\" = \"0.2\"");
-    let hash = m2_song::Sha::of(&std::fs::read(t.store().join("@test/tiny/0.2.0/m2pack.json")).unwrap());
-    let lock = std::fs::read_to_string(song.join("music2.lock")).unwrap();
-    let at = lock.find("sha256:").unwrap();
-    let lock = format!("{}{}{}", &lock[..at], hash.prefixed(), &lock[at + 71..]).replace("version = \"0.1.0\"", "version = \"0.2.0\"");
-    let keys = "import { track } from \"@m2/core\";\nimport { tinyTone } from \"@test/tiny\";\n\nexport default track(\"keys\", { name: \"Keys\" }, ({ lane }) => tinyTone(lane.notes(\"notes\")));\n";
-    let tx = tx_writing(&song, &[("music2.toml", manifest), ("music2.lock", lock), ("tracks/keys.ts", keys.to_string())]);
-    let file = t.0.join("move.json");
-    std::fs::write(&file, tx.to_string()).unwrap();
-    let out = ok(t.m2(&["listen", song.to_str().unwrap(), "--with", file.to_str().unwrap(), "--json"]));
-    let heard: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
-    let own = |side: &str| heard[side]["tracks"]["keys"]["own"].clone();
-    // Only 0.2.0 has the kernel, so "after" played it: a steady sine, 3 dB from peak to RMS.
-    let after = own("after");
-    assert!(after["silent"] == false && after["crest"].as_f64().is_some_and(|c| (c - 3.0).abs() < 0.2), "{heard:#}");
-    assert!(own("before")["silent"] == false, "before plays the pack's keys: {heard:#}");
-    assert!(heard["difference"].is_object(), "{heard:#}");
-    // Nothing was written: the song still uses 0.1.0.
-    assert_eq!(locked(&song), "0.1.0");
-}
-
-// PACK-8, PACK-9, PACK-2: a version in the store this app can't run (a newer app installed it,
-// needing a newer std) is never chosen: not by `m2 pack update`, nor by a song with no lock entry;
-// with only it installed, the song says why.
-#[test]
-fn a_version_this_app_cant_run_is_never_chosen() {
-    let t = Temp::new("runs");
-    copy(&fixtures(), &t.0.join("packs"));
-    let song = t.0.join("packs/song-store");
-    let s = song.to_str().unwrap();
-    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
-    // 0.1.1 needs std 0.9: install refuses it here, so it is put in the store as a newer app would.
-    let later = tiny_at(&t, "0.1.1");
-    let toml = std::fs::read_to_string(later.join("m2pkg.toml")).unwrap();
-    assert!(toml.contains("std = \"0.4\""), "{toml}");
-    std::fs::write(later.join("m2pkg.toml"), toml.replace("std = \"0.4\"", "std = \"0.9\"")).unwrap();
-    ok(t.m2(&["pack", "build", later.to_str().unwrap()]));
-    copy(&later, &t.store().join("@test/tiny/0.1.1"));
-
-    ok(t.m2(&["pack", "update", s]));
-    assert_eq!(locked(&song), "0.1.0", "update stays on the newest version this app runs");
-    std::fs::remove_file(song.join("music2.lock")).unwrap();
-    ok(t.m2(&["check", s]));
-    ok(t.m2(&["pack", "lock", s]));
-    assert_eq!(locked(&song), "0.1.0");
-
-    ok(t.m2(&["pack", "remove", "@test/tiny", "0.1.0"]));
-    std::fs::remove_file(song.join("music2.lock")).unwrap();
-    let text = failed(t.m2(&["check", s]));
-    for want in ["pkg.unsatisfied", "0.1.1", "std \"0.9\""] {
-        assert!(text.contains(want), "says {want}: {text}");
-    }
-}
-
-// FMT-16, PACK-6: m2 keeps the hash cache on disk as the app does, so the next command finds an
-// installed pack's unchanged files there (a stat each), not by reading them all again.
-#[test]
-fn m2_keeps_the_hashes_of_a_packs_files() {
-    let t = Temp::new("hashes");
-    copy(&fixtures(), &t.0.join("packs"));
-    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
-    ok(t.m2(&["check", t.0.join("packs/song-store").to_str().unwrap()]));
-    let mut cached = vec![];
-    let mut stack = vec![t.0.join("home")];
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d).unwrap().flatten() {
-            match e.file_type().unwrap().is_dir() {
-                true => stack.push(e.path()),
-                false if e.file_name() == "hashes.json" => cached.push(std::fs::read_to_string(e.path()).unwrap()),
-                false => {}
-            }
-        }
-    }
-    let index = t.store().join("@test/tiny/0.1.0/src/index.ts");
-    let index = serde_json::to_string(index.to_str().unwrap()).unwrap();
-    assert!(cached.iter().any(|c| c.contains(&index)), "{index} in {cached:?}");
 }
