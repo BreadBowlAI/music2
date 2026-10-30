@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Built the same day (#33 to #38): §16.2's slices 1 to 4 and 7, with the contract's PACK, LIB and PKG-15/16 rules. Not built: slice 5 (streaming) and slice 6 (the registry), which waits for where the bytes are kept (D1, D10) and for an HTTP library and a FLAC decoder, each a change to `Cargo.lock` that needs its own yes. |
+| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Built the same day (#33 to #38): §16.2's slices 1 to 4 and 7, with the contract's PACK, LIB and PKG-15/16 rules. Not built: slice 5 (streaming). Slice 6 (the registry): the owner chose Cloudflare R2 for the bytes and a GitHub repo for the list (D1, 2026-10-30); its robot side, the list's format, the bucket's files and `m2 registry`, is built by track `registry` (§19, the contract's REG rules); the app's side (the catalog, ⌘F's From the library, Get) is next, and the bucket's address (D10) waits for the owner. |
 | **Written** | 2026-10-29, from `main` at `e38c131` |
 | **Gaps** | #39 (shared sound packages), with #22 (the rest of the Sampler) and #18 (more audio file types) |
 | **Decided** | by the owner, 2026-10-30 |
@@ -451,3 +451,79 @@ A change of mind after stage 5 is a new pull request to this note, with why.
 | Files named by their hash | git, Nix, container registries |
 | The list is a repo; a pull request to add | Homebrew, Flathub, Obsidian |
 | An RFC, then a last call | Rust, Python |
+
+## 19. The registry, as built
+
+**In short:** slice 6's robot side, built on 2026-10-30 by track `registry`. The list is a folder of small TOML files, one a pack. The robot is `m2 registry`, run by the registry repo's CI. The bucket is plain files named by their hashes. The rules are the contract's [REG-1 to REG-10](../../architecture.md#registry); this section says the same in plain words, and what changed from the plan above. The app's side (fetching the catalog, ⌘F's From the library, Get) is the next track's.
+
+### 19.1 The list
+
+The registry repo starts from music2's own `registry/` folder: a README with the rules, `tags.txt` (the words tags may use, P7), `packs/` (empty), and the two workflows. One file a pack:
+
+```toml
+# packs/@alice/felt-piano.toml
+name = "@alice/felt-piano"
+repository = "https://github.com/alice/felt-piano"
+
+[[versions]]
+version = "1.2.0"
+hash = "sha256:3b1f…"     # its m2pack.json's hash: what a song's music2.lock pins
+source = "https://github.com/alice/felt-piano/releases/download/v1.2.0/felt-piano-1.2.0.tar.gz"
+# yanked = "why"          hidden from search; a song that locks it still gets it
+# removed = "why"         taken down: its files are deleted from the bucket
+```
+
+| Rule | So |
+|---|---|
+| Read strictly: an unknown key anywhere is refused | a typo never means something |
+| The repository and every source are under `https://github.com/<scope>/` (`BreadBowlAI` for `@m2/`), in plain characters | a pack comes from its owner's own GitHub, and no address can put anything into the CI's shell |
+| A listed version's hash and source never change; only `yanked` or `removed` are added | P5: a song always gets the files it was made with |
+| A pull request may change only its author's own packs; `@m2/` only music2's people | identity is GitHub's, checked from the scope, offline |
+
+### 19.2 The bucket
+
+| Path | Holds |
+|---|---|
+| `blobs/sha256/<hash>` | every file of every version (its `m2pack.json` too) and every preview |
+| `versions/<hash>.json` | the robot's facts for one version, by the version's hash: what it says of itself, its size, every blob it uses, and its items, each as the library would list it, with its preview's hash and, for a sample, its one file |
+| `catalog/<hash>.json` | a catalog, by its own hash: every pack, its versions, its latest's items |
+| `catalog.json` | which catalog is current: the one file that changes |
+
+Every JSON file is written in one form (RFC 8785, the form music2 already hashes JSON in), so the same inputs always give the same bytes and the same hash, and is read strictly: a newer format says to update music2, and an unknown field is refused. The readers are in `m2_song::registry`, for the app to use.
+
+### 19.3 The robot
+
+| Command | Who | Does |
+|---|---|---|
+| `m2 registry add <registry> <pack> --source <url>` | a pack's author | checks the pack (`m2 pack check`), writes its `m2pack.json`, and writes or extends its pack file |
+| `m2 registry check <registry> [--base <before>] [--author <login>]` | the CI, on a pull request | reads every file strictly; with `--base`, no listed version changed; with `--author`, only their packs changed |
+| `m2 registry pending <registry> --out <bucket> [--from <bucket>]` | the CI | prints each version the bucket hasn't got yet, `name version source`, so the CI fetches only those |
+| `m2 registry build <registry> --sources <folder> --out <bucket> [--from <bucket>] [--made <time>] [--to-delete <file>]` | the CI | checks each pending version's source, copies its files in by hash, renders its previews, writes its facts; then the catalog and `catalog.json` |
+
+What `build` refuses, beyond `m2 pack check`: files that aren't the ones the hash names (checked first: nothing else is looked at then), a licence not in D6's list (as an SPDX expression: `CC0-1.0`, `CC-BY-3.0`, `CC-BY-4.0`, `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`), a tag not in `tags.txt`, more than 10 GB (D9). It writes nothing unless every pending version passes.
+
+Previews are made by the app's own code: the robot writes the same song for an item that ⌘F writes (`library::preview::of`, now the one step both take) and renders it the same way, so its preview is the same bits the app makes from the installed pack, checked by a test. A sample's preview is its own file (LIB-6).
+
+### 19.4 The registry repo's CI
+
+| Workflow | Runs on | Has the bucket's key | Does |
+|---|---|---|---|
+| `pull-request.yml` | `pull_request` (never `pull_request_target`) | no; its token only reads | check, fetch the new sources with `curl` and `tar`, build into a scratch folder, and put what the robot said in the job's summary |
+| `main.yml`, job Build | a push to `main` | no | the same, into a folder kept as the job's artifact, with the list of files to delete |
+| `main.yml`, job Copy into the bucket | after Build | yes, from the `bucket` environment | copies that folder into the bucket (`aws s3 sync`, R2 speaks the S3 API), `catalog.json` last, then deletes what the list says; it runs no pack code and no `m2` |
+
+The `m2` they run is a music2 release, pinned by version and SHA-256. music2's own lint checks these workflows with actionlint and zizmor too.
+
+### 19.5 What changed from the plan
+
+| The plan said | As built | Why |
+|---|---|---|
+| A pack carries `items.json` (§6.3) | the robot writes each version's items into the bucket, `versions/<hash>.json` | the robot makes them again anyway, and an author can't get them wrong |
+| Get fetches an instrument's code and the files it uses (§10) | an instrument, an effect or a sound comes with its whole version; a sample alone, its one file | which files code reads can't be known before it runs |
+| A sample's preview is its first seconds, compressed (§10) | its own file, as the app already previews it (LIB-6) | one way, and it can't oversell; none over 64 MB |
+| The robot checks identity with GitHub's API (§8) | from the scope and the addresses alone | the same answer every time, offline, with no token |
+| The robot reports on the pull request (§8) | in the job's summary and its tick or cross | a pull request from a fork gets a token that can't comment, and the usual way round it (`workflow_run`) is the trap §8 warns of |
+| — | the catalog's time is given (`--made`): the CI gives the registry commit's | one commit always makes the same bytes |
+| — | a removed version's facts stay, and only its blobs no other version uses are deleted | what a pack said of itself stays; a file two versions share isn't lost |
+
+Waiting: `--from` over https, which needs music2's download module (track H); until then the workflows can't run, and `--from` takes a folder or `file://`. A data instrument's own tags reach no catalog yet (gaps #49). The app's ⌘F with no song open, and its preview route, don't read instruments written as data (the robot does): gaps #47.
