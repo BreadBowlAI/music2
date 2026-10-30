@@ -49,6 +49,18 @@ impl Temp {
             .unwrap()
     }
 
+    /// `m2` with `args`, run in the folder `dir`.
+    fn m2_in(&self, dir: &Path, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_m2"))
+            .current_dir(dir)
+            .env("HOME", self.0.join("home"))
+            .env("M2_AUDIO", "none")
+            .env("M2_MIDI", "none")
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
     fn store(&self) -> PathBuf {
         self.0.join("home/Music/music2/Packs")
     }
@@ -556,4 +568,185 @@ fn m2_keeps_the_hashes_of_a_packs_files() {
     let index = t.store().join("@test/tiny/0.1.0/src/index.ts");
     let index = serde_json::to_string(index.to_str().unwrap()).unwrap();
     assert!(cached.iter().any(|c| c.contains(&index)), "{index} in {cached:?}");
+}
+
+fn sfz_fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/session/tests/fixtures/sfz/tiny-keys")
+}
+
+/// A song in `dir` that plays `@test/tiny-keys`'s instrument from the folder `pack`: soft and hard
+/// notes, low and high, each released.
+fn tiny_keys_song(dir: &Path, pack: &Path) {
+    std::fs::create_dir_all(dir.join("data/keys")).unwrap();
+    let manifest = format!(
+        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n\
+         \"@test/tiny-keys\" = {{ path = {:?} }}\n",
+        pack.to_str().unwrap()
+    );
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    std::fs::write(
+        dir.join("song.ts"),
+        "import { song, track } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport { tinyKeys } from \"@test/tiny-keys/instruments\";\n\n\
+         const keys = track(\"keys\", ({ lane }) => tinyKeys(lane.notes(\"notes\")));\n\nexport default song(() => master(mixer({ keys: keys.out })));\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("data/keys/notes.json"),
+        "{\"clips\": [\n  {\"id\": \"p7n3c2wa\", \"start\": 0, \"length\": 4, \"notes\": [\n\
+         {\"pitch\": \"C4\", \"start\": 0, \"length\": 0.5, \"velocity\": 0.3},\n\
+         {\"pitch\": \"C4\", \"start\": 1, \"length\": 0.5, \"velocity\": 0.9},\n\
+         {\"pitch\": \"G5\", \"start\": 2, \"length\": 0.25, \"velocity\": 0.4},\n\
+         {\"pitch\": \"E4\", \"start\": 3, \"length\": 0.5, \"velocity\": 1.0}\n  ]}\n]}\n",
+    )
+    .unwrap();
+}
+
+// PACK-14, PACK-13: an SFZ imports into a pack that checks (saying what it couldn't keep), a song
+// plays its instrument from the pack's folder, and renders the same bits on 1 and 4 threads.
+#[test]
+fn an_sfz_imports_checks_and_renders_alike_on_1_and_4_threads() {
+    let t = Temp::new("sfz");
+    copy(&sfz_fixture(), &t.0.join("in"));
+    let pack = t.0.join("pack");
+    let sfz = t.0.join("in/Tiny Keys.sfz");
+    let text =
+        ok(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys", "--category", "Keys"]));
+    for want in [
+        "tiny-keys plays 5 regions from 5 recordings",
+        "left out: 1 region belongs to the key switch c#0, not the default",
+        "left out: 1 region plays only with a controller moved (CC 64)",
+        "changed: 1 region has its own amp_veltrack (90%): the instrument's velocity is 80% for all",
+        "key switches: kept the default one's regions (c0)",
+        "good to install",
+    ] {
+        assert!(text.contains(want), "says {want}: {text}");
+    }
+    let toml = std::fs::read_to_string(pack.join("instruments/tiny-keys.toml")).unwrap();
+    assert!(toml.contains("file = \"samples/g4-soft.wav\"\nroot = 67\nkeys = [72, 127]\nvelocity = [1, 64]\npan = -0.3\n"), "{toml}");
+    assert!(toml.contains("trigger = \"release\"\nvolume = -12\n"), "{toml}");
+    let m = std::fs::read_to_string(pack.join("m2pkg.toml")).unwrap();
+    assert!(m.contains("license = \"CC0-1.0\""), "{m}");
+    assert!(std::fs::read_to_string(pack.join("README.md")).unwrap().contains("Tiny Keys: a test instrument for music2"));
+
+    let song = t.0.join("song");
+    tiny_keys_song(&song, &pack);
+    let (one, four) = (t.0.join("one.wav"), t.0.join("four.wav"));
+    ok(t.m2(&["render", song.to_str().unwrap(), one.to_str().unwrap(), "--seconds", "4", "--threads", "1"]));
+    ok(t.m2(&["render", song.to_str().unwrap(), four.to_str().unwrap(), "--seconds", "4", "--threads", "4"]));
+    let (a, b) = (std::fs::read(&one).unwrap(), std::fs::read(&four).unwrap());
+    assert!(a == b, "the same bits on 1 and 4 threads");
+    let samples: Vec<i32> = hound::WavReader::open(&one).unwrap().into_samples::<i32>().map(Result::unwrap).collect();
+    let peak =
+        |from: f64, to: f64| samples[(from * 96_000.0) as usize..(to * 96_000.0) as usize].iter().map(|s| s.abs()).max().unwrap_or(0);
+    // 120 bpm: a beat is half a second. The soft C4, then the loud one, louder.
+    assert!(peak(0.0, 0.25) > 0 && peak(0.5, 0.75) > peak(0.0, 0.25), "soft then loud: {} {}", peak(0.0, 0.25), peak(0.5, 0.75));
+    assert!(peak(0.25, 0.3) > 0, "the release sounds as the soft note ends");
+}
+
+// PACK-14: a FLAC sample stops the import before anything is written.
+#[test]
+fn a_flac_sample_stops_the_import() {
+    let t = Temp::new("sfz-flac");
+    copy(&sfz_fixture(), &t.0.join("in"));
+    let sfz = t.0.join("in/Tiny Keys.sfz");
+    std::fs::write(&sfz, std::fs::read_to_string(&sfz).unwrap().replace("c4-loud.wav", "c4-loud.flac")).unwrap();
+    let pack = t.0.join("pack");
+    let text = failed(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+    assert!(text.contains("c4-loud.flac is a FLAC file: convert it to WAV first; music2 reads only WAV for now"), "{text}");
+    assert!(!pack.exists());
+}
+
+// PACK-13: code that would hide the instruments written as data is refused by check.
+#[test]
+fn check_refuses_code_that_hides_data_instruments() {
+    let t = Temp::new("sfz-hide");
+    copy(&sfz_fixture(), &t.0.join("in"));
+    let pack = t.0.join("pack");
+    let sfz = t.0.join("in/Tiny Keys.sfz");
+    ok(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+    std::fs::create_dir_all(pack.join("src")).unwrap();
+    std::fs::write(pack.join("src/instruments.ts"), "export const x = 1;\n").unwrap();
+    let text = failed(t.m2(&["pack", "check", pack.to_str().unwrap()]));
+    assert!(text.contains("src/instruments.ts and instruments/*.toml are both the module \"@test/tiny-keys/instruments\""), "{text}");
+}
+
+/// `@test/tiny-keys`, imported from the SFZ fixture into `<t>/pack`, which checks.
+fn imported(t: &Temp) -> PathBuf {
+    copy(&sfz_fixture(), &t.0.join("in"));
+    let pack = t.0.join("pack");
+    let sfz = t.0.join("in/Tiny Keys.sfz");
+    ok(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+    pack
+}
+
+// PACK-13, PACK-12: check names the file and the line of a mistake in a data instrument: one the
+// reader finds (a value out of its range) and one @m2/core finds in a region.
+#[test]
+fn check_names_the_file_and_line_of_a_data_instruments_mistake() {
+    let t = Temp::new("sfz-lines");
+    let pack = imported(&t);
+    let file = pack.join("instruments/tiny-keys.toml");
+    let toml = std::fs::read_to_string(&file).unwrap();
+    let line_of = |text: &str, what: &str| text[..text.find(what).unwrap()].matches('\n').count() + 1;
+
+    let bad = toml.replacen("velocity = [1, 64]", "velocity = [0, 64]", 1);
+    let region = line_of(&bad, "velocity = [0, 64]") - 4;
+    assert!(bad.lines().nth(region - 1).unwrap().starts_with("[[region]]"), "{bad}");
+    std::fs::write(&file, &bad).unwrap();
+    let text = failed(t.m2(&["pack", "check", pack.to_str().unwrap()]));
+    assert!(text.contains(&format!("@test/tiny-keys/instruments/tiny-keys.toml:{region}:1: ")), "{text}");
+
+    let bad = toml.replace("voices = 32", "voices = 200");
+    std::fs::write(&file, &bad).unwrap();
+    let text = failed(t.m2(&["pack", "check", pack.to_str().unwrap()]));
+    let at = format!("@test/tiny-keys/instruments/tiny-keys.toml:{}:10: ", line_of(&bad, "voices = 200"));
+    assert!(text.contains(&at) && text.contains("`voices` must be a whole number from 1 to 128, not 200"), "{text}");
+}
+
+// PACK-13, PACK-12: two data instruments whose names make one name in code fail check, naming both.
+#[test]
+fn check_refuses_two_instruments_with_one_name_in_code() {
+    let t = Temp::new("sfz-twins");
+    let pack = imported(&t);
+    let toml = std::fs::read_to_string(pack.join("instruments/tiny-keys.toml")).unwrap();
+    std::fs::write(pack.join("instruments/a-1.toml"), &toml).unwrap();
+    std::fs::write(pack.join("instruments/a1.toml"), &toml).unwrap();
+    let text = failed(t.m2(&["pack", "check", pack.to_str().unwrap()]));
+    assert!(text.contains("instruments/a-1.toml` and `@test/tiny-keys/instruments/a1.toml` would both be exported as `a1`"), "{text}");
+}
+
+// PACK-14: what check would refuse stops the import, and nothing is left: not the folder, not a
+// folder beside it.
+#[test]
+fn an_import_check_would_refuse_writes_nothing() {
+    let t = Temp::new("sfz-nothing");
+    copy(&sfz_fixture(), &t.0.join("in"));
+    let out = t.0.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let pack = out.join("pack");
+    let sfz = t.0.join("in/Tiny Keys.sfz");
+    let text = failed(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/new"]));
+    assert!(text.contains("`new` can't be an instrument's id: its name in code, `new`, is a word JavaScript keeps for itself"), "{text}");
+    std::fs::write(
+        &sfz,
+        std::fs::read_to_string(&sfz).unwrap().replace("<region> sample=c4-loud.wav", "<region> seq_length=2 sample=c4-loud.wav"),
+    )
+    .unwrap();
+    let text = failed(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+    assert!(text.contains("Tiny Keys.sfz:18: a round robin of 2 takes"), "{text}");
+    assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0, "nothing is left");
+}
+
+// PACK-14: an SFZ named from the working folder (`i.sfz`) reads only its folder: `..` is above it,
+// never the working folder again.
+#[test]
+fn an_sfz_beside_the_working_folder_reads_only_its_folder() {
+    let t = Temp::new("sfz-here");
+    copy(&sfz_fixture(), &t.0.join("in"));
+    std::fs::copy(t.0.join("in/samples/rel.wav"), t.0.join("secret.wav")).unwrap();
+    std::fs::copy(t.0.join("in/samples/rel.wav"), t.0.join("in/secret.wav")).unwrap();
+    std::fs::write(t.0.join("in/i.sfz"), "<region> sample=../secret.wav\n").unwrap();
+    let text = failed(t.m2_in(&t.0.join("in"), &["pack", "import-sfz", "i.sfz", "../pack", "--name", "@test/x"]));
+    assert!(text.contains("i.sfz:1: `sample=../secret.wav` leaves the SFZ's folder"), "{text}");
+    assert!(!t.0.join("pack").exists());
 }

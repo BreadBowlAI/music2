@@ -24,6 +24,11 @@ fn copy(from: &Path, to: &Path) {
 /// A song with std's mixer and no tracks, and a store at `<song>/../Packs` holding `@test/tiny`
 /// 0.1.0: its session, and the pack's hash.
 fn song_and_store(f: &Fixture) -> (Session, m2_song::Sha) {
+    song_and_store_with(f, &[])
+}
+
+/// [`song_and_store`], with these files added to the pack before it is listed.
+fn song_and_store_with(f: &Fixture, files: &[(&str, &str)]) -> (Session, m2_song::Sha) {
     f.write("music2.toml", MANIFEST);
     f.write(
         "song.ts",
@@ -32,6 +37,10 @@ fn song_and_store(f: &Fixture) -> (Session, m2_song::Sha) {
     let store = f.0.join("Packs");
     let dir = Store::at(store.clone()).version_dir(&PackName::new("@test/tiny").unwrap(), &Version(0, 1, 0));
     copy(&tiny(), &dir);
+    for (path, text) in files {
+        std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(path), text).unwrap();
+    }
     let listing = Listing::of(&dir).unwrap();
     std::fs::write(dir.join(LISTING), listing.text()).unwrap();
     let mut p = PackageSet::default().with_store(store);
@@ -74,6 +83,32 @@ fn adding_a_pack_instrument_writes_its_dependency_and_lock_in_one_undo() {
     s.undo().unwrap();
     assert_eq!(f.read("music2.toml"), MANIFEST);
     assert!(!f.0.join("music2.lock").exists(), "the lock was new, so it goes");
+}
+
+// PACK-13, PACK-10, PACK-11: an instrument written as data is offered with the pack's others, and
+// + Track adds it as one written in code: its import from "<package>/instruments", its dependency
+// and its lock, and the song builds and plays it.
+#[test]
+fn a_data_instrument_is_offered_and_added_as_any_other() {
+    let f = Fixture::new();
+    let piano = "label = \"Tiny piano\"\ncategory = \"Keys\"\nengine = \"std:sampler\"\nmode = \"gate\"\n\n\
+                 [[region]]\nfile = \"samples/pluck.wav\"\nroot = 60\nkeys = [0, 127]\n";
+    let (mut s, _) = song_and_store_with(&f, &[("instruments/tiny-piano.toml", piano)]);
+    let offered = crate::tracks::instruments(&s).into_iter().find(|i| i.component == "@test/tiny:tiny-piano").expect("offered");
+    assert_eq!(
+        (offered.module.as_str(), offered.name.as_str(), offered.category.as_str()),
+        ("@test/tiny/instruments", "tinyPiano", "Keys")
+    );
+    assert_eq!(offered.pack, Some(From { name: "@test/tiny".into(), version: "0.1.0".into() }));
+    let made = crate::tracks::add(&mut s, "@test/tiny:tiny-piano", None, None, None).unwrap_or_else(|e| panic!("{e}"));
+    let track = f.read(&format!("tracks/{}.ts", made.module));
+    assert!(track.contains("import { tinyPiano } from \"@test/tiny/instruments\";"), "{track}");
+    assert!(f.read("music2.toml").contains("\"@test/tiny\" = \"0.1\""));
+    assert!(f.read("music2.lock").contains("@test/tiny"));
+    let rev = s.accepted();
+    assert!(rev.compiled.problems.iter().all(|d| d.severity != m2_song::Severity::Error), "{:?}", rev.compiled.problems);
+    let frames: Vec<&str> = rev.compiled.ir.modules.iter().flat_map(|m| m.frames.iter().filter_map(|f| f.component.as_deref())).collect();
+    assert!(frames.contains(&"@test/tiny:tiny-piano"), "{frames:?}");
 }
 
 // PACK-10: adding a pack's effect writes the same, in the effect's one Tx.
