@@ -245,7 +245,7 @@ export const AUDIO_TRACK: Instrument = {
   label: "Audio track",
   name: "",
   module: "",
-  description: "Plays recordings and loops: drop a WAV file on it",
+  description: "Plays recordings and loops: drop a WAV or FLAC file on it",
   category: "Audio",
   lane: "clips",
 };

@@ -472,16 +472,27 @@ const PIECE: u64 = 65_536;
 /// (…)`). A file the library can't offer is refused as an import refuses it: a rate outside 8,000
 /// to 384,000 Hz, over 3 hours, a sample that isn't a number, a FLAC music2 doesn't read.
 pub fn measure(path: &Path) -> Result<Measured, String> {
-    use m2_runtime::decode::Kind;
-    match m2_runtime::decode::kind_of(path).map_err(|e| format!("can't be read ({e})"))? {
-        Some(Kind::Wav) => measure_wav(path).map_err(|why| format!("doesn't read as a WAV file ({why})")),
-        Some(Kind::Flac) => measure_flac(path).map_err(|why| format!("doesn't read as a FLAC file ({why})")),
-        None => Err("isn't a WAV or FLAC file".into()),
+    use m2_runtime::decode::{self, Kind};
+    let kind = match decode::kind_of(path).map_err(|e| format!("can't be read ({e})"))? {
+        Some(Kind::Wav) => "WAV",
+        Some(Kind::Flac) => "FLAC",
+        None => return Err("isn't a WAV or FLAC file".into()),
+    };
+    let doesnt = |why: String| format!("doesn't read as a {kind} file ({why})");
+    // Its header first: held to a whole decode's budget (FMT-24) before a sample of it is read.
+    let h = decode::header_of(path).map_err(|e| doesnt(format!("{e:#}")))?;
+    decode::budget(&h).map_err(|e| format!("is too long: {e}"))?;
+    offered(&h).map_err(doesnt)?;
+    match h.kind {
+        Kind::Wav => measure_wav(path),
+        Kind::Flac => measure_flac(path),
     }
+    .map_err(doesnt)
 }
 
-/// Whether a file of `frames` at `rate` is one the library offers, as an import takes it: why not.
-fn offered(frames: u64, rate: u32) -> Result<(), String> {
+/// Whether a file whose header is `h` is one the library offers, as an import takes it: why not.
+fn offered(h: &m2_runtime::decode::Header) -> Result<(), String> {
+    let (frames, rate) = (h.frames, h.rate);
     if frames == 0 {
         return Err("it holds no samples".into());
     }
@@ -499,7 +510,6 @@ fn offered(frames: u64, rate: u32) -> Result<(), String> {
 fn measure_flac(path: &Path) -> Result<Measured, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut f = m2_runtime::decode::Flac::new(file).map_err(|e| format!("{e:#}"))?;
-    offered(f.frames, f.rate)?;
     let (scale, keep) = (m2_runtime::decode::scale(f.bits), (f.channels as usize).min(2));
     let (mut block, mut peak) = (vec![], 0f32);
     while f.next(&mut block).map_err(|e| format!("{e:#}"))? > 0 {
@@ -513,7 +523,6 @@ fn measure_flac(path: &Path) -> Result<Measured, String> {
 fn measure_wav(path: &Path) -> Result<Measured, String> {
     let wav = m2_runtime::stream::Wav::open(path).map_err(|e| format!("{e:#}"))?;
     let rate = wav.rate as u32;
-    offered(wav.frames(), rate)?;
     let seconds = wav.frames() as f64 / wav.rate;
     let (mut bytes, mut piece) = (vec![], vec![vec![]; wav.channels()]);
     let (mut at, mut peak) = (0, 0f32);
@@ -1077,9 +1086,7 @@ pub fn flac_preview(s: &Sample, stamp: m2_os::fs::Stamp) -> Result<Option<Vec<u8
     if file.metadata().map(|m| m2_os::fs::Stamp::of(&m)).ok() != Some(stamp) {
         return Err(format!("{} changed as it was asked for: a sample is only ever read where it was found", s.file.display()));
     }
-    let mut head = [0u8; decode::HEAD];
-    let n = m2_os::fs::read_full_at(&file, &mut head, 0, decode::HEAD).map_err(|e| e.to_string())?;
-    if decode::kind(&head[..n]) != Some(Kind::Flac) {
+    if decode::kind_of_file(&file).map_err(|e| e.to_string())? != Some(Kind::Flac) {
         return Ok(None);
     }
     let flac = Flac::new(std::io::BufReader::new(file)).map_err(|e| format!("{e:#}"))?;
@@ -1087,8 +1094,8 @@ pub fn flac_preview(s: &Sample, stamp: m2_os::fs::Stamp) -> Result<Option<Vec<u8
     if wav > PREVIEW_BYTES {
         return Err(format!(
             "as a WAV it is {} MB, too long to preview here (up to {} MB): add it to the song to hear it",
-            wav / 1_000_000,
-            PREVIEW_BYTES / 1_000_000
+            wav.div_ceil(1 << 20),
+            PREVIEW_BYTES >> 20
         ));
     }
     let mut out = std::io::Cursor::new(Vec::with_capacity(wav as usize));

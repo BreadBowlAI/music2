@@ -110,11 +110,14 @@ impl Faulted {
     }
 }
 
-/// Names the faults of one plan, made when the plan is prepared from the song it plays, or for an
-/// offline render. It holds that song, so it names nothing until asked.
 /// How a FLAC comes into a song as a clip (FMT-24): as the WAV of its samples.
 const NOT_WAV: &str = "To use a FLAC, import it (File ▸ Import Audio…): music2 brings it in as a WAV.";
 
+/// How long a file one whole decode may make is (FMT-24's budget), in words.
+const TOO_LONG: &str = "over 134,217,728 samples, about 23 minutes of stereo at 48 kHz";
+
+/// Names the faults of one plan, made when the plan is prepared from the song it plays, or for an
+/// offline render. It holds that song, so it names nothing until asked.
 pub struct Namer {
     plan: u64,
     song: Arc<dyn Song>,
@@ -163,7 +166,7 @@ impl Namer {
     pub fn problem(&self, code: Code, parts: &[Subject]) -> Option<Diagnostic> {
         let on = "The rest of the song plays on.";
         let (message, module) = match code {
-            Code::Unreadable | Code::NotWav | Code::StretchFailed => {
+            Code::Unreadable | Code::NotWav | Code::TooLong | Code::StretchFailed => {
                 let s = *parts.first()?;
                 let message = match (code, s) {
                     (Code::NotWav, _) => {
@@ -179,6 +182,10 @@ impl Namer {
                         format!(
                             "{file} {place} can't be read, so it plays silent. It may be damaged, or on a drive that isn't plugged in. {on}"
                         )
+                    }
+                    (Code::TooLong, Subject::Asset { node, .. }) => {
+                        let (file, who) = (self.asset(s)?, lower(&self.sound_named(node as usize)));
+                        format!("{file}, which {who} plays, is too long to hold whole ({TOO_LONG}), so it plays silent. {on}")
                     }
                     (_, Subject::Asset { node, .. }) => {
                         let (file, who) = (self.asset(s)?, lower(&self.sound_named(node as usize)));
@@ -263,6 +270,14 @@ impl Namer {
             },
             (Code::Unreadable, _) => format!("{part} can't be read, {not} It may be damaged, or on a drive that isn't plugged in."),
             (Code::NotWav, _) => format!("{part} isn't a WAV file, {not} A clip plays WAV files only. {NOT_WAV}"),
+            (Code::TooLong, Subject::Asset { node, .. }) => match self.asset(f.subject) {
+                Some(file) => format!(
+                    "{file}, which {} plays, is too long to hold whole ({TOO_LONG}), {not}",
+                    lower(&self.sound_named(node as usize))
+                ),
+                None => format!("A file the song plays is too long to hold whole ({TOO_LONG}), {not}"),
+            },
+            (Code::TooLong, _) => format!("{part} is too long to hold whole ({TOO_LONG}), {not}"),
             (Code::Stopped, _) => format!("{part} stopped working, {not}{detail}"),
             // No offline render reads the sound input.
             (Code::InputMissing | Code::InputLost | Code::InputRefused, _) => format!("The sound input stopped, {not}"),

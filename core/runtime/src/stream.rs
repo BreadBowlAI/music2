@@ -60,8 +60,9 @@ pub struct Wav {
     pub rate: f64,
 }
 
-/// Why a clip's file can't be streamed: it is there, but isn't a WAV (a FLAC put there by hand;
-/// FMT-24: a song's own audio is WAV, which seeks exactly).
+/// Why a clip's file can't be streamed: it is there, but is a FLAC (put there by hand; FMT-24: a
+/// song's own audio is WAV, which seeks exactly). A file of no kind music2 reads (empty, cut in its
+/// header, an AIFF) is no `NotWav`: it can't be read, as any damaged file.
 #[derive(Debug)]
 pub struct NotWav;
 
@@ -89,13 +90,13 @@ impl Read for At<'_> {
 
 impl Wav {
     /// Open `path` and read its header. A file shorter than its header says is refused, as a
-    /// whole decode refused it; one whose first bytes aren't a WAV's is [`NotWav`].
+    /// whole decode refused it; a FLAC is [`NotWav`].
     pub fn open(path: &Path) -> Result<Wav> {
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-        let mut head = [0u8; crate::decode::HEAD];
-        let n = m2_os::fs::read_full_at(&file, &mut head, 0, crate::decode::HEAD)?;
-        if crate::decode::kind(&head[..n]) != Some(crate::decode::Kind::Wav) {
-            return Err(anyhow::Error::new(NotWav).context(format!("reading {}", path.display())));
+        match crate::decode::kind_of_file(&file)? {
+            Some(crate::decode::Kind::Wav) => {}
+            Some(crate::decode::Kind::Flac) => return Err(anyhow::Error::new(NotWav).context(format!("reading {}", path.display()))),
+            None => bail!("{} isn't a WAV file", path.display()),
         }
         let r = hound::WavReader::new(At { file: &file, pos: 0 }).with_context(|| format!("reading {}", path.display()))?;
         let spec = r.spec();

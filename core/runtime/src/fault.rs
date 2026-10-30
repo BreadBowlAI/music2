@@ -34,6 +34,9 @@ pub enum Code {
     /// A clip's file is there but isn't a WAV (a FLAC put there by hand: FMT-24), so it can't be
     /// streamed (`asset.unreadable`).
     NotWav,
+    /// A file a kernel reads holds more samples than one whole decode may make (FMT-24), so it
+    /// isn't decoded (`asset.unreadable`).
+    TooLong,
     /// A warped clip's stretch failed (`stretch.failed`).
     StretchFailed,
     /// The sound input chosen in Settings isn't there, so a take records from another
@@ -63,7 +66,7 @@ impl Code {
             Code::Stopped | Code::OutOfMemory => "sound.stopped",
             Code::PluginFailed => "plugin.failed",
             Code::PluginCrashed | Code::PluginHung => "plugin.crashed",
-            Code::Unreadable | Code::NotWav => "asset.unreadable",
+            Code::Unreadable | Code::NotWav | Code::TooLong => "asset.unreadable",
             Code::StretchFailed => "stretch.failed",
             Code::InputMissing => "input.missing",
             Code::InputLost => "input.lost",

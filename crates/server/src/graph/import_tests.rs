@@ -123,6 +123,18 @@ fn a_read_only_window_refuses_an_import() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// FMT-14, FMT-24 (review F2): one import of `kick.flac` (it comes in as `kick.wav`) and `kick.wav`
+// brings both in, one numbered, as one step: each staged file has a part of its own.
+#[test]
+fn one_import_of_a_flac_and_a_wav_of_one_name_lands_both() {
+    let dir = project("one-name");
+    let (graph, session) = opened(&dir);
+    let flac = include_bytes!("../../../../core/runtime/tests/fixtures/flac/16bit-mono.flac");
+    let done = graph.import_audio(session, vec![bytes("kick.flac", flac), bytes("kick.wav", &float_wav(480).0)], onto_vox(0.0)).unwrap();
+    assert_eq!(done["assets"], json!(["kick.wav", "kick 2.wav"]), "{done:#}");
+    assert!(dir.join("assets/kick.wav").exists() && dir.join("assets/kick 2.wav").exists());
+}
+
 // Refused before anything is copied (D16): not an audio lane, not a WAV.
 #[test]
 fn a_refused_import_adds_nothing() {

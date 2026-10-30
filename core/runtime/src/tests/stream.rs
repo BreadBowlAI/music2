@@ -420,6 +420,34 @@ fn an_export_of_a_clip_on_a_flac_fails_naming_it() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+// FMT-24 (review F3): only a clip on a FLAC (behind an ID3v2 tag too) is told it isn't a WAV; a file
+// that is empty, cut inside its header or of another kind (AIFF) can't be read, as before: it may be
+// damaged, or still being written.
+#[test]
+fn only_a_clip_on_a_flac_is_told_it_isnt_a_wav() {
+    use crate::fault::{Code, Failed};
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/flac");
+    let flac = std::fs::read(fixtures.join("16bit-stereo.flac")).unwrap();
+    let tagged = std::fs::read(fixtures.join("id3v2-start.flac")).unwrap();
+    for (name, bytes, code) in [
+        ("empty.wav", &b""[..], Code::Unreadable),
+        ("cut.wav", b"RIFF\0\0", Code::Unreadable),
+        ("x.aif", b"FORM\0\0\0\x20AIFFCOMM a sound", Code::Unreadable),
+        ("loop.flac", &flac[..], Code::NotWav),
+        ("tagged.flac", &tagged[..], Code::NotWav),
+    ] {
+        let (ir, _, dir) = super::audio_song(&[], serde_json::json!([{"start": 0, "length": 4, "asset": name}]));
+        std::fs::write(dir.join("assets").join(name), bytes).unwrap();
+        let tl = super::data(&ir, &dir);
+        let pk = super::std_packages();
+        let flat = super::check(&ir, &pk).unwrap();
+        let mut r = crate::Renderer::new(&flat, &tl, &pk, SR as u32).unwrap();
+        let e = r.render(1.0).map(drop).expect_err("the render stops");
+        assert_eq!(e.downcast_ref::<Failed>().map(|f| f.fault.code), Some(code), "{name}: {e:#}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+}
+
 // io r8, RENDER-1 (the ex plan's slice 2): an export never finishes with a clip silent. A streamed
 // file cut short after the build can't be read where it ends: the render stops there, its error the
 // fault `asset.unreadable` about that clip (lane 0, its first clip), which the session names.

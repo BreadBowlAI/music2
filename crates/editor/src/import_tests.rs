@@ -453,3 +453,63 @@ fn a_flac_music2_cant_read_is_refused_and_leaves_nothing() {
     assert_eq!(words, "long.flac is longer than 3 hours: music2 takes files up to 3 hours.");
     assert_eq!(assets(&song), ["keys-bounce.wav", "keys-bounce.wav.json"], "no part, no file, no note");
 }
+
+// FMT-14, FMT-24 (review F2): one import of two files that ask for one name (`kick.flac` comes in
+// as `kick.wav`, beside a `kick.wav`; two WAVs of one name from two folders) brings both in: each
+// staged file has a part of its own, and a failure removes only its own.
+#[test]
+fn one_import_of_two_files_of_one_name_lands_both() {
+    let song = fixture("examples/first-song");
+    let a = stage(&song.0, bytes("kick.flac", flac("16bit-mono.flac")), &mut |_| {}).unwrap();
+    let b = stage(&song.0, bytes("kick.wav", tone(0.25, 1.0)), &mut |_| {}).unwrap();
+    let (a, b) = (a.name().unwrap(), b.name().unwrap());
+    assert_eq!((a.asset.as_str(), b.asset.as_str()), ("kick.wav", "kick 2.wav"));
+    let c = stage(&song.0, bytes("snare.wav", tone(0.25, 2.0)), &mut |_| {}).unwrap();
+    let d = stage(&song.0, bytes("snare.wav", tone(0.25, 3.0)), &mut |_| {}).unwrap();
+    let (c, d) = (c.name().unwrap(), d.name().unwrap());
+    assert_eq!((c.asset.as_str(), d.asset.as_str()), ("snare.wav", "snare 2.wav"));
+    assert_eq!(assets(&song), ["kick 2.wav", "kick.wav", "kick.wav.json", "snare 2.wav", "snare.wav"], "no part left");
+}
+
+// FMT-24 (review F6): a FLAC is read once: its hash, its header and the WAV come from the same
+// bytes, so a file changed after it was first looked at (still being written, replaced by a sync)
+// comes in as the bytes read, with their rate, length and hash in its note.
+#[test]
+fn a_flac_is_read_once_for_its_wav_its_header_and_its_note() {
+    let song = fixture("examples/first-song");
+    let (_out, path) = outside("take.flac", &flac("16bit-mono.flac"));
+    // What is there by the time it is read: the stereo fixture, its header saying 44.1 kHz.
+    let mut then = flac("16bit-stereo.flac");
+    let rate: u32 = 44_100;
+    then[18] = (rate >> 12) as u8;
+    then[19] = (rate >> 4) as u8;
+    then[20] = (then[20] & 0x0F) | ((rate as u8 & 0x0F) << 4);
+    let (changed, swapped) = (path.clone(), then.clone());
+    DURING.with(|d| *d.borrow_mut() = Some(Box::new(move |_: &Path| std::fs::write(&changed, &swapped).unwrap())));
+    let done = audio(&song.0, Source::Path(path));
+    DURING.with(|d| *d.borrow_mut() = None);
+    let (i, decoded) = done.unwrap();
+    assert_eq!((i.rate, i.seconds), (44_100, 4_800.0 / 44_100.0), "the header read with the audio");
+    assert_eq!(decoded.unwrap().channels.len(), 2);
+    let note: serde_json::Value = serde_json::from_slice(&std::fs::read(song.0.join("assets/take.wav.json")).unwrap()).unwrap();
+    assert_eq!(note["made_from"]["sha256"], m2_song::Sha::of(&then).hex(), "the bytes the WAV was made from");
+    assert_eq!(hound::WavReader::open(song.0.join("assets/take.wav")).unwrap().spec().sample_rate, 44_100);
+}
+
+// FMT-24 (review F4): a FLAC behind an ID3v2 tag, or with an ID3v1 tag after its frames, comes in
+// as its audio; the note's hash is the whole file's.
+#[test]
+fn a_tagged_flac_comes_in_as_its_audio() {
+    let song = fixture("examples/first-song");
+    let want = bits(
+        &m2_runtime::decode::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/16bit-stereo.flac"))
+            .unwrap(),
+    );
+    for name in ["id3v2-start.flac", "id3v1-end.flac"] {
+        let source = flac(name);
+        let (i, _) = audio(&song.0, bytes(name, source.clone())).unwrap();
+        let wav = song.0.join("assets").join(i.asset.as_str());
+        assert!(bits(&m2_runtime::decode::load(&wav).unwrap()) == want, "{name}");
+        assert_eq!(i.made_from.unwrap().hash, m2_song::Sha::of(&source), "{name}");
+    }
+}

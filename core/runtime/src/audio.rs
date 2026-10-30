@@ -238,6 +238,7 @@ pub(crate) enum Found<T> {
     Empty,
     Unreadable,
     NotWav,
+    TooLong,
 }
 
 impl<T> Found<T> {
@@ -246,6 +247,7 @@ impl<T> Found<T> {
             Ok(t) if empty(&t) => Found::Empty,
             Ok(t) => Found::Plays(t),
             Err(e) if e.downcast_ref::<stream::NotWav>().is_some() => Found::NotWav,
+            Err(e) if e.downcast_ref::<crate::decode::TooLong>().is_some() => Found::TooLong,
             Err(_) => Found::Unreadable,
         }
     }
@@ -256,6 +258,7 @@ impl<T> Found<T> {
             Found::Empty => Found::Empty,
             Found::Unreadable => Found::Unreadable,
             Found::NotWav => Found::NotWav,
+            Found::TooLong => Found::TooLong,
         }
     }
 }
@@ -439,8 +442,9 @@ impl KernelAssets {
                 }
                 let found = match cache.kernel_asset(data, a) {
                     Some(Found::Plays(x)) => Some(x),
-                    Some(Found::Unreadable | Found::NotWav) => {
-                        report.report(Code::Unreadable, Subject::Asset { node: i as u32, slot: slot as u32 });
+                    Some(f @ (Found::Unreadable | Found::NotWav | Found::TooLong)) => {
+                        let code = if matches!(f, Found::TooLong) { Code::TooLong } else { Code::Unreadable };
+                        report.report(code, Subject::Asset { node: i as u32, slot: slot as u32 });
                         None
                     }
                     Some(Found::Empty) | None => None,
@@ -674,6 +678,8 @@ impl AudioLane {
                 Found::Empty => {}
                 Found::Unreadable => tell.report.faults().report(tell.fault(Code::Unreadable, i as u32)),
                 Found::NotWav => tell.report.faults().report(tell.fault(Code::NotWav, i as u32)),
+                // Never from a clip's file, which streams: no whole decode.
+                Found::TooLong => tell.report.faults().report(tell.fault(Code::Unreadable, i as u32)),
             }
         }
         let key = LaneKey { clips: found.iter().map(|f| f.2.clone()).collect(), channels };

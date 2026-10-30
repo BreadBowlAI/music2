@@ -219,6 +219,43 @@ pub fn installed(store: &Store) -> Vec<Installed> {
     out
 }
 
+/// What is wrong with the audio of a pack whose files are `files` (FMT-24, review F1), read from
+/// each WAV's and FLAC's header, never a sample decoded: each held to a whole decode's budget
+/// ([`m2_runtime::decode::WHOLE`]), all of them to a pack's ([`m2_runtime::decode::PACK`]), as the
+/// pack's instruments decode their recordings whole. A file under `samples/` is measured, and its
+/// problems said, by [`crate::library::samples::check`]; it is counted here.
+fn audio_budget(files: &[(String, PathBuf)]) -> Vec<String> {
+    use m2_runtime::decode::{self, PACK};
+    let (mut out, mut total) = (vec![], 0u64);
+    for (rel, path) in files {
+        let ext = Path::new(rel).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !matches!(ext.as_str(), "wav" | "wave" | "flac") {
+            continue;
+        }
+        let measured = rel.starts_with(&format!("{}/", crate::library::samples::SAMPLES_DIR));
+        match decode::header_of(path) {
+            Ok(h) => {
+                total = total.saturating_add(h.samples());
+                if let Err(e) = decode::budget(&h).map_err(|e| e.to_string())
+                    && !measured
+                {
+                    out.push(format!("{rel} is too long: {e}"));
+                }
+            }
+            Err(e) if !measured => out.push(format!("{rel} can't be read as audio ({e:#})")),
+            Err(_) => {}
+        }
+    }
+    if total > PACK {
+        out.push(format!(
+            "the pack's audio holds {total} samples in all (frames × channels of every WAV and FLAC in it), more than a pack may hold \
+             ({PACK}, 1 GiB as music2 plays it): leave some recordings out, or make two packs; bigger instruments wait for music2 \
+             to stream them from the disk"
+        ));
+    }
+    out
+}
+
 /// The file types a pack may hold (design P3), besides `LICENSE` with no extension.
 pub const FILE_TYPES: &[&str] = &["ts", "wasm", "toml", "json", "md", "txt", "wav", "flac"];
 
@@ -248,6 +285,7 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     }
     match pack::pack_files(dir) {
         Ok(files) => {
+            out.extend(audio_budget(&files));
             for (rel, _) in files {
                 // In any capitals: `.WAV` is a WAV.
                 let ext = Path::new(&rel).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();

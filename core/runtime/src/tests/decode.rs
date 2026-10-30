@@ -182,3 +182,67 @@ fn a_flac_written_as_a_wav_keeps_its_samples_and_bits() {
     }
     std::fs::remove_dir_all(d).ok();
 }
+
+// FMT-24 (review F1): a whole decode is held to `WHOLE` samples (frames × channels), read from its
+// header before a sample is decoded, a WAV's as a FLAC's: a FLAC of silence says a length in few
+// bytes, which would decode to GBs. The bomb (29 KB, real FLAC) is refused as too long; a header
+// at the most passes, and only the decode then finds that file cut short.
+#[test]
+fn a_whole_decode_is_held_to_its_budget_before_decoding() {
+    let e = decode::load(&fixture("bomb.flac")).unwrap_err();
+    assert!(e.downcast_ref::<decode::TooLong>().is_some(), "{e:#}");
+    let words = format!("{e:#}");
+    assert!(words.contains("it holds 134217729 samples (frames × channels), more than music2 decodes whole (134217728"), "{words}");
+    let most = decode::header_of(&fixture("at-the-most.flac")).unwrap();
+    assert_eq!((most.kind, most.samples()), (Kind::Flac, decode::WHOLE));
+    let e = format!("{:#}", decode::load(&fixture("at-the-most.flac")).unwrap_err());
+    assert!(e.contains("cut short"), "the budget passes, so the decode is what refuses it: {e}");
+    // A WAV's header that says one sample more: 16-bit mono, its data a sparse file of zeros.
+    let d = scratch("budget");
+    let data = (decode::WHOLE + 1) * 2;
+    let mut head = b"RIFF".to_vec();
+    head.extend((36 + data as u32).to_le_bytes());
+    head.extend(b"WAVEfmt ");
+    head.extend(16u32.to_le_bytes());
+    for (v, n) in [(1u32, 2), (1, 2), (48_000, 4), (96_000, 4), (2, 2), (16, 2)] {
+        head.extend(&v.to_le_bytes()[..n]);
+    }
+    head.extend(b"data");
+    head.extend((data as u32).to_le_bytes());
+    let long = d.join("long.wav");
+    std::fs::write(&long, &head).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&long).unwrap().set_len(head.len() as u64 + data).unwrap();
+    assert_eq!(decode::header_of(&long).unwrap().samples(), decode::WHOLE + 1);
+    let e = decode::load(&long).unwrap_err();
+    assert!(e.downcast_ref::<decode::TooLong>().is_some(), "{e:#}");
+    std::fs::remove_dir_all(d).ok();
+}
+
+// FMT-24 (review F4): tags around a FLAC are no audio: a Vorbis comment that isn't UTF-8 (older
+// taggers), an ID3v2 tag before `fLaC`, an ID3v1 tag after the last frame. Each reads as the
+// file's own audio; an MP3 behind an ID3v2 tag is still no FLAC.
+#[test]
+fn a_flac_with_tags_around_it_reads_as_its_audio() {
+    let want = bits(&decode::load(&fixture("16bit-stereo.wav")).unwrap());
+    for name in ["latin1-tag.flac", "id3v1-end.flac", "id3v2-start.flac"] {
+        assert_eq!(decode::kind_of(&fixture(name)).unwrap(), Some(Kind::Flac), "{name}");
+        assert!(bits(&decode::load(&fixture(name)).unwrap()) == want, "{name}: its audio's bits");
+        assert_eq!(decode::header_of(&fixture(name)).unwrap().frames, 4_800, "{name}");
+    }
+    let d = scratch("id3");
+    std::fs::write(d.join("song.mp3"), b"ID3\x04\x00\x00\x00\x00\x00\x04abcd\xFF\xFB\x90\x00 frames of an mp3").unwrap();
+    assert_eq!(decode::kind_of(&d.join("song.mp3")).unwrap(), None);
+    std::fs::remove_dir_all(d).ok();
+}
+
+// FMT-24 (review F4): a FLAC that uses a part of the format claxon 0.4.3 doesn't decode (numbers
+// written plainly in an "escaped" partition; a frame that takes its bits from the header) is told
+// so in its own words: not "damaged", which it isn't.
+#[test]
+fn a_flac_with_a_part_claxon_cant_decode_is_told_so() {
+    for name in ["escape.flac", "bits-from-header.flac"] {
+        let e = format!("{:#}", decode::load(&fixture(name)).unwrap_err());
+        assert!(e.contains("it uses a part of FLAC that music2 can't decode yet"), "{name}: {e}");
+        assert!(!e.contains("damaged"), "{name}: {e}");
+    }
+}

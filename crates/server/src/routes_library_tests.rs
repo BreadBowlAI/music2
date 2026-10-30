@@ -483,6 +483,24 @@ fn a_flac_samples_preview_is_the_wav_of_it() {
     assert!(bits(&m2_runtime::decode::load(&wav).unwrap()) == want, "the FLAC's bits");
 }
 
+// LIB-6, FMT-24 (review F5): a FLAC sample's preview is held to 64 MB as the WAV it makes, checked
+// from its header before it is decoded: 64 MiB frames of silence (14 KB as FLAC) has none, in words.
+#[test]
+fn a_flac_whose_wav_is_over_64_mb_has_no_preview() {
+    let scratch = Scratch::new("flac-long");
+    let mine = scratch.0.join("Samples");
+    std::fs::create_dir_all(&mine).unwrap();
+    std::fs::write(mine.join("Long Hum.flac"), flac("silence-64mib.flac")).unwrap();
+    let running = with_settings(&scratch);
+    added(&running, &mine);
+    let real = std::fs::canonicalize(&mine).unwrap();
+    let id = format!("sample:folder:{}", real.join("Long Hum.flac").display());
+    let (status, _, body) = get(&running.url, &format!("/api/library/preview?id={}", enc(&id)));
+    assert_eq!(status, 404, "{} bytes served", body.len());
+    let words = json(&body)["error"].as_str().unwrap().to_string();
+    assert!(words.contains("as a WAV it is 65 MB, too long to preview here (up to 64 MB)"), "{words}");
+}
+
 // LIB-7, FMT-24: adding a FLAC sample brings in the WAV of its samples, with its bits, and a note
 // with the pack's credit and what the WAV was made from.
 #[test]

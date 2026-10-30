@@ -691,6 +691,50 @@ fn a_flac_sample_is_copied_and_renders_as_its_wav() {
     assert!(renders[0] == renders[1], "the pack of FLACs plays the bits of the pack of WAVs");
 }
 
+// FMT-24, PACK-12 (review F1): a pack's audio is held to a whole decode's budget, read from each
+// file's header, never decoded: a recording of silence that says 2^27 + 1 samples (29 KB, as FLAC)
+// stops `m2 pack import-sfz`, naming it, and the pack's audio may hold 2^28 samples in all.
+#[test]
+fn a_pack_whose_audio_is_over_its_budget_is_refused() {
+    let t = Temp::new("budget");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac");
+    copy(&sfz_fixture(), &t.0.join("in"));
+    let sfz = t.0.join("in/Tiny Keys.sfz");
+    std::fs::write(&sfz, std::fs::read_to_string(&sfz).unwrap().replace("c4-loud.wav", "c4-loud.flac")).unwrap();
+    std::fs::copy(fixtures.join("bomb.flac"), t.0.join("in/samples/c4-loud.flac")).unwrap();
+    let pack = t.0.join("pack");
+    let text = failed(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+    assert!(
+        text.contains(
+            "samples/c4-loud.flac is too long: it holds 134217729 samples (frames × channels), more than music2 decodes \
+                       whole (134217728, about 23 minutes of stereo at 48 kHz)"
+        ),
+        "{text}"
+    );
+    assert!(!pack.exists());
+    // A recording at the most, beside a short sample, fits; a second one is more than a pack holds.
+    // Their headers alone say so: each file is a header and one block.
+    let drums = t.0.join("drums");
+    std::fs::create_dir_all(drums.join("recordings")).unwrap();
+    std::fs::write(drums.join("m2pkg.toml"), "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\n").unwrap();
+    std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\n").unwrap();
+    short_wav(&drums.join("samples/kicks/Boom.wav"));
+    std::fs::copy(fixtures.join("at-the-most.flac"), drums.join("recordings/a.flac")).unwrap();
+    let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", said(&out));
+    std::fs::copy(fixtures.join("at-the-most.flac"), drums.join("recordings/b.flac")).unwrap();
+    let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    let text = said(&out);
+    assert!(
+        text.contains(
+            "the pack's audio holds 268440256 samples in all (frames × channels of every WAV and FLAC in it), more than a \
+                       pack may hold (268435456, 1 GiB as music2 plays it)"
+        ),
+        "{text}"
+    );
+}
+
 // PACK-14, FMT-24: a recording of another kind than WAV or FLAC (told by its first bytes) stops the
 // import before anything is written, naming it.
 #[test]

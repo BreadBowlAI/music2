@@ -24,12 +24,12 @@ impl Drop for Scratch {
     }
 }
 
-/// A 16-bit WAV of `seconds` of a sine at `amplitude`, in `channels` channels at 48 kHz.
-/// A FLAC fixture's bytes, as libsndfile made it (`core/runtime/tests/fixtures/flac/make.py`).
+/// A FLAC fixture's bytes, as `core/runtime/tests/fixtures/flac/make.py` made it.
 pub(crate) fn flac(name: &str) -> Vec<u8> {
     std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac").join(name)).unwrap()
 }
 
+/// A 16-bit WAV of `seconds` of a sine at `amplitude`, in `channels` channels at 48 kHz.
 pub(crate) fn wav(path: &Path, channels: u16, seconds: f64, amplitude: f64) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let spec = hound::WavSpec { channels, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
@@ -533,6 +533,21 @@ fn a_flac_sample_is_measured_as_its_wav() {
     std::fs::write(t.0.join("slow.flac"), slow).unwrap();
     let why = measure(&t.0.join("slow.flac")).unwrap_err();
     assert_eq!(why, "doesn't read as a FLAC file (it plays at 4000 Hz: music2 takes files from 8,000 to 384,000 Hz)");
+}
+
+// LIB-4, FMT-24 (review F1): a sample is held to a whole decode's budget, from its header, before
+// it is measured: a FLAC of silence (29 KB) that says 2^27 + 1 samples is unreadable at once, in
+// words; a header at the most passes, and only reading it finds it cut short.
+#[test]
+fn a_sample_over_the_budget_is_unreadable_before_it_is_read() {
+    let t = Scratch::new("flac-budget");
+    std::fs::create_dir_all(&t.0).unwrap();
+    std::fs::write(t.0.join("bomb.flac"), flac("bomb.flac")).unwrap();
+    std::fs::write(t.0.join("most.flac"), flac("at-the-most.flac")).unwrap();
+    let why = measure(&t.0.join("bomb.flac")).unwrap_err();
+    assert!(why.starts_with("is too long: it holds 134217729 samples (frames × channels), more than music2 decodes whole"), "{why}");
+    let why = measure(&t.0.join("most.flac")).unwrap_err();
+    assert!(why.contains("cut short"), "{why}");
 }
 
 // LIB-7, FMT-24: a FLAC's note says what its WAV was made from; a note of yours with that, or an

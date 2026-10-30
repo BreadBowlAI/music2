@@ -19,7 +19,16 @@ felt-piano/
   samples/              recordings its code plays
 ```
 
-A pack holds only `.ts`, `.wasm`, `.toml`, `.json`, `.md`, `.txt`, `.wav` and `.flac` files (in any capitals: `.WAV` is a WAV), and `LICENSE`. Recordings and samples may be WAV or FLAC (FLAC: the same sound, about half the size; 8, 16 or 24 bits). It holds no link (a symbolic link or shortcut): copy the file in instead.
+A pack holds only `.ts`, `.wasm`, `.toml`, `.json`, `.md`, `.txt`, `.wav` and `.flac` files (in any capitals: `.WAV` is a WAV), and `LICENSE`. Recordings and samples may be WAV or FLAC (FLAC: the same sound, about half the size; 8, 16 or 24 bits).
+
+**How much audio a pack may hold.** music2 holds an instrument's recordings whole in memory while a song plays it. So a pack is held to what its audio files' headers say (a *sample* here is one number of sound: one channel at one moment, so a second of stereo at 48 kHz is 96,000):
+
+| | The most | About |
+|---|---|---|
+| One recording | 134,217,728 samples | 23 minutes of stereo at 48 kHz |
+| All the pack's WAV and FLAC files together | 268,435,456 samples | 46 minutes of stereo at 48 kHz, 1 GB as music2 plays it |
+
+`m2 pack check` says when a pack holds more, and which file. A small grand piano (200 recordings of a few seconds) uses less than half. Bigger instruments wait for music2 to play recordings from the disk as they sound. It holds no link (a symbolic link or shortcut): copy the file in instead.
 
 ## m2pkg.toml
 

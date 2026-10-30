@@ -24,7 +24,7 @@
 
 In the app, **Add a Folder…** opens the folder picker. In a web browser (the app's page opened from a browser), it asks for the folder's whole path instead, typed in a small box: a browser can't give a page a folder's path.
 
-**WAV and FLAC only for now.** music2 reads WAV and FLAC files (FLAC: the same sound as a WAV, about half the size). A folder's MP3, AIFF or OGG files are skipped, and the folder's line says how many ("3 skipped: WAV and FLAC only for now"). A file music2 can't play (a kind it doesn't decode, a broken file, a FLAC that isn't 8, 16 or 24 bits) is left out too, and the line says how many ("2 don't read").
+**WAV and FLAC only for now.** music2 reads WAV and FLAC files (FLAC: the same sound as a WAV, about half the size). A folder's MP3, AIFF or OGG files are skipped, and the folder's line says how many ("3 skipped: WAV and FLAC only for now"). A file music2 can't play (a kind it doesn't decode, a broken file, a FLAC that isn't 8, 16 or 24 bits, one longer than about 23 minutes of stereo) is left out too, and the line says how many ("2 don't read").
 
 **A FLAC comes in as a WAV.** When you add a FLAC sample to a song, music2 writes a WAV of the very same sound into the song's `assets/` folder (`kick.flac` comes in as `kick.wav`), because a song's audio clips play WAV files. The note beside it (`kick.wav.json`) says which FLAC it was made from. File ▸ Import Audio… does the same with a FLAC you pick.
 

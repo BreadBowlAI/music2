@@ -317,6 +317,28 @@ fn a_sampler_file_that_wont_decode_is_told_naming_it_and_its_track() {
     assert_eq!(rig.problems(), listed, "listed again: the new plan plays it silent too");
 }
 
+// FMT-24 (review F1): a Sampler file whose header says more samples than one whole decode may make
+// (a FLAC of silence, 29 KB, that would decode to 512 MiB) is refused before it is decoded: one
+// problem, `asset.unreadable`, in words that say why, not that it may be damaged.
+#[test]
+fn a_sampler_file_too_long_to_hold_is_told_so_and_never_decoded() {
+    let song = "import { song, track } from '@m2/core';\nimport { sampler } from 'std/sampler';\n\
+                const d = track('drums', { name: 'Drums' }, ({ lane }) => sampler(lane.notes('hits'), { zones: { 36: 'kick.flac' } }));\n\
+                export default song(() => d.out);\n";
+    let mut rig = Rig::with(song, |f| {
+        f.put(
+            "data/drums/hits.json",
+            r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C2", "start": 0, "length": 1}]}]}"#,
+        );
+        std::fs::create_dir_all(f.0.join("assets")).unwrap();
+        std::fs::write(f.0.join("assets/kick.flac"), include_bytes!("../../../../core/runtime/tests/fixtures/flac/bomb.flac")).unwrap();
+    });
+    let said = "kick.flac, which the instrument on Drums plays, is too long to hold whole (over 134,217,728 samples, about 23 minutes \
+                of stereo at 48 kHz), so it plays silent. The rest of the song plays on.";
+    assert_eq!(rig.told_soon(), [said]);
+    assert_eq!(rig.problems(), [("asset.unreadable".into(), Some("drums".into()), said.to_string())]);
+}
+
 // sx, RENDER-25, RENDER-30: a warped clip whose stretch fails while the song plays (here its
 // source's reads fail on the stretch thread) is one problem, `stretch.failed`, naming the clip's
 // file and its track, toasted once. Before, a line in the log said so, and nothing else.
