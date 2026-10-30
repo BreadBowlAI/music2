@@ -61,6 +61,15 @@ icu_normalizer = "2"
 tungstenite = "0.30"
 # `m2 listen --png`'s picture: the version Tauri already builds (0.17 is there too, for another crate).
 png = "0.18"
+# Downloads, `m2_editor::fetch` only (NET-1): HTTP/1.1 over rustls, and nothing else of reqwest's:
+# no HTTP/2, no compression, no cookies, no proxy lookup. reqwest is in Cargo.lock already (Tauri's,
+# on other OSes). TLS is rustls with the ring provider, not aws-lc-rs: no cmake, no OpenSSL licence.
+# fetch hands its client that provider itself, so nothing is installed for the whole process. The
+# certificates are the OS's, through rustls-platform-verifier: Apple's verifier on macOS, the
+# system's store on Linux (its version is the one reqwest's `rustls-no-provider` already builds).
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
 
 [profile.dev]
 opt-level = 1

@@ -21,6 +21,12 @@ hound.workspace = true
 oxc.workspace = true
 icu_normalizer.workspace = true
 png.workspace = true
+sha2.workspace = true
+# Downloads (`fetch`): its own small runtime drives reqwest's client (NET-1).
+tokio.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
 
 [dev-dependencies]
 # A plan prepared against what plays, in the effect tests: what the engine keeps (ID-13).
