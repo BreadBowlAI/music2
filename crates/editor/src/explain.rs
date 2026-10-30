@@ -57,12 +57,13 @@ impl Song {
 }
 
 /// Each name the packages of `s` export, with the module it is imported from: every top-level
-/// `export const`, `export let` and `export function` of each package's own modules, then the
-/// catalog's components where each is exported first (PKG-11).
+/// `export const`, `export let` and `export function` of each of the draft's packages' own modules
+/// (PACK-9: a pack a draft that doesn't build brings in is one), then the catalog's components where
+/// each is exported first (PKG-11).
 fn exports(s: &Session) -> BTreeMap<String, String> {
     let mut exports = BTreeMap::new();
-    for p in s.packages.packages() {
-        let Ok(entries) = std::fs::read_dir(p.dir.join("src")) else { continue };
+    for (name, dir) in s.draft_packages() {
+        let Ok(entries) = std::fs::read_dir(dir.join("src")) else { continue };
         let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         paths.sort();
         for path in paths {
@@ -70,7 +71,7 @@ fn exports(s: &Session) -> BTreeMap<String, String> {
                 continue;
             };
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            let module = if stem == "index" { p.name.clone() } else { format!("{}/{stem}", p.name) };
+            let module = if stem == "index" { name.clone() } else { format!("{name}/{stem}") };
             for name in exported(&text) {
                 exports.entry(name).or_insert_with(|| module.clone());
             }

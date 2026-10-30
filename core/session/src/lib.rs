@@ -186,6 +186,13 @@ pub fn resolve_packs(project: &Project, packages: &PackageSet) -> m2_song::pack:
     m2_song::pack::resolve(&project.dir, &project.manifest, &project.lock, packages.store(), &app(packages))
 }
 
+/// The packs the project in `snapshot` resolves (PACK-9), by name, with their folders: each that
+/// resolves, though another doesn't. None when it isn't a project that reads.
+pub(crate) fn resolved(snapshot: &m2_song::Snapshot, packages: &PackageSet) -> Option<Vec<(String, std::path::PathBuf)>> {
+    let project = Project::from_snapshot(snapshot).ok()?;
+    Some(resolve_packs(&project, packages).packs.into_iter().map(|r| (r.name.as_str().to_string(), r.dir)).collect())
+}
+
 /// Build a project's code: check its dependencies and resolve its packs (PACK-9), run the
 /// TypeScript (QuickJS), bind the hosted plugins and check the graph. What only the code decides;
 /// the data is [`read_data`]'s. The build gets its own view of the packages, std and the packs it

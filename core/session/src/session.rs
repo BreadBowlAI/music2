@@ -180,6 +180,9 @@ pub struct Session {
     pub(crate) draft: Snapshot,
     /// Why the draft doesn't compile, if it doesn't.
     pub draft_errors: Vec<Diagnostic>,
+    /// The packs the draft resolved, by name, with their folders, while its code doesn't build:
+    /// what its problems are placed and explained with (PACK-9). None: the accepted revision's.
+    pub(crate) draft_packs: Option<Vec<(String, PathBuf)>>,
     /// Paths of changes held back with code (or an arrangement) that doesn't build: taken in with
     /// it once it does, never half (WRITE-19).
     pub(crate) waiting: BTreeSet<PathBuf>,
@@ -364,16 +367,17 @@ impl Session {
         // its components are missing from the catalog. Made after the build, which loads the
         // song's packs, so a pack in a folder is offered too (PACK-11).
         let (catalog, offered) = lists(&packages);
-        let (accepted, draft_errors, waiting) = match built {
+        let (accepted, draft_errors, waiting, draft_packs) = match built {
             Ok((project, compiled)) => {
                 let rev = Revision { number: 1, code_rev: 1, data_rev: 1, snapshot: snapshot.clone(), project, compiled };
-                (rev, vec![], BTreeSet::new())
+                (rev, vec![], BTreeSet::new(), None)
             }
             Err(d) => {
                 // No code: the empty revision, silent until the code compiles; everything waits.
                 let project = Project::empty(&snapshot);
                 let all = crate::tx::changed_paths(&Snapshot { dir: snapshot.dir.clone(), ..Snapshot::default() }, &snapshot);
-                (Revision { number: 1, code_rev: 0, data_rev: 0, snapshot: snapshot.clone(), project, compiled: Compiled::none() }, d, all)
+                let packs = crate::resolved(&snapshot, &packages);
+                (Revision { number: 1, code_rev: 0, data_rev: 0, snapshot: snapshot.clone(), project, compiled: Compiled::none() }, d, all, packs)
             }
         };
         let mut seen = Seen::default();
@@ -391,6 +395,7 @@ impl Session {
             seen,
             accepted: Arc::new(accepted),
             draft_errors,
+            draft_packs,
             waiting,
             past: VecDeque::new(),
             history: vec![],
@@ -482,6 +487,17 @@ impl Session {
     /// Every component the packages declare, and where each is exported (PKG-11).
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
+    }
+
+    /// The packages the draft's problems are placed and explained with (PACK-9), by name, with
+    /// their folders: while its code doesn't build, std and the packs it resolved, which the
+    /// accepted revision may not have; else those the session shows.
+    pub fn draft_packages(&self) -> Vec<(String, PathBuf)> {
+        let shown = self.packages.packages().map(|p| (p.name.clone(), p.dir.clone()));
+        match &self.draft_packs {
+            Some(packs) => shown.filter(|(name, _)| name == m2_song::pack::STD).chain(packs.iter().cloned()).collect(),
+            None => shown.collect(),
+        }
     }
 
     /// Where the lists take package `name` from (PACK-11): std as the session has it; a pack at the
@@ -638,6 +654,7 @@ impl Session {
             Ok(s) => self.take_in(s).draft_changed,
             Err(e) => {
                 self.draft_errors = unreadable(e);
+                self.draft_packs = None;
                 true
             }
         }
