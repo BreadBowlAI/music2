@@ -459,6 +459,9 @@ struct Inner {
     wake: Arc<watcher::Wake>,
     /// Projects opened from now on are watched by walks alone, never events (the gates).
     walk_only: AtomicBool,
+    /// The store of packs songs build with (PACK-6), when the server was given one
+    /// ([`Graph::keep_store`]): the one the library installs into. Else this user's.
+    store: std::sync::OnceLock<PathBuf>,
     /// Tests: what an export of this project does inside its window, and whether it holds.
     #[cfg(test)]
     export_hooks: Arc<crate::export::Hooks>,
@@ -622,6 +625,7 @@ impl Inner {
             ticking: Mutex::default(),
             wake: Arc::default(),
             walk_only: AtomicBool::default(),
+            store: std::sync::OnceLock::new(),
             #[cfg(test)]
             export_hooks: Arc::default(),
             layout: Mutex::default(),
@@ -989,6 +993,20 @@ impl Graph {
             Some((range, on)) if self.set_loop(Some(range), Some(on)).is_ok() => self.inner.state().context("no project is open"),
             _ => Ok(opened),
         }
+    }
+
+    /// Build songs opened from now on with the packs in `store` (PACK-6): the store the library
+    /// offers from and installs into ([`crate::library::Folders::packs`]), so a pack a Get installs
+    /// is the one a song finds. Once; before it, this user's store.
+    pub fn keep_store(&self, store: &Path) {
+        let _ = self.inner.store.set(store.to_path_buf());
+    }
+
+    /// The store changed: a Get installed a pack (REG-15). The open song's lists are made again,
+    /// so they offer it (PACK-11), and a song that waits for a pack its lock names is built again
+    /// (REG-17). Whether a song is open.
+    pub fn packs_installed(&self) -> Result<bool> {
+        self.call(|a| Ok(a.store_changed()))
     }
 
     /// Close the project. Returns once its plugin instances are destroyed, or after 2 s.

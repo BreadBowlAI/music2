@@ -328,18 +328,22 @@ pub const COMMANDS: &[Command] = &[
         also: &[],
         usage: "m2 pack new <folder> --name @owner/name\nm2 pack import-sfz <file.sfz> <folder> --name @owner/name [--label L] \
                 [--category C] [--license L]\nm2 pack check <folder>\nm2 pack build <folder>\nm2 pack install <folder>\n\
-                m2 pack list\nm2 pack remove @owner/name <version>\nm2 pack lock <project>\nm2 pack update <project> [@owner/name]",
+                m2 pack get <@owner/name>[@<version>]\nm2 pack get [<project>]\nm2 pack list\nm2 pack remove @owner/name <version>\n\
+                m2 pack lock <project>\nm2 pack update <project> [@owner/name]",
         words: "make, check and install packs: instruments, effects, sounds and recordings in a folder. `new` makes one with an \
                 example instrument; `import-sfz` makes one from an SFZ instrument (its recordings, as an instrument written as \
                 data), saying what it couldn't keep; `check` says in words what the registry would refuse (exit 1); `build` writes its \
-                `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `list` and `remove` show and \
-                take out what is installed; `lock` writes the song's `music2.lock` from its `music2.toml`, moving only what must \
+                `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `get` gets one from the library \
+                (the registry), the latest version unless one is named, or every pack a song's `music2.lock` names that isn't \
+                installed; `list` and `remove` show and take out what is installed; `lock` writes the song's `music2.lock` from its `music2.toml`, moving only what must \
                 move; `update` moves the song to the newest installed version each line allows (or that pack's only)",
         more: "Your store is `~/Music/music2/Packs`, one folder a version (`Packs/@alice/felt-piano/1.2.0/`). A version is never \
                changed: installing one that is there with other files is refused, and installing it again when its copy was \
                changed puts it back. A song keeps the version it was made with in `music2.lock`; adding a pack's instrument or \
                effect in the app writes it. To move a song to another version, change its line in `music2.toml`, then run \
-               `m2 pack lock`; both lock and update work while the song doesn't build. See [Packs](packs.md) and \
+               `m2 pack lock`; both lock and update work while the song doesn't build. `get` reads the registry \
+               `M2_REGISTRY` names, else `registry` in `~/.music2/settings.json`; each file is checked by its hash, and a pack \
+               is installed whole or not at all. See [Packs](packs.md), [Getting packs from the library](library.md) and \
                [Making a pack](making-a-pack.md).",
     },
     Command {
@@ -507,7 +511,10 @@ pub const COMMANDS: &[Command] = &[
                the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), \
                which only samples carry (a tempo within 2 bpm, a key or its relative). `--json` prints each item with all it knows: its `kind`, `id`, `label`, \
                `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track \
-               takes), and a sound's `preset`. [Finding sounds](finding-sounds.md) says more.",
+               takes), and a sound's `preset`. After what you have come the library's items of packs you haven't got \
+               (when a registry is set), each marked `library`, its id `library:<id>`, with `library`: its pack, \
+               version, licence and the bytes `m2 pack get` fetches; the search runs on this computer and sends \
+               nothing. [Finding sounds](finding-sounds.md) says more.",
     },
     Command {
         name: "docs",

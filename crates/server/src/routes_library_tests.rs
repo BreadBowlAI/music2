@@ -932,3 +932,47 @@ fn a_place_no_clip_can_go_is_refused_before_any_copy() {
     let left: Vec<_> = std::fs::read_dir(song.0.join("assets")).into_iter().flatten().flatten().map(|e| e.file_name()).collect();
     assert!(left.is_empty(), "nothing copied: {left:?}");
 }
+
+/// A pack in `dir`, `@alice/piano` 0.1.0, of one instrument written as data (PACK-13) that plays
+/// one recording: what `m2 pack import-sfz` makes.
+fn data_pack(dir: &Path) {
+    std::fs::create_dir_all(dir.join("instruments")).unwrap();
+    std::fs::write(
+        dir.join("m2pkg.toml"),
+        "[package]\nname = \"@alice/piano\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("instruments/piano.toml"),
+        "label = \"Felt piano\"\ncategory = \"Keys\"\nengine = \"std:sampler\"\nmode = \"gate\"\n\n[[region]]\nfile = \"samples/C4.wav\"\nroot = 60\nkeys = [0, 127]\n",
+    )
+    .unwrap();
+    tone(&dir.join("samples/C4.wav"), 1, 0.5);
+}
+
+// LIB-1, LIB-3, REG-6 (gaps #47): an instrument written as data is in the library with no song
+// open, and its preview renders, with no song open and with one that takes its pack.
+#[test]
+fn a_data_instrument_is_listed_and_previewed_with_or_without_a_song() {
+    let scratch = Scratch::new("data-instrument");
+    let store = scratch.0.join("Packs");
+    let installed = store.join("@alice/piano/0.1.0");
+    data_pack(&installed);
+    m2_editor::packs::build(&installed).unwrap();
+    let running = serving(Folders { packs: Some(store), previews: Some(scratch.0.join("previews")), ..Folders::default() });
+    assert_eq!(found(&running.url, "felt piano")[0], "@alice/piano:piano");
+    let (status, kind, body) = get(&running.url, "/api/library/preview?id=%40alice%2Fpiano%3Apiano");
+    assert_eq!((status, kind.as_str()), (200, "audio/wav"), "{}", String::from_utf8_lossy(&body));
+
+    let song = Scratch::new("data-instrument-song");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song.0);
+    let pack = scratch.0.join("piano");
+    data_pack(&pack);
+    let manifest = std::fs::read_to_string(song.0.join("music2.toml")).unwrap();
+    let line = format!("\"@alice/piano\" = {{ path = {} }}\n", serde_json::to_string(&pack.to_string_lossy()).unwrap());
+    std::fs::write(song.0.join("music2.toml"), manifest + &line).unwrap();
+    running.state.graph.open(&song.0).unwrap();
+    assert_eq!(found(&running.url, "felt piano")[0], "@alice/piano:piano");
+    let (status, kind, body) = get(&running.url, "/api/library/preview?id=%40alice%2Fpiano%3Apiano");
+    assert_eq!((status, kind.as_str()), (200, "audio/wav"), "with a song open: {}", String::from_utf8_lossy(&body));
+}

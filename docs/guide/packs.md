@@ -26,6 +26,7 @@ A pack is safe to get from a stranger: it holds only code that runs in music2's 
 | Command | What it does |
 |---|---|
 | `m2 pack install <folder>` | check the pack and copy it into your store, read-only. Installing a version you have again puts back a copy that was changed |
+| `m2 pack get @owner/name` | get a pack from the library, checked, into your store ([Getting packs from the library](library.md)) |
 | `m2 pack list` | the packs you have, each with its versions |
 | `m2 pack remove @owner/name <version>` | take a version out of your store |
 

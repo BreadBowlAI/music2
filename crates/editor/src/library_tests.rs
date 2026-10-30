@@ -587,3 +587,47 @@ mod previews {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// A pack in `dir`, `@alice/piano` 0.1.0, of one instrument written as data (PACK-13) that plays
+/// one recording: what `m2 pack import-sfz` makes.
+fn data_pack(dir: &Path) {
+    std::fs::create_dir_all(dir.join("instruments")).unwrap();
+    std::fs::write(
+        dir.join("m2pkg.toml"),
+        "[package]\nname = \"@alice/piano\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("instruments/piano.toml"),
+        "label = \"Felt piano\"\ncategory = \"Keys\"\nengine = \"std:sampler\"\nmode = \"gate\"\n\n[[region]]\nfile = \"samples/C4.wav\"\nroot = 60\nkeys = [0, 127]\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("samples")).unwrap();
+    let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let mut w = hound::WavWriter::create(dir.join("samples/C4.wav"), spec).unwrap();
+    for i in 0..24_000 {
+        w.write_sample(((i as f32 * 261.6 * std::f32::consts::TAU / 48_000.0).sin() * 9_000.0) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+}
+
+// LIB-1, LIB-2, REG-6 (gaps #47): with no song open the library lists a pack's instrument written
+// as data, as the session's build and the registry's robot do, and its preview renders.
+#[test]
+fn a_data_instrument_is_in_the_library_with_no_song_and_previews() {
+    let f = crate::testing::Fixture::new();
+    let pack = f.0.join("piano");
+    data_pack(&pack);
+    let packages = vec![("std".to_string(), std_dir()), ("@alice/piano".to_string(), pack.clone())];
+    let lib = without_song(&packages, None, &[], &[]);
+    let piano = lib.get("@alice/piano:piano").expect("the data instrument is listed with no song open");
+    assert_eq!(
+        (piano.kind, piano.label.as_str(), piano.package.as_str(), piano.preview),
+        (Kind::Instrument, "Felt piano", "@alice/piano", true)
+    );
+    let catalog = m2_session::describe(&packages);
+    let (song, loads) = preview::of(piano, &catalog, &packages, None).unwrap();
+    let wav = f.0.join("piano.wav");
+    preview::render(&song, &loads, &f.0.join("work"), &wav).unwrap();
+    assert!(std::fs::metadata(&wav).unwrap().len() > 44, "it renders");
+}

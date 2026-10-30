@@ -737,6 +737,32 @@ pub struct SampleFacts {
     pub peak: f64,
 }
 
+/// Why `words` can't be read, if one holds a control character (a line break, a tab, an escape),
+/// which no word of the registry's files may (as `m2 pack check` refuses one in a pack, PACK-12):
+/// shown in a terminal or a log, one could pass for something else. `at` names where.
+fn plain_words<'a>(at: &str, words: impl IntoIterator<Item = &'a str>) -> Result<(), String> {
+    match words.into_iter().find(|w| w.chars().any(char::is_control)) {
+        Some(w) => Err(format!(
+            "{at}: `{}` holds a control character (a line break, a tab or an escape), which no word of the registry may",
+            w.escape_debug()
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Every word of `i`.
+fn item_words(i: &ItemFacts) -> impl Iterator<Item = &str> {
+    let sample = i.sample.iter().flat_map(|s| s.instrument.iter().chain(&s.key));
+    [&i.id, &i.label, &i.category, &i.description, &i.component]
+        .into_iter()
+        .chain(&i.tags)
+        .chain(&i.preset)
+        .chain(&i.no_preview)
+        .chain(sample)
+        .map(String::as_str)
+        .chain(i.file.iter().map(|f| f.path.as_str()))
+}
+
 /// Whether `items` are by id, each once.
 fn by_id(items: &[ItemFacts]) -> bool {
     items.windows(2).all(|w| w[0].id < w[1].id)
@@ -759,6 +785,9 @@ impl Facts {
         if f.items.iter().any(|i| (i.kind == ItemKind::Sample) != (i.sample.is_some() && i.file.is_some())) {
             return Err(format!("{at}: a sample, and only a sample, has its sample facts and its file"));
         }
+        let a = &f.about;
+        let about = [&a.description, &a.license, &f.made_by].into_iter().chain(&a.authors).chain(&a.tags).map(String::as_str);
+        plain_words(&at, about.chain(f.items.iter().flat_map(item_words)))?;
         Ok(f)
     }
 
@@ -909,6 +938,10 @@ impl Catalog {
             if p.versions.iter().any(|v| v.removed.is_some() == (v.size.is_some() || v.files.is_some())) {
                 return Err(format!("the catalog's {}: a removed version has no size or files, and every other has both", p.name));
             }
+            let said = [&p.repository, &p.description, &p.license].into_iter().chain(&p.authors).chain(&p.tags).map(String::as_str);
+            let versions =
+                p.versions.iter().flat_map(|v| std::iter::once(&v.source).chain(&v.yanked).chain(&v.removed)).map(String::as_str);
+            plain_words(&format!("the catalog's {}", p.name), said.chain(versions).chain(p.items.iter().flat_map(item_words)))?;
         }
         Ok(c)
     }
@@ -919,7 +952,11 @@ impl Catalog {
         if bytes.len() as u64 != pointer.size || Sha::of(bytes) != pointer.catalog {
             return Err(format!("the catalog fetched isn't the one {POINTER} names ({}): it was changed or cut short", pointer.catalog));
         }
-        Catalog::read(bytes)
+        let c = Catalog::read(bytes)?;
+        if c.made != pointer.made {
+            return Err(format!("{POINTER} says its catalog was made at {}, and the catalog says it was made at {}", pointer.made, c.made));
+        }
+        Ok(c)
     }
 
     pub fn bytes(&self) -> Vec<u8> {

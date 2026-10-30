@@ -168,6 +168,26 @@ impl Session {
         self.take_in_settled(snapshot, settled)
     }
 
+    /// The store changed: a pack was installed (a Get, REG-15). The lists are made again, so they
+    /// offer it (PACK-11); and a draft that waits (a song whose lock names a version that wasn't
+    /// installed, `pkg.missing`) is built again, so it plays once it builds (REG-17). What outside
+    /// writers changed that waited for it is then one undo step, as when its own batch builds
+    /// (AGENT-2).
+    pub fn store_changed(&mut self) -> TakenIn {
+        (self.catalog, self.offered) = crate::session::lists(&self.packages);
+        self.problems = self.gather_problems();
+        if self.draft_errors.is_empty() {
+            return TakenIn::default();
+        }
+        let (draft, batch) = (self.draft.clone(), self.waiting.clone());
+        let settled = self.settling(&draft, &batch);
+        let taken = self.take_in_settled(draft, settled);
+        if taken.accepted.is_some() && self.access.writer() {
+            self.outside_step(false);
+        }
+        taken
+    }
+
     /// [`Session::take_in`] of `snapshot`, whose batch `settled` decided already.
     fn take_in_settled(&mut self, snapshot: Snapshot, settled: Settle) -> TakenIn {
         self.draft = snapshot;
@@ -225,6 +245,13 @@ impl Session {
         if taken.accepted.is_none() {
             return (taken, Outside::Nothing);
         }
+        let outside = self.outside_step(git);
+        (taken, outside)
+    }
+
+    /// A revision was just accepted: what outside writers changed that went into it, one undo step
+    /// (AGENT-2), as [`Session::take_in_batch`] says. `git`: the watcher saw git's `index.lock`.
+    fn outside_step(&mut self, git: bool) -> Outside {
         // What went into the revision: every outside path that doesn't wait now.
         let waiting = &self.waiting;
         let (left, went): (BTreeSet<PathBuf>, BTreeSet<PathBuf>) =
@@ -234,7 +261,7 @@ impl Session {
         let is = &self.accepted.snapshot;
         let changed = changed_paths(&was, &pick(is, &went));
         if git && !changed.is_empty() && crate::watch::git_has(&self.dir, &changed) {
-            return (taken, Outside::Git(changed.len()));
+            return Outside::Git(changed.len());
         }
         let others = changed.len().saturating_sub(1);
         let mut ops = vec![];
@@ -244,9 +271,9 @@ impl Session {
             let cant = |why| Outside::Cant { file: name.clone(), why, others };
             // Its bytes before are gone, or were never read: nothing can put them back (D5).
             if binary(&was, p) || was.unreadable.contains_key(p) || is.unreadable.contains_key(p) {
-                return (taken, cant(Cant::Bytes));
+                return cant(Cant::Bytes);
             }
-            let Ok(file) = TxPath::new(&name) else { return (taken, cant(Cant::Bytes)) };
+            let Ok(file) = TxPath::new(&name) else { return cant(Cant::Bytes) };
             let op = match text_of(&was, p) {
                 Some(old) => Op::Write { file: file.clone(), bytes: Payload::Text(old.clone()) },
                 // A file made under `assets/` stays: an asset no lane names plays nothing.
@@ -257,18 +284,18 @@ impl Session {
             let left = match (is.files.get(p), is.binaries.get(p)) {
                 (Some(t), _) => Base::Sha(is.not_utf8.get(p).copied().unwrap_or_else(|| Sha::of(t.as_bytes()))),
                 (None, Some(Stored::Hash(sha))) => Base::Sha(*sha),
-                (None, Some(_)) => return (taken, cant(Cant::Bytes)),
+                (None, Some(_)) => return cant(Cant::Bytes),
                 (None, None) => Base::Absent,
             };
             // Refused as a commit would refuse it, it could never be undone (WRITE-3a).
             if let Some(why) = self.unwritable(&file, &left) {
-                return (taken, cant(why));
+                return cant(why);
             }
             bases.push((file, left));
             ops.push(op);
         }
         if ops.is_empty() {
-            return (taken, Outside::Nothing);
+            return Outside::Nothing;
         }
         let file = bases[0].0.to_string();
         let shown = match (&ops[..], text_of(&was, Path::new(&file)), text_of(is, Path::new(&file))) {
@@ -282,11 +309,10 @@ impl Session {
         let mut step = TxStep::new(inverse, true, false, file.clone());
         // More than undo keeps would push every other step out of it.
         if step.retained() > crate::session::RETAINED {
-            return (taken, Outside::Cant { file, why: Cant::TooBig, others });
+            return Outside::Cant { file, why: Cant::TooBig, others };
         }
         step.source = crate::session::Source::Outside;
-        let id = self.record_tx(step);
-        (taken, Outside::Step(id))
+        Outside::Step(self.record_tx(step))
     }
 
     /// Why undo couldn't write `p` back over `base`, the way a commit would refuse it: a name that
