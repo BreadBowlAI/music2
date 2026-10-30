@@ -198,10 +198,20 @@ fn samples_toml_wins_over_the_guess() {
     let found = index(Root::Package { name: "@alice/loops", dir: &t.0 }, None);
     assert_eq!(found.problems.len(), 2, "{:?}", found.problems);
     assert!(found.problems.iter().any(|p| p.contains("there is no WAV file samples/gone.wav")), "{:?}", found.problems);
+    assert!(found.items.is_empty(), "it names none of the files there: they are its instruments' recordings");
+    // One that doesn't read lists nothing until it is fixed.
     pack(&t.0, Some("[file.\"drums/snap 1.wav\"]\nbpm = 500\n"));
     let found = index(Root::Package { name: "@alice/loops", dir: &t.0 }, None);
-    assert!(found.problems[0].contains("bpm is 20 to 300"), "{:?}", found.problems);
+    assert!(found.problems[0].contains("bpm is 20 to 300") && found.items.is_empty(), "{:?}", found.problems);
+    // Only what it names: a folder, or a file.
+    pack(&t.0, Some("[folder.\"drums\"]\n"));
+    let found = index(Root::Package { name: "@alice/loops", dir: &t.0 }, None);
+    let labels: Vec<&str> = found.items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(labels, ["boom", "snap 1"]);
     assert_eq!(sample_of(&found, "sample:@alice/loops:samples/drums/snap 1.wav").instrument.as_deref(), Some("clap"), "guessed");
+    // Without samples.toml, a pack's samples/ is its instruments' recordings alone.
+    std::fs::remove_file(t.0.join("samples.toml")).unwrap();
+    assert!(index(Root::Package { name: "@alice/loops", dir: &t.0 }, None).items.is_empty());
 }
 
 // LIB-4: only WAV files are samples, in any capitals; other audio files are counted; a WAV that

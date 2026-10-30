@@ -357,3 +357,46 @@ fn a_preset_outside_a_strict_range_is_named() {
     let text = failed(t.m2(&["pack", "check", tiny.to_str().unwrap()]));
     assert!(text.contains("presets/tiny-keys/Low.json") && text.contains("brightness") && text.contains("range"), "{text}");
 }
+
+/// A 16-bit mono WAV of a tenth of a second of a tone at 48 kHz.
+fn short_wav(path: &Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let mut w = hound::WavWriter::create(path, spec).unwrap();
+    for i in 0..4_800 {
+        w.write_sample(((i as f32 / 10.0).sin() * 8_000.0) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+}
+
+// PACK-12, LIB-4: a pack of samples alone checks and installs, and its samples are found; check
+// names a WAV that doesn't decode, a word not on the list and a path samples.toml names that isn't
+// there.
+#[test]
+fn a_pack_of_samples_alone_checks_and_its_samples_are_checked() {
+    let t = Temp::new("samples");
+    let drums = t.0.join("drums");
+    std::fs::create_dir_all(&drums).unwrap();
+    std::fs::write(drums.join("m2pkg.toml"), "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\n").unwrap();
+    std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n").unwrap();
+    short_wav(&drums.join("samples/kicks/Boom.wav"));
+    let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", said(&out));
+    let out = t.m2(&["pack", "install", drums.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", said(&out));
+    let out = t.m2(&["search", "boom", "--kind", "sample", "--json"]);
+    let items: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", said(&out)));
+    assert_eq!(items[0]["id"], "sample:@alice/drums:samples/kicks/Boom.wav", "{items}");
+    assert_eq!((&items[0]["package"], &items[0]["sample"]["instrument"]), (&serde_json::json!("@alice/drums"), &serde_json::json!("kick")));
+
+    std::fs::write(drums.join("samples/kicks/broken.wav"), b"RIFF0000WAVEnope").unwrap();
+    std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"cowbell\"\n\n[file.\"snares/gone.wav\"]\n").unwrap();
+    let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    let text = said(&out);
+    for want in
+        ["samples/kicks/broken.wav doesn't read as a WAV file", "instrument cowbell isn't one of", "no WAV file samples/snares/gone.wav"]
+    {
+        assert!(text.contains(want), "says {want}: {text}");
+    }
+}

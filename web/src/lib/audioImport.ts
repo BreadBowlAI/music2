@@ -4,7 +4,8 @@
 // files go as paths; in a browser, as bytes.
 
 import { barAt, graphApi, lockReason, moduleName, readJson, type GraphState, type Instrument } from "./graph";
-import { onFiles, type DropTarget } from "./drop";
+import { onFiles, onSample, type DropTarget } from "./drop";
+import type { LibraryItem } from "./library";
 import { useClipSelection } from "./clips";
 import { beatNow } from "./clock";
 import { native, nativeAction, token } from "./native";
@@ -114,6 +115,79 @@ export function menuTarget(graph: GraphState): Target {
   if (track) return { kind: "track", module: track.module, beat };
   return { kind: "below", beat };
 }
+
+// ---------------------------------------------------------------- samples from the library (LIB-7)
+
+/** What the server answers when it adds a sample. */
+interface SampleAdded {
+  step?: number;
+  name: string;
+  asset: string;
+  made?: { module: string; lane: string; id: string }[];
+  tracks?: { module: string; label: string }[];
+  /** The loop's own tempo it follows, when it does. */
+  follows?: number | null;
+  song_bpm?: number;
+}
+
+/**
+ * Add sample `item` from the library (LIB-7): its file copied into the song with a note of where it
+ * came from, then a clip at `to` (a loop at another tempo with Follow tempo on), or the file of the
+ * Sampler `to` names. One undo step, with Undo in its toast.
+ */
+export async function addSample(item: LibraryItem, to: Target | { kind: "sampler"; call: string; title: string }) {
+  const { graph, connected, toast } = useStore.getState();
+  if (!graph) return;
+  const why = lockReason(graph, connected);
+  if (why) return void toast(`${why}.`);
+  const body = to.kind === "sampler" ? { session: graph.session, id: item.id, at: graph.view.revision, call: to.call } : { session: graph.session, id: item.id, to };
+  try {
+    const res = await fetch("/api/library/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+    const done = (await readJson(res)) as SampleAdded & { error?: string };
+    if (!res.ok) throw new Error(done.error ?? `HTTP ${res.status}`);
+    const fresh = await graphApi.get();
+    useStore.getState().set({ graph: fresh });
+    if (to.kind === "sampler") return void toast(`${to.title} plays ${done.asset}`, undoAction(graph.session, done.step));
+    const refs = (done.made ?? []).map((m) => ({ module: m.module, lane: m.lane, id: m.id }));
+    if (refs[0]) useShell.getState().select(refs[0].module);
+    useClipSelection.getState().only(refs);
+    for (const t of done.tracks ?? []) trackMade(t.module, done.made?.find((m) => m.module === t.module)?.lane ?? "clips");
+    const onto = done.tracks?.[0] ? ` on a new track, ${done.tracks[0].label}` : "";
+    const follows = done.follows ? `. Follow tempo is on: its ${Math.round(done.follows * 10) / 10} bpm plays at the song's ${Math.round((done.song_bpm ?? 0) * 10) / 10}` : "";
+    toast(`Added ${item.label}${onto}${follows}`, undoAction(graph.session, done.step));
+  } catch (error) {
+    toast(`Nothing was added to the song: ${words(error)}`);
+  }
+}
+
+/** Where Enter puts a sample: as File ▸ Import Audio… puts a file (Q7). */
+export const sampleTarget = (graph: GraphState) => menuTarget(graph);
+
+onSample({
+  hint(item, t) {
+    if (t.kind === "sampler") return `${t.title} plays ${item.label}`;
+    const graph = useStore.getState().graph;
+    const to = audioTarget(t);
+    if (!graph || !to) return null;
+    const bar = `bar ${barAt(graph.timeline.meter, to.beat).bar + 1}`;
+    if (to.kind === "lane") {
+      const tr = graph.timeline.tracks.find((x) => x.module === to.module);
+      return `${moduleName({ key: to.module, label: tr?.label })} · ${bar}`;
+    }
+    return `New audio track · ${bar}`;
+  },
+  where(t) {
+    if (t.kind === "sampler") return t;
+    const to = audioTarget(t);
+    if (!to) return { kind: "none" };
+    return to.kind === "lane" ? { kind: "lane", module: to.module, lane: to.lane, beat: to.beat } : to;
+  },
+  drop(item, t) {
+    if (t.kind === "sampler") return void addSample(item, t);
+    const to = audioTarget(t);
+    if (to) void addSample(item, to);
+  },
+});
 
 /** The files the person picks: the app's own dialog when it has one, else the page's file input. */
 async function pick(): Promise<Incoming[]> {

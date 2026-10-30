@@ -299,7 +299,19 @@ impl SamplesToml {
     /// `one-shot`, an instrument not in [`INSTRUMENTS`], a tempo outside [`TEMPOS`] or a key that
     /// doesn't read is refused, each in words.
     pub fn parse(text: &str) -> Result<SamplesToml, Vec<String>> {
-        let t: SamplesToml = toml::from_str(text).map_err(|e| vec![format!("{SAMPLES_TOML} doesn't read: {}", e.message().trim())])?;
+        match SamplesToml::read(text) {
+            (Some(t), problems) if problems.is_empty() => Ok(t),
+            (_, problems) => Err(problems),
+        }
+    }
+
+    /// [`SamplesToml::parse`], with what it says even when a word in it is wrong (none when it
+    /// doesn't read as TOML, or has a key it doesn't know): `m2 pack check` checks its paths too.
+    pub fn read(text: &str) -> (Option<SamplesToml>, Vec<String>) {
+        let t: SamplesToml = match toml::from_str(text) {
+            Ok(t) => t,
+            Err(e) => return (None, vec![format!("{SAMPLES_TOML} doesn't read: {}", e.message().trim())]),
+        };
         let mut problems = vec![];
         let tables = t
             .folder
@@ -320,7 +332,7 @@ impl SamplesToml {
                 problems.push(format!("{SAMPLES_TOML} {at}: key {k} doesn't read: write it as Am, F#, Bb minor or C"));
             }
         }
-        if problems.is_empty() { Ok(t) } else { Err(problems) }
+        (Some(t), problems)
     }
 
     /// The package in `dir`'s, if it has one: none when there is no file; problems in words.
@@ -330,6 +342,13 @@ impl SamplesToml {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SamplesToml::default()),
             Err(e) => Err(vec![format!("{SAMPLES_TOML} can't be read: {e}")]),
         }
+    }
+
+    /// Whether it names the file at `rel` (inside `samples/`), by a table of its own or of a folder
+    /// it is under: a package's loose samples are the files it names (LIB-4); the rest of
+    /// `samples/` is its instruments' recordings.
+    pub fn names(&self, rel: &str) -> bool {
+        self.file.contains_key(rel) || self.folder.keys().any(|f| rel.starts_with(&format!("{}/", f.trim_end_matches('/'))))
     }
 
     /// What it says of the file at `rel` (inside `samples/`): its folders' tables, the shallowest
@@ -503,6 +522,7 @@ pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
             if !base.is_dir() {
                 return out;
             }
+            // A `samples.toml` that doesn't read lists nothing until it is fixed.
             let said = SamplesToml::of_package(dir).unwrap_or_else(|p| {
                 out.problems = p;
                 SamplesToml::default()
@@ -511,6 +531,7 @@ pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
         }
         Root::Folder(_) => (SamplesToml::default(), Origin::Folder),
     };
+    let listed = |rel: &str| matches!(root, Root::Folder(_)) || said.names(rel);
     let kept_at = cache.map(|c| cache_file(c, &base));
     let mut kept: Kept =
         kept_at.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
@@ -520,6 +541,10 @@ pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
     for f in &files {
         if !is_wav_name(&f.rel) {
             out.not_wav += usize::from(NOT_WAV.contains(&extension(&f.rel).as_str()));
+            continue;
+        }
+        wavs.push(f.rel.clone());
+        if !listed(&f.rel) {
             continue;
         }
         let key = f.path.to_string_lossy().into_owned();
@@ -537,7 +562,6 @@ pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
             }
         };
         now.files.insert(key, KeptFile { size: f.size, modified: f.modified, measured: measured.clone() });
-        wavs.push(f.rel.clone());
         out.items.push(item(&origin, &f.rel, &f.path, &measured, &said.of(&f.rel)));
     }
     if matches!(root, Root::Package { .. }) {
@@ -548,6 +572,36 @@ pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
         let _ = keep(&file, &now);
     }
     out
+}
+
+/// What `m2 pack check` finds wrong with the samples of the pack in `dir` (PACK-12, LIB-4), in
+/// words: every WAV under `samples/` decodes, and `samples.toml` reads strictly and names only
+/// files and folders there. Whether it lists any sample, too: a pack of samples alone needs no
+/// component.
+pub fn check(dir: &Path) -> (Vec<String>, bool) {
+    let mut out = vec![];
+    let said = match std::fs::read_to_string(dir.join(SAMPLES_TOML)) {
+        Ok(text) => {
+            let (said, problems) = SamplesToml::read(&text);
+            out.extend(problems);
+            said.unwrap_or_default()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SamplesToml::default(),
+        Err(e) => {
+            out.push(format!("{SAMPLES_TOML} can't be read: {e}"));
+            SamplesToml::default()
+        }
+    };
+    let mut wavs = vec![];
+    for f in files_in(&dir.join(SAMPLES_DIR)).into_iter().filter(|f| is_wav_name(&f.rel)) {
+        if let Err(why) = measure(&f.path) {
+            out.push(format!("{SAMPLES_DIR}/{} doesn't read as a WAV file ({why})", f.rel));
+        }
+        wavs.push(f.rel);
+    }
+    out.extend(said.missing(&wavs));
+    let any = wavs.iter().any(|w| said.names(w));
+    (out, any)
 }
 
 /// Write the cache's file whole, through a part file renamed over it.

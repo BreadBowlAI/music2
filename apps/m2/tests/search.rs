@@ -118,3 +118,77 @@ fn with_the_app_open_m2_asks_it() {
     assert!(o.status.success(), "{o:?}");
     assert!(out(&o).starts_with("Example Synth ") && out(&o).contains("clap:com.example.synth"), "{}", out(&o));
 }
+
+/// A 16-bit mono WAV of `seconds` of a tone at 48 kHz, made byte by byte (no WAV crate here).
+fn tone(path: &Path, seconds: f64) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let frames = (seconds * 48_000.0) as u32;
+    let mut b = vec![];
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + frames * 2).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&48_000u32.to_le_bytes());
+    b.extend_from_slice(&96_000u32.to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&(frames * 2).to_le_bytes());
+    for i in 0..frames {
+        b.extend_from_slice(&(((i as f32 / 20.0).sin() * 12_000.0) as i16).to_le_bytes());
+    }
+    std::fs::write(path, b).unwrap();
+}
+
+/// A copy of `from` at `to`.
+fn copy(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let (f, t) = (e.path(), to.join(e.file_name()));
+        if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
+    }
+}
+
+// LIB-2, LIB-4, LIB-5: with the app closed, m2 search finds std's kit and the samples of your
+// folders (kept in the settings), and says what it skipped.
+#[test]
+fn with_the_app_closed_m2_searches_samples() {
+    let home = Home::new("samples");
+    let mine = home.0.join("My Samples");
+    tone(&mine.join("Kicks/Deep Kick.wav"), 0.2);
+    std::fs::write(mine.join("Kicks/old.flac"), b"fLaC").unwrap();
+    std::fs::create_dir_all(home.0.join(".music2")).unwrap();
+    std::fs::write(home.0.join(".music2/settings.json"), serde_json::json!({"samples": [mine]}).to_string()).unwrap();
+    let o = m2_in(&home.0, &["search", "kick", "--kind", "sample", "--json"]);
+    let items: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_else(|_| panic!("{o:?}"));
+    let ids: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
+    let deep = format!("sample:folder:{}", mine.join("Kicks/Deep Kick.wav").display());
+    assert_eq!(ids, ["sample:std:samples/kit/kick.wav", deep.as_str()], "std's first, then yours");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("1 audio files that aren't WAV were skipped: WAV only for now"), "{o:?}");
+    assert!(home.0.join(".cache/music2/samples").is_dir() || home.0.join("Library/Caches/music2/samples").is_dir(), "measures kept");
+}
+
+// LIB-7: m2 add-sample, with the app closed, copies the sample with its note and places its clip
+// on a new audio track, or on a track's audio lane with --track.
+#[test]
+fn m2_adds_a_sample_with_the_app_closed() {
+    let home = Home::new("add-sample");
+    let song = home.0.join("song");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
+    let s = song.to_str().unwrap();
+    let o = m2_in(&home.0, &["add-sample", s, "sample:std:samples/kit/kick.wav", "--at", "2"]);
+    assert!(o.status.success(), "{o:?}");
+    let said = out(&o);
+    assert!(said.starts_with("added assets/kick.wav, its note in assets/kick.wav.json\nonto a new track Kick"), "{said}");
+    assert_eq!(
+        std::fs::read(song.join("assets/kick.wav")).unwrap(),
+        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/samples/kit/kick.wav")).unwrap()
+    );
+    let note: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(song.join("assets/kick.wav.json")).unwrap()).unwrap();
+    assert_eq!(note["from"]["pack"], "std");
+    assert_eq!(note["from"]["file"], "samples/kit/kick.wav");
+    let o = m2_in(&home.0, &["add-sample", s, "sample:folder:/etc/hosts"]);
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("There is no sample sample:folder:/etc/hosts"), "{o:?}");
+}

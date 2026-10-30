@@ -313,7 +313,7 @@ fn loops_pack(dir: &Path) {
          [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
     )
     .unwrap();
-    std::fs::write(dir.join("samples.toml"), "[folder.\"loops\"]\ntags = [\"dusty\"]\n").unwrap();
+    std::fs::write(dir.join("samples.toml"), "[folder.\"loops\"]\ntags = [\"dusty\"]\n\n[folder.\"one-shots\"]\n").unwrap();
     tone(&dir.join("samples/loops/dusty keys 90 Am.wav"), 2, 32.0 / 3.0);
     tone(&dir.join("samples/loops/drums 120.wav"), 2, 4.0);
     tone(&dir.join("samples/one-shots/kick.wav"), 1, 0.25);

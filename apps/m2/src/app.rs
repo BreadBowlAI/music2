@@ -370,6 +370,21 @@ impl App {
         Ok(v)
     }
 
+    /// `m2 add-sample` while the app has the song open (AGENT-1): `body` (`{id, to}`) sent to the
+    /// app's own route (LIB-7), as this agent. The app's answer.
+    pub fn add_sample(&mut self, mut body: Value) -> Result<Value> {
+        body["session"] = json!(self.session);
+        let (status, bytes) = self.call("POST", "/api/library/sample", Some(&body), true)?;
+        let v = json_of(status, "", &bytes);
+        if status != 200 {
+            bail!("{}", words(&v));
+        }
+        if let Some(done) = done_in_app(&v) {
+            say_after(done);
+        }
+        Ok(v)
+    }
+
     /// `m2 undo` (AGENT-4): take back the newest step in the app, only while it is this agent's.
     pub fn undo(&self) -> Result<Value> {
         let w = who();
