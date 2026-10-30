@@ -184,6 +184,7 @@ fn a_progress_that_panics_leaves_nothing() {
     assert_eq!(names(&f.0), Vec::<String>::new());
 }
 
+// NET-4: a small download, kept in memory, within its limit.
 #[test]
 fn get_returns_the_bytes_within_their_limit() {
     let s = Server::new(vec![ok(BODY), ok_unsized(BODY), ok(BODY)]);
@@ -358,6 +359,7 @@ fn a_wrong_hash_is_refused() {
     assert_eq!(names(&f.0), ["blob.wav"]);
 }
 
+// NET-6: the server's answer, in words.
 #[test]
 fn a_missing_file_says_so() {
     let s = Server::new(vec![status(404), status(503), status(403)]);
@@ -511,6 +513,7 @@ fn a_call_from_async_code_panics() {
     rt.block_on(async { get(&url, 1 << 10) }).ok();
 }
 
+// NET-6: a runtime's blocking thread is a thread of its own.
 #[test]
 fn a_call_from_a_blocking_thread_of_a_runtime_works() {
     let s = Server::new(vec![ok(BODY)]);
@@ -520,6 +523,7 @@ fn a_call_from_a_blocking_thread_of_a_runtime_works() {
     assert_eq!(got.unwrap(), BODY);
 }
 
+// NET-6: sizes in words.
 #[test]
 fn sizes_are_said_in_words() {
     assert_eq!(Error::TooBig { size: Some(900), limit: 512 }.to_string(), "the file was 900 bytes, more than the 512 bytes allowed");
