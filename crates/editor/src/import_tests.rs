@@ -140,10 +140,13 @@ fn a_file_that_isnt_wav_is_refused_in_words() {
     let song = fixture("examples/resample");
     let mp3 = b"ID3\x04\x00\x00\x00\x00\x00\x00some mp3 frames".to_vec();
     let words = refusal(audio(&song.0, bytes("song.mp3", mp3)));
-    assert_eq!(words, "song.mp3 isn't a WAV file. music2 reads WAV files. Save it as a WAV first: most audio apps can (Export, then WAV).");
-    // Taken as WAV by its header, not its name.
+    assert_eq!(
+        words,
+        "song.mp3 isn't a WAV or FLAC file. music2 reads WAV and FLAC files. Save it as a WAV first: most audio apps can (Export, then WAV)."
+    );
+    // Taken as WAV by its header, not its name (FMT-24).
     let named = refusal(audio(&song.0, bytes("fake.wav", b"just some words, not sound".to_vec())));
-    assert!(named.starts_with("fake.wav isn't a WAV file."), "{named}");
+    assert!(named.starts_with("fake.wav isn't a WAV or FLAC file."), "{named}");
     let (i, _) = audio(&song.0, bytes("real.mp3", tone(0.25, 5.0))).unwrap();
     assert_eq!(i.asset.as_str(), "real.mp3", "a WAV with another name is a WAV");
     let silent = refusal(audio(&song.0, bytes("empty.wav", wav_bytes(1, 48_000, 0.0, |_, _| 0.0))));
@@ -310,6 +313,7 @@ fn a_file_name_makes_a_track_name() {
         rate: 48_000,
         dropped_channels: 0,
         reused: false,
+        made_from: None,
     };
     assert_eq!(track_label(&i("lead vox.wav")), "Lead vox");
     assert_eq!(track_label(&i("ベース.wav")), "ベース");
@@ -366,4 +370,146 @@ fn a_plain_import_never_takes_a_noted_name() {
     std::fs::write(song.0.join("assets/kick.wav.json"), r#"{"from": {"pack": "@alice/loops", "license": "CC-BY-4.0"}}"#).unwrap();
     let (i, _) = audio(&song.0, bytes("kick.wav", tone(0.5, 4.0))).unwrap();
     assert_eq!(i.asset.as_str(), "kick 2.wav");
+}
+
+/// A FLAC fixture's bytes, as libsndfile made it (`core/runtime/tests/fixtures/flac/make.py`).
+fn flac(name: &str) -> Vec<u8> {
+    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac").join(name)).unwrap()
+}
+
+/// Each channel's samples as their bits.
+fn bits(a: &m2_runtime::audio::Asset) -> Vec<Vec<u32>> {
+    a.channels.iter().map(|c| c.iter().map(|s| s.to_bits()).collect()).collect()
+}
+
+// FMT-24: a FLAC comes into a song as the WAV of its samples, with its bits (8, 16 or 24), named as
+// the FLAC with `.wav`; what its check decoded is that WAV, and its note says what it was made from.
+#[test]
+fn a_flac_comes_in_as_a_wav_of_its_samples_with_a_note() {
+    let song = fixture("examples/resample");
+    for (fixture_name, name, bits_per_sample) in
+        [("16bit-stereo.flac", "Lead Keys.FLAC", 16), ("24bit-mono.flac", "pad.flac", 24), ("8bit-mono.flac", "lofi", 8)]
+    {
+        let source = flac(fixture_name);
+        let (_out, path) = outside(name, &source);
+        let (i, decoded) = audio(&song.0, Source::Path(path)).unwrap();
+        let wav = format!("{}.wav", name.strip_suffix(".FLAC").or(name.strip_suffix(".flac")).unwrap_or(name));
+        assert_eq!((i.asset.as_str(), i.name.as_str(), i.reused), (wav.as_str(), name, false), "{name}");
+        let asset = song.0.join("assets").join(&wav);
+        let spec = hound::WavReader::open(&asset).unwrap().spec();
+        assert_eq!((spec.bits_per_sample, spec.sample_format), (bits_per_sample, hound::SampleFormat::Int), "{name}: its bits");
+        assert_eq!(i.hash, m2_song::Sha::of(&std::fs::read(&asset).unwrap()), "{name}: the clip pins the WAV");
+        let theirs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac").join(fixture_name);
+        let want = bits(&m2_runtime::decode::load(&theirs).unwrap());
+        assert!(bits(&m2_runtime::decode::load(&asset).unwrap()) == want, "{name}: the FLAC's bits");
+        assert!(bits(&decoded.unwrap()) == want, "{name}: what its check decoded is what plays");
+        assert!((i.seconds - 0.1).abs() < 1e-9 && i.rate == 48_000, "{name}");
+        let note: serde_json::Value = serde_json::from_slice(&std::fs::read(song.0.join(format!("assets/{wav}.json"))).unwrap()).unwrap();
+        let sha = m2_song::Sha::of(&source).hex();
+        assert_eq!(note, serde_json::json!({"made_from": {"file": name, "format": "FLAC", "sha256": sha}}), "{name}");
+    }
+    let mut want = vec!["Lead Keys.wav", "Lead Keys.wav.json", "keys-bounce.wav", "keys-bounce.wav.json", "lofi.wav", "lofi.wav.json"];
+    want.extend(["pad.wav", "pad.wav.json"]);
+    assert_eq!(assets(&song), want, "no FLAC and no part file in assets/");
+}
+
+// FMT-24, FMT-14: the same FLAC twice is one asset: the WAV made of it is the bytes already there,
+// so nothing is copied or decoded the second time, and its note stays one.
+#[test]
+fn the_same_flac_twice_is_one_asset() {
+    let song = fixture("examples/first-song");
+    let (a, _) = audio(&song.0, bytes("kick.flac", flac("16bit-mono.flac"))).unwrap();
+    let (b, decoded) = audio(&song.0, bytes("again.flac", flac("16bit-mono.flac"))).unwrap();
+    assert_eq!((a.asset.as_str(), a.reused), ("kick.wav", false));
+    assert_eq!((b.asset.as_str(), b.reused, b.hash), ("kick.wav", true, a.hash));
+    assert!(decoded.is_none(), "nothing decoded the second time");
+    assert_eq!(assets(&song), ["kick.wav", "kick.wav.json"]);
+}
+
+// FMT-24: a FLAC music2 doesn't read (12 bits), a damaged one and one over 3 hours are refused in
+// words, and leave nothing in assets/.
+#[test]
+fn a_flac_music2_cant_read_is_refused_and_leaves_nothing() {
+    let song = fixture("examples/resample");
+    let mut twelve = flac("16bit-mono.flac");
+    // STREAMINFO's bits in a sample, less one: 11.
+    twelve[20] &= 0xFE;
+    twelve[21] = (twelve[21] & 0x0F) | (11 << 4);
+    let words = refusal(audio(&song.0, bytes("twelve.flac", twelve)));
+    assert_eq!(
+        words,
+        "twelve.flac doesn't read as a FLAC file (it has 12 bits in each sample: music2 reads FLAC files of 8, 16 or 24 bits)"
+    );
+    let mut cut = flac("16bit-stereo.flac");
+    cut.truncate(cut.len() - 200);
+    let words = refusal(audio(&song.0, bytes("cut.flac", cut)));
+    assert!(words.starts_with("cut.flac doesn't read as a FLAC file (it "), "{words}");
+    let mut long = flac("16bit-mono.flac");
+    // STREAMINFO's frames: 3 hours and a minute at 48 kHz.
+    let frames: u64 = 181 * 60 * 48_000;
+    long[21] = (long[21] & 0xF0) | ((frames >> 32) as u8 & 0x0F);
+    long[22..26].copy_from_slice(&(frames as u32).to_be_bytes());
+    let words = refusal(audio(&song.0, bytes("long.flac", long)));
+    assert_eq!(words, "long.flac is longer than 3 hours: music2 takes files up to 3 hours.");
+    assert_eq!(assets(&song), ["keys-bounce.wav", "keys-bounce.wav.json"], "no part, no file, no note");
+}
+
+// FMT-14, FMT-24 (review F2): one import of two files that ask for one name (`kick.flac` comes in
+// as `kick.wav`, beside a `kick.wav`; two WAVs of one name from two folders) brings both in: each
+// staged file has a part of its own, and a failure removes only its own.
+#[test]
+fn one_import_of_two_files_of_one_name_lands_both() {
+    let song = fixture("examples/first-song");
+    let a = stage(&song.0, bytes("kick.flac", flac("16bit-mono.flac")), &mut |_| {}).unwrap();
+    let b = stage(&song.0, bytes("kick.wav", tone(0.25, 1.0)), &mut |_| {}).unwrap();
+    let (a, b) = (a.name().unwrap(), b.name().unwrap());
+    assert_eq!((a.asset.as_str(), b.asset.as_str()), ("kick.wav", "kick 2.wav"));
+    let c = stage(&song.0, bytes("snare.wav", tone(0.25, 2.0)), &mut |_| {}).unwrap();
+    let d = stage(&song.0, bytes("snare.wav", tone(0.25, 3.0)), &mut |_| {}).unwrap();
+    let (c, d) = (c.name().unwrap(), d.name().unwrap());
+    assert_eq!((c.asset.as_str(), d.asset.as_str()), ("snare.wav", "snare 2.wav"));
+    assert_eq!(assets(&song), ["kick 2.wav", "kick.wav", "kick.wav.json", "snare 2.wav", "snare.wav"], "no part left");
+}
+
+// FMT-24 (review F6): a FLAC is read once: its hash, its header and the WAV come from the same
+// bytes, so a file changed after it was first looked at (still being written, replaced by a sync)
+// comes in as the bytes read, with their rate, length and hash in its note.
+#[test]
+fn a_flac_is_read_once_for_its_wav_its_header_and_its_note() {
+    let song = fixture("examples/first-song");
+    let (_out, path) = outside("take.flac", &flac("16bit-mono.flac"));
+    // What is there by the time it is read: the stereo fixture, its header saying 44.1 kHz.
+    let mut then = flac("16bit-stereo.flac");
+    let rate: u32 = 44_100;
+    then[18] = (rate >> 12) as u8;
+    then[19] = (rate >> 4) as u8;
+    then[20] = (then[20] & 0x0F) | ((rate as u8 & 0x0F) << 4);
+    let (changed, swapped) = (path.clone(), then.clone());
+    DURING.with(|d| *d.borrow_mut() = Some(Box::new(move |_: &Path| std::fs::write(&changed, &swapped).unwrap())));
+    let done = audio(&song.0, Source::Path(path));
+    DURING.with(|d| *d.borrow_mut() = None);
+    let (i, decoded) = done.unwrap();
+    assert_eq!((i.rate, i.seconds), (44_100, 4_800.0 / 44_100.0), "the header read with the audio");
+    assert_eq!(decoded.unwrap().channels.len(), 2);
+    let note: serde_json::Value = serde_json::from_slice(&std::fs::read(song.0.join("assets/take.wav.json")).unwrap()).unwrap();
+    assert_eq!(note["made_from"]["sha256"], m2_song::Sha::of(&then).hex(), "the bytes the WAV was made from");
+    assert_eq!(hound::WavReader::open(song.0.join("assets/take.wav")).unwrap().spec().sample_rate, 44_100);
+}
+
+// FMT-24 (review F4): a FLAC behind an ID3v2 tag, or with an ID3v1 tag after its frames, comes in
+// as its audio; the note's hash is the whole file's.
+#[test]
+fn a_tagged_flac_comes_in_as_its_audio() {
+    let song = fixture("examples/first-song");
+    let want = bits(
+        &m2_runtime::decode::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/16bit-stereo.flac"))
+            .unwrap(),
+    );
+    for name in ["id3v2-start.flac", "id3v1-end.flac"] {
+        let source = flac(name);
+        let (i, _) = audio(&song.0, bytes(name, source.clone())).unwrap();
+        let wav = song.0.join("assets").join(i.asset.as_str());
+        assert!(bits(&m2_runtime::decode::load(&wav).unwrap()) == want, "{name}");
+        assert_eq!(i.made_from.unwrap().hash, m2_song::Sha::of(&source), "{name}");
+    }
 }

@@ -504,7 +504,7 @@ Your sample folders, each with how many samples it has and whether it is being i
 
 ### `GET /api/library/preview`
 
-An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file.
+An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file (a FLAC's as the WAV of it).
 
 Its query, as JSON:
 

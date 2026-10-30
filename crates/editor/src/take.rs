@@ -207,7 +207,7 @@ impl Growing {
         m2_os::fs::sync_dir(&self.folder).map_err(io)?;
         seen(&self.folder, "sync");
         let seconds = self.frames as f64 / self.rate as f64;
-        Ok(Imported { asset, name: name.into(), hash, seconds, rate: self.rate, dropped_channels: 0, reused: false })
+        Ok(Imported { asset, name: name.into(), hash, seconds, rate: self.rate, dropped_channels: 0, reused: false, made_from: None })
     }
 
     /// Cut the part file to the frames added whole, and set its header's two sizes to them. It

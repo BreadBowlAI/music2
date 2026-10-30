@@ -117,10 +117,10 @@ Add a track playing an instrument (`std:synth-pluck`, or `synth.pluck`): its fil
 ## m2 import
 
 ```
-m2 import <project> <file.wav>… [--track ID] [--at BAR]
+m2 import <project> <file.wav|file.flac>… [--track ID] [--at BAR]
 ```
 
-Bring WAV files into `assets/` (a copy, or the same bytes already there; a taken name numbered) and place their clips from bar BAR (1 if not given): on a track's audio lane one after another, or without `--track` each on a new audio track named after it, at the end; one edit that undo takes back. With the song open in the app, the app brings them in, as one undo step, and nothing is copied while the musician holds the song (a take, V's Compare): it waits, as every write does.
+Bring WAV or FLAC files into `assets/` (a copy, or the same bytes already there; a taken name numbered; a FLAC as the WAV of its samples, with a note of what it was made from) and place their clips from bar BAR (1 if not given): on a track's audio lane one after another, or without `--track` each on a new audio track named after it, at the end; one edit that undo takes back. With the song open in the app, the app brings them in, as one undo step, and nothing is copied while the musician holds the song (a take, V's Compare): it waits, as every write does.
 
 ## m2 add-sample
 

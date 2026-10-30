@@ -30,7 +30,7 @@ This is the most important difference in music software.
 | Can you change it? | Completely: any note, or the whole instrument | Mostly as a whole: cut, move, stretch |
 | Makes sound by | Being played by an **instrument** | Just playing back |
 
-**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. To record your voice or a guitar, select an audio track and press R. Stacked takes and punch in are still to come ([gap #25](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#recording-and-playing-live)).
+**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV (or a FLAC, which comes in as a WAV) in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. To record your voice or a guitar, select an audio track and press R. Stacked takes and punch in are still to come ([gap #25](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#recording-and-playing-live)).
 
 ## Time: tempo, beats, bars and the grid
 

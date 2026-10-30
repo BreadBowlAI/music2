@@ -716,7 +716,7 @@ fn run() -> Result<()> {
                 i += 1;
             }
             if files.is_empty() {
-                bail!("m2 import names the WAV files to bring in: {}", usage_of("import"));
+                bail!("m2 import names the WAV or FLAC files to bring in: {}", usage_of("import"));
             }
             // While the app has the song open, the app's own import brings the files in, so they
             // come into the song only inside the change that lands (AGENT-1, AGENT-3).
@@ -763,8 +763,7 @@ fn run() -> Result<()> {
             m2_editor::library::samples::still_plain(&sample).map_err(|e| anyhow!("{id} can't be added: {e}."))?;
             let staged =
                 m2_editor::import::stage(&dir, m2_editor::import::Source::Path(sample.file.clone()), &mut |_| {}).map_err(words)?;
-            let file = staged.name().map_err(words)?;
-            let noted = m2_editor::library::samples::write_note(&dir, file.asset.as_str(), &m2_editor::library::samples::note(&sample))?;
+            let (file, noted) = staged.name_noted(Some(&sample.from)).map_err(words)?;
             let song_bpm = s.accepted().compiled.data.tempo().bpm_at(target.beat());
             let follows = m2_editor::library::samples::follows(&sample);
             let placed = m2_editor::import::place_with(&mut s, std::slice::from_ref(&file), &target, &[follows]).map_err(words)?;
