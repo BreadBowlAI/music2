@@ -135,7 +135,7 @@ fn a_sampler_with_regions_says_what_it_plays_and_refuses_a_drop() {
     assert!(e.contains("This Sampler plays regions") && e.contains("change them in its code"), "{e}");
     assert_eq!(f.read(&code), text, "nothing written");
     // One region alone: one recording, nothing else to say.
-    f.write(&code, &f.read(&code).replace(regions, "{ regions: [{ file: \"pad.wav\" }] }"));
+    f.write(&code, f.read(&code).replace(regions, "{ regions: [{ file: \"pad.wav\" }] }"));
     assert!(s.refresh());
     assert_eq!(shown(&s).and_then(|c| c.regions), Some("1 recording".into()));
 }

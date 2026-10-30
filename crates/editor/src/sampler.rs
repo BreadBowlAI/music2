@@ -44,9 +44,12 @@ pub struct SamplerCard {
     pub regions: Option<String>,
 }
 
-/// The settings of the voice kernels call `site` of `m` makes, as the first of them has them: its
-/// kernel, files and values; and how many kernels it makes.
-fn voices_of(m: &Module, site: u32) -> (Option<(String, Vec<String>, Vec<f64>)>, usize) {
+/// A voice kernel's name, files (its assets) and values.
+type Voice = (String, Vec<String>, Vec<f64>);
+
+/// The settings of the voice kernels call `site` of `m` makes, as the first of them has them; and
+/// how many kernels it makes.
+fn voices_of(m: &Module, site: u32) -> (Option<Voice>, usize) {
     let mut first = None;
     let mut kernels = 0;
     walk(&m.nodes, &mut |n| {
