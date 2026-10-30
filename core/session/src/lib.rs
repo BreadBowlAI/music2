@@ -71,6 +71,11 @@ pub struct Code {
     pub outputs: Vec<m2_script::Output>,
     /// Every package file the build read (FMT-6a, RENDER-2).
     pub package_files: Vec<m2_script::PackageFile>,
+    /// The packs the build resolved (PACK-9): what it was built with, beside std.
+    pub packs: Vec<m2_song::pack::Resolved>,
+    /// The packages it was built with: std and one loaded version of each of its packs. Its plans
+    /// and renders run this view's kernels (PACK-9); the session shows the accepted revision's.
+    pub view: Arc<m2_runtime::View>,
     /// The descriptor of every component the build's modules declare, by ComponentId: what a
     /// frame's `component` names (PKG-9, PKG-11).
     pub components: BTreeMap<String, Arc<Descriptor>>,
@@ -105,6 +110,8 @@ impl Code {
             sites: Arc::new([]),
             outputs: vec![],
             package_files: vec![],
+            packs: vec![],
+            view: Arc::default(),
             components: BTreeMap::new(),
             units: Arc::new([]),
             decls: m2_song::Decls::default(),
@@ -152,8 +159,12 @@ impl Clone for Compiled {
     }
 }
 
+/// Build `project` and read its data, as a host that plays or renders it once does: `packages`
+/// then shows what it was built with (PACK-9), so a renderer made from them plays it.
 pub fn compile(project: &Project, packages: &mut PackageSet) -> Result<Compiled, Vec<Diagnostic>> {
-    compile_sources(project, packages, &Seen::default(), None)
+    let c = compile_sources(project, packages, &Seen::default(), None)?;
+    packages.show(&c.view);
+    Ok(c)
 }
 
 /// [`compile`], given what earlier revisions declared (`seen`, for messages about data a rename
@@ -170,17 +181,47 @@ pub fn compile_sources(
     Ok(read_data(&code, project, seen, previous))
 }
 
-/// Build a project's code: check its dependencies, run the TypeScript (QuickJS), bind the hosted
-/// plugins and check the graph. What only the code decides; the data is [`read_data`]'s.
+/// The packs `project` builds with (PACK-9), from its manifest, its lock and `packages`' store.
+pub fn resolve_packs(project: &Project, packages: &PackageSet) -> m2_song::pack::Resolution {
+    m2_song::pack::resolve(&project.dir, &project.manifest, &project.lock, packages.store(), &app(packages))
+}
+
+/// The packs the project in `snapshot` resolves (PACK-9), by name, with their folders: each that
+/// resolves, though another doesn't. None when it isn't a project that reads.
+pub(crate) fn resolved(snapshot: &m2_song::Snapshot, packages: &PackageSet) -> Option<Vec<(String, std::path::PathBuf)>> {
+    let project = Project::from_snapshot(snapshot).ok()?;
+    Some(resolve_packs(&project, packages).packs.into_iter().map(|r| (r.name.as_str().to_string(), r.dir)).collect())
+}
+
+/// Build a project's code: check its dependencies and resolve its packs (PACK-9), run the
+/// TypeScript (QuickJS), bind the hosted plugins and check the graph. What only the code decides;
+/// the data is [`read_data`]'s. The build gets its own view of the packages, std and the packs it
+/// resolved, which its code keeps; what `packages` shows never changes, so a check, a refused Tx
+/// or a probe never moves what the accepted revision lists or plays.
 pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Code>, Vec<Diagnostic>> {
-    let unmet = dependencies(&project.manifest, packages);
+    let resolution = resolve_packs(project, packages);
+    let mut unmet = dependencies(&project.manifest, packages);
+    unmet.extend(resolution.problems.into_iter().map(diagnostic));
     if !unmet.is_empty() {
         return Err(unmet);
     }
+    let packs = resolution.packs;
+    let listed: Vec<(String, std::path::PathBuf)> = packs.iter().map(|r| (r.name.as_str().to_string(), r.dir.clone())).collect();
+    let broken = |name: &str, why: String| {
+        let message = format!("{name}, which this song uses, can't be used: {why}");
+        vec![Diagnostic::error("pkg.broken", message).at(Some(m2_song::path::MANIFEST.to_string()))]
+    };
+    let view = packages.view_of(&listed).map_err(|e| broken("A pack", format!("{e:#}")))?;
+    let app = app(packages);
+    for r in &packs {
+        let Some(p) = view.get(r.name.as_str()) else { continue };
+        app.meets(&p.needs).map_err(|why| broken(r.name.as_str(), format!("it {why}")))?;
+    }
     let code = project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect();
     let mut opts = m2_script::Options::new(code, &project.manifest.project.entry);
-    opts.packages = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
+    opts.packages = view.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
     opts.dependencies = project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect();
+    opts.data = Some(DATA);
     let m2_script::Build { mut ir, sites, outputs, package_files, components, units } = m2_script::build_full(&opts)?;
     let components = components.into_iter().map(|d| (d.id.clone(), Arc::new(d))).collect();
 
@@ -190,10 +231,13 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     if !blocking.is_empty() {
         return Err(blocking);
     }
-    let flat =
-        m2_ir::check(&ir, packages).map_err(|e| e.into_iter().map(|d| at_project_call(d, &ir, &sites, project)).collect::<Vec<_>>())?;
-    let decls = m2_runtime::decls(&ir);
-    Ok(Arc::new(Code { ir, flat, sites: sites.into(), outputs, package_files, components, units: units.into(), decls, kept }))
+    let flat = m2_ir::check(&ir, &*packages.viewing(&view))
+        .map_err(|e| e.into_iter().map(|d| at_project_call(d, &ir, &sites, project)).collect::<Vec<_>>())?;
+    let mut decls = m2_runtime::decls(&ir);
+    // A package's own files are read from the packages it was built with (PACK-5).
+    decls.packages = view.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
+    let (sites, units) = (sites.into(), units.into());
+    Ok(Arc::new(Code { ir, flat, sites, outputs, package_files, packs, view, components, units, decls, kept }))
 }
 
 /// A graph-check error at a node made inside a package, placed at the innermost call in the
@@ -236,23 +280,80 @@ pub fn read_data(code: &Arc<Code>, project: &Project, seen: &Seen, previous: Opt
     Compiled { code: code.clone(), data, problems }
 }
 
-/// Every component `packages` declare, and where each is exported (PKG-11): one sandboxed run
-/// per package module, cached for the process. It never fails (WRITE-20): a module that doesn't
-/// load, an invalid descriptor or one id twice is `pkg.invalid` in its `problems`, and only those
-/// components are left out.
+/// Every component `packages` declare and offer, and where each is exported (PKG-11, PACK-11):
+/// std's, the loaded packs' and those of the newest version of every other pack in the store. One
+/// sandboxed run per package module, cached for the process. It never fails (WRITE-20): a module
+/// that doesn't load, an invalid descriptor or one id twice is `pkg.invalid` in its `problems`,
+/// and only those components are left out.
 pub fn catalog(packages: &PackageSet) -> m2_script::Catalog {
-    let installed: Vec<(String, std::path::PathBuf)> = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
-    m2_script::describe(&installed)
+    catalog_of(packages, &offered(packages))
 }
 
-/// Every `[dependencies]` entry against what is installed (FMT-3): the SDK this build runs, and
-/// each package's own version.
+/// The catalog of std, as `packages` shows it, and of the packs `offered` lists.
+pub(crate) fn catalog_of(packages: &PackageSet, offered: &[Offered]) -> m2_script::Catalog {
+    let mut installed: Vec<(String, std::path::PathBuf)> =
+        packages.packages().filter(|p| p.name == m2_song::pack::STD).map(|p| (p.name.clone(), p.dir.clone())).collect();
+    installed.extend(offered.iter().map(|(name, _, dir)| (name.clone(), dir.clone())));
+    describe(&installed)
+}
+
+/// Every component `packages` declare and where each is exported (`m2_script::describe`), their
+/// instruments written as data included (PACK-13).
+pub fn describe(packages: &[(String, std::path::PathBuf)]) -> m2_script::Catalog {
+    m2_script::describe_with(packages, Some(DATA))
+}
+
+/// What reads a pack's instruments written as data for the build (PACK-13).
+pub const DATA: m2_script::DataReader = m2_script::DataReader { module: data_instrument, binding: data_binding };
+
+/// A pack's `instruments/<id>.toml` read and made into its module (PACK-13): its name checked as an
+/// id first, so code is made only from one that passed.
+pub fn data_instrument(package: &str, id: &str, text: &str) -> Result<m2_script::DataModule, m2_script::DataProblem> {
+    let problem = |message: String, line: u32, col: u32| m2_script::DataProblem { message, line, col };
+    let id = m2_song::instrument::Id::new(id).map_err(|why| problem(file_name(&why), 1, 1))?;
+    let i = m2_song::instrument::DataInstrument::read(text).map_err(|p| problem(p.message, p.line, p.col))?;
+    Ok(m2_script::DataModule { code: i.module(package, &id), regions: i.regions.iter().map(|r| r.line).collect() })
+}
+
+/// The name a data instrument is exported by (PACK-13), or why its file's name can't be an id.
+fn data_binding(id: &str) -> Result<String, String> {
+    m2_song::instrument::Id::new(id).map(|id| id.binding()).map_err(|why| file_name(&why))
+}
+
+/// Why a data file's name can't be its instrument's id, in words at the file.
+fn file_name(why: &str) -> String {
+    format!("the file's name is the instrument's id, and it can't be one: {why}")
+}
+
+/// A pack the lists offer (PACK-11): its name, and the version and folder they offer it from.
+pub type Offered = (String, Version, std::path::PathBuf);
+
+/// The packs the lists offer (PACK-11): those `packages` shows (the accepted revision's), then of
+/// every other pack in the store, the newest version this app can run: one whose `[dependencies]`
+/// its SDK and std meet (PACK-2).
+pub fn offered(packages: &PackageSet) -> Vec<Offered> {
+    packages.offered(&app(packages))
+}
+
+/// What this app gives a pack (PACK-2): its SDK, and the std `packages` shows. Whatever asks whether
+/// it runs a pack asks this.
+pub fn app(packages: &PackageSet) -> m2_song::pack::App {
+    m2_song::pack::App {
+        sdk: Version::parse(m2_script::SDK_VERSION),
+        std: packages.get(m2_song::pack::STD).and_then(|p| Version::parse(&p.version)),
+    }
+}
+
+/// The SDK and std entries of `[dependencies]` against what this app has (FMT-3). A pack's are
+/// its resolution's to check (PACK-9).
 fn dependencies(manifest: &Manifest, packages: &PackageSet) -> Vec<Diagnostic> {
+    let mut ours = manifest.clone();
+    ours.dependencies.retain(|name, _| name == m2_song::SDK || name == m2_song::pack::STD);
     let installed = |name: &str| match name {
         m2_song::SDK => Version::parse(m2_script::SDK_VERSION),
         _ => packages.packages().find(|p| p.name == name).and_then(|p| Version::parse(&p.version)),
     };
-    manifest.check_dependencies(installed).into_iter().map(diagnostic).collect()
+    ours.check_dependencies(installed).into_iter().map(diagnostic).collect()
 }
 
 /// A project diagnostic from `core/song` as the build's diagnostics are shaped (no fixes).
@@ -284,6 +385,8 @@ pub fn problem(d: Diagnostic) -> m2_song::Diagnostic {
 mod bus_tests;
 #[cfg(test)]
 mod gate_tests;
+#[cfg(test)]
+mod pack_tests;
 
 #[cfg(test)]
 mod tests {
@@ -298,7 +401,7 @@ mod tests {
     }
 
     pub(crate) const MANIFEST: &str =
-        "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+        "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -396,17 +499,27 @@ export default song(() => v.out);
         std::fs::remove_dir_all(dir).ok();
     }
 
-    // FMT-3: every project the repo ships asks for what this build has: the SDK and the bundled
-    // std. So a std bump that leaves a manifest behind fails here, with no grep needed.
+    // FMT-3, PACK-2: every project the repo ships asks for what this build has: the SDK and the
+    // bundled std; and every pack it ships needs no more than that. So a std bump that leaves a
+    // manifest behind fails here, with no grep needed.
     #[test]
     fn every_shipped_manifest_is_met() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let packages = std_packages();
         let mut unmet = vec![];
+        let (sdk, std) = (Version::parse(m2_script::SDK_VERSION), packages.get("std").and_then(|p| Version::parse(&p.version)));
+        let mut packs = 0;
         for root in ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"] {
             let mut found = 0;
             let mut stack = vec![repo.join(root)];
             while let Some(d) = stack.pop() {
+                let pack = d.join(m2_song::pack::PKG_MANIFEST);
+                if pack.exists() {
+                    packs += 1;
+                    let name = pack.strip_prefix(&repo).unwrap().display().to_string();
+                    let m = m2_song::pack::PkgManifest::at(&d).unwrap_or_else(|e| panic!("{name}: {e}"));
+                    unmet.extend(m2_song::pack::meets(&m.dependencies, sdk, std).err().map(|why| format!("{name}: {why}")));
+                }
                 let file = d.join("music2.toml");
                 if file.exists() {
                     found += 1;
@@ -425,7 +538,8 @@ export default song(() => v.out);
             // checked nothing.
             assert!(found > 0, "no music2.toml under {}", repo.join(root).display());
         }
-        assert!(unmet.is_empty(), "shipped projects this build can't build:\n{}", unmet.join("\n"));
+        assert!(packs > 0, "no m2pkg.toml under the fixtures: the packs' check checked nothing");
+        assert!(unmet.is_empty(), "shipped projects and packs this build can't build:\n{}", unmet.join("\n"));
     }
 
     // DIAG-1: data no lane reads is a Warning among the revision's problems.

@@ -91,13 +91,21 @@ export interface PortEdge { from: string; from_port: string; to: string; to_port
  * what adding it writes after the audio (`, 1000` gives `lowpass(x, 1000)`). `category` is a free string
  * the browser groups by (PKG-7).
  */
-export interface Effect { component: string; label: string; name: string; module: string; description: string; category: string; insert: string }
+export interface Effect { component: string; label: string; name: string; module: string; description: string; category: string; insert: string; pack?: PackFrom }
+
+/** The pack a browser item is from (PACK-11): none for std's and the song's own. */
+export interface PackFrom { name: string; version: string }
+
+/** What a browser row's tooltip says of where it is from: `\nFrom @alice/felt-piano 1.2.0`, or nothing. */
+export function fromPack(item: { pack?: PackFrom }): string {
+  return item.pack ? `\nFrom ${item.pack.name} ${item.pack.version}` : "";
+}
 
 /**
  * An instrument a new track can play (+ Track, the browser's Instruments): its component, what it
  * is called, where it is imported from, and the lane a new track plays it from (`hits` for drums).
  */
-export interface Instrument { component: string; label: string; name: string; module: string; description: string; category: string; lane: string }
+export interface Instrument { component: string; label: string; name: string; module: string; description: string; category: string; lane: string; pack?: PackFrom }
 
 /** What reads a track a delete would take out: the track it is in, the call, and where. */
 export interface Dependent { module: string; label: string; component: string; file: string; line: number; removable: boolean }
@@ -435,6 +443,11 @@ export interface GraphStatus {
 /** The open project, and where playback was when it was read. */
 export interface GraphState extends GraphStatus {
   session: number;
+  /**
+   * The revision the code editor's libraries were made at: the SDK and the sources of std and the
+   * song's packs. It moves when the song's packs change (PACK-9), and the editor loads them again.
+   */
+  types?: number;
   name: string;
   dir: string;
   view: GraphView;

@@ -52,6 +52,7 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Device / Notes / Mix / Code (X: Mix) |
 | E | E | Show or hide the dock |
+| ⌘F | Ctrl+F | Find instruments, sounds and effects ([Finding sounds](finding-sounds.md)) |
 | ⌥⌘B | Ctrl+Alt+B | Show or hide the browser |
 | ⌥K | Alt+K | Keyboard shortcuts |
 | ⇧-drag, ⌥-click, double-click | Shift-drag, Alt-click, double-click | On a knob: fine-tune, reset to its default, type a value |

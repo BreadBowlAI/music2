@@ -938,6 +938,22 @@ This replaces "TRACKS" and "4/4 · 124 BPM".
 - **The "+" in Device and the "+ Track" button** open the same list as a popover anchored to the
   button, with typeahead (today's behaviour, `c11`). One list in two places is the one allowed
   duplicate, because the popover is the keyboard path.
+- **Its search is the library's** ([LIB-1](../../architecture.md#library)): typing asks the server's
+  one search, the one ⌘F and `m2 search` use, and the rows keep their groups, best first.
+
+**⌘F, Find Sounds** (View ▸ Find Sounds…, track `spotlight`): one search over everything that can be
+added, as a panel over the window, Spotlight-like.
+- 560 px wide, centred, at 14% of the window's height; `raised`, `shadow-pop`, the `rise` animation.
+  One 44 px field with `Search` at 16 px; the key in `fg-faint` at its right.
+- Groups in this order, each hidden when empty: Instruments, Sounds, Effects, Samples, Plugins. A
+  header in `text-sm` 600 `fg-muted`; rows 28 px: the label in `text-sm`, then quietly, in `text-xs`
+  `fg-muted`, the category (a sound's instrument) and where it is from ("music2", "Yours").
+- The best hit is selected, wherever its group is. ↑↓ move across the groups; once the arrows have
+  moved, Space plays the row's preview (a speaker at its left while it plays), again or moving stops
+  it; typing types again. Enter adds it and closes; Esc closes. A row drags as the browser's do.
+- Its foot, 32 px in `chrome`, says what Enter does ("Enter adds a track · Space plays it"), or why
+  a preview can't play.
+- Not in a text field: there ⌘F is the field's, and in the code editor its own find.
 
 ### 3.7 Selection drives the dock's content, never its view
 
@@ -1225,6 +1241,7 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 | Device / Notes / Mix / Code | ⌥1 / ⌥2 / ⌥3 / ⌥4 | tabs | B, P, X (Smart Controls, Piano Roll, Mixer) | ⇧Tab toggles Clip/Device |
 | Mix | X (also ⌥3) | — | X | ⌥⌘M |
 | Show / hide the dock | E | — | E | ⌥⌘L |
+| Find sounds (the library's one search) | ⌘F | — | — | ⌘F (search the browser) |
 | Browser | ⌥⌘B | — | Y (Library) | ⌥⌘B |
 | Command palette | ⇧⌘P | — | — | — |
 | Keyboard shortcuts | ⌥K | — | ⌥K (Key Commands) | — |

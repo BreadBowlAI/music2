@@ -52,7 +52,7 @@ fn dropping_a_wav_sets_the_sample_and_undo_takes_it_back() {
     let code = made.edited.file.clone();
     let before = f.read(&code);
     assert!(before.contains("sampler(lane.notes(\"notes\"))"), "{before}");
-    assert_eq!(shown(&s), Some(SamplerCard { files: vec![] }), "no file yet: its card says to drop one");
+    assert_eq!(shown(&s), Some(SamplerCard { files: vec![], regions: None }), "no file yet: its card says to drop one");
 
     // The drop: the file is imported (create-only), then one Tx writes its name into the call.
     let kick = import::audio(&f.0, Source::Bytes { name: "Kick 1.wav".into(), bytes: tone(0.0) }, &mut |_| {}).unwrap();
@@ -69,7 +69,7 @@ fn dropping_a_wav_sets_the_sample_and_undo_takes_it_back() {
     );
     // The graph: its voices read the file, which the revision knows by its hash, so it plays at once.
     assert_eq!(files(&s), std::slice::from_ref(&name));
-    assert_eq!(shown(&s), Some(SamplerCard { files: vec![name.clone()] }), "its card names the file");
+    assert_eq!(shown(&s), Some(SamplerCard { files: vec![name.clone()], regions: None }), "its card names the file");
     assert!(s.accepted().compiled.data.kernel_assets().contains_key(&name), "the revision knows the file");
     assert!(s.problems().iter().all(|p| p.code != "asset.missing"), "{:?}", s.problems());
 
@@ -107,4 +107,35 @@ fn a_sampler_with_zones_or_another_call_is_refused_in_words() {
     let e = drop_on(&mut s, "lane.notes", &kick).unwrap_err().to_string();
     assert!(e.contains("isn't a sampler"), "{e}");
     assert_eq!(f.read(&code), text, "nothing written");
+}
+
+// PKG-16: a Sampler that plays regions says what it plays in words, names each file once, and
+// refuses a dropped WAV in words, as one with zones does.
+#[test]
+fn a_sampler_with_regions_says_what_it_plays_and_refuses_a_drop() {
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    let made = s.add_track(SAMPLER, None, None, None).unwrap();
+    let code = made.edited.file.clone();
+    let regions = "{ regions: [\
+        { file: \"soft-1.wav\", keys: [48, 72], velocity: [1, 90], round_robin: [1, 2] },\
+        { file: \"soft-2.wav\", keys: [48, 72], velocity: [1, 90], round_robin: [2, 2] },\
+        { file: \"hard.wav\", keys: [48, 72], velocity: [91, 127] },\
+        { file: \"low.wav\", keys: [20, 47] },\
+        { file: \"soft-1.wav\", trigger: \"release\", volume: -12 },\
+        { file: \"pad.wav\", loop: [100, 900] }] }";
+    let text = f.read(&code).replace("sampler(lane.notes(\"notes\"))", &format!("sampler(lane.notes(\"notes\"), {regions})"));
+    f.write(&code, &text);
+    assert!(s.refresh());
+    let files = ["soft-1.wav", "soft-2.wav", "hard.wav", "low.wav", "pad.wav"].map(String::from).to_vec();
+    let said = "5 recordings, 2 layers, round robin of 2, release sounds, loops";
+    assert_eq!(shown(&s), Some(SamplerCard { files, regions: Some(said.into()) }));
+    let kick = import::audio(&f.0, Source::Bytes { name: "kick.wav".into(), bytes: tone(0.0) }, &mut |_| {}).unwrap();
+    let e = drop_on(&mut s, "sampler", &kick).unwrap_err().to_string();
+    assert!(e.contains("This Sampler plays regions") && e.contains("change them in its code"), "{e}");
+    assert_eq!(f.read(&code), text, "nothing written");
+    // One region alone: one recording, nothing else to say.
+    f.write(&code, f.read(&code).replace(regions, "{ regions: [{ file: \"pad.wav\" }] }"));
+    assert!(s.refresh());
+    assert_eq!(shown(&s).and_then(|c| c.regions), Some("1 recording".into()));
 }

@@ -293,7 +293,12 @@ pub(crate) struct Open {
     /// The controls of the two code revisions before the accepted one's, oldest first: what a
     /// client a little behind names, which aliases carry to the accepted ids.
     codes: VecDeque<(u64, Arc<HashMap<String, Control>>)>,
+    /// The SDK and the package sources the code editor checks imports against ([`files::types`]):
+    /// made from the packages the session shows, and again when they change (PACK-9).
     types: Arc<Value>,
+    /// The packages `types` was made from, and the revision it was made at, which the state says
+    /// so the code editor loads them again.
+    types_of: (Arc<m2_runtime::View>, u64),
     /// Plugin instances that asked to be restarted (`HostEvent::Restart`): the next activation,
     /// made at once, replaces each from its committed state (HOST-5).
     pub(crate) restarts: HashSet<Handle>,
@@ -555,6 +560,10 @@ pub(super) struct Prepared {
 
 fn packages(inner: &Inner) -> Result<PackageSet> {
     let mut p = PackageSet::default().with_host(inner.host.clone());
+    // This computer's packs (PACK-6), under `$HOME` (PLAT-7).
+    if let Some(store) = m2_os::dirs::packs() {
+        p = p.with_store(store);
+    }
     p.load(&crate::resources::std_dir()).context("loading the std package")?;
     Ok(p)
 }
@@ -602,7 +611,9 @@ fn build(
 ) -> Result<Renderer> {
     // A tempo drag's arrangement in place of the accepted one (RENDER-27a).
     let (flat, data, rate) = (&rev.compiled.flat, data.unwrap_or(&rev.compiled.data), rev.project.sample_rate());
-    let r = Renderer::prepare(flat, data, packages, rate, audio, owner, basis)?;
+    // The kernels the revision was built with (PACK-9).
+    let packages = packages.viewing(&rev.compiled.view);
+    let r = Renderer::prepare(flat, data, &packages, rate, audio, owner, basis)?;
     audio.prune();
     Ok(r)
 }
@@ -820,6 +831,11 @@ impl Open {
     /// What reads return for the accepted revision.
     fn shown(&mut self) -> Shown {
         self.timeline = Arc::new(self.timeline());
+        // The editor's types follow the accepted revision's packages, as the lists do (PACK-9).
+        if !Arc::ptr_eq(&self.types_of.0, self.session.packages.view()) {
+            self.types = Arc::new(files::types(&self.session.packages));
+            self.types_of = (self.session.packages.view().clone(), self.session.accepted().number);
+        }
         let s = &self.session;
         let rev = s.accepted();
         let diagnostics = files::diagnostics(s);
@@ -832,6 +848,8 @@ impl Open {
             timeline: self.timeline.clone(),
             state: json!({
                 "session": self.token,
+                // The revision the code editor's types were made at: when it moves, it loads them again.
+                "types": self.types_of.1,
                 "name": rev.project.manifest.project.name,
                 "dir": rev.project.dir,
                 "view": s.view(),
@@ -1396,6 +1414,7 @@ impl Actor {
         let (number, code_rev) = (session.accepted().number, session.accepted().code_rev);
         let controls = Arc::new(session.controls_by_id());
         let types = Arc::new(files::types(&session.packages));
+        let types_of = (session.packages.view().clone(), number);
         let mut o = Open {
             token,
             session,
@@ -1407,6 +1426,7 @@ impl Actor {
             controls: controls.clone(),
             codes: VecDeque::new(),
             types,
+            types_of,
             restarts: HashSet::new(),
             relatent: false,
             told_feedback: vec![],

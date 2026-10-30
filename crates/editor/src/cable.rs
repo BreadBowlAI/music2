@@ -510,7 +510,7 @@ pub fn disconnect(s: &mut Session, at: u64, id: &str) -> Result<Edited, EditErro
             (d.value, text, import)
         }
         None => {
-            let (default, unit) = declared_default(&candidate.ir, &consts, &s.packages).ok_or_else(refuse)?;
+            let (default, unit) = declared_default(&candidate.ir, &consts, &s.packages.viewing(&candidate.view)).ok_or_else(refuse)?;
             (default, written(default, unit, &imported, &units), None)
         }
     };

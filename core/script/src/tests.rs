@@ -2086,3 +2086,155 @@ fn a_nested_dictionary_control_is_found() {
         assert!(e.len() == 1 && e[0].message.contains(want), "{channels}: {e:?}");
     }
 }
+
+/// Build `song` with std and the pack `name` installed (and listed when `listed`).
+fn with_pack(name: &str, pkg: &TempPackage, song: &str, listed: bool) -> Result<Build, Vec<Diagnostic>> {
+    built(name, pkg, song, listed).map(|b| *b)
+}
+
+/// [`with_pack`]'s errors, which a test reads.
+fn pack_errors(name: &str, pkg: &TempPackage, song: &str, listed: bool) -> Vec<Diagnostic> {
+    built(name, pkg, song, listed).err().expect("the build fails")
+}
+
+fn built(name: &str, pkg: &TempPackage, song: &str, listed: bool) -> Result<Box<Build>, Vec<Diagnostic>> {
+    let mut o = options(&[("song.ts", song)]);
+    o.packages.push((name.into(), pkg.0.clone()));
+    if listed {
+        o.dependencies.push(name.into());
+    }
+    build_full(&o).map(Box::new)
+}
+
+const PIANO: &str = r#"import { component, control, file, kernel, port, type Params } from "@m2/core";
+export const here = file(import.meta, "samples/C4.wav");
+export const piano = component(
+  { id: "felt-piano", label: "Felt piano", inputs: { notes: port.notes() }, output: port.audio(), editor: { category: "Keys" } },
+  (_n: unknown) => kernel("std:sine", { freq: 440 }),
+);
+"#;
+
+// PACK-3, PACK-4, PACK-5: a scoped package is imported by its two segments, its ids carry its whole
+// name, and `file(import.meta, …)` spells its own files.
+#[test]
+fn a_scoped_package_is_imported_by_its_two_segments() {
+    let pkg = TempPackage::new(
+        "scoped",
+        &[
+            ("index.ts", PIANO),
+            ("keys.ts", "export { piano as keys, here } from \"./index\";\n"),
+            ("deep/more.ts", "export const deep = 1;\n"),
+        ],
+    );
+    let song = |from: &str| {
+        format!(
+            "import {{ song, track, file }} from \"@m2/core\";\nimport {{ piano, here }} from \"{from}\";\n\
+             if (here !== \"@alice/felt-piano:samples/C4.wav\") throw new Error(`here is ${{here}}`);\n\
+             if (file(import.meta, \"kick.wav\") !== \"kick.wav\") throw new Error(\"a song's own file is its asset\");\n\
+             const t = track(\"keys\", ({{ lane }}) => piano(lane.notes(\"notes\")));\nexport default song(() => t.out);\n"
+        )
+    };
+    let b = with_pack("@alice/felt-piano", &pkg, &song("@alice/felt-piano"), true).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(b.package_files.iter().any(|f| f.path == "@alice/felt-piano/src/index.ts"), "{:?}", b.package_files);
+    let frames: Vec<&str> = b.ir.modules.iter().flat_map(|m| m.frames.iter().filter_map(|f| f.component.as_deref())).collect();
+    assert!(frames.contains(&"@alice/felt-piano:felt-piano"), "the id carries the whole name: {frames:?}");
+    assert!(b.components.iter().any(|d| d.id == "@alice/felt-piano:felt-piano"));
+    let keys = song("@alice/felt-piano/keys").replace("{ piano, here }", "{ keys as piano, here }");
+    with_pack("@alice/felt-piano", &pkg, &keys, true).unwrap_or_else(|e| panic!("a sub module: {e:?}"));
+    // Not listed: pkg.undeclared, naming the whole package.
+    let e = pack_errors("@alice/felt-piano", &pkg, &song("@alice/felt-piano"), false);
+    assert_eq!(e[0].code, "pkg.undeclared", "{e:?}");
+    assert!(e[0].message.contains("the package `@alice/felt-piano`"), "{}", e[0].message);
+    let e = pack_errors("@alice/felt-piano", &pkg, &song("@alice/felt-piano/keys"), false);
+    assert!(e[0].code == "pkg.undeclared" && e[0].message.contains("the package `@alice/felt-piano`"), "{e:?}");
+    // Another scope with the same name is another package.
+    let e = pack_errors("@alice/felt-piano", &pkg, &song("@bob/felt-piano"), true);
+    assert!(e[0].code == "pkg.undeclared" && e[0].message.contains("`@bob/felt-piano`"), "{e:?}");
+    // A path out of the package is still outside it (FMT-6a).
+    let e = pack_errors("@alice/felt-piano", &pkg, &song("@alice/felt-piano/../../x"), true);
+    assert_eq!(e[0].code, "import.outside-code", "{e:?}");
+}
+
+/// Packages laid out as the store lays them out, `<root>/@owner/name/<version>/src/…`, each with
+/// its files: the folder of each.
+struct Store(PathBuf);
+
+impl Store {
+    fn new(tag: &str, packs: &[(&str, &[(&str, &str)])]) -> Store {
+        let root = std::env::temp_dir().join(format!("m2-script-store-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (name, files) in packs {
+            for (f, text) in *files {
+                let path = root.join(name).join("1.0.0/src").join(f);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, text).unwrap();
+            }
+        }
+        Store(root)
+    }
+
+    fn dir(&self, name: &str) -> PathBuf {
+        self.0.join(name).join("1.0.0")
+    }
+
+    /// Build `song` with every package in the store loaded and listed.
+    fn build(&self, names: &[&str], song: &str) -> Result<Build, Vec<Diagnostic>> {
+        let mut o = options(&[("song.ts", song)]);
+        for n in names {
+            o.packages.push((n.to_string(), self.dir(n)));
+            o.dependencies.push(n.to_string());
+        }
+        build_full(&o)
+    }
+}
+
+impl Drop for Store {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+// PACK-3, FMT-6a: an import stays inside one package's folder: a bare one inside the package it
+// names, a relative one inside its module's own. Reaching another package loaded beside it is
+// import.outside-code, so a pack never uses another (D4).
+#[test]
+fn an_import_never_reaches_another_package() {
+    let bob = "export const b = 2;\n";
+    let alice = "export const a = 1;\n";
+    let sneaky = "export { b as a } from \"../../../../@bob/b/1.0.0/src/index\";\n";
+    let store = Store::new("reach", &[("@alice/a", &[("index.ts", alice), ("sneaky.ts", sneaky)]), ("@bob/b", &[("index.ts", bob)])]);
+    let song = |from: &str| {
+        format!(
+            "import {{ kernel, song }} from \"@m2/core\";\nimport {{ a }} from \"{from}\";\nif (a !== 1) throw new Error(\"no\");\n\
+             export default song(() => kernel(\"std:sine\", {{ freq: 440 * a }}));\n"
+        )
+    };
+    let both = ["@alice/a", "@bob/b"];
+    // Its own module, as ever.
+    store.build(&both, &song("@alice/a")).unwrap_or_else(|e| panic!("{e:?}"));
+    // A bare import that walks out of the package it names, into another's folder.
+    let e = store.build(&both, &song("@alice/a/../../../../@bob/b/1.0.0/src/index")).err().expect("refused");
+    assert_eq!(e[0].code, "import.outside-code", "{e:?}");
+    // A relative import from a pack's module that walks into another's folder.
+    let e = store.build(&both, &song("@alice/a/sneaky")).err().expect("refused");
+    assert_eq!(e[0].code, "import.outside-code", "{e:?}");
+}
+
+// PACK-5, FMT-6a: a package module is never read through a symbolic link.
+#[cfg(unix)]
+#[test]
+fn a_package_import_never_passes_through_a_link() {
+    let store = Store::new("link", &[("@alice/a", &[("index.ts", "export const a = 1;\n")])]);
+    let outside = store.0.join("outside.ts");
+    std::fs::write(&outside, "export const a = 1;\n").unwrap();
+    std::os::unix::fs::symlink(&outside, store.dir("@alice/a").join("src/linked.ts")).unwrap();
+    let song = "import { kernel, song } from \"@m2/core\";\nimport { a } from \"@alice/a/linked\";\n\
+                export default song(() => kernel(\"std:sine\", { freq: 440 * a }));\n";
+    let e = store.build(&["@alice/a"], song).err().expect("refused");
+    assert_eq!(e[0].code, "import.outside-code", "{e:?}");
+    assert!(e[0].message.contains("link"), "{}", e[0].message);
+    // Nor is a hidden file, which no listing names (PACK-6).
+    std::fs::write(store.dir("@alice/a").join("src/.hidden.ts"), "export const a = 1;\n").unwrap();
+    let e = store.build(&["@alice/a"], &song.replace("@alice/a/linked", "@alice/a/.hidden")).err().expect("refused");
+    assert!(e[0].code == "import.outside-code" && e[0].message.contains("hidden"), "{e:?}");
+}

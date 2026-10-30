@@ -38,6 +38,8 @@ static ALLOC: m2_play::alloc::Counting = m2_play::alloc::Counting;
 fn main() {
     #[cfg(debug_assertions)]
     m2_play::alloc::watch();
+    // PLAT-7: a program keeps the cache folder (hashes, peaks, renders, previews); a test doesn't.
+    m2_server::resources::keep_cache();
     // HOST-2: plugins make their main-thread calls on this thread, AppKit's, through the main
     // dispatch queue; it must be installed before anything touches a plugin. From here on the main
     // thread must never wait on a thread that may be creating plugins (the server's project work):
@@ -65,6 +67,8 @@ fn main() {
             server.keep_recent(home().join(".music2").join("recent.json"));
             // The sound output and where new songs go (gaps #31), before anything plays.
             server.keep_settings(home().join(".music2").join("settings.json"));
+            // Your presets, and previews kept in the cache folder (LIB-1, LIB-3).
+            server.keep_library(m2_server::library::Folders::of_this_user());
             publish_session(&running.url, &server.token);
             // No window is connected yet: the server keeps these toasts for the first one.
             // They name the folder, not its whole path, so the reason fits. Opened off the main

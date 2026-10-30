@@ -94,6 +94,12 @@ impl Wav {
         if file.metadata()?.len() < data + data_len {
             bail!("{} is cut short", path.display());
         }
+        // A sample's bits must fit in its bytes, at most 32: a crafted header would make the
+        // decode's scale overflow.
+        let bits = spec.bits_per_sample as u64;
+        if bits == 0 || bits > 32 || bits > 8 * bytes {
+            bail!("{} says each sample has {bits} bits, in {bytes} bytes", path.display());
+        }
         Ok(Wav {
             file,
             data,

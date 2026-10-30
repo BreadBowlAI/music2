@@ -48,6 +48,9 @@ pub struct Instrument {
     pub category: String,
     /// The lane a new track plays it from: `hits` for drums, as the fixtures name them, else `notes`.
     pub lane: String,
+    /// The pack it is from, with its version; none for std's and the project's (PACK-11).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack: Option<crate::packs::From>,
 }
 
 /// Every instrument the packages and the project offer: each that a track can play and that has a
@@ -77,6 +80,7 @@ pub fn instruments(s: &Session) -> Vec<Instrument> {
                 description: d.editor.description.clone(),
                 category,
                 lane: lane.into(),
+                pack: crate::packs::from(s, &d.id),
             };
             Some((group, i.category.clone(), d.file.clone(), line, i))
         })
@@ -531,6 +535,12 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
     let mut ops = vec![plan::text_edit(&song_file, &song_text, &edits)];
     ops.extend(writes);
     ranges.insert(song_file, Declared::Ranges(declared));
+    // A pack's instrument brings its `[dependencies]` line and lock entry, once a pack (PACK-10).
+    let components: Vec<&str> =
+        tracks.iter().filter_map(|t| if let Play::Instrument(c) = &t.play { Some(c.as_str()) } else { None }).collect();
+    let needs = crate::packs::needs_all(s, &components)?;
+    ops.extend(needs.ops);
+    ranges.extend(needs.ranges);
     let arrangement = match arrangement {
         Some(text) => {
             let file = path(&DataPath::Arrangement.to_string())?;

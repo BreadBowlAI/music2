@@ -64,6 +64,7 @@ import { useStore } from "../lib/store";
 import { editing, oneEnds, type Editing } from "../lib/history";
 import { look } from "../lib/focus";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
+import { dragsSound, droppedSound, loadSound } from "./Spotlight";
 import { listedInstrument } from "../lib/plugins";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, useReorder } from "./Tracks";
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
@@ -2077,18 +2078,22 @@ const TrackRows = memo(function TrackRows({
       className={clsx("group relative", !last && "border-b border-line", dy !== null && "z-30 shadow-lift")}
       style={dy !== null ? { transform: `translateY(${dy}px)` } : undefined}
       onPointerDown={select}
-      // An effect dragged from the browser goes at the end of this track's sound.
+      // An effect dragged from the browser goes at the end of this track's sound; a sound from ⌘F
+      // loads into the instrument or effect it is for here.
       onDragOver={(e) => {
-        if (!dragsEffect(e) || locked) return;
+        if (!(dragsEffect(e) || dragsSound(e)) || locked) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
       }}
       onDrop={(e) => {
         const component = e.dataTransfer.getData(EFFECT_DRAG);
-        if (!component) return;
+        const sound = droppedSound(e);
+        const graph = useStore.getState().graph;
+        if (!component && !(sound && graph)) return;
         e.preventDefault();
         select();
-        addEffectTo(module, component);
+        if (component) addEffectTo(module, component);
+        else if (sound && graph) loadSound(sound, graph, module);
       }}
     >
       {movable && <DropLine before={module} />}

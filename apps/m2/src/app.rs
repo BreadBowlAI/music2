@@ -235,6 +235,53 @@ fn reach_saying(dir: &Path, holder: &Holder, patience: Option<Duration>, cant: i
     Ok(app)
 }
 
+/// `text` as a URL's query value: every byte but letters, digits and `-._~` as `%XX`.
+fn query_value(text: &str) -> String {
+    text.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
+/// What the open app's library answers for `q` (LIB-2, `GET /api/library`): its items, best first;
+/// None when no app is open. The app needn't have a song open. While it says samples are being
+/// indexed (LIB-5: the app just started, a folder was just added), it is asked again once they are,
+/// up to 30 seconds: a search in the app never waits for them, but a script wants what they find.
+pub fn library(q: &str) -> Result<Option<Vec<Value>>> {
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let Some(v) = library_once(q)? else { return Ok(None) };
+        if v["folders"]["indexing"].as_u64().unwrap_or(0) == 0 || std::time::Instant::now() >= until {
+            return Ok(Some(v["items"].as_array().cloned().unwrap_or_default()));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// One ask of [`library`]: the app's whole answer.
+fn library_once(q: &str) -> Result<Option<Value>> {
+    let Some(file) = m2_os::dirs::home().map(|h| h.join(".music2/session.json")) else { return Ok(None) };
+    let Some(published) = std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return Ok(None) };
+    let (Some(url), Some(key), Some(pid)) = (published["url"].as_str(), published["token"].as_str(), published["pid"].as_u64()) else {
+        return Ok(None);
+    };
+    if !u32::try_from(pid).is_ok_and(m2_os::process::alive) {
+        return Ok(None);
+    }
+    let addr = url.trim_start_matches("http://");
+    let Ok(mut s) = TcpStream::connect(addr) else { return Ok(None) };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
+    let path = format!("/api/library?q={}", query_value(q));
+    s.write_all(format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: {key}\r\nConnection: close\r\n\r\n").as_bytes())?;
+    let mut answer = vec![];
+    s.read_to_end(&mut answer)?;
+    let (status, reason, body) = split(&answer).ok_or_else(|| anyhow!("the app's answer to GET {path} can't be read"))?;
+    let v = json_of(status, &reason, &body);
+    if status != 200 {
+        bail!("{}", v["error"].as_str().unwrap_or("the app refused the search"));
+    }
+    Ok(Some(v))
+}
+
 impl App {
     /// `method path` with `body`, the tools key and `Connection: close`: the status and the JSON
     /// answer. While the app takes its time (a long compile), it waits, saying so every 5 s, as
@@ -327,6 +374,21 @@ impl App {
     pub fn import(&mut self, mut body: Value) -> Result<Value> {
         body["session"] = json!(self.session);
         let (status, bytes) = self.call("POST", "/api/graph/audio/import", Some(&body), true)?;
+        let v = json_of(status, "", &bytes);
+        if status != 200 {
+            bail!("{}", words(&v));
+        }
+        if let Some(done) = done_in_app(&v) {
+            say_after(done);
+        }
+        Ok(v)
+    }
+
+    /// `m2 add-sample` while the app has the song open (AGENT-1): `body` (`{id, to}`) sent to the
+    /// app's own route (LIB-7), as this agent. The app's answer.
+    pub fn add_sample(&mut self, mut body: Value) -> Result<Value> {
+        body["session"] = json!(self.session);
+        let (status, bytes) = self.call("POST", "/api/library/sample", Some(&body), true)?;
         let v = json_of(status, "", &bytes);
         if status != 200 {
             bail!("{}", words(&v));

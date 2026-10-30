@@ -1,0 +1,28 @@
+// Tiny Keys: a test instrument for music2, five short tones and a click.
+// Made by a script for music2's tests. CC0: no rights reserved.
+#define $SOFT 64
+
+<control>
+default_path=samples/
+set_cc64=0
+
+<global>
+amp_veltrack=80
+sw_lokey=c0 sw_hikey=c#0
+sw_default=c0
+
+<master> sw_last=c0
+<group> lovel=1 hivel=$SOFT
+#include "soft.sfz"
+<group> lovel=65 hivel=127
+<region> sample=c4-loud.wav lokey=c3 hikey=b4 pitch_keycenter=c4 tune=-5
+<region> sample=g4-loud.wav lokey=c5 hikey=127 pitch_keycenter=g4 volume=-2
+
+<master> sw_last=c#0
+<group>
+<region> sample=c4-soft.wav key=60
+
+<global>
+<group> trigger=release volume=-12 amp_veltrack=90
+<region> sample=rel.wav lokey=0 hikey=127
+<region> sample=rel.wav locc64=64 hicc64=127 /* only with the pedal down */

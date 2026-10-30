@@ -33,7 +33,7 @@
 # --pr: the checks every pull request must pass, and nothing else: rustfmt, actionlint, the gates
 # and docs rules, licences, the pool's models, the web build, std's kernels and std.wasm, clippy,
 # the Rust tests and browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the
-# 12 renders; RustSec's advisories only when the change touches a Cargo.lock or deny.toml
+# 14 renders; RustSec's advisories only when the change touches a Cargo.lock or deny.toml
 # (ci/pr.sh changes). When git proves your committed change is documentation only
 # (ci/docs-only.sh, on a clean tree), it runs only the docs rule's cases, as CI does. It builds into
 # <target>/pr without debug info, as CI does, so it never rebuilds what your own cargo build made.
@@ -651,6 +651,16 @@ else
   record "rust tests" FAIL "$counts: see test.log"
   failures "" "$OUT/test.log" >> "$OUT/failed"
   { first "$OUT/test.log" '^error' | sed 's/^/tests: /'; cause "$OUT/test.log"; } >> "$OUT/failed"
+fi
+
+# 5a. PLAT-7: no test wrote in the cache folder of the HOME it ran with: a file there is one a
+#     plain `cargo test` would have written in your own cache (ci/cache-left.sh).
+begin "cache untouched" "seconds"
+if quiet cache-left.log ci/cache-left.sh "$OUT/home"; then
+  record "cache untouched" PASS ""
+else
+  record "cache untouched" FAIL "see cache-left.log"
+  sed -n '2,6p' "$OUT/cache-left.log" | sed 's/^/cache untouched: /' | cut -c1-160 >> "$OUT/failed"
 fi
 
 # 5b. Linux: every line of ci/nightly-tests.txt names a test that is there (ci/nightly-list.sh, as

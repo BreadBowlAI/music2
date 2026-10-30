@@ -522,7 +522,11 @@ fn from_beat(song: &Arrangement, file: &Arrangement, at: f64, meters: bool) -> A
 /// The sounds' labels, as + Track lists them, by component.
 fn labels(s: &Session) -> impl Fn(&str) -> String + use<> {
     let list: Vec<(String, String)> = crate::tracks::instruments(s).into_iter().map(|i| (i.component, i.label)).collect();
-    move |c: &str| list.iter().find(|(id, _)| id == c).map_or_else(|| c.rsplit(':').next().unwrap_or(c).to_string(), |(_, l)| l.clone())
+    move |c: &str| {
+        list.iter()
+            .find(|(id, _)| id == c)
+            .map_or_else(|| m2_song::pack::split_id(c).map_or(c, |(_, id)| id).to_string(), |(_, l)| l.clone())
+    }
 }
 
 /// Bring a one-part MIDI file in onto notes lane `lane` of track `module`, at beat `at` (Q36, D11):

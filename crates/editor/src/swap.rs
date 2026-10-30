@@ -203,8 +203,13 @@ pub fn swap(s: &mut Session, module: &str, component: &str) -> Result<Edited, Ed
     }
     let shown = call.file.clone();
     let file = path(&shown)?;
-    let ops = vec![plan::text_edit(&file, &text, &edits)];
-    let expect = Expect::Confined(Confined { ranges: [(file, Declared::Ranges(ranges))].into(), lanes: vec![], modules: vec![] });
+    let mut ops = vec![plan::text_edit(&file, &text, &edits)];
+    let mut declared: std::collections::BTreeMap<_, _> = [(file, Declared::Ranges(ranges))].into();
+    // A pack's instrument brings its `[dependencies]` line and lock entry (PACK-10).
+    let also = crate::packs::needs(s, component)?;
+    ops.extend(also.ops);
+    declared.extend(also.ranges);
+    let expect = Expect::Confined(Confined { ranges: declared, lanes: vec![], modules: vec![] });
     let after = format!("{label} plays {}", inst.label);
     let tx = plan::planned(s, (label.clone(), after.clone()), ops, expect);
     let lanes = m.lanes.clone();

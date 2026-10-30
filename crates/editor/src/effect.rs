@@ -62,6 +62,9 @@ pub struct EffectInfo {
     /// What adding it writes after the audio, from its descriptor's insert: `, 1000`, or
     /// `, { time: 0.25, feedback: 0.3, mix: 0.3 }`; empty when it inserts nothing.
     pub insert: String,
+    /// The pack it is from, with its version; none for std's and the project's (PACK-11).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack: Option<crate::packs::From>,
 }
 
 /// The component frames of `m` whose chain holds `n`, outermost first: the sites of the
@@ -180,6 +183,7 @@ pub fn effects(s: &Session) -> Vec<EffectInfo> {
                 description: d.editor.description.clone(),
                 category: d.editor.category.clone().unwrap_or_default(),
                 insert: insert_args(d, &s.accepted().compiled.units).0,
+                pack: crate::packs::from(s, &d.id),
             };
             Some((&**d, info))
         })
@@ -243,7 +247,10 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
             imports.extend(import_insertion(&text, "@m2/core", ctor));
         }
     }
-    let wrap = Wrap { open: format!("{}(", effect.name), close: format!("{args})"), imports, callee: effect.name, label: effect.label };
+    // A pack's effect brings its `[dependencies]` line and lock entry (PACK-10).
+    let also = crate::packs::needs(s, component)?;
+    let wrap =
+        Wrap { open: format!("{}(", effect.name), close: format!("{args})"), imports, callee: effect.name, label: effect.label, also };
     wrap_call(s, &site, wrap, |_, _, _| Ok(()))
 }
 
@@ -255,6 +262,8 @@ pub(crate) struct Wrap {
     pub imports: Vec<(u32, String)>,
     pub callee: String,
     pub label: String,
+    /// What else the Tx writes: a pack's dependency and lock (PACK-10).
+    pub also: crate::packs::Needs,
 }
 
 /// Wrap call `site` of the accepted revision as `w` says, as one `TextEdit` Tx confined to the call:
@@ -289,9 +298,13 @@ pub(crate) fn wrap_call(
     edits.push((site.end, site.end, w.close));
     edits.sort_by_key(|e| e.0);
     let file = path(&site.file)?;
-    let expect = Expect::Confined(Confined { ranges: [(file.clone(), Ranges::Ranges(ranges))].into(), ..Confined::default() });
+    let mut declared: BTreeMap<_, _> = [(file.clone(), Ranges::Ranges(ranges))].into();
+    declared.extend(w.also.ranges);
+    let expect = Expect::Confined(Confined { ranges: declared, ..Confined::default() });
     let label = (written.to_string(), wrapped.clone());
-    let tx = plan::planned(s, label.clone(), vec![plan::text_edit(&file, &text, &edits)], expect);
+    let mut ops = vec![plan::text_edit(&file, &text, &edits)];
+    ops.extend(w.also.ops);
+    let tx = plan::planned(s, label.clone(), ops, expect);
     let what = w.label;
     let refused = || EditError::Rejected(format!("adding {what} here would change more than putting it after this sound"));
     let said = |why: &str| EditError::Rejected(format!("adding {what} here would change more than putting it after this sound ({why})"));

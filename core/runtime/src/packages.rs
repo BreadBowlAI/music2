@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use anyhow::{Context, Result, bail};
 use m2_ir::{Diagnostic, Ir, KernelSig, Kernels, Node, Op, PortKind, PortSig, Severity};
@@ -12,28 +12,10 @@ use wasmtime::{Engine, ExternType, Module, ValType};
 
 use crate::WasmContext;
 
+/// A `[[kernel]]` of `m2pkg.toml`, read strictly (PACK-2): the rest of the file is
+/// `m2_song::pack::PkgManifest`'s.
 #[derive(Deserialize)]
-struct Manifest {
-    package: Info,
-    #[serde(default)]
-    kernel: Vec<KernelDecl>,
-    /// Kept only to refuse it: effects are declared in TypeScript now (PKG-2), and without the
-    /// field an old manifest's `[[effect]]` would be skipped silently.
-    #[serde(default)]
-    effect: Vec<toml::Value>,
-}
-
-#[derive(Deserialize)]
-struct Info {
-    name: String,
-    version: String,
-    #[serde(default)]
-    description: String,
-    /// The compiled kernels, relative to the package folder.
-    wasm: Option<String>,
-}
-
-#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct KernelDecl {
     name: String,
     #[serde(default)]
@@ -49,11 +31,18 @@ struct KernelDecl {
     offline: bool,
 }
 
+/// One loaded version of a package: its manifest, its kernels and its compiled module. Shared by
+/// every view that holds it (PACK-9), and let go when none does.
 pub struct Package {
     pub name: String,
     pub version: String,
     pub description: String,
     pub dir: PathBuf,
+    /// What it needs of `@m2/core` and std (PACK-2): the session checks them against the SDK and
+    /// the std it has.
+    pub needs: BTreeMap<String, m2_song::Requirement>,
+    /// Its licence, as `m2pkg.toml` names it.
+    pub license: Option<String>,
     /// The files the runtime read to load it (`std/m2pkg.toml`, `std/kernels/std.wasm`), by the
     /// SHA-256 of their bytes: with the TypeScript the build read, what a render's provenance
     /// names as the package contents that ran (RENDER-2).
@@ -62,6 +51,10 @@ pub struct Package {
     /// The SHA-256 of its wasm module: part of each of its kernels' shapes, so a module rebuilt
     /// with the same kernel ids starts every instance from init (RENDER-25).
     module_sha: Option<m2_song::Sha>,
+    /// Its kernels by id (`<package>:<name>`, PACK-4), and its offline kernels' ids: kept apart, so
+    /// no song's graph types or runs an offline one (`kernel.offline`).
+    kernels: HashMap<String, KernelSig>,
+    offline: BTreeSet<String>,
 }
 
 impl Package {
@@ -71,23 +64,72 @@ impl Package {
     }
 }
 
-/// Every package a song can use, the kernels they declare, and the hosted plugins
-/// a song has asked about.
+/// What a loaded version is known by (PACK-9): its folder, and the hashes of its `m2pkg.toml` and
+/// wasm, all a [`Package`] is made from. A path pack whose either file changed is another.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Key {
+    dir: PathBuf,
+    manifest: m2_song::Sha,
+    wasm: Option<m2_song::Sha>,
+}
+
+/// The packages one build uses (PACK-9): std and the packs it resolved, one loaded version of each,
+/// by name. A revision keeps the view it was built with, and its plans run that view's kernels.
+#[derive(Clone, Default)]
+pub struct View {
+    packages: BTreeMap<String, Arc<Package>>,
+}
+
+impl View {
+    pub fn get(&self, name: &str) -> Option<&Package> {
+        self.packages.get(name).map(|p| &**p)
+    }
+
+    pub fn packages(&self) -> impl Iterator<Item = &Package> {
+        self.packages.values().map(|p| &**p)
+    }
+
+    /// Its packs, std not one: by name, with their folders.
+    pub fn packs(&self) -> Vec<(String, PathBuf)> {
+        self.packages().filter(|p| p.name != m2_song::pack::STD).map(|p| (p.name.clone(), p.dir.clone())).collect()
+    }
+
+    /// The package holding kernel `id` (an offline one too), when this view has it.
+    fn holding(&self, id: &str) -> Option<&Package> {
+        let (package, _) = m2_song::pack::split_id(id)?;
+        self.get(package).filter(|p| p.kernels.contains_key(id) || p.offline.contains(id))
+    }
+
+    /// Whether it holds exactly the versions `other` holds.
+    fn same(&self, other: &View) -> bool {
+        self.packages.len() == other.packages.len()
+            && self.packages.iter().zip(&other.packages).all(|((a, p), (b, q))| a == b && Arc::ptr_eq(p, q))
+    }
+}
+
+/// The packages a session's builds use, the kernels they declare, and the hosted plugins a song
+/// has asked about. Its lookups (kernels, modules, [`PackageSet::get`]) see one [`View`]: a
+/// session shows its accepted revision's (PACK-9).
+#[derive(Clone)]
 pub struct PackageSet {
     /// Always [`engine`]'s, whose memories never move: each sandbox keeps its memory's address from
     /// its seal (RENDER-32), so no other engine may be put here.
     pub(crate) engine: Engine,
-    packages: BTreeMap<String, Package>,
-    kernels: HashMap<String, (KernelSig, String)>,
-    /// The offline kernels, by id, and the package of each: kept apart from `kernels`, so no
-    /// song's graph types or runs one (`kernel.offline`).
-    offline: HashMap<String, String>,
+    /// What its lookups see.
+    view: Arc<View>,
+    /// Every version loaded and still held by a view, by what it is known by: a build that resolves
+    /// one again shares it, and one no view holds is gone.
+    loaded: HashMap<Key, Weak<Package>>,
     plugins: HashMap<String, Hosted>,
     /// How plugins are reached (P11): the process's in-process host unless set.
     host: Arc<dyn PluginHost>,
+    /// Where installed packs are (PACK-6): none unless set, so only what asks for one reads a
+    /// store; the app and `m2` give this computer's (`m2_os::dirs::packs()`).
+    store: Option<m2_song::pack::Store>,
 }
 
 /// A hosted plugin as the last build found it.
+#[derive(Clone)]
 enum Hosted {
     /// Instantiated once to read its ports and parameters.
     Installed(KernelSig, m2_plugins::Info),
@@ -108,18 +150,34 @@ enum Hosted {
 /// (RENDER-32). A sandbox has one memory, and a box one sandbox (one a package for a voice pool),
 /// so two renderers of p50 hold about 1.2% of the address space. A sealed memory never grows, so it
 /// never moves, and a sandbox keeps its address.
+///
+/// One engine for the process, as wasmtime intends: a module one package set loaded can be played
+/// through any other (a render of a revision plays its view through a copy of the session's set,
+/// and the gates' lab compiles with one set and plays with another). Two engines refuse each
+/// other's modules.
 pub fn engine() -> Engine {
-    let mut config = wasmtime::Config::new();
-    config.cranelift_nan_canonicalization(false);
-    config.wasm_relaxed_simd(false);
-    config.memory_may_move(false);
-    Engine::new(&config).expect("wasmtime engine")
+    static ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+    ENGINE
+        .get_or_init(|| {
+            let mut config = wasmtime::Config::new();
+            config.cranelift_nan_canonicalization(false);
+            config.wasm_relaxed_simd(false);
+            config.memory_may_move(false);
+            Engine::new(&config).expect("wasmtime engine")
+        })
+        .clone()
 }
 
 impl Default for PackageSet {
     fn default() -> Self {
-        let (packages, kernels, plugins) = (BTreeMap::new(), HashMap::new(), HashMap::new());
-        PackageSet { engine: engine(), packages, kernels, offline: HashMap::new(), plugins, host: m2_plugins::host() }
+        PackageSet {
+            engine: engine(),
+            view: Arc::default(),
+            loaded: HashMap::new(),
+            plugins: HashMap::new(),
+            host: m2_plugins::host(),
+            store: None,
+        }
     }
 }
 
@@ -135,21 +193,64 @@ impl PackageSet {
         self
     }
 
-    /// Load the package in `dir` (which holds `m2pkg.toml`).
+    /// Find installed packs in `store` (PACK-6): this computer's is `m2_os::dirs::packs()`.
+    pub fn with_store(mut self, store: PathBuf) -> PackageSet {
+        self.store = Some(m2_song::pack::Store::at(store));
+        self
+    }
+
+    /// Where installed packs are, if anywhere.
+    pub fn store(&self) -> Option<&m2_song::pack::Store> {
+        self.store.as_ref()
+    }
+
+    /// Load the package in `dir` (which holds `m2pkg.toml`, read strictly: PACK-2) and show it
+    /// beside what the set shows: how a host loads std.
     pub fn load(&mut self, dir: &Path) -> Result<&Package> {
-        let path = dir.join("m2pkg.toml");
-        let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let m: Manifest = toml::from_str(&text).with_context(|| format!("reading {}", path.display()))?;
-        let name = m.package.name.clone();
-        if self.packages.contains_key(&name) {
+        let p = self.loaded_at(dir)?;
+        let name = p.name.clone();
+        if self.view.packages.contains_key(&name) {
             bail!("package `{name}` is loaded twice");
         }
-        if !m.effect.is_empty() {
-            bail!(
-                "package `{name}`: `[[effect]]` is gone from m2pkg.toml (PKG-2). Effects are declared in TypeScript, \
-                 `component({{ …, editor: {{ category: \"Filter\", insert: {{ … }} }} }}, …)`"
-            );
+        Arc::make_mut(&mut self.view).packages.insert(name.clone(), p);
+        Ok(self.view.get(&name).expect("just shown"))
+    }
+
+    /// The package in `dir`, loaded once for every view that holds it: a version already loaded
+    /// whose `m2pkg.toml` and wasm are unchanged is shared, and one whose either file changed is
+    /// loaded again (PACK-9). The wasm's hash comes from the hash cache (FMT-16), a stat when it
+    /// is unchanged.
+    fn loaded_at(&mut self, dir: &Path) -> Result<Arc<Package>> {
+        let path = dir.join(m2_song::pack::PKG_MANIFEST);
+        let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let m =
+            m2_song::pack::PkgManifest::read(&text).map_err(anyhow::Error::msg).with_context(|| format!("reading {}", path.display()))?;
+        let wasm = match &m.package.wasm {
+            Some(w) => {
+                let p = dir.join(w);
+                Some(m2_song::HashCache::global().hash(&p).with_context(|| format!("reading {}", p.display()))?)
+            }
+            None => None,
+        };
+        let key = Key { dir: dir.to_path_buf(), manifest: m2_song::Sha::of(text.as_bytes()), wasm };
+        if let Some(p) = self.loaded.get(&key).and_then(Weak::upgrade) {
+            return Ok(p);
         }
+        let p = Arc::new(self.compiled(dir, &text, m)?);
+        self.loaded.retain(|_, w| w.strong_count() > 0);
+        // Known by what was read: the wasm's own bytes, should it have changed since the stat.
+        self.loaded.insert(Key { wasm: p.module_sha, ..key }, Arc::downgrade(&p));
+        Ok(p)
+    }
+
+    /// The package `m` describes, in `dir`: its kernels checked and its module compiled.
+    fn compiled(&self, dir: &Path, text: &str, m: m2_song::pack::PkgManifest) -> Result<Package> {
+        let name = m.package.name.as_str().to_string();
+        let kernels: Vec<KernelDecl> = m
+            .kernel
+            .iter()
+            .map(|k| KernelDecl::deserialize(k.clone()).map_err(|e| anyhow::anyhow!("package `{name}`: a [[kernel]]: {e}")))
+            .collect::<Result<_>>()?;
         let mut files = BTreeMap::from([(format!("{name}/m2pkg.toml"), m2_song::Sha::of(text.as_bytes()).hex())]);
         let (module, module_sha) = match &m.package.wasm {
             Some(w) => {
@@ -159,44 +260,118 @@ impl PackageSet {
                 files.insert(format!("{name}/{w}"), sha.hex());
                 check_abi(&bytes).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 let module = Module::new(&self.engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
-                verify_module(&self.engine, &module, &m.kernel).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
+                verify_module(&self.engine, &module, &kernels).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 (Some(module), Some(sha))
             }
-            None if !m.kernel.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
+            None if !kernels.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
             None => (None, None),
         };
-        for k in &m.kernel {
+        let (mut sigs, mut offline) = (HashMap::new(), BTreeSet::new());
+        for k in &kernels {
             let id = format!("{name}:{}", k.name);
             if k.offline {
                 check_offline(&id, k)?;
-                self.offline.insert(id, name.clone());
+                offline.insert(id);
                 continue;
             }
             let sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).map_err(anyhow::Error::msg)?;
-            self.kernels.insert(id, (sig, name.clone()));
+            sigs.insert(id, sig);
         }
-        let pkg = Package {
-            name: name.clone(),
-            version: m.package.version,
+        Ok(Package {
+            name,
+            version: m.package.version.to_string(),
             description: m.package.description,
             dir: dir.to_path_buf(),
+            needs: m.dependencies,
+            license: m.package.license,
             files,
             module,
             module_sha,
-        };
-        Ok(self.packages.entry(name).or_insert(pkg))
+            kernels: sigs,
+            offline,
+        })
+    }
+
+    /// The view of a build that resolved `packs` (name and folder, PACK-9): std, as this set shows
+    /// it, and exactly those packs, each loaded once for every view that holds it. What the set
+    /// shows doesn't change. One that doesn't load, or holds another pack, is the error, naming it.
+    pub fn view_of(&mut self, packs: &[(String, PathBuf)]) -> Result<Arc<View>> {
+        let mut view = View::default();
+        if let Some(std) = self.view.packages.get(m2_song::pack::STD) {
+            view.packages.insert(m2_song::pack::STD.to_string(), std.clone());
+        }
+        for (name, dir) in packs {
+            let p = self.loaded_at(dir).with_context(|| format!("loading {name}"))?;
+            if p.name != *name {
+                bail!("{} holds {}, not {name}", dir.display(), p.name);
+            }
+            view.packages.insert(name.clone(), p);
+        }
+        // The very view shown, when it holds the same versions: a plan of it borrows the set.
+        match view.same(&self.view) {
+            true => Ok(self.view.clone()),
+            false => Ok(Arc::new(view)),
+        }
+    }
+
+    /// The view its lookups see.
+    pub fn view(&self) -> &Arc<View> {
+        &self.view
+    }
+
+    /// Show `view`: a session shows its accepted revision's (PACK-9).
+    pub fn show(&mut self, view: &Arc<View>) {
+        self.view = view.clone();
+    }
+
+    /// This set seeing `view`: itself when it shows it, else a copy that does, sharing its engine,
+    /// its host and its plugins as described now. What a plan or a render of a revision is made
+    /// from, so it runs the kernels the revision was built with.
+    pub fn viewing(&self, view: &Arc<View>) -> std::borrow::Cow<'_, PackageSet> {
+        match Arc::ptr_eq(view, &self.view) {
+            true => std::borrow::Cow::Borrowed(self),
+            false => std::borrow::Cow::Owned(PackageSet { view: view.clone(), ..self.clone() }),
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<&Package> {
-        self.packages.get(name)
+        self.view.get(name)
+    }
+
+    /// The packs it shows besides std, by name, with their folders.
+    pub fn packs(&self) -> Vec<(String, PathBuf)> {
+        self.view.packs()
+    }
+
+    /// The packs the lists offer (PACK-11), by name, with the version and folder each is offered
+    /// from: each pack it shows (the accepted revision's), then of every other pack in the store,
+    /// the newest installed version `app` runs. std isn't one.
+    pub fn offered(&self, app: &m2_song::pack::App) -> Vec<(String, m2_song::Version, PathBuf)> {
+        let shown = self.view.packages().filter(|p| p.name != m2_song::pack::STD);
+        let mut out: Vec<_> = shown.filter_map(|p| Some((p.name.clone(), m2_song::Version::parse(&p.version)?, p.dir.clone()))).collect();
+        for (name, _) in self.store.as_ref().map(|s| s.list()).unwrap_or_default() {
+            if out.iter().any(|(n, ..)| n == name.as_str()) {
+                continue;
+            }
+            if let Some((v, dir)) = self.newest(&name, app) {
+                out.push((name.as_str().to_string(), v, dir));
+            }
+        }
+        out
+    }
+
+    /// The newest installed version of pack `name` that `app` runs, and its folder in the store.
+    pub fn newest(&self, name: &m2_song::pack::PackName, app: &m2_song::pack::App) -> Option<(m2_song::Version, PathBuf)> {
+        let store = self.store.as_ref()?;
+        store.versions(name).into_iter().rev().map(|v| (v, store.version_dir(name, &v))).find(|(_, dir)| app.runs(dir).is_ok())
     }
 
     pub fn packages(&self) -> impl Iterator<Item = &Package> {
-        self.packages.values()
+        self.view.packages()
     }
 
     pub fn kernel_sigs(&self) -> impl Iterator<Item = &KernelSig> {
-        self.kernels.values().map(|(s, _)| s)
+        self.view.packages().flat_map(|p| p.kernels.values())
     }
 
     /// Look up hosted plugins by graph id (`clap:<plugin id>`), so the checker can type
@@ -300,26 +475,24 @@ impl PackageSet {
 
     /// The SHA-256 of the wasm module holding kernel `id` (an offline one too).
     pub fn module_sha(&self, id: &str) -> Option<m2_song::Sha> {
-        let pkg = self.kernels.get(id).map(|(_, p)| p).or_else(|| self.offline.get(id))?;
-        self.packages.get(pkg)?.module_sha
+        self.view.holding(id)?.module_sha
     }
 
     /// The compiled module holding kernel `id` (an offline one too), the kernel's export prefix,
     /// and its package's name.
     pub(crate) fn module_for<'a>(&'a self, id: &'a str) -> Option<(&'a Module, &'a str, &'a str)> {
-        let pkg = self.kernels.get(id).map(|(_, p)| p).or_else(|| self.offline.get(id))?;
-        let module = self.packages.get(pkg)?.module.as_ref()?;
-        Some((module, id.split_once(':').map_or(id, |(_, k)| k), pkg))
+        let p = self.view.holding(id)?;
+        Some((p.module.as_ref()?, m2_song::pack::split_id(id).map_or(id, |(_, k)| k), p.name.as_str()))
     }
 }
 
 impl Kernels for PackageSet {
     fn kernel(&self, id: &str) -> Option<&KernelSig> {
-        self.kernels.get(id).map(|(s, _)| s)
+        self.view.holding(id)?.kernels.get(id)
     }
 
     fn offline(&self, id: &str) -> bool {
-        self.offline.contains_key(id)
+        self.view.holding(id).is_some_and(|p| p.offline.contains(id))
     }
 
     fn plugin(&self, id: &str) -> Option<&KernelSig> {
@@ -575,12 +748,21 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
 mod tests {
     use super::*;
 
+    // One engine for the process: a view one set loaded can be played by any other set, as the
+    // gates' lab compiles with one set and plays with another, and a render of a revision plays its
+    // view through a copy of the session's set. Two engines refuse each other's modules.
+    #[test]
+    fn every_set_shares_one_engine() {
+        let (a, b) = (PackageSet::default(), PackageSet::default());
+        assert!(Engine::same(&a.engine, &b.engine), "two package sets, two engines");
+    }
+
     fn manifest(effect: &str) -> Result<PackageSet> {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("m2-packages-test-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let manifest = format!("[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[[effect]]\nmodule = \"p/fx\"\n{effect}");
+        let manifest = format!("[package]\nname = \"@test/p\"\nversion = \"0.1.0\"\n\n[[effect]]\nmodule = \"p/fx\"\n{effect}");
         std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
         let mut set = PackageSet::default();
         let loaded = set.load(&dir).map(drop);
@@ -733,6 +915,82 @@ mod tests {
         let mut ir = with_plugin("clap:org.example.not-installed", &[("mix", 0.5)]);
         let codes: Vec<&str> = set.bind_plugins(&mut ir).iter().map(|d| d.code).collect();
         assert_eq!(codes, ["plugin.missing", "plugin.param-unaddressed"]);
+    }
+
+    /// A pack `name` at `version` in a folder of its own, holding one hand-written kernel `k`.
+    fn pack(name: &str, version: &str, extra: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("m2-packages-pack-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The version in a custom section: each version its own module.
+        let wat = crate::tests::module_v1(&format!("{} (@custom \"v\" \"{version}\")", crate::tests::kernel_v1("k", "")));
+        std::fs::write(dir.join("k.wasm"), crate::tests::wasm(&wat)).unwrap();
+        let manifest = format!(
+            "[package]\nname = \"{name}\"\nversion = \"{version}\"\nwasm = \"k.wasm\"\n{extra}\n[[kernel]]\nname = \"k\"\ninputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]\n"
+        );
+        std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
+        dir
+    }
+
+    // PACK-2: a pack's m2pkg.toml is read strictly, its kernels too, and its name by PACK-1.
+    #[test]
+    fn a_pack_manifest_is_read_strictly() {
+        let mut set = std_set();
+        let good = pack("@test/a", "1.0.0", "license = \"CC0-1.0\"\nauthors = [\"A\"]\ntags = [\"keys\"]");
+        set.load(&good).unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(set.kernel("@test/a:k").is_some(), "a kernel id carries the whole name (PACK-4)");
+        assert_eq!(set.module_for("@test/a:k").map(|(_, export, pkg)| (export, pkg)), Some(("k", "@test/a")));
+        for (bad, why) in [
+            (pack("@test/b", "1.0.0", "colour = \"red\""), "colour"),
+            (pack("b", "1.0.0", ""), "package name"),
+            (pack("@test/b", "1.0", ""), "version"),
+        ] {
+            let e = std_set().load(&bad).map(drop).unwrap_err();
+            assert!(format!("{e:#}").contains(why), "{why}: {e:#}");
+        }
+        let odd = pack("@test/c", "1.0.0", "");
+        let text = std::fs::read_to_string(odd.join("m2pkg.toml")).unwrap().replace("name = \"k\"", "name = \"k\"\nspeed = 2");
+        std::fs::write(odd.join("m2pkg.toml"), text).unwrap();
+        let e = std_set().load(&odd).map(drop).unwrap_err();
+        assert!(format!("{e:#}").contains("speed"), "a kernel's unknown key is refused: {e:#}");
+    }
+
+    // PACK-9: a build's view holds std and exactly its packs; another version is another module,
+    // a pack not listed isn't there, and making a view never changes what the set shows. Two views
+    // share a version loaded once; one no view holds is let go.
+    #[test]
+    fn a_view_holds_std_and_exactly_the_songs_packs() {
+        let mut set = std_set();
+        let (a1, a2, b) = (pack("@test/a", "1.0.0", ""), pack("@test/a", "1.1.0", ""), pack("@test/b", "0.1.0", ""));
+        let packs = |l: &[(&str, &PathBuf)]| l.iter().map(|(n, d)| (n.to_string(), d.to_path_buf())).collect::<Vec<_>>();
+        let first = set.view_of(&packs(&[("@test/a", &a1), ("@test/b", &b)])).unwrap();
+        assert!(set.get("@test/a").is_none(), "making a view shows nothing");
+        set.show(&first);
+        let one = set.module_sha("@test/a:k").unwrap();
+        assert!(set.kernel("@test/b:k").is_some() && set.kernel("std:sine").is_some());
+        assert_eq!(set.packs(), packs(&[("@test/a", &a1), ("@test/b", &b)]));
+        let second = set.view_of(&packs(&[("@test/a", &a2)])).unwrap();
+        assert_eq!(set.module_sha("@test/a:k"), Some(one), "what the set shows stays");
+        let other = set.viewing(&second);
+        assert_ne!(other.module_sha("@test/a:k"), Some(one), "another version is another module");
+        assert!(other.kernel("@test/b:k").is_none() && other.get("@test/b").is_none(), "a pack not listed isn't there");
+        assert_eq!(other.get("@test/a").map(|p| p.version.as_str()), Some("1.1.0"));
+        drop(other);
+        // The same packs again: the very view shown, and the versions loaded once.
+        let again = set.view_of(&packs(&[("@test/a", &a1), ("@test/b", &b)])).unwrap();
+        assert!(Arc::ptr_eq(&again, &first));
+        // A pack that doesn't load is the error, and nothing moves.
+        let broken = pack("@test/c", "1.0.0", "colour = 1");
+        assert!(set.view_of(&packs(&[("@test/a", &a1), ("@test/c", &broken)])).is_err());
+        assert_eq!(set.packs(), packs(&[("@test/a", &a1), ("@test/b", &b)]), "unchanged");
+        // A version no view holds is let go.
+        let held = Arc::downgrade(&second.packages["@test/a"]);
+        drop(second);
+        assert!(held.upgrade().is_none());
+        let none = set.view_of(&[]).unwrap();
+        set.show(&none);
+        assert!(set.kernel("@test/a:k").is_none() && set.kernel("std:sine").is_some(), "std stays");
     }
 
     // PKG-2: `m2pkg.toml` describes no TypeScript. A manifest that still has `[[effect]]` fails

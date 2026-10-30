@@ -336,7 +336,7 @@ fn t_kernels() -> PathBuf {
     std::fs::write(dir.join("k.wasm"), crate::tests::wasm(&wat)).unwrap();
     let kernel = |k: &str, input: &str| format!("[[kernel]]\nname = \"{k}\"\ninputs = [\"in: {input}\"]\noutputs = [\"out: audio<1>\"]\n");
     let manifest = format!(
-        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n{}{}{}{}{}{}{}{}",
+        "[package]\nname = \"@test/t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n{}{}{}{}{}{}{}{}",
         kernel("latch", "control<*>"),
         kernel("spike", "control<*>"),
         kernel("denan", "audio<1>"),
@@ -361,8 +361,8 @@ fn t_packages() -> PackageSet {
 fn cued(kind: &str, edit: bool) -> Ir {
     let mut nodes = vec![
         step_const("cue", 0.0, 5),
-        json!({"id": "lat", "op": "kernel", "kernel": format!("t:{kind}"), "inputs": {"in": "cue"}}),
-        json!({"id": "den", "op": "kernel", "kernel": "t:denan", "inputs": {"in": "lat"}}),
+        json!({"id": "lat", "op": "kernel", "kernel": format!("@test/t:{kind}"), "inputs": {"in": "cue"}}),
+        json!({"id": "den", "op": "kernel", "kernel": "@test/t:denan", "inputs": {"in": "lat"}}),
         json!({"id": "fr", "op": "const", "value": 330, "unit": "hz"}),
         json!({"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "fr"}}),
         json!({"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}),
@@ -439,7 +439,7 @@ fn a_transient_inf_keeps_every_instance() {
 /// Two tracks summed in the song: `a`, `t:<kind>` on a cue cell (site 5), and `b`, a sine through
 /// a delay; `edit` adds a gain after `b`'s delay (an edit on the other track).
 fn two_tracks(kind: &str, edit: bool) -> Ir {
-    let a = json!([step_const("cue", 0.0, 5), {"id": "lat", "op": "kernel", "kernel": format!("t:{kind}"), "inputs": {"in": "cue"}}]);
+    let a = json!([step_const("cue", 0.0, 5), {"id": "lat", "op": "kernel", "kernel": format!("@test/t:{kind}"), "inputs": {"in": "cue"}}]);
     let mut b = vec![
         json!({"id": "fr", "op": "const", "value": 330, "unit": "hz"}),
         json!({"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "fr"}}),
@@ -705,7 +705,7 @@ fn between_blocks_kernels_and_plugins_compute_in_the_one_mode() {
         pk.load(&t_kernels()).unwrap();
         let tiny = [
             json!({"id": "c", "op": "const", "value": 0.0}),
-            json!({"id": "tiny", "op": "kernel", "kernel": "t:tiny", "inputs": {"in": "c"}}),
+            json!({"id": "tiny", "op": "kernel", "kernel": "@test/t:tiny", "inputs": {"in": "c"}}),
         ];
         let with_probe = |pk: &mut PackageSet, gain: f64| {
             let mut more = tiny.to_vec();
@@ -752,7 +752,7 @@ fn a_failed_prepare_leaves_what_plays_untouched() {
     let mut tk = t_packages();
     let mut ir = song(
         json!([{"id": "n", "op": "lane", "lane": "notes"}, {"id": "q", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"notes": "n"}},
-            {"id": "c", "op": "const", "value": 0}, {"id": "l", "op": "kernel", "kernel": "t:spike", "inputs": {"in": "c"}},
+            {"id": "c", "op": "const", "value": 0}, {"id": "l", "op": "kernel", "kernel": "@test/t:spike", "inputs": {"in": "c"}},
             {"id": "pl", "op": "kernel", "kernel": "std:pan", "inputs": {"in": "l"}},
             {"id": "s", "op": "kernel", "kernel": "std:add", "inputs": {"a": "q", "b": "pl"}}]),
         "s",

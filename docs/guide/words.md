@@ -26,4 +26,7 @@
 - **Stems:** each track exported as its own audio file, to mix or share elsewhere.
 - **Take:** one recording, from Record to stop.
 - **Sampler:** an instrument that plays an audio file on each note, higher or lower by the note.
+  - **Region:** one recording in a Sampler's map, with the notes, how hard and in which turn it plays ([Sounds](sounds.md)).
+  - **Velocity layer:** the recordings of one note played at one strength; a soft note plays the soft layer.
+  - **Round robin:** several takes of one note, played in turn, so a repeated note doesn't sound the same each time.
 - **Plugin:** an instrument or effect from another maker, installed on your computer (music2 plays CLAP plugins).

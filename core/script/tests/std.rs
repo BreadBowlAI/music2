@@ -718,3 +718,52 @@ fn std_one_note_sounds_are_one_poly() {
     assert_eq!((polys[1].0, polys[1].1, polys[1].2, polys[1].3.is_none()), ("std:fm", 1, legato, true), "FM keys, one voice: no glide");
     assert_eq!((polys[2].0, polys[2].1, polys[2].2, polys[2].3.is_none()), ("std:synth", 16, m2_ir::Alloc::default(), true), "the pad");
 }
+
+// PKG-3, PKG-4, PKG-16: a Sampler that plays regions sends every knob to std:regions, each left out
+// at the kernel port's default, as the zones' std:sampler does; and the count of note starts that
+// gives a turn reaches its `count`.
+#[test]
+fn the_samplers_regions_reach_their_kernel_at_its_defaults() {
+    let b = build(
+        "import { song } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\nimport { sampler } from \"std/sampler\";\n\
+         export default song(({ lane }) => mixer({ a: sampler(lane.notes(\"notes\"), { regions: [{ file: \"a.wav\" }] }) }));\n",
+    );
+    let m = &b.ir.modules[0];
+    let ns = nodes(m);
+    let readers = |id: &str| -> Vec<(String, String)> {
+        let mut out = vec![];
+        for n in &ns {
+            if let Op::Kernel { kernel, inputs, .. } = &n.op {
+                out.extend(inputs.iter().filter(|(_, r)| split_ref(r).0 == id).map(|(port, _)| (kernel.clone(), port.clone())));
+            }
+        }
+        out
+    };
+    let defaults = port_defaults();
+    let mut slots = BTreeSet::new();
+    for n in &ns {
+        let (Op::Const { value, .. }, Some(o)) = (&n.op, &n.origin) else { continue };
+        if !o.inherited() || component_of(m, n) != "std:sampler" {
+            continue;
+        }
+        let slot = o.slot().unwrap();
+        let ports = readers(&n.id);
+        assert!(!ports.is_empty() && ports.iter().all(|(k, _)| k == "std:regions"), "{slot} reaches {ports:?}");
+        for (kernel, port) in &ports {
+            let want = defaults.get(&(kernel.clone(), port.clone())).unwrap_or_else(|| panic!("{kernel}.{port} has no default"));
+            assert_eq!(*value as f32, *want as f32, "sampler.{slot} is {value}, and {kernel}.{port} defaults to {want}");
+        }
+        slots.insert(slot.to_string());
+    }
+    let catalog = describe(&[("std".into(), std_dir())]);
+    let knobs: BTreeSet<String> = catalog.components["std:sampler"].controls.iter().map(|c| c.name.clone()).collect();
+    assert_eq!(slots, knobs, "every knob was checked");
+    let count = ns.iter().find_map(|n| match &n.op {
+        Op::Kernel { kernel, inputs, .. } if kernel == "std:regions" => inputs.get("count").cloned(),
+        _ => None,
+    });
+    let counted = count.is_some_and(|r| {
+        ns.iter().any(|n| n.id == split_ref(&r).0 && matches!(&n.op, Op::Kernel { kernel, .. } if kernel == "std:hitcount"))
+    });
+    assert!(counted, "std:regions' count is std:hitcount's");
+}
