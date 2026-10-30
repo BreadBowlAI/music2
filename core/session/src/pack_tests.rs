@@ -495,3 +495,47 @@ fn sampler_controls_are_stds() {
     assert_eq!(setting("mode").default, Some(serde_json::json!(m2_song::instrument::MODE)));
     assert_eq!(setting("mode").options, Some(m2_song::instrument::MODES.iter().map(|m| m.to_string()).collect()));
 }
+
+// PACK-11, REG-15: a pack installed while a song is open (a Get) is offered once the session is
+// told the store changed, at once, with no edit of the song.
+#[test]
+fn the_lists_offer_a_pack_installed_once_the_store_changed() {
+    let root = scratch("store-changed");
+    copy(&fixtures(), &root);
+    let store = root.join("Packs");
+    let song = root.join("song-path");
+    let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap();
+    let plain: String = manifest.lines().filter(|l| !l.contains("@test/tiny")).map(|l| format!("{l}\n")).collect();
+    std::fs::write(song.join("music2.toml"), plain).unwrap();
+    std::fs::write(song.join("song.ts"), "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n").unwrap();
+    let _ = std::fs::remove_dir_all(song.join("tracks"));
+    let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
+    let offered = |s: &crate::Session| s.offered().iter().any(|(n, ..)| n == "@test/tiny");
+    assert!(!offered(&s));
+    install_tiny(&store);
+    assert!(!offered(&s), "the lists are made as the song opens, and when its packs change");
+    let taken = s.store_changed();
+    assert!(offered(&s), "told the store changed, they offer it");
+    assert!(s.catalog().components.contains_key("@test/tiny:tiny-keys"));
+    assert!(taken.accepted.is_none(), "a song that built isn't built again");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-9, REG-17: a song whose lock names a version that isn't installed waits (pkg.missing);
+// once it is installed and the session told, the song is built again and plays.
+#[test]
+fn a_song_missing_a_locked_pack_builds_once_it_is_installed() {
+    let root = scratch("missing-locked");
+    copy(&fixtures(), &root);
+    let store = root.join("Packs");
+    let song = root.join("song-store");
+    let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(!s.accepted().has_code());
+    assert_eq!(codes(&s.draft_errors), ["pkg.missing"]);
+    install_tiny(&store);
+    let taken = s.store_changed();
+    assert!(taken.accepted.is_some() && s.accepted().has_code(), "{:?}", s.draft_errors);
+    assert!(s.draft_errors.is_empty());
+    assert_eq!(s.accepted().compiled.packs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["@test/tiny"]);
+    std::fs::remove_dir_all(&root).ok();
+}

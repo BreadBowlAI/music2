@@ -269,7 +269,7 @@ pub(crate) enum Change {
 /// A project that can't be read from its snapshot: the manifest's or the arrangement's errors.
 /// What the lists offer from what `packages` shows (PACK-11): the catalog, and the packs it was
 /// made from.
-fn lists(packages: &PackageSet) -> (Arc<Catalog>, Arc<Vec<crate::Offered>>) {
+pub(crate) fn lists(packages: &PackageSet) -> (Arc<Catalog>, Arc<Vec<crate::Offered>>) {
     let offered = crate::offered(packages);
     (Arc::new(crate::catalog_of(packages, &offered)), Arc::new(offered))
 }

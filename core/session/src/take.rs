@@ -168,6 +168,20 @@ impl Session {
         self.take_in_settled(snapshot, settled)
     }
 
+    /// The store changed: a pack was installed (a Get, REG-15). The lists are made again, so they
+    /// offer it (PACK-11); and a draft that waits (a song whose lock names a version that wasn't
+    /// installed, `pkg.missing`) is built again, so it plays once it builds (REG-17).
+    pub fn store_changed(&mut self) -> TakenIn {
+        (self.catalog, self.offered) = crate::session::lists(&self.packages);
+        self.problems = self.gather_problems();
+        if self.draft_errors.is_empty() {
+            return TakenIn::default();
+        }
+        let (draft, batch) = (self.draft.clone(), self.waiting.clone());
+        let settled = self.settling(&draft, &batch);
+        self.take_in_settled(draft, settled)
+    }
+
     /// [`Session::take_in`] of `snapshot`, whose batch `settled` decided already.
     fn take_in_settled(&mut self, snapshot: Snapshot, settled: Settle) -> TakenIn {
         self.draft = snapshot;
