@@ -118,7 +118,7 @@ fn a_pack_that_needs_another_std_is_broken() {
     let root = scratch("needs");
     copy(&fixtures(), &root);
     let manifest = root.join("tiny/m2pkg.toml");
-    let text = std::fs::read_to_string(&manifest).unwrap().replace("std = \"0.5\"", "std = \"0.9\"");
+    let text = std::fs::read_to_string(&manifest).unwrap().replace("std = \"0.4\"", "std = \"0.9\"");
     std::fs::write(&manifest, text).unwrap();
     let mut pk = packages(&root.join("no-store"));
     let e = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).err().unwrap();
@@ -134,7 +134,7 @@ fn a_pack_made_for_an_older_std_still_builds() {
     let root = scratch("older");
     copy(&fixtures(), &root);
     let manifest = root.join("tiny/m2pkg.toml");
-    let text = std::fs::read_to_string(&manifest).unwrap().replace("std = \"0.5\"", "std = \"0.3\"");
+    let text = std::fs::read_to_string(&manifest).unwrap().replace("std = \"0.4\"", "std = \"0.3\"");
     std::fs::write(&manifest, text).unwrap();
     let mut pk = packages(&root.join("no-store"));
     let c = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{d:?}"));
