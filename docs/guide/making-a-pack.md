@@ -120,8 +120,8 @@ volume = -20               # dB
 | `label`, `category` | its name, and the browser's group | must be there |
 | `description`, `tags` | one line about it; words for search (kept for later) | none |
 | `engine` | `"std:sampler"` | must be there |
-| `tune`, `level`, `attack`, `release`, `velocity` | the Sampler's knobs where they start: semitones, dB, seconds, seconds, 0 to 1 | the Sampler's |
-| `mode`, `voices` | `"oneshot"` or `"gate"`; notes at once | `"oneshot"`, 8 |
+| `tune`, `level`, `attack`, `release`, `velocity` | the Sampler's knobs where they start: semitones (-24 to 24), dB (-24 to 12), seconds (0 to 2), seconds (0 to 5), 0 to 1 | the Sampler's |
+| `mode`, `voices` | `"oneshot"` or `"gate"`; notes at once, 1 to 128 | `"oneshot"`, 8 |
 
 Each `[[region]]` takes the Sampler's region fields: `file` (a path in the pack), `root`, `keys`, `velocity`, `round_robin` (`[1, 3]`: take 1 of 3, played in turn), `trigger` (`"attack"` or `"release"`), `loop` (`[start, end]` in frames, played while the note is held), `tune` (cents), `volume` (dB), `pan` (-1 to 1) and `offset` (frames). [Sounds](sounds.md) says what each does.
 
@@ -130,6 +130,8 @@ A song imports it from the pack's `instruments`, by its id in camelCase:
 ```ts
 import { feltPiano } from "@alice/felt-piano/instruments";
 ```
+
+So the file's name must be an id: lowercase letters, digits and `-`, 32 at most (`felt-piano.toml`). A name that is a word JavaScript keeps for itself (`new.toml`, `class.toml`) is refused, and so are two names that make one name in code (`a-b.toml` and `a--b.toml` are both `aB`).
 
 The browser, + Track and search offer it as they offer the pack's other instruments. Every key is checked: a key music2 doesn't know is refused, naming the nearest one (`lable`: did you mean `label`?), and every mistake names the file and its line.
 
@@ -145,11 +147,11 @@ m2 pack import-sfz "Felt Piano.sfz" felt-piano --name @alice/felt-piano --label 
 |---|---|
 | `instruments/felt-piano.toml` | every region of the SFZ music2 can play |
 | `samples/` | the recordings those regions play, copied |
-| `m2pkg.toml` | the name you give; the licence from `--license`, or the `LICENSE` beside the SFZ |
+| `m2pkg.toml` | the name you give; the licence from `--license`, or from the licence file beside the SFZ when it is clear |
 | `README.md` | the credits in the SFZ's first comments, and what the import couldn't keep |
-| `LICENSE` | the one beside the SFZ, when there is one |
+| `LICENSE` | the licence file beside the SFZ (`LICENSE`, `LICENCE` or `COPYING`), when there is one |
 
-It reads SFZ's headers (`<control>`, `<global>`, `<master>`, `<group>`, `<region>`), `#define`, `#include`, `default_path`, notes as numbers or names (`c4` is 60), and the opcodes that map to a region: `sample`, `key`, `lokey`, `hikey`, `pitch_keycenter`, `lovel`, `hivel`, `seq_length`, `seq_position`, `trigger`, `loop_mode`, `loop_start`, `loop_end`, `tune`, `transpose`, `volume`, `pan`, `offset`, `amp_veltrack`, `ampeg_attack` and `ampeg_release`. Everything else it names when it ends:
+It reads SFZ's headers (`<control>`, `<global>`, `<master>`, `<group>`, `<region>`), `#define`, `#include`, `default_path`, `octave_offset` and `note_offset`, notes as numbers or names (`c4` is 60), and the opcodes that map to a region: `sample`, `key`, `lokey`, `hikey`, `pitch_keycenter`, `lovel`, `hivel`, `seq_length`, `seq_position`, `trigger`, `loop_mode`, `loop_start`, `loop_end`, `tune`, `transpose`, `volume`, `pan`, `offset`, `amp_veltrack`, `ampeg_attack` and `ampeg_release`. Everything else it names when it ends:
 
 ```
 made @alice/felt-piano in felt-piano: felt-piano plays 208 regions from 208 recordings
@@ -157,7 +159,15 @@ left out: 88 regions play only with a controller moved (CC 64)
 key switches: kept the default one's regions (c0)
 ```
 
-Only WAV recordings: an SFZ that plays FLAC stops the import before anything is written; convert its files to WAV first. What it writes passes `m2 pack check`. Open `instruments/<id>.toml` afterwards to set what the SFZ leaves to its player, such as `level` and `release`.
+A value it can't read leaves its region out and says so (`tune=+5c`; `pitch_keycenter=sample`, the root note stored in the WAV), rather than reading it as 0.
+
+The instrument's `velocity`, `attack` and `release` are one value for all its regions, so the import takes the one that 9 in 10 of the regions played at a key's start agree on. When they don't agree, it keeps the Sampler's own and says so. The Sampler's `velocity` makes the level follow a straight line where SFZ's `amp_veltrack` follows a curve, so soft notes come out a little louder; the import says by how much.
+
+What it reads, it reads only from the SFZ's own folder and the folders in it: a path that climbs out of it (`../`), a path that starts at the top of the disk (`/home/…`, `C:\…`), and a link (a shortcut to a file elsewhere) stop the import, naming the line. An SFZ from the internet can't copy your own files into a pack this way. If a library keeps its samples beside the SFZ's folder (`default_path=../Samples/`), copy the SFZ up into the folder that holds both and change that line to `default_path=Samples/`.
+
+The licence: `--license` names it. Without it, the import takes the licence from the file beside the SFZ only when that file is clear about it: its first line is `SPDX-License-Identifier: CC-BY-4.0` (or another), or it is the whole text of a Creative Commons licence (CC0, CC BY, CC BY-SA). Many libraries put several licences in one file (the recordings under one, the SFZ under another), so otherwise the import stops and asks: read the file and give `--license`.
+
+Only WAV recordings: an SFZ that plays FLAC stops the import before anything is written; convert its files to WAV first. A round robin with a take missing stops it too: SFZ plays silence on that turn, music2 needs every take. The pack is written beside the folder you name and checked as `m2 pack check` checks it; only a pack that passes gets the folder's name, so a failed import leaves nothing behind. Open `instruments/<id>.toml` afterwards to set what the SFZ leaves to its player, such as `level` and `release`.
 
 ## Sounds
 
