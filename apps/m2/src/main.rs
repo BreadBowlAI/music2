@@ -17,6 +17,7 @@ mod commands;
 mod docs;
 mod edits;
 mod listen;
+mod search;
 mod see;
 mod text;
 
@@ -1046,6 +1047,7 @@ change that code first",
         Some("point") => see::point(&args)?,
         Some("routes") => call::routes(&args)?,
         Some("call") => call::call(&args)?,
+        Some("search") => search::search(&args)?,
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         // main refused every word the table doesn't hold, and a test holds the table to these arms.
         None => bail!("name a command first: m2 <command> … --as <name> --why \"<words>\""),

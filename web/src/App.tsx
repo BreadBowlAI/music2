@@ -34,6 +34,8 @@ import DropLayer from "./components/DropLayer";
 import { stopThen, toggleRecord } from "./lib/record";
 import ExportDialog from "./components/ExportDialog";
 import { openGuide } from "./lib/guide";
+import Spotlight, { toggleFinding } from "./components/Spotlight";
+import { useFinding } from "./lib/library";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -117,6 +119,8 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean
   if (e.key === "-" && !e.altKey && !e.shiftKey) return { id: "zoom_out" };
   if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.altKey && !e.shiftKey) return { id: e.key === "ArrowUp" ? "shorter" : "taller" };
   if (k === "f" && e.shiftKey && !e.altKey) return { id: "follow" };
+  // View ▸ Find Sounds (⌘F): the library's one search (LIB-1).
+  if (k === "f" && !e.altKey) return { id: "find" };
   // Settings (⌘, and Ctrl+,), from anywhere: the start screen, a field, the code editor.
   if (e.key === "," && !e.shiftKey && !e.altKey) return { id: "settings", always: true };
   return null;
@@ -246,6 +250,7 @@ export default function App() {
         <SettingsDialog />
         <Toasts />
         {graph && <PointerNote session={graph.session} />}
+        {graph && <Spotlight graph={graph} />}
         <DropLayer />
         <KeyboardPiano />
         {/* With a song open, the top bar's status pill says it; on the start screen, this one does. */}
@@ -388,6 +393,11 @@ export function appCommand(id: string) {
       return shell.setDock(!shell.dock);
     case "browser":
       return shell.setBrowser(!shell.browser);
+    case "find":
+      // In the code editor, its own find; in a text field, nothing: the field keeps its keys.
+      if (editorHooks.chord?.("find")) return;
+      if (editing() && !useFinding.getState().open) return;
+      return toggleFinding();
     case "draw":
       return shell.set({ draw: !shell.draw });
     case "deselect":

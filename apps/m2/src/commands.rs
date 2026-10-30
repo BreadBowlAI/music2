@@ -459,6 +459,21 @@ pub const COMMANDS: &[Command] = &[
                error it says the undo step a write made, or what an undo took back.",
     },
     Command {
+        name: "search",
+        also: &[],
+        usage: "m2 search <words…> [--kind <kind>] [--json]",
+        words: "find what can be added to a song: instruments, sounds (presets), effects, samples and plugins, best \
+                first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where \
+                it is from, and its id, which adding it names",
+        more: "With the app open it asks the app, whose list has the open song's own instruments and the plugins it \
+               has listed; with the app closed it searches music2's sounds and your presets itself. Every word must \
+               match. `--kind` is `instrument`, `sound`, `effect`, `sample` or `plugin`; the same words typed in \
+               the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), \
+               which only samples carry. `--json` prints each item with all it knows: its `kind`, `id`, `label`, \
+               `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track \
+               takes), and a sound's `preset`. [Finding sounds](finding-sounds.md) says more.",
+    },
+    Command {
         name: "docs",
         also: &[],
         usage: "m2 docs [<page> | all]",

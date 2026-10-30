@@ -58,6 +58,8 @@ fn serve() -> anyhow::Result<()> {
         running.state.keep_recent(home.join(".music2/recent.json"));
         running.state.keep_settings(home.join(".music2/settings.json"));
     }
+    // The library's presets and previews: this HOME's Presets folder and cache, as the app's.
+    running.state.keep_library(m2_server::library::Folders::of_this_user());
     if project != "-" {
         running.state.open_song(std::path::Path::new(project))?;
     }
