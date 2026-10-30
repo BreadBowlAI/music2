@@ -29,14 +29,31 @@ pub const LICENCES: &[&str] = &["CC0-1.0", "CC-BY-3.0", "CC-BY-4.0", "MIT", "Apa
 pub const LARGEST: u64 = 10_000_000_000;
 
 /// A bucket the robot reads what is there already from (`--from`, REG-9): a folder, by its path or
-/// a `file://` URL. Over the network once music2 has its download module.
+/// a `file://` URL, or a web address read through music2's downloads (`crate::fetch`: `https://`,
+/// or `http://` to this computer only, NET-3). It must reach the bucket itself, never a cache in
+/// front of it (REG-7).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Bucket {
     Folder(PathBuf),
+    /// The bucket's address, with no `/` at its end.
+    Web(String),
+}
+
+/// The most a file read from a bucket over the network may be, and the longest it may take, by
+/// its kind (NET-4): `catalog.json` is a line, a version's facts list its blobs and items, and a
+/// catalog lists every pack's.
+fn web_limits(path: &str) -> (u64, Duration) {
+    match path {
+        reg::POINTER => (64 << 10, Duration::from_secs(30)),
+        p if p.starts_with("versions/") => (64 << 20, Duration::from_secs(120)),
+        p if p.starts_with("catalog/") => (512 << 20, Duration::from_secs(600)),
+        _ => (16 << 30, Duration::from_secs(3600)),
+    }
 }
 
 impl Bucket {
-    /// A bucket's address: `file:///…` (a whole path) or a folder's path. Why not, in words.
+    /// A bucket's address: `https://…` (`http://` only to this computer), `file:///…` (a whole
+    /// path) or a folder's path. Why not, in words.
     pub fn parse(url: &str) -> Result<Bucket, String> {
         if let Some(path) = url.strip_prefix("file://") {
             return match Path::new(path).is_absolute() {
@@ -45,19 +62,17 @@ impl Bucket {
             };
         }
         if url.starts_with("https://") || url.starts_with("http://") {
-            return Err(format!(
-                "`{url}`: reading a bucket over the network needs music2's download module, which this m2 doesn't have yet. Copy \
-                 the bucket's versions/ into a folder and give its path"
-            ));
+            crate::fetch::check(url).map_err(|e| format!("`{url}`: {e}"))?;
+            return Ok(Bucket::Web(url.trim_end_matches('/').to_string()));
         }
         match url.contains("://") {
-            true => Err(format!("`{url}` isn't a bucket's address: give a folder's path or file:///…")),
+            true => Err(format!("`{url}` isn't a bucket's address: give https://…, a folder's path or file:///…")),
             false => Ok(Bucket::Folder(url.into())),
         }
     }
 
     /// The file at `path` in the bucket (one of [`reg::blob_path`], [`reg::facts_path`] …); none
-    /// when it isn't there.
+    /// when it isn't there (over the network: the server answers 404 or 410).
     pub fn read(&self, path: &str) -> Result<Option<Vec<u8>>, String> {
         match self {
             Bucket::Folder(dir) => match std::fs::read(dir.join(path)) {
@@ -65,13 +80,27 @@ impl Bucket {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(e) => Err(format!("{} can't be read: {e}", dir.join(path).display())),
             },
+            Bucket::Web(base) => {
+                let (limit, within) = web_limits(path);
+                let expect = crate::fetch::Expect { size: None, sha256: None, limit, within };
+                match crate::fetch::get(&format!("{base}/{path}"), &expect, &std::sync::atomic::AtomicBool::new(false)) {
+                    Ok(bytes) => Ok(Some(bytes)),
+                    Err(crate::fetch::Error::Status { code: 404 | 410, .. }) => Ok(None),
+                    Err(e) => Err(format!("{path} couldn't be read from the bucket: {e}")),
+                }
+            }
         }
     }
 
-    /// Whether the bucket has the file at `path`.
+    /// Whether the bucket has the file at `path`. Over the network a blob is never asked for (it
+    /// could be gigabytes): it is taken as not there, so it is put again, and the copy into the
+    /// bucket skips one there already. A file that can't be read is taken as not there, so the
+    /// most it costs is building a version again.
     pub fn has(&self, path: &str) -> bool {
         match self {
             Bucket::Folder(dir) => dir.join(path).is_file(),
+            Bucket::Web(_) if path.starts_with("blobs/") => false,
+            Bucket::Web(_) => self.read(path).is_ok_and(|b| b.is_some()),
         }
     }
 }

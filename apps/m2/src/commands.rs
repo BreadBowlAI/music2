@@ -356,8 +356,8 @@ pub const COMMANDS: &[Command] = &[
                 `--out` by hash, then the catalog. A version that fails is left out and stays pending (exit 1)",
         more: "The registry is a folder: one file a pack, `packs/@owner/name.toml`, `tags.txt`, the words a pack's tags \
                may use, and `removed.toml`, the versions taken down, which only music2's people list. `--from` is the \
-               bucket as it is: what it has isn't built again, and what it publishes never changes (a folder or \
-               `file:///…` for now). `--made` is the catalog's time, `2026-10-30T12:00:00Z` (now, when it is left out), so \
+               bucket as it is: what it has isn't built again, and what it publishes never changes: `https://…` (the \
+               bucket's own address, never a cache), a folder or `file:///…`. `--made` is the catalog's time, `2026-10-30T12:00:00Z` (now, when it is left out), so \
                one registry and one time always make the same bytes. `--to-delete` writes the bucket paths of taken-down \
                versions' files that no other version uses, one a line. See [Making a pack](making-a-pack.md#listing-it-in-the-registry).",
     },

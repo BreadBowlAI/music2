@@ -131,8 +131,8 @@ fn the_robot_runs_from_the_command_line() {
     let fresh = t.0.join("fresh");
     let out = t.m2(&["registry", "pending", r, "--out", fresh.to_str().unwrap(), "--from", &from]);
     assert!(out.status.success() && out.stdout.is_empty(), "the bucket has it: {}", said(&out));
-    let out = t.m2(&["registry", "build", r, "--sources", s, "--out", fresh.to_str().unwrap(), "--from", "https://packs.example.com"]);
-    assert!(!out.status.success() && said(&out).contains("needs music2's download module"), "{}", said(&out));
+    let out = t.m2(&["registry", "build", r, "--sources", s, "--out", fresh.to_str().unwrap(), "--from", "http://packs.example.com"]);
+    assert!(!out.status.success() && said(&out).contains("--from:"), "plain http only to this computer (NET-3): {}", said(&out));
     let out = failed(t.m2(&["registry", "build", r, "--sources", s, "--out", fresh.to_str().unwrap(), "--made", "today"]));
     assert!(out.contains("`today` isn't a time"), "{out}");
 
@@ -173,4 +173,91 @@ fn a_pack_unpacked_where_the_ci_unpacks_it_gets_its_preview() {
     tar(&["xzf", "felt-piano-0.1.0.tar.gz", "-C", &to, "--no-same-owner", "--no-same-permissions"]);
     let out = ok(t.m2(&["registry", "build", "registry", "--sources", "sources", "--out", "bucket", "--made", "2026-10-30T12:00:00Z"]));
     assert!(out.contains("built @alice/felt-piano 0.1.0: 1 item (1 with a preview)"), "{out}");
+}
+
+/// Serve the files under `root` over http on this computer, as a bucket's host would: a GET of a
+/// path there is its bytes, anything else 404. The port.
+fn serve(root: PathBuf) -> u16 {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap() == 0 || h == "\r\n" {
+                        break;
+                    }
+                }
+                let path = line.split(' ').nth(1).unwrap_or("/").trim_start_matches('/').to_string();
+                let file = root.join(&path);
+                let body = (!path.contains("..")).then(|| std::fs::read(&file).ok()).flatten();
+                let mut stream = stream;
+                let (status, body) = match body {
+                    Some(b) => ("200 OK", b),
+                    None => ("404 Not Found", b"not here".to_vec()),
+                };
+                let head = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(&body));
+            });
+        }
+    });
+    port
+}
+
+// REG-9, REG-5: a bucket is read over http too (on this computer, NET-3; https elsewhere): what it
+// has isn't pending, a build from it builds nothing it has and makes the same catalog, and what it
+// publishes holds: a published version listed with another hash refuses the build.
+#[test]
+fn a_bucket_is_read_over_http() {
+    let t = Temp::new("http");
+    let (reg, src, bucket) = (t.0.join("registry"), t.0.join("sources"), t.0.join("bucket"));
+    write(&reg.join("tags.txt"), "drums\n");
+    std::fs::create_dir_all(reg.join("packs")).unwrap();
+    let drums = t.0.join("drums");
+    write(
+        &drums.join("m2pkg.toml"),
+        "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\nrepository = \"https://github.com/alice/drums\"\n",
+    );
+    write(&drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n");
+    short_wav(&drums.join("samples/kicks/Boom.wav"));
+    let (r, s, b) = (reg.to_str().unwrap(), src.to_str().unwrap(), bucket.to_str().unwrap());
+    let source = "https://github.com/alice/drums/releases/download/v1.0.0/drums-1.0.0.tar.gz";
+    ok(t.m2(&["registry", "add", r, drums.to_str().unwrap(), "--source", source]));
+    copy(&drums, &src.join(Listing::of(&drums).unwrap().hash().hex()).join("drums"));
+    ok(t.m2(&["registry", "build", r, "--sources", s, "--out", b, "--made", "2026-10-30T12:00:00Z"]));
+
+    let from = format!("http://127.0.0.1:{}", serve(bucket.clone()));
+    let fresh = t.0.join("fresh");
+    let f = fresh.to_str().unwrap();
+    let out = t.m2(&["registry", "pending", r, "--out", f, "--from", &from]);
+    assert!(out.status.success() && out.stdout.is_empty(), "the bucket has it: {}", said(&out));
+    ok(t.m2(&["registry", "build", r, "--sources", s, "--out", f, "--from", &from, "--made", "2026-10-30T12:00:00Z"]));
+    assert_eq!(std::fs::read(fresh.join("catalog.json")).unwrap(), std::fs::read(bucket.join("catalog.json")).unwrap(), "the same catalog");
+    assert!(!fresh.join("blobs").exists() && !fresh.join("versions").exists(), "nothing the bucket has is built again");
+
+    let file = reg.join("packs/@alice/drums.toml");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let hash = text.lines().find(|l| l.starts_with("hash")).unwrap();
+    std::fs::write(&file, text.replace(hash, "hash = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\""))
+        .unwrap();
+    let out = failed(t.m2(&[
+        "registry",
+        "build",
+        r,
+        "--sources",
+        s,
+        "--out",
+        t.0.join("other").to_str().unwrap(),
+        "--from",
+        &from,
+        "--made",
+        "2026-10-30T12:00:00Z",
+    ]));
+    assert!(out.contains("@alice/drums 1.0.0 is published with the hash"), "{out}");
 }
