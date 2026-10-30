@@ -745,7 +745,8 @@ fn run() -> Result<()> {
                 let mut app = app::reach(&dir, &holder, "")?;
                 let target = import_target(&reader(&dir)?, &args)?;
                 let v = app.add_sample(serde_json::json!({"id": id, "to": target}))?;
-                return Ok(said_added(&v, &target));
+                said_added(&v, &target);
+                return Ok(());
             }
             let mut s = session(&dir)?;
             let target = import_target(&s, &args)?;
