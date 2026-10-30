@@ -240,8 +240,8 @@ impl Graph {
     /// Add sample `sample` from the library to the open song (LIB-7): its file copied here, as an
     /// import's is ([`Graph::stage`]), then one actor job names it into `assets/` (or the same bytes
     /// there are used again), writes its note beside it (create-only, before the clip names it) and
-    /// places its clip at `target`, with Follow tempo for a loop whose tempo differs from the
-    /// song's there: one Tx, one undo step, "adding kick.wav" (or an agent's words). Answers the
+    /// places its clip at `target`, with Follow tempo for a loop whose tempo is known: one Tx, one
+    /// undo step, "adding kick.wav" (or an agent's words). Answers the
     /// edit with `made`, `tracks`, `asset`, `reused`, `noted` (the note was written now) and
     /// `follows` (the loop's tempo it follows, or null).
     pub fn add_sample(&self, token: u64, sample: m2_editor::library::Sample, target: Target) -> Result<Value> {
@@ -255,14 +255,16 @@ impl Graph {
         let done = Graph::stage(&dir, vec![Source::Path(sample.file.clone())]).map(|mut s| s.remove(0)).and_then(|staged| {
             self.call(move |a| {
                 a.edit_and(token, |s| {
+                    // Where it goes, first: a refusal leaves no file and no note (D18).
+                    import::check_target(s, &target)?;
                     // Into the song only now, after this job's check (AGENT-3); its note before
                     // the clip names it (WRITE-1).
-                    let file = staged.name_noted()?;
+                    let file = staged.name()?;
                     let noted =
                         m2_editor::library::samples::write_note(&dir, file.asset.as_str(), &m2_editor::library::samples::note(&sample))
                             .map_err(|e| m2_editor::EditError::Io(format!("couldn't write the note of {}: {e}", file.asset)))?;
                     let song_bpm = s.accepted().compiled.data.tempo().bpm_at(target.beat().max(0.0));
-                    let follows = m2_editor::library::samples::follow_at(&sample, song_bpm);
+                    let follows = m2_editor::library::samples::follows(&sample);
                     let p = import::place_with(s, std::slice::from_ref(&file), &target, &[follows])?;
                     let name = words.unwrap_or_else(|| format!("adding {}", file.asset.as_str()));
                     s.name_step(p.edited.revision, &name, structural);
@@ -312,7 +314,7 @@ impl Graph {
         let done = Graph::stage(&dir, vec![Source::Path(sample.file.clone())]).map(|mut s| s.remove(0)).and_then(|staged| {
             self.call(move |a| {
                 a.edit_and(token, |s| {
-                    let file = staged.name_noted()?;
+                    let file = staged.name()?;
                     m2_editor::library::samples::write_note(&dir, file.asset.as_str(), &m2_editor::library::samples::note(&sample))
                         .map_err(|e| m2_editor::EditError::Io(format!("couldn't write the note of {}: {e}", file.asset)))?;
                     let e = m2_editor::sampler::set_sample(s, at, &call, &file)?;

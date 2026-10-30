@@ -3,9 +3,11 @@
 //!
 //! - `GET /api/library?q=<words>[&fits=<beat>]`: `{items: [...], folders: {indexing, not_wav}}`,
 //!   the items the search finds, best first; with `fits`, only loops that fit the open song at
-//!   that beat (LIB-1).
-//! - `GET /api/library/preview?id=<id>`: the item's preview, a WAV; a sample's own file, only for
-//!   one the library lists (LIB-6); 404 with `{error}` in words when it has none (a plugin).
+//!   that beat (LIB-1). `indexing` counts the indexes of samples running (LIB-5): ask again when
+//!   it is 0 to see what they found.
+//! - `GET /api/library/preview?id=<id>`: the item's preview, a WAV; a sample's own file, streamed,
+//!   only for one the library lists, as it was indexed, and up to 64 MB (LIB-6); 404 with
+//!   `{error}` in words when it has none (a plugin).
 //! - `GET /api/library/folders`, `POST /api/library/folders {add | remove}`: your sample folders
 //!   (LIB-5), each with how many samples it has so far and whether it is being indexed.
 //! - `POST /api/library/sample {session, id, to}` or `{session, id, at, call}`: add a sample to the
@@ -19,6 +21,7 @@ use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use m2_editor::import::Target;
+use m2_editor::library::samples;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -61,11 +64,9 @@ async fn search(State(s): S, Query(q): Query<SearchQuery>) -> Result<Json<Value>
         if let Some(beat) = q.fits {
             query.fits = Some(s.graph.fits(beat)?.ok_or_else(|| anyhow::anyhow!("Fits my song needs a song open."))?);
         }
-        let found: Vec<Value> =
-            m2_editor::library::search(&items, &query).into_iter().map(serde_json::to_value).collect::<Result<_, _>>()?;
-        let folders = s.sample_folders_shown();
-        let indexing = folders.iter().filter(|f| f.indexing).count();
-        let not_wav: usize = folders.iter().map(|f| f.not_wav).sum();
+        let found: Vec<Value> = items.search(&query).into_iter().map(serde_json::to_value).collect::<Result<_, _>>()?;
+        let indexing = s.sample_index.indexing();
+        let not_wav: usize = s.sample_folders_shown().iter().map(|f| f.not_wav).sum();
         Ok::<_, anyhow::Error>(json!({ "items": found, "folders": {"indexing": indexing, "not_wav": not_wav} }))
     })
     .await?;
@@ -77,25 +78,66 @@ struct PreviewQuery {
     id: String,
 }
 
-async fn preview(State(s): S, Query(q): Query<PreviewQuery>) -> Response {
+/// What a preview answers: a rendered WAV, or a sample's own file, as it was indexed.
+enum Previewed {
+    Wav(Vec<u8>),
+    File(PathBuf, m2_os::fs::Stamp),
+}
+
+async fn preview(State(s): S, Query(q): Query<PreviewQuery>, headers: axum::http::HeaderMap) -> Response {
     let made = crate::caller::blocking(move || {
         // A sample's preview is its file, only for one the library lists (LIB-6).
         if q.id.starts_with("sample:") {
             let item = s.listed_sample(&q.id)?;
-            let file = &item.sample.as_ref().expect("a sample").file;
-            return std::fs::read(file).map_err(|e| anyhow::anyhow!("{} can't be read: {e}", item.label));
+            let sample = item.sample.expect("a sample");
+            let stamp = samples::still_plain(&sample).map_err(|e| anyhow::anyhow!("{} can't be played: {e}.", item.label))?;
+            if stamp.size > samples::PREVIEW_BYTES {
+                anyhow::bail!(
+                    "{} is {} MB, too long to preview here (up to {} MB): add it to the song to hear it.",
+                    item.label,
+                    stamp.size / 1_000_000,
+                    samples::PREVIEW_BYTES / 1_000_000
+                );
+            }
+            return Ok(Previewed::File(sample.file, stamp));
         }
         let folders = s.library_folders();
         let cache = folders.previews.ok_or_else(|| anyhow::anyhow!("This app keeps no previews: it has no cache folder."))?;
         let p = crate::library::preview(&s.previews, &q.id, &s.preview_packages()?, folders.presets.as_deref(), &cache)?;
-        Ok::<_, anyhow::Error>(p.wav)
+        Ok::<_, anyhow::Error>(Previewed::Wav(p.wav))
     })
     .await;
+    let refused = |status, e: String| (status, Json(json!({ "error": e }))).into_response();
     match made {
-        Ok(Ok(bytes)) => ([(header::CONTENT_TYPE, "audio/wav"), (header::CACHE_CONTROL, "no-store")], bytes).into_response(),
-        Ok(Err(e)) => (StatusCode::NOT_FOUND, Json(json!({ "error": format!("{e:#}") }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Ok(Ok(Previewed::Wav(bytes))) => {
+            ([(header::CONTENT_TYPE, "audio/wav"), (header::CACHE_CONTROL, "no-store")], bytes).into_response()
+        }
+        Ok(Ok(Previewed::File(file, stamp))) => match stream(&file, stamp, &headers).await {
+            Ok(r) => r,
+            Err(e) => refused(StatusCode::NOT_FOUND, format!("{e:#}")),
+        },
+        Ok(Err(e)) => refused(StatusCode::NOT_FOUND, format!("{e:#}")),
+        Err(e) => refused(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// Stream `file` (LIB-6), read in pieces as it is sent, never whole, with its length (and a range
+/// asked for). The file it opened must be the plain file stamped `stamp` when it was checked: one
+/// a link was put in place of since is refused.
+async fn stream(file: &std::path::Path, stamp: m2_os::fs::Stamp, headers: &axum::http::HeaderMap) -> anyhow::Result<Response> {
+    let mut ask = axum::http::Request::builder();
+    if let Some(range) = headers.get(header::RANGE) {
+        ask = ask.header(header::RANGE, range);
+    }
+    let served = tower_http::services::ServeFile::new(file).try_call(ask.body(axum::body::Body::empty())?).await?;
+    // It opened the file by its path: what is there now must still be the file checked.
+    if m2_os::fs::Stamp::at(file) != Some(stamp) {
+        anyhow::bail!("{} changed as it was asked for: a sample is only ever read where it was found.", file.display());
+    }
+    let (mut parts, body) = served.into_parts();
+    parts.headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("audio/wav"));
+    parts.headers.insert(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+    Ok(Response::from_parts(parts, axum::body::Body::new(body)))
 }
 
 async fn folders_get(State(s): S) -> Result<Json<Value>, ApiError> {
@@ -112,28 +154,65 @@ struct FoldersSet {
 }
 
 /// Add a folder of yours (LIB-5), which starts its index in the background, or remove one; this
-/// computer's settings keep them. A folder added must be one, and not one already there.
+/// computer's settings keep them. A folder added is kept by its real path ([`folder_to_add`]).
+/// One removed stops its index and loses its cache file.
 async fn folders_set(State(s): S, Json(r): Json<FoldersSet>) -> Result<Json<Value>, ApiError> {
     let shown = crate::routes::blocking(move || {
         let settings = s.settings().ok_or_else(|| anyhow::anyhow!("This app keeps no settings, so it keeps no folders of samples."))?;
         if let Some(add) = &r.add {
-            if !add.is_absolute() || !add.is_dir() {
-                anyhow::bail!("{} isn't a folder on this computer.", add.display());
-            }
+            let home = m2_os::dirs::home();
+            let add = folder_to_add(add, &s.sample_folders(), home.as_deref())?;
             settings.change(|k| {
-                if !k.samples.contains(add) {
+                if !k.samples.contains(&add) {
                     k.samples.push(add.clone());
                 }
             })?;
         }
         if let Some(remove) = &r.remove {
-            settings.change(|k| k.samples.retain(|f| f != remove))?;
-            s.sample_index.forget(remove);
+            let real = std::fs::canonicalize(remove).ok();
+            let gone: Vec<PathBuf> = s.sample_folders().into_iter().filter(|f| f == remove || Some(f) == real.as_ref()).collect();
+            settings.change(|k| k.samples.retain(|f| !gone.contains(f)))?;
+            let cache = s.library_folders().samples;
+            for f in &gone {
+                s.sample_index.forget(f);
+                if let Some(cache) = &cache {
+                    samples::forget(cache, f);
+                }
+            }
         }
         Ok(s.sample_folders_shown())
     })
     .await?;
     Ok(Json(json!({ "folders": shown })))
+}
+
+/// The folder `asked` as one of yours is kept (LIB-5): by its real path (links and `..` resolved),
+/// a folder on this computer; not `/` nor your home folder `home` itself, whose every file would be
+/// looked through; not inside or around one of `yours` already, whose files it would list again.
+/// Why not, in words.
+pub(crate) fn folder_to_add(asked: &std::path::Path, yours: &[PathBuf], home: Option<&std::path::Path>) -> anyhow::Result<PathBuf> {
+    let shown = asked.display();
+    let real = match std::fs::canonicalize(asked) {
+        Ok(r) if asked.is_absolute() && r.is_dir() => r,
+        _ => anyhow::bail!("{shown} isn't a folder on this computer."),
+    };
+    if real.parent().is_none() {
+        anyhow::bail!("{shown} is the whole disk: choose the folder your samples are in.");
+    }
+    if home.and_then(|h| std::fs::canonicalize(h).ok()).is_some_and(|h| h == real) {
+        anyhow::bail!(
+            "{shown} is your home folder: choose the folder your samples are in, so music2 doesn't look through every file you have."
+        );
+    }
+    for f in yours.iter().filter(|f| **f != real) {
+        if real.starts_with(f) {
+            anyhow::bail!("{shown} is inside {}, which is one of your folders already.", f.display());
+        }
+        if f.starts_with(&real) {
+            anyhow::bail!("{shown} holds {}, one of your folders: remove that one first.", f.display());
+        }
+    }
+    Ok(real)
 }
 
 #[derive(Deserialize)]
@@ -159,6 +238,8 @@ async fn add_sample(State(s): S, Json(r): Json<SampleReq>) -> Result<Json<Value>
     let result = crate::routes::blocking(move || {
         let item = state.listed_sample(&r.id)?;
         let sample = item.sample.expect("a sample");
+        // Copied only as it was found: a plain file, never a link put there since (LIB-6).
+        samples::still_plain(&sample).map_err(|e| anyhow::anyhow!("{} can't be added: {e}.", item.label))?;
         match (r.to, r.at, r.call) {
             (Some(to), None, None) => state.graph.add_sample(r.session, sample, to),
             (None, Some(at), Some(call)) => state.graph.sample_to_sampler(r.session, at, call, sample),

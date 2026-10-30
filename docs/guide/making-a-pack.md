@@ -120,7 +120,7 @@ tags = ["lofi"]
 | `key` | `Am`, `F#`, `Bb minor`, `C` |
 | `tags` | more words to find it by |
 
-A file's own table wins over its folder's, and a deeper folder's over a shallower one's. What a table leaves out is guessed from the file's name (`dusty keys 90 Am.wav` says a tempo and a key). What can be measured (length, channels, loudness) is never written: music2 reads it from the file. Only the files `samples.toml` names are samples; the rest of `samples/` is your instruments' recordings. A pack may hold samples alone, with no instrument. Only WAV files for now.
+A file's own table wins over its folder's, and a deeper folder's over a shallower one's. What a table leaves out is guessed from the file's name (`dusty keys 90 Am.wav` says a tempo and a key); `key = "none"` or `instrument = "none"` takes back a guess that is wrong (a drum loop whose name reads as a key). What can be measured (length, channels, loudness) is never written: music2 reads it from the file. Only the files `samples.toml` names are samples; the rest of `samples/` is your instruments' recordings. A pack may hold samples alone, with no instrument. Only WAV files for now.
 
 ## Trying it, checking it, installing it
 

@@ -176,9 +176,18 @@ function Panel({ graph }: { graph: GraphState }) {
   // The installed plugins are asked for as it opens, as + Track's list asks.
   useEffect(() => wantPlugins(), []);
   useLayoutEffect(() => field.current?.focus(), []);
-  // The search, as typing rests, and again when the plugin list comes.
-  const { found, now } = useSearch(query, plugins, 60, fits);
+  // The search, as typing rests, and again when the plugin list comes, and while samples are being
+  // indexed (LIB-5: a search never waits for them), until they are.
+  const [round, setRound] = useState(0);
+  const again = useMemo(() => ({ plugins, round }), [plugins, round]);
+  const { found, now } = useSearch(query, again, 60, fits);
   const items = useMemo(() => found?.items ?? [], [found]);
+  const indexing = (found?.folders?.indexing ?? 0) > 0;
+  useEffect(() => {
+    if (!indexing) return;
+    const t = window.setTimeout(() => setRound((r) => r + 1), 1000);
+    return () => window.clearTimeout(t);
+  }, [indexing, found]);
   // Other words: their best hit is selected, wherever its group is, and nothing is picked yet. The
   // same words answered again (the plugin list came): the row selected stays, while it is there.
   const shownFor = useRef<string | null>(null);
@@ -204,13 +213,40 @@ function Panel({ graph }: { graph: GraphState }) {
   };
   const typedWord = (w: string) => query.toLowerCase().split(/\s+/).includes(w);
   const showFolders = () => void sampleFolders().then(setFolders, (e) => setSaid(e instanceof Error ? e.message : String(e)));
+  // A folder being looked through is asked about again until it is done, and the search with it.
+  const looking = folders?.some((f) => f.indexing) ?? false;
+  useEffect(() => {
+    if (!looking) return;
+    const t = window.setTimeout(() => {
+      void sampleFolders().then(
+        (f) => {
+          if (!alive.current) return;
+          setFolders((shown) => (shown ? f : shown));
+          if (!f.some((x) => x.indexing)) setRound((r) => r + 1);
+        },
+        () => {},
+      );
+    }, 1000);
+    return () => window.clearTimeout(t);
+  }, [looking, folders]);
+  // A folder added or removed: the search is asked again, and again while it is looked through.
   const addFolder = () =>
     void addSampleFolder().then(
-      (f) => f && setFolders(f),
+      (f) => {
+        if (!f) return;
+        setFolders(f);
+        setRound((r) => r + 1);
+      },
       (e) => setSaid(e instanceof Error ? e.message : String(e)),
     );
   const removeFolder = (path: string) =>
-    void sampleFolders({ remove: path }).then(setFolders, (e) => setSaid(e instanceof Error ? e.message : String(e)));
+    void sampleFolders({ remove: path }).then(
+      (f) => {
+        setFolders(f);
+        setRound((r) => r + 1);
+      },
+      (e) => setSaid(e instanceof Error ? e.message : String(e)),
+    );
 
   const groups = useMemo(() => GROUPS.map((g) => ({ ...g, items: items.filter((i) => i.kind === g.kind) })).filter((g) => g.items.length), [items]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
@@ -350,7 +386,11 @@ function Panel({ graph }: { graph: GraphState }) {
                 {f.path}
               </span>
               <span className="shrink-0 text-fg-muted">
-                {f.missing ? "not there" : f.indexing ? "looking…" : `${f.samples} samples${f.not_wav ? ` · ${f.not_wav} skipped: WAV only for now` : ""}`}
+                {f.missing
+                  ? "not there"
+                  : f.indexing
+                    ? "looking…"
+                    : `${f.samples} samples${f.unreadable ? ` · ${f.unreadable} don't read` : ""}${f.not_wav ? ` · ${f.not_wav} skipped: WAV only for now` : ""}`}
               </span>
               <button
                 type="button"
@@ -384,7 +424,13 @@ function Panel({ graph }: { graph: GraphState }) {
           <EmptyState bare className="mx-auto my-6">
             <div>
               <p>{query.trim() ? `Nothing matches “${query.trim()}”` : "Nothing to add"}</p>
-              <p className="mt-1 text-xs">{fits !== null ? "Fits my song keeps only loops near the song's tempo, in its key." : "Try a word like “pad”, “drums”, “kick” or “echo”."}</p>
+              <p className="mt-1 text-xs">
+                {indexing
+                  ? "Looking through your samples…"
+                  : fits !== null
+                    ? "Fits my song keeps only loops near the song's tempo, in its key."
+                    : "Try a word like “pad”, “drums”, “kick” or “echo”."}
+              </p>
             </div>
           </EmptyState>
         )}
@@ -444,7 +490,12 @@ function Panel({ graph }: { graph: GraphState }) {
       </div>
       <div className="h-ctl shrink-0 flex items-center gap-3 px-3 border-t border-line bg-chrome text-xs text-fg-muted">
         <span data-spotlight-said className="flex-1 min-w-0 truncate">
-          {said ?? (current ? `Enter ${enterWords(current, graph)}${current.preview ? " · Space plays it" : " · no preview"}` : "Type to find")}
+          {said ??
+            (current
+              ? `Enter ${enterWords(current, graph)}${current.preview ? " · Space plays it" : " · no preview"}`
+              : indexing
+                ? "Looking through your samples…"
+                : "Type to find")}
         </span>
         <span className="shrink-0">↑↓ · Esc</span>
       </div>

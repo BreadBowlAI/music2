@@ -153,7 +153,13 @@ export async function addSample(item: LibraryItem, to: Target | { kind: "sampler
     useClipSelection.getState().only(refs);
     for (const t of done.tracks ?? []) trackMade(t.module, done.made?.find((m) => m.module === t.module)?.lane ?? "clips");
     const onto = done.tracks?.[0] ? ` on a new track, ${done.tracks[0].label}` : "";
-    const follows = done.follows ? `. Follow tempo is on: its ${Math.round(done.follows * 10) / 10} bpm plays at the song's ${Math.round((done.song_bpm ?? 0) * 10) / 10}` : "";
+    const bpm = (n: number) => Math.round(n * 10) / 10;
+    // LIB-7: every loop whose tempo is known follows the song's, at the song's own tempo too.
+    const follows = !done.follows
+      ? ""
+      : bpm(done.follows) === bpm(done.song_bpm ?? 0)
+        ? ". Follow tempo is on, so it keeps time if the song's tempo changes"
+        : `. Follow tempo is on: its ${bpm(done.follows)} bpm plays at the song's ${bpm(done.song_bpm ?? 0)}`;
     toast(`Added ${item.label}${onto}${follows}`, undoAction(graph.session, done.step));
   } catch (error) {
     toast(`Nothing was added to the song: ${words(error)}`);

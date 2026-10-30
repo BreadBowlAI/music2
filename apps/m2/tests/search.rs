@@ -20,7 +20,26 @@ impl Home {
 
 impl Drop for Home {
     fn drop(&mut self) {
+        // An installed pack's files and folders are read-only (PACK-6).
+        writable(&self.0);
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Make everything under `path` writable again, links not followed.
+fn writable(path: &Path) {
+    let Ok(m) = std::fs::symlink_metadata(path) else { return };
+    if m.file_type().is_symlink() {
+        return;
+    }
+    let mut p = m.permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    p.set_readonly(false);
+    let _ = std::fs::set_permissions(path, p);
+    if m.is_dir() {
+        for e in std::fs::read_dir(path).into_iter().flatten().flatten() {
+            writable(&e.path());
+        }
     }
 }
 
@@ -191,4 +210,59 @@ fn m2_adds_a_sample_with_the_app_closed() {
     assert_eq!(note["from"]["file"], "samples/kit/kick.wav");
     let o = m2_in(&home.0, &["add-sample", s, "sample:folder:/etc/hosts"]);
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("There is no sample sample:folder:/etc/hosts"), "{o:?}");
+}
+
+/// A pack of samples alone, `@alice/loops` at `version`, in `dir`: a 90 bpm loop of keys.
+fn loops_pack(dir: &Path, version: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    let toml = format!(
+        "[package]\nname = \"@alice/loops\"\nversion = \"{version}\"\nlicense = \"CC-BY-4.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n"
+    );
+    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
+    std::fs::write(dir.join("samples.toml"), "[folder.\"loops\"]\n").unwrap();
+    tone(&dir.join("samples/loops/groove 90.wav"), 2.7);
+}
+
+/// The first song in `home`, taking `@alice/loops` by `line` (its manifest's right side).
+fn song_taking(home: &Path, line: &str) -> std::path::PathBuf {
+    let song = home.join("song");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
+    let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap();
+    std::fs::write(song.join("music2.toml"), format!("{manifest}\"@alice/loops\" = {line}\n")).unwrap();
+    song
+}
+
+// LIB-7 (review D7): with the app closed, m2 add-sample finds a sample in the library the song's own
+// build lists: a pack it takes from a folder, and a store's pack at the version its lock holds, not
+// the newest installed; the note says that version.
+#[test]
+fn m2_adds_a_songs_own_packs_sample_at_its_locked_version() {
+    let home = Home::new("own-packs");
+    let pack = home.0.join("mypack");
+    loops_pack(&pack, "0.3.0");
+    let song = song_taking(&home.0, &format!("{{ path = {} }}", serde_json::to_string(pack.to_str().unwrap()).unwrap()));
+    let id = "sample:@alice/loops:samples/loops/groove 90.wav";
+    let o = m2_in(&home.0, &["add-sample", song.to_str().unwrap(), id]);
+    assert!(o.status.success(), "{o:?}");
+    let note: serde_json::Value = serde_json::from_slice(&std::fs::read(song.join("assets/groove 90.wav.json")).unwrap()).unwrap();
+    assert_eq!(note["from"]["version"], "0.3.0", "{note}");
+
+    // From the store: 1.2.0 locked, 1.3.0 installed since.
+    let home = Home::new("locked");
+    for v in ["1.2.0", "1.3.0"] {
+        let dir = home.0.join(format!("pack-{v}"));
+        loops_pack(&dir, v);
+        if v == "1.3.0" {
+            let s = song_taking(&home.0, "\"1\"");
+            let o = m2_in(&home.0, &["pack", "lock", s.to_str().unwrap()]);
+            assert!(o.status.success(), "{o:?}");
+        }
+        let o = m2_in(&home.0, &["pack", "install", dir.to_str().unwrap()]);
+        assert!(o.status.success(), "{o:?}");
+    }
+    let song = home.0.join("song");
+    let o = m2_in(&home.0, &["add-sample", song.to_str().unwrap(), id]);
+    assert!(o.status.success(), "{o:?}");
+    let note: serde_json::Value = serde_json::from_slice(&std::fs::read(song.join("assets/groove 90.wav.json")).unwrap()).unwrap();
+    assert_eq!(note["from"]["version"], "1.2.0", "the song's own version: {note}");
 }

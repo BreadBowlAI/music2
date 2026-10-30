@@ -759,23 +759,19 @@ fn run() -> Result<()> {
             let mut s = session(&dir)?;
             let target = import_target(&s, &args)?;
             let words = |e: m2_editor::EditError| anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
-            let all = search::closed()?;
-            let item = all
-                .into_iter()
-                .find(|i| i.id == id && i.sample.is_some())
-                .ok_or_else(|| anyhow!("There is no sample {id} in the library: `m2 search --kind sample` lists them."))?;
-            let sample = item.sample.expect("a sample");
+            let sample = search::song_sample(&s, &id)?;
+            m2_editor::library::samples::still_plain(&sample).map_err(|e| anyhow!("{id} can't be added: {e}."))?;
             let staged =
                 m2_editor::import::stage(&dir, m2_editor::import::Source::Path(sample.file.clone()), &mut |_| {}).map_err(words)?;
-            let file = staged.name_noted().map_err(words)?;
+            let file = staged.name().map_err(words)?;
             let noted = m2_editor::library::samples::write_note(&dir, file.asset.as_str(), &m2_editor::library::samples::note(&sample))?;
             let song_bpm = s.accepted().compiled.data.tempo().bpm_at(target.beat());
-            let follows = m2_editor::library::samples::follow_at(&sample, song_bpm);
+            let follows = m2_editor::library::samples::follows(&sample);
             let placed = m2_editor::import::place_with(&mut s, std::slice::from_ref(&file), &target, &[follows]).map_err(words)?;
             let tracks: Vec<serde_json::Value> = placed.tracks.iter().map(|(m, l)| serde_json::json!({"module": m, "label": l})).collect();
             let v = serde_json::json!({
                 "asset": file.asset.as_str(), "reused": file.reused, "noted": noted, "follows": follows,
-                "tracks": tracks, "revision": placed.edited.revision,
+                "tracks": tracks, "revision": placed.edited.revision, "song_bpm": song_bpm,
             });
             said_added(&v, &target);
         }

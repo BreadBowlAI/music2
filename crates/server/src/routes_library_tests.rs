@@ -354,11 +354,20 @@ fn post(url: &str, path: &str, key: &str, body: &Value) -> (u16, Value) {
     (status, text.split_once("\r\n\r\n").map_or(Value::Null, |(_, b)| serde_json::from_str(b).unwrap_or(Value::Null)))
 }
 
-/// The items of `GET /api/library?<query>`, as JSON.
+/// The items of `GET /api/library?<query>`, as JSON, once the indexes of samples its answer says
+/// are running are done (LIB-5: a search never waits for them; it is asked again, as the page and
+/// `m2 search` do).
 fn items(url: &str, query: &str) -> Vec<Value> {
-    let (status, _, body) = get(url, &format!("/api/library?{query}"));
-    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
-    json(&body)["items"].as_array().unwrap().clone()
+    for _ in 0..600 {
+        let (status, _, body) = get(url, &format!("/api/library?{query}"));
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+        let answer = json(&body);
+        if answer["folders"]["indexing"] == json!(0) {
+            return answer["items"].as_array().unwrap().clone();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("the indexes of samples never ended");
 }
 
 fn ids(items: &[Value]) -> Vec<String> {
@@ -571,6 +580,7 @@ fn a_folder_is_indexed_in_the_background() {
     let kept: Value = serde_json::from_str(&std::fs::read_to_string(scratch.0.join("settings.json")).unwrap()).unwrap();
     assert_eq!(kept["samples"], json!([mine]));
     assert!(running.state.sample_index.settled(std::time::Duration::from_secs(60)), "indexed");
+    items(&running.url, "q=sample");
     let (_, _, body) = get(&running.url, "/api/library?q=sample");
     let found = json(&body);
     let labels: Vec<&str> =
@@ -592,4 +602,250 @@ fn a_folder_is_indexed_in_the_background() {
 
 fn found_yours(url: &str) -> Vec<String> {
     items(url, "q=sample").iter().filter(|i| i["package"] == "yours").map(|i| i["id"].as_str().unwrap().to_string()).collect()
+}
+
+/// A server keeping settings and caches in `scratch`, with no song open.
+fn with_settings(scratch: &Scratch) -> crate::Running {
+    let running = serving(Folders { samples: Some(scratch.0.join("cache")), ..Folders::default() });
+    running.state.keep_settings(scratch.0.join("settings.json"));
+    running
+}
+
+/// Your folders, as `GET /api/library/folders` lists them.
+fn your_folders(url: &str) -> Vec<Value> {
+    let (status, _, body) = get(url, "/api/library/folders");
+    assert_eq!(status, 200);
+    json(&body)["folders"].as_array().unwrap().clone()
+}
+
+// LIB-5 (review D16, D6): a folder is kept by its real path, once: the same folder written another
+// way, a folder inside one of yours, or around one, is refused; so are `/` and your home folder.
+#[test]
+fn a_folder_is_kept_by_its_real_path_and_not_twice() {
+    let scratch = Scratch::new("real-path");
+    let mine = scratch.0.join("Samples");
+    tone(&mine.join("Kicks/kick.wav"), 1, 0.1);
+    let running = with_settings(&scratch);
+    let add = |path: &Path| post(&running.url, "/api/library/folders", "t0k", &json!({ "add": path }));
+    assert_eq!(add(&mine).0, 200);
+    assert_eq!(add(&mine.join("Kicks/..")).0, 200, "the same folder: nothing new");
+    assert_eq!(your_folders(&running.url).len(), 1, "{:?}", your_folders(&running.url));
+    let (status, why) = add(&mine.join("Kicks"));
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("is inside"), "{status} {why}");
+    let (status, why) = add(&scratch.0);
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("holds"), "{status} {why}");
+    let (status, why) = add(Path::new("/"));
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("whole disk"), "{status} {why}");
+    assert_eq!(your_folders(&running.url).len(), 1);
+    // Your home folder itself, whatever it is called.
+    let home = scratch.0.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let why = crate::routes_library::folder_to_add(&home.join("."), &[], Some(&home)).unwrap_err().to_string();
+    assert!(why.contains("your home folder"), "{why}");
+    assert!(crate::routes_library::folder_to_add(&home.join("x"), &[], Some(&home)).is_err(), "not a folder");
+}
+
+// LIB-5 (review D16): removing a folder deletes its cache file.
+#[test]
+fn removing_a_folder_deletes_its_cache() {
+    let scratch = Scratch::new("remove");
+    let mine = scratch.0.join("Samples");
+    tone(&mine.join("kick.wav"), 1, 0.1);
+    let running = with_settings(&scratch);
+    assert_eq!(post(&running.url, "/api/library/folders", "t0k", &json!({ "add": mine })).0, 200);
+    assert!(running.state.sample_index.settled(std::time::Duration::from_secs(60)));
+    let file = m2_editor::library::samples::cache_file(&scratch.0.join("cache"), &std::fs::canonicalize(&mine).unwrap());
+    assert!(file.exists());
+    assert_eq!(post(&running.url, "/api/library/folders", "t0k", &json!({ "remove": mine })).0, 200);
+    assert!(!file.exists(), "its cache file is gone");
+    assert!(found_yours(&running.url).is_empty());
+}
+
+/// Your folder `mine` added to `running` and indexed.
+fn added(running: &crate::Running, mine: &Path) {
+    assert_eq!(post(&running.url, "/api/library/folders", "t0k", &json!({ "add": mine })).0, 200);
+    assert!(running.state.sample_index.settled(std::time::Duration::from_secs(60)));
+}
+
+// LIB-6 (review D12): a sample's file is read only as it was found: a link put in its place since
+// it was indexed is refused, by the preview and by adding it.
+#[cfg(unix)]
+#[test]
+fn a_preview_never_follows_a_link() {
+    let scratch = Scratch::new("link");
+    let mine = scratch.0.join("Samples");
+    tone(&mine.join("kick.wav"), 1, 0.1);
+    let secret = scratch.0.join("private/diary.wav");
+    tone(&secret, 1, 0.3);
+    let running = with_settings(&scratch);
+    added(&running, &mine);
+    let id = format!("sample:folder:{}", std::fs::canonicalize(&mine).unwrap().join("kick.wav").display());
+    assert_eq!(found_yours(&running.url), std::slice::from_ref(&id));
+    std::fs::remove_file(mine.join("kick.wav")).unwrap();
+    std::os::unix::fs::symlink(&secret, mine.join("kick.wav")).unwrap();
+    let (status, _, body) = get(&running.url, &format!("/api/library/preview?id={}", enc(&id)));
+    assert_eq!(status, 404, "the link's target was served: {} bytes", body.len());
+    assert!(json(&body)["error"].as_str().unwrap().contains("isn't a plain file"), "{}", String::from_utf8_lossy(&body));
+}
+
+// LIB-6 (review D9): a sample's preview is streamed, with its length; a file over 64 MB has none,
+// said in words, as the page would hold it whole.
+#[test]
+fn a_long_file_has_no_preview() {
+    let scratch = Scratch::new("long");
+    let mine = scratch.0.join("Samples");
+    tone(&mine.join("short.wav"), 1, 0.1);
+    // A stereo 16-bit file of 68 MB, its data zeros (a sparse file).
+    let data: u32 = 68_000_000;
+    let mut head = b"RIFF".to_vec();
+    head.extend((36 + data).to_le_bytes());
+    head.extend(b"WAVEfmt ");
+    head.extend(16u32.to_le_bytes());
+    for (v, n) in [(1u32, 2), (2, 2), (48_000, 4), (192_000, 4), (4, 2), (16, 2)] {
+        head.extend(&v.to_le_bytes()[..n]);
+    }
+    head.extend(b"data");
+    head.extend(data.to_le_bytes());
+    let long = mine.join("Long Take.wav");
+    std::fs::write(&long, &head).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&long).unwrap().set_len(head.len() as u64 + data as u64).unwrap();
+    let running = with_settings(&scratch);
+    added(&running, &mine);
+    let real = std::fs::canonicalize(&mine).unwrap();
+    let (status, _, body) =
+        get(&running.url, &format!("/api/library/preview?id={}", enc(&format!("sample:folder:{}", real.join("Long Take.wav").display()))));
+    assert_eq!(status, 404, "{} bytes served", body.len());
+    assert!(json(&body)["error"].as_str().unwrap().contains("too long to preview"), "{}", String::from_utf8_lossy(&body));
+    let (status, kind, body) =
+        get(&running.url, &format!("/api/library/preview?id={}", enc(&format!("sample:folder:{}", real.join("short.wav").display()))));
+    assert_eq!((status, kind.as_str()), (200, "audio/wav"));
+    assert_eq!(body, std::fs::read(mine.join("short.wav")).unwrap());
+}
+
+// LIB-7 (review D5, D15): every loop with a known tempo follows the song's, at the song's own tempo
+// too; its warp is its exact beats (a tail is no whole beat); and the same bytes added from your
+// folder, then from a pack, keep the pack's credit.
+#[test]
+fn every_loop_follows_with_its_exact_beats_and_a_pack_keeps_its_credit() {
+    let scratch = Scratch::new("exact");
+    let pack = scratch.0.join("loops");
+    loops_pack(&pack);
+    tone(&pack.join("samples/loops/groove 124.wav"), 1, 60.0 / 124.0 * 8.0);
+    tone(&pack.join("samples/loops/tail 120.wav"), 1, 8.3);
+    let mine = scratch.0.join("Samples");
+    std::fs::create_dir_all(&mine).unwrap();
+    std::fs::copy(pack.join("samples/one-shots/kick.wav"), mine.join("my kick.wav")).unwrap();
+    let song = Scratch::new("exact-song");
+    song_with_pack(&song.0, &pack);
+    let running = with_settings(&scratch);
+    added(&running, &mine);
+    let session = running.state.graph.open(&song.0).unwrap()["session"].as_u64().unwrap();
+    items(&running.url, "q=loop");
+    let add = |id: &str| {
+        post(&running.url, "/api/library/sample", "t00ls", &json!({"session": session, "id": id, "to": {"kind": "below", "beat": 0}}))
+    };
+    let (status, done) = add("sample:@alice/loops:samples/loops/groove 124.wav");
+    assert_eq!((status, &done["follows"], &done["song_bpm"]), (200, &json!(124.0), &json!(124.0)), "{done:#}");
+    let clip = &audio_clips(&song.0, done["tracks"][0]["module"].as_str().unwrap())[0];
+    assert_eq!(clip["warp"].as_array().map(|w| w[1][1].as_f64()), Some(Some(8.0)), "it follows a later tempo change: {clip:#}");
+    let (status, done) = add("sample:@alice/loops:samples/loops/tail 120.wav");
+    assert_eq!(status, 200, "{done:#}");
+    let clip = &audio_clips(&song.0, done["tracks"][0]["module"].as_str().unwrap())[0];
+    let beats = clip["warp"][1][1].as_f64().unwrap();
+    assert!(
+        (beats - 16.6).abs() < 1e-3 && (clip["length"].as_f64().unwrap() - 16.6).abs() < 1e-3,
+        "16 beats and its tail, not 17: {clip:#}"
+    );
+    // The kick from your folder first, then the same bytes from the pack: the pack's credit.
+    let real = std::fs::canonicalize(&mine).unwrap();
+    let (status, done) = add(&format!("sample:folder:{}", real.join("my kick.wav").display()));
+    assert_eq!((status, &done["asset"]), (200, &json!("my kick.wav")), "{done:#}");
+    let (status, done) = add(KICK);
+    assert_eq!(
+        (status, &done["asset"], &done["reused"], &done["noted"]),
+        (200, &json!("my kick.wav"), &json!(true), &json!(true)),
+        "{done:#}"
+    );
+    let note: Value = serde_json::from_slice(&std::fs::read(song.0.join("assets/my kick.wav.json")).unwrap()).unwrap();
+    assert_eq!(note["from"]["license"], json!("CC-BY-4.0"), "{note:#}");
+}
+
+// LIB-5 (review D1): a package's samples are indexed in the background, once: searches meanwhile
+// answer at once with what was there (nothing, the first time), and start no second index.
+#[test]
+fn a_packages_samples_are_indexed_once_in_the_background() {
+    use crate::library::SampleIndex;
+    let scratch = Scratch::new("once");
+    let pack = scratch.0.join("loops");
+    loops_pack(&pack);
+    let index = std::sync::Arc::new(SampleIndex::default());
+    let cache = scratch.0.join("cache");
+    let (first, busy) = index.package("@alice/loops", &pack, Some(&cache));
+    assert!(first.is_none() && busy, "nothing yet, and an index running");
+    for _ in 0..5 {
+        let (none, busy) = index.package("@alice/loops", &pack, Some(&cache));
+        assert!(none.is_none() || !busy);
+    }
+    assert!(index.indexing() <= 1, "one index of the folder at a time");
+    assert!(index.settled(std::time::Duration::from_secs(60)));
+    let (made, busy) = index.package("@alice/loops", &pack, Some(&cache));
+    let made = made.expect("indexed");
+    assert!(!busy);
+    assert_eq!((made.items.len(), made.measured), (3, 3), "each file measured once");
+}
+
+// LIB-5 (review D11): an index that panics still ends: its folder isn't "looking…" for good, and
+// the next search starts another.
+#[test]
+fn a_panic_while_indexing_ends_the_index() {
+    use crate::library::{Of, SampleIndex};
+    let index = std::sync::Arc::new(SampleIndex::default());
+    let of = Of::Folder(PathBuf::from("/nowhere/panics"));
+    let (_, busy) = index.get(of.clone(), std::time::Duration::ZERO, |_| panic!("a crafted file"));
+    assert!(busy || !index.indexing_of(&of));
+    assert!(index.settled(std::time::Duration::from_secs(10)), "the count of indexes running came down");
+    assert!(!index.indexing_of(&of));
+    let (made, _) = index.get(of.clone(), std::time::Duration::ZERO, |_| m2_editor::library::samples::Indexed::default());
+    assert!(made.is_none());
+    assert!(index.settled(std::time::Duration::from_secs(10)));
+    assert!(index.get(of, std::time::Duration::from_secs(60), |_| unreachable!()).0.is_some(), "another one ran");
+}
+
+// LIB-5 (review D16): removing a folder stops its index between two files, and what it made is
+// never kept.
+#[test]
+fn removing_a_folder_stops_its_index() {
+    use crate::library::{Of, SampleIndex};
+    let index = std::sync::Arc::new(SampleIndex::default());
+    let dir = PathBuf::from("/nowhere/huge");
+    let (until, waiting) = (std::time::Instant::now() + std::time::Duration::from_secs(30), std::sync::Arc::new(()));
+    let held = waiting.clone();
+    index.get(Of::Folder(dir.clone()), std::time::Duration::ZERO, move |stop| {
+        let _held = held;
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) && std::time::Instant::now() < until {
+            std::thread::yield_now();
+        }
+        m2_editor::library::samples::Indexed { stopped: stop.load(std::sync::atomic::Ordering::Relaxed), ..Default::default() }
+    });
+    index.forget(&dir);
+    assert!(index.settled(std::time::Duration::from_secs(20)), "it stopped");
+    assert!(!index.indexing_of(&Of::Folder(dir)));
+}
+
+// LIB-7 (review D18): a place no clip can go (a lane that plays notes) is refused before the file
+// is copied in: no file and no note are left.
+#[test]
+fn a_place_no_clip_can_go_is_refused_before_any_copy() {
+    let scratch = Scratch::new("no-lane");
+    let pack = scratch.0.join("loops");
+    loops_pack(&pack);
+    let song = Scratch::new("no-lane-song");
+    song_with_pack(&song.0, &pack);
+    let running = serving(Folders::default());
+    let session = running.state.graph.open(&song.0).unwrap()["session"].as_u64().unwrap();
+    let to = json!({"kind": "lane", "module": "kick", "lane": "hits", "beat": 0});
+    let (status, why) = post(&running.url, "/api/library/sample", "t00ls", &json!({"session": session, "id": KICK, "to": to}));
+    assert!(status >= 400 && why["error"].as_str().unwrap().contains("plays notes"), "{status} {why:#}");
+    let left: Vec<_> = std::fs::read_dir(song.0.join("assets")).into_iter().flatten().flatten().map(|e| e.file_name()).collect();
+    assert!(left.is_empty(), "nothing copied: {left:?}");
 }

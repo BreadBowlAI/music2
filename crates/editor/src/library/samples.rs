@@ -11,12 +11,13 @@
 //! read. Only WAV files are samples for now; other audio files are counted ("WAV only for now").
 //!
 //! Adding one to a song copies its file into `assets/` with a note beside it ([`note`],
-//! [`write_note`]), and places a clip, with Follow tempo for a loop at another tempo
-//! ([`follow_at`]).
+//! [`write_note`]), and places a clip, with Follow tempo for a loop whose tempo is known
+//! ([`follows`]).
 
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
@@ -95,10 +96,18 @@ pub struct Guess {
     pub key: Option<Key>,
 }
 
+/// A word of a name ([`words`]), and whether the next word was run into it at a capital
+/// (`Fm` of `FmPiano`).
+#[derive(Clone, Debug)]
+struct Word {
+    text: String,
+    run_on: bool,
+}
+
 /// A name's words: its runs of letters, digits and the signs `#`, `♯` and `♭`, split again where
 /// letters meet digits (`120bpm` is `120` and `bpm`, `Kick01` is `Kick` and `01`) and where a
 /// small letter meets a capital (`PianoChords` is `Piano` and `Chords`). Case kept.
-fn tokens(text: &str) -> Vec<String> {
+fn words(text: &str) -> Vec<Word> {
     let mut out = vec![];
     let mut word = String::new();
     let mut digits: Option<bool> = None;
@@ -106,20 +115,25 @@ fn tokens(text: &str) -> Vec<String> {
     for c in text.chars() {
         let sign = matches!(c, '#' | '♯' | '♭');
         if !(c.is_alphanumeric() || sign) {
-            out.extend((!word.is_empty()).then(|| std::mem::take(&mut word)));
+            if !word.is_empty() {
+                out.push(Word { text: std::mem::take(&mut word), run_on: false });
+            }
             digits = None;
             small = false;
             continue;
         }
         let digit = c.is_ascii_digit();
-        if digits.is_some_and(|d| d != digit) || small && c.is_uppercase() {
-            out.push(std::mem::take(&mut word));
+        let capital = small && c.is_uppercase();
+        if digits.is_some_and(|d| d != digit) || capital {
+            out.push(Word { text: std::mem::take(&mut word), run_on: capital });
         }
         word.push(c);
         digits = Some(digit);
         small = c.is_lowercase();
     }
-    out.extend((!word.is_empty()).then_some(word));
+    if !word.is_empty() {
+        out.push(Word { text: word, run_on: false });
+    }
     out
 }
 
@@ -167,19 +181,26 @@ fn key_word(word: &str) -> Option<Key> {
 }
 
 /// The first key in `words`: one word ([`key_word`]), or a root and its mode (`F# minor`,
-/// `Bb maj`, `A min`).
-fn key_in(words: &[String]) -> Option<Key> {
+/// `Bb maj`, `A min`). Words of a sentence aren't one: `Am` after `I` (`I Am Free`), or a key word
+/// run into a capitalised word (`FmPiano`: FM synthesis).
+fn key_in(words: &[Word]) -> Option<Key> {
     for (i, w) in words.iter().enumerate() {
-        let mode = words.get(i + 1).map(|n| n.to_ascii_lowercase());
+        if i > 0 && words[i - 1].text == "I" {
+            continue;
+        }
+        let mode = words.get(i + 1).map(|n| n.text.to_ascii_lowercase());
         let minor = match mode.as_deref() {
             Some("minor" | "min") => Some(true),
             Some("major" | "maj") => Some(false),
             _ => None,
         };
-        if let (Some(minor), Some((root, _, _, ""))) = (minor, root_of(w)) {
+        if let (Some(minor), Some((root, _, _, ""))) = (minor, root_of(&w.text)) {
             return Some(Key { root, minor });
         }
-        if let Some(k) = key_word(w) {
+        if w.run_on {
+            continue;
+        }
+        if let Some(k) = key_word(&w.text) {
             return Some(k);
         }
     }
@@ -192,53 +213,93 @@ fn number(word: &str) -> Option<f64> {
     word.bytes().all(|b| b.is_ascii_digit()).then(|| word.parse().ok())?
 }
 
+/// Units a number in a name may be followed by, which make it no tempo: `96k`, `24bit`, `100 Hz`,
+/// `90s`, `-6dB`.
+const UNITS: [&str; 15] = ["k", "khz", "hz", "bit", "bits", "kbps", "ms", "s", "sec", "secs", "db", "st", "x", "ch", "khz"];
+
 /// The tempo `words` say: a number beside `bpm` (`90 bpm`, `120bpm`, `bpm 95`) in [`TEMPOS`], or,
-/// when `bare`, a number alone in [`BARE_TEMPOS`] with no leading zero (not `01` or `045`).
-fn tempo_in(words: &[String], bare: bool) -> Option<f64> {
-    let lower: Vec<String> = words.iter().map(|w| w.to_ascii_lowercase()).collect();
+/// when `bare`, a number alone in [`BARE_TEMPOS`] with no leading zero (not `01` or `045`), and
+/// no unit after it ([`UNITS`]).
+fn tempo_in(words: &[Word], bare: bool) -> Option<f64> {
+    let lower: Vec<String> = words.iter().map(|w| w.text.to_ascii_lowercase()).collect();
     for (i, w) in lower.iter().enumerate() {
         let beside = lower.get(i + 1).is_some_and(|n| n == "bpm") || i > 0 && lower[i - 1] == "bpm";
         if let Some(n) = number(w).filter(|n| beside && TEMPOS.contains(n)) {
             return Some(n);
         }
     }
-    bare.then(|| lower.iter().filter(|w| !w.starts_with('0')).find_map(|w| number(w).filter(|n| BARE_TEMPOS.contains(n))))?
+    let unit = |i: usize| lower.get(i + 1).is_some_and(|n| UNITS.contains(&n.as_str()));
+    bare.then(|| {
+        lower
+            .iter()
+            .enumerate()
+            .filter(|(i, w)| !w.starts_with('0') && !unit(*i))
+            .find_map(|(_, w)| number(w).filter(|n| BARE_TEMPOS.contains(n)))
+    })?
 }
 
 /// The instrument the lowercase `words` name: the first of [`INSTRUMENTS`] one of them says
-/// (`bass drum` and `hi hat` as one).
-fn instrument_in(words: &[String]) -> Option<&'static str> {
+/// (`bass drum` and `hi hat` as one). A folder's `808` names none: a folder of 808s is a drum kit
+/// as often as basses.
+fn instrument_in(words: &[String], folder: bool) -> Option<&'static str> {
     if words.windows(2).any(|p| p[0] == "bass" && p[1] == "drum") {
         return Some("kick");
     }
-    INSTRUMENTS.iter().zip(NAMES).find(|(_, names)| words.iter().any(|w| names.contains(&w.as_str()))).map(|(i, _)| *i)
+    let says = |w: &String, names: &[&str]| names.contains(&w.as_str()) && !(folder && w == "808");
+    INSTRUMENTS.iter().zip(NAMES).find(|(_, names)| words.iter().any(|w| says(w, names))).map(|(i, _)| *i)
 }
 
-/// What a sample's path inside its folder says of it (LIB-4), `/` between folders:
-/// `loops/dusty keys 90 Am.wav` is a loop of keys at 90 bpm in A minor.
-/// - A tempo: a number beside `bpm` in the name, else in a folder (deepest first); else a bare
-///   number of the name from 60 to 200 when the path has a key or a loop word.
-/// - A key: the name's, else a folder's.
-/// - Its type: a one-shot when the path says so (`one-shot`, `oneshot`, `one shots`); else a loop
-///   with a tempo or a loop word (`loop`, `loops`); else a one-shot.
-/// - Its instrument: from the name's words, else a folder's, deepest first ([`instrument_in`]).
+/// The type the lowercase `words` of one name say, if any: a one-shot word (`one-shot`, `oneshot`,
+/// `one shots`, `hit`, `hits`, `shot`, `shots`) before a loop word (`loop`, `loops`).
+fn type_in(words: &[String]) -> Option<SampleType> {
+    let one_shot = words.windows(2).any(|p| p[0] == "one" && (p[1] == "shot" || p[1] == "shots"))
+        || words.iter().any(|w| matches!(w.as_str(), "oneshot" | "oneshots" | "hit" | "hits" | "shot" | "shots"));
+    if one_shot {
+        return Some(SampleType::OneShot);
+    }
+    words.iter().any(|w| w == "loop" || w == "loops").then_some(SampleType::Loop)
+}
+
+/// How many beats of a bar a loop that is a loop by its tempo alone must last, at least: one bar
+/// of 4 beats, less 5%.
+const LOOP_BEATS: f64 = 4.0 * 0.95;
+
+/// What a sample's path inside its folder says of it (LIB-4), `/` between folders, as if it were
+/// long enough to be a loop ([`guess_with`] knows its length): `loops/dusty keys 90 Am.wav` is a
+/// loop of keys at 90 bpm in A minor.
 pub fn guess(path: &str) -> Guess {
+    guess_with(path, None)
+}
+
+/// What a sample's path inside its folder, and its length in seconds when known, say of it
+/// (LIB-4).
+/// - A tempo: a number beside `bpm` in the name, else in a folder (deepest first); else a bare
+///   number of the name from 60 to 200 when the path has a key or a loop word, never one with a
+///   unit after it ([`UNITS`]).
+/// - A key: the name's, else a folder's ([`key_in`]).
+/// - Its type, from evidence of its own: the nearest of its name and its folders (deepest first)
+///   with a type word ([`type_in`]); with none, a loop when its own name has a tempo and it lasts
+///   at least [`LOOP_BEATS`] at it; else a one-shot. A folder's tempo alone makes no loop.
+/// - Its instrument: from the name's words, else a folder's, deepest first ([`instrument_in`]).
+pub fn guess_with(path: &str, seconds: Option<f64>) -> Guess {
     let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
     let Some((file, folders)) = parts.split_last() else { return Guess::default() };
     let stem = file.rsplit_once('.').map_or(*file, |(s, _)| s);
-    let name = tokens(stem);
-    let dirs: Vec<Vec<String>> = folders.iter().rev().map(|f| tokens(f)).collect();
-    let lower = |w: &[String]| w.iter().map(|x| x.to_lowercase()).collect::<Vec<_>>();
-    let every: Vec<String> = std::iter::once(&name).chain(&dirs).flat_map(|w| lower(w)).collect();
-    let one_shot = every.windows(2).any(|p| p[0] == "one" && (p[1] == "shot" || p[1] == "shots"))
-        || every.iter().any(|w| w == "oneshot" || w == "oneshots");
-    let looped = every.iter().any(|w| w == "loop" || w == "loops");
+    let name = words(stem);
+    let dirs: Vec<Vec<Word>> = folders.iter().rev().map(|f| words(f)).collect();
+    let lower = |w: &[Word]| w.iter().map(|x| x.text.to_lowercase()).collect::<Vec<_>>();
+    let typed = std::iter::once(&name).chain(&dirs).find_map(|w| type_in(&lower(w)));
     let key = key_in(&name).or_else(|| dirs.iter().find_map(|d| key_in(d)));
-    let bpm = tempo_in(&name, false)
-        .or_else(|| dirs.iter().find_map(|d| tempo_in(d, false)))
-        .or_else(|| tempo_in(&name, !one_shot && (looped || key.is_some())));
-    let kind = if !one_shot && (bpm.is_some() || looped) { SampleType::Loop } else { SampleType::OneShot };
-    let instrument = instrument_in(&lower(&name)).or_else(|| dirs.iter().find_map(|d| instrument_in(&lower(d))));
+    let bare = typed != Some(SampleType::OneShot) && (typed == Some(SampleType::Loop) || key.is_some());
+    let own = tempo_in(&name, false).or_else(|| tempo_in(&name, bare));
+    let bpm = tempo_in(&name, false).or_else(|| dirs.iter().find_map(|d| tempo_in(d, false))).or(own);
+    let long_enough = |bpm: f64| seconds.is_none_or(|s| s * bpm / 60.0 >= LOOP_BEATS);
+    let kind = match typed {
+        Some(t) => t,
+        None if own.is_some_and(long_enough) => SampleType::Loop,
+        None => SampleType::OneShot,
+    };
+    let instrument = instrument_in(&lower(&name), false).or_else(|| dirs.iter().find_map(|d| instrument_in(&lower(d), true)));
     Guess { kind, instrument, bpm, key }
 }
 
@@ -264,7 +325,11 @@ pub fn key_said(text: &str) -> Option<Key> {
     }
 }
 
-/// What `samples.toml` says of some samples: each field it gives wins over the guess.
+/// What `samples.toml` writes for a key or an instrument to take back a guess: there is none.
+pub const NONE: &str = "none";
+
+/// What `samples.toml` says of some samples: each field it gives wins over the guess; `none` for a
+/// key or an instrument takes back the guess.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Said {
@@ -322,14 +387,14 @@ impl SamplesToml {
             if let Some(k) = s.kind.as_deref().filter(|k| !matches!(*k, "loop" | "one-shot")) {
                 problems.push(format!("{SAMPLES_TOML} {at}: type is loop or one-shot, not {k}"));
             }
-            if let Some(i) = s.instrument.as_deref().filter(|i| !INSTRUMENTS.contains(i)) {
-                problems.push(format!("{SAMPLES_TOML} {at}: instrument {i} isn't one of {}", INSTRUMENTS.join(", ")));
+            if let Some(i) = s.instrument.as_deref().filter(|i| *i != NONE && !INSTRUMENTS.contains(i)) {
+                problems.push(format!("{SAMPLES_TOML} {at}: instrument {i} isn't one of {} (or none)", INSTRUMENTS.join(", ")));
             }
             if let Some(b) = s.bpm.filter(|b| !TEMPOS.contains(b)) {
                 problems.push(format!("{SAMPLES_TOML} {at}: bpm is 20 to 300, not {b}"));
             }
-            if let Some(k) = s.key.as_deref().filter(|k| key_said(k).is_none()) {
-                problems.push(format!("{SAMPLES_TOML} {at}: key {k} doesn't read: write it as Am, F#, Bb minor or C"));
+            if let Some(k) = s.key.as_deref().filter(|k| *k != NONE && key_said(k).is_none()) {
+                problems.push(format!("{SAMPLES_TOML} {at}: key {k} doesn't read: write it as Am, F#, Bb minor or C (or none)"));
             }
         }
         (Some(t), problems)
@@ -402,11 +467,20 @@ pub struct Measured {
 const PIECE: u64 = 65_536;
 
 /// Measure the WAV file at `path`, reading it once to its end as it will play: why it can't be, in
-/// words.
+/// words. A file the library can't offer is refused as an import refuses it: a rate outside
+/// 8,000 to 384,000 Hz, over 3 hours, or a sample that isn't a number.
 pub fn measure(path: &Path) -> Result<Measured, String> {
     let wav = m2_runtime::stream::Wav::open(path).map_err(|e| format!("{e:#}"))?;
     if wav.frames() == 0 {
         return Err("it holds no samples".into());
+    }
+    let rate = wav.rate as u32;
+    if !crate::import::RATES.contains(&rate) {
+        return Err(format!("it plays at {rate} Hz: music2 takes files from 8,000 to 384,000 Hz"));
+    }
+    let seconds = wav.frames() as f64 / wav.rate;
+    if seconds > crate::import::LONGEST {
+        return Err("it is longer than 3 hours: music2 takes files up to 3 hours".into());
     }
     let (mut bytes, mut piece) = (vec![], vec![vec![]; wav.channels()]);
     let (mut at, mut peak) = (0, 0f32);
@@ -414,11 +488,13 @@ pub fn measure(path: &Path) -> Result<Measured, String> {
         let to = wav.frames().min(at + PIECE);
         wav.read(at, to, &mut bytes, &mut piece).map_err(|e| format!("{e:#}"))?;
         peak = piece.iter().flatten().fold(peak, |p, s| p.max(s.abs()));
+        if !peak.is_finite() {
+            return Err("it holds a sample that isn't a number".into());
+        }
         at = to;
     }
     let hash = m2_song::Sha::of_file(path).map_err(|e| e.to_string())?.hex();
-    let seconds = wav.frames() as f64 / wav.rate;
-    Ok(Measured { seconds, channels: wav.channels() as u16, rate: wav.rate as u32, peak: peak as f64, hash })
+    Ok(Measured { seconds, channels: wav.channels() as u16, rate, peak: peak as f64, hash })
 }
 
 /// Where samples are found: a package's `samples/` folder, or a folder of yours.
@@ -440,11 +516,19 @@ pub struct Indexed {
     pub problems: Vec<String>,
     /// How many files were read this time; the rest came from the cache.
     pub measured: usize,
+    /// The folder isn't there, or can't be read (a drive unplugged): nothing was indexed, and the
+    /// cache was kept.
+    pub missing: bool,
+    /// It was asked to stop (the folder was removed): it is unfinished, and wrote no cache.
+    pub stopped: bool,
 }
 
-/// The cache's file for a root: its measured files by path, each with its size and modified time.
-#[derive(Default, Serialize, Deserialize)]
+/// The cache's file for a folder (LIB-5): the folder, whether it is a package's, and its measured
+/// files by their exact paths ([`path_key`]), each with its size and modified time.
+#[derive(Default, Serialize)]
 struct Kept {
+    root: String,
+    package: bool,
     files: BTreeMap<String, KeptFile>,
 }
 
@@ -453,6 +537,20 @@ struct KeptFile {
     size: u64,
     modified: u64,
     measured: Measured,
+}
+
+impl Kept {
+    /// The cache file at `file`, read entry by entry: an entry that doesn't read (or measures that
+    /// aren't numbers) costs only itself. Empty when there is none.
+    fn read(file: &Path) -> BTreeMap<String, KeptFile> {
+        let Some(v) = std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { return BTreeMap::new() };
+        let files = v.get("files").and_then(Value::as_object).cloned().unwrap_or_default();
+        files
+            .into_iter()
+            .filter_map(|(k, e)| serde_json::from_value::<KeptFile>(e).ok().map(|e| (k, e)))
+            .filter(|(_, e)| e.measured.seconds.is_finite() && e.measured.peak.is_finite())
+            .collect()
+    }
 }
 
 /// A file found under a root: its path inside it (`/` between folders), its path, size and
@@ -464,30 +562,61 @@ struct Found {
     modified: u64,
 }
 
-/// Every file under `dir`, by sorted path: never inside a hidden folder (`.git`), never through a
-/// link.
-fn files_in(dir: &Path) -> Vec<Found> {
-    let mut out = vec![];
+/// What [`files_in`] found under a folder.
+#[derive(Default)]
+struct Walked {
+    /// The WAV files, by sorted path.
+    wavs: Vec<Found>,
+    /// Other audio files, by extension ([`NOT_WAV`]).
+    not_wav: usize,
+    /// Files whose name isn't UTF-8, under a package's folder: no `samples.toml` can name them.
+    unnamed: Vec<String>,
+    /// The folders under it that couldn't be read, by their paths inside it.
+    unread: Vec<String>,
+}
+
+/// The WAV files under `dir`, by sorted path, and the other audio files counted: only folders and
+/// plain files, never inside a hidden folder (`.git`), never through a link, never a pipe or a
+/// device (which would block a read for good). None, if `dir` can't be read.
+fn files_in(dir: &Path) -> Option<Walked> {
+    let mut out = Walked::default();
     let mut stack = vec![(dir.to_path_buf(), String::new())];
     while let Some((d, prefix)) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else { continue };
-        for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let Ok(t) = e.file_type() else { continue };
-            if name.starts_with('.') || t.is_symlink() {
+        let entries = match std::fs::read_dir(&d) {
+            Ok(e) => e,
+            Err(_) if prefix.is_empty() => return None,
+            Err(_) => {
+                out.unread.push(prefix);
                 continue;
             }
-            let rel = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+        };
+        for e in entries.flatten() {
+            let os_name = e.file_name();
+            let name = os_name.to_string_lossy().into_owned();
+            let Ok(t) = e.file_type() else { continue };
+            if name.starts_with('.') || !(t.is_dir() || t.is_file()) {
+                continue;
+            }
+            let rel = if prefix.is_empty() { name } else { format!("{prefix}/{}", name) };
             if t.is_dir() {
                 stack.push((e.path(), rel));
-            } else if let Ok(m) = e.metadata() {
+                continue;
+            }
+            if !is_wav_name(&rel) {
+                out.not_wav += usize::from(NOT_WAV.contains(&extension(&rel).as_str()));
+                continue;
+            }
+            if os_name.to_str().is_none() {
+                out.unnamed.push(rel.clone());
+            }
+            if let Ok(m) = e.metadata() {
                 let modified = m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as u64);
-                out.push(Found { rel, path: e.path(), size: m.len(), modified });
+                out.wavs.push(Found { rel, path: e.path(), size: m.len(), modified });
             }
         }
     }
-    out.sort_by(|a, b| a.rel.cmp(&b.rel));
-    out
+    out.wavs.sort_by(|a, b| a.rel.cmp(&b.rel));
+    Some(out)
 }
 
 /// A file's extension, lowercase.
@@ -500,26 +629,53 @@ pub fn is_wav_name(rel: &str) -> bool {
     matches!(extension(rel).as_str(), "wav" | "wave")
 }
 
-/// The cache's file for the folder `base`, in `cache`: named by a hash of its path.
-fn cache_file(cache: &Path, base: &Path) -> PathBuf {
-    let named = m2_song::Sha::of(base.to_string_lossy().as_bytes()).hex();
+/// A path as an id and the cache write it, exactly: the path itself when it is UTF-8; else as
+/// shown, then `#` and a short hash of its exact bytes, so two names that differ only in bytes
+/// that aren't UTF-8 are two samples (LIB-4).
+pub fn path_key(path: &Path) -> String {
+    match path.to_str() {
+        Some(p) => p.to_string(),
+        None => format!("{}#{}", path.to_string_lossy(), &m2_song::Sha::of(path.as_os_str().as_encoded_bytes()).hex()[..16]),
+    }
+}
+
+/// The cache's file for the folder `base`, in `cache`: named by a hash of its exact path.
+pub fn cache_file(cache: &Path, base: &Path) -> PathBuf {
+    let named = m2_song::Sha::of(base.as_os_str().as_encoded_bytes()).hex();
     cache.join(format!("{}.json", &named[..16]))
 }
 
-/// The samples of `root` (LIB-4, LIB-5): every WAV file under its folder (a package's `samples/`),
-/// measured, or found in the cache folder `cache` by its path, size and modified time; then what
-/// the package's `samples.toml` says of each, and the guess for the rest. The cache is written
-/// again when a file was measured or is gone. Other audio files are counted, and a WAV that
-/// doesn't read is named.
-pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
-    let base = match root {
+/// Where a root's samples are: a package's `samples/`, or the folder itself.
+pub fn base_of(root: Root) -> PathBuf {
+    match root {
         Root::Package { dir, .. } => dir.join(SAMPLES_DIR),
         Root::Folder(dir) => dir.to_path_buf(),
-    };
+    }
+}
+
+/// The samples of `root` (LIB-4, LIB-5): every WAV file under its folder (a package's `samples/`),
+/// measured, or found in the cache folder `cache` by its exact path, size and modified time; then
+/// what the package's `samples.toml` says of each, and the guess for the rest. The cache is written
+/// again when a file was measured or is gone, keeping the entries of a subfolder that couldn't be
+/// read. Other audio files are counted, and a WAV that doesn't read is named. A folder of yours
+/// that isn't there is `missing`: nothing indexed, the cache kept.
+pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
+    index_until(root, cache, &AtomicBool::new(false))
+}
+
+/// [`index`], stopping between two files once `stop` is set: then it is `stopped`, and writes no
+/// cache.
+pub fn index_until(root: Root, cache: Option<&Path>, stop: &AtomicBool) -> Indexed {
+    let base = base_of(root);
     let mut out = Indexed::default();
     let (said, origin) = match root {
         Root::Package { name, dir } => {
-            if !base.is_dir() {
+            // A package's samples are in a folder of its own, never one a link points at (which
+            // could be anywhere: `/`).
+            if !std::fs::symlink_metadata(&base).is_ok_and(|m| m.is_dir()) {
+                if std::fs::symlink_metadata(&base).is_ok_and(|m| m.file_type().is_symlink()) {
+                    out.problems.push(format!("{SAMPLES_DIR} is a link: a pack's samples are listed only from a folder of its own"));
+                }
                 return out;
             }
             // A `samples.toml` that doesn't read lists nothing until it is fixed.
@@ -531,24 +687,31 @@ pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
         }
         Root::Folder(_) => (SamplesToml::default(), Origin::Folder),
     };
+    let Some(walked) = files_in(&base) else {
+        out.missing = true;
+        return out;
+    };
     let listed = |rel: &str| matches!(root, Root::Folder(_)) || said.names(rel);
     let kept_at = cache.map(|c| cache_file(c, &base));
-    let mut kept: Kept =
-        kept_at.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    let mut now = Kept::default();
-    let files = files_in(&base);
+    let mut kept = kept_at.as_deref().map(Kept::read).unwrap_or_default();
+    let mut now = Kept { root: path_key(&base), package: matches!(root, Root::Package { .. }), files: BTreeMap::new() };
+    out.not_wav = walked.not_wav;
     let mut wavs = vec![];
-    for f in &files {
-        if !is_wav_name(&f.rel) {
-            out.not_wav += usize::from(NOT_WAV.contains(&extension(&f.rel).as_str()));
-            continue;
+    for f in &walked.wavs {
+        if stop.load(Ordering::Relaxed) {
+            out.stopped = true;
+            return out;
         }
         wavs.push(f.rel.clone());
         if !listed(&f.rel) {
             continue;
         }
-        let key = f.path.to_string_lossy().into_owned();
-        let measured = match kept.files.remove(&key).filter(|k| k.size == f.size && k.modified == f.modified) {
+        if matches!(root, Root::Package { .. }) && walked.unnamed.contains(&f.rel) {
+            out.unreadable.push(format!("{} has a name that isn't UTF-8", f.rel));
+            continue;
+        }
+        let key = path_key(&f.path);
+        let measured = match kept.remove(&key).filter(|k| k.size == f.size && k.modified == f.modified) {
             Some(k) => k.measured,
             None => {
                 out.measured += 1;
@@ -562,16 +725,61 @@ pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
             }
         };
         now.files.insert(key, KeptFile { size: f.size, modified: f.modified, measured: measured.clone() });
-        out.items.push(item(&origin, &f.rel, &f.path, &measured, &said.of(&f.rel)));
+        let mut item = item(&origin, &f.rel, &f.path, &measured, &said.of(&f.rel));
+        if let Some(s) = item.sample.as_mut() {
+            s.stamp = (f.size, f.modified);
+        }
+        out.items.push(item);
     }
     if matches!(root, Root::Package { .. }) {
         out.problems.extend(said.missing(&wavs));
     }
+    // A subfolder that couldn't be read this time keeps its files' entries.
+    let unread: Vec<String> = walked.unread.iter().map(|r| format!("{}/", path_key(&base.join(r)))).collect();
+    let (gone, held): (Vec<_>, Vec<_>) = std::mem::take(&mut kept).into_iter().partition(|(k, _)| !unread.iter().any(|u| k.starts_with(u)));
+    now.files.extend(held);
     // Written again only when something changed: a file measured, or one gone.
-    if let Some(file) = kept_at.filter(|_| out.measured > 0 || !kept.files.is_empty()) {
+    if let Some(file) = kept_at.filter(|_| out.measured > 0 || !gone.is_empty()) {
         let _ = keep(&file, &now);
     }
     out
+}
+
+/// Delete the cache files in `cache` (LIB-5) of a folder of yours that isn't one of `folders` any
+/// more, of a package's folder that is gone (a pack's version removed), or that don't read; and
+/// part files an index stopped mid-way left over an hour ago. What it deleted.
+pub fn prune(cache: &Path, folders: &[PathBuf]) -> usize {
+    let yours: Vec<String> = folders.iter().map(|f| path_key(f)).collect();
+    let mut gone = 0;
+    for e in std::fs::read_dir(cache).into_iter().flatten().flatten() {
+        let (path, name) = (e.path(), e.file_name().to_string_lossy().into_owned());
+        let old = || e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|a| a > STALE_PART));
+        let drop = if name.ends_with(".part") {
+            old()
+        } else if name.ends_with(".json") {
+            let v = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+            let root = v.as_ref().and_then(|v| v["root"].as_str()).filter(|r| !r.is_empty());
+            match (root, v.as_ref().and_then(|v| v["package"].as_bool())) {
+                (Some(root), Some(true)) => !Path::new(root).is_dir(),
+                (Some(root), Some(false)) => !yours.iter().any(|y| y == root),
+                _ => true,
+            }
+        } else {
+            false
+        };
+        if drop && std::fs::remove_file(&path).is_ok() {
+            gone += 1;
+        }
+    }
+    gone
+}
+
+/// How old a part file of the cache must be to be one an index left when it stopped mid-way.
+const STALE_PART: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Delete the cache file of the folder `dir` of yours from `cache` (LIB-5): it was removed.
+pub fn forget(cache: &Path, dir: &Path) {
+    let _ = std::fs::remove_file(cache_file(cache, dir));
 }
 
 /// What `m2 pack check` finds wrong with the samples of the pack in `dir` (PACK-12, LIB-4), in
@@ -593,7 +801,7 @@ pub fn check(dir: &Path) -> (Vec<String>, bool) {
         }
     };
     let mut wavs = vec![];
-    for f in files_in(&dir.join(SAMPLES_DIR)).into_iter().filter(|f| is_wav_name(&f.rel)) {
+    for f in files_in(&dir.join(SAMPLES_DIR)).map(|w| w.wavs).unwrap_or_default() {
         if let Err(why) = measure(&f.path) {
             out.push(format!("{SAMPLES_DIR}/{} doesn't read as a WAV file ({why})", f.rel));
         }
@@ -604,14 +812,22 @@ pub fn check(dir: &Path) -> (Vec<String>, bool) {
     (out, any)
 }
 
-/// Write the cache's file whole, through a part file renamed over it.
+/// Write the cache's file whole, through a part file of its own (the process's and a count's in
+/// its name, so two writers never share one) renamed over it.
 fn keep(file: &Path, kept: &Kept) -> std::io::Result<()> {
+    static N: AtomicUsize = AtomicUsize::new(0);
     std::fs::create_dir_all(file.parent().expect("a file in the cache"))?;
-    let part = file.with_extension(format!("json.{}.part", std::process::id()));
-    let mut f = std::fs::File::create(&part)?;
-    f.write_all(&serde_json::to_vec(kept).map_err(std::io::Error::other)?)?;
-    drop(f);
-    std::fs::rename(&part, file)
+    let part = file.with_extension(format!("json.{}.{}.part", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let written = (|| {
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&part)?;
+        f.write_all(&serde_json::to_vec(kept).map_err(std::io::Error::other)?)?;
+        drop(f);
+        std::fs::rename(&part, file)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    written
 }
 
 /// Where a root's samples come from, as their notes say it.
@@ -653,15 +869,24 @@ fn seconds_words(s: f64) -> String {
 /// The library's item for the sample at `rel` under `origin`'s folder, its file at `path`: what
 /// was measured, what `said` says, and the guess for the rest.
 fn item(origin: &Origin, rel: &str, path: &Path, m: &Measured, said: &Said) -> Item {
-    let g = guess(rel);
+    let g = guess_with(rel, Some(m.seconds));
     let kind = match said.kind.as_deref() {
         Some("loop") => SampleType::Loop,
         Some("one-shot") => SampleType::OneShot,
         _ => g.kind,
     };
-    let instrument = said.instrument.clone().or_else(|| g.instrument.map(String::from));
+    // `none` takes back the guess.
+    let instrument = match said.instrument.as_deref() {
+        Some(NONE) => None,
+        Some(i) => Some(i.to_string()),
+        None => g.instrument.map(String::from),
+    };
     let bpm = said.bpm.or(g.bpm).filter(|_| kind == SampleType::Loop || said.bpm.is_some());
-    let key = said.key.as_deref().and_then(key_said).or(g.key);
+    let key = match said.key.as_deref() {
+        Some(NONE) => None,
+        Some(k) => key_said(k),
+        None => g.key,
+    };
     let stem = Path::new(rel).file_stem().map_or_else(|| rel.to_string(), |s| s.to_string_lossy().into_owned());
     let mut tags: Vec<String> = instrument.iter().cloned().collect();
     tags.extend(rel.split('/').rev().skip(1).map(String::from));
@@ -685,7 +910,7 @@ fn item(origin: &Origin, rel: &str, path: &Path, m: &Measured, said: &Said) -> I
             from["file"] = json!(file);
             (format!("sample:{name}:{file}"), name.clone(), format!("{name}:{file}"), from)
         }
-        Origin::Folder => (format!("sample:folder:{}", path.display()), "yours".to_string(), String::new(), json!({ "folder": true })),
+        Origin::Folder => (format!("sample:folder:{}", path_key(path)), "yours".to_string(), String::new(), json!({ "folder": true })),
     };
     Item {
         kind: Kind::Sample,
@@ -713,6 +938,7 @@ fn item(origin: &Origin, rel: &str, path: &Path, m: &Measured, said: &Said) -> I
             hash: m.hash.clone(),
             from,
             file: path.to_path_buf(),
+            stamp: (0, 0),
         }),
     }
 }
@@ -727,39 +953,82 @@ pub fn note_name(asset: &str) -> String {
     format!("{asset}.json")
 }
 
+/// Whether `note` is a note of yours: `{"from": {"folder": true}}`, which credits no one.
+fn yours(note: &Value) -> bool {
+    note == &json!({ "from": { "folder": true } })
+}
+
 /// Write `note` beside asset `asset` in the song in `dir` (LIB-7): created only if it isn't there
-/// (FMT-14), its bytes pushed and its folder synced before anything names the asset (WRITE-1).
-/// Whether it was written: false when a note was there, which is kept.
+/// (FMT-14), its bytes pushed and its folder synced before anything names the asset (WRITE-1). A
+/// note already there is kept, but for a note of yours, which a package's note replaces (the same
+/// bytes came from a pack: its credit is never lost), through a part file renamed over it.
+/// Whether it was written.
 pub fn write_note(dir: &Path, asset: &str, note: &Value) -> std::io::Result<bool> {
-    let path = dir.join(m2_song::path::ASSETS).join(note_name(asset));
-    let mut f = match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+    let assets = dir.join(m2_song::path::ASSETS);
+    let path = assets.join(note_name(asset));
+    let there = match std::fs::read(&path) {
+        Ok(b) => Some(serde_json::from_slice::<Value>(&b).ok()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    let replace = match &there {
+        None => false,
+        Some(Some(old)) if yours(old) && note["from"].get("pack").is_some() => true,
+        Some(_) => return Ok(false),
+    };
+    // A fresh name of its own, create-only: hidden, so no sweep or import takes it for an asset.
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let to = if replace {
+        assets.join(format!(".{}.{}.{}.part", note_name(asset), std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
+    } else {
+        path.clone()
+    };
+    let mut f = match std::fs::OpenOptions::new().write(true).create_new(true).open(&to) {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && !replace => return Ok(false),
         Err(e) => return Err(e),
     };
     let text = serde_json::to_string_pretty(note).map_err(std::io::Error::other)? + "\n";
     let written = f.write_all(text.as_bytes()).and_then(|()| m2_os::fs::push(&f));
+    drop(f);
+    let written = written.and_then(|()| if replace { std::fs::rename(&to, &path) } else { Ok(()) });
     if let Err(e) = written {
-        drop(f);
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&to);
         return Err(e);
     }
-    m2_os::fs::sync_dir(path.parent().expect("inside assets/"))?;
+    m2_os::fs::sync_dir(&assets)?;
     Ok(true)
 }
 
-/// The tempo a sample's clip follows when added where the song plays at `song_bpm` (LIB-7): a
-/// loop's own, when it is known and differs from the song's.
-pub fn follow_at(sample: &Sample, song_bpm: f64) -> Option<f64> {
-    sample.bpm.filter(|b| sample.kind == SampleType::Loop && (b - song_bpm).abs() > 1e-6)
+/// The tempo a sample's clip follows when added (LIB-7): a loop's own, when it is known, at the
+/// song's tempo too, so it follows a later change of tempo.
+pub fn follows(sample: &Sample) -> Option<f64> {
+    sample.bpm.filter(|_| sample.kind == SampleType::Loop)
 }
 
-/// How many beats a loop of `seconds` at `bpm` lasts: a whole number of beats when within 5% of
-/// one (a name's tempo is rounded), else exactly.
-pub fn loop_beats(seconds: f64, bpm: f64) -> f64 {
+/// How many beats a loop of `seconds` at `bpm` lasts, played at `rate`: its exact length, or a
+/// whole number of beats when that is within one sample of it.
+pub fn loop_beats(seconds: f64, bpm: f64, rate: u32) -> f64 {
     let beats = seconds * bpm / 60.0;
     let whole = beats.round();
-    if whole >= 1.0 && (beats - whole).abs() <= 0.05 * whole { whole } else { beats }
+    // How far it is from the whole beats, in samples.
+    let off = (beats - whole).abs() * 60.0 / bpm * rate as f64;
+    if whole >= 1.0 && off <= 1.0 + 1e-6 { whole } else { beats }
+}
+
+/// The longest file a sample's preview is (LIB-6), in bytes: the page holds a preview whole.
+pub const PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Whether sample `s`'s file is still as it was indexed (LIB-6): a plain file at its path, never a
+/// link (one put there since, which could point anywhere) nor a pipe. Its stamp, links not
+/// followed; why not, in words.
+pub fn still_plain(s: &Sample) -> Result<m2_os::fs::Stamp, String> {
+    let gone = || format!("{} isn't there any more", s.file.display());
+    let m = std::fs::symlink_metadata(&s.file).map_err(|_| gone())?;
+    if !m.file_type().is_file() {
+        return Err(format!("{} isn't a plain file any more: a sample is only ever read where it was found", s.file.display()));
+    }
+    Ok(m2_os::fs::Stamp::of(&m))
 }
 
 #[cfg(test)]

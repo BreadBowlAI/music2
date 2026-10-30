@@ -5,10 +5,11 @@
 //! function.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use m2_editor::library::samples::{self, Root};
-use m2_editor::library::{self, Kind, Query};
+use m2_editor::library::samples::{self, Indexed, Root};
+use m2_editor::library::{self, Kind, Library, Query};
 use serde_json::Value;
 
 /// The packages with the app closed: std, found as the app finds it, and the store's packs the
@@ -29,30 +30,64 @@ pub fn sample_folders() -> Vec<PathBuf> {
     kept.and_then(|k| serde_json::from_value(k["samples"].clone()).ok()).unwrap_or_default()
 }
 
-/// The samples of `packages` and of your folders, indexed now through the cache folder's
-/// measures (LIB-5).
-pub fn samples(packages: &[(String, PathBuf)]) -> Vec<library::Item> {
-    let cache = m2_os::dirs::cache().map(|c| c.join("samples"));
+/// Where what is measured of samples is kept (LIB-5): `samples` in the cache folder.
+fn samples_cache() -> Option<PathBuf> {
+    m2_os::dirs::cache().map(|c| c.join("samples"))
+}
+
+/// The samples of `packages`, indexed now through the cache folder's measures (LIB-5).
+pub fn packages_samples(packages: &[(String, PathBuf)]) -> Vec<Arc<Indexed>> {
+    let cache = samples_cache();
+    packages.iter().map(|(name, dir)| Arc::new(samples::index(Root::Package { name, dir }, cache.as_deref()))).collect()
+}
+
+/// The samples of your folders, indexed now through the cache folder's measures (LIB-5); what
+/// each skipped is said. A folder inside another of yours is that one's.
+pub fn folders_samples() -> Vec<Arc<Indexed>> {
+    let cache = samples_cache();
+    let yours = sample_folders();
     let mut out = vec![];
-    for (name, dir) in packages {
-        out.extend(samples::index(Root::Package { name, dir }, cache.as_deref()).items);
-    }
-    for dir in sample_folders() {
-        let found = samples::index(Root::Folder(&dir), cache.as_deref());
+    for dir in yours.iter().filter(|d| !yours.iter().any(|o| o != *d && d.starts_with(o))) {
+        let found = samples::index(Root::Folder(dir), cache.as_deref());
+        if found.missing {
+            eprintln!("{} isn't there: its samples are left out.", dir.display());
+        }
         if found.not_wav > 0 {
             eprintln!("{}: {} audio files that aren't WAV were skipped: WAV only for now.", dir.display(), found.not_wav);
         }
-        out.extend(found.items);
+        out.push(Arc::new(found));
     }
     out
 }
 
 /// The library with the app closed (LIB-2): std's and the store's packs' components, their presets
 /// and yours, and the samples of both and of your folders.
-pub fn closed() -> Result<Vec<library::Item>> {
+pub fn closed() -> Result<Library> {
     let packages = packages();
     let yours = m2_os::dirs::presets();
-    Ok(library::without_song(&packages, yours.as_deref(), &[], &samples(&packages)))
+    let samples = [packages_samples(&packages), folders_samples()].concat();
+    Ok(library::without_song(&packages, yours.as_deref(), &[], &samples))
+}
+
+/// The sample with id `id` in the library of the song `s` (LIB-7), as its own build lists it with
+/// the app closed: a package's from std, the song's packs at their locked versions, or the store's
+/// other packs (only the one the id names is indexed); one of yours only for a `sample:folder:` id.
+pub fn song_sample(s: &m2_session::Session, id: &str) -> Result<library::Sample> {
+    let indexes = if id.starts_with("sample:folder:") {
+        folders_samples()
+    } else {
+        let named = id.strip_prefix("sample:").and_then(|r| r.split_once(':')).map(|(n, _)| n);
+        let std = s.packages.get(m2_song::pack::STD).map(|p| (p.name.clone(), p.dir.clone()));
+        let packs = s.offered().iter().map(|(n, _, dir)| (n.clone(), dir.clone()));
+        let packages: Vec<(String, PathBuf)> = std.into_iter().chain(packs).filter(|(n, _)| Some(n.as_str()) == named).collect();
+        packages_samples(&packages)
+    };
+    indexes
+        .iter()
+        .flat_map(|i| i.items.iter())
+        .find(|i| i.id == id)
+        .and_then(|i| i.sample.clone())
+        .ok_or_else(|| anyhow::anyhow!("There is no sample {id} in the library: `m2 search --kind sample` lists them."))
 }
 
 /// Run `m2 search`.
@@ -74,7 +109,7 @@ pub fn search(args: &[String]) -> Result<()> {
         Some(items) => items,
         None => {
             let all = closed()?;
-            library::search(&all, &Query::parse(&q)).into_iter().map(serde_json::to_value).collect::<Result<_, _>>()?
+            all.search(&Query::parse(&q)).into_iter().map(serde_json::to_value).collect::<Result<_, _>>()?
         }
     };
     if json {

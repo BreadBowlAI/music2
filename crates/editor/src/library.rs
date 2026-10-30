@@ -18,6 +18,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use m2_script::Catalog;
 use m2_script::component::Descriptor;
@@ -168,6 +169,9 @@ pub struct Sample {
     /// Its file on this computer, which only the server reads: never sent (LIB-6).
     #[serde(skip)]
     pub file: PathBuf,
+    /// Its file's size and modified time (nanoseconds since 1970) when it was indexed.
+    #[serde(skip)]
+    pub stamp: (u64, u64),
 }
 
 /// A sound's preset: where it is from (`std` or `yours`) and its name.
@@ -235,16 +239,16 @@ pub struct Sources<'a> {
     pub yours: Option<&'a Path>,
     /// The installed plugins, once the app has listed them; none otherwise.
     pub plugins: &'a [Plugin],
-    /// The samples (LIB-4): std's, the packs' and your folders', as [`samples::index`] made them.
-    pub samples: &'a [Item],
+    /// The samples (LIB-4): std's, the packs' and your folders', as [`samples::index`] made them,
+    /// shared with the index that keeps them.
+    pub samples: &'a [Arc<samples::Indexed>],
 }
 
-/// Every item the sources give, each once (the first source's), in the order [`search`] gives with
-/// no words.
+/// Every item the sources give but the samples, each once (the first source's), in the order
+/// [`search`] gives with no words.
 pub fn items(src: &Sources) -> Vec<Item> {
     let mut out = components(src.catalog);
     out.extend(sounds(src, &out));
-    out.extend(src.samples.iter().cloned());
     out.extend(plugins(src.plugins));
     let mut seen = BTreeSet::new();
     out.retain(|i| seen.insert(i.id.clone()));
@@ -252,11 +256,47 @@ pub fn items(src: &Sources) -> Vec<Item> {
     search(&out, &all).into_iter().cloned().collect()
 }
 
+/// The library (LIB-1): the items its sources give ([`items`]), and the samples where their
+/// indexes keep them. A search reads the samples there, by reference: none is copied, however many
+/// your folders hold (only what it answers is).
+#[derive(Clone, Debug, Default)]
+pub struct Library {
+    pub items: Vec<Item>,
+    pub samples: Vec<Arc<samples::Indexed>>,
+}
+
+impl Library {
+    /// The library of `src`.
+    pub fn of(src: &Sources) -> Library {
+        Library { items: items(src), samples: src.samples.to_vec() }
+    }
+
+    /// Every item, the samples last; an id twice (a sample in two of your folders) is there twice.
+    pub fn all(&self) -> impl Iterator<Item = &Item> {
+        self.items.iter().chain(self.samples.iter().flat_map(|i| i.items.iter()))
+    }
+
+    /// The items `q` finds, best first ([`search`]), each id once: the first source's.
+    pub fn search(&self, q: &Query) -> Vec<&Item> {
+        search(self.all(), q)
+    }
+
+    /// The item with id `id`, if the library has it.
+    pub fn get(&self, id: &str) -> Option<&Item> {
+        self.all().find(|i| i.id == id)
+    }
+}
+
 /// The library with no song open (LIB-2): the components of `packages` (std, found as the app finds
 /// it, and the packs the lists offer), their presets and `yours`, `samples`, and `plugins`.
-pub fn without_song(packages: &[(String, PathBuf)], yours: Option<&Path>, plugins: &[Plugin], samples: &[Item]) -> Vec<Item> {
+pub fn without_song(
+    packages: &[(String, PathBuf)],
+    yours: Option<&Path>,
+    plugins: &[Plugin],
+    samples: &[Arc<samples::Indexed>],
+) -> Library {
     let catalog = m2_script::describe(packages);
-    items(&Sources { catalog: &catalog, packages, yours, plugins, samples })
+    Library::of(&Sources { catalog: &catalog, packages, yours, plugins, samples })
 }
 
 /// The packs of the store in `store` the lists offer with no song open (PACK-11): of each, its
@@ -636,26 +676,19 @@ fn origin(package: &str) -> u8 {
 }
 
 /// The items `q` finds, best first (LIB-1): each meets every filter and has every word somewhere;
-/// by [`place`], then [`origin`], kind, label and id.
-pub fn search<'a>(items: &'a [Item], q: &Query) -> Vec<&'a Item> {
+/// by [`place`], then [`origin`], kind, label and id. An id found twice is the first one's.
+pub fn search<'a>(items: impl IntoIterator<Item = &'a Item>, q: &Query) -> Vec<&'a Item> {
+    let mut seen = std::collections::HashSet::new();
     let mut found: Vec<(u8, &Item)> = items
-        .iter()
+        .into_iter()
         .filter_map(|i| {
             let label: Vec<String> = words_of(&i.label).collect();
             q.admits(i, &label).then_some(())?;
-            Some((place(i, q, &label)?, i))
+            let at = place(i, q, &label)?;
+            seen.insert(i.id.as_str()).then_some((at, i))
         })
         .collect();
-    found.sort_by(|(a, x), (b, y)| {
-        (a, origin(&x.package), x.kind, x.label.to_lowercase(), &x.label, &x.id).cmp(&(
-            b,
-            origin(&y.package),
-            y.kind,
-            y.label.to_lowercase(),
-            &y.label,
-            &y.id,
-        ))
-    });
+    found.sort_by_cached_key(|(at, x)| (*at, origin(&x.package), x.kind, x.label.to_lowercase(), x.label.as_str(), x.id.as_str()));
     found.into_iter().map(|(_, i)| i).collect()
 }
 

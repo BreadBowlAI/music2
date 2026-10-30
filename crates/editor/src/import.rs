@@ -180,23 +180,15 @@ impl Staged {
     }
 
     /// Make it an asset: its part given the first free name, create-only, and its folder synced (a
-    /// file whose bytes were there already is that asset). The lock goes after.
-    pub fn name(self) -> Result<Imported, EditError> {
-        self.name_where(false)
-    }
-
-    /// [`Staged::name`], for a file that gets a note beside it (LIB-7): a name whose note's name
-    /// (`kick.wav.json`) is taken is taken too.
-    pub fn name_noted(self) -> Result<Imported, EditError> {
-        self.name_where(true)
-    }
-
-    fn name_where(mut self, noted: bool) -> Result<Imported, EditError> {
+    /// file whose bytes were there already is that asset). A name whose note's name
+    /// (`kick.wav.json`, LIB-7) is taken is taken too, so no file inherits another's note. The lock
+    /// goes after.
+    pub fn name(mut self) -> Result<Imported, EditError> {
         let Some((part, lock)) = self.part.take() else { return Ok(self.file.clone()) };
         let named = (|| -> std::io::Result<AssetName> {
             let there: Vec<String> = assets_in(&self.folder).into_iter().map(|(n, _)| n).collect();
             // A note's name taken takes its asset's: `kick.wav.json` takes `kick.wav`.
-            let notes = there.iter().filter_map(|n| n.strip_suffix(".json")).map(String::from).filter(|_| noted).collect::<Vec<_>>();
+            let notes = there.iter().filter_map(|n| n.strip_suffix(".json")).map(String::from).collect::<Vec<_>>();
             let mut taken: Vec<String> = there.into_iter().chain(notes).collect();
             let asset = loop {
                 let name = self.file.asset.untaken_folded(taken.iter().map(String::as_str));
@@ -404,7 +396,7 @@ fn clip_at(f: &Imported, start: f64, tempo: &TempoMap, bpm: Option<f64>) -> serd
     match bpm {
         None => clip_json(f, start, length_at(tempo, start, f.seconds)),
         Some(bpm) => {
-            let beats = crate::library::samples::loop_beats(f.seconds, bpm);
+            let beats = crate::library::samples::loop_beats(f.seconds, bpm, f.rate);
             let mut clip = clip_json(f, start, beats);
             clip["warp"] = json!([[0.0, 0.0], [f.seconds, beats]]);
             clip
@@ -419,16 +411,13 @@ pub fn place_with(s: &mut Session, files: &[Imported], at: &Target, follow: &[Op
     if files.is_empty() {
         return Err(refused("No file to bring in.".into()));
     }
+    check_target(s, at)?;
     take_in(s, files)?;
     let tempo = s.accepted().compiled.data.tempo().clone();
     let beat = at.beat();
-    if !(beat.is_finite() && beat >= 0.0) {
-        return Err(refused("A clip can't start before the song starts.".into()));
-    }
     match at {
         Target::Lane { module, lane, .. } => {
             let addr = LaneAddr { module: Key::new(module).map_err(refused)?, lane: Key::new(lane).map_err(refused)? };
-            audio_lane(s, &addr)?;
             let mut start = beat;
             let mut put = vec![];
             for (i, f) in files.iter().enumerate() {
@@ -469,6 +458,25 @@ pub fn place_with(s: &mut Session, files: &[Imported], at: &Target, follow: &[Op
             let edited = made[0].edited.clone();
             Ok(Placed { edited, made: clips, tracks: made.into_iter().map(|m| (m.module, m.label)).collect() })
         }
+    }
+}
+
+/// Whether clips can go at `at` in the accepted revision, in words: a beat in the song, on an audio
+/// lane, or after a track that is there. Checked before a file is named into `assets/` (LIB-7), so a
+/// refusal leaves nothing behind.
+pub fn check_target(s: &Session, at: &Target) -> Result<(), EditError> {
+    let beat = at.beat();
+    if !(beat.is_finite() && beat >= 0.0) {
+        return Err(refused("A clip can't start before the song starts.".into()));
+    }
+    match at {
+        Target::Lane { module, lane, .. } => {
+            audio_lane(s, &LaneAddr { module: Key::new(module).map_err(refused)?, lane: Key::new(lane).map_err(refused)? })
+        }
+        Target::Track { module, .. } if !s.accepted().compiled.ir.modules.iter().any(|m| m.key == *module) => {
+            Err(EditError::Missing(format!("There's no track `{module}`.")))
+        }
+        _ => Ok(()),
     }
 }
 

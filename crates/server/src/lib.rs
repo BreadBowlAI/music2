@@ -153,9 +153,12 @@ impl AppState {
         listed
     }
 
-    /// Read your presets and keep previews in `folders` from now on (LIB-1, LIB-3). Once.
+    /// Read your presets and keep previews and samples' measures in `folders` from now on (LIB-1,
+    /// LIB-3, LIB-5), and start indexing the samples a search will want first. Once.
     pub fn keep_library(&self, folders: library::Folders) {
-        let _ = self.library.set(folders);
+        if self.library.set(folders).is_ok() {
+            self.warm_samples();
+        }
     }
 
     /// Where the library reads your presets and keeps previews: none until kept.

@@ -285,16 +285,283 @@ fn a_note_is_written_once_beside_its_asset() {
     assert_eq!(std::fs::read_to_string(t.0.join("assets/kick.wav.json")).unwrap(), text);
 }
 
-// LIB-7: a loop follows the song's tempo when its own is known and differs; its beats are a whole
-// number when within 5% of one.
+// LIB-7 (review D5): a loop follows the song's tempo whenever its own is known, at the song's own
+// tempo too (so a later tempo change moves it); its beats are its exact length, a whole number
+// only within one sample of one: a tail never pulls its beats off the song's.
 #[test]
-fn a_loop_at_another_tempo_follows_with_whole_beats() {
+fn a_loop_follows_with_its_exact_beats() {
     let looped = Sample { kind: SampleType::Loop, bpm: Some(90.0), ..Sample::default() };
-    assert_eq!(follow_at(&looped, 120.0), Some(90.0));
-    assert_eq!(follow_at(&looped, 90.0), None, "the song's own tempo: a plain clip");
-    assert_eq!(follow_at(&Sample { bpm: None, ..looped.clone() }, 120.0), None);
-    assert_eq!(follow_at(&Sample { kind: SampleType::OneShot, ..looped }, 120.0), None);
-    assert_eq!(loop_beats(10.0 + 2.0 / 3.0, 90.0), 16.0);
-    assert_eq!(loop_beats(10.75, 90.0), 16.0, "a rounded tempo still lands on 16 beats");
-    assert_eq!(loop_beats(1.0, 90.0), 1.5, "1.5 beats is no whole number");
+    assert_eq!(follows(&looped), Some(90.0));
+    assert_eq!(follows(&Sample { bpm: None, ..looped.clone() }), None);
+    assert_eq!(follows(&Sample { kind: SampleType::OneShot, ..looped }), None);
+    assert_eq!(loop_beats(10.0 + 2.0 / 3.0, 90.0, 48_000), 16.0);
+    assert_eq!(loop_beats(512_000.0 / 48_000.0 + 1.0 / 48_000.0, 90.0, 48_000), 16.0, "one sample over 16 beats is 16");
+    assert_eq!(loop_beats(8.3, 120.0, 48_000), 8.3 * 2.0, "a 16-beat loop with a tail of 0.6 beats is 16.6 beats, not 17");
+    assert_eq!(loop_beats(10.75, 90.0, 48_000), 10.75 * 1.5);
+    assert_eq!(loop_beats(1.0, 90.0, 48_000), 1.5);
+}
+
+/// A WAV's bytes from its `fmt ` chunk's body and its data, as a crafted file may have them.
+fn raw_wav(fmt: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut body = b"WAVE".to_vec();
+    body.extend(b"fmt ");
+    body.extend((fmt.len() as u32).to_le_bytes());
+    body.extend(fmt);
+    body.extend(b"data");
+    body.extend((data.len() as u32).to_le_bytes());
+    body.extend(data);
+    let mut out = b"RIFF".to_vec();
+    out.extend((body.len() as u32).to_le_bytes());
+    out.extend(body);
+    out
+}
+
+/// A `fmt ` chunk's body: its format, channels, rate, bytes a second, a frame's bytes and bits.
+fn fmt_of(format: u16, channels: u16, rate: u32, bytes_a_second: u32, align: u16, bits: u16) -> Vec<u8> {
+    let mut f = vec![];
+    for (v, n) in [(format as u32, 2), (channels as u32, 2), (rate, 4), (bytes_a_second, 4), (align as u32, 2), (bits as u32, 2)] {
+        f.extend(&v.to_le_bytes()[..n]);
+    }
+    f
+}
+
+/// The labels of what `found` lists, and their types.
+fn kinds(found: &Indexed) -> Vec<(String, SampleType, Option<f64>)> {
+    found.items.iter().map(|i| (i.label.clone(), i.sample.as_ref().unwrap().kind, i.sample.as_ref().unwrap().bpm)).collect()
+}
+
+// LIB-4 (review D4): a loop needs evidence of its own. A tempo in a folder's name (a construction
+// kit's) gives a loop its tempo but makes no file a loop, and a file named with a tempo is a loop
+// only if it lasts a bar at it: the kicks of a kit at 140 are one-shots, never warped.
+#[test]
+fn a_loop_needs_evidence_of_its_own() {
+    use SampleType::{Loop, OneShot};
+    let t = Scratch::new("evidence");
+    for (path, seconds) in [
+        ("Trap Kit 140 BPM/Kicks/Kick 1.wav", 0.43),
+        ("Construction Kit 128 BPM/Drum Hits/Kick.wav", 0.3),
+        ("Construction Kit 128 BPM/Loops/Drums.wav", 1.9),
+        ("Trap Kick 140 BPM.wav", 0.43),
+        ("Chord Stab Em 124.wav", 0.5),
+        ("Keys 90 Am.wav", 2.7),
+        ("Fill 120 bpm.wav", 2.0),
+        ("Kick Loop 140.wav", 0.43),
+    ] {
+        wav(&t.0.join(path), 1, seconds, 0.5);
+    }
+    let found = index(Root::Folder(&t.0), None);
+    let want = [
+        ("Chord Stab Em 124", OneShot, None),
+        ("Drums", Loop, Some(128.0)),
+        ("Fill 120 bpm", Loop, Some(120.0)),
+        ("Keys 90 Am", Loop, Some(90.0)),
+        ("Kick", OneShot, None),
+        ("Kick 1", OneShot, None),
+        ("Kick Loop 140", Loop, Some(140.0)),
+        ("Trap Kick 140 BPM", OneShot, None),
+    ];
+    let mut got = kinds(&found);
+    got.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(got, want.map(|(l, k, b)| (l.to_string(), k, b)));
+    for path in ["Trap Kit 140 BPM/Kicks/Kick 1.wav", "Kit 128 BPM/Drum Hits/Snare.wav", "Loops/One Shots/Kick 3.wav"] {
+        assert_eq!(guess(path).kind, OneShot, "{path}");
+    }
+    // The nearest type word decides: the name's before its folders'.
+    assert_eq!(guess("Kit 128 BPM/Loops/Groove.wav").kind, Loop);
+    assert_eq!(guess("One Shots/Fx Loop 1.wav").kind, Loop);
+}
+
+// LIB-4 (review D13): words of a sentence and numbers with a unit are no keys or tempos.
+#[test]
+fn words_and_units_are_no_keys_or_tempos() {
+    use SampleType::{Loop, OneShot};
+    let cases: &[Case] = &[
+        ("I Am Free 120.wav", OneShot, None, None, None),
+        ("Vocal I Am 100.wav", OneShot, Some("vocal"), None, None),
+        ("FmPiano 90.wav", OneShot, Some("keys"), None, None),
+        ("Top Loop 24bit 96k.wav", Loop, None, None, None),
+        ("Loop 100 Hz Sine.wav", Loop, None, None, None),
+        ("90s Drum Loop.wav", Loop, None, None, None),
+        ("Drums/808/01.wav", OneShot, None, None, None),
+        // Still read as before.
+        ("Amen Loop 170.wav", Loop, None, Some(170.0), None),
+        ("808 Bass C.wav", OneShot, Some("bass"), None, None),
+        ("Piano Am Loop 90.wav", Loop, Some("keys"), Some(90.0), Some("Am")),
+        ("Fm Synth Bell.wav", OneShot, Some("synth"), None, Some("Fm")),
+    ];
+    for &(path, kind, instrument, bpm, k) in cases {
+        let g = guess(path);
+        assert_eq!((g.kind, g.instrument, g.bpm, g.key), (kind, instrument, bpm, k.and_then(key)), "{path}");
+    }
+}
+
+// LIB-4 (review D14): samples.toml takes back a guess with `none`.
+#[test]
+fn samples_toml_takes_back_a_guess() {
+    let t = Scratch::new("none");
+    pack(&t.0, Some("[folder.\"loops\"]\ninstrument = \"none\"\n\n[file.\"loops/Kick Groove Am 120.wav\"]\nkey = \"none\"\n"));
+    wav(&t.0.join("samples/loops/Kick Groove Am 120.wav"), 1, 2.0, 0.5);
+    let found = index(Root::Package { name: "@alice/loops", dir: &t.0 }, None);
+    assert_eq!(found.problems, Vec::<String>::new());
+    let s = sample_of(&found, "sample:@alice/loops:samples/loops/Kick Groove Am 120.wav");
+    assert_eq!((s.kind, s.bpm, s.key, s.instrument.as_deref()), (SampleType::Loop, Some(120.0), None, None));
+    assert!(SamplesToml::parse("[file.\"a.wav\"]\nkey = \"nothing\"\n").is_err(), "only none");
+}
+
+// LIB-5 (review D2): a folder that isn't there for a while (a drive unplugged) keeps its cache,
+// so nothing is measured again when it is back.
+#[test]
+fn a_missing_folder_keeps_its_cache() {
+    let t = Scratch::new("missing");
+    let (folder, away, cache) = (t.0.join("drive"), t.0.join("unplugged"), t.0.join("cache"));
+    for i in 0..10 {
+        wav(&folder.join(format!("kick {i}.wav")), 1, 0.05, 0.5);
+    }
+    assert_eq!(index(Root::Folder(&folder), Some(&cache)).measured, 10);
+    std::fs::rename(&folder, &away).unwrap();
+    let gone = index(Root::Folder(&folder), Some(&cache));
+    assert!(gone.missing && gone.items.is_empty());
+    std::fs::rename(&away, &folder).unwrap();
+    let back = index(Root::Folder(&folder), Some(&cache));
+    assert_eq!((back.items.len(), back.measured), (10, 0), "nothing measured again");
+}
+
+// LIB-5 (review D3): a file music2 can't play from the library (0 Hz, a sample that isn't a
+// number) is unreadable, not listed; and a bad entry in the cache costs only itself.
+#[test]
+fn a_bad_file_costs_only_itself() {
+    let t = Scratch::new("bad");
+    let (folder, cache) = (t.0.join("mine"), t.0.join("cache"));
+    wav(&folder.join("Kick 01.wav"), 1, 0.1, 0.5);
+    wav(&folder.join("Snare 02.wav"), 1, 0.1, 0.5);
+    let tone: Vec<u8> = (0..4800).flat_map(|i| (((i as f32 / 10.0).sin() * 8000.0) as i16).to_le_bytes()).collect();
+    std::fs::write(folder.join("Zero Rate Snare.wav"), raw_wav(&fmt_of(1, 1, 0, 0, 2, 16), &tone)).unwrap();
+    let inf: Vec<u8> = [0.5f32, f32::INFINITY, -0.25].iter().flat_map(|s| s.to_le_bytes()).collect();
+    std::fs::write(folder.join("Inf Hat.wav"), raw_wav(&fmt_of(3, 1, 48_000, 192_000, 4, 32), &inf)).unwrap();
+    let found = index(Root::Folder(&folder), Some(&cache));
+    let labels: Vec<&str> = found.items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(labels, ["Kick 01", "Snare 02"]);
+    assert_eq!(found.unreadable.len(), 2, "{:?}", found.unreadable);
+    assert!(found.unreadable.iter().any(|u| u.starts_with("Zero Rate Snare.wav") && u.contains("0 Hz")), "{:?}", found.unreadable);
+    assert!(found.unreadable.iter().any(|u| u.starts_with("Inf Hat.wav") && u.contains("isn't a number")), "{:?}", found.unreadable);
+    assert_eq!(index(Root::Folder(&folder), Some(&cache)).measured, 2, "the two that don't read, again; the rest from the cache");
+    // One entry spoilt by hand: only it is measured again.
+    let file = cache_file(&cache, &folder);
+    let text = std::fs::read_to_string(&file).unwrap();
+    let at = text.find("\"seconds\":").unwrap();
+    let spoilt = format!("{}\"seconds\":null,\"was\":{}", &text[..at], &text[at + "\"seconds\":".len()..]);
+    std::fs::write(&file, spoilt).unwrap();
+    assert_eq!(index(Root::Folder(&folder), Some(&cache)).measured, 3, "one kept file, and the two that don't read");
+}
+
+// LIB-5 (review D10): only plain files are read: a pipe named like a WAV never blocks the index.
+#[cfg(unix)]
+#[test]
+fn only_plain_files_are_read() {
+    let t = Scratch::new("fifo");
+    wav(&t.0.join("Kick.wav"), 1, 0.1, 0.5);
+    let made = std::process::Command::new("mkfifo").arg(t.0.join("trap.wav")).status().unwrap();
+    assert!(made.success());
+    let dir = t.0.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(index(Root::Folder(&dir), None)).unwrap());
+    let found = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the index never ends: it opened the pipe");
+    let labels: Vec<&str> = found.items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!((labels, found.unreadable.len()), (vec!["Kick"], 0));
+}
+
+// LIB-4 (review D20): a sample of yours is named by its exact path: two names that differ only in
+// bytes that aren't UTF-8 are two samples.
+#[cfg(target_os = "linux")]
+#[test]
+fn ids_are_the_exact_paths() {
+    use std::os::unix::ffi::OsStrExt;
+    let t = Scratch::new("bytes");
+    for name in [&b"kick \xff.wav"[..], &b"kick \xfe.wav"[..]] {
+        wav(&t.0.join(std::ffi::OsStr::from_bytes(name)), 1, 0.05, 0.5);
+    }
+    wav(&t.0.join("snare.wav"), 1, 0.05, 0.5);
+    let found = index(Root::Folder(&t.0), None);
+    let ids: std::collections::BTreeSet<&str> = found.items.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids.len(), 3, "{ids:?}");
+    assert!(ids.contains(format!("sample:folder:{}", t.0.join("snare.wav").display()).as_str()), "a UTF-8 path is itself: {ids:?}");
+    let again = index(Root::Folder(&t.0), None);
+    assert_eq!(again.items.iter().map(|i| i.id.as_str()).collect::<std::collections::BTreeSet<_>>(), ids, "and stays so");
+}
+
+// LIB-5 (review D11): a crafted header (more valid bits than its samples hold) is unreadable, never
+// a panic.
+#[test]
+fn a_crafted_header_is_unreadable() {
+    let t = Scratch::new("crafted");
+    let mut fmt = fmt_of(0xFFFE, 1, 48_000, 96_000, 2, 16);
+    fmt.extend(22u16.to_le_bytes());
+    fmt.extend(100u16.to_le_bytes());
+    fmt.extend(4u32.to_le_bytes());
+    fmt.extend([1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71]);
+    let data: Vec<u8> = (0..480i16).flat_map(|i| (i * 10).to_le_bytes()).collect();
+    std::fs::write(t.0.join("Odd.wav"), raw_wav(&fmt, &data)).unwrap();
+    let found = index(Root::Folder(&t.0), None);
+    assert!(found.items.is_empty() && found.unreadable.len() == 1, "{:?}", found.unreadable);
+}
+
+// LIB-7 (review D15): a note of yours, which credits no one, gives way to a pack's note for the
+// same bytes; a pack's note is never replaced.
+#[test]
+fn a_folders_note_gives_way_to_a_packs() {
+    let t = Scratch::new("credit");
+    std::fs::create_dir_all(t.0.join("assets")).unwrap();
+    let yours = Sample { from: json!({"folder": true}), ..Sample::default() };
+    let packs = Sample { from: json!({"pack": "@alice/loops", "version": "1.2.0", "license": "CC-BY-4.0"}), ..Sample::default() };
+    assert!(write_note(&t.0, "kick.wav", &note(&yours)).unwrap());
+    assert!(write_note(&t.0, "kick.wav", &note(&packs)).unwrap(), "the pack's credit replaces it");
+    let read = || serde_json::from_slice::<Value>(&std::fs::read(t.0.join("assets/kick.wav.json")).unwrap()).unwrap();
+    assert_eq!(read(), note(&packs));
+    assert!(!write_note(&t.0, "kick.wav", &note(&yours)).unwrap());
+    let other = Sample { from: json!({"pack": "std", "version": "0.5.0"}), ..Sample::default() };
+    assert!(!write_note(&t.0, "kick.wav", &note(&other)).unwrap(), "a pack's credit stays");
+    assert_eq!(read(), note(&packs));
+    let names: Vec<String> =
+        std::fs::read_dir(t.0.join("assets")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["kick.wav.json"], "no part file left");
+}
+
+// LIB-5 (review D16): an index asked to stop ends between two files and writes no cache; the
+// cache files of a folder removed, of a package's folder gone, and of none are pruned.
+#[test]
+fn a_stopped_index_writes_nothing_and_caches_are_pruned() {
+    let t = Scratch::new("prune");
+    let (mine, other, cache) = (t.0.join("mine"), t.0.join("other"), t.0.join("cache"));
+    wav(&mine.join("kick.wav"), 1, 0.05, 0.5);
+    wav(&other.join("snare.wav"), 1, 0.05, 0.5);
+    let stopped = index_until(Root::Folder(&mine), Some(&cache), &AtomicBool::new(true));
+    assert!(stopped.stopped && stopped.items.is_empty());
+    assert!(!cache.exists(), "nothing written");
+    index(Root::Folder(&mine), Some(&cache));
+    index(Root::Folder(&other), Some(&cache));
+    let pack_dir = t.0.join("pack");
+    pack(&pack_dir, Some("[folder.\"kicks\"]\n"));
+    wav(&pack_dir.join("samples/kicks/boom.wav"), 1, 0.05, 0.5);
+    index(Root::Package { name: "@alice/loops", dir: &pack_dir }, Some(&cache));
+    std::fs::write(cache.join("0123456789abcdef.json"), "{\"files\": {}}").unwrap();
+    assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 4);
+    assert_eq!(prune(&cache, &[mine.clone(), other.clone()]), 1, "only the one that names no folder");
+    std::fs::remove_dir_all(&pack_dir).unwrap();
+    assert_eq!(prune(&cache, std::slice::from_ref(&mine)), 2, "the other folder, and the pack gone");
+    let left: Vec<_> = std::fs::read_dir(&cache).unwrap().flatten().map(|e| e.path()).collect();
+    assert_eq!(left, [cache_file(&cache, &mine)]);
+}
+
+// LIB-5 (review D12): a package whose `samples` is a link lists none: it could point anywhere.
+#[cfg(unix)]
+#[test]
+fn a_packages_samples_through_a_link_list_none() {
+    let t = Scratch::new("link");
+    let (dir, elsewhere) = (t.0.join("pack"), t.0.join("elsewhere"));
+    pack(&dir, Some("[folder.\"kicks\"]\n"));
+    wav(&elsewhere.join("kicks/boom.wav"), 1, 0.05, 0.5);
+    std::os::unix::fs::symlink(&elsewhere, dir.join("samples")).unwrap();
+    let found = index(Root::Package { name: "@alice/loops", dir: &dir }, None);
+    assert!(found.items.is_empty(), "{:?}", found.items);
+    assert!(found.problems.iter().any(|p| p.contains("is a link")), "{:?}", found.problems);
 }
