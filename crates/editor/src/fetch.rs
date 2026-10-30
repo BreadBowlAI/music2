@@ -1,46 +1,50 @@
 //! Downloads (NET-1 to NET-6): the one way music2 reaches another computer.
 //!
 //! [`get`] fetches something small into memory (a catalog, a JSON file); [`get_to_file`] streams
-//! something big to a file, through `<dest>.part`, checked by size and hash before it is put in
-//! place. Both take an address that is `https://`, `http://` to this computer only, or `file://`
-//! (NET-3), and a size limit (NET-4). Neither retries nor caches: the caller decides.
+//! something big to a file, through a `.part` file of its own beside it, checked by size and hash
+//! before it is put in place. Both take an address that is `https://`, `http://` to this computer
+//! only, or `file://` (NET-3); a size limit and a deadline for the whole download (NET-4, NET-6);
+//! and a cancel. Neither retries nor caches: the caller decides.
 //!
 //! Both block. Call them from a thread of their own (in the server, `spawn_blocking`), never from
 //! async code: there they panic, as tokio's `block_on` does, so a blocked runtime is a loud bug
 //! and never a quiet stall of the app's server. Inside, fetch drives reqwest's client on a small
-//! runtime of its own, one thread for the whole process, made at the first download: so a cancel
-//! is seen within 50 ms even while the server sends nothing, a quiet server is timed by the
-//! stretch of silence, not by each read, and connections are kept for the next download from the
-//! same host.
+//! runtime of its own, one thread for the whole process, made at the first download: so while it
+//! waits on the network a cancel or the deadline is seen within 50 ms, a quiet server is timed by
+//! the stretch of silence, not by each read, and connections are kept for the next download from
+//! the same host.
 //!
-//! TLS is rustls with the ring provider, handed to fetch's own client, so nothing is installed for
+//! TLS is rustls with the ring provider, handed to fetch's own clients, so nothing is installed for
 //! the whole process and nothing else can change it. Certificates are checked by the OS's verifier
-//! (rustls-platform-verifier: Apple's on macOS, the system's store on Linux). No check can be
-//! turned off here, and no proxy is used.
+//! (rustls-platform-verifier: Apple's on macOS, the system's store on Linux), loaded only for an
+//! https address: http to this computer and `file://` never need one. No check can be turned off
+//! here, no proxy is used, and no compressed answer is taken.
 
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use m2_song::Sha;
 use reqwest::Url;
-use reqwest::header::LOCATION;
+use reqwest::header::{ACCEPT_ENCODING, CONTENT_ENCODING, HeaderMap, HeaderValue, LOCATION};
+use rustls::pki_types::CertificateDer;
 use rustls_platform_verifier::BuilderVerifierExt;
 use sha2::{Digest, Sha256};
 
-/// What a download to a file must be (NET-4): its size and SHA-256 when the caller knows them,
-/// and the most it may be.
+/// What a download must be (NET-4, NET-6): its size and SHA-256 when the caller knows them, the
+/// most it may be, and the longest the whole download may take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Expect {
     pub size: Option<u64>,
     pub sha256: Option<Sha>,
     pub limit: u64,
+    pub within: Duration,
 }
 
 /// What came: its size and SHA-256.
@@ -68,8 +72,8 @@ pub enum Error {
     Refused(String),
     /// The host couldn't be reached: no internet, a wrong name, or it is down.
     Unreachable { host: String },
-    /// No safe connection could be made: a certificate this computer doesn't trust, or a server
-    /// that doesn't speak TLS.
+    /// No safe connection could be made: a certificate this computer doesn't trust, one for
+    /// another name, or a server that doesn't speak TLS.
     Unsafe { host: String },
     /// Nothing came for this many seconds: no answer, or no bytes.
     Quiet { host: String, secs: u64 },
@@ -77,6 +81,8 @@ pub enum Error {
     Broken { host: String },
     /// The server answered this, not the file.
     Status { host: String, code: u16 },
+    /// The server sent the file compressed (`Content-Encoding`), which music2 doesn't read.
+    Compressed { host: String },
     /// Over the limit: its size when the server or the disk said it.
     TooBig { size: Option<u64>, limit: u64 },
     /// Not the size the caller expected: what came, or `None` when more came than expected and
@@ -84,10 +90,12 @@ pub enum Error {
     WrongSize { expected: u64, got: Option<u64> },
     /// Not the SHA-256 the caller expected.
     WrongHash,
+    /// The whole download took longer than the caller's `within`, in seconds.
+    TooSlow { secs: u64 },
     /// A file couldn't be read (`file://`) or the download couldn't be saved: why, naming it.
     Disk(String),
     /// This computer's trusted certificates couldn't be loaded, so no https download can be
-    /// checked: why.
+    /// checked: why. Tried again at the next https download.
     NoCertificates(String),
     /// The caller cancelled it.
     Cancelled,
@@ -114,6 +122,7 @@ impl std::fmt::Display for Error {
                 write!(f, "{host} can't answer right now (it answered {code}): try again later")
             }
             Error::Status { host, code } => write!(f, "{host} answered {code}, not the file"),
+            Error::Compressed { host } => write!(f, "{host} sent the file compressed, which music2 doesn't read"),
             Error::TooBig { size: Some(size), limit } => {
                 let (size, limit) = sizes(*size, *limit);
                 write!(f, "the file was {size}, more than the {limit} allowed")
@@ -127,6 +136,9 @@ impl std::fmt::Display for Error {
                 write!(f, "the download was more than the {} it should be: it was changed or broken on the way", size_text(*expected))
             }
             Error::WrongHash => write!(f, "the download didn't match its hash: it was changed or broken on the way"),
+            Error::TooSlow { secs } => {
+                write!(f, "the download took more than the {secs} s allowed, so music2 stopped it: the connection is too slow")
+            }
             Error::NoCertificates(why) => {
                 write!(f, "couldn't load this computer's trusted certificates, so no download can be checked: {why}")
             }
@@ -142,25 +154,24 @@ pub fn check(url: &str) -> Result<(), Error> {
     source(url).map(drop)
 }
 
-/// The bytes at `url`, at most `limit` of them (NET-4).
-pub fn get(url: &str, limit: u64) -> Result<Vec<u8>, Error> {
-    let source = source(url)?;
-    let mut sink = Sink::Memory(vec![]);
-    let e = Expect { size: None, sha256: None, limit };
-    run(&TIMEOUTS, &source, &mut sink, &e, &mut |_| {}, &AtomicBool::new(false))?;
-    match sink {
-        Sink::Memory(bytes) => Ok(bytes),
-        Sink::File(..) => unreachable!("get keeps the bytes"),
-    }
+/// The bytes at `url`, checked against `expect` (NET-4): at most `expect.limit` of them, of its
+/// size and hash when known, within `expect.within`. `cancel` is looked at as for
+/// [`get_to_file`].
+pub fn get(url: &str, expect: &Expect, cancel: &AtomicBool) -> Result<Vec<u8>, Error> {
+    get_with(&SETUP, url, expect, cancel)
 }
 
-/// Download `url` to `dest` (NET-4, NET-5): into `<dest>.part` beside it, hashed as it is
-/// written, stopped as soon as it is over `expect.limit`, then checked against `expect`'s size and
-/// hash and renamed onto `dest`. On any failure or a cancel the `.part` is removed and `dest` is
-/// left as it was. `progress` is told after each piece; `cancel` is looked at every 50 ms.
-/// `dest`'s folder must be there, and one download at a time may go to a `dest`.
+/// Download `url` to `dest` (NET-4, NET-5): into a `.part` file of this call's own beside it,
+/// hashed as it is written, stopped as soon as it is over `expect.limit` or past `expect.within`,
+/// then checked against `expect`'s size and hash, put on the drive, renamed onto `dest`, and its
+/// folder synced. On any failure or a cancel the `.part` is removed and `dest` is left as it was,
+/// but when the folder can't be synced after the rename: then nothing is left at `dest`.
+/// `progress` is told after each piece, on the caller's thread. `cancel` is looked at every 50 ms
+/// while the download waits on the network, and between pieces read from a file; not while the
+/// file is put on the drive. `dest`'s folder must be there. Two downloads to one `dest` never mix:
+/// each lands whole, the last one last.
 pub fn get_to_file(url: &str, dest: &Path, expect: &Expect, mut progress: impl FnMut(Progress), cancel: &AtomicBool) -> Result<Got, Error> {
-    get_to_file_with(&TIMEOUTS, url, dest, expect, &mut progress, cancel)
+    get_to_file_with(&SETUP, url, dest, expect, &mut progress, cancel)
 }
 
 /// How long a download waits (NET-6).
@@ -177,7 +188,7 @@ pub(crate) struct Timeouts {
 pub(crate) const TIMEOUTS: Timeouts =
     Timeouts { connect: Duration::from_secs(10), answer: Duration::from_secs(30), quiet: Duration::from_secs(30) };
 
-/// How often a wait looks at its cancel.
+/// How often a wait looks at its cancel and its deadline.
 pub(crate) const TICK: Duration = Duration::from_millis(50);
 
 /// The most redirects one download follows (NET-3).
@@ -186,9 +197,63 @@ const REDIRECTS: usize = 5;
 /// A file's pieces as they are read from the disk.
 const PIECE: usize = 64 << 10;
 
-/// [`get_to_file`], waiting as long as `t` says: the tests' timeouts are short.
+/// The most `.part` names one download tries before it gives up: each taken name (a part a crash
+/// left, a link someone put there) is passed over.
+const PART_TRIES: usize = 64;
+
+/// What a download runs with: the app's always, the tests' own where they say.
+pub(crate) struct Setup<'a> {
+    pub(crate) timeouts: Timeouts,
+    /// Certificates trusted besides the OS's: a test's own CA, never one in the app.
+    pub(crate) roots: &'a [CertificateDer<'static>],
+    /// The disk calls that put a download in place.
+    pub(crate) disk: &'a dyn Disk,
+}
+
+pub(crate) const SETUP: Setup<'static> = Setup { timeouts: TIMEOUTS, roots: &[], disk: &OsDisk };
+
+/// The disk calls that put a download in place (NET-5), in one seam so the tests see their order.
+pub(crate) trait Disk: Sync {
+    /// The file's bytes made durable: `F_FULLFSYNC` on macOS, `fsync` on Linux.
+    fn barrier(&self, f: &File) -> std::io::Result<()>;
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    /// A folder's new entries pushed to the drive (WRITE-1).
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()>;
+}
+
+/// The OS's own calls, through `m2_os` (PLAT-2).
+pub(crate) struct OsDisk;
+
+impl Disk for OsDisk {
+    fn barrier(&self, f: &File) -> std::io::Result<()> {
+        m2_os::fs::barrier(f)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::rename(from, to)
+    }
+
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+        m2_os::fs::sync_dir(dir)
+    }
+}
+
+/// [`get`] with `setup`.
+pub(crate) fn get_with(setup: &Setup, url: &str, expect: &Expect, cancel: &AtomicBool) -> Result<Vec<u8>, Error> {
+    let source = source(url)?;
+    let ctl = Control::new(expect.within, cancel);
+    ctl.check()?;
+    let mut sink = Sink::Memory(vec![]);
+    run(setup, &source, &mut sink, expect, &mut |_| {}, &ctl)?;
+    match sink {
+        Sink::Memory(bytes) => Ok(bytes),
+        Sink::File(..) => unreachable!("get keeps the bytes"),
+    }
+}
+
+/// [`get_to_file`] with `setup`.
 pub(crate) fn get_to_file_with(
-    t: &Timeouts,
+    setup: &Setup,
     url: &str,
     dest: &Path,
     expect: &Expect,
@@ -196,20 +261,53 @@ pub(crate) fn get_to_file_with(
     cancel: &AtomicBool,
 ) -> Result<Got, Error> {
     let source = source(url)?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err(Error::Cancelled);
-    }
-    let mut part = Part { path: part_of(dest)?, landed: false };
+    let ctl = Control::new(expect.within, cancel);
+    ctl.check()?;
+    let (file, path) = open_part(dest)?;
+    let mut part = Part { path, landed: false };
     let saving = |e: std::io::Error| Error::Disk(format!("couldn't save {}: {e}", part.path.display()));
-    let mut sink = Sink::File(File::create(&part.path).map_err(saving)?, part.path.clone());
-    let got = run(t, &source, &mut sink, expect, progress, cancel)?;
+    let mut sink = Sink::File(file, part.path.clone());
+    let got = run(setup, &source, &mut sink, expect, progress, &ctl)?;
     let Sink::File(file, _) = sink else { unreachable!("get_to_file writes a file") };
-    // The bytes reach the drive before the name does, so a crash never leaves `dest` empty.
-    m2_os::fs::push(&file).map_err(saving)?;
+    // The bytes are on the drive before the name is, so a crash never leaves `dest` empty or half.
+    setup.disk.barrier(&file).map_err(saving)?;
     drop(file);
-    std::fs::rename(&part.path, dest).map_err(|e| Error::Disk(format!("couldn't put the download at {}: {e}", dest.display())))?;
+    setup.disk.rename(&part.path, dest).map_err(|e| Error::Disk(format!("couldn't put the download at {}: {e}", dest.display())))?;
     part.landed = true;
+    // The new name pushed to the drive: durable on Linux now, on macOS at its next flush. If that
+    // fails, the file it replaced is gone already, so nothing is left at `dest` (NET-5).
+    if let Err(e) = setup.disk.sync_dir(m2_os::fs::folder_of(dest)) {
+        let _ = std::fs::remove_file(dest);
+        return Err(Error::Disk(format!("couldn't make sure {} was saved: {e}", dest.display())));
+    }
     Ok(got)
+}
+
+/// The `.part` names handed out in this process, one each (NET-5).
+pub(crate) static PARTS: AtomicU64 = AtomicU64::new(0);
+
+/// The `n`th `.part` name for `dest`: `<dest>.<this process>-<n>.part`, beside it.
+pub(crate) fn part_of(dest: &Path, n: u64) -> PathBuf {
+    let mut name = OsString::from(dest.file_name().unwrap_or_default());
+    name.push(format!(".{}-{n}.part", std::process::id()));
+    dest.with_file_name(name)
+}
+
+/// A `.part` of this call's own, made new: never one another call writes, never through a link,
+/// which `create_new` refuses as it refuses any name that is taken (NET-5).
+fn open_part(dest: &Path) -> Result<(File, PathBuf), Error> {
+    if dest.file_name().is_none() {
+        return Err(Error::Disk(format!("{} isn't a file's name", dest.display())));
+    }
+    for _ in 0..PART_TRIES {
+        let path = part_of(dest, PARTS.fetch_add(1, Ordering::Relaxed));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((file, path)),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(Error::Disk(format!("couldn't save {}: {e}", path.display()))),
+        }
+    }
+    Err(Error::Disk(format!("couldn't make a new file beside {}: every name tried is taken", dest.display())))
 }
 
 /// The `.part` being written: removed when dropped, unless it landed (NET-5). So a failure, a
@@ -227,12 +325,36 @@ impl Drop for Part {
     }
 }
 
-/// `<dest>.part`, beside `dest`.
-fn part_of(dest: &Path) -> Result<PathBuf, Error> {
-    let name = dest.file_name().ok_or_else(|| Error::Disk(format!("{} isn't a file's name", dest.display())))?;
-    let mut part = OsString::from(name);
-    part.push(".part");
-    Ok(dest.with_file_name(part))
+/// What may end a download early: the caller's cancel and its deadline (NET-6).
+struct Control<'a> {
+    cancel: &'a AtomicBool,
+    /// None when `within` is beyond what the clock can say.
+    deadline: Option<Instant>,
+    within: Duration,
+}
+
+impl Control<'_> {
+    fn new(within: Duration, cancel: &AtomicBool) -> Control<'_> {
+        Control { cancel, deadline: Instant::now().checked_add(within), within }
+    }
+
+    /// Cancelled, or past the deadline.
+    fn check(&self) -> Result<(), Error> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        match self.deadline {
+            Some(at) if Instant::now() >= at => {
+                Err(Error::TooSlow { secs: (self.within.as_secs() + u64::from(self.within.subsec_nanos() > 0)).max(1) })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The time left before the deadline.
+    fn left(&self) -> Option<Duration> {
+        self.deadline.map(|at| at.saturating_duration_since(Instant::now()))
+    }
 }
 
 /// Where a download comes from, once its address passed NET-3.
@@ -272,8 +394,8 @@ fn web(url: &Url) -> Result<(), Error> {
     }
 }
 
-/// Whether `url`'s host is this computer: `127.0.0.1`, `::1` or `localhost`, which the client
-/// always sends to 127.0.0.1 (NET-3). The parser writes an address one way only (`0x7f.1` is
+/// Whether `url`'s host is this computer: `127.0.0.1`, `::1` or `localhost`, which the clients
+/// always send to 127.0.0.1 (NET-3). The parser writes an address one way only (`0x7f.1` is
 /// `127.0.0.1`, `[0:0::1]` is `[::1]`), so its words are compared.
 fn this_computer(url: &Url) -> bool {
     matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
@@ -384,22 +506,20 @@ impl Intake<'_> {
 /// One download, from `source` into `sink`, on fetch's runtime: blocks the caller, and panics in
 /// async code (NET-6).
 fn run(
-    t: &Timeouts,
+    setup: &Setup,
     source: &Source,
     sink: &mut Sink,
     expect: &Expect,
     progress: &mut dyn FnMut(Progress),
-    cancel: &AtomicBool,
+    ctl: &Control,
 ) -> Result<Got, Error> {
     let mut intake = Intake { expect, sink, progress, hash: Sha256::new(), done: 0, total: None };
     runtime().block_on(async {
         match source {
-            Source::Web(url) => from_web(t, url, &mut intake, cancel).await?,
-            Source::Disk(path) => from_disk(path, &mut intake, cancel)?,
+            Source::Web(url) => from_web(setup, url, &mut intake, ctl).await?,
+            Source::Disk(path) => from_disk(path, &mut intake, ctl)?,
         }
-        if cancel.load(Ordering::Relaxed) {
-            return Err(Error::Cancelled);
-        }
+        ctl.check()?;
         intake.end()
     })
 }
@@ -418,25 +538,74 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// The one client, made at the first download from the web, with this computer's certificates.
-pub(crate) fn client() -> Result<&'static reqwest::Client, Error> {
-    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
-    CLIENT.get_or_init(|| make_client(&TIMEOUTS)).as_ref().map_err(|why| Error::NoCertificates(why.clone()))
+/// Whose certificates a client trusts.
+enum Trust<'a> {
+    /// The OS's: every https download.
+    Os,
+    /// The OS's and these: a test's own CA.
+    OsAnd(&'a [CertificateDer<'static>]),
+    /// None: the client for http to this computer, which never meets a certificate.
+    Nothing,
 }
 
-fn make_client(t: &Timeouts) -> Result<reqwest::Client, String> {
+/// The client for `url`'s scheme: https with the OS's certificates, http to this computer with
+/// none, so a computer without any still reaches a local registry (NET-3).
+fn client_for(url: &Url, roots: &[CertificateDer<'static>]) -> Result<reqwest::Client, Error> {
+    match url.scheme() {
+        "https" => tls_client(roots),
+        _ => {
+            static PLAIN: Mutex<Option<reqwest::Client>> = Mutex::new(None);
+            kept(&PLAIN, Trust::Nothing).map_err(|why| Error::Disk(format!("couldn't start downloading: {why}")))
+        }
+    }
+}
+
+/// The https client, made at the first https download with this computer's certificates, and
+/// kept once made. A failure isn't kept: the next download tries again.
+pub(crate) fn tls_client(roots: &[CertificateDer<'static>]) -> Result<reqwest::Client, Error> {
+    static TLS: Mutex<Option<reqwest::Client>> = Mutex::new(None);
+    match roots.is_empty() {
+        true => kept(&TLS, Trust::Os),
+        false => make_client(&TIMEOUTS, Trust::OsAnd(roots)),
+    }
+    .map_err(Error::NoCertificates)
+}
+
+/// The client in `slot`, made with `trust` when there is none yet.
+fn kept(slot: &Mutex<Option<reqwest::Client>>, trust: Trust) -> Result<reqwest::Client, String> {
+    let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(client) = &*slot {
+        return Ok(client.clone());
+    }
+    let client = make_client(&TIMEOUTS, trust)?;
+    *slot = Some(client.clone());
+    Ok(client)
+}
+
+fn make_client(t: &Timeouts, trust: Trust) -> Result<reqwest::Client, String> {
     // ring, handed to this client alone: no default is installed for the process (NET-3).
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut tls = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|e| e.to_string())?
-        .with_platform_verifier()
-        .map_err(|e| e.to_string())?
-        .with_no_client_auth();
+    let builder =
+        rustls::ClientConfig::builder_with_provider(provider.clone()).with_safe_default_protocol_versions().map_err(|e| e.to_string())?;
+    let builder = match trust {
+        Trust::Os => builder.with_platform_verifier().map_err(|e| e.to_string())?,
+        // The OS's verifier still, given one more root: rustls calls any verifier it is handed
+        // "dangerous", as it can't tell this one checks as strictly.
+        Trust::OsAnd(roots) => {
+            let verifier =
+                rustls_platform_verifier::Verifier::new_with_extra_roots(roots.iter().cloned(), provider).map_err(|e| e.to_string())?;
+            builder.dangerous().with_custom_certificate_verifier(Arc::new(verifier))
+        }
+        Trust::Nothing => builder.with_root_certificates(rustls::RootCertStore::empty()),
+    };
+    let mut tls = builder.with_no_client_auth();
     tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+    // The file as it is: never compressed on the way (NET-4).
+    let headers = HeaderMap::from_iter([(ACCEPT_ENCODING, HeaderValue::from_static("identity"))]);
     reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
         .user_agent(concat!("music2/", env!("CARGO_PKG_VERSION")))
+        .default_headers(headers)
         // fetch follows redirects itself, checking each (NET-3), and sends no referrer (NET-2).
         .redirect(reqwest::redirect::Policy::none())
         .referer(false)
@@ -447,13 +616,14 @@ fn make_client(t: &Timeouts) -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-async fn from_web(t: &Timeouts, url: &Url, intake: &mut Intake<'_>, cancel: &AtomicBool) -> Result<(), Error> {
-    let client = client()?;
+async fn from_web(setup: &Setup<'_>, url: &Url, intake: &mut Intake<'_>, ctl: &Control<'_>) -> Result<(), Error> {
+    let t = &setup.timeouts;
     let mut url = url.clone();
     let mut hops = 0;
     let mut answer = loop {
         let host = host_of(&url);
-        let answer = wait(client.get(url.clone()).send(), t.answer, cancel, &host).await?.map_err(|e| failed(&e, &host))?;
+        let client = client_for(&url, setup.roots)?;
+        let answer = wait(client.get(url.clone()).send(), t.answer, ctl, &host).await?.map_err(|e| failed(&e, &host))?;
         let location = answer.headers().get(LOCATION).filter(|_| answer.status().is_redirection());
         let Some(location) = location else { break answer };
         if hops == REDIRECTS {
@@ -468,31 +638,39 @@ async fn from_web(t: &Timeouts, url: &Url, intake: &mut Intake<'_>, cancel: &Ato
     if !answer.status().is_success() {
         return Err(Error::Status { host, code: answer.status().as_u16() });
     }
+    let encoded = answer.headers().get(CONTENT_ENCODING).map(|v| v.as_bytes().trim_ascii());
+    if encoded.is_some_and(|v| !v.is_empty() && !v.eq_ignore_ascii_case(b"identity")) {
+        return Err(Error::Compressed { host });
+    }
     intake.total(answer.content_length())?;
-    while let Some(piece) = wait(answer.chunk(), t.quiet, cancel, &host).await?.map_err(|e| failed(&e, &host))? {
+    while let Some(piece) = wait(answer.chunk(), t.quiet, ctl, &host).await?.map_err(|e| failed(&e, &host))? {
         intake.take(&piece)?;
     }
     Ok(())
 }
 
-/// A `file://` download: the file read from the disk with the same checks (NET-3).
-fn from_disk(path: &Path, intake: &mut Intake<'_>, cancel: &AtomicBool) -> Result<(), Error> {
+/// A `file://` download: a plain file read from the disk with the same checks (NET-3). Anything
+/// else (a pipe, a device) is refused before it is opened, since opening or reading it could block
+/// where no cancel is seen.
+fn from_disk(path: &Path, intake: &mut Intake<'_>, ctl: &Control) -> Result<(), Error> {
     let unread = |e: std::io::Error| match e.kind() {
         ErrorKind::NotFound => Error::Disk(format!("{} isn't there", path.display())),
         ErrorKind::PermissionDenied => Error::Disk(format!("music2 isn't allowed to read {}", path.display())),
         _ => Error::Disk(format!("couldn't read {}: {e}", path.display())),
     };
+    let plain = |meta: &std::fs::Metadata| match (meta.is_dir(), meta.is_file()) {
+        (true, _) => Err(Error::Disk(format!("{} is a folder, not a file", path.display()))),
+        (_, false) => Err(Error::Disk(format!("{} isn't a plain file: music2 reads only files from a drive", path.display()))),
+        _ => Ok(()),
+    };
+    plain(&std::fs::metadata(path).map_err(unread)?)?;
     let mut file = File::open(path).map_err(unread)?;
     let meta = file.metadata().map_err(unread)?;
-    if meta.is_dir() {
-        return Err(Error::Disk(format!("{} is a folder, not a file", path.display())));
-    }
+    plain(&meta)?;
     intake.total(Some(meta.len()))?;
     let mut buf = vec![0u8; PIECE];
     loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(Error::Cancelled);
-        }
+        ctl.check()?;
         match file.read(&mut buf) {
             Ok(0) => return Ok(()),
             Ok(n) => intake.take(&buf[..n])?,
@@ -502,19 +680,19 @@ fn from_disk(path: &Path, intake: &mut Intake<'_>, cancel: &AtomicBool) -> Resul
     }
 }
 
-/// `fut`, waited for at most `limit`, looking at `cancel` every [`TICK`] (NET-6).
-async fn wait<F: Future>(fut: F, limit: Duration, cancel: &AtomicBool, host: &str) -> Result<F::Output, Error> {
+/// `fut`, waited for at most `limit`, looking at the cancel and the deadline every [`TICK`]
+/// (NET-6).
+async fn wait<F: Future>(fut: F, limit: Duration, ctl: &Control<'_>, host: &str) -> Result<F::Output, Error> {
     let start = Instant::now();
     let mut fut = std::pin::pin!(fut);
     loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(Error::Cancelled);
-        }
+        ctl.check()?;
         let left = limit.saturating_sub(start.elapsed());
         if left.is_zero() {
             return Err(Error::Quiet { host: host.to_string(), secs: limit.as_secs().max(1) });
         }
-        if let Ok(out) = tokio::time::timeout(left.min(TICK), &mut fut).await {
+        let slice = ctl.left().map_or(left, |l| l.min(left)).min(TICK);
+        if let Ok(out) = tokio::time::timeout(slice, &mut fut).await {
             return Ok(out);
         }
     }
