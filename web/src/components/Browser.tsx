@@ -2,7 +2,8 @@ import clsx from "clsx";
 import { ChevronRight, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { graphApi, lockReason, moduleName, type Effect, type GraphState, type Instrument, type ViewNode } from "../lib/graph";
-import { listedEffect, pluginEffects, pluginInstruments, PLUGINS, usePluginList, wantPlugins } from "../lib/plugins";
+import { searchLibrary, type LibraryItem } from "../lib/library";
+import { listedEffect, listedInstrument, pluginEffects, pluginInstruments, PLUGINS, usePluginList, wantPlugins } from "../lib/plugins";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { category, NoMatch, search } from "./EffectBrowser";
@@ -79,6 +80,16 @@ export function addEffectTo(module: string, component: string) {
 /** Whether a drag carries an effect from the browser. */
 export const dragsEffect = (e: React.DragEvent) => e.dataTransfer.types.includes(EFFECT_DRAG);
 
+/** `list` in groups by category, each group where its first item is: a search's best group first. */
+function byCategory<T extends { category: string }>(list: T[]) {
+  const groups: { name: string; items: T[] }[] = [];
+  for (const x of list) {
+    const g = groups.find((g) => g.name === x.category) ?? (groups.push({ name: x.category, items: [] }), groups[groups.length - 1]);
+    g.items.push(x);
+  }
+  return groups;
+}
+
 function readFolded(key = FOLDED_KEY): Set<string> {
   try {
     return new Set(JSON.parse(localStorage.getItem(key) ?? "[]"));
@@ -89,7 +100,7 @@ function readFolded(key = FOLDED_KEY): Set<string> {
 
 /**
  * The side browser (taste.md §3.6): what can be added, by its label, grouped by category. Typing
- * filters it; ↓ moves into the list and Enter adds the row to the selected track; a row can be
+ * filters it through the library's one search (LIB-1), as ⌘F does; ↓ moves into the list and Enter adds the row to the selected track; a row can be
  * dragged onto a track or the Device view. Instruments add a track: Enter or a double-click, below
  * the selected one; dragged, below the tracks (BR-1). The installed plugins (gaps #32) are a Plugins
  * group under the instruments and one under the effects, folded until opened: opening one asks for
@@ -105,15 +116,42 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
   const field = useRef<HTMLInputElement>(null);
   const connected = useStore((s) => s.connected);
   const locked = lockReason(graph, connected);
-  const groups = useMemo(() => search(graph.effects, query), [graph.effects, query]);
-  const instruments = useMemo(() => instrumentGroups(graph.instruments ?? [], query), [graph.instruments, query]);
+  // The search is the library's (LIB-1), asked as typing rests: the hits keep their rank in their
+  // groups. Until the first answer comes, the list stays as it was.
+  const [hits, setHits] = useState<LibraryItem[] | null>(null);
+  const asked = useRef(0);
+  useEffect(() => {
+    const n = ++asked.current;
+    if (!query.trim()) return setHits(null);
+    const t = window.setTimeout(() => void searchLibrary(query).then((found) => n === asked.current && setHits(found), () => {}), 60);
+    return () => window.clearTimeout(t);
+  }, [query, plugins.plugins]);
+  const ranked = <T,>(kind: LibraryItem["kind"], find: (component: string) => T | undefined): T[] =>
+    (hits ?? []).filter((h) => h.kind === kind).flatMap((h) => find(h.component) ?? []);
+  const groups = useMemo(
+    () =>
+      hits
+        ? byCategory(ranked("effect", (c) => graph.effects.find((e) => e.component === c))).map((g) => ({ name: g.name, items: g.items.map((effect) => ({ effect, score: 0 })) }))
+        : search(graph.effects, ""),
+    [graph.effects, hits],
+  );
+  const instruments = useMemo(
+    () => instrumentGroups(hits ? ranked("instrument", (c) => graph.instruments?.find((i) => i.component === c)) : (graph.instruments ?? []), ""),
+    [graph.instruments, hits],
+  );
   // Folds hold while browsing; a search shows every match.
   const shown = groups.map((g) => ({ ...g, open: !!query.trim() || !folded.has(g.name) }));
   const playable = instruments.map((g) => ({ ...g, open: !!query.trim() || !folded.has(`instruments:${g.name}`) }));
   // The Plugins groups: open when opened, or searched once the list is there (a search doesn't scan).
   const pluginsOpen = (k: string) => opened.has(k) || (!!query.trim() && plugins.state === "listed");
-  const fxPlugins = useMemo(() => search(pluginEffects(plugins.plugins), query).flatMap((g) => g.items.map((m) => m.effect)), [plugins.plugins, query]);
-  const insPlugins = useMemo(() => instrumentGroups(pluginInstruments(plugins.plugins), query).flatMap((g) => g.items), [plugins.plugins, query]);
+  const fxPlugins = useMemo(
+    () => (hits ? ranked("plugin", listedEffect) : search(pluginEffects(plugins.plugins), "").flatMap((g) => g.items.map((m) => m.effect))),
+    [plugins.plugins, hits],
+  );
+  const insPlugins = useMemo(
+    () => (hits ? ranked("plugin", listedInstrument) : instrumentGroups(pluginInstruments(plugins.plugins), "").flatMap((g) => g.items)),
+    [plugins.plugins, hits],
+  );
   // Instruments first, then effects, each with its plugins last: one keyboard list.
   const flat: Row[] = [
     ...playable.flatMap((g) => (g.open ? g.items.map((i) => ({ instrument: i })) : [])),
