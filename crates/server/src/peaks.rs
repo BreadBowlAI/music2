@@ -142,14 +142,15 @@ pub struct Store {
 
 static GLOBAL: LazyLock<Store> = LazyLock::new(|| Store::new(disk()));
 
-/// Where the server keeps peaks. Tests keep them in memory, so none writes outside its own folder.
+/// Where the server keeps peaks: in memory in a process that keeps no cache folder, as every test
+/// (PLAT-7), so none writes outside its own folder.
 fn disk() -> Option<PathBuf> {
-    if cfg!(test) { None } else { folder() }
+    crate::resources::cache_dir().map(|d| folder_in(&d))
 }
 
 /// `<cache>/peaks`, beside the hash cache (PLAT-7: under `$HOME`).
-fn folder() -> Option<PathBuf> {
-    crate::resources::cache_dir().map(|d| d.join("peaks"))
+fn folder_in(cache: &Path) -> PathBuf {
+    cache.join("peaks")
 }
 
 impl Store {

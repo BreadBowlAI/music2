@@ -21,6 +21,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
+    // PLAT-7: a program keeps the cache folder, under the HOME it is given (a suite's scratch one).
+    m2_os::dirs::keep_cache();
     // Tests: with `M2_PROBE` set, the probe plugin (`clap:m2.probe`) is installed, in the host
     // process as any plugin (e2e/br-plugins.mjs). Debug builds only, as `m2`'s.
     #[cfg(debug_assertions)]

@@ -50,6 +50,8 @@ fn main() -> ExitCode {
     if std::env::var_os("M2_PROBE").is_some() {
         m2_plugins::probe::install();
     }
+    // PLAT-7: a program keeps the cache folder (hashes, renders, samples' measures); a test doesn't.
+    m2_os::dirs::keep_cache();
     // HOST-2: the command runs on a worker while the main thread serves plugins as their main
     // thread, with its run loop; plugins it created are destroyed there before it exits.
     m2_plugins::run_main(|| {
