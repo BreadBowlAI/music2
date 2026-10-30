@@ -95,6 +95,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("view_code", "Code", None),
     ("lanes", "Show Automation", None),
     ("dock", "Show Dock", None),
+    // The library's one search (LIB-1): a panel over the window. In the code editor ⌘F is its find.
+    ("find", "Find Sounds…", Some("CmdOrCtrl+F")),
     ("browser", "Show Browser", Some("Alt+CmdOrCtrl+B")),
     // The grid of the view the pointer or the keyboard was last in: the timeline's or the roll's.
     ("grid_narrower", "Narrower Grid", Some("CmdOrCtrl+1")),
@@ -252,6 +254,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Line,
         Item("lanes"),
         Item("dock"),
+        Item("find"),
         Item("browser"),
         Item("piano"),
         Line,
@@ -644,6 +647,19 @@ mod tests {
             let view = &bar.iter().find(|m| m.0 == "View").expect("View").1;
             let at = view.iter().position(|r| *r == Row::Item("browser")).expect("Show Browser");
             assert_eq!(view[at + 1], Row::Item("piano"), "mac: {mac}");
+        }
+    }
+
+    /// Track spotlight (LIB-1): View ▸ Find Sounds… is ⌘F (Ctrl+F), just before Show Browser on both
+    /// menu bars: one search over everything that can be added.
+    #[test]
+    fn find_sounds_is_command_f_in_view() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "find").map(|i| (i.1, i.2)), Some(("Find Sounds…", Some("CmdOrCtrl+F"))));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let view = &bar.iter().find(|m| m.0 == "View").expect("View").1;
+            let at = view.iter().position(|r| *r == Row::Item("find")).expect("Find Sounds…");
+            assert_eq!(view[at + 1], Row::Item("browser"), "mac: {mac}");
         }
     }
 

@@ -172,6 +172,7 @@ export const SUITES = [
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 19, s: 2 }],
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
+  ["spotlight", "fix", { expect: 40, s: 4 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 

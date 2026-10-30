@@ -488,6 +488,26 @@ An example body:
 {"session": 7}
 ```
 
+### `GET /api/library`
+
+Search everything you can add: instruments, sounds (presets), effects, samples and plugins, best first; q's words may name a kind, loop, one-shot, a tempo or a key.
+
+Its query, as JSON:
+
+```json
+{"q": "warm pad"}
+```
+
+### `GET /api/library/preview`
+
+An item's preview: a short WAV of it playing, rendered offline and kept.
+
+Its query, as JSON:
+
+```json
+{"id": "std:synth-pluck"}
+```
+
 ### `GET /api/plugins`
 
 The installed CLAP plugins: id, name, vendor, version, and whether each is an instrument or an effect.

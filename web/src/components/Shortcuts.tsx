@@ -79,6 +79,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Place a clip off the grid", `hold ${mod.cmd} while dragging`],
       ["Mix", "X"],
       ["Show / hide the dock", "E"],
+      ["Find instruments, sounds and effects", chord("F")],
       ["Show / hide the browser", chord("B", { alt: true })],
       ["Keyboard shortcuts", opt("K")],
       ["Zoom in / out", `${chord("=")} / ${chord("−")}`],
