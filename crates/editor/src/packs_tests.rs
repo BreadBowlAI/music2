@@ -95,7 +95,10 @@ fn a_data_instrument_is_offered_and_added_as_any_other() {
                  [[region]]\nfile = \"samples/pluck.wav\"\nroot = 60\nkeys = [0, 127]\n";
     let (mut s, _) = song_and_store_with(&f, &[("instruments/tiny-piano.toml", piano)]);
     let offered = crate::tracks::instruments(&s).into_iter().find(|i| i.component == "@test/tiny:tiny-piano").expect("offered");
-    assert_eq!((offered.module.as_str(), offered.name.as_str(), offered.category.as_str()), ("@test/tiny/instruments", "tinyPiano", "Keys"));
+    assert_eq!(
+        (offered.module.as_str(), offered.name.as_str(), offered.category.as_str()),
+        ("@test/tiny/instruments", "tinyPiano", "Keys")
+    );
     assert_eq!(offered.pack, Some(From { name: "@test/tiny".into(), version: "0.1.0".into() }));
     let made = crate::tracks::add(&mut s, "@test/tiny:tiny-piano", None, None, None).unwrap_or_else(|e| panic!("{e}"));
     let track = f.read(&format!("tracks/{}.ts", made.module));

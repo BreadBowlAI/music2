@@ -702,7 +702,8 @@ pub fn import(i: &Import) -> Result<Imported, String> {
         m2_song::instrument::binding(&id),
         i.name,
     );
-    let credits: Vec<&String> = sfz.comments.iter().filter(|c| !c.trim().is_empty() && !c.chars().all(|ch| "-=*/_ ".contains(ch))).collect();
+    let credits: Vec<&String> =
+        sfz.comments.iter().filter(|c| !c.trim().is_empty() && !c.chars().all(|ch| "-=*/_ ".contains(ch))).collect();
     if !credits.is_empty() {
         readme.push_str("\n## Credits\n\nFrom the SFZ file:\n\n");
         for c in credits {
