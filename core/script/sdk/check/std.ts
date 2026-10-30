@@ -13,6 +13,7 @@ import { fm } from "std/fm";
 import { bass, hat, kick, pad, pluck } from "std/instruments";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
+import { sampler } from "std/sampler";
 import { mono, synth } from "std/synth";
 
 declare const x: Audio, notes: Events, beats: Control<"beats">, l: Control<"unit01">, pitch: Control<"semitones">, s: Signal;
@@ -76,6 +77,22 @@ export const instruments: Audio[] = [
   drums.shaker(notes),
   mono(notes, (n) => vca(osc.saw(n.pitch), adsr(n.gate)), { glide: ms(60) }),
   mono(notes, (n) => osc.square(n.pitch)),
+  sampler(notes, { sample: "pluck.wav", mode: "gate", velocity: 0.5 }),
+  sampler(notes, { zones: { 36: "kick.wav", 38: "snare.wav" } }),
+  // Regions (PKG-15): only `file` must be given; pairs are written as two numbers.
+  sampler(notes, {
+    regions: [
+      { file: "C4-soft.wav", keys: [58, 62], velocity: [1, 80], round_robin: [1, 2] },
+      { file: "C4-up.wav", trigger: "release", volume: -12, pan: -0.2, tune: 5, offset: 10 },
+      { file: "pad.wav", root: 55, loop: [2400, 5399] },
+    ],
+  }),
+  // @ts-expect-error: a region needs a file.
+  sampler(notes, { regions: [{ root: 60 }] }),
+  // @ts-expect-error: a trigger is "attack" or "release".
+  sampler(notes, { regions: [{ file: "a.wav", trigger: "up" }] }),
+  // @ts-expect-error: a region has no field `lokey`.
+  sampler(notes, { regions: [{ file: "a.wav", lokey: 3 }] }),
 ];
 
 // Every effect as the editor adds it, then left bare.
