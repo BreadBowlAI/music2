@@ -278,7 +278,8 @@ impl AppState {
             Some(both) => both,
             None => {
                 let packages = without_song(folders.packs.as_deref());
-                (m2_script::describe(&packages), packages)
+                // Instruments written as data too (PACK-13), as a song's build reads them.
+                (m2_session::describe(&packages), packages)
             }
         };
         // The list kept from before any scan that runs now: the scan holds another lock.
@@ -389,7 +390,8 @@ fn short(text: &[u8]) -> String {
 /// among them) and `yours` (your Presets folder) make: its WAV in `cache`, rendered now with std and
 /// the item's own package loaded, unless kept there. Why there is none, in words.
 pub fn preview(previews: &Previews, id: &str, packages: &[(String, PathBuf)], yours: Option<&Path>, cache: &Path) -> Result<Preview> {
-    let catalog = m2_script::describe(packages);
+    // Instruments written as data too (PACK-13), as the library lists them.
+    let catalog = m2_session::describe(packages);
     packages.iter().find(|(n, _)| n == "std").context("no std package is loaded")?;
     let items = library::items(&Sources { catalog: &catalog, packages, yours, plugins: &[], samples: &[] });
     let item = items.iter().find(|i| i.id == id).ok_or_else(|| anyhow!("There is no {id} in the library."))?;
