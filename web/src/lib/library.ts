@@ -94,6 +94,7 @@ export interface FoldersSaid {
 interface Answer {
   items: LibraryItem[];
   library: LibraryItem[];
+  libraryMore: number;
   registry: RegistrySaid | null;
   folders?: FoldersSaid;
 }
@@ -104,7 +105,7 @@ export async function searchLibrary(q: string, fits: number | null = null): Prom
   const res = await fetch(`/api/library?q=${encodeURIComponent(q)}${at}`, { headers: auth });
   const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-  return { items: data.items ?? [], library: data.library ?? [], registry: data.registry ?? null, folders: data.folders };
+  return { items: data.items ?? [], library: data.library ?? [], libraryMore: data.library_more ?? 0, registry: data.registry ?? null, folders: data.folders };
 }
 
 /** What the search found, with the words it answers: a page never takes an older search's rows for a newer's. */
@@ -115,6 +116,8 @@ export interface Found {
   library: LibraryItem[];
   /** The registry, as the answer found it: null with none set. */
   registry?: RegistrySaid | null;
+  /** How many more From the library found than it answers (REG-13: at most 20 rows). */
+  libraryMore?: number;
   /** Your sample folders, as the answer found them. */
   folders?: FoldersSaid;
   /** Why the search failed, in words. */
@@ -139,7 +142,7 @@ export function useSearch(query: string | null, again: unknown, delay = 60, fits
     const mine = { q, answer: answer.then((a) => [...a.items, ...a.library]) };
     asking.current = mine;
     answer.then(
-      (a) => asking.current === mine && setFound({ q, items: a.items, library: a.library, registry: a.registry, folders: a.folders }),
+      (a) => asking.current === mine && setFound({ q, items: a.items, library: a.library, libraryMore: a.libraryMore, registry: a.registry, folders: a.folders }),
       (e) => asking.current === mine && setFound({ q, items: [], library: [], error: e instanceof Error ? e.message : String(e) }),
     );
     return mine.answer;
@@ -265,15 +268,19 @@ export function sizeWords(bytes: number): string {
   return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
 }
 
-/** The Get running (REG-15), if one is: the library item's id and label, and how far it is. Every window's, from the server's `get` events. */
-export const useGetting = create<{ id: string; label: string; done: number; total: number } | null>(() => null);
+/**
+ * The Get running (REG-15), if one is: the library item's id and label, how far it is, and whether
+ * it is being installed, when it can no longer be cancelled. Every window's, from the server's
+ * `get` events.
+ */
+export const useGetting = create<{ id: string; label: string; done: number; total: number; installing: boolean } | null>(() => null);
 
-on("get", (msg: { id: string; label?: string; done?: number; total?: number; end?: boolean }) => {
+on("get", (msg: { id: string; label?: string; done?: number; total?: number; installing?: boolean; end?: boolean }) => {
   if (msg.end) {
     if (useGetting.getState()?.id === msg.id) useGetting.setState(null, true);
     return;
   }
-  useGetting.setState({ id: msg.id, label: msg.label ?? msg.id, done: msg.done ?? 0, total: msg.total ?? 0 }, true);
+  useGetting.setState({ id: msg.id, label: msg.label ?? msg.id, done: msg.done ?? 0, total: msg.total ?? 0, installing: !!msg.installing }, true);
 });
 
 /** What a Get answers: a pack's `got` and the id its item has once installed; a sample's add, as Add sample's. */
@@ -288,7 +295,7 @@ export interface Got {
  * to the open song at `to` (with `session`). Answers once it is done; `useGetting` says how far.
  */
 export async function getFromLibrary(item: LibraryItem, sample?: { session: number; to: unknown }): Promise<Got> {
-  useGetting.setState({ id: item.id, label: item.label, done: 0, total: item.library?.size ?? 0 }, true);
+  useGetting.setState({ id: item.id, label: item.label, done: 0, total: item.library?.size ?? 0, installing: false }, true);
   try {
     const body = sample ? { id: item.id, session: sample.session, to: sample.to } : { id: item.id };
     const res = await fetch("/api/library/get", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
@@ -303,7 +310,7 @@ export async function getFromLibrary(item: LibraryItem, sample?: { session: numb
 /** Get version `version` of `pack`, which the open song locks and hasn't got (REG-17). */
 export async function getMissing(pack: string, version: string): Promise<Got> {
   const id = `${pack}@${version}`;
-  useGetting.setState({ id, label: `${pack} ${version}`, done: 0, total: 0 }, true);
+  useGetting.setState({ id, label: `${pack} ${version}`, done: 0, total: 0, installing: false }, true);
   try {
     const res = await fetch("/api/library/get", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify({ pack, version }) });
     const data = await readJson(res);
@@ -314,9 +321,11 @@ export async function getMissing(pack: string, version: string): Promise<Got> {
   }
 }
 
-/** Stop the Get running: nothing of it is kept. */
-export async function cancelGet(): Promise<void> {
-  await fetch("/api/library/get/cancel", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: "{}" });
+/** Stop the Get running: nothing of it is kept. Once it is being installed it can't be: why, in words. */
+export async function cancelGet(): Promise<string | null> {
+  const res = await fetch("/api/library/get/cancel", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: "{}" });
+  const data = await readJson(res);
+  return data.cancelled === false && data.why ? data.why : null;
 }
 
 /** A version the open song locks that isn't installed (REG-17): whether the library has it (`can`, and the bytes a Get fetches), or why not. */

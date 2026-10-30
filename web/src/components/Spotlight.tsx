@@ -124,7 +124,7 @@ export function addItem(item: LibraryItem) {
  * got, in words; null once it is.
  */
 export async function getItem(item: LibraryItem, got: () => void = () => {}): Promise<string | null> {
-  const { graph, connected } = useStore.getState();
+  const { graph, connected, toast } = useStore.getState();
   if (!graph) return "open a song first";
   const why = lockReason(graph, connected);
   if (why) return why;
@@ -137,6 +137,11 @@ export async function getItem(item: LibraryItem, got: () => void = () => {}): Pr
     }
     const done = await getFromLibrary(item);
     got();
+    // It is added to the song it was got for, only while that song is open.
+    if (useStore.getState().graph?.session !== graph.session) {
+      toast(`Got ${done.got.pack} ${done.got.version}, but ${graph.name ?? "the song it was got for"} isn't open now, so ${item.label} wasn't added: open it, then find ${item.label} with ⌘F`);
+      return null;
+    }
     const fresh = await graphApi.get();
     useStore.getState().set({ graph: fresh });
     // Installed, it is an item you have: its own id, as the lists offer it now.
@@ -336,7 +341,7 @@ function Panel({ graph }: { graph: GraphState }) {
     if (running) return setSaid(`Getting ${running.label} already: wait for it, or cancel it.`);
     stopPreview();
     setSaid(null);
-    void getItem(item, () => alive.current && close()).then((why) => {
+    void getItem(item, () => void (alive.current && close())).then((why) => {
       if (!why) return;
       const words = `Couldn't get ${item.label}: ${why.replace(/^Couldn't get [^:]*: /, "")}`;
       if (alive.current) setSaid(words);
@@ -376,8 +381,8 @@ function Panel({ graph }: { graph: GraphState }) {
         else if (e.key === "ArrowUp") move(-1);
         else if (e.key === " " && browsing && current) play(current);
         else if (e.key === "Enter") enter();
-        // While a Get comes, Esc cancels it; then it closes.
-        else if (e.key === "Escape") void (getting ? cancelGet() : close());
+        // While a Get comes, Esc cancels it; once it is being installed it can't be, and Esc closes.
+        else if (e.key === "Escape") void (getting && !getting.installing ? cancelGet().then((why) => why && setSaid(why)) : close());
         else return;
         e.preventDefault();
         e.stopPropagation();
@@ -562,7 +567,14 @@ function Panel({ graph }: { graph: GraphState }) {
                   <span className="shrink-0 max-w-[45%] truncate text-xs text-fg-muted">
                     {sound} · {fromWords(item)}
                   </span>
-                  {item.library && mine ? (
+                  {item.library && mine && getting.installing ? (
+                    <>
+                      <span className="shrink-0 text-xs text-fg-muted" data-spotlight-installing>
+                        Installing…
+                      </span>
+                      <span className="absolute left-2 right-2 bottom-0.5 h-0.5 rounded-full bg-accent" data-spotlight-progress={100} />
+                    </>
+                  ) : item.library && mine ? (
                     <>
                       <span className="shrink-0 w-9 text-right text-xs text-fg-muted tabular-nums">{Math.round(part * 100)}%</span>
                       <button
@@ -572,7 +584,7 @@ function Panel({ graph }: { graph: GraphState }) {
                         className="shrink-0 h-ctl-sm px-2 rounded-sm text-xs text-fg-muted hover:bg-hover"
                         onClick={(e) => {
                           e.stopPropagation();
-                          void cancelGet();
+                          void cancelGet().then((why) => why && setSaid(why));
                         }}
                       >
                         Cancel
@@ -605,6 +617,11 @@ function Panel({ graph }: { graph: GraphState }) {
             })}
           </div>
         ))}
+        {found?.q === query && (found.libraryMore ?? 0) > 0 && (
+          <p className="px-2 py-1 text-xs text-fg-muted" data-spotlight-library-more>
+            {found.libraryMore} more in the library: type more to find them
+          </p>
+        )}
         {found?.q === query && query.trim() && library.length === 0 && found.registry && (found.registry.fetching || (found.registry.error && !found.registry.made)) && (
           <p className="px-2 py-1 text-xs text-fg-muted" data-spotlight-library-note>
             {found.registry.fetching ? "Looking at the library…" : "The library can't be reached right now (no internet?): what you have is all here."}
@@ -614,7 +631,9 @@ function Panel({ graph }: { graph: GraphState }) {
       <div className="h-ctl shrink-0 flex items-center gap-3 px-3 border-t border-line bg-chrome text-xs text-fg-muted">
         <span data-spotlight-said className="flex-1 min-w-0 truncate">
           {said ??
-            (getting
+            (getting?.installing
+              ? `Installing ${getting.label}…`
+              : getting
               ? `Getting ${getting.label}…${getting.total ? ` ${sizeWords(getting.done)} of ${sizeWords(getting.total)}` : ""} · Esc cancels`
               : current
                 ? `Enter ${enterWords(current, graph)}${current.preview ? " · Space plays it" : " · no preview"}`

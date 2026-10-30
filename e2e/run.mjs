@@ -12,8 +12,8 @@
 //              empty   no project open                 node suite <root> empty
 //              none    no project open                 node suite <root> <home>
 //              export  examples/first-song open        node suite <root> <home> <project> <m2 cli>
-//              library as export, and a registry: a bucket the m2 cli's robot builds from the packs in
-//                      fixtures/library, served over http on this computer while the run lasts
+//              library as export, and a registry: a bucket the m2 cli's robot builds from the three
+//                      packs in fixtures/library, served over http on this computer while the run lasts
 //                      (M2_REGISTRY names it); a path prefix written in <root>/library/drip is
 //                      answered half, then held until that file is gone
 //   --repo <dir>   the checkout examples/first-song is copied from (the <root>/proj of every kind),
@@ -179,7 +179,7 @@ export const SUITES = [
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
   ["pk-packs", "fix", { expect: 20, s: 3 }],
   ["spotlight", "fix", { expect: 53, s: 4 }],
-  ["library", "library", { expect: 31, s: 8 }],
+  ["library", "library", { expect: 38, s: 9 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 
@@ -417,7 +417,7 @@ function library(dir, home) {
   const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "none" };
   delete env.M2_REGISTRY;
   const m2 = (...a) => execFileSync(cli, a, { cwd: at, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  for (const [pack, owner] of [["drums", "alice"], ["keys", "bob"]]) {
+  for (const [pack, owner] of [["drums", "alice"], ["keys", "bob"], ["pad", "carol"]]) {
     const said = m2("registry", "add", "registry", pack, "--source", `https://github.com/${owner}/${pack}/releases/download/v1/${pack}.tar.gz`);
     const hex = /sha256:([0-9a-f]{64})/.exec(said)?.[1];
     if (!hex) throw new Error(`m2 registry add ${pack} said: ${said}`);
@@ -479,82 +479,86 @@ async function runOne(suite, kind, o = {}, stream) {
   const env = envFor(home, o.clap, o.probe);
   const bucket = kind === "library" ? await serveBucket(dir) : null;
   if (bucket) env.M2_REGISTRY = bucket.url;
-  const session = path.join(home, ".music2/session.json");
-  const log = fs.openSync(logFile, "w");
-  // Once the log is closed, a late line goes to it by name: its old descriptor may belong to
-  // another run's file by then.
-  let closed = false;
-  const say = (s) => {
-    if (closed) fs.appendFileSync(logFile, s);
-    else fs.writeSync(log, s);
-    if (stream) process.stdout.write(s);
-  };
+  // However the run ends, the bucket's server stops with it.
+  try {
+    const session = path.join(home, ".music2/session.json");
+    const log = fs.openSync(logFile, "w");
+    // Once the log is closed, a late line goes to it by name: its old descriptor may belong to
+    // another run's file by then.
+    let closed = false;
+    const say = (s) => {
+      if (closed) fs.appendFileSync(logFile, s);
+      else fs.writeSync(log, s);
+      if (stream) process.stdout.write(s);
+    };
 
-  const serverLog = fs.openSync(path.join(dir, "headless.log"), "w");
-  const server = spawn(headless, [open, session, `e2e${Date.now()}`], { env, stdio: ["ignore", serverLog, serverLog] });
-  let serverExit = null;
-  server.on("exit", (code, sig) => (serverExit = sig ?? code));
-  // It couldn't be started: say so in its run, not as a crash of every run.
-  server.on("error", (e) => (serverExit ??= e.code ?? String(e)));
-  const t0 = Date.now();
-  while (!fs.existsSync(session) && serverExit === null && Date.now() - t0 < 30000) await sleep(100);
-  await sleep(300);
-  let code;
-  if (!fs.existsSync(session)) {
-    say(`FAIL  the headless server didn't start (exit ${serverExit}); see ${path.join(dir, "headless.log")}\n`);
-    code = 1;
-  } else {
-    code = await new Promise((resolve) => {
-      const child = spawn(process.execPath, [path.join(E2E, `${suite}.mjs`), ...args], { cwd: E2E, env, stdio: ["ignore", "pipe", "pipe"] });
-      child.stdout.on("data", (d) => say(d.toString()));
-      child.stderr.on("data", (d) => say(d.toString()));
-      // Its output can still be on the way when it exits: wait for the end of both (at most 2 s,
-      // in case something it started holds them open), so every line it printed is counted.
-      const ends = Promise.all([child.stdout, child.stderr].map((s) => new Promise((r) => s.once("end", r).once("error", r))));
-      // On a timeout, SIGTERM first: puppeteer closes its browser on it (a SIGKILL would leave
-      // chrome-headless-shell running, since puppeteer starts it in its own process group).
-      let hard;
-      const timer = setTimeout(() => {
-        say(`FAIL  timed out after ${timeout / 1000}s\n`);
-        child.kill("SIGTERM");
-        hard = setTimeout(() => child.kill("SIGKILL"), 5000);
-      }, timeout);
-      child.on("exit", (c, sig) => {
-        clearTimeout(timer);
-        clearTimeout(hard);
-        Promise.race([ends, sleep(2000)]).then(() => resolve(sig ? 1 : c));
+    const serverLog = fs.openSync(path.join(dir, "headless.log"), "w");
+    const server = spawn(headless, [open, session, `e2e${Date.now()}`], { env, stdio: ["ignore", serverLog, serverLog] });
+    let serverExit = null;
+    server.on("exit", (code, sig) => (serverExit = sig ?? code));
+    // It couldn't be started: say so in its run, not as a crash of every run.
+    server.on("error", (e) => (serverExit ??= e.code ?? String(e)));
+    const t0 = Date.now();
+    while (!fs.existsSync(session) && serverExit === null && Date.now() - t0 < 30000) await sleep(100);
+    await sleep(300);
+    let code;
+    if (!fs.existsSync(session)) {
+      say(`FAIL  the headless server didn't start (exit ${serverExit}); see ${path.join(dir, "headless.log")}\n`);
+      code = 1;
+    } else {
+      code = await new Promise((resolve) => {
+        const child = spawn(process.execPath, [path.join(E2E, `${suite}.mjs`), ...args], { cwd: E2E, env, stdio: ["ignore", "pipe", "pipe"] });
+        child.stdout.on("data", (d) => say(d.toString()));
+        child.stderr.on("data", (d) => say(d.toString()));
+        // Its output can still be on the way when it exits: wait for the end of both (at most 2 s,
+        // in case something it started holds them open), so every line it printed is counted.
+        const ends = Promise.all([child.stdout, child.stderr].map((s) => new Promise((r) => s.once("end", r).once("error", r))));
+        // On a timeout, SIGTERM first: puppeteer closes its browser on it (a SIGKILL would leave
+        // chrome-headless-shell running, since puppeteer starts it in its own process group).
+        let hard;
+        const timer = setTimeout(() => {
+          say(`FAIL  timed out after ${timeout / 1000}s\n`);
+          child.kill("SIGTERM");
+          hard = setTimeout(() => child.kill("SIGKILL"), 5000);
+        }, timeout);
+        child.on("exit", (c, sig) => {
+          clearTimeout(timer);
+          clearTimeout(hard);
+          Promise.race([ends, sleep(2000)]).then(() => resolve(sig ? 1 : c));
+        });
+        // node couldn't be started: that run fails, and the others go on.
+        child.on("error", (e) => {
+          clearTimeout(timer);
+          clearTimeout(hard);
+          say(`FAIL  the suite didn't start: ${e.message}\n`);
+          resolve(1);
+        });
       });
-      // node couldn't be started: that run fails, and the others go on.
-      child.on("error", (e) => {
-        clearTimeout(timer);
-        clearTimeout(hard);
-        say(`FAIL  the suite didn't start: ${e.message}\n`);
-        resolve(1);
-      });
-    });
+    }
+    if (serverExit === null) {
+      server.kill("SIGTERM");
+      for (let i = 0; i < 30 && serverExit === null; i++) await sleep(100);
+      if (serverExit === null) server.kill("SIGKILL");
+    }
+    fs.closeSync(serverLog);
+    closed = true;
+    fs.closeSync(log);
+    const text = fs.readFileSync(logFile, "utf8");
+    const pass = (text.match(/^PASS/gm) ?? []).length;
+    const fail = (text.match(/^FAIL/gm) ?? []).length;
+    const skips = text.match(/^SKIP.*$/gm) ?? [];
+    const { expect } = o;
+    // Why a run that failed nothing still isn't ok.
+    const why = [];
+    if (expect !== undefined && pass < expect) why.push(`${pass} of its ${expect} checks passed, ${expect - pass} didn't run`);
+    if (expect !== undefined && pass > expect) why.push(`${pass} checks passed where ${expect} are expected: update its count in run.mjs and the README`);
+    why.push(...skips.map((s) => s.replace(/^SKIP\s+/, "skipped ")));
+    const status = code !== 0 || fail > 0 ? "FAIL" : why.length ? "PART" : "ok";
+    if (!opts.keep && status === "ok") removeTree(dir);
+    return { name, code, pass, fail, skip: skips.length, expect, why, status, logFile };
+  } finally {
+    await bucket?.stop();
   }
-  if (serverExit === null) {
-    server.kill("SIGTERM");
-    for (let i = 0; i < 30 && serverExit === null; i++) await sleep(100);
-    if (serverExit === null) server.kill("SIGKILL");
-  }
-  await bucket?.stop();
-  fs.closeSync(serverLog);
-  closed = true;
-  fs.closeSync(log);
-  const text = fs.readFileSync(logFile, "utf8");
-  const pass = (text.match(/^PASS/gm) ?? []).length;
-  const fail = (text.match(/^FAIL/gm) ?? []).length;
-  const skips = text.match(/^SKIP.*$/gm) ?? [];
-  const { expect } = o;
-  // Why a run that failed nothing still isn't ok.
-  const why = [];
-  if (expect !== undefined && pass < expect) why.push(`${pass} of its ${expect} checks passed, ${expect - pass} didn't run`);
-  if (expect !== undefined && pass > expect) why.push(`${pass} checks passed where ${expect} are expected: update its count in run.mjs and the README`);
-  why.push(...skips.map((s) => s.replace(/^SKIP\s+/, "skipped ")));
-  const status = code !== 0 || fail > 0 ? "FAIL" : why.length ? "PART" : "ok";
-  if (!opts.keep && status === "ok") removeTree(dir);
-  return { name, code, pass, fail, skip: skips.length, expect, why, status, logFile };
 }
 
 // One run, never a crash of all of them: anything runOne throws is that run's FAIL, in its log.

@@ -362,13 +362,21 @@ function MissingPacks() {
   const [said, setSaid] = useState<string | null>(null);
   const getting = useGetting();
   const toast = useStore((s) => s.toast);
+  // Asked again every 2 s while it shows: the library's catalog may still be coming as the app
+  // starts, and `m2 pack get` may get one meanwhile.
   useEffect(() => {
     let alive = true;
-    void missingPacks().then(
-      (m) => alive && setMissing(m),
-      () => alive && setMissing([]),
-    );
-    return () => void (alive = false);
+    const ask = () =>
+      void missingPacks().then(
+        (m) => alive && setMissing(m),
+        () => alive && setMissing((was) => was ?? []),
+      );
+    ask();
+    const t = window.setInterval(ask, 2000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
   }, []);
   if (!missing?.length) return null;
   const get = (m: MissingPack) => {
@@ -392,10 +400,11 @@ function MissingPacks() {
               {m.pack} {m.version}
               {!m.can && m.why && <span className="block text-xs text-fg-muted whitespace-normal">{m.why}</span>}
             </span>
-            {m.can && mine && (
+            {m.can && mine && getting.installing && <span className="text-xs text-fg-muted">Installing…</span>}
+            {m.can && mine && !getting.installing && (
               <>
                 <span className="text-xs text-fg-muted tabular-nums">{getting.total ? `${Math.round((getting.done / getting.total) * 100)}%` : "…"}</span>
-                <Button variant="secondary" size="sm" onClick={() => void cancelGet()} data-missing-cancel>
+                <Button variant="secondary" size="sm" onClick={() => void cancelGet().then((why) => why && setSaid(why))} data-missing-cancel>
                   Cancel
                 </Button>
               </>

@@ -6,12 +6,13 @@
 // Gets waiting, and Esc cancels it, leaving nothing in the store; Enter again gets it and adds it: a
 // sound adds a track of its instrument with the sound loaded, its pack's dependency and lock
 // written; once got it is what you have. A sample's Get adds it on a new audio track with its note,
-// and installs no pack.
+// and installs no pack. A Get that ends after another song was opened installs its pack, adds
+// nothing to the song open then, and says so (fixtures/library's third pack, @carol/pad).
 //
 //   node e2e/library.mjs <root> <home> <project> <m2 cli>     (the `library` kind)
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { check, done, HOME, open, PROJ, read, ROOT, until } from "./fixlib.mjs";
+import { check, done, HOME, open, PROJ, read, ROOT, sess, until } from "./fixlib.mjs";
 
 const { page, errors, toasts, state, key } = await open(1440, 900, { browser: true });
 
@@ -74,7 +75,8 @@ const index = crypto.createHash("sha256").update(fs.readFileSync(`${ROOT}/librar
 fs.writeFileSync(drip, `blobs/sha256/${index}`);
 check(await pickRow(DARK), "↓ reaches its sound Dark");
 await key("Enter");
-const progress = () => page.$eval(`[data-spotlight-item="${DARK}"] [data-spotlight-progress]`, (e) => Number(e.getAttribute("data-spotlight-progress"))).catch(() => -1);
+const progressOf = (id) => page.$eval(`[data-spotlight-item="${id}"] [data-spotlight-progress]`, (e) => Number(e.getAttribute("data-spotlight-progress"))).catch(() => -1);
+const progress = () => progressOf(DARK);
 check(await until(async () => (await progress()) > 0, 15000), `Enter gets it: its row shows how far, with a bar (${await progress()}%)`);
 const coming = await said();
 check(coming.startsWith("Getting Dark…") && coming.includes(" of ") && coming.includes("Esc cancels"), `the foot says how far, and that Esc cancels (${coming})`);
@@ -122,5 +124,30 @@ const note = has("assets/Boom.wav.json") ? JSON.parse(read("assets/Boom.wav.json
 check(note.from?.pack === "@alice/drums" && note.from?.version === "1.0.0" && note.from?.license === "CC0-1.0", `the note names its pack, version and licence (${JSON.stringify(note)})`);
 check(await toasted("Added Boom on a new track"), "and says so, with Undo");
 check(!fs.existsSync(`${store}/@alice`), "a sample comes alone: no pack is installed for it");
+
+// ---------------------------------------------------------------- a Get that ends after another song was opened
+
+const PAD = "library:@carol/pad:warm-pad";
+const other = `${ROOT}/other-song`;
+fs.cpSync(PROJ, other, { recursive: true });
+const otherManifest = fs.readFileSync(`${other}/music2.toml`, "utf8");
+const padIndex = crypto.createHash("sha256").update(fs.readFileSync(`${ROOT}/library/pad/src/index.ts`)).digest("hex");
+fs.writeFileSync(drip, `blobs/sha256/${padIndex}`);
+await find("warm pad");
+check(await until(async () => (await rows()).includes(PAD), 15000), `"warm pad" finds the library's Warm pad (${(await rows()).slice(-3)})`);
+check(await pickRow(PAD), "↓ reaches it");
+await key("Enter");
+check(await until(async () => (await progressOf(PAD)) > 0, 15000), "its Get comes, held half way");
+const opened = await page.evaluate(
+  async (token, path) => (await fetch("/api/graph/open", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ path }) })).status,
+  sess.page_token,
+  other,
+);
+check(opened === 200 && (await until(async () => (await state()).dir === other, 10000)), "another song is opened meanwhile");
+const otherModules = await modules();
+fs.rmSync(drip);
+check(await toasted("isn't open now"), "once got, it says the song it was got for isn't open, so it wasn't added");
+check(fs.readFileSync(`${other}/music2.toml`, "utf8") === otherManifest && (await modules()).length === otherModules.length, "nothing is added to the song open now");
+check(fs.existsSync(`${store}/@carol/pad/0.1.0/m2pack.json`), "the pack is installed all the same");
 
 done(errors);
