@@ -17,7 +17,7 @@ felt-piano/
   samples/              recordings its code plays
 ```
 
-A pack holds only `.ts`, `.wasm`, `.toml`, `.json`, `.md`, `.txt` and `.wav` files, and `LICENSE`.
+A pack holds only `.ts`, `.wasm`, `.toml`, `.json`, `.md`, `.txt` and `.wav` files (in any capitals: `.WAV` is a WAV), and `LICENSE`. It holds no link (a symbolic link or shortcut): copy the file in instead.
 
 ## m2pkg.toml
 
@@ -32,11 +32,13 @@ repository = "https://github.com/alice/felt-piano"
 tags = ["keys", "piano"]
 
 [dependencies]                 # only these two
-"@m2/core" = "1"
-std = "0.4"
+"@m2/core" = "1"               # this SDK, 1.0 or newer but below 2
+std = "0.4"                    # the std you made it with, or any newer one
 ```
 
 Every key is checked: one music2 doesn't know is an error, so a typo never goes unseen.
+
+`std` is the std you made the pack with: a newer music2's std, which only adds, still runs it. `@m2/core` keeps its major version: `"1"` is any 1.x.
 
 ## An instrument
 
@@ -103,6 +105,6 @@ It shows in the instrument's **Presets**, under music2's own.
 | List its files | `m2 pack build felt-piano` writes `m2pack.json`: every file, its size and its fingerprint |
 | Install it | `m2 pack install felt-piano` |
 
-`m2 pack check` checks what the pack registry will: the strict `m2pkg.toml`, the file types, a licence, every instrument and effect has a category and builds in a song, every kernel loads, every sound loads on its instrument, and every recording its code names is in the pack.
+`m2 pack check` checks what the pack registry will: the strict `m2pkg.toml`, the file types and no links, a licence, every instrument and effect has a category and builds in a song, every kernel loads, every sound is for an instrument of the pack and names only its controls (inside any range marked `.strict()`), and every recording its code names is in the pack.
 
-A version is never changed once installed: to change the pack, raise its version.
+A version is never changed once installed: to change the pack, raise its version. While you try it from its folder (`{ path = … }`), a change you save to its code, its `m2pkg.toml` or its kernels reaches the song the next time the song builds: when one of the song's own files changes, or the song opens again.
