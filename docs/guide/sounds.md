@@ -32,7 +32,48 @@ std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/k
   | A4, A#4 (69, 70) | shakers | D#5 (75) | claves |
 
   A hit cuts off the drum before it, as on a drum machine: a kick the kick still ringing, a closed hat an open one. Toms, rim, cowbell, ride and shakers ring on. No two hits are quite the same, as on an analog machine (each catches its noise and metal at a new place), yet every render of a song is. The kit's knobs are `kickTune`, `kickDecay`, `punch` (from a deep 808 boom to a hard 909 thump), `snareTune`, `snap`, `hatDecay`, `openDecay`, `hatTone`, `tomTune`, `drive`, and a level in dB for each group: `kickLevel`, `snareLevel` (with the clap and rim), `hatLevel`, `tomLevel` and `percLevel` (cymbals and the rest). Each drum is also an instrument of its own, on every note: `drums.kick`, `drums.snare`, `drums.clap`, `drums.hats` (closed, with G#2 pedal and A#2 open), `drums.tom` (tuned by the note: A2 plays at its `tune`), `drums.rim`, `drums.cowbell`, `drums.cymbal` and `drums.shaker`. The kit comes out as one sound, so a drum you want to treat on its own (a kick for the bass to duck under, a snare with a reverb of its own) goes on a lane of its own, played by that drum alone, as `examples/sounds` does with its kick.
-- **Sampler** (`std/sampler`, std 0.2.1): `sampler` plays a WAV file from the song's `assets/` folder on every note, higher or lower by how far the note is from `root` (60, C4): `sampler(lane.notes("notes"), { sample: "pluck.wav" })`. Or one file for each range of notes, each from its root up to the next one's: `{ zones: { 36: "kick.wav", 38: "snare.wav" } }`. It plays the whole file however short the note (`mode: "oneshot"`), or stops with the note, fading over `release` (`mode: "gate"`). Knobs: `tune` (semitones), `level`, `attack`, `release`. In the app, drop a WAV on its card in Device. [`examples/sampler`](https://github.com/BreadBowlAI/music2/tree/main/examples/sampler) plays drums and a melody from three short files.
+- **Sampler** (`std/sampler`, std 0.2.1): `sampler` plays a WAV file from the song's `assets/` folder on every note, higher or lower by how far the note is from `root` (60, C4): `sampler(lane.notes("notes"), { sample: "pluck.wav" })`. Or one file for each range of notes, each from its root up to the next one's: `{ zones: { 36: "kick.wav", 38: "snare.wav" } }`. It plays the whole file however short the note (`mode: "oneshot"`), or stops with the note, fading over `release` (`mode: "gate"`). Knobs: `tune` (semitones), `level`, `attack`, `release`, and `velocity` (std 0.5.0): how much playing harder makes a note louder, from 0 (not at all) to 1 (all the way, the default). In the app, drop a WAV on its card in Device. [`examples/sampler`](https://github.com/BreadBowlAI/music2/tree/main/examples/sampler) plays drums and a melody from three short files.
+
+  **Recorded instruments: `regions`** (std 0.5.0). A real piano, guitar or drum kit is many recordings: each note, played soft and hard, sometimes twice so repeats don't sound the same. `regions` maps them, one region a recording, with the ideas of SFZ (the open format free sampled instruments use). Give one of `sample`, `zones` and `regions`. Only `file` is needed; the rest have defaults:
+
+  | Field | What it means | Left out |
+  |---|---|---|
+  | `file` | the recording, in `assets/` | needed |
+  | `root` | the note it was recorded at (60 is C4) | 60 |
+  | `keys` | `[lowest, highest]`: the notes it plays, higher or lower than its root | its root alone if you give `root`, else every note |
+  | `velocity` | `[lowest, highest]`: how hard, 1 (softest) to 127 (hardest) | every velocity |
+  | `round_robin` | `[position, of]`: one of several takes, played in turn: `[1, 2]` and `[2, 2]` alternate | `[1, 1]` |
+  | `trigger` | `"attack"`: plays when the note starts; `"release"`: when it ends (a key's click, a string's buzz) | `"attack"` |
+  | `loop` | `[start, end]`: frames of the file (samples of each channel, counted from 0) to repeat while the note is held | no loop |
+  | `tune` | cents (a hundredth of a semitone) | 0 |
+  | `volume` | dB | 0 |
+  | `pan` | -1 (left) to 1 (right) | 0 |
+  | `offset` | frames into the file to start from | 0 |
+
+  ```ts
+  sampler(lane.notes("notes"), {
+    regions: [
+      { file: "piano/C4-soft-1.wav", keys: [58, 62], velocity: [1, 80], round_robin: [1, 2] },
+      { file: "piano/C4-soft-2.wav", keys: [58, 62], velocity: [1, 80], round_robin: [2, 2] },
+      { file: "piano/C4-hard.wav", keys: [58, 62], velocity: [81, 127] },
+      { file: "piano/key-up.wav", trigger: "release", volume: -12 },
+    ],
+    mode: "gate",
+  });
+  ```
+
+  How it plays:
+  - A note's velocity, 0 to 1 in the piano roll, is a number from 1 to 127 here: velocity × 127, rounded. So 0.5 is 64.
+  - Every region whose `keys`, `velocity` and turn match plays, all at once (layers). A pad region under every note, say, plays with the piano's.
+  - The turn counts the notes the lane has played, whatever their key: notes that start together count once, so a chord's notes all take the same turn. So notes that take turns on one lane keep their takes: a kick and a snare that alternate (kick, snare, kick, snare) each play the same take every time, and so do the two notes of a trill. Give each drum whose takes must alternate a lane of its own. (A turn for each key is [gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#sounds).)
+  - The turns are the same in an export, and when you open the song and play it from the start. Play it again (Return, then Space), jump, or try notes on the lane, and the turns carry on from where they were, so a take may swap.
+  - Every take of a round robin must be there wherever it plays: `[1, 3]` and `[2, 3]` with no `[3, 3]` is refused, since every third note would play nothing.
+  - A `"release"` region plays to its end when the note stops, whatever `mode` says.
+  - A loop repeats while the key is held. It blends its last few milliseconds into the start, so it doesn't click. When you let go, the file plays on past the loop to its end (in `mode: "gate"`, fading over `release`).
+  - A mistake is said in words when the song builds: "regions: region 3: keys 70 to 60: the lowest is above the highest".
+  - Regions can come from a helper function or a `const`, as a list of many files is easiest to write. A `trigger` kept in a `const` needs the const's type, or the code editor reads it as any text: `const keyUps: Region[] = [{ file: "key-up.wav", trigger: "release" }]`, with `import { type Region } from "@m2/core"`.
+
+  The Sampler's card in Device says what it plays ("5 recordings, 2 layers, round robin of 2, release sounds, loops"). Its regions are changed in code: a WAV dropped on it is refused. Not yet: a sustain pedal, choke groups (an open hat cut by a closed one), blends between velocity layers, and instruments too big for memory ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#sounds)).
 - **The first instruments** (`std/instruments`): `bass`, `kick`, `hat`, `pluck` and `pad`, simple versions built from the building blocks below, short enough to read and copy. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `drums.kick`, `drums.hats`, `synth.pluck` and `synth.pad`. The templates still start new songs with the first ones.
 
 [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.

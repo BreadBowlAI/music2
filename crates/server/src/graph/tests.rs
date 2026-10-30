@@ -6,7 +6,7 @@ use m2_play::{DeviceErrorKind, Driver};
 use super::*;
 use m2_editor::Gestures;
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
 
 pub(super) struct Fixture(pub(super) PathBuf);
 
