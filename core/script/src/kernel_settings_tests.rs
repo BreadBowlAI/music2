@@ -121,21 +121,33 @@ fn regions_settings_are_checked() {
         ("7", "region 3: must be an object such as { file: \"C4.wav\", root: 60 }, not 7"),
         ("{ root: 60 }", "region 3: needs a file, as file: \"C4.wav\""),
         ("{ file: \"../x.wav\" }", "region 3: file must be a file name in assets/, not \"../x.wav\""),
-        ("{ file: \"a.wav\", lokey: 3 }", "region 3: unknown field \"lokey\" (fields: file, root, keys, velocity, round_robin, trigger, loop, tune, volume, pan, offset)"),
+        (
+            "{ file: \"a.wav\", lokey: 3 }",
+            "region 3: unknown field \"lokey\" (fields: file, root, keys, velocity, round_robin, trigger, loop, tune, volume, pan, offset)",
+        ),
         ("{ file: \"a.wav\", root: 128 }", "region 3: root must be a MIDI note, a whole number from 0 to 127, not 128"),
         ("{ file: \"a.wav\", root: 60.5 }", "region 3: root must be a MIDI note"),
         ("{ file: \"a.wav\", keys: [70, 60] }", "region 3: keys 70 to 60: the lowest is above the highest"),
         ("{ file: \"a.wav\", keys: [60] }", "region 3: keys must be [lowest, highest], two MIDI notes from 0 to 127, not [60]"),
         ("{ file: \"a.wav\", keys: [0, 128] }", "region 3: keys must be [lowest, highest]"),
-        ("{ file: \"a.wav\", velocity: [0, 127] }", "region 3: velocity must be [lowest, highest], two whole numbers from 1 to 127, not [0, 127]"),
+        (
+            "{ file: \"a.wav\", velocity: [0, 127] }",
+            "region 3: velocity must be [lowest, highest], two whole numbers from 1 to 127, not [0, 127]",
+        ),
         ("{ file: \"a.wav\", velocity: [100, 20] }", "region 3: velocity 100 to 20: the lowest is above the highest"),
         ("{ file: \"a.wav\", round_robin: [3, 2] }", "region 3: round_robin [3, 2]: the position is above the number of takes"),
-        ("{ file: \"a.wav\", round_robin: [0, 2] }", "region 3: round_robin must be [position, of], two whole numbers from 1 to 128 (take 2 of 3 is [2, 3])"),
+        (
+            "{ file: \"a.wav\", round_robin: [0, 2] }",
+            "region 3: round_robin must be [position, of], two whole numbers from 1 to 128 (take 2 of 3 is [2, 3])",
+        ),
         ("{ file: \"a.wav\", round_robin: 2 }", "region 3: round_robin must be [position, of]"),
         ("{ file: \"a.wav\", trigger: \"on\" }", "region 3: trigger must be \"attack\" or \"release\", not \"on\""),
         ("{ file: \"a.wav\", loop: [500, 100] }", "region 3: loop 500 to 100: the start must be before the end"),
         ("{ file: \"a.wav\", loop: [5, 5] }", "region 3: loop 5 to 5: the start must be before the end"),
-        ("{ file: \"a.wav\", loop: [-1, 5] }", "region 3: loop must be [start, end], two frames of the file, whole numbers from 0, not [-1, 5]"),
+        (
+            "{ file: \"a.wav\", loop: [-1, 5] }",
+            "region 3: loop must be [start, end], two frames of the file, whole numbers from 0, not [-1, 5]",
+        ),
         ("{ file: \"a.wav\", tune: 3000 }", "region 3: tune must be cents, a number from -2400 to 2400, not 3000"),
         ("{ file: \"a.wav\", volume: 30 }", "region 3: volume must be dB, a number from -120 to 24, not 30"),
         ("{ file: \"a.wav\", pan: -2 }", "region 3: pan must be a number from -1 (left) to 1 (right), not -2"),
@@ -148,7 +160,10 @@ fn regions_settings_are_checked() {
         assert!(e.iter().any(|d| d.message.contains(&want)), "{call}: wanted {want:?} in {e:?}");
     }
     for (call, says) in [
-        ("{ regions: { file: \"a.wav\" } }", "player(): regions: must be a list of regions, as [{ file: \"C4.wav\", root: 60 }], not an object"),
+        (
+            "{ regions: { file: \"a.wav\" } }",
+            "player(): regions: must be a list of regions, as [{ file: \"C4.wav\", root: 60 }], not an object",
+        ),
         ("{ regions: \"a.wav\" }", "player(): regions: must be a list of regions"),
     ] {
         let e = regions_player(call).err().unwrap_or_else(|| panic!("{call} builds"));
