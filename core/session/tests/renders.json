@@ -1,6 +1,6 @@
 {
   "renders": {
-    "core/session/tests/fixtures/sampler-regions": "3a9cc116bcb7b6c437ff8a2ad6f9966b60d6555088b92b00f45c8f78714cbf79",
+    "core/session/tests/fixtures/sampler-regions": "b850b806de5283ff77c0aacf0e807d76846841346cdc96f02c426735da1c4282",
     "examples/first-song": "f98fca3ff31fdc4d6b7c470131353f22ca42fdd959348bac79190e6df1873156",
     "examples/resample": "e804b04ac389918162b8a4aaca1da1b9b6ef3bf4cb9317b91627c70e32196a44",
     "examples/sampler": "8b3f507f65629d60ae80e415c6335faef0f294c5d9a9873480e1aa26df4695e6",

@@ -48,7 +48,7 @@
 #                               M2_PR_JOBS at a time (default 2); a run that failed runs once more,
 #                               alone, as in ci/check.sh, and is named if it passes then; a run
 #                               that was PART (passed, but not in full) fails the step
-#   ci/pr.sh renders            the 12 offline renders, against e2e/renders.sha256
+#   ci/pr.sh renders            the 14 offline renders, against e2e/renders.sha256
 #   rust and suites take --all: the nightly-tagged tests too (the Mac's nightly job).
 #   With M2_LATE_SLEEPS=1 (the Mac's nightly job: GitHub's Mac's sleeps run long), rust and suites
 #   leave out the tests that need a sleep to last what it asks (ci/sleeps-tests.txt, and the runs

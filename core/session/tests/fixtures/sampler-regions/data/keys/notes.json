@@ -1,5 +1,5 @@
 {"clips": [
-  {"id": "rg5s1mpl", "start": 0, "length": 8, "notes": [
+  {"id": "rg5s1mpl", "start": 0, "length": 12, "notes": [
     {"pitch": "C4", "start": 0, "length": 0.5, "velocity": 0.5},
     {"pitch": "C4", "start": 0.5, "length": 0.5, "velocity": 0.5},
     {"pitch": "E4", "start": 1, "length": 0.5, "velocity": 0.9},
@@ -12,6 +12,11 @@
     {"pitch": "C4", "start": 4, "length": 2, "velocity": 0.7},
     {"pitch": "C5", "start": 6, "length": 0.5, "velocity": 1},
     {"pitch": "C5", "start": 6.5, "length": 0.5, "velocity": 0.3},
-    {"pitch": "C5", "start": 7, "length": 0.5, "velocity": 0.3}
+    {"pitch": "C5", "start": 7, "length": 0.5, "velocity": 0.3},
+    {"pitch": "C4", "start": 7.5, "length": 0.5, "velocity": 0.5},
+    {"pitch": "C4", "start": 8.5, "length": 0.5, "velocity": 0.5},
+    {"pitch": "C4", "start": 9, "length": 0.5, "velocity": 0.5},
+    {"pitch": "C4", "start": 9.5, "length": 0.5, "velocity": 0.5},
+    {"pitch": "G4", "start": 10, "length": 1.5, "velocity": 0.7}
   ]}
 ]}
