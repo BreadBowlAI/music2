@@ -13,6 +13,7 @@ pub mod library;
 mod peaks;
 pub mod project;
 pub mod recent;
+pub mod registry;
 pub mod resources;
 mod routes;
 mod routes_8b;
@@ -113,6 +114,8 @@ pub struct AppState {
     /// ([`AppState::keep_library`]): the app and the headless server do; tests give scratch ones,
     /// so none reads your Presets folder or writes your cache.
     library: OnceLock<library::Folders>,
+    /// The registry's catalog as this server has it, and the Get running (REG-12, REG-15).
+    pub(crate) registry: Arc<registry::Registry>,
 }
 
 impl AppState {
@@ -137,6 +140,7 @@ impl AppState {
             previews: Default::default(),
             sample_index: Arc::default(),
             library: OnceLock::new(),
+            registry: Arc::default(),
         }
     }
 
@@ -154,10 +158,15 @@ impl AppState {
     }
 
     /// Read your presets and keep previews and samples' measures in `folders` from now on (LIB-1,
-    /// LIB-3, LIB-5), and start indexing the samples a search will want first. Once.
+    /// LIB-3, LIB-5), build songs with its store of packs, and start indexing the samples a search
+    /// will want first and fetching the registry's catalog (REG-12). Once.
     pub fn keep_library(&self, folders: library::Folders) {
+        if let Some(store) = &folders.packs {
+            self.graph.keep_store(store);
+        }
         if self.library.set(folders).is_ok() {
             self.warm_samples();
+            self.catalog();
         }
     }
 

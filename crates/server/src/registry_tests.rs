@@ -1,0 +1,508 @@
+//! The registry in the app over HTTP (REG-11 to REG-17): a bucket the robot builds from two
+//! made-up packs (`@alice/drums`, one sample; `@bob/keys`, an instrument and a sound of it), served
+//! over http on this computer. Every server here keeps scratch folders, never yours, and reaches
+//! no other computer.
+
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use m2_editor::get::Remote;
+use serde_json::{Value, json};
+
+use crate::graph::Graph;
+use crate::library::Folders;
+
+/// A scratch folder for one test, removed when dropped (read-only files too: an installed pack's).
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(name: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("m2-get-{name}-{}", std::process::id()));
+        let s = Scratch(dir);
+        s.clean();
+        std::fs::create_dir_all(&s.0).unwrap();
+        s
+    }
+
+    fn clean(&self) {
+        let mut stack = vec![self.0.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let mut perm = e.metadata().unwrap().permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                perm.set_readonly(false);
+                let _ = std::fs::set_permissions(e.path(), perm);
+                if e.file_type().unwrap().is_dir() {
+                    stack.push(e.path());
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        self.clean();
+    }
+}
+
+fn write(path: &Path, text: impl AsRef<[u8]>) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+/// A 16-bit mono WAV of a tenth of a second of a tone at 48 kHz.
+fn tone(path: &Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let mut w = hound::WavWriter::create(path, spec).unwrap();
+    for i in 0..4_800 {
+        w.write_sample(((i as f32 / 10.0).sin() * 8_000.0) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+}
+
+const KEYS: &str = r#"import { component, control, port, signature, type Audio, type Events, type Params } from "@m2/core";
+import { synth } from "std/synth";
+
+/** A soft pluck: std's synth pluck, darker. */
+export const softKeys = component(
+  {
+    id: "soft-keys",
+    label: "Soft keys",
+    signature: signature<(notes: Events) => Audio>(),
+    inputs: { notes: port.notes() },
+    controls: { brightness: control.hz(1800).range(200, 20000) },
+    output: port.audio(),
+    editor: { category: "Keys", description: "A soft pluck, from std's synth" },
+  },
+  (notes: Events, { brightness }: Params): Audio => synth.pluck(notes, { brightness }),
+);
+"#;
+
+/// A bucket in `root/bucket` that the robot built from two made-up packs, as the registry's CI
+/// builds one: `@alice/drums` 1.0.0 (one sample) and `@bob/keys` 0.1.0 (an instrument, and its
+/// sound Dark). The keys' folder too.
+fn bucket(root: &Path) -> (PathBuf, PathBuf) {
+    let std = crate::resources::std_dir();
+    let registry = root.join("registry");
+    write(&registry.join("tags.txt"), "drums\nkeys\n");
+    write(&registry.join("packs/.gitkeep"), "");
+    let drums = root.join("src/drums");
+    write(
+        &drums.join("m2pkg.toml"),
+        "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\ndescription = \"One kick\"\n\
+         authors = [\"Alice\"]\nrepository = \"https://github.com/alice/drums\"\ntags = [\"drums\"]\n",
+    );
+    write(&drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n");
+    tone(&drums.join("samples/kicks/Boom.wav"));
+    let keys = root.join("src/keys");
+    write(
+        &keys.join("m2pkg.toml"),
+        "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\ndescription = \"Soft keys\"\nauthors = [\"Bob\"]\n\
+         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+    );
+    write(&keys.join("src/index.ts"), KEYS);
+    write(
+        &keys.join("presets/soft-keys/Dark.json"),
+        "{\n  \"m2preset\": 1,\n  \"name\": \"Dark\",\n  \"sound\": \"@bob/keys:soft-keys\",\n  \"values\": {\n    \"brightness\": 600\n  }\n}\n",
+    );
+    let sources = root.join("sources");
+    for (dir, source) in [
+        (&drums, "https://github.com/alice/drums/releases/download/v1.0.0/drums-1.0.0.tar.gz"),
+        (&keys, "https://github.com/bob/keys/releases/download/v0.1.0/keys-0.1.0.tar.gz"),
+    ] {
+        let added = m2_editor::registry::add(&m2_editor::registry::Add { registry: &registry, pack: dir, source, std: &std });
+        let m2_editor::registry::Added::Listed { hash, .. } = added.unwrap_or_else(|e| panic!("{}", e.join("\n"))) else { panic!() };
+        copy(dir, &sources.join(hash.hex()).join(dir.file_name().unwrap()));
+    }
+    let out = root.join("bucket");
+    let built = m2_editor::registry::build(&m2_editor::registry::Build {
+        registry: &registry,
+        sources: &sources,
+        out: &out,
+        from: None,
+        made: "2026-10-30T12:00:00Z",
+        std: &std,
+        work: &root.join("work"),
+        to_delete: None,
+        limit: m2_editor::registry::LONGEST,
+    })
+    .unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    assert!(built.failed.is_empty(), "{:?}", built.failed);
+    (out, keys)
+}
+
+fn copy(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let (f, t) = (e.path(), to.join(e.file_name()));
+        if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
+    }
+}
+
+/// A folder served over http on 127.0.0.1, each request on a connection of its own; the paths
+/// asked for are kept. A path starting with `hold` is answered with half its bytes, then nothing
+/// until the client goes.
+struct Serve {
+    url: String,
+    asked: Arc<Mutex<Vec<String>>>,
+    hold: Arc<Mutex<Option<String>>>,
+}
+
+impl Serve {
+    fn folder(dir: &Path) -> Serve {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let asked = Arc::new(Mutex::new(vec![]));
+        let hold: Arc<Mutex<Option<String>>> = Arc::default();
+        let (dir, kept, held) = (dir.to_path_buf(), asked.clone(), hold.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { return };
+                let (dir, kept, held) = (dir.clone(), kept.clone(), held.clone());
+                std::thread::spawn(move || {
+                    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+                    let mut head = vec![];
+                    let mut b = [0u8; 1];
+                    while !head.ends_with(b"\r\n\r\n") && s.read(&mut b).is_ok_and(|n| n == 1) {
+                        head.push(b[0]);
+                    }
+                    let head = String::from_utf8_lossy(&head).to_string();
+                    let path = head.split(' ').nth(1).unwrap_or("/").trim_start_matches('/').to_string();
+                    kept.lock().unwrap().push(path.clone());
+                    let Ok(body) = std::fs::read(dir.join(&path)) else {
+                        let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        return;
+                    };
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
+                    if held.lock().unwrap().as_ref().is_some_and(|h| path.starts_with(h.as_str())) {
+                        let _ = s.write_all(&body[..body.len() / 2]);
+                        let _ = s.flush();
+                        let _ = s.read(&mut [0u8; 1]);
+                        return;
+                    }
+                    let _ = s.write_all(&body);
+                });
+            }
+        });
+        Serve { url, asked, hold }
+    }
+
+    /// The paths asked for since the last call.
+    fn asked(&self) -> Vec<String> {
+        std::mem::take(&mut *self.asked.lock().unwrap())
+    }
+}
+
+/// A server with no song open, keeping `folders` (scratch ones), with the tools key `t00ls`.
+fn serving(folders: Folders) -> crate::Running {
+    let options =
+        crate::ServeOptions { port: 0, web_dir: std::env::temp_dir().join("m2-no-web"), token: "t00ls".into(), page_token: "t0k".into() };
+    let running = crate::start_with(options, Graph::silent()).unwrap();
+    running.state.keep_library(folders);
+    running
+}
+
+/// A world: the bucket, served; a server reading it, with a scratch store and cache.
+struct World {
+    scratch: Scratch,
+    bucket: PathBuf,
+    keys: PathBuf,
+    serve: Serve,
+    running: crate::Running,
+}
+
+impl World {
+    fn new(name: &str) -> World {
+        let scratch = Scratch::new(name);
+        let (bucket, keys) = bucket(&scratch.0);
+        let serve = Serve::folder(&bucket);
+        let cache = scratch.0.join("cache");
+        let folders = Folders {
+            packs: Some(scratch.0.join("Packs")),
+            previews: Some(cache.join("previews")),
+            samples: Some(cache.join("samples")),
+            registry: Some(Remote::new(&serve.url, &cache.join("registry")).unwrap()),
+            ..Folders::default()
+        };
+        let running = serving(folders);
+        World { scratch, bucket, keys, serve, running }
+    }
+
+    fn store(&self) -> m2_song::pack::Store {
+        m2_song::pack::Store::at(self.scratch.0.join("Packs"))
+    }
+
+    /// `GET /api/library?q=<q>` once the catalog isn't being fetched and no samples are being
+    /// indexed: the whole answer.
+    fn search(&self, q: &str) -> Value {
+        for _ in 0..600 {
+            let (status, body) = get(&self.running.url, &format!("/api/library?q={}", enc(q)));
+            assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+            let answer: Value = serde_json::from_slice(&body).unwrap();
+            if answer["registry"]["fetching"] != json!(true) && answer["folders"]["indexing"] == json!(0) {
+                return answer;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the catalog was never fetched");
+    }
+
+    /// The ids From the library `q` finds.
+    fn library(&self, q: &str) -> Vec<String> {
+        ids(&self.search(q)["library"])
+    }
+
+    /// A copy of the first song, open: its session.
+    fn song(&self, edit: impl FnOnce(&Path)) -> (u64, PathBuf) {
+        let dir = self.scratch.0.join("song");
+        copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir);
+        edit(&dir);
+        let session = self.running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+        (session, dir)
+    }
+}
+
+fn ids(list: &Value) -> Vec<String> {
+    list.as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().to_string()).collect()
+}
+
+fn enc(text: &str) -> String {
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// `GET path` with the tools key: the status and the body.
+fn get(url: &str, path: &str) -> (u16, Vec<u8>) {
+    let addr = url.trim_start_matches("http://");
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.write_all(format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: t00ls\r\nConnection: close\r\n\r\n").as_bytes()).unwrap();
+    let mut answer = vec![];
+    s.read_to_end(&mut answer).unwrap();
+    let at = answer.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&answer[..at]).to_string();
+    (head[9..12].parse().unwrap(), answer[at + 4..].to_vec())
+}
+
+/// `POST path` with `body` as JSON and the tools key: the status and the answer.
+fn post(url: &str, path: &str, body: &Value) -> (u16, Value) {
+    let addr = url.trim_start_matches("http://");
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(120))).unwrap();
+    let body = body.to_string();
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: t00ls\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    s.write_all(head.as_bytes()).unwrap();
+    s.write_all(body.as_bytes()).unwrap();
+    let mut answer = vec![];
+    s.read_to_end(&mut answer).unwrap();
+    let text = String::from_utf8_lossy(&answer).to_string();
+    let status = text[9..12].parse().unwrap();
+    (status, text.split_once("\r\n\r\n").map_or(Value::Null, |(_, b)| serde_json::from_str(b).unwrap_or(Value::Null)))
+}
+
+const KEYS_ID: &str = "library:@bob/keys:soft-keys";
+const KICK_ID: &str = "library:sample:@alice/drums:samples/kicks/Boom.wav";
+
+// REG-13, REG-11: the search answers From the library after what you have: the catalog's items of
+// packs this computer hasn't got, by the one search, each with what a Get fetches. A server given
+// no registry answers none, and fetches nothing.
+#[test]
+fn the_library_route_answers_from_the_library_too() {
+    let w = World::new("route");
+    let answer = w.search("soft");
+    assert_eq!(ids(&answer["library"]), [KEYS_ID, "library:sound:std/@bob/keys:soft-keys/Dark"]);
+    assert!(!ids(&answer["items"]).iter().any(|i| i.starts_with("library:")), "what you have and the library are apart");
+    let keys = &answer["library"][0];
+    assert_eq!(
+        (&keys["kind"], &keys["label"], &keys["package"], &keys["library"]["version"], &keys["library"]["license"]),
+        (&json!("instrument"), &json!("Soft keys"), &json!("@bob/keys"), &json!("0.1.0"), &json!("MIT"))
+    );
+    assert!(keys["library"]["size"].as_u64().unwrap() > 0);
+    assert_eq!(answer["registry"]["made"], json!("2026-10-30T12:00:00Z"));
+    assert_eq!(w.library("kick one-shot"), [KICK_ID]);
+
+    let none = serving(Folders::default());
+    let (_, body) = get(&none.url, "/api/library?q=soft");
+    let answer: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!((&answer["library"], &answer["registry"]), (&json!([]), &Value::Null), "no registry: no group, nothing said");
+}
+
+// NET-2, REG-12: what is typed is never sent: once the catalog is here, a search asks the
+// registry nothing, whatever the words.
+#[test]
+fn a_search_sends_nothing() {
+    let w = World::new("sends-nothing");
+    w.search("");
+    let fetched = w.serve.asked();
+    assert!(fetched.iter().all(|p| p == "catalog.json" || p.starts_with("catalog/")), "{fetched:?}");
+    for q in ["soft keys", "kick", "my secret song idea", "@bob/keys", "90 bpm Am", "dark"] {
+        w.search(q);
+    }
+    assert!(w.serve.asked().is_empty(), "a search sends nothing");
+}
+
+// REG-14: a library item's preview is its blob, fetched when played and kept by its hash.
+#[test]
+fn a_library_items_preview_is_its_blob() {
+    let w = World::new("preview");
+    let keys = &w.search("soft")["library"][0];
+    assert_eq!(keys["preview"], json!(true));
+    w.serve.asked();
+    let (status, wav) = get(&w.running.url, &format!("/api/library/preview?id={}", enc(KEYS_ID)));
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&wav));
+    let catalog: Value = serde_json::from_slice(&std::fs::read(w.bucket.join("catalog.json")).unwrap()).unwrap();
+    let blobs = w.serve.asked();
+    assert_eq!(blobs.len(), 1, "{blobs:?} ({catalog})");
+    assert_eq!(wav, std::fs::read(w.bucket.join(&blobs[0])).unwrap());
+    let (status, again) = get(&w.running.url, &format!("/api/library/preview?id={}", enc(KEYS_ID)));
+    assert_eq!((status, again == wav), (200, true));
+    assert!(w.serve.asked().is_empty(), "kept by its hash");
+    let (status, body) = get(&w.running.url, &format!("/api/library/preview?id={}", enc("library:@carol/none:x")));
+    assert!(status == 404 && String::from_utf8_lossy(&body).contains("isn't in the library"), "{status}");
+}
+
+/// The open song's state.
+fn state(w: &World) -> Value {
+    w.running.state.graph.state().unwrap()
+}
+
+// REG-15, PACK-10, PACK-11: Get installs the pack's whole version into the store, the open song's
+// lists offer it at once, and adding its instrument writes the dependency and the lock. Once
+// installed, it is no longer From the library.
+#[test]
+fn get_installs_the_pack_and_the_song_offers_it() {
+    let w = World::new("pack");
+    let (session, dir) = w.song(|_| {});
+    w.search("soft");
+    let instruments = |w: &World| state(w)["instruments"].as_array().unwrap().iter().filter_map(|i| i["component"].as_str().map(String::from)).collect::<Vec<_>>();
+    assert!(!instruments(&w).contains(&"@bob/keys:soft-keys".to_string()));
+    let (status, done) = post(&w.running.url, "/api/library/get", &json!({"id": KEYS_ID}));
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!((&done["got"]["pack"], &done["got"]["version"], &done["id"]), (&json!("@bob/keys"), &json!("0.1.0"), &json!("@bob/keys:soft-keys")));
+    let hash = m2_song::pack::Listing::of(&w.keys).unwrap().hash();
+    assert_eq!(w.store().check(&m2_song::PackName::new("@bob/keys").unwrap(), &m2_song::Version(0, 1, 0)).unwrap(), hash);
+    assert!(instruments(&w).contains(&"@bob/keys:soft-keys".to_string()), "the song's lists offer it at once");
+    let (status, added) = post(&w.running.url, "/api/graph/track/add", &json!({"session": session, "component": "@bob/keys:soft-keys"}));
+    assert_eq!(status, 200, "{added:#}");
+    assert!(std::fs::read_to_string(dir.join("music2.toml")).unwrap().contains("\"@bob/keys\" = \"0.1\""));
+    assert!(std::fs::read_to_string(dir.join("music2.lock")).unwrap().contains(&hash.prefixed()));
+    assert!(w.library("soft").is_empty(), "installed: no longer From the library");
+    assert!(ids(&w.search("soft")["items"]).contains(&"@bob/keys:soft-keys".to_string()));
+}
+
+// REG-16, LIB-7: Get of a sample fetches its one file and adds it to the song with its note
+// naming the pack, a clip on a new audio track, one undo step; nothing is left in the cache.
+#[test]
+fn getting_a_sample_adds_it_with_its_note() {
+    let w = World::new("sample");
+    let (session, dir) = w.song(|_| {});
+    w.search("kick");
+    w.serve.asked();
+    let (status, done) = post(&w.running.url, "/api/library/get", &json!({"id": KICK_ID, "session": session, "to": {"kind": "below", "beat": 4}}));
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!((&done["asset"], &done["noted"]), (&json!("Boom.wav"), &json!(true)), "{done:#}");
+    assert_eq!(w.serve.asked().len(), 1, "its one file");
+    let note: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("assets/Boom.wav.json")).unwrap()).unwrap();
+    assert_eq!(
+        note,
+        json!({"from": {"pack": "@alice/drums", "version": "1.0.0", "file": "samples/kicks/Boom.wav", "author": "Alice", "license": "CC0-1.0"}})
+    );
+    assert!(done["tracks"][0]["module"].is_string(), "{done:#}");
+    assert!(w.store().list().is_empty(), "a sample comes alone: no pack is installed");
+    let getting: Vec<_> = walk(&w.scratch.0.join("cache")).into_iter().filter(|p| p.to_string_lossy().contains("getting")).collect();
+    assert!(getting.is_empty(), "{getting:?}");
+    // With no song open, a sample has nowhere to go: said before anything is fetched.
+    w.running.state.graph.close();
+    let (status, why) = post(&w.running.url, "/api/library/get", &json!({"id": KICK_ID}));
+    assert!(status >= 400 && why["error"].as_str().unwrap().contains("Open a song"), "{status} {why}");
+    assert!(w.serve.asked().is_empty());
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            out.push(e.path());
+            if e.file_type().unwrap().is_dir() {
+                stack.push(e.path());
+            }
+        }
+    }
+    out
+}
+
+// REG-15: a Get says how far it is in `get` events and can be cancelled; one runs at a time, and
+// one cancelled leaves nothing.
+#[test]
+fn a_get_says_how_far_and_can_be_cancelled() {
+    let w = World::new("progress");
+    w.search("soft");
+    let index = m2_song::pack::Listing::of(&w.keys).unwrap().files.into_iter().find(|f| f.path == "src/index.ts").unwrap().sha256;
+    *w.serve.hold.lock().unwrap() = Some(m2_song::registry::blob_path(&index));
+    let mut events = w.running.state.events.subscribe();
+    let url = w.running.url.clone();
+    let getting = std::thread::spawn(move || post(&url, "/api/library/get", &json!({"id": KEYS_ID})));
+    let t = Instant::now();
+    let mut heard = None;
+    while heard.is_none() && t.elapsed() < Duration::from_secs(20) {
+        match events.try_recv() {
+            Ok(m) if m.contains("\"t\":\"get\"") => heard = Some(serde_json::from_str::<Value>(&m).unwrap()),
+            Ok(_) => {}
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    let heard = heard.expect("a get event");
+    assert_eq!((&heard["id"], heard["total"].as_u64().is_some_and(|t| t > 0)), (&json!(KEYS_ID), true), "{heard}");
+    // Wait until it waits on the held file.
+    while !w.serve.asked.lock().unwrap().iter().any(|p| p.contains(&index.hex())) {
+        assert!(t.elapsed() < Duration::from_secs(20));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let (status, busy) = post(&w.running.url, "/api/library/get", &json!({"id": "library:sound:std/@bob/keys:soft-keys/Dark"}));
+    assert!(status >= 400 && busy["error"].as_str().unwrap().contains("already"), "one at a time: {status} {busy}");
+    let (status, cancelled) = post(&w.running.url, "/api/library/get/cancel", &json!({}));
+    assert_eq!((status, &cancelled["cancelled"]), (200, &json!(true)));
+    let (status, why) = getting.join().unwrap();
+    assert!(status >= 400 && why["error"].as_str().unwrap().contains("cancelled"), "{status} {why}");
+    assert!(w.store().list().is_empty());
+    let left: Vec<_> = walk(&w.store().dir).into_iter().filter(|p| p.to_string_lossy().contains("getting")).collect();
+    assert!(left.is_empty(), "{left:?}");
+    let (_, nothing) = post(&w.running.url, "/api/library/get/cancel", &json!({}));
+    assert_eq!(nothing["cancelled"], json!(false), "nothing to cancel");
+}
+
+// REG-17: a song whose lock names a version that isn't installed is offered Get when the library
+// has it with that very hash; once got, the song builds and plays.
+#[test]
+fn a_song_missing_a_locked_pack_gets_it_and_plays() {
+    let w = World::new("missing");
+    let hash = m2_song::pack::Listing::of(&w.keys).unwrap().hash();
+    let (_, _dir) = w.song(|dir| {
+        let manifest = std::fs::read_to_string(dir.join("music2.toml")).unwrap();
+        std::fs::write(dir.join("music2.toml"), manifest + "\"@bob/keys\" = \"0.1\"\n").unwrap();
+        std::fs::write(dir.join("music2.lock"), format!("[[pack]]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nhash = \"{}\"\n", hash.prefixed())).unwrap();
+    });
+    assert_eq!(state(&w)["has_code"], json!(false), "it waits for the pack");
+    w.search("");
+    let (status, body) = get(&w.running.url, "/api/library/missing");
+    assert_eq!(status, 200);
+    let missing: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        missing["missing"],
+        json!([{"pack": "@bob/keys", "version": "0.1.0", "hash": hash.prefixed(), "can": true, "size": missing["missing"][0]["size"]}]),
+        "{missing:#}"
+    );
+    let (status, done) = post(&w.running.url, "/api/library/get", &json!({"pack": "@bob/keys", "version": "0.1.0"}));
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!(state(&w)["has_code"], json!(true), "it builds now: {:#}", state(&w)["diagnostics"]);
+    let (_, body) = get(&w.running.url, "/api/library/missing");
+    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["missing"], json!([]));
+}

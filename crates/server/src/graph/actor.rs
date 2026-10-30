@@ -560,8 +560,8 @@ pub(super) struct Prepared {
 
 fn packages(inner: &Inner) -> Result<PackageSet> {
     let mut p = PackageSet::default().with_host(inner.host.clone());
-    // This computer's packs (PACK-6), under `$HOME` (PLAT-7).
-    if let Some(store) = m2_os::dirs::packs() {
+    // The store the server was given, else this computer's packs (PACK-6), under `$HOME` (PLAT-7).
+    if let Some(store) = inner.store.get().cloned().or_else(m2_os::dirs::packs) {
         p = p.with_store(store);
     }
     p.load(&crate::resources::std_dir()).context("loading the std package")?;
@@ -2001,6 +2001,16 @@ impl Actor {
         let (sent_ns, published_ns) = (s.sent_ns, s.published_ns);
         let timing = EditTiming { requested_ns, ready_ns: compiled_ns, compiled_ns, sent_ns, published_ns, seq, ..EditTiming::default() };
         *self.inner.last_taken_in.lock() = Some(timing);
+        true
+    }
+
+    /// The store changed (a Get installed a pack): the session makes its lists again and builds a
+    /// draft that waited (REG-15, REG-17), and the view is published again. Whether a song is open.
+    pub(super) fn store_changed(&mut self) -> bool {
+        let Some(o) = self.open.as_mut() else { return false };
+        o.session.store_changed();
+        o.sent = None;
+        self.settle(None);
         true
     }
 

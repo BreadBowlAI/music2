@@ -46,20 +46,40 @@ pub struct Folders {
     pub packs: Option<PathBuf>,
     /// Where what was measured of samples is kept: `samples` in music2's cache folder.
     pub samples: Option<PathBuf>,
+    /// The registry ⌘F's From the library reads, and where what is fetched from it is kept
+    /// (REG-11): `registry` in music2's cache folder. None: no such group, and nothing is fetched.
+    pub registry: Option<m2_editor::get::Remote>,
 }
 
 impl Folders {
     /// This user's: the Presets folder (`m2_os::dirs::presets`), the store (`m2_os::dirs::packs`),
-    /// and `previews` and `samples` in music2's cache folder (`m2_os::dirs::cache`).
+    /// `previews` and `samples` in music2's cache folder (`m2_os::dirs::cache`), and the registry
+    /// `M2_REGISTRY`, else this computer's settings, name, kept in `registry` there (REG-11): only
+    /// in a program that keeps the cache folder. One that can't be used is said, and is none.
     pub fn of_this_user() -> Folders {
         let cache = m2_os::dirs::cache();
+        let registry = cache.as_ref().and_then(|c| {
+            let at = registry_named()?;
+            m2_editor::get::Remote::new(&at, &c.join("registry")).map_err(|why| eprintln!("music2: {why}")).ok()
+        });
         Folders {
             presets: m2_os::dirs::presets(),
             previews: cache.as_ref().map(|c| c.join("previews")),
             packs: m2_os::dirs::packs(),
             samples: cache.map(|c| c.join("samples")),
+            registry,
         }
     }
+}
+
+/// The registry this user names (REG-11): `M2_REGISTRY`, else `registry` in this computer's
+/// settings (`~/.music2/settings.json`), else the default.
+pub fn registry_named() -> Option<String> {
+    let env = std::env::var(m2_editor::get::ENV).ok();
+    let file = m2_os::dirs::home().map(|h| h.join(".music2").join("settings.json"));
+    let kept: Option<serde_json::Value> = file.and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok());
+    let setting = kept.as_ref().and_then(|k| k["registry"].as_str());
+    m2_editor::get::address(env.as_deref(), setting)
 }
 
 /// How long a folder's index is used before it is made again in the background, while the old one

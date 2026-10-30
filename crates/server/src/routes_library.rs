@@ -13,6 +13,15 @@
 //!   (LIB-5), each with how many samples it has so far and whether it is being indexed.
 //! - `POST /api/library/sample {session, id, to}` or `{session, id, at, call}`: add a sample to the
 //!   open song, a clip at `to` or a Sampler's file (LIB-7).
+//! - The search also answers From the library (REG-13): `library`, the registry's items of packs
+//!   this computer hasn't got, and `registry`: `{fetching, made, error}`, or null with none set.
+//!   A library item's preview is its blob (REG-14).
+//! - `POST /api/library/get {id}` (a library item; a sample with `session` and `to`) or `{pack,
+//!   version}` (a song's missing locked version): Get it (REG-15 to REG-17), one at a time,
+//!   answering once it is done; `{"t": "get", id, label, done, total}` events say how far it is,
+//!   and `{"t": "get", id, end: true}` that it ended. `POST /api/library/get/cancel` stops it.
+//! - `GET /api/library/missing`: the open song's locked versions that aren't installed, each with
+//!   whether the library has it (`can`) or why not (REG-17).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,6 +56,15 @@ crate::api::routes! {
     POST "/api/library/sample" => add_sample; writes, agents,
         "Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or a Sampler's file at `call`",
         r#"{"session": 7, "id": "sample:std:samples/kit/kick.wav", "to": {"kind": "below", "beat": 0}}"#;
+    POST "/api/library/get" => get_item; writes, agents,
+        "Get a pack or a sample from the library (the registry): a pack's whole version installed, checked, or one sample added to the song with its note; or a version the open song locks and is missing. Answers once it is done; `get` events say how far",
+        r#"{"id": "library:@alice/felt-piano:felt-piano"}"#;
+    POST "/api/library/get/cancel" => cancel_get; reads, agents,
+        "Stop the Get running: nothing of it is kept",
+        r#"{}"#;
+    GET "/api/library/missing" => missing; reads, agents,
+        "The packs the open song's music2.lock names that aren't installed, each with whether the library has that very version to get",
+        r#"{}"#;
 }
 
 #[derive(Deserialize)]
@@ -66,9 +84,15 @@ async fn search(State(s): S, Query(q): Query<SearchQuery>) -> Result<Json<Value>
             query.fits = Some(s.graph.fits(beat)?.ok_or_else(|| anyhow::anyhow!("Fits my song needs a song open."))?);
         }
         let found: Vec<Value> = items.search(&query).into_iter().map(serde_json::to_value).collect::<Result<_, _>>()?;
+        // From the library: what is typed searches the catalog kept here, and is never sent (REG-13).
+        let offers = s.offers()?;
+        let library: Vec<Value> = m2_editor::get::find(&offers, &query).into_iter().map(|o| o.json()).collect();
         let indexing = s.sample_index.indexing();
         let not_wav: usize = s.sample_folders_shown().iter().map(|f| f.not_wav).sum();
-        Ok::<_, anyhow::Error>(json!({ "items": found, "folders": {"indexing": indexing, "not_wav": not_wav} }))
+        Ok::<_, anyhow::Error>(json!({
+            "items": found, "library": library, "registry": s.registry_said(),
+            "folders": {"indexing": indexing, "not_wav": not_wav},
+        }))
     })
     .await?;
     Ok(Json(found))
@@ -87,6 +111,16 @@ enum Previewed {
 
 async fn preview(State(s): S, Query(q): Query<PreviewQuery>, headers: axum::http::HeaderMap) -> Response {
     let made = crate::caller::blocking(move || {
+        // A library item's: its blob, fetched by its hash and kept (REG-14); a FLAC's as its WAV.
+        if q.id.starts_with(m2_editor::get::PREFIX) {
+            let file = s.library_preview(&q.id)?;
+            let sample = m2_editor::library::Sample { file: file.clone(), ..Default::default() };
+            let stamp = samples::still_plain(&sample).map_err(|e| anyhow::anyhow!("The preview can't be played: {e}."))?;
+            if let Some(wav) = samples::flac_preview(&sample, stamp).map_err(|e| anyhow::anyhow!("The preview can't be played: {e}."))? {
+                return Ok(Previewed::Wav(wav));
+            }
+            return Ok(Previewed::File(file, stamp));
+        }
         // A sample's preview is its file, only for one the library lists (LIB-6).
         if q.id.starts_with("sample:") {
             let item = s.listed_sample(&q.id)?;
@@ -254,6 +288,34 @@ async fn add_sample(State(s): S, Json(r): Json<SampleReq>) -> Result<Json<Value>
     .await;
     s.graph_changed();
     Ok(Json(result?))
+}
+
+/// Get a library item, or a version the open song locks and is missing (REG-15 to REG-17),
+/// answering once it is done. A write: a pack installed, or a sample added to the song.
+async fn get_item(State(s): S, Json(r): Json<crate::registry::GetReq>) -> Result<Json<Value>, ApiError> {
+    let state = s.clone();
+    let result = crate::routes::blocking(move || state.get_from_library(r)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+/// Stop the Get running (REG-15): `{cancelled}`, whether one was.
+async fn cancel_get(State(s): S) -> Json<Value> {
+    Json(json!({ "cancelled": s.cancel_get() }))
+}
+
+/// The open song's locked versions that aren't installed (REG-17): each with whether the library
+/// has it (`can`, and the bytes a Get fetches) or why not.
+async fn missing(State(s): S) -> Result<Json<Value>, ApiError> {
+    let missing = crate::routes::blocking(move || s.missing_packs()).await?;
+    let shown: Vec<Value> = missing
+        .iter()
+        .map(|m| match &m.got {
+            Ok(v) => json!({"pack": m.name.as_str(), "version": m.version.to_string(), "hash": m.hash.prefixed(), "can": true, "size": v.size}),
+            Err(why) => json!({"pack": m.name.as_str(), "version": m.version.to_string(), "hash": m.hash.prefixed(), "can": false, "why": why}),
+        })
+        .collect();
+    Ok(Json(json!({ "missing": shown })))
 }
 
 #[cfg(test)]
