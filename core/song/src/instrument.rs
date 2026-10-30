@@ -74,6 +74,54 @@ pub const CONTROLS: &[(&str, &str, f64, (f64, f64))] = &[
 pub const MODES: &[&str] = &["oneshot", "gate"];
 pub const MODE: &str = "oneshot";
 pub const VOICES: f64 = 8.0;
+/// The most voices a call may have (`poly`'s, `core/script/sdk/core.ts`).
+pub const MAX_VOICES: f64 = 128.0;
+
+/// A data instrument's id (PACK-13): its file's name, `instruments/<id>.toml`, checked before any
+/// code is made from it. A key (ID-1), whose name in code, [`Id::binding`], is a name a module may
+/// export: never a word JavaScript keeps for itself. The only way to that name, so code is made
+/// only from a name that passed.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Id(String);
+
+/// Words JavaScript keeps for itself in a module (always strict), and the globals a song would
+/// lose if an instrument took their name.
+const RESERVED: &str = "arguments await break case catch class const continue debugger default delete do else enum eval \
+                        export extends false finally for function if implements import in instanceof interface let new null \
+                        package private protected public return static super switch this throw true try typeof var void \
+                        while with yield undefined NaN Infinity";
+
+impl Id {
+    /// `id` as an instrument's id, or why it can't be one, in words that follow "it can't be one: ".
+    /// The words never repeat `id`, which may be anything a file can be named.
+    pub fn new(id: &str) -> Result<Id, String> {
+        if !crate::Key::valid(id) {
+            return Err("an id is 1 to 32 lowercase letters, digits and inner hyphens, such as `felt-piano`".into());
+        }
+        let b = camel(id);
+        if RESERVED.split_whitespace().any(|w| w == b) {
+            return Err(format!("its name in code, `{b}`, is a word JavaScript keeps for itself"));
+        }
+        Ok(Id(id.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The name it is exported by: its id in camelCase, `felt-piano` → `feltPiano`; one that starts
+    /// with a digit gets `_` first, `808-kit` → `_808Kit`. Letters, digits and that `_` only, so
+    /// never a name the module made from it uses (`__m2_…`).
+    pub fn binding(&self) -> String {
+        camel(&self.0)
+    }
+}
+
+impl std::fmt::Display for Id {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// What a value must be, said in words.
 #[derive(Clone, Copy)]
@@ -188,6 +236,7 @@ impl DataInstrument {
             };
             let field = value_of(value, kind).map_err(|m| at(value.span(), format!("`{name}` {m}")))?;
             let wrong = |message: String| Err(at(value.span(), message));
+            let written = text.get(value.span()).unwrap_or("").trim();
             match (name, field) {
                 ("label" | "category", Field::Text(s)) if s.trim().is_empty() => return wrong(format!("`{name}` must not be empty")),
                 ("label", Field::Text(s)) => out.label = s,
@@ -204,8 +253,17 @@ impl DataInstrument {
                 }
                 ("mode", Field::Text(s)) => out.mode = Some(s),
                 ("tags", Field::Texts(t)) => out.tags = t,
+                ("voices", Field::Number(n)) if n.fract() != 0.0 || !(1.0..=MAX_VOICES).contains(&n) => {
+                    return wrong(format!("`voices` must be a whole number from 1 to {}, not {written}", number(MAX_VOICES)));
+                }
                 ("voices", Field::Number(n)) => out.voices = Some(n),
-                (_, Field::Number(n)) => out.controls.push((name, n)),
+                (_, Field::Number(n)) => {
+                    let (lo, hi) = CONTROLS.iter().find(|c| c.0 == name).map(|c| c.3).expect("a number in TOP is a control");
+                    if !(lo..=hi).contains(&n) {
+                        return wrong(format!("`{name}` must be from {} to {}, not {written}", number(lo), number(hi)));
+                    }
+                    out.controls.push((name, n))
+                }
                 _ => unreachable!("value_of gives the kind asked for"),
             }
         }
@@ -232,12 +290,13 @@ impl DataInstrument {
         Ok(out)
     }
 
-    /// The TypeScript of this instrument as `<package>:<id>`, exported as [`binding`]`(id)`, laid
+    /// The TypeScript of this instrument as `<package>:<id>`, exported as [`Id::binding`], laid
     /// out on the file's lines: the component on line 1, each region on its own line, and the
-    /// imports last (they are hoisted). A function of the instrument alone.
-    pub fn module(&self, package: &str, id: &str) -> String {
+    /// imports last (they are hoisted). A function of the instrument alone. Its own names all
+    /// start `__m2_`, which no instrument's can (PACK-13).
+    pub fn module(&self, package: &str, id: &Id) -> String {
         let q = |s: &str| serde_json::to_string(s).expect("a string");
-        let head = format!("{} const regions: readonly Region[] = [", self.component(id, "regions"));
+        let head = format!("{} const __m2_regions: readonly __m2_Region[] = [", self.component(id, "__m2_regions"));
         let last = self.regions.iter().map(|r| r.line).max().unwrap_or(1).max(1) as usize;
         let mut lines = vec![String::new(); last];
         lines[0] = head;
@@ -259,36 +318,36 @@ impl DataInstrument {
             let line = &mut lines[r.line as usize - 1];
             line.push_str(&format!(" {{ {} }},", fields.join(", ")));
         }
-        lines.push(
-            "]; import { component, control, port, setting, signature, type Audio, type Events, type Params, type Region } from \"@m2/core\"; \
-             import { sampler } from \"std/sampler\";"
-                .into(),
-        );
+        lines.push(format!("]; {IMPORTS}"));
         lines.join("\n") + "\n"
     }
 
     /// `export const <binding> = component(…);` on one line: the descriptor, and a body that plays
     /// `regions` (an expression) on std's Sampler with the instrument's controls and settings.
-    fn component(&self, id: &str, regions: &str) -> String {
+    fn component(&self, id: &Id, regions: &str) -> String {
         let q = |s: &str| serde_json::to_string(s).expect("a string");
         let controls: Vec<String> = CONTROLS
             .iter()
             .map(|(name, ctor, default, (lo, hi))| {
                 let v = self.controls.iter().find(|(k, _)| k == name).map_or(*default, |(_, v)| *v);
-                format!("{name}: control.{ctor}({}).range({}, {})", number(v), number(*lo), number(*hi))
+                format!("{name}: __m2_control.{ctor}({}).range({}, {})", number(v), number(*lo), number(*hi))
             })
             .collect();
         let mode = self.mode.as_deref().unwrap_or(MODE);
         let voices = self.voices.unwrap_or(VOICES);
         let modes: Vec<String> = MODES.iter().map(|m| q(m)).collect();
-        let pass: Vec<String> =
-            CONTROLS.iter().map(|c| format!("{0}: p.{0}", c.0)).chain(["mode: p.mode".into(), "voices: p.voices".into()]).collect();
+        let pass: Vec<String> = CONTROLS
+            .iter()
+            .map(|c| format!("{0}: __m2_p.{0}", c.0))
+            .chain(["mode: __m2_p.mode".into(), "voices: __m2_p.voices".into()])
+            .collect();
         format!(
-            "export const {} = component({{ id: {}, label: {}, signature: signature<(notes: Events) => Audio>(), inputs: {{ notes: port.notes() }}, \
-             controls: {{ {} }}, settings: {{ mode: setting.choice([{}], {}), voices: setting.int({}) }}, output: port.audio(), \
-             editor: {{ category: {}, description: {} }} }}, (notes: Events, p: Params): Audio => sampler(notes, {{ regions: {regions}, {} }}));",
-            binding(id),
-            q(id),
+            "export const {} = __m2_component({{ id: {}, label: {}, signature: __m2_signature<(notes: __m2_Events) => __m2_Audio>(), \
+             inputs: {{ notes: __m2_port.notes() }}, controls: {{ {} }}, settings: {{ mode: __m2_setting.choice([{}], {}), voices: __m2_setting.int({}) }}, \
+             output: __m2_port.audio(), editor: {{ category: {}, description: {} }} }}, \
+             (__m2_notes: __m2_Events, __m2_p: __m2_Params): __m2_Audio => __m2_sampler(__m2_notes, {{ regions: {regions}, {} }}));",
+            id.binding(),
+            q(id.as_str()),
             q(&self.label),
             controls.join(", "),
             modes.join(", "),
@@ -301,27 +360,32 @@ impl DataInstrument {
     }
 }
 
+/// What the module made from a data instrument imports, each under a name no instrument's can be.
+const IMPORTS: &str = "import { component as __m2_component, control as __m2_control, port as __m2_port, setting as __m2_setting, \
+                       signature as __m2_signature, type Audio as __m2_Audio, type Events as __m2_Events, type Params as __m2_Params, \
+                       type Region as __m2_Region } from \"@m2/core\"; import { sampler as __m2_sampler } from \"std/sampler\";";
+
 /// What a code editor checks `import { feltPiano } from "<package>/instruments"` against: one
-/// module declaring each instrument (`id`, its file's text) that reads, as its component, with no
-/// regions (types need none). One that doesn't read is left out: the build says why.
+/// module declaring each instrument (its file's name, its text) that reads, as its component, with
+/// no regions (types need none). One whose name isn't an id, whose name in code an earlier one has,
+/// or that doesn't read is left out: the build says why.
 pub fn types(instruments: &[(String, String)]) -> String {
-    let mut out = String::from(
-        "// The pack's instruments written as data (instruments/*.toml), as code editors see them.\n\
-         import { component, control, port, setting, signature, type Audio, type Events, type Params } from \"@m2/core\";\n\
-         import { sampler } from \"std/sampler\";\n",
-    );
+    let mut out = format!("// The pack's instruments written as data (instruments/*.toml), as code editors see them.\n{IMPORTS}\n");
+    let mut taken = std::collections::BTreeSet::new();
     for (id, text) in instruments {
-        if let Ok(i) = DataInstrument::read(text) {
-            out.push_str(&i.component(id, "[]"));
+        let Ok(id) = Id::new(id) else { continue };
+        if let Ok(i) = DataInstrument::read(text)
+            && taken.insert(id.binding())
+        {
+            out.push_str(&i.component(&id, "[]"));
             out.push('\n');
         }
     }
     out
 }
 
-/// The name a data instrument is exported by: its id in camelCase, `felt-piano` → `feltPiano`; one
-/// that starts with a digit gets `_` first, `808-kit` → `_808Kit`.
-pub fn binding(id: &str) -> String {
+/// `id` in camelCase, `_` first when it starts with a digit: see [`Id::binding`].
+fn camel(id: &str) -> String {
     let mut out = String::new();
     for (i, part) in id.split('-').filter(|p| !p.is_empty()).enumerate() {
         let mut c = part.chars();

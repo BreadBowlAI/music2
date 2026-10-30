@@ -96,6 +96,27 @@ fn a_value_of_the_wrong_kind_is_named_at_its_line() {
     assert_eq!((p.line, p.message.as_str()), (9, "`mode = \"loop\"` must be \"oneshot\" or \"gate\""));
 }
 
+// PACK-13: each control's default inside its control's range, and `voices` a whole number from
+// 1 to 128, at its line: never taken, nor blamed on the song that plays it.
+#[test]
+fn a_value_outside_its_range_is_refused_at_its_line() {
+    for (from, to, line, message) in [
+        ("release = 0.4", "level = 1e300", 7, "`level` must be from -24 to 12, not 1e300"),
+        ("release = 0.4", "attack = -1", 7, "`attack` must be from 0 to 2, not -1"),
+        ("release = 0.4", "release = -1", 7, "`release` must be from 0 to 5, not -1"),
+        ("velocity = 0.7", "velocity = 5", 8, "`velocity` must be from 0 to 1, not 5"),
+        ("velocity = 0.7", "tune = 25", 8, "`tune` must be from -24 to 24, not 25"),
+        ("voices = 16", "voices = 200", 10, "`voices` must be a whole number from 1 to 128, not 200"),
+        ("voices = 16", "voices = 0", 10, "`voices` must be a whole number from 1 to 128, not 0"),
+        ("voices = 16", "voices = 2.5", 10, "`voices` must be a whole number from 1 to 128, not 2.5"),
+    ] {
+        let p = err(&PIANO.replace(from, to));
+        assert_eq!((p.line, p.message.as_str()), (line, message), "{to}");
+    }
+    let edges = PIANO.replace("release = 0.4", "release = 5\nlevel = -24").replace("voices = 16", "voices = 128");
+    assert!(DataInstrument::read(&edges).is_ok(), "the ends of each range are in it");
+}
+
 #[test]
 fn only_stds_sampler_plays_data() {
     let p = err(&PIANO.replace("std:sampler", "@alice/grains:grain"));
@@ -138,13 +159,14 @@ fn a_toml_mistake_is_at_its_line() {
 #[test]
 fn the_code_is_laid_out_on_the_files_lines() {
     let i = DataInstrument::read(PIANO).unwrap();
-    let code = i.module("@alice/felt-piano", "felt-piano");
-    assert_eq!(code, i.module("@alice/felt-piano", "felt-piano"), "a function of the file alone");
+    let id = Id::new("felt-piano").unwrap();
+    let code = i.module("@alice/felt-piano", &id);
+    assert_eq!(code, i.module("@alice/felt-piano", &id), "a function of the file alone");
     let lines: Vec<&str> = code.lines().collect();
-    assert!(lines[0].starts_with("export const feltPiano = component({ id: \"felt-piano\", label: \"Felt Piano\","), "{}", lines[0]);
-    assert!(lines[0].contains("controls: { tune: control.semis(0).range(-24, 24), level: control.db(0).range(-24, 12), attack: control.secs(0).range(0, 2), release: control.secs(0.4).range(0, 5), velocity: control.frac(0.7).range(0, 1) }"), "{}", lines[0]);
+    assert!(lines[0].starts_with("export const feltPiano = __m2_component({ id: \"felt-piano\", label: \"Felt Piano\","), "{}", lines[0]);
+    assert!(lines[0].contains("controls: { tune: __m2_control.semis(0).range(-24, 24), level: __m2_control.db(0).range(-24, 12), attack: __m2_control.secs(0).range(0, 2), release: __m2_control.secs(0.4).range(0, 5), velocity: __m2_control.frac(0.7).range(0, 1) }"), "{}", lines[0]);
     assert!(
-        lines[0].contains("settings: { mode: setting.choice([\"oneshot\", \"gate\"], \"gate\"), voices: setting.int(16) }"),
+        lines[0].contains("settings: { mode: __m2_setting.choice([\"oneshot\", \"gate\"], \"gate\"), voices: __m2_setting.int(16) }"),
         "{}",
         lines[0]
     );
@@ -159,17 +181,58 @@ fn the_code_is_laid_out_on_the_files_lines() {
     // Left out, the Sampler's own defaults.
     let plain =
         DataInstrument::read("label = \"P\"\ncategory = \"Keys\"\nengine = \"std:sampler\"\n[[region]]\nfile = \"a.wav\"\n").unwrap();
-    let code = plain.module("@a/b", "808-kit");
-    assert!(code.starts_with("export const _808Kit = component("), "{code}");
-    assert!(code.contains("release: control.secs(0.05)") && code.contains("\"oneshot\"), voices: setting.int(8)"), "{code}");
+    let code = plain.module("@a/b", &Id::new("808-kit").unwrap());
+    assert!(code.starts_with("export const _808Kit = __m2_component("), "{code}");
+    assert!(code.contains("release: __m2_control.secs(0.05)") && code.contains("\"oneshot\"), voices: __m2_setting.int(8)"), "{code}");
 }
 
 #[test]
 fn bindings_are_camel_case() {
+    let binding = |id: &str| Id::new(id).unwrap().binding();
     assert_eq!(binding("grand-piano"), "grandPiano");
     assert_eq!(binding("piano"), "piano");
     assert_eq!(binding("808-kit"), "_808Kit");
     assert_eq!(binding("a-2b"), "a2b");
+}
+
+// PACK-13: a file's name is checked before any code is made from it: a key whose name in code a
+// module may export.
+#[test]
+fn ids_are_checked_before_any_code() {
+    for bad in ["Felt Piano", "a=(()=>{throw 1})(),b", "a\nb", "-a", "a-", "", "abcdefghij-abcdefghij-abcdefghij-a", "piano.v2"] {
+        let e = Id::new(bad).expect_err(bad);
+        assert_eq!(e, "an id is 1 to 32 lowercase letters, digits and inner hyphens, such as `felt-piano`", "{bad}");
+    }
+    for word in ["new", "static", "class", "default", "delete", "package", "let", "await", "eval", "arguments", "yield", "enum"] {
+        let e = Id::new(word).expect_err(word);
+        assert!(e.contains("a word JavaScript keeps for itself"), "{word}: {e}");
+    }
+    for fine in ["sampler", "regions", "component", "control", "notes", "p", "808", "new-york", "a--b"] {
+        assert!(Id::new(fine).is_ok(), "{fine}");
+    }
+    assert_eq!(Id::new("abcdefghij-abcdefghij-abcdefghij").unwrap().as_str().len(), 32);
+}
+
+// PACK-13: the module made from a file names its own imports and values `__m2_…`, which no
+// instrument's name in code can be (letters, digits, and `_` only before a digit).
+#[test]
+fn the_modules_own_names_are_no_instruments() {
+    let i = DataInstrument::read(PIANO).unwrap();
+    let code = i.module("@a/b", &Id::new("sampler").unwrap());
+    assert!(code.starts_with("export const sampler = __m2_component("), "{code}");
+    // Every name the module declares: its export, then only `__m2_…` ones.
+    let word = |after: &str| -> Vec<String> {
+        code.split(after).skip(1).map(|r| r.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect()).collect()
+    };
+    let consts = word("const ");
+    assert_eq!(consts[0], "sampler", "{code}");
+    assert!(consts[1..].iter().chain(&word(" as ")).all(|n| n.starts_with("__m2_")), "{consts:?} {:?}", word(" as "));
+    for import in code.split("import { ").skip(1) {
+        let names = import.split(" }").next().unwrap();
+        assert!(names.split(", ").all(|n| n.contains(" as __m2_")), "imported under its own name: {names}");
+    }
+    assert!(code.contains("import { sampler as __m2_sampler } from \"std/sampler\""), "{code}");
+    assert!(code.contains("__m2_sampler(__m2_notes, { regions: __m2_regions,"), "{code}");
 }
 
 #[test]
@@ -184,8 +247,12 @@ fn the_nearest_word_is_a_slip_away() {
 fn code_editors_see_each_instrument_in_one_module() {
     let t = types(&[("felt-piano".into(), PIANO.into()), ("broken".into(), "label = 3".into()), ("808-kit".into(), PIANO.into())]);
     let lines: Vec<&str> = t.lines().collect();
-    assert_eq!(lines.len(), 5, "a comment, two imports and the two that read: {t}");
-    assert!(lines[3].starts_with("export const feltPiano = component({ id: \"felt-piano\""), "{t}");
-    assert!(lines[3].ends_with("sampler(notes, { regions: [], tune: p.tune, level: p.level, attack: p.attack, release: p.release, velocity: p.velocity, mode: p.mode, voices: p.voices }));"), "{t}");
-    assert!(lines[4].starts_with("export const _808Kit = component("), "{t}");
+    assert_eq!(lines.len(), 4, "a comment, the imports and the two that read: {t}");
+    assert!(lines[2].starts_with("export const feltPiano = __m2_component({ id: \"felt-piano\""), "{t}");
+    assert!(lines[2].ends_with("__m2_sampler(__m2_notes, { regions: [], tune: __m2_p.tune, level: __m2_p.level, attack: __m2_p.attack, release: __m2_p.release, velocity: __m2_p.velocity, mode: __m2_p.mode, voices: __m2_p.voices }));"), "{t}");
+    assert!(lines[3].starts_with("export const _808Kit = __m2_component("), "{t}");
+    // A name that isn't an id, or whose name in code an earlier one has, is left out.
+    let t =
+        types(&[("a-b".into(), PIANO.into()), ("a--b".into(), PIANO.into()), ("new".into(), PIANO.into()), ("x y".into(), PIANO.into())]);
+    assert_eq!(t.matches("export const").count(), 1, "{t}");
 }

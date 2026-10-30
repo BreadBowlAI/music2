@@ -214,7 +214,7 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     let mut opts = m2_script::Options::new(code, &project.manifest.project.entry);
     opts.packages = view.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
     opts.dependencies = project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect();
-    opts.data = Some(data_instrument);
+    opts.data = Some(DATA);
     let m2_script::Build { mut ir, sites, outputs, package_files, components, units } = m2_script::build_full(&opts)?;
     let components = components.into_iter().map(|d| (d.id.clone(), Arc::new(d))).collect();
 
@@ -288,17 +288,29 @@ pub fn catalog(packages: &PackageSet) -> m2_script::Catalog {
 /// Every component `packages` declare and where each is exported (`m2_script::describe`), their
 /// instruments written as data included (PACK-13).
 pub fn describe(packages: &[(String, std::path::PathBuf)]) -> m2_script::Catalog {
-    m2_script::describe_with(packages, Some(data_instrument))
+    m2_script::describe_with(packages, Some(DATA))
 }
 
-/// A pack's `instruments/<id>.toml` read and made into its module (PACK-13), for the build.
+/// What reads a pack's instruments written as data for the build (PACK-13).
+pub const DATA: m2_script::DataReader = m2_script::DataReader { module: data_instrument, binding: data_binding };
+
+/// A pack's `instruments/<id>.toml` read and made into its module (PACK-13): its name checked as an
+/// id first, so code is made only from one that passed.
 pub fn data_instrument(package: &str, id: &str, text: &str) -> Result<m2_script::DataModule, m2_script::DataProblem> {
-    let i = m2_song::instrument::DataInstrument::read(text).map_err(|p| m2_script::DataProblem {
-        message: p.message,
-        line: p.line,
-        col: p.col,
-    })?;
-    Ok(m2_script::DataModule { code: i.module(package, id), regions: i.regions.iter().map(|r| r.line).collect() })
+    let problem = |message: String, line: u32, col: u32| m2_script::DataProblem { message, line, col };
+    let id = m2_song::instrument::Id::new(id).map_err(|why| problem(file_name(&why), 1, 1))?;
+    let i = m2_song::instrument::DataInstrument::read(text).map_err(|p| problem(p.message, p.line, p.col))?;
+    Ok(m2_script::DataModule { code: i.module(package, &id), regions: i.regions.iter().map(|r| r.line).collect() })
+}
+
+/// The name a data instrument is exported by (PACK-13), or why its file's name can't be an id.
+fn data_binding(id: &str) -> Result<String, String> {
+    m2_song::instrument::Id::new(id).map(|id| id.binding()).map_err(|why| file_name(&why))
+}
+
+/// Why a data file's name can't be its instrument's id, in words at the file.
+fn file_name(why: &str) -> String {
+    format!("the file's name is the instrument's id, and it can't be one: {why}")
 }
 
 /// The packs the lists offer (PACK-11): those `packages` shows (the accepted revision's), then of

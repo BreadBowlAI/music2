@@ -457,3 +457,48 @@ fn check_refuses_code_that_hides_data_instruments() {
     let text = failed(t.m2(&["pack", "check", pack.to_str().unwrap()]));
     assert!(text.contains("src/instruments.ts and instruments/*.toml are both the module \"@test/tiny-keys/instruments\""), "{text}");
 }
+
+/// `@test/tiny-keys`, imported from the SFZ fixture into `<t>/pack`, which checks.
+fn imported(t: &Temp) -> PathBuf {
+    copy(&sfz_fixture(), &t.0.join("in"));
+    let pack = t.0.join("pack");
+    let sfz = t.0.join("in/Tiny Keys.sfz");
+    ok(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+    pack
+}
+
+// PACK-13, PACK-12: check names the file and the line of a mistake in a data instrument: one the
+// reader finds (a value out of its range) and one @m2/core finds in a region.
+#[test]
+fn check_names_the_file_and_line_of_a_data_instruments_mistake() {
+    let t = Temp::new("sfz-lines");
+    let pack = imported(&t);
+    let file = pack.join("instruments/tiny-keys.toml");
+    let toml = std::fs::read_to_string(&file).unwrap();
+    let line_of = |text: &str, what: &str| text[..text.find(what).unwrap()].matches('\n').count() + 1;
+
+    let bad = toml.replacen("velocity = [1, 64]", "velocity = [0, 64]", 1);
+    let region = line_of(&bad, "velocity = [0, 64]") - 4;
+    assert!(bad.lines().nth(region - 1).unwrap().starts_with("[[region]]"), "{bad}");
+    std::fs::write(&file, &bad).unwrap();
+    let text = failed(t.m2(&["pack", "check", pack.to_str().unwrap()]));
+    assert!(text.contains(&format!("@test/tiny-keys/instruments/tiny-keys.toml:{region}:1: ")), "{text}");
+
+    let bad = toml.replace("voices = 32", "voices = 200");
+    std::fs::write(&file, &bad).unwrap();
+    let text = failed(t.m2(&["pack", "check", pack.to_str().unwrap()]));
+    let at = format!("@test/tiny-keys/instruments/tiny-keys.toml:{}:10: ", line_of(&bad, "voices = 200"));
+    assert!(text.contains(&at) && text.contains("`voices` must be a whole number from 1 to 128, not 200"), "{text}");
+}
+
+// PACK-13, PACK-12: two data instruments whose names make one name in code fail check, naming both.
+#[test]
+fn check_refuses_two_instruments_with_one_name_in_code() {
+    let t = Temp::new("sfz-twins");
+    let pack = imported(&t);
+    let toml = std::fs::read_to_string(pack.join("instruments/tiny-keys.toml")).unwrap();
+    std::fs::write(pack.join("instruments/a-1.toml"), &toml).unwrap();
+    std::fs::write(pack.join("instruments/a1.toml"), &toml).unwrap();
+    let text = failed(t.m2(&["pack", "check", pack.to_str().unwrap()]));
+    assert!(text.contains("instruments/a-1.toml` and `@test/tiny-keys/instruments/a1.toml` would both be exported as `a1`"), "{text}");
+}

@@ -134,9 +134,17 @@ pub struct DataProblem {
     pub col: u32,
 }
 
-/// What reads a pack's `instruments/<id>.toml` into its module (PACK-13): given the package's name,
-/// the id and the file's text. The build has no TOML reader of its own; `m2_session` gives it one.
-pub type DataReader = fn(package: &str, id: &str, text: &str) -> Result<DataModule, DataProblem>;
+/// What reads a pack's instruments written as data (PACK-13). The build has no TOML reader of its
+/// own, and makes no name in code of its own; `m2_session` gives it both.
+#[derive(Clone, Copy)]
+pub struct DataReader {
+    /// The module of one `instruments/<id>.toml`: given the package's name, the id (the file's
+    /// name without `.toml`) and the file's text.
+    pub module: fn(package: &str, id: &str, text: &str) -> Result<DataModule, DataProblem>,
+    /// The name an instrument is exported by, given its id, or why the file's name can't be an
+    /// id: asked before any code is made from the name.
+    pub binding: fn(id: &str) -> Result<String, String>,
+}
 
 /// Where a pack's instruments written as data are, and the module that exports them (PACK-13).
 const DATA: &str = "instruments";
@@ -539,6 +547,32 @@ impl State {
 /// What a package file not there is called: a build error like any other.
 const NOT_FOUND: &str = "file not found";
 
+/// The module `name` (`<package>/instruments`): `export { <binding> } from "./instruments/<file>";`
+/// for each of `files`, its binding asked of `binding` before any code is made (PACK-13). A file
+/// whose name isn't an id, or whose binding an earlier file has, is refused at its file:
+/// `(file:1:1, why)`.
+fn data_exports(name: &str, files: &[String], binding: fn(&str) -> Result<String, String>) -> Result<String, (String, String)> {
+    let mut taken: BTreeMap<String, &str> = BTreeMap::new();
+    let mut code = String::new();
+    for f in files {
+        let at = format!("{name}/{f}");
+        let b = binding(f.strip_suffix(".toml").unwrap_or(f)).map_err(|why| (format!("{at}:1:1"), why))?;
+        let plain =
+            b.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') && b.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !plain {
+            return Err((format!("{at}:1:1"), format!("`{b}` can't be a name in code")));
+        }
+        if let Some(other) = taken.insert(b.clone(), f) {
+            return Err((
+                format!("{at}:1:1"),
+                format!("`{name}/{other}` and `{at}` would both be exported as `{b}`, so both are refused: rename one of them"),
+            ));
+        }
+        code.push_str(&format!("export {{ {b} }} from {};\n", serde_json::to_string(&format!("./{DATA}/{f}")).expect("a string")));
+    }
+    Ok(code)
+}
+
 /// A package's instruments written as data (PACK-13): the `.toml` files right in its `instruments/`
 /// folder, by name in bytewise order, never through a link and never a hidden one.
 pub fn data_files(dir: &Path) -> Vec<String> {
@@ -757,15 +791,24 @@ impl Loader for Load {
             let data = st.data_module(name).map(|(pkg, dir, id)| (pkg.to_string(), dir.to_path_buf(), id));
             let source = match (name.strip_prefix(PROJECT), data) {
                 (Some(rel), _) => st.code.get(rel).cloned().ok_or_else(|| fail("not a code file of the project".into()))?,
-                // `<package>/instruments`: each data instrument's module, in bytewise order. What the
-                // folder lists is recorded, so a describe run sees an instrument added (PACK-13).
+                // `<package>/instruments`: each data instrument by its name in code, in bytewise order
+                // of the files. What the folder lists is recorded, so a describe run sees an
+                // instrument added (PACK-13).
                 (None, Some((_, dir, None))) => {
                     let files = data_files(&dir);
                     st.read.push((dir.join(DATA), sha256_hex(files.join("\n").as_bytes())));
-                    files
-                        .iter()
-                        .map(|f| format!("export * from {};\n", serde_json::to_string(&format!("./{DATA}/{f}")).expect("a string")))
-                        .collect()
+                    let Some(reader) = st.data else {
+                        let e = format!("`{name}` is instruments written as data, which this program can't read");
+                        st.failed.get_or_insert(Diagnostic::error("code.build", e.clone()).at(Some(name.to_string())));
+                        return Err(fail(e));
+                    };
+                    match data_exports(name, &files, reader.binding) {
+                        Ok(code) => code,
+                        Err((at, e)) => {
+                            st.failed.get_or_insert(Diagnostic::error("code.build", e.clone()).at(Some(at)));
+                            return Err(fail(e));
+                        }
+                    }
                 }
                 (None, data) => {
                     let file = st.package_path(name).ok_or_else(|| fail("not a file of an installed package".into()))?;
@@ -781,7 +824,7 @@ impl Loader for Load {
                                 st.failed.get_or_insert(Diagnostic::error("code.build", e.clone()).at(Some(name.to_string())));
                                 return Err(fail(e));
                             };
-                            match reader(&pkg, &id, &text) {
+                            match (reader.module)(&pkg, &id, &text) {
                                 Ok(m) => {
                                     st.data_regions.insert(name.to_string(), m.regions);
                                     m.code
@@ -1247,7 +1290,9 @@ fn caught(st: &mut State, e: CaughtError, timed_out: bool) -> Diagnostic {
         CaughtError::Error(e) => e.to_string(),
         CaughtError::Value(_) => String::new(),
     };
-    if let Some(d) = st.failed.take().filter(|d| text.contains(&d.message)) {
+    // The engine cuts a long message short, so the start of one is enough.
+    let head = |m: &str| m.char_indices().nth(48).map_or(m, |(i, _)| &m[..i]).to_string();
+    if let Some(d) = st.failed.take().filter(|d| text.contains(&head(&d.message))) {
         return d;
     }
     if let Some(d) = st.export_error(&text) {

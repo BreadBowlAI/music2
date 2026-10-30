@@ -280,8 +280,10 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     }
     let catalog = m2_session::describe(&[(pack::STD.to_string(), std.to_path_buf()), (name.as_str().to_string(), dir.to_path_buf())]);
     let prefix = format!("{name}:");
-    for d in catalog.problems.iter().filter(|d| d.message.contains(name.as_str())) {
-        out.push(d.message.clone());
+    for d in
+        catalog.problems.iter().filter(|d| d.message.contains(name.as_str()) || d.src.as_ref().is_some_and(|s| s.contains(name.as_str())))
+    {
+        out.push(placed(d.src.as_deref(), &d.message, &name));
     }
     let ours: Vec<_> = catalog.components.values().filter(|d| d.id.starts_with(&prefix)).cloned().collect();
     if ours.is_empty() {
@@ -388,15 +390,29 @@ fn builds(
     let built = match set.load(std) {
         Err(e) => Err(vec![format!("{e:#}")]),
         Ok(_) => m2_song::Project::open(&song)
-            .map_err(|d| d.into_iter().map(|d| d.message).collect::<Vec<_>>())
-            .and_then(|project| m2_session::compile(&project, &mut set).map_err(|d| d.into_iter().map(|d| d.message).collect())),
+            .map_err(|d| d.iter().map(|d| placed(d.src.as_deref(), &d.message, name)).collect::<Vec<_>>())
+            .and_then(|project| {
+                m2_session::compile(&project, &mut set).map_err(|d| d.iter().map(|d| placed(d.src.as_deref(), &d.message, name)).collect())
+            }),
     };
     match built {
-        Ok(c) => out.extend(c.problems.iter().filter(|d| d.severity == m2_song::Severity::Error).map(|d| d.message.clone())),
+        Ok(c) => out.extend(
+            c.problems.iter().filter(|d| d.severity == m2_song::Severity::Error).map(|d| placed(d.src.as_deref(), &d.message, name)),
+        ),
         Err(e) => out.extend(e.into_iter().map(|m| format!("its components don't build in a song: {m}"))),
     }
     let _ = std::fs::remove_dir_all(&song);
     out
+}
+
+/// A problem in words, after its place when that is in the pack `name`:
+/// `@alice/felt-piano/instruments/felt-piano.toml:12:1: …` (PACK-13). A place in the scratch song
+/// check builds would mean nothing to the pack's author.
+fn placed(src: Option<&str>, message: &str, name: &PackName) -> String {
+    match src {
+        Some(at) if at.starts_with(&format!("{name}/")) => format!("{at}: {message}"),
+        _ => message.to_string(),
+    }
 }
 
 /// The requirement that admits the std in `std`.

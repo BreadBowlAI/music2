@@ -699,7 +699,7 @@ pub fn import(i: &Import) -> Result<Imported, String> {
         i.sfz.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
         i.name,
         files.len(),
-        m2_song::instrument::binding(&id),
+        m2_song::instrument::Id::new(&id).map(|i| i.binding()).unwrap_or_default(),
         i.name,
     );
     let credits: Vec<&String> =

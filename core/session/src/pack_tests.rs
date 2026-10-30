@@ -406,6 +406,79 @@ fn a_data_instruments_region_error_names_its_line() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+// PACK-13: a data file's name is the instrument's id, checked before any code is made from it: a
+// name that is code, or a word JavaScript keeps for itself, is refused at its file, and never runs.
+#[test]
+fn a_data_file_named_as_code_is_refused_at_its_file() {
+    let root = scratch("data-name");
+    let song = tiny_with_data(&root, TINY_PIANO);
+    let std = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    let evil = "a=(()=>{throw new Error(\"INJECTED CODE RAN\")})(),b.toml";
+    for name in [evil, "new.toml", "static.toml", "default.toml", "Felt Piano.toml"] {
+        let file = root.join("tiny/instruments").join(name);
+        std::fs::write(&file, TINY_PIANO).unwrap();
+        let mut pk = packages(&root.join("no-store"));
+        let Err(e) = compile(&Project::open(&song).unwrap(), &mut pk) else { panic!("{name} is refused") };
+        assert!(e.iter().all(|d| !d.message.contains("INJECTED")), "the name never runs: {e:?}");
+        assert_eq!(e[0].src.as_deref(), Some(format!("@test/tiny/instruments/{name}:1:1").as_str()), "{e:?}");
+        assert!(e[0].message.contains("the file's name is the instrument's id"), "{name}: {}", e[0].message);
+        let catalog = describe(&[("std".into(), std.clone()), ("@test/tiny".into(), root.join("tiny"))]);
+        assert!(catalog.problems.iter().all(|d| !d.message.contains("INJECTED")), "{:?}", catalog.problems);
+        let at = format!("@test/tiny/instruments/{name}:1:1");
+        assert!(
+            catalog
+                .problems
+                .iter()
+                .any(|d| d.src.as_deref() == Some(at.as_str()) && d.message.contains("the file's name is the instrument's id")),
+            "{name}: {:?}",
+            catalog.problems
+        );
+        std::fs::remove_file(&file).unwrap();
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-13: two files whose names make one name in code are both refused, naming both, rather than
+// one import failing as "ambiguous" in a song.
+#[test]
+fn two_files_with_one_name_in_code_are_both_refused() {
+    let root = scratch("data-twins");
+    let song = tiny_with_data(&root, TINY_PIANO);
+    for (a, b, both) in [("a-1", "a1", "a1"), ("a--b", "a-b", "aB")] {
+        std::fs::write(root.join(format!("tiny/instruments/{a}.toml")), TINY_PIANO).unwrap();
+        std::fs::write(root.join(format!("tiny/instruments/{b}.toml")), TINY_PIANO).unwrap();
+        let mut pk = packages(&root.join("no-store"));
+        let Err(e) = compile(&Project::open(&song).unwrap(), &mut pk) else { panic!("{a} and {b} are refused") };
+        let m = &e[0].message;
+        assert!(m.contains(&format!("{a}.toml")) && m.contains(&format!("{b}.toml")) && m.contains(&format!("`{both}`")), "{m}");
+        std::fs::remove_file(root.join(format!("tiny/instruments/{a}.toml"))).unwrap();
+        std::fs::remove_file(root.join(format!("tiny/instruments/{b}.toml"))).unwrap();
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-13: an instrument may be named as the module made from it names its own imports and values
+// (`sampler`, `regions`, `component` …): those are names no instrument can have. Every file of
+// the folder is loaded with the module `<package>/instruments`, so each is built here.
+#[test]
+fn the_modules_own_names_are_no_instruments() {
+    let root = scratch("data-own-names");
+    let song = tiny_with_data(&root, TINY_PIANO);
+    for id in ["sampler", "regions", "component", "control", "signature", "notes", "p"] {
+        std::fs::write(root.join(format!("tiny/instruments/{id}.toml")), TINY_PIANO).unwrap();
+    }
+    let pluck = "import { track } from \"@m2/core\";\nimport { sampler } from \"@test/tiny/instruments\";\n\n\
+                 export default track(\"pluck\", { name: \"Pluck\" }, ({ lane }) => sampler(lane.notes(\"notes\")));\n";
+    std::fs::write(root.join("song-path/tracks/pluck.ts"), pluck).unwrap();
+    let mut pk = packages(&root.join("no-store"));
+    let c = compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(c.problems.is_empty(), "{:?}", c.problems);
+    let out = Renderer::new(&c.flat, &c.data, &pk, 48_000).unwrap().render(2.0).unwrap();
+    let peak = out[(0.25 * 48_000.0) as usize..(0.45 * 48_000.0) as usize].iter().map(|f| f[0].abs()).fold(0.0, f32::max);
+    assert!(peak > 0.01, "`sampler`, the data instrument, sounds");
+    std::fs::remove_dir_all(&root).ok();
+}
+
 // PACK-13: a data instrument's controls and settings are std's Sampler's, so one that gives no
 // defaults is the Sampler with its regions.
 #[test]
