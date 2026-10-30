@@ -10,9 +10,9 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Result, anyhow, bail};
 use m2_editor::get::{self, Remote};
 use m2_editor::packs::Install;
+use m2_song::Version;
 use m2_song::pack::{Lock, PackName, Store};
 use m2_song::registry::Catalog;
-use m2_song::Version;
 
 /// The registry `m2` reads (REG-11), kept in `registry` in the cache folder. Why there is none,
 /// in words saying how to set one.

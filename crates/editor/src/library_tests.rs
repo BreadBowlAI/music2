@@ -621,7 +621,10 @@ fn a_data_instrument_is_in_the_library_with_no_song_and_previews() {
     let packages = vec![("std".to_string(), std_dir()), ("@alice/piano".to_string(), pack.clone())];
     let lib = without_song(&packages, None, &[], &[]);
     let piano = lib.get("@alice/piano:piano").expect("the data instrument is listed with no song open");
-    assert_eq!((piano.kind, piano.label.as_str(), piano.package.as_str(), piano.preview), (Kind::Instrument, "Felt piano", "@alice/piano", true));
+    assert_eq!(
+        (piano.kind, piano.label.as_str(), piano.package.as_str(), piano.preview),
+        (Kind::Instrument, "Felt piano", "@alice/piano", true)
+    );
     let catalog = m2_session::describe(&packages);
     let (song, loads) = preview::of(piano, &catalog, &packages, None).unwrap();
     let wav = f.0.join("piano.wav");

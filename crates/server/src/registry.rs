@@ -14,9 +14,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::get::{self, Missing, Offer, Remote};
+use m2_song::Version;
 use m2_song::pack::{Lock, PackName, PkgManifest, Store};
 use m2_song::registry::Catalog;
-use m2_song::Version;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -171,8 +171,13 @@ impl AppState {
     pub fn library_preview(&self, id: &str) -> Result<PathBuf> {
         let remote = self.remote().context("No registry is set, so nothing is in the library.")?;
         let o = self.offer(id)?;
-        let sha = o.facts.preview.ok_or_else(|| anyhow!("{}", o.item.no_preview.clone().unwrap_or_else(|| format!("{} has no preview.", o.item.label))))?;
-        remote.blob(sha, m2_editor::library::samples::PREVIEW_BYTES, &AtomicBool::new(false)).map_err(|e| anyhow!("{}'s preview couldn't be fetched: {e}", o.item.label))
+        let sha = o
+            .facts
+            .preview
+            .ok_or_else(|| anyhow!("{}", o.item.no_preview.clone().unwrap_or_else(|| format!("{} has no preview.", o.item.label))))?;
+        remote
+            .blob(sha, m2_editor::library::samples::PREVIEW_BYTES, &AtomicBool::new(false))
+            .map_err(|e| anyhow!("{}'s preview couldn't be fetched: {e}", o.item.label))
     }
 
     /// Cancel the Get running (REG-15): whether one was.
@@ -198,7 +203,8 @@ impl AppState {
     /// song told (its lists then offer it, and a song that waited for it builds); a sample is
     /// added to the open song as Add sample adds one. Blocks: call it off the async threads.
     pub fn get_from_library(&self, r: GetReq) -> Result<Value> {
-        let remote = self.remote().context("No registry is set: set M2_REGISTRY, or `registry` in ~/.music2/settings.json, to get packs.")?;
+        let remote =
+            self.remote().context("No registry is set: set M2_REGISTRY, or `registry` in ~/.music2/settings.json, to get packs.")?;
         let (id, offer, version) = match (&r.id, &r.pack, &r.version) {
             (Some(id), None, None) => {
                 let o = self.offer(id)?;
@@ -243,7 +249,8 @@ impl AppState {
             done["got"] = json!({"pack": o.pack.as_str(), "version": o.version.version.to_string()});
             return Ok(done);
         }
-        let name = offer.as_ref().map(|o| o.pack.clone()).or_else(|| r.pack.as_deref().and_then(|p| PackName::new(p).ok())).expect("a pack");
+        let name =
+            offer.as_ref().map(|o| o.pack.clone()).or_else(|| r.pack.as_deref().and_then(|p| PackName::new(p).ok())).expect("a pack");
         let store = Store::at(self.library_folders().packs.context("This app keeps no store of packs.")?);
         let std = crate::resources::std_dir();
         let installed = get::pack(&remote, &name, &version, &store, &std, &mut progress, &cancel).map_err(|e| anyhow!(e))?;

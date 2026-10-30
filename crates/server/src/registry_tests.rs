@@ -181,7 +181,8 @@ impl Serve {
                         let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                         return;
                     };
-                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
+                    let _ =
+                        s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
                     if held.lock().unwrap().as_ref().is_some_and(|h| path.starts_with(h.as_str())) {
                         let _ = s.write_all(&body[..body.len() / 2]);
                         let _ = s.flush();
@@ -383,11 +384,16 @@ fn get_installs_the_pack_and_the_song_offers_it() {
     let w = World::new("pack");
     let (session, dir) = w.song(|_| {});
     w.search("soft");
-    let instruments = |w: &World| state(w)["instruments"].as_array().unwrap().iter().filter_map(|i| i["component"].as_str().map(String::from)).collect::<Vec<_>>();
+    let instruments = |w: &World| {
+        state(w)["instruments"].as_array().unwrap().iter().filter_map(|i| i["component"].as_str().map(String::from)).collect::<Vec<_>>()
+    };
     assert!(!instruments(&w).contains(&"@bob/keys:soft-keys".to_string()));
     let (status, done) = post(&w.running.url, "/api/library/get", &json!({"id": KEYS_ID}));
     assert_eq!(status, 200, "{done:#}");
-    assert_eq!((&done["got"]["pack"], &done["got"]["version"], &done["id"]), (&json!("@bob/keys"), &json!("0.1.0"), &json!("@bob/keys:soft-keys")));
+    assert_eq!(
+        (&done["got"]["pack"], &done["got"]["version"], &done["id"]),
+        (&json!("@bob/keys"), &json!("0.1.0"), &json!("@bob/keys:soft-keys"))
+    );
     let hash = m2_song::pack::Listing::of(&w.keys).unwrap().hash();
     assert_eq!(w.store().check(&m2_song::PackName::new("@bob/keys").unwrap(), &m2_song::Version(0, 1, 0)).unwrap(), hash);
     assert!(instruments(&w).contains(&"@bob/keys:soft-keys".to_string()), "the song's lists offer it at once");
@@ -407,7 +413,8 @@ fn getting_a_sample_adds_it_with_its_note() {
     let (session, dir) = w.song(|_| {});
     w.search("kick");
     w.serve.asked();
-    let (status, done) = post(&w.running.url, "/api/library/get", &json!({"id": KICK_ID, "session": session, "to": {"kind": "below", "beat": 4}}));
+    let (status, done) =
+        post(&w.running.url, "/api/library/get", &json!({"id": KICK_ID, "session": session, "to": {"kind": "below", "beat": 4}}));
     assert_eq!(status, 200, "{done:#}");
     assert_eq!((&done["asset"], &done["noted"]), (&json!("Boom.wav"), &json!(true)), "{done:#}");
     assert_eq!(w.serve.asked().len(), 1, "its one file");
@@ -490,7 +497,11 @@ fn a_song_missing_a_locked_pack_gets_it_and_plays() {
     let (_, _dir) = w.song(|dir| {
         let manifest = std::fs::read_to_string(dir.join("music2.toml")).unwrap();
         std::fs::write(dir.join("music2.toml"), manifest + "\"@bob/keys\" = \"0.1\"\n").unwrap();
-        std::fs::write(dir.join("music2.lock"), format!("[[pack]]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nhash = \"{}\"\n", hash.prefixed())).unwrap();
+        std::fs::write(
+            dir.join("music2.lock"),
+            format!("[[pack]]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nhash = \"{}\"\n", hash.prefixed()),
+        )
+        .unwrap();
     });
     assert_eq!(state(&w)["has_code"], json!(false), "it waits for the pack");
     w.search("");
@@ -519,7 +530,8 @@ fn a_flac_sample_comes_in_as_a_wav() {
     assert_eq!(w.library("snap"), [snap]);
     let (status, wav) = get(&w.running.url, &format!("/api/library/preview?id={}", enc(snap)));
     assert_eq!((status, &wav[..4], &wav[8..12]), (200, &b"RIFF"[..], &b"WAVE"[..]), "its preview is the WAV of it");
-    let (status, done) = post(&w.running.url, "/api/library/get", &json!({"id": snap, "session": session, "to": {"kind": "below", "beat": 0}}));
+    let (status, done) =
+        post(&w.running.url, "/api/library/get", &json!({"id": snap, "session": session, "to": {"kind": "below", "beat": 0}}));
     assert_eq!(status, 200, "{done:#}");
     assert_eq!(done["asset"], json!("Snap.wav"), "{done:#}");
     let bytes = std::fs::read(dir.join("assets/Snap.wav")).unwrap();

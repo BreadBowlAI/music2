@@ -507,7 +507,11 @@ fn the_lists_offer_a_pack_installed_once_the_store_changed() {
     let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap();
     let plain: String = manifest.lines().filter(|l| !l.contains("@test/tiny")).map(|l| format!("{l}\n")).collect();
     std::fs::write(song.join("music2.toml"), plain).unwrap();
-    std::fs::write(song.join("song.ts"), "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n").unwrap();
+    std::fs::write(
+        song.join("song.ts"),
+        "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n",
+    )
+    .unwrap();
     let _ = std::fs::remove_dir_all(song.join("tracks"));
     let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
     let offered = |s: &crate::Session| s.offered().iter().any(|(n, ..)| n == "@test/tiny");

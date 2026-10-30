@@ -332,7 +332,10 @@ pub fn offers(catalog: &Catalog, have: &dyn Fn(&PackName) -> Option<Version>) ->
 /// The offers `q` finds, best first, by LIB-1's one search.
 pub fn find<'a>(offers: &'a [Offer], q: &Query) -> Vec<&'a Offer> {
     let by_item: HashMap<*const Item, &Offer> = offers.iter().map(|o| (&o.item as *const Item, o)).collect();
-    crate::library::search(offers.iter().map(|o| &o.item), q).into_iter().filter_map(|i| by_item.get(&(i as *const Item)).copied()).collect()
+    crate::library::search(offers.iter().map(|o| &o.item), q)
+        .into_iter()
+        .filter_map(|i| by_item.get(&(i as *const Item)).copied())
+        .collect()
 }
 
 /// How far a Get is: bytes.
@@ -519,7 +522,8 @@ pub fn sample(
         .is_some_and(|url| fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total }), cancel).is_ok());
     if !copied {
         let url = remote.url(&reg::blob_path(&file.sha256));
-        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total }), cancel).map_err(|e| said(e.to_string()))?;
+        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total }), cancel)
+            .map_err(|e| said(e.to_string()))?;
     }
     progress(Progress { done: total, total });
     sample.file = dest;

@@ -311,8 +311,12 @@ async fn missing(State(s): S) -> Result<Json<Value>, ApiError> {
     let shown: Vec<Value> = missing
         .iter()
         .map(|m| match &m.got {
-            Ok(v) => json!({"pack": m.name.as_str(), "version": m.version.to_string(), "hash": m.hash.prefixed(), "can": true, "size": v.size}),
-            Err(why) => json!({"pack": m.name.as_str(), "version": m.version.to_string(), "hash": m.hash.prefixed(), "can": false, "why": why}),
+            Ok(v) => {
+                json!({"pack": m.name.as_str(), "version": m.version.to_string(), "hash": m.hash.prefixed(), "can": true, "size": v.size})
+            }
+            Err(why) => {
+                json!({"pack": m.name.as_str(), "version": m.version.to_string(), "hash": m.hash.prefixed(), "can": false, "why": why})
+            }
         })
         .collect();
     Ok(Json(json!({ "missing": shown })))

@@ -58,7 +58,8 @@ impl Serve {
                         let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                         return;
                     };
-                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
+                    let _ =
+                        s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
                     if held.lock().unwrap().as_ref().is_some_and(|h| path.starts_with(h.as_str())) {
                         let _ = s.write_all(&body[..body.len() / 2]);
                         let _ = s.flush();
@@ -235,7 +236,10 @@ fn from_the_library_is_what_you_havent_got() {
     let file = kick.facts.file.as_ref().unwrap();
     assert_eq!(kick.size(), file.size, "a sample comes alone");
     let s = kick.item.sample.as_ref().unwrap();
-    assert_eq!((s.kind, s.instrument.as_deref(), s.hash.as_str()), (crate::library::SampleType::OneShot, Some("kick"), file.sha256.hex().as_str()));
+    assert_eq!(
+        (s.kind, s.instrument.as_deref(), s.hash.as_str()),
+        (crate::library::SampleType::OneShot, Some("kick"), file.sha256.hex().as_str())
+    );
     assert_eq!(
         s.from,
         json!({"pack": "@alice/drums", "version": "1.0.0", "file": "samples/kicks/Boom.wav", "author": "Alice", "license": "CC0-1.0"})
@@ -338,7 +342,8 @@ fn a_cancelled_get_leaves_nothing() {
     let v = version_of(&bucket, "@bob/keys", Version(0, 1, 0));
     let remote = Remote::new(&file_url(&bucket), &w.t.0.join("cache")).unwrap();
     let cancel = AtomicBool::new(false);
-    let why = pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |_| cancel.store(true, Ordering::Relaxed), &cancel).unwrap_err();
+    let why =
+        pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |_| cancel.store(true, Ordering::Relaxed), &cancel).unwrap_err();
     assert!(why.contains("cancelled"), "{why}");
     assert!(store.versions(&name("@bob/keys")).is_empty() && getting(&store).is_empty());
 

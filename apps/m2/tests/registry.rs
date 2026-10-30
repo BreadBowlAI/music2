@@ -313,7 +313,17 @@ fn library_bucket(t: &Temp) -> (PathBuf, String, String) {
         hashes.push(hash.prefixed());
     }
     let bucket = t.0.join("bucket");
-    ok(t.m2(&["registry", "build", r, "--sources", src.to_str().unwrap(), "--out", bucket.to_str().unwrap(), "--made", "2026-10-30T12:00:00Z"]));
+    ok(t.m2(&[
+        "registry",
+        "build",
+        r,
+        "--sources",
+        src.to_str().unwrap(),
+        "--out",
+        bucket.to_str().unwrap(),
+        "--made",
+        "2026-10-30T12:00:00Z",
+    ]));
     (bucket, hashes.remove(0), hashes.remove(0))
 }
 
@@ -369,7 +379,8 @@ fn m2_pack_get_gets_a_pack_and_a_songs_missing_ones() {
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
     let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap();
     std::fs::write(song.join("music2.toml"), manifest + "\"@alice/drums\" = \"1.0\"\n").unwrap();
-    std::fs::write(song.join("music2.lock"), format!("[[pack]]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nhash = \"{drums}\"\n")).unwrap();
+    std::fs::write(song.join("music2.lock"), format!("[[pack]]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nhash = \"{drums}\"\n"))
+        .unwrap();
     let out = ok(t.m2_with(&at, &song, &["pack", "get"]));
     assert!(out.contains("got @alice/drums 1.0.0"), "{out}");
     assert!(store.join("@alice/drums/1.0.0/m2pack.json").is_file());
@@ -388,7 +399,12 @@ fn m2_search_lists_the_librarys_items() {
     let row = out.lines().find(|l| l.contains("Soft keys")).unwrap_or_else(|| panic!("{out}"));
     assert!(row.contains("library") && row.contains("library:@bob/keys:soft-keys"), "{row}");
     let json: serde_json::Value = serde_json::from_slice(&t.m2_with(&at, &t.0, &["search", "kick", "--json"]).stdout).unwrap();
-    let kick = json.as_array().unwrap().iter().find(|i| i["id"] == "library:sample:@alice/drums:samples/kicks/Boom.wav").expect("the library's kick");
+    let kick = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == "library:sample:@alice/drums:samples/kicks/Boom.wav")
+        .expect("the library's kick");
     assert_eq!(kick["library"]["pack"], "@alice/drums");
     ok(t.m2_with(&at, &t.0, &["pack", "get", "@bob/keys"]));
     let out = ok(t.m2_with(&at, &t.0, &["search", "soft"]));
