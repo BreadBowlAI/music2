@@ -39,6 +39,7 @@ pub mod packs;
 pub mod plan;
 pub mod plugins;
 pub mod presets;
+pub mod registry;
 pub mod rekey;
 pub mod rename;
 pub mod render;

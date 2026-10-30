@@ -284,6 +284,17 @@ m2 pack update <project> [@owner/name]
 
 Make, check and install packs: instruments, effects, sounds and recordings in a folder. `new` makes one with an example instrument; `import-sfz` makes one from an SFZ instrument (its recordings, as an instrument written as data), saying what it couldn't keep; `check` says in words what the registry would refuse (exit 1); `build` writes its `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `list` and `remove` show and take out what is installed; `lock` writes the song's `music2.lock` from its `music2.toml`, moving only what must move; `update` moves the song to the newest installed version each line allows (or that pack's only). Your store is `~/Music/music2/Packs`, one folder a version (`Packs/@alice/felt-piano/1.2.0/`). A version is never changed: installing one that is there with other files is refused, and installing it again when its copy was changed puts it back. A song keeps the version it was made with in `music2.lock`; adding a pack's instrument or effect in the app writes it. To move a song to another version, change its line in `music2.toml`, then run `m2 pack lock`; both lock and update work while the song doesn't build. See [Packs](packs.md) and [Making a pack](making-a-pack.md).
 
+## m2 registry
+
+```
+m2 registry check <registry> [--base <registry>] [--author <github-login>]
+m2 registry add <registry> <pack-folder> --source <url>
+m2 registry pending <registry> --out <bucket> [--from <bucket>]
+m2 registry build <registry> --sources <folder> --out <bucket> [--from <bucket>] [--made <time>] [--to-delete <file>]
+```
+
+The pack registry's robot, and listing your pack in it. `check` reads every pack file strictly and says what a change broke: a listed version changed (`--base`: the registry before), a pack changed by someone not its scope's (`--author`); `add` checks your pack, writes its `m2pack.json` and lists its version in `packs/@owner/name.toml`; `pending` prints the versions the bucket hasn't got yet, with where to get each; `build` checks each of those (unpacked under `--sources`), refuses one whose files aren't the ones listed, and writes its files, previews and facts into `--out` by hash, then the catalog. The registry is a folder: one file a pack, `packs/@owner/name.toml`, and `tags.txt`, the words a pack's tags may use. `--from` is the bucket as it is: what it has isn't built again (a folder or `file:///…` for now). `--made` is the catalog's time, `2026-10-30T12:00:00Z` (now, when it is left out), so one registry and one time always make the same bytes. `--to-delete` writes the bucket paths of removed versions' files that no other version uses, one a line. See [Making a pack](making-a-pack.md#listing-it-in-the-registry).
+
 ## m2 plugin-state
 
 ```

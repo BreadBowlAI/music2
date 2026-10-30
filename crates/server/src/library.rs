@@ -14,7 +14,7 @@
 //! before the next render of the item can replace it. Your presets and the cache are the folders
 //! the server keeps ([`Folders`]).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use m2_editor::library::samples::{self, Indexed, Root};
 use m2_editor::library::{self, Item, Kind, Library, Plugin, Sources, preview as made};
-use m2_editor::presets;
 use parking_lot::Mutex;
 
 use crate::AppState;
@@ -394,22 +393,7 @@ pub fn preview(previews: &Previews, id: &str, packages: &[(String, PathBuf)], yo
     packages.iter().find(|(n, _)| n == "std").context("no std package is loaded")?;
     let items = library::items(&Sources { catalog: &catalog, packages, yours, plugins: &[], samples: &[] });
     let item = items.iter().find(|i| i.id == id).ok_or_else(|| anyhow!("There is no {id} in the library."))?;
-    // std (the song's mixer, an effect's loop) and the item's own package.
-    let own = item.component.split_once(':').map_or("", |(p, _)| p);
-    let packages: Vec<(String, PathBuf)> = packages.iter().filter(|(n, _)| n == "std" || n == own).cloned().collect();
-    let values = match &item.preset {
-        Some(p) => {
-            // A package's own presets are in its folder; yours in yours.
-            let dir = match p.from.as_str() {
-                "std" => packages.iter().find(|(n, _)| *n == item.package).and_then(|(_, d)| presets::factory(d, &item.component)),
-                _ => yours.map(|y| y.join(presets::folder(&item.component))),
-            };
-            let dir = dir.ok_or_else(|| anyhow!("{} can't be found.", p.name))?;
-            presets::read(&dir, &item.component, &p.name).map_err(|e| anyhow!(e))?.values
-        }
-        None => BTreeMap::new(),
-    };
-    let song = made::song(item, &catalog, &values).map_err(|e| anyhow!(e))?;
+    let (song, packages) = made::of(item, &catalog, packages, yours).map_err(|e| anyhow!(e))?;
     let named = short(id.as_bytes());
     let file = cache.join(format!("{named}-{}.wav", &made::fingerprint(&song, &packages).hex()[..16]));
     let lock = previews.making.lock().entry(named.clone()).or_default().clone();

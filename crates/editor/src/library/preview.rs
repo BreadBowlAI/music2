@@ -239,6 +239,35 @@ pub fn song(item: &Item, catalog: &Catalog, values: &BTreeMap<String, f64>) -> R
     Ok(Song { files })
 }
 
+/// What `item`'s preview renders, in the library `packages` (std among them) and `yours` (your
+/// Presets folder) make: its song, with a sound's preset values from its package's folder or
+/// yours, and the packages it loads, std and the item's own (LIB-3). The one step the app's ⌘F
+/// and the registry's robot (REG-5) both take, so both make the same preview. Why there is none,
+/// in words.
+pub fn of(
+    item: &Item,
+    catalog: &Catalog,
+    packages: &[(String, PathBuf)],
+    yours: Option<&Path>,
+) -> Result<(Song, Vec<(String, PathBuf)>), String> {
+    // std (the song's mixer, an effect's loop) and the item's own package.
+    let own = item.component.split_once(':').map_or("", |(p, _)| p);
+    let loads: Vec<(String, PathBuf)> = packages.iter().filter(|(n, _)| n == m2_song::pack::STD || n == own).cloned().collect();
+    let values = match &item.preset {
+        Some(p) => {
+            // A package's own presets are in its folder; yours in yours.
+            let dir = match p.from.as_str() {
+                "std" => loads.iter().find(|(n, _)| *n == item.package).and_then(|(_, d)| crate::presets::factory(d, &item.component)),
+                _ => yours.map(|y| y.join(crate::presets::folder(&item.component))),
+            };
+            let dir = dir.ok_or_else(|| format!("{} can't be found.", p.name))?;
+            crate::presets::read(&dir, &item.component, &p.name)?.values
+        }
+        None => BTreeMap::new(),
+    };
+    Ok((song(item, catalog, &values)?, loads))
+}
+
 /// The files of package folder `dir` a render reads: its manifest, its kernels and its code.
 fn package_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = vec![dir.join("m2pkg.toml")];
@@ -390,10 +419,11 @@ fn render_in(song: &Song, packages: &[(String, PathBuf)], work: &Path, out: &Pat
     for (name, dir) in packages {
         let p = set.load(dir).with_context(|| format!("loading the {name} package"))?;
         // A pack from its folder, as the song's build found it (PACK-7): the preview's song has no
-        // lock, and the folder may be a path pack's, not the store's.
+        // lock, and the folder may be a path pack's, not the store's. Its whole path: the song is
+        // in `work`, and a relative one would be read from there.
         let wants = match name.as_str() {
             m2_song::pack::STD => format!("\"{}\"", wanted(&p.version)),
-            _ => format!("{{ path = {} }}", serde_json::to_string(&dir.to_string_lossy())?),
+            _ => format!("{{ path = {} }}", serde_json::to_string(&std::path::absolute(dir)?.to_string_lossy())?),
         };
         deps += &format!("{} = {wants}\n", serde_json::to_string(name)?);
     }

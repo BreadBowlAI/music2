@@ -342,6 +342,24 @@ pub const COMMANDS: &[Command] = &[
                [Making a pack](making-a-pack.md).",
     },
     Command {
+        name: "registry",
+        also: &[],
+        usage: "m2 registry check <registry> [--base <registry>] [--author <github-login>]\nm2 registry add <registry> <pack-folder> \
+                --source <url>\nm2 registry pending <registry> --out <bucket> [--from <bucket>]\nm2 registry build <registry> \
+                --sources <folder> --out <bucket> [--from <bucket>] [--made <time>] [--to-delete <file>]",
+        words: "the pack registry's robot, and listing your pack in it. `check` reads every pack file strictly and says what a \
+                change broke: a listed version changed (`--base`: the registry before), a pack changed by someone not its \
+                scope's (`--author`); `add` checks your pack, writes its `m2pack.json` and lists its version in \
+                `packs/@owner/name.toml`; `pending` prints the versions the bucket hasn't got yet, with where to get each; \
+                `build` checks each of those (unpacked under `--sources`), refuses one whose files aren't the ones listed, \
+                and writes its files, previews and facts into `--out` by hash, then the catalog",
+        more: "The registry is a folder: one file a pack, `packs/@owner/name.toml`, and `tags.txt`, the words a pack's tags \
+               may use. `--from` is the bucket as it is: what it has isn't built again (a folder or `file:///…` for now). \
+               `--made` is the catalog's time, `2026-10-30T12:00:00Z` (now, when it is left out), so one registry and one \
+               time always make the same bytes. `--to-delete` writes the bucket paths of removed versions' files that no \
+               other version uses, one a line. See [Making a pack](making-a-pack.md#listing-it-in-the-registry).",
+    },
+    Command {
         name: "plugin-state",
         also: &[],
         usage: "m2 plugin-state <project> <track>/<key> clap:<id>",
