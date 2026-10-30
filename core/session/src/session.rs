@@ -342,12 +342,13 @@ impl Session {
                 Access::ReadOnly(ReadOnly::Asked)
             }
         };
-        // Never fails (WRITE-20): a package module that doesn't load is `pkg.invalid`, and only
-        // its components are missing from the catalog.
-        let catalog = Arc::new(crate::catalog(&packages));
         let built = Project::from_snapshot(&snapshot)
             .map_err(unread)
             .and_then(|p| crate::compile_sources(&p, &mut packages, &Seen::default(), None).map(|c| (p, c)));
+        // Never fails (WRITE-20): a package module that doesn't load is `pkg.invalid`, and only
+        // its components are missing from the catalog. Made after the build, which loads the
+        // song's packs, so a pack in a folder is offered too (PACK-11).
+        let catalog = Arc::new(crate::catalog(&packages));
         let (accepted, draft_errors, waiting) = match built {
             Ok((project, compiled)) => {
                 let rev = Revision { number: 1, code_rev: 1, data_rev: 1, snapshot: snapshot.clone(), project, compiled };

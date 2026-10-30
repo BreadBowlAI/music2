@@ -25,3 +25,10 @@ the keys send to the delay before their fader. `core/play/tests/bit_identity.rs`
 it on several thread counts, and puts a latent probe on its delay bus
 (`a_latent_plugin_on_a_bus_stays_aligned`): keep the `echo` bus, the `keys` track and
 their keys, or update the tests with them.
+
+`packs/tiny` is the pack `@test/tiny` (PACK-1 to PACK-12): Tiny keys (std's synth pluck),
+Tiny sampler (std's Sampler playing the pack's own `samples/pluck.wav` through
+`file(import.meta, …)`), Tiny crunch (std's drive) and one sound, Dark. `packs/song-path`
+uses it from its folder (`{ path = "../tiny" }`), and `packs/song-store` from the store, with
+a `music2.lock` that pins its hash: any change to the pack's files changes that hash, and
+`a_song_builds_with_a_locked_pack_from_the_store` says the lock to write.
