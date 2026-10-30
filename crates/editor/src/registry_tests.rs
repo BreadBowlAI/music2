@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use m2_song::Sha;
 use m2_song::pack::{Listing, PackName, Store};
 use m2_song::registry::{Catalog, Facts, ItemKind, POINTER, Pointer, Registry, blob_path, catalog_path, facts_path};
+use m2_song::{Sha, Version};
 
 use super::*;
 
@@ -80,11 +80,15 @@ export const softKeys = component(
 );
 "#;
 
-/// A made-up registry and the unpacked sources of its two packs: `@alice/drums` 1.0.0, one
-/// sample that `samples.toml` names, and `@bob/keys` 0.1.0, one instrument and one sound of it.
+/// A made-up registry, its packs' folders, and where the CI would unpack each pending version:
+/// `@alice/drums` 1.0.0, one sample that `samples.toml` names, and `@bob/keys` 0.1.0, one
+/// instrument and one sound of it.
 struct World {
     t: Temp,
     registry: PathBuf,
+    /// Each pack's folder, by name and version: what its `.tar.gz` would hold.
+    packs: std::cell::RefCell<BTreeMap<(String, String), PathBuf>>,
+    /// Where [`World::stage`] unpacks each pending version, `<hex>/<its folder>`, as the CI does.
     sources: PathBuf,
 }
 
@@ -92,7 +96,7 @@ impl World {
     fn new(tag: &str) -> World {
         let t = Temp::new(tag);
         let (registry, sources) = (t.0.join("registry"), t.0.join("sources"));
-        let drums = sources.join("drums-1.0.0");
+        let drums = t.0.join("src/drums-1.0.0");
         write(
             &drums.join("m2pkg.toml"),
             "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\ndescription = \"One kick\"\n\
@@ -100,7 +104,7 @@ impl World {
         );
         write(&drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n");
         tone(&drums.join("samples/kicks/Boom.wav"));
-        let keys = sources.join("keys/keys-0.1.0");
+        let keys = t.0.join("src/keys/keys-0.1.0");
         write(
             &keys.join("m2pkg.toml"),
             "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\ndescription = \"Soft keys\"\nauthors = [\"Bob\"]\n\
@@ -113,22 +117,22 @@ impl World {
         );
         write(&registry.join("tags.txt"), "# the words a pack's tags may use\ndrums\nkeys\n");
         write(&registry.join("packs/.gitkeep"), "");
-        let w = World { t, registry, sources };
-        w.list("@alice/drums", "1.0.0", &w.drums(), "");
-        w.list("@bob/keys", "0.1.0", &w.keys(), "");
+        let w = World { t, registry, packs: Default::default(), sources };
+        w.list("@alice/drums", "1.0.0", &drums, "");
+        w.list("@bob/keys", "0.1.0", &keys, "");
         w
     }
 
     fn drums(&self) -> PathBuf {
-        self.sources.join("drums-1.0.0")
+        self.t.0.join("src/drums-1.0.0")
     }
 
     fn keys(&self) -> PathBuf {
-        self.sources.join("keys/keys-0.1.0")
+        self.t.0.join("src/keys/keys-0.1.0")
     }
 
     /// Write `name`'s pack file with one version, its hash the listing of `dir` now, and `more`
-    /// lines in its table.
+    /// lines in its table; `dir` is that version's source.
     fn list(&self, name: &str, version: &str, dir: &Path, more: &str) {
         let n = PackName::new(name).unwrap();
         let owner = m2_song::registry::github_owner(&n);
@@ -139,9 +143,46 @@ impl World {
             Listing::of(dir).unwrap().hash().prefixed()
         );
         write(&self.registry.join(m2_song::registry::PackFile::path_of(&n)), text);
+        self.packs.borrow_mut().insert((name.to_string(), version.to_string()), dir.to_path_buf());
     }
 
+    /// List version `version` of `name` in removed.toml (REG-7), as music2's people would.
+    fn take_down(&self, name: &str, version: &str) {
+        let reg = self.registry();
+        let hash = reg.get(&PackName::new(name).unwrap()).unwrap().get(Version::parse(version).unwrap()).unwrap().hash;
+        let file = self.registry.join(m2_song::registry::REMOVED);
+        let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+        text += &format!(
+            "[[removed]]\nname = \"{name}\"\nversion = \"{version}\"\nhash = \"{}\"\nwhy = \"not ours to share\"\n",
+            hash.prefixed()
+        );
+        std::fs::write(file, text).unwrap();
+    }
+
+    /// Unpack each listed version's source as the CI does: its folder copied into
+    /// `sources/<the listed hash's hex>/`, whatever its files are now.
+    fn stage(&self) {
+        let _ = std::fs::remove_dir_all(&self.sources);
+        for p in &self.registry().packs {
+            for v in &p.versions {
+                let packs = self.packs.borrow();
+                let Some(dir) = packs.get(&(p.name.as_str().to_string(), v.version.to_string())).filter(|d| d.is_dir()) else { continue };
+                let to = self.sources.join(v.hash.hex()).join(dir.file_name().unwrap());
+                for (rel, bytes) in tree(dir) {
+                    write(&to.join(rel), bytes);
+                }
+            }
+        }
+    }
+
+    /// Stage the sources, then build.
     fn build(&self, out: &Path, from: Option<&Bucket>) -> Result<Built, Vec<String>> {
+        self.stage();
+        self.run(out, from, LONGEST)
+    }
+
+    /// Build from the sources as they are staged, each version given `limit`.
+    fn run(&self, out: &Path, from: Option<&Bucket>, limit: std::time::Duration) -> Result<Built, Vec<String>> {
         let work = self.t.0.join("work");
         build(&Build {
             registry: &self.registry,
@@ -152,11 +193,25 @@ impl World {
             std: &std_dir(),
             work: &work,
             to_delete: None,
+            limit,
         })
     }
 
     fn registry(&self) -> Registry {
         Registry::read(&self.registry).unwrap()
+    }
+
+    /// The listed hash of `name`'s version `version`.
+    fn hash(&self, name: &str, version: &str) -> Sha {
+        self.registry().get(&PackName::new(name).unwrap()).unwrap().get(Version::parse(version).unwrap()).unwrap().hash
+    }
+}
+
+/// Copy what a build wrote in `out` into the bucket `live`, as the publish job does: catalog.json
+/// replaced, the rest added.
+fn publish_into(out: &Path, live: &Path) {
+    for (rel, bytes) in tree(out) {
+        write(&live.join(rel), bytes);
     }
 }
 
@@ -274,31 +329,47 @@ fn a_registry_builds_into_a_bucket_and_again_to_the_same_bytes() {
     assert!(tree(&out) == first);
 }
 
-/// `w.build` into a new folder, refused: what it says, and that it wrote nothing.
-fn refused(w: &World, tag: &str) -> String {
+/// `w.build` into the new folder `tag`, where `name` fails and the other version is built: what
+/// it says of `name`, and that nothing of it is in the bucket.
+fn fails_alone(w: &World, tag: &str, name: &str) -> String {
     let out = w.t.0.join(tag);
-    let e = w.build(&out, None).err().unwrap_or_else(|| panic!("{tag}: built, but should be refused")).join("\n");
-    assert!(!out.exists() || tree(&out).is_empty(), "{tag}: a refused build writes nothing: {:?}", tree(&out).keys().collect::<Vec<_>>());
-    e
+    let built = w.build(&out, None).unwrap_or_else(|e| panic!("{tag}: {}", e.join("\n")));
+    let [failed] = built.failed.as_slice() else { panic!("{tag}: one failure: {:?}", built.failed) };
+    assert_eq!(failed.name.as_str(), name, "{tag}");
+    assert_eq!(built.built.len(), 1, "{tag}: the other version is built all the same");
+    let kept: std::collections::BTreeSet<Sha> = built.built.iter().flat_map(|f| f.blobs.iter().copied()).collect();
+    for (path, _) in tree(&out) {
+        if let Some(hex) = path.strip_prefix("blobs/sha256/") {
+            assert!(kept.iter().any(|b| b.hex() == hex), "{tag}: {path} is no built version's: a failed version writes nothing");
+        }
+        assert!(!path.starts_with(&format!("versions/{}", w.hash(name, &failed.version.to_string()).hex())), "{tag}: no facts of {name}");
+    }
+    let c = catalog_in(&tree(&out));
+    assert!(c.get(&self::name(name)).is_none(), "{tag}: {name} isn't in the catalog");
+    assert!(pending(&w.registry(), &out, None).iter().any(|(n, _)| n.as_str() == name), "{tag}: {name} stays pending");
+    failed.problems.join("\n")
 }
 
-// REG-5: a source is refused unless its files are the ones the registry lists, and unless it
-// passes what the registry asks beyond `m2 pack check`: a licence from the list (D6), tags from
-// the word list (P7), its own m2pack.json the listing; each source is found once.
+// REG-5 (review G5, G8): a source is refused unless its files are the ones the registry lists,
+// and unless it passes what the registry asks beyond `m2 pack check`: a licence from the list
+// (D6), tags from the word list (P7), its own m2pack.json the listing. Each version is built on
+// its own from its own folder: one that fails (refused, missing, a tarball holding another
+// version, a pipe, too big) is reported, writes nothing and stays pending, and never stops the
+// others.
 #[test]
-fn a_source_that_isnt_what_is_listed_is_refused() {
+fn a_source_that_isnt_what_is_listed_fails_alone() {
     let w = World::new("refused");
     let boom = w.drums().join("samples/kicks/Boom.wav");
     let good = std::fs::read(&boom).unwrap();
     let mut tampered = good.clone();
     *tampered.last_mut().unwrap() ^= 1;
     std::fs::write(&boom, &tampered).unwrap();
-    let e = refused(&w, "tampered");
+    let e = fails_alone(&w, "tampered", "@alice/drums");
     assert!(e.contains("@alice/drums 1.0.0") && e.contains("aren't the files the registry lists"), "{e}");
     std::fs::write(&boom, &good).unwrap();
 
     write(&w.keys().join("m2pack.json"), "{\"m2pack\": 1, \"files\": []}\n");
-    let e = refused(&w, "own-listing");
+    let e = fails_alone(&w, "own-listing", "@bob/keys");
     assert!(e.contains("@bob/keys 0.1.0: its own m2pack.json isn't the listing of its files"), "{e}");
     std::fs::remove_file(w.keys().join("m2pack.json")).unwrap();
 
@@ -306,28 +377,111 @@ fn a_source_that_isnt_what_is_listed_is_refused() {
     let text = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(&manifest, text.replace("CC0-1.0", "CC-BY-NC-4.0").replace("[\"drums\"]", "[\"drums\", \"techno\"]")).unwrap();
     w.list("@alice/drums", "1.0.0", &w.drums(), "");
-    let e = refused(&w, "licence");
+    let e = fails_alone(&w, "licence", "@alice/drums");
     assert!(e.contains("licence CC-BY-NC-4.0 isn't one the registry takes"), "{e}");
     assert!(e.contains("tag `techno` isn't in the registry's word list"), "{e}");
     std::fs::write(&manifest, &text).unwrap();
     w.list("@alice/drums", "1.0.0", &w.drums(), "");
 
-    let copy = w.sources.join("copy/drums");
+    // Its .tar.gz holds it twice, or holds another version instead: only its own build fails.
+    w.stage();
+    let hex = w.hash("@alice/drums", "1.0.0").hex();
     for (rel, bytes) in tree(&w.drums()) {
-        write(&copy.join(rel), bytes);
+        write(&w.sources.join(&hex).join("again/drums").join(rel), bytes);
     }
-    let e = refused(&w, "twice");
-    assert!(e.contains("@alice/drums 1.0.0 is in two folders of the sources"), "{e}");
-    std::fs::remove_dir_all(w.sources.join("copy")).unwrap();
+    let out = w.t.0.join("twice");
+    let built = w.run(&out, None, LONGEST).unwrap();
+    assert!(built.failed[0].problems[0].contains("@alice/drums 1.0.0 is in two folders of its source"), "{:?}", built.failed);
+    w.stage();
+    std::fs::remove_dir_all(w.sources.join(&hex)).unwrap();
+    for (rel, bytes) in tree(&w.keys()) {
+        write(&w.sources.join(&hex).join("keys").join(rel), bytes);
+    }
+    let built = w.run(&w.t.0.join("another"), None, LONGEST).unwrap();
+    let e = built.failed[0].problems.join("\n");
+    assert!(e.contains("@alice/drums 1.0.0: its source, https://github.com/alice/drums/releases/download/v1.0.0/drums-1.0.0.tar.gz, holds @bob/keys 0.1.0, not @alice/drums 1.0.0"), "{e}");
+    assert_eq!(built.built.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["@bob/keys"], "keys from its own folder only");
 
-    std::fs::remove_dir_all(w.keys()).unwrap();
-    let e = refused(&w, "missing");
-    assert!(e.contains("@bob/keys 0.1.0 isn't built yet, and its source isn't in"), "{e}");
-    assert!(e.contains("https://github.com/bob/keys/releases/download/v0.1.0/keys-0.1.0.tar.gz"), "says where to get it: {e}");
-    assert!(e.contains("the sources hold @alice/drums 1.0.0"), "says what is there instead: {e}");
+    let real = w.keys();
+    std::fs::rename(&real, w.t.0.join("src/keys/away")).unwrap();
+    let e = fails_alone(&w, "missing", "@bob/keys");
+    assert!(e.contains("@bob/keys 0.1.0 isn't built yet, and its source isn't there"), "{e}");
+    assert!(e.contains("unpack https://github.com/bob/keys/releases/download/v0.1.0/keys-0.1.0.tar.gz into"), "says where to get it: {e}");
+    std::fs::rename(w.t.0.join("src/keys/away"), &real).unwrap();
+
+    // A pipe is refused before any file is opened (it would wait for ever), and a source over
+    // 10 GB by its sizes, before any byte is hashed (a hashed one would say its files aren't the
+    // listed ones first).
+    w.stage();
+    let drums_src = w.sources.join(&hex).join("drums-1.0.0");
+    assert!(std::process::Command::new("mkfifo").arg(drums_src.join("samples/kicks/Hang.wav")).status().unwrap().success());
+    let built = w.run(&w.t.0.join("pipe"), None, LONGEST).unwrap();
+    assert!(built.failed[0].problems[0].contains("samples/kicks/Hang.wav isn't a plain file (a pipe or a device)"), "{:?}", built.failed);
+    w.stage();
+    let big = std::fs::File::create(drums_src.join("big.txt")).unwrap();
+    big.set_len(LARGEST + 1).unwrap();
+    let built = w.run(&w.t.0.join("big"), None, LONGEST).unwrap();
+    assert!(
+        built.failed[0].problems[0].contains("@alice/drums 1.0.0 is 10.0 GB: the registry takes packs up to 10 GB (D9)"),
+        "{:?}",
+        built.failed
+    );
 }
 
-// REG-2: check refuses a listed version edited from the base, a pack changed by an author not its
+/// A kernel module whose kernel `spin` never returns from its `spin_process`: `module_v1` in
+/// core/runtime's tests around these exports, made by `wat` once (music2's editor has no `wat`).
+///
+/// ```text
+/// (func (export "spin_new") (param i32) (result i32) (i32.const 4096))
+/// (func (export "spin_ports") (result i32) (i32.const 1))
+/// (func (export "spin_reset") (param i32))
+/// (func (export "spin_active") (param i32) (result i32) (i32.const 0))
+/// (func (export "spin_process") (param i32 i32 i32 i32) (loop $l (br $l)))
+/// ```
+const SPIN: &[u8] = &[
+    0, 97, 115, 109, 1, 0, 0, 0, 1, 27, 5, 96, 2, 127, 127, 1, 127, 96, 1, 127, 1, 127, 96, 0, 1, 127, 96, 1, 127, 0, 96, 4, 127, 127, 127,
+    127, 0, 3, 7, 6, 0, 1, 2, 3, 1, 4, 5, 3, 1, 0, 1, 6, 8, 1, 127, 1, 65, 128, 192, 0, 11, 7, 87, 7, 6, 109, 101, 109, 111, 114, 121, 2,
+    0, 8, 109, 50, 95, 97, 108, 108, 111, 99, 0, 0, 8, 115, 112, 105, 110, 95, 110, 101, 119, 0, 1, 10, 115, 112, 105, 110, 95, 112, 111,
+    114, 116, 115, 0, 2, 10, 115, 112, 105, 110, 95, 114, 101, 115, 101, 116, 0, 3, 11, 115, 112, 105, 110, 95, 97, 99, 116, 105, 118, 101,
+    0, 4, 12, 115, 112, 105, 110, 95, 112, 114, 111, 99, 101, 115, 115, 0, 5, 10, 97, 6, 68, 1, 2, 127, 35, 0, 32, 1, 65, 1, 107, 106, 65,
+    0, 32, 1, 107, 113, 33, 2, 32, 2, 32, 0, 106, 33, 3, 32, 3, 63, 0, 65, 16, 116, 75, 4, 64, 32, 3, 65, 255, 255, 3, 106, 65, 16, 118,
+    63, 0, 107, 64, 0, 65, 127, 70, 4, 64, 65, 0, 15, 11, 11, 32, 3, 36, 0, 32, 2, 11, 5, 0, 65, 128, 32, 11, 4, 0, 65, 1, 11, 2, 0, 11, 4,
+    0, 65, 0, 11, 7, 0, 3, 64, 12, 0, 11, 11, 0, 11, 6, 109, 50, 95, 97, 98, 105, 1, 0, 0, 0, 0, 49, 4, 110, 97, 109, 101, 2, 25, 1, 0, 4,
+    0, 4, 115, 105, 122, 101, 1, 5, 97, 108, 105, 103, 110, 2, 2, 97, 116, 3, 3, 101, 110, 100, 3, 6, 1, 5, 1, 0, 1, 108, 7, 7, 1, 0, 4,
+    104, 101, 97, 112,
+];
+
+// REG-5 (review G8): a version is given a time; one whose kernel never returns (P4) as its preview
+// renders is refused when it runs out, and the robot goes on: the others are built.
+#[test]
+fn a_kernel_that_never_returns_is_refused_and_the_rest_are_built() {
+    let w = World::new("spin");
+    let spin = w.t.0.join("src/spin-0.1.0");
+    write(
+        &spin.join("m2pkg.toml"),
+        "[package]\nname = \"@carol/spin\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\n\
+         std = \"0.5\"\n\n[[kernel]]\nname = \"spin\"\ndescription = \"Never returns\"\noutputs = [\"out: audio<1>\"]\n",
+    );
+    write(&spin.join("k.wasm"), SPIN);
+    write(
+        &spin.join("src/index.ts"),
+        "import { component, kernel, port, signature, type Audio, type Events } from \"@m2/core\";\n\n\
+         export const spin = component(\n  {\n    id: \"spin\",\n    label: \"Spin\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
+         inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"Never returns\" },\n  },\n  \
+         (_notes: Events): Audio => kernel(\"@carol/spin:spin\", {}),\n);\n",
+    );
+    w.list("@carol/spin", "0.1.0", &spin, "");
+    w.stage();
+    let started = std::time::Instant::now();
+    let built = w.run(&w.t.0.join("bucket"), None, std::time::Duration::from_secs(20)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    assert!(started.elapsed() < std::time::Duration::from_secs(120), "the robot went on: {:?}", started.elapsed());
+    let [failed] = built.failed.as_slice() else { panic!("{:?}", built.failed) };
+    assert_eq!(failed.name.as_str(), "@carol/spin");
+    assert!(failed.problems[0].contains("@carol/spin 0.1.0 took longer than 20 s to check and build"), "{:?}", failed.problems);
+    assert_eq!(built.built.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["@alice/drums", "@bob/keys"]);
+}
+
+// REG-2: check refuses a listed version edited from the base, a file changed by an author not its
 // scope's, and an address outside the scope's GitHub; with nothing wrong it passes.
 #[test]
 fn check_refuses_an_edited_version_a_wrong_scope_and_a_foreign_source() {
@@ -344,7 +498,7 @@ fn check_refuses_an_edited_version_a_wrong_scope_and_a_foreign_source() {
     std::fs::write(&file, format!("{text}\n[[versions]]\nversion = \"1.1.0\"\nhash = \"sha256:{}\"\nsource = \"https://github.com/alice/drums/releases/download/v1.1.0/drums-1.1.0.tar.gz\"\n", Sha::of(b"x").hex())).unwrap();
     assert!(ok(Some("ALICE")).is_ok(), "alice adds a version of her own pack");
     let e = ok(Some("mallory")).unwrap_err().join("\n");
-    assert!(e.contains("@alice/drums is @alice's: mallory may change only packs named @mallory/…"), "{e}");
+    assert!(e.contains("packs/@alice/drums.toml is @alice's: mallory may change only packs named @mallory/…"), "{e}");
 
     let hash = text.lines().find(|l| l.starts_with("hash")).unwrap();
     std::fs::write(&file, text.replace(hash, &format!("hash = \"sha256:{}\"", Sha::of(b"y").hex()))).unwrap();
@@ -352,6 +506,12 @@ fn check_refuses_an_edited_version_a_wrong_scope_and_a_foreign_source() {
     assert!(e.contains("@alice/drums 1.0.0 was changed: a listed version is never changed (P5)"), "{e}");
     std::fs::write(&file, format!("{text}yanked = \"a click at the end\"\n")).unwrap();
     assert!(ok(Some("alice")).is_ok(), "a yank is an edit allowed");
+    std::fs::write(&file, &text).unwrap();
+    w.take_down("@alice/drums", "1.0.0");
+    let e = ok(Some("alice")).unwrap_err().join("\n");
+    assert!(e.contains("removed.toml is music2's people's to change"), "only music2's people take down: {e}");
+    assert!(ok(None).is_ok(), "music2's people may");
+    std::fs::remove_file(w.registry.join("removed.toml")).unwrap();
 
     std::fs::write(&file, text.replace("https://github.com/alice/drums/releases", "https://gitlab.com/alice/drums/releases")).unwrap();
     let e = ok(None).unwrap_err().join("\n");
@@ -418,7 +578,7 @@ fn add_lists_a_version_once_and_never_changes_it() {
 }
 
 // REG-7, REG-9: what is pending is what neither the folder built into nor the bucket read from
-// has; a build that reads a bucket builds nothing it has and makes the same catalog; a removed
+// has; a build that reads a bucket builds nothing it has and makes the same catalog; a taken-down
 // version isn't built, is listed with why and nothing else, and its blobs no other version uses
 // are what to delete.
 #[test]
@@ -443,7 +603,7 @@ fn a_removed_version_goes_and_a_bucket_is_read_where_it_is() {
 
     let drums_hash = reg.get(&name("@alice/drums")).unwrap().versions[0].hash;
     let drums_facts = Facts::read(&a[&facts_path(&drums_hash)]).unwrap();
-    w.list("@alice/drums", "1.0.0", &w.drums(), "removed = \"not ours to share\"\n");
+    w.take_down("@alice/drums", "1.0.0");
     std::fs::remove_dir_all(w.drums()).unwrap();
     let after = w.t.0.join("after");
     let built = w.build(&after, Some(&bucket)).unwrap();
@@ -455,4 +615,39 @@ fn a_removed_version_goes_and_a_bucket_is_read_where_it_is() {
         (None, 0, Some("not ours to share"), None)
     );
     assert_eq!(drums.license, "CC0-1.0", "what it said of itself stays, from its facts");
+}
+
+// REG-5, REG-7 (review G2, G3): what the bucket publishes never changes, by anyone: a published
+// version listed with other files, or a take-down taken back, refuses the whole build, and nothing
+// is written; a yank and a new version are built.
+#[test]
+fn what_is_published_never_changes() {
+    let w = World::new("published");
+    let live = w.t.0.join("live");
+    let out = w.t.0.join("out1");
+    w.build(&out, None).unwrap();
+    publish_into(&out, &live);
+    let bucket = Bucket::Folder(live.clone());
+
+    let boom = w.drums().join("samples/kicks/Boom.wav");
+    let mut bytes = std::fs::read(&boom).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    std::fs::write(&boom, &bytes).unwrap();
+    let file = w.registry.join("packs/@alice/drums.toml");
+    let was = std::fs::read_to_string(&file).unwrap();
+    w.list("@alice/drums", "1.0.0", &w.drums(), "");
+    assert!(pending(&w.registry(), &w.t.0.join("out2"), Some(&bucket)).len() == 1, "the new hash isn't in the bucket");
+    let e = w.build(&w.t.0.join("out2"), Some(&bucket)).unwrap_err().join("\n");
+    assert!(e.contains("@alice/drums 1.0.0 is published with the hash") && e.contains("never changes (P5)"), "{e}");
+    assert!(!w.t.0.join("out2").exists(), "a refused build writes nothing");
+    std::fs::write(&file, &was).unwrap();
+
+    w.take_down("@alice/drums", "1.0.0");
+    let out = w.t.0.join("out3");
+    let built = w.build(&out, Some(&bucket)).unwrap();
+    assert!(!built.to_delete.is_empty());
+    publish_into(&out, &live);
+    std::fs::remove_file(w.registry.join("removed.toml")).unwrap();
+    let e = w.build(&w.t.0.join("out4"), Some(&bucket)).unwrap_err().join("\n");
+    assert!(e.contains("@alice/drums 1.0.0 was taken down, and a take-down is never taken back"), "{e}");
 }

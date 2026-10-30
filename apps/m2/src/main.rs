@@ -1248,8 +1248,9 @@ fn registry(args: &[String]) -> Result<()> {
         "pending" => {
             let dir = PathBuf::from(arg(2)?);
             let r = m2_song::registry::Registry::read(&dir).map_err(failed)?;
+            // The hash's hex first: the folder the CI unpacks that version's source into (REG-9).
             for (name, v) in robot::pending(&r, &path_flag("--out")?, from()?.as_ref()) {
-                println!("{name} {} {}", v.version, v.source);
+                println!("{} {name} {} {}", v.hash.hex(), v.version, v.source);
             }
         }
         "build" => {
@@ -1271,6 +1272,7 @@ fn registry(args: &[String]) -> Result<()> {
                 std: &std,
                 work: &work,
                 to_delete: to_delete.as_deref(),
+                limit: robot::LONGEST,
             };
             let built = robot::build(&b).map_err(failed)?;
             for f in &built.built {
@@ -1303,7 +1305,17 @@ fn registry(args: &[String]) -> Result<()> {
                 println!("{} blobs of removed versions to delete (--to-delete <file> lists them)", built.to_delete.len());
             }
             for u in &built.unknown {
-                eprintln!("warning: {u} is removed, but its facts aren't there, so its blobs aren't known: delete them by hand");
+                eprintln!("warning: {u} is taken down, but its facts aren't there, so its blobs aren't known: delete them by hand");
+            }
+            // Each failed alone: the rest are built and in the catalog (REG-5).
+            for f in &built.failed {
+                for p in &f.problems {
+                    eprintln!("problem: {p}");
+                }
+            }
+            if let n @ 1.. = built.failed.len() {
+                let (s, it) = if n == 1 { ("", "it stays") } else { ("s", "each stays") };
+                bail!("{n} version{s} not built: {it} pending, and the rest are in the catalog");
             }
         }
         _ => bail!("{}", usage_of("registry")),

@@ -407,3 +407,43 @@ fn an_install_removes_a_copy_a_stopped_install_left_aside() {
     assert!(!left.exists(), "the copy left aside is gone");
     remove_tree(&store.dir).unwrap();
 }
+
+// PACK-12 (review G12): every word a pack gives the lists (its m2pkg.toml's, its components'
+// labels, descriptions, categories and notes, its sounds' names, its samples' tags, its files'
+// names) is on one line, with no control character: a line break or an escape could pass for
+// something else where it is shown, a CI's log among them.
+#[test]
+fn a_packs_words_hold_no_control_characters() {
+    let f = Fixture::new();
+    let dir = f.0.join("tiny");
+    copy(&tiny(), &dir);
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    assert_eq!(check(&dir, &std_dir), Vec::<String>::new(), "the fixture checks");
+    let edit = |rel: &str, from: &str, to: &str| {
+        let text = std::fs::read_to_string(dir.join(rel)).unwrap();
+        assert!(text.contains(from), "{rel} has {from}");
+        std::fs::write(dir.join(rel), text.replace(from, to)).unwrap();
+    };
+    edit("m2pkg.toml", "description = \"A tiny pack", "description = \"\\u001b[32mA tiny pack");
+    edit("m2pkg.toml", "authors = [\"music2\"]", "authors = [\"mu\\nsic2\"]");
+    edit("m2pkg.toml", "tags = [\"test\"]", "tags = [\"te\\tst\"]");
+    edit("src/index.ts", "label: \"Tiny keys\"", "label: \"Tiny\\n::error::keys\"");
+    edit("src/index.ts", "description: \"std's drive, harder\"", "description: \"std's drive\\r harder\"");
+    edit("presets/tiny-keys/Dark.json", "\"name\": \"Dark\"", "\"name\": \"Da\\u0007rk\"");
+    std::fs::write(dir.join("samples.toml"), "[file.\"pluck.wav\"]\ntags = [\"bright\\u0000\"]\n").unwrap();
+    std::fs::write(dir.join("notes\nhere.txt"), "x").unwrap();
+    let problems = check(&dir, &std_dir).join("\n");
+    for want in [
+        "m2pkg.toml: its description holds a control character",
+        "m2pkg.toml: its authors hold a control character",
+        "m2pkg.toml: its tags hold a control character",
+        "@test/tiny:tiny-keys: its label holds a control character",
+        "@test/tiny:tiny-crunch: its description holds a control character",
+        // A preset's own reader refuses it already (FMT-22).
+        "presets/tiny-keys/Dark.json: This preset's name won't do: a preset's name is 1 to 40 characters on one line",
+        "samples.toml: its tags hold a control character",
+        "\"notes\\nhere.txt\": its name holds a control character",
+    ] {
+        assert!(problems.contains(want), "says `{want}`:\n{problems}");
+    }
+}

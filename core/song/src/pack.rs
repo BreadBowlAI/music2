@@ -318,7 +318,9 @@ impl Listing {
 
 /// Every file under `dir`, by its path there, `/`-separated, sorted bytewise; dot files and
 /// folders left out. A symbolic link, to a file or a folder, is an error naming it: a pack holds
-/// none, and nothing of a pack is ever read through one (PACK-6), so the tools never leave it.
+/// none, and nothing of a pack is ever read through one (PACK-6), so the tools never leave it. So
+/// is anything else that isn't a folder or a plain file (a pipe, a device), found before any file
+/// is opened: reading one could wait for ever.
 pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
     let mut out = vec![];
     let mut stack = vec![(String::new(), dir.to_path_buf())];
@@ -334,9 +336,14 @@ pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
             if kind.is_symlink() {
                 return Err(std::io::Error::other(format!("{r} is a symbolic link: a pack holds none, so copy the file in instead")));
             }
-            match kind.is_dir() {
-                true => stack.push((r, e.path())),
-                false => out.push((r, e.path())),
+            if kind.is_dir() {
+                stack.push((r, e.path()));
+            } else if kind.is_file() {
+                out.push((r, e.path()));
+            } else {
+                return Err(std::io::Error::other(format!(
+                    "{r} isn't a plain file (a pipe or a device): a pack holds only files and folders"
+                )));
             }
         }
     }

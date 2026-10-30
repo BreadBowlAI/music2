@@ -5,7 +5,9 @@
 //!
 //! ```text
 //! PackFile    packs/@owner/name.toml: a pack's versions, each with its hash and source (REG-1)
-//! Registry    the registry's folder: every pack file, and tags.txt (REG-1); what may change (REG-2)
+//! Removal     removed.toml: the versions taken down, which only music2's people list (REG-7)
+//! Registry    the registry's folder: every pack file, tags.txt, removed.toml (REG-1); what a change
+//!             may not do (REG-2), and what may never change once published (REG-5)
 //! Pointer     catalog.json: which catalog is current (REG-3)
 //! Facts       versions/<hash>.json: what the robot found in one version (REG-4)
 //! Catalog     catalog/<hash>.json: every listed pack, its versions and its latest's items (REG-4)
@@ -62,19 +64,20 @@ pub fn github_owner(name: &PackName) -> &str {
     }
 }
 
-/// The parts of `url` after `https://github.com/<owner>/`, when it is a plain URL there: `owner`
-/// in any capitals (GitHub's names don't care), only letters, digits and `-._~%+/`, and no empty,
-/// `.` or `..` part. Why not, in words naming `what` it is.
+/// The parts of `url` after `https://github.com/<owner>/`, when it is a plain address there:
+/// `owner` in any capitals (GitHub's names don't care), then only letters, digits and `-._/`, with
+/// no empty, `.` or `..` part. No `%`: an encoded part (`%2e%2e`, `%2F`) could name another
+/// owner's repo once the server decodes it. Why not, in words naming `what` it is.
 fn under_github<'a>(url: &'a str, owner: &str, what: &str) -> Result<Vec<&'a str>, String> {
     let want = format!("https://github.com/{owner}/");
     let rest = url.get(want.len()..).unwrap_or_default();
-    let plain = rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._~%+/".contains(&b));
+    let plain = rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._/".contains(&b));
     let parts: Vec<&str> = rest.split('/').collect();
     let at = url.get(..want.len()).is_some_and(|p| p.eq_ignore_ascii_case(&want)) && url.starts_with("https://github.com/");
     if !at || !plain || parts.iter().any(|p| p.is_empty() || *p == "." || *p == "..") {
         return Err(format!(
-            "{what} `{url}` must be a plain address under {want} (only letters, digits and - . _ ~ % + /, no empty or `..` \
-             part): a pack comes from its owner's own GitHub"
+            "{what} `{url}` must be a plain address under {want} (only letters, digits and - . _ /, no empty, `.` or `..` part): \
+             a pack comes from its owner's own GitHub"
         ));
     }
     Ok(parts)
@@ -110,7 +113,7 @@ pub struct PackFile {
     pub versions: Vec<ListedVersion>,
 }
 
-/// One version a pack file lists.
+/// One version a pack file lists. Whether it was taken down is `removed.toml`'s ([`Removal`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListedVersion {
     pub version: Version,
@@ -120,8 +123,6 @@ pub struct ListedVersion {
     pub source: String,
     /// Why it is hidden from search; a song that locks it still gets it (design §9.3).
     pub yanked: Option<String>,
-    /// Why it was taken down: its files are deleted from the bucket.
-    pub removed: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -140,7 +141,9 @@ struct RawVersion {
     hash: Sha,
     source: String,
     yanked: Option<String>,
-    removed: Option<String>,
+    /// Kept only to refuse it in words: a take-down is `removed.toml`'s, which only music2's people
+    /// change (REG-7).
+    removed: Option<toml::Value>,
 }
 
 /// A string as TOML (and JSON) writes it, quoted and escaped.
@@ -150,8 +153,8 @@ fn quoted(s: &str) -> String {
 
 impl PackFile {
     /// Read a pack file's text strictly (REG-1): an unknown key anywhere, a name that isn't a
-    /// pack's, no version, a version or a hash listed twice, a version both yanked and removed, a
-    /// reason left empty, or an address outside the scope's GitHub is refused, in words.
+    /// pack's, no version, a version or a hash listed twice, a reason left empty, a take-down
+    /// (which is `removed.toml`'s), or an address outside the scope's GitHub is refused, in words.
     pub fn read(text: &str) -> Result<PackFile, String> {
         let raw: RawPackFile = toml::from_str(text).map_err(|e| e.message().trim().to_string())?;
         let name = raw.name;
@@ -168,13 +171,14 @@ impl PackFile {
             let version =
                 Version::parse(&v.version).ok_or_else(|| format!("`version = \"{}\"` must be a version such as \"1.2.0\"", v.version))?;
             source_ok(&v.source, owner).map_err(|e| format!("{version}: {e}"))?;
-            for (key, why) in [("yanked", &v.yanked), ("removed", &v.removed)] {
-                if why.as_deref().is_some_and(|w| w.trim().is_empty()) {
-                    return Err(format!("{version}: `{key}` says why, in words: it can't be empty"));
-                }
+            if v.removed.is_some() {
+                return Err(format!(
+                    "{version}: a take-down isn't written in a pack's file but in {REMOVED}, which only music2's people change. \
+                     To hide a version from search, write `yanked = \"why\"`"
+                ));
             }
-            if v.yanked.is_some() && v.removed.is_some() {
-                return Err(format!("{version} is both yanked and removed: a removed version is gone, so take out its `yanked`"));
+            if v.yanked.as_deref().is_some_and(|w| w.trim().is_empty()) {
+                return Err(format!("{version}: `yanked` says why, in words: it can't be empty"));
             }
             if versions.iter().any(|w| w.version == version) {
                 return Err(format!("{version} is listed twice"));
@@ -182,7 +186,7 @@ impl PackFile {
             if let Some(w) = versions.iter().find(|w| w.hash == v.hash) {
                 return Err(format!("{version} has the hash of {}: two versions are never the same files", w.version));
             }
-            versions.push(ListedVersion { version, hash: v.hash, source: v.source, yanked: v.yanked, removed: v.removed });
+            versions.push(ListedVersion { version, hash: v.hash, source: v.source, yanked: v.yanked });
         }
         Ok(PackFile { name, repository: raw.repository, versions })
     }
@@ -208,10 +212,8 @@ impl PackFile {
     pub fn version_text(v: &ListedVersion) -> String {
         let mut out =
             format!("[[versions]]\nversion = \"{}\"\nhash = \"{}\"\nsource = {}\n", v.version, v.hash.prefixed(), quoted(&v.source));
-        for (key, why) in [("yanked", &v.yanked), ("removed", &v.removed)] {
-            if let Some(why) = why {
-                out.push_str(&format!("{key} = {}\n", quoted(why)));
-            }
+        if let Some(why) = &v.yanked {
+            out.push_str(&format!("yanked = {}\n", quoted(why)));
         }
         out
     }
@@ -219,19 +221,59 @@ impl PackFile {
     pub fn get(&self, version: Version) -> Option<&ListedVersion> {
         self.versions.iter().find(|v| v.version == version)
     }
-
-    /// Its newest version that is neither yanked nor removed: what search offers (design §9.3).
-    pub fn latest(&self) -> Option<&ListedVersion> {
-        self.versions.iter().filter(|v| v.yanked.is_none() && v.removed.is_none()).max_by_key(|v| v.version)
-    }
 }
 
-/// The registry's folder (REG-1): every pack file under `packs/`, by name, and the word list.
+/// The registry's file of take-downs (REG-7), at its root: only music2's people change it, and an
+/// entry is never taken out.
+pub const REMOVED: &str = "removed.toml";
+
+/// A version taken down, as `removed.toml` lists it: `[[removed]]` with its pack's `name`, its
+/// `version`, its `hash` (the one its pack file lists) and `why`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Removal {
+    pub name: PackName,
+    pub version: Version,
+    pub hash: Sha,
+    pub why: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRemoved {
+    #[serde(default)]
+    removed: Vec<Removal>,
+}
+
+/// `removed.toml`'s take-downs, read strictly: an unknown key, an empty reason or one version twice
+/// is refused, in words.
+pub fn read_removed(text: &str) -> Result<Vec<Removal>, String> {
+    let raw: RawRemoved = toml::from_str(text).map_err(|e| format!("{REMOVED}: {}", e.message().trim()))?;
+    let mut out: Vec<Removal> = vec![];
+    for r in raw.removed {
+        if r.why.trim().is_empty() {
+            return Err(format!("{REMOVED}: {} {} says no why: a take-down says why, in words", r.name, r.version));
+        }
+        if out.iter().any(|o| o.name == r.name && o.version == r.version) {
+            return Err(format!("{REMOVED}: {} {} is taken down twice", r.name, r.version));
+        }
+        out.push(r);
+    }
+    Ok(out)
+}
+
+/// The registry's folder (REG-1): every pack file under `packs/`, by name, the word list, the
+/// take-downs, and the bytes of every file a change can touch.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Registry {
     pub packs: Vec<PackFile>,
     /// The words a pack's tags may use (design P7), from `tags.txt`.
     pub tags: BTreeSet<String>,
+    /// The versions taken down, from `removed.toml` (REG-7).
+    pub removed: Vec<Removal>,
+    /// Every file under `packs/` (dot files too), `tags.txt` and `removed.toml`, by its path in
+    /// the registry, with its bytes: what [`Registry::not_authors`] compares (REG-2).
+    pub files: BTreeMap<String, Vec<u8>>,
 }
 
 /// Whether `w` is a tag: 1 to 39 of `a-z`, `0-9` and inner `-`, as a pack name's part.
@@ -262,61 +304,110 @@ pub fn read_tags(text: &str) -> Result<BTreeSet<String>, Vec<String>> {
     }
 }
 
+/// Every file under `dir`, by its path from the registry's root (`packs/@alice/drums.toml`), dot
+/// files and folders too, with its bytes. A link, a pipe or a device anywhere is a problem, never
+/// followed or read.
+fn files_under(root: &Path, rel: &str, out: &mut BTreeMap<String, Vec<u8>>, problems: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(root.join(rel)) {
+        Ok(e) => e,
+        Err(e) => return problems.push(format!("{rel}/ can't be read ({e})")),
+    };
+    for e in entries.flatten() {
+        let path = format!("{rel}/{}", e.file_name().to_string_lossy());
+        match std::fs::symlink_metadata(e.path()).map(|m| m.file_type()) {
+            Ok(t) if t.is_dir() => files_under(root, &path, out, problems),
+            Ok(t) if t.is_file() => match std::fs::read(e.path()) {
+                Ok(bytes) => drop(out.insert(path, bytes)),
+                Err(e) => problems.push(format!("{path} can't be read ({e})")),
+            },
+            Ok(t) if t.is_symlink() => problems.push(format!("{path} is a link: the registry holds only plain files")),
+            Ok(_) => problems.push(format!("{path} isn't a plain file: the registry holds only plain files")),
+            Err(e) => problems.push(format!("{path} can't be read ({e})")),
+        }
+    }
+}
+
 impl Registry {
-    /// Read the registry in `dir` strictly (REG-1): `tags.txt`, and under `packs/` only folders
+    /// Read the registry in `dir` strictly (REG-1): `tags.txt`; under `packs/` only folders
     /// `@owner` holding pack files `name.toml` (dot files aside), each read with
-    /// [`PackFile::read`] and naming its own path. Every problem, in words naming the file.
+    /// [`PackFile::read`] and naming its own path, and no link, pipe or device anywhere; each hash
+    /// listed once in the whole registry; and `removed.toml`, if it is there, naming only listed
+    /// versions by their listed hashes. Every problem, in words naming the file.
     pub fn read(dir: &Path) -> Result<Registry, Vec<String>> {
         let mut problems = vec![];
-        let tags = match std::fs::read_to_string(dir.join(TAGS)) {
-            Ok(text) => read_tags(&text).unwrap_or_else(|p| {
+        let mut files = BTreeMap::new();
+        for top in [TAGS, REMOVED] {
+            match std::fs::symlink_metadata(dir.join(top)) {
+                Ok(m) if m.file_type().is_file() => match std::fs::read(dir.join(top)) {
+                    Ok(bytes) => drop(files.insert(top.to_string(), bytes)),
+                    Err(e) => problems.push(format!("{top} can't be read ({e})")),
+                },
+                Ok(_) => problems.push(format!("{top} isn't a plain file: the registry holds only plain files")),
+                Err(_) if top == REMOVED => {}
+                Err(e) => problems.push(format!("{TAGS} can't be read ({e}): the registry's word list, one tag a line")),
+            }
+        }
+        let tags = match files.get(TAGS).map(|b| String::from_utf8_lossy(b).into_owned()) {
+            Some(text) => read_tags(&text).unwrap_or_else(|p| {
                 problems.extend(p);
                 BTreeSet::new()
             }),
-            Err(e) => {
-                problems.push(format!("{TAGS} can't be read ({e}): the registry's word list, one tag a line"));
-                BTreeSet::new()
-            }
+            None => BTreeSet::new(),
         };
+        let removed = match files.get(REMOVED).map(|b| String::from_utf8_lossy(b).into_owned()) {
+            Some(text) => read_removed(&text).unwrap_or_else(|p| {
+                problems.push(p);
+                vec![]
+            }),
+            None => vec![],
+        };
+        match std::fs::symlink_metadata(dir.join(PACKS)) {
+            Ok(m) if m.file_type().is_dir() => files_under(dir, PACKS, &mut files, &mut problems),
+            _ => problems.push(format!("{PACKS}/ isn't a folder: the registry keeps one file a pack there")),
+        }
         let mut packs = vec![];
-        let listed = |d: &Path| -> std::io::Result<Vec<(String, PathBuf, std::fs::FileType)>> {
-            let mut v = vec![];
-            for e in std::fs::read_dir(d)? {
-                let e = e?;
-                let name = e.file_name().to_string_lossy().into_owned();
-                if !name.starts_with('.') {
-                    v.push((name, e.path(), std::fs::symlink_metadata(e.path())?.file_type()));
-                }
-            }
-            v.sort_by(|a, b| a.0.cmp(&b.0));
-            Ok(v)
-        };
-        let owners = listed(&dir.join(PACKS)).unwrap_or_else(|e| {
-            problems.push(format!("{PACKS}/ can't be read ({e}): the registry keeps one file a pack there"));
-            vec![]
-        });
-        for (owner, path, kind) in owners {
-            if !kind.is_dir() || !owner.starts_with('@') {
-                problems.push(format!("{PACKS}/{owner}: only folders named @owner are in {PACKS}/, each holding name.toml files"));
+        for (path, bytes) in &files {
+            let Some(rest) = path.strip_prefix(&format!("{PACKS}/")) else { continue };
+            // Dot files and folders, at any depth, are no pack's; they are compared all the same.
+            if rest.split('/').any(|p| p.starts_with('.')) {
                 continue;
             }
-            for (file, path, kind) in listed(&path).unwrap_or_default() {
-                let at = format!("{PACKS}/{owner}/{file}");
-                let Some(stem) = file.strip_suffix(".toml").filter(|_| kind.is_file()) else {
-                    problems.push(format!("{at}: only pack files, name.toml, are in {PACKS}/{owner}/"));
-                    continue;
-                };
-                let read = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| PackFile::read(&t));
-                match read {
-                    Ok(p) if p.name.as_str() == format!("{owner}/{stem}") => packs.push(p),
-                    Ok(p) => problems.push(format!("{at} names {}: a pack's file is {}", p.name, PackFile::path_of(&p.name).display())),
-                    Err(e) => problems.push(format!("{at}: {e}")),
-                }
+            let (owner, file) = rest.split_once('/').unwrap_or(("", rest));
+            if !owner.starts_with('@') {
+                problems.push(format!("{path}: only folders named @owner are in {PACKS}/, each holding name.toml files"));
+                continue;
+            }
+            let Some(stem) = file.strip_suffix(".toml").filter(|f| !f.contains('/')) else {
+                problems.push(format!("{path}: only pack files, name.toml, are in {PACKS}/{owner}/"));
+                continue;
+            };
+            match std::str::from_utf8(bytes).map_err(|e| e.to_string()).and_then(PackFile::read) {
+                Ok(p) if p.name.as_str() == format!("{owner}/{stem}") => packs.push(p),
+                Ok(p) => problems.push(format!("{path} names {}: a pack's file is {}", p.name, PackFile::path_of(&p.name).display())),
+                Err(e) => problems.push(format!("{path}: {e}")),
             }
         }
         packs.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut hashes: BTreeMap<Sha, (&PackName, Version)> = BTreeMap::new();
+        for p in &packs {
+            for v in &p.versions {
+                if let Some((n, w)) = hashes.insert(v.hash, (&p.name, v.version)) {
+                    problems.push(format!(
+                        "{} {} and {n} {w} list one hash: two versions are never the same files, so each hash is listed once",
+                        p.name, v.version
+                    ));
+                }
+            }
+        }
+        for r in &removed {
+            let listed = packs.iter().find(|p| p.name == r.name).and_then(|p| p.get(r.version));
+            if listed.is_none_or(|v| v.hash != r.hash) {
+                problems
+                    .push(format!("{REMOVED}: {} {} isn't listed with that hash: a take-down names a listed version", r.name, r.version));
+            }
+        }
         match problems.is_empty() {
-            true => Ok(Registry { packs, tags }),
+            true => Ok(Registry { packs, tags, removed, files }),
             false => Err(problems),
         }
     }
@@ -325,67 +416,118 @@ impl Registry {
         self.packs.iter().find(|p| p.name == *name)
     }
 
+    /// Version `version` of `name`'s take-down, if it was taken down (REG-7).
+    pub fn removal(&self, name: &PackName, version: Version) -> Option<&Removal> {
+        self.removed.iter().find(|r| r.name == *name && r.version == version)
+    }
+
+    /// Its newest version of `p` that is neither yanked nor taken down: what search offers.
+    pub fn latest<'a>(&self, p: &'a PackFile) -> Option<&'a ListedVersion> {
+        p.versions.iter().filter(|v| v.yanked.is_none() && self.removal(&p.name, v.version).is_none()).max_by_key(|v| v.version)
+    }
+
     /// What this registry changed of `base`, the registry as it was, that a version's promise
-    /// forbids (REG-2, design P5): a pack file gone, a version gone, or a listed version's hash or
-    /// source changed. Adding `yanked` or `removed`, or taking one back, is allowed. In words.
+    /// forbids (REG-2, design P5): a pack file gone, a version gone, a listed version's hash or
+    /// source changed, or a take-down taken back. Adding `yanked`, or taking it back, is allowed.
+    /// In words.
     pub fn broken_promises(&self, base: &Registry) -> Vec<String> {
         let mut out = vec![];
         for was in &base.packs {
             let Some(now) = self.get(&was.name) else {
                 out.push(format!(
-                    "{} is gone from the registry: a listed pack stays listed. Mark its versions `removed = \"why\"` instead",
+                    "{} is gone from the registry: a listed pack stays listed. Yank its versions instead",
                     PackFile::path_of(&was.name).display()
                 ));
                 continue;
             };
             for v in &was.versions {
                 match now.get(v.version) {
-                    None => out.push(format!(
-                        "{} {} is gone from its file: a listed version stays listed. Mark it `yanked` or `removed` instead",
-                        was.name, v.version
-                    )),
+                    None => out
+                        .push(format!("{} {} is gone from its file: a listed version stays listed. Yank it instead", was.name, v.version)),
                     Some(n) if n.hash != v.hash || n.source != v.source => out.push(format!(
-                        "{} {} was changed: a listed version is never changed (P5), only yanked or removed. Give the new \
-                         files a new version",
+                        "{} {} was changed: a listed version is never changed (P5), only yanked. Give the new files a new version",
                         was.name, v.version
                     )),
                     Some(_) => {}
                 }
             }
         }
+        for r in base.removed.iter().filter(|r| !self.removed.contains(r)) {
+            out.push(format!(
+                "{REMOVED}: {} {} was taken down, and a take-down is never taken back: its files are gone",
+                r.name, r.version
+            ));
+        }
         out
     }
 
-    /// The packs whose files differ from `base`'s (all of them with no base): what a pull request
-    /// changed.
-    pub fn changed_from<'a>(&'a self, base: Option<&Registry>) -> Vec<&'a PackFile> {
-        self.packs.iter().filter(|p| base.and_then(|b| b.get(&p.name)) != Some(*p)).collect()
-    }
-
-    /// What the GitHub account `author` may not change (REG-2): of the packs changed from `base`,
-    /// each whose scope isn't `author`'s (in any capitals). `@m2/` is never an author's: its files
-    /// are changed by music2's own people, whose pull requests are checked without an author.
+    /// What the GitHub account `author` may not change (REG-2): every file whose bytes differ from
+    /// `base`'s (every file, with no base) that isn't in a folder of the author's own scope,
+    /// `packs/@<author>/` in any capitals. `tags.txt`, `removed.toml` and any other file are music2's
+    /// people's, and `@m2/` is never an author's: those change only in pull requests music2's
+    /// people make, which are checked without an author. In words, a file a line.
     pub fn not_authors(&self, base: Option<&Registry>, author: &str) -> Vec<String> {
+        let none = BTreeMap::new();
+        let was = base.map_or(&none, |b| &b.files);
+        let changed: BTreeSet<&String> =
+            self.files.keys().chain(was.keys()).filter(|p| base.is_none() || self.files.get(*p) != was.get(*p)).collect();
         let mut out = vec![];
-        for p in self.changed_from(base) {
-            let s = scope(&p.name);
-            if s == OUR_SCOPE {
-                out.push(format!("{} is music2's own (@m2/): only music2's people change it", p.name));
-            } else if !s.eq_ignore_ascii_case(author) {
-                out.push(format!("{} is @{s}'s: {author} may change only packs named @{}/…", p.name, author.to_ascii_lowercase()));
+        for path in changed {
+            let owner = path.strip_prefix(&format!("{PACKS}/@")).and_then(|r| r.split_once('/')).map(|(o, _)| o);
+            match owner {
+                Some(OUR_SCOPE) => out.push(format!("{path} is music2's own (@m2/): only music2's people change it")),
+                Some(o) if o.eq_ignore_ascii_case(author) => {}
+                Some(o) => out.push(format!("{path} is @{o}'s: {author} may change only packs named @{}/…", author.to_ascii_lowercase())),
+                None => out.push(format!("{path} is music2's people's to change: an author changes only their own packs' files")),
             }
         }
         out
     }
 
-    /// The blobs of its removed versions that no version still listed uses (REG-7), from each
-    /// version's facts (`facts`, by the version's hash): what to delete from the bucket. A removed
-    /// version whose facts aren't there is named in the second list, its blobs unknown.
+    /// What this registry would change of what is published already, `published` (the bucket's
+    /// catalog), that may never change (REG-5): a published version gone or listed with another
+    /// hash or source, a take-down taken back, or a hash a published version has listed for
+    /// another version. In words; none is allowed, by anyone.
+    pub fn breaks(&self, published: &Catalog) -> Vec<String> {
+        let mut out = vec![];
+        let mut hashes: BTreeMap<Sha, (&PackName, Version)> = BTreeMap::new();
+        for cp in &published.packs {
+            let now = self.get(&cp.name);
+            for cv in &cp.versions {
+                hashes.insert(cv.hash, (&cp.name, cv.version));
+                let at = format!("{} {}", cp.name, cv.version);
+                match now.and_then(|p| p.get(cv.version)) {
+                    None => out.push(format!("{at} is published, and gone from the registry: a published version stays listed (P5)")),
+                    Some(v) if v.hash != cv.hash || v.source != cv.source => out.push(format!(
+                        "{at} is published with the hash {} and the source {}, and the registry now lists it with others: a \
+                         published version never changes (P5). Put it back as it was, and give new files a new version",
+                        cv.hash, cv.source
+                    )),
+                    Some(_) => {}
+                }
+                if cv.removed.is_some() && self.removal(&cp.name, cv.version).is_none() {
+                    out.push(format!("{at} was taken down, and a take-down is never taken back: its files are gone from the bucket"));
+                }
+            }
+        }
+        for p in &self.packs {
+            for v in &p.versions {
+                if let Some((n, w)) = hashes.get(&v.hash).filter(|(n, w)| (*n, *w) != (&p.name, v.version)) {
+                    out.push(format!("{} {} lists the hash of the published {n} {w}: each hash is one version's", p.name, v.version));
+                }
+            }
+        }
+        out
+    }
+
+    /// The blobs of its taken-down versions that no other listed version uses (REG-7), from each
+    /// version's facts (`facts`, by the version's hash): what to delete from the bucket. A
+    /// taken-down version whose facts aren't there is named in the second list, its blobs unknown.
     pub fn removed_blobs(&self, facts: &dyn Fn(&Sha) -> Option<Facts>) -> (Vec<Sha>, Vec<String>) {
         let (mut kept, mut gone, mut unknown) = (BTreeSet::new(), BTreeSet::new(), vec![]);
         for p in &self.packs {
             for v in &p.versions {
-                match (facts(&v.hash), v.removed.is_some()) {
+                match (facts(&v.hash), self.removal(&p.name, v.version).is_some()) {
                     (Some(f), true) => gone.extend(f.blobs),
                     (Some(f), false) => kept.extend(f.blobs),
                     (None, true) => unknown.push(format!("{} {}", p.name, v.version)),
@@ -671,6 +813,8 @@ pub struct CatalogPack {
 pub struct CatalogVersion {
     pub version: Version,
     pub hash: Sha,
+    /// Where its files came from, as the registry listed it: never changes once published (REG-5).
+    pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -683,12 +827,13 @@ pub struct CatalogVersion {
 
 impl Catalog {
     /// The catalog of `registry` as of `made` (REG-4), from each listed version's facts (`facts`,
-    /// by the version's hash; a removed version's may be missing): packs by name, versions oldest
-    /// first, the latest's items. The same registry, facts and time give the same bytes. Each
-    /// version that isn't removed and has no facts, in words.
-    pub fn make(registry: &Registry, facts: &dyn Fn(&Sha) -> Option<Facts>, made: &str) -> Result<Catalog, Vec<String>> {
+    /// by the version's hash): packs by name, versions oldest first, the latest's items. A version
+    /// with no facts (one not built yet, or whose build failed) is left out, and a pack none of
+    /// whose versions is in; a taken-down version is in, with why, whatever facts there are. The
+    /// same registry, facts and time give the same bytes. The versions left out, in words.
+    pub fn make(registry: &Registry, facts: &dyn Fn(&Sha) -> Option<Facts>, made: &str) -> (Catalog, Vec<String>) {
         let mut packs = vec![];
-        let mut problems = vec![];
+        let mut left_out = vec![];
         for p in &registry.packs {
             let mut listed: Vec<&ListedVersion> = p.versions.iter().collect();
             listed.sort_by_key(|v| v.version);
@@ -697,23 +842,30 @@ impl Catalog {
             let mut found: BTreeMap<Version, Facts> = BTreeMap::new();
             for v in listed {
                 let f = facts(&v.hash);
-                if f.is_none() && v.removed.is_none() {
-                    problems.push(format!("{} {} has no facts ({}): build it first", p.name, v.version, facts_path(&v.hash)));
+                let removed = registry.removal(&p.name, v.version).map(|r| r.why.clone());
+                if f.is_none() && removed.is_none() {
+                    left_out.push(format!("{} {}", p.name, v.version));
+                    continue;
                 }
-                let kept = v.removed.is_none();
+                let kept = removed.is_none();
                 versions.push(CatalogVersion {
                     version: v.version,
                     hash: v.hash,
+                    source: v.source.clone(),
                     size: f.as_ref().filter(|_| kept).map(|f| f.size),
                     files: f.as_ref().filter(|_| kept).map(|f| f.files),
                     yanked: v.yanked.clone(),
-                    removed: v.removed.clone(),
+                    removed,
                 });
                 if let Some(f) = f {
                     found.insert(v.version, f);
                 }
             }
-            let latest = p.latest().map(|v| v.version);
+            if versions.is_empty() {
+                continue;
+            }
+            let offered = |c: &&CatalogVersion| c.yanked.is_none() && c.removed.is_none();
+            let latest = versions.iter().filter(offered).map(|c| c.version).max();
             // What it says of itself: its latest's, else its newest's there.
             let about = latest.and_then(|l| found.get(&l)).or_else(|| found.values().next_back());
             let a = about.map(|f| f.about.clone()).unwrap_or_default();
@@ -731,10 +883,7 @@ impl Catalog {
             });
         }
         packs.sort_by(|a, b| a.name.cmp(&b.name));
-        match problems.is_empty() {
-            true => Ok(Catalog { format: FORMAT, made: made.to_string(), packs }),
-            false => Err(problems),
-        }
+        (Catalog { format: FORMAT, made: made.to_string(), packs }, left_out)
     }
 
     /// Read a catalog strictly: another format, an unknown field, packs, versions or items out of

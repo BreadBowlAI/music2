@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use m2_song::pack::Listing;
+
 /// A scratch folder, removed when dropped.
 struct Temp(PathBuf);
 
@@ -48,6 +50,14 @@ fn failed(out: Output) -> String {
     said(&out)
 }
 
+fn copy(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let (f, t) = (e.path(), to.join(e.file_name()));
+        if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
+    }
+}
+
 fn write(path: &Path, text: impl AsRef<[u8]>) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
@@ -74,7 +84,7 @@ fn the_robot_runs_from_the_command_line() {
     let (reg, src, bucket) = (t.0.join("registry"), t.0.join("sources"), t.0.join("bucket"));
     write(&reg.join("tags.txt"), "drums\n");
     std::fs::create_dir_all(reg.join("packs")).unwrap();
-    let drums = src.join("drums");
+    let drums = t.0.join("drums");
     write(
         &drums.join("m2pkg.toml"),
         "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\nrepository = \"https://github.com/alice/drums\"\n\
@@ -89,11 +99,14 @@ fn the_robot_runs_from_the_command_line() {
     assert!(out.contains("listed @alice/drums 1.0.0 (sha256:") && out.contains("a new file"), "{out}");
     assert!(ok(t.m2(&["registry", "check", r])).contains("is good: 1 pack, 1 version"));
     let out = failed(t.m2(&["registry", "check", r, "--author", "mallory"]));
-    assert!(out.contains("problem: @alice/drums is @alice's: mallory may change only packs named @mallory/…"), "{out}");
+    assert!(out.contains("problem: packs/@alice/drums.toml is @alice's: mallory may change only packs named @mallory/…"), "{out}");
 
     let b = bucket.to_str().unwrap();
     let out = t.m2(&["registry", "pending", r, "--out", b]);
-    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("@alice/drums 1.0.0 {source}\n"), "{}", said(&out));
+    let hex = Listing::of(&drums).unwrap().hash().hex();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{hex} @alice/drums 1.0.0 {source}\n"), "{}", said(&out));
+    // As the CI unpacks it: into sources/<its hash's hex>/.
+    copy(&drums, &src.join(&hex).join("drums"));
     let deletes = t.0.join("to-delete.txt");
     let s = src.to_str().unwrap();
     let out = ok(t.m2(&[
@@ -122,6 +135,18 @@ fn the_robot_runs_from_the_command_line() {
     assert!(!out.status.success() && said(&out).contains("needs music2's download module"), "{}", said(&out));
     let out = failed(t.m2(&["registry", "build", r, "--sources", s, "--out", fresh.to_str().unwrap(), "--made", "today"]));
     assert!(out.contains("`today` isn't a time"), "{out}");
+
+    // A version whose source isn't there fails alone: the rest are built and in the catalog, and
+    // the build says which failed, exit 1 (REG-5).
+    let hats = t.0.join("hats");
+    copy(&drums, &hats);
+    let m = hats.join("m2pkg.toml");
+    std::fs::write(&m, std::fs::read_to_string(&m).unwrap().replace("alice/drums", "alice/hats")).unwrap();
+    ok(t.m2(&["registry", "add", r, hats.to_str().unwrap(), "--source", &source.replace("drums", "hats")]));
+    let out = failed(t.m2(&["registry", "build", r, "--sources", s, "--out", fresh.to_str().unwrap(), "--made", "2026-10-30T12:00:00Z"]));
+    assert!(out.contains("built @alice/drums 1.0.0") && out.contains("problem: @alice/hats 1.0.0 isn't built yet"), "{out}");
+    assert!(out.contains("1 version not built: it stays pending, and the rest are in the catalog"), "{out}");
+    assert!(fresh.join("catalog.json").is_file());
 }
 
 // REG-6, REG-5: the robot run as the registry's CI runs it, with paths relative to where it runs:
@@ -141,8 +166,11 @@ fn a_pack_unpacked_where_the_ci_unpacks_it_gets_its_preview() {
     // As the README says to pack it up, and as the CI unpacks it.
     let tar = |args: &[&str]| assert!(Command::new("tar").current_dir(&t.0).args(args).status().unwrap().success());
     tar(&["-czf", "felt-piano-0.1.0.tar.gz", "--exclude=.*", "felt-piano"]);
-    std::fs::create_dir_all(t.0.join("sources/1")).unwrap();
-    tar(&["xzf", "felt-piano-0.1.0.tar.gz", "-C", "sources/1", "--no-same-owner", "--no-same-permissions"]);
+    let pending = String::from_utf8(t.m2(&["registry", "pending", "registry", "--out", "bucket"]).stdout).unwrap();
+    let hex = pending.split(' ').next().unwrap();
+    let to = format!("sources/{hex}");
+    std::fs::create_dir_all(t.0.join(&to)).unwrap();
+    tar(&["xzf", "felt-piano-0.1.0.tar.gz", "-C", &to, "--no-same-owner", "--no-same-permissions"]);
     let out = ok(t.m2(&["registry", "build", "registry", "--sources", "sources", "--out", "bucket", "--made", "2026-10-30T12:00:00Z"]));
     assert!(out.contains("built @alice/felt-piano 0.1.0: 1 item (1 with a preview)"), "{out}");
 }

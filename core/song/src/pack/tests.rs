@@ -484,3 +484,17 @@ fn a_build_during_a_repair_says_it_is_being_installed() {
     assert!(being(&r) && r.packs.is_empty(), "1.2.0 isn't taken instead: {:?} {:?}", r.problems, r.packs);
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+// PACK-6: anything in a pack that isn't a folder or a plain file (a pipe, a device) is refused,
+// named, before any file is opened: reading a pipe would wait for ever (review G8).
+#[test]
+fn a_pipe_in_a_pack_is_refused_before_anything_is_read() {
+    let d = scratch("pipe");
+    pack_at(&d, "@alice/drums", "1.0.0");
+    std::fs::create_dir_all(d.join("samples")).unwrap();
+    let made = std::process::Command::new("mkfifo").arg(d.join("samples/hang.wav")).status().unwrap();
+    assert!(made.success(), "mkfifo");
+    let e = Listing::of(&d).unwrap_err().to_string();
+    assert!(e.contains("samples/hang.wav isn't a plain file (a pipe or a device)"), "{e}");
+    assert!(pack_files(&d).is_err());
+}
