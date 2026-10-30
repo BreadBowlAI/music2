@@ -299,8 +299,9 @@ fn missing_import(spec: &str, from: &str, song: &Song) -> Option<Plain> {
     let fix = if spec.starts_with('.') {
         if song.tracks.is_empty() { "Check its name.".to_string() } else { format!("The track files are: {}.", song.tracks.join(", ")) }
     } else {
-        let pkg = spec.split('/').next().unwrap_or(spec);
-        let modules: BTreeSet<&str> = song.exports.values().map(String::as_str).filter(|m| m.split('/').next() == Some(pkg)).collect();
+        // A scoped package's name is its first two segments (PACK-3).
+        let pkg = m2_script::package_of(spec).0;
+        let modules: BTreeSet<&str> = song.exports.values().map(String::as_str).filter(|m| m2_script::package_of(m).0 == pkg).collect();
         if modules.is_empty() {
             "Check its name.".to_string()
         } else {

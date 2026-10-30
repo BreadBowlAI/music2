@@ -2154,3 +2154,87 @@ fn a_scoped_package_is_imported_by_its_two_segments() {
     let e = pack_errors("@alice/felt-piano", &pkg, &song("@alice/felt-piano/../../x"), true);
     assert_eq!(e[0].code, "import.outside-code", "{e:?}");
 }
+
+/// Packages laid out as the store lays them out, `<root>/@owner/name/<version>/src/…`, each with
+/// its files: the folder of each.
+struct Store(PathBuf);
+
+impl Store {
+    fn new(tag: &str, packs: &[(&str, &[(&str, &str)])]) -> Store {
+        let root = std::env::temp_dir().join(format!("m2-script-store-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (name, files) in packs {
+            for (f, text) in *files {
+                let path = root.join(name).join("1.0.0/src").join(f);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, text).unwrap();
+            }
+        }
+        Store(root)
+    }
+
+    fn dir(&self, name: &str) -> PathBuf {
+        self.0.join(name).join("1.0.0")
+    }
+
+    /// Build `song` with every package in the store loaded and listed.
+    fn build(&self, names: &[&str], song: &str) -> Result<Build, Vec<Diagnostic>> {
+        let mut o = options(&[("song.ts", song)]);
+        for n in names {
+            o.packages.push((n.to_string(), self.dir(n)));
+            o.dependencies.push(n.to_string());
+        }
+        build_full(&o)
+    }
+}
+
+impl Drop for Store {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+// PACK-3, FMT-6a: an import stays inside one package's folder: a bare one inside the package it
+// names, a relative one inside its module's own. Reaching another package loaded beside it is
+// import.outside-code, so a pack never uses another (D4).
+#[test]
+fn an_import_never_reaches_another_package() {
+    let bob = "export const b = 2;\n";
+    let alice = "export const a = 1;\n";
+    let sneaky = "export { b as a } from \"../../../../@bob/b/1.0.0/src/index\";\n";
+    let store = Store::new("reach", &[("@alice/a", &[("index.ts", alice), ("sneaky.ts", sneaky)]), ("@bob/b", &[("index.ts", bob)])]);
+    let song = |from: &str| {
+        format!(
+            "import {{ kernel, song }} from \"@m2/core\";\nimport {{ a }} from \"{from}\";\nif (a !== 1) throw new Error(\"no\");\n\
+             export default song(() => kernel(\"std:sine\", {{ freq: 440 * a }}));\n"
+        )
+    };
+    let both = ["@alice/a", "@bob/b"];
+    // Its own module, as ever.
+    store.build(&both, &song("@alice/a")).unwrap_or_else(|e| panic!("{e:?}"));
+    // A bare import that walks out of the package it names, into another's folder.
+    let e = store.build(&both, &song("@alice/a/../../../../@bob/b/1.0.0/src/index")).err().expect("refused");
+    assert_eq!(e[0].code, "import.outside-code", "{e:?}");
+    // A relative import from a pack's module that walks into another's folder.
+    let e = store.build(&both, &song("@alice/a/sneaky")).err().expect("refused");
+    assert_eq!(e[0].code, "import.outside-code", "{e:?}");
+}
+
+// PACK-5, FMT-6a: a package module is never read through a symbolic link.
+#[cfg(unix)]
+#[test]
+fn a_package_import_never_passes_through_a_link() {
+    let store = Store::new("link", &[("@alice/a", &[("index.ts", "export const a = 1;\n")])]);
+    let outside = store.0.join("outside.ts");
+    std::fs::write(&outside, "export const a = 1;\n").unwrap();
+    std::os::unix::fs::symlink(&outside, store.dir("@alice/a").join("src/linked.ts")).unwrap();
+    let song = "import { kernel, song } from \"@m2/core\";\nimport { a } from \"@alice/a/linked\";\n\
+                export default song(() => kernel(\"std:sine\", { freq: 440 * a }));\n";
+    let e = store.build(&["@alice/a"], song).err().expect("refused");
+    assert_eq!(e[0].code, "import.outside-code", "{e:?}");
+    assert!(e[0].message.contains("link"), "{}", e[0].message);
+    // Nor is a hidden file, which no listing names (PACK-6).
+    std::fs::write(store.dir("@alice/a").join("src/.hidden.ts"), "export const a = 1;\n").unwrap();
+    let e = store.build(&["@alice/a"], &song.replace("@alice/a/linked", "@alice/a/.hidden")).err().expect("refused");
+    assert!(e[0].code == "import.outside-code" && e[0].message.contains("hidden"), "{e:?}");
+}

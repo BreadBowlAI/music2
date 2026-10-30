@@ -350,7 +350,12 @@ impl State {
 
     /// The file on disk that a package module (`std/src/dsp.ts`) names.
     fn package_path(&self, module: &str) -> Option<PathBuf> {
-        self.packages.iter().find_map(|(name, dir)| Some(dir.join(module.strip_prefix(name.as_str())?.strip_prefix('/')?)))
+        self.package_module(module).map(|(_, file)| file)
+    }
+
+    /// The folder of the package a package module (`std/src/dsp.ts`) is in, and its file there.
+    fn package_module(&self, module: &str) -> Option<(&Path, PathBuf)> {
+        self.packages.iter().find_map(|(name, dir)| Some((dir.as_path(), dir.join(module.strip_prefix(name.as_str())?.strip_prefix('/')?))))
     }
 
     /// The module that `name`, imported from the module `base`, names.
@@ -369,9 +374,16 @@ impl State {
             let dir = base.strip_prefix(PROJECT).and_then(|b| b.rsplit_once('/')).map_or("", |(d, _)| d);
             return self.project_file(dir, name).map(|p| format!("{PROJECT}{p}")).map_err(|m| fail("import.outside-code", m));
         }
+        // Inside one package's folder (PACK-3): a relative import's own module's package, a bare
+        // import's named one.
         let found = if relative {
-            let dir = self.package_path(base).and_then(|f| f.parent().map(Path::to_path_buf)).unwrap_or_default();
-            self.package_file(&normalize(&dir.join(name)))
+            match self.package_module(base) {
+                Some((own, file)) => {
+                    let at = file.parent().map(Path::to_path_buf).unwrap_or_default();
+                    self.package_file(own, &normalize(&at.join(name)))
+                }
+                None => Err(("import.outside-code", "it names no file of an installed package".into())),
+            }
         } else {
             let (pkg, sub) = package_of(name);
             if in_project && !self.dependencies.iter().any(|d| d == pkg) {
@@ -379,7 +391,7 @@ impl State {
                 return Err(fail("pkg.undeclared", e));
             }
             match self.packages.iter().find(|(n, _)| n == pkg) {
-                Some((_, dir)) => self.package_file(&normalize(&dir.join("src").join(sub))),
+                Some((_, dir)) => self.package_file(dir, &normalize(&dir.join("src").join(sub))),
                 None => {
                     let have: Vec<&str> = self.packages.iter().map(|(n, _)| n.as_str()).collect();
                     let code = if in_project { "pkg.unsatisfied" } else { "code.build" };
@@ -422,16 +434,28 @@ impl State {
         Err(format!("`{spec}` names no code file of the project (looked for {})", tried.join(", ")))
     }
 
-    /// The module of a file inside an installed package: the path, then with `.ts`, then
+    /// The module of a file inside the installed package in `dir`: the path, then with `.ts`, then
     /// `/index.ts`, spelled exactly as in its folder's listing, so every disk finds the same
-    /// files. An error comes with its code.
-    fn package_file(&self, p: &Path) -> Result<String, (&'static str, String)> {
-        let Some((_, dir)) = self.packages.iter().find(|(_, d)| p.starts_with(d)) else {
-            return Err(("import.outside-code", "songs can only import files from their own project or from installed packages".into()));
-        };
+    /// files. One outside `dir` (another package's folder too: PACK-3), or reached through a
+    /// symbolic link (PACK-5), is no file it may import. An error comes with its code.
+    fn package_file(&self, dir: &Path, p: &Path) -> Result<String, (&'static str, String)> {
+        if !p.starts_with(dir) {
+            // Short: QuickJS cuts a resolving error's message, and a cut one loses its code.
+            return Err((
+                "import.outside-code",
+                "it leaves its package (songs import from their own project or from installed packages)".into(),
+            ));
+        }
         let tried = [p.to_path_buf(), PathBuf::from(format!("{}.ts", p.display())), p.join("index.ts")];
         let listed: Vec<(&PathBuf, PathBuf)> = tried.iter().filter_map(|c| Some((c, listed(dir, c)?))).collect();
-        if let Some((c, _)) = listed.iter().find(|(c, real)| *c == real) {
+        if let Some((c, real)) = listed.iter().find(|(c, real)| *c == real) {
+            if through_link(dir, real) {
+                return Err(("import.outside-code", "it is reached through a symbolic link, and a package's file never is".into()));
+            }
+            // A hidden file is no part of a package (its listing leaves it out, PACK-6).
+            if real.strip_prefix(dir).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))) {
+                return Err(("import.outside-code", "it is a hidden file, and no part of its package".into()));
+            }
             return Ok(self.display(&c.to_string_lossy()));
         }
         match listed.first() {
@@ -456,6 +480,16 @@ pub fn package_of(spec: &str) -> (&str, &str) {
         Some(i) => (&spec[..i], &spec[i + 1..]),
         None => (spec, "index"),
     }
+}
+
+/// Whether any part of `path` below `root` is a symbolic link.
+fn through_link(root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else { return true };
+    let mut at = root.to_path_buf();
+    rel.components().any(|c| {
+        at.push(c);
+        std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink())
+    })
 }
 
 /// The file at `path` below `root` as its folders' listings spell it, matching each part
@@ -889,10 +923,12 @@ pub fn describe(packages: &[(String, PathBuf)]) -> Catalog {
         let mut files = vec![];
         let mut stack = vec![src.clone()];
         while let Some(d) = stack.pop() {
-            for path in std::fs::read_dir(&d).into_iter().flatten().flatten().map(|e| e.path()) {
-                if path.is_dir() {
+            // A link is never followed (PACK-5): a folder that links to one above it would never end.
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let (path, kind) = (e.path(), e.file_type());
+                if kind.as_ref().is_ok_and(|k| k.is_dir()) {
                     stack.push(path);
-                } else if path.extension().is_some_and(|x| x == "ts") {
+                } else if kind.is_ok_and(|k| k.is_file()) && path.extension().is_some_and(|x| x == "ts") {
                     files.push(path);
                 }
             }
