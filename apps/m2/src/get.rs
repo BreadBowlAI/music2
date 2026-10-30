@@ -5,7 +5,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use anyhow::{Result, anyhow, bail};
 use m2_editor::get::{self, Remote};
@@ -54,7 +53,7 @@ pub fn offers() -> Vec<get::Offer> {
         }
     };
     let store = Store::here();
-    get::offers(&catalog, &|name| store.as_ref().and_then(|s| s.versions(name).last().copied()))
+    get::offers(&catalog, &|name| store.as_ref().and_then(|s| s.versions(name).last().copied()), &|_| false)
 }
 
 /// Say how far a Get is, on stderr: a line at each quarter.
@@ -81,7 +80,7 @@ fn get_one(remote: &Remote, store: &Store, name: &PackName, version: &m2_song::r
         eprintln!("{what} was yanked ({}): got all the same, as a song that locks it needs it", version.yanked.as_deref().unwrap_or(""));
     }
     let std = m2_server::resources::std_dir();
-    let done = get::pack(remote, name, version, store, &std, &mut progress(&what), &AtomicBool::new(false)).map_err(|e| anyhow!(e))?;
+    let done = get::pack(remote, name, version, store, &std, &mut progress(&what), &get::Cancel::default()).map_err(|e| anyhow!(e))?;
     match done {
         Install::Installed { dir, .. } => println!("got {what} ({}), installed in {}", mb(version.size.unwrap_or(0)), dir.display()),
         Install::Already { .. } => println!("{what} is already installed, with these very files"),

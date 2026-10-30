@@ -5,7 +5,7 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use m2_song::pack::{Listing, Lock, PackName, Store};
@@ -213,7 +213,7 @@ fn offline_the_kept_catalog_is_used() {
 fn from_the_library_is_what_you_havent_got() {
     let (_w, bucket) = built("get-offers");
     let catalog = catalog_in(&tree(&bucket));
-    let all = offers(&catalog, &|_| None);
+    let all = offers(&catalog, &|_| None, &|_| false);
     let ids: Vec<&str> = all.iter().map(|o| o.item.id.as_str()).collect();
     assert_eq!(
         ids,
@@ -249,10 +249,14 @@ fn from_the_library_is_what_you_havent_got() {
     assert_eq!(dark.item.preset.as_ref().map(|p| (p.from.as_str(), p.name.as_str())), Some(("std", "Dark")));
 
     // What this computer has: none of a pack it has, but of one it has an older version of.
-    let had = offers(&catalog, &|n| (n.as_str() == "@bob/keys").then_some(Version(0, 1, 0)));
+    let had = offers(&catalog, &|n| (n.as_str() == "@bob/keys").then_some(Version(0, 1, 0)), &|_| false);
     assert!(had.iter().all(|o| o.pack.as_str() == "@alice/drums"), "you have @bob/keys 0.1.0");
-    let older = offers(&catalog, &|n| (n.as_str() == "@bob/keys").then_some(Version(0, 0, 9)));
+    let older = offers(&catalog, &|n| (n.as_str() == "@bob/keys").then_some(Version(0, 0, 9)), &|_| false);
     assert_eq!(older.iter().filter(|o| o.have == Some(Version(0, 0, 9))).count(), 2, "a newer version is offered, saying what you have");
+    // L3: a pack the open song lists or locks: none of it, whatever its versions (moving the song
+    // to another is `m2 pack update`, never a Get).
+    let used = offers(&catalog, &|_| None, &|n| n.as_str() == "@bob/keys");
+    assert!(used.iter().all(|o| o.pack.as_str() == "@alice/drums"), "the open song uses @bob/keys");
 
     let found: Vec<&str> = find(&all, &Query::parse("soft")).into_iter().map(|o| o.item.id.as_str()).collect();
     assert_eq!(found, ["library:@bob/keys:soft-keys", "library:sound:std/@bob/keys:soft-keys/Dark"]);
@@ -301,7 +305,7 @@ fn get_installs_a_whole_version_checked() {
     let store = Store::at(w.t.0.join("Packs"));
     let v = version_of(&bucket, "@bob/keys", Version(0, 1, 0));
     let mut seen = vec![];
-    let done = pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |p| seen.push(p), &AtomicBool::new(false)).unwrap();
+    let done = pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |p| seen.push(p), &Cancel::default()).unwrap();
     assert!(matches!(done, Install::Installed { hash, .. } if hash == v.hash), "{done:?}");
     assert_eq!(store.check(&name("@bob/keys"), &Version(0, 1, 0)).unwrap(), v.hash);
     let last = seen.last().unwrap();
@@ -312,7 +316,7 @@ fn get_installs_a_whole_version_checked() {
     assert_eq!(asked.len() as u64, v.files.unwrap(), "each file once");
     assert!(getting(&store).is_empty());
     // Got again: it is there with these very files.
-    let again = pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |_| {}, &AtomicBool::new(false)).unwrap();
+    let again = pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |_| {}, &Cancel::default()).unwrap();
     assert!(matches!(again, Install::Already { .. }), "{again:?}");
 }
 
@@ -328,7 +332,7 @@ fn a_changed_blob_fails_get_and_leaves_nothing() {
     let blob = bucket.join(blob_path(&index.sha256));
     let text = std::fs::read_to_string(&blob).unwrap();
     std::fs::write(&blob, text.replace("1800", "1900")).unwrap();
-    let why = pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |_| {}, &AtomicBool::new(false)).unwrap_err();
+    let why = pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |_| {}, &Cancel::default()).unwrap_err();
     assert!(why.contains("didn't match its hash") && why.contains("@bob/keys 0.1.0"), "{why}");
     assert!(store.versions(&name("@bob/keys")).is_empty(), "nothing installed");
     assert!(files(&store.dir).is_empty() && getting(&store).is_empty(), "nothing left: {:?}", files(&store.dir));
@@ -341,9 +345,8 @@ fn a_cancelled_get_leaves_nothing() {
     let store = Store::at(w.t.0.join("Packs"));
     let v = version_of(&bucket, "@bob/keys", Version(0, 1, 0));
     let remote = Remote::new(&file_url(&bucket), &w.t.0.join("cache")).unwrap();
-    let cancel = AtomicBool::new(false);
-    let why =
-        pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |_| cancel.store(true, Ordering::Relaxed), &cancel).unwrap_err();
+    let cancel = Cancel::default();
+    let why = pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |_| assert!(cancel.cancel()), &cancel).unwrap_err();
     assert!(why.contains("cancelled"), "{why}");
     assert!(store.versions(&name("@bob/keys")).is_empty() && getting(&store).is_empty());
 
@@ -351,11 +354,11 @@ fn a_cancelled_get_leaves_nothing() {
     let remote = Remote::new(&serve.url, &w.t.0.join("cache")).unwrap();
     let index = Listing::of(&w.keys()).unwrap().files.iter().find(|f| f.path == "src/index.ts").unwrap().sha256;
     *serve.hold.lock().unwrap() = Some(blob_path(&index));
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(Cancel::default());
     let later = cancel.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(300));
-        later.store(true, Ordering::Relaxed);
+        later.cancel();
     });
     let t = std::time::Instant::now();
     let why = pack(&remote, &name("@bob/keys"), &v, &store, &std_dir(), &mut |_| {}, &cancel).unwrap_err();
@@ -397,7 +400,7 @@ fn a_listing_that_leaves_its_folder_is_refused() {
         let bucket = t.0.join(format!("bucket-{}", Sha::of(bad.as_bytes()).hex()));
         let v = by_hand(&bucket, &[("m2pkg.toml", TINY), ("x", b"escaped")], &["m2pkg.toml", bad]);
         let remote = Remote::new(&file_url(&bucket), &t.0.join("cache")).unwrap();
-        let why = pack(&remote, &name("@alice/tiny"), &v, &store, &std_dir(), &mut |_| {}, &AtomicBool::new(false)).unwrap_err();
+        let why = pack(&remote, &name("@alice/tiny"), &v, &store, &std_dir(), &mut |_| {}, &Cancel::default()).unwrap_err();
         assert!(why.contains("isn't a plain path"), "{bad}: {why}");
         assert!(!t.0.join("escape.txt").exists() && files(&store.dir).is_empty() && getting(&store).is_empty(), "{bad}");
     }
@@ -414,32 +417,39 @@ fn a_pack_for_a_newer_music2_stops_before_its_files() {
     std::fs::remove_file(bucket.join(blob_path(&Sha::of(b"export {};\n")))).unwrap();
     let remote = Remote::new(&file_url(&bucket), &t.0.join("cache")).unwrap();
     let store = Store::at(t.0.join("Packs"));
-    let why = pack(&remote, &name("@alice/tiny"), &v, &store, &std_dir(), &mut |_| {}, &AtomicBool::new(false)).unwrap_err();
+    let why = pack(&remote, &name("@alice/tiny"), &v, &store, &std_dir(), &mut |_| {}, &Cancel::default()).unwrap_err();
     assert!(why.contains("newer music2"), "{why}");
     assert!(files(&store.dir).is_empty() && getting(&store).is_empty());
     // Another pack's m2pkg.toml under this version's hash: refused too.
     let other = t.0.join("other");
     let v = by_hand(&other, &[("m2pkg.toml", TINY)], &["m2pkg.toml"]);
     let remote = Remote::new(&file_url(&other), &t.0.join("cache")).unwrap();
-    let why = pack(&remote, &name("@alice/other"), &v, &store, &std_dir(), &mut |_| {}, &AtomicBool::new(false)).unwrap_err();
+    let why = pack(&remote, &name("@alice/other"), &v, &store, &std_dir(), &mut |_| {}, &Cancel::default()).unwrap_err();
     assert!(why.contains("@alice/tiny 0.1.0") && why.contains("not @alice/other"), "{why}");
 }
 
-// REG-15: the folder a Get that crashed left beside the store is removed by the next Get; one of
-// a Get still running (this process's) is not.
+// REG-15, L9: the folder a Get that crashed left beside the store is removed by the next Get:
+// another process's, and one with this process's own id that no Get of it made (a crashed process
+// had this id before: ids are reused), so it never stops a Get; one a Get of this process is
+// using now stays.
 #[test]
 fn a_crashed_gets_folder_is_removed() {
     let (w, bucket) = built("get-crashed");
     let store = Store::at(w.t.0.join("Packs"));
     let dead = store.dir.join(".getting-4000000000-0");
-    let ours = store.dir.join(format!(".getting-{}-999999", std::process::id()));
     write(&dead.join("src/index.ts"), "half");
-    write(&ours.join("src/index.ts"), "still coming");
+    for n in 0..8 {
+        write(&store.dir.join(format!(".getting-{}-{n}", std::process::id())).join("x"), "left by a crash");
+    }
+    let running = Work::new(&store.dir, GETTING).unwrap();
+    write(&running.0.join("src/index.ts"), "still coming");
     let remote = Remote::new(&file_url(&bucket), &w.t.0.join("cache")).unwrap();
     let v = version_of(&bucket, "@alice/drums", Version(1, 0, 0));
-    pack(&remote, &name("@alice/drums"), &v, &store, &std_dir(), &mut |_| {}, &AtomicBool::new(false)).unwrap();
+    pack(&remote, &name("@alice/drums"), &v, &store, &std_dir(), &mut |_| {}, &Cancel::default()).unwrap();
     assert!(!dead.exists(), "a crashed Get's folder goes");
-    assert!(ours.exists(), "a running Get's stays");
+    assert_eq!(getting(&store), [running.0.file_name().unwrap().to_string_lossy()], "this process's old ones go; a running Get's stays");
+    drop(running);
+    assert!(getting(&store).is_empty());
 }
 
 // REG-16: Get of a sample fetches its one file, by its hash, under its own name, with its note;
@@ -450,11 +460,11 @@ fn get_a_sample_fetches_its_one_file() {
     let serve = Serve::folder(&bucket);
     let remote = Remote::new(&serve.url, &w.t.0.join("cache")).unwrap();
     let catalog = catalog_in(&tree(&bucket));
-    let kick = offers(&catalog, &|_| None).into_iter().find(|o| o.item.kind == crate::library::Kind::Sample).unwrap();
+    let kick = offers(&catalog, &|_| None, &|_| false).into_iter().find(|o| o.item.kind == crate::library::Kind::Sample).unwrap();
     let into = w.t.0.join("into");
     std::fs::create_dir_all(&into).unwrap();
     let mut seen = vec![];
-    let s = sample(&remote, &kick, &into, &mut |p| seen.push(p), &AtomicBool::new(false)).unwrap();
+    let s = sample(&remote, &kick, &into, &mut |p| seen.push(p), &Cancel::default()).unwrap();
     assert_eq!(s.file, into.join("Boom.wav"));
     assert_eq!(std::fs::read(&s.file).unwrap(), std::fs::read(w.drums().join("samples/kicks/Boom.wav")).unwrap());
     assert_eq!(s.from["pack"], json!("@alice/drums"));
@@ -465,7 +475,7 @@ fn get_a_sample_fetches_its_one_file() {
     remote.blob(file.sha256, 64 << 20, &AtomicBool::new(false)).unwrap();
     serve.asked();
     std::fs::remove_file(&s.file).unwrap();
-    sample(&remote, &kick, &into, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+    sample(&remote, &kick, &into, &mut |_| {}, &Cancel::default()).unwrap();
     assert!(serve.asked().is_empty());
 }
 
@@ -530,4 +540,175 @@ fn the_version_got_is_the_latest_or_the_one_named() {
     let p = catalog.packs.iter_mut().find(|p| p.name.as_str() == "@bob/keys").unwrap();
     p.versions[0].removed = Some("not ours".into());
     assert!(chosen(&catalog, &name("@bob/keys"), Some(Version(0, 1, 0))).unwrap_err().contains("taken down"));
+}
+
+// REG-15, L1: a cancel that comes once every file is in, before the install starts, still leaves
+// nothing installed; once the install starts (its progress says so), a cancel is refused, and the
+// Get ends installed.
+#[test]
+fn a_cancel_until_the_install_starts_leaves_nothing() {
+    let (w, bucket) = built("get-cancel-late");
+    let store = Store::at(w.t.0.join("Packs"));
+    let v = version_of(&bucket, "@bob/keys", Version(0, 1, 0));
+    let remote = Remote::new(&file_url(&bucket), &w.t.0.join("cache")).unwrap();
+    let total = v.size.unwrap();
+    let cancel = Cancel::default();
+    let mut whole = 0;
+    let got = pack(
+        &remote,
+        &name("@bob/keys"),
+        &v,
+        &store,
+        &std_dir(),
+        &mut |p| {
+            // The last file is in, and its download returned: the cancel comes now.
+            if p.done == total && !p.installing {
+                whole += 1;
+                if whole == 2 {
+                    assert!(cancel.cancel(), "not installing yet: it can be cancelled");
+                }
+            }
+        },
+        &cancel,
+    );
+    assert!(got.as_ref().is_err_and(|why| why.contains("cancelled")), "cancelled, yet: {got:?}");
+    assert!(store.versions(&name("@bob/keys")).is_empty() && getting(&store).is_empty(), "nothing is left");
+
+    let cancel = Cancel::default();
+    let mut refused = None;
+    let got = pack(
+        &remote,
+        &name("@bob/keys"),
+        &v,
+        &store,
+        &std_dir(),
+        &mut |p| {
+            if p.installing {
+                refused = Some(cancel.cancel());
+            }
+        },
+        &cancel,
+    );
+    assert_eq!(refused, Some(false), "installing: a cancel is refused");
+    assert!(cancel.installing() && !cancel.cancelled());
+    assert!(matches!(got, Ok(Install::Installed { .. })), "{got:?}");
+}
+
+// REG-15, L2: a listing whose sizes add up past what a number holds is refused in words, before
+// any file is fetched: never wrapped round to a small size, nor a panic.
+#[test]
+fn a_listing_whose_sizes_overflow_is_refused() {
+    let listing = Listing {
+        files: vec![
+            m2_song::pack::Listed { path: "m2pkg.toml".into(), size: 10, sha256: Sha::of(b"a") },
+            m2_song::pack::Listed { path: "samples/huge.wav".into(), size: u64::MAX - 5, sha256: Sha::of(b"b") },
+        ],
+    };
+    let text = listing.text();
+    let wrapped = 10u64.wrapping_add(u64::MAX - 5).wrapping_add(text.len() as u64);
+    let v = m2_song::registry::CatalogVersion {
+        version: Version(0, 1, 0),
+        hash: Sha::of(text.as_bytes()),
+        source: String::new(),
+        size: Some(wrapped),
+        files: Some(3),
+        yanked: None,
+        removed: None,
+    };
+    let why = std::panic::catch_unwind(|| listing_of(text.as_bytes(), &v).map(drop)).expect("no panic").unwrap_err();
+    assert!(why.contains("10 GB"), "{why}");
+    // Through a Get: refused before any file but its m2pack.json is asked for.
+    let t = Temp::new("get-overflow");
+    let bucket = t.0.join("bucket");
+    write(&bucket.join(blob_path(&v.hash)), &text);
+    let remote = Remote::new(&file_url(&bucket), &t.0.join("cache")).unwrap();
+    let store = Store::at(t.0.join("Packs"));
+    let why = pack(&remote, &name("@alice/tiny"), &v, &store, &std_dir(), &mut |_| {}, &Cancel::default()).unwrap_err();
+    assert!(why.contains("10 GB"), "{why}");
+    assert!(files(&store.dir).is_empty() && getting(&store).is_empty());
+}
+
+// REG-12, L4: once a catalog is kept, a catalog.json naming an older one (a stale cache in front
+// of the bucket, or a host undoing a yank), or one as old with other bytes, is refused, and the
+// one kept stays.
+#[test]
+fn an_older_catalog_never_replaces_a_newer_one() {
+    let (w, bucket) = built("get-rollback");
+    let remote = Remote::new(&file_url(&bucket), &w.t.0.join("cache")).unwrap();
+    let old = remote.fetch(&AtomicBool::new(false)).unwrap().catalog;
+    let old_pointer = std::fs::read(bucket.join(POINTER)).unwrap();
+    let publish = |c: &Catalog| {
+        let p = c.pointer();
+        write(&bucket.join(catalog_path(&p.catalog)), c.bytes());
+        write(&bucket.join(POINTER), p.bytes());
+    };
+    // A newer catalog: @bob/keys yanked.
+    let mut newer = (*old).clone();
+    newer.made = "2026-10-31T12:00:00Z".into();
+    let keys = newer.packs.iter_mut().find(|p| p.name.as_str() == "@bob/keys").unwrap();
+    keys.versions[0].yanked = Some("plays noise".into());
+    keys.latest = None;
+    keys.items.clear();
+    publish(&newer);
+    assert_eq!(remote.fetch(&AtomicBool::new(false)).unwrap().catalog.made, "2026-10-31T12:00:00Z");
+    // The older one again.
+    write(&bucket.join(POINTER), &old_pointer);
+    let why = remote.fetch(&AtomicBool::new(false)).unwrap_err();
+    assert!(why.contains("older than the one kept"), "{why}");
+    assert_eq!(remote.kept().unwrap().catalog.made, "2026-10-31T12:00:00Z", "the newer one stays");
+    // As old, with other bytes.
+    let mut other = newer.clone();
+    other.packs.retain(|p| p.name.as_str() == "@alice/drums");
+    publish(&other);
+    let why = remote.fetch(&AtomicBool::new(false)).unwrap_err();
+    assert!(why.contains("as old as the one kept"), "{why}");
+    assert_eq!(remote.kept().unwrap().catalog.packs.len(), 2);
+    // A catalog.json whose time isn't its catalog's own.
+    let mut later = newer.clone();
+    later.made = "2026-11-01T12:00:00Z".into();
+    let mut pointer = later.pointer();
+    pointer.made = "2026-11-02T12:00:00Z".into();
+    write(&bucket.join(catalog_path(&pointer.catalog)), later.bytes());
+    write(&bucket.join(POINTER), pointer.bytes());
+    let why = remote.fetch(&AtomicBool::new(false)).unwrap_err();
+    assert!(why.contains("made"), "{why}");
+    // A newer one, written as the robot writes it, is taken.
+    publish(&later);
+    assert_eq!(remote.fetch(&AtomicBool::new(false)).unwrap().catalog.made, "2026-11-01T12:00:00Z");
+}
+
+// REG-3, L5: a catalog or a version's facts with a control character in any of its words (an
+// escape sequence that would clear a terminal, a line break that would pass for another line) is
+// refused, as `m2 pack check` refuses them in a pack (PACK-12).
+#[test]
+fn a_catalog_with_control_characters_is_refused() {
+    let (w, bucket) = built("get-words");
+    let good = catalog_in(&tree(&bucket));
+    let bad: Vec<(&str, Box<dyn Fn(&mut Catalog)>)> = vec![
+        ("a label", Box::new(|c| c.packs[1].items[0].label = "Soft keys\u{1b}[2J\u{1b}]0;title\u{7}".into())),
+        ("a description", Box::new(|c| c.packs[0].description = "One kick\nproblem: none".into())),
+        ("an author", Box::new(|c| c.packs[0].authors = vec!["Alice\u{1b}[31m".into()])),
+        ("a tag", Box::new(|c| c.packs[1].items[0].tags.push("keys\t".into()))),
+        (
+            "a yank's reason",
+            Box::new(|c| {
+                c.packs[1].versions[0].yanked = Some("noise\u{1b}[2J".into());
+                (c.packs[1].latest, c.packs[1].items) = (None, vec![]);
+            }),
+        ),
+        ("a sample's file", Box::new(|c| c.packs[0].items[0].file.as_mut().unwrap().path = "samples/\rBoom.wav".into())),
+    ];
+    for (what, change) in bad {
+        let mut c = good.clone();
+        change(&mut c);
+        let why = Catalog::read_checked(&c.bytes(), &c.pointer()).unwrap_err();
+        assert!(why.contains("control character"), "{what}: {why}");
+    }
+    let reg = w.registry();
+    let v = &reg.get(&name("@bob/keys")).unwrap().versions[0];
+    let facts_file = bucket.join(m2_song::registry::facts_path(&v.hash));
+    let mut facts = m2_song::registry::Facts::read(&std::fs::read(&facts_file).unwrap()).unwrap();
+    facts.items[0].description = "a pluck\u{1b}[2J".into();
+    let why = m2_song::registry::Facts::read(&facts.bytes()).unwrap_err();
+    assert!(why.contains("control character"), "{why}");
 }

@@ -543,3 +543,89 @@ fn a_song_missing_a_locked_pack_builds_once_it_is_installed() {
     assert_eq!(s.accepted().compiled.packs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["@test/tiny"]);
     std::fs::remove_dir_all(&root).ok();
 }
+
+// AGENT-2, REG-17, L7: an outside write that waited for a pack (pkg.missing), built once a Get
+// installs it, keeps its one undo step, source outside, as when its own batch built.
+#[test]
+fn an_outside_edit_that_waited_for_a_pack_keeps_its_undo_step() {
+    let root = scratch("rv-outside");
+    copy(&fixtures(), &root);
+    let store = root.join("Packs");
+    let song = root.join("song-store");
+    let rd = |p: &str| std::fs::read_to_string(song.join(p)).unwrap();
+    let (manifest, lock, code) = (rd("music2.toml"), rd("music2.lock"), rd("song.ts"));
+    let plain: String = manifest.lines().filter(|l| !l.contains("@test/tiny")).map(|l| format!("{l}\n")).collect();
+    std::fs::write(song.join("music2.toml"), &plain).unwrap();
+    std::fs::remove_file(song.join("music2.lock")).unwrap();
+    std::fs::write(
+        song.join("song.ts"),
+        "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n",
+    )
+    .unwrap();
+    std::fs::rename(song.join("tracks"), root.join("tracks-aside")).unwrap();
+    let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(s.accepted().has_code());
+    // An agent writes the pack in: its dependency, its lock, and code that plays it.
+    std::fs::write(song.join("music2.toml"), &manifest).unwrap();
+    std::fs::write(song.join("music2.lock"), &lock).unwrap();
+    std::fs::write(song.join("song.ts"), &code).unwrap();
+    std::fs::rename(root.join("tracks-aside"), song.join("tracks")).unwrap();
+    let paths: std::collections::BTreeSet<PathBuf> =
+        ["music2.toml", "music2.lock", "song.ts", "tracks/keys.ts", "tracks/pluck.ts"].iter().map(PathBuf::from).collect();
+    let (_, out) = s.take_in_batch(m2_song::Snapshot::read(&song).unwrap(), &paths, false);
+    assert_eq!(codes(&s.draft_errors), ["pkg.missing"], "{out:?}");
+    // Then a Get installs the pack, and the session is told.
+    install_tiny(&store);
+    let taken = s.store_changed();
+    assert!(taken.accepted.is_some(), "{:?}", s.draft_errors);
+    let top = s.step_names().0;
+    assert!(
+        top.as_ref().is_some_and(|n| n.source == crate::Source::Outside),
+        "the agent's edit, built once the pack came, has no undo step: {:?}",
+        top.map(|n| (n.id, n.source, n.files))
+    );
+    // One undo takes the agent's whole edit back.
+    s.undo().unwrap();
+    assert_eq!(std::fs::read_to_string(song.join("music2.toml")).unwrap(), plain);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// AGENT-2: the same outside write, with the pack installed first: built by its own batch, one
+// undo step, source outside.
+#[test]
+fn an_outside_edit_with_its_pack_there_is_one_undo_step() {
+    let root = scratch("rv-control");
+    copy(&fixtures(), &root);
+    let store = root.join("Packs");
+    let song = root.join("song-store");
+    let rd = |p: &str| std::fs::read_to_string(song.join(p)).unwrap();
+    let (manifest, lock, code) = (rd("music2.toml"), rd("music2.lock"), rd("song.ts"));
+    let plain: String = manifest.lines().filter(|l| !l.contains("@test/tiny")).map(|l| format!("{l}\n")).collect();
+    std::fs::write(song.join("music2.toml"), &plain).unwrap();
+    std::fs::remove_file(song.join("music2.lock")).unwrap();
+    std::fs::write(
+        song.join("song.ts"),
+        "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n",
+    )
+    .unwrap();
+    std::fs::rename(song.join("tracks"), root.join("tracks-aside")).unwrap();
+    install_tiny(&store);
+    let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(s.accepted().has_code());
+    // An agent writes the pack in: its dependency, its lock, and code that plays it.
+    std::fs::write(song.join("music2.toml"), &manifest).unwrap();
+    std::fs::write(song.join("music2.lock"), &lock).unwrap();
+    std::fs::write(song.join("song.ts"), &code).unwrap();
+    std::fs::rename(root.join("tracks-aside"), song.join("tracks")).unwrap();
+    let paths: std::collections::BTreeSet<PathBuf> =
+        ["music2.toml", "music2.lock", "song.ts", "tracks/keys.ts", "tracks/pluck.ts"].iter().map(PathBuf::from).collect();
+    let (_, out) = s.take_in_batch(m2_song::Snapshot::read(&song).unwrap(), &paths, false);
+    assert!(matches!(out, crate::take::Outside::Step(_)), "{out:?} {:?}", s.draft_errors);
+    let top = s.step_names().0;
+    assert!(
+        top.as_ref().is_some_and(|n| n.source == crate::Source::Outside),
+        "the agent's edit, built once the pack came, has no undo step: {:?}",
+        top.map(|n| (n.id, n.source, n.files))
+    );
+    std::fs::remove_dir_all(&root).ok();
+}

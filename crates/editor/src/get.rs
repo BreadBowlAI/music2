@@ -131,6 +131,13 @@ impl Remote {
         self.cache.join("blobs")
     }
 
+    /// The `catalog.json` kept, when the catalog it names is kept too.
+    fn kept_pointer(&self) -> Option<Pointer> {
+        let dir = self.dir();
+        let pointer = Pointer::read(&std::fs::read(dir.join(reg::POINTER)).ok()?).ok()?;
+        dir.join(reg::catalog_path(&pointer.catalog)).is_file().then_some(pointer)
+    }
+
     /// The catalog kept in the cache, read back and checked against the `catalog.json` kept with it
     /// (REG-12); none when there is none, or it doesn't read.
     pub fn kept(&self) -> Option<Kept> {
@@ -151,6 +158,25 @@ impl Remote {
         let bytes = fetch::get(&self.url(reg::POINTER), &Expect { size: None, sha256: None, limit, within }, cancel)
             .map_err(|e| said(e.to_string()))?;
         let pointer = Pointer::read(&bytes).map_err(said)?;
+        // Never an older one than the one kept, nor another as old (REG-12): a cache in front of
+        // the bucket, or a host, serving an old catalog would undo a yank or a take-down.
+        if let Some(kept) = self.kept_pointer() {
+            if pointer.made < kept.made {
+                return Err(said(format!(
+                    "{} names a catalog made at {}, older than the one kept (made at {}), so the one kept stays",
+                    reg::POINTER,
+                    pointer.made,
+                    kept.made
+                )));
+            }
+            if pointer.made == kept.made && pointer.catalog != kept.catalog {
+                return Err(said(format!(
+                    "{} names another catalog as old as the one kept (made at {}), so the one kept stays",
+                    reg::POINTER,
+                    kept.made
+                )));
+            }
+        }
         let dir = self.dir();
         let named = reg::catalog_path(&pointer.catalog);
         let at = dir.join(&named);
@@ -304,11 +330,17 @@ fn item_of(p: &CatalogPack, version: Version, f: &ItemFacts) -> Item {
     }
 }
 
-/// The items From the library (REG-13): of each pack of `catalog` with a latest version, its
-/// latest's items, when `have` says this computer has none of it, or an older one.
-pub fn offers(catalog: &Catalog, have: &dyn Fn(&PackName) -> Option<Version>) -> Vec<Offer> {
+/// The items From the library (REG-13): of each pack of `catalog` with a latest version that the
+/// open song doesn't list or lock (`uses`), its latest's items, when `have` says this computer has
+/// none of it, or an older one.
+pub fn offers(catalog: &Catalog, have: &dyn Fn(&PackName) -> Option<Version>, uses: &dyn Fn(&PackName) -> bool) -> Vec<Offer> {
     let mut out = vec![];
     for p in &catalog.packs {
+        // The open song's own packs: moving it to another version is `m2 pack update`, never a Get
+        // (design §11); a version it locks that isn't here is a missing pack's Get (REG-17).
+        if uses(&p.name) {
+            continue;
+        }
         let Some(version) = p.latest.and_then(|l| p.get(l)) else { continue };
         let had = have(&p.name);
         if had.is_some_and(|h| h >= version.version) {
@@ -338,35 +370,96 @@ pub fn find<'a>(offers: &'a [Offer], q: &Query) -> Vec<&'a Offer> {
         .collect()
 }
 
-/// How far a Get is: bytes.
+/// How far a Get is: bytes; and once every byte is in, whether it is being installed, when it
+/// can no longer be cancelled (REG-15).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Progress {
     pub done: u64,
     pub total: u64,
+    pub installing: bool,
+}
+
+/// A Get's cancel (REG-15): asked for while its files come, and refused once it is installed (or
+/// added): from then on it ends as it began.
+#[derive(Debug, Default)]
+pub struct Cancel {
+    /// What `fetch` looks at: set once a cancel is taken.
+    flag: AtomicBool,
+    /// 0 while it may be cancelled, 1 cancelled, 2 past the point of no return.
+    state: std::sync::atomic::AtomicU8,
+}
+
+impl Cancel {
+    /// Cancel it: whether it will stop (it was cancelled already, or isn't past its point of no
+    /// return yet).
+    pub fn cancel(&self) -> bool {
+        match self.state.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) | Err(1) => {
+                self.flag.store(true, Ordering::SeqCst);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Whether it was cancelled.
+    pub fn cancelled(&self) -> bool {
+        self.state.load(Ordering::SeqCst) == 1
+    }
+
+    /// Whether it is past its point of no return: being installed (or added).
+    pub fn installing(&self) -> bool {
+        self.state.load(Ordering::SeqCst) == 2
+    }
+
+    /// Pass the point of no return: whether it wasn't cancelled before.
+    pub fn commit(&self) -> bool {
+        self.state.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    }
+
+    /// What a download looks at to stop.
+    pub fn flag(&self) -> &AtomicBool {
+        &self.flag
+    }
 }
 
 /// What a Get's own folder beside the store is called: `.getting-<process>-<n>`.
-const GETTING: &str = ".getting-";
+pub const GETTING: &str = ".getting-";
+/// What a sample's Get's own folder in the registry's cache is called: `getting-<process>-<n>`.
+pub const GETTING_SAMPLE: &str = "getting-";
 
-/// A Get's own folder beside the store (REG-15), removed with everything in it when dropped:
+/// The folders this process's Gets are using now: a folder with its own id that isn't one of
+/// these was left by a process that crashed with that id before (ids are reused).
+static IN_USE: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// A Get's own folder (REG-15), `<parent>/<prefix><process>-<n>`: beside the store for a pack's
+/// files, in the registry's cache for a sample's. Removed with everything in it when dropped:
 /// however the Get ends, nothing is left.
-struct Work(PathBuf);
+pub struct Work(pub PathBuf);
 
 impl Work {
-    fn new(store: &Path) -> Result<Work, String> {
+    /// A new folder of this Get's own in `parent`, named by `prefix`. The folders of Gets that
+    /// crashed go first: another process's that no longer runs, and one with this process's id
+    /// that none of its Gets is using.
+    pub fn new(parent: &Path, prefix: &str) -> Result<Work, String> {
         static N: AtomicU64 = AtomicU64::new(0);
-        std::fs::create_dir_all(store).map_err(|e| format!("{} couldn't be made: {e}", store.display()))?;
-        // A folder a Get that crashed left goes; one of a Get running now, of this process or
-        // another's, stays.
-        for e in std::fs::read_dir(store).into_iter().flatten().flatten() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{} couldn't be made: {e}", parent.display()))?;
+        let mut in_use = IN_USE.lock().unwrap_or_else(|e| e.into_inner());
+        let me = std::process::id();
+        for e in std::fs::read_dir(parent).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            let pid = name.strip_prefix(GETTING).and_then(|r| r.split_once('-')).and_then(|(pid, _)| pid.parse::<u32>().ok());
-            if pid.is_some_and(|pid| pid != std::process::id() && !m2_os::process::alive(pid)) {
+            let pid = name.strip_prefix(prefix).and_then(|r| r.split_once('-')).and_then(|(pid, _)| pid.parse::<u32>().ok());
+            let left = pid.is_some_and(|pid| match pid == me {
+                true => !in_use.contains(&e.path()),
+                false => !m2_os::process::alive(pid),
+            });
+            if left {
                 let _ = std::fs::remove_dir_all(e.path());
             }
         }
-        let dir = store.join(format!("{GETTING}{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let dir = parent.join(format!("{prefix}{me}-{}", N.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir(&dir).map_err(|e| format!("{} couldn't be made: {e}", dir.display()))?;
+        in_use.push(dir.clone());
         Ok(Work(dir))
     }
 }
@@ -374,6 +467,7 @@ impl Work {
 impl Drop for Work {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        IN_USE.lock().unwrap_or_else(|e| e.into_inner()).retain(|d| *d != self.0);
     }
 }
 
@@ -417,7 +511,11 @@ fn listing_of(bytes: &[u8], v: &CatalogVersion) -> Result<Listing, String> {
     if !listing.files.windows(2).all(|w| w[0].path < w[1].path) {
         return Err("its m2pack.json lists its files out of order, or one twice".into());
     }
-    let size = listing.files.iter().map(|f| f.size).sum::<u64>() + bytes.len() as u64;
+    // Sizes from the network: added up with a check, so none can wrap round to a small one.
+    let size = listing.files.iter().try_fold(bytes.len() as u64, |sum, f| sum.checked_add(f.size).filter(|s| *s <= crate::registry::LARGEST));
+    let Some(size) = size else {
+        return Err("its m2pack.json lists files of more than the 10 GB a pack may be".into());
+    };
     let files = listing.files.len() as u64 + 1;
     if v.size != Some(size) || v.files != Some(files) {
         return Err(format!(
@@ -425,9 +523,6 @@ fn listing_of(bytes: &[u8], v: &CatalogVersion) -> Result<Listing, String> {
             v.files.unwrap_or(0),
             v.size.unwrap_or(0)
         ));
-    }
-    if size > crate::registry::LARGEST {
-        return Err(format!("it is {size} bytes, more than the 10 GB a pack may be"));
     }
     Ok(listing)
 }
@@ -442,21 +537,22 @@ pub fn pack(
     store: &Store,
     std: &Path,
     progress: &mut dyn FnMut(Progress),
-    cancel: &AtomicBool,
+    stop: &Cancel,
 ) -> Result<Install, String> {
+    let cancel = stop.flag();
     let at = format!("{name} {}", version.version);
     let said = |why: String| format!("Couldn't get {at}: {why}");
     if let Some(why) = &version.removed {
         return Err(said(format!("it was taken down from the library ({why}), so its files are gone")));
     }
     let total = version.size.ok_or_else(|| said("the library lists no files for it".into()))?;
-    let work = Work::new(&store.dir).map_err(said)?;
+    let work = Work::new(&store.dir, GETTING).map_err(said)?;
     // Its listing, by the version's hash, read before any other file is asked for.
     let expect = Expect { size: None, sha256: Some(version.hash), limit: LISTING_LIMIT, within: deadline(LISTING_LIMIT) };
     let bytes = fetch::get(&remote.url(&reg::blob_path(&version.hash)), &expect, cancel).map_err(|e| said(e.to_string()))?;
     let listing = listing_of(&bytes, version).map_err(said)?;
     let mut done = bytes.len() as u64;
-    progress(Progress { done, total });
+    progress(Progress { done, total, installing: false });
     let manifest = listing.files.iter().find(|f| f.path == pack::PKG_MANIFEST).ok_or_else(|| said("it has no m2pkg.toml".into()))?;
     // Its m2pkg.toml first: a version this app can't run stops here.
     let rest = listing.files.iter().filter(|f| f.path != pack::PKG_MANIFEST);
@@ -469,12 +565,12 @@ pub fn pack(
         let expect = Expect { size: Some(f.size), sha256: Some(f.sha256), limit: f.size, within: deadline(f.size) };
         let base = done;
         let url = remote.url(&reg::blob_path(&f.sha256));
-        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: base + p.done, total }), cancel).map_err(|e| match e {
+        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: base + p.done, total, installing: false }), cancel).map_err(|e| match e {
             fetch::Error::Cancelled => said(e.to_string()),
             e => said(format!("{}: {e}", f.path)),
         })?;
         done += f.size;
-        progress(Progress { done, total });
+        progress(Progress { done, total, installing: false });
         if n == 0 {
             runs_here(&work.0, name, version.version, std).map_err(said)?;
         }
@@ -483,6 +579,12 @@ pub fn pack(
     if Listing::of(&work.0).ok().as_ref() != Some(&listing) {
         return Err(said("the files got aren't the ones its m2pack.json lists".into()));
     }
+    // The point of no return: a cancel taken before it stops the Get here; one asked for after it
+    // is refused, and the version is installed (or the install refused, leaving nothing).
+    if !stop.commit() {
+        return Err(said(fetch::Error::Cancelled.to_string()));
+    }
+    progress(Progress { done: total, total, installing: true });
     crate::packs::install(&work.0, store, std).map_err(|problems| said(problems.join("; ")))
 }
 
@@ -505,8 +607,9 @@ pub fn sample(
     offer: &Offer,
     into: &Path,
     progress: &mut dyn FnMut(Progress),
-    cancel: &AtomicBool,
+    stop: &Cancel,
 ) -> Result<Sample, String> {
+    let cancel = stop.flag();
     let said = |why: String| format!("Couldn't get {}: {why}", offer.item.label);
     let (Some(file), Some(mut sample)) = (&offer.facts.file, offer.item.sample.clone()) else {
         return Err(said("it isn't a sample".into()));
@@ -519,13 +622,13 @@ pub fn sample(
     let kept = remote.blobs().join(file.sha256.hex());
     let copied = fetch::file_address(&kept)
         .filter(|_| kept.is_file())
-        .is_some_and(|url| fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total }), cancel).is_ok());
+        .is_some_and(|url| fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total, installing: false }), cancel).is_ok());
     if !copied {
         let url = remote.url(&reg::blob_path(&file.sha256));
-        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total }), cancel)
+        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total, installing: false }), cancel)
             .map_err(|e| said(e.to_string()))?;
     }
-    progress(Progress { done: total, total });
+    progress(Progress { done: total, total, installing: false });
     sample.file = dest;
     Ok(sample)
 }

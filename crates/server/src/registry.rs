@@ -62,7 +62,7 @@ impl Fetch {
 /// The Get running: what it gets, and its cancel.
 struct Getting {
     label: String,
-    cancel: Arc<AtomicBool>,
+    cancel: Arc<get::Cancel>,
 }
 
 /// What a Get is asked for: a library item (`id`), or a song's missing locked version (`pack` and
@@ -157,14 +157,14 @@ impl AppState {
     pub fn offers(&self) -> Result<Vec<Offer>> {
         let Some(catalog) = self.catalog() else { return Ok(vec![]) };
         let have = self.have(&self.preview_packages()?);
-        Ok(get::offers(&catalog, &have))
+        Ok(get::offers(&catalog, &have, &|_| false))
     }
 
     /// The library item with id `id` (`library:…`), as the catalog has it now, whether or not this
     /// computer has its pack. Why there is none, in words.
     fn offer(&self, id: &str) -> Result<Offer> {
         let catalog = self.catalog().ok_or_else(|| anyhow!("The library's catalog isn't here yet: try again in a moment."))?;
-        get::offers(&catalog, &|_| None).into_iter().find(|o| o.item.id == id).ok_or_else(|| anyhow!("{id} isn't in the library."))
+        get::offers(&catalog, &|_| None, &|_| false).into_iter().find(|o| o.item.id == id).ok_or_else(|| anyhow!("{id} isn't in the library."))
     }
 
     /// A library item's preview (REG-14): its blob, fetched by its hash and kept by it. Its file.
@@ -182,7 +182,7 @@ impl AppState {
 
     /// Cancel the Get running (REG-15): whether one was.
     pub fn cancel_get(&self) -> bool {
-        self.registry.getting.lock().as_ref().map(|g| g.cancel.store(true, Ordering::Relaxed)).is_some()
+        self.registry.getting.lock().as_ref().is_some_and(|g| g.cancel.cancel())
     }
 
     /// The open song's locked versions that aren't installed (REG-17), each with whether the
@@ -224,7 +224,7 @@ impl AppState {
             bail!("Open a song to add a sample to it.");
         }
         let label = offer.as_ref().map_or_else(|| id.clone(), |o| o.item.label.clone());
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(get::Cancel::default());
         {
             let mut g = self.registry.getting.lock();
             if let Some(other) = g.as_ref() {
