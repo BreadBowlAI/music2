@@ -150,12 +150,22 @@ enum Hosted {
 /// (RENDER-32). A sandbox has one memory, and a box one sandbox (one a package for a voice pool),
 /// so two renderers of p50 hold about 1.2% of the address space. A sealed memory never grows, so it
 /// never moves, and a sandbox keeps its address.
+///
+/// One engine for the process, as wasmtime intends: a module one package set loaded can be played
+/// through any other (a render of a revision plays its view through a copy of the session's set,
+/// and the gates' lab compiles with one set and plays with another). Two engines refuse each
+/// other's modules.
 pub fn engine() -> Engine {
-    let mut config = wasmtime::Config::new();
-    config.cranelift_nan_canonicalization(false);
-    config.wasm_relaxed_simd(false);
-    config.memory_may_move(false);
-    Engine::new(&config).expect("wasmtime engine")
+    static ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+    ENGINE
+        .get_or_init(|| {
+            let mut config = wasmtime::Config::new();
+            config.cranelift_nan_canonicalization(false);
+            config.wasm_relaxed_simd(false);
+            config.memory_may_move(false);
+            Engine::new(&config).expect("wasmtime engine")
+        })
+        .clone()
 }
 
 impl Default for PackageSet {
@@ -737,6 +747,15 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // One engine for the process: a view one set loaded can be played by any other set, as the
+    // gates' lab compiles with one set and plays with another, and a render of a revision plays its
+    // view through a copy of the session's set. Two engines refuse each other's modules.
+    #[test]
+    fn every_set_shares_one_engine() {
+        let (a, b) = (PackageSet::default(), PackageSet::default());
+        assert!(Engine::same(&a.engine, &b.engine), "two package sets, two engines");
+    }
 
     fn manifest(effect: &str) -> Result<PackageSet> {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
