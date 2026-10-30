@@ -9,6 +9,7 @@ pub mod caller;
 pub mod export;
 mod files;
 pub mod graph;
+pub mod library;
 mod peaks;
 pub mod project;
 pub mod recent;
@@ -19,6 +20,7 @@ mod routes_audio;
 mod routes_exchange;
 mod routes_fx;
 mod routes_leases;
+mod routes_library;
 mod routes_mix;
 mod routes_notes;
 mod routes_plugins;
@@ -99,6 +101,8 @@ pub struct AppState {
     /// The installed plugins as the app lists them (gaps #32), once a list was asked for: kept for
     /// the app run, until Look again. Held through a scan, so two asks scan once.
     plugins: Mutex<Option<serde_json::Value>>,
+    /// The previews being made (LIB-3): a second ask for one waits for the first.
+    pub previews: library::Previews,
 }
 
 impl AppState {
@@ -119,6 +123,7 @@ impl AppState {
             settings: OnceLock::new(),
             midi: OnceLock::new(),
             plugins: Mutex::default(),
+            previews: Default::default(),
         }
     }
 

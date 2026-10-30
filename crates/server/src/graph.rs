@@ -50,6 +50,7 @@ mod import;
 mod instrument;
 mod lanes;
 pub mod lease;
+mod library;
 mod markers;
 pub mod meters;
 pub mod midi;
