@@ -389,7 +389,13 @@ fn render_in(song: &Song, packages: &[(String, PathBuf)], work: &Path, out: &Pat
     let mut deps = format!("\"@m2/core\" = \"{}\"\n", wanted(m2_script::SDK_VERSION));
     for (name, dir) in packages {
         let p = set.load(dir).with_context(|| format!("loading the {name} package"))?;
-        deps += &format!("{} = \"{}\"\n", serde_json::to_string(name)?, wanted(&p.version));
+        // A pack from its folder, as the song's build found it (PACK-7): the preview's song has no
+        // lock, and the folder may be a path pack's, not the store's.
+        let wants = match name.as_str() {
+            m2_song::pack::STD => format!("\"{}\"", wanted(&p.version)),
+            _ => format!("{{ path = {} }}", serde_json::to_string(&dir.to_string_lossy())?),
+        };
+        deps += &format!("{} = {wants}\n", serde_json::to_string(name)?);
     }
     let manifest = format!("[project]\nname = \"Preview\"\nformat = 1\nsample_rate = {RATE}\n\n[dependencies]\n{deps}");
     for (path, text) in std::iter::once((&"music2.toml".to_string(), &manifest)).chain(&song.files) {

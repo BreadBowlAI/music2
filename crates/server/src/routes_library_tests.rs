@@ -257,7 +257,7 @@ fn a_packs_instrument_plays_from_its_pack() {
     let scratch = Scratch::new("pack");
     let acme = scratch.0.join("acme");
     std::fs::create_dir_all(acme.join("src")).unwrap();
-    std::fs::write(acme.join("m2pkg.toml"), "[package]\nname = \"acme\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(acme.join("m2pkg.toml"), "[package]\nname = \"@acme/tones\"\nversion = \"0.1.0\"\n").unwrap();
     std::fs::write(
         acme.join("src/keys.ts"),
         r#"import { component, port, signature, type Audio, type Events } from "@m2/core";
@@ -279,11 +279,11 @@ export const bell = component(
 "#,
     )
     .unwrap();
-    let packages = [std_only(), vec![("acme".to_string(), acme.clone())]].concat();
+    let packages = [std_only(), vec![("@acme/tones".to_string(), acme.clone())]].concat();
     let cache = scratch.0.join("cache");
-    let made = preview(&Previews::default(), "acme:bell", &packages, None, &cache).unwrap_or_else(|e| panic!("{e:#}"));
+    let made = preview(&Previews::default(), "@acme/tones:bell", &packages, None, &cache).unwrap_or_else(|e| panic!("{e:#}"));
     assert!(made.rendered && made.wav.len() > 800_000, "{} bytes", made.wav.len());
     // Its package changed: rendered anew.
     std::fs::write(acme.join("src/keys.ts"), std::fs::read_to_string(acme.join("src/keys.ts")).unwrap() + "// changed\n").unwrap();
-    assert!(preview(&Previews::default(), "acme:bell", &packages, None, &cache).unwrap().rendered);
+    assert!(preview(&Previews::default(), "@acme/tones:bell", &packages, None, &cache).unwrap().rendered);
 }
