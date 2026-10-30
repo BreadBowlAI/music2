@@ -10,7 +10,9 @@
 //! tag, a word of the description) and meets every filter typed (a kind, `loop`, `one-shot`, a
 //! tempo, a key), ranked: the label itself, then a label that starts with what was typed, then by
 //! each item's weakest word; then std's and ours before yours, before plugins; then by kind, label
-//! and id. The same list and words give the same order every time.
+//! and id. What is typed is split into words as an item's text is ([`words_of`]), and a kind or a
+//! sample's type typed also finds a label that has that word. The same list and words give the
+//! same order every time.
 //!
 //! Previews (LIB-3) are in [`preview`].
 
@@ -169,8 +171,14 @@ pub struct Item {
     /// Adding it makes a new track: it plays notes (an instrument, an instrument plugin, a sound of
     /// an instrument).
     pub instrument: bool,
-    /// It has a preview (LIB-3): not a plugin, a plugin's preset or the song's own code.
+    /// It goes on a track's sound: an effect, an effect plugin, a sound of an effect.
+    pub effect: bool,
+    /// It has a preview (LIB-3): not a plugin, a plugin's preset, the song's own code or an
+    /// instrument that plays a file you give it ([`preview::none_for`]).
     pub preview: bool,
+    /// Why it has none, in words, when it has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_preview: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<PresetOf>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -259,10 +267,12 @@ fn components(catalog: &Catalog) -> Vec<Item> {
             category,
             description: d.editor.description.clone(),
             tags,
-            preview: package != "song",
+            preview: preview::none_for(d).is_none(),
+            no_preview: preview::none_for(d),
             package,
             component: d.id.clone(),
             instrument: kind == Kind::Instrument,
+            effect: kind == Kind::Effect,
             preset: None,
             sample: None,
         });
@@ -287,7 +297,13 @@ fn sounds(src: &Sources, components: &[Item]) -> Vec<Item> {
                 package: from.to_string(),
                 component: of.component.clone(),
                 instrument: of.instrument,
+                effect: of.effect,
                 preview: of.preview,
+                no_preview: if of.kind == Kind::Plugin {
+                    Some("A plugin's sounds have no preview yet.".into())
+                } else {
+                    of.no_preview.clone()
+                },
                 preset: Some(PresetOf { from: from.to_string(), name: l.name }),
                 sample: None,
             });
@@ -316,7 +332,9 @@ fn sounds(src: &Sources, components: &[Item]) -> Vec<Item> {
                     package: "plugin".into(),
                     component: sound.clone(),
                     instrument: false,
+                    effect: false,
                     preview: false,
+                    no_preview: Some("Plugins have no preview yet.".into()),
                     preset: None,
                     sample: None,
                 })
@@ -377,7 +395,9 @@ fn plugins(list: &[Plugin]) -> Vec<Item> {
                 package: "plugin".into(),
                 component: p.id.clone(),
                 instrument: p.instrument,
+                effect: p.effect,
                 preview: false,
+                no_preview: Some("Plugins have no preview yet.".into()),
                 preset: None,
                 sample: None,
             }
@@ -385,24 +405,46 @@ fn plugins(list: &[Plugin]) -> Vec<Item> {
         .collect()
 }
 
+impl Item {
+    /// Whether it is of `kind`: a plugin is an instrument or an effect too, by what it plays.
+    fn is(&self, kind: Kind) -> bool {
+        self.kind == kind
+            || self.kind == Kind::Plugin
+                && match kind {
+                    Kind::Instrument => self.instrument,
+                    Kind::Effect => self.effect,
+                    _ => false,
+                }
+    }
+}
+
 /// What was typed: the words, and the filters among them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Query {
-    /// Lowercase, in the order typed.
+    /// The words to find: lowercase, split as an item's text is ([`words_of`]), in the order typed.
     pub words: Vec<String>,
     /// The kinds named (`effects`): any of them. None named: every kind.
     pub kinds: Vec<Kind>,
+    /// The words that named them, as typed: a label with one of them meets the filter too.
+    pub kind_words: Vec<String>,
     pub sample: Option<SampleType>,
+    /// The word that named the sample's type (`loop`): a label with it meets the filter too.
+    pub sample_word: Option<String>,
     pub bpm: Option<f64>,
     pub key: Option<Key>,
+    /// Every word typed, filters too, split as `words` is: the whole query a label may be.
+    pub all: Vec<String>,
+    /// What was typed, lowercase, its spaces made one: an item's whole id finds it.
+    pub text: String,
 }
 
 impl Query {
     /// Read what was typed (LIB-1): a kind (`effects`), `loop` or `one-shot`, a tempo (`90 bpm`,
-    /// `90bpm`) and a key (`Am`, `F#`, `C major`) are filters; every other word is a word.
+    /// `90bpm`) and a key (`Am`, `F#`, `C major`) are filters, each a word between spaces; the rest
+    /// is split into words as an item's text is, so `hi-hat` is `hi` and `hat`.
     pub fn parse(text: &str) -> Query {
-        let mut q = Query::default();
         let tokens: Vec<&str> = text.split_whitespace().collect();
+        let mut q = Query { all: words_of(text).collect(), text: tokens.join(" ").to_lowercase(), ..Query::default() };
         let mut i = 0;
         while i < tokens.len() {
             let (t, next) = (tokens[i], tokens.get(i + 1).map(|n| n.to_lowercase()));
@@ -413,10 +455,13 @@ impl Query {
                 if !q.kinds.contains(&k) {
                     q.kinds.push(k);
                 }
+                q.kind_words.push(lower);
             } else if matches!(lower.as_str(), "loop" | "loops") {
                 q.sample = Some(SampleType::Loop);
+                q.sample_word = Some(lower);
             } else if matches!(lower.as_str(), "one-shot" | "one-shots" | "oneshot" | "oneshots") {
                 q.sample = Some(SampleType::OneShot);
+                q.sample_word = Some(lower);
             } else if let Some(n) = lower.strip_suffix("bpm").and_then(number) {
                 q.bpm = Some(n);
             } else if let (Some(n), Some("bpm")) = (number(&lower), next.as_deref()) {
@@ -428,7 +473,7 @@ impl Query {
             } else if let Some(k) = Key::parse(t) {
                 q.key = Some(k);
             } else {
-                q.words.push(lower);
+                q.words.extend(words_of(t));
             }
         }
         q
@@ -439,54 +484,62 @@ impl Query {
         *self == Query::default()
     }
 
-    /// Whether `item` meets every filter.
-    fn admits(&self, item: &Item) -> bool {
-        if !self.kinds.is_empty() && !self.kinds.contains(&item.kind) {
+    /// Whether `item`, whose label's words are `label`, meets every filter. A kind or a sample's
+    /// type is met by the item's own, or by a label that has the word that named it.
+    fn admits(&self, item: &Item, label: &[String]) -> bool {
+        let named = |typed: &str| words_of(typed).all(|w| label.iter().any(|x| x.starts_with(&w)));
+        if !self.kinds.is_empty() && !self.kinds.iter().any(|&k| item.is(k)) && !self.kind_words.iter().any(|w| named(w)) {
             return false;
         }
-        if self.sample.is_none() && self.bpm.is_none() && self.key.is_none() {
+        if let Some(t) = self.sample
+            && item.sample.as_ref().is_none_or(|s| s.kind != t)
+            && !self.sample_word.as_deref().is_some_and(named)
+        {
+            return false;
+        }
+        if self.bpm.is_none() && self.key.is_none() {
             return true;
         }
         let Some(s) = &item.sample else { return false };
-        self.sample.is_none_or(|t| t == s.kind)
-            && self.bpm.is_none_or(|b| s.bpm.is_some_and(|x| (x - b).abs() < 0.5))
-            && self.key.is_none_or(|k| s.key == Some(k))
+        self.bpm.is_none_or(|b| s.bpm.is_some_and(|x| (x - b).abs() < 0.5)) && self.key.is_none_or(|k| s.key == Some(k))
     }
 }
 
-/// The words of `text`, lowercase: its runs of letters and digits.
+/// The words of `text`, lowercase: its runs of letters and digits. What is typed and an item's
+/// text are split alike.
 fn words_of(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase)
 }
 
-/// Where `item` matches `q`'s words, as a rank, lower first: 0 the whole query is its label, 1 its
-/// label starts with it; else its weakest word's: 2 a word of the label, 3 inside the label, 4 a
-/// tag, 5 a word of the description. None when a word matches nothing.
-fn place(item: &Item, words: &[String]) -> Option<u8> {
-    if words.is_empty() {
+/// Where `item`, whose label's words are `label`, matches `q`, as a rank, lower first: 0 its whole
+/// id was typed, or the whole query is its label, 1 its label starts with it; else its weakest
+/// word's: 2 a word of the label, 3 inside the label, 4 a tag, 5 a word of the description (2 with
+/// no words, only filters). None when a word matches nothing. The query and the label are compared
+/// word for word, so their punctuation doesn't count.
+fn place(item: &Item, q: &Query, label: &[String]) -> Option<u8> {
+    if !q.text.is_empty() && item.id.to_lowercase() == q.text {
         return Some(0);
     }
-    let label = item.label.to_lowercase();
-    let typed = words.join(" ");
-    if label == typed {
+    let label = label.join(" ");
+    let (typed, all) = (q.words.join(" "), q.all.join(" "));
+    if !typed.is_empty() && label == typed || !all.is_empty() && label == all {
         return Some(0);
     }
-    if label.starts_with(&typed) {
+    if !typed.is_empty() && label.starts_with(&typed) || !all.is_empty() && label.starts_with(&all) {
         return Some(1);
     }
-    let label_words: Vec<String> = words_of(&item.label).collect();
+    let label_words: Vec<&str> = label.split(' ').collect();
     let tag_words: Vec<String> = item.tags.iter().flat_map(|t| words_of(t)).collect();
     let described: Vec<String> = words_of(&item.description).collect();
-    let starts = |list: &[String], w: &str| list.iter().any(|x| x.starts_with(w));
     let mut worst = 2;
-    for w in words {
-        let at = if starts(&label_words, w) {
+    for w in &q.words {
+        let at = if label_words.iter().any(|x| x.starts_with(w.as_str())) {
             2
         } else if label.contains(w.as_str()) {
             3
-        } else if starts(&tag_words, w) {
+        } else if tag_words.iter().any(|x| x.starts_with(w.as_str())) {
             4
-        } else if starts(&described, w) {
+        } else if described.iter().any(|x| x.starts_with(w.as_str())) {
             5
         } else {
             return None;
@@ -510,7 +563,14 @@ fn origin(package: &str) -> u8 {
 /// The items `q` finds, best first (LIB-1): each meets every filter and has every word somewhere;
 /// by [`place`], then [`origin`], kind, label and id.
 pub fn search<'a>(items: &'a [Item], q: &Query) -> Vec<&'a Item> {
-    let mut found: Vec<(u8, &Item)> = items.iter().filter(|i| q.admits(i)).filter_map(|i| Some((place(i, &q.words)?, i))).collect();
+    let mut found: Vec<(u8, &Item)> = items
+        .iter()
+        .filter_map(|i| {
+            let label: Vec<String> = words_of(&i.label).collect();
+            q.admits(i, &label).then_some(())?;
+            Some((place(i, q, &label)?, i))
+        })
+        .collect();
     found.sort_by(|(a, x), (b, y)| {
         (a, origin(&x.package), x.kind, x.label.to_lowercase(), &x.label, &x.id).cmp(&(
             b,

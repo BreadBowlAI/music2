@@ -5,9 +5,10 @@
 //! [`song`] writes the song: a phrase chosen by the item's category (a beat for drums, a line for a
 //! bass or a lead, four chords for the rest), played by the item with a sound's preset values; an
 //! effect plays a pluck and a drum kit, the first bar dry and the second through it. [`render`]
-//! renders it in a folder of the cache, never a project, and writes the preview: 16-bit stereo at
-//! 48 kHz, brought to one loudness ([`level`]). [`fingerprint`] is the hash of what it renders, by
-//! which the server keeps it.
+//! renders it in a folder of the cache, never a project, on a thread of its own at background
+//! priority, and writes the preview: 16-bit stereo at 48 kHz, brought to one loudness ([`level`],
+//! measured by [`loudness`] as ITU-R BS.1770 does). [`fingerprint`] is the hash of what it renders
+//! and of what renders it, by which the server keeps it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, bail};
 use m2_runtime::PackageSet;
 use m2_script::Catalog;
-use m2_script::component::Descriptor;
+use m2_script::component::{Descriptor, SettingKind};
 use m2_song::Project;
 
 use super::{Item, Kind};
@@ -28,9 +29,9 @@ pub const SECONDS: f64 = 4.5;
 const FADE: f64 = 0.25;
 /// Its sample rate.
 pub const RATE: u32 = 48_000;
-/// The loudness every preview is brought to: this RMS, in dBFS…
-pub const RMS_DB: f64 = -18.0;
-/// …unless a peak would go above this.
+/// The loudness every preview is brought to, as [`loudness`] measures it (EBU R 128's)…
+pub const LUFS: f64 = -23.0;
+/// …unless a peak would go above this, in dBFS.
 pub const PEAK_DB: f64 = -1.0;
 
 /// A preview's song: its files, by path in the song's folder, but its manifest, which [`render`]
@@ -160,8 +161,22 @@ fn options(d: &Descriptor, values: &BTreeMap<String, f64>) -> String {
 const ARRANGEMENT: &str = "{\n  \"tempo\": [{\"beat\": 0, \"bpm\": 120}],\n  \"meter\": []\n}\n";
 const IMPORTS: &str = "import { song, track } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\n";
 
+/// Why component `d` has no preview, in words, if it has none: the song's own code (a preview renders
+/// outside the song), or an instrument that plays a file you give it (an asset setting, as the
+/// Sampler's), which a preview has none to give, so it would be silence.
+pub fn none_for(d: &Descriptor) -> Option<String> {
+    if !d.id.contains(':') {
+        return Some(format!("{} is the song's own, so it has no preview here.", d.label));
+    }
+    if d.settings.iter().any(|s| matches!(s.kind, SettingKind::Asset | SettingKind::Keymap)) {
+        return Some(format!("{} plays a file you give it, so it has no preview.", d.label));
+    }
+    None
+}
+
 /// The song `item`'s preview renders, with `values` (a sound's preset) written into its call; or
-/// why it has none, in words: a plugin, a plugin's preset and the song's own code have none.
+/// why it has none, in words: a plugin, a plugin's preset, the song's own code and an instrument
+/// that plays a file you give it have none.
 pub fn song(item: &Item, catalog: &Catalog, values: &BTreeMap<String, f64>) -> Result<Song, String> {
     if item.kind == Kind::Plugin {
         return Err("Plugins have no preview yet.".into());
@@ -169,10 +184,14 @@ pub fn song(item: &Item, catalog: &Catalog, values: &BTreeMap<String, f64>) -> R
     if item.component.starts_with("clap:") {
         return Err("A plugin's sounds have no preview yet.".into());
     }
+    let d = catalog.components.get(&item.component);
+    if let Some(why) = d.and_then(|d| none_for(d)) {
+        return Err(why);
+    }
     if !item.preview {
         return Err(format!("{} is the song's own, so it has no preview here.", item.label));
     }
-    let d = catalog.components.get(&item.component).ok_or_else(|| format!("{} isn't there any more.", item.label))?;
+    let d = d.ok_or_else(|| format!("{} isn't there any more.", item.label))?;
     let (import, call) = imported(catalog, &d.id, "item")?;
     let opts = options(d, values);
     let mut files = BTreeMap::new();
@@ -233,11 +252,23 @@ fn package_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// The hash of what a preview renders: how it renders, its song's files, and each file of the
-/// packages it loads (their manifests, kernels and code). A changed preset or package gives another.
+/// The hash of what a preview renders and of what renders it: how it renders, music2's version and
+/// its SDK's ([`made_by`]), its song's files, and each file of the packages it loads (their
+/// manifests, kernels and code). A changed preset, package or music2 gives another.
 pub fn fingerprint(song: &Song, packages: &[(String, PathBuf)]) -> m2_song::Sha {
+    fingerprint_by(song, packages, &made_by())
+}
+
+/// What renders a preview: music2's version, and the version of the SDK (`@m2/core`) its song is
+/// built with: `music2 0.1.0, @m2/core 1.0.0`.
+pub fn made_by() -> String {
+    format!("music2 {}, @m2/core {}", env!("CARGO_PKG_VERSION"), m2_script::SDK_VERSION)
+}
+
+/// [`fingerprint`], with `by` for what renders it.
+pub fn fingerprint_by(song: &Song, packages: &[(String, PathBuf)], by: &str) -> m2_song::Sha {
     let mut all: Vec<u8> =
-        format!("m2 preview: {SECONDS} s at {RATE} Hz, {RMS_DB} dB RMS, {PEAK_DB} dB peak, {FADE} s fade\n").into_bytes();
+        format!("m2 preview by {by}: {SECONDS} s at {RATE} Hz, {LUFS} LUFS, {PEAK_DB} dB peak, {FADE} s fade\n").into_bytes();
     for (path, text) in &song.files {
         all.extend(format!("{path}\0{}\0", text.len()).bytes());
         all.extend(text.bytes());
@@ -253,18 +284,16 @@ pub fn fingerprint(song: &Song, packages: &[(String, PathBuf)]) -> m2_song::Sha 
     m2_song::Sha::of(&all)
 }
 
-/// Bring interleaved stereo `samples` to one loudness: an RMS of [`RMS_DB`], or less where a peak
-/// would pass [`PEAK_DB`]; then fade the last [`FADE`] seconds out to silence. Silence stays silent.
-pub fn level(samples: &mut [f32]) {
-    let n = samples.len().max(1) as f64;
-    let rms = (samples.iter().map(|&s| s as f64 * s as f64).sum::<f64>() / n).sqrt();
+/// Bring interleaved stereo `samples` at [`RATE`] to one loudness: [`LUFS`], or less where a peak
+/// would pass [`PEAK_DB`] (a sound of short, sharp hits); then fade the last [`FADE`] seconds out to
+/// silence. Silence, or a sound too quiet to measure, is no preview: said in words.
+pub fn level(samples: &mut [f32]) -> Result<()> {
+    let Some(loud) = loudness(samples) else { bail!("it made no sound, so it has no preview") };
     let peak = samples.iter().fold(0f64, |m, &s| m.max((s as f64).abs()));
-    if rms > 0.0 {
-        let db = |d: f64| 10f64.powf(d / 20.0);
-        let gain = (db(RMS_DB) / rms).min(db(PEAK_DB) / peak);
-        for s in samples.iter_mut() {
-            *s = (*s as f64 * gain) as f32;
-        }
+    let db = |d: f64| 10f64.powf(d / 20.0);
+    let gain = db(LUFS - loud).min(db(PEAK_DB) / peak);
+    for s in samples.iter_mut() {
+        *s = (*s as f64 * gain) as f32;
     }
     let frames = samples.len() / 2;
     let fade = ((FADE * RATE as f64) as usize).min(frames);
@@ -275,6 +304,45 @@ pub fn level(samples: &mut [f32]) {
         samples[at] *= g;
         samples[at + 1] *= g;
     }
+    Ok(())
+}
+
+/// The integrated loudness of interleaved stereo `samples` at [`RATE`], in LUFS, as ITU-R BS.1770-4
+/// measures it: K-weighted, in blocks of 400 ms that overlap by 300, gated at −70 LUFS and then at
+/// 10 LU under the loudness of the blocks left. None when every block is under −70: silence.
+pub fn loudness(samples: &[f32]) -> Option<f64> {
+    // K-weighting at 48 kHz: a high shelf, then a high-pass (BS.1770-4, table 1 and table 2).
+    const SHELF: ([f64; 3], [f64; 2]) = ([1.53512485958697, -2.69169618940638, 1.19839281085285], [-1.69065929318241, 0.73248077421585]);
+    const HIGH: ([f64; 3], [f64; 2]) = ([1.0, -2.0, 1.0], [-1.99004745483398, 0.99007225036621]);
+    let frames = samples.len() / 2;
+    let weighted = |channel: usize| -> Vec<f64> {
+        let mut out: Vec<f64> = (0..frames).map(|i| samples[i * 2 + channel] as f64).collect();
+        for (b, a) in [SHELF, HIGH] {
+            let (mut x1, mut x2, mut y1, mut y2) = (0.0, 0.0, 0.0, 0.0);
+            for v in out.iter_mut() {
+                let y = b[0] * *v + b[1] * x1 + b[2] * x2 - a[0] * y1 - a[1] * y2;
+                (x2, x1, y2, y1) = (x1, *v, y1, y);
+                *v = y;
+            }
+        }
+        out
+    };
+    let (left, right) = (weighted(0), weighted(1));
+    let (block, hop) = (RATE as usize * 4 / 10, RATE as usize / 10);
+    let powers: Vec<f64> = (0..)
+        .map(|n| n * hop)
+        .take_while(|at| at + block <= frames)
+        .map(|at| (at..at + block).map(|i| left[i] * left[i] + right[i] * right[i]).sum::<f64>() / block as f64)
+        .collect();
+    let lufs = |power: f64| -0.691 + 10.0 * power.log10();
+    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+    let heard: Vec<f64> = powers.into_iter().filter(|&p| p > 0.0 && lufs(p) > -70.0).collect();
+    if heard.is_empty() {
+        return None;
+    }
+    let gate = lufs(mean(&heard)) - 10.0;
+    let kept: Vec<f64> = heard.into_iter().filter(|&p| lufs(p) > gate).collect();
+    Some(lufs(mean(&kept)))
 }
 
 /// A version as a manifest asks for it: `1` of `1.4.0`, `0.4` of `0.4.0`.
@@ -288,12 +356,32 @@ fn wanted(version: &str) -> String {
 
 /// Render `song` with `packages` loaded, in `work` (a folder of the cache, made here and removed
 /// after), and write the preview to `out`: 16-bit stereo at [`RATE`], [`SECONDS`] long, through a
-/// part file renamed into place. A pure render, so the same song and packages give the same bits.
+/// part file renamed into place, which goes if anything fails. A pure render, so the same song and
+/// packages give the same bits. It builds and renders on a thread of its own at background
+/// priority, as an export's workers do beside playback (AGENT-7), and waits for it.
 pub fn render(song: &Song, packages: &[(String, PathBuf)], work: &Path, out: &Path) -> Result<()> {
-    let _ = std::fs::remove_dir_all(work);
-    let result = render_in(song, packages, work, out);
-    let _ = std::fs::remove_dir_all(work);
-    result
+    std::thread::scope(|s| {
+        let made = std::thread::Builder::new().name("music2-preview".into()).spawn_scoped(s, || {
+            // Never fatal: a thread the OS won't lower renders as it is.
+            let _ = m2_os::thread::background();
+            let _ = std::fs::remove_dir_all(work);
+            let result = render_in(song, packages, work, out);
+            let _ = std::fs::remove_dir_all(work);
+            result
+        })?;
+        made.join().map_err(|_| anyhow!("the preview's render stopped"))?
+    })
+}
+
+/// A file being written, removed when dropped unless kept: a write that fails leaves nothing.
+struct Part<'a>(&'a Path, bool);
+
+impl Drop for Part<'_> {
+    fn drop(&mut self) {
+        if !self.1 {
+            let _ = std::fs::remove_file(self.0);
+        }
+    }
 }
 
 fn render_in(song: &Song, packages: &[(String, PathBuf)], work: &Path, out: &Path) -> Result<()> {
@@ -324,19 +412,19 @@ fn render_in(song: &Song, packages: &[(String, PathBuf)], work: &Path, out: &Pat
         hound::SampleFormat::Int => reader.samples::<i32>().map(|s| s.map(|s| s as f32 / full)).collect::<Result<_, _>>()?,
         hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<_, _>>()?,
     };
-    level(&mut samples);
+    level(&mut samples)?;
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let part = out.with_extension(format!("wav.{}.part", std::process::id()));
+    let mut guard = Part(&part, false);
     let spec = hound::WavSpec { channels: 2, sample_rate: RATE, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
     let mut w = hound::WavWriter::create(&part, spec)?;
     for s in samples {
         w.write_sample((s * 32767.0).round().clamp(-32768.0, 32767.0) as i16)?;
     }
     w.finalize()?;
-    std::fs::rename(&part, out).inspect_err(|_| {
-        let _ = std::fs::remove_file(&part);
-    })?;
+    std::fs::rename(&part, out)?;
+    guard.1 = true;
     Ok(())
 }
