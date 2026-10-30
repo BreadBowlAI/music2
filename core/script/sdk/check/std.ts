@@ -3,7 +3,7 @@
 // controls left out written back in, positionally or in the options object (D5). A line that
 // should fail carries `@ts-expect-error`, so a type that stops refusing it fails the check too.
 
-import { db, hz, khz, ms, secs, semis, type Audio, type Control, type Events, type Signal } from "@m2/core";
+import { db, hz, khz, ms, secs, semis, type Audio, type Control, type Events, type Region, type Signal } from "@m2/core";
 import { choose, lfo, when } from "std/control";
 import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
@@ -17,6 +17,16 @@ import { sampler } from "std/sampler";
 import { mono, synth } from "std/synth";
 
 declare const x: Audio, notes: Events, beats: Control<"beats">, l: Control<"unit01">, pitch: Control<"semitones">, s: Signal;
+
+// Regions made by a helper, or kept in a `const`, as a sample map of many files is written: a pair
+// is then a list of two numbers, not a pair, and still type-checks. A trigger kept in a `const` is
+// a string, unless the const says it holds regions.
+const take = (file: string, key: number, of: number, position: number) => ({ file, root: key, keys: [key - 1, key + 1], round_robin: [position, of] });
+const piano = [
+  { file: "C4-soft.wav", velocity: [1, 80], loop: [100, 4000] },
+  { file: "C4-hard.wav", velocity: [81, 127] },
+];
+const keyUps: Region[] = [{ file: "C4-up.wav", trigger: "release", keys: [0, 127] }];
 
 // The generic helpers keep their kinds; the others say what they return.
 export const audio: Audio[] = [add(x, x), scale(x, 0.5), scale(x), blend(x, x, l), sum(x, x, x), when(l, x), choose(l, x, x)];
@@ -87,6 +97,8 @@ export const instruments: Audio[] = [
       { file: "pad.wav", root: 55, loop: [2400, 5399] },
     ],
   }),
+  sampler(notes, { regions: [take("C4-1.wav", 60, 2, 1), take("C4-2.wav", 60, 2, 2), ...piano, ...keyUps] }),
+  sampler(notes, { regions: piano }),
   // @ts-expect-error: a region needs a file.
   sampler(notes, { regions: [{ root: 60 }] }),
   // @ts-expect-error: a trigger is "attack" or "release".

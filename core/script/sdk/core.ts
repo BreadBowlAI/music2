@@ -337,7 +337,8 @@ function keymap(v: unknown): boolean {
 
 /**
  * One region of a sampler's `regions` (PKG-15): which recording plays for which notes, how hard, in
- * which turn and when. Only `file` must be given.
+ * which turn and when. Only `file` must be given. A pair is two numbers: typed as a list, so a
+ * region made by a helper or kept in a `const` type-checks, and the build refuses any other length.
  */
 export type Region = {
   /** The recording, a file in `assets/`. */
@@ -345,15 +346,15 @@ export type Region = {
   /** The MIDI note it was recorded at, 0 to 127. Left out, 60. */
   root?: number;
   /** `[lowest, highest]`: the notes it plays. Left out, its root alone when `root` is given, else every note. */
-  keys?: readonly [number, number];
+  keys?: readonly number[];
   /** `[lowest, highest]`: how hard, 1 to 127. Left out, every velocity. */
-  velocity?: readonly [number, number];
-  /** `[position, of]`: it is take `position` of `of`, played in turn. Left out, `[1, 1]`. */
-  round_robin?: readonly [number, number];
+  velocity?: readonly number[];
+  /** `[position, of]`: it is take `position` of `of`, played in turn; takes 1 to `of` must all be there. Left out, `[1, 1]`. */
+  round_robin?: readonly number[];
   /** `"attack"` plays when the note starts (the default), `"release"` when it ends. */
   trigger?: "attack" | "release";
   /** `[start, end]`: frames of the file it loops while the note is held, both played. */
-  loop?: readonly [number, number];
+  loop?: readonly number[];
   /** Cents, -2400 to 2400. */
   tune?: number;
   /** dB, -120 to 24. */
@@ -376,6 +377,48 @@ function checkRegions(v: unknown): string | undefined {
   for (let i = 0; i < v.length; i++) {
     const wrong = regionProblem(v[i]);
     if (wrong) return `: region ${i + 1}: ${wrong}`;
+  }
+  const turns = turnsProblem(v as Region[]);
+  return turns && `: ${turns}`;
+}
+
+/**
+ * What is wrong with the regions' turns, if anything (PKG-15): wherever a note and velocity are
+ * played by regions of one trigger whose round robin is of `n` takes (`n` > 1), there must be a
+ * region for each take from 1 to `n`, else that turn plays nothing there. Groups of different `n`
+ * on one note, each whole, are layers that take turns apart. Only the notes and velocities where
+ * the regions that play change are looked at, lowest first, so a sample map of thousands is quick.
+ */
+function turnsProblem(regions: readonly Region[]): string | undefined {
+  type Take = { n: number; release: boolean; position: number; of: number; keys: readonly number[]; velocity: readonly number[] };
+  const takes: Take[] = [];
+  regions.forEach((r, i) => {
+    const [position, of] = r.round_robin ?? [1, 1];
+    const root = r.root ?? 60;
+    const keys = r.keys ?? (r.root === undefined ? [0, 127] : [root, root]);
+    if (of > 1) takes.push({ n: i + 1, release: r.trigger === "release", position, of, keys, velocity: r.velocity ?? [1, 127] });
+  });
+  // The lowest of each run of values whose takes are the same: each range's lowest, and the value after its highest.
+  const edges = (ranges: (readonly number[])[]) => [...new Set(ranges.flatMap(([lo, hi]) => [lo, hi + 1]))].sort((a, b) => a - b);
+  for (const key of edges(takes.map((t) => t.keys))) {
+    const onKey = takes.filter((t) => t.keys[0] <= key && key <= t.keys[1]);
+    for (const velocity of edges(onKey.map((t) => t.velocity))) {
+      // Each group here (its trigger and `of`), with its first region and the takes it has.
+      const groups = new Map<string, { first: Take; has: Set<number> }>();
+      for (const t of onKey) {
+        if (velocity < t.velocity[0] || velocity > t.velocity[1]) continue;
+        const g = groups.get(`${t.release} ${t.of}`) ?? { first: t, has: new Set<number>() };
+        g.has.add(t.position);
+        groups.set(`${t.release} ${t.of}`, g);
+      }
+      for (const { first, has } of groups.values()) {
+        for (let p = 1; p <= first.of; p++) {
+          if (has.has(p)) continue;
+          const which = first.release ? "release region" : "region";
+          return `region ${first.n}: round_robin [${first.position}, ${first.of}]: no ${which} is take ${p} of ${first.of} on note ${key} at velocity ${velocity}, so that turn plays nothing there`;
+        }
+      }
+    }
   }
   return undefined;
 }

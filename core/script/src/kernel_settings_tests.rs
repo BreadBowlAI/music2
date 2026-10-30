@@ -106,8 +106,10 @@ fn regions_player(call: &str) -> Result<Build, Vec<Diagnostic>> {
 fn regions_settings_are_checked() {
     let full = "{ file: \"b.wav\", root: 36, keys: [30, 40], velocity: [1, 64], round_robin: [2, 2], trigger: \"release\", \
                 loop: [10, 20], tune: -50, volume: -3.5, pan: 0.5, offset: 100 }";
-    let b = regions_player(&format!("{{ regions: [{{ file: \"a.wav\" }}, {full}] }}")).unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(settings_of(&b), (vec!["a.wav".into(), "b.wav".into()], vec![-1.0, 36.0]));
+    // With its other take (round robin's takes must all be there).
+    let other = "{ file: \"c.wav\", root: 36, keys: [30, 40], velocity: [1, 64], round_robin: [1, 2], trigger: \"release\" }";
+    let b = regions_player(&format!("{{ regions: [{{ file: \"a.wav\" }}, {full}, {other}] }}")).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(settings_of(&b), (vec!["a.wav".into(), "b.wav".into(), "c.wav".into()], vec![-1.0, 36.0, 36.0]));
     let d = b.components.iter().find(|d| d.id == "player").expect("its descriptor");
     let s = &d.settings[0];
     assert_eq!((s.name.as_str(), s.kind, s.default.clone()), ("regions", component::SettingKind::Regions, Some(serde_json::json!([]))));
@@ -168,6 +170,102 @@ fn regions_settings_are_checked() {
     ] {
         let e = regions_player(call).err().unwrap_or_else(|| panic!("{call} builds"));
         assert!(e.iter().any(|d| d.message.contains(says)), "{call}: {e:?}");
+    }
+}
+
+// PKG-15: wherever a note and velocity are played by regions of one trigger whose round_robin is of
+// n takes, there is a region for each take from 1 to n; else that turn plays nothing there, which
+// no one hears until the nth hit. Groups of different n, each whole, are layers that take turns
+// apart, and play on every turn.
+#[test]
+fn round_robin_groups_must_have_every_take() {
+    let rr = |p: u32, of: u32| format!("round_robin: [{p}, {of}]");
+    for (regions, says) in [
+        // A take left out: every third note is silence.
+        (
+            format!("{{ file: \"a.wav\", {} }}, {{ file: \"b.wav\", {} }}", rr(1, 3), rr(2, 3)),
+            "region 1: round_robin [1, 3]: no region is take 3 of 3 on note 0 at velocity 1, so that turn plays nothing there",
+        ),
+        // Takes of 2 beside takes of 3 on one note: neither group is whole.
+        (
+            format!("{{ file: \"a.wav\", {} }}, {{ file: \"b.wav\", {} }}", rr(1, 2), rr(2, 3)),
+            "region 1: round_robin [1, 2]: no region is take 2 of 2 on note 0 at velocity 1",
+        ),
+        // A kit on one lane: the kick has both takes, the snare one.
+        (
+            format!(
+                "{{ file: \"k1.wav\", root: 36, {} }}, {{ file: \"k2.wav\", root: 36, {} }}, {{ file: \"s1.wav\", root: 38, {} }}",
+                rr(1, 2),
+                rr(2, 2),
+                rr(1, 2)
+            ),
+            "region 3: round_robin [1, 2]: no region is take 2 of 2 on note 38 at velocity 1",
+        ),
+        // A loud layer with one take, above soft ones with two.
+        (
+            format!(
+                "{{ file: \"s1.wav\", velocity: [1, 80], {} }}, {{ file: \"s2.wav\", velocity: [1, 80], {} }}, {{ file: \"h1.wav\", velocity: [81, 127], {} }}",
+                rr(1, 2),
+                rr(2, 2),
+                rr(1, 2)
+            ),
+            "region 3: round_robin [1, 2]: no region is take 2 of 2 on note 0 at velocity 81",
+        ),
+        // Take 2 covers only some of take 1's keys.
+        (
+            format!("{{ file: \"a.wav\", keys: [60, 72], {} }}, {{ file: \"b.wav\", keys: [60, 65], {} }}", rr(1, 2), rr(2, 2)),
+            "region 1: round_robin [1, 2]: no region is take 2 of 2 on note 66 at velocity 1",
+        ),
+        // A release take doesn't fill an attack's turn, nor the other way round.
+        (
+            format!("{{ file: \"a.wav\", {} }}, {{ file: \"b.wav\", trigger: \"release\", {} }}", rr(1, 2), rr(2, 2)),
+            "region 1: round_robin [1, 2]: no region is take 2 of 2 on note 0 at velocity 1",
+        ),
+        (
+            format!("{{ file: \"a.wav\" }}, {{ file: \"up1.wav\", trigger: \"release\", {} }}", rr(1, 2)),
+            "region 2: round_robin [1, 2]: no release region is take 2 of 2 on note 0 at velocity 1",
+        ),
+    ] {
+        let call = format!("{{ regions: [{regions}] }}");
+        let e = regions_player(&call).err().unwrap_or_else(|| panic!("{call} builds"));
+        let want = format!("player(): regions: {says}");
+        assert!(e.iter().any(|d| d.message.contains(&want)), "{call}: wanted {want:?} in {e:?}");
+    }
+    // Whole groups build: two takes with a layer of no turns over them, takes of 2 and of 3 layered
+    // on one note, groups on keys and velocities of their own, and release takes of their own.
+    for regions in [
+        format!("{{ file: \"a.wav\", {} }}, {{ file: \"b.wav\", {} }}, {{ file: \"pad.wav\" }}", rr(2, 2), rr(1, 2)),
+        format!(
+            "{{ file: \"a.wav\", {} }}, {{ file: \"b.wav\", {} }}, {{ file: \"c.wav\", {} }}, {{ file: \"d.wav\", {} }}, {{ file: \"e.wav\", {} }}",
+            rr(1, 2),
+            rr(2, 2),
+            rr(1, 3),
+            rr(2, 3),
+            rr(3, 3)
+        ),
+        format!(
+            "{{ file: \"k1.wav\", root: 36, {} }}, {{ file: \"k2.wav\", root: 36, {} }}, {{ file: \"s1.wav\", root: 38, {} }}, \
+             {{ file: \"s2.wav\", root: 38, {} }}, {{ file: \"s3.wav\", root: 38, {} }}",
+            rr(1, 2),
+            rr(2, 2),
+            rr(1, 3),
+            rr(2, 3),
+            rr(3, 3)
+        ),
+        format!(
+            "{{ file: \"s1.wav\", keys: [0, 63], velocity: [1, 80], {} }}, {{ file: \"s2.wav\", keys: [0, 63], velocity: [1, 80], {} }}, \
+             {{ file: \"h.wav\", keys: [64, 127] }}",
+            rr(1, 2),
+            rr(2, 2)
+        ),
+        format!(
+            "{{ file: \"a.wav\" }}, {{ file: \"up1.wav\", trigger: \"release\", {} }}, {{ file: \"up2.wav\", trigger: \"release\", {} }}",
+            rr(1, 2),
+            rr(2, 2)
+        ),
+    ] {
+        let call = format!("{{ regions: [{regions}] }}");
+        regions_player(&call).unwrap_or_else(|e| panic!("{call}: {e:?}"));
     }
 }
 
@@ -250,6 +348,7 @@ fn the_sampler_gives_its_regions_their_kernel() {
     let call = ", { regions: [\
         { file: \"C4.wav\", root: 60, keys: [58, 62], velocity: [1, 60] },\
         { file: \"C4-hard.wav\", root: 60, keys: [58, 62], velocity: [61, 127], round_robin: [1, 2] },\
+        { file: \"C4-hard.wav\", root: 60, keys: [58, 62], velocity: [61, 127], round_robin: [2, 2] },\
         { file: \"C4.wav\", trigger: \"release\", volume: -6 },\
         { file: \"kick.wav\", root: 36 },\
         { file: \"pad.wav\", loop: [100, 4000], tune: 50, pan: -0.5, offset: 10 }] }";
@@ -260,6 +359,7 @@ fn the_sampler_gives_its_regions_their_kernel() {
         15.0,
         0.0, 60.0, 58.0, 62.0, 1.0, 60.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0,
         1.0, 60.0, 58.0, 62.0, 61.0, 127.0, 1.0, 2.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0,
+        1.0, 60.0, 58.0, 62.0, 61.0, 127.0, 2.0, 2.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0,
         0.0, 60.0, 0.0, 127.0, 1.0, 127.0, 1.0, 1.0, 1.0, -1.0, -1.0, 0.0, -6.0, 0.0, 0.0,
         2.0, 36.0, 36.0, 36.0, 1.0, 127.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0,
         3.0, 60.0, 0.0, 127.0, 1.0, 127.0, 1.0, 1.0, 0.0, 100.0, 4000.0, 50.0, 0.0, -0.5, 10.0,
