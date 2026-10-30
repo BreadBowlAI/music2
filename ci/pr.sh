@@ -236,7 +236,7 @@ lint() {
     check zizmor zizmor.log zizmor --offline --no-progress --color never .github registry/.github
     # No advisories (the advisories step), so no advisory database is fetched: the same answer every day.
     check licences licences.log sh -c 'cargo deny --locked --color never --config deny.toml check bans licenses sources &&
-      cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources &&
+      cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered -A license-exception-not-encountered bans licenses sources &&
       node ci/npm-licenses.mjs'
   fi
   check guide guide.log ci/guide.sh check

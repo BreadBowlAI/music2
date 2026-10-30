@@ -108,6 +108,13 @@ impl Sha {
     }
 }
 
+/// A SHA-256 its maker hashed as the bytes went by: a download, hashed as it is written (NET-5).
+impl From<[u8; 32]> for Sha {
+    fn from(digest: [u8; 32]) -> Sha {
+        Sha(digest)
+    }
+}
+
 impl fmt::Display for Sha {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.prefixed())
