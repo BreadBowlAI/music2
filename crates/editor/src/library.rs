@@ -505,7 +505,14 @@ fn origin(package: &str) -> u8 {
 pub fn search<'a>(items: &'a [Item], q: &Query) -> Vec<&'a Item> {
     let mut found: Vec<(u8, &Item)> = items.iter().filter(|i| q.admits(i)).filter_map(|i| Some((place(i, &q.words)?, i))).collect();
     found.sort_by(|(a, x), (b, y)| {
-        (a, origin(&x.package), x.kind, x.label.to_lowercase(), &x.label, &x.id).cmp(&(b, origin(&y.package), y.kind, y.label.to_lowercase(), &y.label, &y.id))
+        (a, origin(&x.package), x.kind, x.label.to_lowercase(), &x.label, &x.id).cmp(&(
+            b,
+            origin(&y.package),
+            y.kind,
+            y.label.to_lowercase(),
+            &y.label,
+            &y.id,
+        ))
     });
     found.into_iter().map(|(_, i)| i).collect()
 }
