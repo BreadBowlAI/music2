@@ -7,6 +7,11 @@
 //! map        each region into PKG-15's fields, or why it is left out; and what is ignored
 //! import     the pack: m2pkg.toml, instruments/<id>.toml, samples/, README.md, LICENSE
 //! ```
+//!
+//! An SFZ folder comes from a stranger. Everything it names is a plain file in its own folder,
+//! found by [`Folder`] (never through a link, never above it), and the work it can ask for is
+//! bounded: the size of a file, the text once `#define` names are filled in, how deep `#include`
+//! goes, how many regions and opcodes.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -841,22 +846,42 @@ pub struct Imported {
 const AGREE: f64 = 0.9;
 
 /// One of the instrument's values that SFZ gives each region: the opcode, the instrument's name
-/// for it, its unit, SFZ's default, the Sampler's (in the opcode's unit), and each region's own.
+/// for it, its unit, SFZ's default, the Sampler's (in the opcode's unit), the opcode's unit in the
+/// Sampler's (100 for a percentage), and each region's own.
 struct Shared {
     opcode: &'static str,
     name: &'static str,
     unit: &'static str,
     sfz: f64,
     sampler: f64,
+    scale: f64,
     own: fn(&Mapped) -> Option<f64>,
     /// Whether release regions play by it too (the envelope is only the attack regions').
     releases: bool,
 }
 
 const SHARED: [Shared; 3] = [
-    Shared { opcode: "amp_veltrack", name: "velocity", unit: "%", sfz: 100.0, sampler: 100.0, own: |m| m.veltrack, releases: true },
-    Shared { opcode: "ampeg_attack", name: "attack", unit: " s", sfz: 0.0, sampler: 0.0, own: |m| m.attack, releases: false },
-    Shared { opcode: "ampeg_release", name: "release", unit: " s", sfz: 0.0, sampler: 0.05, own: |m| m.release_time, releases: false },
+    Shared {
+        opcode: "amp_veltrack",
+        name: "velocity",
+        unit: "%",
+        sfz: 100.0,
+        sampler: 100.0,
+        scale: 100.0,
+        own: |m| m.veltrack,
+        releases: true,
+    },
+    Shared { opcode: "ampeg_attack", name: "attack", unit: " s", sfz: 0.0, sampler: 0.0, scale: 1.0, own: |m| m.attack, releases: false },
+    Shared {
+        opcode: "ampeg_release",
+        name: "release",
+        unit: " s",
+        sfz: 0.0,
+        sampler: 0.05,
+        scale: 1.0,
+        own: |m| m.release_time,
+        releases: false,
+    },
 ];
 
 /// Make a pack in `folder` from an SFZ file (PACK-14). What `m2 pack check` would refuse is refused
@@ -973,7 +998,7 @@ pub fn import(i: &Import) -> Result<Imported, String> {
             let each: Vec<String> = given
                 .iter()
                 .map(|(x, c)| match x {
-                    None => format!("{c} don't set it (SFZ: {})", shown(v.sfz)),
+                    None => format!("{c} {} set it (SFZ: {})", if *c == 1 { "doesn't" } else { "don't" }, shown(v.sfz)),
                     Some(x) => format!("{c} {} {}", if *c == 1 { "has" } else { "have" }, shown(*x)),
                 })
                 .collect();
@@ -986,9 +1011,24 @@ pub fn import(i: &Import) -> Result<Imported, String> {
             ));
             continue;
         }
-        let value = if top == v.sfz { v.sampler } else { top };
+        // Inside the Sampler's range for it (PACK-13), else at its end, said.
+        let (lo, hi) = m2_song::instrument::CONTROLS.iter().find(|c| c.0 == v.name).map(|c| c.3).expect("a control of the Sampler's");
+        let (lo, hi) = (lo * v.scale, hi * v.scale);
+        let top_in = top.clamp(lo, hi);
+        if top_in != top {
+            disagree.push(format!(
+                "changed: the regions' {} is {}, beyond the Sampler's {} to {}: the instrument's {} is {} for all",
+                v.opcode,
+                shown(top),
+                shown(lo),
+                shown(hi),
+                v.name,
+                shown(top_in)
+            ));
+        }
+        let value = if top == v.sfz { v.sampler } else { top_in };
         if top != v.sfz {
-            values[n] = Some(top);
+            values[n] = Some(top_in);
         }
         for m in kept.iter().filter(|m| !m.release || v.releases) {
             if effective(m) == top {
@@ -1056,7 +1096,12 @@ pub fn import(i: &Import) -> Result<Imported, String> {
     }
     if !sfz.loose.is_empty() {
         let n = sfz.loose.len();
-        left_out.push(format!("ignored: {n} opcode{} before the first header, which no region has: {}", plural(n), sfz.loose.join(", ")));
+        let names: std::collections::BTreeSet<&str> = sfz.loose.iter().map(String::as_str).collect();
+        let mut shown: Vec<&str> = names.iter().copied().take(20).collect();
+        if names.len() > shown.len() {
+            shown.push("…");
+        }
+        left_out.push(format!("ignored: {n} opcode{} before the first header, which no region has: {}", plural(n), shown.join(", ")));
     }
     for (h, n) in &sfz.other_headers {
         left_out.push(format!("ignored: {n} {h} section{}", plural(*n)));

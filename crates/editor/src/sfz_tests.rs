@@ -531,6 +531,11 @@ fn instrument_values_come_from_what_nearly_every_attack_region_says() {
         said.iter().any(|l| l == "changed: 1 region has its own ampeg_release (4 s): the instrument's release is 1 s for all"),
         "{said:?}"
     );
+    // Beyond the Sampler's range: at its end, said, never a file that doesn't read.
+    let (t, said) = imported_text("vote4", "<global> ampeg_release=10 amp_veltrack=-50\n<region> sample=a.wav key=60\n");
+    assert!(t.contains("release = 5\n") && t.contains("velocity = 0\n"), "{t}");
+    assert!(said.iter().any(|l| l.contains("ampeg_release is 10 s, beyond the Sampler's 0 s to 5 s")), "{said:?}");
+    assert!(said.iter().any(|l| l.contains("amp_veltrack is -50%, beyond the Sampler's 0% to 100%")), "{said:?}");
     let sfz = format!("<global> amp_veltrack=73\n{}", "<region> sample=a.wav key=60\n".repeat(3));
     let (t, said) = imported_text("vote3", &sfz);
     assert!(t.contains("velocity = 0.73\n"), "{t}");
