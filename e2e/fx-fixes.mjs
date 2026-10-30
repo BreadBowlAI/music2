@@ -44,7 +44,7 @@ function longSong(dir, name, minutes) {
   fs.mkdirSync(`${dir}/data/pad`, { recursive: true });
   fs.writeFileSync(
     `${dir}/music2.toml`,
-    `[project]\nname = ${JSON.stringify(name)}\nentry = "song.ts"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "1"\nstd = "0.4"\n`,
+    `[project]\nname = ${JSON.stringify(name)}\nentry = "song.ts"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "1"\nstd = "0.5"\n`,
   );
   fs.writeFileSync(`${dir}/song.ts`, "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\nconst p = track('pad', { name: 'Pad' }, ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n");
   const beats = minutes * 120;
@@ -267,7 +267,7 @@ await idle();
 const nop = `${S}/no-plugin`;
 fs.rmSync(nop, { recursive: true, force: true });
 fs.mkdirSync(nop, { recursive: true });
-fs.writeFileSync(`${nop}/music2.toml`, `[project]\nname = "No plugin"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "1"\nstd = "0.4"\n`);
+fs.writeFileSync(`${nop}/music2.toml`, `[project]\nname = "No plugin"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "1"\nstd = "0.5"\n`);
 fs.writeFileSync(`${nop}/song.ts`, "import { hz, plugin, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => plugin('clap:com.example.not-installed', { in: osc.sine(hz(440)) }));\n");
 const opened = await api("graph/open", { path: nop });
 check(opened.status === 200 && (opened.json?.problems ?? []).some((p) => p.code === "plugin.missing"), "a song whose plugin isn't installed opens, saying so");

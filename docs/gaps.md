@@ -237,8 +237,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **The dock and the browser panel start over at each launch** (which view the dock shows, and its height): the browser's storage starts empty, as the page gets a new address each time.
 - **Renaming a song's folder starts Undo over**: the song closes and opens again from there (Rename Song… says so).
-- **A song asking for std "0.2" or "0.3"** gets `pkg.unsatisfied` in this app (std 0.4.0); its message names the line to write (`std = "0.4"`). A "0.2" song may sound a little different (one-note sounds now keep each note's own velocity); a "0.3" song sounds the same, though the message says it may not.
-- **A song's std line names no patch version** (`std = "0.4"`), so a song that needs a later patch gets a missing import in an app with an earlier one, not `pkg.unsatisfied`.
+- **A song asking for std "0.2", "0.3" or "0.4"** gets `pkg.unsatisfied` in this app (std 0.5.0); its message names the line to write (`std = "0.5"`). A "0.2" song may sound a little different (one-note sounds now keep each note's own velocity); a "0.3" or "0.4" song sounds the same, though the message says it may not.
+- **A song's std line names no patch version** (`std = "0.5"`), so a song that needs a later patch gets a missing import in an app with an earlier one, not `pkg.unsatisfied`.
 
 ## Code editor
 

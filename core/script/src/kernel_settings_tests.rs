@@ -218,3 +218,63 @@ fn the_sampler_gives_its_kernel_its_files() {
     let e = sampler_of(", { sample: \"../song.ts\" }").err().expect("a bad name is refused");
     assert!(e.iter().any(|d| d.message.contains("must be a file name in assets/")), "{e:?}");
 }
+
+/// The kernels of the song `sampler(<notes><call>)` makes, by name, outside its voices and in them.
+fn sampler_kernels(call: &str) -> Result<(Vec<String>, Vec<(String, Settings)>), Vec<Diagnostic>> {
+    let b = build_of(&format!(
+        "import {{ song, track }} from \"@m2/core\";\nimport {{ sampler }} from \"std/sampler\";\n\
+         const s = track(\"s\", ({{ lane }}) => sampler(lane.notes(\"notes\"){call}));\nexport default song(() => s.out);\n"
+    ))?;
+    let (mut outside, mut voices) = (vec![], vec![]);
+    for n in b.ir.modules.iter().flat_map(|m| &m.nodes) {
+        match &n.op {
+            Op::Kernel { kernel, .. } => outside.push(kernel.clone()),
+            Op::Poly { body, .. } => voices.extend(body.nodes.iter().filter_map(|n| match &n.op {
+                Op::Kernel { kernel, assets, values, .. } => Some((kernel.clone(), (assets.clone(), values.clone()))),
+                _ => None,
+            })),
+            _ => {}
+        }
+    }
+    Ok((outside, voices))
+}
+
+// PKG-16 (std 0.5.0): the sampler's regions reach `std:regions` in its layout, each file once and
+// every default filled in; the note starts that give a turn are counted outside the voices; and a
+// call gives one of sample, zones and regions.
+#[test]
+fn the_sampler_gives_its_regions_their_kernel() {
+    let call = ", { regions: [\
+        { file: \"C4.wav\", root: 60, keys: [58, 62], velocity: [1, 60] },\
+        { file: \"C4-hard.wav\", root: 60, keys: [58, 62], velocity: [61, 127], round_robin: [1, 2] },\
+        { file: \"C4.wav\", trigger: \"release\", volume: -6 },\
+        { file: \"kick.wav\", root: 36 },\
+        { file: \"pad.wav\", loop: [100, 4000], tune: 50, pan: -0.5, offset: 10 }] }";
+    let (outside, voices) = sampler_kernels(call).unwrap_or_else(|e| panic!("{e:?}"));
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    #[rustfmt::skip]
+    let values = vec![
+        15.0,
+        0.0, 60.0, 58.0, 62.0, 1.0, 60.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0,
+        1.0, 60.0, 58.0, 62.0, 61.0, 127.0, 1.0, 2.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 60.0, 0.0, 127.0, 1.0, 127.0, 1.0, 1.0, 1.0, -1.0, -1.0, 0.0, -6.0, 0.0, 0.0,
+        2.0, 36.0, 36.0, 36.0, 1.0, 127.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0,
+        3.0, 60.0, 0.0, 127.0, 1.0, 127.0, 1.0, 1.0, 0.0, 100.0, 4000.0, 50.0, 0.0, -0.5, 10.0,
+    ];
+    let regions: Vec<_> = voices.iter().filter(|(k, _)| k == "std:regions").map(|(_, s)| s.clone()).collect();
+    assert_eq!(regions, [(s(&["C4.wav", "C4-hard.wav", "kick.wav", "pad.wav"]), values)], "one std:regions in the voices");
+    assert!(voices.iter().any(|(k, _)| k == "std:drumhit") && outside.contains(&"std:hitcount".to_string()), "a turn is counted: {outside:?}");
+    // Zones and a sample play through std:sampler, as before, with no count.
+    let (outside, _) = sampler_kernels(", { sample: \"a.wav\" }").unwrap();
+    assert!(!outside.contains(&"std:hitcount".to_string()), "{outside:?}");
+    let (_, voices) = sampler_kernels(", { zones: { 36: \"kick.wav\" } }").unwrap();
+    assert!(voices.iter().all(|(k, _)| k == "std:sampler") && !voices.is_empty());
+    for (call, says) in [
+        (", { sample: \"x.wav\", regions: [{ file: \"a.wav\" }] }", "sampler(): give one of sample, zones and regions, not sample and regions"),
+        (", { zones: { 36: \"k.wav\" }, regions: [{ file: \"a.wav\" }] }", "sampler(): give one of sample, zones and regions, not zones and regions"),
+        (", { regions: [{ file: \"a.wav\", keys: [70, 60] }] }", "sampler(): regions: region 1: keys 70 to 60: the lowest is above the highest"),
+    ] {
+        let e = sampler_kernels(call).err().unwrap_or_else(|| panic!("{call} builds"));
+        assert!(e.iter().any(|d| d.message.contains(says)), "{call}: {e:?}");
+    }
+}

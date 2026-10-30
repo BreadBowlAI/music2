@@ -21,8 +21,15 @@ use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2).
-const PURE: [&str; 6] =
-    ["examples/first-song", "examples/resample", "examples/sounds", "examples/sampler", "templates/starter", "templates/empty"];
+const PURE: [&str; 7] = [
+    "examples/first-song",
+    "examples/resample",
+    "examples/sounds",
+    "examples/sampler",
+    "templates/starter",
+    "templates/empty",
+    "core/session/tests/fixtures/sampler-regions",
+];
 
 /// `song` live through the player, from 0 for `frames`, with a no-op swap of every lane at
 /// frame `swap_at` when given.
@@ -246,6 +253,32 @@ fn std_plays_the_export_after_the_engine_sat_stopped() {
         }
     }
     assert!(differs.is_empty(), "live differs from the export:\n{}", differs.join("\n"));
+}
+
+// PKG-16, RENDER-33: std's Sampler takes a region's turn from how many notes its lane has started
+// (std:hitcount, outside the voices), never from engine time or from which voice is free. Four C4s
+// a beat apart on two takes play take 1, 2, 1, 2 in the export; and live after the engine sat
+// stopped they play the same, bit for bit.
+#[test]
+fn round_robin_takes_turns_by_the_notes_live_as_in_the_export() {
+    let keys = "import { track } from \"@m2/core\";\nimport { sampler } from \"std/sampler\";\n\
+                export default track(\"keys\", { name: \"Keys\" }, ({ lane }) => sampler(lane.notes(\"notes\"), { regions: [\
+                { file: \"soft-1.wav\", round_robin: [1, 2] }, { file: \"soft-2.wav\", round_robin: [2, 2] }] }));\n";
+    let notes = "{\"clips\": [{\"id\": \"rr4c4s00\", \"start\": 0, \"length\": 4, \"notes\": [\
+                 {\"pitch\": \"C4\", \"start\": 0, \"length\": 0.5, \"velocity\": 0.5}, {\"pitch\": \"C4\", \"start\": 1, \"length\": 0.5, \"velocity\": 0.5},\
+                 {\"pitch\": \"C4\", \"start\": 2, \"length\": 0.5, \"velocity\": 0.5}, {\"pitch\": \"C4\", \"start\": 3, \"length\": 0.5, \"velocity\": 0.5}]}]}";
+    let song = fixture_with("core/session/tests/fixtures/sampler-regions", &[("tracks/keys.ts", keys), ("data/keys/notes.json", notes)]);
+    let frames = (song.seconds() * song.rate as f64) as usize;
+    let export = offline(&song, frames);
+    // A beat is 0.5 s at 120 bpm; each take is 0.12 s, so each note's sound is its own.
+    let beat = song.rate as usize / 2;
+    let note = |k: usize| &export[k * beat..k * beat + beat / 2];
+    assert!(peak(note(0)) > 0.05 && peak(note(1)) > 0.05, "the notes sound");
+    assert!(note(0) == note(2) && note(1) == note(3), "every second note plays the same take");
+    assert!(note(0) != note(1), "and the two takes take turns");
+    for idle in [2 * SR as usize, 5 * BLOCK] {
+        assert_eq!(first_diff(&live_after_idle(&song, idle, frames), &export), None, "played after {idle} frames stopped");
+    }
 }
 
 /// The 16-track reference project (p16), written into a temp folder.
