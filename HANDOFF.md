@@ -150,6 +150,7 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `taste` | the Bass header's click didn't select it within 30 s | once, three suites at once beside other agents |
 | `live3b` | "its release writes db(-32) into song.ts" | once, at load 45–74, before step 7 |
 | `s5-knobs` | page detached after a double-click on a knob at its default | from before the platform step |
+| `pl-sounds-fix` | "one revision, and song.ts as it was" right after Return in Change instrument | once, 2026-10-30, track F's check; passed on the retry. The check reads the revision as soon as `tracks/hats.ts` is written, so the file may land before its revision is counted |
 | `audition_never_waits_for_a_compile`, `midi_never_waits_for_a_compile` | "the compile's span" not found; a subtract overflow | once each, at load 9–10; alone 3 of 3 pass |
 | `s8-clips` | "the left edge dragged a bar right: 8+28" | once, beside other tracks' builds; passed on its retry |
 | `st-audio-fix` | "and adds nothing": the revision moved after an MP3 was refused | once, passed on its retry |
