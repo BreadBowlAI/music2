@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Built the same day (#33 to #38): §16.2's slices 1 to 4 and 7, with the contract's PACK, LIB and PKG-15/16 rules. FLAC is read since track flac (the `claxon` crate, [FMT-24](../../architecture.md#assets-and-hashes)), and downloads since track fetch (NET-1 to NET-6). Not built: slice 5 (streaming). Slice 6 (the registry): the owner chose Cloudflare R2 for the bytes and a GitHub repo for the list (D1, 2026-10-30); its robot side, the list's format, the bucket's files and `m2 registry`, is built by track `registry` (§19, the contract's REG rules); the app's side (the catalog, ⌘F's From the library, Get) is next, and the bucket's address (D10) waits for the owner. |
+| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Built the same day (#33 to #38): §16.2's slices 1 to 4 and 7, with the contract's PACK, LIB and PKG-15/16 rules. FLAC is read since track flac (the `claxon` crate, [FMT-24](../../architecture.md#assets-and-hashes)), and downloads since track fetch (NET-1 to NET-6). Not built: slice 5 (streaming). Slice 6 (the registry): the owner chose Cloudflare R2 for the bytes and a GitHub repo for the list (D1, 2026-10-30); its robot side, the list's format, the bucket's files and `m2 registry`, is built by track `registry` (§19, the contract's REG rules); the app's side (the catalog, ⌘F's From the library, Get, `m2 pack get`) by track `library-get` (§20, REG-11 to REG-17); the bucket's address (D10) waits for the owner. |
 | **Written** | 2026-10-29, from `main` at `e38c131` |
 | **Gaps** | #39 (shared sound packages), with #22 (the rest of the Sampler) and #18 (more audio file types) |
 | **Decided** | by the owner, 2026-10-30 |
@@ -454,7 +454,7 @@ A change of mind after stage 5 is a new pull request to this note, with why.
 
 ## 19. The registry, as built
 
-**In short:** slice 6's robot side, built on 2026-10-30 by track `registry`, and hardened after its review the same day. The list is a folder of small TOML files, one a pack. The robot is `m2 registry`, run by the registry repo's CI. The bucket is plain files named by their hashes. A person from BreadBowlAI merges every pull request; the robot's run on a pull request is advice, and the real gate is the build after a merge, which holds the registry to what the bucket has published. The rules are the contract's [REG-1 to REG-10](../../architecture.md#registry); this section says the same in plain words, and what changed from the plan above. The app's side (fetching the catalog, ⌘F's From the library, Get) is the next track's.
+**In short:** slice 6's robot side, built on 2026-10-30 by track `registry`, and hardened after its review the same day. The list is a folder of small TOML files, one a pack. The robot is `m2 registry`, run by the registry repo's CI. The bucket is plain files named by their hashes. A person from BreadBowlAI merges every pull request; the robot's run on a pull request is advice, and the real gate is the build after a merge, which holds the registry to what the bucket has published. The rules are the contract's [REG-1 to REG-10](../../architecture.md#registry); this section says the same in plain words, and what changed from the plan above. The app's side (fetching the catalog, ⌘F's From the library, Get) is §20.
 
 ### 19.1 The list
 
@@ -553,4 +553,19 @@ Every pull request is merged by a person: the owner protects `main` (a required 
 | — | a removed version's facts stay, and only its blobs no other version uses are deleted | what a pack said of itself stays; a file two versions share isn't lost |
 | — | each version is built on its own, from its own folder, with a time limit; one that fails stays pending | one author's missing release or hung kernel never stops everyone's publishing |
 
-`--from` reads the bucket over https through music2's download module (track H's `m2_editor::fetch`), from its `r2.dev` address, never the cached one; so the workflows run with the first music2 release that has `m2 registry`. A take-down needs the deleted files purged from Cloudflare's cache by hand (the README says how). A data instrument's own tags reach no catalog yet (gaps #49). The app's ⌘F with no song open, and its preview route, don't read instruments written as data (the robot does): gaps #47. A kernel that never returns has no bound in the app's own previews and plays (gaps #39).
+`--from` reads the bucket over https through music2's download module (track H's `m2_editor::fetch`), from its `r2.dev` address, never the cached one; so the workflows run with the first music2 release that has `m2 registry`. A take-down needs the deleted files purged from Cloudflare's cache by hand (the README says how). A data instrument's own tags reach no catalog yet (gaps #49). The app's ⌘F with no song open, and its preview route, read instruments written as data since track `library-get`, as the robot does (it was gaps #47). A kernel that never returns has no bound in the app's own previews and plays (gaps #39).
+
+## 20. The registry in the app, as built
+
+**In short:** built on 2026-10-30 by track `library-get`. The app reads one registry (`M2_REGISTRY`, else the settings' `registry`; no default until D10 picks the bucket's address), keeps its catalog in the cache folder, and searches it on this computer: ⌘F shows **From the library** after what you have, Space plays a preview fetched by its hash, and **Get** gets a pack's whole version, or one sample, checked by hash, all or nothing. A song missing a locked pack is offered Get, and `m2 pack get` does the same from the command line. The rules are the contract's [REG-11 to REG-17](../../architecture.md#registry); the guide says it in plain words ([Getting packs from the library](../../guide/library.md)).
+
+| The plan said | As built | Why |
+|---|---|---|
+| The catalog, fresh once a day (§9.2) | fetched as the app starts, when a day old, and ten minutes after a fetch that failed, in the background; a search never waits; `m2` with the app closed fetches only a catalog a day old | offline must just work, and a search must never wait on the network |
+| — | the catalog is kept by a short hash of the registry's address, `catalog.json` written after its catalog, and a catalog that isn't the one `catalog.json` names is never used nor kept | a broken or changed catalog must never replace a good one |
+| Ranked by name, tags, description; ours and what you have first; then downloads (§9.2) | From the library is ranked by LIB-1's one search, ours (`@m2/`) first, in a group after what you have; no downloads | the catalog counts no downloads yet; one search keeps both groups ranked alike |
+| Get fetches what an item needs (§10) | an instrument, an effect or a sound gets its whole version, into a folder beside the store, then installed as `m2 pack install` does; a sample its one file | §19.5; and a pack's own check runs on this computer before anything is in the store |
+| — | `m2pkg.toml` comes first: a version that needs a newer music2 stops there | nothing big is fetched for a pack this app can't run |
+| A sound adds its preset (§9.2) | a sound of an instrument adds a track of its instrument, then loads the sound on it: two undo steps; an effect's sound loads as one you have does, onto the selected track's effect | a track that plays a sound in one step is gaps #47 |
+| — | one Get at a time; progress in the row and the foot, `get` events for every window; Esc or Cancel stops it | a beginner must see it come, and be able to stop it |
+

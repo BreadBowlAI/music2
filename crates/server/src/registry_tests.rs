@@ -98,8 +98,10 @@ fn bucket(root: &Path) -> (PathBuf, PathBuf) {
         "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\ndescription = \"One kick\"\n\
          authors = [\"Alice\"]\nrepository = \"https://github.com/alice/drums\"\ntags = [\"drums\"]\n",
     );
-    write(&drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n");
+    write(&drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n\n[folder.\"snaps\"]\ninstrument = \"clap\"\n");
     tone(&drums.join("samples/kicks/Boom.wav"));
+    let flac = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/16bit-mono.flac");
+    write(&drums.join("samples/snaps/Snap.flac"), std::fs::read(flac).unwrap());
     let keys = root.join("src/keys");
     write(
         &keys.join("m2pkg.toml"),
@@ -505,4 +507,23 @@ fn a_song_missing_a_locked_pack_gets_it_and_plays() {
     assert_eq!(state(&w)["has_code"], json!(true), "it builds now: {:#}", state(&w)["diagnostics"]);
     let (_, body) = get(&w.running.url, "/api/library/missing");
     assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["missing"], json!([]));
+}
+
+// REG-16, REG-14, LIB-7: a FLAC sample from the library is previewed as a WAV, and comes into the
+// song as one, with its note.
+#[test]
+fn a_flac_sample_comes_in_as_a_wav() {
+    let w = World::new("flac");
+    let (session, dir) = w.song(|_| {});
+    let snap = "library:sample:@alice/drums:samples/snaps/Snap.flac";
+    assert_eq!(w.library("snap"), [snap]);
+    let (status, wav) = get(&w.running.url, &format!("/api/library/preview?id={}", enc(snap)));
+    assert_eq!((status, &wav[..4], &wav[8..12]), (200, &b"RIFF"[..], &b"WAVE"[..]), "its preview is the WAV of it");
+    let (status, done) = post(&w.running.url, "/api/library/get", &json!({"id": snap, "session": session, "to": {"kind": "below", "beat": 0}}));
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!(done["asset"], json!("Snap.wav"), "{done:#}");
+    let bytes = std::fs::read(dir.join("assets/Snap.wav")).unwrap();
+    assert_eq!((&bytes[..4], &bytes[8..12]), (&b"RIFF"[..], &b"WAVE"[..]));
+    let note: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("assets/Snap.wav.json")).unwrap()).unwrap();
+    assert_eq!(note["from"]["file"], json!("samples/snaps/Snap.flac"));
 }

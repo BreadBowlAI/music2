@@ -22,6 +22,7 @@
 - [Sounds and effects](sounds.md)
 - [CLAP plugins](plugins.md)
 - [Packs](packs.md)
+- [Getting packs from the library](library.md)
 - [Making a pack](making-a-pack.md)
 - [How a song is written](code.md)
 - [Credits](credits.md)
