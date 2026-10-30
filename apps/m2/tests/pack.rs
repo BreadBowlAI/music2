@@ -49,6 +49,18 @@ impl Temp {
             .unwrap()
     }
 
+    /// `m2` with `args`, run in the folder `dir`.
+    fn m2_in(&self, dir: &Path, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_m2"))
+            .current_dir(dir)
+            .env("HOME", self.0.join("home"))
+            .env("M2_AUDIO", "none")
+            .env("M2_MIDI", "none")
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
     fn store(&self) -> PathBuf {
         self.0.join("home/Music/music2/Packs")
     }
@@ -501,4 +513,40 @@ fn check_refuses_two_instruments_with_one_name_in_code() {
     std::fs::write(pack.join("instruments/a1.toml"), &toml).unwrap();
     let text = failed(t.m2(&["pack", "check", pack.to_str().unwrap()]));
     assert!(text.contains("instruments/a-1.toml` and `@test/tiny-keys/instruments/a1.toml` would both be exported as `a1`"), "{text}");
+}
+
+// PACK-14: what check would refuse stops the import, and nothing is left: not the folder, not a
+// folder beside it.
+#[test]
+fn an_import_check_would_refuse_writes_nothing() {
+    let t = Temp::new("sfz-nothing");
+    copy(&sfz_fixture(), &t.0.join("in"));
+    let out = t.0.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let pack = out.join("pack");
+    let sfz = t.0.join("in/Tiny Keys.sfz");
+    let text = failed(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/new"]));
+    assert!(text.contains("`new` can't be an instrument's id: its name in code, `new`, is a word JavaScript keeps for itself"), "{text}");
+    std::fs::write(
+        &sfz,
+        std::fs::read_to_string(&sfz).unwrap().replace("<region> sample=c4-loud.wav", "<region> seq_length=2 sample=c4-loud.wav"),
+    )
+    .unwrap();
+    let text = failed(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+    assert!(text.contains("Tiny Keys.sfz:18: a round robin of 2 takes"), "{text}");
+    assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0, "nothing is left");
+}
+
+// PACK-14: an SFZ named from the working folder (`i.sfz`) reads only its folder: `..` is above it,
+// never the working folder again.
+#[test]
+fn an_sfz_beside_the_working_folder_reads_only_its_folder() {
+    let t = Temp::new("sfz-here");
+    copy(&sfz_fixture(), &t.0.join("in"));
+    std::fs::copy(t.0.join("in/samples/rel.wav"), t.0.join("secret.wav")).unwrap();
+    std::fs::copy(t.0.join("in/samples/rel.wav"), t.0.join("in/secret.wav")).unwrap();
+    std::fs::write(t.0.join("in/i.sfz"), "<region> sample=../secret.wav\n").unwrap();
+    let text = failed(t.m2_in(&t.0.join("in"), &["pack", "import-sfz", "i.sfz", "../pack", "--name", "@test/x"]));
+    assert!(text.contains("i.sfz:1: `sample=../secret.wav` leaves the SFZ's folder"), "{text}");
+    assert!(!t.0.join("pack").exists());
 }

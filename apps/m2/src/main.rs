@@ -1086,6 +1086,7 @@ fn pack(args: &[String]) -> Result<()> {
                 category: category.as_deref(),
                 license: license.as_deref(),
                 std: &std,
+                check: &|dir: &Path| packs::check(dir, &std),
             };
             let done = m2_editor::sfz::import(&import).map_err(|e| anyhow!(e))?;
             println!(
@@ -1097,13 +1098,10 @@ fn pack(args: &[String]) -> Result<()> {
                 done.samples,
                 if done.samples == 1 { "" } else { "s" }
             );
-            for l in &done.left_out {
+            for l in done.licence.iter().chain(&done.left_out) {
                 println!("{l}");
             }
-            let problems = packs::check(&folder, &std);
-            if !problems.is_empty() {
-                return Err(failed(problems));
-            }
+            // Checked before it was kept (PACK-14).
             println!("{} is good to install: m2 pack install {}", folder.display(), folder.display());
         }
         "check" => {
