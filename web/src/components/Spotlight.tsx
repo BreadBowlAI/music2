@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { CornerDownLeft, Loader2, Search, Volume2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { lockReason, moduleName, type GraphState } from "../lib/graph";
-import { fromWords, GROUPS, searchLibrary, stopPreview, togglePreview, useFinding, usePreview, type LibraryItem } from "../lib/library";
+import { fromWords, GROUPS, stopPreview, togglePreview, useFinding, usePreview, useSearch, type LibraryItem } from "../lib/library";
 import { chord } from "../lib/native";
 import { keptWords, presetsApi } from "../lib/presets";
 import { listedInstrument, usePluginList, wantPlugins } from "../lib/plugins";
@@ -26,15 +26,33 @@ const target = () => {
   return s.module && s.module !== "song" ? s.module : null;
 };
 
+/** What a dragged sound row carries: the item, as JSON. */
+export const SOUND_DRAG = "application/x-m2-sound";
+
+/** Whether a drag carries a sound from ⌘F's panel. */
+export const dragsSound = (e: React.DragEvent) => e.dataTransfer.types.includes(SOUND_DRAG);
+
+/** The sound a drop carries, if any. */
+export function droppedSound(e: React.DragEvent): LibraryItem | null {
+  try {
+    const item = JSON.parse(e.dataTransfer.getData(SOUND_DRAG) || "null");
+    return item?.kind === "sound" && item.preset ? item : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Load sound `item` (a preset) onto the instrument or effect it is for on the selected track: one
- * Undo step, as the card's Presets does. A track that doesn't play it is said in words.
+ * Load sound `item` (a preset) onto the instrument or effect it is for on track `module` (the
+ * selected track when not given): one Undo step, as the card's Presets does. A track that doesn't
+ * play it is said in words.
  */
-function loadSound(item: LibraryItem, graph: GraphState) {
+export function loadSound(item: LibraryItem, graph: GraphState, module = target()) {
   const toast = useStore.getState().toast;
   const preset = item.preset;
   if (!preset) return;
-  const module = target();
+  const why = lockReason(graph, useStore.getState().connected);
+  if (why) return toast(`${why}.`);
   const sound = item.tags[0] || item.component;
   const m = module ? graph.view.modules.find((x) => x.key === module) : undefined;
   const node = m?.nodes.find((n) => n.kind === "call" && n.component === item.component);
@@ -87,14 +105,13 @@ function enterWords(item: LibraryItem, graph: GraphState): string {
   return "adds it";
 }
 
-/** How long typing rests before the search is asked. */
-const DEBOUNCE_MS = 60;
-
 /**
  * ⌘F's panel (LIB-1): one search over everything that can be added, Spotlight-like. Typing filters;
- * ↑↓ move across the groups; Space plays the selected row's preview once the arrows have moved
- * there (again, or moving, stops it); Enter adds it; Esc closes. A row drags onto the timeline or
- * a track, as the side browser's rows do.
+ * ↑↓ move across the groups; Space plays the selected row's preview once the arrows (or a click)
+ * picked it (again, or moving, stops it); Enter adds it, or, when the search hasn't answered the
+ * words typed yet, their best hit once it has; Esc closes. A row drags onto the timeline or a
+ * track, as the side browser's rows do; a sound onto a track loads into it. A click keeps the
+ * keys in the panel.
  */
 export default function Spotlight({ graph }: { graph: GraphState }) {
   const open = useFinding((s) => s.open);
@@ -104,10 +121,8 @@ export default function Spotlight({ graph }: { graph: GraphState }) {
 
 function Panel({ graph }: { graph: GraphState }) {
   const [query, setQuery] = useState("");
-  const [items, setItems] = useState<LibraryItem[]>([]);
-  const [searched, setSearched] = useState(false);
   const [active, setActive] = useState<string | null>(null);
-  // The arrows moved: Space plays the row, until a key types again.
+  // The arrows or a click picked the row: Space plays it, until a key types again.
   const [browsing, setBrowsing] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const preview = usePreview();
@@ -115,6 +130,12 @@ function Panel({ graph }: { graph: GraphState }) {
   const panel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
+  // The words in the field now, and whether the panel is still open: an Enter that waits for the
+  // search acts only on these.
+  const typed = useRef(query);
+  typed.current = query;
+  const alive = useRef(true);
+  useEffect(() => () => void (alive.current = false), []);
   const close = () => {
     stopPreview();
     useFinding.setState({ open: false });
@@ -123,31 +144,21 @@ function Panel({ graph }: { graph: GraphState }) {
   // The installed plugins are asked for as it opens, as + Track's list asks.
   useEffect(() => wantPlugins(), []);
   useLayoutEffect(() => field.current?.focus(), []);
-  // The search, as typing rests; an answer to an older query is dropped.
-  const asked = useRef(0);
+  // The search, as typing rests, and again when the plugin list comes.
+  const { found, now } = useSearch(query, plugins);
+  const items = useMemo(() => found?.items ?? [], [found]);
+  // Other words: their best hit is selected, wherever its group is, and nothing is picked yet. The
+  // same words answered again (the plugin list came): the row selected stays, while it is there.
+  const shownFor = useRef<string | null>(null);
   useEffect(() => {
-    const n = ++asked.current;
-    const t = window.setTimeout(() => {
-      searchLibrary(query)
-        .then((found) => {
-          if (n !== asked.current) return;
-          setItems(found);
-          setSearched(true);
-          // The best hit, wherever its group is.
-          setActive(found[0]?.id ?? null);
-        })
-        .catch((e) => n === asked.current && setSaid(e instanceof Error ? e.message : String(e)));
-    }, DEBOUNCE_MS);
-    return () => window.clearTimeout(t);
-  }, [query, plugins]);
-  // A click anywhere else closes it.
-  useEffect(() => {
-    const outside = (e: PointerEvent) => {
-      if (!panel.current?.contains(e.target as Node)) close();
-    };
-    document.addEventListener("pointerdown", outside, true);
-    return () => document.removeEventListener("pointerdown", outside, true);
-  }, []);
+    if (!found) return;
+    if (found.error) setSaid(found.error);
+    if (found.q !== shownFor.current) {
+      shownFor.current = found.q;
+      setActive(found.items[0]?.id ?? null);
+      setBrowsing(false);
+    } else setActive((a) => (found.items.some((i) => i.id === a) ? a : (found.items[0]?.id ?? null)));
+  }, [found]);
 
   const groups = useMemo(() => GROUPS.map((g) => ({ ...g, items: items.filter((i) => i.kind === g.kind) })).filter((g) => g.items.length), [items]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
@@ -156,19 +167,34 @@ function Panel({ graph }: { graph: GraphState }) {
     list.current?.querySelector("[data-active]")?.scrollIntoView({ block: "nearest" });
   }, [current?.id]);
 
-  const move = (by: number) => {
-    if (!flat.length) return;
-    const at = current ? flat.indexOf(current) : -1;
-    setActive(flat[(at + by + flat.length) % flat.length].id);
+  /** Select `item`, picked: what was playing stops. */
+  const pick = (item: LibraryItem) => {
+    setActive(item.id);
     setBrowsing(true);
     setSaid(null);
     stopPreview();
   };
-  const play = (item: LibraryItem) => void togglePreview(item).then((why) => setSaid(why));
+  const move = (by: number) => {
+    if (!flat.length) return;
+    const at = current ? flat.indexOf(current) : -1;
+    pick(flat[(at + by + flat.length) % flat.length]);
+  };
+  // A newer ask (or a stop) says its own: an older one's answer never overwrites it.
+  const play = (item: LibraryItem) => void togglePreview(item).then((why) => why !== undefined && setSaid(why));
   const add = (item: LibraryItem | undefined) => {
     if (!item) return;
     close();
     addItem(item);
+  };
+  // Enter: the row selected, when the search answered the words in the field; else their best hit,
+  // once the search answers them, if they are still the words in the field.
+  const enter = () => {
+    if (found?.q === query) return add(current);
+    const words = query;
+    void now().then(
+      (best) => alive.current && typed.current === words && add(best[0]),
+      (e) => alive.current && setSaid(e instanceof Error ? e.message : String(e)),
+    );
   };
 
   return (
@@ -177,7 +203,21 @@ function Panel({ graph }: { graph: GraphState }) {
       role="dialog"
       aria-label="Find sounds"
       data-spotlight
-      className="fixed z-[60] left-1/2 top-[14vh] -translate-x-1/2 w-[560px] max-w-[calc(100vw-32px)] max-h-[64vh] flex flex-col rounded-md bg-raised shadow-pop overflow-hidden animate-rise cursor-default"
+      tabIndex={-1}
+      className="fixed z-[60] left-1/2 top-[14vh] -translate-x-1/2 w-[560px] max-w-[calc(100vw-32px)] max-h-[64vh] flex flex-col rounded-md bg-raised shadow-pop overflow-hidden animate-rise cursor-default outline-none"
+      // The panel's keys, wherever in it the focus is; a click anywhere in it gives the keys back to
+      // the field, so Space, Enter and Esc stay the panel's.
+      onClick={() => field.current?.focus()}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowDown") move(1);
+        else if (e.key === "ArrowUp") move(-1);
+        else if (e.key === " " && browsing && current) play(current);
+        else if (e.key === "Enter") enter();
+        else if (e.key === "Escape") close();
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+      }}
     >
       <div className="h-11 shrink-0 flex items-center gap-2 px-3 border-b border-line">
         <Search size={16} className="text-fg-faint shrink-0" />
@@ -197,21 +237,11 @@ function Panel({ graph }: { graph: GraphState }) {
             setBrowsing(false);
             setSaid(null);
           }}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowDown") move(1);
-            else if (e.key === "ArrowUp") move(-1);
-            else if (e.key === " " && browsing && current) play(current);
-            else if (e.key === "Enter") add(current);
-            else if (e.key === "Escape") close();
-            else return;
-            e.preventDefault();
-            e.stopPropagation();
-          }}
         />
         <span className="shrink-0 text-xs text-fg-faint">{chord("F")}</span>
       </div>
       <div ref={list} id="spotlight-list" role="listbox" aria-label="Found" className="flex-1 min-h-0 overflow-y-auto p-1">
-        {searched && flat.length === 0 && (
+        {found?.q === query && flat.length === 0 && (
           <EmptyState bare className="mx-auto my-6">
             <div>
               <p>{query.trim() ? `Nothing matches “${query.trim()}”` : "Nothing to add"}</p>
@@ -224,7 +254,14 @@ function Panel({ graph }: { graph: GraphState }) {
             <div className="h-ctl-sm px-2 flex items-center text-sm font-semibold text-fg-muted">{g.name}</div>
             {g.items.map((item) => {
               const on = item === current;
-              const drag = item.kind === "instrument" || (item.kind === "plugin" && item.instrument) ? INSTRUMENT_DRAG : item.kind === "effect" || item.kind === "plugin" ? EFFECT_DRAG : null;
+              const drag =
+                item.kind === "instrument" || (item.kind === "plugin" && item.instrument)
+                  ? INSTRUMENT_DRAG
+                  : item.kind === "effect" || item.kind === "plugin"
+                    ? EFFECT_DRAG
+                    : item.kind === "sound" && item.preset
+                      ? SOUND_DRAG
+                      : null;
               const sound = item.kind === "sound" ? item.tags[0] : item.category;
               return (
                 <div
@@ -237,11 +274,11 @@ function Panel({ graph }: { graph: GraphState }) {
                   draggable={!!drag}
                   title={item.description}
                   className={clsx("h-ctl px-2 rounded-sm flex items-center gap-2 cursor-default transition-colors duration-80 ease-linear", on ? "bg-accent-soft" : "hover:bg-hover")}
-                  onPointerDown={() => setActive(item.id)}
+                  onPointerDown={() => pick(item)}
                   onDoubleClick={() => add(item)}
                   onDragStart={(ev) => {
                     if (!drag) return;
-                    ev.dataTransfer.setData(drag, item.component);
+                    ev.dataTransfer.setData(drag, drag === SOUND_DRAG ? JSON.stringify(item) : item.component);
                     ev.dataTransfer.effectAllowed = "copy";
                   }}
                   onDragEnd={close}
