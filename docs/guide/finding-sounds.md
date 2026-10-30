@@ -2,7 +2,7 @@
 
 **In short**
 - Press **⌘F** (Ctrl+F off the Mac) anywhere outside a text field, type a few words, and press **Enter** to add what you found.
-- One search finds everything you can add: instruments, sounds (presets), effects, and your plugins. Later, samples from packs.
+- One search finds everything you can add: instruments, sounds (presets), effects, samples and your plugins, music2's own and your packs'.
 - **Space** plays a short preview first. **Esc** closes.
 
 ## The panel
@@ -32,6 +32,7 @@ In the code editor ⌘F finds text in your code, as it always did. In a text fie
 | A sound (a preset) | loads its settings into the selected track's instrument or effect it is for. If the selected track doesn't play it, the panel says so: select a track that does, or add one first |
 | An effect | puts it after the last effect on the selected track |
 | A plugin | as an instrument or an effect, by what the plugin is |
+| A sample | adds its clip at the playhead's bar, on the selected audio track or a new one ([Samples](samples.md)) |
 
 Each is one step that **Undo** (⌘Z) takes back, and a note at the bottom says what it did.
 
@@ -48,10 +49,10 @@ Some words are filters, not words to find:
 |---|---|
 | `instrument`, `sound`, `effect`, `sample`, `plugin` (or `fx`, `preset`, and the plurals) | that kind; a plugin counts as an instrument or an effect too, by what it is |
 | `loop`, `one-shot` | samples of that type |
-| `90 bpm` or `90bpm` | samples at that tempo |
-| `Am`, `F#`, `Bbm`, `C major` | samples in that key (a capital letter, then a ♯, a ♭ or `m`, or `major`/`minor` after it) |
+| `90 bpm` or `90bpm` | samples within 2 bpm of that tempo |
+| `Am`, `F#`, `Bbm`, `C major` | samples in that key or its relative, `Am` and `C` (a capital letter, then a ♯, a ♭ or `m`, or `major`/`minor` after it) |
 
-So `pad sound` finds the pad's presets, and `delay effect` the Delay and any delay plugin. A name with one of these words in it is still found by it: `surge xt effects` finds the plugin Surge XT Effects, and `loop` an instrument called Loop station. Samples come with packs, later.
+So `pad sound` finds the pad's presets, and `delay effect` the Delay and any delay plugin. A name with one of these words in it is still found by it: `surge xt effects` finds the plugin Surge XT Effects, and `loop` an instrument called Loop station. **Loops**, **One-shots** and **Fits my song** are also buttons under the field: see [Samples](samples.md).
 
 ## Previews
 
@@ -70,7 +71,7 @@ Every preview is brought to the same loudness, −23 LUFS (a measure of loudness
 
 The first time takes a moment; after that it is kept (in music2's cache folder, never in your song) until the sound changes or you update music2. A preview renders beside your song at a low priority, as Export does while you play, and plays in the window, never through your song, so it never changes what your song plays.
 
-Plugins have no preview yet. Nor does the Sampler: it plays a file you give it, and a preview has none to give. A sound from a pack plays from its pack.
+Plugins have no preview yet. Nor does the Sampler: it plays a file you give it, and a preview has none to give. A sound from a pack plays from its pack. A sample's preview is the sample itself.
 
 ## The side browser
 
@@ -78,4 +79,4 @@ The browser's search field (⌥⌘B shows it) asks the same search: its rows kee
 
 ## From the terminal
 
-`m2 search <words>` asks the same search: through the app when it is open, else by itself, from music2's sounds and your presets. `--kind effect` finds only effects; `--json` prints every item with all it knows. See [m2 commands](commands.md).
+`m2 search <words>` asks the same search: through the app when it is open, else by itself, from music2's sounds, the packs you installed, your presets and your sample folders. `--kind effect` finds only effects; `--json` prints every item with all it knows. See [m2 commands](commands.md).
