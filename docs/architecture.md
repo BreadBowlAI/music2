@@ -1215,6 +1215,37 @@ export const delay = component({
 - *Why:* the descriptor knows which controls click; the engine doesn't.
 - *Today:* since step 5 std marks smooth the controls its kernels read every sample without smoothing, where a step jumps the output: every filter's `cutoff` and `q`, `delay`'s `time`, `feedback` and `mix`, `drive`'s `amount`, `pan`, `vca`, `scale`, `add`, `blend`, `when` and `choose`, `range`'s and `xrange`'s `lo` and `hi`, `lfo`'s `phase`, the square's `width`, the mixer's `pan`, and the instrument controls that reach them (`bass`'s `cutoff` and `drive`, `pluck`'s `brightness`, `pad`'s `cutoff`). `std_smooth_controls_are_the_per_sample_ones` (`core/script/tests/std.rs`) holds the list, and `a_range_bound_ramps` (`core/play/tests/knobs.rs`) hears a range's bound ramp where it sets a gain. A control whose step only changes a rate steps, as the phase runs on: an oscillator's `freq`, `mtof`'s `pitch`, the envelopes' times (and `adsr` approaches a new `sustain` at its decay rate). The effects' kernels, `gain` and `duck` glide their own levels (`compress` reaches its through its envelope). `.smooth()` helps only a kernel that reads the control every sample, and only where a ramp is a glide: `limit` reads `ceiling` once per block, where a one-block ramp arrives as one value, and `lfo` divides the song's beats by `period`, so a ramp of it would sweep the LFO through many cycles in one block; neither is marked, and gliding either would be a kernel change. A one-block ramp of `delay`'s `time` (about 3 ms) still moves the read head, so it removes the hard step but not the pitch chirp.
 
+**PKG-15.** `setting.regions()` declares a list of **regions**: which recording plays for which notes, how hard, in which turn and when. It is the one shape music2 compiles sample maps into (a pack's `instruments/*.toml`, an SFZ file), so its fields, their defaults and their checks are fixed here:
+
+| Field | Meaning | Left out |
+|---|---|---|
+| `file` | the recording: an asset name the build accepts (`"piano/C4.wav"`) | required |
+| `root` | the MIDI note it was recorded at, 0 to 127 | 60 |
+| `keys` | `[lowest, highest]`: the notes it plays, 0 to 127 | `[root, root]` when `root` is written, else `[0, 127]` |
+| `velocity` | `[lowest, highest]`: how hard, 1 to 127 | `[1, 127]` |
+| `round_robin` | `[position, of]`: take `position` of `of` takes, played in turn; 1 ≤ position ≤ of ≤ 128 | `[1, 1]` |
+| `trigger` | `"attack"`: when the note starts; `"release"`: when it ends | `"attack"` |
+| `loop` | `[start, end]`: frames of the file, both played (SFZ's `loop_start` and `loop_end`); start < end | none |
+| `tune` | cents, −2400 to 2400 | 0 |
+| `volume` | dB, −120 to 24 | 0 |
+| `pan` | −1 (left) to 1 (right) | 0 |
+| `offset` | frames into the file it starts from, 0 or more | 0 |
+
+The build MUST refuse a list that isn't one, a region that isn't an object, any other field, a field of the wrong kind, a number outside its range or not whole where a note, a velocity, a turn or a frame goes, and a pair whose first is above its second, in words that name the region by its place from 1: "regions: region 3: keys 70 to 60: the lowest is above the highest". Left out, the setting is `[]`, which plays nothing.
+- *Why:* readers outside the code (a pack's sample map, an SFZ import) compile to this shape, so it must be one shape, said once; a field misspelt, or a range upside down, would otherwise play silence that no one hears.
+- *Today:* since track sampler2 (`@m2/core` 1.6.0): `setting.regions()` and `checkRegions` in `core/script/sdk/core.ts`, the kind `regions` in the descriptor (`SettingKind::Regions`, `core/script/src/component.rs`). Each refusal is checked by `regions_settings_are_checked` (`core/script/src/kernel_settings_tests.rs`).
+
+**PKG-16.** std's Sampler (`std/sampler`) plays `regions` ([PKG-15](#component-descriptors)) by these rules, the same live and in an export ([RENDER-33](#the-bit-identity-test)):
+1. A note's velocity, 0 to 1, becomes a MIDI velocity once, by one rule: `clamp(round(velocity × 127), 1, 127)`, halves rounded up. Its pitch, rounded, is its key.
+2. When a note starts, every attack region whose `keys` hold its key, whose `velocity` holds its velocity, and whose `round_robin` position is its turn plays, from `offset`. Several play at once, summed (layers), up to 32 in one voice, the first in the list first; none is silence.
+3. A note's turn is counted outside the voices, from the notes alone: one voice of `std:drumhit` marks each sample on which notes start, so notes that start together count once, and `std:hitcount` counts the marks. The nth start's turn, in a region of `of` takes, is ((n − 1) mod `of`) + 1: regions with the same `of` take their turns together. A count never follows engine time, so a song played live from 0 takes the export's turns, however long the engine ran before.
+4. When the note ends, the release regions that match it (its key, and the velocity and turn it started with) start, and play to their end; the attack regions follow `mode` and `release` as before.
+5. A region with a `loop` loops while its note is held: after `end` comes `start`, crossfaded in a straight line over the last min(5 ms of the file, `start`, half the loop) frames before it. A crossfade started while the note is held finishes; after that, once the note has ended, it plays on past `end` to the file's end (fading over `release` in gate mode).
+6. `tune` adds to the pitch; `volume` scales; `pan` balances (the far side × sin((1 − |pan|) × π/2), the near side as it is); `offset` starts the file later. The component's `velocity` control, 0 to 1 (SFZ's `amp_veltrack`), sets how much velocity changes the level: level × (1 − v + v × velocity). Its default, 1, is the level before it: velocity × level.
+7. `sample` and `zones` play as they did, bit for bit, through `std:sampler`; regions play through `std:regions`. A call gives one of `sample`, `zones` and `regions`; `sample` with `zones` still plays the zones, as before.
+- *Why:* one engine for real recorded instruments (a piano's velocity layers, a drum's takes, a release noise, a held string), from SFZ's ideas; and a turn that a voice took from engine time, or from the voices that happened to be free, would make live playback differ from the export.
+- *Today:* since track sampler2 (std 0.5.0): `std/kernels-src/src/sampler.rs` (both kernels, the values layout in its header and in `std/m2pkg.toml`; tested in `sampler/tests.rs`: keys and velocity, layers, turns from the count, release regions, loops held then played out with a bounded step, tune, volume, pan and offset, any block split, and the zones' bits as before), `std/src/sampler.ts`, which checks the one-of rule and counts the turns only when a region has more than one take. `core/session/tests/fixtures/sampler-regions` (two velocity layers, a round robin of 2, a release sound and a loop) renders the same bits on 1 to 7 threads, live after the engine sat stopped (`std_plays_the_export_after_the_engine_sat_stopped`), and is recorded in `renders.json`. The Device card says what a Sampler with regions plays in words ("4 recordings, 2 layers, round robin of 2, release sounds") and refuses a dropped WAV in words, as for zones (`crates/editor/src/sampler.rs`). Not yet (gap #22): a sustain pedal, choke groups, crossfades between velocity layers, band-limited playback and streaming; a turn counted for each region alone, as SFZ does.
+
 ## Homes of values
 
 | Home | Holds | Example |
