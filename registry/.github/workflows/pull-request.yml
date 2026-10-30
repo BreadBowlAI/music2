@@ -1,0 +1,115 @@
+# .github/workflows/pull-request.yml: the robot's check of a pull request to the registry
+# (music2's contract, REG-2, REG-5 and REG-10).
+#
+# In short: on every pull request it checks the pack files against main (no listed version
+# changed; someone not of BreadBowlAI changes only their own packs, and only files under packs/),
+# fetches each new version's source with curl and tar, and builds it with `m2 registry build` into
+# a scratch folder: its files, previews and facts, and a catalog. What the robot says is in the
+# job's summary, and its tick or cross is on the pull request.
+#
+# Security (GitHub's "pwn request" trap): this runs on `pull_request`, never
+# `pull_request_target`, so it has no secret and its token only reads. A pull request's own change
+# to this file runs here too, and still has nothing to steal. The checkouts keep no credentials.
+# A pull request's words (its author, an address in a pack file) reach the shell only through
+# environment variables, never written into a script. Every action is pinned by its full commit.
+#
+# Before it runs, set M2_VERSION and M2_SHA256 below to a music2 release that has
+# `m2 registry` (the first is the one after 0.1.0) and the SHA-256 of its
+# m2-<version>-linux-x86_64.tar.gz (in the release's SHA256SUMS), and BUCKET_URL to the bucket's
+# public address (decision D10).
+
+name: Check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  M2_VERSION: "0.2.0"
+  M2_SHA256: "0000000000000000000000000000000000000000000000000000000000000000"
+  BUCKET_URL: "https://packs.example.com"
+  M2_AUDIO: none
+  M2_MIDI: none
+
+jobs:
+  check:
+    name: The robot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+
+      - name: Get m2
+        run: |
+          set -euo pipefail
+          curl -fsSL --proto '=https' -o m2.tar.gz \
+            "https://github.com/BreadBowlAI/music2/releases/download/v${M2_VERSION}/m2-${M2_VERSION}-linux-x86_64.tar.gz"
+          echo "${M2_SHA256}  m2.tar.gz" | sha256sum -c -
+          tar xzf m2.tar.gz --no-same-owner
+          echo "$PWD/m2-${M2_VERSION}-linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Check the pack files
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          set -euo pipefail
+          case "$ASSOCIATION" in
+            OWNER|MEMBER)
+              m2 registry check head --base base ;;
+            *)
+              # Someone not of BreadBowlAI changes only pack files, and only their own.
+              if ! diff -rq --exclude=.git --exclude=packs head base > outside.txt; then
+                echo "A pull request from outside BreadBowlAI may change only files under packs/. It changes:" >&2
+                cat outside.txt >&2
+                exit 1
+              fi
+              m2 registry check head --base base --author "$AUTHOR" ;;
+          esac
+
+      - name: Fetch the new versions' sources
+        run: |
+          set -euo pipefail
+          mkdir sources
+          m2 registry pending head --out bucket --from "$BUCKET_URL" > pending.txt
+          n=0
+          while read -r name version source; do
+            n=$((n + 1))
+            echo "fetching $name $version from $source"
+            mkdir "sources/$n"
+            curl -fsSL --proto '=https' --max-filesize 10000000000 -o "sources/$n.tar.gz" "$source"
+            tar xzf "sources/$n.tar.gz" -C "sources/$n" --no-same-owner --no-same-permissions
+            rm "sources/$n.tar.gz"
+          done < pending.txt
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          made=$(TZ=UTC0 git -C head log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
+          m2 registry build head --sources sources --out bucket --from "$BUCKET_URL" --made "$made" 2>&1 | tee built.txt
+
+      - name: Say what the robot found
+        if: always()
+        run: |
+          {
+            echo "## The registry's robot"
+            echo
+            echo '```'
+            cat built.txt 2> /dev/null || echo "It didn't get as far as a build: see the job's steps."
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
