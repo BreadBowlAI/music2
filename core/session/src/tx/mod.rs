@@ -399,6 +399,7 @@ pub(crate) fn put_file(snap: &mut Snapshot, p: &Path, bytes: Option<&[u8]>) {
     let Some(bytes) = bytes else { return };
     match DataPath::parse(p) {
         DataPath::Manifest
+        | DataPath::Lock
         | DataPath::Code(_)
         | DataPath::Arrangement
         | DataPath::Lane { .. }

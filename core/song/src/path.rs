@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! music2.toml                                  Manifest
+//! music2.lock                                  Lock (classed with the manifest, PACK-8)
 //! *.ts (outside data/, assets/, .music2/, node_modules/ and dot folders)   Code
 //! data/arrangement.json                        Arrangement
 //! data/<module>/                               Module (the folder itself)
@@ -22,6 +23,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::key::{Key, LaneAddr};
 
 pub const MANIFEST: &str = "music2.toml";
+/// The exact version and hash of each pack the song uses (PACK-8).
+pub const LOCK: &str = "music2.lock";
 pub const DATA: &str = "data";
 pub const ASSETS: &str = "assets";
 pub const LOCAL: &str = ".music2";
@@ -32,6 +35,8 @@ const ARRANGEMENT: &str = "arrangement.json";
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DataPath {
     Manifest,
+    /// `music2.lock` (PACK-8).
+    Lock,
     /// A TypeScript file, relative to the project.
     Code(PathBuf),
     Arrangement,
@@ -102,6 +107,7 @@ impl DataPath {
             [] => unknown(),
             [LOCAL, ..] => DataPath::Local(p.to_path_buf()),
             [MANIFEST] => DataPath::Manifest,
+            [LOCK] => DataPath::Lock,
             [LAYOUT] => DataPath::Presentation,
             [DATA, rest @ ..] => data(rest).unwrap_or_else(unknown),
             [ASSETS, rest @ ..] if !rest.is_empty() => AssetName::new(&rest.join("/")).map(DataPath::Asset).unwrap_or_else(|_| unknown()),
@@ -117,6 +123,7 @@ impl DataPath {
         let data = |rest: &[String]| PathBuf::from(format!("{DATA}/{}", rest.join("/")));
         match self {
             DataPath::Manifest => PathBuf::from(MANIFEST),
+            DataPath::Lock => PathBuf::from(LOCK),
             DataPath::Code(p) | DataPath::Local(p) | DataPath::Unknown(p) => p.clone(),
             DataPath::Arrangement => data(&[ARRANGEMENT.to_string()]),
             DataPath::Module { module } => data(&[module.segment()]),
@@ -135,7 +142,7 @@ impl DataPath {
 
     pub fn class(&self) -> Class {
         match self {
-            DataPath::Manifest => Class::Manifest,
+            DataPath::Manifest | DataPath::Lock => Class::Manifest,
             DataPath::Code(_) => Class::Code,
             DataPath::Arrangement => Class::Arrangement,
             DataPath::Module { .. } | DataPath::Lane { .. } | DataPath::PluginState { .. } | DataPath::Asset(_) => Class::Data,
@@ -219,7 +226,8 @@ pub fn denormal_asset(p: &Path) -> Option<AssetName> {
 }
 
 /// An asset's name: a path under `assets/`, `/`-separated (FMT-14). It is NFC and has no
-/// empty, `.` or `..` segment, no segment that starts with `.`, and no `\` or control character.
+/// empty, `.` or `..` segment, no segment that starts with `.`, and no `\`, `:` or control
+/// character: a `:` names a package's file instead (PACK-5).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AssetName(String);
 
@@ -231,6 +239,9 @@ impl AssetName {
             Some("a folder or file name in it is empty or starts with `.`")
         } else if s.chars().any(|c| c == '\\' || c.is_control()) {
             Some("it holds a `\\` or a control character")
+        } else if s.contains(':') {
+            // `<package>:<path>` names a package's file (PACK-5).
+            Some("it holds a `:`, which names a file in a package")
         } else if !icu_normalizer::ComposingNormalizerBorrowed::new_nfc().is_normalized(s) {
             Some("it isn't in Unicode normal form C")
         } else {
@@ -335,6 +346,7 @@ mod tests {
     fn the_path_table() {
         let rows = [
             ("music2.toml", DataPath::Manifest, Class::Manifest),
+            ("music2.lock", DataPath::Lock, Class::Manifest),
             ("song.ts", DataPath::Code("song.ts".into()), Class::Code),
             ("tracks/bass.ts", DataPath::Code("tracks/bass.ts".into()), Class::Code),
             ("lib/a/b.ts", DataPath::Code("lib/a/b.ts".into()), Class::Code),
@@ -459,6 +471,9 @@ mod tests {
             "a\\b.wav",
             "a\nb.wav",
             nfd,
+            // A `:` names a package's file (PACK-5), so a song's asset never holds one.
+            "a:b.wav",
+            "@alice/felt-piano:samples/c4.wav",
         ] {
             assert!(AssetName::new(bad).is_err(), "{bad:?}");
         }

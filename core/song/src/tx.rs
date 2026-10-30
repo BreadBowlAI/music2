@@ -287,6 +287,7 @@ impl TxPath {
         matches!(
             self.path,
             DataPath::Manifest
+                | DataPath::Lock
                 | DataPath::Code(_)
                 | DataPath::Arrangement
                 | DataPath::Lane { .. }
