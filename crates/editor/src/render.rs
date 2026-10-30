@@ -205,12 +205,10 @@ fn bounds(data: &DataSet, sample_rate: u32, from: f64, length: Length) -> Result
 }
 
 /// `packages` seeing what `song` was built with (PACK-9), so a render of a revision runs that
-/// revision's kernels whatever the set shows now.
-fn seen<'a>(song: &'a dyn Song, packages: &'a PackageSet) -> std::borrow::Cow<'a, PackageSet> {
-    match song.view() {
-        Some(view) => packages.viewing(view),
-        None => std::borrow::Cow::Borrowed(packages),
-    }
+/// revision's kernels whatever the set shows now. Every render of a song is made through it:
+/// `packages` gives the engine, the plugin host and the plugins, never the kernels.
+pub fn seen<'a>(song: &'a dyn Song, packages: &'a PackageSet) -> std::borrow::Cow<'a, PackageSet> {
+    packages.viewing(song.view())
 }
 
 impl Render {
@@ -336,6 +334,12 @@ impl Render {
     /// Whether it renders what an export holds from where it starts (see [`Rendered::exact`]).
     pub fn exact(&self) -> bool {
         self.exact
+    }
+
+    /// What its plan is made of: each node's shape, a kernel's module hash among them.
+    #[cfg(test)]
+    pub(crate) fn info(&self) -> Arc<m2_runtime::PlanInfo> {
+        self.renderer.info()
     }
 
     /// Stop rendering when `stop` is set (the app is quitting): the write then fails, and
@@ -1129,9 +1133,9 @@ mod tests {
         assert!((seconds - (32.0 * 60.0 / 124.0 + 2.0)).abs() < 1e-9, "{seconds}");
         for track in ["kick", "hats", "bass", "keys"] {
             let ir = rooted(&c.ir, track, "out").unwrap();
-            let flat = m2_ir::check(&ir, &packages).unwrap();
+            let parts = Arc::new(Parts::of(&*c, ir, &packages).unwrap());
+            let flat = parts.flat.clone();
             let stem = dir.0.join(format!("{track}.wav"));
-            let parts = Arc::new(Parts { ir, flat: flat.clone(), data: c.data.clone() });
             let r = Render::new(parts, &packages, SAMPLE_RATE, 0.0, Length::Seconds(seconds), Threads::Exactly(2))
                 .unwrap()
                 .write_float(&stem, |_| {})

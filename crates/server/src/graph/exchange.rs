@@ -99,11 +99,11 @@ impl Graph {
             let mut stems = vec![];
             for t in m2_editor::timeline::timeline(&o.session).tracks.into_iter().filter(|t| t.track && plays(&t.module)) {
                 let ir = m2_editor::render::rooted(&rev.compiled.ir, &t.module, "out")?;
-                let flat = m2_ir::check(&ir, &o.session.packages).map_err(|d| {
+                let stem = Parts::of(&*rev, ir, &o.session.packages).map_err(|d| {
                     let why = d.first().map_or_else(String::new, |d| format!(": {}", d.message));
                     anyhow!("{}'s stem doesn't build{why}", t.label)
                 })?;
-                stems.push((t.label, Arc::new(Parts { ir, flat, data: rev.compiled.data.clone() })));
+                stems.push((t.label, Arc::new(stem)));
             }
             if stems.is_empty() {
                 bail!("The song has no tracks to export as stems: each is muted in the song.");

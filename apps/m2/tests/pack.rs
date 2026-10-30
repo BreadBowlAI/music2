@@ -357,3 +357,75 @@ fn a_preset_outside_a_strict_range_is_named() {
     let text = failed(t.m2(&["pack", "check", tiny.to_str().unwrap()]));
     assert!(text.contains("presets/tiny-keys/Low.json") && text.contains("brightness") && text.contains("range"), "{text}");
 }
+
+/// A copy of the pack `tiny` at `version` with a kernel of its own, in a folder beside it:
+/// `@test/tiny:sine`, std's module under its own name (`tag` as a custom section, so each copy's
+/// module has its own hash), played by the instrument `tinyTone`.
+fn tiny_with_kernel(t: &Temp, version: &str, tag: &str) -> PathBuf {
+    let dir = tiny_at(t, version);
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
+    let toml = toml.replace(&format!("version = \"{version}\""), &format!("version = \"{version}\"\nwasm = \"k.wasm\""))
+        + "\n[[kernel]]\nname = \"sine\"\ndescription = \"A sine\"\ninputs = [\"freq: control<hz> = 440\"]\noutputs = [\"out: audio<1>\"]\n";
+    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
+    let mut wasm = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm")).unwrap();
+    let name = b"m2-test";
+    wasm.extend([0u8, (1 + name.len() + tag.len()) as u8, name.len() as u8]);
+    wasm.extend(name);
+    wasm.extend(tag.as_bytes());
+    std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
+    let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
+    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+                id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
+                inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
+                (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
+    std::fs::write(dir.join("src/index.ts"), index + tone).unwrap();
+    dir
+}
+
+/// A Tx that writes `files` (path, text) in the song at `song`, each based on what it holds now.
+fn tx_writing(song: &Path, files: &[(&str, String)]) -> serde_json::Value {
+    let mut base = serde_json::Map::new();
+    let mut ops = vec![];
+    let mut ranges = serde_json::Map::new();
+    for (path, text) in files {
+        let now = std::fs::read(song.join(path)).unwrap();
+        base.insert(path.to_string(), serde_json::json!(m2_song::Sha::of(&now).prefixed()));
+        ops.push(serde_json::json!({"op": "write", "file": path, "text": text}));
+        ranges.insert(path.to_string(), serde_json::json!("whole"));
+    }
+    serde_json::json!({"id": "tx-move", "base": base, "label": ["before", "after"], "ops": ops, "expect": {"confined": {"ranges": ranges}}})
+}
+
+// PACK-9, AGENT-7: `m2 listen --with` renders each side with its own packs: the song as it is with
+// 0.1.0 (no kernel of its own), the change with 0.2.0 and the kernel it plays.
+#[test]
+fn listen_with_renders_each_side_with_its_own_packs() {
+    let t = Temp::new("listen-with");
+    copy(&fixtures(), &t.0.join("packs"));
+    let song = t.0.join("packs/song-store");
+    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
+    ok(t.m2(&["pack", "install", tiny_with_kernel(&t, "0.2.0", "two").to_str().unwrap()]));
+    ok(t.m2(&["check", song.to_str().unwrap()]));
+    assert_eq!(locked(&song), "0.1.0");
+    // The move: the line, the lock (as `m2 pack update` would write it), and the keys playing the
+    // new version's kernel.
+    let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap().replace("\"@test/tiny\" = \"0.1\"", "\"@test/tiny\" = \"0.2\"");
+    let hash = m2_song::Sha::of(&std::fs::read(t.store().join("@test/tiny/0.2.0/m2pack.json")).unwrap());
+    let lock = std::fs::read_to_string(song.join("music2.lock")).unwrap();
+    let at = lock.find("sha256:").unwrap();
+    let lock = format!("{}{}{}", &lock[..at], hash.prefixed(), &lock[at + 71..]).replace("version = \"0.1.0\"", "version = \"0.2.0\"");
+    let keys = "import { track } from \"@m2/core\";\nimport { tinyTone } from \"@test/tiny\";\n\nexport default track(\"keys\", { name: \"Keys\" }, ({ lane }) => tinyTone(lane.notes(\"notes\")));\n";
+    let tx = tx_writing(&song, &[("music2.toml", manifest), ("music2.lock", lock), ("tracks/keys.ts", keys.to_string())]);
+    let file = t.0.join("move.json");
+    std::fs::write(&file, tx.to_string()).unwrap();
+    let out = ok(t.m2(&["listen", song.to_str().unwrap(), "--with", file.to_str().unwrap(), "--json"]));
+    let heard: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    let own = |side: &str| heard[side]["tracks"]["keys"]["own"].clone();
+    // Only 0.2.0 has the kernel, so "after" played it: a steady sine, 3 dB from peak to RMS.
+    let after = own("after");
+    assert!(after["silent"] == false && after["crest"].as_f64().is_some_and(|c| (c - 3.0).abs() < 0.2), "{heard:#}");
+    assert!(own("before")["silent"] == false, "before plays the pack's keys: {heard:#}");
+    assert!(heard["difference"].is_object(), "{heard:#}");
+    // Nothing was written: the song still uses 0.1.0.
+    assert_eq!(locked(&song), "0.1.0");
+}

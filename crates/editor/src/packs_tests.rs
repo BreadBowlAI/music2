@@ -222,3 +222,81 @@ fn a_store_pack_the_song_doesnt_use_puts_no_problem_on_it() {
     assert!(invalid.is_empty(), "{invalid:?}");
     assert!(crate::tracks::instruments(&s).iter().any(|i| i.component == "@test/tiny:tiny-keys"), "the rest is still offered");
 }
+
+/// `@test/tiny` at `version` in the store at `<f>/Packs`, as an install leaves it, with a kernel of
+/// its own: `@test/tiny:sine`, std's module under its own name (`tag` as a custom section, so each
+/// version's module has its own hash), played by its instrument `tinyTone`. Its module's hash.
+fn install_with_kernel(f: &Fixture, version: &str, tag: &str) -> m2_song::Sha {
+    let v = Version::parse(version).unwrap();
+    let dir = Store::at(f.0.join("Packs")).version_dir(&PackName::new("@test/tiny").unwrap(), &v);
+    copy(&tiny(), &dir);
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
+    let toml = toml.replace("version = \"0.1.0\"", &format!("version = \"{version}\"\nwasm = \"k.wasm\""))
+        + "\n[[kernel]]\nname = \"sine\"\ndescription = \"A sine\"\ninputs = [\"freq: control<hz> = 440\"]\noutputs = [\"out: audio<1>\"]\n";
+    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
+    let mut wasm = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm")).unwrap();
+    let name = b"m2-test";
+    wasm.extend([0u8, (1 + name.len() + tag.len()) as u8, name.len() as u8]);
+    wasm.extend(name);
+    wasm.extend(tag.as_bytes());
+    std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
+    let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
+    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+                id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
+                inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
+                (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
+    std::fs::write(dir.join("src/index.ts"), index + tone).unwrap();
+    let listing = Listing::of(&dir).unwrap();
+    std::fs::write(dir.join(LISTING), listing.text()).unwrap();
+    m2_song::Sha::of(&wasm)
+}
+
+const SINE: &str = "@test/tiny:sine";
+
+/// A song at `f` whose track `tone` plays `@test/tiny`'s own kernel, `"@test/tiny" = "0.1"` and
+/// locked to 0.1.0, with 0.1.0 (module `one`) installed: its session, and the module's hash.
+fn tone_song(f: &Fixture) -> (Session, m2_song::Sha) {
+    let m1 = install_with_kernel(f, "0.1.0", "one");
+    f.write("music2.toml", &format!("{MANIFEST}\"@test/tiny\" = \"0.1\"\n"));
+    f.write(
+        "song.ts",
+        "import { song } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport tone from \"./tracks/tone\";\n\nexport default song(() => master(mixer({ tone: tone.out })));\n",
+    );
+    f.write(
+        "tracks/tone.ts",
+        "import { track } from \"@m2/core\";\nimport { tinyTone } from \"@test/tiny\";\n\nexport default track(\"tone\", { name: \"Tone\" }, ({ lane }) => tinyTone(lane.notes(\"notes\")));\n",
+    );
+    let tiny = PackName::new("@test/tiny").unwrap();
+    let hash = Store::at(f.0.join("Packs")).hash(&tiny, &Version(0, 1, 0)).unwrap();
+    f.write("music2.lock", &Lock::default().with(tiny, Version(0, 1, 0), hash).canonical());
+    let s = open(f);
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    assert_eq!(s.packages.module_sha(SINE), Some(m1));
+    (s, m1)
+}
+
+/// The module hash `info`'s plan gives kernel `id`.
+fn module_of(info: &m2_runtime::PlanInfo, id: &str) -> Option<m2_song::Sha> {
+    info.shapes.iter().flatten().find_map(|s| match s {
+        m2_runtime::Shape::Kernel { id: k, wasm, .. } if k == id => Some(*wasm),
+        _ => None,
+    })
+}
+
+// PACK-9, RENDER-2: a stem renders with the packs of the revision it was made from, though the
+// song moved to another version before it rendered (stems render one at a time, edits go on).
+#[test]
+fn a_stem_renders_the_view_it_was_planned_on() {
+    use crate::render::{Length, Parts, Render, Threads};
+    let f = Fixture::new();
+    let (mut s, m1) = tone_song(&f);
+    let rev = s.accepted_arc();
+    let ir = crate::render::rooted(&rev.compiled.ir, "tone", "out").unwrap();
+    let stem = std::sync::Arc::new(Parts::of(&*rev, ir, &s.packages).unwrap_or_else(|d| panic!("{d:?}")));
+    // `m2 pack update` while the stem waits: the song moves to 0.1.1.
+    let m2 = install_with_kernel(&f, "0.1.1", "two");
+    write_lock(&mut s, pack::Move::All).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(s.packages.module_sha(SINE), Some(m2), "the song moved");
+    let r = Render::new(stem, &s.packages, 48_000, 0.0, Length::Seconds(0.1), Threads::Exactly(1)).unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(module_of(&r.info(), SINE), Some(m1), "the stem plays the version it was made with");
+}

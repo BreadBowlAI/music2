@@ -166,7 +166,9 @@ pub struct Heard {
     pub pictures: Vec<(String, Picture)>,
 }
 
-/// Listen to `ask`'s range of `rev`: render it with copy taps, and measure them.
+/// Listen to `ask`'s range of `rev`: render it with copy taps, and measure them. It runs the
+/// kernels of the packages `rev` was built with (PACK-9), whatever `packages` shows: a candidate
+/// (`m2 listen --with`) with its own.
 pub fn hear(rev: Arc<Revision>, packages: &PackageSet, ask: &Ask) -> Result<Heard> {
     let all = tapped(&rev);
     let tracks: Vec<Tapped> = match &ask.tracks {
@@ -185,6 +187,8 @@ pub fn hear(rev: Arc<Revision>, packages: &PackageSet, ask: &Ask) -> Result<Hear
     };
     let rate = rev.project.sample_rate();
     let song: Arc<dyn Song> = rev.clone();
+    let seen = crate::render::seen(&*song, packages);
+    let packages = &*seen;
     let namer = Namer::new(0, song.clone(), packages);
     let (flat, data) = (song.flat(), song.data());
     let frame = |s: f64| (s.max(0.0) * rate as f64).round() as u64;

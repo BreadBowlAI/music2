@@ -479,7 +479,8 @@ fn run() -> Result<()> {
                 // Played through an export of the root module, which stays `song` (ID-3): as a stem is.
                 ir = render::rooted(&ir, &track, &export)?;
             }
-            let flat = m2_ir::check(&ir, &pk).map_err(report)?;
+            let stem = std::sync::Arc::new(render::Parts::of(&c, ir, &pk).map_err(report)?);
+            let flat = &stem.flat;
             let impure = flat.order.iter().any(|&i| matches!(flat.nodes[i].op, FOp::Plugin { .. }));
             let sr = render_rate(&args, &project)?;
             let tempo = data.tempo().clone();
@@ -498,9 +499,10 @@ fn run() -> Result<()> {
                 }
             }
             // A fault that changes its sound stops it, named (RENDER-1).
-            let song = render::Parts { ir: ir.clone(), flat: flat.clone(), data: data.clone() };
-            let namer = m2_editor::faults::Namer::new(0, std::sync::Arc::new(song), &pk);
-            let mut r = Renderer::new(&flat, &data, &pk, sr).map_err(|e| namer.faulted(e))?;
+            // With the packages it was built with (PACK-9), as every render of a song is.
+            let seen = render::seen(&*stem, &pk);
+            let namer = m2_editor::faults::Namer::new(0, stem.clone(), &seen);
+            let mut r = Renderer::new(flat, &data, &seen, sr).map_err(|e| namer.faulted(e))?;
             let (mut runner, _pool) = render::threads_for(&r, threads);
             r.seek_on((from * sr as f64).round() as u64, &mut runner).map_err(|e| namer.faulted(e))?;
             let frames = r.render_on(seconds, &mut runner).map_err(|e| namer.faulted(e))?;
