@@ -17,6 +17,7 @@
 - [New songs, the songs folder and export](songs.md)
 - [Saving and undo](saving.md)
 - [Shortcuts](shortcuts.md)
+- [Finding sounds (⌘F)](finding-sounds.md)
 - [Sounds and effects](sounds.md)
 - [CLAP plugins](plugins.md)
 - [How a song is written](code.md)

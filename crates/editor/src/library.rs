@@ -213,6 +213,13 @@ pub fn items(src: &Sources) -> Vec<Item> {
     search(&out, &all).into_iter().cloned().collect()
 }
 
+/// The library with no song open (LIB-2): the components of `packages` (std's, found as the app
+/// finds it), the presets of std's folder `std` and of `yours`, and `plugins`.
+pub fn without_song(packages: &[(String, std::path::PathBuf)], std: Option<&Path>, yours: Option<&Path>, plugins: &[Plugin]) -> Vec<Item> {
+    let catalog = m2_script::describe(packages);
+    items(&Sources { catalog: &catalog, std, yours, plugins })
+}
+
 /// The package a ComponentId is from: `std` of `std:delay`; `song` for the song's own.
 fn package_of(component: &str) -> String {
     component.split_once(':').map_or("song", |(p, _)| p).to_string()
