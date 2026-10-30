@@ -215,6 +215,17 @@ pub fn types(packages: &PackageSet) -> Value {
                 }
             }
         }
+        // Its instruments written as data, as one module, unless its code has that module (PACK-13).
+        let data = m2_script::data_files(&p.dir);
+        if !data.is_empty() && !src.join("instruments.ts").is_file() && !src.join("instruments/index.ts").is_file() {
+            let read: Vec<(String, String)> = data
+                .iter()
+                .filter_map(|f| {
+                    Some((f.strip_suffix(".toml")?.to_string(), std::fs::read_to_string(p.dir.join("instruments").join(f)).ok()?))
+                })
+                .collect();
+            files.push(json!({"path": format!("{}/instruments.ts", p.name), "text": m2_song::instrument::types(&read)}));
+        }
     }
     files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
     json!({ "files": files })

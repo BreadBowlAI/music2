@@ -237,34 +237,7 @@ impl DataInstrument {
     /// imports last (they are hoisted). A function of the instrument alone.
     pub fn module(&self, package: &str, id: &str) -> String {
         let q = |s: &str| serde_json::to_string(s).expect("a string");
-        let controls: Vec<String> = CONTROLS
-            .iter()
-            .map(|(name, ctor, default, (lo, hi))| {
-                let v = self.controls.iter().find(|(k, _)| k == name).map_or(*default, |(_, v)| *v);
-                format!("{name}: control.{ctor}({}).range({}, {})", number(v), number(*lo), number(*hi))
-            })
-            .collect();
-        let mode = self.mode.as_deref().unwrap_or(MODE);
-        let voices = self.voices.unwrap_or(VOICES);
-        let modes: Vec<String> = MODES.iter().map(|m| q(m)).collect();
-        let pass: Vec<String> =
-            CONTROLS.iter().map(|c| format!("{0}: p.{0}", c.0)).chain(["mode: p.mode".into(), "voices: p.voices".into()]).collect();
-        let head = format!(
-            "export const {} = component({{ id: {}, label: {}, signature: signature<(notes: Events) => Audio>(), inputs: {{ notes: port.notes() }}, \
-             controls: {{ {} }}, settings: {{ mode: setting.choice([{}], {}), voices: setting.int({}) }}, output: port.audio(), \
-             editor: {{ category: {}, description: {} }} }}, (notes: Events, p: Params): Audio => sampler(notes, {{ regions, {} }})); \
-             const regions: readonly Region[] = [",
-            binding(id),
-            q(id),
-            q(&self.label),
-            controls.join(", "),
-            modes.join(", "),
-            q(mode),
-            number(voices),
-            q(&self.category),
-            q(&self.description),
-            pass.join(", "),
-        );
+        let head = format!("{} const regions: readonly Region[] = [", self.component(id, "regions"));
         let last = self.regions.iter().map(|r| r.line).max().unwrap_or(1).max(1) as usize;
         let mut lines = vec![String::new(); last];
         lines[0] = head;
@@ -293,6 +266,57 @@ impl DataInstrument {
         );
         lines.join("\n") + "\n"
     }
+
+    /// `export const <binding> = component(…);` on one line: the descriptor, and a body that plays
+    /// `regions` (an expression) on std's Sampler with the instrument's controls and settings.
+    fn component(&self, id: &str, regions: &str) -> String {
+        let q = |s: &str| serde_json::to_string(s).expect("a string");
+        let controls: Vec<String> = CONTROLS
+            .iter()
+            .map(|(name, ctor, default, (lo, hi))| {
+                let v = self.controls.iter().find(|(k, _)| k == name).map_or(*default, |(_, v)| *v);
+                format!("{name}: control.{ctor}({}).range({}, {})", number(v), number(*lo), number(*hi))
+            })
+            .collect();
+        let mode = self.mode.as_deref().unwrap_or(MODE);
+        let voices = self.voices.unwrap_or(VOICES);
+        let modes: Vec<String> = MODES.iter().map(|m| q(m)).collect();
+        let pass: Vec<String> =
+            CONTROLS.iter().map(|c| format!("{0}: p.{0}", c.0)).chain(["mode: p.mode".into(), "voices: p.voices".into()]).collect();
+        format!(
+            "export const {} = component({{ id: {}, label: {}, signature: signature<(notes: Events) => Audio>(), inputs: {{ notes: port.notes() }}, \
+             controls: {{ {} }}, settings: {{ mode: setting.choice([{}], {}), voices: setting.int({}) }}, output: port.audio(), \
+             editor: {{ category: {}, description: {} }} }}, (notes: Events, p: Params): Audio => sampler(notes, {{ regions: {regions}, {} }}));",
+            binding(id),
+            q(id),
+            q(&self.label),
+            controls.join(", "),
+            modes.join(", "),
+            q(mode),
+            number(voices),
+            q(&self.category),
+            q(&self.description),
+            pass.join(", "),
+        )
+    }
+}
+
+/// What a code editor checks `import { feltPiano } from "<package>/instruments"` against: one
+/// module declaring each instrument (`id`, its file's text) that reads, as its component, with no
+/// regions (types need none). One that doesn't read is left out: the build says why.
+pub fn types(instruments: &[(String, String)]) -> String {
+    let mut out = String::from(
+        "// The pack's instruments written as data (instruments/*.toml), as code editors see them.\n\
+         import { component, control, port, setting, signature, type Audio, type Events, type Params } from \"@m2/core\";\n\
+         import { sampler } from \"std/sampler\";\n",
+    );
+    for (id, text) in instruments {
+        if let Ok(i) = DataInstrument::read(text) {
+            out.push_str(&i.component(id, "[]"));
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// The name a data instrument is exported by: its id in camelCase, `felt-piano` → `feltPiano`; one

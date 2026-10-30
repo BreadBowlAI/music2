@@ -179,3 +179,13 @@ fn the_nearest_word_is_a_slip_away() {
     assert_eq!(nearest("colour", ["label", "level"]), None);
     assert_eq!(nearest("fiel", ["file", "pan"]), Some("file"));
 }
+
+#[test]
+fn code_editors_see_each_instrument_in_one_module() {
+    let t = types(&[("felt-piano".into(), PIANO.into()), ("broken".into(), "label = 3".into()), ("808-kit".into(), PIANO.into())]);
+    let lines: Vec<&str> = t.lines().collect();
+    assert_eq!(lines.len(), 5, "a comment, two imports and the two that read: {t}");
+    assert!(lines[3].starts_with("export const feltPiano = component({ id: \"felt-piano\""), "{t}");
+    assert!(lines[3].ends_with("sampler(notes, { regions: [], tune: p.tune, level: p.level, attack: p.attack, release: p.release, velocity: p.velocity, mode: p.mode, voices: p.voices }));"), "{t}");
+    assert!(lines[4].starts_with("export const _808Kit = component("), "{t}");
+}
