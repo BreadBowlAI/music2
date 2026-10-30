@@ -8,7 +8,8 @@
 //!
 //! [`index`] lists a folder's samples, measuring only the files the cache folder doesn't know by
 //! their path, size and modified time, so a folder indexed before is indexed again with no file
-//! read. Only WAV files are samples for now; other audio files are counted ("WAV only for now").
+//! read. Only WAV and FLAC files are samples for now (FMT-24); other audio files are counted ("WAV
+//! and FLAC only for now").
 //!
 //! Adding one to a song copies its file into `assets/` with a note beside it ([`note`],
 //! [`write_note`]), and places a clip, with Follow tempo for a loop whose tempo is known
@@ -79,8 +80,8 @@ const NAMES: [&[&str]; 19] = [
     &["foley", "footstep", "footsteps"],
 ];
 
-/// Audio files that aren't WAV, by extension: skipped and counted (LIB-4).
-const NOT_WAV: [&str; 9] = ["flac", "mp3", "aif", "aiff", "ogg", "m4a", "aac", "opus", "wma"];
+/// Audio files that are neither WAV nor FLAC, by extension: skipped and counted (LIB-4).
+const NOT_WAV: [&str; 8] = ["mp3", "aif", "aiff", "ogg", "m4a", "aac", "opus", "wma"];
 
 /// A loop's tempo, as `samples.toml` may say it and a guess may find it, in bpm.
 pub const TEMPOS: std::ops::RangeInclusive<f64> = 20.0..=300.0;
@@ -441,11 +442,11 @@ impl SamplesToml {
         for f in self.folder.keys() {
             let prefix = format!("{}/", f.trim_end_matches('/'));
             if !found.iter().any(|p| p.starts_with(&prefix)) {
-                out.push(format!("{SAMPLES_TOML} names the folder {f}, but samples/{f} holds no WAV file"));
+                out.push(format!("{SAMPLES_TOML} names the folder {f}, but samples/{f} holds no WAV or FLAC file"));
             }
         }
         for f in self.file.keys().filter(|f| !found.contains(f)) {
-            out.push(format!("{SAMPLES_TOML} names the file {f}, but there is no WAV file samples/{f}"));
+            out.push(format!("{SAMPLES_TOML} names the file {f}, but there is no WAV or FLAC file samples/{f}"));
         }
         out
     }
@@ -466,22 +467,54 @@ pub struct Measured {
 /// Frames read at a time while measuring.
 const PIECE: u64 = 65_536;
 
-/// Measure the WAV file at `path`, reading it once to its end as it will play: why it can't be, in
-/// words. A file the library can't offer is refused as an import refuses it: a rate outside
-/// 8,000 to 384,000 Hz, over 3 hours, or a sample that isn't a number.
+/// Measure the WAV or FLAC file at `path` (told by its first bytes, FMT-24), reading it once to its
+/// end as it will play: why it can't be, in words after its name (`doesn't read as a WAV file
+/// (…)`). A file the library can't offer is refused as an import refuses it: a rate outside 8,000
+/// to 384,000 Hz, over 3 hours, a sample that isn't a number, a FLAC music2 doesn't read.
 pub fn measure(path: &Path) -> Result<Measured, String> {
-    let wav = m2_runtime::stream::Wav::open(path).map_err(|e| format!("{e:#}"))?;
-    if wav.frames() == 0 {
+    use m2_runtime::decode::Kind;
+    match m2_runtime::decode::kind_of(path).map_err(|e| format!("can't be read ({e})"))? {
+        Some(Kind::Wav) => measure_wav(path).map_err(|why| format!("doesn't read as a WAV file ({why})")),
+        Some(Kind::Flac) => measure_flac(path).map_err(|why| format!("doesn't read as a FLAC file ({why})")),
+        None => Err("isn't a WAV or FLAC file".into()),
+    }
+}
+
+/// Whether a file of `frames` at `rate` is one the library offers, as an import takes it: why not.
+fn offered(frames: u64, rate: u32) -> Result<(), String> {
+    if frames == 0 {
         return Err("it holds no samples".into());
     }
-    let rate = wav.rate as u32;
     if !crate::import::RATES.contains(&rate) {
         return Err(format!("it plays at {rate} Hz: music2 takes files from 8,000 to 384,000 Hz"));
     }
-    let seconds = wav.frames() as f64 / wav.rate;
-    if seconds > crate::import::LONGEST {
+    if frames as f64 / rate as f64 > crate::import::LONGEST {
         return Err("it is longer than 3 hours: music2 takes files up to 3 hours".into());
     }
+    Ok(())
+}
+
+/// [`measure`] of a FLAC: its header checked before a sample is decoded, then each block in turn,
+/// its first two channels' peak as the WAV of it would give.
+fn measure_flac(path: &Path) -> Result<Measured, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut f = m2_runtime::decode::Flac::new(file).map_err(|e| format!("{e:#}"))?;
+    offered(f.frames, f.rate)?;
+    let (scale, keep) = (m2_runtime::decode::scale(f.bits), (f.channels as usize).min(2));
+    let (mut block, mut peak) = (vec![], 0f32);
+    while f.next(&mut block).map_err(|e| format!("{e:#}"))? > 0 {
+        peak = block[..keep].iter().flatten().fold(peak, |p, &v| p.max((v as f32 * scale).abs()));
+    }
+    let hash = m2_song::Sha::of_file(path).map_err(|e| e.to_string())?.hex();
+    Ok(Measured { seconds: f.frames as f64 / f.rate as f64, channels: keep as u16, rate: f.rate, peak: peak as f64, hash })
+}
+
+/// [`measure`] of a WAV, read in pieces as it plays.
+fn measure_wav(path: &Path) -> Result<Measured, String> {
+    let wav = m2_runtime::stream::Wav::open(path).map_err(|e| format!("{e:#}"))?;
+    let rate = wav.rate as u32;
+    offered(wav.frames(), rate)?;
+    let seconds = wav.frames() as f64 / wav.rate;
     let (mut bytes, mut piece) = (vec![], vec![vec![]; wav.channels()]);
     let (mut at, mut peak) = (0, 0f32);
     while at < wav.frames() {
@@ -508,9 +541,9 @@ pub enum Root<'a> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Indexed {
     pub items: Vec<Item>,
-    /// Audio files that aren't WAV, skipped: "WAV only for now".
+    /// Audio files that are neither WAV nor FLAC, skipped: "WAV and FLAC only for now".
     pub not_wav: usize,
-    /// WAV files that don't read, and why.
+    /// WAV and FLAC files that don't read, and why.
     pub unreadable: Vec<String>,
     /// What is wrong with the package's `samples.toml`, in words.
     pub problems: Vec<String>,
@@ -565,7 +598,7 @@ struct Found {
 /// What [`files_in`] found under a folder.
 #[derive(Default)]
 struct Walked {
-    /// The WAV files, by sorted path.
+    /// The WAV and FLAC files, by sorted path.
     wavs: Vec<Found>,
     /// Other audio files, by extension ([`NOT_WAV`]).
     not_wav: usize,
@@ -575,7 +608,7 @@ struct Walked {
     unread: Vec<String>,
 }
 
-/// The WAV files under `dir`, by sorted path, and the other audio files counted: only folders and
+/// The WAV and FLAC files under `dir`, by sorted path, and the other audio files counted: only folders and
 /// plain files, never inside a hidden folder (`.git`), never through a link, never a pipe or a
 /// device (which would block a read for good). None, if `dir` can't be read.
 fn files_in(dir: &Path) -> Option<Walked> {
@@ -602,7 +635,7 @@ fn files_in(dir: &Path) -> Option<Walked> {
                 stack.push((e.path(), rel));
                 continue;
             }
-            if !is_wav_name(&rel) {
+            if !is_audio_name(&rel) {
                 out.not_wav += usize::from(NOT_WAV.contains(&extension(&rel).as_str()));
                 continue;
             }
@@ -624,9 +657,10 @@ fn extension(rel: &str) -> String {
     Path::new(rel).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
-/// Whether a file is a WAV, by its name in any capitals (`.wav`, `.WAV`, `.wave`).
-pub fn is_wav_name(rel: &str) -> bool {
-    matches!(extension(rel).as_str(), "wav" | "wave")
+/// Whether a file may be a sample, by its name in any capitals: a WAV's (`.wav`, `.WAV`, `.wave`)
+/// or a FLAC's (`.flac`). What it is, is told by its first bytes when it is measured (FMT-24).
+pub fn is_audio_name(rel: &str) -> bool {
+    matches!(extension(rel).as_str(), "wav" | "wave" | "flac")
 }
 
 /// A path as an id and the cache write it, exactly: the path itself when it is UTF-8; else as
@@ -653,11 +687,11 @@ pub fn base_of(root: Root) -> PathBuf {
     }
 }
 
-/// The samples of `root` (LIB-4, LIB-5): every WAV file under its folder (a package's `samples/`),
+/// The samples of `root` (LIB-4, LIB-5): every WAV and FLAC file under its folder (a package's `samples/`),
 /// measured, or found in the cache folder `cache` by its exact path, size and modified time; then
 /// what the package's `samples.toml` says of each, and the guess for the rest. The cache is written
 /// again when a file was measured or is gone, keeping the entries of a subfolder that couldn't be
-/// read. Other audio files are counted, and a WAV that doesn't read is named. A folder of yours
+/// read. Other audio files are counted, and a file that doesn't read is named. A folder of yours
 /// that isn't there is `missing`: nothing indexed, the cache kept.
 pub fn index(root: Root, cache: Option<&Path>) -> Indexed {
     index_until(root, cache, &AtomicBool::new(false))
@@ -718,7 +752,7 @@ pub fn index_until(root: Root, cache: Option<&Path>, stop: &AtomicBool) -> Index
                 match measure(&f.path) {
                     Ok(m) => m,
                     Err(why) => {
-                        out.unreadable.push(format!("{} doesn't read as a WAV file ({why})", f.rel));
+                        out.unreadable.push(format!("{} {why}", f.rel));
                         continue;
                     }
                 }
@@ -783,7 +817,7 @@ pub fn forget(cache: &Path, dir: &Path) {
 }
 
 /// What `m2 pack check` finds wrong with the samples of the pack in `dir` (PACK-12, LIB-4), in
-/// words: every WAV under `samples/` decodes, and `samples.toml` reads strictly and names only
+/// words: every WAV and FLAC under `samples/` decodes, and `samples.toml` reads strictly and names only
 /// files and folders there. Whether it lists any sample, too: a pack of samples alone needs no
 /// component.
 pub fn check(dir: &Path) -> (Vec<String>, bool) {
@@ -803,7 +837,7 @@ pub fn check(dir: &Path) -> (Vec<String>, bool) {
     let mut wavs = vec![];
     for f in files_in(&dir.join(SAMPLES_DIR)).map(|w| w.wavs).unwrap_or_default() {
         if let Err(why) = measure(&f.path) {
-            out.push(format!("{SAMPLES_DIR}/{} doesn't read as a WAV file ({why})", f.rel));
+            out.push(format!("{SAMPLES_DIR}/{} {why}", f.rel));
         }
         wavs.push(f.rel);
     }
@@ -953,9 +987,11 @@ pub fn note_name(asset: &str) -> String {
     format!("{asset}.json")
 }
 
-/// Whether `note` is a note of yours: `{"from": {"folder": true}}`, which credits no one.
+/// Whether `note` is a note of yours, which credits no one: `{"from": {"folder": true}}`, or an
+/// import's that says only what its WAV was made from (FMT-24), with that or alone.
 fn yours(note: &Value) -> bool {
-    note == &json!({ "from": { "folder": true } })
+    let Some(o) = note.as_object() else { return false };
+    !o.is_empty() && o.keys().all(|k| k == "from" || k == "made_from") && o.get("from").is_none_or(|f| f == &json!({ "folder": true }))
 }
 
 /// Write `note` beside asset `asset` in the song in `dir` (LIB-7): created only if it isn't there
@@ -1029,6 +1065,35 @@ pub fn still_plain(s: &Sample) -> Result<m2_os::fs::Stamp, String> {
         return Err(format!("{} isn't a plain file any more: a sample is only ever read where it was found", s.file.display()));
     }
     Ok(m2_os::fs::Stamp::of(&m))
+}
+
+/// A FLAC sample's preview (LIB-6, FMT-24): the WAV of its samples, made now, so the page needs no
+/// FLAC decoder; none for a WAV, which is its own preview. The file opened must be the one stamped
+/// `stamp` when it was checked (never a link put there since), and the WAV it makes at most
+/// [`PREVIEW_BYTES`], from the FLAC's header, before a sample is decoded. Why not, in words.
+pub fn flac_preview(s: &Sample, stamp: m2_os::fs::Stamp) -> Result<Option<Vec<u8>>, String> {
+    use m2_runtime::decode::{self, Flac, Kind};
+    let file = std::fs::File::open(&s.file).map_err(|e| e.to_string())?;
+    if file.metadata().map(|m| m2_os::fs::Stamp::of(&m)).ok() != Some(stamp) {
+        return Err(format!("{} changed as it was asked for: a sample is only ever read where it was found", s.file.display()));
+    }
+    let mut head = [0u8; decode::HEAD];
+    let n = m2_os::fs::read_full_at(&file, &mut head, 0, decode::HEAD).map_err(|e| e.to_string())?;
+    if decode::kind(&head[..n]) != Some(Kind::Flac) {
+        return Ok(None);
+    }
+    let flac = Flac::new(std::io::BufReader::new(file)).map_err(|e| format!("{e:#}"))?;
+    let wav = flac.frames * flac.channels as u64 * (flac.bits as u64 / 8) + 44;
+    if wav > PREVIEW_BYTES {
+        return Err(format!(
+            "as a WAV it is {} MB, too long to preview here (up to {} MB): add it to the song to hear it",
+            wav / 1_000_000,
+            PREVIEW_BYTES / 1_000_000
+        ));
+    }
+    let mut out = std::io::Cursor::new(Vec::with_capacity(wav as usize));
+    decode::write_wav(flac, &mut out).map_err(|e| format!("{e:#}"))?;
+    Ok(Some(out.into_inner()))
 }
 
 #[cfg(test)]

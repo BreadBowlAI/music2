@@ -43,7 +43,7 @@ fn rendered(clips: &[AudioClip], assets: &Path, tempo: &TempoMap, channels: usiz
     let mut out = vec![vec![0.0f32; len]; channels];
     let k = stretch();
     for c in clips {
-        let asset = Arc::new(audio::load_wav(&assets.join(&c.asset)).unwrap());
+        let asset = Arc::new(crate::decode::load(&assets.join(&c.asset)).unwrap());
         let data = audio::render_clip(c, &asset, tempo, SR, Some(&k)).unwrap();
         let at = (tempo.seconds_at(c.start) * SR).round() as usize;
         for (ch, o) in out.iter_mut().enumerate() {
@@ -399,6 +399,25 @@ fn a_render_whose_disk_fills_goes_on_in_memory() {
     }
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "its part file went, and no render is named");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+// FMT-24, RENDER-1: a clip whose file in assets/ is a FLAC (a song's clips are WAV: an import
+// writes a FLAC as one) fails an export, naming the clip, with a fault of its own: the session says
+// it isn't a WAV, not that it may be damaged. Live it is silent, said the same way.
+#[test]
+fn an_export_of_a_clip_on_a_flac_fails_naming_it() {
+    use crate::fault::{Code, Failed, Subject};
+    let (ir, _, dir) = super::audio_song(&[], serde_json::json!([{"start": 0, "length": 4, "asset": "loop.flac"}]));
+    std::fs::write(dir.join("assets/loop.flac"), include_bytes!("../../tests/fixtures/flac/16bit-stereo.flac")).unwrap();
+    let tl = super::data(&ir, &dir);
+    let pk = super::std_packages();
+    let flat = super::check(&ir, &pk).unwrap();
+    let mut r = crate::Renderer::new(&flat, &tl, &pk, SR as u32).unwrap();
+    let e = r.render(1.0).map(drop).expect_err("the render stops");
+    let fault = e.downcast_ref::<Failed>().map(|f| (f.fault.code, f.fault.subject));
+    assert_eq!(fault, Some((Code::NotWav, Subject::Clip { lane: 0, clip: 0 })), "{e:#}");
+    assert_eq!(Code::NotWav.diag(), "asset.unreadable");
+    std::fs::remove_dir_all(dir).ok();
 }
 
 // io r8, RENDER-1 (the ex plan's slice 2): an export never finishes with a clip silent. A streamed

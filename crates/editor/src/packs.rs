@@ -220,7 +220,7 @@ pub fn installed(store: &Store) -> Vec<Installed> {
 }
 
 /// The file types a pack may hold (design P3), besides `LICENSE` with no extension.
-pub const FILE_TYPES: &[&str] = &["ts", "wasm", "toml", "json", "md", "txt", "wav"];
+pub const FILE_TYPES: &[&str] = &["ts", "wasm", "toml", "json", "md", "txt", "wav", "flac"];
 
 /// What `m2 pack check` finds in the pack in `dir` (PACK-12), in words: empty when it is good.
 /// `std` is the std this app has, which the pack builds against.

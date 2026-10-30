@@ -392,6 +392,9 @@ fn a_pack_of_samples_alone_checks_and_its_samples_are_checked() {
     std::fs::write(drums.join("m2pkg.toml"), "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\n").unwrap();
     std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n").unwrap();
     short_wav(&drums.join("samples/kicks/Boom.wav"));
+    // FMT-24: a FLAC sample checks too, and is found.
+    let flac = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/16bit-mono.flac");
+    std::fs::copy(flac, drums.join("samples/kicks/Thud.flac")).unwrap();
     let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
     assert!(out.status.success(), "{}", said(&out));
     let out = t.m2(&["pack", "install", drums.to_str().unwrap()]);
@@ -400,15 +403,20 @@ fn a_pack_of_samples_alone_checks_and_its_samples_are_checked() {
     let items: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", said(&out)));
     assert_eq!(items[0]["id"], "sample:@alice/drums:samples/kicks/Boom.wav", "{items}");
     assert_eq!((&items[0]["package"], &items[0]["sample"]["instrument"]), (&serde_json::json!("@alice/drums"), &serde_json::json!("kick")));
+    let out = t.m2(&["search", "thud", "--kind", "sample", "--json"]);
+    let items: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", said(&out)));
+    assert_eq!(items[0]["id"], "sample:@alice/drums:samples/kicks/Thud.flac", "{items}");
 
     std::fs::write(drums.join("samples/kicks/broken.wav"), b"RIFF0000WAVEnope").unwrap();
     std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"cowbell\"\n\n[file.\"snares/gone.wav\"]\n").unwrap();
     let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(1), "{}", said(&out));
     let text = said(&out);
-    for want in
-        ["samples/kicks/broken.wav doesn't read as a WAV file", "instrument cowbell isn't one of", "no WAV file samples/snares/gone.wav"]
-    {
+    for want in [
+        "samples/kicks/broken.wav doesn't read as a WAV file",
+        "instrument cowbell isn't one of",
+        "no WAV or FLAC file samples/snares/gone.wav",
+    ] {
         assert!(text.contains(want), "says {want}: {text}");
     }
 }
@@ -643,16 +651,58 @@ fn an_sfz_imports_checks_and_renders_alike_on_1_and_4_threads() {
     assert!(peak(0.25, 0.3) > 0, "the release sounds as the soft note ends");
 }
 
-// PACK-14: a FLAC sample stops the import before anything is written.
+// PACK-14, FMT-24, RENDER-2: an SFZ whose recordings are FLAC imports into a pack that keeps them
+// as they are, checks, and plays the very bits of the same pack made of the WAVs of them.
 #[test]
-fn a_flac_sample_stops_the_import() {
+fn a_flac_sample_is_copied_and_renders_as_its_wav() {
     let t = Temp::new("sfz-flac");
+    let flacs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/tiny-keys");
+    let mut renders = vec![];
+    for kind in ["wav", "flac"] {
+        let input = t.0.join(format!("in-{kind}"));
+        copy(&sfz_fixture(), &input);
+        if kind == "flac" {
+            for e in std::fs::read_dir(input.join("samples")).unwrap().flatten() {
+                std::fs::remove_file(e.path()).unwrap();
+            }
+            for e in std::fs::read_dir(&flacs).unwrap().flatten() {
+                std::fs::copy(e.path(), input.join("samples").join(e.file_name())).unwrap();
+            }
+            for sfz in ["Tiny Keys.sfz", "soft.sfz"] {
+                let text = std::fs::read_to_string(input.join(sfz)).unwrap();
+                std::fs::write(input.join(sfz), text.replace(".wav", ".flac")).unwrap();
+            }
+        }
+        let pack = t.0.join(format!("pack-{kind}"));
+        let sfz = input.join("Tiny Keys.sfz");
+        let text = ok(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+        assert!(text.contains("tiny-keys plays 5 regions from 5 recordings") && text.contains("good to install"), "{kind}: {text}");
+        if kind == "flac" {
+            assert_eq!(std::fs::read(pack.join("samples/c4-loud.flac")).unwrap(), std::fs::read(flacs.join("c4-loud.flac")).unwrap());
+            let toml = std::fs::read_to_string(pack.join("instruments/tiny-keys.toml")).unwrap();
+            assert!(toml.contains("file = \"samples/g4-soft.flac\"") && !toml.contains(".wav"), "{toml}");
+        }
+        let song = t.0.join(format!("song-{kind}"));
+        tiny_keys_song(&song, &pack);
+        let out = t.0.join(format!("{kind}.wav"));
+        ok(t.m2(&["render", song.to_str().unwrap(), out.to_str().unwrap(), "--seconds", "4"]));
+        renders.push(std::fs::read(&out).unwrap());
+    }
+    assert!(renders[0] == renders[1], "the pack of FLACs plays the bits of the pack of WAVs");
+}
+
+// PACK-14, FMT-24: a recording of another kind than WAV or FLAC (told by its first bytes) stops the
+// import before anything is written, naming it.
+#[test]
+fn an_ogg_sample_stops_the_import() {
+    let t = Temp::new("sfz-ogg");
     copy(&sfz_fixture(), &t.0.join("in"));
     let sfz = t.0.join("in/Tiny Keys.sfz");
-    std::fs::write(&sfz, std::fs::read_to_string(&sfz).unwrap().replace("c4-loud.wav", "c4-loud.flac")).unwrap();
+    std::fs::write(&sfz, std::fs::read_to_string(&sfz).unwrap().replace("c4-loud.wav", "c4-loud.ogg")).unwrap();
+    std::fs::write(t.0.join("in/samples/c4-loud.ogg"), b"OggS\0\x02 a sound in another kind of file").unwrap();
     let pack = t.0.join("pack");
     let text = failed(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
-    assert!(text.contains("c4-loud.flac is a FLAC file: convert it to WAV first; music2 reads only WAV for now"), "{text}");
+    assert!(text.contains("c4-loud.ogg isn't a WAV or FLAC file: music2 reads those two; save it as a WAV first"), "{text}");
     assert!(!pack.exists());
 }
 

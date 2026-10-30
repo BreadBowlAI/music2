@@ -451,6 +451,66 @@ fn a_samples_preview_is_its_file_and_only_a_listed_one() {
     }
 }
 
+/// A FLAC fixture's bytes, as libsndfile made it (`core/runtime/tests/fixtures/flac/make.py`).
+fn flac(name: &str) -> Vec<u8> {
+    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac").join(name)).unwrap()
+}
+
+/// Each channel's samples as their bits.
+fn bits(a: &m2_runtime::audio::Asset) -> Vec<Vec<u32>> {
+    a.channels.iter().map(|c| c.iter().map(|s| s.to_bits()).collect()).collect()
+}
+
+const SNARE: &str = "sample:@alice/loops:samples/one-shots/snare.flac";
+
+// LIB-6, FMT-24: a FLAC sample's preview is the WAV of its samples, made when it is asked for, so
+// the page needs no FLAC decoder: the FLAC's very bits.
+#[test]
+fn a_flac_samples_preview_is_the_wav_of_it() {
+    let scratch = Scratch::new("flac-preview");
+    let store = scratch.0.join("Packs");
+    let dir = store.join("@alice/loops/1.2.0");
+    loops_pack(&dir);
+    std::fs::write(dir.join("samples/one-shots/snare.flac"), flac("24bit-stereo.flac")).unwrap();
+    m2_editor::packs::build(&dir).unwrap();
+    let running = serving(Folders { packs: Some(store.clone()), ..Folders::default() });
+    let (status, kind, body) = get(&running.url, &format!("/api/library/preview?id={}", enc(SNARE)));
+    assert_eq!((status, kind.as_str()), (200, "audio/wav"), "{}", String::from_utf8_lossy(&body));
+    let wav = scratch.0.join("preview.wav");
+    std::fs::write(&wav, &body).unwrap();
+    assert_eq!(hound::WavReader::open(&wav).unwrap().spec().bits_per_sample, 24);
+    let want = bits(&m2_runtime::decode::load(&dir.join("samples/one-shots/snare.flac")).unwrap());
+    assert!(bits(&m2_runtime::decode::load(&wav).unwrap()) == want, "the FLAC's bits");
+}
+
+// LIB-7, FMT-24: adding a FLAC sample brings in the WAV of its samples, with its bits, and a note
+// with the pack's credit and what the WAV was made from.
+#[test]
+fn adding_a_flac_sample_brings_in_its_wav_with_its_note() {
+    let scratch = Scratch::new("add-flac");
+    let pack = scratch.0.join("loops");
+    loops_pack(&pack);
+    let source = flac("16bit-stereo.flac");
+    std::fs::write(pack.join("samples/one-shots/snare.flac"), &source).unwrap();
+    let song = Scratch::new("add-flac-song");
+    song_with_pack(&song.0, &pack);
+    let running = serving(Folders::default());
+    let session = running.state.graph.open(&song.0).unwrap()["session"].as_u64().unwrap();
+    let (status, done) =
+        post(&running.url, "/api/library/sample", "t00ls", &json!({"session": session, "id": SNARE, "to": {"kind": "below", "beat": 0}}));
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!((&done["asset"], &done["reused"], &done["noted"]), (&json!("snare.wav"), &json!(false), &json!(true)));
+    let want = bits(&m2_runtime::decode::load(&pack.join("samples/one-shots/snare.flac")).unwrap());
+    assert!(bits(&m2_runtime::decode::load(&song.0.join("assets/snare.wav")).unwrap()) == want, "the FLAC's bits");
+    let note: Value = serde_json::from_str(&std::fs::read_to_string(song.0.join("assets/snare.wav.json")).unwrap()).unwrap();
+    let from = json!({"pack": "@alice/loops", "version": "1.2.0", "file": "samples/one-shots/snare.flac", "author": "Alice Example", "license": "CC-BY-4.0"});
+    let made = json!({"file": "snare.flac", "format": "FLAC", "sha256": m2_song::Sha::of(&source).hex()});
+    assert_eq!(note, json!({"from": from, "made_from": made}));
+    assert!(!song.0.join("assets/snare.flac").exists(), "no FLAC in assets/");
+    let track = done["tracks"][0]["module"].as_str().unwrap().to_string();
+    assert_eq!(audio_clips(&song.0, &track)[0]["asset"], json!("snare.wav"));
+}
+
 /// The open song's session and the clips of its audio lane `module`, as the files say.
 fn audio_clips(dir: &Path, module: &str) -> Vec<Value> {
     let text = std::fs::read_to_string(dir.join(format!("data/{module}/clips.json"))).unwrap_or_else(|_| "{\"clips\": []}".into());
@@ -564,14 +624,16 @@ fn a_sample_dropped_on_a_sampler_is_its_file() {
 }
 
 // LIB-5: a folder of yours is kept in the settings and indexed in the background: a search never
-// waits for it, and finds its samples once it is; what isn't WAV is counted; Remove forgets it.
+// waits for it, and finds its samples once it is; what isn't WAV or FLAC is counted; Remove forgets
+// it.
 #[test]
 fn a_folder_is_indexed_in_the_background() {
     let scratch = Scratch::new("folder");
     let mine = scratch.0.join("My Samples");
     tone(&mine.join("Kicks/Big Kick.wav"), 1, 0.2);
     tone(&mine.join("Loops/Funk Guitar 92 Gmin.wav"), 2, 1.0);
-    std::fs::write(mine.join("Loops/vox.flac"), b"fLaC").unwrap();
+    std::fs::write(mine.join("Loops/Vox Chop.flac"), flac("16bit-mono.flac")).unwrap();
+    std::fs::write(mine.join("Loops/vox.mp3"), b"ID3 not read").unwrap();
     let running = serving(Folders { samples: Some(scratch.0.join("cache")), ..Folders::default() });
     running.state.keep_settings(scratch.0.join("settings.json"));
     let (status, shown) = post(&running.url, "/api/library/folders", "t0k", &json!({"add": mine}));
@@ -585,8 +647,8 @@ fn a_folder_is_indexed_in_the_background() {
     let found = json(&body);
     let labels: Vec<&str> =
         found["items"].as_array().unwrap().iter().filter(|i| i["package"] == "yours").map(|i| i["label"].as_str().unwrap()).collect();
-    assert_eq!(labels, ["Big Kick", "Funk Guitar 92 Gmin"]);
-    assert_eq!(found["folders"]["not_wav"], json!(1), "WAV only for now");
+    assert_eq!(labels, ["Big Kick", "Funk Guitar 92 Gmin", "Vox Chop"], "a FLAC is a sample too (FMT-24)");
+    assert_eq!(found["folders"]["not_wav"], json!(1), "the MP3: WAV and FLAC only for now");
     let funk = found["items"].as_array().unwrap().iter().find(|i| i["label"] == "Funk Guitar 92 Gmin").unwrap();
     assert_eq!(
         (&funk["sample"]["bpm"], &funk["sample"]["key"], &funk["sample"]["from"]),

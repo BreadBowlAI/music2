@@ -135,7 +135,7 @@ fn a_refused_import_adds_nothing() {
     );
     assert!(why.unwrap_err().to_string().contains("no lane `nope`"));
     let why = graph.import_audio(session, vec![bytes("song.mp3", b"ID3 not a wav")], onto_vox(0.0)).unwrap_err().to_string();
-    assert!(why.starts_with("song.mp3 isn't a WAV file. music2 reads WAV files."), "{why}");
+    assert!(why.starts_with("song.mp3 isn't a WAV or FLAC file. music2 reads WAV and FLAC files."), "{why}");
     assert!(std::fs::read_dir(dir.join("assets")).map_or(true, |d| d.count() == 0));
     assert_eq!(clips(&dir), Vec::<Value>::new());
     let _ = std::fs::remove_dir_all(&dir);

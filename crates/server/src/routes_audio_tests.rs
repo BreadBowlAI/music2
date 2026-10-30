@@ -244,7 +244,7 @@ fn a_wav_dropped_on_a_sampler_sets_its_file_through_the_route() {
     // Not a WAV: refused in words; nothing is copied or written.
     let path = format!("/api/graph/sample?session={session}&at={at}&call={}&name=notes.txt", enc(&call));
     let (status, why) = post(&running.url, &path, "application/octet-stream", b"hello, not a sound");
-    assert!(status == 400 && why["error"].as_str().unwrap().contains("notes.txt isn't a WAV file"), "{status} {why:#}");
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("notes.txt isn't a WAV or FLAC file"), "{status} {why:#}");
     assert!(!dir.join("assets/notes.txt").exists());
     assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("{ sample: \"kick.wav\" }"));
     let _ = std::fs::remove_dir_all(&dir);

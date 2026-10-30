@@ -268,6 +268,23 @@ fn a_streamed_file_that_cant_be_read_is_told_once() {
     assert!(rig.graph.status().playing, "the song plays on");
 }
 
+// FMT-24: a clip whose file in assets/ is a FLAC (put there by hand: an import makes a WAV of it)
+// plays silent, and says so in words that name it and say how to bring it in. Never noise.
+#[test]
+fn a_clip_on_a_flac_is_silent_and_says_why() {
+    let (song, clips) = drums(r#"{"id": "a", "start": 0, "length": 4, "asset": "loop.flac"}"#);
+    let mut rig = Rig::with(song, |f| {
+        let flac = include_bytes!("../../../../core/runtime/tests/fixtures/flac/16bit-stereo.flac");
+        std::fs::create_dir_all(f.0.join("assets")).unwrap();
+        std::fs::write(f.0.join("assets/loop.flac"), flac).unwrap();
+        f.put("data/drums/loops.json", &clips);
+    });
+    let said = "loop.flac on Drums isn't a WAV file, so it plays silent: a clip plays WAV files only. To use a FLAC, import it \
+                (File ▸ Import Audio…): music2 brings it in as a WAV. The rest of the song plays on.";
+    assert_eq!(rig.told_soon(), [said]);
+    assert_eq!(rig.problems(), [("asset.unreadable".into(), Some("drums".into()), said.into())]);
+}
+
 // ab r4, RENDER-25, D3: a Sampler file that is in assets/ but won't decode is one problem,
 // `asset.unreadable`, naming the file, what plays it and its track, toasted once. Its build found
 // it, before the plan was sent. A new plan finds it again: listed again, with no toast. Before,

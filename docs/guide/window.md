@@ -75,7 +75,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - **+** on a box that makes sound opens the effect browser: 17 effects in seven groups (Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility), as the effects themselves declare them. Type to search, then press Enter or click. The bin icon on an effect removes it.
   - Zoom with ⌘ and scroll, or pinch. The buttons at the bottom right zoom and fit the graph to the panel.
   - An instrument's card says how it plays under its name, such as "Plays one note at a time." (the rest is in its tooltip).
-  - A **Sampler**'s card takes a WAV file: drop one on it (see [Sounds and effects](sounds.md)).
+  - A **Sampler**'s card takes a WAV or FLAC file: drop one on it (see [Sounds and effects](sounds.md)).
   - A CLAP plugin's box has **Open window**, for the plugin's own window (see [CLAP plugins](plugins.md)).
 - **Mix** (⌥3, or X): a strip for each track, in the timeline's order, and Master on the right.
   - Each strip has the track's colour and name, a pan knob, **M** and **S** (as on the track's header; a strip shared by two tracks acts on both), and a fader with its level under it. Beside the fader, two bars (left and right) show how loud the track is. They read the track before its fader, as the header's meter does. A small red dot over them means the track went over the top: click it to clear it. Master's meter is the whole song.

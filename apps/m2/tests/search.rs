@@ -177,15 +177,19 @@ fn with_the_app_closed_m2_searches_samples() {
     let home = Home::new("samples");
     let mine = home.0.join("My Samples");
     tone(&mine.join("Kicks/Deep Kick.wav"), 0.2);
-    std::fs::write(mine.join("Kicks/old.flac"), b"fLaC").unwrap();
+    let flac = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/16bit-mono.flac");
+    std::fs::copy(flac, mine.join("Kicks/Old Kick.flac")).unwrap();
+    std::fs::write(mine.join("Kicks/old.mp3"), b"ID3 not read").unwrap();
     std::fs::create_dir_all(home.0.join(".music2")).unwrap();
     std::fs::write(home.0.join(".music2/settings.json"), serde_json::json!({"samples": [mine]}).to_string()).unwrap();
     let o = m2_in(&home.0, &["search", "kick", "--kind", "sample", "--json"]);
     let items: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_else(|_| panic!("{o:?}"));
     let ids: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
     let deep = format!("sample:folder:{}", mine.join("Kicks/Deep Kick.wav").display());
-    assert_eq!(ids, ["sample:std:samples/kit/kick.wav", deep.as_str()], "std's first, then yours");
-    assert!(String::from_utf8_lossy(&o.stderr).contains("1 audio files that aren't WAV were skipped: WAV only for now"), "{o:?}");
+    let old = format!("sample:folder:{}", mine.join("Kicks/Old Kick.flac").display());
+    assert_eq!(ids, ["sample:std:samples/kit/kick.wav", deep.as_str(), old.as_str()], "std's first, then yours, a FLAC too");
+    let said = String::from_utf8_lossy(&o.stderr);
+    assert!(said.contains("1 audio files that aren't WAV or FLAC were skipped: WAV and FLAC only for now"), "{o:?}");
     assert!(home.0.join(".cache/music2/samples").is_dir() || home.0.join("Library/Caches/music2/samples").is_dir(), "measures kept");
 }
 

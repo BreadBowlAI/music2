@@ -259,10 +259,7 @@ impl Graph {
                     import::check_target(s, &target)?;
                     // Into the song only now, after this job's check (AGENT-3); its note before
                     // the clip names it (WRITE-1).
-                    let file = staged.name()?;
-                    let noted =
-                        m2_editor::library::samples::write_note(&dir, file.asset.as_str(), &m2_editor::library::samples::note(&sample))
-                            .map_err(|e| m2_editor::EditError::Io(format!("couldn't write the note of {}: {e}", file.asset)))?;
+                    let (file, noted) = staged.name_noted(Some(&sample.from))?;
                     let song_bpm = s.accepted().compiled.data.tempo().bpm_at(target.beat().max(0.0));
                     let follows = m2_editor::library::samples::follows(&sample);
                     let p = import::place_with(s, std::slice::from_ref(&file), &target, &[follows])?;
@@ -314,9 +311,7 @@ impl Graph {
         let done = Graph::stage(&dir, vec![Source::Path(sample.file.clone())]).map(|mut s| s.remove(0)).and_then(|staged| {
             self.call(move |a| {
                 a.edit_and(token, |s| {
-                    let file = staged.name()?;
-                    m2_editor::library::samples::write_note(&dir, file.asset.as_str(), &m2_editor::library::samples::note(&sample))
-                        .map_err(|e| m2_editor::EditError::Io(format!("couldn't write the note of {}: {e}", file.asset)))?;
+                    let (file, _) = staged.name_noted(Some(&sample.from))?;
                     let e = m2_editor::sampler::set_sample(s, at, &call, &file)?;
                     let name = words.unwrap_or_else(|| format!("setting Sampler to {}", file.asset.as_str()));
                     s.name_step(e.revision, &name, false);

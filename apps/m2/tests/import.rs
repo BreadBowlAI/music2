@@ -75,7 +75,7 @@ fn import_places_a_clip_and_takes_the_lock() {
     std::fs::write(&text, "words").unwrap();
     let bad = m2(&["import", dir, text.to_str().unwrap(), "--track", "chops"]);
     assert!(
-        String::from_utf8_lossy(&bad.stderr).contains("notes.wav isn't a WAV file. music2 reads WAV files."),
+        String::from_utf8_lossy(&bad.stderr).contains("notes.wav isn't a WAV or FLAC file. music2 reads WAV and FLAC files."),
         "{}",
         String::from_utf8_lossy(&bad.stderr)
     );

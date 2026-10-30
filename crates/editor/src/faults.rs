@@ -112,6 +112,9 @@ impl Faulted {
 
 /// Names the faults of one plan, made when the plan is prepared from the song it plays, or for an
 /// offline render. It holds that song, so it names nothing until asked.
+/// How a FLAC comes into a song as a clip (FMT-24): as the WAV of its samples.
+const NOT_WAV: &str = "To use a FLAC, import it (File ▸ Import Audio…): music2 brings it in as a WAV.";
+
 pub struct Namer {
     plan: u64,
     song: Arc<dyn Song>,
@@ -160,9 +163,13 @@ impl Namer {
     pub fn problem(&self, code: Code, parts: &[Subject]) -> Option<Diagnostic> {
         let on = "The rest of the song plays on.";
         let (message, module) = match code {
-            Code::Unreadable | Code::StretchFailed => {
+            Code::Unreadable | Code::NotWav | Code::StretchFailed => {
                 let s = *parts.first()?;
                 let message = match (code, s) {
+                    (Code::NotWav, _) => {
+                        let (file, place) = self.clip(s)?;
+                        format!("{file} {place} isn't a WAV file, so it plays silent: a clip plays WAV files only. {NOT_WAV} {on}")
+                    }
                     (Code::StretchFailed, _) => {
                         let (file, place) = self.clip(s)?;
                         format!("The warped clip of {file} {place} can't be stretched, so it plays silent. {on}")
@@ -255,6 +262,7 @@ impl Namer {
                 None => format!("A file the song plays can't be read, {not}"),
             },
             (Code::Unreadable, _) => format!("{part} can't be read, {not} It may be damaged, or on a drive that isn't plugged in."),
+            (Code::NotWav, _) => format!("{part} isn't a WAV file, {not} A clip plays WAV files only. {NOT_WAV}"),
             (Code::Stopped, _) => format!("{part} stopped working, {not}{detail}"),
             // No offline render reads the sound input.
             (Code::InputMissing | Code::InputLost | Code::InputRefused, _) => format!("The sound input stopped, {not}"),

@@ -6,7 +6,8 @@
 //!   that beat (LIB-1). `indexing` counts the indexes of samples running (LIB-5): ask again when
 //!   it is 0 to see what they found.
 //! - `GET /api/library/preview?id=<id>`: the item's preview, a WAV; a sample's own file, streamed,
-//!   only for one the library lists, as it was indexed, and up to 64 MB (LIB-6); 404 with
+//!   only for one the library lists, as it was indexed, and up to 64 MB (LIB-6), a FLAC's as the
+//!   WAV of it (FMT-24); 404 with
 //!   `{error}` in words when it has none (a plugin).
 //! - `GET /api/library/folders`, `POST /api/library/folders {add | remove}`: your sample folders
 //!   (LIB-5), each with how many samples it has so far and whether it is being indexed.
@@ -35,7 +36,7 @@ crate::api::routes! {
         "Search everything you can add: instruments, sounds (presets), effects, samples and plugins, best first; q's words may name a kind, loop, one-shot, a tempo or a key; fits (a beat) keeps the loops that fit the song there",
         r#"{"q": "warm pad"}"#;
     GET "/api/library/preview" => preview; reads, agents,
-        "An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file",
+        "An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file (a FLAC's as the WAV of it)",
         r#"{"id": "std:synth-pluck"}"#;
     GET "/api/library/folders" => folders_get; reads, agents,
         "Your sample folders, each with how many samples it has and whether it is being indexed",
@@ -91,6 +92,10 @@ async fn preview(State(s): S, Query(q): Query<PreviewQuery>, headers: axum::http
             let item = s.listed_sample(&q.id)?;
             let sample = item.sample.expect("a sample");
             let stamp = samples::still_plain(&sample).map_err(|e| anyhow::anyhow!("{} can't be played: {e}.", item.label))?;
+            // A FLAC's is the WAV of it, made now (FMT-24).
+            if let Some(wav) = samples::flac_preview(&sample, stamp).map_err(|e| anyhow::anyhow!("{} can't be played: {e}.", item.label))? {
+                return Ok(Previewed::Wav(wav));
+            }
             if stamp.size > samples::PREVIEW_BYTES {
                 anyhow::bail!(
                     "{} is {} MB, too long to preview here (up to {} MB): add it to the song to hear it.",

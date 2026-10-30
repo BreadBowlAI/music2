@@ -1,11 +1,13 @@
 //! Bringing audio files into a song (lane A's A2, FMT-14, WRITE-1).
 //!
-//! [`audio`] copies one file into the song's `assets/`: a WAV only (by its `RIFF`/`WAVE` header,
-//! not its name), up to 3 hours, through a hidden part file that is locked at once, pushed,
+//! [`audio`] copies one file into the song's `assets/`: a WAV or a FLAC (told by its first bytes,
+//! not its name: FMT-24), up to 3 hours, through a hidden part file that is locked at once, pushed,
 //! decoded once (so what imports is what plays), then named create-only and its folder synced
-//! (Q3, D2). Its name is the file's own, made safe ([`AssetName::for_import`]), with a number when
-//! taken in any capitals. The same bytes already in `assets/` are used again, with no copy (Q2).
-//! A failure leaves nothing. music2 never deletes an asset (Q4).
+//! (Q3, D2). A FLAC is written there as the WAV of its samples, with its bits, as `<name>.wav`, and
+//! a note beside it says what it was made from: a song's clips stream WAV, which seeks exactly. Its
+//! name is the file's own, made safe ([`AssetName::for_import`]), with a number when taken in any
+//! capitals. The same bytes already in `assets/` are used again, with no copy (Q2). A failure
+//! leaves nothing. music2 never deletes an asset (Q4).
 //!
 //! The app does it in two parts ([`stage`], then [`Staged::name`]), so the copy is made before the
 //! session is asked, but becomes an asset only inside the change that places it, after that
@@ -21,11 +23,12 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
+use m2_runtime::decode::{self, Flac, Kind};
 use m2_session::Session;
 use m2_song::path::ASSETS;
 use m2_song::{AssetName, HashCache, Key, LaneAddr, LaneKind, Sha, Snapshot, TempoMap};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::clips::{self, Gesture};
 use crate::render::{name_new, part_path, sweep};
@@ -71,41 +74,78 @@ pub struct Imported {
     pub dropped_channels: u16,
     /// Whether the same bytes were in `assets/` already, so nothing was copied.
     pub reused: bool,
+    /// The FLAC its WAV was made from (FMT-24); none for a WAV, copied as it was.
+    pub made_from: Option<MadeFrom>,
 }
 
-/// What a WAV's header says.
+/// The FLAC a WAV in `assets/` was made from (FMT-24): its name where it came from, and the hash
+/// of its bytes. Its note says so.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MadeFrom {
+    pub file: String,
+    pub hash: Sha,
+}
+
+impl MadeFrom {
+    /// As the note says it: `{"file": "kick.flac", "format": "FLAC", "sha256": "…"}`.
+    pub fn note(&self) -> Value {
+        json!({ "file": self.file, "format": "FLAC", "sha256": self.hash.hex() })
+    }
+}
+
+/// What a file's header says: its kind, and what plays.
 struct Header {
+    kind: Kind,
     channels: u16,
     rate: u32,
-    frames: u32,
+    frames: u64,
 }
 
 fn refused(why: String) -> EditError {
     EditError::Rejected(why)
 }
 
-/// The words for a file that isn't a WAV (Q1).
+/// The words for a file that is neither a WAV nor a FLAC (Q1, FMT-24).
 pub fn not_wav(name: &str) -> String {
-    format!("{name} isn't a WAV file. music2 reads WAV files. Save it as a WAV first: most audio apps can (Export, then WAV).")
+    format!(
+        "{name} isn't a WAV or FLAC file. music2 reads WAV and FLAC files. Save it as a WAV first: most audio apps can (Export, then WAV)."
+    )
 }
 
-/// Whether `head` (a file's first bytes) starts as a WAV does.
-pub fn is_wav(head: &[u8]) -> bool {
-    head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WAVE"
+/// The words for a file of `kind` that doesn't read, `why` after.
+fn doesnt_read(name: &str, kind: Kind, why: &str) -> String {
+    let kind = match kind {
+        Kind::Wav => "WAV",
+        Kind::Flac => "FLAC",
+    };
+    format!("{name} doesn't read as a {kind} file ({why})")
 }
 
-/// Everything an import can know from the file before copying it: a WAV, that reads, has sound,
-/// plays at a rate music2 takes and is at most 3 hours long (D31).
-fn header(name: &str, mut r: Box<dyn Read + '_>) -> Result<Header, EditError> {
-    let mut head = [0u8; 12];
-    let n = read_up_to(&mut r, &mut head);
-    if !is_wav(&head[..n]) {
-        return Err(refused(not_wav(name)));
+/// The name a FLAC called `name` comes in as (FMT-24): its WAV's, `<name>.wav`.
+fn as_wav(name: &str) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.contains(['/', '\\']) => format!("{stem}.wav"),
+        _ => format!("{name}.wav"),
     }
-    let reader = hound::WavReader::new(std::io::Cursor::new(head).chain(r))
-        .map_err(|e| refused(format!("{name} doesn't read as a WAV file ({e})")))?;
-    let spec = reader.spec();
-    let h = Header { channels: spec.channels, rate: spec.sample_rate, frames: reader.duration() };
+}
+
+/// Everything an import can know from the file before copying it: a WAV or a FLAC (FMT-24), that
+/// reads, has sound, plays at a rate music2 takes and is at most 3 hours long (D31).
+fn header(name: &str, mut r: Box<dyn Read + '_>) -> Result<Header, EditError> {
+    let mut head = [0u8; decode::HEAD];
+    let n = read_up_to(&mut r, &mut head);
+    let h = match decode::kind(&head[..n]) {
+        Some(Kind::Wav) => {
+            let reader = hound::WavReader::new((&head[..n]).chain(r)).map_err(|e| refused(doesnt_read(name, Kind::Wav, &e.to_string())))?;
+            let spec = reader.spec();
+            Header { kind: Kind::Wav, channels: spec.channels, rate: spec.sample_rate, frames: reader.duration() as u64 }
+        }
+        Some(Kind::Flac) => {
+            let f = Flac::new((&head[..n]).chain(r)).map_err(|e| refused(doesnt_read(name, Kind::Flac, &format!("{e:#}"))))?;
+            Header { kind: Kind::Flac, channels: f.channels, rate: f.rate, frames: f.frames }
+        }
+        None => return Err(refused(not_wav(name))),
+    };
     if !RATES.contains(&h.rate) {
         return Err(refused(format!("{name} plays at {} Hz: music2 takes files from 8,000 to 384,000 Hz.", h.rate)));
     }
@@ -182,8 +222,33 @@ impl Staged {
     /// Make it an asset: its part given the first free name, create-only, and its folder synced (a
     /// file whose bytes were there already is that asset). A name whose note's name
     /// (`kick.wav.json`, LIB-7) is taken is taken too, so no file inherits another's note. The lock
-    /// goes after.
-    pub fn name(mut self) -> Result<Imported, EditError> {
+    /// goes after. A FLAC's WAV gets its note, saying what it was made from (FMT-24).
+    pub fn name(self) -> Result<Imported, EditError> {
+        self.name_noted(None).map(|(file, _)| file)
+    }
+
+    /// [`Self::name`], then its note written beside it, before anything names the file (LIB-7,
+    /// WRITE-1): `from`, a sample's credit, and what a FLAC's WAV was made from (FMT-24). Whether
+    /// a note was written now (one there already is kept, but for a note of yours).
+    pub fn name_noted(self, from: Option<&Value>) -> Result<(Imported, bool), EditError> {
+        let song = self.folder.parent().map(Path::to_path_buf).unwrap_or_default();
+        let file = self.name_only()?;
+        let mut note = serde_json::Map::new();
+        if let Some(from) = from {
+            note.insert("from".into(), from.clone());
+        }
+        if let Some(m) = &file.made_from {
+            note.insert("made_from".into(), m.note());
+        }
+        if note.is_empty() {
+            return Ok((file, false));
+        }
+        let noted = crate::library::samples::write_note(&song, file.asset.as_str(), &Value::Object(note))
+            .map_err(|e| EditError::Io(format!("couldn't write the note of {}: {e}", file.asset)))?;
+        Ok((file, noted))
+    }
+
+    fn name_only(mut self) -> Result<Imported, EditError> {
         let Some((part, lock)) = self.part.take() else { return Ok(self.file.clone()) };
         let named = (|| -> std::io::Result<AssetName> {
             let there: Vec<String> = assets_in(&self.folder).into_iter().map(|(n, _)| n).collect();
@@ -243,17 +308,38 @@ pub fn stage(dir: &Path, from: Source, each: &mut dyn FnMut(&[Vec<f32>])) -> Res
     };
     let folder = dir.join(ASSETS);
     m2_os::fs::make_dirs(&folder).map_err(io)?;
-    let there = assets_in(&folder);
-    // The same bytes already there: that asset, with no copy (size first, then the hash).
-    for (rel, p) in &there {
-        let same_size = std::fs::metadata(p).is_ok_and(|m| m.len() == size);
-        if same_size
-            && HashCache::global().hash(p).is_ok_and(|s| s == hash)
-            && let Ok(asset) = AssetName::new(rel)
-        {
-            let file = Imported { asset, name, hash, seconds, rate: h.rate, dropped_channels, reused: true };
-            return Ok(Staged { file, part: None, folder });
+    let copy_err = |e: Copy| match e {
+        Copy::Io(e) => io(e),
+        Copy::Decode(why) => refused(doesnt_read(&name, h.kind, &why)),
+    };
+    if h.kind == Kind::Flac {
+        // FMT-24: the WAV of its samples, made first; then the same bytes there are that asset.
+        let made_from = Some(MadeFrom { file: name.clone(), hash });
+        let wanted = AssetName::for_import(&as_wav(&name));
+        let part = part_path(&folder.join(wanted.as_str())).map_err(|e| EditError::Io(e.to_string()))?;
+        sweep(&folder);
+        let written = match &from {
+            Source::Path(p) => File::open(p).map_err(Copy::Io).and_then(|f| flac_in(f, &part)),
+            Source::Bytes { bytes, .. } => flac_in(&bytes[..], &part),
+        };
+        let (lock, hash) = written.inspect_err(|_| drop(std::fs::remove_file(&part))).map_err(copy_err)?;
+        let wav_size = lock.metadata().map_err(io)?.len();
+        let file = Imported { asset: wanted, name: name.clone(), hash, seconds, rate: h.rate, dropped_channels, reused: false, made_from };
+        if let Some(asset) = same_bytes(&folder, wav_size, hash) {
+            drop(lock);
+            let _ = std::fs::remove_file(&part);
+            return Ok(Staged { file: Imported { asset, reused: true, ..file }, part: None, folder });
         }
+        decode(&part, each)
+            .map_err(|e| Copy::Decode(e.root_cause().to_string()))
+            .inspect_err(|_| drop(std::fs::remove_file(&part)))
+            .map_err(copy_err)?;
+        return Ok(Staged { file, part: Some((part, lock)), folder });
+    }
+    // The same bytes already there: that asset, with no copy.
+    if let Some(asset) = same_bytes(&folder, size, hash) {
+        let file = Imported { asset, name, hash, seconds, rate: h.rate, dropped_channels, reused: true, made_from: None };
+        return Ok(Staged { file, part: None, folder });
     }
     let wanted = AssetName::for_import(&name);
     let part = part_path(&folder.join(wanted.as_str())).map_err(|e| EditError::Io(e.to_string()))?;
@@ -262,12 +348,36 @@ pub fn stage(dir: &Path, from: Source, each: &mut dyn FnMut(&[Vec<f32>])) -> Res
     if copied.is_err() {
         let _ = std::fs::remove_file(&part);
     }
-    let (lock, hash) = copied.map_err(|e| match e {
-        Copy::Io(e) => io(e),
-        Copy::Decode(why) => refused(format!("{name} doesn't read as a WAV file ({why})")),
-    })?;
-    let file = Imported { asset: wanted, name, hash, seconds, rate: h.rate, dropped_channels, reused: false };
+    let (lock, hash) = copied.map_err(copy_err)?;
+    let file = Imported { asset: wanted, name, hash, seconds, rate: h.rate, dropped_channels, reused: false, made_from: None };
     Ok(Staged { file, part: Some((part, lock)), folder })
+}
+
+/// The asset in `folder` (`assets/`) whose bytes are `size` long and hash to `hash`, if any: size
+/// first, then the hash.
+fn same_bytes(folder: &Path, size: u64, hash: Sha) -> Option<AssetName> {
+    assets_in(folder).into_iter().find_map(|(rel, p)| {
+        let same = std::fs::metadata(&p).is_ok_and(|m| m.len() == size) && HashCache::global().hash(&p).is_ok_and(|s| s == hash);
+        same.then(|| AssetName::new(&rel).ok()).flatten()
+    })
+}
+
+/// A FLAC read from `from` written into the part file `part` as the WAV of its samples (FMT-24),
+/// made create-only and locked at once (so no sweep takes it), then pushed: its lock, held until
+/// it is named, and the hash of the WAV's bytes.
+fn flac_in(from: impl Read, part: &Path) -> Result<(File, Sha), Copy> {
+    let f = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(part)?;
+    let _ = m2_os::fs::try_lock(&f);
+    let flac = Flac::new(from).map_err(|e| Copy::Decode(format!("{e:#}")))?;
+    // A write that fails (a full disk) is the disk's; anything else is the FLAC's.
+    decode::write_wav(flac, std::io::BufWriter::new(&f)).map_err(|e| match e.downcast::<hound::Error>() {
+        Ok(hound::Error::IoError(e)) => Copy::Io(e),
+        Ok(e) => Copy::Decode(e.to_string()),
+        Err(e) => Copy::Decode(format!("{e:#}")),
+    })?;
+    m2_os::fs::push(&f)?;
+    let hash = Sha::of_file(part)?;
+    Ok((f, hash))
 }
 
 enum Copy {

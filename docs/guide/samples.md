@@ -12,7 +12,7 @@
 |---|---|---|
 | music2 | a small drum kit: kick, snare, clap, closed and open hat, three toms, rim, cowbell, crash, ride, shaker, tambourine. music2 made them itself from its own drum machine, so they are music2's, free to use in anything | music2 |
 | A pack | the samples its author listed in the pack's `samples.toml` (see [Making a pack](making-a-pack.md)) | the pack's name |
-| Your folders | every WAV file in a folder you add, and in the folders inside it | Yours |
+| Your folders | every WAV and FLAC file in a folder you add, and in the folders inside it | Yours |
 
 **Your folders.** In ⌘F's panel, click **Your folders**, then **Add a Folder…**, and pick a folder of samples on your computer. music2 looks through it in the background, so the panel never waits: the folder's line says "looking…", and the results fill in when it is done. The first time a big folder takes a while; after that it opens at once (music2 keeps what it measured in its cache folder). Nothing is copied until you add a sample to a song. **Remove** (the × beside a folder) takes it out of the list and stops looking through it; its files stay where they are. music2 keeps the list with your other settings, on this computer only.
 
@@ -24,7 +24,9 @@
 
 In the app, **Add a Folder…** opens the folder picker. In a web browser (the app's page opened from a browser), it asks for the folder's whole path instead, typed in a small box: a browser can't give a page a folder's path.
 
-**WAV only for now.** music2 reads WAV files. A folder's FLAC, MP3, AIFF or OGG files are skipped, and the folder's line says how many ("3 skipped: WAV only for now"). A WAV file music2 can't play (a kind of WAV it doesn't decode, a broken file) is left out too, and the line says how many ("2 don't read").
+**WAV and FLAC only for now.** music2 reads WAV and FLAC files (FLAC: the same sound as a WAV, about half the size). A folder's MP3, AIFF or OGG files are skipped, and the folder's line says how many ("3 skipped: WAV and FLAC only for now"). A file music2 can't play (a kind it doesn't decode, a broken file, a FLAC that isn't 8, 16 or 24 bits) is left out too, and the line says how many ("2 don't read").
+
+**A FLAC comes in as a WAV.** When you add a FLAC sample to a song, music2 writes a WAV of the very same sound into the song's `assets/` folder (`kick.flac` comes in as `kick.wav`), because a song's audio clips play WAV files. The note beside it (`kick.wav.json`) says which FLAC it was made from. File ▸ Import Audio… does the same with a FLAC you pick.
 
 ## What a sample row says
 

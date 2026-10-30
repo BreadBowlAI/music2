@@ -19,7 +19,7 @@ felt-piano/
   samples/              recordings its code plays
 ```
 
-A pack holds only `.ts`, `.wasm`, `.toml`, `.json`, `.md`, `.txt` and `.wav` files (in any capitals: `.WAV` is a WAV), and `LICENSE`. It holds no link (a symbolic link or shortcut): copy the file in instead.
+A pack holds only `.ts`, `.wasm`, `.toml`, `.json`, `.md`, `.txt`, `.wav` and `.flac` files (in any capitals: `.WAV` is a WAV), and `LICENSE`. Recordings and samples may be WAV or FLAC (FLAC: the same sound, about half the size; 8, 16 or 24 bits). It holds no link (a symbolic link or shortcut): copy the file in instead.
 
 ## m2pkg.toml
 
@@ -167,7 +167,7 @@ What it reads, it reads only from the SFZ's own folder and the folders in it: a 
 
 The licence: `--license` names it. Without it, the import takes the licence from the file beside the SFZ only when that file is clear about it: its first line is `SPDX-License-Identifier: CC-BY-4.0` (or another), or it is the whole text of a Creative Commons licence (CC0, CC BY, CC BY-SA). Many libraries put several licences in one file (the recordings under one, the SFZ under another), so otherwise the import stops and asks: read the file and give `--license`.
 
-Only WAV recordings: an SFZ that plays FLAC stops the import before anything is written; convert its files to WAV first. A round robin with a take missing stops it too: SFZ plays silence on that turn, music2 needs every take. The pack is written beside the folder you name and checked as `m2 pack check` checks it; only a pack that passes gets the folder's name, so a failed import leaves nothing behind. Open `instruments/<id>.toml` afterwards to set what the SFZ leaves to its player, such as `level` and `release`.
+Recordings may be WAV or FLAC, and each is copied as it is (a FLAC stays a FLAC). A recording of another kind (OGG, say), or a FLAC that isn't 8, 16 or 24 bits, stops the import before anything is written; convert it to WAV first. A round robin with a take missing stops it too: SFZ plays silence on that turn, music2 needs every take. The pack is written beside the folder you name and checked as `m2 pack check` checks it; only a pack that passes gets the folder's name, so a failed import leaves nothing behind. Open `instruments/<id>.toml` afterwards to set what the SFZ leaves to its player, such as `level` and `release`.
 
 ## Sounds
 
