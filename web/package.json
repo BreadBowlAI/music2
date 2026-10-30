@@ -12,7 +12,7 @@
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
     "clsx": "2.1.1",
-    "lucide-react": "1.59.0",
+    "lucide-react": "1.61.0",
     "monaco-editor": "0.57.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -20,13 +20,13 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
-    "@tauri-apps/cli": "2.12.3",
+    "@tauri-apps/cli": "2.12.4",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
-    "vite": "8.3.4"
+    "vite": "8.3.5"
   },
   "overrides": {
     "monaco-editor": {
