@@ -257,7 +257,7 @@ const SINE: &str = "@test/tiny:sine";
 /// locked to 0.1.0, with 0.1.0 (module `one`) installed: its session, and the module's hash.
 fn tone_song(f: &Fixture) -> (Session, m2_song::Sha) {
     let m1 = install_with_kernel(f, "0.1.0", "one");
-    f.write("music2.toml", &format!("{MANIFEST}\"@test/tiny\" = \"0.1\"\n"));
+    f.write("music2.toml", format!("{MANIFEST}\"@test/tiny\" = \"0.1\"\n"));
     f.write(
         "song.ts",
         "import { song } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport tone from \"./tracks/tone\";\n\nexport default song(() => master(mixer({ tone: tone.out })));\n",
@@ -268,7 +268,7 @@ fn tone_song(f: &Fixture) -> (Session, m2_song::Sha) {
     );
     let tiny = PackName::new("@test/tiny").unwrap();
     let hash = Store::at(f.0.join("Packs")).hash(&tiny, &Version(0, 1, 0)).unwrap();
-    f.write("music2.lock", &Lock::default().with(tiny, Version(0, 1, 0), hash).canonical());
+    f.write("music2.lock", Lock::default().with(tiny, Version(0, 1, 0), hash).canonical());
     let s = open(f);
     assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
     assert_eq!(s.packages.module_sha(SINE), Some(m1));
@@ -307,7 +307,7 @@ fn a_stem_renders_the_view_it_was_planned_on() {
 fn the_lists_follow_the_accepted_view() {
     let f = Fixture::new();
     song_and_store(&f);
-    f.write("music2.toml", &format!("{MANIFEST}\"@test/tiny\" = \"0.1\"\n"));
+    f.write("music2.toml", format!("{MANIFEST}\"@test/tiny\" = \"0.1\"\n"));
     let mut s = open(&f);
     write_lock(&mut s, pack::Move::Needed).unwrap_or_else(|e| panic!("{e}"));
     let tone = "@test/tiny:tiny-tone";

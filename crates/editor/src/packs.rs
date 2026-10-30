@@ -470,9 +470,9 @@ pub fn install(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<Str
         }
         read_only_inside(&temp)?;
         match repair {
-            Some(_) => swap(&temp, &target, &parent.join(format!(".{version}.{}.old", std::process::id())), &mut |a, b| {
-                std::fs::rename(a, b)
-            })?,
+            Some(_) => {
+                swap(&temp, &target, &parent.join(format!(".{version}.{}.old", std::process::id())), &mut |a, b| std::fs::rename(a, b))?
+            }
             None => std::fs::rename(&temp, &target)?,
         }
         set_read_only(&target, true)
@@ -502,10 +502,9 @@ fn swap(temp: &Path, target: &Path, old: &Path, rename: &mut dyn FnMut(&Path, &P
     if let Err(e) = rename(temp, target) {
         return match rename(old, target).and_then(|()| set_read_only(target, true)) {
             Ok(()) => Err(e),
-            Err(back) => Err(std::io::Error::other(format!(
-                "{e}; and the copy before couldn't be put back ({back}): it is at {}",
-                old.display()
-            ))),
+            Err(back) => {
+                Err(std::io::Error::other(format!("{e}; and the copy before couldn't be put back ({back}): it is at {}", old.display())))
+            }
         };
     }
     remove_tree(old)

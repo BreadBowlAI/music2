@@ -409,7 +409,8 @@ fn listen_with_renders_each_side_with_its_own_packs() {
     assert_eq!(locked(&song), "0.1.0");
     // The move: the line, the lock (as `m2 pack update` would write it), and the keys playing the
     // new version's kernel.
-    let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap().replace("\"@test/tiny\" = \"0.1\"", "\"@test/tiny\" = \"0.2\"");
+    let manifest =
+        std::fs::read_to_string(song.join("music2.toml")).unwrap().replace("\"@test/tiny\" = \"0.1\"", "\"@test/tiny\" = \"0.2\"");
     let hash = m2_song::Sha::of(&std::fs::read(t.store().join("@test/tiny/0.2.0/m2pack.json")).unwrap());
     let lock = std::fs::read_to_string(song.join("music2.lock")).unwrap();
     let at = lock.find("sha256:").unwrap();

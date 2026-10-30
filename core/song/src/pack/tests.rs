@@ -454,7 +454,8 @@ fn relocking_moves_only_what_must_move() {
     assert_eq!(l, Lock::default().with(name.clone(), Version(1, 2, 0), h120));
 
     // Nothing admitted is installed: unsatisfied, naming what is.
-    let e = relock(&song_with("\"@alice/felt-piano\" = \"3\"\n"), &Lock::default(), Some(&store), &App::default(), Move::Needed).unwrap_err();
+    let e =
+        relock(&song_with("\"@alice/felt-piano\" = \"3\"\n"), &Lock::default(), Some(&store), &App::default(), Move::Needed).unwrap_err();
     assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
     assert!(relock(&m, &Lock::default(), None, &App::default(), Move::Needed).is_err(), "no store, nothing to lock to");
     std::fs::remove_dir_all(&root).ok();

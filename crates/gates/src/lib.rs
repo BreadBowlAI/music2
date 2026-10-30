@@ -67,6 +67,9 @@ impl m2_editor::faults::Song for Song {
     fn data(&self) -> &DataSet {
         &self.data
     }
+    fn view(&self) -> &Arc<m2_runtime::View> {
+        &self.code.0.view
+    }
 }
 
 impl Song {

@@ -377,7 +377,12 @@ impl Session {
                 let project = Project::empty(&snapshot);
                 let all = crate::tx::changed_paths(&Snapshot { dir: snapshot.dir.clone(), ..Snapshot::default() }, &snapshot);
                 let packs = crate::resolved(&snapshot, &packages);
-                (Revision { number: 1, code_rev: 0, data_rev: 0, snapshot: snapshot.clone(), project, compiled: Compiled::none() }, d, all, packs)
+                (
+                    Revision { number: 1, code_rev: 0, data_rev: 0, snapshot: snapshot.clone(), project, compiled: Compiled::none() },
+                    d,
+                    all,
+                    packs,
+                )
             }
         };
         let mut seen = Seen::default();
