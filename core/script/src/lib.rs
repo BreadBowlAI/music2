@@ -901,7 +901,13 @@ pub fn describe(packages: &[(String, PathBuf)]) -> Catalog {
             files.iter().filter_map(|f| Some(f.strip_prefix(&src).ok()?.to_string_lossy().replace('\\', "/"))).collect();
         subs.sort();
         for sub in subs {
-            let spec = format!("{name}/{}", sub.strip_suffix(".ts").unwrap_or(&sub));
+            // A package's `index` is the package itself (PACK-3): `@alice/felt-piano`, not `…/index`.
+            let stem = sub.strip_suffix(".ts").unwrap_or(&sub);
+            let spec = match stem.strip_suffix("/index").or_else(|| (stem == "index").then_some("")) {
+                Some("") => name.clone(),
+                Some(folder) => format!("{name}/{folder}"),
+                None => format!("{name}/{stem}"),
+            };
             let file = format!("{name}/src/{sub}");
             runs.push((file, described(&packages, &spec)));
         }

@@ -141,10 +141,25 @@ pub fn folder(sound: &str) -> PathBuf {
     Path::new(&folder_name(package)).join(folder_name(name))
 }
 
-/// Where std's own presets for `sound` are, in std's folder `std`: `presets/synth-pluck`. None for
-/// a sound std doesn't make.
-pub fn factory(std: &Path, sound: &str) -> Option<PathBuf> {
-    Some(std.join("presets").join(folder_name(sound.strip_prefix("std:")?)))
+/// Where a package's own presets for `sound` are, in that package's folder `dir`:
+/// `presets/synth-pluck` for `std:synth-pluck` in std's, `presets/felt-piano` for
+/// `@alice/felt-piano:felt-piano` in that pack's (PACK-11). None for a project's own component or
+/// a plugin, which no package makes.
+pub fn factory(dir: &Path, sound: &str) -> Option<PathBuf> {
+    let (package, id) = m2_song::pack::split_id(sound)?;
+    if package == "clap" {
+        return None;
+    }
+    Some(dir.join("presets").join(folder_name(id)))
+}
+
+/// The folder of the package that makes `sound`, as the session has it: std's or a pack's.
+pub fn package_dir(s: &Session, sound: &str) -> Option<PathBuf> {
+    let (package, _) = m2_song::pack::split_id(sound)?;
+    match s.packages.get(package) {
+        Some(p) => Some(p.dir.clone()),
+        None => s.packages.offered().into_iter().find(|(n, _)| n == package).map(|(_, d)| d),
+    }
 }
 
 /// A preset in a folder: its name and its file.

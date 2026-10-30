@@ -531,6 +531,12 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
     let mut ops = vec![plan::text_edit(&song_file, &song_text, &edits)];
     ops.extend(writes);
     ranges.insert(song_file, Declared::Ranges(declared));
+    // A pack's instrument brings its `[dependencies]` line and lock entry, once a pack (PACK-10).
+    let components: Vec<&str> =
+        tracks.iter().filter_map(|t| if let Play::Instrument(c) = &t.play { Some(c.as_str()) } else { None }).collect();
+    let needs = crate::packs::needs_all(s, &components)?;
+    ops.extend(needs.ops);
+    ranges.extend(needs.ranges);
     let arrangement = match arrangement {
         Some(text) => {
             let file = path(&DataPath::Arrangement.to_string())?;

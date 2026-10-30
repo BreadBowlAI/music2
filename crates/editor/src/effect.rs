@@ -243,7 +243,10 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
             imports.extend(import_insertion(&text, "@m2/core", ctor));
         }
     }
-    let wrap = Wrap { open: format!("{}(", effect.name), close: format!("{args})"), imports, callee: effect.name, label: effect.label };
+    // A pack's effect brings its `[dependencies]` line and lock entry (PACK-10).
+    let also = crate::packs::needs(s, component)?;
+    let wrap =
+        Wrap { open: format!("{}(", effect.name), close: format!("{args})"), imports, callee: effect.name, label: effect.label, also };
     wrap_call(s, &site, wrap, |_, _, _| Ok(()))
 }
 
@@ -255,6 +258,8 @@ pub(crate) struct Wrap {
     pub imports: Vec<(u32, String)>,
     pub callee: String,
     pub label: String,
+    /// What else the Tx writes: a pack's dependency and lock (PACK-10).
+    pub also: crate::packs::Needs,
 }
 
 /// Wrap call `site` of the accepted revision as `w` says, as one `TextEdit` Tx confined to the call:
@@ -289,9 +294,13 @@ pub(crate) fn wrap_call(
     edits.push((site.end, site.end, w.close));
     edits.sort_by_key(|e| e.0);
     let file = path(&site.file)?;
-    let expect = Expect::Confined(Confined { ranges: [(file.clone(), Ranges::Ranges(ranges))].into(), ..Confined::default() });
+    let mut declared: BTreeMap<_, _> = [(file.clone(), Ranges::Ranges(ranges))].into();
+    declared.extend(w.also.ranges);
+    let expect = Expect::Confined(Confined { ranges: declared, ..Confined::default() });
     let label = (written.to_string(), wrapped.clone());
-    let tx = plan::planned(s, label.clone(), vec![plan::text_edit(&file, &text, &edits)], expect);
+    let mut ops = vec![plan::text_edit(&file, &text, &edits)];
+    ops.extend(w.also.ops);
+    let tx = plan::planned(s, label.clone(), ops, expect);
     let what = w.label;
     let refused = || EditError::Rejected(format!("adding {what} here would change more than putting it after this sound"));
     let said = |why: &str| EditError::Rejected(format!("adding {what} here would change more than putting it after this sound ({why})"));
