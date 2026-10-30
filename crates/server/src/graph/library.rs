@@ -22,7 +22,7 @@ impl Graph {
                 let p = &o.session.packages;
                 let mut packages: Packages =
                     p.packages().filter(|p| p.name == m2_song::pack::STD).map(|p| (p.name.clone(), p.dir.clone())).collect();
-                packages.extend(m2_session::offered(p));
+                packages.extend(o.session.offered().iter().map(|(name, _, dir)| (name.clone(), dir.clone())));
                 (o.session.catalog().clone(), packages)
             }))
         })

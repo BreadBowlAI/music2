@@ -211,65 +211,65 @@ fn every_resolution_case_says_what_it_is() {
 
     // No lock entry: the highest installed version the requirement admits (Cargo's caret rule).
     let m = song_with("\"@alice/felt-piano\" = \"1.2\"\n");
-    let r = resolve(&song, &m, &Lock::default(), Some(&store));
+    let r = resolve(&song, &m, &Lock::default(), Some(&store), &App::default());
     assert_eq!(codes(&r), Vec::<&str>::new());
     assert_eq!((r.packs[0].version, r.packs[0].hash), (Version(1, 3, 0), Some(h130)));
     assert_eq!(r.packs[0].dir, store.version_dir(&name, &Version(1, 3, 0)));
-    let r = resolve(&song, &song_with("\"@alice/felt-piano\" = \"1.2.5\"\n"), &Lock::default(), Some(&store));
+    let r = resolve(&song, &song_with("\"@alice/felt-piano\" = \"1.2.5\"\n"), &Lock::default(), Some(&store), &App::default());
     assert_eq!(r.packs[0].version, Version(1, 3, 0));
 
     // The lock's version, when its hash is the lock's.
     let lock = Lock::default().with(name.clone(), Version(1, 2, 0), h120);
-    let r = resolve(&song, &m, &lock, Some(&store));
+    let r = resolve(&song, &m, &lock, Some(&store), &App::default());
     assert_eq!((codes(&r), r.packs[0].version), (vec![], Version(1, 2, 0)));
 
     // Another hash: pkg.changed.
     let lock = Lock::default().with(name.clone(), Version(1, 2, 0), h125);
-    let r = resolve(&song, &m, &lock, Some(&store));
+    let r = resolve(&song, &m, &lock, Some(&store), &App::default());
     assert_eq!(codes(&r), ["pkg.changed"]);
     assert!(r.packs.is_empty());
 
     // A locked version not installed: pkg.missing, saying what to install and how.
     let lock = Lock::default().with(name.clone(), Version(1, 2, 9), h120);
-    let r = resolve(&song, &m, &lock, Some(&store));
+    let r = resolve(&song, &m, &lock, Some(&store), &App::default());
     assert_eq!(codes(&r), ["pkg.missing"]);
     let said = &r.problems[0].message;
     assert!(said.contains("@alice/felt-piano") && said.contains("1.2.9") && said.contains("m2 pack install"), "{said}");
 
     // A locked version the requirement doesn't admit: pkg.unsatisfied.
     let lock = Lock::default().with(name.clone(), Version(1, 2, 5), h125);
-    let r = resolve(&song, &song_with("\"@alice/felt-piano\" = \"1.3\"\n"), &lock, Some(&store));
+    let r = resolve(&song, &song_with("\"@alice/felt-piano\" = \"1.3\"\n"), &lock, Some(&store), &App::default());
     assert_eq!(codes(&r), ["pkg.unsatisfied"]);
     assert!(r.problems[0].message.contains("m2 pack lock"), "{}", r.problems[0].message);
 
     // No installed version admitted: pkg.unsatisfied, naming those there are.
-    let r = resolve(&song, &song_with("\"@alice/felt-piano\" = \"3\"\n"), &Lock::default(), Some(&store));
+    let r = resolve(&song, &song_with("\"@alice/felt-piano\" = \"3\"\n"), &Lock::default(), Some(&store), &App::default());
     assert_eq!(codes(&r), ["pkg.unsatisfied"]);
     assert!(r.problems[0].message.contains("1.3.0, 2.0.0"), "{}", r.problems[0].message);
-    let r = resolve(&song, &song_with("\"@bob/none\" = \"1\"\n"), &Lock::default(), Some(&store));
+    let r = resolve(&song, &song_with("\"@bob/none\" = \"1\"\n"), &Lock::default(), Some(&store), &App::default());
     assert_eq!(codes(&r), ["pkg.unsatisfied"]);
 
     // A path dependency: that folder, never locked, never hashed.
     let mine = root.join("felt-piano");
     pack_at(&mine, "@alice/felt-piano", "1.4.0");
     let m = song_with("\"@alice/felt-piano\" = { path = \"../felt-piano\" }\n");
-    let r = resolve(&song, &m, &lock, Some(&store));
+    let r = resolve(&song, &m, &lock, Some(&store), &App::default());
     assert_eq!(codes(&r), Vec::<&str>::new());
     assert_eq!((r.packs[0].version, r.packs[0].hash, r.packs[0].path), (Version(1, 4, 0), None, true));
     assert_eq!(r.packs[0].dir, mine.canonicalize().unwrap());
     // A folder that holds another pack, or none: pkg.missing.
     pack_at(&root.join("other"), "@bob/other", "1.0.0");
     let m = song_with("\"@alice/felt-piano\" = { path = \"../other\" }\n");
-    assert_eq!(codes(&resolve(&song, &m, &Lock::default(), Some(&store))), ["pkg.missing"]);
+    assert_eq!(codes(&resolve(&song, &m, &Lock::default(), Some(&store), &App::default())), ["pkg.missing"]);
     let m = song_with("\"@alice/felt-piano\" = { path = \"../nowhere\" }\n");
-    assert_eq!(codes(&resolve(&song, &m, &Lock::default(), Some(&store))), ["pkg.missing"]);
+    assert_eq!(codes(&resolve(&song, &m, &Lock::default(), Some(&store), &App::default())), ["pkg.missing"]);
 
     // std and the SDK are never resolved here: the app has them.
-    assert!(resolve(&song, &song_with(""), &Lock::default(), Some(&store)).packs.is_empty());
+    assert!(resolve(&song, &song_with(""), &Lock::default(), Some(&store), &App::default()).packs.is_empty());
 
     // No store (no home folder): a pack from the store is unsatisfied, and nothing else is looked
     // in, not even a folder of that name where the process runs.
-    let r = resolve(&song, &song_with("\"@alice/felt-piano\" = \"1.2\"\n"), &Lock::default(), None);
+    let r = resolve(&song, &song_with("\"@alice/felt-piano\" = \"1.2\"\n"), &Lock::default(), None, &App::default());
     assert_eq!(codes(&r), ["pkg.unsatisfied"]);
     assert!(r.problems[0].message.contains("no store"), "{}", r.problems[0].message);
     std::fs::remove_dir_all(&root).unwrap();
@@ -333,7 +333,7 @@ fn a_store_version_is_checked_file_by_file() {
     let lock = Lock::default().with(name.clone(), Version(1, 2, 0), hash);
     let codes = |r: &Resolution| r.problems.iter().map(|d| d.code).collect::<Vec<_>>();
     assert_eq!(store.check(&name, &Version(1, 2, 0)), Ok(hash));
-    assert_eq!(codes(&resolve(&song, &m, &lock, Some(&store))), Vec::<&str>::new());
+    assert_eq!(codes(&resolve(&song, &m, &lock, Some(&store), &App::default())), Vec::<&str>::new());
 
     let index = dir.join("src/index.ts");
     let was = std::fs::read(&index).unwrap();
@@ -341,7 +341,7 @@ fn a_store_version_is_checked_file_by_file() {
     // The same size, other bytes: only the hash can tell.
     std::fs::write(&index, String::from_utf8(was.clone()).unwrap().replace("1.2.0", "9.9.9")).unwrap();
     for lock in [&lock, &Lock::default()] {
-        let r = resolve(&song, &m, lock, Some(&store));
+        let r = resolve(&song, &m, lock, Some(&store), &App::default());
         assert_eq!(codes(&r), ["pkg.changed"], "{:?}", r.problems);
         let said = &r.problems[0].message;
         assert!(said.contains("src/index.ts") && said.contains("m2 pack install"), "{said}");
@@ -415,47 +415,72 @@ fn relocking_moves_only_what_must_move() {
     let m = song_with("\"@alice/felt-piano\" = \"1.2\"\n\"@bob/kit\" = \"0.1\"\n");
 
     // No lock: the highest each admits.
-    let l = relock(&m, &Lock::default(), Some(&store), Move::Needed).unwrap();
+    let l = relock(&m, &Lock::default(), Some(&store), &App::default(), Move::Needed).unwrap();
     assert_eq!((locked(&l, &name), locked(&l, &kit)), (Some((Version(1, 3, 0), h130)), Some((Version(0, 1, 0), hkit))));
 
     // An entry still admitted and installed stays, though a newer is there; update moves it.
     let old = Lock::default().with(name.clone(), Version(1, 2, 0), h120).with(kit.clone(), Version(0, 1, 0), hkit);
-    let l = relock(&m, &old, Some(&store), Move::Needed).unwrap();
+    let l = relock(&m, &old, Some(&store), &App::default(), Move::Needed).unwrap();
     assert_eq!(l, old, "nothing moves that needn't");
-    let l = relock(&m, &old, Some(&store), Move::All).unwrap();
+    let l = relock(&m, &old, Some(&store), &App::default(), Move::All).unwrap();
     assert_eq!(locked(&l, &name), Some((Version(1, 3, 0), h130)));
-    let l = relock(&m, &old, Some(&store), Move::Only(&kit)).unwrap();
+    let l = relock(&m, &old, Some(&store), &App::default(), Move::Only(&kit)).unwrap();
     assert_eq!(locked(&l, &name), Some((Version(1, 2, 0), h120)), "update of another pack leaves this one");
 
     // The requirement moved on: the entry it no longer admits moves to the highest it does.
     let m2 = song_with("\"@alice/felt-piano\" = \"2\"\n\"@bob/kit\" = \"0.1\"\n");
-    let l = relock(&m2, &old, Some(&store), Move::Needed).unwrap();
+    let l = relock(&m2, &old, Some(&store), &App::default(), Move::Needed).unwrap();
     assert_eq!((locked(&l, &name), locked(&l, &kit)), (Some((Version(2, 0, 0), h200)), Some((Version(0, 1, 0), hkit))));
 
     // A locked version that isn't installed, while another admitted one is: that one.
     let gone = Lock::default().with(name.clone(), Version(1, 2, 9), h125);
-    let l = relock(&m, &gone, Some(&store), Move::Needed).unwrap();
+    let l = relock(&m, &gone, Some(&store), &App::default(), Move::Needed).unwrap();
     assert_eq!(locked(&l, &name), Some((Version(1, 3, 0), h130)));
 
     // The installed copy isn't the one locked: refused, saying how to put it back and how to move.
     let other = Lock::default().with(name.clone(), Version(1, 2, 0), h125);
-    let e = relock(&m, &other, Some(&store), Move::Needed).unwrap_err();
+    let e = relock(&m, &other, Some(&store), &App::default(), Move::Needed).unwrap_err();
     assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.changed"]);
     assert!(e[0].message.contains("m2 pack install") && e[0].message.contains("m2 pack update"), "{}", e[0].message);
     // Update to the installed copy is the way to move to it.
-    let l = relock(&m, &other, Some(&store), Move::Only(&name)).unwrap();
+    let l = relock(&m, &other, Some(&store), &App::default(), Move::Only(&name)).unwrap();
     assert_eq!(locked(&l, &name), Some((Version(1, 3, 0), h130)));
 
     // A pack the manifest no longer lists leaves the lock; a path pack and std are never locked.
     let mine = root.join("mine");
     pack_at(&mine, "@bob/kit", "0.1.0");
     let m3 = song_with("\"@alice/felt-piano\" = \"1.2\"\n\"@bob/kit\" = { path = \"../mine\" }\n");
-    let l = relock(&m3, &old, Some(&store), Move::Needed).unwrap();
+    let l = relock(&m3, &old, Some(&store), &App::default(), Move::Needed).unwrap();
     assert_eq!(l, Lock::default().with(name.clone(), Version(1, 2, 0), h120));
 
     // Nothing admitted is installed: unsatisfied, naming what is.
-    let e = relock(&song_with("\"@alice/felt-piano\" = \"3\"\n"), &Lock::default(), Some(&store), Move::Needed).unwrap_err();
+    let e =
+        relock(&song_with("\"@alice/felt-piano\" = \"3\"\n"), &Lock::default(), Some(&store), &App::default(), Move::Needed).unwrap_err();
     assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
-    assert!(relock(&m, &Lock::default(), None, Move::Needed).is_err(), "no store, nothing to lock to");
+    assert!(relock(&m, &Lock::default(), None, &App::default(), Move::Needed).is_err(), "no store, nothing to lock to");
     std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-6: while `m2 pack install` repairs a version, its changed copy moved aside and the new one
+// not in place yet, a build says the version is being installed again: never that it isn't
+// installed, nor that an older one does instead.
+#[test]
+fn a_build_during_a_repair_says_it_is_being_installed() {
+    let root = scratch("aside");
+    let song = root.join("song");
+    std::fs::create_dir_all(&song).unwrap();
+    let store = Store::at(root.join("Packs"));
+    installed(&store, "@alice/felt-piano", "1.2.0");
+    let h125 = installed(&store, "@alice/felt-piano", "1.2.5");
+    let name = PackName::new("@alice/felt-piano").unwrap();
+    let dir = store.version_dir(&name, &Version(1, 2, 5));
+    std::fs::rename(&dir, dir.with_file_name(".1.2.5.4242.old")).unwrap();
+    let m = song_with("\"@alice/felt-piano\" = \"1.2\"\n");
+    let being = |r: &Resolution| r.problems.iter().any(|d| d.message.contains("being installed again"));
+    let lock = Lock::default().with(name.clone(), Version(1, 2, 5), h125);
+    let r = resolve(&song, &m, &lock, Some(&store), &App::default());
+    assert!(being(&r), "{:?}", r.problems);
+    let r = resolve(&song, &m, &Lock::default(), Some(&store), &App::default());
+    assert!(being(&r) && r.packs.is_empty(), "1.2.0 isn't taken instead: {:?} {:?}", r.problems, r.packs);
+    std::fs::remove_dir_all(&root).unwrap();
 }

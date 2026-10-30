@@ -183,7 +183,14 @@ pub fn compile_sources(
 
 /// The packs `project` builds with (PACK-9), from its manifest, its lock and `packages`' store.
 pub fn resolve_packs(project: &Project, packages: &PackageSet) -> m2_song::pack::Resolution {
-    m2_song::pack::resolve(&project.dir, &project.manifest, &project.lock, packages.store())
+    m2_song::pack::resolve(&project.dir, &project.manifest, &project.lock, packages.store(), &app(packages))
+}
+
+/// The packs the project in `snapshot` resolves (PACK-9), by name, with their folders: each that
+/// resolves, though another doesn't. None when it isn't a project that reads.
+pub(crate) fn resolved(snapshot: &m2_song::Snapshot, packages: &PackageSet) -> Option<Vec<(String, std::path::PathBuf)>> {
+    let project = Project::from_snapshot(snapshot).ok()?;
+    Some(resolve_packs(&project, packages).packs.into_iter().map(|r| (r.name.as_str().to_string(), r.dir)).collect())
 }
 
 /// Build a project's code: check its dependencies and resolve its packs (PACK-9), run the
@@ -205,10 +212,10 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
         vec![Diagnostic::error("pkg.broken", message).at(Some(m2_song::path::MANIFEST.to_string()))]
     };
     let view = packages.view_of(&listed).map_err(|e| broken("A pack", format!("{e:#}")))?;
-    let (sdk, std) = (Version::parse(m2_script::SDK_VERSION), view.get(m2_song::pack::STD).and_then(|p| Version::parse(&p.version)));
+    let app = app(packages);
     for r in &packs {
         let Some(p) = view.get(r.name.as_str()) else { continue };
-        m2_song::pack::meets(&p.needs, sdk, std).map_err(|why| broken(r.name.as_str(), format!("it {why}")))?;
+        app.meets(&p.needs).map_err(|why| broken(r.name.as_str(), format!("it {why}")))?;
     }
     let code = project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect();
     let mut opts = m2_script::Options::new(code, &project.manifest.project.entry);
@@ -278,33 +285,34 @@ pub fn read_data(code: &Arc<Code>, project: &Project, seen: &Seen, previous: Opt
 /// that doesn't load, an invalid descriptor or one id twice is `pkg.invalid` in its `problems`,
 /// and only those components are left out.
 pub fn catalog(packages: &PackageSet) -> m2_script::Catalog {
+    catalog_of(packages, &offered(packages))
+}
+
+/// The catalog of std, as `packages` shows it, and of the packs `offered` lists.
+pub(crate) fn catalog_of(packages: &PackageSet, offered: &[Offered]) -> m2_script::Catalog {
     let mut installed: Vec<(String, std::path::PathBuf)> =
         packages.packages().filter(|p| p.name == m2_song::pack::STD).map(|p| (p.name.clone(), p.dir.clone())).collect();
-    installed.extend(offered(packages));
+    installed.extend(offered.iter().map(|(name, _, dir)| (name.clone(), dir.clone())));
     m2_script::describe(&installed)
 }
+
+/// A pack the lists offer (PACK-11): its name, and the version and folder they offer it from.
+pub type Offered = (String, Version, std::path::PathBuf);
 
 /// The packs the lists offer (PACK-11): those `packages` shows (the accepted revision's), then of
 /// every other pack in the store, the newest version this app can run: one whose `[dependencies]`
 /// its SDK and std meet (PACK-2).
-pub fn offered(packages: &PackageSet) -> Vec<(String, std::path::PathBuf)> {
-    packages.offered(runs_here(packages))
+pub fn offered(packages: &PackageSet) -> Vec<Offered> {
+    packages.offered(&app(packages))
 }
 
-/// Where the lists take pack `name` from (PACK-11): its folder as `packages` shows it, else its
-/// newest version in the store this app can run. Its version and folder.
-pub fn offered_one(packages: &PackageSet, name: &str) -> Option<(Version, std::path::PathBuf)> {
-    if let Some(p) = packages.get(name) {
-        return Some((Version::parse(&p.version)?, p.dir.clone()));
+/// What this app gives a pack (PACK-2): its SDK, and the std `packages` shows. Whatever asks whether
+/// it runs a pack asks this.
+pub fn app(packages: &PackageSet) -> m2_song::pack::App {
+    m2_song::pack::App {
+        sdk: Version::parse(m2_script::SDK_VERSION),
+        std: packages.get(m2_song::pack::STD).and_then(|p| Version::parse(&p.version)),
     }
-    packages.newest(&m2_song::pack::PackName::new(name).ok()?, runs_here(packages))
-}
-
-/// Whether this app runs a package: its SDK and std meet what it needs (PACK-2).
-fn runs_here(packages: &PackageSet) -> impl Fn(&m2_song::pack::PkgManifest) -> bool {
-    let sdk = Version::parse(m2_script::SDK_VERSION);
-    let std = packages.get(m2_song::pack::STD).and_then(|p| Version::parse(&p.version));
-    move |m| m2_song::pack::meets(&m.dependencies, sdk, std).is_ok()
 }
 
 /// The SDK and std entries of `[dependencies]` against what this app has (FMT-3). A pack's are

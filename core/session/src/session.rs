@@ -18,7 +18,7 @@ use m2_ir::Diagnostic;
 use m2_runtime::PackageSet;
 use m2_script::Catalog;
 use m2_script::sites::Site;
-use m2_song::{Project, Sha, Snapshot, TempoMap};
+use m2_song::{Project, Sha, Snapshot, TempoMap, Version};
 
 use crate::lock::{Access, ReadOnly};
 use crate::texts::Texts;
@@ -180,6 +180,9 @@ pub struct Session {
     pub(crate) draft: Snapshot,
     /// Why the draft doesn't compile, if it doesn't.
     pub draft_errors: Vec<Diagnostic>,
+    /// The packs the draft resolved, by name, with their folders, while its code doesn't build:
+    /// what its problems are placed and explained with (PACK-9). None: the accepted revision's.
+    pub(crate) draft_packs: Option<Vec<(String, PathBuf)>>,
     /// Paths of changes held back with code (or an arrangement) that doesn't build: taken in with
     /// it once it does, never half (WRITE-19).
     pub(crate) waiting: BTreeSet<PathBuf>,
@@ -197,9 +200,13 @@ pub struct Session {
     /// What every revision accepted so far declared, so data a rename left behind is named as
     /// its track was and offered only to lanes that read it.
     pub(crate) seen: Seen,
-    /// Every component the packages declare, described once at open (PKG-11): what the effect
-    /// browser offers and the effect planner adds. Packages don't change while a project is open.
+    /// Every component the lists offer (PKG-11, PACK-11): what the effect browser offers and the
+    /// effect planner adds. Made as the song opens, and again when a revision is accepted whose
+    /// packs differ from the one before (PACK-9).
     pub(crate) catalog: Arc<Catalog>,
+    /// The packs the catalog was made from, each with the version and folder the lists offer it
+    /// from: what an add of its item locks (PACK-10).
+    pub(crate) offered: Arc<Vec<crate::Offered>>,
     /// The session's own problems, then the packages' (`pkg.invalid`), then the accepted
     /// revision's.
     pub(crate) problems: Vec<m2_song::Diagnostic>,
@@ -260,6 +267,13 @@ pub(crate) enum Change {
 }
 
 /// A project that can't be read from its snapshot: the manifest's or the arrangement's errors.
+/// What the lists offer from what `packages` shows (PACK-11): the catalog, and the packs it was
+/// made from.
+fn lists(packages: &PackageSet) -> (Arc<Catalog>, Arc<Vec<crate::Offered>>) {
+    let offered = crate::offered(packages);
+    (Arc::new(crate::catalog_of(packages, &offered)), Arc::new(offered))
+}
+
 fn unread(d: Vec<m2_song::Diagnostic>) -> Vec<Diagnostic> {
     d.into_iter().map(crate::diagnostic).collect()
 }
@@ -352,17 +366,23 @@ impl Session {
         // Never fails (WRITE-20): a package module that doesn't load is `pkg.invalid`, and only
         // its components are missing from the catalog. Made after the build, which loads the
         // song's packs, so a pack in a folder is offered too (PACK-11).
-        let catalog = Arc::new(crate::catalog(&packages));
-        let (accepted, draft_errors, waiting) = match built {
+        let (catalog, offered) = lists(&packages);
+        let (accepted, draft_errors, waiting, draft_packs) = match built {
             Ok((project, compiled)) => {
                 let rev = Revision { number: 1, code_rev: 1, data_rev: 1, snapshot: snapshot.clone(), project, compiled };
-                (rev, vec![], BTreeSet::new())
+                (rev, vec![], BTreeSet::new(), None)
             }
             Err(d) => {
                 // No code: the empty revision, silent until the code compiles; everything waits.
                 let project = Project::empty(&snapshot);
                 let all = crate::tx::changed_paths(&Snapshot { dir: snapshot.dir.clone(), ..Snapshot::default() }, &snapshot);
-                (Revision { number: 1, code_rev: 0, data_rev: 0, snapshot: snapshot.clone(), project, compiled: Compiled::none() }, d, all)
+                let packs = crate::resolved(&snapshot, &packages);
+                (
+                    Revision { number: 1, code_rev: 0, data_rev: 0, snapshot: snapshot.clone(), project, compiled: Compiled::none() },
+                    d,
+                    all,
+                    packs,
+                )
             }
         };
         let mut seen = Seen::default();
@@ -380,6 +400,7 @@ impl Session {
             seen,
             accepted: Arc::new(accepted),
             draft_errors,
+            draft_packs,
             waiting,
             past: VecDeque::new(),
             history: vec![],
@@ -388,6 +409,7 @@ impl Session {
             refused: 0,
             outside_was: Default::default(),
             catalog,
+            offered,
             problems: vec![],
             access,
             own,
@@ -470,6 +492,34 @@ impl Session {
     /// Every component the packages declare, and where each is exported (PKG-11).
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
+    }
+
+    /// The packages the draft's problems are placed and explained with (PACK-9), by name, with
+    /// their folders: while its code doesn't build, std and the packs it resolved, which the
+    /// accepted revision may not have; else those the session shows.
+    pub fn draft_packages(&self) -> Vec<(String, PathBuf)> {
+        let shown = self.packages.packages().map(|p| (p.name.clone(), p.dir.clone()));
+        match &self.draft_packs {
+            Some(packs) => shown.filter(|(name, _)| name == m2_song::pack::STD).chain(packs.iter().cloned()).collect(),
+            None => shown.collect(),
+        }
+    }
+
+    /// The packs the lists offer (PACK-11), each with the version and folder they offer it from:
+    /// those the catalog was made from.
+    pub fn offered(&self) -> &[crate::Offered] {
+        &self.offered
+    }
+
+    /// Where the lists take package `name` from (PACK-11): std as the session has it; a pack at the
+    /// accepted revision's version, else at the store's version they were made from, never one
+    /// installed since. Its version and folder.
+    pub fn offered_one(&self, name: &str) -> Option<(Version, &Path)> {
+        if name == m2_song::pack::STD {
+            let std = self.packages.get(name)?;
+            return Some((Version::parse(&std.version)?, std.dir.as_path()));
+        }
+        self.offered.iter().find(|(n, ..)| n == name).map(|(_, v, dir)| (*v, dir.as_path()))
     }
 
     /// What this session may write (WRITE-17).
@@ -586,9 +636,10 @@ impl Session {
             }
         }
         // What the session shows follows the accepted revision (PACK-9): a build that wasn't
-        // accepted never moved it.
-        if compiled.view.get(m2_song::pack::STD).is_some() {
+        // accepted never moved it. The lists follow it too.
+        if compiled.view.get(m2_song::pack::STD).is_some() && !Arc::ptr_eq(self.packages.view(), &compiled.view) {
             self.packages.show(&compiled.view);
+            (self.catalog, self.offered) = lists(&self.packages);
         }
         let new = Arc::new(Revision { number, code_rev, data_rev, snapshot, project, compiled });
         let old = std::mem::replace(&mut self.accepted, new);
@@ -614,6 +665,7 @@ impl Session {
             Ok(s) => self.take_in(s).draft_changed,
             Err(e) => {
                 self.draft_errors = unreadable(e);
+                self.draft_packs = None;
                 true
             }
         }
