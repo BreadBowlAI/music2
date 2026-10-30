@@ -1636,6 +1636,34 @@ What you can add to a song, found in one place: ⌘F's panel, the side browser's
 - *Why:* a beginner needs a few sounds to drop in before getting any pack, and music2 can make them itself, so they carry no one else's licence.
 - *Today:* since track `samples`: `crates/editor/src/library/kit.rs` (`std_kit_is_made_again_to_the_same_bytes`); the bundle's config carries them (`apps/music2-desktop/tests/bundle.rs`, `the_bundle_carries_stds_kit`; `ci/release.sh` checks the built files). std stays 0.5.0.
 
+## Network
+
+music2 works offline. It reaches the internet only to get something: a pack, a sample, the registry's catalog (the packs design, §7 and §9.2). These rules say how. Talking to this computer is not covered here: the local API and its callers, the window and `m2` ([AGENT-8](#agents)). Nor is a CLAP plugin: it is another maker's program, in its own process ([PluginHost](#pluginhost)).
+
+**NET-1.** music2's own code MUST reach another computer only through `m2_editor::fetch`. Only `crates/editor` depends on the HTTP and TLS crates (`reqwest`, `rustls`), and only `fetch.rs` names them.
+- *Why:* one place to read for what music2 sends, and one place where every download is checked.
+- *Today:* since track `fetch` (`crates/editor/src/fetch.rs`; `only_fetch_reaches_the_network`). Nothing calls it yet: the registry will.
+
+**NET-2.** music2 MUST download only what the person asked for (a Get, an install, an update they chose, in the app or with `m2`), and the registry's catalog. A request is a GET of the address it names with `User-Agent: music2/<version>`, and nothing about the person: no account, no cookie, no id, no referrer, and never what they typed (search runs on their computer over the catalog, the design's §9.2). An address with a name or password in it is refused. `fetch` never retries and keeps no cache: its caller decides both.
+- *Why:* music2 is a studio, not a service: what you do in it stays on your computer.
+- *Today:* since track `fetch` (`a_request_says_only_what_it_asks_for`, `an_address_that_isnt_safe_is_refused_before_any_connection`).
+
+**NET-3.** A download's address MUST be `https://`; `http://` only to this computer (`127.0.0.1`, `::1`, `localhost`, which is always 127.0.0.1), for tests and a local registry; or `file://`, read from the disk with the same limits and checks, since a folder on a drive serves the same files as the bucket (the design's §7.3). Anything else is refused before any connection is made. A redirect is followed at most 5 times, each new address checked again, and never from `https` to `http`. Certificates are checked by the OS's own verifier (Apple's on macOS, the system's store on Linux); no check can be turned off. No proxy is used.
+- *Why:* a download over plain http can be changed on the way by anyone on the same network.
+- *Today:* since track `fetch`. TLS is rustls with the ring provider, given to fetch's own client, so nothing is installed for the whole process (`a_redirect_to_http_is_refused`, `a_few_redirects_are_followed_and_no_more`, `file_addresses_read_from_disk_with_the_same_checks`, `the_https_client_builds_with_the_oss_certificates`).
+
+**NET-4.** Every download MUST have a size limit, and MUST stop as soon as it is over it: before any byte when the server says its size (`Content-Length`), else as the bytes come. A size or SHA-256 the caller knows MUST be checked: the size against the server's word before the bytes and against the bytes at the end, the hash after the last byte. The size and hash of what came are returned either way.
+- *Why:* a server that is wrong or hostile must never fill the disk, and a file changed on the way must never be used (the design's §12 and R2).
+- *Today:* since track `fetch` (`too_big_is_stopped_from_its_content_length`, `too_big_is_stopped_while_streaming`, `a_wrong_size_is_refused`, `a_wrong_hash_is_refused`).
+
+**NET-5.** A download to a file MUST be written to `<dest>.part` beside it, hashed as it is written, and renamed onto `dest` only once every check passed. On any failure or a cancel, the `.part` is removed and `dest` is left as it was: a failed download never leaves a file at its destination.
+- *Why:* a half file, or one with the wrong bytes, must never look like a good one, to a person or to the store ([PACK-6](#packs)).
+- *Today:* since track `fetch` (`a_download_lands_only_when_every_check_passed`; every failure test checks that nothing was left).
+
+**NET-6.** A failed download MUST say why in plain words: the host couldn't be reached, nothing came for too long, the server's answer, the size, the hash, a cancel. It names the host, never the whole address, so a token in a link is never shown. It waits 10 s at most to connect, 30 s for an answer, and 30 s with no bytes. `fetch` blocks its caller, so it is called from a thread of its own (`spawn_blocking` in the server), never from async code, where it panics; it sees a cancel within 50 ms, even while nothing comes.
+- *Why:* a musician must know whether to check the internet, try later or tell the pack's author; and a blocked runtime would stop the app's server.
+- *Today:* since track `fetch` (`errors_never_show_the_address`, `a_dropped_connection_says_so`, `a_server_that_goes_quiet_times_out`, `cancel_stops_at_once_and_leaves_nothing`, `a_call_from_async_code_panics`).
+
 ## Platforms
 
 **PLAT-1.** music2 MUST build and pass every check on macOS on Apple silicon (the reference platform: judged timings, the look, native menus) and on Linux x86_64 with the glibc it was built against (the development platform). Windows is designed for in every OS piece and built in its own step. Timings are judged on the [reference Mac](#acceptance-gates) only; other machines run the same gates and record their timings with the machine named.
