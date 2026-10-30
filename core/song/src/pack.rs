@@ -215,9 +215,32 @@ impl PkgManifest {
     }
 }
 
+/// What this app gives a pack (PACK-2): its `@m2/core` and its std (`None`: none at all). Whether
+/// it runs a pack is asked of it wherever that matters, the build, resolution, `m2 pack lock` and
+/// `update`, and the lists, so they never disagree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct App {
+    pub sdk: Option<Version>,
+    pub std: Option<Version>,
+}
+
+impl App {
+    /// Whether it meets a package's `[dependencies]`: [`meets`].
+    pub fn meets(&self, dependencies: &BTreeMap<String, Requirement>) -> Result<(), String> {
+        meets(dependencies, self.sdk, self.std)
+    }
+
+    /// Whether it runs the pack in `dir`: its `m2pkg.toml` reads, and it has what that needs. Why
+    /// not, in words naming the pack: `@a/x 1.3.0 needs std "0.9" or later, but this app has 0.5.0`.
+    pub fn runs(&self, dir: &Path) -> Result<(), String> {
+        let m = PkgManifest::at(dir)?;
+        self.meets(&m.dependencies).map_err(|why| format!("{} {} {why}", m.package.name, m.package.version))
+    }
+}
+
 /// Whether the SDK and std this app has (`None`: none at all) meet a package's `[dependencies]`
 /// (PACK-2): the SDK by the caret rule, std as a lower bound. What it needs that isn't met, in
-/// words: `needs std "0.9" or later, but this app has 0.4.0`.
+/// words: `needs std "0.9" or later, but this app has 0.4.0`. The one rule; [`App`] asks it.
 pub fn meets(dependencies: &BTreeMap<String, Requirement>, sdk: Option<Version>, std: Option<Version>) -> Result<(), String> {
     for (dep, req) in dependencies {
         let (have, met, at_least) = match dep.as_str() {
@@ -532,11 +555,12 @@ pub struct Resolution {
 
 /// The packs the song in `project` builds with, from its manifest, its lock and the store
 /// (PACK-9). std and the SDK aren't here: the app has them, and FMT-3 checks them. With no store
-/// (no home folder), a pack from the store is unsatisfied: nothing is looked for elsewhere.
-pub fn resolve(project: &Path, manifest: &Manifest, lock: &Lock, store: Option<&Store>) -> Resolution {
+/// (no home folder), a pack from the store is unsatisfied: nothing is looked for elsewhere. Of the
+/// store's versions, only one `app` runs is chosen.
+pub fn resolve(project: &Path, manifest: &Manifest, lock: &Lock, store: Option<&Store>, app: &App) -> Resolution {
     let mut out = Resolution::default();
     for (name, dep) in packs_of(manifest) {
-        match resolve_one(project, &name, dep, lock, store) {
+        match resolve_one(project, &name, dep, lock, store, app) {
             Ok(r) => out.packs.push(r),
             Err(d) => out.problems.push(d),
         }
@@ -577,30 +601,60 @@ fn whole(store: &Store, name: &PackName, v: Version) -> Result<Resolved, Diagnos
     Ok(Resolved { name: name.clone(), version: v, dir: store.version_dir(name, &v), hash: Some(hash), path: false })
 }
 
-/// The highest installed version of `name` that `req` admits, checked whole.
-fn highest(store: &Store, name: &PackName, req: &Requirement) -> Result<Resolved, Diagnostic> {
+/// The highest installed version of `name` that `req` admits and `app` runs (PACK-2): another
+/// app sharing the store may have installed a newer one this one can't run. One whose copy no
+/// longer reads is taken all the same, so checking it whole says what changed. Its version, or
+/// why this app runs none it admits.
+fn runnable(store: &Store, name: &PackName, req: &Requirement, app: &App) -> Result<Option<Version>, String> {
+    let mut cant = None;
+    for v in store.versions(name).into_iter().rev().filter(|v| req.matches(*v)) {
+        match app.runs(&store.version_dir(name, &v)) {
+            Ok(()) => return Ok(Some(v)),
+            Err(_) if store.check(name, &v).is_err() => return Ok(Some(v)),
+            Err(why) => {
+                cant.get_or_insert(why);
+            }
+        }
+    }
+    cant.map_or(Ok(None), Err)
+}
+
+/// The highest installed version of `name` that `req` admits and `app` runs, checked whole.
+fn highest(store: &Store, name: &PackName, req: &Requirement, app: &App) -> Result<Resolved, Diagnostic> {
+    let unsatisfied = |words: String| Diagnostic::error("pkg.unsatisfied", words).file(MANIFEST);
+    let v = runnable(store, name, req, app).map_err(|why| {
+        unsatisfied(format!(
+            "{MANIFEST} asks for {name} \"{req}\", but the versions installed that it admits need a newer music2: {why}. Update \
+             music2, or install a version made for this one with `m2 pack install <folder>`"
+        ))
+    })?;
     let installed = store.versions(name);
-    let Some(v) = installed.iter().rev().find(|v| req.matches(**v)).copied() else {
+    let Some(v) = v else {
         let have = match installed.is_empty() {
             true => "none is installed".to_string(),
             false => format!("installed: {}", installed.iter().map(Version::to_string).collect::<Vec<_>>().join(", ")),
         };
-        return Err(Diagnostic::error(
-            "pkg.unsatisfied",
-            format!("{MANIFEST} asks for {name} \"{req}\", but {have}. Install it from its folder with `m2 pack install <folder>`"),
-        )
-        .file(MANIFEST));
+        return Err(unsatisfied(format!(
+            "{MANIFEST} asks for {name} \"{req}\", but {have}. Install it from its folder with `m2 pack install <folder>`"
+        )));
     };
     whole(store, name, v)
 }
 
-fn resolve_one(project: &Path, name: &PackName, dep: &Dependency, lock: &Lock, store: Option<&Store>) -> Result<Resolved, Diagnostic> {
+fn resolve_one(
+    project: &Path,
+    name: &PackName,
+    dep: &Dependency,
+    lock: &Lock,
+    store: Option<&Store>,
+    app: &App,
+) -> Result<Resolved, Diagnostic> {
     let req = match dep {
         Dependency::Path(p) => return in_folder(project, name, &p.path),
         Dependency::Version(req) => req,
     };
     let store = store.ok_or_else(|| no_store(name, req))?;
-    let Some(l) = lock.get(name) else { return highest(store, name, req) };
+    let Some(l) = lock.get(name) else { return highest(store, name, req, app) };
     let installed = store.versions(name);
     if !req.matches(l.version) {
         return Err(Diagnostic::error(
@@ -614,7 +668,7 @@ fn resolve_one(project: &Path, name: &PackName, dep: &Dependency, lock: &Lock, s
         .file(LOCK));
     }
     if !installed.contains(&l.version) {
-        let other = installed.iter().rev().find(|v| req.matches(**v));
+        let other = runnable(store, name, req, app).ok().flatten();
         let instead = match other {
             Some(v) => format!(", or run `m2 pack lock <song>` to use {v}, which is installed (the song may sound different)"),
             None => String::new(),
@@ -676,9 +730,9 @@ pub enum Move<'a> {
 /// The lock `m2 pack lock` and `m2 pack update` write (PACK-8), from the manifest, the lock it
 /// replaces and the store alone, never from a build: each pack the manifest takes from the store,
 /// kept at its locked version when that is admitted, installed and the copy locked, else at the
-/// highest installed version its requirement admits. An entry for a pack the manifest no longer
+/// highest installed version its requirement admits that `app` runs. An entry for a pack the manifest no longer
 /// lists goes. What keeps one from it, as a build says it.
-pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, moving: Move) -> Result<Lock, Vec<Diagnostic>> {
+pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, app: &App, moving: Move) -> Result<Lock, Vec<Diagnostic>> {
     let mut out = Lock::default();
     let mut problems = vec![];
     for (name, dep) in packs_of(manifest) {
@@ -698,7 +752,7 @@ pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, moving: M
                 true => Ok(r),
                 false => Err(not_locked(&name, &l.version)),
             }),
-            None => highest(store, &name, req),
+            None => highest(store, &name, req, app),
         };
         match resolved {
             Ok(r) => out = out.with(r.name, r.version, r.hash.expect("a store version has a hash")),

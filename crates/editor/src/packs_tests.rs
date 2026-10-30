@@ -205,7 +205,7 @@ fn a_pack_this_app_cant_run_isnt_offered() {
     install_as(&f, "@test/later", "1.0.0", |t| t.replace("std = \"0.4\"", "std = \"9.0\""), None);
     let s = open(&f);
     assert_eq!(from(&s, "@test/tiny:tiny-keys").map(|p| p.version), Some("0.1.0".into()));
-    let offered: Vec<String> = m2_session::offered(&s.packages).into_iter().map(|(n, _)| n).collect();
+    let offered: Vec<String> = m2_session::offered(&s.packages).into_iter().map(|(n, ..)| n).collect();
     assert_eq!(offered, ["@test/tiny"], "@test/later needs std 9.0");
 }
 
@@ -299,4 +299,37 @@ fn a_stem_renders_the_view_it_was_planned_on() {
     assert_eq!(s.packages.module_sha(SINE), Some(m2), "the song moved");
     let r = Render::new(stem, &s.packages, 48_000, 0.0, Length::Seconds(0.1), Threads::Exactly(1)).unwrap_or_else(|e| panic!("{e:#}"));
     assert_eq!(module_of(&r.info(), SINE), Some(m1), "the stem plays the version it was made with");
+}
+
+// PACK-9, PACK-11: the lists follow the accepted revision's packs: `m2 pack update` while the song
+// is open moves its items to the new version's, as the list names it.
+#[test]
+fn the_lists_follow_the_accepted_view() {
+    let f = Fixture::new();
+    song_and_store(&f);
+    f.write("music2.toml", &format!("{MANIFEST}\"@test/tiny\" = \"0.1\"\n"));
+    let mut s = open(&f);
+    write_lock(&mut s, pack::Move::Needed).unwrap_or_else(|e| panic!("{e}"));
+    let tone = "@test/tiny:tiny-tone";
+    assert!(!s.catalog().components.contains_key(tone), "0.1.0 has no tone");
+    install_with_kernel(&f, "0.1.1", "two");
+    write_lock(&mut s, pack::Move::All).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(s.accepted().compiled.packs[0].version, Version(0, 1, 1));
+    assert!(s.catalog().components.contains_key(tone), "the lists have 0.1.1's items");
+    assert!(crate::tracks::instruments(&s).iter().any(|i| i.component == tone));
+    assert_eq!(from(&s, tone).map(|p| p.version), Some("0.1.1".into()));
+}
+
+// PACK-11, PACK-10: an add takes the version the lists offer the item from, not one installed
+// since the lists were made.
+#[test]
+fn an_add_takes_the_version_the_lists_show() {
+    let f = Fixture::new();
+    let (mut s, hash) = song_and_store(&f);
+    assert_eq!(from(&s, "@test/tiny:tiny-keys").map(|p| p.version), Some("0.1.0".into()));
+    install_with_kernel(&f, "0.1.1", "two");
+    assert_eq!(from(&s, "@test/tiny:tiny-keys").map(|p| p.version), Some("0.1.0".into()), "the list says what it shows");
+    crate::tracks::add(&mut s, "@test/tiny:tiny-keys", None, None, None).unwrap_or_else(|e| panic!("{e}"));
+    let lock = Lock::read(&f.read("music2.lock")).unwrap();
+    assert_eq!(lock.get(&PackName::new("@test/tiny").unwrap()).map(|l| (l.version, l.hash)), Some((Version(0, 1, 0), hash)));
 }

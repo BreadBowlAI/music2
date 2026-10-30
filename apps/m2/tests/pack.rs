@@ -429,3 +429,36 @@ fn listen_with_renders_each_side_with_its_own_packs() {
     // Nothing was written: the song still uses 0.1.0.
     assert_eq!(locked(&song), "0.1.0");
 }
+
+// PACK-8, PACK-9, PACK-2: a version in the store this app can't run (a newer app installed it,
+// needing a newer std) is never chosen: not by `m2 pack update`, nor by a song with no lock entry;
+// with only it installed, the song says why.
+#[test]
+fn a_version_this_app_cant_run_is_never_chosen() {
+    let t = Temp::new("runs");
+    copy(&fixtures(), &t.0.join("packs"));
+    let song = t.0.join("packs/song-store");
+    let s = song.to_str().unwrap();
+    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
+    // 0.1.1 needs std 0.9: install refuses it here, so it is put in the store as a newer app would.
+    let later = tiny_at(&t, "0.1.1");
+    let toml = std::fs::read_to_string(later.join("m2pkg.toml")).unwrap();
+    assert!(toml.contains("std = \"0.4\""), "{toml}");
+    std::fs::write(later.join("m2pkg.toml"), toml.replace("std = \"0.4\"", "std = \"0.9\"")).unwrap();
+    ok(t.m2(&["pack", "build", later.to_str().unwrap()]));
+    copy(&later, &t.store().join("@test/tiny/0.1.1"));
+
+    ok(t.m2(&["pack", "update", s]));
+    assert_eq!(locked(&song), "0.1.0", "update stays on the newest version this app runs");
+    std::fs::remove_file(song.join("music2.lock")).unwrap();
+    ok(t.m2(&["check", s]));
+    ok(t.m2(&["pack", "lock", s]));
+    assert_eq!(locked(&song), "0.1.0");
+
+    ok(t.m2(&["pack", "remove", "@test/tiny", "0.1.0"]));
+    std::fs::remove_file(song.join("music2.lock")).unwrap();
+    let text = failed(t.m2(&["check", s]));
+    for want in ["pkg.unsatisfied", "0.1.1", "std \"0.9\""] {
+        assert!(text.contains(want), "says {want}: {text}");
+    }
+}

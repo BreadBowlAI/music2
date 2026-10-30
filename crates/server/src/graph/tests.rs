@@ -4281,3 +4281,42 @@ fn an_export_borrows_instances_in_the_host_process() {
     let (a, b) = (samples(&out), samples(&fresh_wav));
     assert!(a.len() == b.len() && a == b, "the borrowed export is the export of new instances");
 }
+
+/// A copy of the fixture pack `@test/tiny` (`core/session/tests/fixtures/packs/tiny`) at `to`.
+fn tiny_at(to: &Path) {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap().flatten() {
+            let (f, t) = (e.path(), to.join(e.file_name()));
+            if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
+        }
+    }
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/session/tests/fixtures/packs/tiny"), to);
+}
+
+// PACK-9: the code editor's types follow the accepted revision's packs: a pack the song comes to
+// use brings its sources, and the state says when they were made, so the editor loads them again.
+#[test]
+fn the_editor_types_follow_the_accepted_view() {
+    let fixture = Fixture::new();
+    let tiny = PathBuf::from(format!("{}-tiny", fixture.0.display()));
+    tiny_at(&tiny);
+    let graph = fixture.open();
+    let paths = |graph: &Graph| -> Vec<String> {
+        graph.types().unwrap()["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap().to_string()).collect()
+    };
+    assert!(!paths(&graph).iter().any(|p| p.starts_with("@test/tiny/")));
+    let made = graph.state().unwrap()["types"].clone();
+    let name = tiny.file_name().unwrap().to_str().unwrap();
+    fixture.put("music2.toml", &format!("{MANIFEST}\"@test/tiny\" = {{ path = \"../{name}\" }}\n"));
+    assert!(graph.poll());
+    assert!(paths(&graph).iter().any(|p| p == "@test/tiny/index.ts"), "{:?}", paths(&graph));
+    assert!(made.is_u64(), "{made}");
+    assert_ne!(graph.state().unwrap()["types"], made, "the state says the types were made again");
+    // An edit that keeps the packs keeps the types.
+    let made = graph.state().unwrap()["types"].clone();
+    fixture.write("export default song(() => osc.sine(hz(700)));\n");
+    assert!(graph.poll());
+    assert_eq!(graph.state().unwrap()["types"], made);
+    std::fs::remove_dir_all(&tiny).ok();
+}

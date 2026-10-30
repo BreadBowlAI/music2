@@ -333,36 +333,27 @@ impl PackageSet {
         self.view.packs()
     }
 
-    /// The packs the lists offer (PACK-11), by name: each pack it shows (the accepted revision's),
-    /// then of every other pack in the store, the newest installed version `runs` says this app
-    /// can run. std isn't one.
-    pub fn offered(&self, runs: impl Fn(&m2_song::pack::PkgManifest) -> bool) -> Vec<(String, PathBuf)> {
-        let mut out = self.packs();
+    /// The packs the lists offer (PACK-11), by name, with the version and folder each is offered
+    /// from: each pack it shows (the accepted revision's), then of every other pack in the store,
+    /// the newest installed version `app` runs. std isn't one.
+    pub fn offered(&self, app: &m2_song::pack::App) -> Vec<(String, m2_song::Version, PathBuf)> {
+        let shown = self.view.packages().filter(|p| p.name != m2_song::pack::STD);
+        let mut out: Vec<_> = shown.filter_map(|p| Some((p.name.clone(), m2_song::Version::parse(&p.version)?, p.dir.clone()))).collect();
         for (name, _) in self.store.as_ref().map(|s| s.list()).unwrap_or_default() {
-            if out.iter().any(|(n, _)| n == name.as_str()) {
+            if out.iter().any(|(n, ..)| n == name.as_str()) {
                 continue;
             }
-            if let Some((_, dir)) = self.newest(&name, &runs) {
-                out.push((name.as_str().to_string(), dir));
+            if let Some((v, dir)) = self.newest(&name, app) {
+                out.push((name.as_str().to_string(), v, dir));
             }
         }
         out
     }
 
-    /// The newest installed version of pack `name` that `runs` says this app can run, and its
-    /// folder in the store.
-    pub fn newest(
-        &self,
-        name: &m2_song::pack::PackName,
-        runs: impl Fn(&m2_song::pack::PkgManifest) -> bool,
-    ) -> Option<(m2_song::Version, PathBuf)> {
+    /// The newest installed version of pack `name` that `app` runs, and its folder in the store.
+    pub fn newest(&self, name: &m2_song::pack::PackName, app: &m2_song::pack::App) -> Option<(m2_song::Version, PathBuf)> {
         let store = self.store.as_ref()?;
-        store
-            .versions(name)
-            .into_iter()
-            .rev()
-            .map(|v| (v, store.version_dir(name, &v)))
-            .find(|(_, dir)| m2_song::pack::PkgManifest::at(dir).is_ok_and(|m| runs(&m)))
+        store.versions(name).into_iter().rev().map(|v| (v, store.version_dir(name, &v))).find(|(_, dir)| app.runs(dir).is_ok())
     }
 
     pub fn packages(&self) -> impl Iterator<Item = &Package> {

@@ -41,15 +41,15 @@ pub fn from(s: &Session, component: &str) -> Option<From> {
     if package == pack::STD {
         return None;
     }
-    let (version, _) = m2_session::offered_one(&s.packages, package)?;
+    let (version, _) = s.offered_one(package)?;
     Some(From { name: package.to_string(), version: version.to_string() })
 }
 
-/// The version and hash of `package` as the lists offer it from the store (PACK-11): its newest
-/// installed version this app can run, its copy checked against its listing (PACK-6).
+/// The version and hash of `package` as the lists offer it from the store (PACK-11): the version
+/// they were made from, its copy checked against its listing (PACK-6).
 fn offered_version(s: &Session, package: &str) -> Option<(Version, Result<Sha, String>)> {
     let name = PackName::new(package).ok()?;
-    let (v, _) = m2_session::offered_one(&s.packages, package)?;
+    let (v, _) = s.offered_one(package)?;
     Some((v, s.packages.store()?.check(&name, &v)))
 }
 
@@ -154,7 +154,7 @@ pub fn lock_now(s: &Session, moving: pack::Move) -> Result<Lock, EditError> {
     let text = files.get(Path::new(m2_song::path::MANIFEST)).ok_or_else(|| EditError::NotFound(m2_song::path::MANIFEST.into()))?;
     let manifest = m2_song::Manifest::read(text).map_err(|d| EditError::Rejected(d.message))?;
     let old = files.get(Path::new(m2_song::path::LOCK)).and_then(|t| Lock::read(t).ok()).unwrap_or_default();
-    pack::relock(&manifest, &old, s.packages.store(), moving)
+    pack::relock(&manifest, &old, s.packages.store(), &m2_session::app(&s.packages), moving)
         .map_err(|d| EditError::Rejected(d.into_iter().map(|d| d.message).collect::<Vec<_>>().join("\n")))
 }
 
