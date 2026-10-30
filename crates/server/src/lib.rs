@@ -107,6 +107,8 @@ pub struct AppState {
     scanning: Mutex<()>,
     /// The previews being made (LIB-3): a second ask for one waits for the first.
     pub previews: library::Previews,
+    /// The samples indexed so far (LIB-4, LIB-5): a folder of yours is indexed in the background.
+    pub sample_index: Arc<library::SampleIndex>,
     /// Where the library reads your presets and keeps previews, when this server keeps them
     /// ([`AppState::keep_library`]): the app and the headless server do; tests give scratch ones,
     /// so none reads your Presets folder or writes your cache.
@@ -133,6 +135,7 @@ impl AppState {
             plugins: Mutex::default(),
             scanning: Mutex::default(),
             previews: Default::default(),
+            sample_index: Arc::default(),
             library: OnceLock::new(),
         }
     }
@@ -150,9 +153,12 @@ impl AppState {
         listed
     }
 
-    /// Read your presets and keep previews in `folders` from now on (LIB-1, LIB-3). Once.
+    /// Read your presets and keep previews and samples' measures in `folders` from now on (LIB-1,
+    /// LIB-3, LIB-5), and start indexing the samples a search will want first. Once.
     pub fn keep_library(&self, folders: library::Folders) {
-        let _ = self.library.set(folders);
+        if self.library.set(folders).is_ok() {
+            self.warm_samples();
+        }
     }
 
     /// Where the library reads your presets and keeps previews: none until kept.

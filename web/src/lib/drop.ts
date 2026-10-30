@@ -12,6 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { barAt, lockReason } from "./graph";
 import { native } from "./native";
+import { draggedSample, SAMPLE_DRAG, type LibraryItem } from "./library";
 import type { SamplerTarget } from "./sampler";
 import { useStore } from "./store";
 import { zoomNow } from "./zoom";
@@ -138,8 +139,89 @@ function dropAt(files: DropFile[], x: number, y: number) {
   t.drop(files, h.target);
 }
 
-/** Start listening: Tauri's drag events in the app, HTML5's in a browser. Returns the stop. */
+/** What a sample dragged from the library does (LIB-7): what it says where, where it lands, and the drop. */
+interface SampleTaker {
+  hint: (item: LibraryItem, target: DropTarget) => string | null;
+  where?: (target: DropTarget) => DropTarget;
+  drop: (item: LibraryItem, target: DropTarget) => void;
+}
+
+let sampleTaker: SampleTaker | null = null;
+
+/** Take samples dragged from the library (one taker: the audio import's). */
+export function onSample(how: SampleTaker) {
+  sampleTaker = how;
+}
+
+/** What a drag of sample `item` at (`x`, `y`) says, and where it lands. */
+function sampleHintAt(item: LibraryItem, x: number, y: number): Hint {
+  const graph = useStore.getState().graph;
+  const at = { x, y };
+  if (!graph || !sampleTaker) return { at, words: "Open a song first", target: { kind: "none" } };
+  const why = lockReason(graph, useStore.getState().connected);
+  if (why) return { at, words: why, target: { kind: "none" } };
+  const where = target(x, y);
+  const words = sampleTaker.hint(item, where);
+  return words ? { at, words, target: where, shown: sampleTaker.where?.(where) ?? where } : { at, words: "Drop it on a track, or below the tracks", target: { kind: "none" } };
+}
+
+/**
+ * A sample dragged from ⌘F's panel (LIB-7): a drag inside the page, in the app as in a browser,
+ * shown and dropped as a file is. Returns the stop.
+ */
+function listenForSamples(): () => void {
+  const carries = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes(SAMPLE_DRAG);
+  let depth = 0;
+  const over = (e: DragEvent) => {
+    const item = draggedSample();
+    if (!carries(e) || !item) return;
+    e.preventDefault();
+    const h = sampleHintAt(item, e.clientX, e.clientY);
+    if (e.dataTransfer) e.dataTransfer.dropEffect = h.target.kind === "none" ? "none" : "copy";
+    useDropHint.setState({ hint: h });
+  };
+  const enter = (e: DragEvent) => {
+    if (!carries(e)) return;
+    depth++;
+    over(e);
+  };
+  const leave = (e: DragEvent) => {
+    if (!carries(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) useDropHint.setState({ hint: null });
+  };
+  const drop = (e: DragEvent) => {
+    const item = draggedSample();
+    if (!carries(e) || !item) return;
+    e.preventDefault();
+    depth = 0;
+    useDropHint.setState({ hint: null });
+    const h = sampleHintAt(item, e.clientX, e.clientY);
+    if (h.target.kind === "none") return void useStore.getState().toast(`${h.words}.`);
+    sampleTaker?.drop(item, h.target);
+  };
+  const ended = () => {
+    depth = 0;
+    useDropHint.setState({ hint: null });
+  };
+  const pairs = [["dragenter", enter], ["dragover", over], ["dragleave", leave], ["drop", drop], ["dragend", ended]] as const;
+  for (const [t, f] of pairs) window.addEventListener(t, f);
+  return () => {
+    for (const [t, f] of pairs) window.removeEventListener(t, f);
+  };
+}
+
+/** Start listening: Tauri's drag events in the app, HTML5's in a browser; and a sample from the library, in both. Returns the stop. */
 export function listenForDrops(): () => void {
+  const samples = listenForSamples();
+  const files = listenForFiles();
+  return () => {
+    samples();
+    files();
+  };
+}
+
+function listenForFiles(): () => void {
   if (native) {
     // Tauri gives physical pixels.
     const px = (p: { x: number; y: number }) => ({ x: p.x / (window.devicePixelRatio || 1), y: p.y / (window.devicePixelRatio || 1) });

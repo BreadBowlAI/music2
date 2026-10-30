@@ -301,6 +301,7 @@ case $STEP in
     fi
     if tools nextest && plugins && check "web build" web.log web &&
        check "build tests" build.log cargo nextest run --locked --workspace --no-run -E "$filter"; then
+      ci/cache-left.sh --clear "$OUT/home"
       check "rust tests" test.log env HOME="$OUT/home" cargo nextest run --locked --workspace --no-tests=warn \
         --partition "hash:$PART" -E "$filter"
       # What nextest said: the counts, and each test that passed only when run again.
@@ -323,6 +324,8 @@ case $STEP in
           check "sleeps list" sleeps-list.log sleeps_list "$OUT"
         fi
       fi
+      # PLAT-7: no test wrote in the cache folder of the HOME it ran with.
+      check "cache untouched" cache-left.log ci/cache-left.sh "$OUT/home"
     fi ;;
 
   suites)

@@ -38,6 +38,8 @@ static ALLOC: m2_play::alloc::Counting = m2_play::alloc::Counting;
 fn main() {
     #[cfg(debug_assertions)]
     m2_play::alloc::watch();
+    // PLAT-7: a program keeps the cache folder (hashes, peaks, renders, previews); a test doesn't.
+    m2_server::resources::keep_cache();
     // HOST-2: plugins make their main-thread calls on this thread, AppKit's, through the main
     // dispatch queue; it must be installed before anything touches a plugin. From here on the main
     // thread must never wait on a thread that may be creating plugins (the server's project work):

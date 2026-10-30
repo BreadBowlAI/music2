@@ -117,6 +117,8 @@ OPTIONS:
 ";
 
 fn main() {
+    // PLAT-7: the gates keep the cache folder (warped renders) as the app does, under their HOME.
+    m2_os::dirs::keep_cache();
     // Before any thread starts: server runs must never open a real device, and the silent player
     // times with 512-frame buffers (step 3a's design, §15).
     // SAFETY: nothing else runs yet, so nothing reads the environment concurrently.
