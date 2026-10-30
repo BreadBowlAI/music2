@@ -12,28 +12,10 @@ use wasmtime::{Engine, ExternType, Module, ValType};
 
 use crate::WasmContext;
 
+/// A `[[kernel]]` of `m2pkg.toml`, read strictly (PACK-2): the rest of the file is
+/// `m2_song::pack::PkgManifest`'s.
 #[derive(Deserialize)]
-struct Manifest {
-    package: Info,
-    #[serde(default)]
-    kernel: Vec<KernelDecl>,
-    /// Kept only to refuse it: effects are declared in TypeScript now (PKG-2), and without the
-    /// field an old manifest's `[[effect]]` would be skipped silently.
-    #[serde(default)]
-    effect: Vec<toml::Value>,
-}
-
-#[derive(Deserialize)]
-struct Info {
-    name: String,
-    version: String,
-    #[serde(default)]
-    description: String,
-    /// The compiled kernels, relative to the package folder.
-    wasm: Option<String>,
-}
-
-#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct KernelDecl {
     name: String,
     #[serde(default)]
@@ -54,6 +36,11 @@ pub struct Package {
     pub version: String,
     pub description: String,
     pub dir: PathBuf,
+    /// What it needs of `@m2/core` and std (PACK-2): the session checks them against the SDK and
+    /// the std it has.
+    pub needs: BTreeMap<String, m2_song::Requirement>,
+    /// Its licence, as `m2pkg.toml` names it.
+    pub license: Option<String>,
     /// The files the runtime read to load it (`std/m2pkg.toml`, `std/kernels/std.wasm`), by the
     /// SHA-256 of their bytes: with the TypeScript the build read, what a render's provenance
     /// names as the package contents that ran (RENDER-2).
@@ -85,6 +72,8 @@ pub struct PackageSet {
     plugins: HashMap<String, Hosted>,
     /// How plugins are reached (P11): the process's in-process host unless set.
     host: Arc<dyn PluginHost>,
+    /// Where installed packs are (PACK-6): this computer's store unless set.
+    store: Option<m2_song::pack::Store>,
 }
 
 /// A hosted plugin as the last build found it.
@@ -119,7 +108,8 @@ pub fn engine() -> Engine {
 impl Default for PackageSet {
     fn default() -> Self {
         let (packages, kernels, plugins) = (BTreeMap::new(), HashMap::new(), HashMap::new());
-        PackageSet { engine: engine(), packages, kernels, offline: HashMap::new(), plugins, host: m2_plugins::host() }
+        let store = m2_song::pack::Store::here();
+        PackageSet { engine: engine(), packages, kernels, offline: HashMap::new(), plugins, host: m2_plugins::host(), store }
     }
 }
 
@@ -135,21 +125,32 @@ impl PackageSet {
         self
     }
 
-    /// Load the package in `dir` (which holds `m2pkg.toml`).
+    /// Find installed packs in `store` instead of this computer's (PACK-6).
+    pub fn with_store(mut self, store: PathBuf) -> PackageSet {
+        self.store = Some(m2_song::pack::Store::at(store));
+        self
+    }
+
+    /// Where installed packs are, if anywhere.
+    pub fn store(&self) -> Option<&m2_song::pack::Store> {
+        self.store.as_ref()
+    }
+
+    /// Load the package in `dir` (which holds `m2pkg.toml`, read strictly: PACK-2).
     pub fn load(&mut self, dir: &Path) -> Result<&Package> {
-        let path = dir.join("m2pkg.toml");
+        let path = dir.join(m2_song::pack::PKG_MANIFEST);
         let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let m: Manifest = toml::from_str(&text).with_context(|| format!("reading {}", path.display()))?;
-        let name = m.package.name.clone();
+        let m =
+            m2_song::pack::PkgManifest::read(&text).map_err(anyhow::Error::msg).with_context(|| format!("reading {}", path.display()))?;
+        let name = m.package.name.as_str().to_string();
         if self.packages.contains_key(&name) {
             bail!("package `{name}` is loaded twice");
         }
-        if !m.effect.is_empty() {
-            bail!(
-                "package `{name}`: `[[effect]]` is gone from m2pkg.toml (PKG-2). Effects are declared in TypeScript, \
-                 `component({{ …, editor: {{ category: \"Filter\", insert: {{ … }} }} }}, …)`"
-            );
-        }
+        let kernels: Vec<KernelDecl> = m
+            .kernel
+            .iter()
+            .map(|k| KernelDecl::deserialize(k.clone()).map_err(|e| anyhow::anyhow!("package `{name}`: a [[kernel]]: {e}")))
+            .collect::<Result<_>>()?;
         let mut files = BTreeMap::from([(format!("{name}/m2pkg.toml"), m2_song::Sha::of(text.as_bytes()).hex())]);
         let (module, module_sha) = match &m.package.wasm {
             Some(w) => {
@@ -159,27 +160,37 @@ impl PackageSet {
                 files.insert(format!("{name}/{w}"), sha.hex());
                 check_abi(&bytes).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 let module = Module::new(&self.engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
-                verify_module(&self.engine, &module, &m.kernel).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
+                verify_module(&self.engine, &module, &kernels).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 (Some(module), Some(sha))
             }
-            None if !m.kernel.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
+            None if !kernels.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
             None => (None, None),
         };
-        for k in &m.kernel {
+        // Checked whole before any is taken, so a package that fails leaves the set as it was.
+        let mut sigs = vec![];
+        for k in &kernels {
             let id = format!("{name}:{}", k.name);
             if k.offline {
                 check_offline(&id, k)?;
-                self.offline.insert(id, name.clone());
+                sigs.push((id, None));
                 continue;
             }
             let sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).map_err(anyhow::Error::msg)?;
-            self.kernels.insert(id, (sig, name.clone()));
+            sigs.push((id, Some(sig)));
+        }
+        for (id, sig) in sigs {
+            match sig {
+                Some(sig) => self.kernels.insert(id, (sig, name.clone())).map(drop),
+                None => self.offline.insert(id, name.clone()).map(drop),
+            };
         }
         let pkg = Package {
             name: name.clone(),
-            version: m.package.version,
+            version: m.package.version.to_string(),
             description: m.package.description,
             dir: dir.to_path_buf(),
+            needs: m.dependencies,
+            license: m.package.license,
             files,
             module,
             module_sha,
@@ -189,6 +200,70 @@ impl PackageSet {
 
     pub fn get(&self, name: &str) -> Option<&Package> {
         self.packages.get(name)
+    }
+
+    /// The packs loaded besides std, by name, with their folders: what the last [`Self::sync`] left.
+    pub fn packs(&self) -> Vec<(String, PathBuf)> {
+        self.packages.values().filter(|p| p.name != m2_song::pack::STD).map(|p| (p.name.clone(), p.dir.clone())).collect()
+    }
+
+    /// Hold std and exactly `packs` (name and folder, PACK-9): a pack loaded from the same folder
+    /// stays as it is, one from another folder is loaded again, and one not listed goes, with its
+    /// kernels. When one doesn't load, the set is put back as it was, and the error names it.
+    pub fn sync(&mut self, packs: &[(String, PathBuf)]) -> Result<()> {
+        let before = self.packs();
+        let result = self.sync_to(packs);
+        if result.is_err() {
+            self.sync_to(&before).expect("what loaded before loads again");
+        }
+        result
+    }
+
+    fn sync_to(&mut self, packs: &[(String, PathBuf)]) -> Result<()> {
+        let stale: Vec<String> =
+            self.packs().into_iter().filter(|(n, d)| !packs.iter().any(|(pn, pd)| pn == n && pd == d)).map(|(n, _)| n).collect();
+        for name in stale {
+            self.unload(&name);
+        }
+        for (name, dir) in packs {
+            if self.packages.contains_key(name) {
+                continue;
+            }
+            let loaded = self.load(dir).map(|p| p.name.clone());
+            match loaded {
+                Ok(n) if n == *name => {}
+                Ok(n) => {
+                    self.unload(&n);
+                    bail!("{} holds {n}, not {name}", dir.display());
+                }
+                Err(e) => return Err(e.context(format!("loading {name}"))),
+            }
+        }
+        Ok(())
+    }
+
+    /// Take package `name` out, with its kernels.
+    fn unload(&mut self, name: &str) {
+        self.packages.remove(name);
+        self.kernels.retain(|_, (_, p)| p != name);
+        self.offline.retain(|_, p| p != name);
+    }
+
+    /// The packs the lists offer (PACK-11), by name: each loaded pack (what the song resolved), then
+    /// the newest installed version of every other pack in the store. std isn't one.
+    pub fn offered(&self) -> Vec<(String, PathBuf)> {
+        let mut out = self.packs();
+        if let Some(store) = &self.store {
+            for (name, versions) in store.list() {
+                if out.iter().any(|(n, _)| n == name.as_str()) {
+                    continue;
+                }
+                if let Some(v) = versions.last() {
+                    out.push((name.as_str().to_string(), store.version_dir(&name, v)));
+                }
+            }
+        }
+        out
     }
 
     pub fn packages(&self) -> impl Iterator<Item = &Package> {
@@ -309,7 +384,7 @@ impl PackageSet {
     pub(crate) fn module_for<'a>(&'a self, id: &'a str) -> Option<(&'a Module, &'a str, &'a str)> {
         let pkg = self.kernels.get(id).map(|(_, p)| p).or_else(|| self.offline.get(id))?;
         let module = self.packages.get(pkg)?.module.as_ref()?;
-        Some((module, id.split_once(':').map_or(id, |(_, k)| k), pkg))
+        Some((module, m2_song::pack::split_id(id).map_or(id, |(_, k)| k), pkg))
     }
 }
 
@@ -580,7 +655,7 @@ mod tests {
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("m2-packages-test-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let manifest = format!("[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[[effect]]\nmodule = \"p/fx\"\n{effect}");
+        let manifest = format!("[package]\nname = \"@test/p\"\nversion = \"0.1.0\"\n\n[[effect]]\nmodule = \"p/fx\"\n{effect}");
         std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
         let mut set = PackageSet::default();
         let loaded = set.load(&dir).map(drop);
@@ -733,6 +808,68 @@ mod tests {
         let mut ir = with_plugin("clap:org.example.not-installed", &[("mix", 0.5)]);
         let codes: Vec<&str> = set.bind_plugins(&mut ir).iter().map(|d| d.code).collect();
         assert_eq!(codes, ["plugin.missing", "plugin.param-unaddressed"]);
+    }
+
+    /// A pack `name` at `version` in a folder of its own, holding one hand-written kernel `k`.
+    fn pack(name: &str, version: &str, extra: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("m2-packages-pack-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The version in a custom section: each version its own module.
+        let wat = crate::tests::module_v1(&format!("{} (@custom \"v\" \"{version}\")", crate::tests::kernel_v1("k", "")));
+        std::fs::write(dir.join("k.wasm"), crate::tests::wasm(&wat)).unwrap();
+        let manifest = format!(
+            "[package]\nname = \"{name}\"\nversion = \"{version}\"\nwasm = \"k.wasm\"\n{extra}\n[[kernel]]\nname = \"k\"\ninputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]\n"
+        );
+        std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
+        dir
+    }
+
+    // PACK-2: a pack's m2pkg.toml is read strictly, its kernels too, and its name by PACK-1.
+    #[test]
+    fn a_pack_manifest_is_read_strictly() {
+        let mut set = std_set();
+        let good = pack("@test/a", "1.0.0", "license = \"CC0-1.0\"\nauthors = [\"A\"]\ntags = [\"keys\"]");
+        set.load(&good).unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(set.kernel("@test/a:k").is_some(), "a kernel id carries the whole name (PACK-4)");
+        assert_eq!(set.module_for("@test/a:k").map(|(_, export, pkg)| (export, pkg)), Some(("k", "@test/a")));
+        for (bad, why) in [
+            (pack("@test/b", "1.0.0", "colour = \"red\""), "colour"),
+            (pack("b", "1.0.0", ""), "package name"),
+            (pack("@test/b", "1.0", ""), "version"),
+        ] {
+            let e = std_set().load(&bad).map(drop).unwrap_err();
+            assert!(format!("{e:#}").contains(why), "{why}: {e:#}");
+        }
+        let odd = pack("@test/c", "1.0.0", "");
+        let text = std::fs::read_to_string(odd.join("m2pkg.toml")).unwrap().replace("name = \"k\"", "name = \"k\"\nspeed = 2");
+        std::fs::write(odd.join("m2pkg.toml"), text).unwrap();
+        let e = std_set().load(&odd).map(drop).unwrap_err();
+        assert!(format!("{e:#}").contains("speed"), "a kernel's unknown key is refused: {e:#}");
+    }
+
+    // PACK-9: the set holds std and exactly the packs it is synced to; a pack whose folder changes
+    // is loaded again, and one no longer listed goes, with its kernels.
+    #[test]
+    fn syncing_holds_std_and_exactly_the_songs_packs() {
+        let mut set = std_set();
+        let (a1, a2, b) = (pack("@test/a", "1.0.0", ""), pack("@test/a", "1.1.0", ""), pack("@test/b", "0.1.0", ""));
+        let packs = |l: &[(&str, &PathBuf)]| l.iter().map(|(n, d)| (n.to_string(), d.to_path_buf())).collect::<Vec<_>>();
+        set.sync(&packs(&[("@test/a", &a1), ("@test/b", &b)])).unwrap();
+        let first = set.module_sha("@test/a:k").unwrap();
+        assert!(set.kernel("@test/b:k").is_some() && set.kernel("std:sine").is_some());
+        assert_eq!(set.packs(), packs(&[("@test/a", &a1), ("@test/b", &b)]));
+        set.sync(&packs(&[("@test/a", &a2)])).unwrap();
+        assert_ne!(set.module_sha("@test/a:k"), Some(first), "another version is another module");
+        assert!(set.kernel("@test/b:k").is_none() && set.get("@test/b").is_none(), "a pack no longer listed goes");
+        assert_eq!(set.get("@test/a").map(|p| p.version.as_str()), Some("1.1.0"));
+        // A pack that doesn't load leaves the set as it was.
+        let broken = pack("@test/c", "1.0.0", "colour = 1");
+        assert!(set.sync(&packs(&[("@test/a", &a1), ("@test/c", &broken)])).is_err());
+        assert_eq!(set.packs(), packs(&[("@test/a", &a2)]), "unchanged");
+        set.sync(&[]).unwrap();
+        assert!(set.kernel("@test/a:k").is_none() && set.kernel("std:sine").is_some(), "std stays");
     }
 
     // PKG-2: `m2pkg.toml` describes no TypeScript. A manifest that still has `[[effect]]` fails
