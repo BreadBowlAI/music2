@@ -46,9 +46,10 @@ struct PreviewQuery {
 
 async fn preview(State(s): S, Query(q): Query<PreviewQuery>) -> Response {
     let made = crate::caller::blocking(move || {
-        let cache = m2_os::dirs::cache().ok_or_else(|| anyhow::anyhow!("can't find your home folder ($HOME isn't set)"))?;
-        let p = crate::library::preview(&s.previews, &q.id, m2_os::dirs::presets().as_deref(), &cache.join("previews"))?;
-        Ok::<_, anyhow::Error>(std::fs::read(&p.file)?)
+        let folders = s.library_folders();
+        let cache = folders.previews.ok_or_else(|| anyhow::anyhow!("This app keeps no previews: it has no cache folder."))?;
+        let p = crate::library::preview(&s.previews, &q.id, &s.preview_packages()?, folders.presets.as_deref(), &cache)?;
+        Ok::<_, anyhow::Error>(p.wav)
     })
     .await;
     match made {
