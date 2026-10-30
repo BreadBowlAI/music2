@@ -151,6 +151,7 @@ impl World {
             made: "2026-10-30T12:00:00Z",
             std: &std_dir(),
             work: &work,
+            to_delete: None,
         })
     }
 
@@ -201,7 +202,8 @@ fn a_registry_builds_into_a_bucket_and_again_to_the_same_bytes() {
         let v = &p.versions[0];
         let listing = &first[&blob_path(&v.hash)];
         assert_eq!(Sha::of(listing), v.hash, "{}'s m2pack.json is in the bucket by the version's hash", p.name);
-        let f = Facts::read_for(&first[&facts_path(&v.hash)], &p.name, v).unwrap();
+        let f = Facts::read_for(&first[&facts_path(&v.hash)], &p.name, v.version, v.hash).unwrap();
+        assert!(Facts::read_for(&first[&facts_path(&v.hash)], &p.name, Version(9, 9, 9), v.hash).is_err(), "another version's facts");
         for b in &f.blobs {
             assert!(first.contains_key(&blob_path(b)), "{} {}: its blob {b} is in the bucket", p.name, v.version);
         }
@@ -322,6 +324,7 @@ fn a_source_that_isnt_what_is_listed_is_refused() {
     let e = refused(&w, "missing");
     assert!(e.contains("@bob/keys 0.1.0 isn't built yet, and its source isn't in"), "{e}");
     assert!(e.contains("https://github.com/bob/keys/releases/download/v0.1.0/keys-0.1.0.tar.gz"), "says where to get it: {e}");
+    assert!(e.contains("the sources hold @alice/drums 1.0.0"), "says what is there instead: {e}");
 }
 
 // REG-2: check refuses a listed version edited from the base, a pack changed by an author not its

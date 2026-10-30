@@ -70,7 +70,7 @@ A new version is a new `[[versions]]` table: run `m2 registry add` again after r
 | P6 | A licence, as D6 says | the robot |
 | P7 | Tags come from `tags.txt`. What can be measured (a sample's length, tempo, key) is measured, never typed | the robot |
 
-To add a word to `tags.txt`, open a pull request that adds it, alone.
+To add a word to `tags.txt`, ask in an issue: music2's people add words to it.
 
 ## What the robot does
 

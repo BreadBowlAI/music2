@@ -1,6 +1,6 @@
 # The words a pack's tags may use (music2's packs design, P7). One a line. A pack names its tags in
 # its m2pkg.toml, `tags = ["keys", "lofi"]`, and the robot refuses a word that isn't here. To add a
-# word, open a pull request that adds it here, alone.
+# word, ask in an issue: music2's people add words here.
 
 # What it plays
 kick

@@ -223,6 +223,8 @@ pub struct Build<'a> {
     pub std: &'a Path,
     /// A folder to render previews in, removed after.
     pub work: &'a Path,
+    /// Where to write [`Built::to_delete`], one bucket path a line (REG-7), if anywhere.
+    pub to_delete: Option<&'a Path>,
 }
 
 /// What [`build`] made.
@@ -263,7 +265,13 @@ pub fn build(b: &Build) -> Result<Built, Vec<String>> {
                 dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(" and ")
             )),
             None => {
-                let mut said = format!("{at} isn't built yet, and its source isn't in {}: unpack {} there", b.sources.display(), v.source);
+                let held: Vec<String> = found.keys().map(|(n, v)| format!("{n} {v}")).collect();
+                let held = if held.is_empty() { "no pack".to_string() } else { held.join(", ") };
+                let mut said = format!(
+                    "{at} isn't built yet, and its source isn't in {}: unpack {} there (the sources hold {held})",
+                    b.sources.display(),
+                    v.source
+                );
                 if !unread.is_empty() {
                     said += &format!(" (these m2pkg.toml files there don't read: {})", unread.join("; "));
                 }
@@ -287,7 +295,7 @@ pub fn build(b: &Build) -> Result<Built, Vec<String>> {
                 Some(bytes) => Some(bytes),
                 None => b.from.map(|f| f.read(&at)).transpose().map_err(|e| vec![e])?.flatten(),
             };
-            match bytes.map(|bytes| Facts::read_for(&bytes, &p.name, v)) {
+            match bytes.map(|bytes| Facts::read_for(&bytes, &p.name, v.version, v.hash)) {
                 Some(Ok(f)) => drop(facts.insert(v.hash, f)),
                 Some(Err(e)) => problems.push(e),
                 None => {}
@@ -304,6 +312,10 @@ pub fn build(b: &Build) -> Result<Built, Vec<String>> {
     put(b.out, &reg::catalog_path(&pointer.catalog), &catalog.bytes()).map_err(io)?;
     put(b.out, reg::POINTER, &pointer.bytes()).map_err(io)?;
     let (to_delete, unknown) = registry.removed_blobs(&lookup);
+    if let Some(file) = b.to_delete {
+        let lines: String = to_delete.iter().map(|h| format!("{}\n", reg::blob_path(h))).collect();
+        std::fs::write(file, lines).map_err(|e| vec![format!("{} couldn't be written: {e}", file.display())])?;
+    }
     Ok(Built { built, catalog, pointer, to_delete, unknown })
 }
 

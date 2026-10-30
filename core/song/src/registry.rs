@@ -620,12 +620,13 @@ impl Facts {
         Ok(f)
     }
 
-    /// [`Facts::read`], for the listed version `v` of `name`: refused when they are another's.
-    pub fn read_for(bytes: &[u8], name: &PackName, v: &ListedVersion) -> Result<Facts, String> {
+    /// [`Facts::read`], for version `version` of `name` with `hash` (as the registry or the
+    /// catalog lists it): refused when they are another's.
+    pub fn read_for(bytes: &[u8], name: &PackName, version: Version, hash: Sha) -> Result<Facts, String> {
         let f = Facts::read(bytes)?;
-        match (&f.name, f.version, f.hash) == (name, v.version, v.hash) {
+        match (&f.name, f.version, f.hash) == (name, version, hash) {
             true => Ok(f),
-            false => Err(format!("the facts at {} are of {} {}, not {name} {}", facts_path(&v.hash), f.name, f.version, v.version)),
+            false => Err(format!("the facts at {} are of {} {}, not {name} {version}", facts_path(&hash), f.name, f.version)),
         }
     }
 

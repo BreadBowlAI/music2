@@ -49,6 +49,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: registry
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Get m2
@@ -61,7 +62,16 @@ jobs:
           echo "$PWD/m2-${M2_VERSION}-linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Check the pack files
-        run: m2 registry check registry
+        run: |
+          set -euo pipefail
+          # Against the commit before, as a pull request is checked, in case one came another way:
+          # no listed version changed.
+          if git -C registry rev-parse -q --verify HEAD~1 > /dev/null; then
+            git -C registry worktree add -q --detach ../before HEAD~1
+            m2 registry check registry --base before
+          else
+            m2 registry check registry
+          fi
 
       - name: Fetch the new versions' sources
         run: |

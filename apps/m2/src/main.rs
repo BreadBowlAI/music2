@@ -1261,7 +1261,17 @@ fn registry(args: &[String]) -> Result<()> {
             });
             let from = from()?;
             let work = m2_os::dirs::cache().unwrap_or_else(std::env::temp_dir).join(format!("registry-build-{}", std::process::id()));
-            let b = robot::Build { registry: &dir, sources: &sources, out: &out, from: from.as_ref(), made: &made, std: &std, work: &work };
+            let to_delete = flag(args, "--to-delete").map(PathBuf::from);
+            let b = robot::Build {
+                registry: &dir,
+                sources: &sources,
+                out: &out,
+                from: from.as_ref(),
+                made: &made,
+                std: &std,
+                work: &work,
+                to_delete: to_delete.as_deref(),
+            };
             let built = robot::build(&b).map_err(failed)?;
             for f in &built.built {
                 let previews = f.items.iter().filter(|i| i.preview.is_some()).count();
@@ -1289,13 +1299,8 @@ fn registry(args: &[String]) -> Result<()> {
                 plural(built.catalog.packs.len()),
                 plural(items)
             );
-            let lines: String = built.to_delete.iter().map(|h| format!("{}\n", m2_song::registry::blob_path(h))).collect();
-            match flag(args, "--to-delete") {
-                Some(file) => std::fs::write(&file, &lines).with_context(|| format!("writing {file}"))?,
-                None if !built.to_delete.is_empty() => {
-                    println!("{} blobs of removed versions to delete (--to-delete <file> lists them)", built.to_delete.len())
-                }
-                None => {}
+            if to_delete.is_none() && !built.to_delete.is_empty() {
+                println!("{} blobs of removed versions to delete (--to-delete <file> lists them)", built.to_delete.len());
             }
             for u in &built.unknown {
                 eprintln!("warning: {u} is removed, but its facts aren't there, so its blobs aren't known: delete them by hand");
