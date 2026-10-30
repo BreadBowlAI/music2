@@ -191,7 +191,6 @@ pub fn resolve_packs(project: &Project, packages: &PackageSet) -> m2_song::pack:
 /// the data is [`read_data`]'s. The build gets its own view of the packages, std and the packs it
 /// resolved, which its code keeps; what `packages` shows never changes, so a check, a refused Tx
 /// or a probe never moves what the accepted revision lists or plays.
-
 pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Code>, Vec<Diagnostic>> {
     let resolution = resolve_packs(project, packages);
     let mut unmet = dependencies(&project.manifest, packages);
