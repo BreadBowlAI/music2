@@ -86,8 +86,9 @@ export const softKeys = component(
 
 /// A bucket in `root/bucket` that the robot built from two made-up packs, as the registry's CI
 /// builds one: `@alice/drums` 1.0.0 (one sample) and `@bob/keys` 0.1.0 (an instrument, and its
-/// sound Dark). The keys' folder too.
-fn bucket(root: &Path) -> (PathBuf, PathBuf) {
+/// sound Dark). The keys' folder too. With `newer`, `@bob/keys` 0.2.0 too, the latest, which adds
+/// Hard keys.
+fn bucket(root: &Path, newer: bool) -> (PathBuf, PathBuf) {
     let std = crate::resources::std_dir();
     let registry = root.join("registry");
     write(&registry.join("tags.txt"), "drums\nkeys\n");
@@ -113,12 +114,23 @@ fn bucket(root: &Path) -> (PathBuf, PathBuf) {
         &keys.join("presets/soft-keys/Dark.json"),
         "{\n  \"m2preset\": 1,\n  \"name\": \"Dark\",\n  \"sound\": \"@bob/keys:soft-keys\",\n  \"values\": {\n    \"brightness\": 600\n  }\n}\n",
     );
+    let keys2 = root.join("src/keys2");
+    let mut packs = vec![
+        (drums.clone(), "https://github.com/alice/drums/releases/download/v1.0.0/drums-1.0.0.tar.gz"),
+        (keys.clone(), "https://github.com/bob/keys/releases/download/v0.1.0/keys-0.1.0.tar.gz"),
+    ];
+    if newer {
+        copy(&keys, &keys2);
+        let m = std::fs::read_to_string(keys.join("m2pkg.toml")).unwrap();
+        write(&keys2.join("m2pkg.toml"), m.replace("version = \"0.1.0\"", "version = \"0.2.0\""));
+        let hard = KEYS.replace("softKeys", "hardKeys").replace("soft-keys", "hard-keys").replace("Soft keys", "Hard keys");
+        write(&keys2.join("src/index.ts"), format!("{KEYS}\n{}", hard.split_once("\n\n").unwrap().1));
+        packs.push((keys2.clone(), "https://github.com/bob/keys/releases/download/v0.2.0/keys-0.2.0.tar.gz"));
+    }
     let sources = root.join("sources");
-    for (dir, source) in [
-        (&drums, "https://github.com/alice/drums/releases/download/v1.0.0/drums-1.0.0.tar.gz"),
-        (&keys, "https://github.com/bob/keys/releases/download/v0.1.0/keys-0.1.0.tar.gz"),
-    ] {
+    for (dir, source) in &packs {
         let added = m2_editor::registry::add(&m2_editor::registry::Add { registry: &registry, pack: dir, source, std: &std });
+        let dir = &dir.to_path_buf();
         let m2_editor::registry::Added::Listed { hash, .. } = added.unwrap_or_else(|e| panic!("{}", e.join("\n"))) else { panic!() };
         copy(dir, &sources.join(hash.hex()).join(dir.file_name().unwrap()));
     }
@@ -148,8 +160,8 @@ fn copy(from: &Path, to: &Path) {
 }
 
 /// A folder served over http on 127.0.0.1, each request on a connection of its own; the paths
-/// asked for are kept. A path starting with `hold` is answered with half its bytes, then nothing
-/// until the client goes.
+/// asked for are kept. A path starting with `hold` is answered with half its bytes, then the rest
+/// once `hold` no longer names it.
 struct Serve {
     url: String,
     asked: Arc<Mutex<Vec<String>>>,
@@ -183,10 +195,16 @@ impl Serve {
                     };
                     let _ =
                         s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
-                    if held.lock().unwrap().as_ref().is_some_and(|h| path.starts_with(h.as_str())) {
+                    let holding = || held.lock().unwrap().as_ref().is_some_and(|h| path.starts_with(h.as_str()));
+                    if holding() {
                         let _ = s.write_all(&body[..body.len() / 2]);
                         let _ = s.flush();
-                        let _ = s.read(&mut [0u8; 1]);
+                        // Until it is let go (or 20 s): then the rest.
+                        let t = Instant::now();
+                        while holding() && t.elapsed() < Duration::from_secs(20) {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        let _ = s.write_all(&body[body.len() / 2..]);
                         return;
                     }
                     let _ = s.write_all(&body);
@@ -222,8 +240,13 @@ struct World {
 
 impl World {
     fn new(name: &str) -> World {
+        World::with(name, false)
+    }
+
+    /// With `newer`, the bucket has `@bob/keys` 0.2.0 too.
+    fn with(name: &str, newer: bool) -> World {
         let scratch = Scratch::new(name);
-        let (bucket, keys) = bucket(&scratch.0);
+        let (bucket, keys) = bucket(&scratch.0, newer);
         let serve = Serve::folder(&bucket);
         let cache = scratch.0.join("cache");
         let folders = Folders {
@@ -263,7 +286,12 @@ impl World {
 
     /// A copy of the first song, open: its session.
     fn song(&self, edit: impl FnOnce(&Path)) -> (u64, PathBuf) {
-        let dir = self.scratch.0.join("song");
+        self.song_in("song", edit)
+    }
+
+    /// A copy of the first song in `name`, open: its session.
+    fn song_in(&self, name: &str, edit: impl FnOnce(&Path)) -> (u64, PathBuf) {
+        let dir = self.scratch.0.join(name);
         copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir);
         edit(&dir);
         let session = self.running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
@@ -538,4 +566,215 @@ fn a_flac_sample_comes_in_as_a_wav() {
     assert_eq!((&bytes[..4], &bytes[8..12]), (&b"RIFF"[..], &b"WAVE"[..]));
     let note: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("assets/Snap.wav.json")).unwrap()).unwrap();
     assert_eq!(note["from"]["file"], json!("samples/snaps/Snap.flac"));
+}
+
+// REG-15: once a Get is being installed it can't be cancelled: a cancel then is refused in
+// words, and the Get ends installed.
+#[test]
+fn a_cancel_once_installing_is_refused() {
+    let w = World::new("installing");
+    w.search("soft");
+    let mut events = w.running.state.events.subscribe();
+    let url = w.running.url.clone();
+    let getting = std::thread::spawn(move || post(&url, "/api/library/get", &json!({"id": KEYS_ID})));
+    let t = Instant::now();
+    let mut installing = false;
+    while !installing && t.elapsed() < Duration::from_secs(30) {
+        match events.try_recv() {
+            Ok(m) => installing = m.contains("\"t\":\"get\"") && m.contains("\"installing\":true"),
+            Err(_) => std::thread::sleep(Duration::from_millis(5)),
+        }
+    }
+    assert!(installing, "a get event says it is installing");
+    let (status, cancelled) = post(&w.running.url, "/api/library/get/cancel", &json!({}));
+    assert_eq!((status, &cancelled["cancelled"]), (200, &json!(false)), "{cancelled}");
+    let (status, done) = getting.join().unwrap();
+    assert_eq!(status, 200, "{done:#}");
+    assert!(!w.store().list().is_empty(), "installed");
+}
+
+// REG-13: a pack the open song lists or locks is offered nothing of: moving the song to
+// another version is `m2 pack update`, never a Get. With no song that uses it, its latest is
+// offered, saying the version you have, and Get gets that version, whose items the lists then
+// offer.
+#[test]
+fn a_pack_the_open_song_uses_is_offered_nothing_of() {
+    let w = World::with("song-uses", true);
+    let (session, _) = w.song(|_| {});
+    w.search("keys");
+    // 0.1.0 in the store, and in the song.
+    let store = w.store();
+    let old = w.scratch.0.join("old-keys");
+    copy(&w.keys, &old);
+    m2_editor::packs::install(&old, &store, &crate::resources::std_dir()).unwrap();
+    w.running.state.graph.packs_installed().unwrap();
+    let (status, added) = post(&w.running.url, "/api/graph/track/add", &json!({"session": session, "component": "@bob/keys:soft-keys"}));
+    assert_eq!(status, 200, "{added:#}");
+    assert!(w.library("keys").is_empty(), "the song uses @bob/keys: nothing of it is offered");
+    assert!(w.library("hard").is_empty());
+
+    // Another song, which doesn't use it: 0.2.0 is offered, saying you have 0.1.0.
+    let (_, _) = w.song_in("other", |_| {});
+    let answer = w.search("hard");
+    assert_eq!(ids(&answer["library"]), ["library:@bob/keys:hard-keys"]);
+    assert_eq!((&answer["library"][0]["library"]["version"], &answer["library"][0]["library"]["have"]), (&json!("0.2.0"), &json!("0.1.0")));
+    let (status, done) = post(&w.running.url, "/api/library/get", &json!({"id": "library:@bob/keys:hard-keys"}));
+    assert_eq!((status, &done["got"]["version"]), (200, &json!("0.2.0")), "{done:#}");
+    let instruments: Vec<String> =
+        state(&w)["instruments"].as_array().unwrap().iter().filter_map(|i| i["component"].as_str().map(String::from)).collect();
+    assert!(instruments.contains(&"@bob/keys:hard-keys".to_string()), "the lists offer the version got: {instruments:?}");
+}
+
+// REG-13: From the library is searched over an index made once a catalog, never again a
+// keystroke, and answers at most `LIBRARY_ROWS` rows, saying how many more there are. The times,
+// at 100,000 items, are printed.
+#[test]
+fn from_the_library_is_capped_and_made_once_a_catalog() {
+    use m2_song::registry::{CatalogPack, CatalogVersion, ItemFacts, ItemKind};
+    let scratch = Scratch::new("big");
+    let bucket = scratch.0.join("bucket");
+    let item = |p: usize, i: usize| ItemFacts {
+        kind: ItemKind::Instrument,
+        id: format!("@a/p{p:04}:soft-{i:02}"),
+        label: format!("Soft thing {p} {i}"),
+        category: "Keys".into(),
+        description: "A soft pluck".into(),
+        tags: vec!["keys".into()],
+        component: format!("@a/p{p:04}:soft-{i:02}"),
+        instrument: true,
+        effect: false,
+        preset: None,
+        sample: None,
+        preview: None,
+        no_preview: Some("none".into()),
+        file: None,
+    };
+    let packs: Vec<CatalogPack> = (0..2000)
+        .map(|p| {
+            let mut items: Vec<ItemFacts> = (0..50).map(|i| item(p, i)).collect();
+            items.sort_by(|a, b| a.id.cmp(&b.id));
+            CatalogPack {
+                name: m2_song::PackName::new(&format!("@a/p{p:04}")).unwrap(),
+                repository: format!("https://github.com/a/p{p:04}"),
+                description: String::new(),
+                license: "MIT".into(),
+                authors: vec![],
+                tags: vec![],
+                latest: Some(m2_song::Version(1, 0, 0)),
+                versions: vec![CatalogVersion {
+                    version: m2_song::Version(1, 0, 0),
+                    hash: m2_song::Sha::of(format!("{p}").as_bytes()),
+                    source: String::new(),
+                    size: Some(1),
+                    files: Some(1),
+                    yanked: None,
+                    removed: None,
+                }],
+                items,
+            }
+        })
+        .collect();
+    let catalog = m2_song::registry::Catalog { format: 1, made: "2026-10-30T12:00:00Z".into(), packs };
+    let pointer = catalog.pointer();
+    write(&bucket.join(m2_song::registry::catalog_path(&pointer.catalog)), catalog.bytes());
+    write(&bucket.join("catalog.json"), pointer.bytes());
+    let cache = scratch.0.join("cache");
+    let remote = Remote::new(&m2_editor::fetch::file_address(&bucket).unwrap(), &cache.join("registry")).unwrap();
+    let running = serving(Folders { packs: Some(scratch.0.join("Packs")), registry: Some(remote), ..Folders::default() });
+    let w = |q: &str| {
+        let t = Instant::now();
+        for _ in 0..600 {
+            let (status, body) = get(&running.url, &format!("/api/library?q={}", enc(q)));
+            assert_eq!(status, 200);
+            let answer: Value = serde_json::from_slice(&body).unwrap();
+            if answer["registry"]["fetching"] != json!(true) && !answer["registry"]["made"].is_null() {
+                return (answer, body.len(), t.elapsed());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("never fetched");
+    };
+    w("");
+    let made = running.state.registry.offers_made();
+    for q in ["s", "soft", "soft thing 1999", "zzzq", "keys", "s"] {
+        let (answer, bytes, took) = w(q);
+        let rows = answer["library"].as_array().unwrap().len();
+        eprintln!("100,000 items: `{q}` answered {rows} rows (+{} more), {bytes} bytes, in {took:?}", answer["library_more"]);
+        assert!(rows <= crate::registry::LIBRARY_ROWS, "{q}: {rows} rows");
+        if q == "s" {
+            assert_eq!(rows, crate::registry::LIBRARY_ROWS);
+            assert_eq!(answer["library_more"], json!(100_000 - crate::registry::LIBRARY_ROWS), "it says how many more");
+        }
+    }
+    assert_eq!(running.state.registry.offers_made(), made, "made once for the catalog, never a keystroke");
+}
+
+// REG-16: a sample's folder in the cache that a crashed Get left (another process's, or one
+// with this process's id that no Get of it uses) is swept by the next sample's Get.
+#[test]
+fn a_samples_folder_a_crash_left_is_swept() {
+    let w = World::new("sample-sweep");
+    let (session, _) = w.song(|_| {});
+    w.search("kick");
+    let cache = w.scratch.0.join("cache/registry");
+    for left in ["getting-4000000000-0".to_string(), format!("getting-{}-123456", std::process::id())] {
+        write(&cache.join(left).join("Boom.wav"), "half");
+    }
+    let (status, done) =
+        post(&w.running.url, "/api/library/get", &json!({"id": KICK_ID, "session": session, "to": {"kind": "below", "beat": 0}}));
+    assert_eq!(status, 200, "{done:#}");
+    let left: Vec<_> = std::fs::read_dir(&cache)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("getting-"))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+// REG-16: a sample's Get remembers the song it was asked for: when another is open by the
+// time its file is in, nothing is added to either, said in words.
+#[test]
+fn a_sample_got_for_a_song_no_longer_open_is_not_added() {
+    let w = World::new("sample-song-gone");
+    let (session, first) = w.song(|_| {});
+    w.search("kick");
+    let file = m2_song::Sha::of(&std::fs::read(w.scratch.0.join("src/drums/samples/kicks/Boom.wav")).unwrap());
+    *w.serve.hold.lock().unwrap() = Some(m2_song::registry::blob_path(&file));
+    let url = w.running.url.clone();
+    let getting = std::thread::spawn(move || {
+        post(&url, "/api/library/get", &json!({"id": KICK_ID, "session": session, "to": {"kind": "below", "beat": 0}}))
+    });
+    let t = Instant::now();
+    while !w.serve.asked.lock().unwrap().iter().any(|p| p.contains(&file.hex())) {
+        assert!(t.elapsed() < Duration::from_secs(20));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let (_, other) = w.song_in("other", |_| {});
+    *w.serve.hold.lock().unwrap() = None;
+    let (status, why) = getting.join().unwrap();
+    assert!(status >= 400 && why["error"].as_str().unwrap().contains("isn't open any more"), "{status} {why}");
+    assert!(!first.join("assets/Boom.wav").exists() && !other.join("assets/Boom.wav").exists());
+}
+
+// REG-17: told the store changed (`m2 pack get` with the app open), the app builds a song that
+// waited for a pack, as a Get in the app does.
+#[test]
+fn told_the_store_changed_a_song_that_waited_builds() {
+    let w = World::new("store-changed");
+    let hash = m2_song::pack::Listing::of(&w.keys).unwrap().hash();
+    w.song(|dir| {
+        let manifest = std::fs::read_to_string(dir.join("music2.toml")).unwrap();
+        std::fs::write(dir.join("music2.toml"), manifest + "\"@bob/keys\" = \"0.1\"\n").unwrap();
+        let lock = format!("[[pack]]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nhash = \"{}\"\n", hash.prefixed());
+        std::fs::write(dir.join("music2.lock"), lock).unwrap();
+    });
+    assert_eq!(state(&w)["has_code"], json!(false));
+    let old = w.scratch.0.join("by-m2");
+    copy(&w.keys, &old);
+    m2_editor::packs::install(&old, &w.store(), &crate::resources::std_dir()).unwrap();
+    assert_eq!(state(&w)["has_code"], json!(false), "the app doesn't watch the store");
+    let (status, _) = post(&w.running.url, "/api/library/store-changed", &json!({}));
+    assert_eq!(status, 200);
+    assert_eq!(state(&w)["has_code"], json!(true), "told, it builds: {:#}", state(&w)["diagnostics"]);
 }

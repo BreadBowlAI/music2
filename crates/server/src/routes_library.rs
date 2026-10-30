@@ -21,7 +21,9 @@
 //!   answering once it is done; `{"t": "get", id, label, done, total}` events say how far it is,
 //!   and `{"t": "get", id, end: true}` that it ended. `POST /api/library/get/cancel` stops it.
 //! - `GET /api/library/missing`: the open song's locked versions that aren't installed, each with
-//!   whether the library has it (`can`) or why not (REG-17).
+//!   whether the library has it (`can`) or why not (REG-17). `POST /api/library/store-changed`:
+//!   packs were installed outside the app (`m2 pack get`); the open song is told.
+//! - From the library answers at most `LIBRARY_ROWS` rows, and `library_more`, how many more.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,6 +64,9 @@ crate::api::routes! {
     POST "/api/library/get/cancel" => cancel_get; reads, agents,
         "Stop the Get running: nothing of it is kept",
         r#"{}"#;
+    POST "/api/library/store-changed" => store_changed; reads, agents,
+        "Tell the app packs were installed or removed outside it (m2 pack get does): the open song's lists are made again, and a song that waited for a pack builds",
+        r#"{}"#;
     GET "/api/library/missing" => missing; reads, agents,
         "The packs the open song's music2.lock names that aren't installed, each with whether the library has that very version to get",
         r#"{}"#;
@@ -85,12 +90,14 @@ async fn search(State(s): S, Query(q): Query<SearchQuery>) -> Result<Json<Value>
         }
         let found: Vec<Value> = items.search(&query).into_iter().map(serde_json::to_value).collect::<Result<_, _>>()?;
         // From the library: what is typed searches the catalog kept here, and is never sent (REG-13).
-        let offers = s.offers()?;
-        let library: Vec<Value> = m2_editor::get::find(&offers, &query).into_iter().map(|o| o.json()).collect();
+        let offers = s.offers();
+        let found_there = m2_editor::get::find(&offers, &query);
+        let more = found_there.len().saturating_sub(crate::registry::LIBRARY_ROWS);
+        let library: Vec<Value> = found_there.into_iter().take(crate::registry::LIBRARY_ROWS).map(|o| o.json()).collect();
         let indexing = s.sample_index.indexing();
         let not_wav: usize = s.sample_folders_shown().iter().map(|f| f.not_wav).sum();
         Ok::<_, anyhow::Error>(json!({
-            "items": found, "library": library, "registry": s.registry_said(),
+            "items": found, "library": library, "library_more": more, "registry": s.registry_said(),
             "folders": {"indexing": indexing, "not_wav": not_wav},
         }))
     })
@@ -299,9 +306,22 @@ async fn get_item(State(s): S, Json(r): Json<crate::registry::GetReq>) -> Result
     Ok(Json(result?))
 }
 
-/// Stop the Get running (REG-15): `{cancelled}`, whether one was.
+/// Stop the Get running (REG-15): `{cancelled}`, whether it stops; once it is being installed it
+/// can't be, said in `why`.
 async fn cancel_get(State(s): S) -> Json<Value> {
-    Json(json!({ "cancelled": s.cancel_get() }))
+    Json(match s.cancel_get() {
+        crate::registry::Cancelled::Taken => json!({ "cancelled": true }),
+        crate::registry::Cancelled::Refused => json!({ "cancelled": false, "why": "It is being installed now: it can't be stopped." }),
+        crate::registry::Cancelled::Nothing => json!({ "cancelled": false }),
+    })
+}
+
+/// The store changed outside the app (REG-17): the open song is told, as after a Get.
+async fn store_changed(State(s): S) -> Result<Json<Value>, ApiError> {
+    let state = s.clone();
+    crate::routes::blocking(move || state.store_changed()).await?;
+    s.graph_changed();
+    Ok(Json(json!({})))
 }
 
 /// The open song's locked versions that aren't installed (REG-17): each with whether the library

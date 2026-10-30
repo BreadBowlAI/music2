@@ -7,7 +7,7 @@
 //! runs at a time, on the request's own blocking thread: it says how far it is in `get` events
 //! (at most ten a second) and stops when cancelled.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::get::{self, Missing, Offer, Remote};
 use m2_song::Version;
-use m2_song::pack::{Lock, PackName, PkgManifest, Store};
+use m2_song::pack::{Lock, PackName, Store};
 use m2_song::registry::Catalog;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -26,12 +26,31 @@ use crate::AppState;
 const RETRY: Duration = Duration::from_secs(10 * 60);
 /// How often a Get says how far it is.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+/// The most rows From the library answers a search (REG-13): what ⌘F's panel shows without
+/// scrolling far; the answer says how many more there are (`library_more`), so the panel says to
+/// type more.
+pub const LIBRARY_ROWS: usize = 20;
 
-/// The registry's catalog as the server has it, its fetches, and the Get running.
+/// The registry's catalog as the server has it, its fetches, From the library's index, and the Get
+/// running.
 #[derive(Default)]
 pub struct Registry {
     fetch: Mutex<Fetch>,
     getting: Mutex<Option<Getting>>,
+    /// From the library (REG-13), made once a catalog and what this computer and the open song
+    /// have, never again a keystroke.
+    offers: Mutex<Option<Index>>,
+    /// How many times it was made: tests.
+    made: AtomicU64,
+}
+
+/// From the library's offers, and what they were made from.
+struct Index {
+    catalog: Arc<Catalog>,
+    /// The newest version of each pack the store has, and the packs the open song lists or locks.
+    have: Vec<(String, Version)>,
+    uses: Vec<String>,
+    offers: Arc<Vec<Offer>>,
 }
 
 /// The catalog kept, and how its fetches went.
@@ -63,6 +82,24 @@ impl Fetch {
 struct Getting {
     label: String,
     cancel: Arc<get::Cancel>,
+}
+
+impl Registry {
+    /// How many times From the library's index was made (tests: once a catalog).
+    #[cfg(test)]
+    pub(crate) fn offers_made(&self) -> u64 {
+        self.made.load(Ordering::Relaxed)
+    }
+}
+
+/// What a cancel did (REG-15).
+pub enum Cancelled {
+    /// It stops, and nothing of it is kept.
+    Taken,
+    /// It is being installed (or added) now, past its point of no return.
+    Refused,
+    /// No Get is running.
+    Nothing,
 }
 
 /// What a Get is asked for: a library item (`id`), or a song's missing locked version (`pack` and
@@ -129,42 +166,57 @@ impl AppState {
         json!({ "fetching": f.running, "made": f.kept.as_ref().map(|c| c.made.clone()), "error": f.error })
     }
 
-    /// The newest version of each pack this computer has: in the store, or offered by the open
-    /// song's build (`packages`, its own path packs among them).
-    fn have(&self, packages: &[(String, PathBuf)]) -> impl Fn(&PackName) -> Option<Version> + use<> {
-        let mut have: std::collections::HashMap<String, Version> = std::collections::HashMap::new();
-        let mut put = |name: &str, v: Version| {
-            let e = have.entry(name.to_string()).or_insert(v);
-            *e = (*e).max(v);
-        };
-        if let Some(store) = self.library_folders().packs.map(Store::at) {
-            for (name, versions) in store.list() {
-                if let Some(v) = versions.last() {
-                    put(name.as_str(), *v);
-                }
-            }
-        }
-        for (name, dir) in packages {
-            if let Ok(m) = PkgManifest::at(dir) {
-                put(name, m.package.version);
-            }
-        }
-        move |name: &PackName| have.get(name.as_str()).copied()
+    /// The newest version of each pack in the store, by name.
+    fn have(&self) -> Vec<(String, Version)> {
+        let store = self.library_folders().packs.map(Store::at);
+        store.map(|s| s.list().into_iter().filter_map(|(n, v)| Some((n.as_str().to_string(), *v.last()?))).collect()).unwrap_or_default()
     }
 
-    /// From the library (REG-13): the catalog's items of packs this computer hasn't got, or has an
-    /// older version of. None with no catalog. Reads files: call it off the async threads.
-    pub fn offers(&self) -> Result<Vec<Offer>> {
-        let Some(catalog) = self.catalog() else { return Ok(vec![]) };
-        let have = self.have(&self.preview_packages()?);
-        Ok(get::offers(&catalog, &have, &|_| false))
+    /// The packs the open song lists in `[dependencies]` or locks in `music2.lock`, as its files say
+    /// now, by name: none with no song open.
+    fn uses(&self) -> Vec<String> {
+        let Some(dir) = self.graph.dir() else { return vec![] };
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok();
+        let mut uses: Vec<String> = read(m2_song::path::MANIFEST)
+            .and_then(|t| m2_song::Manifest::read(&t).ok())
+            .map(|m| m.dependencies.into_keys().collect())
+            .unwrap_or_default();
+        if let Some(lock) = read(m2_song::path::LOCK).and_then(|t| Lock::read(&t).ok()) {
+            uses.extend(lock.packs.into_iter().map(|l| l.name.as_str().to_string()));
+        }
+        uses.sort();
+        uses.dedup();
+        uses
+    }
+
+    /// From the library (REG-13): the catalog's items of packs the open song doesn't use that this
+    /// computer hasn't got, or has an older version of. Made again only when the catalog, the
+    /// store or the song's packs changed. None with no catalog. Reads files: call it off the async
+    /// threads.
+    pub fn offers(&self) -> Arc<Vec<Offer>> {
+        let Some(catalog) = self.catalog() else { return Arc::default() };
+        let (have, uses) = (self.have(), self.uses());
+        let mut index = self.registry.offers.lock();
+        if let Some(i) = index.as_ref().filter(|i| Arc::ptr_eq(&i.catalog, &catalog) && i.have == have && i.uses == uses) {
+            return i.offers.clone();
+        }
+        let newest: std::collections::HashMap<&str, Version> = have.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+        let offers = Arc::new(get::offers(&catalog, &|name| newest.get(name.as_str()).copied(), &|name| {
+            uses.binary_search_by(|u| u.as_str().cmp(name.as_str())).is_ok()
+        }));
+        self.registry.made.fetch_add(1, Ordering::Relaxed);
+        *index = Some(Index { catalog, have, uses, offers: offers.clone() });
+        offers
     }
 
     /// The library item with id `id` (`library:…`), as the catalog has it now, whether or not this
     /// computer has its pack. Why there is none, in words.
     fn offer(&self, id: &str) -> Result<Offer> {
         let catalog = self.catalog().ok_or_else(|| anyhow!("The library's catalog isn't here yet: try again in a moment."))?;
-        get::offers(&catalog, &|_| None, &|_| false).into_iter().find(|o| o.item.id == id).ok_or_else(|| anyhow!("{id} isn't in the library."))
+        get::offers(&catalog, &|_| None, &|_| false)
+            .into_iter()
+            .find(|o| o.item.id == id)
+            .ok_or_else(|| anyhow!("{id} isn't in the library."))
     }
 
     /// A library item's preview (REG-14): its blob, fetched by its hash and kept by it. Its file.
@@ -180,9 +232,19 @@ impl AppState {
             .map_err(|e| anyhow!("{}'s preview couldn't be fetched: {e}", o.item.label))
     }
 
-    /// Cancel the Get running (REG-15): whether one was.
-    pub fn cancel_get(&self) -> bool {
-        self.registry.getting.lock().as_ref().is_some_and(|g| g.cancel.cancel())
+    /// Cancel the Get running (REG-15): until it is installed (or added); refused after.
+    pub fn cancel_get(&self) -> Cancelled {
+        match self.registry.getting.lock().as_ref() {
+            None => Cancelled::Nothing,
+            Some(g) if g.cancel.cancel() => Cancelled::Taken,
+            Some(_) => Cancelled::Refused,
+        }
+    }
+
+    /// The store changed outside the app (`m2 pack get`, `m2 pack install`): the open song's lists
+    /// are made again and a song that waited for a pack is built again (REG-17), as after a Get.
+    pub fn store_changed(&self) -> Result<()> {
+        self.graph.packs_installed().map(drop)
     }
 
     /// The open song's locked versions that aren't installed (REG-17), each with whether the
@@ -238,14 +300,24 @@ impl AppState {
         let mut progress = |p: get::Progress| {
             if last.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) || p.done == p.total {
                 last = Some(Instant::now());
-                self.send(json!({"t": "get", "id": id, "label": label, "done": p.done, "total": p.total}));
+                let ev = json!({"t": "get", "id": id, "label": label, "done": p.done, "total": p.total, "installing": p.installing});
+                self.send(ev);
             }
         };
         if let Some(o) = sample {
-            let work = Scratch::new(&remote.cache)?;
-            let s = get::sample(&remote, o, &work.0, &mut progress, &cancel).map_err(|e| anyhow!(e))?;
+            let session = r.session.expect("checked");
             let to = r.to.context("Say where the sample goes (`to`).")?;
-            let mut done = self.graph.add_sample(r.session.expect("checked"), s, to)?;
+            let work = get::Work::new(&remote.cache, get::GETTING_SAMPLE).map_err(|e| anyhow!(e))?;
+            let s = get::sample(&remote, o, &work.0, &mut progress, &cancel).map_err(|e| anyhow!(e))?;
+            // It goes to the song it was got for, and only once it can't be cancelled.
+            if self.graph.session() != Some(session) {
+                bail!("{} was got for a song that isn't open any more, so it wasn't added.", o.item.label);
+            }
+            if !cancel.commit() {
+                bail!("Couldn't get {}: the download was cancelled", o.item.label);
+            }
+            progress(get::Progress { done: o.size(), total: o.size(), installing: true });
+            let mut done = self.graph.add_sample(session, s, to)?;
             done["got"] = json!({"pack": o.pack.as_str(), "version": o.version.version.to_string()});
             return Ok(done);
         }
@@ -271,24 +343,6 @@ impl Drop for Ends<'_> {
     fn drop(&mut self) {
         *self.state.registry.getting.lock() = None;
         self.state.send(json!({"t": "get", "id": self.id, "end": true}));
-    }
-}
-
-/// A folder of its own in the registry's cache for a sample being got, removed when dropped.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(cache: &Path) -> Result<Scratch> {
-        static N: AtomicU64 = AtomicU64::new(0);
-        let dir = cache.join(format!("getting-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-        std::fs::create_dir_all(&dir).with_context(|| format!("{} couldn't be made", dir.display()))?;
-        Ok(Scratch(dir))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 

@@ -125,12 +125,14 @@ pub fn search(args: &[String]) -> Result<()> {
         eprintln!("Nothing in the library matches {q}.");
         return Ok(());
     }
-    let text = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
+    // A word from the registry's catalog is shown with any control character written out.
+    let text = |v: &Value, k: &str| crate::get::shown(v[k].as_str().unwrap_or_default());
     // Each item's columns: its label, its kind, what it is and where it is from, and its id.
     let rows: Vec<[String; 4]> = items
         .iter()
         .map(|i| {
-            let what = if text(i, "kind") == "sound" { i["tags"][0].as_str().unwrap_or_default().to_string() } else { text(i, "category") };
+            let what =
+                if text(i, "kind") == "sound" { crate::get::shown(i["tags"][0].as_str().unwrap_or_default()) } else { text(i, "category") };
             let library = if i.get("library").is_some() { " · library" } else { "" };
             [text(i, "label"), text(i, "kind"), format!("{what} · {}{library}", text(i, "package")), text(i, "id")]
         })

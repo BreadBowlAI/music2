@@ -544,7 +544,7 @@ fn a_song_missing_a_locked_pack_builds_once_it_is_installed() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-// AGENT-2, REG-17, L7: an outside write that waited for a pack (pkg.missing), built once a Get
+// AGENT-2, REG-17: an outside write that waited for a pack (pkg.missing), built once a Get
 // installs it, keeps its one undo step, source outside, as when its own batch built.
 #[test]
 fn an_outside_edit_that_waited_for_a_pack_keeps_its_undo_step() {

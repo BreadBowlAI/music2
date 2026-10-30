@@ -512,7 +512,8 @@ fn listing_of(bytes: &[u8], v: &CatalogVersion) -> Result<Listing, String> {
         return Err("its m2pack.json lists its files out of order, or one twice".into());
     }
     // Sizes from the network: added up with a check, so none can wrap round to a small one.
-    let size = listing.files.iter().try_fold(bytes.len() as u64, |sum, f| sum.checked_add(f.size).filter(|s| *s <= crate::registry::LARGEST));
+    let size =
+        listing.files.iter().try_fold(bytes.len() as u64, |sum, f| sum.checked_add(f.size).filter(|s| *s <= crate::registry::LARGEST));
     let Some(size) = size else {
         return Err("its m2pack.json lists files of more than the 10 GB a pack may be".into());
     };
@@ -565,10 +566,11 @@ pub fn pack(
         let expect = Expect { size: Some(f.size), sha256: Some(f.sha256), limit: f.size, within: deadline(f.size) };
         let base = done;
         let url = remote.url(&reg::blob_path(&f.sha256));
-        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: base + p.done, total, installing: false }), cancel).map_err(|e| match e {
-            fetch::Error::Cancelled => said(e.to_string()),
-            e => said(format!("{}: {e}", f.path)),
-        })?;
+        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: base + p.done, total, installing: false }), cancel)
+            .map_err(|e| match e {
+                fetch::Error::Cancelled => said(e.to_string()),
+                e => said(format!("{}: {e}", f.path)),
+            })?;
         done += f.size;
         progress(Progress { done, total, installing: false });
         if n == 0 {
@@ -602,27 +604,24 @@ fn runs_here(dir: &Path, name: &PackName, version: Version, std: &Path) -> Resul
 
 /// Get the sample `offer` (REG-16): its one file, into `into` under its own name. The sample, as
 /// Add sample takes it (LIB-7): that file, and its note naming the pack.
-pub fn sample(
-    remote: &Remote,
-    offer: &Offer,
-    into: &Path,
-    progress: &mut dyn FnMut(Progress),
-    stop: &Cancel,
-) -> Result<Sample, String> {
+pub fn sample(remote: &Remote, offer: &Offer, into: &Path, progress: &mut dyn FnMut(Progress), stop: &Cancel) -> Result<Sample, String> {
     let cancel = stop.flag();
     let said = |why: String| format!("Couldn't get {}: {why}", offer.item.label);
     let (Some(file), Some(mut sample)) = (&offer.facts.file, offer.item.sample.clone()) else {
         return Err(said("it isn't a sample".into()));
     };
+    if file.size > crate::registry::LARGEST {
+        return Err(said("the library says its file is more than the 10 GB a pack may be".into()));
+    }
     let own = file.path.rsplit('/').next().filter(|n| not_plain(n).is_none()).ok_or_else(|| said("its file has no plain name".into()))?;
     let dest = into.join(own);
     let expect = Expect { size: Some(file.size), sha256: Some(file.sha256), limit: file.size, within: deadline(file.size) };
     let total = file.size;
     // One played already is kept: copied from there, checked as any download is.
     let kept = remote.blobs().join(file.sha256.hex());
-    let copied = fetch::file_address(&kept)
-        .filter(|_| kept.is_file())
-        .is_some_and(|url| fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total, installing: false }), cancel).is_ok());
+    let copied = fetch::file_address(&kept).filter(|_| kept.is_file()).is_some_and(|url| {
+        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total, installing: false }), cancel).is_ok()
+    });
     if !copied {
         let url = remote.url(&reg::blob_path(&file.sha256));
         fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: p.done, total, installing: false }), cancel)

@@ -742,7 +742,10 @@ pub struct SampleFacts {
 /// shown in a terminal or a log, one could pass for something else. `at` names where.
 fn plain_words<'a>(at: &str, words: impl IntoIterator<Item = &'a str>) -> Result<(), String> {
     match words.into_iter().find(|w| w.chars().any(char::is_control)) {
-        Some(w) => Err(format!("{at}: `{}` holds a control character (a line break, a tab or an escape), which no word of the registry may", w.escape_debug())),
+        Some(w) => Err(format!(
+            "{at}: `{}` holds a control character (a line break, a tab or an escape), which no word of the registry may",
+            w.escape_debug()
+        )),
         None => Ok(()),
     }
 }
@@ -936,7 +939,8 @@ impl Catalog {
                 return Err(format!("the catalog's {}: a removed version has no size or files, and every other has both", p.name));
             }
             let said = [&p.repository, &p.description, &p.license].into_iter().chain(&p.authors).chain(&p.tags).map(String::as_str);
-            let versions = p.versions.iter().flat_map(|v| std::iter::once(&v.source).chain(&v.yanked).chain(&v.removed)).map(String::as_str);
+            let versions =
+                p.versions.iter().flat_map(|v| std::iter::once(&v.source).chain(&v.yanked).chain(&v.removed)).map(String::as_str);
             plain_words(&format!("the catalog's {}", p.name), said.chain(versions).chain(p.items.iter().flat_map(item_words)))?;
         }
         Ok(c)

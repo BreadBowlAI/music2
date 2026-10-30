@@ -253,7 +253,7 @@ fn from_the_library_is_what_you_havent_got() {
     assert!(had.iter().all(|o| o.pack.as_str() == "@alice/drums"), "you have @bob/keys 0.1.0");
     let older = offers(&catalog, &|n| (n.as_str() == "@bob/keys").then_some(Version(0, 0, 9)), &|_| false);
     assert_eq!(older.iter().filter(|o| o.have == Some(Version(0, 0, 9))).count(), 2, "a newer version is offered, saying what you have");
-    // L3: a pack the open song lists or locks: none of it, whatever its versions (moving the song
+    // A pack the open song lists or locks: none of it, whatever its versions (moving the song
     // to another is `m2 pack update`, never a Get).
     let used = offers(&catalog, &|_| None, &|n| n.as_str() == "@bob/keys");
     assert!(used.iter().all(|o| o.pack.as_str() == "@alice/drums"), "the open song uses @bob/keys");
@@ -428,7 +428,7 @@ fn a_pack_for_a_newer_music2_stops_before_its_files() {
     assert!(why.contains("@alice/tiny 0.1.0") && why.contains("not @alice/other"), "{why}");
 }
 
-// REG-15, L9: the folder a Get that crashed left beside the store is removed by the next Get:
+// REG-15: the folder a Get that crashed left beside the store is removed by the next Get:
 // another process's, and one with this process's own id that no Get of it made (a crashed process
 // had this id before: ids are reused), so it never stops a Get; one a Get of this process is
 // using now stays.
@@ -542,7 +542,7 @@ fn the_version_got_is_the_latest_or_the_one_named() {
     assert!(chosen(&catalog, &name("@bob/keys"), Some(Version(0, 1, 0))).unwrap_err().contains("taken down"));
 }
 
-// REG-15, L1: a cancel that comes once every file is in, before the install starts, still leaves
+// REG-15: a cancel that comes once every file is in, before the install starts, still leaves
 // nothing installed; once the install starts (its progress says so), a cancel is refused, and the
 // Get ends installed.
 #[test]
@@ -594,7 +594,7 @@ fn a_cancel_until_the_install_starts_leaves_nothing() {
     assert!(matches!(got, Ok(Install::Installed { .. })), "{got:?}");
 }
 
-// REG-15, L2: a listing whose sizes add up past what a number holds is refused in words, before
+// REG-15: a listing whose sizes add up past what a number holds is refused in words, before
 // any file is fetched: never wrapped round to a small size, nor a panic.
 #[test]
 fn a_listing_whose_sizes_overflow_is_refused() {
@@ -628,7 +628,7 @@ fn a_listing_whose_sizes_overflow_is_refused() {
     assert!(files(&store.dir).is_empty() && getting(&store).is_empty());
 }
 
-// REG-12, L4: once a catalog is kept, a catalog.json naming an older one (a stale cache in front
+// REG-12: once a catalog is kept, a catalog.json naming an older one (a stale cache in front
 // of the bucket, or a host undoing a yank), or one as old with other bytes, is refused, and the
 // one kept stays.
 #[test]
@@ -677,14 +677,17 @@ fn an_older_catalog_never_replaces_a_newer_one() {
     assert_eq!(remote.fetch(&AtomicBool::new(false)).unwrap().catalog.made, "2026-11-01T12:00:00Z");
 }
 
-// REG-3, L5: a catalog or a version's facts with a control character in any of its words (an
+/// A change made to a catalog.
+type Change = Box<dyn Fn(&mut Catalog)>;
+
+// REG-3: a catalog or a version's facts with a control character in any of its words (an
 // escape sequence that would clear a terminal, a line break that would pass for another line) is
 // refused, as `m2 pack check` refuses them in a pack (PACK-12).
 #[test]
 fn a_catalog_with_control_characters_is_refused() {
     let (w, bucket) = built("get-words");
     let good = catalog_in(&tree(&bucket));
-    let bad: Vec<(&str, Box<dyn Fn(&mut Catalog)>)> = vec![
+    let bad: Vec<(&str, Change)> = vec![
         ("a label", Box::new(|c| c.packs[1].items[0].label = "Soft keys\u{1b}[2J\u{1b}]0;title\u{7}".into())),
         ("a description", Box::new(|c| c.packs[0].description = "One kick\nproblem: none".into())),
         ("an author", Box::new(|c| c.packs[0].authors = vec!["Alice\u{1b}[31m".into()])),
@@ -711,4 +714,21 @@ fn a_catalog_with_control_characters_is_refused() {
     facts.items[0].description = "a pluck\u{1b}[2J".into();
     let why = m2_song::registry::Facts::read(&facts.bytes()).unwrap_err();
     assert!(why.contains("control character"), "{why}");
+}
+
+// REG-16: a sample whose file the catalog says is larger than a pack may be is refused in
+// words, before any byte is asked for.
+#[test]
+fn a_sample_larger_than_a_pack_may_be_is_refused() {
+    let (w, bucket) = built("get-big-sample");
+    let serve = Serve::folder(&bucket);
+    let remote = Remote::new(&serve.url, &w.t.0.join("cache")).unwrap();
+    let catalog = catalog_in(&tree(&bucket));
+    let mut kick = offers(&catalog, &|_| None, &|_| false).into_iter().find(|o| o.item.kind == crate::library::Kind::Sample).unwrap();
+    kick.facts.file.as_mut().unwrap().size = u64::MAX - 1;
+    let into = w.t.0.join("into");
+    std::fs::create_dir_all(&into).unwrap();
+    let why = sample(&remote, &kick, &into, &mut |_| {}, &Cancel::default()).unwrap_err();
+    assert!(why.contains("10 GB"), "{why}");
+    assert!(serve.asked().is_empty(), "nothing asked for");
 }

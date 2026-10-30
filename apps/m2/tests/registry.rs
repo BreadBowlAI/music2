@@ -410,3 +410,46 @@ fn m2_search_lists_the_librarys_items() {
     let out = ok(t.m2_with(&at, &t.0, &["search", "soft"]));
     assert!(out.contains("@bob/keys:soft-keys") && !out.contains("library:@bob/keys"), "{out}");
 }
+
+// REG-17: `m2 pack get` with the app open tells it the store changed
+// (`POST /api/library/store-changed`, with the tools key), so a song of it that waited for the
+// pack builds, and its lists offer it, with no reopening.
+#[test]
+fn m2_pack_get_tells_the_open_app() {
+    use std::io::{BufRead, BufReader, Write};
+    let t = Temp::new("tells-app");
+    let (bucket, _, _) = library_bucket(&t);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    write(&t.0.join("home/.music2/session.json"), serde_json::json!({"url": url, "token": "k3y", "pid": std::process::id()}).to_string());
+    listener.set_nonblocking(true).unwrap();
+    let app = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut s = loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(_) => return vec!["nothing was asked".to_string()],
+            }
+        };
+        s.set_nonblocking(false).unwrap();
+        let mut head = vec![];
+        let mut r = BufReader::new(s.try_clone().unwrap());
+        loop {
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            head.push(line.trim_end().to_string());
+        }
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+        let _ = s.shutdown(std::net::Shutdown::Both);
+        head
+    });
+    let out = ok(t.m2_with(&file_url(&bucket), &t.0, &["pack", "get", "@bob/keys"]));
+    let head = app.join().unwrap();
+    assert_eq!(head[0], "POST /api/library/store-changed HTTP/1.1", "{head:?}");
+    assert!(head.iter().any(|h| h.eq_ignore_ascii_case("x-m2-token: k3y")), "with the tools key: {head:?}");
+    assert!(out.contains("got @bob/keys 0.1.0") && out.contains("the app was told"), "{out}");
+}

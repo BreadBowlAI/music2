@@ -540,6 +540,10 @@ An example body:
 {"session": 7, "id": "sample:std:samples/kit/kick.wav", "to": {"kind": "below", "beat": 0}}
 ```
 
+### `POST /api/library/store-changed`
+
+Tell the app packs were installed or removed outside it (m2 pack get does): the open song's lists are made again, and a song that waited for a pack builds.
+
 ### `GET /api/packs`
 
 The packs installed on this computer: each one's name, versions (newest last), licence, description and items.
