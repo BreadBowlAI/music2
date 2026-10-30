@@ -16,6 +16,7 @@ mod call;
 mod commands;
 mod docs;
 mod edits;
+mod get;
 mod listen;
 mod search;
 mod see;
@@ -1090,8 +1091,8 @@ change that code first",
 
 /// Where `m2 import` puts its files in the song `s`: on `--track`'s audio lane, else on new tracks
 /// below, from `--at` (the start when it is left out).
-/// `m2 pack …` (PACK-6, PACK-8, PACK-12): make, check, build and install packs; list and remove
-/// what is installed; lock a song's.
+/// `m2 pack …` (PACK-6, PACK-8, PACK-12, REG-17): make, check, build and install packs; get them
+/// from the library; list and remove what is installed; lock a song's.
 fn pack(args: &[String]) -> Result<()> {
     use m2_editor::packs;
     use m2_song::pack::{PackName, Store};
@@ -1169,6 +1170,7 @@ fn pack(args: &[String]) -> Result<()> {
                 }
             }
         }
+        "get" => get::pack_get(args.get(2).map(String::as_str))?,
         "list" => {
             let all = packs::installed(&store()?);
             if all.is_empty() {

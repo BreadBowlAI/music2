@@ -502,6 +502,24 @@ Its query, as JSON:
 
 Your sample folders, each with how many samples it has and whether it is being indexed.
 
+### `POST /api/library/get`
+
+Get a pack or a sample from the library (the registry): a pack's whole version installed, checked, or one sample added to the song with its note; or a version the open song locks and is missing. Answers once it is done; `get` events say how far. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"id": "library:@alice/felt-piano:felt-piano"}
+```
+
+### `POST /api/library/get/cancel`
+
+Stop the Get running: nothing of it is kept.
+
+### `GET /api/library/missing`
+
+The packs the open song's music2.lock names that aren't installed, each with whether the library has that very version to get.
+
 ### `GET /api/library/preview`
 
 An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file (a FLAC's as the WAV of it).

@@ -242,8 +242,8 @@ fn query_value(text: &str) -> String {
         .collect()
 }
 
-/// What the open app's library answers for `q` (LIB-2, `GET /api/library`): its items, best first;
-/// None when no app is open. The app needn't have a song open. While it says samples are being
+/// What the open app's library answers for `q` (LIB-2, `GET /api/library`): its items, best first,
+/// then From the library's (REG-13); None when no app is open. The app needn't have a song open. While it says samples are being
 /// indexed (LIB-5: the app just started, a folder was just added), it is asked again once they are,
 /// up to 30 seconds: a search in the app never waits for them, but a script wants what they find.
 pub fn library(q: &str) -> Result<Option<Vec<Value>>> {
@@ -251,7 +251,8 @@ pub fn library(q: &str) -> Result<Option<Vec<Value>>> {
     loop {
         let Some(v) = library_once(q)? else { return Ok(None) };
         if v["folders"]["indexing"].as_u64().unwrap_or(0) == 0 || std::time::Instant::now() >= until {
-            return Ok(Some(v["items"].as_array().cloned().unwrap_or_default()));
+            let library = v["library"].as_array().cloned().unwrap_or_default();
+            return Ok(Some(v["items"].as_array().cloned().unwrap_or_default().into_iter().chain(library).collect()));
         }
         std::thread::sleep(Duration::from_millis(200));
     }

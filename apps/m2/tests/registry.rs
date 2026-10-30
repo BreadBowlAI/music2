@@ -24,6 +24,7 @@ impl Temp {
             .env("HOME", self.0.join("home"))
             .env("M2_AUDIO", "none")
             .env("M2_MIDI", "none")
+            .env_remove("M2_REGISTRY")
             .args(args)
             .output()
             .unwrap()
@@ -260,4 +261,136 @@ fn a_bucket_is_read_over_http() {
         "2026-10-30T12:00:00Z",
     ]));
     assert!(out.contains("@alice/drums 1.0.0 is published with the hash"), "{out}");
+}
+
+const KEYS: &str = r#"import { component, control, port, signature, type Audio, type Events, type Params } from "@m2/core";
+import { synth } from "std/synth";
+
+/** A soft pluck: std's synth pluck, darker. */
+export const softKeys = component(
+  {
+    id: "soft-keys",
+    label: "Soft keys",
+    signature: signature<(notes: Events) => Audio>(),
+    inputs: { notes: port.notes() },
+    controls: { brightness: control.hz(1800).range(200, 20000) },
+    output: port.audio(),
+    editor: { category: "Keys", description: "A soft pluck, from std's synth" },
+  },
+  (notes: Events, { brightness }: Params): Audio => synth.pluck(notes, { brightness }),
+);
+"#;
+
+/// A bucket the robot built in `t`'s `bucket` from two made-up packs, as the registry's CI builds
+/// one: `@alice/drums` 1.0.0, one sample, and `@bob/keys` 0.1.0, an instrument. Each pack's hash.
+fn library_bucket(t: &Temp) -> (PathBuf, String, String) {
+    let (reg, src) = (t.0.join("registry"), t.0.join("sources"));
+    write(&reg.join("tags.txt"), "drums\nkeys\n");
+    std::fs::create_dir_all(reg.join("packs")).unwrap();
+    let drums = t.0.join("drums");
+    write(
+        &drums.join("m2pkg.toml"),
+        "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\nauthors = [\"Alice\"]\n\
+         repository = \"https://github.com/alice/drums\"\ntags = [\"drums\"]\n",
+    );
+    write(&drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n");
+    short_wav(&drums.join("samples/kicks/Boom.wav"));
+    let keys = t.0.join("keys");
+    write(
+        &keys.join("m2pkg.toml"),
+        "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nauthors = [\"Bob\"]\n\
+         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+    );
+    write(&keys.join("src/index.ts"), KEYS);
+    let r = reg.to_str().unwrap();
+    let mut hashes = vec![];
+    for (dir, owner) in [(&drums, "alice"), (&keys, "bob")] {
+        let short = dir.file_name().unwrap().to_str().unwrap();
+        let source = format!("https://github.com/{owner}/{short}/releases/download/v1/{short}.tar.gz");
+        ok(t.m2(&["registry", "add", r, dir.to_str().unwrap(), "--source", &source]));
+        let hash = Listing::of(dir).unwrap().hash();
+        copy(dir, &src.join(hash.hex()).join(short));
+        hashes.push(hash.prefixed());
+    }
+    let bucket = t.0.join("bucket");
+    ok(t.m2(&["registry", "build", r, "--sources", src.to_str().unwrap(), "--out", bucket.to_str().unwrap(), "--made", "2026-10-30T12:00:00Z"]));
+    (bucket, hashes.remove(0), hashes.remove(0))
+}
+
+impl Temp {
+    /// `m2` with `args`, reading the registry at `registry` (REG-11), run in `dir`.
+    fn m2_with(&self, registry: &str, dir: &Path, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_m2"))
+            .current_dir(dir)
+            .env("HOME", self.0.join("home"))
+            .env("M2_AUDIO", "none")
+            .env("M2_MIDI", "none")
+            .env("M2_REGISTRY", registry)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+}
+
+/// The bucket in `dir` as a `file://` address.
+fn file_url(dir: &Path) -> String {
+    format!("file://{}", dir.display())
+}
+
+// REG-11: with no registry set, `m2 pack get` says so plainly, and how to set one; `m2 search`
+// finds what you have all the same.
+#[test]
+fn no_registry_is_said_plainly() {
+    let t = Temp::new("no-registry");
+    let out = failed(t.m2(&["pack", "get", "@bob/keys"]));
+    assert!(out.contains("No registry is set") && out.contains("M2_REGISTRY"), "{out}");
+    let out = ok(t.m2(&["search", "reverb"]));
+    assert!(out.contains("std:reverb") && !out.contains("library"), "{out}");
+}
+
+// REG-17, REG-15: `m2 pack get <name>` gets the latest version, whole and checked, into the store;
+// in a song's folder `m2 pack get` gets every locked version missing, and then nothing.
+#[test]
+fn m2_pack_get_gets_a_pack_and_a_songs_missing_ones() {
+    let t = Temp::new("pack-get");
+    let (bucket, drums, _) = library_bucket(&t);
+    let at = file_url(&bucket);
+    let out = ok(t.m2_with(&at, &t.0, &["pack", "get", "@bob/keys"]));
+    assert!(out.contains("got @bob/keys 0.1.0"), "{out}");
+    let store = t.0.join("home/Music/music2/Packs");
+    assert!(store.join("@bob/keys/0.1.0/m2pack.json").is_file());
+    assert!(ok(t.m2(&["pack", "list"])).contains("@bob/keys 0.1.0"));
+    let out = failed(t.m2_with(&at, &t.0, &["pack", "get", "@bob/keys@9.0.0"]));
+    assert!(out.contains("isn't in the library") && out.contains("0.1.0"), "{out}");
+    let out = failed(t.m2_with(&at, &t.0, &["pack", "get", "@carol/none"]));
+    assert!(out.contains("isn't in the library"), "{out}");
+
+    let song = t.0.join("song");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
+    let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap();
+    std::fs::write(song.join("music2.toml"), manifest + "\"@alice/drums\" = \"1.0\"\n").unwrap();
+    std::fs::write(song.join("music2.lock"), format!("[[pack]]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nhash = \"{drums}\"\n")).unwrap();
+    let out = ok(t.m2_with(&at, &song, &["pack", "get"]));
+    assert!(out.contains("got @alice/drums 1.0.0"), "{out}");
+    assert!(store.join("@alice/drums/1.0.0/m2pack.json").is_file());
+    let out = ok(t.m2_with(&at, &t.0, &["pack", "get", song.to_str().unwrap()]));
+    assert!(out.contains("nothing is missing"), "{out}");
+}
+
+// REG-13: `m2 search` with the app closed lists the library's items too, after what you have,
+// each marked library; once the pack is got, it is what you have.
+#[test]
+fn m2_search_lists_the_librarys_items() {
+    let t = Temp::new("search-library");
+    let (bucket, _, _) = library_bucket(&t);
+    let at = file_url(&bucket);
+    let out = ok(t.m2_with(&at, &t.0, &["search", "soft"]));
+    let row = out.lines().find(|l| l.contains("Soft keys")).unwrap_or_else(|| panic!("{out}"));
+    assert!(row.contains("library") && row.contains("library:@bob/keys:soft-keys"), "{row}");
+    let json: serde_json::Value = serde_json::from_slice(&t.m2_with(&at, &t.0, &["search", "kick", "--json"]).stdout).unwrap();
+    let kick = json.as_array().unwrap().iter().find(|i| i["id"] == "library:sample:@alice/drums:samples/kicks/Boom.wav").expect("the library's kick");
+    assert_eq!(kick["library"]["pack"], "@alice/drums");
+    ok(t.m2_with(&at, &t.0, &["pack", "get", "@bob/keys"]));
+    let out = ok(t.m2_with(&at, &t.0, &["search", "soft"]));
+    assert!(out.contains("@bob/keys:soft-keys") && !out.contains("library:@bob/keys"), "{out}");
 }
