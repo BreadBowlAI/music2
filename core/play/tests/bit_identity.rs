@@ -281,6 +281,35 @@ fn round_robin_takes_turns_by_the_notes_live_as_in_the_export() {
     }
 }
 
+// PKG-16.4, RENDER-16: a release region plays when its note ends, wherever on the block grid. A
+// poly frees a voice whose note's Off lands on a block line before the voice runs that block, when
+// its last block was silent and its kernels say they aren't active; std:regions says it is active
+// while a note a release region matches is held. Here the attack file (0.12 s) ends long before
+// each note, so each voice is silent when its note ends: at 120 bpm the second note ends on frame
+// 96 000 (750 blocks), the first mid-block; at 125 bpm a beat is 23 040 frames (180 blocks), so
+// every note that ends on a beat ends on a block line.
+#[test]
+fn a_release_region_sounds_when_its_note_ends_on_a_block_line() {
+    let keys = "import { track } from \"@m2/core\";\nimport { sampler } from \"std/sampler\";\n\
+                export default track(\"keys\", { name: \"Keys\" }, ({ lane }) => sampler(lane.notes(\"notes\"), { regions: [\
+                { file: \"soft-1.wav\", keys: [48, 72] }, { file: \"release.wav\", keys: [48, 72], trigger: \"release\" }] }));\n";
+    let notes = "{\"clips\": [{\"id\": \"relgrid1\", \"start\": 0, \"length\": 6, \"notes\": [\
+                 {\"pitch\": \"C4\", \"start\": 0, \"length\": 1, \"velocity\": 0.5}, {\"pitch\": \"C4\", \"start\": 2, \"length\": 2, \"velocity\": 0.5}]}]}";
+    for (bpm, ends) in [(120, [24_000, 96_000]), (125, [23_040, 92_160])] {
+        let tempo = format!("{{\"tempo\": [{{\"beat\": 0, \"bpm\": {bpm}}}], \"meter\": []}}");
+        let files = [("tracks/keys.ts", keys), ("data/keys/notes.json", notes), ("data/arrangement.json", tempo.as_str())];
+        let song = fixture_with("core/session/tests/fixtures/sampler-regions", &files);
+        let frames = (song.seconds() * song.rate as f64) as usize;
+        let export = offline(&song, frames);
+        for end in ends {
+            let line = end % BLOCK == 0;
+            assert!(peak(&export[end - 4_800..end]) < 1e-4, "{bpm} bpm: the voice is silent before its note ends at {end}");
+            assert!(peak(&export[end..end + 1_920]) > 0.05, "{bpm} bpm: the release sounds at {end} (on a block line: {line})");
+        }
+        assert_eq!(first_diff(&live(&song, frames, None), &export), None, "{bpm} bpm: live is the export");
+    }
+}
+
 /// The 16-track reference project (p16), written into a temp folder.
 fn p16() -> Song {
     reference(&m2_session::reference::Reference::P16)

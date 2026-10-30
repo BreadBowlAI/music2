@@ -36,7 +36,13 @@
 //! loop's start, nor half the loop) crossfade in a straight line into the same frames before the
 //! start, read through a second window, so the jump doesn't click. Whether a pass loops is decided
 //! when it reaches its crossfade: held, it loops, and that crossfade finishes even if the note ends
-//! in it; let go, it plays on past the end to the file's end.
+//! in it; let go, it plays on past the end to the file's end. A loop's last frame past the file is
+//! the file's last, and a pass that loops never ends at the file's end, so a loop to the file's
+//! last frame (the one SFZ files most often have) loops like any other.
+//!
+//! A held note that a release region matches says it is active, though nothing may sound yet: a
+//! poly frees a silent voice that says it isn't when its note ends on a block line, before the
+//! voice sees the gate fall (architecture.md, RENDER-16), and the release would be lost.
 //!
 //! `mode` 0 (one-shot) plays to the file's end, whatever the note does after it starts; 1 (gated)
 //! fades out over `release` when the note ends. `attack` fades in from the note's start. Both are
@@ -343,6 +349,8 @@ pub struct Sampler<const REGIONS: bool> {
     velocity: u32,
     count: u32,
     amp: f32,
+    /// A release region matches the note: its end starts a sound.
+    to_release: bool,
     level: Memo,
     layers: Box<[Layer]>,
 }
@@ -360,6 +368,7 @@ impl<const REGIONS: bool> Sampler<REGIONS> {
         // A float to int cast saturates; NaN is the first turn too. Zones have no turns.
         self.count = if REGIONS { at(COUNT).max(1.0) as u32 } else { 1 };
         self.amp = 1.0 - v + v * velocity;
+        self.to_release = self.regions.iter().any(|r| r.release && r.holds(key, self.velocity, self.count));
         let gated = at(MODE) >= 0.5;
         for l in self.layers.iter_mut() {
             l.play = Play::default();
@@ -419,6 +428,7 @@ impl<const REGIONS: bool> Kernel for Sampler<REGIONS> {
             velocity: 1,
             count: 1,
             amp: 0.0,
+            to_release: false,
             level: Memo::new(),
             layers: (0..layers).map(|_| Layer { play: Play::default(), main: Window::new(window), tail: Window::new(tail) }).collect(),
         }
@@ -427,7 +437,7 @@ impl<const REGIONS: bool> Kernel for Sampler<REGIONS> {
     /// Its regions and windows stay; a window is read again before it is used.
     fn reset(&mut self, _cfg: &Cfg) {
         self.gate = false;
-        (self.key, self.velocity, self.count, self.amp) = (0.0, 1, 1, 0.0);
+        (self.key, self.velocity, self.count, self.amp, self.to_release) = (0.0, 1, 1, 0.0, false);
         self.level = Memo::new();
         for l in self.layers.iter_mut() {
             l.play = Play::default();
@@ -499,8 +509,9 @@ impl<const REGIONS: bool> Kernel for Sampler<REGIONS> {
                     r[i] += y;
                 }
                 p.pos += p.step;
-                if p.pos > asset.frames as f64 - 1.0 {
-                    // Past the file's last frame: the region is over.
+                // Past the file's last frame, the region is over, unless this pass goes back to its
+                // loop's start at the next sample: a loop may end on the file's last frame.
+                if p.pos > asset.frames as f64 - 1.0 && !(p.wrap || p.armed && self.gate) {
                     p.region = None;
                 }
                 if p.slope != 0.0 {
@@ -521,9 +532,12 @@ impl<const REGIONS: bool> Kernel for Sampler<REGIONS> {
     }
 
     /// While a file plays: past the note's end, a one-shot plays to the file's end, a gated one
-    /// fades out, and a release region plays.
+    /// fades out, and a release region plays. And while a note is held that a release region
+    /// matches, silent or not: a poly frees a silent voice that says it isn't active when its
+    /// note's end lands on a block line, before the voice sees the gate fall (core/runtime's
+    /// poly), and the release would be lost.
     fn active(&self) -> bool {
-        self.layers.iter().any(|l| l.play.region.is_some())
+        self.gate && self.to_release || self.layers.iter().any(|l| l.play.region.is_some())
     }
 }
 

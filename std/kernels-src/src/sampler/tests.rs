@@ -332,6 +332,33 @@ fn release_regions_start_when_the_note_ends() {
     assert!((300..1_000).all(|t| gated[t] == x[1][t - 300]), "gated: the release region alone");
 }
 
+// A poly frees a voice whose Off lands on a block line before the voice runs that block, when its
+// last block was silent and it says it isn't active (core/runtime's poly). A release region starts
+// sound at the gate's fall, so a held note it matches is active, though its attack has ended or it
+// has none: else its release would be lost whenever the note ends on a block line.
+#[test]
+fn a_held_note_with_a_release_region_is_active() {
+    let (x, assets) = files(200, 3);
+    // Below 70, a short attack and a release noise for loud notes; on 70 to 80, a release alone.
+    let regions = [
+        R { keys: [0.0, 69.0], ..R::of(0) },
+        R { release: true, keys: [0.0, 69.0], velocity: [100.0, 127.0], ..R::of(1) },
+        R { release: true, root: 75.0, keys: [70.0, 80.0], ..R::of(2) },
+    ];
+    let note = Note { held: 1_000, ..NOTE };
+    let loud = play_regions(&assets, &regions, note, 1_400, 37, &[]);
+    assert!(loud.left()[300..1_000].iter().all(|&v| v == 0.0), "the attack has ended while the note is held");
+    assert!(loud.active[500] && loud.active[999], "held, with a release to come: active");
+    assert!((1_000..1_200).all(|t| loud.left()[t] == x[1][t - 1_000]) && !loud.active[1_399], "the release plays, then it is over");
+    // A release-only key: no attack at all, active until its release has played.
+    let only = play_regions(&assets, &regions, Note { pitch: 75.0, ..note }, 1_400, 37, &[]);
+    assert!(only.left()[..1_000].iter().all(|&v| v == 0.0) && only.active[0] && only.active[999]);
+    assert!((1_000..1_200).all(|t| only.left()[t] == x[2][t - 1_000]) && !only.active[1_399]);
+    // No release region matches a soft note: once its attack ends it is silent, and not active.
+    let soft = play_regions(&assets, &regions, Note { velocity: 0.5, ..note }, 1_400, 37, &[]);
+    assert!(soft.active[100] && !soft.active[500] && soft.left()[200..].iter().all(|&v| v == 0.0));
+}
+
 /// A sine of `period` samples, `n` long.
 fn sine(n: usize, period: f32) -> Vec<f32> {
     (0..n).map(|t| (std::f32::consts::TAU * t as f32 / period).sin() * 0.8).collect()
@@ -364,6 +391,40 @@ fn a_loop_repeats_while_held_then_plays_on_to_the_end() {
     // Let go before the loop: it never loops.
     let short = play_regions(&asset, &[lp], Note { held: 50, ..NOTE }, 1_200, 37, &[]).left();
     assert!(short[..1_000] == x[..] && short[1_000..].iter().all(|&v| v == 0.0), "let go early: the file once");
+}
+
+// The loop SFZ files most often have ends at the file's last frame (and the one a WAV's `smpl`
+// chunk gives). It loops while held like any other: the pass that reaches the end goes back to the
+// start, never ends at the file's end. So does a loop whose end is past the file (the build can't
+// know the file's length: it is taken as the last frame), and one that ends within a step of the
+// file's end, played above its root.
+#[test]
+fn a_loop_to_the_files_last_frame_loops_while_held() {
+    let x = file(1_000, 21);
+    let asset = [native::asset(SR, vec![x.clone()])];
+    let held = |looped: [f64; 2], pitch: f32| {
+        play_regions(&asset, &[R { looped, ..R::of(0) }], Note { pitch, held: 20_000, ..NOTE }, 21_000, 37, &[])
+    };
+    for (looped, pitch) in
+        [([300.0, 999.0], 60.0), ([300.0, 1e9], 60.0), ([300.0, 999.0], 61.0), ([300.0, 998.0], 61.0), ([300.0, 998.0], 60.0)]
+    {
+        let got = held(looped, pitch);
+        let l = got.left();
+        assert!(l[19_000..20_000].iter().any(|&v| v != 0.0) && got.active[19_999], "{looped:?} at {pitch}: still looping when let go");
+    }
+    // At its root, exactly: frames 300 to 999 loop (700 of them), crossfaded over min(240, 300, 350).
+    let l = held([300.0, 999.0], 60.0).left();
+    assert!(l[..760] == x[..760], "up to the crossfade, the file");
+    for t in 760..1_000 {
+        let want = x[t] + (x[t - 700] - x[t]) * (t - 760) as f32 / 240.0;
+        assert!((l[t] - want).abs() <= 1e-6, "{t}: {} against {want}", l[t]);
+    }
+    assert!((1_000..1_460).all(|t| l[t] == x[t - 700]), "after the file's last frame comes the loop's start");
+    // Let go, it plays on to the file's end, then it is over.
+    let out = play_regions(&asset, &[R { looped: [300.0, 999.0], ..R::of(0) }], Note { held: 1_100, ..NOTE }, 3_000, 37, &[]);
+    let l = out.left();
+    assert!((1_460..1_700).all(|t| l[t] == x[t - 700]), "the pass let go in plays on");
+    assert!(l[1_700..].iter().all(|&v| v == 0.0) && !out.active[2_999], "to the file's end, then silence");
 }
 
 #[test]
