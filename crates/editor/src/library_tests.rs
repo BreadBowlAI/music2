@@ -27,7 +27,7 @@ fn item(kind: Kind, id: &str, label: &str, tags: &[&str], description: &str, pac
 
 fn sample(id: &str, label: &str, kind: SampleType, bpm: Option<f64>, key: Option<&str>) -> Item {
     let mut i = item(Kind::Sample, id, label, &[], "", "@m2/vocals");
-    i.sample = Some(Sample { kind, bpm, key: key.map(|k| Key::parse(k).unwrap()), seconds: Some(2.0) });
+    i.sample = Some(Sample { kind, bpm, key: key.map(|k| Key::parse(k).unwrap()), seconds: Some(2.0), ..Sample::default() });
     i
 }
 
@@ -43,6 +43,11 @@ fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
 
 fn std_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")
+}
+
+/// std alone, as the library's packages.
+fn std_packages() -> Vec<(String, std::path::PathBuf)> {
+    vec![("std".to_string(), std_dir())]
 }
 
 // LIB-1: every word typed must match somewhere, in any capitals: a word of the label, inside the
@@ -127,7 +132,7 @@ fn a_kind_typed_filters_by_kind() {
 #[test]
 fn what_is_typed_is_split_into_words_as_an_items_text_is() {
     let catalog = m2_script::describe(&[("std".to_string(), std_dir())]);
-    let all = items(&Sources { catalog: &catalog, std: Some(&std_dir()), yours: None, plugins: &[] });
+    let all = items(&Sources { catalog: &catalog, packages: &std_packages(), yours: None, plugins: &[], samples: &[] });
     let first = |text: &str| found(&all, text).first().cloned().unwrap_or_else(|| format!("nothing for {text:?}"));
     assert!(found(&all, "hi-hat").contains(&"std:drum-hats".to_string()), "{:?}", found(&all, "hi-hat"));
     assert_eq!(found(&all, "hi-hat"), found(&all, "hi hat"));
@@ -157,7 +162,7 @@ fn a_kind_word_finds_that_kind_and_names_with_it() {
         Plugin { id: "clap:sxfx".into(), name: "Surge XT Effects".into(), vendor: "Surge".into(), instrument: false, effect: true },
         Plugin { id: "clap:dly".into(), name: "Space Delay".into(), vendor: "Acme".into(), instrument: false, effect: true },
     ];
-    let all = items(&Sources { catalog: &catalog, std: Some(&std_dir()), yours: None, plugins: &plugins });
+    let all = items(&Sources { catalog: &catalog, packages: &std_packages(), yours: None, plugins: &plugins, samples: &[] });
     assert_eq!(found(&all, "consolidated effect"), ["clap:aw"], "an effect plugin is an effect");
     let delays = found(&all, "delay effect");
     assert_eq!(delays.first().map(String::as_str), Some("std:delay"));
@@ -191,14 +196,60 @@ fn sample_filters_find_only_the_samples_that_carry_them() {
         sample("loop-fs", "Vocal loop", SampleType::Loop, None, Some("Gb")),
         item(Kind::Instrument, "vocal-synth", "Vocal synth", &[], "", "std"),
     ];
-    assert_eq!(found(&items, "vocal Am"), ["chop-am-90", "loop-am-90"]);
+    assert_eq!(found(&items, "vocal Am"), ["chop-am-90", "loop-am-90", "loop-c-120"], "A minor, and its relative, C major");
     assert_eq!(found(&items, "vocal loop"), ["loop-am-90", "loop-c-120", "loop-fs"]);
     assert_eq!(found(&items, "one-shot"), ["chop-am-90"]);
     assert_eq!(found(&items, "90 bpm"), ["chop-am-90", "loop-am-90"]);
     assert_eq!(found(&items, "120bpm loop"), ["loop-c-120"]);
-    assert_eq!(found(&items, "C major"), ["loop-c-120"]);
+    assert_eq!(found(&items, "C major"), ["chop-am-90", "loop-am-90", "loop-c-120"], "C major, and its relative, A minor");
     assert_eq!(found(&items, "F#"), ["loop-fs"], "F# is G♭");
     assert_eq!(found(&items, "vocal"), ["vocal-synth", "chop-am-90", "loop-am-90", "loop-c-120", "loop-fs"], "no filter: every kind");
+}
+
+// LIB-1: a tempo typed finds the samples within 2 bpm of it; a key, the samples in it or its
+// relative, and no other.
+#[test]
+fn a_tempo_finds_within_two_bpm_and_a_key_its_relative() {
+    let items = [
+        sample("at-88", "Keys", SampleType::Loop, Some(88.0), None),
+        sample("at-91", "Keys", SampleType::Loop, Some(91.5), None),
+        sample("at-92", "Keys", SampleType::Loop, Some(92.0), None),
+        sample("at-93", "Keys", SampleType::Loop, Some(92.5), None),
+        sample("in-em", "Keys", SampleType::Loop, None, Some("Em")),
+        sample("in-g", "Keys", SampleType::Loop, None, Some("Gmaj")),
+        sample("in-e", "Keys", SampleType::Loop, None, Some("Emaj")),
+        sample("in-bm", "Keys", SampleType::Loop, None, Some("Bm")),
+    ];
+    assert_eq!(found(&items, "90 bpm"), ["at-88", "at-91", "at-92"]);
+    assert_eq!(found(&items, "Em"), ["in-em", "in-g"]);
+    assert_eq!(found(&items, "G major"), ["in-em", "in-g"]);
+    assert_eq!(found(&items, "E major"), ["in-e"], "E major's relative is C# minor, not E minor");
+    assert_eq!(Key::parse("Am").unwrap().relative(), Key::parse("Cmaj").unwrap());
+    assert_eq!(Key::parse("F#").unwrap().relative(), Key::parse("Ebm").unwrap(), "F# major's relative is D# (E♭) minor");
+}
+
+// LIB-1: Fits my song keeps the loops within 8% of the song's tempo, in its key or the key's
+// relative when it has one (a loop with no key fits any); without a key, by tempo alone.
+#[test]
+fn fits_my_song_keeps_loops_near_the_songs_tempo_in_its_key() {
+    let items = [
+        sample("am-120", "Loop", SampleType::Loop, Some(120.0), Some("Am")),
+        sample("c-111", "Loop", SampleType::Loop, Some(111.0), Some("Cmaj")),
+        sample("am-110", "Loop", SampleType::Loop, Some(110.0), Some("Am")),
+        sample("drums-128", "Loop", SampleType::Loop, Some(129.0), None),
+        sample("drums-130", "Loop", SampleType::Loop, Some(130.0), None),
+        sample("dm-120", "Loop", SampleType::Loop, Some(120.0), Some("Dm")),
+        sample("hit-am", "Loop", SampleType::OneShot, Some(120.0), Some("Am")),
+        sample("no-tempo", "Loop", SampleType::Loop, None, Some("Am")),
+        item(Kind::Instrument, "std:loop", "Loop", &[], "", "std"),
+    ];
+    let fits = |bpm: f64, key: Option<&str>, text: &str| {
+        let q = Query { fits: Some(Fits { bpm, key: key.map(|k| Key::parse(k).unwrap()) }), ..Query::parse(text) };
+        search(&items, &q).into_iter().map(|i| i.id.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(fits(120.0, Some("Am"), ""), ["am-120", "c-111", "drums-128"], "110 is 8.3% under, 130 8.3% over");
+    assert_eq!(fits(120.0, None, ""), ["am-120", "c-111", "dm-120", "drums-128"]);
+    assert_eq!(fits(120.0, Some("Dm"), "loop"), ["dm-120", "drums-128"]);
 }
 
 // LIB-1: a key is written with a capital and a sign, or followed by major or minor; a bare letter
@@ -229,7 +280,7 @@ fn a_key_needs_a_capital_and_a_sign_or_a_mode() {
 #[test]
 fn the_library_holds_stds_instruments_effects_and_presets() {
     let catalog = m2_script::describe(&[("std".to_string(), std_dir())]);
-    let all = items(&Sources { catalog: &catalog, std: Some(&std_dir()), yours: None, plugins: &[] });
+    let all = items(&Sources { catalog: &catalog, packages: &std_packages(), yours: None, plugins: &[], samples: &[] });
     let get =
         |id: &str| all.iter().find(|i| i.id == id).unwrap_or_else(|| panic!("{id} in {:?}", all.iter().map(|i| &i.id).collect::<Vec<_>>()));
     let pluck = get("std:synth-pluck");
@@ -287,7 +338,7 @@ fn your_presets_are_sounds_and_a_missing_sounds_are_left_out() {
         instrument: true,
         effect: false,
     }];
-    let all = items(&Sources { catalog: &catalog, std: None, yours: Some(&yours), plugins: &plugins });
+    let all = items(&Sources { catalog: &catalog, packages: &[], yours: Some(&yours), plugins: &plugins, samples: &[] });
     let sounds: Vec<(&str, &str, &str, bool)> =
         all.iter().filter(|i| i.kind == Kind::Sound).map(|i| (i.id.as_str(), i.package.as_str(), i.category.as_str(), i.preview)).collect();
     assert_eq!(
@@ -312,7 +363,7 @@ mod previews {
 
     fn std_items() -> (m2_script::Catalog, Vec<Item>) {
         let catalog = m2_script::describe(&[("std".to_string(), std_dir())]);
-        let all = items(&Sources { catalog: &catalog, std: Some(&std_dir()), yours: None, plugins: &[] });
+        let all = items(&Sources { catalog: &catalog, packages: &std_packages(), yours: None, plugins: &[], samples: &[] });
         (catalog, all)
     }
 
@@ -470,16 +521,17 @@ mod previews {
         let (catalog, _) = std_items();
         let plugin = items(&Sources {
             catalog: &catalog,
-            std: None,
+            packages: &[],
             yours: None,
             plugins: &[Plugin { id: "clap:a.b".into(), name: "AB".into(), vendor: "A".into(), instrument: true, effect: false }],
+            samples: &[],
         })
         .into_iter()
         .find(|i| i.kind == Kind::Plugin)
         .unwrap();
         assert_eq!(preview::song(&plugin, &catalog, &BTreeMap::new()), Err("Plugins have no preview yet.".to_string()));
         // An instrument that plays a file you give it has none: its preview would be silence.
-        let sampler = items(&Sources { catalog: &catalog, std: None, yours: None, plugins: &[] })
+        let sampler = items(&Sources { catalog: &catalog, packages: &[], yours: None, plugins: &[], samples: &[] })
             .into_iter()
             .find(|i| i.id == "std:sampler")
             .unwrap();

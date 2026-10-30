@@ -52,10 +52,10 @@ enum Phrase {
 }
 
 /// A note in a lane: pitch, start and length in beats, velocity.
-type Note = (u8, f64, f64, f64);
+pub(super) type Note = (u8, f64, f64, f64);
 
 /// A lane's file with one clip of `beats`, holding `notes`.
-fn lane(notes: &[Note], beats: f64) -> String {
+pub(super) fn lane(notes: &[Note], beats: f64) -> String {
     let notes: Vec<String> = notes
         .iter()
         .map(|(p, start, length, velocity)| format!(r#"{{"pitch": {p}, "start": {start}, "length": {length}, "velocity": {velocity}}}"#))
@@ -158,7 +158,7 @@ fn options(d: &Descriptor, values: &BTreeMap<String, f64>) -> String {
     if written.is_empty() { String::new() } else { format!(", {{ {} }}", written.join(", ")) }
 }
 
-const ARRANGEMENT: &str = "{\n  \"tempo\": [{\"beat\": 0, \"bpm\": 120}],\n  \"meter\": []\n}\n";
+pub(super) const ARRANGEMENT: &str = "{\n  \"tempo\": [{\"beat\": 0, \"bpm\": 120}],\n  \"meter\": []\n}\n";
 const IMPORTS: &str = "import { song, track } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\n";
 
 /// Why component `d` has no preview, in words, if it has none: the song's own code (a preview renders
@@ -346,7 +346,7 @@ pub fn loudness(samples: &[f32]) -> Option<f64> {
 }
 
 /// A version as a manifest asks for it: `1` of `1.4.0`, `0.4` of `0.4.0`.
-fn wanted(version: &str) -> String {
+pub(super) fn wanted(version: &str) -> String {
     match version.split('.').collect::<Vec<_>>().as_slice() {
         ["0", minor, ..] => format!("0.{minor}"),
         [major, ..] => major.to_string(),
