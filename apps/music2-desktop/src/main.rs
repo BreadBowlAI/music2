@@ -65,6 +65,8 @@ fn main() {
             server.keep_recent(home().join(".music2").join("recent.json"));
             // The sound output and where new songs go (gaps #31), before anything plays.
             server.keep_settings(home().join(".music2").join("settings.json"));
+            // Your presets, and previews kept in the cache folder (LIB-1, LIB-3).
+            server.keep_library(m2_server::library::Folders::of_this_user());
             publish_session(&running.url, &server.token);
             // No window is connected yet: the server keeps these toasts for the first one.
             // They name the folder, not its whole path, so the reason fits. Opened off the main

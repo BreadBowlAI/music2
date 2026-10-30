@@ -173,6 +173,7 @@ export const SUITES = [
   ["br-plugins", "fix", { probe: true, expect: 19, s: 2 }],
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
   ["pk-packs", "fix", { expect: 18, s: 3 }],
+  ["spotlight", "fix", { expect: 40, s: 4 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 

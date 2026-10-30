@@ -96,6 +96,7 @@ const PARTS: [Part; 16] = [
     crate::routes_exchange::PART,
     crate::routes_fx::PART,
     crate::routes_leases::PART,
+    crate::routes_library::PART,
     crate::routes_mix::PART,
     crate::routes_notes::PART,
     crate::routes_packs::PART,

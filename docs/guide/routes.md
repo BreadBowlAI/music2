@@ -488,9 +488,25 @@ An example body:
 {"session": 7}
 ```
 
-### `GET /api/packs`
+### `GET /api/library`
 
-The packs installed on this computer: each one's name, versions (newest last), licence, description and items.
+Search everything you can add: instruments, sounds (presets), effects, samples and plugins, best first; q's words may name a kind, loop, one-shot, a tempo or a key.
+
+Its query, as JSON:
+
+```json
+{"q": "warm pad"}
+```
+
+### `GET /api/library/preview`
+
+An item's preview: a short WAV of it playing, rendered offline and kept.
+
+Its query, as JSON:
+
+```json
+{"id": "std:synth-pluck"}
+```
 
 ### `GET /api/plugins`
 
