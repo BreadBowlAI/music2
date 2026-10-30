@@ -12,8 +12,8 @@ import { undoAction } from "../components/GraphCanvas";
 
 declare module "./graph" {
   interface ViewNode {
-    /** A Sampler's card: the files it plays (none yet, one, or one per zone). */
-    sampler?: { files: string[] };
+    /** A Sampler's card: the files it plays (none yet, one, one per zone, or its regions' files), and for regions what it plays in words ("5 recordings, 2 layers, round robin of 2"). */
+    sampler?: { files: string[]; regions?: string };
   }
 }
 

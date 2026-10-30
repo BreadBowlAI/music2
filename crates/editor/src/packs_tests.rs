@@ -60,7 +60,7 @@ fn adding_a_pack_instrument_writes_its_dependency_and_lock_in_one_undo() {
     let (mut s, hash) = song_and_store(&f);
     let made = crate::tracks::add(&mut s, "@test/tiny:tiny-keys", None, None, None).unwrap_or_else(|e| panic!("{e}"));
     let manifest = f.read("music2.toml");
-    assert!(manifest.ends_with("std = \"0.4\"\n\"@test/tiny\" = \"0.1\"\n"), "{manifest}");
+    assert!(manifest.ends_with("std = \"0.5\"\n\"@test/tiny\" = \"0.1\"\n"), "{manifest}");
     let lock = Lock::read(&f.read("music2.lock")).unwrap();
     assert_eq!(lock.get(&PackName::new("@test/tiny").unwrap()).map(|l| (l.version, l.hash)), Some((Version(0, 1, 0), hash)));
     let track = f.read(&format!("tracks/{}.ts", made.module));

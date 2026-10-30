@@ -967,7 +967,7 @@ function NodeCard({
           ))}
         </div>
       )}
-      {node.sampler && <SampleRow files={node.sampler.files} />}
+      {node.sampler && <SampleRow files={node.sampler.files} regions={node.sampler.regions} />}
       {node.outputs.map((o, j) => (
         <OutputPortView
           key={o.id}
@@ -1058,8 +1058,8 @@ function PluginRow({ node, title, session }: { node: string; title: string; sess
  * A Sampler's file (track ab), under its knobs: "Drop a WAV here" until it has one. The whole card
  * takes a dropped WAV (`data-sampler-call`), which it then plays.
  */
-function SampleRow({ files }: { files: string[] }) {
-  const said = files.length === 0 ? "Drop a WAV here" : files.length === 1 ? files[0] : `${files.length} files: ${files.join(", ")}`;
+function SampleRow({ files, regions }: { files: string[]; regions?: string }) {
+  const said = regions ?? (files.length === 0 ? "Drop a WAV here" : files.length === 1 ? files[0] : `${files.length} files: ${files.join(", ")}`);
   return (
     <div
       data-testid="sampler-file"
@@ -1068,11 +1068,13 @@ function SampleRow({ files }: { files: string[] }) {
         files.length ? "bg-chrome text-fg" : "border border-dashed border-line-strong text-fg-muted",
       )}
       title={
-        files.length > 1
-          ? `Plays ${files.join(", ")}, each on its own range of notes. They are set in its code.`
-          : files.length
-            ? `Plays ${files[0]}. Drop another WAV on this card to play it instead.`
-            : "Drop a WAV file from your computer on this card to play it"
+        regions !== undefined
+          ? `Plays ${regions}, each recording on its own notes and velocities. They are set in its code.`
+          : files.length > 1
+            ? `Plays ${files.join(", ")}, each on its own range of notes. They are set in its code.`
+            : files.length
+              ? `Plays ${files[0]}. Drop another WAV on this card to play it instead.`
+              : "Drop a WAV file from your computer on this card to play it"
       }
     >
       <FileAudio size={12} className="shrink-0" />

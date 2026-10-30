@@ -350,6 +350,138 @@ function keymap(v: unknown): boolean {
 }
 
 /**
+ * One region of a sampler's `regions` (PKG-15): which recording plays for which notes, how hard, in
+ * which turn and when. Only `file` must be given. A pair is two numbers: typed as a list, so a
+ * region made by a helper or kept in a `const` type-checks, and the build refuses any other length.
+ */
+export type Region = {
+  /** The recording, a file in `assets/`. */
+  file: string;
+  /** The MIDI note it was recorded at, 0 to 127. Left out, 60. */
+  root?: number;
+  /** `[lowest, highest]`: the notes it plays. Left out, its root alone when `root` is given, else every note. */
+  keys?: readonly number[];
+  /** `[lowest, highest]`: how hard, 1 to 127. Left out, every velocity. */
+  velocity?: readonly number[];
+  /** `[position, of]`: it is take `position` of `of`, played in turn; takes 1 to `of` must all be there. Left out, `[1, 1]`. */
+  round_robin?: readonly number[];
+  /** `"attack"` plays when the note starts (the default), `"release"` when it ends. */
+  trigger?: "attack" | "release";
+  /** `[start, end]`: frames of the file it loops while the note is held, both played. */
+  loop?: readonly number[];
+  /** Cents, -2400 to 2400. */
+  tune?: number;
+  /** dB, -120 to 24. */
+  volume?: number;
+  /** -1 (left) to 1 (right). */
+  pan?: number;
+  /** Frames into the file it starts from. */
+  offset?: number;
+};
+
+/** A region's fields, in order. */
+const REGION_FIELDS = ["file", "root", "keys", "velocity", "round_robin", "trigger", "loop", "tune", "volume", "pan", "offset"];
+
+/**
+ * What is wrong with `v` as a list of regions (PKG-15), naming the region by its place from 1, or
+ * nothing. Each problem starts with ": ", so it reads after the setting's name.
+ */
+function checkRegions(v: unknown): string | undefined {
+  if (!Array.isArray(v)) return `: must be a list of regions, as [{ file: "C4.wav", root: 60 }], not ${shown(v)}`;
+  for (let i = 0; i < v.length; i++) {
+    const wrong = regionProblem(v[i]);
+    if (wrong) return `: region ${i + 1}: ${wrong}`;
+  }
+  const turns = turnsProblem(v as Region[]);
+  return turns && `: ${turns}`;
+}
+
+/**
+ * What is wrong with the regions' turns, if anything (PKG-15): wherever a note and velocity are
+ * played by regions of one trigger whose round robin is of `n` takes (`n` > 1), there must be a
+ * region for each take from 1 to `n`, else that turn plays nothing there. Groups of different `n`
+ * on one note, each whole, are layers that take turns apart. Only the notes and velocities where
+ * the regions that play change are looked at, lowest first, so a sample map of thousands is quick.
+ */
+function turnsProblem(regions: readonly Region[]): string | undefined {
+  type Take = { n: number; release: boolean; position: number; of: number; keys: readonly number[]; velocity: readonly number[] };
+  const takes: Take[] = [];
+  regions.forEach((r, i) => {
+    const [position, of] = r.round_robin ?? [1, 1];
+    const root = r.root ?? 60;
+    const keys = r.keys ?? (r.root === undefined ? [0, 127] : [root, root]);
+    if (of > 1) takes.push({ n: i + 1, release: r.trigger === "release", position, of, keys, velocity: r.velocity ?? [1, 127] });
+  });
+  // The lowest of each run of values whose takes are the same: each range's lowest, and the value after its highest.
+  const edges = (ranges: (readonly number[])[]) => [...new Set(ranges.flatMap(([lo, hi]) => [lo, hi + 1]))].sort((a, b) => a - b);
+  for (const key of edges(takes.map((t) => t.keys))) {
+    const onKey = takes.filter((t) => t.keys[0] <= key && key <= t.keys[1]);
+    for (const velocity of edges(onKey.map((t) => t.velocity))) {
+      // Each group here (its trigger and `of`), with its first region and the takes it has.
+      const groups = new Map<string, { first: Take; has: Set<number> }>();
+      for (const t of onKey) {
+        if (velocity < t.velocity[0] || velocity > t.velocity[1]) continue;
+        const g = groups.get(`${t.release} ${t.of}`) ?? { first: t, has: new Set<number>() };
+        g.has.add(t.position);
+        groups.set(`${t.release} ${t.of}`, g);
+      }
+      for (const { first, has } of groups.values()) {
+        for (let p = 1; p <= first.of; p++) {
+          if (has.has(p)) continue;
+          const which = first.release ? "release region" : "region";
+          return `region ${first.n}: round_robin [${first.position}, ${first.of}]: no ${which} is take ${p} of ${first.of} on note ${key} at velocity ${velocity}, so that turn plays nothing there`;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/** What is wrong with one region, if anything. */
+function regionProblem(r: unknown): string | undefined {
+  if (typeof r !== "object" || r === null || Array.isArray(r) || r instanceof Signal || r instanceof Quantity) {
+    return `must be an object such as { file: "C4.wav", root: 60 }, not ${shown(r)}`;
+  }
+  const o = r as Record<string, unknown>;
+  for (const k of Object.keys(o)) if (!REGION_FIELDS.includes(k)) return `unknown field "${k}" (fields: ${REGION_FIELDS.join(", ")})`;
+  const whole = (x: unknown, lo: number, hi: number) => typeof x === "number" && Number.isInteger(x) && x >= lo && x <= hi;
+  const number = (x: unknown, lo: number, hi: number) => typeof x === "number" && Number.isFinite(x) && x >= lo && x <= hi;
+  // A pair of whole numbers from lo to hi, and what is wrong with its order, if anything.
+  const pair = (name: string, lo: number, hi: number, what: string, order: (a: number, b: number) => string | undefined): string | undefined => {
+    const x = o[name];
+    if (x === undefined) return undefined;
+    if (!Array.isArray(x) || x.length !== 2 || !whole(x[0], lo, hi) || !whole(x[1], lo, hi)) return `${name} must be ${what}, not ${shownPair(x)}`;
+    return order(x[0], x[1]);
+  };
+  if (o.file === undefined) return `needs a file, as file: "C4.wav"`;
+  if (!assetName(o.file)) return `file must be a file name in assets/, not ${shown(o.file)}`;
+  if (o.root !== undefined && !whole(o.root, 0, 127)) return `root must be a MIDI note, a whole number from 0 to 127, not ${shown(o.root)}`;
+  const problem =
+    pair("keys", 0, 127, "[lowest, highest], two MIDI notes from 0 to 127", (a, b) => (a > b ? `keys ${a} to ${b}: the lowest is above the highest` : undefined)) ??
+    pair("velocity", 1, 127, "[lowest, highest], two whole numbers from 1 to 127", (a, b) =>
+      a > b ? `velocity ${a} to ${b}: the lowest is above the highest` : undefined,
+    ) ??
+    pair("round_robin", 1, 128, "[position, of], two whole numbers from 1 to 128 (take 2 of 3 is [2, 3])", (a, b) =>
+      a > b ? `round_robin [${a}, ${b}]: the position is above the number of takes` : undefined,
+    ) ??
+    pair("loop", 0, Number.MAX_SAFE_INTEGER, "[start, end], two frames of the file, whole numbers from 0", (a, b) =>
+      a >= b ? `loop ${a} to ${b}: the start must be before the end` : undefined,
+    );
+  if (problem) return problem;
+  if (o.trigger !== undefined && o.trigger !== "attack" && o.trigger !== "release") return `trigger must be "attack" or "release", not ${shown(o.trigger)}`;
+  if (o.tune !== undefined && !number(o.tune, -2400, 2400)) return `tune must be cents, a number from -2400 to 2400, not ${shown(o.tune)}`;
+  if (o.volume !== undefined && !number(o.volume, -120, 24)) return `volume must be dB, a number from -120 to 24, not ${shown(o.volume)}`;
+  if (o.pan !== undefined && !number(o.pan, -1, 1)) return `pan must be a number from -1 (left) to 1 (right), not ${shown(o.pan)}`;
+  if (o.offset !== undefined && !whole(o.offset, 0, Number.MAX_SAFE_INTEGER)) return `offset must be a whole number of frames from 0, not ${shown(o.offset)}`;
+  return undefined;
+}
+
+/** A pair as written: `[70, 60]`, or what else it is. */
+function shownPair(x: unknown): string {
+  return Array.isArray(x) ? `[${x.map((y) => (typeof y === "number" ? String(y) : shown(y))).join(", ")}]` : shown(x);
+}
+
+/**
  * A hosted plugin (CLAP), e.g. `plugin("clap:org.surge-synth-team.surge-xt", { key: "lead", notes })`.
  * Inputs are `in` (audio), `notes` (a notes lane) and any parameter by its port name
  * (`m2 plugins <id>` lists them). `key` names the plugin's saved state: it is filed under
@@ -819,9 +951,9 @@ export const port = {
 
 /** What a setting declaration holds. */
 type SettingSpec = {
-  kind: "number" | "int" | "bool" | "choice" | "asset" | "keymap" | "key";
+  kind: "number" | "int" | "bool" | "choice" | "asset" | "keymap" | "regions" | "key";
   options?: readonly string[];
-  default?: number | boolean | string | Readonly<Record<number, string>>;
+  default?: number | boolean | string | Readonly<Record<number, string>> | readonly Region[];
   /** Left out, it is `undefined`: no call needs it, and it has no default. */
   optional?: boolean;
 };
@@ -843,12 +975,14 @@ export class SettingDecl<T = unknown, R extends boolean = boolean> {
  * Declare a setting: `setting.int(12)`, `setting.choice(["sine", "tri"], "sine")`. `setting.asset()`
  * names a file in the project's `assets/` (`"kick.wav"`), and `setting.keymap()` maps MIDI notes
  * to such files (`{ 36: "kick.wav", 38: "snare.wav" }`; empty unless given): what a kernel reads.
- * `setting.key()` is a string that follows the key rule (ID-1), such as the channel a mixer channel
+ * `setting.regions()` is a list of regions, a recording each with the notes, velocities and turn it
+ * plays on ([`Region`], PKG-15; empty unless given). `setting.key()` is a string that follows the key rule (ID-1), such as the channel a mixer channel
  * goes to (`to: "drums"`).
  */
 export const setting = {
   asset: ((d?: string) => new SettingDecl({ kind: "asset", default: d })) as { (): SettingDecl<string, true>; (d: string): SettingDecl<string, false> },
   keymap: (d: Readonly<Record<number, string>> = {}) => new SettingDecl<Readonly<Record<number, string>>, false>({ kind: "keymap", default: { ...d } }),
+  regions: () => new SettingDecl<readonly Region[], false>({ kind: "regions", default: [] }),
   key: ((d?: string) => new SettingDecl({ kind: "key", default: d })) as { (): SettingDecl<string, true>; (d: string): SettingDecl<string, false> },
   number: ((d?: number) => new SettingDecl({ kind: "number", default: d })) as { (): SettingDecl<number, true>; (d: number): SettingDecl<number, false> },
   int: ((d?: number) => new SettingDecl({ kind: "int", default: d })) as { (): SettingDecl<number, true>; (d: number): SettingDecl<number, false> },
@@ -1255,10 +1389,10 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   // Its problems are found here, not through a callback: QuickJS keeps 10 frames of a stack, and
   // the error's place in the project is the last of them.
   const setting_ = (name: string, d: unknown, what: string): Set_ => {
-    if (!(d instanceof SettingDecl)) fail(`${what} "${name}" must be declared with setting.number(), .int(), .bool(), .choice(), .asset(), .keymap() or .key()`);
+    if (!(d instanceof SettingDecl)) fail(`${what} "${name}" must be declared with setting.number(), .int(), .bool(), .choice(), .asset(), .keymap(), .regions() or .key()`);
     const s = specOf<SettingSpec>(d as object);
     const wrong = s.default === undefined ? undefined : settingProblem(s, s.default);
-    if (wrong) fail(`${what} "${name}": its default ${wrong}`);
+    if (wrong) fail(`${what} "${name}": its default ${wrong.replace(/^: /, "")}`);
     if (s.kind === "choice" && (!s.options?.length || s.options.some((o) => typeof o !== "string"))) fail(`${what} "${name}": a choice needs a list of strings`);
     return { name, spec: s };
   };
@@ -1417,6 +1551,11 @@ function spelled(s: ControlSpec, written: number): { value: number; spelled: Spe
   return { value: written * s.scale, spelled: s.spelled ?? null, written };
 }
 
+/** A setting's problem after its name: "sample must be …", or "regions: region 3: …". */
+function said(name: string, problem: string): string {
+  return problem.startsWith(": ") ? `${name}${problem}` : `${name} ${problem}`;
+}
+
 /** Check a setting's value against its kind; `fail` gets what is wrong. */
 function settingValue(s: SettingSpec, v: unknown, fail: (m: string) => never): unknown {
   const wrong = settingProblem(s, v);
@@ -1439,6 +1578,8 @@ function settingProblem(s: SettingSpec, v: unknown): string | undefined {
       return !assetName(v) ? `must be a file name in assets/, not ${shown(v)}` : undefined;
     case "keymap":
       return !keymap(v) ? `must map MIDI notes (0 to 127) to file names in assets/, as { 36: "kick.wav" }, not ${shown(v)}` : undefined;
+    case "regions":
+      return checkRegions(v);
     case "key":
       return typeof v !== "string" || host.__m2_key("the key", v) ? `must be a key such as "drums" (lowercase letters, digits and dashes), not ${shown(v)}` : undefined;
   }
@@ -1486,7 +1627,7 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
     }
     for (const s of c.settings) {
       const g = given.get(s.name);
-      if (g !== undefined) params[s.name] = settingValue(s.spec, g.value, (msg) => fail(c.id, `${s.name} ${msg}`));
+      if (g !== undefined) params[s.name] = settingValue(s.spec, g.value, (msg) => fail(c.id, said(s.name, msg)));
       else if (s.spec.default !== undefined) params[s.name] = s.spec.default;
       else if (!s.spec.optional) fail(c.id, `the setting ${s.name} is missing`);
     }
@@ -1719,7 +1860,7 @@ function normaliseEach(made: Made, path: string, c: Ctl, g: Given | undefined, n
     }
     for (const s of settings) {
       const v = entry[s.name];
-      if (v !== undefined) normal[s.name] = settingValue(s.spec, v, (msg) => fail(made.id, `${at}.${s.name} ${msg}`));
+      if (v !== undefined) normal[s.name] = settingValue(s.spec, v, (msg) => fail(made.id, said(`${at}.${s.name}`, msg)));
       else if (s.spec.default !== undefined) normal[s.name] = s.spec.default;
       else if (!s.spec.optional) fail(made.id, `${at}: the setting ${s.name} is missing`);
     }

@@ -33,7 +33,7 @@
 # --pr: the checks every pull request must pass, and nothing else: rustfmt, actionlint, the gates
 # and docs rules, licences, the pool's models, the web build, std's kernels and std.wasm, clippy,
 # the Rust tests and browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the
-# 12 renders; RustSec's advisories only when the change touches a Cargo.lock or deny.toml
+# 14 renders; RustSec's advisories only when the change touches a Cargo.lock or deny.toml
 # (ci/pr.sh changes). When git proves your committed change is documentation only
 # (ci/docs-only.sh, on a clean tree), it runs only the docs rule's cases, as CI does. It builds into
 # <target>/pr without debug info, as CI does, so it never rebuilds what your own cargo build made.
