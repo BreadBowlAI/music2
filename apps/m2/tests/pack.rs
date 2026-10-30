@@ -400,3 +400,30 @@ fn a_pack_of_samples_alone_checks_and_its_samples_are_checked() {
         assert!(text.contains(want), "says {want}: {text}");
     }
 }
+
+// LIB-1, LIB-2, PACK-11: with the app closed, m2 search finds an installed pack's instruments,
+// effects and sounds, each with its pack; its recordings (no samples.toml) are no samples.
+#[test]
+fn an_installed_packs_items_are_found_with_the_app_closed() {
+    let t = Temp::new("search");
+    let tiny = t.0.join("tiny");
+    copy(&fixtures().join("tiny"), &tiny);
+    let out = t.m2(&["pack", "install", tiny.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", said(&out));
+    let out = t.m2(&["search", "tiny", "--json"]);
+    let items: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", said(&out)));
+    let found: Vec<(&str, &str, &str)> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["id"].as_str().unwrap(), i["kind"].as_str().unwrap(), i["package"].as_str().unwrap()))
+        .collect();
+    for want in [
+        ("@test/tiny:tiny-keys", "instrument", "@test/tiny"),
+        ("@test/tiny:tiny-crunch", "effect", "@test/tiny"),
+        ("sound:std/@test/tiny:tiny-keys/Dark", "sound", "@test/tiny"),
+    ] {
+        assert!(found.contains(&want), "{want:?} in {found:?}");
+    }
+    assert!(!found.iter().any(|(_, kind, _)| *kind == "sample"), "its recording is no sample: {found:?}");
+}
