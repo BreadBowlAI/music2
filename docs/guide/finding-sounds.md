@@ -16,11 +16,11 @@ Each row says what it is called, then quietly what kind of sound it is and where
 | ⌘F | Open the panel, or close it |
 | Type | Find; every word must match |
 | ↓ ↑ | Move from row to row, across the groups |
-| Space | Play the row's preview, after you moved with ↓ or ↑. Again, or moving, stops it |
-| Enter | Add it, and close |
+| Space | Play the row's preview, after you moved to it with ↓ or ↑, or clicked it. Again, or moving, stops it |
+| Enter | Add it, and close. Pressed right after typing, it adds the best match for what you typed, as soon as the search has it |
 | Esc | Close |
 
-A row also drags onto the timeline or a track, as the side browser's rows do.
+A row also drags: an instrument onto the timeline, an effect onto a track, as the side browser's rows do, and a sound (a preset) onto a track, which loads it into that track's instrument or effect it is for.
 
 In the code editor ⌘F finds text in your code, as it always did. In a text field it does nothing.
 
@@ -37,7 +37,8 @@ Each is one step that **Undo** (⌘Z) takes back, and a note at the bottom says 
 
 ## How it finds things
 
-- Each word you type must match somewhere: the name, the start of a word in it, a word of what it is (its group, what code calls it, a drum the kit plays), or a word of its description. Capitals don't matter.
+- Each word you type must match somewhere: the name, the start of a word in it, a word of what it is (its group, what code calls it, a drum the kit plays), or a word of its description. Capitals don't matter, and neither do dashes, dots and other marks: `hi-hat` finds what `hi hat` finds, and `synth.pluck` the Synth pluck.
+- An item's id, as code and `m2 search` write it (`std:reverb`), finds that item first.
 - The best match is selected: the name itself, then names that start with what you typed, then a word of the name, a tag, the description.
 - music2's own sounds come before yours, and yours before plugins.
 
@@ -45,12 +46,12 @@ Some words are filters, not words to find:
 
 | Type | Finds only |
 |---|---|
-| `instrument`, `sound`, `effect`, `sample`, `plugin` (or `fx`, `preset`, and the plurals) | that kind |
+| `instrument`, `sound`, `effect`, `sample`, `plugin` (or `fx`, `preset`, and the plurals) | that kind; a plugin counts as an instrument or an effect too, by what it is |
 | `loop`, `one-shot` | samples of that type |
 | `90 bpm` or `90bpm` | samples at that tempo |
 | `Am`, `F#`, `Bbm`, `C major` | samples in that key (a capital letter, then a ♯, a ♭ or `m`, or `major`/`minor` after it) |
 
-So `pad sound` finds the pad's presets, and `delay effect` the Delay. Samples come with packs, later.
+So `pad sound` finds the pad's presets, and `delay effect` the Delay and any delay plugin. A name with one of these words in it is still found by it: `surge xt effects` finds the plugin Surge XT Effects, and `loop` an instrument called Loop station. Samples come with packs, later.
 
 ## Previews
 
@@ -65,13 +66,15 @@ A preview is about 4½ seconds of the item playing, made by music2 itself: it wr
 | A sound | the same, with the sound's settings |
 | An effect | a pluck and drums: one bar without the effect, then one bar through it |
 
-Every preview is brought to the same loudness, so you can compare them. The first time takes a moment; after that it is kept (in music2's cache folder, never in your song) until the sound or music2 changes. Previews play in the window, never through your song, so they never change what your song plays.
+Every preview is brought to the same loudness, −23 LUFS (a measure of loudness as ears hear it, the one TV uses), so you can compare them. The only exception: a peak never goes above −1 dBFS, so a sound of short, sharp hits that would need more plays a little quieter. Of music2's sounds, only Hats and Rim do, by up to 2 dB.
 
-Plugins have no preview yet.
+The first time takes a moment; after that it is kept (in music2's cache folder, never in your song) until the sound changes or you update music2. A preview renders beside your song at a low priority, as Export does while you play, and plays in the window, never through your song, so it never changes what your song plays.
+
+Plugins have no preview yet. Nor does the Sampler: it plays a file you give it, and a preview has none to give. A sound from a pack plays from its pack.
 
 ## The side browser
 
-The browser's search field (⌥⌘B shows it) asks the same search: its rows keep their groups, with the best matches first.
+The browser's search field (⌥⌘B shows it) asks the same search: its rows keep their groups, with the best matches first. It filters its rows as you type, then shows the search's answer when it comes; Enter waits for that answer, so it never adds a row of an earlier search.
 
 ## From the terminal
 

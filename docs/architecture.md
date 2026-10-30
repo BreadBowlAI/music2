@@ -1471,7 +1471,7 @@ What you can add to a song, found in one place: ⌘F's panel, the side browser's
 - A render runs on a thread of its own at background priority, as an export's workers do beside playback ([AGENT-7](#agents)): off the audio thread and the session's.
 - A plugin, a plugin's preset and the song's own components have no preview, said in words.
 - *Why:* a preview must be the item playing, so it can't oversell (the packs design §10), and it must never cost the song that plays a glitch.
-- *Today:* since track `spotlight`: `crates/editor/src/library/preview.rs` (the song, the render and the loudness; `a_preview_is_the_same_bits_twice_at_one_loudness`, `every_std_item_with_a_preview_renders_one_at_one_loudness`, `loudness_is_measured_as_bs_1770_does`, `a_preview_renders_on_a_thread_of_its_own`), the cache in `crates/server/src/library.rs` (`a_preview_is_kept_until_what_it_renders_changes`, `a_second_ask_waits_for_the_first_render`, `a_packs_instrument_plays_from_its_pack`). No check yet measures dropouts while previews render beside playback, as G13 does for `m2 listen` (gaps).
+- *Today:* since track `spotlight`: `crates/editor/src/library/preview.rs` (the song, the render and the loudness; `a_preview_is_the_same_bits_twice_at_one_loudness`, `every_std_item_with_a_preview_renders_one`, `loudness_is_measured_as_bs_1770_does`, `a_preview_renders_on_a_thread_of_its_own`), the cache in `crates/server/src/library.rs` (`a_preview_is_kept_until_what_it_renders_changes`, `a_second_ask_waits_for_the_first_render`, `a_packs_instrument_plays_from_its_pack`). No check yet measures dropouts while previews render beside playback, as G13 does for `m2 listen` (gaps).
 
 ## Platforms
 

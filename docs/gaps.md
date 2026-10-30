@@ -97,7 +97,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 22 | **The rest of the Sampler**: loop points, start and end, reverse, velocity layers, round robin and choke groups; zones made by dropping several WAVs (code only today); a waveform and a root picker on its card; files other than WAV. | Sampled drums and vocal chops are pop staples. | Yes | medium |
-| 47 | **The rest of ⌘F** ([LIB-1](architecture.md#library)): a sound (a preset) that makes a track of its own in one step (today Enter loads it onto the selected track's instrument it is for, and says so when there is none); previews of plugins and of a plugin's presets; the filters to click as well as type, and **Fits my song** (the song's tempo and key); **What you have** and **From the library** with Get, once packs have a registry; samples, once packs bring them (the filters `loop`, `one-shot`, a tempo and a key are built and find only samples). | Finding a sound and hearing it before adding it is how a beginner builds a song. | Partly (a browser with previews) | medium |
+| 47 | **The rest of ⌘F** ([LIB-1](architecture.md#library)): a sound (a preset) that makes a track of its own in one step (today Enter loads it onto the selected track's instrument it is for, and a drop onto a track onto that track's, and each says so when there is none); previews of plugins and of a plugin's presets; the filters to click as well as type, and **Fits my song** (the song's tempo and key); **What you have** and **From the library** with Get, once packs have a registry; samples, once packs bring them (the filters `loop`, `one-shot`, a tempo and a key are built and find only samples). | Finding a sound and hearing it before adding it is how a beginner builds a song. | Partly (a browser with previews) | medium |
 
 - **Your presets can't be renamed or deleted** in the app, and there is no Show in Finder: tidy the Presets folder by hand.
 - **A card doesn't say which preset it came from**, or that its knobs changed since.
@@ -125,6 +125,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **The + Track list and the Device view's + search on their own**, in the window: only the side browser and ⌘F ask the library's one search.
 - **A preview is kept in the cache folder until its item changes**: one file an item (about 860 kB), never trimmed, and one of an item that went (a preset deleted) stays.
 - **The song's own instruments and effects have no preview**: their code is the song's, and a preview renders outside it.
+- **The Sampler has no preview**, nor any instrument that plays a file you give it: a preview has no file to give it. It could play a sample music2 or a pack ships.
 - **No check counts dropouts while a preview renders beside playback**: a preview renders at background priority, as an export's workers do, but no gate measures it, as G13 does for `m2 listen` (LIB-3).
 - **A sound for a plugin, on Enter**, looks for the selected track's call of that plugin by its component, which a plugin's call may not give: it may say the track has none.
 
