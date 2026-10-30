@@ -43,6 +43,7 @@ pub mod rekey;
 pub mod rename;
 pub mod render;
 pub mod sampler;
+pub mod sfz;
 pub mod sites;
 pub mod smf;
 pub mod song;

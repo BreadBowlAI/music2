@@ -1081,6 +1081,37 @@ fn pack(args: &[String]) -> Result<()> {
             packs::new_pack(&folder, &name, &std).map_err(|e| anyhow!(e))?;
             println!("made {name} in {}: check it with m2 pack check {}", folder.display(), folder.display());
         }
+        "import-sfz" => {
+            let (sfz, folder) = (PathBuf::from(arg(2)?), PathBuf::from(arg(3)?));
+            let name = flag(args, "--name").ok_or_else(|| anyhow!("name it: m2 pack import-sfz <file.sfz> <folder> --name @owner/name"))?;
+            let name = PackName::new(&name).map_err(|e| anyhow!(e))?;
+            let (label, category, license) = (flag(args, "--label"), flag(args, "--category"), flag(args, "--license"));
+            let import = m2_editor::sfz::Import {
+                sfz: &sfz,
+                folder: &folder,
+                name: &name,
+                label: label.as_deref(),
+                category: category.as_deref(),
+                license: license.as_deref(),
+                std: &std,
+                check: &|dir: &Path| packs::check(dir, &std),
+            };
+            let done = m2_editor::sfz::import(&import).map_err(|e| anyhow!(e))?;
+            println!(
+                "made {name} in {}: {} plays {} region{} from {} recording{}",
+                folder.display(),
+                done.id,
+                done.regions,
+                if done.regions == 1 { "" } else { "s" },
+                done.samples,
+                if done.samples == 1 { "" } else { "s" }
+            );
+            for l in done.licence.iter().chain(&done.left_out) {
+                println!("{l}");
+            }
+            // Checked before it was kept (PACK-14).
+            println!("{} is good to install: m2 pack install {}", folder.display(), folder.display());
+        }
         "check" => {
             let dir = PathBuf::from(arg(2)?);
             let problems = packs::check(&dir, &std);
