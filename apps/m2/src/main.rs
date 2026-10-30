@@ -53,7 +53,11 @@ fn main() -> ExitCode {
     // thread, with its run loop; plugins it created are destroyed there before it exits.
     m2_plugins::run_main(|| {
         m2_server::resources::keep_hashes();
-        match run() {
+        let ran = run();
+        // What the command hashed since the project was read (an installed pack's files, checked
+        // as the song resolves them: PACK-6) is a stat for the next one (FMT-16).
+        m2_song::HashCache::global().save();
+        match ran {
             Ok(()) => {
                 // A write the open app took: that it is one undo step there (AGENT-1).
                 for line in app::after() {

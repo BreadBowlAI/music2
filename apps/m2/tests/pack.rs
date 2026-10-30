@@ -462,3 +462,27 @@ fn a_version_this_app_cant_run_is_never_chosen() {
         assert!(text.contains(want), "says {want}: {text}");
     }
 }
+
+// FMT-16, PACK-6: m2 keeps the hash cache on disk as the app does, so the next command finds an
+// installed pack's unchanged files there (a stat each), not by reading them all again.
+#[test]
+fn m2_keeps_the_hashes_of_a_packs_files() {
+    let t = Temp::new("hashes");
+    copy(&fixtures(), &t.0.join("packs"));
+    ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
+    ok(t.m2(&["check", t.0.join("packs/song-store").to_str().unwrap()]));
+    let mut cached = vec![];
+    let mut stack = vec![t.0.join("home")];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            match e.file_type().unwrap().is_dir() {
+                true => stack.push(e.path()),
+                false if e.file_name() == "hashes.json" => cached.push(std::fs::read_to_string(e.path()).unwrap()),
+                false => {}
+            }
+        }
+    }
+    let index = t.store().join("@test/tiny/0.1.0/src/index.ts");
+    let index = serde_json::to_string(index.to_str().unwrap()).unwrap();
+    assert!(cached.iter().any(|c| c.contains(&index)), "{index} in {cached:?}");
+}
