@@ -189,8 +189,7 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
 
 /// The packs `project` builds with (PACK-9), from its manifest, its lock and `packages`' store.
 pub fn resolve_packs(project: &Project, packages: &PackageSet) -> m2_song::pack::Resolution {
-    let none = m2_song::pack::Store::at(std::path::PathBuf::new());
-    m2_song::pack::resolve(&project.dir, &project.manifest, &project.lock, packages.store().unwrap_or(&none))
+    m2_song::pack::resolve(&project.dir, &project.manifest, &project.lock, packages.store())
 }
 
 fn build_resolved(project: &Project, packages: &mut PackageSet) -> Result<Arc<Code>, Vec<Diagnostic>> {
@@ -210,13 +209,7 @@ fn build_resolved(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     let (sdk, std) = (Version::parse(m2_script::SDK_VERSION), packages.get(m2_song::pack::STD).and_then(|p| Version::parse(&p.version)));
     for r in &packs {
         let Some(p) = packages.get(r.name.as_str()) else { continue };
-        for (dep, req) in &p.needs {
-            let have = if dep == m2_song::SDK { sdk } else { std };
-            if !have.is_some_and(|v| req.matches(v)) {
-                let have = have.map_or("none".to_string(), |v| v.to_string());
-                return Err(broken(r.name.as_str(), format!("it needs {dep} \"{req}\", and this app has {have}")));
-            }
-        }
+        m2_song::pack::meets(&p.needs, sdk, std).map_err(|why| broken(r.name.as_str(), format!("it {why}")))?;
     }
     let code = project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect();
     let mut opts = m2_script::Options::new(code, &project.manifest.project.entry);
@@ -446,17 +439,27 @@ export default song(() => v.out);
         std::fs::remove_dir_all(dir).ok();
     }
 
-    // FMT-3: every project the repo ships asks for what this build has: the SDK and the bundled
-    // std. So a std bump that leaves a manifest behind fails here, with no grep needed.
+    // FMT-3, PACK-2: every project the repo ships asks for what this build has: the SDK and the
+    // bundled std; and every pack it ships needs no more than that. So a std bump that leaves a
+    // manifest behind fails here, with no grep needed.
     #[test]
     fn every_shipped_manifest_is_met() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let packages = std_packages();
         let mut unmet = vec![];
+        let (sdk, std) = (Version::parse(m2_script::SDK_VERSION), packages.get("std").and_then(|p| Version::parse(&p.version)));
+        let mut packs = 0;
         for root in ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"] {
             let mut found = 0;
             let mut stack = vec![repo.join(root)];
             while let Some(d) = stack.pop() {
+                let pack = d.join(m2_song::pack::PKG_MANIFEST);
+                if pack.exists() {
+                    packs += 1;
+                    let name = pack.strip_prefix(&repo).unwrap().display().to_string();
+                    let m = m2_song::pack::PkgManifest::at(&d).unwrap_or_else(|e| panic!("{name}: {e}"));
+                    unmet.extend(m2_song::pack::meets(&m.dependencies, sdk, std).err().map(|why| format!("{name}: {why}")));
+                }
                 let file = d.join("music2.toml");
                 if file.exists() {
                     found += 1;
@@ -475,7 +478,8 @@ export default song(() => v.out);
             // checked nothing.
             assert!(found > 0, "no music2.toml under {}", repo.join(root).display());
         }
-        assert!(unmet.is_empty(), "shipped projects this build can't build:\n{}", unmet.join("\n"));
+        assert!(packs > 0, "no m2pkg.toml under the fixtures: the packs' check checked nothing");
+        assert!(unmet.is_empty(), "shipped projects and packs this build can't build:\n{}", unmet.join("\n"));
     }
 
     // DIAG-1: data no lane reads is a Warning among the revision's problems.

@@ -9,6 +9,7 @@
 //! Store         ~/Music/music2/Packs/<name>/<version>/ (PACK-6)
 //! Lock          music2.lock: the exact version and hash of each pack a song uses (PACK-8)
 //! resolve       the packs a song builds with, and what keeps one from it (PACK-9)
+//! relock        the lock `m2 pack lock` and `m2 pack update` write (PACK-8)
 //! ```
 
 use std::collections::BTreeMap;
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::diag::Diagnostic;
-use crate::hash::Sha;
+use crate::hash::{HashCache, Sha};
 use crate::manifest::{Dependency, Manifest, Requirement, SDK, Version};
 use crate::path::{LOCK, MANIFEST};
 
@@ -207,16 +208,28 @@ impl PkgManifest {
         PkgManifest::read(&text).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// Whether this app's SDK and std meet what the package needs.
+    /// Whether this app's SDK and std meet what the package needs (PACK-2): the SDK by the caret
+    /// rule, std as a lower bound, so a std that grew since still meets it.
     pub fn needs(&self, sdk: Version, std: Version) -> Result<(), String> {
-        for (dep, req) in &self.dependencies {
-            let have = if dep == SDK { sdk } else { std };
-            if !req.matches(have) {
-                return Err(format!("{} {} needs {dep} \"{req}\", but this app has {have}", self.package.name, self.package.version));
-            }
-        }
-        Ok(())
+        meets(&self.dependencies, Some(sdk), Some(std)).map_err(|why| format!("{} {} {why}", self.package.name, self.package.version))
     }
+}
+
+/// Whether the SDK and std this app has (`None`: none at all) meet a package's `[dependencies]`
+/// (PACK-2): the SDK by the caret rule, std as a lower bound. What it needs that isn't met, in
+/// words: `needs std "0.9" or later, but this app has 0.4.0`.
+pub fn meets(dependencies: &BTreeMap<String, Requirement>, sdk: Option<Version>, std: Option<Version>) -> Result<(), String> {
+    for (dep, req) in dependencies {
+        let (have, met, at_least) = match dep.as_str() {
+            SDK => (sdk, sdk.is_some_and(|v| req.matches(v)), ""),
+            _ => (std, std.is_some_and(|v| req.at_least(v)), " or later"),
+        };
+        if !met {
+            let have = have.map_or("none".to_string(), |v| v.to_string());
+            return Err(format!("needs {dep} \"{req}\"{at_least}, but this app has {have}"));
+        }
+    }
+    Ok(())
 }
 
 /// One file of an installed version.
@@ -246,14 +259,14 @@ const LISTING_FORMAT: u32 = 1;
 
 impl Listing {
     /// Every file under `dir` but the listing itself, by its path there, `/`-separated, sorted
-    /// bytewise. Dot files and folders (`.git`) are no part of a pack.
+    /// bytewise. Dot files and folders (`.git`) are no part of a pack; a link is refused.
     pub fn of(dir: &Path) -> std::io::Result<Listing> {
         let mut files = vec![];
         for (rel, path) in pack_files(dir)? {
             if rel == LISTING {
                 continue;
             }
-            let size = std::fs::metadata(&path)?.len();
+            let size = std::fs::symlink_metadata(&path)?.len();
             files.push(Listed { path: rel, size, sha256: Sha::of_file(&path)? });
         }
         Ok(Listing { files })
@@ -281,7 +294,8 @@ impl Listing {
 }
 
 /// Every file under `dir`, by its path there, `/`-separated, sorted bytewise; dot files and
-/// folders left out. A link is listed as what it points to.
+/// folders left out. A symbolic link, to a file or a folder, is an error naming it: a pack holds
+/// none, and nothing of a pack is ever read through one (PACK-6), so the tools never leave it.
 pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
     let mut out = vec![];
     let mut stack = vec![(String::new(), dir.to_path_buf())];
@@ -293,7 +307,11 @@ pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
                 continue;
             }
             let r = if rel.is_empty() { name } else { format!("{rel}/{name}") };
-            match std::fs::metadata(e.path())?.is_dir() {
+            let kind = std::fs::symlink_metadata(e.path())?.file_type();
+            if kind.is_symlink() {
+                return Err(std::io::Error::other(format!("{r} is a symbolic link: a pack holds none, so copy the file in instead")));
+            }
+            match kind.is_dir() {
                 true => stack.push((r, e.path())),
                 false => out.push((r, e.path())),
             }
@@ -304,7 +322,8 @@ pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
 }
 
 /// The file at `path` inside a package's folder `dir`, each part spelled exactly as its folder
-/// lists it, with no case folding (PACK-5, FMT-6a): what every disk finds the same.
+/// lists it, with no case folding and no part a symbolic link (PACK-5, FMT-6a): what every disk
+/// finds the same, and never anything outside the package.
 pub fn package_file(dir: &Path, path: &str) -> Result<PathBuf, String> {
     let mut at = dir.to_path_buf();
     for part in path.split('/') {
@@ -317,6 +336,9 @@ pub fn package_file(dir: &Path, path: &str) -> Result<PathBuf, String> {
             });
         }
         at.push(part);
+        if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!("`{part}` is a symbolic link, and a package's file is never read through one"));
+        }
     }
     match at.is_file() {
         true => Ok(at),
@@ -360,6 +382,35 @@ impl Store {
     /// The hash of an installed version: its listing's.
     pub fn hash(&self, name: &PackName, v: &Version) -> std::io::Result<Sha> {
         Sha::of_file(&self.version_dir(name, v).join(LISTING))
+    }
+
+    /// Check an installed version against its listing (PACK-6): every file in its folder is one the
+    /// listing names, with that size and SHA-256, none is missing, and none is a link. Hashes come
+    /// from the process's hash cache (FMT-16), so an unchanged file costs a stat. Its hash, or what
+    /// differs, in words naming the file.
+    pub fn check(&self, name: &PackName, v: &Version) -> Result<Sha, String> {
+        let dir = self.version_dir(name, v);
+        let text = std::fs::read(dir.join(LISTING)).map_err(|e| format!("its {LISTING} can't be read ({e})"))?;
+        let listing = Listing::read(&String::from_utf8_lossy(&text))?;
+        let found = pack_files(&dir).map_err(|e| e.to_string())?;
+        let mut listed: BTreeMap<&str, &Listed> = listing.files.iter().map(|f| (f.path.as_str(), f)).collect();
+        for (rel, path) in &found {
+            if rel == LISTING {
+                continue;
+            }
+            let Some(f) = listed.remove(rel.as_str()) else {
+                return Err(format!("{rel} isn't one of its files"));
+            };
+            let size = std::fs::symlink_metadata(path).map(|m| m.len()).map_err(|e| format!("{rel} can't be read ({e})"))?;
+            let sha = (size == f.size).then(|| HashCache::global().hash(path).ok()).flatten();
+            if sha != Some(f.sha256) {
+                return Err(format!("{rel} was changed"));
+            }
+        }
+        if let Some(rel) = listed.keys().next() {
+            return Err(format!("{rel} is missing"));
+        }
+        Ok(Sha::of(&text))
     }
 
     /// Every installed pack and its versions, oldest first, by name.
@@ -480,15 +531,11 @@ pub struct Resolution {
 }
 
 /// The packs the song in `project` builds with, from its manifest, its lock and the store
-/// (PACK-9). std and the SDK aren't here: the app has them, and FMT-3 checks them.
-pub fn resolve(project: &Path, manifest: &Manifest, lock: &Lock, store: &Store) -> Resolution {
+/// (PACK-9). std and the SDK aren't here: the app has them, and FMT-3 checks them. With no store
+/// (no home folder), a pack from the store is unsatisfied: nothing is looked for elsewhere.
+pub fn resolve(project: &Path, manifest: &Manifest, lock: &Lock, store: Option<&Store>) -> Resolution {
     let mut out = Resolution::default();
-    for (name, dep) in &manifest.dependencies {
-        if matches!(name.as_str(), SDK | STD) {
-            continue;
-        }
-        // Manifest::read checked every name.
-        let Ok(name) = PackName::new(name) else { continue };
+    for (name, dep) in packs_of(manifest) {
         match resolve_one(project, &name, dep, lock, store) {
             Ok(r) => out.packs.push(r),
             Err(d) => out.problems.push(d),
@@ -497,67 +544,177 @@ pub fn resolve(project: &Path, manifest: &Manifest, lock: &Lock, store: &Store) 
     out
 }
 
-fn resolve_one(project: &Path, name: &PackName, dep: &Dependency, lock: &Lock, store: &Store) -> Result<Resolved, Diagnostic> {
-    let req = match dep {
-        Dependency::Path(p) => {
-            let dir = project.join(&p.path);
-            let missing = |why: String| {
-                Diagnostic::error("pkg.missing", format!("{MANIFEST} takes {name} from the folder {}, but {why}", p.path)).file(MANIFEST)
-            };
-            let m = PkgManifest::at(&dir).map_err(|e| missing(format!("that has no pack ({e})")))?;
-            if m.package.name != *name {
-                return Err(missing(format!("that holds {}", m.package.name)));
-            }
-            let dir = dir.canonicalize().unwrap_or(dir);
-            return Ok(Resolved { name: name.clone(), version: m.package.version, dir, hash: None, path: true });
-        }
-        Dependency::Version(req) => req,
-    };
+/// The manifest's packs: every `[dependencies]` entry but the SDK and std, by name.
+fn packs_of(manifest: &Manifest) -> impl Iterator<Item = (PackName, &Dependency)> {
+    // Manifest::read checked every name.
+    manifest.dependencies.iter().filter(|(n, _)| !matches!(n.as_str(), SDK | STD)).filter_map(|(n, d)| Some((PackName::new(n).ok()?, d)))
+}
+
+/// What to say for a pack from the store when there is no store.
+fn no_store(name: &PackName, req: &Requirement) -> Diagnostic {
+    Diagnostic::error(
+        "pkg.unsatisfied",
+        format!("{MANIFEST} asks for {name} \"{req}\", but there is no store of packs here: music2 finds your home folder ($HOME) unset"),
+    )
+    .file(MANIFEST)
+}
+
+/// What says how to put back version `v` of `name` whose installed copy was changed (`why`).
+fn changed(name: &PackName, v: &Version, why: &str) -> Diagnostic {
+    Diagnostic::error(
+        "pkg.changed",
+        format!(
+            "The installed {name} {v} was changed after it was installed: {why}. Install it again from its folder with `m2 pack \
+             install <folder>`, which puts it back as it was"
+        ),
+    )
+    .file(LOCK)
+}
+
+/// The store's version `v` of `name`, checked whole, as a song resolves it.
+fn whole(store: &Store, name: &PackName, v: Version) -> Result<Resolved, Diagnostic> {
+    let hash = store.check(name, &v).map_err(|why| changed(name, &v, &why))?;
+    Ok(Resolved { name: name.clone(), version: v, dir: store.version_dir(name, &v), hash: Some(hash), path: false })
+}
+
+/// The highest installed version of `name` that `req` admits, checked whole.
+fn highest(store: &Store, name: &PackName, req: &Requirement) -> Result<Resolved, Diagnostic> {
     let installed = store.versions(name);
-    let install = "Install it from its folder with `m2 pack install <folder>`";
-    if let Some(l) = lock.get(name) {
-        if !req.matches(l.version) {
-            return Err(Diagnostic::error(
-                "pkg.unsatisfied",
-                format!(
-                    "{LOCK} keeps {name} at {}, which {MANIFEST}'s \"{req}\" doesn't admit. Run `m2 pack lock` to lock what it admits",
-                    l.version
-                ),
-            )
-            .file(LOCK));
-        }
-        if !installed.contains(&l.version) {
-            return Err(Diagnostic::error(
-                "pkg.missing",
-                format!("This song uses {name} {}, which isn't installed. {install}, then open the song again", l.version),
-            )
-            .file(LOCK));
-        }
-        let hash = store.hash(name, &l.version).ok();
-        if hash != Some(l.hash) {
-            return Err(Diagnostic::error(
-                "pkg.changed",
-                format!(
-                    "The installed {name} {} isn't the one this song was made with: its hash differs from {LOCK}'s. Install the \
-                     version the song locks, or run `m2 pack lock` to use this one; the song may sound different",
-                    l.version
-                ),
-            )
-            .file(LOCK));
-        }
-        return Ok(Resolved { name: name.clone(), version: l.version, dir: store.version_dir(name, &l.version), hash, path: false });
-    }
     let Some(v) = installed.iter().rev().find(|v| req.matches(**v)).copied() else {
         let have = match installed.is_empty() {
             true => "none is installed".to_string(),
             false => format!("installed: {}", installed.iter().map(Version::to_string).collect::<Vec<_>>().join(", ")),
         };
-        return Err(
-            Diagnostic::error("pkg.unsatisfied", format!("{MANIFEST} asks for {name} \"{req}\", but {have}. {install}")).file(MANIFEST)
-        );
+        return Err(Diagnostic::error(
+            "pkg.unsatisfied",
+            format!("{MANIFEST} asks for {name} \"{req}\", but {have}. Install it from its folder with `m2 pack install <folder>`"),
+        )
+        .file(MANIFEST));
     };
-    let hash = store.hash(name, &v).ok();
-    Ok(Resolved { name: name.clone(), version: v, dir: store.version_dir(name, &v), hash, path: false })
+    whole(store, name, v)
+}
+
+fn resolve_one(
+    project: &Path,
+    name: &PackName,
+    dep: &Dependency,
+    lock: &Lock,
+    store: Option<&Store>,
+) -> Result<Resolved, Diagnostic> {
+    let req = match dep {
+        Dependency::Path(p) => return in_folder(project, name, &p.path),
+        Dependency::Version(req) => req,
+    };
+    let store = store.ok_or_else(|| no_store(name, req))?;
+    let Some(l) = lock.get(name) else { return highest(store, name, req) };
+    let installed = store.versions(name);
+    if !req.matches(l.version) {
+        return Err(Diagnostic::error(
+            "pkg.unsatisfied",
+            format!(
+                "{LOCK} keeps {name} at {}, which {MANIFEST}'s \"{req}\" doesn't admit. Run `m2 pack lock <song>` to lock the \
+                 highest installed version it admits",
+                l.version
+            ),
+        )
+        .file(LOCK));
+    }
+    if !installed.contains(&l.version) {
+        let other = installed.iter().rev().find(|v| req.matches(**v));
+        let instead = match other {
+            Some(v) => format!(", or run `m2 pack lock <song>` to use {v}, which is installed (the song may sound different)"),
+            None => String::new(),
+        };
+        return Err(Diagnostic::error(
+            "pkg.missing",
+            format!(
+                "This song uses {name} {}, which isn't installed. Install it from its folder with `m2 pack install <folder>`{instead}",
+                l.version
+            ),
+        )
+        .file(LOCK));
+    }
+    let r = whole(store, name, l.version)?;
+    if r.hash != Some(l.hash) {
+        return Err(not_locked(name, &l.version));
+    }
+    Ok(r)
+}
+
+/// What to say when the installed `v` of `name` isn't the copy the lock names.
+fn not_locked(name: &PackName, v: &Version) -> Diagnostic {
+    Diagnostic::error(
+        "pkg.changed",
+        format!(
+            "The installed {name} {v} isn't the one this song was made with: its files differ from those {LOCK} names. To keep the \
+             song's sound, put the one it was made with back: `m2 pack remove {name} {v}`, then `m2 pack install <its folder>`. To \
+             use the installed one, run `m2 pack update <song> {name}` (the song may sound different)"
+        ),
+    )
+    .file(LOCK)
+}
+
+/// A path dependency (PACK-7): the folder, which must hold that pack.
+fn in_folder(project: &Path, name: &PackName, path: &str) -> Result<Resolved, Diagnostic> {
+    let dir = project.join(path);
+    let missing =
+        |why: String| Diagnostic::error("pkg.missing", format!("{MANIFEST} takes {name} from the folder {path}, but {why}")).file(MANIFEST);
+    let m = PkgManifest::at(&dir).map_err(|e| missing(format!("that has no pack ({e})")))?;
+    if m.package.name != *name {
+        return Err(missing(format!("that holds {}", m.package.name)));
+    }
+    let dir = dir.canonicalize().unwrap_or(dir);
+    Ok(Resolved { name: name.clone(), version: m.package.version, dir, hash: None, path: true })
+}
+
+/// Which locked packs [`relock`] moves.
+#[derive(Clone, Copy, Debug)]
+pub enum Move<'a> {
+    /// Only what must (`m2 pack lock`): an entry the requirement doesn't admit, or whose version
+    /// isn't installed, and a pack with none.
+    Needed,
+    /// Every pack, to the highest installed version its requirement admits (`m2 pack update`).
+    All,
+    /// That pack (`m2 pack update <song> <name>`), and what must.
+    Only(&'a PackName),
+}
+
+/// The lock `m2 pack lock` and `m2 pack update` write (PACK-8), from the manifest, the lock it
+/// replaces and the store alone, never from a build: each pack the manifest takes from the store,
+/// kept at its locked version when that is admitted, installed and the copy locked, else at the
+/// highest installed version its requirement admits. An entry for a pack the manifest no longer
+/// lists goes. What keeps one from it, as a build says it.
+pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, moving: Move) -> Result<Lock, Vec<Diagnostic>> {
+    let mut out = Lock::default();
+    let mut problems = vec![];
+    for (name, dep) in packs_of(manifest) {
+        let Dependency::Version(req) = dep else { continue };
+        let Some(store) = store else {
+            problems.push(no_store(&name, req));
+            continue;
+        };
+        let moves = match moving {
+            Move::Needed => false,
+            Move::All => true,
+            Move::Only(n) => *n == name,
+        };
+        let kept = lock.get(&name).filter(|l| !moves && req.matches(l.version) && store.versions(&name).contains(&l.version));
+        let resolved = match kept {
+            Some(l) => whole(store, &name, l.version).and_then(|r| match r.hash == Some(l.hash) {
+                true => Ok(r),
+                false => Err(not_locked(&name, &l.version)),
+            }),
+            None => highest(store, &name, req),
+        };
+        match resolved {
+            Ok(r) => out = out.with(r.name, r.version, r.hash.expect("a store version has a hash")),
+            Err(d) => problems.push(d),
+        }
+    }
+    match problems.is_empty() {
+        true => Ok(out),
+        false => Err(problems),
+    }
 }
 
 #[cfg(test)]

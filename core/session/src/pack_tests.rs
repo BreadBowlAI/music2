@@ -127,3 +127,17 @@ fn a_pack_that_needs_another_std_is_broken() {
     assert!(pk.get("@test/tiny").is_none(), "a pack that can't be used isn't kept");
     std::fs::remove_dir_all(&root).ok();
 }
+
+// PACK-2: a pack's std is a lower bound: one made for an older std builds with the app's.
+#[test]
+fn a_pack_made_for_an_older_std_still_builds() {
+    let root = scratch("older");
+    copy(&fixtures(), &root);
+    let manifest = root.join("tiny/m2pkg.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap().replace("std = \"0.4\"", "std = \"0.3\"");
+    std::fs::write(&manifest, text).unwrap();
+    let mut pk = packages(&root.join("no-store"));
+    let c = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{d:?}"));
+    assert_eq!(c.packs.len(), 1);
+    std::fs::remove_dir_all(&root).ok();
+}
