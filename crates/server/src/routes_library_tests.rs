@@ -150,7 +150,7 @@ fn a_preview_is_kept_until_what_it_renders_changes() {
     let changed = preview(&previews, id, Some(&yours), &cache).unwrap();
     assert!(changed.rendered && changed.file != first.file, "a changed preset renders anew: {changed:?}");
     assert_ne!(std::fs::read(&changed.file).unwrap(), bytes, "brighter");
-    assert_eq!(wavs(&cache), [changed.file.clone()], "only the newest of an item is kept");
+    assert_eq!(wavs(&cache), std::slice::from_ref(&changed.file), "only the newest of an item is kept");
 
     let pad = preview(&previews, "std:synth-pad", Some(&yours), &cache).unwrap();
     assert!(pad.rendered && !preview(&previews, "std:synth-pad", Some(&yours), &cache).unwrap().rendered);
