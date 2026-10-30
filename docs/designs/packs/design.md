@@ -567,5 +567,8 @@ Every pull request is merged by a person: the owner protects `main` (a required 
 | Get fetches what an item needs (§10) | an instrument, an effect or a sound gets its whole version, into a folder beside the store, then installed as `m2 pack install` does; a sample its one file | §19.5; and a pack's own check runs on this computer before anything is in the store |
 | — | `m2pkg.toml` comes first: a version that needs a newer music2 stops there | nothing big is fetched for a pack this app can't run |
 | A sound adds its preset (§9.2) | a sound of an instrument adds a track of its instrument, then loads the sound on it: two undo steps; an effect's sound loads as one you have does, onto the selected track's effect | a track that plays a sound in one step is gaps #47 |
-| — | one Get at a time; progress in the row and the foot, `get` events for every window; Esc or Cancel stops it | a beginner must see it come, and be able to stop it |
+| — | one Get at a time; progress in the row and the foot, `get` events for every window; Esc or Cancel stops it while its files come; once it is installing it can't be, and says so | a beginner must see it come, and be able to stop it; a cancel the install didn't heed would be a lie |
+| — | From the library offers nothing of a pack the open song uses, and at most 20 rows, saying how many more; it is made once a catalog | moving a song to another version is `m2 pack update` (§11); a catalog of 100,000 items must not cost a keystroke a second |
+| — | a catalog older than the one kept is refused | a cache or a host serving an old catalog would undo a yank or a take-down |
+| — | a Get that ends after another song was opened adds nothing, and says so | an instrument must never land in a song it wasn't got for |
 

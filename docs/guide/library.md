@@ -19,9 +19,9 @@
 ## Find, hear, get
 
 1. Press **⌘F** (Ctrl+F on Linux) and type a word: `piano`, `kick`, `warm pad`.
-2. What you have comes first, in its groups. Below them, **From the library** lists what you can get. Each row says its pack, such as `@alice/felt-piano`; music2's own packs say `music2`.
+2. What you have comes first, in its groups. Below them, **From the library** lists what you can get: the 20 best matches, and how many more there are (type more words to narrow it). Each row says its pack, such as `@alice/felt-piano`; music2's own packs say `music2`. A pack your song already uses isn't offered there: to move the song to a newer version, use `m2 pack update`.
 3. Move to a row with ↓ and press **Space** to hear it. Press Space again to stop.
-4. Press **Enter**, or click **Get** in its row. The row shows how far it is, and the foot says how much has come. To stop it, press **Esc** or click **Cancel**: nothing of it is kept.
+4. Press **Enter**, or click **Get** in its row. The row shows how far it is, and the foot says how much has come. To stop it while it downloads, press **Esc** or click **Cancel**: nothing of it is kept. Once every file is in, the row says **Installing…**: it is checked and installed then, and can't be stopped.
 5. When it is here, the panel closes and it is added, as Enter adds anything:
 
 | You get | What happens |
@@ -31,7 +31,9 @@
 | an effect | its pack is installed, and it goes on the selected track |
 | a sample | only that one file comes, into your song's `assets/` folder, on a new audio track at the playhead. A FLAC comes in as a WAV |
 
-Each is one undo step. The song's `music2.toml` and `music2.lock` then name the pack and its exact version, as when you add an installed pack's instrument ([Packs](packs.md)).
+Each is one undo step, but a sound, which is two: the track, then the sound loaded on it (Undo twice takes both back). The song's `music2.toml` and `music2.lock` then name the pack and its exact version, as when you add an installed pack's instrument ([Packs](packs.md)).
+
+It is added to the song you got it for. If you open another song before it is here, the pack is installed, but nothing is added to the song open then: the toast says so, and ⌘F finds it among what you have.
 
 One Get runs at a time. If a Get fails, the foot says why in plain words: no internet, the server didn't answer, or the file wasn't what the library said.
 
@@ -45,7 +47,7 @@ From the command line, in the song's folder:
 m2 pack get
 ```
 
-It gets every pack the song's `music2.lock` names that isn't installed, and says what it got.
+It gets every pack the song's `music2.lock` names that isn't installed, and says what it got. With the app open, it tells the app too, so the song plays there with no need to open it again.
 
 | It says | Why |
 |---|---|
@@ -83,5 +85,7 @@ music2 has no default address yet: until one is set, ⌘F shows no From the libr
 | you Get something | its pack, or its one sample |
 
 Nothing else. No account, no id, and never what you type: search runs over the catalog on your computer. Every file is checked by its fingerprint (its hash) before it is used, so a file changed on the way is never kept. A pack goes in whole or not at all.
+
+The catalog is checked against `catalog.json` by its fingerprint, and an older catalog than the one music2 has is refused, so a yanked version can't come back. Neither is signed: music2 trusts the library's address for what its catalog lists.
 
 Offline, the catalog from last time is used. The catalog and the previews you played are kept in music2's cache folder (`~/Library/Caches/music2` on a Mac, `~/.cache/music2` on Linux).
