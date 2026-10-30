@@ -1,0 +1,19 @@
+# .github/dependabot.yml: Dependabot keeps the registry's pinned GitHub Actions up to date, once
+# a week, as music2's own does.
+#
+# In short: the actions in .github/workflows (pinned by commit, with the version in a comment,
+# which Dependabot keeps in step), the small bumps together in one pull request, each big one
+# alone. cooldown: a release is offered only once it is 7 days old. The m2 the workflows run is
+# pinned by hand (M2_VERSION and M2_SHA256), by whoever moves the registry to a new music2.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

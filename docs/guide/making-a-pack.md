@@ -236,3 +236,27 @@ A file's own table wins over its folder's, and a deeper folder's over a shallowe
 `m2 pack check` checks what the pack registry will: the strict `m2pkg.toml`, the file types and no links, a licence, every instrument and effect has a category and builds in a song, every kernel loads, every sound is for an instrument of the pack and names only its controls (inside any range marked `.strict()`), every recording its code or its data names is in the pack, no `src/instruments.ts` hides its instruments written as data, every WAV under `samples/` reads, and `samples.toml` reads and names only files and folders that are there.
 
 A version is never changed once installed: to change the pack, raise its version. While you try it from its folder (`{ path = … }`), a change you save to its code, its `m2pkg.toml` or its kernels reaches the song the next time the song builds: when one of the song's own files changes, or the song opens again.
+
+## Listing it in the registry
+
+The registry is the list of packs anyone can get: one small file a pack, in a GitHub repo. Its robot checks each pack, plays a short preview of each instrument and sound, and copies the files where music2 can fetch them. The registry isn't open yet: its repo and its storage are still being set up, and the app can't get packs from it yet.
+
+| Step | Command or action |
+|---|---|
+| Say where its code is | in `m2pkg.toml`, under `[package]`: `repository = "https://github.com/alice/felt-piano"` |
+| List it | in a clone of the registry: `m2 registry add <registry> felt-piano --source <address of its .tar.gz>`. It checks the pack, writes its `m2pack.json`, and writes `packs/@alice/felt-piano.toml` |
+| Pack it up | `tar -czf felt-piano-1.2.0.tar.gz --exclude='.*' felt-piano`, and attach it to a GitHub release of your repo, at that address |
+| Ask | a pull request to the registry with the one file |
+
+What the registry asks beyond `m2 pack check`:
+
+| Rule | |
+|---|---|
+| Your name | `@alice/…` is the GitHub account `alice`'s. Its repository and its `.tar.gz` are under `https://github.com/alice/` |
+| A licence anyone can use | for sounds `CC0-1.0`, `CC-BY-3.0` or `CC-BY-4.0`; for code `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause` or `ISC`. Nothing "non-commercial" |
+| Tags | from the registry's word list, `tags.txt` |
+| Size | 10 GB at most |
+| The same files | the `.tar.gz` holds exactly the files the listed hash names. A version, once listed, never changes: to change anything, raise the version and list it again |
+| Plain words | every label, description, tag, author and file name is on one line, with no hidden character |
+
+A person from BreadBowlAI reads every pull request and merges it; the robot's answer on it is advice. To hide a version of yours from search, add `yanked = "why"` to it. Taking a version down for good (a licence or legal problem) is BreadBowlAI's to do.

@@ -1,0 +1,15 @@
+# .github/CODEOWNERS: who must review a change to the registry (music2's REG-10).
+#
+# In short: every pull request is merged by one of BreadBowlAI's people (the README's setup turns
+# on "require a review from Code Owners"). A change to anything outside packs/ needs BreadBowlAI's
+# review as code owner: the workflows (whose pull request run is only advice), the word list, this
+# file, and removed.toml, the take-downs. A pack's file needs one approving review from anyone
+# with write access, as any change does.
+
+*                 @BreadBowlAI
+
+# Pack files: no code owner, so any reviewer of BreadBowlAI's will do.
+/packs/
+
+# Take-downs: always BreadBowlAI's, and never taken back (REG-7).
+/removed.toml     @BreadBowlAI

@@ -283,10 +283,14 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     if let Err(e) = m.needs(sdk, std_version.unwrap_or(Version(0, 0, 0))) {
         out.push(e);
     }
+    out.extend(manifest_words(&m));
     match pack::pack_files(dir) {
         Ok(files) => {
             out.extend(audio_budget(&files));
             for (rel, _) in files {
+                if unseen(&rel) {
+                    out.push(format!("{:?}: its name holds a control character{ONE_LINE}", rel));
+                }
                 // In any capitals: `.WAV` is a WAV.
                 let ext = Path::new(&rel).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
                 if rel != "LICENSE" && !FILE_TYPES.contains(&ext.as_str()) {
@@ -330,6 +334,12 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     if ours.is_empty() && !any_samples {
         out.push(format!("{name} declares no component and no sample: an instrument or an effect is a component(…) in src/, a sample a WAV file under samples/ that samples.toml names"));
     }
+    out.extend(component_words(&ours));
+    if let Ok(said) = crate::library::samples::SamplesToml::of_package(dir)
+        && said.folder.values().chain(said.file.values()).any(|s| s.tags.iter().any(|t| unseen(t)))
+    {
+        out.push(format!("{}: its tags hold a control character{ONE_LINE}", crate::library::samples::SAMPLES_TOML));
+    }
     for d in &ours {
         if d.editor.category.is_none() {
             out.push(format!("{} ({}) has no category: give it `editor: {{ category: \"Keys\" }}` or another", d.id, d.at));
@@ -339,6 +349,50 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     }
     out.extend(presets_problems(dir, &name, &ours));
     out.extend(builds(dir, std, &name, &ours, &catalog));
+    out
+}
+
+/// What every word a pack gives must be instead of holding a control character (review G12).
+const ONE_LINE: &str = " (a line break, a tab or another unseen character): write it on one line, in plain characters";
+
+/// Whether `text` holds a control character: a line break, a tab, an escape. Shown anywhere (the
+/// lists, a terminal, a CI's log) one could pass for something else (PACK-12).
+fn unseen(text: &str) -> bool {
+    text.chars().any(char::is_control)
+}
+
+/// What of `m2pkg.toml`'s words holds a control character (PACK-12).
+fn manifest_words(m: &pack::PkgManifest) -> Vec<String> {
+    let p = &m.package;
+    let one = |field: &str, text: Option<&str>| text.filter(|t| unseen(t)).map(|_| format!("{field} holds"));
+    let many = |field: &str, texts: &[String]| texts.iter().any(|t| unseen(t)).then(|| format!("{field} hold"));
+    let found = [
+        one("description", Some(&p.description)),
+        one("license", p.license.as_deref()),
+        one("repository", p.repository.as_deref()),
+        many("authors", &p.authors),
+        many("tags", &p.tags),
+    ];
+    found.into_iter().flatten().map(|what| format!("{}: its {what} a control character{ONE_LINE}", pack::PKG_MANIFEST)).collect()
+}
+
+/// What of the pack's components' words holds a control character: each one's label,
+/// description, category and the names of its notes (PACK-12).
+fn component_words(ours: &[std::sync::Arc<m2_script::Descriptor>]) -> Vec<String> {
+    let mut out = vec![];
+    for d in ours {
+        let e = &d.editor;
+        let fields =
+            [("label", unseen(&d.label)), ("description", unseen(&e.description)), ("category", e.category.as_deref().is_some_and(unseen))];
+        for (field, bad) in fields {
+            if bad {
+                out.push(format!("{}: its {field} holds a control character{ONE_LINE}", d.id));
+            }
+        }
+        if e.notes.values().any(|n| unseen(n)) {
+            out.push(format!("{}: its notes' names hold a control character{ONE_LINE}", d.id));
+        }
+    }
     out
 }
 

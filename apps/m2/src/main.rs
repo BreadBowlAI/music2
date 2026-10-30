@@ -998,6 +998,7 @@ change that code first",
             attention(&dir, s.problems());
         }
         Some("pack") => pack(&args)?,
+        Some("registry") => registry(&args)?,
         Some("plugins") => match args.get(1) {
             None => {
                 let (found, errors) = m2_plugins::scan();
@@ -1205,6 +1206,125 @@ fn pack(args: &[String]) -> Result<()> {
         _ => bail!("{}", usage_of("pack")),
     }
     Ok(())
+}
+
+/// `m2 registry …` (REG-2, REG-5 to REG-9): the registry's robot, run by the registry repo's CI,
+/// and `add` for a pack's author. Each problem is printed in words; any is exit 1.
+fn registry(args: &[String]) -> Result<()> {
+    use m2_editor::registry::{self as robot, Bucket};
+    let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument: {}", usage_of("registry")));
+    let path_flag = |name: &str| flag(args, name).map(PathBuf::from).ok_or_else(|| anyhow!("give {name}: {}", usage_of("registry")));
+    let from = || flag(args, "--from").map(|u| Bucket::parse(&u).map_err(|e| anyhow!("--from: {e}"))).transpose();
+    let failed = |problems: Vec<String>| {
+        for p in &problems {
+            eprintln!("problem: {p}");
+        }
+        anyhow!("{} problem{} to fix first", problems.len(), if problems.len() == 1 { "" } else { "s" })
+    };
+    let std = m2_server::resources::std_dir();
+    // Not `Some("…")` arms: those are m2's own commands, which the one table lists (AGENT-12).
+    match args.get(1).map_or("", String::as_str) {
+        "check" => {
+            let dir = PathBuf::from(arg(2)?);
+            let base = flag(args, "--base").map(PathBuf::from);
+            let author = flag(args, "--author");
+            let r = robot::check(&robot::Check { registry: &dir, base: base.as_deref(), author: author.as_deref() }).map_err(failed)?;
+            let versions: usize = r.packs.iter().map(|p| p.versions.len()).sum();
+            println!("{} is good: {} pack{}, {versions} version{}", dir.display(), r.packs.len(), plural(r.packs.len()), plural(versions));
+        }
+        "add" => {
+            let (dir, pack) = (PathBuf::from(arg(2)?), PathBuf::from(arg(3)?));
+            let source = flag(args, "--source").ok_or_else(|| anyhow!("say where its .tar.gz is: {}", usage_of("registry")))?;
+            match robot::add(&robot::Add { registry: &dir, pack: &pack, source: &source, std: &std }).map_err(failed)? {
+                robot::Added::Listed { name, version, hash, file, new } => println!(
+                    "listed {name} {version} ({hash}) in {}{}: open a pull request with it to the registry",
+                    file.display(),
+                    if new { ", a new file" } else { "" }
+                ),
+                robot::Added::Already { name, version } => println!("{name} {version} is listed already, with these very files"),
+            }
+        }
+        "pending" => {
+            let dir = PathBuf::from(arg(2)?);
+            let r = m2_song::registry::Registry::read(&dir).map_err(failed)?;
+            // The hash's hex first: the folder the CI unpacks that version's source into (REG-9).
+            for (name, v) in robot::pending(&r, &path_flag("--out")?, from()?.as_ref()) {
+                println!("{} {name} {} {}", v.hash.hex(), v.version, v.source);
+            }
+        }
+        "build" => {
+            let dir = PathBuf::from(arg(2)?);
+            let (sources, out) = (path_flag("--sources")?, path_flag("--out")?);
+            let made = flag(args, "--made").unwrap_or_else(|| {
+                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                m2_song::registry::utc(secs)
+            });
+            let from = from()?;
+            let work = m2_os::dirs::cache().unwrap_or_else(std::env::temp_dir).join(format!("registry-build-{}", std::process::id()));
+            let to_delete = flag(args, "--to-delete").map(PathBuf::from);
+            let b = robot::Build {
+                registry: &dir,
+                sources: &sources,
+                out: &out,
+                from: from.as_ref(),
+                made: &made,
+                std: &std,
+                work: &work,
+                to_delete: to_delete.as_deref(),
+                limit: robot::LONGEST,
+            };
+            let built = robot::build(&b).map_err(failed)?;
+            for f in &built.built {
+                let previews = f.items.iter().filter(|i| i.preview.is_some()).count();
+                println!(
+                    "built {} {}: {} item{} ({previews} with a preview), {} file{}, {:.1} MB",
+                    f.name,
+                    f.version,
+                    f.items.len(),
+                    plural(f.items.len()),
+                    f.files,
+                    plural(f.files as usize),
+                    f.size as f64 / 1e6
+                );
+                for i in f.items.iter().filter_map(|i| i.no_preview.as_ref().map(|why| (&i.id, why))) {
+                    println!("  {}: {}", i.0, i.1);
+                }
+            }
+            let items: usize = built.catalog.packs.iter().map(|p| p.items.len()).sum();
+            println!(
+                "catalog {} ({} bytes, made {}): {} pack{}, {items} item{}",
+                built.pointer.catalog,
+                built.pointer.size,
+                built.pointer.made,
+                built.catalog.packs.len(),
+                plural(built.catalog.packs.len()),
+                plural(items)
+            );
+            if to_delete.is_none() && !built.to_delete.is_empty() {
+                println!("{} blobs of removed versions to delete (--to-delete <file> lists them)", built.to_delete.len());
+            }
+            for u in &built.unknown {
+                eprintln!("warning: {u} is taken down, but its facts aren't there, so its blobs aren't known: delete them by hand");
+            }
+            // Each failed alone: the rest are built and in the catalog (REG-5).
+            for f in &built.failed {
+                for p in &f.problems {
+                    eprintln!("problem: {p}");
+                }
+            }
+            if let n @ 1.. = built.failed.len() {
+                let (s, it) = if n == 1 { ("", "it stays") } else { ("s", "each stays") };
+                bail!("{n} version{s} not built: {it} pending, and the rest are in the catalog");
+            }
+        }
+        _ => bail!("{}", usage_of("registry")),
+    }
+    Ok(())
+}
+
+/// `s` when `n` isn't one.
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
 }
 
 fn import_target(s: &Session, args: &[String]) -> Result<m2_editor::import::Target> {

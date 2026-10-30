@@ -27,6 +27,7 @@ pub mod lane;
 pub mod manifest;
 pub mod pack;
 pub mod path;
+pub mod registry;
 pub mod tx;
 
 use std::collections::{BTreeMap, BTreeSet};

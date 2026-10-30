@@ -264,6 +264,20 @@ impl fmt::Display for Version {
     }
 }
 
+/// As a string, `"1.2.0"`: how the registry's files write it (REG-1, REG-4).
+impl Serialize for Version {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Version {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Version, D::Error> {
+        let s = String::deserialize(d)?;
+        Version::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("`{s}` isn't a version such as \"1.2.0\"")))
+    }
+}
+
 /// A part of a version: digits only (`u64::from_str` would take `+1`).
 fn number(s: &str) -> Option<u64> {
     if s.bytes().all(|c| c.is_ascii_digit()) { s.parse().ok() } else { None }

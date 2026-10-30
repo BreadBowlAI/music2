@@ -1,0 +1,65 @@
+# The words a pack's tags may use (music2's packs design, P7). One a line. A pack names its tags in
+# its m2pkg.toml, `tags = ["keys", "lofi"]`, and the robot refuses a word that isn't here. To add a
+# word, ask in an issue: music2's people add words here.
+
+# What it plays
+kick
+snare
+clap
+hat
+cymbal
+tom
+perc
+drums
+bass
+keys
+piano
+organ
+bells
+guitar
+vocal
+choir
+strings
+brass
+woodwind
+pad
+lead
+pluck
+arp
+chords
+synth
+fx
+texture
+foley
+field-recording
+
+# Styles
+ambient
+cinematic
+classical
+dnb
+electronic
+experimental
+funk
+hip-hop
+house
+jazz
+lofi
+orchestral
+pop
+rock
+soul
+techno
+trap
+world
+
+# How it sounds
+acoustic
+analog
+bright
+clean
+dark
+dirty
+soft
+vintage
+warm
