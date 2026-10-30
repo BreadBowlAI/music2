@@ -260,6 +260,20 @@ m2 plugins [clap:<id>]
 
 List installed CLAP plugins, or one plugin's ports.
 
+## m2 pack
+
+```
+m2 pack new <folder> --name @owner/name
+m2 pack check <folder>
+m2 pack build <folder>
+m2 pack install <folder>
+m2 pack list
+m2 pack remove @owner/name <version>
+m2 pack lock <project>
+```
+
+Make, check and install packs: instruments, effects, sounds and recordings in a folder. `new` makes one with an example instrument; `check` says in words what the registry would refuse (exit 1); `build` writes its `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `list` and `remove` show and take out what is installed; `lock` writes the song's `music2.lock` from what it uses now. Your store is `~/Music/music2/Packs`, one folder a version (`Packs/@alice/felt-piano/1.2.0/`). A version is never changed: installing one that is there with other files is refused. A song keeps the version it was made with in `music2.lock`; adding a pack's instrument or effect in the app writes it. See [Packs](packs.md) and [Making a pack](making-a-pack.md).
+
 ## m2 plugin-state
 
 ```

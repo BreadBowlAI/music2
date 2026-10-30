@@ -311,6 +311,20 @@ pub const COMMANDS: &[Command] = &[
         more: "",
     },
     Command {
+        name: "pack",
+        also: &[],
+        usage: "m2 pack new <folder> --name @owner/name\nm2 pack check <folder>\nm2 pack build <folder>\nm2 pack install <folder>\n\
+                m2 pack list\nm2 pack remove @owner/name <version>\nm2 pack lock <project>",
+        words: "make, check and install packs: instruments, effects, sounds and recordings in a folder. `new` makes one with an \
+                example instrument; `check` says in words what the registry would refuse (exit 1); `build` writes its \
+                `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `list` and `remove` show and \
+                take out what is installed; `lock` writes the song's `music2.lock` from what it uses now",
+        more: "Your store is `~/Music/music2/Packs`, one folder a version (`Packs/@alice/felt-piano/1.2.0/`). A version is never \
+               changed: installing one that is there with other files is refused. A song keeps the version it was made with in \
+               `music2.lock`; adding a pack's instrument or effect in the app writes it. See [Packs](packs.md) and \
+               [Making a pack](making-a-pack.md).",
+    },
+    Command {
         name: "plugin-state",
         also: &[],
         usage: "m2 plugin-state <project> <track>/<key> clap:<id>",

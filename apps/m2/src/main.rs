@@ -514,7 +514,8 @@ fn run() -> Result<()> {
                     let files: std::collections::BTreeMap<&str, &str> = c
                         .package_files
                         .iter()
-                        .filter(|f| f.path.split('/').next() == Some(p.name.as_str()))
+                        // A scoped name has a `/` of its own (PACK-1): the file is the package's when its path starts with it.
+                        .filter(|f| f.path.strip_prefix(p.name.as_str()).is_some_and(|rest| rest.starts_with('/')))
                         .map(|f| (f.path.as_str(), f.sha256.as_str()))
                         .chain(p.files.iter().map(|(path, sha)| (path.as_str(), sha.as_str())))
                         .collect();
@@ -941,6 +942,7 @@ change that code first",
             println!("{}: `{}` → `{}` (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision);
             attention(&dir, s.problems());
         }
+        Some("pack") => pack(&args)?,
         Some("plugins") => match args.get(1) {
             None => {
                 let (found, errors) = m2_plugins::scan();
@@ -1031,6 +1033,80 @@ change that code first",
 
 /// Where `m2 import` puts its files in the song `s`: on `--track`'s audio lane, else on new tracks
 /// below, from `--at` (the start when it is left out).
+/// `m2 pack …` (PACK-6, PACK-8, PACK-12): make, check, build and install packs; list and remove
+/// what is installed; lock a song's.
+fn pack(args: &[String]) -> Result<()> {
+    use m2_editor::packs;
+    use m2_song::pack::{PackName, Store};
+    let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument: {}", usage_of("pack")));
+    let std = m2_server::resources::std_dir();
+    let store = || Store::here().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"));
+    let failed = |problems: Vec<String>| {
+        for p in &problems {
+            eprintln!("problem: {p}");
+        }
+        anyhow!("{} problem{} to fix first", problems.len(), if problems.len() == 1 { "" } else { "s" })
+    };
+    match args.get(1).map(String::as_str) {
+        Some("new") => {
+            let folder = PathBuf::from(arg(2)?);
+            let name = flag(args, "--name").ok_or_else(|| anyhow!("name it: m2 pack new <folder> --name @owner/name"))?;
+            let name = PackName::new(&name).map_err(|e| anyhow!(e))?;
+            packs::new_pack(&folder, &name, &std).map_err(|e| anyhow!(e))?;
+            println!("made {name} in {}: check it with m2 pack check {}", folder.display(), folder.display());
+        }
+        Some("check") => {
+            let dir = PathBuf::from(arg(2)?);
+            let problems = packs::check(&dir, &std);
+            if !problems.is_empty() {
+                return Err(failed(problems));
+            }
+            println!("{} is good to install", dir.display());
+        }
+        Some("build") => {
+            let dir = PathBuf::from(arg(2)?);
+            let (listing, hash) = packs::build(&dir).with_context(|| format!("listing {}", dir.display()))?;
+            println!("wrote {} ({} files): {hash}", dir.join(m2_song::pack::LISTING).display(), listing.files.len());
+        }
+        Some("install") => {
+            let dir = PathBuf::from(arg(2)?);
+            match packs::install(&dir, &store()?, &std).map_err(failed)? {
+                packs::Install::Installed { name, version, dir, hash } => {
+                    println!("installed {name} {version} in {} ({hash})", dir.display())
+                }
+                packs::Install::Already { name, version, .. } => println!("{name} {version} is already installed, with these very files"),
+            }
+        }
+        Some("list") => {
+            let all = packs::installed(&store()?);
+            if all.is_empty() {
+                println!("no packs installed: install one from its folder with m2 pack install <folder>");
+            }
+            for p in all {
+                let licence = p.license.map(|l| format!(" ({l})")).unwrap_or_default();
+                println!("{} {}{licence}  {}", p.name, p.versions.join(", "), p.description);
+            }
+        }
+        Some("remove") => {
+            let name = PackName::new(&arg(2)?).map_err(|e| anyhow!(e))?;
+            let v = arg(3)?;
+            let version = m2_song::Version::parse(&v).ok_or_else(|| anyhow!("`{v}` isn't a version such as 1.2.0"))?;
+            packs::remove(&store()?, &name, &version)?;
+            println!("removed {name} {version}. A song that locks this version says so (pkg.missing) until it is installed again");
+        }
+        Some("lock") => {
+            let dir = PathBuf::from(arg(2)?);
+            let mut s = writer(&dir)?;
+            match packs::write_lock(&mut s).map_err(|e| anyhow!("{e}"))? {
+                Some(e) => println!("{}: {}", e.file, e.after),
+                None => println!("{} says that already", m2_song::path::LOCK),
+            }
+        }
+        _ => bail!("{}", usage_of("pack")),
+    }
+    Ok(())
+}
+
 fn import_target(s: &Session, args: &[String]) -> Result<m2_editor::import::Target> {
     let beat = match flag(args, "--at") {
         Some(p) => m2_editor::clips::position(&s.accepted().project.arrangement, &p).map_err(|e| anyhow!("--at: {e}"))?,
