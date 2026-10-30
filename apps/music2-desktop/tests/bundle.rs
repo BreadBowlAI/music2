@@ -172,3 +172,16 @@ fn every_bundle_carries_the_licences_and_notices() {
     let script = std::fs::read_to_string(here().join("bundle-m2.sh")).unwrap();
     assert!(script.contains("node ci/notices.mjs"), "the hook makes the notices");
 }
+
+// PLAT-8, LIB-8: the bundle carries std's kit and the samples.toml that lists it, beside std's
+// code and presets, and every file of the kit is one the config's pattern takes.
+#[test]
+fn the_bundle_carries_stds_kit() {
+    let c = config();
+    let resources = c["bundle"]["resources"].as_object().unwrap();
+    assert_eq!(resources["../../std/samples.toml"], "std/samples.toml");
+    assert_eq!(resources["../../std/samples/kit/*.wav"], "std/samples/kit/");
+    let kit = from_here("../../std/samples/kit");
+    let files: Vec<String> = std::fs::read_dir(&kit).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(files.len() >= 12 && files.iter().all(|f| f.ends_with(".wav")), "{files:?}");
+}

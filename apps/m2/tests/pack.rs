@@ -370,6 +370,49 @@ fn a_preset_outside_a_strict_range_is_named() {
     assert!(text.contains("presets/tiny-keys/Low.json") && text.contains("brightness") && text.contains("range"), "{text}");
 }
 
+/// A 16-bit mono WAV of a tenth of a second of a tone at 48 kHz.
+fn short_wav(path: &Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let mut w = hound::WavWriter::create(path, spec).unwrap();
+    for i in 0..4_800 {
+        w.write_sample(((i as f32 / 10.0).sin() * 8_000.0) as i16).unwrap();
+    }
+    w.finalize().unwrap();
+}
+
+// PACK-12, LIB-4: a pack of samples alone checks and installs, and its samples are found; check
+// names a WAV that doesn't decode, a word not on the list and a path samples.toml names that isn't
+// there.
+#[test]
+fn a_pack_of_samples_alone_checks_and_its_samples_are_checked() {
+    let t = Temp::new("samples");
+    let drums = t.0.join("drums");
+    std::fs::create_dir_all(&drums).unwrap();
+    std::fs::write(drums.join("m2pkg.toml"), "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\n").unwrap();
+    std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n").unwrap();
+    short_wav(&drums.join("samples/kicks/Boom.wav"));
+    let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", said(&out));
+    let out = t.m2(&["pack", "install", drums.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", said(&out));
+    let out = t.m2(&["search", "boom", "--kind", "sample", "--json"]);
+    let items: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", said(&out)));
+    assert_eq!(items[0]["id"], "sample:@alice/drums:samples/kicks/Boom.wav", "{items}");
+    assert_eq!((&items[0]["package"], &items[0]["sample"]["instrument"]), (&serde_json::json!("@alice/drums"), &serde_json::json!("kick")));
+
+    std::fs::write(drums.join("samples/kicks/broken.wav"), b"RIFF0000WAVEnope").unwrap();
+    std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"cowbell\"\n\n[file.\"snares/gone.wav\"]\n").unwrap();
+    let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    let text = said(&out);
+    for want in
+        ["samples/kicks/broken.wav doesn't read as a WAV file", "instrument cowbell isn't one of", "no WAV file samples/snares/gone.wav"]
+    {
+        assert!(text.contains(want), "says {want}: {text}");
+    }
+}
+
 /// A copy of the pack `tiny` at `version` with a kernel of its own, in a folder beside it:
 /// `@test/tiny:sine`, std's module under its own name (`tag` as a custom section, so each copy's
 /// module has its own hash), played by the instrument `tinyTone`.
@@ -474,6 +517,33 @@ fn a_version_this_app_cant_run_is_never_chosen() {
     for want in ["pkg.unsatisfied", "0.1.1", "std \"0.9\""] {
         assert!(text.contains(want), "says {want}: {text}");
     }
+}
+
+// LIB-1, LIB-2, PACK-11: with the app closed, m2 search finds an installed pack's instruments,
+// effects and sounds, each with its pack; its recordings (no samples.toml) are no samples.
+#[test]
+fn an_installed_packs_items_are_found_with_the_app_closed() {
+    let t = Temp::new("search");
+    let tiny = t.0.join("tiny");
+    copy(&fixtures().join("tiny"), &tiny);
+    let out = t.m2(&["pack", "install", tiny.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", said(&out));
+    let out = t.m2(&["search", "tiny", "--json"]);
+    let items: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", said(&out)));
+    let found: Vec<(&str, &str, &str)> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["id"].as_str().unwrap(), i["kind"].as_str().unwrap(), i["package"].as_str().unwrap()))
+        .collect();
+    for want in [
+        ("@test/tiny:tiny-keys", "instrument", "@test/tiny"),
+        ("@test/tiny:tiny-crunch", "effect", "@test/tiny"),
+        ("sound:std/@test/tiny:tiny-keys/Dark", "sound", "@test/tiny"),
+    ] {
+        assert!(found.contains(&want), "{want:?} in {found:?}");
+    }
+    assert!(!found.iter().any(|(_, kind, _)| *kind == "sample"), "its recording is no sample: {found:?}");
 }
 
 // FMT-16, PACK-6: m2 keeps the hash cache on disk as the app does, so the next command finds an

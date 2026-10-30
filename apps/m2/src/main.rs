@@ -50,6 +50,8 @@ fn main() -> ExitCode {
     if std::env::var_os("M2_PROBE").is_some() {
         m2_plugins::probe::install();
     }
+    // PLAT-7: a program keeps the cache folder (hashes, renders, samples' measures); a test doesn't.
+    m2_os::dirs::keep_cache();
     // HOST-2: the command runs on a worker while the main thread serves plugins as their main
     // thread, with its run loop; plugins it created are destroyed there before it exits.
     m2_plugins::run_main(|| {
@@ -743,6 +745,36 @@ fn run() -> Result<()> {
             };
             println!("onto {} from beat {} (revision {})", onto.join(", "), m2_song::lane::number(beat), placed.edited.revision);
         }
+        Some("add-sample") => {
+            // A sample from the library (LIB-7): copied with its note, then its clip placed.
+            let dir = PathBuf::from(arg(1)?);
+            let id = arg(2)?;
+            if let Some(holder) = app::holder(&dir) {
+                let mut app = app::reach(&dir, &holder, "")?;
+                let target = import_target(&reader(&dir)?, &args)?;
+                let v = app.add_sample(serde_json::json!({"id": id, "to": target}))?;
+                said_added(&v, &target);
+                return Ok(());
+            }
+            let mut s = session(&dir)?;
+            let target = import_target(&s, &args)?;
+            let words = |e: m2_editor::EditError| anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
+            let sample = search::song_sample(&s, &id)?;
+            m2_editor::library::samples::still_plain(&sample).map_err(|e| anyhow!("{id} can't be added: {e}."))?;
+            let staged =
+                m2_editor::import::stage(&dir, m2_editor::import::Source::Path(sample.file.clone()), &mut |_| {}).map_err(words)?;
+            let file = staged.name().map_err(words)?;
+            let noted = m2_editor::library::samples::write_note(&dir, file.asset.as_str(), &m2_editor::library::samples::note(&sample))?;
+            let song_bpm = s.accepted().compiled.data.tempo().bpm_at(target.beat());
+            let follows = m2_editor::library::samples::follows(&sample);
+            let placed = m2_editor::import::place_with(&mut s, std::slice::from_ref(&file), &target, &[follows]).map_err(words)?;
+            let tracks: Vec<serde_json::Value> = placed.tracks.iter().map(|(m, l)| serde_json::json!({"module": m, "label": l})).collect();
+            let v = serde_json::json!({
+                "asset": file.asset.as_str(), "reused": file.reused, "noted": noted, "follows": follows,
+                "tracks": tracks, "revision": placed.edited.revision, "song_bpm": song_bpm,
+            });
+            said_added(&v, &target);
+        }
         Some("duplicate-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let made = s.duplicate_track(&arg(2)?).map_err(|e| anyhow!("{e}"))?;
@@ -1232,6 +1264,33 @@ fn import_in_app(dir: &Path, holder: &m2_session::lock::Holder, files: &[PathBuf
     };
     println!("onto {} from beat {} (revision {})", onto.join(", "), m2_song::lane::number(beat), v["revision"].as_u64().unwrap_or(0));
     Ok(())
+}
+
+/// What `m2 add-sample` did, as it prints it: the file, its note, where its clip went, and the
+/// tempo a loop follows.
+fn said_added(v: &serde_json::Value, target: &m2_editor::import::Target) {
+    let asset = v["asset"].as_str().unwrap_or("?");
+    let again = if v["reused"] == serde_json::json!(true) { " (the same bytes were there)" } else { "" };
+    let note = if v["noted"] == serde_json::json!(true) { format!(", its note in assets/{asset}.json") } else { String::new() };
+    println!("added assets/{asset}{again}{note}");
+    let onto: Vec<String> = match target {
+        m2_editor::import::Target::Lane { module, .. } => vec![module.clone()],
+        _ => v["tracks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|t| format!("a new track {} (ID {})", t["label"].as_str().unwrap_or("?"), t["module"].as_str().unwrap_or("?")))
+            .collect(),
+    };
+    println!(
+        "onto {} from beat {} (revision {})",
+        onto.join(", "),
+        m2_song::lane::number(target.beat()),
+        v["revision"].as_u64().unwrap_or(0)
+    );
+    if let Some(bpm) = v["follows"].as_f64() {
+        println!("a loop at {} bpm: it follows the song's tempo (Follow tempo)", m2_song::lane::number(bpm));
+    }
 }
 
 /// The tracks, by key, with their labels where they differ: `kick, chops (Chops)`.

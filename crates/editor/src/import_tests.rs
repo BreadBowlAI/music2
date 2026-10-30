@@ -356,3 +356,14 @@ fn a_drop_on_a_notes_track_adds_an_audio_track_after_it() {
     assert_eq!(order[kick + 1], "vox");
     assert!(song.read("tracks/vox.ts").contains("lane.audio(\"clips\")"));
 }
+
+// LIB-7, FMT-14 (review D15): a plain import never takes a name whose note is there (an asset
+// deleted by hand, its note left): the file would inherit another's credit.
+#[test]
+fn a_plain_import_never_takes_a_noted_name() {
+    let song = fixture("examples/first-song");
+    std::fs::create_dir_all(song.0.join("assets")).unwrap();
+    std::fs::write(song.0.join("assets/kick.wav.json"), r#"{"from": {"pack": "@alice/loops", "license": "CC-BY-4.0"}}"#).unwrap();
+    let (i, _) = audio(&song.0, bytes("kick.wav", tone(0.5, 4.0))).unwrap();
+    assert_eq!(i.asset.as_str(), "kick 2.wav");
+}

@@ -505,6 +505,12 @@ impl Session {
         }
     }
 
+    /// The packs the lists offer (PACK-11), each with the version and folder they offer it from:
+    /// those the catalog was made from.
+    pub fn offered(&self) -> &[crate::Offered] {
+        &self.offered
+    }
+
     /// Where the lists take package `name` from (PACK-11): std as the session has it; a pack at the
     /// accepted revision's version, else at the store's version they were made from, never one
     /// installed since. Its version and folder.

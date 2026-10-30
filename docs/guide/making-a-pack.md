@@ -186,6 +186,33 @@ A sound is an instrument's settings under a name, one file in `presets/<id>/`:
 
 It shows in the instrument's **Presets**, under music2's own.
 
+## Samples
+
+A pack can hold loose **samples** too: one-shots and loops a musician finds with ⌘F and drops into a song ([Samples](samples.md)). Put them under `samples/`, and list them in `samples.toml` at the pack's root, by folder or by file (paths inside `samples/`):
+
+```toml
+[folder."drums/kicks"]
+instrument = "kick"
+tags = ["punchy"]
+
+[file."loops/dusty keys 90 Am.wav"]
+type = "loop"
+instrument = "keys"
+bpm = 90
+key = "Am"
+tags = ["lofi"]
+```
+
+| Key | Says |
+|---|---|
+| `type` | `loop` or `one-shot` |
+| `instrument` | one of: kick, snare, clap, hat, cymbal, tom, perc, bass, keys, guitar, vocal, strings, brass, pad, lead, synth, fx, texture, foley |
+| `bpm` | a loop's tempo, 20 to 300 |
+| `key` | `Am`, `F#`, `Bb minor`, `C` |
+| `tags` | more words to find it by |
+
+A file's own table wins over its folder's, and a deeper folder's over a shallower one's. What a table leaves out is guessed from the file's name (`dusty keys 90 Am.wav` says a tempo and a key); `key = "none"` or `instrument = "none"` takes back a guess that is wrong (a drum loop whose name reads as a key). What can be measured (length, channels, loudness) is never written: music2 reads it from the file. Only the files `samples.toml` names are samples; the rest of `samples/` is your instruments' recordings. A pack may hold samples alone, with no instrument. Only WAV files for now.
+
 ## Trying it, checking it, installing it
 
 | Step | Command |
@@ -197,6 +224,6 @@ It shows in the instrument's **Presets**, under music2's own.
 | List its files | `m2 pack build felt-piano` writes `m2pack.json`: every file, its size and its fingerprint |
 | Install it | `m2 pack install felt-piano` |
 
-`m2 pack check` checks what the pack registry will: the strict `m2pkg.toml`, the file types and no links, a licence, every instrument and effect has a category and builds in a song, every kernel loads, every sound is for an instrument of the pack and names only its controls (inside any range marked `.strict()`), every recording its code or its data names is in the pack, and no `src/instruments.ts` hides its instruments written as data.
+`m2 pack check` checks what the pack registry will: the strict `m2pkg.toml`, the file types and no links, a licence, every instrument and effect has a category and builds in a song, every kernel loads, every sound is for an instrument of the pack and names only its controls (inside any range marked `.strict()`), every recording its code or its data names is in the pack, no `src/instruments.ts` hides its instruments written as data, every WAV under `samples/` reads, and `samples.toml` reads and names only files and folders that are there.
 
 A version is never changed once installed: to change the pack, raise its version. While you try it from its folder (`{ path = … }`), a change you save to its code, its `m2pkg.toml` or its kernels reaches the song the next time the song builds: when one of the song's own files changes, or the song opens again.

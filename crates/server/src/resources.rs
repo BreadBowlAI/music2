@@ -18,6 +18,12 @@ pub fn cache_dir() -> Option<PathBuf> {
     m2_os::dirs::cache()
 }
 
+/// Keep the cache folder from now on (PLAT-7): a program's `main` calls it first, never a test
+/// ([`m2_os::dirs::keep_cache`]).
+pub fn keep_cache() {
+    m2_os::dirs::keep_cache();
+}
+
 /// Keep the hash cache on disk, so a project's assets are hashed once, not at every open.
 pub fn keep_hashes() {
     if let Some(dir) = cache_dir() {

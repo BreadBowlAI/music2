@@ -4,10 +4,16 @@
 // Space plays a preview (the server answers a WAV); Esc closes. The side browser's field asks the
 // same search. Answers that come late (held back here) never move what was picked, nor let Enter
 // act on an older search's rows, in the panel or the side browser; a click on a row keeps the keys
-// in the panel; a sound row dragged onto a track loads into it.
+// in the panel; a sound row dragged onto a track loads into it. A sample (std's kick) is found in the
+// Samples group, Space fetches its own file, and Enter copies it into assets/ with its note and adds
+// its clip on a new audio track, which Undo takes back. A folder of yours added (Your folders, Add a
+// Folder…, its path typed as the browser asks for it) says how many samples it has once looked
+// through, and how many files don't read, with the list left open; a search typed meanwhile finds
+// its sample once it is (LIB-5).
 //
 //   node e2e/spotlight.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
-import { check, done, open, read, sess, sleep, until } from "./fixlib.mjs";
+import fs from "node:fs";
+import { check, done, HOME, open, PROJ, read, sess, sleep, until } from "./fixlib.mjs";
 
 const { page, errors, toasts, state, key } = await open(1440, 900, { browser: true });
 
@@ -225,5 +231,77 @@ await sleep(300);
 reverbAnswer();
 check(await until(() => reverbs() === reverbsBefore + 1, 10000), "typing reverb, ↓↑ and Enter in the side browser adds Reverb to the selected track");
 check((await modules()).length === sideBefore.length, "and no track");
+
+// ---------------------------------------------------------------- samples: found, heard, added (LIB-4 to LIB-7)
+
+const has = (path) => {
+  try {
+    read(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+await find("kick one-shot");
+const kicks = await rows();
+check(kicks[0] === "sample:std:samples/kit/kick.wav" && (await page.$('[data-spotlight-group="sample"]')) !== null, `std's kick is the best hit, in the Samples group (${kicks.slice(0, 3)})`);
+check(
+  await page.$eval('[data-spotlight-item="sample:std:samples/kit/kick.wav"]', (e) => e.textContent.includes("One-shot") && e.textContent.includes("music2")),
+  "its row says it is a one-shot from music2",
+);
+check(await page.$eval('[data-spotlight-filter="one-shot"]', (e) => e.getAttribute("aria-pressed") === "true"), "the One-shots filter shows as on, typed");
+await key("ArrowDown");
+await key("ArrowUp");
+const kickHeard = page.waitForResponse((r) => r.url().includes("/api/library/preview?id=sample"), { timeout: 30000 });
+await key("Space");
+const kickAnswer = await kickHeard;
+// Asked again in the page: its bytes, to set beside the file it adds.
+const kickBytes = await page.evaluate(async (token) => {
+  const r = await fetch(`/api/library/preview?id=${encodeURIComponent("sample:std:samples/kit/kick.wav")}`, { headers: { "x-m2-token": token } });
+  const b = new Uint8Array(await r.arrayBuffer());
+  return { head: String.fromCharCode(...b.subarray(0, 4)) + String.fromCharCode(...b.subarray(8, 12)), size: b.length };
+}, sess.page_token);
+check(
+  kickAnswer.status() === 200 && kickAnswer.headers()["content-type"] === "audio/wav" && kickBytes.head === "RIFFWAVE",
+  `Space fetches the sample's own file, a WAV (${kickAnswer.status()}, ${kickBytes.head}, ${kickBytes.size} bytes)`,
+);
+const samplesBefore = await modules();
+await key("Enter");
+check(await until(async () => (await modules()).length === samplesBefore.length + 1, 10000), "Enter adds the sample on a new audio track");
+const kickTrack = (await modules()).find((m) => !samplesBefore.includes(m));
+check(
+  await until(() => has("assets/kick.wav") && read(`data/${kickTrack}/clips.json`).includes("kick.wav"), 10000) && fs.statSync(`${PROJ}/assets/kick.wav`).size === kickBytes.size,
+  "its file is copied into assets/, the same bytes Space played, and its clip names it",
+);
+const note = has("assets/kick.wav.json") ? JSON.parse(read("assets/kick.wav.json")) : {};
+check(note.from?.pack === "std" && note.from?.file === "samples/kit/kick.wav" && note.from?.license === "MIT OR Apache-2.0", `with a note of where it came from (${JSON.stringify(note)})`);
+check(await toasted("Added kick on a new track"), "and says so, with Undo");
+await page.click('button[aria-label="Undo"]');
+check(await until(async () => !(await modules()).includes(kickTrack), 10000), "Undo takes the clip and its track back");
+check(has("assets/kick.wav") && has("assets/kick.wav.json"), "the file and its note stay");
+
+// ---------------------------------------------------------------- your folder: looked through, then found (LIB-5)
+
+const mine = `${HOME}/My Samples`;
+fs.mkdirSync(`${mine}/Kicks`, { recursive: true });
+fs.copyFileSync(`${PROJ}/assets/kick.wav`, `${mine}/Kicks/Big Boom.wav`);
+fs.writeFileSync(`${mine}/Kicks/broken.wav`, "RIFF....WAVE");
+const boom = `sample:folder:${fs.realpathSync(mine)}/Kicks/Big Boom.wav`;
+await find("boom");
+await page.click("[data-spotlight-folders]");
+await until(() => page.$("[data-spotlight-add-folder]"), 5000);
+page.once("dialog", (d) => void d.accept(mine));
+await page.click("[data-spotlight-add-folder]");
+const folderRow = () => page.$eval("[data-spotlight-folder]", (e) => e.textContent).catch(() => "");
+check(
+  await until(async () => (await folderRow()).includes("1 samples · 1 don't read"), 15000),
+  `the folder's row says what it found once looked through, the list left open (${await folderRow()})`,
+);
+check(await until(async () => (await rows()).includes(boom), 15000), `the search typed meanwhile finds its sample once it is (${(await rows()).slice(0, 3)})`);
+check(
+  await page.$eval(`[data-spotlight-item="${boom}"]`, (e) => e.textContent.includes("One-shot") && e.textContent.includes("Yours")).catch(() => false),
+  "its row says it is a one-shot of yours",
+);
+await key("Escape");
 
 done(errors);

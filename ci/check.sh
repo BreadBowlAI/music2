@@ -653,6 +653,16 @@ else
   { first "$OUT/test.log" '^error' | sed 's/^/tests: /'; cause "$OUT/test.log"; } >> "$OUT/failed"
 fi
 
+# 5a. PLAT-7: no test wrote in the cache folder of the HOME it ran with: a file there is one a
+#     plain `cargo test` would have written in your own cache (ci/cache-left.sh).
+begin "cache untouched" "seconds"
+if quiet cache-left.log ci/cache-left.sh "$OUT/home"; then
+  record "cache untouched" PASS ""
+else
+  record "cache untouched" FAIL "see cache-left.log"
+  sed -n '2,6p' "$OUT/cache-left.log" | sed 's/^/cache untouched: /' | cut -c1-160 >> "$OUT/failed"
+fi
+
 # 5b. Linux: every line of ci/nightly-tests.txt names a test that is there (ci/nightly-list.sh, as
 #     ci/pr.sh rust's row of the same name), so a renamed test can't slip back into the PR tier
 #     unseen (some names are Linux's own modules); and so does every line of ci/sleeps-tests.txt

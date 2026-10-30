@@ -286,8 +286,11 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
         out.push(placed(d.src.as_deref(), &d.message, &name));
     }
     let ours: Vec<_> = catalog.components.values().filter(|d| d.id.starts_with(&prefix)).cloned().collect();
-    if ours.is_empty() {
-        out.push(format!("{name} declares no component: an instrument or an effect is a component(…) in src/"));
+    // Its samples (LIB-4): a pack of samples alone needs no component.
+    let (samples, any_samples) = crate::library::samples::check(dir);
+    out.extend(samples);
+    if ours.is_empty() && !any_samples {
+        out.push(format!("{name} declares no component and no sample: an instrument or an effect is a component(…) in src/, a sample a WAV file under samples/ that samples.toml names"));
     }
     for d in &ours {
         if d.editor.category.is_none() {

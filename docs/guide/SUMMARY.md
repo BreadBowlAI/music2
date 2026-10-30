@@ -18,6 +18,7 @@
 - [Saving and undo](saving.md)
 - [Shortcuts](shortcuts.md)
 - [Finding sounds (⌘F)](finding-sounds.md)
+- [Samples](samples.md)
 - [Sounds and effects](sounds.md)
 - [CLAP plugins](plugins.md)
 - [Packs](packs.md)

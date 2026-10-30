@@ -180,6 +180,18 @@ pub const COMMANDS: &[Command] = &[
                the musician holds the song (a take, V's Compare): it waits, as every write does.",
     },
     Command {
+        name: "add-sample",
+        also: &[],
+        usage: "m2 add-sample <project> <sample id> [--track ID] [--at BAR]",
+        words: "add a sample from the library (its id, from `m2 search --kind sample`): its file copied into \
+                `assets/` with a note beside it of where it came from (a pack's name, version, author and \
+                licence; or that it is from your own folder), and its clip placed from bar BAR (1 if not given), \
+                on a track's audio lane or on a new audio track; a loop at another tempo follows the song's. One \
+                edit that undo takes back",
+        more: "With the song open in the app, the app adds it, as one undo step. The note is `assets/<file>.json`; \
+               the file and its note stay when the clip is undone. [Samples](samples.md) says more.",
+    },
+    Command {
         name: "duplicate-track",
         also: &[],
         usage: "m2 duplicate-track <project> <track>",
@@ -468,10 +480,11 @@ pub const COMMANDS: &[Command] = &[
                 first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where \
                 it is from, and its id, which adding it names",
         more: "With the app open it asks the app, whose list has the open song's own instruments and the plugins it \
-               has listed; with the app closed it searches music2's sounds and your presets itself. Every word must \
+               has listed; with the app closed it searches music2's sounds, the packs you installed, your presets and \
+               your sample folders itself. Every word must \
                match. `--kind` is `instrument`, `sound`, `effect`, `sample` or `plugin`; the same words typed in \
                the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), \
-               which only samples carry. `--json` prints each item with all it knows: its `kind`, `id`, `label`, \
+               which only samples carry (a tempo within 2 bpm, a key or its relative). `--json` prints each item with all it knows: its `kind`, `id`, `label`, \
                `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track \
                takes), and a sound's `preset`. [Finding sounds](finding-sounds.md) says more.",
     },
