@@ -555,6 +555,10 @@ pub(super) struct Prepared {
 
 fn packages(inner: &Inner) -> Result<PackageSet> {
     let mut p = PackageSet::default().with_host(inner.host.clone());
+    // This computer's packs (PACK-6), under `$HOME` (PLAT-7).
+    if let Some(store) = m2_os::dirs::packs() {
+        p = p.with_store(store);
+    }
     p.load(&crate::resources::std_dir()).context("loading the std package")?;
     Ok(p)
 }

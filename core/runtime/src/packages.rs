@@ -72,7 +72,8 @@ pub struct PackageSet {
     plugins: HashMap<String, Hosted>,
     /// How plugins are reached (P11): the process's in-process host unless set.
     host: Arc<dyn PluginHost>,
-    /// Where installed packs are (PACK-6): this computer's store unless set.
+    /// Where installed packs are (PACK-6): none unless set, so only what asks for one reads a
+    /// store; the app and `m2` give this computer's (`m2_os::dirs::packs()`).
     store: Option<m2_song::pack::Store>,
 }
 
@@ -108,8 +109,7 @@ pub fn engine() -> Engine {
 impl Default for PackageSet {
     fn default() -> Self {
         let (packages, kernels, plugins) = (BTreeMap::new(), HashMap::new(), HashMap::new());
-        let store = m2_song::pack::Store::here();
-        PackageSet { engine: engine(), packages, kernels, offline: HashMap::new(), plugins, host: m2_plugins::host(), store }
+        PackageSet { engine: engine(), packages, kernels, offline: HashMap::new(), plugins, host: m2_plugins::host(), store: None }
     }
 }
 
@@ -125,7 +125,7 @@ impl PackageSet {
         self
     }
 
-    /// Find installed packs in `store` instead of this computer's (PACK-6).
+    /// Find installed packs in `store` (PACK-6): this computer's is `m2_os::dirs::packs()`.
     pub fn with_store(mut self, store: PathBuf) -> PackageSet {
         self.store = Some(m2_song::pack::Store::at(store));
         self

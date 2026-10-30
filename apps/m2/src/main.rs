@@ -141,6 +141,10 @@ fn number(x: f64) -> String {
 
 fn packages() -> Result<PackageSet> {
     let mut p = PackageSet::default();
+    // This computer's packs (PACK-6), under `$HOME` (PLAT-7).
+    if let Some(store) = m2_os::dirs::packs() {
+        p = p.with_store(store);
+    }
     // Found the way the app finds it, so both load the same std.
     p.load(&m2_server::resources::std_dir()).context("loading the std package")?;
     Ok(p)
@@ -1047,15 +1051,16 @@ fn pack(args: &[String]) -> Result<()> {
         }
         anyhow!("{} problem{} to fix first", problems.len(), if problems.len() == 1 { "" } else { "s" })
     };
-    match args.get(1).map(String::as_str) {
-        Some("new") => {
+    // Not `Some("…")` arms: those are m2's own commands, which the one table lists (AGENT-12).
+    match args.get(1).map_or("", String::as_str) {
+        "new" => {
             let folder = PathBuf::from(arg(2)?);
             let name = flag(args, "--name").ok_or_else(|| anyhow!("name it: m2 pack new <folder> --name @owner/name"))?;
             let name = PackName::new(&name).map_err(|e| anyhow!(e))?;
             packs::new_pack(&folder, &name, &std).map_err(|e| anyhow!(e))?;
             println!("made {name} in {}: check it with m2 pack check {}", folder.display(), folder.display());
         }
-        Some("check") => {
+        "check" => {
             let dir = PathBuf::from(arg(2)?);
             let problems = packs::check(&dir, &std);
             if !problems.is_empty() {
@@ -1063,12 +1068,12 @@ fn pack(args: &[String]) -> Result<()> {
             }
             println!("{} is good to install", dir.display());
         }
-        Some("build") => {
+        "build" => {
             let dir = PathBuf::from(arg(2)?);
             let (listing, hash) = packs::build(&dir).with_context(|| format!("listing {}", dir.display()))?;
             println!("wrote {} ({} files): {hash}", dir.join(m2_song::pack::LISTING).display(), listing.files.len());
         }
-        Some("install") => {
+        "install" => {
             let dir = PathBuf::from(arg(2)?);
             match packs::install(&dir, &store()?, &std).map_err(failed)? {
                 packs::Install::Installed { name, version, dir, hash } => {
@@ -1077,7 +1082,7 @@ fn pack(args: &[String]) -> Result<()> {
                 packs::Install::Already { name, version, .. } => println!("{name} {version} is already installed, with these very files"),
             }
         }
-        Some("list") => {
+        "list" => {
             let all = packs::installed(&store()?);
             if all.is_empty() {
                 println!("no packs installed: install one from its folder with m2 pack install <folder>");
@@ -1087,14 +1092,14 @@ fn pack(args: &[String]) -> Result<()> {
                 println!("{} {}{licence}  {}", p.name, p.versions.join(", "), p.description);
             }
         }
-        Some("remove") => {
+        "remove" => {
             let name = PackName::new(&arg(2)?).map_err(|e| anyhow!(e))?;
             let v = arg(3)?;
             let version = m2_song::Version::parse(&v).ok_or_else(|| anyhow!("`{v}` isn't a version such as 1.2.0"))?;
             packs::remove(&store()?, &name, &version)?;
             println!("removed {name} {version}. A song that locks this version says so (pkg.missing) until it is installed again");
         }
-        Some("lock") => {
+        "lock" => {
             let dir = PathBuf::from(arg(2)?);
             let mut s = writer(&dir)?;
             match packs::write_lock(&mut s).map_err(|e| anyhow!("{e}"))? {

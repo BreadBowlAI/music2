@@ -309,7 +309,8 @@ fn builds(
 ) -> Vec<String> {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let song = std::env::temp_dir().join(format!("m2-pack-check-{}-{n}", std::process::id()));
+    // In music2's cache folder, under `$HOME` (PLAT-7), and gone when the check ends.
+    let song = m2_os::dirs::cache().unwrap_or_else(std::env::temp_dir).join(format!("pack-check-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&song);
     let (mut imports, mut plays) = (std::collections::BTreeSet::new(), vec![]);
     for (i, d) in ours.iter().enumerate() {
