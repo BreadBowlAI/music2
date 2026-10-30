@@ -259,6 +259,18 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
         }
         Err(e) => out.push(format!("{} can't be read: {e}", dir.display())),
     }
+    // Instruments written as data are the module `<package>/instruments`, unless code has that
+    // module, which would hide them (PACK-13).
+    if !m2_script::data_files(dir).is_empty() {
+        for code in ["src/instruments.ts", "src/instruments/index.ts"] {
+            if dir.join(code).is_file() {
+                out.push(format!(
+                    "{code} and instruments/*.toml are both the module \"{name}/instruments\", so the instruments written as data \
+                     would be hidden: give the code's module another name"
+                ));
+            }
+        }
+    }
     // Its kernels load, each module checked as a song would load it.
     let mut set = m2_runtime::PackageSet::default();
     let loaded = set.load(std).map(drop).and_then(|()| set.load(dir).map(drop));
@@ -266,7 +278,7 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
         out.push(format!("{e:#}"));
         return out;
     }
-    let catalog = m2_script::describe(&[(pack::STD.to_string(), std.to_path_buf()), (name.as_str().to_string(), dir.to_path_buf())]);
+    let catalog = m2_session::describe(&[(pack::STD.to_string(), std.to_path_buf()), (name.as_str().to_string(), dir.to_path_buf())]);
     let prefix = format!("{name}:");
     for d in catalog.problems.iter().filter(|d| d.message.contains(name.as_str())) {
         out.push(d.message.clone());

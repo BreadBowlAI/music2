@@ -214,6 +214,7 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     let mut opts = m2_script::Options::new(code, &project.manifest.project.entry);
     opts.packages = view.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
     opts.dependencies = project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect();
+    opts.data = Some(data_instrument);
     let m2_script::Build { mut ir, sites, outputs, package_files, components, units } = m2_script::build_full(&opts)?;
     let components = components.into_iter().map(|d| (d.id.clone(), Arc::new(d))).collect();
 
@@ -281,7 +282,23 @@ pub fn catalog(packages: &PackageSet) -> m2_script::Catalog {
     let mut installed: Vec<(String, std::path::PathBuf)> =
         packages.packages().filter(|p| p.name == m2_song::pack::STD).map(|p| (p.name.clone(), p.dir.clone())).collect();
     installed.extend(offered(packages));
-    m2_script::describe(&installed)
+    describe(&installed)
+}
+
+/// Every component `packages` declare and where each is exported (`m2_script::describe`), their
+/// instruments written as data included (PACK-13).
+pub fn describe(packages: &[(String, std::path::PathBuf)]) -> m2_script::Catalog {
+    m2_script::describe_with(packages, Some(data_instrument))
+}
+
+/// A pack's `instruments/<id>.toml` read and made into its module (PACK-13), for the build.
+pub fn data_instrument(package: &str, id: &str, text: &str) -> Result<m2_script::DataModule, m2_script::DataProblem> {
+    let i = m2_song::instrument::DataInstrument::read(text).map_err(|p| m2_script::DataProblem {
+        message: p.message,
+        line: p.line,
+        col: p.col,
+    })?;
+    Ok(m2_script::DataModule { code: i.module(package, id), regions: i.regions.iter().map(|r| r.line).collect() })
 }
 
 /// The packs the lists offer (PACK-11): those `packages` shows (the accepted revision's), then of

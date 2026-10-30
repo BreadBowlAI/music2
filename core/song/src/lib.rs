@@ -20,6 +20,7 @@ pub mod arrangement;
 pub mod data;
 pub mod diag;
 pub mod hash;
+pub mod instrument;
 pub mod jcs;
 pub mod key;
 pub mod lane;

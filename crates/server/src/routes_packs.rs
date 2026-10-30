@@ -32,7 +32,7 @@ fn installed() -> Value {
     let packs: Vec<Value> = m2_editor::packs::installed(&store)
         .into_iter()
         .map(|p| {
-            let catalog = m2_script::describe(&[("std".to_string(), std.clone()), (p.name.clone(), p.dir.clone())]);
+            let catalog = m2_session::describe(&[("std".to_string(), std.clone()), (p.name.clone(), p.dir.clone())]);
             let prefix = format!("{}:", p.name);
             let items: Vec<Value> = catalog
                 .components

@@ -329,3 +329,96 @@ fn a_pack_that_fails_to_load_never_panics_the_build() {
     assert_eq!(codes(&e), ["pkg.broken"]);
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// `@test/tiny` in `root` with `instruments/tiny-piano.toml` (PACK-13), and the song from its
+/// folder playing it on its pluck track.
+fn tiny_with_data(root: &Path, toml: &str) -> PathBuf {
+    copy(&fixtures(), root);
+    std::fs::create_dir_all(root.join("tiny/instruments")).unwrap();
+    std::fs::write(root.join("tiny/instruments/tiny-piano.toml"), toml).unwrap();
+    let pluck = "import { track } from \"@m2/core\";\nimport { tinyPiano } from \"@test/tiny/instruments\";\n\n\
+                 export default track(\"pluck\", { name: \"Pluck\" }, ({ lane }) => tinyPiano(lane.notes(\"notes\")));\n";
+    std::fs::write(root.join("song-path/tracks/pluck.ts"), pluck).unwrap();
+    root.join("song-path")
+}
+
+const TINY_PIANO: &str = "# Two layers of one pluck.\nlabel = \"Tiny piano\"\ncategory = \"Keys\"\ndescription = \"A pluck in two layers\"\n\
+                          engine = \"std:sampler\"\nmode = \"gate\"\nrelease = 0.2\nvoices = 4\n\n\
+                          [[region]]\nfile = \"samples/pluck.wav\"\nroot = 48\nkeys = [0, 59]\n\n\
+                          [[region]]\nfile = \"samples/pluck.wav\"\nroot = 60\nkeys = [60, 127]\nvolume = -6\n";
+
+// PACK-13: an instrument written as data is a component of its pack, as if written in TypeScript:
+// its id, its descriptor with the file's defaults, exported from "<package>/instruments" by its id
+// in camelCase, and listed with the pack's other components. The build records the file read, and
+// it sounds.
+#[test]
+fn a_data_instrument_is_a_component_of_its_pack() {
+    let root = scratch("data");
+    let song = tiny_with_data(&root, TINY_PIANO);
+    let mut pk = packages(&root.join("no-store"));
+    let c = compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(c.problems.is_empty(), "{:?}", c.problems);
+    let components: Vec<&str> = c.ir.modules.iter().flat_map(|m| m.frames.iter().filter_map(|f| f.component.as_deref())).collect();
+    assert!(components.contains(&"@test/tiny:tiny-piano"), "{components:?}");
+    let toml = std::fs::read(root.join("tiny/instruments/tiny-piano.toml")).unwrap();
+    let read = c.package_files.iter().find(|f| f.path == "@test/tiny/instruments/tiny-piano.toml").expect("the file is recorded");
+    assert_eq!(format!("sha256:{}", read.sha256), m2_song::Sha::of(&toml).to_string());
+    let out = Renderer::new(&c.flat, &c.data, &pk, 48_000).unwrap().render(2.0).unwrap();
+    let peak =
+        |from: f64, to: f64| out[(from * 48_000.0) as usize..(to * 48_000.0) as usize].iter().map(|f| f[0].abs()).fold(0.0, f32::max);
+    assert!(peak(0.25, 0.45) > 0.01, "the data instrument sounds");
+
+    let std = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    let catalog = describe(&[("std".into(), std), ("@test/tiny".into(), root.join("tiny"))]);
+    assert!(catalog.problems.is_empty(), "{:?}", catalog.problems);
+    let d = &catalog.components["@test/tiny:tiny-piano"];
+    assert!(d.is_instrument());
+    assert_eq!(
+        (d.label.as_str(), d.editor.category.as_deref(), d.editor.description.as_str()),
+        ("Tiny piano", Some("Keys"), "A pluck in two layers")
+    );
+    assert_eq!(d.module, "@test/tiny/instruments");
+    assert_eq!(d.at, "@test/tiny/instruments/tiny-piano.toml:1:1", "defined at its file");
+    assert_eq!(d.control("release").and_then(|c| c.default.as_ref()).map(|v| v.value), Some(0.2));
+    assert_eq!(d.control("level").and_then(|c| c.default.as_ref()).map(|v| v.value), Some(0.0), "left out, the Sampler's");
+    let exports: Vec<(&str, &str)> =
+        catalog.exports["@test/tiny:tiny-piano"].iter().map(|e| (e.module.as_str(), e.name.as_str())).collect();
+    assert_eq!(exports, [("@test/tiny/instruments", "tinyPiano")]);
+    assert!(catalog.components.contains_key("@test/tiny:tiny-keys"), "listed with the pack's coded ones");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-13, PKG-15: a mistake in a data instrument names its file and line: one the reader finds,
+// and one @m2/core finds in a region's numbers, at that region's line.
+#[test]
+fn a_data_instruments_region_error_names_its_line() {
+    let root = scratch("data-err");
+    let song = tiny_with_data(&root, &TINY_PIANO.replace("keys = [60, 127]", "keys = [127, 60]"));
+    let mut pk = packages(&root.join("no-store"));
+    let Err(e) = compile(&Project::open(&song).unwrap(), &mut pk) else { panic!("refused") };
+    assert_eq!(e[0].src.as_deref(), Some("@test/tiny/instruments/tiny-piano.toml:15:1"), "{e:?}");
+    assert!(e[0].message.contains("region 2: keys 127 to 60: the lowest is above the highest"), "{}", e[0].message);
+
+    std::fs::write(root.join("tiny/instruments/tiny-piano.toml"), TINY_PIANO.replace("root = 48", "roots = 48")).unwrap();
+    let Err(e) = compile(&Project::open(&song).unwrap(), &mut pk) else { panic!("refused") };
+    assert_eq!(e[0].src.as_deref(), Some("@test/tiny/instruments/tiny-piano.toml:12:1"), "{e:?}");
+    assert!(e[0].message.contains("`roots` in region 1: no such key; did you mean `root`?"), "{}", e[0].message);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-13: a data instrument's controls and settings are std's Sampler's, so one that gives no
+// defaults is the Sampler with its regions.
+#[test]
+fn sampler_controls_are_stds() {
+    let std = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    let catalog = describe(&[("std".into(), std)]);
+    let sampler = &catalog.components["std:sampler"];
+    for (name, _, default, (lo, hi)) in m2_song::instrument::CONTROLS {
+        let c = sampler.control(name).unwrap_or_else(|| panic!("std's sampler has {name}"));
+        assert_eq!((c.default.as_ref().map(|v| v.value), c.range), (Some(*default), Some((*lo, *hi))), "{name}");
+    }
+    let setting = |n: &str| sampler.settings.iter().find(|s| s.name == n).unwrap_or_else(|| panic!("std's sampler has {n}")).clone();
+    assert_eq!(setting("voices").default, Some(serde_json::json!(m2_song::instrument::VOICES as i64)));
+    assert_eq!(setting("mode").default, Some(serde_json::json!(m2_song::instrument::MODE)));
+    assert_eq!(setting("mode").options, Some(m2_song::instrument::MODES.iter().map(|m| m.to_string()).collect()));
+}
