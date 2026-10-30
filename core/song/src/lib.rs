@@ -24,6 +24,7 @@ pub mod jcs;
 pub mod key;
 pub mod lane;
 pub mod manifest;
+pub mod pack;
 pub mod path;
 pub mod tx;
 
@@ -40,7 +41,8 @@ pub use key::{ClipId, Key, LaneAddr, ROOT};
 pub use lane::{
     AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, canonical, parse_pitch,
 };
-pub use manifest::{FORMAT, Manifest, Requirement, SDK, Version};
+pub use manifest::{Dependency, FORMAT, Manifest, Requirement, SDK, Version};
+pub use pack::{Lock, PackName};
 pub use path::{AssetName, Class, DataPath, dir_hash};
 pub use tx::{Anchor, Base, Confined, Declared, DeltaHash, Expect, ModuleChange, Op as TxOp, Payload, Pos, Range, Spot, Tx, TxPath};
 
@@ -149,6 +151,7 @@ impl Snapshot {
         let d = DataPath::parse(&rel);
         match d {
             DataPath::Manifest
+            | DataPath::Lock
             | DataPath::Code(_)
             | DataPath::Arrangement
             | DataPath::Lane { .. }
@@ -367,7 +370,7 @@ fn stored(path: &Path) -> Stored {
 /// assets never do.
 fn blocks(p: &Path) -> bool {
     match DataPath::parse(p) {
-        DataPath::Manifest | DataPath::Code(_) | DataPath::Arrangement => true,
+        DataPath::Manifest | DataPath::Lock | DataPath::Code(_) | DataPath::Arrangement => true,
         DataPath::Lane { .. } | DataPath::Module { .. } | DataPath::PluginState { .. } | DataPath::Asset(_) => false,
         _ => !(p.starts_with(path::DATA) || p.starts_with(path::ASSETS)) || p == Path::new(path::DATA),
     }
@@ -377,7 +380,7 @@ fn blocks(p: &Path) -> bool {
 fn unreadable_blocks(p: &Path, why: &str) -> Diagnostic {
     let file = path::slashed(p);
     match DataPath::parse(p) {
-        DataPath::Manifest => Diagnostic::error("manifest.invalid", format!("{file} can't be read ({why})")),
+        DataPath::Manifest | DataPath::Lock => Diagnostic::error("manifest.invalid", format!("{file} can't be read ({why})")),
         DataPath::Arrangement => Diagnostic::error("arrangement.invalid", format!("{file} can't be read ({why})")),
         _ if p == Path::new(path::DATA) => {
             Diagnostic::error("arrangement.invalid", format!("{file} can't be read ({why}), so neither can {}", DataPath::Arrangement))
@@ -395,6 +398,8 @@ fn unreadable_blocks(p: &Path, why: &str) -> Diagnostic {
 pub struct Project {
     pub dir: PathBuf,
     pub manifest: Manifest,
+    /// `music2.lock`, or an empty lock when there is none (PACK-8).
+    pub lock: Lock,
     pub arrangement: Arrangement,
     /// Every Code file, by its path in the project, `/`-separated: all the build may import
     /// from the project (FMT-6a).
@@ -427,6 +432,10 @@ impl Project {
             return Err(vec![Diagnostic::error("manifest.invalid", why)]);
         };
         let manifest = Manifest::read(text).map_err(|d| vec![d])?;
+        let lock = match snap.files.get(Path::new(path::LOCK)) {
+            Some(text) => Lock::read(text).map_err(|d| vec![d])?,
+            None => Lock::default(),
+        };
         // Code and the arrangement that can't be read block, as their errors do; data never does.
         let (blocking, unreadable): (BTreeMap<PathBuf, String>, BTreeMap<PathBuf, String>) =
             snap.unreadable.clone().into_iter().partition(|(p, _)| blocks(p));
@@ -456,7 +465,7 @@ impl Project {
             }
         }
         let (binaries, unknown) = (snap.binaries.clone(), snap.unknown.clone());
-        Ok(Project { dir: snap.dir.clone(), manifest, arrangement, code, lanes, sidecars, binaries, unknown, unreadable })
+        Ok(Project { dir: snap.dir.clone(), manifest, lock, arrangement, code, lanes, sidecars, binaries, unknown, unreadable })
     }
 
     /// The project a session opens with while its files don't build (WRITE-20): the manifest's
@@ -472,6 +481,7 @@ impl Project {
         Project {
             dir: snap.dir.clone(),
             manifest: Manifest { project: info, dependencies: BTreeMap::new() },
+            lock: Lock::default(),
             arrangement: Arrangement::default(),
             code: BTreeMap::new(),
             lanes: BTreeMap::new(),

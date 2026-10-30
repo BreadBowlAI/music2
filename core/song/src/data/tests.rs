@@ -266,6 +266,7 @@ fn plugin_states_need_their_sidecar() {
     let decls = Decls {
         lanes: vec![],
         assets: vec![],
+        packages: BTreeMap::new(),
         states: vec![
             state("lead", &["lead"], surge),
             state("pad", &["pad"], surge),
@@ -718,4 +719,35 @@ fn with_arrangement_keeps_every_lane() {
     let both: Vec<_> = data.lanes().zip(dragged.lanes()).collect();
     assert_eq!(both.len(), 2);
     assert!(both.iter().all(|((a, x), (b, y))| a == b && Arc::ptr_eq(x, y)), "every lane shared");
+}
+
+// PACK-5: a package's file resolves inside that package's folder only, byte for byte, and only for a
+// package the code was built with; the revision records its hash beside the song's assets.
+#[test]
+fn package_assets_resolve_inside_their_package() {
+    let d = Dir::new(&[("assets/kick.wav", b"kick"), ("pack/samples/C4.wav", b"c4"), ("pack/m2pkg.toml", b"x"), ("secret.wav", b"no")]);
+    let pack = d.0.join("pack");
+    let read = |names: &[&str]| {
+        let assets = names.iter().map(|n| AssetDecl { module: key("keys"), name: n.to_string() }).collect();
+        let packages = BTreeMap::from([("@alice/felt-piano".to_string(), pack.clone())]);
+        d.project().data(&Decls { assets, packages, ..Decls::default() }, None)
+    };
+    let (data, diags) = read(&["kick.wav", "@alice/felt-piano:samples/C4.wav"]);
+    assert!(diags.is_empty(), "{diags:?}");
+    assert_eq!(data.kernel_assets().get("@alice/felt-piano:samples/C4.wav"), Some(&Sha::of(b"c4")), "the revision records its hash");
+    assert_eq!(data.kernel_assets().get("kick.wav"), Some(&Sha::of(b"kick")));
+    assert_eq!(data.asset_path("@alice/felt-piano:samples/C4.wav"), Some(pack.join("samples/C4.wav")));
+    for bad in [
+        "@alice/felt-piano:samples/c4.wav",
+        "@alice/felt-piano:samples/../../secret.wav",
+        "@alice/felt-piano:samples/none.wav",
+        "@alice/felt-piano:samples",
+        "@bob/other:samples/C4.wav",
+        "std:samples/C4.wav",
+    ] {
+        let (data, diags) = read(&[bad]);
+        assert_eq!(diags.iter().map(|d| d.code).collect::<Vec<_>>(), ["asset.missing"], "{bad}");
+        assert!(diags[0].message.contains(bad) && diags[0].module.as_deref() == Some("keys"), "{}", diags[0].message);
+        assert!(data.asset_path(bad).is_none() && data.kernel_assets().is_empty(), "{bad} never plays");
+    }
 }

@@ -35,6 +35,7 @@ pub mod mix;
 pub mod mute;
 pub mod note_names;
 pub mod notes;
+pub mod packs;
 pub mod plan;
 pub mod plugins;
 pub mod presets;

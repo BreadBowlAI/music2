@@ -219,3 +219,13 @@ fn an_unknown_message_keeps_its_words() {
         assert_eq!(explain(code, message, &song, &At::default()), None, "{code}: {message}");
     }
 }
+
+// PACK-3: a scoped package's missing module names the whole package, and lists only its modules.
+#[test]
+fn a_missing_scoped_module_names_its_whole_package() {
+    let exports = [("feltPiano", "@alice/felt-piano"), ("feltKeys", "@alice/felt-piano/keys"), ("organ", "@alice/organ")];
+    let song =
+        Song { tracks: vec![], exports: exports.iter().map(|(n, m)| (n.to_string(), m.to_string())).collect(), names: BTreeMap::new() };
+    let p = missing_import("@alice/felt-piano/nope", "tracks/keys.ts", &song).unwrap();
+    assert_eq!(p.fix.as_deref(), Some("Check its name: @alice/felt-piano has @alice/felt-piano, @alice/felt-piano/keys."));
+}

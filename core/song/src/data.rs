@@ -22,16 +22,19 @@ use crate::tx::{Base, Confined, Expect, Op, Payload, TxPath};
 use crate::{Project, Stored};
 
 /// What the code declares that reads data: lanes, plugins with saved state, and the assets
-/// kernels read.
+/// kernels read; and the folders of the packages it was built with, where a package's own files
+/// are (PACK-5).
 #[derive(Clone, Debug, Default)]
 pub struct Decls {
     pub lanes: Vec<(LaneAddr, LaneKind)>,
     pub states: Vec<StateDecl>,
     pub assets: Vec<AssetDecl>,
+    /// By package name: std's and each resolved pack's (PACK-9).
+    pub packages: BTreeMap<String, PathBuf>,
 }
 
-/// An asset a kernel reads (kernel ABI v1), by its name in `assets/`, and the module whose code
-/// names it.
+/// An asset a kernel reads (kernel ABI v1), by its name in `assets/` or a package's file
+/// (`@alice/felt-piano:samples/C4.wav`, PACK-5), and the module whose code names it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AssetDecl {
     pub module: Key,
@@ -84,6 +87,8 @@ pub struct DataSet {
     /// The hash of each asset a kernel reads, as this revision read it (RENDER-2): what it plays.
     /// A missing one isn't here, and its kernel reads silence (`asset.missing`).
     kernel_assets: BTreeMap<String, Sha>,
+    /// Where each package file a kernel reads is (PACK-5), by its reference.
+    package_files: BTreeMap<String, PathBuf>,
     /// The binaries `assets` was listed from, so a revision whose binaries are these lists none
     /// again (thousands of assets beside a lane edit). Not data.
     assets_of: Option<Arc<BTreeMap<PathBuf, Stored>>>,
@@ -158,9 +163,13 @@ impl DataSet {
         }
     }
 
-    /// Where to read the asset a clip names, if it may be played: an exact entry of `assets/`
-    /// that could be read when the revision was made (FMT-15).
+    /// Where to read the asset a clip or a kernel names, if it may be played: an exact entry of
+    /// `assets/` that could be read when the revision was made (FMT-15), or a package's file found
+    /// then (PACK-5).
     pub fn asset_path(&self, name: &str) -> Option<PathBuf> {
+        if let Some(p) = self.package_files.get(name) {
+            return Some(p.clone());
+        }
         let dir = self.dir.as_ref()?;
         let name = AssetName::new(name).ok().filter(|n| self.assets.contains(n.as_str()))?;
         Some(dir.join(DataPath::Asset(name).path()))
@@ -210,6 +219,22 @@ impl DataSet {
         d.read.insert(addr.clone(), (kind.clone(), text));
         d
     }
+}
+
+/// Where a package's file named `name` is (PACK-5): None when `name` is a song's asset; else the
+/// file, or why it can't be played. Only a package in `packages` (what the code was built with)
+/// has files, each found inside its folder byte for byte.
+fn package_asset(name: &str, packages: &BTreeMap<String, PathBuf>) -> Option<Result<PathBuf, String>> {
+    let (package, path) = match crate::pack::AssetRef::parse(name) {
+        Ok(crate::pack::AssetRef::Song(_)) => return None,
+        Ok(crate::pack::AssetRef::Package { package, path }) => (package, path),
+        Err(why) if name.contains(':') => return Some(Err(format!("isn't a file a package can name: {why}"))),
+        Err(_) => return None,
+    };
+    let Some(dir) = packages.get(package.as_str()) else {
+        return Some(Err(format!("is in {package}, which this song doesn't list under [dependencies] in music2.toml")));
+    };
+    Some(crate::pack::package_file(dir, path).map_err(|why| format!("isn't in {package}: {why}")))
 }
 
 /// A lane file no declared lane reads (DIAG-6).
@@ -278,7 +303,7 @@ impl Project {
             }
         }
         let states = self.states(decls, &mut diags);
-        let kernel_assets = self.kernel_assets(decls, &mut diags);
+        let (kernel_assets, package_files) = self.kernel_assets(decls, &mut diags);
         diags.extend(self.unread(decls));
         for p in self.unknown.iter().filter(|p| DataPath::parse(p).unknown_data()) {
             let file = slashed(p);
@@ -312,6 +337,7 @@ impl Project {
             states,
             assets,
             kernel_assets,
+            package_files,
             assets_of: Some(self.binaries.clone()),
             dir: Some(self.dir.clone()),
             end,
@@ -594,13 +620,28 @@ impl Project {
     }
 
     /// The assets kernels read (kernel ABI v1), found by listing `assets/` as a clip's are
-    /// (FMT-15): the hash of each that may be played. One that may not is `asset.missing`, naming
-    /// the track whose code reads it; its kernel reads silence, and the rest plays on.
-    fn kernel_assets(&self, decls: &Decls, diags: &mut Vec<Diagnostic>) -> BTreeMap<String, Sha> {
+    /// (FMT-15), or a package's folder for a package's file (PACK-5): the hash of each that may be
+    /// played, and where each package file is. One that may not is `asset.missing`, naming the
+    /// track whose code reads it; its kernel reads silence, and the rest plays on.
+    fn kernel_assets(&self, decls: &Decls, diags: &mut Vec<Diagnostic>) -> (BTreeMap<String, Sha>, BTreeMap<String, PathBuf>) {
         let mut out = BTreeMap::new();
+        let mut files = BTreeMap::new();
         let read: BTreeSet<&AssetDecl> = decls.assets.iter().collect();
         for d in read {
             let name = &d.name;
+            if let Some(found) = package_asset(name, &decls.packages) {
+                match found.and_then(|p| HashCache::global().hash(&p).map(|sha| (p, sha)).map_err(|e| format!("can't be read ({e})"))) {
+                    Ok((p, sha)) => {
+                        out.insert(name.clone(), sha);
+                        files.insert(name.clone(), p);
+                    }
+                    Err(why) => {
+                        let message = format!("`{name}` {why}, so the sound on track `{}` that plays it is silent", d.module);
+                        diags.push(Diagnostic::error("asset.missing", message).module(d.module.as_str()));
+                    }
+                }
+                continue;
+            }
             let path = AssetName::new(name).ok().map(|a| DataPath::Asset(a).path());
             let stored = path.as_ref().map(|p| (self.binaries.get(p), p));
             let why = match stored {
@@ -625,7 +666,7 @@ impl Project {
             );
             diags.push(Diagnostic::error("asset.missing", message).module(d.module.as_str()));
         }
-        out
+        (out, files)
     }
 
     /// Every file in `assets/`, by name.

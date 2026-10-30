@@ -89,7 +89,7 @@ impl Part {
 }
 
 /// Every file's routes, each named once.
-const PARTS: [Part; 16] = [
+const PARTS: [Part; 17] = [
     crate::routes::PART,
     crate::routes_8b::PART,
     crate::routes_audio::PART,
@@ -99,6 +99,7 @@ const PARTS: [Part; 16] = [
     crate::routes_library::PART,
     crate::routes_mix::PART,
     crate::routes_notes::PART,
+    crate::routes_packs::PART,
     crate::routes_plugins::PART,
     crate::routes_presets::PART,
     crate::routes_project::PART,

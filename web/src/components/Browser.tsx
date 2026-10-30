@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { ChevronRight, Search } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { graphApi, lockReason, moduleName, type Effect, type GraphState, type Instrument, type ViewNode } from "../lib/graph";
+import { fromPack, graphApi, lockReason, moduleName, type Effect, type GraphState, type Instrument, type ViewNode } from "../lib/graph";
 import { useSearch, type LibraryItem } from "../lib/library";
 import { listedEffect, listedInstrument, pluginEffects, pluginInstruments, PLUGINS, usePluginList, wantPlugins } from "../lib/plugins";
 import { useShell } from "../lib/shell";
@@ -9,6 +9,7 @@ import { useStore } from "../lib/store";
 import { category, NoMatch, search } from "./EffectBrowser";
 import { undoAction } from "./GraphCanvas";
 import Guide from "./Guide";
+import PacksList from "./PacksList";
 import PluginsFoot from "./PluginsFoot";
 import { addTrack, INSTRUMENT_DRAG, instrumentGroups } from "./Tracks";
 
@@ -235,7 +236,7 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
         data-browser-instrument={ins.component}
         data-active={on || undefined}
         draggable={!locked}
-        title={`${ins.description}\n${ins.name}${locked ? `\n\n${locked}.` : "\n\nEnter or double-click adds a track with it; drag it below the tracks"}`}
+        title={`${ins.description}\n${ins.name}${fromPack(ins)}${locked ? `\n\n${locked}.` : "\n\nEnter or double-click adds a track with it; drag it below the tracks"}`}
         onPointerDown={() => {
           setPicked(key);
           setCursor(true);
@@ -266,7 +267,7 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
         data-browser-item={e.component}
         data-active={on || undefined}
         draggable={!locked}
-        title={`${e.description}\n${e.name}${locked ? `\n\n${locked}.` : `\n\nEnter or double-click adds it to ${target}; drag it onto a track`}`}
+        title={`${e.description}\n${e.name}${fromPack(e)}${locked ? `\n\n${locked}.` : `\n\nEnter or double-click adds it to ${target}; drag it onto a track`}`}
         onPointerDown={() => {
           setPicked(key);
           setCursor(true);
@@ -401,6 +402,7 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
           );
         })}
         {pluginGroup("effects", () => fxPlugins.map((e) => effectRow(e)))}
+        {!query.trim() && <PacksList />}
       </div>
     </aside>
   );

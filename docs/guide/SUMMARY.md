@@ -20,6 +20,8 @@
 - [Finding sounds (⌘F)](finding-sounds.md)
 - [Sounds and effects](sounds.md)
 - [CLAP plugins](plugins.md)
+- [Packs](packs.md)
+- [Making a pack](making-a-pack.md)
 - [How a song is written](code.md)
 - [Credits](credits.md)
 

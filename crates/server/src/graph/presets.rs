@@ -28,11 +28,13 @@ fn yours() -> Result<PathBuf> {
     m2_os::dirs::presets().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set)"))
 }
 
-/// The folder presets `from` (`std` or `yours`) for `sound` are in.
-fn folder(from: &str, sound: &str) -> Result<PathBuf> {
+/// The folder presets `from` (`std`: the package's own, std's or a pack's, in `own`, its folder;
+/// or `yours`) for `sound` are in.
+fn folder(from: &str, sound: &str, own: Option<&std::path::Path>) -> Result<PathBuf> {
     match from {
         "std" => {
-            presets::factory(&crate::resources::std_dir(), sound).ok_or_else(|| anyhow!("music2 has no presets of its own for this sound"))
+            let dir = own.map_or_else(crate::resources::std_dir, std::path::Path::to_path_buf);
+            presets::factory(&dir, sound).ok_or_else(|| anyhow!("music2 has no presets of its own for this sound"))
         }
         "yours" => Ok(yours()?.join(presets::folder(sound))),
         other => bail!("there are no presets from `{other}`"),
@@ -45,8 +47,8 @@ fn named(controls: &[(String, Why)]) -> Value {
 }
 
 /// The names of `sound`'s presets from `from`.
-fn names(from: &str, sound: &str) -> Vec<Value> {
-    let listed = folder(from, sound).map(|d| presets::list(&d, sound)).unwrap_or_default();
+fn names(from: &str, sound: &str, own: Option<&std::path::Path>) -> Vec<Value> {
+    let listed = folder(from, sound, own).map(|d| presets::list(&d, sound)).unwrap_or_default();
     listed.into_iter().map(|l| json!({"name": l.name})).collect()
 }
 
@@ -60,6 +62,12 @@ impl Graph {
             Some(o) => f(&o.session),
             None => bail!("the open project changed; refresh the graph before editing"),
         })
+    }
+
+    /// The folder of the package that makes `sound`, as the open session has it (PACK-11).
+    fn package_dir(&self, token: u64, sound: &str) -> Option<PathBuf> {
+        let sound = sound.to_string();
+        self.with_session(token, move |s| Ok(presets::package_dir(s, &sound))).ok().flatten()
     }
 
     /// What call `node` (named at revision `at`, else the accepted one) is to presets.
@@ -90,9 +98,10 @@ impl Graph {
     pub fn presets(&self, token: u64, at: Option<u64>, node: &str) -> Result<Value> {
         let (of, found) = self.preset_call(token, at, node)?;
         let (sound, label) = of.named();
-        let mut out = json!({"sound": sound, "label": label, "std": [], "yours": names("yours", &sound), "plugin": []});
+        let own = self.package_dir(token, &sound);
+        let mut out = json!({"sound": sound, "label": label, "std": [], "yours": names("yours", &sound, None), "plugin": []});
         match (&of, found) {
-            (Of::Sound(_), _) => out["std"] = names("std", &sound).into(),
+            (Of::Sound(_), _) => out["std"] = names("std", &sound, own.as_deref()).into(),
             (Of::Plugin(_), Some(found)) => match self.offered(&found) {
                 Ok(offered) => out["plugin"] = offered.iter().map(|o| json!({"name": o.name})).collect(),
                 Err(e) => out["plugin_error"] = format!("Couldn't read {label}'s presets: {e}").into(),
@@ -125,7 +134,7 @@ impl Graph {
                 presets::capture_plugin(&p, &name, &blob.bytes).map_err(|e| anyhow!("{e}"))?
             }
         };
-        match presets::store(&folder("yours", &saved.preset.sound)?, &saved.preset, replace) {
+        match presets::store(&folder("yours", &saved.preset.sound, None)?, &saved.preset, replace) {
             Ok(_) => Ok(json!({"name": saved.preset.name, "left": named(&saved.left)})),
             Err(NotStored::Taken(name)) => Ok(json!({"taken": name})),
             Err(NotStored::Refused(why)) => bail!(why),
@@ -143,7 +152,8 @@ impl Graph {
         };
         match self.preset_call(token, Some(at), &node)? {
             (Of::Sound(x), _) => {
-                let preset = presets::read(&folder(from, &x.component)?, &x.component, name).map_err(|e| anyhow!(e))?;
+                let own = self.package_dir(token, &x.component);
+                let preset = presets::read(&folder(from, &x.component, own.as_deref())?, &x.component, name).map_err(|e| anyhow!(e))?;
                 self.call(move |a| a.edit_and(token, |s| answer(presets::load(s, at, &node, &preset)?)))
             }
             (Of::Plugin(p), found) => {
@@ -155,7 +165,7 @@ impl Graph {
                         self.scratch(&found, &p, name)?
                     }
                     _ => {
-                        let preset = presets::read(&folder(from, &p.plugin)?, &p.plugin, name).map_err(|e| anyhow!(e))?;
+                        let preset = presets::read(&folder(from, &p.plugin, None)?, &p.plugin, name).map_err(|e| anyhow!(e))?;
                         let blob = preset.blob().map_err(|e| anyhow!(e))?;
                         (preset, blob)
                     }

@@ -80,7 +80,7 @@ pub use data::{decls, lane_kind};
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
 pub use m2_pool::{Counters, ENTRY_BUCKETS, Meter, Pool, Runner, Setup, Trip};
-pub use packages::{Package, PackageSet};
+pub use packages::{Package, PackageSet, View};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
 pub use sandbox::{OutOfMemory, TooManySounds};

@@ -20,6 +20,7 @@
 | `step9/` | one plan and one set of build notes per track (`io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`) |
 | `agents/` | agents beside the musician: the design, and the build notes of its five tracks (`steps`, `fwd`, `see`, `routes`, `listen`) |
 | `release/` | the first release, 0.1.0: the downloads for the Mac and Linux, and the workflow that makes them from a tag |
+| `packs/` | the proposal for packs: instruments, effects, sounds and samples anyone can publish; the registry; ⌘F search (a draft, not built) |
 | `docs/` | the docs plan: the guide in `docs/guide/`, `m2 docs`, the website, and the `AGENTS.md` every new song gets |
 | `workflows/` | the scripts that ran the AI agents who wrote many of these notes. They are kept as a record; nothing runs them |
 

@@ -204,6 +204,13 @@ fn bounds(data: &DataSet, sample_rate: u32, from: f64, length: Length) -> Result
     Ok((first, end))
 }
 
+/// `packages` seeing what `song` was built with (PACK-9), so a render of a revision runs that
+/// revision's kernels whatever the set shows now. Every render of a song is made through it:
+/// `packages` gives the engine, the plugin host and the plugins, never the kernels.
+pub fn seen<'a>(song: &'a dyn Song, packages: &'a PackageSet) -> std::borrow::Cow<'a, PackageSet> {
+    packages.viewing(song.view())
+}
+
 impl Render {
     /// Render a compiled song (its graph and the data it plays) from `from` seconds in (replaying
     /// up to there first), on `threads`: exact (RENDER-1).
@@ -215,6 +222,8 @@ impl Render {
         length: Length,
         threads: Threads,
     ) -> Result<Render> {
+        let seen = seen(&*song, packages);
+        let packages = &*seen;
         let namer = Namer::new(0, song.clone(), packages);
         let (flat, data) = (song.flat(), song.data());
         let (first, end) = bounds(data, sample_rate, from, length)?;
@@ -265,6 +274,8 @@ impl Render {
         lent: &HashMap<usize, Arc<PluginInstance>>,
         threads: Threads,
     ) -> Result<Render> {
+        let seen = seen(&*song, packages);
+        let packages = &*seen;
         let namer = Namer::new(0, song.clone(), packages);
         let (flat, data) = (song.flat(), song.data());
         let (first, end) = bounds(data, sample_rate, 0.0, length)?;
@@ -303,6 +314,8 @@ impl Render {
         if t0 == 0 {
             return Render::new(song, packages, sample_rate, from, length, threads);
         }
+        let seen = seen(&*song, packages);
+        let packages = &*seen;
         let namer = Namer::new(0, song.clone(), packages);
         let (flat, data) = (song.flat(), song.data());
         let mut renderer = Renderer::starting_at(flat, data, packages, sample_rate, t0).map_err(|e| namer.faulted(e))?;
@@ -321,6 +334,12 @@ impl Render {
     /// Whether it renders what an export holds from where it starts (see [`Rendered::exact`]).
     pub fn exact(&self) -> bool {
         self.exact
+    }
+
+    /// What its plan is made of: each node's shape, a kernel's module hash among them.
+    #[cfg(test)]
+    pub(crate) fn info(&self) -> Arc<m2_runtime::PlanInfo> {
+        self.renderer.info()
     }
 
     /// Stop rendering when `stop` is set (the app is quitting): the write then fails, and
@@ -1114,9 +1133,9 @@ mod tests {
         assert!((seconds - (32.0 * 60.0 / 124.0 + 2.0)).abs() < 1e-9, "{seconds}");
         for track in ["kick", "hats", "bass", "keys"] {
             let ir = rooted(&c.ir, track, "out").unwrap();
-            let flat = m2_ir::check(&ir, &packages).unwrap();
+            let parts = Arc::new(Parts::of(&*c, ir, &packages).unwrap());
+            let flat = parts.flat.clone();
             let stem = dir.0.join(format!("{track}.wav"));
-            let parts = Arc::new(Parts { ir, flat: flat.clone(), data: c.data.clone() });
             let r = Render::new(parts, &packages, SAMPLE_RATE, 0.0, Length::Seconds(seconds), Threads::Exactly(2))
                 .unwrap()
                 .write_float(&stem, |_| {})
