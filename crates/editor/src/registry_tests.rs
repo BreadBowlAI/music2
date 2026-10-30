@@ -7,15 +7,15 @@ use m2_song::{Sha, Version};
 
 use super::*;
 
-fn std_dir() -> PathBuf {
+pub(crate) fn std_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")
 }
 
 /// A scratch folder, removed when dropped (read-only files too: an installed pack's).
-struct Temp(PathBuf);
+pub(crate) struct Temp(pub(crate) PathBuf);
 
 impl Temp {
-    fn new(tag: &str) -> Temp {
+    pub(crate) fn new(tag: &str) -> Temp {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let d = std::env::temp_dir().join(format!("m2-registry-{tag}-{}-{n}", std::process::id()));
@@ -46,13 +46,13 @@ impl Drop for Temp {
     }
 }
 
-fn write(path: &Path, text: impl AsRef<[u8]>) {
+pub(crate) fn write(path: &Path, text: impl AsRef<[u8]>) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
 }
 
 /// A 16-bit mono WAV of a tenth of a second of a tone at 48 kHz: the same bytes every time.
-fn tone(path: &Path) {
+pub(crate) fn tone(path: &Path) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
     let mut w = hound::WavWriter::create(path, spec).unwrap();
@@ -83,9 +83,9 @@ export const softKeys = component(
 /// A made-up registry, its packs' folders, and where the CI would unpack each pending version:
 /// `@alice/drums` 1.0.0, one sample that `samples.toml` names, and `@bob/keys` 0.1.0, one
 /// instrument and one sound of it.
-struct World {
-    t: Temp,
-    registry: PathBuf,
+pub(crate) struct World {
+    pub(crate) t: Temp,
+    pub(crate) registry: PathBuf,
     /// Each pack's folder, by name and version: what its `.tar.gz` would hold.
     packs: std::cell::RefCell<BTreeMap<(String, String), PathBuf>>,
     /// Where [`World::stage`] unpacks each pending version, `<hex>/<its folder>`, as the CI does.
@@ -93,7 +93,7 @@ struct World {
 }
 
 impl World {
-    fn new(tag: &str) -> World {
+    pub(crate) fn new(tag: &str) -> World {
         let t = Temp::new(tag);
         let (registry, sources) = (t.0.join("registry"), t.0.join("sources"));
         let drums = t.0.join("src/drums-1.0.0");
@@ -123,17 +123,17 @@ impl World {
         w
     }
 
-    fn drums(&self) -> PathBuf {
+    pub(crate) fn drums(&self) -> PathBuf {
         self.t.0.join("src/drums-1.0.0")
     }
 
-    fn keys(&self) -> PathBuf {
+    pub(crate) fn keys(&self) -> PathBuf {
         self.t.0.join("src/keys/keys-0.1.0")
     }
 
     /// Write `name`'s pack file with one version, its hash the listing of `dir` now, and `more`
     /// lines in its table; `dir` is that version's source.
-    fn list(&self, name: &str, version: &str, dir: &Path, more: &str) {
+    pub(crate) fn list(&self, name: &str, version: &str, dir: &Path, more: &str) {
         let n = PackName::new(name).unwrap();
         let owner = m2_song::registry::github_owner(&n);
         let short = name.rsplit('/').next().unwrap();
@@ -147,7 +147,7 @@ impl World {
     }
 
     /// List version `version` of `name` in removed.toml (REG-7), as music2's people would.
-    fn take_down(&self, name: &str, version: &str) {
+    pub(crate) fn take_down(&self, name: &str, version: &str) {
         let reg = self.registry();
         let hash = reg.get(&PackName::new(name).unwrap()).unwrap().get(Version::parse(version).unwrap()).unwrap().hash;
         let file = self.registry.join(m2_song::registry::REMOVED);
@@ -176,7 +176,7 @@ impl World {
     }
 
     /// Stage the sources, then build.
-    fn build(&self, out: &Path, from: Option<&Bucket>) -> Result<Built, Vec<String>> {
+    pub(crate) fn build(&self, out: &Path, from: Option<&Bucket>) -> Result<Built, Vec<String>> {
         self.stage();
         self.run(out, from, LONGEST)
     }
@@ -197,12 +197,12 @@ impl World {
         })
     }
 
-    fn registry(&self) -> Registry {
+    pub(crate) fn registry(&self) -> Registry {
         Registry::read(&self.registry).unwrap()
     }
 
     /// The listed hash of `name`'s version `version`.
-    fn hash(&self, name: &str, version: &str) -> Sha {
+    pub(crate) fn hash(&self, name: &str, version: &str) -> Sha {
         self.registry().get(&PackName::new(name).unwrap()).unwrap().get(Version::parse(version).unwrap()).unwrap().hash
     }
 }
@@ -216,7 +216,7 @@ fn publish_into(out: &Path, live: &Path) {
 }
 
 /// Every file under `dir`, by its path there.
-fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+pub(crate) fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     crate::testing::files_under(dir)
         .into_iter()
         .map(|p| (p.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/"), std::fs::read(&p).unwrap()))
@@ -228,7 +228,7 @@ fn name(s: &str) -> PackName {
 }
 
 /// The catalog `out`'s catalog.json names, checked.
-fn catalog_in(out: &BTreeMap<String, Vec<u8>>) -> Catalog {
+pub(crate) fn catalog_in(out: &BTreeMap<String, Vec<u8>>) -> Catalog {
     let pointer = Pointer::read(&out[POINTER]).unwrap();
     Catalog::read_checked(&out[&catalog_path(&pointer.catalog)], &pointer).unwrap()
 }

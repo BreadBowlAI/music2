@@ -22,6 +22,7 @@ pub mod effect;
 pub mod explain;
 pub mod faults;
 pub mod fetch;
+pub mod get;
 pub mod import;
 pub mod json;
 pub mod keys;

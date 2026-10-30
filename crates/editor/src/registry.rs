@@ -776,4 +776,4 @@ fn item_facts(item: &Item, listing: &Listing, preview: Option<Sha>, no_preview: 
 
 #[cfg(test)]
 #[path = "registry_tests.rs"]
-mod tests;
+pub(crate) mod tests;

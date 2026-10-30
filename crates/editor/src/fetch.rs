@@ -154,6 +154,12 @@ pub fn check(url: &str) -> Result<(), Error> {
     source(url).map(drop)
 }
 
+/// The `file://` address of the whole path `path` (NET-3), its odd characters escaped (a space, a
+/// `#`), so it reads back as that path; none for a path that isn't whole.
+pub fn file_address(path: &Path) -> Option<String> {
+    Url::from_file_path(path).ok().map(String::from)
+}
+
 /// The bytes at `url`, checked against `expect` (NET-4): at most `expect.limit` of them, of its
 /// size and hash when known, within `expect.within`. `cancel` is looked at as for
 /// [`get_to_file`].
