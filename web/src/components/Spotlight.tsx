@@ -379,7 +379,7 @@ function Panel({ graph }: { graph: GraphState }) {
       </div>
       {folders && (
         <div className="shrink-0 px-3 py-2 border-b border-line bg-chrome text-xs" data-spotlight-folder-list>
-          {folders.length === 0 && <p className="text-fg-muted">No folders of yours yet. Add one, and its WAV files are found here: nothing is copied until you add one to a song.</p>}
+          {folders.length === 0 && <p className="text-fg-muted">No folders of yours yet. Add one, and its WAV and FLAC files are found here: nothing is copied until you add one to a song.</p>}
           {folders.map((f) => (
             <div key={f.path} className="h-ctl-sm flex items-center gap-2" data-spotlight-folder={f.path}>
               <span className="flex-1 min-w-0 truncate text-fg" title={f.path}>
@@ -390,7 +390,7 @@ function Panel({ graph }: { graph: GraphState }) {
                   ? "not there"
                   : f.indexing
                     ? "looking…"
-                    : `${f.samples} samples${f.unreadable ? ` · ${f.unreadable} don't read` : ""}${f.not_wav ? ` · ${f.not_wav} skipped: WAV only for now` : ""}`}
+                    : `${f.samples} samples${f.unreadable ? ` · ${f.unreadable} don't read` : ""}${f.not_wav ? ` · ${f.not_wav} skipped: WAV and FLAC only for now` : ""}`}
               </span>
               <button
                 type="button"

@@ -78,6 +78,12 @@ impl Sha {
         }
     }
 
+    /// A reader that hashes what is read through it: `r`'s bytes as they go by, so a file read
+    /// once is hashed as it was read ([`Hashing::sha`]).
+    pub fn reading<R: Read>(r: R) -> Hashing<R> {
+        Hashing { r, h: Sha256::new() }
+    }
+
     /// All 64 hex digits.
     pub fn hex(&self) -> String {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
@@ -105,6 +111,27 @@ impl Sha {
     /// [`Sha::prefixed`]'s form back to a hash.
     pub fn parse_prefixed(s: &str) -> Option<Sha> {
         Sha::parse(s.strip_prefix("sha256:")?)
+    }
+}
+
+/// A reader that hashes the bytes read through it ([`Sha::reading`]).
+pub struct Hashing<R> {
+    r: R,
+    h: Sha256,
+}
+
+impl<R> Hashing<R> {
+    /// The hash of every byte read through it so far.
+    pub fn sha(self) -> Sha {
+        Sha(self.h.finalize().into())
+    }
+}
+
+impl<R: Read> Read for Hashing<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.r.read(buf)?;
+        self.h.update(&buf[..n]);
+        Ok(n)
     }
 }
 

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Built the same day (#33 to #38): §16.2's slices 1 to 4 and 7, with the contract's PACK, LIB and PKG-15/16 rules. Not built: slice 5 (streaming). Slice 6 (the registry): the owner chose Cloudflare R2 for the bytes and a GitHub repo for the list (D1, 2026-10-30); its robot side, the list's format, the bucket's files and `m2 registry`, is built by track `registry` (§19, the contract's REG rules); the app's side (the catalog, ⌘F's From the library, Get) is next, and the bucket's address (D10) waits for the owner. |
+| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Built the same day (#33 to #38): §16.2's slices 1 to 4 and 7, with the contract's PACK, LIB and PKG-15/16 rules. FLAC is read since track flac (the `claxon` crate, [FMT-24](../../architecture.md#assets-and-hashes)), and downloads since track fetch (NET-1 to NET-6). Not built: slice 5 (streaming). Slice 6 (the registry): the owner chose Cloudflare R2 for the bytes and a GitHub repo for the list (D1, 2026-10-30); its robot side, the list's format, the bucket's files and `m2 registry`, is built by track `registry` (§19, the contract's REG rules); the app's side (the catalog, ⌘F's From the library, Get) is next, and the bucket's address (D10) waits for the owner. |
 | **Written** | 2026-10-29, from `main` at `e38c131` |
 | **Gaps** | #39 (shared sound packages), with #22 (the rest of the Sampler) and #18 (more audio file types) |
 | **Decided** | by the owner, 2026-10-30 |

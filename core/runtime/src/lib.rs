@@ -39,6 +39,7 @@ pub mod audio;
 pub mod cells;
 pub mod click;
 pub mod data;
+pub mod decode;
 mod delay;
 pub mod engine;
 pub mod event;

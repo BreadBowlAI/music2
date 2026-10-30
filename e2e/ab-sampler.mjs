@@ -1,5 +1,5 @@
 // Track ab's sampler in the app: std's Sampler is in the side browser in a group of its own, and
-// + Track adds it, its card in Device saying "Drop a WAV here". A WAV dropped on the card (as a
+// + Track adds it, its card in Device saying "Drop a WAV or FLAC here". A WAV dropped on the card (as a
 // browser drops it) comes into assets/ and the Sampler plays it: the call says `sample: "tone.wav"`,
 // a toast says so, it is one undo step ("Undo setting Sampler to tone.wav"), and the export
 // changes. ⌘Z takes the code back, and the export with it; the file stays. Each state linted.
@@ -105,7 +105,7 @@ check(await until(async () => !!(await page.$(card))), "Device shows the Sampler
 await page.$eval(card, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
 await sleep(200);
 const said = () => page.$eval(`${card} [data-testid=sampler-file]`, (e) => e.textContent).catch(() => null);
-check((await said()) === "Drop a WAV here", `with no file, it says so: ${await said()}`);
+check((await said()) === "Drop a WAV or FLAC here", `with no file, it says so: ${await said()}`);
 await linted(card, "the Sampler's card with no file");
 const before = render("before.wav");
 
@@ -131,7 +131,7 @@ check(!after.equals(before), "the export changes: the Sampler plays the file");
 await key("Meta+z");
 check(await until(() => read("tracks/sampler.ts").includes('sampler(lane.notes("notes"))') && !read("tracks/sampler.ts").includes("sample:")), `⌘Z takes the code back: ${read("tracks/sampler.ts")}`);
 check(fs.existsSync(`${PROJ}/assets/tone.wav`), "the file stays in assets/");
-check(await until(async () => (await said()) === "Drop a WAV here"), `the card says to drop one again: ${await said()}`);
+check(await until(async () => (await said()) === "Drop a WAV or FLAC here"), `the card says to drop one again: ${await said()}`);
 check(render("undone.wav").equals(before), "the export is as it was");
 
 done(errors);

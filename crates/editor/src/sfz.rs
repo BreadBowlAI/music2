@@ -841,6 +841,21 @@ pub struct Imported {
     pub licence: Option<String>,
 }
 
+/// Whether the recording at `found`, named `source` in the SFZ, is one music2 reads (FMT-24): a WAV
+/// or a FLAC by its first bytes, whose header reads. Why not, in words; `m2 pack check` decodes it.
+fn readable(found: &Path, source: &str) -> Result<(), String> {
+    use m2_runtime::decode::{Flac, Kind};
+    match m2_runtime::decode::kind_of(found).map_err(|e| format!("{source} can't be read: {e}"))? {
+        Some(Kind::Wav) => drop(hound::WavReader::open(found).map_err(|e| format!("{source} isn't a WAV music2 can read: {e}"))?),
+        Some(Kind::Flac) => {
+            let file = std::fs::File::open(found).map_err(|e| format!("{source} can't be read: {e}"))?;
+            drop(Flac::new(file).map_err(|e| format!("{source} isn't a FLAC music2 can read: {e:#}"))?);
+        }
+        None => return Err(format!("{source} isn't a WAV or FLAC file: music2 reads those two; save it as a WAV first")),
+    }
+    Ok(())
+}
+
 /// How many of the regions that play at the attack must say one value of the instrument's for it
 /// to be the instrument's: 9 in 10 (PACK-14).
 const AGREE: f64 = 0.9;
@@ -910,17 +925,14 @@ pub fn import(i: &Import) -> Result<Imported, String> {
     turns_whole(&kept)?;
     let licence_file = folder.licence()?;
     // Every recording: a plain file in the SFZ's folder (in any capitals, as SFZ made on Windows
-    // names them), a WAV, and given its path in the pack, one path for each file however it is named.
+    // names them), a WAV or a FLAC by its first bytes (FMT-24), and given its path in the pack, one
+    // path for each file however it is named.
     let mut files: BTreeMap<String, (PathBuf, String)> = BTreeMap::new();
     let mut by_source: BTreeMap<String, String> = BTreeMap::new();
     let mut taken: BTreeMap<String, String> = BTreeMap::new();
     for m in &kept {
         if by_source.contains_key(&m.source) {
             continue;
-        }
-        let ext = Path::new(&m.source).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        if ext != "wav" {
-            return Err(format!("{} is a {} file: convert it to WAV first; music2 reads only WAV for now", m.source, ext.to_uppercase()));
         }
         let (found, spelt) = folder.find(&m.source).map_err(|r| match r {
             Refused::Missing => format!("{}, which the SFZ plays, isn't there (looked in {})", m.source, folder.root.display()),
@@ -930,7 +942,7 @@ pub fn import(i: &Import) -> Result<Imported, String> {
         if files.contains_key(&spelt) {
             continue;
         }
-        hound::WavReader::open(&found).map_err(|e| format!("{} isn't a WAV music2 can read: {e}", m.source))?;
+        readable(&found, &m.source)?;
         // Under `samples/`, by its path from the SFZ's folder, a first folder that is already
         // called samples (in any capitals) not twice.
         let mut inside: Vec<&str> = spelt.split('/').collect();

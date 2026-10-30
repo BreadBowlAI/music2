@@ -21,8 +21,8 @@ export type Incoming = { name: string; path: string } | { name: string; file: Fi
 /** Where files go: onto an audio lane, onto a new audio track after a track, or at the end (Q6). */
 export type Target = { kind: "lane"; module: string; lane: string; beat: number } | { kind: "track"; module: string; beat: number } | { kind: "below"; beat: number };
 
-/** The files music2 reads (Q1): taken as WAV by their header on the server, offered by name here. */
-export const WAV = [".wav", ".wave"];
+/** The files music2 reads (Q1, FMT-24): WAV and FLAC, told by their first bytes on the server, offered by name here. A FLAC comes in as the WAV of it. */
+export const WAV = [".wav", ".wave", ".flac"];
 export const isWav = (name: string) => WAV.some((x) => name.toLowerCase().endsWith(x));
 
 /** What the server answers. */
@@ -199,7 +199,7 @@ onSample({
 async function pick(): Promise<Incoming[]> {
   if (native) {
     try {
-      const arg = JSON.stringify({ title: "Import Audio", filters: [{ name: "WAV files", extensions: ["wav", "wave"] }], multiple: true });
+      const arg = JSON.stringify({ title: "Import Audio", filters: [{ name: "WAV and FLAC files", extensions: ["wav", "wave", "flac"] }], multiple: true });
       const answer = await nativeAction("open_file", arg);
       if (answer === null) return [];
       const paths = JSON.parse(answer) as string[] | null;
@@ -212,7 +212,7 @@ async function pick(): Promise<Incoming[]> {
     const input = document.createElement("input");
     input.type = "file";
     input.multiple = true;
-    input.accept = ".wav,.wave,audio/wav,audio/x-wav";
+    input.accept = ".wav,.wave,.flac,audio/wav,audio/x-wav,audio/flac,audio/x-flac";
     input.style.display = "none";
     input.addEventListener("change", () => {
       resolve([...(input.files ?? [])].map((file) => ({ name: file.name, file })));
@@ -227,7 +227,7 @@ async function pick(): Promise<Incoming[]> {
   });
 }
 
-/** File ▸ Import Audio… (⇧⌘I): pick WAV files, then bring them in where Q7 says. */
+/** File ▸ Import Audio… (⇧⌘I): pick WAV or FLAC files, then bring them in where Q7 says. */
 export async function importAudio() {
   const { graph, connected, toast } = useStore.getState();
   if (!graph) return;
@@ -245,7 +245,7 @@ export const AUDIO_TRACK: Instrument = {
   label: "Audio track",
   name: "",
   module: "",
-  description: "Plays recordings and loops: drop a WAV file on it",
+  description: "Plays recordings and loops: drop a WAV or FLAC file on it",
   category: "Audio",
   lane: "clips",
 };
@@ -279,8 +279,8 @@ export async function addAudioTrack(after: string | null) {
 
 // ---------------------------------------------------------------- drops (Q6)
 
-/** The WAV types a browser says while it drags a file (no names until the drop). */
-const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-wave", "audio/vnd.wave"];
+/** The WAV and FLAC types a browser says while it drags a file (no names until the drop). */
+const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-wave", "audio/vnd.wave", "audio/flac", "audio/x-flac"];
 
 /**
  * Where dropped audio goes (Q6): onto the audio lane under the pointer, or a track's audio lane;
