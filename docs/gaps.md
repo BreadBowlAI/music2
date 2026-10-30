@@ -38,7 +38,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 18 | **The rest of audio clips**: place a clip's warp markers by hand (Follow tempo is the only way), find a clip's own tempo from its file, set a clip's pitch in the app (JSON only), join audio clips, clear out audio files no clip uses, and import MP3 or AIFF (FLAC comes in as a WAV of its samples, [FMT-24](architecture.md#assets-and-hashes)). | Every file stays in `assets/` until you delete it, and only WAV and FLAC come in. | Yes | medium |
+| 18 | **The rest of audio clips**: place a clip's warp markers by hand (Follow tempo is the only way), find a clip's own tempo from its file, set a clip's pitch in the app (JSON only), join audio clips, clear out audio files no clip uses, and import MP3 or AIFF (FLAC comes in as a WAV of its samples, [FMT-24](architecture.md#assets-and-hashes); not yet a FLAC of 12, 20 or 32 bits, which a WAV of the same bits can't hold or claxon doesn't read). | Every file stays in `assets/` until you delete it, and only WAV and FLAC come in. | Yes | medium |
 
 - **After a tempo change, a followed clip is silent until its new stretch reaches the playhead**: up to half a second near its start, longer deep in a long clip or with several followed clips, as stretches are made one at a time, in build order, each from its clip's start. Later: the one under the playhead first.
 - **A quarter second that holds a plain clip and a stretch being made** is silent, the plain clip too; the status may say "The disk was too slow" meanwhile.
