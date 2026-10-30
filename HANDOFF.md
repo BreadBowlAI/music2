@@ -1,10 +1,25 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-10-25 (the docs plan, then the release track). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-10-30 (the packs night, then the registry day). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
 
+- **The registry day (2026-10-30) let music2 get packs from the internet** (#39 to #46; each track reviewed by a
+  skeptic agent, every finding fixed with a test seen failing first, `ci/check.sh --pr` passed on each):
+  - **FLAC** is read wherever WAV is (the `claxon` crate, FMT-24). A FLAC brought into a song lands as a WAV of the same
+    bits, because clips stream from disk. A file decoded whole holds at most 2^27 samples, and a pack 2^28 in all,
+    read from the headers before decoding (#42).
+  - **Downloads**: `m2_editor::fetch` (NET-1 to NET-6): https only (loopback http and `file://` too), a size limit and
+    a deadline on each, checked by hash, never a partial file. Built on reqwest + rustls with ring (#40).
+  - **The registry's robot** (REG-1 to REG-10, #45): the list's format, the bucket's files (by hash), `m2 registry
+    check|add|pending|build`, and `registry/`, the starting contents of the registry repo, with its workflows.
+  - **The registry in the app** (REG-11 to REG-17, #46): ⌘F's From the library, previews, **Get**, `m2 pack get`, and
+    Get for a song's missing locked packs. **No registry is set by default** until the owner picks the bucket's
+    address (D10): `M2_REGISTRY=<url>` or `"registry"` in `~/.music2/settings.json` turns it on.
+  - wasmtime 50.0.1 for RUSTSEC-2026-0424 (#44); Dependabot's #30 and #31; the npm lockfile check reads bundled
+    packages (#39); the Mac nightly's two Rust failures (#43). Dependabot's #29 waits for the owner's review.
+  - Design: [docs/designs/packs/design.md](docs/designs/packs/design.md) §19 and §20.
 - **The packs night (2026-10-30) made music2 a library anyone can add sounds to** (#33 to #38; each track reviewed
   by a skeptic agent, every finding fixed with a test seen failing first, `ci/check.sh --pr` passed on each):
   - std's Sampler plays real recorded instruments: `regions` with velocity layers, round robin, release sounds and
@@ -18,7 +33,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
     `~/m2-runs/packs-night/piano/grand-piano-0.1.0.tar.gz`.
   - No test writes your cache any more (PLAT-7, `ci/cache-left.sh`), and one wasmtime engine serves the process (#38).
   - Songs asking for std "0.4" need `std = "0.5"`; `@m2/core` is 1.7.0. **macOS: unverified since `e38c131`.**
-  - Design: [docs/designs/packs/design.md](docs/designs/packs/design.md). Not built: the registry and streaming (below).
+  - Design: [docs/designs/packs/design.md](docs/designs/packs/design.md). Not built then: the registry (built the
+    next day, above) and streaming (below).
 - **Every planned step is built on Linux** (steps 1 to 9), and so are the five tracks of the agents design. All of it is on `main` at `a1e3c77`, pushed.
 - Each track was reviewed, its findings fixed or listed in [docs/gaps.md](docs/gaps.md), and `ci/check.sh --gates`
   passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
@@ -193,9 +209,11 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 3. **The top gaps**, if the owner asks for features ([docs/gaps.md](docs/gaps.md), most visible first): the rest of
    recording (#24, #25), audio clips (#18), the Sampler (#22),
    meters after the fader (#20), sections (#23), scale help (#16).
-4. **The rest of packs** ([design](docs/designs/packs/design.md) §16): the registry (fetching packs, Get in ⌘F,
-   publishing) waits for the owner's D1 and D10 (where the bytes are kept) and two dependency pull requests (an HTTP
-   client and a FLAC decoder); then big instruments streamed from disk (#22); then gaps #46 to #49.
+4. **The registry, live**: the owner makes the Cloudflare R2 bucket and its address (D10), then the repo
+   `BreadBowlAI/music2-registry` from `registry/`, with its secrets and branch rules (`registry/README.md`, "Setting
+   it up"). Then a music2 release with `m2 registry`, then `DEFAULT_REGISTRY` set to the address, then
+   `@m2/grand-piano` listed (the Salamander's own FLACs can be used now). Then big instruments streamed from disk
+   (#22); then gaps #39 and #46 to #49.
 5. **Open owner decisions** (below): ask them, with the recommendation.
 6. **Opening the repository to everyone:** the owner's one-time GitHub steps are in [docs/maintainers.md](docs/maintainers.md). Part 1 is done, all but making it public.
 
@@ -205,8 +223,9 @@ The owner wants music2 to become a full DAW whose sounds mostly come from packs 
 
 | Question | What was built | Recommendation |
 |---|---|---|
-| Where pack downloads are kept (packs design D1, D10). | Nothing downloads: packs install from a folder. | A bucket with free downloads (Cloudflare R2) behind a name of ours; the list of packs in a GitHub repo. |
-| Two libraries for packs (each a `Cargo.lock` change). | None added: packs and samples are WAV only. | Yes, each its own pull request: an HTTP client (reqwest, already in `Cargo.lock` through Tauri) and a FLAC decoder. |
+| The bucket's address (packs design D10). D1 is decided: Cloudflare R2, the list on GitHub (2026-10-30). | Everything but the bucket: `DEFAULT_REGISTRY` is empty, so the library shows only with `M2_REGISTRY` or the setting. | The bucket's own `r2.dev` address to start (the robot must read it, not a cache); a name of ours (`packs.<domain>`) in front for the app later. |
+| A Settings field for the registry's address. | None: the environment or `settings.json`. | Not until there is a default; then a field for a mirror. |
+| How big the cache of previews and got files may grow. | Never pruned. | A limit (2 GB), the oldest out first. |
 | How loud ⌘F's previews are. | −23 LUFS, measured as BS.1770 does; hats and rims fall up to 2 dB short. | Keep it; −20 if previews feel quiet (hats, rims and Snare 2 then fall 2 to 4.5 dB short). |
 | G7f: O2 named a p99 rule. | The mean of 5 pairs is judged; the p99's estimate is printed beside it. The p99 moved by hundreds of µs from pair to pair, the mean by about 12. | Keep the mean. |
 | A plugin that keeps failing. | Started again once. If the new one fails within 10 s, it stays silent until the song is opened again, and you are told once. | Keep 10 s. |
