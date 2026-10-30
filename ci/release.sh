@@ -199,7 +199,7 @@ carries() {
   for f in "$bin/m2" ${app:+"$bin/music2"}; do
     [ -x "$f" ] || fail "no program $f"
   done
-  for f in std/m2pkg.toml std/kernels/std.wasm std/src std/presets ${app:+web/index.html}; do
+  for f in std/m2pkg.toml std/kernels/std.wasm std/src std/presets std/samples.toml std/samples/kit/kick.wav ${app:+web/index.html}; do
     [ -e "$res/$f" ] || fail "nothing at $res/$f"
   done
   n=$(ls "$ROOT/templates" | grep -cv '\.md$' || true)

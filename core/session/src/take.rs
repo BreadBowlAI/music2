@@ -118,8 +118,9 @@ enum Settle {
     Same { clear: bool },
     /// This snapshot, built so, is the new accepted revision (`clear`: nothing waits any more).
     Accept { built: Box<(Snapshot, m2_song::Project, crate::Compiled)>, clear: bool },
-    /// It doesn't build: these paths wait, for these errors.
-    Wait { errors: Vec<m2_ir::Diagnostic>, paths: BTreeSet<PathBuf> },
+    /// It doesn't build: these paths wait, for these errors. `packs`: those the draft resolved when
+    /// its code didn't build (None: the accepted revision's).
+    Wait { errors: Vec<m2_ir::Diagnostic>, paths: BTreeSet<PathBuf>, packs: Option<Vec<(String, PathBuf)>> },
 }
 
 /// Only the entries of `paths` of `s`.
@@ -322,14 +323,14 @@ impl Session {
             }
             return match self.build(&snap, Some(accepted.compiled.code().clone()), &accepted.compiled.data) {
                 Ok((project, compiled)) => Settle::Accept { built: Box::new((snap, project, compiled)), clear: false },
-                Err(errors) => Settle::Wait { errors, paths: take },
+                Err(errors) => Settle::Wait { errors, paths: take, packs: None },
             };
         }
         // The whole draft, which must build: a compile when its code differs from the accepted.
         let code = !accepted.has_code() || changed_paths(&accepted.snapshot, draft).iter().any(|p| kind_of(p) == Kind::Code);
         match self.build(draft, (!code).then(|| accepted.compiled.code().clone()), &accepted.compiled.data) {
             Ok((project, compiled)) => Settle::Accept { built: Box::new((draft.clone(), project, compiled)), clear: true },
-            Err(errors) => Settle::Wait { errors, paths: batch.clone() },
+            Err(errors) => Settle::Wait { errors, paths: batch.clone(), packs: crate::resolved(draft, &self.packages) },
         }
     }
 
@@ -339,6 +340,7 @@ impl Session {
             Settle::Same { clear } => {
                 if clear {
                     self.draft_errors.clear();
+                    self.draft_packs = None;
                     self.waiting.clear();
                 }
                 false
@@ -348,12 +350,14 @@ impl Session {
                 self.accept(snap, project, compiled);
                 if clear {
                     self.draft_errors.clear();
+                    self.draft_packs = None;
                     self.waiting.clear();
                 }
                 true
             }
-            Settle::Wait { errors, paths } => {
+            Settle::Wait { errors, paths, packs } => {
                 self.draft_errors = errors;
+                self.draft_packs = packs;
                 self.waiting.extend(paths);
                 false
             }

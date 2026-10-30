@@ -180,11 +180,16 @@ impl Staged {
     }
 
     /// Make it an asset: its part given the first free name, create-only, and its folder synced (a
-    /// file whose bytes were there already is that asset). The lock goes after.
+    /// file whose bytes were there already is that asset). A name whose note's name
+    /// (`kick.wav.json`, LIB-7) is taken is taken too, so no file inherits another's note. The lock
+    /// goes after.
     pub fn name(mut self) -> Result<Imported, EditError> {
         let Some((part, lock)) = self.part.take() else { return Ok(self.file.clone()) };
         let named = (|| -> std::io::Result<AssetName> {
-            let mut taken: Vec<String> = assets_in(&self.folder).into_iter().map(|(n, _)| n).collect();
+            let there: Vec<String> = assets_in(&self.folder).into_iter().map(|(n, _)| n).collect();
+            // A note's name taken takes its asset's: `kick.wav.json` takes `kick.wav`.
+            let notes = there.iter().filter_map(|n| n.strip_suffix(".json")).map(String::from).collect::<Vec<_>>();
+            let mut taken: Vec<String> = there.into_iter().chain(notes).collect();
             let asset = loop {
                 let name = self.file.asset.untaken_folded(taken.iter().map(String::as_str));
                 match name_new(&part, &self.folder.join(name.as_str())) {
@@ -381,25 +386,44 @@ pub fn take_in(s: &mut Session, files: &[Imported]) -> Result<(), EditError> {
 /// Put the clips of `files` in the song as one Tx, one undo step (Q4, Q6): onto lane `at` one
 /// after another, or each onto a new audio track named after it.
 pub fn place(s: &mut Session, files: &[Imported], at: &Target) -> Result<Placed, EditError> {
+    place_with(s, files, at, &[])
+}
+
+/// A clip of `f` from `start`: as long as the file at the song's tempo there; or, following a
+/// loop's own tempo `bpm` (LIB-7), as long as its beats, with Follow tempo's warp markers made
+/// from that tempo, so it plays in time with the song.
+fn clip_at(f: &Imported, start: f64, tempo: &TempoMap, bpm: Option<f64>) -> serde_json::Value {
+    match bpm {
+        None => clip_json(f, start, length_at(tempo, start, f.seconds)),
+        Some(bpm) => {
+            let beats = crate::library::samples::loop_beats(f.seconds, bpm, f.rate);
+            let mut clip = clip_json(f, start, beats);
+            clip["warp"] = json!([[0.0, 0.0], [f.seconds, beats]]);
+            clip
+        }
+    }
+}
+
+/// [`place`], each file following the tempo `follow` gives it, if any (by its index): a loop added
+/// from the library (LIB-7).
+pub fn place_with(s: &mut Session, files: &[Imported], at: &Target, follow: &[Option<f64>]) -> Result<Placed, EditError> {
+    let follows = |i: usize| follow.get(i).copied().flatten();
     if files.is_empty() {
         return Err(refused("No file to bring in.".into()));
     }
+    check_target(s, at)?;
     take_in(s, files)?;
     let tempo = s.accepted().compiled.data.tempo().clone();
     let beat = at.beat();
-    if !(beat.is_finite() && beat >= 0.0) {
-        return Err(refused("A clip can't start before the song starts.".into()));
-    }
     match at {
         Target::Lane { module, lane, .. } => {
             let addr = LaneAddr { module: Key::new(module).map_err(refused)?, lane: Key::new(lane).map_err(refused)? };
-            audio_lane(s, &addr)?;
             let mut start = beat;
             let mut put = vec![];
-            for f in files {
-                let length = length_at(&tempo, start, f.seconds);
-                put.push(clip_json(f, start, length));
-                start += length;
+            for (i, f) in files.iter().enumerate() {
+                let clip = clip_at(f, start, &tempo, follows(i));
+                start += clip["length"].as_f64().expect("a clip's length");
+                put.push(clip);
             }
             let done = clips::edit(s, &Gesture::Set { lane: addr, put, delete: vec![] })?;
             Ok(Placed { edited: done.edited, made: done.made, tracks: vec![] })
@@ -412,11 +436,12 @@ pub fn place(s: &mut Session, files: &[Imported], at: &Target) -> Result<Placed,
             };
             let new: Vec<NewTrack> = files
                 .iter()
-                .map(|f| NewTrack {
+                .enumerate()
+                .map(|(i, f)| NewTrack {
                     play: Play::Audio,
                     label: Some(track_label(f)),
                     key: None,
-                    clips: vec![clip_json(f, beat, length_at(&tempo, beat, f.seconds))],
+                    clips: vec![clip_at(f, beat, &tempo, follows(i))],
                 })
                 .collect();
             let made = tracks::add_tracks(s, &new, after, None)?;
@@ -433,6 +458,25 @@ pub fn place(s: &mut Session, files: &[Imported], at: &Target) -> Result<Placed,
             let edited = made[0].edited.clone();
             Ok(Placed { edited, made: clips, tracks: made.into_iter().map(|m| (m.module, m.label)).collect() })
         }
+    }
+}
+
+/// Whether clips can go at `at` in the accepted revision, in words: a beat in the song, on an audio
+/// lane, or after a track that is there. Checked before a file is named into `assets/` (LIB-7), so a
+/// refusal leaves nothing behind.
+pub fn check_target(s: &Session, at: &Target) -> Result<(), EditError> {
+    let beat = at.beat();
+    if !(beat.is_finite() && beat >= 0.0) {
+        return Err(refused("A clip can't start before the song starts.".into()));
+    }
+    match at {
+        Target::Lane { module, lane, .. } => {
+            audio_lane(s, &LaneAddr { module: Key::new(module).map_err(refused)?, lane: Key::new(lane).map_err(refused)? })
+        }
+        Target::Track { module, .. } if !s.accepted().compiled.ir.modules.iter().any(|m| m.key == *module) => {
+            Err(EditError::Missing(format!("There's no track `{module}`.")))
+        }
+        _ => Ok(()),
     }
 }
 

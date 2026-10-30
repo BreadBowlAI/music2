@@ -10,7 +10,7 @@ use super::*;
 /// Frames in a beat at 120 bpm.
 const BEAT: usize = 24_000;
 
-/// `t:probe`: inputs `a` and `b`, a stereo output of `a` on the left and `b` on the right.
+/// `@test/t:probe`: inputs `a` and `b`, a stereo output of `a` on the left and `b` on the right.
 fn probe_package() -> PathBuf {
     let at = |port: u32| format!("(i32.add (i32.load offset={} (local.get $io)) (i32.shl (local.get $i) (i32.const 2)))", 4 * port);
     let wat = module_v1(&format!(
@@ -56,7 +56,7 @@ fn probed_field(opts: Value, glide: f64, field: &str) -> Flat {
         {"id": "f", "op": "lane", "lane": field},
         {"id": "g", "op": "lane", "lane": "gate"},
         {"id": "fg", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "f", "by": "g"}},
-        {"id": "o", "op": "kernel", "kernel": "t:probe", "inputs": {"a": "fg", "b": "g"}}]}});
+        {"id": "o", "op": "kernel", "kernel": "@test/t:probe", "inputs": {"a": "fg", "b": "g"}}]}});
     v.as_object_mut().unwrap().extend(opts.as_object().unwrap().clone());
     let gl = json!({"id": "gl", "op": "const", "value": glide, "unit": "seconds", "origin": {"site": 7, "arg": ["0"]}});
     let ir = song(json!([{"id": "n", "op": "lane", "lane": "notes"}, gl, v]), "v", json!([{"key": "notes", "kind": "events<note>"}]));

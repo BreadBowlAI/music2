@@ -9,6 +9,7 @@ pub mod caller;
 pub mod export;
 mod files;
 pub mod graph;
+pub mod library;
 mod peaks;
 pub mod project;
 pub mod recent;
@@ -19,8 +20,10 @@ mod routes_audio;
 mod routes_exchange;
 mod routes_fx;
 mod routes_leases;
+mod routes_library;
 mod routes_mix;
 mod routes_notes;
+mod routes_packs;
 mod routes_plugins;
 mod routes_presets;
 mod routes_project;
@@ -97,8 +100,19 @@ pub struct AppState {
     /// Listening to MIDI keyboards (8b.10), unless `M2_MIDI` says not to ([`spawn_midi`]).
     midi: OnceLock<m2_os::midi::Listening>,
     /// The installed plugins as the app lists them (gaps #32), once a list was asked for: kept for
-    /// the app run, until Look again. Held through a scan, so two asks scan once.
+    /// the app run, until Look again. Only ever held for a moment, so the library never waits for
+    /// a scan (LIB-1): it reads the list from before one.
     plugins: Mutex<Option<serde_json::Value>>,
+    /// Held through a scan, so two asks scan once.
+    scanning: Mutex<()>,
+    /// The previews being made (LIB-3): a second ask for one waits for the first.
+    pub previews: library::Previews,
+    /// The samples indexed so far (LIB-4, LIB-5): a folder of yours is indexed in the background.
+    pub sample_index: Arc<library::SampleIndex>,
+    /// Where the library reads your presets and keeps previews, when this server keeps them
+    /// ([`AppState::keep_library`]): the app and the headless server do; tests give scratch ones,
+    /// so none reads your Presets folder or writes your cache.
+    library: OnceLock<library::Folders>,
 }
 
 impl AppState {
@@ -119,6 +133,10 @@ impl AppState {
             settings: OnceLock::new(),
             midi: OnceLock::new(),
             plugins: Mutex::default(),
+            scanning: Mutex::default(),
+            previews: Default::default(),
+            sample_index: Arc::default(),
+            library: OnceLock::new(),
         }
     }
 
@@ -126,11 +144,26 @@ impl AppState {
     /// (HOST-3), made on the first ask, or now when `again` (Look again), and kept. It waits for a
     /// scan, up to 2 minutes: call it off the async threads.
     pub fn plugins(&self, again: bool) -> serde_json::Value {
-        let mut kept = self.plugins.lock();
-        if again || kept.is_none() {
-            *kept = Some(routes_plugins::listed(&*self.graph.host()));
+        let _scanning = self.scanning.lock();
+        if !again && let Some(kept) = self.plugins.lock().clone() {
+            return kept;
         }
-        kept.clone().unwrap_or_default()
+        let listed = routes_plugins::listed(&*self.graph.host());
+        *self.plugins.lock() = Some(listed.clone());
+        listed
+    }
+
+    /// Read your presets and keep previews and samples' measures in `folders` from now on (LIB-1,
+    /// LIB-3, LIB-5), and start indexing the samples a search will want first. Once.
+    pub fn keep_library(&self, folders: library::Folders) {
+        if self.library.set(folders).is_ok() {
+            self.warm_samples();
+        }
+    }
+
+    /// Where the library reads your presets and keeps previews: none until kept.
+    pub fn library_folders(&self) -> library::Folders {
+        self.library.get().cloned().unwrap_or_default()
     }
 
     /// Keep this machine's settings in `file` (`~/.music2/settings.json`) from now on, and apply
@@ -498,7 +531,7 @@ mod tests {
         std::fs::create_dir_all(&song).unwrap();
         std::fs::write(
             song.join("music2.toml"),
-            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n",
+            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
         )
         .unwrap();
         std::fs::write(
@@ -598,7 +631,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("data/kick")).unwrap();
         let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
-        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
         std::fs::write(dir.join("music2.toml"), manifest).unwrap();
         std::fs::write(dir.join("song.ts"), song).unwrap();
         std::fs::write(dir.join("data/kick/old.json"), r#"{"clips": []}"#).unwrap();

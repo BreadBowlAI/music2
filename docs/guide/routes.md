@@ -488,6 +488,44 @@ An example body:
 {"session": 7}
 ```
 
+### `GET /api/library`
+
+Search everything you can add: instruments, sounds (presets), effects, samples and plugins, best first; q's words may name a kind, loop, one-shot, a tempo or a key; fits (a beat) keeps the loops that fit the song there.
+
+Its query, as JSON:
+
+```json
+{"q": "warm pad"}
+```
+
+### `GET /api/library/folders`
+
+Your sample folders, each with how many samples it has and whether it is being indexed.
+
+### `GET /api/library/preview`
+
+An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file.
+
+Its query, as JSON:
+
+```json
+{"id": "std:synth-pluck"}
+```
+
+### `POST /api/library/sample`
+
+Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or a Sampler's file at `call`. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "id": "sample:std:samples/kit/kick.wav", "to": {"kind": "below", "beat": 0}}
+```
+
+### `GET /api/packs`
+
+The packs installed on this computer: each one's name, versions (newest last), licence, description and items.
+
 ### `GET /api/plugins`
 
 The installed CLAP plugins: id, name, vendor, version, and whether each is an instrument or an effect.
@@ -717,6 +755,10 @@ Say which files have changes not yet saved in the code editor.
 ### `POST /api/graph/view`
 
 Set the timeline's view (zoom, follow, track heights, hidden lanes, the grid, audition, the metronome and the guide).
+
+### `POST /api/library/folders`
+
+Add a folder of samples to the library, or remove one.
 
 ### `POST /api/plugins/scan`
 

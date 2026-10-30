@@ -63,7 +63,7 @@ fn name_of(c: &Control, m: &Module, sites: &[Site], channel: &dyn Fn(u32, &str) 
     }
     let frame = m.frames.get(slot.frame as usize);
     let binding = frame.and_then(|f| site_of(f.site)).and_then(|s| s.binding.clone());
-    let component = frame.and_then(|f| f.component.as_deref()).map(|c| c.rsplit(':').next().unwrap_or(c).to_string());
+    let component = frame.and_then(|f| f.component.as_deref()).map(|c| m2_song::pack::split_id(c).map_or(c, |(_, id)| id).to_string());
     let label = c.declared.iter().find(|d| d.slot == slot.slot).map_or(slot.slot.as_str(), |d| d.label.as_str());
     // A level is Volume, never "db", which reads as a note (graph.ts' `controlLabel`).
     let label = if label == "db" { "volume" } else { label };

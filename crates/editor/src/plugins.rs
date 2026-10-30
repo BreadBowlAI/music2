@@ -176,7 +176,7 @@ pub(crate) fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) 
     let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?;
     let imports = import_insertion(text, "@m2/core", "plugin").into_iter().collect();
     let (open, close) = effect_text(component, &key);
-    let wrap = Wrap { open, close, imports, callee: "plugin".into(), label: name.clone() };
+    let wrap = Wrap { open, close, imports, callee: "plugin".into(), label: name.clone(), also: Default::default() };
     wrap_call(s, &site, wrap, |_, checked, new| {
         installed_in(checked, component)?;
         match one_plugin(&checked.candidate().compiled, new, component, &key) {

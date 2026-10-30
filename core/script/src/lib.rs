@@ -44,7 +44,7 @@ pub const SDK: &str = include_str!("../sdk/core.ts");
 
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
 /// requirement is checked against it (FMT-2, FMT-3).
-pub const SDK_VERSION: &str = "1.5.0";
+pub const SDK_VERSION: &str = "1.7.0";
 
 const CORE: &str = "@m2/core";
 
@@ -119,6 +119,36 @@ Math.random = () => { throw new Error("Math.random isn't available: songs must r
 /// The prelude's name in stack frames: an error it throws is placed at the code that called it.
 const PRELUDE_FILE: &str = "<prelude>";
 
+/// A package module made from data (PACK-13): the TypeScript of a pack's `instruments/<id>.toml`,
+/// laid out on the file's own lines, and the line of each of its regions (from 1), so a mistake
+/// `@m2/core` finds in region 3 is placed at region 3's line.
+pub struct DataModule {
+    pub code: String,
+    pub regions: Vec<u32>,
+}
+
+/// Why a data file makes no module: in words, at its line and column (from 1).
+pub struct DataProblem {
+    pub message: String,
+    pub line: u32,
+    pub col: u32,
+}
+
+/// What reads a pack's instruments written as data (PACK-13). The build has no TOML reader of its
+/// own, and makes no name in code of its own; `m2_session` gives it both.
+#[derive(Clone, Copy)]
+pub struct DataReader {
+    /// The module of one `instruments/<id>.toml`: given the package's name, the id (the file's
+    /// name without `.toml`) and the file's text.
+    pub module: fn(package: &str, id: &str, text: &str) -> Result<DataModule, DataProblem>,
+    /// The name an instrument is exported by, given its id, or why the file's name can't be an
+    /// id: asked before any code is made from the name.
+    pub binding: fn(id: &str) -> Result<String, String>,
+}
+
+/// Where a pack's instruments written as data are, and the module that exports them (PACK-13).
+const DATA: &str = "instruments";
+
 pub struct Options {
     /// The project's code: every Code file of the snapshot, by its path in the project,
     /// `/`-separated (`song.ts`, `tracks/bass.ts`). Nothing of the project is read from
@@ -137,6 +167,8 @@ pub struct Options {
     /// own work, not the time it waited for a CPU; by the clock, ten times this at most (see
     /// [`Limit`]).
     pub time_limit: Duration,
+    /// What reads the packs' instruments written as data; without one, importing them is an error.
+    pub data: Option<DataReader>,
 }
 
 /// What a build produces.
@@ -187,6 +219,7 @@ impl Options {
             dependencies: vec![],
             memory_limit: 256 << 20,
             time_limit: Duration::from_secs(10),
+            data: None,
         }
     }
 }
@@ -224,6 +257,10 @@ struct State {
     read: Vec<(PathBuf, String)>,
     /// Why an import failed, with its code: the engine passes on only the text.
     failed: Option<Diagnostic>,
+    /// What reads the packs' instruments written as data (PACK-13).
+    data: Option<DataReader>,
+    /// The line of each region of each data module loaded, by the module's name.
+    data_regions: HashMap<String, Vec<u32>>,
 }
 
 impl State {
@@ -248,6 +285,8 @@ impl State {
             },
             None => (line, col),
         };
+        // A data module's columns are its code's, not its file's (PACK-13).
+        let col = if self.data_regions.contains_key(file) { 1 } else { col };
         format!("{}:{line}:{col}", self.display(file))
     }
 
@@ -256,6 +295,7 @@ impl State {
         let s = self.sites.iter().find(|s| s.id == site)?;
         let f = self.files.values().find(|f| f.instrumented.as_ref().is_some_and(|i| i.sites.iter().any(|x| x.id == site)))?;
         let (l, c) = line_col(&f.original, s.start as usize);
+        let c = if self.data_regions.contains_key(&s.file) { 1 } else { c };
         Some(format!("{}:{l}:{c}", s.file))
     }
 
@@ -321,6 +361,10 @@ impl State {
             return serde_json::json!({"package": null, "module": display, "file": display});
         }
         for (name, _) in &self.packages {
+            if display == format!("{name}/{DATA}") || display.strip_prefix(&format!("{name}/{DATA}/")).is_some_and(|f| f.ends_with(".toml"))
+            {
+                return serde_json::json!({"package": name, "module": format!("{name}/{DATA}"), "file": display});
+            }
             if let Some(sub) = display.strip_prefix(&format!("{name}/src/")) {
                 let sub = sub.strip_suffix(".ts").unwrap_or(sub);
                 let sub = sub.strip_suffix("/index").or_else(|| (sub == "index").then_some("")).unwrap_or(sub);
@@ -350,7 +394,12 @@ impl State {
 
     /// The file on disk that a package module (`std/src/dsp.ts`) names.
     fn package_path(&self, module: &str) -> Option<PathBuf> {
-        self.packages.iter().find_map(|(name, dir)| Some(dir.join(module.strip_prefix(name.as_str())?.strip_prefix('/')?)))
+        self.package_module(module).map(|(_, file)| file)
+    }
+
+    /// The folder of the package a package module (`std/src/dsp.ts`) is in, and its file there.
+    fn package_module(&self, module: &str) -> Option<(&Path, PathBuf)> {
+        self.packages.iter().find_map(|(name, dir)| Some((dir.as_path(), dir.join(module.strip_prefix(name.as_str())?.strip_prefix('/')?))))
     }
 
     /// The module that `name`, imported from the module `base`, names.
@@ -369,17 +418,31 @@ impl State {
             let dir = base.strip_prefix(PROJECT).and_then(|b| b.rsplit_once('/')).map_or("", |(d, _)| d);
             return self.project_file(dir, name).map(|p| format!("{PROJECT}{p}")).map_err(|m| fail("import.outside-code", m));
         }
+        // Inside one package's folder (PACK-3): a relative import's own module's package, a bare
+        // import's named one.
         let found = if relative {
-            let dir = self.package_path(base).and_then(|f| f.parent().map(Path::to_path_buf)).unwrap_or_default();
-            self.package_file(&normalize(&dir.join(name)))
+            match self.package_module(base) {
+                Some((own, file)) => {
+                    let at = file.parent().map(Path::to_path_buf).unwrap_or_default();
+                    self.package_file(own, &normalize(&at.join(name)))
+                }
+                None => Err(("import.outside-code", "it names no file of an installed package".into())),
+            }
         } else {
-            let (pkg, sub) = name.split_once('/').unwrap_or((name, "index"));
+            let (pkg, sub) = package_of(name);
             if in_project && !self.dependencies.iter().any(|d| d == pkg) {
                 let e = format!("`{name}` is from the package `{pkg}`, which music2.toml doesn't list: add it under [dependencies]");
                 return Err(fail("pkg.undeclared", e));
             }
             match self.packages.iter().find(|(n, _)| n == pkg) {
-                Some((_, dir)) => self.package_file(&normalize(&dir.join("src").join(sub))),
+                // The pack's instruments written as data, unless its code has that module (PACK-13).
+                Some((_, dir)) if sub == DATA && !data_files(dir).is_empty() => {
+                    match self.package_file(dir, &normalize(&dir.join("src").join(sub))) {
+                        Err((_, m)) if m == NOT_FOUND => Ok(format!("{pkg}/{DATA}")),
+                        found => found,
+                    }
+                }
+                Some((_, dir)) => self.package_file(dir, &normalize(&dir.join("src").join(sub))),
                 None => {
                     let have: Vec<&str> = self.packages.iter().map(|(n, _)| n.as_str()).collect();
                     let code = if in_project { "pkg.unsatisfied" } else { "code.build" };
@@ -422,16 +485,28 @@ impl State {
         Err(format!("`{spec}` names no code file of the project (looked for {})", tried.join(", ")))
     }
 
-    /// The module of a file inside an installed package: the path, then with `.ts`, then
+    /// The module of a file inside the installed package in `dir`: the path, then with `.ts`, then
     /// `/index.ts`, spelled exactly as in its folder's listing, so every disk finds the same
-    /// files. An error comes with its code.
-    fn package_file(&self, p: &Path) -> Result<String, (&'static str, String)> {
-        let Some((_, dir)) = self.packages.iter().find(|(_, d)| p.starts_with(d)) else {
-            return Err(("import.outside-code", "songs can only import files from their own project or from installed packages".into()));
-        };
+    /// files. One outside `dir` (another package's folder too: PACK-3), or reached through a
+    /// symbolic link (PACK-5), is no file it may import. An error comes with its code.
+    fn package_file(&self, dir: &Path, p: &Path) -> Result<String, (&'static str, String)> {
+        if !p.starts_with(dir) {
+            // Short: QuickJS cuts a resolving error's message, and a cut one loses its code.
+            return Err((
+                "import.outside-code",
+                "it leaves its package (songs import from their own project or from installed packages)".into(),
+            ));
+        }
         let tried = [p.to_path_buf(), PathBuf::from(format!("{}.ts", p.display())), p.join("index.ts")];
         let listed: Vec<(&PathBuf, PathBuf)> = tried.iter().filter_map(|c| Some((c, listed(dir, c)?))).collect();
-        if let Some((c, _)) = listed.iter().find(|(c, real)| *c == real) {
+        if let Some((c, real)) = listed.iter().find(|(c, real)| *c == real) {
+            if through_link(dir, real) {
+                return Err(("import.outside-code", "it is reached through a symbolic link, and a package's file never is".into()));
+            }
+            // A hidden file is no part of a package (its listing leaves it out, PACK-6).
+            if real.strip_prefix(dir).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))) {
+                return Err(("import.outside-code", "it is a hidden file, and no part of its package".into()));
+            }
             return Ok(self.display(&c.to_string_lossy()));
         }
         match listed.first() {
@@ -439,9 +514,106 @@ impl State {
                 "import.outside-code",
                 format!("must be spelled as the file is named, `{}`, with the same capitals", self.display(&real.to_string_lossy())),
             )),
-            None => Err(("code.build", "file not found".into())),
+            None => Err(("code.build", NOT_FOUND.into())),
         }
     }
+
+    /// A mistake `@m2/core` found in "region N" of a data module the stack passes through, placed
+    /// at that region's line in its file (PACK-13): the file is what to fix, not the call in the song.
+    fn region_at(&self, stack: &str, message: &str) -> Option<String> {
+        let n: usize = message.split("region ").skip(1).find_map(|r| r.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok())?;
+        stack.lines().filter_map(frame_at).find_map(|at| {
+            let (file, _) = at.rsplitn(3, ':').nth(2).zip(Some(()))?;
+            let line = self.data_regions.get(file)?.get(n.checked_sub(1)?)?;
+            Some(format!("{file}:{line}:1"))
+        })
+    }
+
+    /// The module of a pack's instruments written as data, when `name` is one (PACK-13): the
+    /// package's folder, and the file's id for one instrument (`None` for `<package>/instruments`,
+    /// which exports them all).
+    fn data_module(&self, name: &str) -> Option<(&str, &Path, Option<String>)> {
+        self.packages.iter().find_map(|(pkg, dir)| {
+            let rest = name.strip_prefix(pkg.as_str())?.strip_prefix('/')?.strip_prefix(DATA)?;
+            if rest.is_empty() {
+                return Some((pkg.as_str(), dir.as_path(), None));
+            }
+            let id = rest.strip_prefix('/')?.strip_suffix(".toml")?;
+            (!id.contains('/')).then(|| (pkg.as_str(), dir.as_path(), Some(id.to_string())))
+        })
+    }
+}
+
+/// What a package file not there is called: a build error like any other.
+const NOT_FOUND: &str = "file not found";
+
+/// The module `name` (`<package>/instruments`): `export { <binding> } from "./instruments/<file>";`
+/// for each of `files`, its binding asked of `binding` before any code is made (PACK-13). A file
+/// whose name isn't an id, or whose binding an earlier file has, is refused at its file:
+/// `(file:1:1, why)`.
+fn data_exports(name: &str, files: &[String], binding: fn(&str) -> Result<String, String>) -> Result<String, (String, String)> {
+    let mut taken: BTreeMap<String, &str> = BTreeMap::new();
+    let mut code = String::new();
+    for f in files {
+        let at = format!("{name}/{f}");
+        let b = binding(f.strip_suffix(".toml").unwrap_or(f)).map_err(|why| (format!("{at}:1:1"), why))?;
+        let plain =
+            b.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') && b.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !plain {
+            return Err((format!("{at}:1:1"), format!("`{b}` can't be a name in code")));
+        }
+        if let Some(other) = taken.insert(b.clone(), f) {
+            return Err((
+                format!("{at}:1:1"),
+                format!("`{name}/{other}` and `{at}` would both be exported as `{b}`, so both are refused: rename one of them"),
+            ));
+        }
+        code.push_str(&format!("export {{ {b} }} from {};\n", serde_json::to_string(&format!("./{DATA}/{f}")).expect("a string")));
+    }
+    Ok(code)
+}
+
+/// A package's instruments written as data (PACK-13): the `.toml` files right in its `instruments/`
+/// folder, by name in bytewise order, never through a link and never a hidden one.
+pub fn data_files(dir: &Path) -> Vec<String> {
+    let folder = dir.join(DATA);
+    if !std::fs::symlink_metadata(&folder).is_ok_and(|m| m.is_dir()) {
+        return vec![];
+    }
+    let mut names: Vec<String> = std::fs::read_dir(&folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .filter(|n| n.ends_with(".toml") && !n.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+}
+
+/// A bare import's package and the module in it (PACK-3): its first segment, or its first two when
+/// it starts with `@`, and `index` when it names nothing more. `"std/dsp"` is std's `dsp`,
+/// `"@alice/felt-piano/keys"` is `@alice/felt-piano`'s `keys`.
+pub fn package_of(spec: &str) -> (&str, &str) {
+    let cut = match spec.starts_with('@') {
+        true => spec.match_indices('/').nth(1).map(|(i, _)| i),
+        false => spec.find('/'),
+    };
+    match cut {
+        Some(i) => (&spec[..i], &spec[i + 1..]),
+        None => (spec, "index"),
+    }
+}
+
+/// Whether any part of `path` below `root` is a symbolic link.
+fn through_link(root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else { return true };
+    let mut at = root.to_path_buf();
+    rel.components().any(|c| {
+        at.push(c);
+        std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink())
+    })
 }
 
 /// The file at `path` below `root` as its folders' listings spell it, matching each part
@@ -616,15 +788,56 @@ impl Loader for Load {
         let (original, instrumented) = if name == CORE {
             (SDK.to_string(), None)
         } else {
-            let source = match name.strip_prefix(PROJECT) {
-                Some(rel) => st.code.get(rel).cloned().ok_or_else(|| fail("not a code file of the project".into()))?,
-                None => {
+            let data = st.data_module(name).map(|(pkg, dir, id)| (pkg.to_string(), dir.to_path_buf(), id));
+            let source = match (name.strip_prefix(PROJECT), data) {
+                (Some(rel), _) => st.code.get(rel).cloned().ok_or_else(|| fail("not a code file of the project".into()))?,
+                // `<package>/instruments`: each data instrument by its name in code, in bytewise order
+                // of the files. What the folder lists is recorded, so a describe run sees an
+                // instrument added (PACK-13).
+                (None, Some((_, dir, None))) => {
+                    let files = data_files(&dir);
+                    st.read.push((dir.join(DATA), sha256_hex(files.join("\n").as_bytes())));
+                    let Some(reader) = st.data else {
+                        let e = format!("`{name}` is instruments written as data, which this program can't read");
+                        st.failed.get_or_insert(Diagnostic::error("code.build", e.clone()).at(Some(name.to_string())));
+                        return Err(fail(e));
+                    };
+                    match data_exports(name, &files, reader.binding) {
+                        Ok(code) => code,
+                        Err((at, e)) => {
+                            st.failed.get_or_insert(Diagnostic::error("code.build", e.clone()).at(Some(at)));
+                            return Err(fail(e));
+                        }
+                    }
+                }
+                (None, data) => {
                     let file = st.package_path(name).ok_or_else(|| fail("not a file of an installed package".into()))?;
                     let bytes = std::fs::read(&file).map_err(|e| fail(e.to_string()))?;
                     let sha256 = sha256_hex(&bytes);
                     st.read.push((file, sha256.clone()));
                     st.package_files.push(PackageFile { path: name.to_string(), sha256 });
-                    String::from_utf8(bytes).map_err(|e| fail(e.to_string()))?
+                    let text = String::from_utf8(bytes).map_err(|e| fail(e.to_string()))?;
+                    match data {
+                        Some((pkg, _, Some(id))) => {
+                            let Some(reader) = st.data else {
+                                let e = format!("`{name}` is an instrument written as data, which this program can't read");
+                                st.failed.get_or_insert(Diagnostic::error("code.build", e.clone()).at(Some(name.to_string())));
+                                return Err(fail(e));
+                            };
+                            match (reader.module)(&pkg, &id, &text) {
+                                Ok(m) => {
+                                    st.data_regions.insert(name.to_string(), m.regions);
+                                    m.code
+                                }
+                                Err(p) => {
+                                    let at = format!("{name}:{}:{}", p.line, p.col);
+                                    st.failed.get_or_insert(Diagnostic::error("code.build", p.message.clone()).at(Some(at.clone())));
+                                    return Err(fail(format!("{at}: {}", p.message)));
+                                }
+                            }
+                        }
+                        _ => text,
+                    }
                 }
             };
             let first = st.sites.last().map_or(0, |s| s.id + 1);
@@ -646,7 +859,11 @@ impl Loader for Load {
         let (js, map) = if name == CORE { sdk_js() } else { strip(name, code).map_err(fail)? };
         st.files.insert(name.to_string(), LoadedFile { original, instrumented, map });
         drop(st);
-        Module::declare(ctx.clone(), name, js)
+        let module = Module::declare(ctx.clone(), name, js)?;
+        // `import.meta.url` is the module's name, as people see it: `@m2/core`'s `file()` reads
+        // its package from it (PACK-5).
+        module.meta()?.set("url", name)?;
+        Ok(module)
     }
 }
 
@@ -707,6 +924,7 @@ fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
         code: opts.code.clone(),
         packages: packages.clone(),
         dependencies: opts.dependencies.clone(),
+        data: opts.data,
         ..Default::default()
     }));
 
@@ -864,6 +1082,12 @@ fn set<'js>(object: &Object<'js>, name: &str, length: usize, f: Function<'js>) -
 /// out, so a broken package never stops a project from opening (WRITE-20). Runs are cached for
 /// the process, by the content of every file each read.
 pub fn describe(packages: &[(String, PathBuf)]) -> Catalog {
+    describe_with(packages, None)
+}
+
+/// [`describe`], reading the packs' instruments written as data with `data` (PACK-13): each pack's
+/// `"<package>/instruments"` is one more module, unless its code has a module of that name.
+pub fn describe_with(packages: &[(String, PathBuf)], data: Option<DataReader>) -> Catalog {
     let packages: Vec<(String, PathBuf)> = packages.iter().filter_map(|(n, d)| Some((n.clone(), d.canonicalize().ok()?))).collect();
     let mut runs = vec![];
     for (name, dir) in &packages {
@@ -871,10 +1095,12 @@ pub fn describe(packages: &[(String, PathBuf)]) -> Catalog {
         let mut files = vec![];
         let mut stack = vec![src.clone()];
         while let Some(d) = stack.pop() {
-            for path in std::fs::read_dir(&d).into_iter().flatten().flatten().map(|e| e.path()) {
-                if path.is_dir() {
+            // A link is never followed (PACK-5): a folder that links to one above it would never end.
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let (path, kind) = (e.path(), e.file_type());
+                if kind.as_ref().is_ok_and(|k| k.is_dir()) {
                     stack.push(path);
-                } else if path.extension().is_some_and(|x| x == "ts") {
+                } else if kind.is_ok_and(|k| k.is_file()) && path.extension().is_some_and(|x| x == "ts") {
                     files.push(path);
                 }
             }
@@ -883,9 +1109,21 @@ pub fn describe(packages: &[(String, PathBuf)]) -> Catalog {
             files.iter().filter_map(|f| Some(f.strip_prefix(&src).ok()?.to_string_lossy().replace('\\', "/"))).collect();
         subs.sort();
         for sub in subs {
-            let spec = format!("{name}/{}", sub.strip_suffix(".ts").unwrap_or(&sub));
+            // A package's `index` is the package itself (PACK-3): `@alice/felt-piano`, not `…/index`.
+            let stem = sub.strip_suffix(".ts").unwrap_or(&sub);
+            let spec = match stem.strip_suffix("/index").or_else(|| (stem == "index").then_some("")) {
+                Some("") => name.clone(),
+                Some(folder) => format!("{name}/{folder}"),
+                None => format!("{name}/{stem}"),
+            };
             let file = format!("{name}/src/{sub}");
-            runs.push((file, described(&packages, &spec)));
+            runs.push((file, described(&packages, &spec, data)));
+        }
+        let spec = format!("{name}/{DATA}");
+        if !data_files(dir).is_empty()
+            && !runs.iter().any(|(f, _)| f == &format!("{name}/src/{DATA}.ts") || f == &format!("{name}/src/{DATA}/index.ts"))
+        {
+            runs.push((spec.clone(), described(&packages, &spec, data)));
         }
     }
     merge(runs)
@@ -905,7 +1143,7 @@ struct DescribedExport {
     name: String,
 }
 
-type DescribeCache = HashMap<(Vec<(String, PathBuf)>, String), (Vec<(PathBuf, String)>, Result<Described, Diagnostic>)>;
+type DescribeCache = HashMap<(Vec<(String, PathBuf)>, String, bool), (Vec<(PathBuf, String)>, Result<Described, Diagnostic>)>;
 
 /// The SHA-256 of `bytes` in 64 lowercase hex digits, as a build records a package file's (FMT-6a).
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -915,32 +1153,46 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// Describe the package module `spec` (`std/fx`), or take a cached run whose files are unchanged.
 // A diagnostic is 128 bytes since it carries `inner` (the studio plan's Q46); this runs once a module.
 #[allow(clippy::result_large_err)]
-fn described(packages: &[(String, PathBuf)], spec: &str) -> Result<Described, Diagnostic> {
+fn described(packages: &[(String, PathBuf)], spec: &str, data: Option<DataReader>) -> Result<Described, Diagnostic> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<DescribeCache>> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
-    let key = (packages.to_vec(), spec.to_string());
-    let same = |read: &[(PathBuf, String)]| read.iter().all(|(p, sha)| std::fs::read(p).is_ok_and(|b| sha256_hex(&b) == *sha));
+    let key = (packages.to_vec(), spec.to_string(), data.is_some());
+    // A file's bytes; for a pack's `instruments/` folder, what it lists (PACK-13).
+    let now = |p: &Path| match p.file_name().is_some_and(|n| n == DATA) && p.is_dir() {
+        true => p.parent().map(|dir| sha256_hex(data_files(dir).join("\n").as_bytes())),
+        false => std::fs::read(p).ok().map(|b| sha256_hex(&b)),
+    };
+    let same = |read: &[(PathBuf, String)]| read.iter().all(|(p, sha)| now(p).is_some_and(|h| h == *sha));
     if let Some((read, result)) = cache.lock().expect("the describe cache").get(&key)
         && same(read)
     {
         return result.clone();
     }
-    let (read, result) = describe_run(packages, spec);
+    let (read, result) = describe_run(packages, spec, data);
     cache.lock().expect("the describe cache").insert(key, (read, result.clone()));
     result
 }
 
 /// One sandboxed run that imports `spec` and asks `@m2/core` what it registered.
-fn describe_run(packages: &[(String, PathBuf)], spec: &str) -> (Vec<(PathBuf, String)>, Result<Described, Diagnostic>) {
-    on_own_thread(|| describe_here(packages, spec))
+fn describe_run(
+    packages: &[(String, PathBuf)],
+    spec: &str,
+    data: Option<DataReader>,
+) -> (Vec<(PathBuf, String)>, Result<Described, Diagnostic>) {
+    on_own_thread(|| describe_here(packages, spec, data))
 }
 
 /// [`describe_run`], on this thread.
 #[allow(clippy::result_large_err)]
-fn describe_here(packages: &[(String, PathBuf)], spec: &str) -> (Vec<(PathBuf, String)>, Result<Described, Diagnostic>) {
+fn describe_here(
+    packages: &[(String, PathBuf)],
+    spec: &str,
+    data: Option<DataReader>,
+) -> (Vec<(PathBuf, String)>, Result<Described, Diagnostic>) {
     let state = Rc::new(RefCell::new(State {
         packages: packages.to_vec(),
         dependencies: packages.iter().map(|(n, _)| n.clone()).collect(),
+        data,
         ..Default::default()
     }));
     let invalid = |m: String| Diagnostic::error("pkg.invalid", m);
@@ -1038,7 +1290,9 @@ fn caught(st: &mut State, e: CaughtError, timed_out: bool) -> Diagnostic {
         CaughtError::Error(e) => e.to_string(),
         CaughtError::Value(_) => String::new(),
     };
-    if let Some(d) = st.failed.take().filter(|d| text.contains(&d.message)) {
+    // The engine cuts a long message short, so the start of one is enough.
+    let head = |m: &str| m.char_indices().nth(48).map_or(m, |(i, _)| &m[..i]).to_string();
+    if let Some(d) = st.failed.take().filter(|d| text.contains(&head(&d.message))) {
         return d;
     }
     if let Some(d) = st.export_error(&text) {
@@ -1053,6 +1307,7 @@ fn caught(st: &mut State, e: CaughtError, timed_out: bool) -> Diagnostic {
             let frame = stack.lines().filter_map(frame_at).find(|at| at.starts_with(PROJECT));
             let other = || stack.lines().filter_map(frame_at).find(|at| ![CORE, "<main>", PRELUDE_FILE].iter().any(|f| at.starts_with(f)));
             let src = frame.or_else(other).map(|at| st.remap(&at));
+            let src = st.region_at(&stack, &message).or(src);
             let mut d = Diagnostic::error(code, message).at(src);
             d.module = field("module");
             d

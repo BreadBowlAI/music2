@@ -21,8 +21,15 @@ use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2).
-const PURE: [&str; 6] =
-    ["examples/first-song", "examples/resample", "examples/sounds", "examples/sampler", "templates/starter", "templates/empty"];
+const PURE: [&str; 7] = [
+    "examples/first-song",
+    "examples/resample",
+    "examples/sounds",
+    "examples/sampler",
+    "templates/starter",
+    "templates/empty",
+    "core/session/tests/fixtures/sampler-regions",
+];
 
 /// `song` live through the player, from 0 for `frames`, with a no-op swap of every lane at
 /// frame `swap_at` when given.
@@ -246,6 +253,61 @@ fn std_plays_the_export_after_the_engine_sat_stopped() {
         }
     }
     assert!(differs.is_empty(), "live differs from the export:\n{}", differs.join("\n"));
+}
+
+// PKG-16, RENDER-33: std's Sampler takes a region's turn from how many notes its lane has started
+// (std:hitcount, outside the voices), never from engine time or from which voice is free. Four C4s
+// a beat apart on two takes play take 1, 2, 1, 2 in the export; and live after the engine sat
+// stopped they play the same, bit for bit.
+#[test]
+fn round_robin_takes_turns_by_the_notes_live_as_in_the_export() {
+    let keys = "import { track } from \"@m2/core\";\nimport { sampler } from \"std/sampler\";\n\
+                export default track(\"keys\", { name: \"Keys\" }, ({ lane }) => sampler(lane.notes(\"notes\"), { regions: [\
+                { file: \"soft-1.wav\", round_robin: [1, 2] }, { file: \"soft-2.wav\", round_robin: [2, 2] }] }));\n";
+    let notes = "{\"clips\": [{\"id\": \"rr4c4s00\", \"start\": 0, \"length\": 4, \"notes\": [\
+                 {\"pitch\": \"C4\", \"start\": 0, \"length\": 0.5, \"velocity\": 0.5}, {\"pitch\": \"C4\", \"start\": 1, \"length\": 0.5, \"velocity\": 0.5},\
+                 {\"pitch\": \"C4\", \"start\": 2, \"length\": 0.5, \"velocity\": 0.5}, {\"pitch\": \"C4\", \"start\": 3, \"length\": 0.5, \"velocity\": 0.5}]}]}";
+    let song = fixture_with("core/session/tests/fixtures/sampler-regions", &[("tracks/keys.ts", keys), ("data/keys/notes.json", notes)]);
+    let frames = (song.seconds() * song.rate as f64) as usize;
+    let export = offline(&song, frames);
+    // A beat is 0.5 s at 120 bpm; each take is 0.12 s, so each note's sound is its own.
+    let beat = song.rate as usize / 2;
+    let note = |k: usize| &export[k * beat..k * beat + beat / 2];
+    assert!(peak(note(0)) > 0.05 && peak(note(1)) > 0.05, "the notes sound");
+    assert!(note(0) == note(2) && note(1) == note(3), "every second note plays the same take");
+    assert!(note(0) != note(1), "and the two takes take turns");
+    for idle in [2 * SR as usize, 5 * BLOCK] {
+        assert_eq!(first_diff(&live_after_idle(&song, idle, frames), &export), None, "played after {idle} frames stopped");
+    }
+}
+
+// PKG-16.4, RENDER-16: a release region plays when its note ends, wherever on the block grid. A
+// poly frees a voice whose note's Off lands on a block line before the voice runs that block, when
+// its last block was silent and its kernels say they aren't active; std:regions says it is active
+// while a note a release region matches is held. Here the attack file (0.12 s) ends long before
+// each note, so each voice is silent when its note ends: at 120 bpm the second note ends on frame
+// 96 000 (750 blocks), the first mid-block; at 125 bpm a beat is 23 040 frames (180 blocks), so
+// every note that ends on a beat ends on a block line.
+#[test]
+fn a_release_region_sounds_when_its_note_ends_on_a_block_line() {
+    let keys = "import { track } from \"@m2/core\";\nimport { sampler } from \"std/sampler\";\n\
+                export default track(\"keys\", { name: \"Keys\" }, ({ lane }) => sampler(lane.notes(\"notes\"), { regions: [\
+                { file: \"soft-1.wav\", keys: [48, 72] }, { file: \"release.wav\", keys: [48, 72], trigger: \"release\" }] }));\n";
+    let notes = "{\"clips\": [{\"id\": \"relgrid1\", \"start\": 0, \"length\": 6, \"notes\": [\
+                 {\"pitch\": \"C4\", \"start\": 0, \"length\": 1, \"velocity\": 0.5}, {\"pitch\": \"C4\", \"start\": 2, \"length\": 2, \"velocity\": 0.5}]}]}";
+    for (bpm, ends) in [(120, [24_000, 96_000]), (125, [23_040, 92_160])] {
+        let tempo = format!("{{\"tempo\": [{{\"beat\": 0, \"bpm\": {bpm}}}], \"meter\": []}}");
+        let files = [("tracks/keys.ts", keys), ("data/keys/notes.json", notes), ("data/arrangement.json", tempo.as_str())];
+        let song = fixture_with("core/session/tests/fixtures/sampler-regions", &files);
+        let frames = (song.seconds() * song.rate as f64) as usize;
+        let export = offline(&song, frames);
+        for end in ends {
+            let line = end % BLOCK == 0;
+            assert!(peak(&export[end - 4_800..end]) < 1e-4, "{bpm} bpm: the voice is silent before its note ends at {end}");
+            assert!(peak(&export[end..end + 1_920]) > 0.05, "{bpm} bpm: the release sounds at {end} (on a block line: {line})");
+        }
+        assert_eq!(first_diff(&live(&song, frames, None), &export), None, "{bpm} bpm: live is the export");
+    }
 }
 
 /// The 16-track reference project (p16), written into a temp folder.
@@ -491,6 +553,24 @@ fn the_sampler_example_gives_the_same_bits_on_1_to_7_threads() {
         let song = fixture_with("examples/sampler", &[("song.ts", &alone)]);
         assert!(peak(&offline(&song, frames)) > 0.05, "the {track} sound on their own");
     }
+}
+
+// RENDER-2, PACK-5 (packs): a song that plays a pack from its folder, its keys on std's synth and
+// its sampler on the pack's own recording, renders the same bits on 4 threads as on one, and
+// sounds.
+#[test]
+fn a_song_using_a_pack_gives_the_same_bits_on_1_and_4_threads() {
+    let root = temp("pack");
+    copy(&repo().join("core/session/tests/fixtures/packs"), &root);
+    let song = compile(root.join("song-path"));
+    let frames = (song.seconds() * song.rate as f64) as usize;
+    let one = offline(&song, frames);
+    assert!(peak(&one) > 0.05, "the pack's song sounds");
+    for (n, diff, on_workers, _) in on_threads(&song, frames, &[4], &one) {
+        assert_eq!(diff, None, "the pack's song on {n} threads: the same bits");
+        assert!(on_workers > 0, "the pack's song on {n} threads: tasks ran on workers");
+    }
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 // RENDER-2 (track sx): examples/resample's warped clips are stretched by std's `std:stretch`, made

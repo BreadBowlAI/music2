@@ -1,0 +1,2 @@
+<region> sample=c4-soft.wav lokey=0 hikey=b4 pitch_keycenter=60
+<region> sample=g4-soft.wav lokey=c5 hikey=127 pitch_keycenter=67 pan=-30

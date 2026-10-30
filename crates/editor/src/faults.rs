@@ -18,6 +18,9 @@ pub trait Song: Send + Sync {
     fn ir(&self) -> &Ir;
     fn flat(&self) -> &Flat;
     fn data(&self) -> &DataSet;
+    /// The packages it was built with (PACK-9): a render of it runs their kernels, whatever the
+    /// set shows now.
+    fn view(&self) -> &Arc<m2_runtime::View>;
 }
 
 impl Song for Revision {
@@ -29,6 +32,9 @@ impl Song for Revision {
     }
     fn data(&self) -> &DataSet {
         &self.compiled.data
+    }
+    fn view(&self) -> &Arc<m2_runtime::View> {
+        &self.compiled.view
     }
 }
 
@@ -42,14 +48,28 @@ impl Song for Compiled {
     fn data(&self) -> &DataSet {
         &self.data
     }
+    fn view(&self) -> &Arc<m2_runtime::View> {
+        &self.view
+    }
 }
 
 /// A song's parts, each its own: one rooted at a track (a stem, `m2 bounce --track`), whose graph
-/// is checked from its own IR.
+/// is checked from its own IR, with the packages of the song it was made from.
 pub struct Parts {
     pub ir: Ir,
     pub flat: Flat,
     pub data: DataSet,
+    view: Arc<m2_runtime::View>,
+}
+
+impl Parts {
+    /// The parts of `ir`, made from `song` (rooted at one of its tracks, [`crate::render::rooted`]):
+    /// its graph checked against the packages `song` was built with (PACK-9), which it keeps, so it
+    /// renders with them whatever the session shows by then; and `song`'s data.
+    pub fn of(song: &dyn Song, ir: Ir, packages: &PackageSet) -> Result<Parts, Vec<m2_ir::Diagnostic>> {
+        let flat = m2_ir::check(&ir, &*packages.viewing(song.view()))?;
+        Ok(Parts { ir, flat, data: song.data().clone(), view: song.view().clone() })
+    }
 }
 
 impl Song for Parts {
@@ -61,6 +81,9 @@ impl Song for Parts {
     }
     fn data(&self) -> &DataSet {
         &self.data
+    }
+    fn view(&self) -> &Arc<m2_runtime::View> {
+        &self.view
     }
 }
 
@@ -294,7 +317,7 @@ impl Namer {
         let Some(n) = self.song.flat().nodes.get(node) else { return "A sound".into() };
         let what = match &n.op {
             FOp::Poly { .. } => "instrument",
-            FOp::Kernel { kernel, .. } => kernel.split_once(':').map_or(kernel.as_str(), |(_, name)| name),
+            FOp::Kernel { kernel, .. } => m2_song::pack::split_id(kernel).map_or(kernel.as_str(), |(_, name)| name),
             _ => n.name.rsplit_once('/').map_or(n.name.as_str(), |(_, id)| id),
         };
         format!("The {what} {}", self.place_of(&n.module))

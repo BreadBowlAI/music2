@@ -1,0 +1,7 @@
+{"clips": [
+  {"id": "k4m2p8ta", "start": 0, "length": 4, "notes": [
+    {"pitch": "C4", "start": 0, "length": 0.5, "velocity": 0.8},
+    {"pitch": "E4", "start": 1, "length": 0.5, "velocity": 0.7},
+    {"pitch": "G4", "start": 2, "length": 1, "velocity": 0.8}
+  ]}
+]}

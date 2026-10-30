@@ -28,8 +28,9 @@
 #                               the docs job's link check and site, and the cases of the docs rule,
 #                               of the PR tier's own verdicts (ci/pr-test.sh), of ci/nightly.sh
 #                               (ci/nightly-test.sh), of the nightly's issues
-#                               (ci/nightly-issue-test.sh) and of how ci/check.sh reads a test log
-#                               (ci/tally-test.sh)
+#                               (ci/nightly-issue-test.sh), of how ci/check.sh reads a test log
+#                               (ci/tally-test.sh) and of the npm lockfiles' check
+#                               (ci/npm-licenses-test.sh)
 #   ci/pr.sh quick              lint's checks, then the cases of the gates rule, the pool's models,
 #                               the web typecheck and build, std's kernels (tests, clippy) and
 #                               std.wasm rebuilt to the committed bytes
@@ -48,7 +49,7 @@
 #                               M2_PR_JOBS at a time (default 2); a run that failed runs once more,
 #                               alone, as in ci/check.sh, and is named if it passes then; a run
 #                               that was PART (passed, but not in full) fails the step
-#   ci/pr.sh renders            the 12 offline renders, against e2e/renders.sha256
+#   ci/pr.sh renders            the 14 offline renders, against e2e/renders.sha256
 #   rust and suites take --all: the nightly-tagged tests too (the Mac's nightly job).
 #   With M2_LATE_SLEEPS=1 (the Mac's nightly job: GitHub's Mac's sleeps run long), rust and suites
 #   leave out the tests that need a sleep to last what it asks (ci/sleeps-tests.txt, and the runs
@@ -243,6 +244,7 @@ lint() {
   check "nightly.sh" nightly-test.log ci/nightly-test.sh
   check "nightly issue" nightly-issue-test.log ci/nightly-issue-test.sh
   check "test tally" tally-test.log ci/tally-test.sh
+  check "npm licences" npm-licenses-test.log ci/npm-licenses-test.sh
 }
 # models: the pool's models, in release, and their lint (the same commands as ci/check.sh's step
 # 6b). m2-pool needs only m2-os and libc, so this builds in seconds, with no system library.
@@ -301,6 +303,7 @@ case $STEP in
     fi
     if tools nextest && plugins && check "web build" web.log web &&
        check "build tests" build.log cargo nextest run --locked --workspace --no-run -E "$filter"; then
+      ci/cache-left.sh --clear "$OUT/home"
       check "rust tests" test.log env HOME="$OUT/home" cargo nextest run --locked --workspace --no-tests=warn \
         --partition "hash:$PART" -E "$filter"
       # What nextest said: the counts, and each test that passed only when run again.
@@ -323,6 +326,8 @@ case $STEP in
           check "sleeps list" sleeps-list.log sleeps_list "$OUT"
         fi
       fi
+      # PLAT-7: no test wrote in the cache folder of the HOME it ran with.
+      check "cache untouched" cache-left.log ci/cache-left.sh "$OUT/home"
     fi ;;
 
   suites)

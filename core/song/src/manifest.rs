@@ -11,6 +11,8 @@
 //! [dependencies]
 //! "@m2/core" = "1"        # required: the SDK version the code is written against
 //! std = "0.2"             # every package the code imports from must be listed
+//! "@alice/felt-piano" = "1.2"                  # a pack from the store (PACK-7)
+//! "@bob/strings" = { path = "../strings" }     # a pack in a folder
 //! ```
 
 use std::collections::BTreeMap;
@@ -27,19 +29,72 @@ pub const FORMAT: u32 = 1;
 /// The dependency every project lists: the SDK.
 pub const SDK: &str = "@m2/core";
 /// The package the app bundles, one version of it (FMT-3).
-const STD: &str = "std";
+const STD: &str = crate::pack::STD;
 
 /// The rates a project may run at. Outside this, a typo (`4800`) would silently run the
 /// whole engine at a rate no device or file uses.
 const RATES: std::ops::RangeInclusive<u32> = 8_000..=384_000;
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Manifest {
     pub project: ProjectInfo,
-    /// Package name → requirement. `@m2/core` is required.
+    /// Package name → what it must be. `@m2/core` is required.
+    pub dependencies: BTreeMap<String, Dependency>,
+}
+
+/// `music2.toml` as written: each `[dependencies]` entry is read on its own, so what is wrong
+/// with one is said with its name (PACK-7).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawManifest {
+    project: ProjectInfo,
     #[serde(default)]
-    pub dependencies: BTreeMap<String, Requirement>,
+    dependencies: BTreeMap<String, toml::Value>,
+}
+
+/// A `[dependencies]` entry (PACK-7): a requirement (FMT-2), or a pack in a folder, relative to
+/// the project, for its author trying it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Dependency {
+    Version(Requirement),
+    Path(PathDependency),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PathDependency {
+    pub path: String,
+}
+
+impl Dependency {
+    /// The requirement, when it is one.
+    pub fn requirement(&self) -> Option<&Requirement> {
+        match self {
+            Dependency::Version(r) => Some(r),
+            Dependency::Path(_) => None,
+        }
+    }
+
+    /// Entry `name` as written: a requirement, or a table holding `path` and nothing else. What is
+    /// wrong is said in words, naming the entry and what to write.
+    fn read(name: &str, value: &toml::Value) -> Result<Dependency, String> {
+        let entry = format!("[dependencies] \"{name}\"");
+        let folder = "{ path = \"../folder\" }";
+        match value {
+            toml::Value::String(s) => Requirement::parse(s).map(Dependency::Version).map_err(|e| format!("{entry}: {e}")),
+            toml::Value::Table(t) => {
+                if let Some(k) = t.keys().find(|k| *k != "path") {
+                    return Err(format!("{entry}: `{k}` isn't a key of a pack in a folder, which has only `path`: write {folder}"));
+                }
+                match t.get("path") {
+                    Some(toml::Value::String(path)) => Ok(Dependency::Path(PathDependency { path: path.clone() })),
+                    Some(_) => Err(format!("{entry}: `path` is the folder, relative to the project, as text: write {folder}")),
+                    None => Err(format!("{entry} names no folder: write {folder}")),
+                }
+            }
+            _ => Err(format!("{entry} must be a version, such as \"1.2\", or a folder, {folder}")),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -65,7 +120,13 @@ impl Manifest {
     pub fn read(text: &str) -> Result<Manifest, Diagnostic> {
         check_format(text)?;
         let invalid = |message: String| Diagnostic::error("manifest.invalid", message).file(MANIFEST);
-        let m: Manifest = toml::from_str(text).map_err(|e| invalid(format!("{MANIFEST} can't be read: {}", e.message())))?;
+        let raw: RawManifest = toml::from_str(text).map_err(|e| invalid(format!("{MANIFEST} can't be read: {}", e.message())))?;
+        let mut dependencies = BTreeMap::new();
+        for (name, value) in &raw.dependencies {
+            let dep = Dependency::read(name, value).map_err(|e| invalid(format!("{MANIFEST}: {e}")))?;
+            dependencies.insert(name.clone(), dep);
+        }
+        let m = Manifest { project: raw.project, dependencies };
         let p = &m.project;
         if !matches!(DataPath::parse(Path::new(&p.entry)), DataPath::Code(_)) {
             return Err(invalid(format!("{MANIFEST}: `entry = \"{}\"` must name a .ts file in the project, such as \"song.ts\"", p.entry)));
@@ -78,6 +139,18 @@ impl Manifest {
                 RATES.end()
             )));
         }
+        for (name, dep) in &m.dependencies {
+            let named = match name.as_str() {
+                SDK | STD => Ok(()),
+                other => crate::pack::PackName::new(other).map(drop),
+            };
+            if let Err(why) = named {
+                return Err(invalid(format!("{MANIFEST}: [dependencies] {why}")));
+            }
+            if matches!(name.as_str(), SDK | STD) && dep.requirement().is_none() {
+                return Err(invalid(format!("{MANIFEST}: [dependencies] {name} is a version this app has, such as \"1\", never a folder")));
+            }
+        }
         if !m.dependencies.contains_key(SDK) {
             return Err(invalid(format!(
                 "{MANIFEST} must list the SDK the code is written against: add `\"{SDK}\" = \"1\"` under [dependencies]"
@@ -86,14 +159,14 @@ impl Manifest {
         Ok(m)
     }
 
-    /// Check every `[dependencies]` entry against what is installed (FMT-3): an unmet
+    /// Check every `[dependencies]` requirement against what is installed (FMT-3): an unmet
     /// `@m2/core` is `sdk.unsatisfied`, any other package `pkg.unsatisfied`. `installed` gives
     /// the version of a package, or `None` when it isn't installed. A song that asks for an older
     /// std is also told how to move to the one the app has; never for a newer std, or another
-    /// package.
+    /// package. A pack in a folder has no requirement: resolving it says what it is (PACK-9).
     pub fn check_dependencies(&self, installed: impl Fn(&str) -> Option<Version>) -> Vec<Diagnostic> {
         let mut out = vec![];
-        for (name, req) in &self.dependencies {
+        for (name, req) in self.dependencies.iter().filter_map(|(n, d)| Some((n, d.requirement()?))) {
             let code = if name == SDK { "sdk.unsatisfied" } else { "pkg.unsatisfied" };
             let have = installed(name);
             if have.is_some_and(|v| req.matches(v)) {
@@ -229,8 +302,24 @@ impl Requirement {
         v >= self.0 && v < self.upper()
     }
 
+    /// Whether `v` is the version written or any later one: how a pack's std requirement is read
+    /// (PACK-2), as std is one version that only grows.
+    pub fn at_least(&self, v: Version) -> bool {
+        v >= self.0
+    }
+
+    /// The version written, with any part left out as 0: the least it admits.
+    pub fn least(&self) -> Version {
+        self.0
+    }
+
+    /// `v`'s major and minor: `"1.2"` for 1.2.5, what adding a pack's item writes (PACK-10).
+    pub fn minor(v: Version) -> Requirement {
+        Requirement(Version(v.0, v.1, 0), 2)
+    }
+
     /// The shortest requirement that admits `v`: `"0.2"` for 0.2.0, `"1"` for 1.4.2.
-    fn admitting(v: Version) -> Requirement {
+    pub fn admitting(v: Version) -> Requirement {
         match v {
             Version(0, b, _) => Requirement(Version(0, b, 0), 2),
             Version(a, _, _) => Requirement(Version(a, 0, 0), 1),
@@ -321,6 +410,40 @@ mod tests {
         );
     }
 
+    // PACK-7: a pack's entry is named by PACK-1, and is a requirement or a folder; the SDK and std
+    // are always versions.
+    #[test]
+    fn pack_dependencies_are_named_and_may_be_folders() {
+        let m =
+            Manifest::read(&GOOD.replace("[dependencies]", "[dependencies]\n\"@a/b\" = \"1.2\"\n\"@c/d\" = { path = \"../d\" }")).unwrap();
+        assert_eq!(m.dependencies["@a/b"], Dependency::Version(Requirement::parse("1.2").unwrap()));
+        assert_eq!(m.dependencies["@c/d"], Dependency::Path(PathDependency { path: "../d".into() }));
+        for bad in [
+            "\"drums\" = \"1\"",
+            "\"@A/b\" = \"1\"",
+            "\"@a/b\" = { path = \"../d\", version = \"1\" }",
+            "\"@a/b\" = { git = \"x\" }",
+            "std = { path = \"../std\" }",
+        ] {
+            let text = GOOD.replace("std = \"0.2\"", bad).replace("[dependencies]", "[dependencies]\nstd = \"0.2\"");
+            let text = if bad.starts_with("std") { GOOD.replace("std = \"0.2\"", bad) } else { text };
+            assert_eq!(Manifest::read(&text).map_err(|e| e.code), Err("manifest.invalid"), "{text}");
+        }
+        assert_eq!(Requirement::minor(Version(1, 2, 5)).to_string(), "1.2");
+        assert_eq!(Requirement::minor(Version(0, 4, 1)).to_string(), "0.4");
+        // A folder has no version to check: resolving it says what it is (PACK-9).
+        assert!(
+            m.check_dependencies(|n| Version::parse(if n == SDK {
+                "1.0.0"
+            } else if n == "@a/b" {
+                "1.2.0"
+            } else {
+                "0.2.0"
+            }))
+            .is_empty()
+        );
+    }
+
     // FMT-2: Cargo's caret rule.
     #[test]
     fn caret_requirements() {
@@ -395,7 +518,7 @@ mod tests {
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
         assert!(!d[0].message.contains("This app has"), "{}", d[0].message);
         // Only std: another package asked for at an older version gets none.
-        let drums = Manifest::read(&GOOD.replace("[dependencies]", "[dependencies]\ndrums = \"1\"")).unwrap();
+        let drums = Manifest::read(&GOOD.replace("[dependencies]", "[dependencies]\n\"@x/drums\" = \"1\"")).unwrap();
         let d = drums.check_dependencies(|name: &str| {
             Version::parse(if name == SDK {
                 "1.0.0"
@@ -410,5 +533,25 @@ mod tests {
         let d = m.check_dependencies(installed("1.0.0", None));
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
         assert!(d[0].message.contains("isn't installed"));
+    }
+
+    // PACK-7: a bad [dependencies] entry is named, with what to write: never serde's words.
+    #[test]
+    fn a_bad_dependency_says_which_and_why() {
+        let bad = |line: &str| Manifest::read(&format!("{GOOD}{line}\n")).unwrap_err();
+        let d = bad("\"@test/tiny\" = { paht = \"../tiny\" }");
+        assert_eq!(d.code, "manifest.invalid");
+        assert!(d.message.contains("@test/tiny") && d.message.contains("paht") && d.message.contains("path"), "{}", d.message);
+        assert!(!d.message.contains("untagged"), "{}", d.message);
+        let d = Manifest::read(&GOOD.replace("std = \"0.2\"", "std = \"latest\"")).unwrap_err();
+        assert!(d.message.contains("std") && d.message.contains("`latest` is not a version requirement"), "{}", d.message);
+        let d = bad("\"@test/tiny\" = 3");
+        assert!(d.message.contains("@test/tiny") && d.message.contains("\"1.2\""), "{}", d.message);
+        let d = bad("\"@test/tiny\" = {}");
+        assert!(d.message.contains("@test/tiny") && d.message.contains("path"), "{}", d.message);
+        // The good ones still read, both ways.
+        let m = Manifest::read(&format!("{GOOD}\"@a/b\" = \"1.2\"\n\"@a/c\" = {{ path = \"../c\" }}\n")).unwrap();
+        assert_eq!(m.dependencies["@a/b"].requirement().map(|r| r.to_string()), Some("1.2".into()));
+        assert!(matches!(&m.dependencies["@a/c"], Dependency::Path(p) if p.path == "../c"));
     }
 }

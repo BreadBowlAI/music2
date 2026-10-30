@@ -180,6 +180,18 @@ pub const COMMANDS: &[Command] = &[
                the musician holds the song (a take, V's Compare): it waits, as every write does.",
     },
     Command {
+        name: "add-sample",
+        also: &[],
+        usage: "m2 add-sample <project> <sample id> [--track ID] [--at BAR]",
+        words: "add a sample from the library (its id, from `m2 search --kind sample`): its file copied into \
+                `assets/` with a note beside it of where it came from (a pack's name, version, author and \
+                licence; or that it is from your own folder), and its clip placed from bar BAR (1 if not given), \
+                on a track's audio lane or on a new audio track; a loop at another tempo follows the song's. One \
+                edit that undo takes back",
+        more: "With the song open in the app, the app adds it, as one undo step. The note is `assets/<file>.json`; \
+               the file and its note stay when the clip is undone. [Samples](samples.md) says more.",
+    },
+    Command {
         name: "duplicate-track",
         also: &[],
         usage: "m2 duplicate-track <project> <track>",
@@ -311,6 +323,25 @@ pub const COMMANDS: &[Command] = &[
         more: "",
     },
     Command {
+        name: "pack",
+        also: &[],
+        usage: "m2 pack new <folder> --name @owner/name\nm2 pack import-sfz <file.sfz> <folder> --name @owner/name [--label L] \
+                [--category C] [--license L]\nm2 pack check <folder>\nm2 pack build <folder>\nm2 pack install <folder>\n\
+                m2 pack list\nm2 pack remove @owner/name <version>\nm2 pack lock <project>\nm2 pack update <project> [@owner/name]",
+        words: "make, check and install packs: instruments, effects, sounds and recordings in a folder. `new` makes one with an \
+                example instrument; `import-sfz` makes one from an SFZ instrument (its recordings, as an instrument written as \
+                data), saying what it couldn't keep; `check` says in words what the registry would refuse (exit 1); `build` writes its \
+                `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `list` and `remove` show and \
+                take out what is installed; `lock` writes the song's `music2.lock` from its `music2.toml`, moving only what must \
+                move; `update` moves the song to the newest installed version each line allows (or that pack's only)",
+        more: "Your store is `~/Music/music2/Packs`, one folder a version (`Packs/@alice/felt-piano/1.2.0/`). A version is never \
+               changed: installing one that is there with other files is refused, and installing it again when its copy was \
+               changed puts it back. A song keeps the version it was made with in `music2.lock`; adding a pack's instrument or \
+               effect in the app writes it. To move a song to another version, change its line in `music2.toml`, then run \
+               `m2 pack lock`; both lock and update work while the song doesn't build. See [Packs](packs.md) and \
+               [Making a pack](making-a-pack.md).",
+    },
+    Command {
         name: "plugin-state",
         also: &[],
         usage: "m2 plugin-state <project> <track>/<key> clap:<id>",
@@ -440,6 +471,22 @@ pub const COMMANDS: &[Command] = &[
                where a path takes two (`/api/settings`). Refused before anything is sent, too: a body bigger than \
                the route takes. A write the musician holds waits, as every `m2` write does (exit 3). On standard \
                error it says the undo step a write made, or what an undo took back.",
+    },
+    Command {
+        name: "search",
+        also: &[],
+        usage: "m2 search <words…> [--kind <kind>] [--json]",
+        words: "find what can be added to a song: instruments, sounds (presets), effects, samples and plugins, best \
+                first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where \
+                it is from, and its id, which adding it names",
+        more: "With the app open it asks the app, whose list has the open song's own instruments and the plugins it \
+               has listed; with the app closed it searches music2's sounds, the packs you installed, your presets and \
+               your sample folders itself. Every word must \
+               match. `--kind` is `instrument`, `sound`, `effect`, `sample` or `plugin`; the same words typed in \
+               the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), \
+               which only samples carry (a tempo within 2 bpm, a key or its relative). `--json` prints each item with all it knows: its `kind`, `id`, `label`, \
+               `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track \
+               takes), and a sound's `preset`. [Finding sounds](finding-sounds.md) says more.",
     },
     Command {
         name: "docs",

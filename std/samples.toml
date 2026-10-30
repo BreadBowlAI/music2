@@ -1,0 +1,6 @@
+# std's samples (LIB-4 and LIB-8 in docs/architecture.md): its small drum kit, rendered by music2
+# from std's own drum machine (std/samples/make.sh). Paths are inside samples/; what each drum is
+# comes from its name (kick, hat-open, tom-low…).
+[folder."kit"]
+type = "one-shot"
+tags = ["drum machine", "808", "909", "kit"]

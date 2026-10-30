@@ -352,7 +352,7 @@ fn with_kernel(reset: &str, process: &str) -> (PackageSet, PathBuf) {
     std::fs::write(dir.join("k.wasm"), crate::tests::wasm(&wat)).unwrap();
     std::fs::write(
         dir.join("m2pkg.toml"),
-        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\ninputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]\n",
+        "[package]\nname = \"@test/t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\ninputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]\n",
     )
     .unwrap();
     let mut pk = std_packages();
@@ -360,10 +360,10 @@ fn with_kernel(reset: &str, process: &str) -> (PackageSet, PathBuf) {
     (pk, dir)
 }
 
-/// A sine through `t:k`.
+/// A sine through `@test/t:k`.
 fn through_k(pk: &PackageSet) -> Result<Renderer> {
     let ir = song(
-        json!([{"id": "x", "op": "kernel", "kernel": "std:sine"}, {"id": "k", "op": "kernel", "kernel": "t:k", "inputs": {"in": "x"}}]),
+        json!([{"id": "x", "op": "kernel", "kernel": "std:sine"}, {"id": "k", "op": "kernel", "kernel": "@test/t:k", "inputs": {"in": "x"}}]),
         "k",
         json!([]),
     );
@@ -377,7 +377,7 @@ fn through_k(pk: &PackageSet) -> Result<Renderer> {
 fn a_kernel_that_writes_its_input_fails() {
     let (pk, dir) = with_kernel("", "(f32.store (i32.load (local.get $io)) (f32.const 12345))");
     let e = through_k(&pk).unwrap().render(0.01).unwrap_err();
-    assert!(format!("{e:#}").contains("song/k: `t:k` wrote its input `in` (ABI-1: kernel input memory is read-only)"), "{e:#}");
+    assert!(format!("{e:#}").contains("song/k: `@test/t:k` wrote its input `in` (ABI-1: kernel input memory is read-only)"), "{e:#}");
     // An export (not strict) fails the same way (RENDER-25).
     let mut r = through_k(&pk).unwrap();
     r.set_strict(false);
@@ -404,7 +404,7 @@ fn a_kernel_that_writes_its_input_fails() {
 fn a_reset_that_changes_its_input_fails() {
     let (pk, dir) = with_kernel("(f32.store (i32.const 8196) (f32.const 7))", "");
     let e = through_k(&pk).map(drop).unwrap_err();
-    assert!(format!("{e:#}").contains("song/k: `t:k`'s reset changed its input `in` (ABI-1"), "{e:#}");
+    assert!(format!("{e:#}").contains("song/k: `@test/t:k`'s reset changed its input `in` (ABI-1"), "{e:#}");
     std::fs::remove_dir_all(dir).ok();
 }
 
