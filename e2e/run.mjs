@@ -12,6 +12,10 @@
 //              empty   no project open                 node suite <root> empty
 //              none    no project open                 node suite <root> <home>
 //              export  examples/first-song open        node suite <root> <home> <project> <m2 cli>
+//              library as export, and a registry: a bucket the m2 cli's robot builds from the packs in
+//                      fixtures/library, served over http on this computer while the run lasts
+//                      (M2_REGISTRY names it); a path prefix written in <root>/library/drip is
+//                      answered half, then held until that file is gone
 //   --repo <dir>   the checkout examples/first-song is copied from (the <root>/proj of every kind),
 //                  passed on as E2E_REPO to the suites that copy an example themselves (live3b:
 //                  examples/with-plugins; fx-fixes: examples/first-song). Default: the repo this
@@ -71,8 +75,9 @@
 // `expect` here (and the README's table) must follow. Exit status: 0 when every run was ok, 1 when
 // any failed, 3 when none failed but some were PART, 2 for a usage error.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -174,8 +179,9 @@ export const SUITES = [
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
   ["pk-packs", "fix", { expect: 20, s: 3 }],
   ["spotlight", "fix", { expect: 53, s: 4 }],
+  ["library", "library", { expect: 31, s: 8 }],
 ];
-const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
+const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 
 function usage(msg) {
   if (msg) console.error(`run.mjs: ${msg}`);
@@ -333,9 +339,22 @@ if (runs.some(([, , o]) => o?.clap) && !clapPath) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Removes a run's scratch folder: its folders made writable first, since a pack installed in its
+// HOME's store is read-only (PACK-6).
+function removeTree(dir) {
+  const writable = (d) => {
+    try {
+      fs.chmodSync(d, 0o755);
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) if (e.isDirectory()) writable(path.join(d, e.name));
+    } catch {}
+  };
+  writable(dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // Builds the scratch folder for one run, as the suites expect it.
 function prepare(dir, kind) {
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTree(dir);
   const home = path.join(dir, "testhome");
   fs.mkdirSync(path.join(home, ".music2"), { recursive: true });
   const proj = path.join(dir, "proj");
@@ -352,6 +371,7 @@ function prepare(dir, kind) {
   } else if (kind === "empty" || kind === "none") {
     open = "-";
   }
+  if (kind === "library") library(dir, home);
   const args = {
     proj: [dir],
     cables: [dir],
@@ -360,14 +380,91 @@ function prepare(dir, kind) {
     empty: [dir, "empty"],
     none: [dir, home],
     export: [dir, home, proj, cli],
+    library: [dir, home, proj, cli],
   }[kind];
   return { home, open, args };
+}
+
+// A 16-bit mono WAV of a tenth of a second of a tone at 48 kHz, as a pack's sample.
+function tone(file) {
+  const n = 4800;
+  const b = Buffer.alloc(44 + n * 2);
+  b.write("RIFF", 0);
+  b.writeUInt32LE(36 + n * 2, 4);
+  b.write("WAVEfmt ", 8);
+  b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20);
+  b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(48000, 24);
+  b.writeUInt32LE(96000, 28);
+  b.writeUInt16LE(2, 32);
+  b.writeUInt16LE(16, 34);
+  b.write("data", 36);
+  b.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(Math.sin(i / 10) * 8000 * (1 - i / n)), 44 + i * 2);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, b);
+}
+
+// The library kind's registry: fixtures/library's two packs listed with `m2 registry add`,
+// unpacked as the registry's CI unpacks them, and built into <dir>/library/bucket by `m2 registry
+// build`, as the registry's CI builds one.
+function library(dir, home) {
+  const at = path.join(dir, "library");
+  fs.cpSync(path.join(E2E, "fixtures/library"), at, { recursive: true });
+  fs.mkdirSync(path.join(at, "registry/packs"), { recursive: true });
+  tone(path.join(at, "drums/samples/kicks/Boom.wav"));
+  const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "none" };
+  delete env.M2_REGISTRY;
+  const m2 = (...a) => execFileSync(cli, a, { cwd: at, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  for (const [pack, owner] of [["drums", "alice"], ["keys", "bob"]]) {
+    const said = m2("registry", "add", "registry", pack, "--source", `https://github.com/${owner}/${pack}/releases/download/v1/${pack}.tar.gz`);
+    const hex = /sha256:([0-9a-f]{64})/.exec(said)?.[1];
+    if (!hex) throw new Error(`m2 registry add ${pack} said: ${said}`);
+    fs.cpSync(path.join(at, pack), path.join(at, "sources", hex, pack), { recursive: true });
+  }
+  m2("registry", "build", "registry", "--sources", "sources", "--out", "bucket", "--made", "2026-10-30T12:00:00Z");
+}
+
+// The library kind's bucket, served over http on this computer while the run lasts: a GET of a path
+// is its file's bytes, else 404. While <root>/library/drip names a prefix of a path asked for, the
+// answer sends half its bytes, then waits until that file is gone (a slow download, to see a Get's
+// progress and cancel it). Its address, and how to stop it.
+async function serveBucket(dir) {
+  const bucket = path.join(dir, "library/bucket");
+  const drip = path.join(dir, "library/drip");
+  const server = http.createServer(async (req, res) => {
+    const rel = decodeURIComponent(new URL(req.url, "http://x").pathname).replace(/^\/+/, "");
+    let body;
+    try {
+      if (rel.split("/").includes("..")) throw new Error("no");
+      body = fs.readFileSync(path.join(bucket, rel));
+    } catch {
+      res.writeHead(404, { "content-length": 0 });
+      return res.end();
+    }
+    res.writeHead(200, { "content-length": body.length });
+    const held = fs.existsSync(drip) && rel.startsWith(fs.readFileSync(drip, "utf8").trim());
+    if (!held) return res.end(body);
+    res.write(body.subarray(0, body.length >> 1));
+    while (fs.existsSync(drip) && !res.destroyed) await sleep(50);
+    res.end(body.subarray(body.length >> 1));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const stop = () =>
+    new Promise((r) => {
+      server.close(r);
+      server.closeAllConnections();
+    });
+  return { url: `http://127.0.0.1:${server.address().port}`, stop };
 }
 
 function envFor(home, clap, probe) {
   const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "inject", M2_AUDIO_INPUT: "inject", M2_AUDIO_INPUTS: "Test mic,USB mic", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
   delete env.CLAP_PATH;
   delete env.M2_PROBE;
+  // No suite reads a registry unless its kind serves one (the library kind's).
+  delete env.M2_REGISTRY;
   if (clap && clapPath) env.CLAP_PATH = clapPath;
   // The probe plugin, which a debug server installs (br-plugins).
   if (probe) env.M2_PROBE = "1";
@@ -380,6 +477,8 @@ async function runOne(suite, kind, o = {}, stream) {
   const logFile = path.join(root, `${name}.log`);
   const { home, open, args } = prepare(dir, kind);
   const env = envFor(home, o.clap, o.probe);
+  const bucket = kind === "library" ? await serveBucket(dir) : null;
+  if (bucket) env.M2_REGISTRY = bucket.url;
   const session = path.join(home, ".music2/session.json");
   const log = fs.openSync(logFile, "w");
   // Once the log is closed, a late line goes to it by name: its old descriptor may belong to
@@ -439,6 +538,7 @@ async function runOne(suite, kind, o = {}, stream) {
     for (let i = 0; i < 30 && serverExit === null; i++) await sleep(100);
     if (serverExit === null) server.kill("SIGKILL");
   }
+  await bucket?.stop();
   fs.closeSync(serverLog);
   closed = true;
   fs.closeSync(log);
@@ -453,7 +553,7 @@ async function runOne(suite, kind, o = {}, stream) {
   if (expect !== undefined && pass > expect) why.push(`${pass} checks passed where ${expect} are expected: update its count in run.mjs and the README`);
   why.push(...skips.map((s) => s.replace(/^SKIP\s+/, "skipped ")));
   const status = code !== 0 || fail > 0 ? "FAIL" : why.length ? "PART" : "ok";
-  if (!opts.keep && status === "ok") fs.rmSync(dir, { recursive: true, force: true });
+  if (!opts.keep && status === "ok") removeTree(dir);
   return { name, code, pass, fail, skip: skips.length, expect, why, status, logFile };
 }
 

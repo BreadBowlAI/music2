@@ -1,19 +1,23 @@
 import clsx from "clsx";
 import { CornerDownLeft, FolderPlus, Loader2, Search, Volume2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { lockReason, moduleName, type GraphState } from "../lib/graph";
-import { addSample, sampleTarget } from "../lib/audioImport";
+import { graphApi, lockReason, moduleName, type GraphState } from "../lib/graph";
+import { addSample, sampleAdded, sampleTarget, type SampleAdded } from "../lib/audioImport";
 import { beatNow } from "../lib/clock";
 import {
+  cancelGet,
   dragSample,
   fromWords,
+  getFromLibrary,
   GROUPS,
   SAMPLE_DRAG,
   sampleFolders,
   sampleWords,
+  sizeWords,
   stopPreview,
   togglePreview,
   useFinding,
+  useGetting,
   usePreview,
   useSearch,
   type LibraryItem,
@@ -112,6 +116,44 @@ export function addItem(item: LibraryItem) {
   toast(`${item.label} can't be added yet.`);
 }
 
+/**
+ * Get library item `item` (REG-15, REG-16) and add it as Enter adds one you have: a pack's whole
+ * version is installed, then its instrument goes on a new track, its effect on the selected track,
+ * its sound on a new track of its instrument; a sample is added on a new audio track at the
+ * playhead, with its note. `got` is called once it is here, before it is added. Why it couldn't be
+ * got, in words; null once it is.
+ */
+export async function getItem(item: LibraryItem, got: () => void = () => {}): Promise<string | null> {
+  const { graph, connected } = useStore.getState();
+  if (!graph) return "open a song first";
+  const why = lockReason(graph, connected);
+  if (why) return why;
+  try {
+    if (item.kind === "sample") {
+      const done = await getFromLibrary(item, { session: graph.session, to: sampleTarget(graph) });
+      got();
+      await sampleAdded(item, graph.session, done as unknown as SampleAdded);
+      return null;
+    }
+    const done = await getFromLibrary(item);
+    got();
+    const fresh = await graphApi.get();
+    useStore.getState().set({ graph: fresh });
+    // Installed, it is an item you have: its own id, as the lists offer it now.
+    const have: LibraryItem = { ...item, id: done.id ?? item.id.replace(/^library:/, ""), library: undefined };
+    if (item.kind !== "sound") return addItem(have), null;
+    // A sound of an instrument plays on a new track of its own; an effect's loads as one you have does.
+    const ins = fresh.instruments?.find((i) => i.component === have.component);
+    if (!ins) return loadSound(have, fresh), null;
+    const module = await addTrack(ins, target());
+    const now = useStore.getState().graph;
+    if (module && now) loadSound(have, now, module);
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
 /** Add a folder of your samples (LIB-5): the app's own folder dialog, else its path typed. */
 export async function addSampleFolder(): Promise<SampleFolder[] | null> {
   let path: string | null = null;
@@ -123,8 +165,12 @@ export async function addSampleFolder(): Promise<SampleFolder[] | null> {
   return sampleFolders({ add: path.trim() });
 }
 
-/** What Enter does with `item`, in words, for the panel's foot. */
+/** What Enter does with `item`, in words, for the panel's foot; a library item's is a Get first. */
 function enterWords(item: LibraryItem, graph: GraphState): string {
+  if (item.library) {
+    const then = item.kind === "sound" || item.kind === "instrument" ? "adds a track" : item.kind === "sample" ? "adds it at the playhead" : enterWords({ ...item, library: undefined }, graph);
+    return `gets it (${sizeWords(item.library.size)}) and ${then}`;
+  }
   const module = target();
   const name = module ? moduleName(graph.view.modules.find((m) => m.key === module) ?? { key: module }) : null;
   if (item.kind === "instrument" || (item.kind === "plugin" && item.instrument)) return "adds a track";
@@ -140,7 +186,9 @@ function enterWords(item: LibraryItem, graph: GraphState): string {
  * picked it (again, or moving, stops it); Enter adds it, or, when the search hasn't answered the
  * words typed yet, their best hit once it has; Esc closes. A row drags onto the timeline or a
  * track, as the side browser's rows do; a sound onto a track loads into it. A click keeps the
- * keys in the panel.
+ * keys in the panel. After what you have, From the library (REG-13): what you can get, each with
+ * Get; Enter on one gets it, its progress in its row and the foot, then adds it; Esc while it comes
+ * cancels it.
  */
 export default function Spotlight({ graph }: { graph: GraphState }) {
   const open = useFinding((s) => s.open);
@@ -182,12 +230,17 @@ function Panel({ graph }: { graph: GraphState }) {
   const again = useMemo(() => ({ plugins, round }), [plugins, round]);
   const { found, now } = useSearch(query, again, 60, fits);
   const items = useMemo(() => found?.items ?? [], [found]);
+  const library = useMemo(() => found?.library ?? [], [found]);
   const indexing = (found?.folders?.indexing ?? 0) > 0;
+  // The library's catalog being fetched (REG-12): asked again until it is here.
+  const fetching = found?.registry?.fetching ?? false;
   useEffect(() => {
-    if (!indexing) return;
+    if (!indexing && !fetching) return;
     const t = window.setTimeout(() => setRound((r) => r + 1), 1000);
     return () => window.clearTimeout(t);
-  }, [indexing, found]);
+  }, [indexing, fetching, found]);
+  // The Get running, this panel's or another window's: one at a time (REG-15).
+  const getting = useGetting();
   // Other words: their best hit is selected, wherever its group is, and nothing is picked yet. The
   // same words answered again (the plugin list came): the row selected stays, while it is there.
   const shownFor = useRef<string | null>(null);
@@ -248,7 +301,15 @@ function Panel({ graph }: { graph: GraphState }) {
       (e) => setSaid(e instanceof Error ? e.message : String(e)),
     );
 
-  const groups = useMemo(() => GROUPS.map((g) => ({ ...g, items: items.filter((i) => i.kind === g.kind) })).filter((g) => g.items.length), [items]);
+  const groups = useMemo(
+    () =>
+      [
+        ...GROUPS.map((g) => ({ key: g.kind as string, name: g.name, items: items.filter((i) => i.kind === g.kind) })),
+        // What you can get, after what you have, ranked by the same search (REG-13).
+        { key: "library", name: "From the library", items: library },
+      ].filter((g) => g.items.length),
+    [items, library],
+  );
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const current = flat.find((i) => i.id === active) ?? flat[0];
   useEffect(() => {
@@ -269,8 +330,22 @@ function Panel({ graph }: { graph: GraphState }) {
   };
   // A newer ask (or a stop) says its own: an older one's answer never overwrites it.
   const play = (item: LibraryItem) => void togglePreview(item).then((why) => why !== undefined && setSaid(why));
+  /** Get a library item (REG-15): its progress in its row and the foot; once here, the panel closes and it is added. */
+  const get = (item: LibraryItem) => {
+    const running = useGetting.getState();
+    if (running) return setSaid(`Getting ${running.label} already: wait for it, or cancel it.`);
+    stopPreview();
+    setSaid(null);
+    void getItem(item, () => alive.current && close()).then((why) => {
+      if (!why) return;
+      const words = `Couldn't get ${item.label}: ${why.replace(/^Couldn't get [^:]*: /, "")}`;
+      if (alive.current) setSaid(words);
+      else useStore.getState().toast(words);
+    });
+  };
   const add = (item: LibraryItem | undefined) => {
     if (!item) return;
+    if (item.library) return get(item);
     close();
     addItem(item);
   };
@@ -301,7 +376,8 @@ function Panel({ graph }: { graph: GraphState }) {
         else if (e.key === "ArrowUp") move(-1);
         else if (e.key === " " && browsing && current) play(current);
         else if (e.key === "Enter") enter();
-        else if (e.key === "Escape") close();
+        // While a Get comes, Esc cancels it; then it closes.
+        else if (e.key === "Escape") void (getting ? cancelGet() : close());
         else return;
         e.preventDefault();
         e.stopPropagation();
@@ -435,7 +511,7 @@ function Panel({ graph }: { graph: GraphState }) {
           </EmptyState>
         )}
         {groups.map((g) => (
-          <div key={g.kind} role="group" aria-label={g.name} data-spotlight-group={g.kind}>
+          <div key={g.key} role="group" aria-label={g.name} data-spotlight-group={g.key}>
             <div className="h-ctl-sm px-2 flex items-center text-sm font-semibold text-fg-muted">{g.name}</div>
             {g.items.map((item) => {
               const on = item === current;
@@ -450,6 +526,10 @@ function Panel({ graph }: { graph: GraphState }) {
                         ? SAMPLE_DRAG
                         : null;
               const sound = item.kind === "sound" ? item.tags[0] : item.kind === "sample" ? sampleWords(item) : item.category;
+              // A library item is got first: it drags nowhere until it is here.
+              const draggable = !!drag && !item.library;
+              const mine = getting?.id === item.id;
+              const part = mine && getting.total > 0 ? Math.min(1, getting.done / getting.total) : 0;
               return (
                 <div
                   key={item.id}
@@ -458,13 +538,14 @@ function Panel({ graph }: { graph: GraphState }) {
                   aria-selected={on}
                   data-spotlight-item={item.id}
                   data-active={on || undefined}
-                  draggable={!!drag}
-                  title={item.description}
-                  className={clsx("h-ctl px-2 rounded-sm flex items-center gap-2 cursor-default transition-colors duration-80 ease-linear", on ? "bg-accent-soft" : "hover:bg-hover")}
+                  data-spotlight-library={item.library ? item.library.pack : undefined}
+                  draggable={draggable}
+                  title={item.library ? `${item.description}${item.description ? "\n" : ""}${item.library.pack} ${item.library.version} · ${item.library.license || "no licence named"}${item.library.authors.length ? ` · by ${item.library.authors.join(", ")}` : ""}${item.library.have ? ` · you have ${item.library.have}` : ""}` : item.description}
+                  className={clsx("relative h-ctl px-2 rounded-sm flex items-center gap-2 cursor-default transition-colors duration-80 ease-linear", on ? "bg-accent-soft" : "hover:bg-hover")}
                   onPointerDown={() => pick(item)}
                   onDoubleClick={() => add(item)}
                   onDragStart={(ev) => {
-                    if (!drag) return;
+                    if (!drag || !draggable) return;
                     ev.dataTransfer.setData(drag, drag === SOUND_DRAG ? JSON.stringify(item) : drag === SAMPLE_DRAG ? item.id : item.component);
                     ev.dataTransfer.effectAllowed = "copy";
                     if (drag === SAMPLE_DRAG) dragSample(item);
@@ -481,21 +562,67 @@ function Panel({ graph }: { graph: GraphState }) {
                   <span className="shrink-0 max-w-[45%] truncate text-xs text-fg-muted">
                     {sound} · {fromWords(item)}
                   </span>
-                  {on && <CornerDownLeft size={14} className="shrink-0 text-fg-faint" />}
+                  {item.library && mine ? (
+                    <>
+                      <span className="shrink-0 w-9 text-right text-xs text-fg-muted tabular-nums">{Math.round(part * 100)}%</span>
+                      <button
+                        type="button"
+                        data-spotlight-cancel
+                        title="Stop getting it: nothing of it is kept"
+                        className="shrink-0 h-ctl-sm px-2 rounded-sm text-xs text-fg-muted hover:bg-hover"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void cancelGet();
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <span className="absolute left-2 right-2 bottom-0.5 h-0.5 rounded-full bg-line overflow-hidden" data-spotlight-progress={Math.round(part * 100)}>
+                        <span className="block h-full bg-accent transition-[width] duration-80 ease-linear" style={{ width: `${part * 100}%` }} />
+                      </span>
+                    </>
+                  ) : item.library ? (
+                    <button
+                      type="button"
+                      data-spotlight-get={item.id}
+                      disabled={!!getting}
+                      title={getting ? "One at a time: wait for the one coming, or cancel it" : `Get ${item.library.pack} ${item.library.version} (${sizeWords(item.library.size)})`}
+                      className="shrink-0 h-ctl-sm px-2 rounded-sm text-xs font-medium text-accent hover:bg-hover disabled:text-fg-off disabled:hover:bg-transparent"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pick(item);
+                        get(item);
+                      }}
+                    >
+                      Get
+                    </button>
+                  ) : (
+                    on && <CornerDownLeft size={14} className="shrink-0 text-fg-faint" />
+                  )}
                 </div>
               );
             })}
           </div>
         ))}
+        {found?.q === query && query.trim() && library.length === 0 && found.registry && (found.registry.fetching || (found.registry.error && !found.registry.made)) && (
+          <p className="px-2 py-1 text-xs text-fg-muted" data-spotlight-library-note>
+            {found.registry.fetching ? "Looking at the library…" : "The library can't be reached right now (no internet?): what you have is all here."}
+          </p>
+        )}
       </div>
       <div className="h-ctl shrink-0 flex items-center gap-3 px-3 border-t border-line bg-chrome text-xs text-fg-muted">
         <span data-spotlight-said className="flex-1 min-w-0 truncate">
           {said ??
-            (current
-              ? `Enter ${enterWords(current, graph)}${current.preview ? " · Space plays it" : " · no preview"}`
-              : indexing
-                ? "Looking through your samples…"
-                : "Type to find")}
+            (getting
+              ? `Getting ${getting.label}…${getting.total ? ` ${sizeWords(getting.done)} of ${sizeWords(getting.total)}` : ""} · Esc cancels`
+              : current
+                ? `Enter ${enterWords(current, graph)}${current.preview ? " · Space plays it" : " · no preview"}`
+                : indexing
+                  ? "Looking through your samples…"
+                  : fetching
+                    ? "Looking at the library…"
+                    : "Type to find")}
         </span>
         <span className="shrink-0">↑↓ · Esc</span>
       </div>

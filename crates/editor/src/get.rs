@@ -466,8 +466,10 @@ pub fn pack(
         let expect = Expect { size: Some(f.size), sha256: Some(f.sha256), limit: f.size, within: deadline(f.size) };
         let base = done;
         let url = remote.url(&reg::blob_path(&f.sha256));
-        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: base + p.done, total }), cancel)
-            .map_err(|e| said(format!("{}: {e}", f.path)))?;
+        fetch::get_to_file(&url, &dest, &expect, |p| progress(Progress { done: base + p.done, total }), cancel).map_err(|e| match e {
+            fetch::Error::Cancelled => said(e.to_string()),
+            e => said(format!("{}: {e}", f.path)),
+        })?;
         done += f.size;
         progress(Progress { done, total });
         if n == 0 {

@@ -1,0 +1,12 @@
+[package]
+name = "@bob/keys"
+version = "0.1.0"
+license = "MIT"
+description = "Soft keys"
+authors = ["Bob"]
+repository = "https://github.com/bob/keys"
+tags = ["keys"]
+
+[dependencies]
+"@m2/core" = "1"
+std = "0.5"

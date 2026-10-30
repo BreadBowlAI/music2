@@ -117,7 +117,7 @@ export function newTrack() {
 }
 
 /** Add a track playing `instrument` below `after` (else last): selected and lit, with an Undo. */
-export async function addTrack(instrument: Instrument, after: string | null) {
+export async function addTrack(instrument: Instrument, after: string | null): Promise<string | undefined> {
   const graph = writable();
   if (!graph) return;
   lastAdded = instrument.component;
@@ -127,6 +127,7 @@ export async function addTrack(instrument: Instrument, after: string | null) {
     await refreshed();
     arrived(r.module, instrument.lane);
     toast(r.label === instrument.label ? `Added ${r.label}` : `Added ${r.label} (${instrument.label})`, undoAction(graph.session, r.step));
+    return r.module;
   } catch (error) {
     toast(message(error));
   }

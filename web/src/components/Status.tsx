@@ -1,7 +1,8 @@
 import clsx from "clsx";
-import { CircleAlert, CodeXml, Gauge, HardDrive, Hourglass, Info, Lock, Pause, TriangleAlert, VolumeX, WifiOff } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { CircleAlert, CodeXml, Download, Gauge, HardDrive, Hourglass, Info, Lock, Pause, TriangleAlert, VolumeX, WifiOff } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
+import { cancelGet, getMissing, missingPacks, sizeWords, useGetting, type MissingPack } from "../lib/library";
 import { usePill } from "../lib/overlays";
 import { openSettings } from "../lib/settings";
 import { placeOf, technical, Words } from "../lib/plain";
@@ -298,6 +299,7 @@ function Compile({ graph, state, onShow }: { graph: GraphState; state: State; on
           ),
         )}
         {problems.length > 3 && <li className="text-xs text-fg-muted">and {problems.length - 3} more, in the code view</li>}
+        {problems.some((p) => p.code === "pkg.missing") && <MissingPacks />}
         {codes.length > 0 && (
           <li>
             <Details>
@@ -347,5 +349,67 @@ function ReadOnlyItem({ graph, state, readOnly }: { graph: GraphState; state: St
         ? `Open in ${holderName(readOnly)}. You can listen here; to edit, close it there, then Retry.`
         : readOnly.message}
     </Item>
+  );
+}
+
+/**
+ * The packs the song's `music2.lock` names that aren't installed (REG-17), each with Get when the
+ * library has that very version, its progress while it comes and Cancel; or why it can't be got.
+ * Once got, the song builds again and plays.
+ */
+function MissingPacks() {
+  const [missing, setMissing] = useState<MissingPack[] | null>(null);
+  const [said, setSaid] = useState<string | null>(null);
+  const getting = useGetting();
+  const toast = useStore((s) => s.toast);
+  useEffect(() => {
+    let alive = true;
+    void missingPacks().then(
+      (m) => alive && setMissing(m),
+      () => alive && setMissing([]),
+    );
+    return () => void (alive = false);
+  }, []);
+  if (!missing?.length) return null;
+  const get = (m: MissingPack) => {
+    setSaid(null);
+    void getMissing(m.pack, m.version).then(
+      () => {
+        toast(`Got ${m.pack} ${m.version}: the song builds with it again`);
+        setMissing((all) => all?.filter((x) => x !== m) ?? null);
+      },
+      (e) => setSaid(e instanceof Error ? e.message : String(e)),
+    );
+  };
+  return (
+    <li className="pt-1 space-y-1" data-missing-packs>
+      {missing.map((m) => {
+        const id = `${m.pack}@${m.version}`;
+        const mine = getting?.id === id;
+        return (
+          <div key={id} className="flex items-center gap-2 text-sm" data-missing-pack={id}>
+            <span className="flex-1 min-w-0 truncate text-fg">
+              {m.pack} {m.version}
+              {!m.can && m.why && <span className="block text-xs text-fg-muted whitespace-normal">{m.why}</span>}
+            </span>
+            {m.can && mine && (
+              <>
+                <span className="text-xs text-fg-muted tabular-nums">{getting.total ? `${Math.round((getting.done / getting.total) * 100)}%` : "…"}</span>
+                <Button variant="secondary" size="sm" onClick={() => void cancelGet()} data-missing-cancel>
+                  Cancel
+                </Button>
+              </>
+            )}
+            {m.can && !mine && (
+              <Button variant="secondary" size="sm" disabled={!!getting} onClick={() => get(m)} data-missing-get={id} title={`Get it from the library${m.size ? ` (${sizeWords(m.size)})` : ""}`}>
+                <Download size={14} />
+                Get
+              </Button>
+            )}
+          </div>
+        );
+      })}
+      {said && <p className="text-xs text-danger-strong">{said}</p>}
+    </li>
   );
 }
