@@ -26,6 +26,7 @@ pub mod json;
 pub mod keys;
 pub mod label;
 pub mod layout;
+pub mod library;
 pub mod lens;
 pub mod listen;
 pub mod markers;
