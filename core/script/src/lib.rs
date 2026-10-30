@@ -44,7 +44,7 @@ pub const SDK: &str = include_str!("../sdk/core.ts");
 
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
 /// requirement is checked against it (FMT-2, FMT-3).
-pub const SDK_VERSION: &str = "1.5.0";
+pub const SDK_VERSION: &str = "1.6.0";
 
 const CORE: &str = "@m2/core";
 
@@ -373,7 +373,7 @@ impl State {
             let dir = self.package_path(base).and_then(|f| f.parent().map(Path::to_path_buf)).unwrap_or_default();
             self.package_file(&normalize(&dir.join(name)))
         } else {
-            let (pkg, sub) = name.split_once('/').unwrap_or((name, "index"));
+            let (pkg, sub) = package_of(name);
             if in_project && !self.dependencies.iter().any(|d| d == pkg) {
                 let e = format!("`{name}` is from the package `{pkg}`, which music2.toml doesn't list: add it under [dependencies]");
                 return Err(fail("pkg.undeclared", e));
@@ -441,6 +441,20 @@ impl State {
             )),
             None => Err(("code.build", "file not found".into())),
         }
+    }
+}
+
+/// A bare import's package and the module in it (PACK-3): its first segment, or its first two when
+/// it starts with `@`, and `index` when it names nothing more. `"std/dsp"` is std's `dsp`,
+/// `"@alice/felt-piano/keys"` is `@alice/felt-piano`'s `keys`.
+pub fn package_of(spec: &str) -> (&str, &str) {
+    let cut = match spec.starts_with('@') {
+        true => spec.match_indices('/').nth(1).map(|(i, _)| i),
+        false => spec.find('/'),
+    };
+    match cut {
+        Some(i) => (&spec[..i], &spec[i + 1..]),
+        None => (spec, "index"),
     }
 }
 
@@ -646,7 +660,11 @@ impl Loader for Load {
         let (js, map) = if name == CORE { sdk_js() } else { strip(name, code).map_err(fail)? };
         st.files.insert(name.to_string(), LoadedFile { original, instrumented, map });
         drop(st);
-        Module::declare(ctx.clone(), name, js)
+        let module = Module::declare(ctx.clone(), name, js)?;
+        // `import.meta.url` is the module's name, as people see it: `@m2/core`'s `file()` reads
+        // its package from it (PACK-5).
+        module.meta()?.set("url", name)?;
+        Ok(module)
     }
 }
 

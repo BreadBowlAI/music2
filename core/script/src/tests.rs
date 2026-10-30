@@ -2086,3 +2086,71 @@ fn a_nested_dictionary_control_is_found() {
         assert!(e.len() == 1 && e[0].message.contains(want), "{channels}: {e:?}");
     }
 }
+
+/// Build `song` with std and the pack `name` installed (and listed when `listed`).
+fn with_pack(name: &str, pkg: &TempPackage, song: &str, listed: bool) -> Result<Build, Vec<Diagnostic>> {
+    built(name, pkg, song, listed).map(|b| *b)
+}
+
+/// [`with_pack`]'s errors, which a test reads.
+fn pack_errors(name: &str, pkg: &TempPackage, song: &str, listed: bool) -> Vec<Diagnostic> {
+    built(name, pkg, song, listed).err().expect("the build fails")
+}
+
+fn built(name: &str, pkg: &TempPackage, song: &str, listed: bool) -> Result<Box<Build>, Vec<Diagnostic>> {
+    let mut o = options(&[("song.ts", song)]);
+    o.packages.push((name.into(), pkg.0.clone()));
+    if listed {
+        o.dependencies.push(name.into());
+    }
+    build_full(&o).map(Box::new)
+}
+
+const PIANO: &str = r#"import { component, control, file, kernel, port, type Params } from "@m2/core";
+export const here = file(import.meta, "samples/C4.wav");
+export const piano = component(
+  { id: "felt-piano", label: "Felt piano", inputs: { notes: port.notes() }, output: port.audio(), editor: { category: "Keys" } },
+  (_n: unknown) => kernel("std:sine", { freq: 440 }),
+);
+"#;
+
+// PACK-3, PACK-4, PACK-5: a scoped package is imported by its two segments, its ids carry its whole
+// name, and `file(import.meta, …)` spells its own files.
+#[test]
+fn a_scoped_package_is_imported_by_its_two_segments() {
+    let pkg = TempPackage::new(
+        "scoped",
+        &[
+            ("index.ts", PIANO),
+            ("keys.ts", "export { piano as keys, here } from \"./index\";\n"),
+            ("deep/more.ts", "export const deep = 1;\n"),
+        ],
+    );
+    let song = |from: &str| {
+        format!(
+            "import {{ song, track, file }} from \"@m2/core\";\nimport {{ piano, here }} from \"{from}\";\n\
+             if (here !== \"@alice/felt-piano:samples/C4.wav\") throw new Error(`here is ${{here}}`);\n\
+             if (file(import.meta, \"kick.wav\") !== \"kick.wav\") throw new Error(\"a song's own file is its asset\");\n\
+             const t = track(\"keys\", ({{ lane }}) => piano(lane.notes(\"notes\")));\nexport default song(() => t.out);\n"
+        )
+    };
+    let b = with_pack("@alice/felt-piano", &pkg, &song("@alice/felt-piano"), true).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(b.package_files.iter().any(|f| f.path == "@alice/felt-piano/src/index.ts"), "{:?}", b.package_files);
+    let frames: Vec<&str> = b.ir.modules.iter().flat_map(|m| m.frames.iter().filter_map(|f| f.component.as_deref())).collect();
+    assert!(frames.contains(&"@alice/felt-piano:felt-piano"), "the id carries the whole name: {frames:?}");
+    assert!(b.components.iter().any(|d| d.id == "@alice/felt-piano:felt-piano"));
+    let keys = song("@alice/felt-piano/keys").replace("{ piano, here }", "{ keys as piano, here }");
+    with_pack("@alice/felt-piano", &pkg, &keys, true).unwrap_or_else(|e| panic!("a sub module: {e:?}"));
+    // Not listed: pkg.undeclared, naming the whole package.
+    let e = pack_errors("@alice/felt-piano", &pkg, &song("@alice/felt-piano"), false);
+    assert_eq!(e[0].code, "pkg.undeclared", "{e:?}");
+    assert!(e[0].message.contains("the package `@alice/felt-piano`"), "{}", e[0].message);
+    let e = pack_errors("@alice/felt-piano", &pkg, &song("@alice/felt-piano/keys"), false);
+    assert!(e[0].code == "pkg.undeclared" && e[0].message.contains("the package `@alice/felt-piano`"), "{e:?}");
+    // Another scope with the same name is another package.
+    let e = pack_errors("@alice/felt-piano", &pkg, &song("@bob/felt-piano"), true);
+    assert!(e[0].code == "pkg.undeclared" && e[0].message.contains("`@bob/felt-piano`"), "{e:?}");
+    // A path out of the package is still outside it (FMT-6a).
+    let e = pack_errors("@alice/felt-piano", &pkg, &song("@alice/felt-piano/../../x"), true);
+    assert_eq!(e[0].code, "import.outside-code", "{e:?}");
+}

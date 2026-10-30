@@ -329,6 +329,20 @@ function assetName(v: unknown): v is string {
   return typeof v === "string" && v.length > 0 && !v.split("/").some((s) => s === "" || s.startsWith(".")) && !v.includes("\\");
 }
 
+/**
+ * A file of the module's own package, as an asset reference (PACK-5): in a pack's
+ * `src/index.ts`, `file(import.meta, "samples/C4.wav")` is `"@alice/felt-piano:samples/C4.wav"`,
+ * so pack code needn't spell its own name. In a song's own code it is the song's asset,
+ * `file(import.meta, "kick.wav")` is `"kick.wav"`.
+ */
+export function file(meta: ImportMeta, path: string): string {
+  const url = (meta as { url?: unknown } | undefined)?.url;
+  if (typeof url !== "string") throw new Error("file(): pass `import.meta`, as in file(import.meta, \"samples/C4.wav\")");
+  if (typeof path !== "string" || !assetName(path) || path.includes(":")) throw new Error(`file(): ${shown(path)} isn't a file's path, such as "samples/C4.wav"`);
+  const home: Home = JSON.parse(host.__m2_home(url));
+  return home.package === null ? path : `${home.package}:${path}`;
+}
+
 /** Whether `v` maps MIDI notes (0 to 127) to file names in `assets/`: a keymap. */
 function keymap(v: unknown): boolean {
   if (typeof v !== "object" || v === null || Array.isArray(v) || v instanceof Signal || v instanceof Quantity) return false;
