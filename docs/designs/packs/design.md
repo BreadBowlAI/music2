@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Being built: §16.2's slices 1 to 4 and 7 first. The registry's network side (slice 6) waits for two things: where the bytes are kept (D1, D10), and an HTTP library and a FLAC decoder, each a change to `Cargo.lock` that needs its own yes. |
+| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Built the same day (#33 to #38): §16.2's slices 1 to 4 and 7, with the contract's PACK, LIB and PKG-15/16 rules. Not built: slice 5 (streaming) and slice 6 (the registry), which waits for where the bytes are kept (D1, D10) and for an HTTP library and a FLAC decoder, each a change to `Cargo.lock` that needs its own yes. |
 | **Written** | 2026-10-29, from `main` at `e38c131` |
 | **Gaps** | #39 (shared sound packages), with #22 (the rest of the Sampler) and #18 (more audio file types) |
 | **Decided** | by the owner, 2026-10-30 |
