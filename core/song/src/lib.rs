@@ -37,7 +37,7 @@ use std::sync::Arc;
 pub use arrangement::{Arrangement, Meter, Tempo, TempoMap};
 pub use data::{AssetDecl, DataSet, Decls, Sidecar, StateDecl, Unused};
 pub use diag::{Diagnostic, Fix, Severity};
-pub use hash::{HashCache, Sha};
+pub use hash::{HashCache, Hashing, Sha};
 pub use key::{ClipId, Key, LaneAddr, ROOT};
 pub use lane::{
     AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, canonical, parse_pitch,

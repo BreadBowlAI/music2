@@ -32,6 +32,8 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 parking_lot = "0.13"
 crossbeam-channel = "0.5"
 hound = "3.5"
+# FLAC decoding (FMT-24): pure Rust, no dependencies of its own.
+claxon = "0.4"
 cpal = "0.18"
 # MIDI input (8b.10), only through m2-os's `midi` feature, which only m2-server turns on.
 midir = "=0.11.1"

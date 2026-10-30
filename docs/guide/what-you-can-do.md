@@ -25,10 +25,10 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Play live: the computer's keys, or a MIDI keyboard with its wheels | ⌘K; or plug a keyboard in |
 | Hear a click on each beat | K |
 | Record notes, or your voice or a guitar | R |
-| Bring in WAV files, long ones too | File ▸ Import Audio… (⇧⌘I), or drag them onto the window |
+| Bring in WAV or FLAC files, long ones too | File ▸ Import Audio… (⇧⌘I), or drag them onto the window |
 | Keep an audio clip in time when the tempo changes | right-click the clip ▸ **Follow tempo** |
 | Bring in a MIDI file as new tracks | File ▸ Import MIDI…, or drop the `.mid` file |
-| Play a WAV file as an instrument | + Track ▸ Sampler, then drop a WAV on its card |
+| Play a WAV file as an instrument | + Track ▸ Sampler, then drop a WAV (or a FLAC) on its card |
 | Add a CLAP plugin, and open its own window | drag it from the browser's **Plugins** onto a track, or + Track ▸ **Plugins**; **Open window** on its box |
 | Export the song, each track (stems), or the notes as MIDI | **Export** (⇧⌘E) |
 | Edit the song's code, with type checks | **Code** (⌥4) |

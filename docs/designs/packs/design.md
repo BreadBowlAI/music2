@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Built the same day (#33 to #38): §16.2's slices 1 to 4 and 7, with the contract's PACK, LIB and PKG-15/16 rules. Not built: slice 5 (streaming) and slice 6 (the registry), which waits for where the bytes are kept (D1, D10) and for an HTTP library and a FLAC decoder, each a change to `Cargo.lock` that needs its own yes. |
+| **Status** | Accepted by the owner on 2026-10-30 ("just implement it"), with the recommendations in §15. Built the same day (#33 to #38): §16.2's slices 1 to 4 and 7, with the contract's PACK, LIB and PKG-15/16 rules. Not built: slice 5 (streaming) and slice 6 (the registry), which waits for where the bytes are kept (D1, D10) and for an HTTP library, a change to `Cargo.lock` that needs its own yes. FLAC is read since track flac (the `claxon` crate, [FMT-24](../../architecture.md#assets-and-hashes)). |
 | **Written** | 2026-10-29, from `main` at `e38c131` |
 | **Gaps** | #39 (shared sound packages), with #22 (the rest of the Sampler) and #18 (more audio file types) |
 | **Decided** | by the owner, 2026-10-30 |

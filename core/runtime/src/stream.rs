@@ -60,6 +60,20 @@ pub struct Wav {
     pub rate: f64,
 }
 
+/// Why a clip's file can't be streamed: it is there, but is a FLAC (put there by hand; FMT-24: a
+/// song's own audio is WAV, which seeks exactly). A file of no kind music2 reads (empty, cut in its
+/// header, an AIFF) is no `NotWav`: it can't be read, as any damaged file.
+#[derive(Debug)]
+pub struct NotWav;
+
+impl std::fmt::Display for NotWav {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("it isn't a WAV file: a clip plays WAV files only")
+    }
+}
+
+impl std::error::Error for NotWav {}
+
 /// A reader at a position of a file, through `read_at`: what `hound` parses a header from.
 struct At<'a> {
     file: &'a File,
@@ -76,9 +90,14 @@ impl Read for At<'_> {
 
 impl Wav {
     /// Open `path` and read its header. A file shorter than its header says is refused, as a
-    /// whole decode refused it.
+    /// whole decode refused it; a FLAC is [`NotWav`].
     pub fn open(path: &Path) -> Result<Wav> {
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        match crate::decode::kind_of_file(&file)? {
+            Some(crate::decode::Kind::Wav) => {}
+            Some(crate::decode::Kind::Flac) => return Err(anyhow::Error::new(NotWav).context(format!("reading {}", path.display()))),
+            None => bail!("{} isn't a WAV file", path.display()),
+        }
         let r = hound::WavReader::new(At { file: &file, pos: 0 }).with_context(|| format!("reading {}", path.display()))?;
         let spec = r.spec();
         let (frames, samples) = (r.duration() as u64, r.len() as u64);
@@ -122,7 +141,7 @@ impl Wav {
         self.channels.min(2)
     }
 
-    /// Frames `from..to` decoded as [`load_wav`](crate::audio::load_wav) decodes them, by hound's
+    /// Frames `from..to` decoded as [`load`](crate::decode::load) decodes them, by hound's
     /// own sample reader, into the first [`Self::channels`] of `out` (each cleared first). `buf`
     /// holds the bytes; it grows to the largest piece asked for.
     pub fn read(&self, from: u64, to: u64, buf: &mut Vec<u8>, out: &mut [Vec<f32>]) -> Result<()> {
@@ -151,7 +170,7 @@ impl Wav {
                 }
             }
             hound::SampleFormat::Int => {
-                let scale = 1.0 / (1u64 << (bits - 1)) as f32;
+                let scale = crate::decode::scale(bits);
                 for _ in 0..n {
                     for o in out[..keep].iter_mut() {
                         o.push(<i32 as Sample>::read(&mut cur, format, bytes, bits)? as f32 * scale);
