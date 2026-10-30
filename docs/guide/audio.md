@@ -1,10 +1,10 @@
 # Audio, recording and MIDI files
 
 **In short**
-- Bring in WAV files and MIDI files, edit audio clips, and keep audio in time when the tempo changes.
+- Bring in WAV, FLAC and MIDI files, edit audio clips, and keep audio in time when the tempo changes.
 - Record notes from a MIDI keyboard or the computer's keys, or your voice or a guitar.
 
-- **Bring in audio:** File → Import Audio… (⇧⌘I), or drag WAV files onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). An outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` folder (the same file twice is kept once). Files up to 3 hours long play from the disk, never whole in memory.
+- **Bring in audio:** File → Import Audio… (⇧⌘I), or drag WAV or FLAC files onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). An outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` folder (the same file twice is kept once). A FLAC (the same sound as a WAV, about half the size) comes in as a WAV of the very same sound, `kick.flac` as `kick.wav`, with a note beside it (`kick.wav.json`) saying which FLAC it was made from: a song's clips play WAV files. Files up to 3 hours long play from the disk, never whole in memory.
 - **Edit an audio clip:** drag its edges to trim it, and the small squares at its top to fade it in or out. Its menu sets its volume, plays it backwards, or removes the fades. Each is one undo step.
 - **Follow tempo:** right-click an audio clip and turn on **Follow tempo**. Change the song's tempo later, and the clip stretches to keep its beats; its pitch stays the same. The stretch is made in the background while the song plays on. Turn it off and the clip plays at its own speed again.
 - **Bring in a MIDI file:** File → Import MIDI…, or drop a `.mid` file. Each part becomes a new track with a fitting sound (channel 10 plays the Drum kit), its notes in one clip. If the file's tempo differs from the song's, it asks: **Keep** the song's (Return) or **Use** the file's. One Undo takes the whole import back.

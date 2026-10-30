@@ -8,6 +8,7 @@ use super::*;
 
 mod audition;
 mod cell;
+mod decode;
 mod fpenv;
 mod latency;
 mod live;
@@ -1591,7 +1592,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
             .collect()
     };
     for path in &files {
-        let whole = sandbox::Held::Whole(Arc::new(audio::load_wav(path).unwrap()));
+        let whole = sandbox::Held::Whole(Arc::new(crate::decode::load(path).unwrap()));
         let disk = sandbox::Held::Disk(Arc::new(crate::stream::Wav::open(path).unwrap()));
         assert_eq!(whole.shape(), disk.shape(), "{}: the settings entry", path.display());
         for channel in 0..3 {
@@ -1725,7 +1726,7 @@ fn a_new_asset_never_replaces_one() {
     assert_eq!(std::fs::read(&path).unwrap(), b"mine");
     let new = dir.join("take 2.wav");
     audio::write_new_wav(&new, &[vec![0.5; 4]], SR).unwrap();
-    assert_eq!(audio::load_wav(&new).unwrap().channels, vec![vec![0.5; 4]]);
+    assert_eq!(crate::decode::load(&new).unwrap().channels, vec![vec![0.5; 4]]);
     std::fs::remove_dir_all(dir).ok();
 }
 

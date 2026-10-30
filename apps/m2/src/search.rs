@@ -53,7 +53,7 @@ pub fn folders_samples() -> Vec<Arc<Indexed>> {
             eprintln!("{} isn't there: its samples are left out.", dir.display());
         }
         if found.not_wav > 0 {
-            eprintln!("{}: {} audio files that aren't WAV were skipped: WAV only for now.", dir.display(), found.not_wav);
+            eprintln!("{}: {} audio files that aren't WAV or FLAC were skipped: WAV and FLAC only for now.", dir.display(), found.not_wav);
         }
         out.push(Arc::new(found));
     }

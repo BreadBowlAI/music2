@@ -207,7 +207,7 @@ check(fs.existsSync(`${PROJ}/assets/hit.wav`), "the files stay in assets/");
 await until(async () => (await api("")).body.view.revision > imported);
 const revision = (await api("")).body.view.revision;
 await importVia("Meta+Shift+KeyI", [`${files}/song.mp3`]);
-check(await until(async () => (await toasts()).some((t) => t.includes("song.mp3 isn't a WAV file. music2 reads WAV files. Save it as a WAV first: most audio apps can (Export, then WAV)."))), `an MP3 says Q1's words: ${await toasts()}`);
+check(await until(async () => (await toasts()).some((t) => t.includes("song.mp3 isn't a WAV or FLAC file. music2 reads WAV and FLAC files. Save it as a WAV first: most audio apps can (Export, then WAV)."))), `an MP3 says Q1's words: ${await toasts()}`);
 check(laneClips().length === before && (await api("")).body.view.revision === revision && !fs.existsSync(`${PROJ}/assets/song.mp3`), "and adds nothing");
 
 // A PC page: Ctrl+Shift+I.
@@ -361,7 +361,7 @@ await page.click("[data-testid=add-track]");
 await page.waitForSelector("[data-testid=instrument-list] input");
 await page.keyboard.type("audio");
 const row = await page.$$eval("[data-testid=instrument-list] [role=group]", (gs) => gs.map((g) => [g.getAttribute("aria-label"), [...g.querySelectorAll("[role=option]")].map((o) => o.textContent)]));
-check(JSON.stringify(row) === JSON.stringify([["Audio", ["Audio trackPlays recordings and loops: drop a WAV file on it"]]]), `typing "audio" finds the Audio group: ${JSON.stringify(row)}`);
+check(JSON.stringify(row) === JSON.stringify([["Audio", ["Audio trackPlays recordings and loops: drop a WAV or FLAC file on it"]]]), `typing "audio" finds the Audio group: ${JSON.stringify(row)}`);
 const foot = await page.$eval("[data-testid=instrument-code]", (e) => e.textContent);
 check(foot === 'tracks/audio.ts · lane.audio("clips")', `its foot says the code: ${foot}`);
 await linted("[data-testid=instrument-list]", "+ Track's list with Audio");
@@ -439,7 +439,7 @@ check(!(await page.$("[data-testid=drop-hint]")), "the hint is gone after the dr
 // Not a WAV: says what music2 opens, writes nothing.
 const rev = (await api("")).body.view.revision;
 const mp3 = await dropFiles(xAt(9), await yBelow(), [{ name: "song.mp3", path: `${files}/song.mp3`, type: "audio/mpeg" }]);
-check(mp3.hint === "music2 opens WAV and MIDI files" && mp3.outline === null, `an MP3's hint: ${JSON.stringify(mp3)}`);
+check(mp3.hint === "music2 opens WAV, FLAC and MIDI files" && mp3.outline === null, `an MP3's hint: ${JSON.stringify(mp3)}`);
 await sleep(400);
 check((await api("")).body.view.revision === rev && !fs.existsSync(`${PROJ}/assets/song.mp3`), "and nothing is written");
 // A MIDI file is MIDI's to take (st-midi): new tracks, and one that isn't a MIDI file says so.

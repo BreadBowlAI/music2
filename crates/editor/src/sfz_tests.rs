@@ -211,10 +211,15 @@ fn an_import_writes_a_pack_and_says_what_it_left_out() {
     std::fs::remove_dir_all(&d).ok();
 }
 
+// PACK-14, FMT-24: a FLAC recording is copied unchanged, a FLAC as a FLAC; one of another kind (by
+// its first bytes, not its name), a FLAC music2 doesn't read and a missing one stop the import
+// before anything is written, naming the file.
 #[test]
-fn a_flac_or_a_missing_sample_stops_the_import_before_anything_is_written() {
+fn a_flac_is_copied_and_another_kind_or_a_missing_sample_stops_the_import() {
     let d = scratch("flac");
     std::fs::create_dir_all(&d).unwrap();
+    let flac = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/16bit-mono.flac")).unwrap();
+    std::fs::write(d.join("a.flac"), &flac).unwrap();
     std::fs::write(d.join("i.sfz"), "<region> sample=a.flac\n").unwrap();
     let name = PackName::new("@ada/x").unwrap();
     let folder = d.join("pack");
@@ -228,7 +233,29 @@ fn a_flac_or_a_missing_sample_stops_the_import_before_anything_is_written() {
         std: &std_dir(),
         check: &|_| vec![],
     };
-    assert_eq!(import(&i).unwrap_err(), "a.flac is a FLAC file: convert it to WAV first; music2 reads only WAV for now");
+    let done = import(&i).unwrap();
+    assert_eq!(done.samples, 1);
+    assert_eq!(std::fs::read(folder.join("samples/a.flac")).unwrap(), flac, "copied unchanged");
+    let t = std::fs::read_to_string(folder.join("instruments/x.toml")).unwrap();
+    assert!(t.contains("file = \"samples/a.flac\""), "{t}");
+    std::fs::remove_dir_all(&folder).unwrap();
+    std::fs::write(d.join("b.ogg"), b"OggS\0\x02 not a wav or a flac").unwrap();
+    std::fs::write(d.join("i.sfz"), "<region> sample=b.ogg\n").unwrap();
+    assert_eq!(import(&i).unwrap_err(), "b.ogg isn't a WAV or FLAC file: music2 reads those two; save it as a WAV first");
+    assert!(!folder.exists());
+    // A WAV's bytes named .flac are a WAV.
+    std::fs::write(d.join("c.flac"), b"RIFF\0\0\0\0WAVE but broken").unwrap();
+    std::fs::write(d.join("i.sfz"), "<region> sample=c.flac\n").unwrap();
+    assert!(import(&i).unwrap_err().starts_with("c.flac isn't a WAV music2 can read: "), "by its first bytes");
+    let mut twelve = flac.clone();
+    twelve[20] &= 0xFE;
+    twelve[21] = (twelve[21] & 0x0F) | (11 << 4);
+    std::fs::write(d.join("d.flac"), twelve).unwrap();
+    std::fs::write(d.join("i.sfz"), "<region> sample=d.flac\n").unwrap();
+    assert_eq!(
+        import(&i).unwrap_err(),
+        "d.flac isn't a FLAC music2 can read: it has 12 bits in each sample: music2 reads FLAC files of 8, 16 or 24 bits"
+    );
     assert!(!folder.exists());
     std::fs::write(d.join("i.sfz"), "<region> sample=gone.wav\n").unwrap();
     assert!(import(&i).unwrap_err().starts_with("gone.wav, which the SFZ plays, isn't there"));

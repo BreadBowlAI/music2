@@ -280,7 +280,7 @@ const KNOB_H = 40;
 const VALUE_H = 48;
 
 const inputHeight = (p: InputPort) => (p.knob ? KNOB_H : p.readonly != null ? VALUE_H : ROW_H);
-/** A Sampler's file row, under its knobs: where a WAV is dropped. */
+/** A Sampler's file row, under its knobs: where a WAV or FLAC is dropped. */
 const SAMPLE_H = 36;
 /** An instrument's line under its name: how it plays its notes. */
 const VOICES_H = 24;
@@ -1055,11 +1055,12 @@ function PluginRow({ node, title, session }: { node: string; title: string; sess
 }
 
 /**
- * A Sampler's file (track ab), under its knobs: "Drop a WAV here" until it has one. The whole card
- * takes a dropped WAV (`data-sampler-call`), which it then plays.
+ * A Sampler's file (track ab), under its knobs: "Drop a WAV or FLAC here" until it has one. The whole
+ * card takes a dropped WAV or FLAC (`data-sampler-call`; a FLAC comes in as a WAV, FMT-24), which it
+ * then plays.
  */
 function SampleRow({ files, regions }: { files: string[]; regions?: string }) {
-  const said = regions ?? (files.length === 0 ? "Drop a WAV here" : files.length === 1 ? files[0] : `${files.length} files: ${files.join(", ")}`);
+  const said = regions ?? (files.length === 0 ? "Drop a WAV or FLAC here" : files.length === 1 ? files[0] : `${files.length} files: ${files.join(", ")}`);
   return (
     <div
       data-testid="sampler-file"
@@ -1073,8 +1074,8 @@ function SampleRow({ files, regions }: { files: string[]; regions?: string }) {
           : files.length > 1
             ? `Plays ${files.join(", ")}, each on its own range of notes. They are set in its code.`
             : files.length
-              ? `Plays ${files[0]}. Drop another WAV on this card to play it instead.`
-              : "Drop a WAV file from your computer on this card to play it"
+              ? `Plays ${files[0]}. Drop another WAV or FLAC on this card to play it instead.`
+              : "Drop a WAV or FLAC file from your computer on this card to play it"
       }
     >
       <FileAudio size={12} className="shrink-0" />

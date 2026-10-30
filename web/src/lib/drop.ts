@@ -70,7 +70,7 @@ const KNOWN = ["audio/", "video/", "image/", "text/", "application/pdf", "applic
 const takerOf = (files: DropFile[]) => (files.length ? takers.find((t) => files.every((f) => takes(t, f))) : undefined);
 
 /** What music2 opens, said when a drag carries something else. */
-export const OPENS = "music2 opens WAV and MIDI files";
+export const OPENS = "music2 opens WAV, FLAC and MIDI files";
 
 /** Where a drop at (`x`, `y`) on the page lands: the bar line at or before the pointer (D32). */
 export function target(x: number, y: number): DropTarget {

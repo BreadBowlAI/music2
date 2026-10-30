@@ -24,6 +24,11 @@ impl Drop for Scratch {
     }
 }
 
+/// A FLAC fixture's bytes, as `core/runtime/tests/fixtures/flac/make.py` made it.
+pub(crate) fn flac(name: &str) -> Vec<u8> {
+    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac").join(name)).unwrap()
+}
+
 /// A 16-bit WAV of `seconds` of a sine at `amplitude`, in `channels` channels at 48 kHz.
 pub(crate) fn wav(path: &Path, channels: u16, seconds: f64, amplitude: f64) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -197,7 +202,7 @@ fn samples_toml_wins_over_the_guess() {
     pack(&t.0, Some("[file.\"gone.wav\"]\ninstrument = \"kick\"\n[folder.\"nowhere\"]\ninstrument = \"pad\"\n"));
     let found = index(Root::Package { name: "@alice/loops", dir: &t.0 }, None);
     assert_eq!(found.problems.len(), 2, "{:?}", found.problems);
-    assert!(found.problems.iter().any(|p| p.contains("there is no WAV file samples/gone.wav")), "{:?}", found.problems);
+    assert!(found.problems.iter().any(|p| p.contains("there is no WAV or FLAC file samples/gone.wav")), "{:?}", found.problems);
     assert!(found.items.is_empty(), "it names none of the files there: they are its instruments' recordings");
     // One that doesn't read lists nothing until it is fixed.
     pack(&t.0, Some("[file.\"drums/snap 1.wav\"]\nbpm = 500\n"));
@@ -214,14 +219,16 @@ fn samples_toml_wins_over_the_guess() {
     assert!(index(Root::Package { name: "@alice/loops", dir: &t.0 }, None).items.is_empty());
 }
 
-// LIB-4: only WAV files are samples, in any capitals; other audio files are counted; a WAV that
-// doesn't read is named; hidden folders and links are skipped.
+// LIB-4, FMT-24: only WAV and FLAC files are samples, in any capitals; other audio files are
+// counted; a file that doesn't read is named, a FLAC that isn't one too; hidden folders and links
+// are skipped.
 #[test]
-fn only_wav_files_are_samples_and_the_rest_are_counted() {
+fn only_wav_and_flac_files_are_samples_and_the_rest_are_counted() {
     let t = Scratch::new("wav-only");
     wav(&t.0.join("Kick.WAV"), 1, 0.1, 0.5);
     wav(&t.0.join("sub/snare.wav"), 1, 0.1, 0.5);
     wav(&t.0.join(".hidden/clap.wav"), 1, 0.1, 0.5);
+    std::fs::write(t.0.join("Pad.FLAC"), flac("16bit-stereo.flac")).unwrap();
     for f in ["loop.flac", "vox.mp3", "pad.aiff", "readme.txt"] {
         std::fs::write(t.0.join(f), b"not audio").unwrap();
     }
@@ -230,13 +237,11 @@ fn only_wav_files_are_samples_and_the_rest_are_counted() {
     std::os::unix::fs::symlink(t.0.join("sub"), t.0.join("again")).unwrap();
     let found = index(Root::Folder(&t.0), None);
     let labels: Vec<&str> = found.items.iter().map(|i| i.label.as_str()).collect();
-    assert_eq!(labels, ["Kick", "snare"]);
-    assert_eq!(found.not_wav, 3, "flac, mp3 and aiff; not the text file");
-    assert!(
-        found.unreadable.len() == 1 && found.unreadable[0].starts_with("broken.wav doesn't read as a WAV file"),
-        "{:?}",
-        found.unreadable
-    );
+    assert_eq!(labels, ["Kick", "Pad", "snare"]);
+    assert_eq!(found.not_wav, 2, "mp3 and aiff; not the text file, and FLAC is read");
+    assert_eq!(found.unreadable.len(), 2, "{:?}", found.unreadable);
+    assert!(found.unreadable[0].starts_with("broken.wav doesn't read as a WAV file"), "{:?}", found.unreadable);
+    assert_eq!(found.unreadable[1], "loop.flac isn't a WAV or FLAC file", "told by its first bytes");
     let kick = &found.items[0];
     assert_eq!((kick.package.as_str(), kick.component.as_str()), ("yours", ""));
     assert_eq!(kick.id, format!("sample:folder:{}", t.0.join("Kick.WAV").display()));
@@ -503,6 +508,66 @@ fn a_crafted_header_is_unreadable() {
     std::fs::write(t.0.join("Odd.wav"), raw_wav(&fmt, &data)).unwrap();
     let found = index(Root::Folder(&t.0), None);
     assert!(found.items.is_empty() && found.unreadable.len() == 1, "{:?}", found.unreadable);
+}
+
+// LIB-4, FMT-24: a FLAC sample is measured as the WAV of its samples is: its length, channels, rate
+// and peak; its hash is the FLAC's own bytes'. Its rate and length are checked before it is decoded.
+#[test]
+fn a_flac_sample_is_measured_as_its_wav() {
+    let t = Scratch::new("flac-measure");
+    std::fs::create_dir_all(&t.0).unwrap();
+    for name in ["24bit-stereo", "16bit-3ch", "8bit-mono"] {
+        let (f, w) = (t.0.join(format!("{name}.flac")), t.0.join(format!("{name}.wav")));
+        std::fs::write(&f, flac(&format!("{name}.flac"))).unwrap();
+        std::fs::write(&w, flac(&format!("{name}.wav"))).unwrap();
+        let (mf, mw) = (measure(&f).unwrap(), measure(&w).unwrap());
+        assert_eq!((mf.seconds, mf.channels, mf.rate, mf.peak), (mw.seconds, mw.channels, mw.rate, mw.peak), "{name}");
+        assert_eq!(mf.hash, m2_song::Sha::of(&std::fs::read(&f).unwrap()).hex(), "{name}");
+    }
+    let mut slow = flac("16bit-mono.flac");
+    // STREAMINFO's rate, 20 bits from byte 18: 4,000 Hz.
+    let rate: u32 = 4_000;
+    slow[18] = (rate >> 12) as u8;
+    slow[19] = (rate >> 4) as u8;
+    slow[20] = (slow[20] & 0x0F) | ((rate as u8 & 0x0F) << 4);
+    std::fs::write(t.0.join("slow.flac"), slow).unwrap();
+    let why = measure(&t.0.join("slow.flac")).unwrap_err();
+    assert_eq!(why, "doesn't read as a FLAC file (it plays at 4000 Hz: music2 takes files from 8,000 to 384,000 Hz)");
+}
+
+// LIB-4, FMT-24 (review F1): a sample is held to a whole decode's budget, from its header, before
+// it is measured: a FLAC of silence (29 KB) that says 2^27 + 1 samples is unreadable at once, in
+// words; a header at the most passes, and only reading it finds it cut short.
+#[test]
+fn a_sample_over_the_budget_is_unreadable_before_it_is_read() {
+    let t = Scratch::new("flac-budget");
+    std::fs::create_dir_all(&t.0).unwrap();
+    std::fs::write(t.0.join("bomb.flac"), flac("bomb.flac")).unwrap();
+    std::fs::write(t.0.join("most.flac"), flac("at-the-most.flac")).unwrap();
+    let why = measure(&t.0.join("bomb.flac")).unwrap_err();
+    assert!(why.starts_with("is too long: it holds 134217729 samples (frames × channels), more than music2 decodes whole"), "{why}");
+    let why = measure(&t.0.join("most.flac")).unwrap_err();
+    assert!(why.contains("cut short"), "{why}");
+}
+
+// LIB-7, FMT-24: a FLAC's note says what its WAV was made from; a note of yours with that, or an
+// import's with only that, still credits no one, so a pack's note for the same bytes replaces it.
+#[test]
+fn a_flacs_note_of_yours_gives_way_to_a_packs() {
+    let t = Scratch::new("flac-credit");
+    std::fs::create_dir_all(t.0.join("assets")).unwrap();
+    let made = json!({"file": "kick.flac", "format": "FLAC", "sha256": "00"});
+    let packs = json!({"from": {"pack": "@alice/loops", "version": "1.2.0", "license": "CC-BY-4.0"}, "made_from": made});
+    for yours in [json!({"from": {"folder": true}, "made_from": made}), json!({"made_from": made})] {
+        let _ = std::fs::remove_file(t.0.join("assets/kick.wav.json"));
+        assert!(write_note(&t.0, "kick.wav", &yours).unwrap());
+        assert!(write_note(&t.0, "kick.wav", &packs).unwrap(), "the pack's credit replaces {yours}");
+        let read = serde_json::from_slice::<Value>(&std::fs::read(t.0.join("assets/kick.wav.json")).unwrap()).unwrap();
+        assert_eq!(read, packs);
+    }
+    // A note someone wrote by hand is theirs: kept.
+    std::fs::write(t.0.join("assets/snare.wav.json"), r#"{"from": {"author": "me"}}"#).unwrap();
+    assert!(!write_note(&t.0, "snare.wav", &packs).unwrap());
 }
 
 // LIB-7 (review D15): a note of yours, which credits no one, gives way to a pack's note for the

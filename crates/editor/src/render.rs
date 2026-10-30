@@ -634,13 +634,17 @@ fn file_id(p: &Path) -> Option<m2_os::fs::FileId> {
     m2_os::fs::file_id(p).ok()
 }
 
-/// Where a render is written until it's complete: hidden, beside the file it becomes.
+/// Where a render or an import is written until it's complete: hidden, beside the file it becomes,
+/// and its own (a count in its name): two files of one name made at once never share a part
+/// (review F2).
 pub(crate) fn part_path(path: &Path) -> Result<PathBuf> {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let name = path.file_name().with_context(|| format!("{} is not a file name", path.display()))?;
-    Ok(path.with_file_name(format!(".{}.{}.part", name.to_string_lossy(), std::process::id())))
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(path.with_file_name(format!(".{}.{n}.{}.part", name.to_string_lossy(), std::process::id())))
 }
 
-/// A [`part_path`] name: `.<file>.<process id>.part`.
+/// A [`part_path`] name: `.<file>.<count>.<process id>.part` (`.<file>.<process id>.part` before).
 fn is_part(name: &str) -> bool {
     let rest = name.strip_prefix('.').and_then(|n| n.strip_suffix(".part"));
     rest.and_then(|r| r.rsplit_once('.'))
