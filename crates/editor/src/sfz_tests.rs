@@ -185,7 +185,7 @@ fn an_import_writes_a_pack_and_says_what_it_left_out() {
     let done = import(&i).unwrap();
     assert_eq!((done.id.as_str(), done.regions, done.samples), ("tiny-keys", 3, 3));
     assert!(done.left_out.contains(&"left out: 1 region plays only with a controller moved (CC 64)".to_string()), "{:?}", done.left_out);
-    assert!(done.left_out.iter().any(|l| l.contains("have their own amp_veltrack (90%)")), "{:?}", done.left_out);
+    assert!(done.left_out.iter().any(|l| l.contains("has its own amp_veltrack (90%)")), "{:?}", done.left_out);
     let t = std::fs::read_to_string(folder.join("instruments/tiny-keys.toml")).unwrap();
     let inst = m2_song::instrument::DataInstrument::read(&t).unwrap();
     assert_eq!((inst.label.as_str(), inst.category.as_str(), inst.mode.as_deref()), ("Tiny Keys", "Keys", Some("gate")));
