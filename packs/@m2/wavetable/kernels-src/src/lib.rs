@@ -107,6 +107,16 @@ fn read(y: &[f32], i: usize, f: f32) -> f32 {
     ((c3 * f + c2) * f + c1) * f + a
 }
 
+/// Table `t`'s wave at phase `p` from level `k`, `m` of the way from frame `j` to the next.
+fn wave(t: &Found, j: usize, m: f32, k: usize, p: f32) -> f32 {
+    let len = LEN[k];
+    let at = p * len as f32;
+    let i = (at as usize).min(len - 1);
+    let f = at - i as f32;
+    let (a, b) = (read(t.level(j, k), i, f), read(t.level(j + 1, k), i, f));
+    a + m * (b - a)
+}
+
 /// The filter's mix for its shape (lowpass, bandpass, highpass, notch), with damping `k`: how much
 /// of the input, the bandpass and the lowpass make it.
 fn shape(place: usize, k: f32) -> [f32; 3] {
@@ -155,8 +165,10 @@ struct Play {
     /// Each oscillator's unison voices: phase, and cycles a sample (at twice the rate).
     phase: [[f32; UNISON]; 2],
     dt: [[Ramp; UNISON]; 2],
-    /// The mip level each reads.
+    /// The mip level each reads, and the one it read the tick before: when they differ (its pitch
+    /// crossed a level's line) it crossfades from that one to this through the tick.
     level: [[usize; UNISON]; 2],
+    was: [[usize; UNISON]; 2],
     /// Each oscillator's place among its frames, and its level.
     pos: [Ramp; 2],
     gain: [Ramp; 2],
@@ -198,6 +210,7 @@ impl Play {
             phase: [[0.0; UNISON]; 2],
             dt: [[Ramp::default(); UNISON]; 2],
             level: [[0; UNISON]; 2],
+            was: [[0; UNISON]; 2],
             pos: [Ramp::default(); 2],
             gain: [Ramp::default(); 2],
             ratios: [1.0; UNISON],
@@ -294,8 +307,11 @@ impl Play {
                 let dt = (base * self.ratios[k]).min(top);
                 let ramp = &mut self.dt[o][k];
                 ramp.to(dt, jump);
-                // A glide's ramp moves within the tick: the level fits both its ends.
-                self.level[o][k] = level_for(dt.max(ramp.value));
+                // A glide's ramp moves within the tick: the level fits both its ends. A note from
+                // silence starts on its level; a pitch that moved across a line fades into it.
+                let level = level_for(dt.max(ramp.value));
+                self.was[o][k] = if jump { level } else { self.level[o][k] };
+                self.level[o][k] = level;
             }
             let place = clampf(position + lfo_position * lfo, 0.0, 1.0) * self.last[o];
             self.pos[o].to(place, jump);
@@ -341,8 +357,8 @@ impl Play {
         }
     }
 
-    /// One output sample, before the amp envelope.
-    fn sample(&mut self, tables: &[Option<Found>; 2]) -> [f32; 2] {
+    /// One output sample, before the amp envelope; `tick_at` is its place in the tick, 0 to 15.
+    fn sample(&mut self, tables: &[Option<Found>; 2], tick_at: u32) -> [f32; 2] {
         let n = self.unison;
         let gains = [self.gain[0].next(), self.gain[1].next()];
         let places = [self.pos[0].next(), self.pos[1].next()];
@@ -368,22 +384,25 @@ impl Play {
             let j = place as usize;
             let m = place - j as f32;
             for k in 0..n {
-                let level = self.level[o][k];
-                let (a, b) = (table.level(j, level), table.level(j + 1, level));
-                let len = LEN[level];
+                let (level, was) = (self.level[o][k], self.was[o][k]);
                 let dt = self.dt[o][k].value;
                 let [gl, gr] = self.pans[k];
-                for xs in &mut x {
+                for (half, xs) in x.iter_mut().enumerate() {
                     let mut p = self.phase[o][k] + dt;
                     if p >= 1.0 {
                         p -= 1.0;
                     }
                     self.phase[o][k] = p;
-                    let at = p * len as f32;
-                    let i = (at as usize).min(len - 1);
-                    let f = at - i as f32;
-                    let (va, vb) = (read(a, i, f), read(b, i, f));
-                    let v = g * (va + m * (vb - va));
+                    let mut v = wave(table, j, m, level, p);
+                    if was != level {
+                        // Its pitch crossed a level's line: through this tick it fades from the old
+                        // level to the new by a smooth step, so the octave of harmonics one holds
+                        // and the other doesn't comes or goes with no click.
+                        let u = (2 * tick_at + half as u32 + 1) as f32 / (2 * TICK) as f32;
+                        let before = wave(table, j, m, was, p);
+                        v = before + u * u * (3.0 - 2.0 * u) * (v - before);
+                    }
+                    let v = g * v;
                     xs[0] += v * gl;
                     xs[1] += v * gr;
                 }
@@ -463,6 +482,7 @@ impl Kernel for Wavetable {
             if play.clock == 0 {
                 play.tick(&at);
             }
+            let tick_at = play.clock;
             play.clock = (play.clock + 1) % TICK;
             let a = play.amp.next();
             if a == 0.0 {
@@ -470,7 +490,7 @@ impl Kernel for Wavetable {
                 or[i] = 0.0;
                 continue;
             }
-            let [l, r] = play.sample(&found);
+            let [l, r] = play.sample(&found, tick_at);
             let g = a * play.out.next();
             ol[i] = l * g;
             or[i] = r * g;

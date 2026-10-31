@@ -215,6 +215,58 @@ fn every_note_holds_little_but_its_harmonics() {
     }
 }
 
+/// Frames of 4096 from `from`, half overlapping, while the pitch moves as `pitch(t)`: in each, the
+/// strongest bin below its lowest pitch against the strongest about its middle pitch; the worst, dB.
+fn worst_below_while_moving(x: &[f32], sr: f32, pitch: &dyn Fn(usize) -> f32, from: usize) -> f64 {
+    let n = 4096;
+    let mut worst = f64::MIN;
+    let mut at = from;
+    while at + n <= x.len() {
+        let (lo, hi) = (0..=64).map(|k| pitch(at + k * n / 64)).fold((f32::MAX, f32::MIN), |(l, h), p| (l.min(p), h.max(p)));
+        let (flo, fmid) = (hz(lo) as f64, hz(0.5 * (lo + hi)) as f64);
+        let spec = spectrum(&x[at..at + n], sr);
+        let bin = spec[1].0;
+        let low = spec.iter().filter(|s| s.0 >= 20.0 && s.0 < flo - 14.0 * bin).fold(0.0f64, |m, s| m.max(s.1));
+        let near = (hz(hi) - hz(lo)) as f64 + 20.0 * bin;
+        let fund = spec.iter().filter(|s| (s.0 - fmid).abs() < near).fold(0.0f64, |m, s| m.max(s.1));
+        worst = worst.max(10.0 * (low.max(1e-300) / fund).log10());
+        at += n / 2;
+    }
+    worst
+}
+
+// PACK-27 (review B3): a pitch that moves across a level's line crossfades from the old level to
+// the new through that tick, so it never clicks. A vibrato of half a semitone each way at 6 Hz
+// across the lines at 750 Hz, 1.5 kHz and 3 kHz (at 48 kHz) holds nothing below its lowest pitch
+// above -90 dB of its fundamental, on the saw, the narrowest pulse and a file of every harmonic (an
+// impulse). Read with no crossfade they held -71, -47 and -40 dB.
+#[test]
+fn a_pitch_crossing_a_levels_line_never_clicks() {
+    let mut loud = vec![];
+    let impulse: Vec<f32> = (0..2048).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
+    for (what, values, assets, position) in [
+        ("saw", vec![0.0, 0.0], vec![], SAW),
+        ("narrowest pulse", vec![1.0, 1.0], vec![], 1.0),
+        ("impulse", vec![0.0, 0.0, 0.0, -1.0, 1.0], vec![native::asset(SR, vec![impulse.clone()])], 0.0),
+    ] {
+        for centre in [78.24f32, 90.24, 102.24] {
+            let pitch = move |t: usize| centre + 0.5 * (2.0 * std::f32::consts::PI * 6.0 * t as f32 / SR).sin();
+            let p = patch(&[(A_POSITION, position), (SUSTAIN, 1.0)]);
+            let x = play_cfg::<Wavetable>(cfg(SR, &values, &assets), s(2.0), BLOCK, &|port, _, t| match port {
+                PITCH => pitch(t),
+                GATE => 1.0,
+                _ => p[port],
+            })
+            .left();
+            let got = worst_below_while_moving(&x, SR, &pitch, 4800);
+            if got >= -90.0 {
+                loud.push(format!("{what}, a vibrato about note {centre}: {got:.1} dB below its pitch"));
+            }
+        }
+    }
+    assert!(loud.is_empty(), "{}", loud.join("\n"));
+}
+
 // ---------------------------------------------------------------- unison
 
 // PACK-27: unison voices detune as declared: n voices spread evenly from `detune` semitones below
