@@ -12,7 +12,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 - An **offline kernel** is run by music2 off the audio thread, to make something from a file: `std:stretch` makes a warped clip's stretch. Song code can't call one.
 - A module says its version in a small part of its file named **`m2_abi`**: **1**. music2 reads it first, before it looks at anything else. It refuses a module built for any other version, and says which.
 - v1 only ever grows at the end: new optional exports, and new fields at the end of the settings block. Anything else is v2.
-- Every call has a **time limit**: 100 ms while the song plays, 5 s for everything else. A call still running then is stopped, and its sound goes silent ([below](#the-time-limit-abi-6-abi-7)).
+- A pack's kernels have a **time limit** on every call: 100 ms while the song plays, 5 s for everything else. A call still running then is stopped, and its sound goes silent ([below](#the-time-limit-abi-6-abi-7)). std's kernels, music2's own, have none.
 
 | Part | Where below |
 |---|---|
@@ -164,17 +164,18 @@ The host checks rules 1 and 2 by construction (the seal and the prewarm). Debug 
 
 ## The time limit (ABI-6, ABI-7)
 
-Every call into a kernel must return within its limit. A call still running then is stopped where it is (a trap), however far it got.
+Every call into a pack's kernel must return within its limit. A call still running then is stopped where it is (a trap), however far it got. std's kernels, music2's own code, run with no limit and no checks.
 
 | Calls | Limit |
 |---|---|
 | `k_process`, `k_reset` and `k_active` while the song plays live | 100 ms |
-| Everything else: instantiating the module (its start function), `m2_alloc`, `k_ports`, `k_new`, the prewarm's `k_reset`, and every call of an export, a render, a preview or an offline kernel | 5 s |
+| Everything else: instantiating the module (its start function), `m2_alloc`, `k_ports`, `k_new`, the first `k_reset` as the sound is made (live too), and every call of an export, a render, a preview or an offline kernel | 5 s |
 
-- A block's call should take microseconds: the whole song shares a block's time (2.7 ms at 48 kHz). The limits are far past that, so only a kernel that never returns meets them.
+- A block's call should take microseconds: the whole song shares a block's time (2.7 ms at 48 kHz). The limits are far past that, so only a kernel that never returns meets them, or a computer so busy it gives the call no time.
 - The time `m2.asset_read` spends reading a file for the kernel (an offline kernel's source, [held as **disk**](#the-asset-import)) isn't counted.
-- Stopped while the song plays, the kernel's sound is silent until the song is built again, and its sandbox isn't called again until then; the status names the sound, its track and its package (`sound.too-slow`). Offline, the render fails, naming it. Stopped in `k_new`, the sound doesn't load. The registry refuses a version whose preview was stopped.
-- How it works, for the curious: wasmtime's epochs. A thread moves a counter on every 10 ms, and the compiled code checks it at each function's start and each loop's turn. That costs a load and a compare.
+- Stopped while the song plays, the kernel's sound is silent until the song is built again, and its sandbox isn't called again until then; the status names the sound, its track and whose code it runs (`sound.too-slow`). Offline, the render fails, naming it. Stopped as it is made (`k_new`, or its first `k_reset`), the sound doesn't load, and music2 doesn't make that kernel with those settings again until the song opens again or the pack changes. The registry refuses a version whose preview was stopped.
+- What it costs: the checks are compiled into a pack's kernels, at each function's start and each loop's turn. Measured on std's 36 kernels compiled as a pack's, a call costs about a fifth more (+20.6 % in all; least for kernels with long straight runs, most for small kernels with tight loops). Keep the work of a call in few, long loops.
+- How it works, for the curious: wasmtime's epochs. A thread moves a counter on every 10 ms, and the compiled code checks it at each function's start and each loop's turn.
 
 ## Reserved shapes
 
