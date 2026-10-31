@@ -1,5 +1,5 @@
 import { db, ms, secs, track } from "@m2/core";
-import { drums } from "std/drums";
+import { drums } from "@m2/drums";
 import { mixer } from "std/mix";
 
 // The drums one at a time, each on a lane of its own: a long boom at each drop, a snare roll

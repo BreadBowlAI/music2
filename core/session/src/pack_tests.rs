@@ -161,7 +161,7 @@ fn install_tiny_with_kernel(store: &Path, version: &str, tag: &str) -> (m2_song:
     wasm.extend(tag.as_bytes());
     std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
     let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
-    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+    let tone = "\nimport { hz } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
                 id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
                 inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
                 (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
@@ -641,7 +641,7 @@ fn a_choice_in_a_pack_plays_its_place() {
     copy(&fixtures().join("kinds"), &root.join("kinds"));
     let song = root.join("song");
     std::fs::create_dir_all(&song).unwrap();
-    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n";
     std::fs::write(song.join("music2.toml"), format!("{manifest}\"@test/kinds\" = {{ path = \"../kinds\" }}\n")).unwrap();
     let mut pk = packages(&root.join("no-store"));
     for (call, heard) in [

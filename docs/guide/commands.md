@@ -112,7 +112,7 @@ Show a track, named by its key, as `<name>`: its `track()` call's name, verified
 m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]
 ```
 
-Add a track playing an instrument (`std:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in `layout.json`, verified. It is what + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track.
+Add a track playing an instrument (`@m2/synths:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in `layout.json`, verified. It is what + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track.
 
 ## m2 import
 
@@ -210,7 +210,7 @@ Write the input's declared default in place of the name, verified.
 m2 effects <project>
 ```
 
-The effects packages offer, by id (`std:delay`), and the calls they can go after.
+The effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after.
 
 ## m2 add-effect
 
@@ -218,7 +218,7 @@ The effects packages offer, by id (`std:delay`), and the calls they can go after
 m2 add-effect <project> <call> <effect>
 ```
 
-Wrap a call's audio in an effect, named by its component id (`std:delay`) or its export (`std/fx.delay`), verified.
+Wrap a call's audio in an effect, named by its component id (`@m2/effects:delay`) or its export (`@m2/effects.delay`), verified.
 
 ## m2 remove-effect
 
@@ -329,6 +329,19 @@ m2 clips <project> json <gesture.json | ->
 
 One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste`, `notes`, `points`, `audio` and `set`.
 
+## m2 sections
+
+```
+m2 sections <project> duplicate <bars> [--to <bar>]
+m2 sections <project> move <bars> --to <bar>
+m2 sections <project> delete <bars>
+m2 sections <project> insert-bars <bars>
+m2 sections <project> delete-bars <bars>
+m2 sections <project> json <gesture.json | ->
+```
+
+One gesture on whole bars of every track at once, as one edit that undo takes back. `<bars>` are bars counted from 1 (`9-16`, or `9` for one), or a marker's name (`Chorus`: to the next marker). `duplicate` copies them right after themselves (or to bar `--to`) and `move` moves them, each in place of what was there; `delete` empties them; `insert-bars` opens as many empty bars where they start, and `delete-bars` takes them out: everything after moves, markers and tempo changes too. A clip that crosses the bars' edge is split there. `json` also takes `paste`, with a copied section, as `POST /api/graph/sections` does. See [Sections](sections.md).
+
 ## m2 unautomate
 
 ```
@@ -429,7 +442,7 @@ m2 render /tmp/m2-scratch out.wav
 m2 controls /tmp/m2-scratch                                     # ids look like song.ts#2/0.hats.pan
 m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
 m2 set /tmp/m2-scratch 'tracks/hats.ts#1/@decay' 0.08            # a control the call leaves out: writes { decay: 0.08 }
-m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std:delay
+m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' @m2/effects:delay
 
 m2 new /tmp/m2-resample --example resample
 m2 bounce /tmp/m2-resample keys-again --track keys              # render the keys track to assets/keys-again.wav

@@ -12,7 +12,8 @@ struct Temp(PathBuf);
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
@@ -25,7 +26,7 @@ fn put(dir: &Path, name: &str, bytes: &[u8]) {
 /// `m2 <args>`, the probe plugin playable, with no audio device and no MIDI one.
 fn m2(args: &[&std::ffi::OsStr]) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_m2"));
-    c.env("HOME", std::env::temp_dir().join("m2-tests-no-app"));
+    c.env("HOME", m2_song::pack::test_home());
     c.args(args).env("M2_PROBE", "1").env("M2_AUDIO", "none").env("M2_MIDI", "none");
     c.output().unwrap()
 }
@@ -41,7 +42,7 @@ fn m2_render_of_a_host_crash_exits_non_zero_naming_it() {
     put(
         &song,
         "music2.toml",
-        b"[project]\nname = \"crash\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n",
+        b"[project]\nname = \"crash\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
     );
     put(
         &song,

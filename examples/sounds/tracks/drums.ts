@@ -1,6 +1,6 @@
 import { hz, ms, track } from "@m2/core";
 import { follow } from "std/dsp";
-import { drums } from "std/drums";
+import { drums } from "@m2/drums";
 import { sum } from "std/math";
 
 // The beat on one lane: each drum on its General MIDI note (D2 snare, D#2 clap, F#2 closed

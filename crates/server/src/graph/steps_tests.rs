@@ -318,7 +318,7 @@ fn a_step_event_names_what_its_delta_changed() {
 pub(in crate::graph) fn serving() -> (Fixture, crate::Running, u64) {
     let fixture = first_song_files();
     let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
-    let running = crate::start_with(options, Graph::silent()).unwrap();
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
     let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
     (fixture, running, session)
 }

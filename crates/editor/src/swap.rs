@@ -43,7 +43,7 @@ fn each<'a>(nodes: &'a [Node], out: &mut Vec<&'a Node>) {
 }
 
 /// What plays a track's notes: its instrument calls (the outermost frames of a component that
-/// takes notes first and makes audio, listed or not: std/instruments' simple `hat` has no
+/// takes notes first and makes audio, listed or not: @m2/synths' simple `hat` has no
 /// category) and the plugins it gives notes to.
 struct Players<'a> {
     calls: Vec<&'a Site>,

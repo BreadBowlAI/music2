@@ -10,13 +10,13 @@ use super::*;
 use crate::testing::{Fixture, fixture};
 
 /// A copy of first-song whose Keys track plays `call` (on its `chords` lane), importing `imports`
-/// from `@m2/core` and `synth` from std/synth.
+/// from `@m2/core` and `synth` from `@m2/synths`.
 fn keys(imports: &str, call: &str) -> Fixture {
     let f = fixture("examples/first-song");
     f.write(
         "tracks/keys.ts",
         format!(
-            "import {{ {imports} }} from \"@m2/core\";\nimport {{ synth }} from \"std/synth\";\n\n\
+            "import {{ {imports} }} from \"@m2/core\";\nimport {{ synth }} from \"@m2/synths\";\n\n\
              export default track(\"keys\", {{ name: \"Keys\" }}, ({{ lane }}) => {call});\n"
         ),
     );
@@ -61,11 +61,11 @@ impl Drop for Dir {
 // was written; it is stored by a rename and listed by its name; a newer format is refused in words.
 #[test]
 fn a_preset_file_round_trips() {
-    let mut p = preset("std:synth-pluck", &[("brightness", 1800.0), ("decay", 0.6)]);
+    let mut p = preset("@m2/synths:synth-pluck", &[("brightness", 1800.0), ("decay", 0.6)]);
     let text = p.text();
     assert_eq!(
         text,
-        "{\n  \"m2preset\": 1,\n  \"name\": \"Soft\",\n  \"sound\": \"std:synth-pluck\",\n  \"values\": {\n    \"brightness\": 1800,\n    \"decay\": 0.6\n  }\n}\n"
+        "{\n  \"m2preset\": 1,\n  \"name\": \"Soft\",\n  \"sound\": \"@m2/synths:synth-pluck\",\n  \"values\": {\n    \"brightness\": 1800,\n    \"decay\": 0.6\n  }\n}\n"
     );
     assert_eq!(Preset::parse(&text), Ok(p.clone()));
     p.plugin_version = Some("1.3.4".into());
@@ -77,25 +77,26 @@ fn a_preset_file_round_trips() {
     assert_eq!(Preset::parse("[1]"), Err("This file isn't a music2 preset.".into()));
 
     // Stored in its sound's folder, listed by name; another sound's file there is left out.
-    assert_eq!(folder("std:synth-pluck"), Path::new("std/synth-pluck"));
+    assert_eq!(folder("@m2/synths:synth-pluck"), Path::new("_m2_synths/synth-pluck"));
+    assert_eq!(folder("std:sampler"), Path::new("std/sampler"));
     assert_eq!(folder("clap:org.surge-synth-team.surge-xt"), Path::new("clap/org.surge-synth-team.surge-xt"));
     assert_eq!(folder("std:../x y"), Path::new("std/.._x_y"), "never a step up");
     let d = Dir::new("round-trip");
-    let p = preset("std:synth-pluck", &[("brightness", 1800.0)]);
+    let p = preset("@m2/synths:synth-pluck", &[("brightness", 1800.0)]);
     let file = store(&d.0, &p, false).unwrap();
     assert_eq!(file, d.0.join("Soft.json"));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), p.text());
-    std::fs::write(d.0.join("Pad.json"), preset("std:synth-pad", &[]).text().replace("Soft", "Pad")).unwrap();
+    std::fs::write(d.0.join("Pad.json"), preset("@m2/synths:synth-pad", &[]).text().replace("Soft", "Pad")).unwrap();
     std::fs::write(d.0.join("notes.json"), "not a preset").unwrap();
-    assert_eq!(list(&d.0, "std:synth-pluck"), vec![Listed { name: "Soft".into(), file: file.clone() }]);
-    assert_eq!(read(&d.0, "std:synth-pluck", "Soft"), Ok(p.clone()));
+    assert_eq!(list(&d.0, "@m2/synths:synth-pluck"), vec![Listed { name: "Soft".into(), file: file.clone() }]);
+    assert_eq!(read(&d.0, "@m2/synths:synth-pluck", "Soft"), Ok(p.clone()));
 
     // A name taken in other capitals is taken; replacing it takes the new capitals.
     let mut louder = p.clone();
     louder.name = "SOFT".into();
     assert_eq!(store(&d.0, &louder, false), Err(NotStored::Taken("Soft".into())));
     store(&d.0, &louder, true).unwrap();
-    assert_eq!(list(&d.0, "std:synth-pluck").iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["SOFT"]);
+    assert_eq!(list(&d.0, "@m2/synths:synth-pluck").iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["SOFT"]);
     let left: Vec<String> = std::fs::read_dir(&d.0).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     assert!(!left.iter().any(|n| n.ends_with(".tmp")), "no temporary file is left: {left:?}");
 }
@@ -111,7 +112,7 @@ fn a_preset_name_is_one_line_of_1_to_40() {
     {
         assert!(name_error(bad).is_some(), "{bad:?}");
     }
-    let mut p = preset("std:synth-pluck", &[]);
+    let mut p = preset("@m2/synths:synth-pluck", &[]);
     p.name = "a/b".into();
     assert!(Preset::parse(&p.text()).is_err(), "a file with such a name isn't read");
     assert!(matches!(store(Path::new("/nowhere"), &p, false), Err(NotStored::Refused(_))), "nor written");
@@ -130,7 +131,7 @@ fn saving_a_std_preset_writes_every_control_of_the_call() {
         [("brightness", 3000.0), ("decay", 0.45), ("spread", 0.7), ("velSens", 0.5)].map(|(k, v)| (k.to_string(), v)).into();
     assert_eq!(
         saved.preset,
-        Preset { name: "Mine".into(), sound: "std:synth-pluck".into(), values: want, plugin_version: None, state: None }
+        Preset { name: "Mine".into(), sound: "@m2/synths:synth-pluck".into(), values: want, plugin_version: None, state: None }
     );
     assert_eq!(saved.left, vec![]);
     assert_eq!(f.read("tracks/keys.ts"), before);
@@ -148,7 +149,7 @@ fn loading_a_std_preset_is_one_values_tx() {
     let mut s = f.open();
     let before = f.read("tracks/keys.ts");
     let at = s.accepted().number;
-    let soft = preset("std:synth-pluck", &[("brightness", 900.0), ("decay", 0.6), ("spread", 0.5)]);
+    let soft = preset("@m2/synths:synth-pluck", &[("brightness", 900.0), ("decay", 0.6), ("spread", 0.5)]);
     let node = call(&s, "synth.pluck");
     let loaded = load(&mut s, at, &node, &soft).unwrap();
     let want = before.replace("{ brightness: khz(3) }", "{ brightness: khz(0.9), decay: 0.6, spread: 0.5 }");
@@ -166,7 +167,7 @@ fn loading_a_std_preset_is_one_values_tx() {
     // A call with no options gets them; spread is the pad's default already, so isn't written.
     let f = keys("track", "synth.pad(lane.notes(\"chords\"))");
     let mut s = f.open();
-    let warm = preset("std:synth-pad", &[("cutoff", 1200.0), ("attack", 0.9), ("spread", 0.9)]);
+    let warm = preset("@m2/synths:synth-pad", &[("cutoff", 1200.0), ("attack", 0.9), ("spread", 0.9)]);
     let (at, node) = (s.accepted().number, call(&s, "synth.pad"));
     load(&mut s, at, &node, &warm).unwrap();
     assert!(
@@ -182,7 +183,7 @@ fn a_control_a_lane_drives_keeps_its_lane_and_is_named() {
     let f = keys("track", "synth.pluck(lane.notes(\"chords\"), { brightness: lane.control(\"bright\", \"hz\", 3000) })");
     f.write("data/keys/bright.json", m2_song::canonical(&m2_song::LaneData::Control { unit: Some("hz".into()), clips: vec![] }));
     let mut s = f.open();
-    let soft = preset("std:synth-pluck", &[("brightness", 900.0), ("decay", 0.6)]);
+    let soft = preset("@m2/synths:synth-pluck", &[("brightness", 900.0), ("decay", 0.6)]);
     let saved = capture(&s, s.accepted().number, &call(&s, "synth.pluck"), "Mine").unwrap();
     assert_eq!(saved.left, vec![("brightness".to_string(), Why::Lane)], "saving leaves it out, and names it");
     assert!(!saved.preset.values.contains_key("brightness"));
@@ -202,22 +203,23 @@ fn a_preset_for_another_sound_is_refused() {
     let f = keys("track", "synth.pluck(lane.notes(\"chords\"))");
     let mut s = f.open();
     let before = f.read("tracks/keys.ts");
-    let warm = preset("std:synth-pad", &[("cutoff", 1200.0)]);
+    let warm = preset("@m2/synths:synth-pad", &[("cutoff", 1200.0)]);
     let (at, node) = (s.accepted().number, call(&s, "synth.pluck"));
     let e = load(&mut s, at, &node, &warm).unwrap_err();
     assert_eq!(e.to_string(), "This preset is for Synth pad, not Synth pluck.");
     assert_eq!(f.read("tracks/keys.ts"), before);
 }
 
-// FMT-22: every factory preset in std/presets is canonical, names a std sound by its folder, gives
-// only that sound's declared controls, and loads into a song that calls the sound: afterwards it
-// saves back as its values.
+// FMT-22, PACK-15: every factory preset of the packs music2 ships (`presets/<component>/`) is
+// canonical, names the pack's sound by its folder, gives only that sound's declared controls, and
+// loads into a song that calls the sound: afterwards it saves back as its values.
 #[test]
 fn every_factory_preset_loads() {
-    let std = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
     let mut n = 0;
-    for folder in std::fs::read_dir(std.join("presets")).unwrap() {
-        let folder = folder.unwrap().path();
+    let folders = m2_song::pack::test_packs()
+        .into_iter()
+        .flat_map(|(_, dir)| std::fs::read_dir(dir.join("presets")).into_iter().flatten().map(move |f| (dir.clone(), f.unwrap().path())));
+    for (std, folder) in folders {
         for file in std::fs::read_dir(&folder).unwrap() {
             let file = file.unwrap().path();
             let text = std::fs::read_to_string(&file).unwrap();
@@ -227,6 +229,8 @@ fn every_factory_preset_loads() {
             assert_eq!(factory(&std, &p.sound), Some(folder.clone()), "{} is in its sound's folder", file.display());
 
             let f = keys("track", "synth.pluck(lane.notes(\"chords\"))");
+            // The song lists the pack each sound is from (PACK-10).
+            f.write("music2.toml", f.read("music2.toml") + "\"@m2/effects\" = \"1\"\n");
             let s = f.open();
             let desc = s.catalog().components.get(&p.sound).unwrap_or_else(|| panic!("{}: no sound {}", file.display(), p.sound)).clone();
             for k in p.values.keys() {
@@ -245,13 +249,13 @@ fn every_factory_preset_loads() {
                 _ => format!("{}(synth.pluck(lane.notes(\"chords\")))", export.name),
             };
             let more = match export.module.as_str() {
-                "std/synth" => String::new(),
+                "@m2/synths" => String::new(),
                 module => format!("import {{ {import} }} from \"{module}\";\n"),
             };
             f.write(
                 "tracks/keys.ts",
                 format!(
-                    "import {{ track }} from \"@m2/core\";\nimport {{ synth }} from \"std/synth\";\n{more}\n\
+                    "import {{ track }} from \"@m2/core\";\nimport {{ synth }} from \"@m2/synths\";\n{more}\n\
                      export default track(\"keys\", {{ name: \"Keys\" }}, ({{ lane }}) => {played});\n"
                 ),
             );

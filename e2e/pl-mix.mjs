@@ -229,7 +229,7 @@ await until(() => read("song.ts") === orig.song);
 
 // ---------------------------------------------------------------- the clip dot (Q3)
 
-write("tracks/hats.ts", orig.hats.replace('import { hat } from "std/instruments";', 'import { hat } from "std/instruments";\nimport { scale } from "std/math";').replace('hat(lane.notes("hits"))', 'scale(hat(lane.notes("hits")), 8)'));
+write("tracks/hats.ts", orig.hats.replace('import { hat } from "@m2/synths";', 'import { hat } from "@m2/synths";\nimport { scale } from "std/math";').replace('hat(lane.notes("hits"))', 'scale(hat(lane.notes("hits")), 8)'));
 const rev = (await state()).view.revision;
 await until(async () => (await state()).view.revision !== rev, 10000);
 const dot = `${strip("hats")} [data-testid=clip-dot]`;

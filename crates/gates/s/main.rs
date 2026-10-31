@@ -62,6 +62,8 @@ impl S {
     }
 
     /// A copy of the project in `dir`, in the runner's own folder, whose manifest asks for S's std.
+    /// S's std had the sounds that are packs since std 0.6 (PACK-15): the copy imports each from
+    /// the std module S had it in ([`wire::imports_for_s`]), and lists and locks no pack.
     fn asking_for_own_std(&self, dir: &Path) -> Result<PathBuf, String> {
         let std = &self.lab.packages.get("std").ok_or("S has no std")?.version;
         let to = self.lab.dir(&format!("{}-s", dir.file_name().unwrap_or_default().to_string_lossy()));
@@ -74,11 +76,31 @@ impl S {
             if line.starts_with('[') {
                 deps = line.trim() == "[dependencies]";
             }
-            let std_line = deps && line.split('=').next().is_some_and(|k| k.trim() == "std");
+            let key = line.split('=').next().map(str::trim);
+            if deps && key.is_some_and(|k| k.starts_with("\"@m2/") && k != "\"@m2/core\"") {
+                continue;
+            }
+            let std_line = deps && key == Some("std");
             out += &if std_line { format!("std = \"{std}\"") } else { line.to_string() };
             out.push('\n');
         }
         std::fs::write(&manifest, out).map_err(|e| format!("{}: {e}", manifest.display()))?;
+        let _ = std::fs::remove_file(to.join("music2.lock"));
+        let mut stack = vec![to.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))?.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().is_some_and(|x| x == "ts") {
+                    let text = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+                    let then = wire::imports_for_s(&text).map_err(|e| format!("{}: {e}", p.display()))?;
+                    if then != text {
+                        std::fs::write(&p, then).map_err(|e| format!("{}: {e}", p.display()))?;
+                    }
+                }
+            }
+        }
         Ok(to)
     }
 

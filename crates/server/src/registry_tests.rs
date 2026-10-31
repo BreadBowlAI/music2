@@ -50,6 +50,12 @@ impl Drop for Scratch {
     }
 }
 
+/// The packs in `store` but those music2 ships, which a server installs into its store when it
+/// starts (PACK-16).
+fn theirs(store: &m2_song::pack::Store) -> Vec<(m2_song::pack::PackName, Vec<m2_song::Version>)> {
+    store.list().into_iter().filter(|(n, _)| !n.as_str().starts_with("@m2/")).collect()
+}
+
 fn write(path: &Path, text: impl AsRef<[u8]>) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
@@ -66,10 +72,9 @@ fn tone(path: &Path) {
     w.finalize().unwrap();
 }
 
-const KEYS: &str = r#"import { component, control, port, signature, type Audio, type Events, type Params } from "@m2/core";
-import { synth } from "std/synth";
+const KEYS: &str = r#"import { component, control, kernel, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
 
-/** A soft pluck: std's synth pluck, darker. */
+/** A soft pluck, on std's synth kernel. */
 export const softKeys = component(
   {
     id: "soft-keys",
@@ -78,9 +83,11 @@ export const softKeys = component(
     inputs: { notes: port.notes() },
     controls: { brightness: control.hz(1800).range(200, 20000) },
     output: port.audio(),
-    editor: { category: "Keys", description: "A soft pluck, from std's synth" },
+    editor: { category: "Keys", description: "A soft pluck, on std's synth kernel" },
   },
-  (notes: Events, { brightness }: Params): Audio => synth.pluck(notes, { brightness }),
+  // A pack never imports another (PACK-3): std's synth kernel, played as a soft pluck.
+  (notes: Events, { brightness }: Params): Audio =>
+    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: brightness, decay: 0.45, sustain: 0, release: 0.25 }), { voices: 12 }),
 );
 "#;
 
@@ -107,7 +114,7 @@ fn bucket(root: &Path, newer: bool) -> (PathBuf, PathBuf) {
     write(
         &keys.join("m2pkg.toml"),
         "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\ndescription = \"Soft keys\"\nauthors = [\"Bob\"]\n\
-         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n",
+         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
     );
     write(&keys.join("src/index.ts"), KEYS);
     write(
@@ -452,7 +459,7 @@ fn getting_a_sample_adds_it_with_its_note() {
         json!({"from": {"pack": "@alice/drums", "version": "1.0.0", "file": "samples/kicks/Boom.wav", "author": "Alice", "license": "CC0-1.0"}})
     );
     assert!(done["tracks"][0]["module"].is_string(), "{done:#}");
-    assert!(w.store().list().is_empty(), "a sample comes alone: no pack is installed");
+    assert!(theirs(&w.store()).is_empty(), "a sample comes alone: no pack is installed");
     let getting: Vec<_> = walk(&w.scratch.0.join("cache")).into_iter().filter(|p| p.to_string_lossy().contains("getting")).collect();
     assert!(getting.is_empty(), "{getting:?}");
     // With no song open, a sample has nowhere to go: said before anything is fetched.
@@ -509,7 +516,7 @@ fn a_get_says_how_far_and_can_be_cancelled() {
     assert_eq!((status, &cancelled["cancelled"]), (200, &json!(true)));
     let (status, why) = getting.join().unwrap();
     assert!(status >= 400 && why["error"].as_str().unwrap().contains("cancelled"), "{status} {why}");
-    assert!(w.store().list().is_empty());
+    assert!(theirs(&w.store()).is_empty());
     let left: Vec<_> = walk(&w.store().dir).into_iter().filter(|p| p.to_string_lossy().contains("getting")).collect();
     assert!(left.is_empty(), "{left:?}");
     let (_, nothing) = post(&w.running.url, "/api/library/get/cancel", &json!({}));
@@ -590,7 +597,7 @@ fn a_cancel_once_installing_is_refused() {
     assert_eq!((status, &cancelled["cancelled"]), (200, &json!(false)), "{cancelled}");
     let (status, done) = getting.join().unwrap();
     assert_eq!(status, 200, "{done:#}");
-    assert!(!w.store().list().is_empty(), "installed");
+    assert!(!theirs(&w.store()).is_empty(), "installed");
 }
 
 // REG-13: a pack the open song lists or locks is offered nothing of: moving the song to

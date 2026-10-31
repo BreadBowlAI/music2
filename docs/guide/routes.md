@@ -119,7 +119,7 @@ Put an effect after a call's sound, by its component id as the state's effects l
 An example body:
 
 ```json
-{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "std:delay"}
+{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "@m2/effects:delay"}
 ```
 
 ### `POST /api/graph/effect/bypass`
@@ -370,6 +370,26 @@ An example body:
 {"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}
 ```
 
+### `POST /api/graph/sections`
+
+A section gesture, on whole bars of every track: paste, duplicate, move, delete, insert-bars or delete-bars. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "gesture": {"op": "duplicate", "start": 32, "end": 64}}
+```
+
+### `POST /api/graph/sections/copy`
+
+Copy whole bars of every track: each lane's kind and the clips that overlap them, for a section paste.
+
+An example body:
+
+```json
+{"session": 7, "start": 32, "end": 64}
+```
+
 ### `POST /api/graph/set`
 
 Write a knob's value, or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step (for an agent, never a drag's commit). It writes the song: one undo step.
@@ -431,7 +451,7 @@ Add a track playing an instrument, by its component id as the state's instrument
 An example body:
 
 ```json
-{"session": 7, "component": "std:synth-pluck", "label": "Pluck", "after": "keys"}
+{"session": 7, "component": "@m2/synths:synth-pluck", "label": "Pluck", "after": "keys"}
 ```
 
 ### `POST /api/graph/track/delete`
@@ -461,7 +481,7 @@ Change a track's instrument, by its component id as the state's instruments list
 An example body:
 
 ```json
-{"session": 7, "module": "keys", "component": "std:synth-pad"}
+{"session": 7, "module": "keys", "component": "@m2/synths:synth-pad"}
 ```
 
 ### `POST /api/graph/track/mute`
@@ -547,7 +567,7 @@ An item's preview: a short WAV of it playing, rendered offline and kept; a sampl
 Its query, as JSON:
 
 ```json
-{"id": "std:synth-pluck"}
+{"id": "@m2/synths:synth-pluck"}
 ```
 
 ### `POST /api/library/sample`

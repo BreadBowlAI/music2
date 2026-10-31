@@ -7,7 +7,7 @@
 // "lead-vox".
 
 import { song, track } from "@m2/core";
-import { kick } from "std/instruments";
+import { kick } from "@m2/synths";
 import { master, mixer } from "std/mix";
 
 // const drums = track("drums", { name: "Drums" }, ({ lane }) => kick(lane.notes("hits"))); // drums

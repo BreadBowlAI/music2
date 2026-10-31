@@ -394,7 +394,7 @@ fn a_first_clip_makes_the_lane_file() {
     f.write("music2.toml", crate::testing::MANIFEST);
     f.write(
         "song.ts",
-        "import { song, track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\
+        "import { song, track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\
          const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
     );
     let mut s = f.open();

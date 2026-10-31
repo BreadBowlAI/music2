@@ -2181,7 +2181,7 @@ mod tests {
     #[test]
     fn frame_chains() {
         let m: Module = serde_json::from_value(json!({"key": "bass", "nodes": [], "exports": {}, "frames": [
-            {"site": 3, "key": "chain-l"}, {"site": 7, "component": "std:bass", "parent": 0},
+            {"site": 3, "key": "chain-l"}, {"site": 7, "component": "@m2/synths:bass", "parent": 0},
             {"site": 9, "component": "std:lowpass", "occurrence": 1, "parent": 1}, {"site": 2}]}))
         .unwrap();
         let sites: Vec<u32> = m.chain(Some(2)).iter().map(|f| f.site).collect();

@@ -95,12 +95,12 @@ check(await until(() => markers().some((m) => m.beat === 8 && m.name === "Marker
 check((await rulerMenu(16)).includes("Add marker at bar 5(off: A marker is at bar 5 already)"), "a bar with a marker can't take another: the row says why");
 await page.keyboard.press("Escape");
 
-// Its menu: Rename, Delete, Loop to next marker.
+// Its menu: Rename, Delete, Loop to next marker, Select to next marker (sections, ARR-9).
 const f8 = await flag("Marker 1");
 await page.mouse.click(f8.x + 4, f8.y + f8.height / 2, { button: "right" });
 await page.waitForSelector("[data-testid=clip-menu]");
 const mrows = await page.$$eval("[data-testid=clip-menu] [role=menuitem]", (els) => els.map((e) => e.textContent));
-check(same(mrows, ["Rename", "Delete", "Loop to next marker"]), `a marker's menu: ${mrows.join(" | ")}`);
+check(same(mrows, ["Rename", "Delete", "Loop to next marker", "Select to next marker"]), `a marker's menu: ${mrows.join(" | ")}`);
 await page.click('[data-testid=clip-menu] [data-menu-item="delete"]');
 check(await until(() => markers().length === 2), "Delete takes it out");
 check(await until(async () => (await undoTitle()).includes("Undo deleting Marker 1"), 2000), `Undo says so: ${await undoTitle()}`);

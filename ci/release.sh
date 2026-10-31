@@ -131,6 +131,7 @@ build() {
   v=$(version)
   mkdir -p "$out"
   out=$(cd "$out" && pwd)
+  [ ! -e "$SCR" ] || chmod -R u+w "$SCR"
   rm -rf "$SCR"
   mkdir -p "$SCR"
   [ -x web/node_modules/.bin/tauri ] || (cd web && npm ci)
@@ -164,7 +165,7 @@ build() {
     stage=$SCR/tar/m2-$v-linux-x86_64
     mkdir -p "$stage/bin" "$stage/lib/music2"
     cp "$extra/usr/bin/m2" "$stage/bin/"
-    cp -R "$extra/usr/lib/music2/std" "$extra/usr/lib/music2/templates" "$extra/usr/lib/music2/examples" "$stage/lib/music2/"
+    cp -R "$extra/usr/lib/music2/std" "$extra/usr/lib/music2/packs" "$extra/usr/lib/music2/templates" "$extra/usr/lib/music2/examples" "$stage/lib/music2/"
     cp "$extra/usr/share/doc/music2/LICENSE-MIT" "$extra/usr/share/doc/music2/LICENSE-APACHE" \
       "$extra/usr/share/doc/music2/THIRD-PARTY-NOTICES.txt" "$stage/"
     cat > "$stage/README.txt" << EOF
@@ -175,7 +176,7 @@ libasound2, or libasound2t64 on Ubuntu 24.04 and newer), even on a computer that
 
 Run bin/m2 from this folder, or put the folder's bin on your PATH:
   export PATH="\$PATH:$(printf '%s' "\$HOME")/m2-$v-linux-x86_64/bin"
-Keep bin and lib together: m2 finds std, the song templates and the examples in lib/music2.
+Keep bin and lib together: m2 finds std, its own packs, the song templates and the examples in lib/music2.
 m2 docs prints the guide. Every new song's AGENTS.md says how to use m2 on it.
 The app itself is the AppImage or the .deb beside this file on the release page.
 EOF
@@ -199,7 +200,8 @@ carries() {
   for f in "$bin/m2" ${app:+"$bin/music2"}; do
     [ -x "$f" ] || fail "no program $f"
   done
-  for f in std/m2pkg.toml std/kernels/std.wasm std/src std/presets std/samples.toml std/samples/kit/kick.wav ${app:+web/index.html}; do
+  for f in std/m2pkg.toml std/kernels/std.wasm std/src std/samples.toml std/samples/kit/kick.wav packs/@m2/synths/m2pkg.toml \
+    packs/@m2/drums/m2pkg.toml packs/@m2/effects/m2pkg.toml packs/@m2/synths/presets ${app:+web/index.html}; do
     [ -e "$res/$f" ] || fail "nothing at $res/$f"
   done
   n=$(ls "$ROOT/templates" | grep -cv '\.md$' || true)
@@ -251,6 +253,8 @@ run() {
 songs() {
   local m2=$1/m2 res=$2 name=$3 v id out songs
   v=$(version)
+  # A pack m2 installed in the scratch HOME's store is read-only (PACK-6, PACK-16).
+  [ ! -e "$SCR/home" ] || chmod -R u+w "$SCR/home"
   rm -rf "$SCR/home" "$SCR/cwd"
   mkdir -p "$SCR/home" "$SCR/cwd"
   out=$(run "$m2" --version)
@@ -294,6 +298,7 @@ check() {
   local out=$1 v f u checked=
   v=$(version)
   out=$(cd "$out" && pwd)
+  [ ! -e "$SCR" ] || chmod -R u+w "$SCR"
   rm -rf "$SCR"
   mkdir -p "$SCR"
   for f in "$out"/*; do
@@ -346,6 +351,7 @@ app() {
   mkdir -p "$shots"
   shots=$(cd "$shots" && pwd)
   command -v Xvfb > /dev/null || fail "no Xvfb (apt install xvfb)"
+  [ ! -e "$SCR" ] || chmod -R u+w "$SCR"
   rm -rf "$SCR"
   mkdir -p "$SCR/home" "$SCR/cwd" "$SCR/run"
   chmod 700 "$SCR/run"

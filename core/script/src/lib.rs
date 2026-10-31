@@ -44,7 +44,7 @@ pub const SDK: &str = include_str!("../sdk/core.ts");
 
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
 /// requirement is checked against it (FMT-2, FMT-3).
-pub const SDK_VERSION: &str = "1.9.0";
+pub const SDK_VERSION: &str = "1.10.0";
 
 const CORE: &str = "@m2/core";
 
@@ -313,7 +313,54 @@ impl State {
         let longer: Vec<&&String> = files.iter().filter(|f| f.starts_with(cut)).collect();
         let module = files.iter().find(|f| f.as_str() == cut).or((longer.len() == 1).then(|| longer[0]))?;
         let at = files.iter().find_map(|file| self.import_at(file, name, module));
+        // One of std/fx's effects that moved to a pack (PKG-17) says which.
+        if let Some(why) =
+            self.display(module).strip_prefix("std/src/").and_then(|m| m.strip_suffix(".ts")).and_then(|m| moved_from_std(m, Some(name)))
+        {
+            return Some(Diagnostic::error("pkg.missing", why).at(at));
+        }
         Some(Diagnostic::error("code.build", format!("{head} in module '{}'{tail}", self.display(module))).at(at))
+    }
+
+    /// One of std/fx's effects that moved to a pack (PKG-17), called through a namespace import
+    /// (`import * as fx from "std/fx"`, then `fx.reverb(…)`), where a "not a function" was thrown at
+    /// `at` (a frame: its file's key, line and column): the words a named import gets, at the name.
+    fn moved_through_namespace(&self, at: &str) -> Option<Diagnostic> {
+        let file = at.rsplitn(3, ':').nth(2)?;
+        let source = &self.files.get(file)?.original;
+        let line: usize = self.remap(at).rsplit(':').nth(1)?.parse().ok()?;
+        let text = source.lines().nth(line.checked_sub(1)?)?;
+        let allocator = Allocator::default();
+        let program = Parser::new(&allocator, source, SourceType::ts()).parse().program;
+        let spaces: Vec<String> = program
+            .body
+            .iter()
+            .filter_map(|s| match s {
+                Statement::ImportDeclaration(d) if d.source.value == "std/fx" => d.specifiers.as_ref(),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|s| match s {
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => Some(s.local.name.to_string()),
+                _ => None,
+            })
+            .collect();
+        let (_, names, _) = MOVED.iter().find(|(m, ..)| *m == "fx")?;
+        let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+        for ns in &spaces {
+            for name in *names {
+                let call = format!("{ns}.{name}");
+                for (i, _) in text.match_indices(&call) {
+                    let alone = !text[..i].ends_with(ident) && !text[i + call.len()..].starts_with(ident);
+                    if alone {
+                        let col = text[..i + ns.len() + 1].chars().count() + 1;
+                        let why = moved_from_std("fx", Some(name))?;
+                        return Some(Diagnostic::error("pkg.missing", why).at(Some(format!("{}:{line}:{col}", self.display(file)))));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// `file:line:col` of the first import or re-export in `file` that takes `name` from `module`
@@ -442,7 +489,17 @@ impl State {
                         found => found,
                     }
                 }
-                Some((_, dir)) => self.package_file(dir, &normalize(&dir.join("src").join(sub))),
+                Some((_, dir)) => match self.package_file(dir, &normalize(&dir.join("src").join(sub))) {
+                    // A std module that moved to a pack (PKG-17) says which.
+                    Err((_, m))
+                        if m == NOT_FOUND
+                            && pkg == "std"
+                            && let Some(why) = moved_from_std(sub, None) =>
+                    {
+                        return Err(fail("pkg.missing", why));
+                    }
+                    found => found,
+                },
                 None => {
                     let have: Vec<&str> = self.packages.iter().map(|(n, _)| n.as_str()).collect();
                     let code = if in_project { "pkg.unsatisfied" } else { "code.build" };
@@ -546,6 +603,32 @@ impl State {
 
 /// What a package file not there is called: a build error like any other.
 const NOT_FOUND: &str = "file not found";
+
+/// What moved out of std into the packs music2 ships, in std 0.7 (PKG-17): a std module, whole or
+/// only the names listed, and the pack it is in now. The one table: an import of one says where.
+pub const MOVED: &[(&str, &[&str], &str)] = &[
+    ("instruments", &[], "@m2/synths"),
+    ("synth", &[], "@m2/synths"),
+    ("fm", &[], "@m2/synths"),
+    ("drums", &[], "@m2/drums"),
+    ("fx", &["bitcrush", "chorus", "delay", "drive", "phaser", "reverb", "tremolo", "widen"], "@m2/effects"),
+];
+
+/// Why an import of `std/<sub>`, or of `name` from it, finds nothing, when what it names moved to
+/// a pack (PKG-17): the pack, what to import, and the line `[dependencies]` needs.
+fn moved_from_std(sub: &str, name: Option<&str>) -> Option<String> {
+    let (_, names, pack) =
+        MOVED.iter().find(|(m, names, _)| *m == sub && name.is_none_or(|n| names.contains(&n)) && name.is_some() != names.is_empty())?;
+    let what = match name {
+        Some(n) => format!("`{n}` is no longer in std/{sub}: since std 0.7 it is in the pack {pack}"),
+        None => format!("`std/{sub}` is no longer std's: since std 0.7 its sounds are in the pack {pack}"),
+    };
+    let it = if names.is_empty() { "them" } else { "it" };
+    let mono = if sub == "synth" && name.is_none() { " (`mono` and `Voice` stay std's, in std/dsp)" } else { "" };
+    Some(format!(
+        "{what}, which comes with music2. Import {it} from \"{pack}\"{mono}, and add \"{pack}\" = \"1\" under [dependencies] in music2.toml"
+    ))
+}
 
 /// The module `name` (`<package>/instruments`): `export { <binding> } from "./instruments/<file>";`
 /// for each of `files`, its binding asked of `binding` before any code is made (PACK-13). A file
@@ -1259,7 +1342,11 @@ fn merge(runs: Vec<(String, Result<Described, Diagnostic>)>) -> Catalog {
         }
         let d = at.remove(0);
         let mut e = exports.remove(&id).unwrap_or_default();
-        e.sort_by(|a, b| (a.module != d.module, a).cmp(&(b.module != d.module, b)));
+        // First where code imports it from: its package's own name when that exports it (a pack's
+        // `src/index.ts`, PACK-3: `import { synth } from "@m2/synths"`), else where it is defined.
+        let root = id.split_once(':').map(|(package, _)| package);
+        let rank = |x: &component::Export| (Some(x.module.as_str()) != root, x.module != d.module);
+        e.sort_by(|a, b| (rank(a), a).cmp(&(rank(b), b)));
         e.dedup();
         catalog.exports.insert(id.clone(), e);
         catalog.components.insert(id, std::sync::Arc::new(d));
@@ -1306,6 +1393,11 @@ fn caught(st: &mut State, e: CaughtError, timed_out: bool) -> Diagnostic {
             let stack = ex.stack().unwrap_or_default();
             let frame = stack.lines().filter_map(frame_at).find(|at| at.starts_with(PROJECT));
             let other = || stack.lines().filter_map(frame_at).find(|at| ![CORE, "<main>", PRELUDE_FILE].iter().any(|f| at.starts_with(f)));
+            if message == "not a function"
+                && let Some(d) = frame.as_deref().and_then(|at| st.moved_through_namespace(at))
+            {
+                return d;
+            }
             let src = frame.or_else(other).map(|at| st.remap(&at));
             let src = st.region_at(&stack, &message).or(src);
             let mut d = Diagnostic::error(code, message).at(src);

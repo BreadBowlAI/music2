@@ -21,7 +21,7 @@ pub struct Plain {
 pub struct Song {
     /// Its track files' names, as `./tracks/…` imports name them: kick, bass, keys.
     pub tracks: Vec<String>,
-    /// Each name a package exports, with the module it is imported from: `pluck` → `std/instruments`.
+    /// Each name a package exports, with the module it is imported from: `pluck` → `@m2/synths`.
     pub exports: BTreeMap<String, String>,
     /// What to call each track, by its ID: bass → Bass.
     pub names: BTreeMap<String, String>,
@@ -56,12 +56,17 @@ impl Song {
     }
 }
 
-/// Each name the packages of `s` export, with the module it is imported from: every top-level
-/// `export const`, `export let` and `export function` of each of the draft's packages' own modules
-/// (PACK-9: a pack a draft that doesn't build brings in is one), then the catalog's components where
-/// each is exported first (PKG-11).
+/// Each name the packages of `s` export, with the module it is imported from: the catalog's
+/// components where each is exported first (PKG-11: a pack's from the pack's own name), then every
+/// top-level `export const`, `export let` and `export function` of each of the draft's packages' own
+/// modules (PACK-9: a pack a draft that doesn't build brings in is one).
 fn exports(s: &Session) -> BTreeMap<String, String> {
     let mut exports = BTreeMap::new();
+    for list in s.catalog().exports.values() {
+        if let Some(e) = list.iter().find(|e| !e.name.contains('.')) {
+            exports.entry(e.name.clone()).or_insert_with(|| e.module.clone());
+        }
+    }
     for (name, dir) in s.draft_packages() {
         let Ok(entries) = std::fs::read_dir(dir.join("src")) else { continue };
         let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
@@ -75,11 +80,6 @@ fn exports(s: &Session) -> BTreeMap<String, String> {
             for name in exported(&text) {
                 exports.entry(name).or_insert_with(|| module.clone());
             }
-        }
-    }
-    for list in s.catalog().exports.values() {
-        if let Some(e) = list.iter().find(|e| !e.name.contains('.')) {
-            exports.entry(e.name.clone()).or_insert_with(|| e.module.clone());
         }
     }
     exports

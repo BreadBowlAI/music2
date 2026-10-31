@@ -39,14 +39,14 @@ fn note(channel: u8, key: u8, velocity: u8, start: u64, end: u64) -> SmfNote {
     SmfNote { channel, key, velocity, start, end }
 }
 
-/// A song of one track, `pad`, playing `std/instruments`' pad from lane `chords`, holding `clips`;
+/// A song of one track, `pad`, playing `@m2/synths`' simple pad from lane `chords`, holding `clips`;
 /// and any more files.
 fn pad_song(clips: &str, more: &[(&str, &str)]) -> Fixture {
     let f = Fixture::new();
     f.write("music2.toml", MANIFEST);
     f.write(
         "song.ts",
-        "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\n\
+        "import { song, track } from '@m2/core';\nimport { pad } from '@m2/synths';\n\
          const p = track('pad', { name: 'Pad' }, ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n",
     );
     f.write("data/pad/chords.json", clips);
@@ -85,7 +85,7 @@ fn a_second_lane_is_named_by_its_track_and_lane() {
     let f = pad_song(r#"{"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 60, "start": 0, "length": 1}]}]}"#, &[]);
     f.write(
         "song.ts",
-        "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+        "import { song, track } from '@m2/core';\nimport { pad } from '@m2/synths';\nimport { sum } from 'std/math';\n\
          const p = track('pad', { name: 'Pad' }, ({ lane }) => sum(pad(lane.notes('chords')), pad(lane.notes('lead', { name: 'Top' }))));\n\
          export default song(() => p.out);\n",
     );
@@ -100,7 +100,7 @@ fn a_second_lane_is_named_by_its_track_and_lane() {
 fn a_drum_kit_lane_is_channel_10() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    let made = s.add_track("std:drum-kit", Some("Kit"), None, None).unwrap();
+    let made = s.add_track("@m2/drums:drum-kit", Some("Kit"), None, None).unwrap();
     f.write(
         &format!("data/{}/hits.json", made.module),
         r#"{"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 38, "start": 1, "length": 0.25}]}]}"#,
@@ -227,28 +227,28 @@ fn the_sound_table_picks_and_writes_one_way() {
     assert_eq!(
         [0, 8, 16, 24, 33, 40, 56, 64, 88, 104, 112, 127].map(|p| sound_for(false, Some(p), 60.0)),
         [
-            "std:fm-keys",
-            "std:fm-bell",
-            "std:synth-pad",
-            "std:synth-pluck",
-            "std:synth-bass",
-            "std:synth-strings",
-            "std:synth-supersaw",
-            "std:synth-lead",
-            "std:synth-pad",
-            "std:synth-pluck",
-            "std:fm-metal",
-            "std:synth-pad"
+            "@m2/synths:fm-keys",
+            "@m2/synths:fm-bell",
+            "@m2/synths:synth-pad",
+            "@m2/synths:synth-pluck",
+            "@m2/synths:synth-bass",
+            "@m2/synths:synth-strings",
+            "@m2/synths:synth-supersaw",
+            "@m2/synths:synth-lead",
+            "@m2/synths:synth-pad",
+            "@m2/synths:synth-pluck",
+            "@m2/synths:fm-metal",
+            "@m2/synths:synth-pad"
         ]
     );
-    assert_eq!(sound_for(false, None, 40.0), "std:synth-bass");
-    assert_eq!(sound_for(false, None, 48.0), "std:fm-keys");
+    assert_eq!(sound_for(false, None, 40.0), "@m2/synths:synth-bass");
+    assert_eq!(sound_for(false, None, 48.0), "@m2/synths:fm-keys");
     // Each picked sound is written with a program that picks it again.
     for s in SOUNDS.iter().filter(|s| !s.picked_by.is_empty()) {
         assert_eq!(sound_for(false, program_for(s.component), 60.0), s.component);
     }
-    assert_eq!(program_for("std:drum-kit"), None);
-    assert_eq!(program_for("std:synth-custom"), None);
+    assert_eq!(program_for("@m2/drums:drum-kit"), None);
+    assert_eq!(program_for("@m2/synths:synth-custom"), None);
 }
 
 // ---------------------------------------------------------------- bringing a MIDI file in
@@ -292,7 +292,7 @@ fn each_track_and_channel_becomes_a_track() {
     let got: Vec<(&str, &str, usize)> = b.parts.iter().map(|p| (p.label.as_str(), p.component.as_str(), p.notes.len())).collect();
     // The tempo track and the empty one have no notes; Band's two channels are two parts, named by
     // their sounds, in the order their first notes come.
-    assert_eq!(got, [("Drums", DRUM_KIT, 2), ("fm-keys", "std:fm-keys", 1), ("synth-bass", "std:synth-bass", 1)]);
+    assert_eq!(got, [("Drums", DRUM_KIT, 2), ("fm-keys", "@m2/synths:fm-keys", 1), ("synth-bass", "@m2/synths:synth-bass", 1)]);
     let bass = &b.parts[2].notes[0];
     assert_eq!((bass.pitch, bass.start, bass.length), (40.0, 0.5, 1.0));
     assert_eq!(bass.velocity, 0.787, "100 / 127, to a thousandth");
@@ -303,7 +303,7 @@ fn each_track_and_channel_becomes_a_track() {
     one.extend(played(2, 50, 0, 96));
     let b = bring(&file(0, vec![(Some("Song"), one)]), "zero.mid", &label).unwrap();
     // Both start at once: channel 3 (D3 and up: FM keys) comes before channel 10.
-    assert_eq!(b.parts.iter().map(|p| p.component.as_str()).collect::<Vec<_>>(), ["std:fm-keys", DRUM_KIT]);
+    assert_eq!(b.parts.iter().map(|p| p.component.as_str()).collect::<Vec<_>>(), ["@m2/synths:fm-keys", DRUM_KIT]);
     // A name twice is numbered.
     let b = bring(&file(1, vec![(Some("Piano"), played(0, 60, 0, 96)), (Some("piano"), played(1, 64, 0, 96))]), "two.mid", &label).unwrap();
     assert_eq!(b.parts.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(), ["Piano", "piano 2"]);
@@ -321,18 +321,18 @@ fn channel_10_plays_the_drum_kit() {
 #[test]
 fn programs_pick_std_sounds() {
     let cases = [
-        (0, "std:fm-keys"),
-        (11, "std:fm-bell"),
-        (19, "std:synth-pad"),
-        (25, "std:synth-pluck"),
-        (38, "std:synth-bass"),
-        (48, "std:synth-strings"),
-        (61, "std:synth-supersaw"),
-        (80, "std:synth-lead"),
-        (89, "std:synth-pad"),
-        (105, "std:synth-pluck"),
-        (114, "std:fm-metal"),
-        (125, "std:synth-pad"),
+        (0, "@m2/synths:fm-keys"),
+        (11, "@m2/synths:fm-bell"),
+        (19, "@m2/synths:synth-pad"),
+        (25, "@m2/synths:synth-pluck"),
+        (38, "@m2/synths:synth-bass"),
+        (48, "@m2/synths:synth-strings"),
+        (61, "@m2/synths:synth-supersaw"),
+        (80, "@m2/synths:synth-lead"),
+        (89, "@m2/synths:synth-pad"),
+        (105, "@m2/synths:synth-pluck"),
+        (114, "@m2/synths:fm-metal"),
+        (125, "@m2/synths:synth-pad"),
     ];
     for (program, want) in cases {
         let mut t = vec![(0, Event::Program { channel: 3, program })];
@@ -341,15 +341,15 @@ fn programs_pick_std_sounds() {
     }
     // A program set on another track for the channel counts too.
     let f = file(1, vec![(None, vec![(0, Event::Program { channel: 3, program: 48 })]), (Some("Strings"), played(3, 60, 0, 96))]);
-    assert_eq!(bring(&f, "p.mid", &label).unwrap().parts[0].component, "std:synth-strings");
+    assert_eq!(bring(&f, "p.mid", &label).unwrap().parts[0].component, "@m2/synths:synth-strings");
 }
 
 #[test]
 fn no_program_picks_by_pitch() {
     let low = file(1, vec![(None, [played(0, 36, 0, 96), played(0, 43, 96, 96)].concat())]);
-    assert_eq!(bring(&low, "low.mid", &label).unwrap().parts[0].component, "std:synth-bass");
+    assert_eq!(bring(&low, "low.mid", &label).unwrap().parts[0].component, "@m2/synths:synth-bass");
     let high = file(1, vec![(None, [played(0, 48, 0, 96), played(0, 60, 96, 96)].concat())]);
-    assert_eq!(bring(&high, "high.mid", &label).unwrap().parts[0].component, "std:fm-keys");
+    assert_eq!(bring(&high, "high.mid", &label).unwrap().parts[0].component, "@m2/synths:fm-keys");
 }
 
 #[test]
@@ -433,7 +433,10 @@ fn an_exported_song_imports_as_the_same_notes() {
     let b = bring(&smf, "first-song.mid", &label).unwrap();
     assert_eq!(b.parts.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(), ["Kick", "Hats", "Bass", "Keys"]);
     // The sounds: drums on 10, then what the programs pick again.
-    assert_eq!(b.parts.iter().map(|p| p.component.as_str()).collect::<Vec<_>>(), [DRUM_KIT, DRUM_KIT, "std:synth-bass", "std:synth-pluck"]);
+    assert_eq!(
+        b.parts.iter().map(|p| p.component.as_str()).collect::<Vec<_>>(),
+        [DRUM_KIT, DRUM_KIT, "@m2/synths:synth-bass", "@m2/synths:synth-pluck"]
+    );
     assert_eq!(b.arrangement.tempo, [Tempo { beat: 0.0, bpm: 124.0 }]);
     let data = &s.accepted().compiled.data;
     for (p, (module, lane)) in b.parts.iter().zip([("kick", "hits"), ("hats", "hits"), ("bass", "notes"), ("keys", "chords")]) {
@@ -557,7 +560,7 @@ fn an_import_makes_a_track_for_each_part() {
     assert_eq!(order(&s), ["kick", &keys[0], &keys[1], &keys[2], "hats", "bass", "keys"], "right after Kick");
     let rev = s.accepted();
     let sounds: Vec<Option<String>> = keys.iter().zip(["hits", "notes", "notes"]).map(|(k, l)| player_of(rev, k, l)).collect();
-    assert_eq!(sounds, [Some(DRUM_KIT.to_string()), Some("std:synth-bass".into()), Some("std:fm-keys".into())]);
+    assert_eq!(sounds, [Some(DRUM_KIT.to_string()), Some("@m2/synths:synth-bass".into()), Some("@m2/synths:fm-keys".into())]);
     // One clip each, from bar 3 to the bar line after its last note.
     assert_eq!(t.made.len(), 3);
     for ((k, l), len) in keys.iter().zip(["hits", "notes", "notes"]).zip([4.0, 4.0, 8.0]) {

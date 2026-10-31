@@ -1,0 +1,12 @@
+{
+  "m2preset": 1,
+  "name": "Warm",
+  "sound": "@m2/synths:synth-pad",
+  "values": {
+    "attack": 0.9,
+    "cutoff": 1200,
+    "release": 2.2,
+    "spread": 0.8,
+    "velSens": 0.3
+  }
+}

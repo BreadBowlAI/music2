@@ -1,20 +1,20 @@
-// std's calls, checked as the app's code editor checks songs (PKG-1, the step 5 design's D15):
-// what the fixtures and templates write, every effect as the editor adds it (its `insert`), and
-// controls left out written back in, positionally or in the options object (D5). A line that
-// should fail carries `@ts-expect-error`, so a type that stops refusing it fails the check too.
+// The calls of std and of the packs music2 ships (@m2/synths, @m2/drums, @m2/effects: PACK-15),
+// checked as the app's code editor checks songs (PKG-1, the step 5 design's D15): what the fixtures
+// and templates write, every effect as the editor adds it (its `insert`), and controls left out
+// written back in, positionally or in the options object (D5). A line that should fail carries
+// `@ts-expect-error`, so a type that stops refusing it fails the check too.
 
 import { db, hz, khz, kernel, ms, poly, secs, semis, type Audio, type Control, type Events, type Region, type Signal } from "@m2/core";
+import { drums } from "@m2/drums";
+import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
+import { bass, fm, hat, kick, pad, pluck, synth } from "@m2/synths";
 import { choose, lfo, when } from "std/control";
-import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
+import { adsr, follow, gain, mono, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
-import { bitcrush, chorus, compress, delay, drive, duck, eq3, limit, phaser, reverb, tremolo, widen } from "std/fx";
-import { drums } from "std/drums";
-import { fm } from "std/fm";
-import { bass, hat, kick, pad, pluck } from "std/instruments";
+import { compress, duck, eq3, limit } from "std/fx";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
 import { sampler } from "std/sampler";
-import { mono, synth } from "std/synth";
 
 declare const x: Audio, notes: Events, beats: Control<"beats">, l: Control<"unit01">, pitch: Control<"semitones">, s: Signal;
 
@@ -57,8 +57,8 @@ export const written = [
   reverb(x, { size: 0.6, mix: 0.2 }),
 ];
 
-// The instruments of std/synth, std/fm and std/drums: bare, with knobs and settings written,
-// and mono() around a voice of one's own.
+// The instruments of @m2/synths and @m2/drums: bare, with knobs and settings written, and
+// std's mono() around a voice of one's own.
 export const instruments: Audio[] = [
   synth.custom(notes),
   synth.custom(notes, { unison: 7, detune: 0.4, filterEnv: 2, filterDecay: ms(250), voices: 1, glide: ms(80) }),

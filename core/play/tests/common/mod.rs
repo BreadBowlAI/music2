@@ -23,7 +23,7 @@ pub fn std_packages() -> PackageSet {
     // Plugins run their main-thread calls on the tests' dedicated thread (HOST-2, C1).
     m2_plugins::test_main_thread();
     m2_plugins::probe::install();
-    let mut p = PackageSet::default();
+    let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
     p.load(&repo().join("std")).expect("std loads");
     p
 }
@@ -127,8 +127,9 @@ pub fn project(what: &str, files: &[(&str, &str)]) -> Song {
 /// [`project`], its plugins on `host` when given.
 pub fn project_on(what: &str, files: &[(&str, &str)], host: Option<std::sync::Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let dir = temp(what);
-    let manifest =
-        format!("[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n");
+    let manifest = format!(
+        "[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n"
+    );
     for (rel, text) in [("music2.toml", manifest.as_str())].into_iter().chain(files.iter().copied()) {
         let path = dir.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -155,14 +156,16 @@ pub fn continues(old: &Song, new: &Song) -> Continues {
 pub fn first_song_edited() -> Song {
     let mut song = std::fs::read_to_string(repo().join("examples/first-song/song.ts")).unwrap();
     for (from, to) in [
-        ("import { duck } from \"std/fx\";", "import { delay, drive } from \"std/fx\";"),
+        ("import { duck } from \"std/fx\";", "import { delay, drive } from \"@m2/effects\";"),
         ("bass: duck(bass.out, kick.env, { depth: db(-9) }),", "bass: drive(bass.out, db(6)),"),
         ("keys: { in: keys.out,", "keys: { in: delay(hats.out),"),
     ] {
         assert!(song.contains(from), "first-song's song.ts has `{from}`");
         song = song.replace(from, to);
     }
-    fixture_with("examples/first-song", &[("song.ts", &song)])
+    // It plays @m2/effects now: the song lists it, as adding one of its effects would (PACK-10).
+    let manifest = std::fs::read_to_string(repo().join("examples/first-song/music2.toml")).unwrap() + "\"@m2/effects\" = \"1\"\n";
+    fixture_with("examples/first-song", &[("song.ts", &song), ("music2.toml", &manifest)])
 }
 
 /// A copy of the repo's fixture `rel`, compiled.

@@ -22,7 +22,7 @@ fn refusal(r: Result<Edited, EditError>) -> String {
     }
 }
 
-// First-song's hats play std/instruments' simple `hat` (not in the + Track list): to the drum
+// First-song's hats play @m2/synths' simple `hat` (not in the + Track list): to the drum
 // kit, the call reads the same notes, `drums` is imported on a line of its own, and `hat`'s import
 // goes with its line. One revision, labelled as the toast says it.
 #[test]
@@ -30,10 +30,10 @@ fn swap_replaces_the_call_and_its_import() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
     let rev = s.accepted().number;
-    let done = swap(&mut s, "hats", "std:drum-kit").unwrap();
+    let done = swap(&mut s, "hats", "@m2/drums:drum-kit").unwrap();
     assert_eq!(
         f.read("tracks/hats.ts"),
-        "import { track } from \"@m2/core\";\nimport { drums } from \"std/drums\";\n\n\
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\n\
          export default track(\"hats\", { name: \"Hats\" }, ({ lane }) => drums.kit(lane.notes(\"hits\")));\n"
     );
     assert_eq!((done.file.as_str(), done.before.as_str(), done.after.as_str()), ("tracks/hats.ts", "Hats", "Hats plays Drum kit"));
@@ -47,16 +47,16 @@ fn swap_replaces_the_call_and_its_import() {
 fn swap_keeps_a_used_import() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    swap(&mut s, "kick", "std:drum-kick").unwrap();
+    swap(&mut s, "kick", "@m2/drums:drum-kick").unwrap();
     assert_eq!(
         f.read("tracks/kick.ts"),
-        "import { ms, track } from \"@m2/core\";\nimport { follow } from \"std/dsp\";\nimport { drums } from \"std/drums\";\n\n\
+        "import { ms, track } from \"@m2/core\";\nimport { follow } from \"std/dsp\";\nimport { drums } from \"@m2/drums\";\n\n\
          export default track(\"kick\", { name: \"Kick\" }, ({ lane }) => {\n  const out = drums.kick(lane.notes(\"hits\"));\n  \
          // Exported so other tracks can duck to the kick.\n  return { out, env: follow(out, { release: ms(150) }) };\n});\n"
     );
-    swap(&mut s, "hats", "std:drum-kit").unwrap();
+    swap(&mut s, "hats", "@m2/drums:drum-kit").unwrap();
     let kit = f.read("tracks/hats.ts");
-    swap(&mut s, "hats", "std:drum-hats").unwrap();
+    swap(&mut s, "hats", "@m2/drums:drum-hats").unwrap();
     assert_eq!(f.read("tracks/hats.ts"), kit.replace("drums.kit(", "drums.hats("), "the drums import stays as it was");
 }
 
@@ -67,7 +67,7 @@ fn swap_refuses_a_setting_that_follows_code() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
     let before = tree(&f);
-    let why = refusal(swap(&mut s, "bass", "std:synth-bass"));
+    let why = refusal(swap(&mut s, "bass", "@m2/synths:synth-bass"));
     assert_eq!(why, "Bass's cutoff is set by code here. Change its instrument in the Code view.");
     assert_eq!(tree(&f), before);
 }
@@ -84,7 +84,7 @@ fn swap_refuses_two_instruments() {
     );
     f.write(
         "tracks/duo.ts",
-        "import { track } from \"@m2/core\";\nimport { pad, pluck } from \"std/instruments\";\nimport { sum } from \"std/math\";\n\n\
+        "import { track } from \"@m2/core\";\nimport { pad, pluck } from \"@m2/synths\";\nimport { sum } from \"std/math\";\n\n\
          export default track(\"duo\", { name: \"Duo\" }, ({ lane }) => sum(pluck(lane.notes(\"notes\")), pad(lane.notes(\"notes\"))));\n",
     );
     f.write(
@@ -92,14 +92,14 @@ fn swap_refuses_two_instruments() {
         "import { track } from \"@m2/core\";\nimport { noise } from \"std/dsp\";\n\nexport default track(\"clap\", { name: \"Clap\" }, () => noise(1));\n",
     );
     let mut s = f.open();
-    assert_eq!(refusal(swap(&mut s, "duo", "std:synth-pad")), "Duo plays 2 instruments. Change them in code.");
-    assert_eq!(refusal(swap(&mut s, "clap", "std:synth-pad")), "Clap is built from parts, not one instrument. Change it in code.");
-    swap(&mut s, "duo", "std:synth-pad").unwrap_err();
+    assert_eq!(refusal(swap(&mut s, "duo", "@m2/synths:synth-pad")), "Duo plays 2 instruments. Change them in code.");
+    assert_eq!(refusal(swap(&mut s, "clap", "@m2/synths:synth-pad")), "Clap is built from parts, not one instrument. Change it in code.");
+    swap(&mut s, "duo", "@m2/synths:synth-pad").unwrap_err();
     let f2 = fixture("templates/starter");
     let mut s2 = f2.open();
-    assert_eq!(refusal(swap(&mut s2, "clap", "std:synth-pad")), "Clap is built from parts, not one instrument. Change it in code.");
-    swap(&mut s2, "hats", "std:drum-hats").unwrap();
-    assert_eq!(refusal(swap(&mut s2, "hats", "std:drum-hats")), "Hats plays Hats already.");
+    assert_eq!(refusal(swap(&mut s2, "clap", "@m2/synths:synth-pad")), "Clap is built from parts, not one instrument. Change it in code.");
+    swap(&mut s2, "hats", "@m2/drums:drum-hats").unwrap();
+    assert_eq!(refusal(swap(&mut s2, "hats", "@m2/drums:drum-hats")), "Hats plays Hats already.");
     assert!(matches!(swap(&mut s2, "hats", "std:no-such"), Err(EditError::NotFound(_))));
 }
 
@@ -109,23 +109,23 @@ fn swap_refuses_two_instruments() {
 fn swap_drops_plain_settings() {
     let f = fixture("templates/starter");
     let mut s = f.open();
-    swap(&mut s, "bass", "std:synth-pad").unwrap();
+    swap(&mut s, "bass", "@m2/synths:synth-pad").unwrap();
     assert_eq!(
         f.read("tracks/bass.ts"),
-        "import { track } from \"@m2/core\";\nimport { synth } from \"std/synth\";\n\n\
+        "import { track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\n\
          export default track(\"bass\", { name: \"Bass\" }, ({ lane }) => synth.pad(lane.notes(\"notes\")));\n"
     );
     // A pad in the middle of other code: only the call changes, and its import goes after the last.
     let chords = f.read("tracks/chords.ts");
-    swap(&mut s, "chords", "std:synth-strings").unwrap();
+    swap(&mut s, "chords", "@m2/synths:synth-strings").unwrap();
     assert_eq!(
         f.read("tracks/chords.ts"),
         chords
             .replace(
-                "import { hz, track } from \"@m2/core\";\nimport { pad } from \"std/instruments\";\n",
+                "import { hz, track } from \"@m2/core\";\nimport { pad } from \"@m2/synths\";\n",
                 "import { track } from \"@m2/core\";\n"
             )
-            .replace("from \"std/fx\";\n", "from \"std/fx\";\nimport { synth } from \"std/synth\";\n")
+            .replace("from \"@m2/effects\";\n", "from \"@m2/effects\";\nimport { synth } from \"@m2/synths\";\n")
             .replace("pad(lane.notes(\"notes\"), { cutoff: hz(1600) })", "synth.strings(lane.notes(\"notes\"))")
     );
 }
@@ -134,9 +134,9 @@ fn swap_drops_plain_settings() {
 #[test]
 fn undo_puts_every_byte_back() {
     for (fixture_dir, module, to) in [
-        ("examples/first-song", "hats", "std:drum-kit"),
-        ("templates/starter", "bass", "std:synth-pad"),
-        ("templates/starter", "hook", "std:fm-bell"),
+        ("examples/first-song", "hats", "@m2/drums:drum-kit"),
+        ("templates/starter", "bass", "@m2/synths:synth-pad"),
+        ("templates/starter", "hook", "@m2/synths:fm-bell"),
     ] {
         let f = fixture(fixture_dir);
         let mut s = f.open();
@@ -163,14 +163,14 @@ fn the_change_stays_in_the_track() {
     let lanes = |s: &Session, k: &str| s.accepted().compiled.ir.modules.iter().find(|m| m.key == k).map(|m| m.lanes.clone());
     let (keys_lanes, kick_nodes) =
         (lanes(&s, "keys"), s.accepted().compiled.ir.modules.iter().find(|m| m.key == "kick").unwrap().nodes.len());
-    swap(&mut s, "keys", "std:fm-keys").unwrap();
+    swap(&mut s, "keys", "@m2/synths:fm-keys").unwrap();
     let after = tree(&f);
     let changed: Vec<&String> = after.keys().filter(|k| before.get(*k) != after.get(*k)).collect();
     assert_eq!(changed, ["tracks/keys.ts"]);
     let keys = f.read("tracks/keys.ts");
     assert_eq!(
         keys,
-        "import { track } from \"@m2/core\";\nimport { fm } from \"std/fm\";\n\n\
+        "import { track } from \"@m2/core\";\nimport { fm } from \"@m2/synths\";\n\n\
          export default track(\"keys\", { name: \"Keys\", muted: true }, ({ lane }) => fm.keys(lane.notes(\"chords\")));\n"
     );
     let m = s.accepted().compiled.ir.modules.iter().find(|m| m.key == "keys").unwrap();

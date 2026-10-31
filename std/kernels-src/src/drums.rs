@@ -1,4 +1,4 @@
-//! `drum`, the voice behind std/drums: an 808/909-style machine in one kernel that picks
+//! `drum`, the voice behind @m2/drums: an 808/909-style machine in one kernel that picks
 //! its drum when the note starts, either from the note's General MIDI pitch or from a
 //! fixed `model`. Port order must match `std/m2pkg.toml`.
 //!

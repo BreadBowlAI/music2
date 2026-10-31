@@ -29,5 +29,7 @@ rustls.workspace = true
 rustls-platform-verifier.workspace = true
 
 [dev-dependencies]
+# A store of the packs this tree bundles (`pack::test_store`).
+m2-song = { workspace = true, features = ["testing"] }
 # A plan prepared against what plays, in the effect tests: what the engine keeps (ID-13).
 m2-plugins.workspace = true

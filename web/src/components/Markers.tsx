@@ -2,8 +2,9 @@
 // its name beside it on `chrome`, cut where the next one starts; the bar numbers are on the line
 // under the band (next D4a), so a marker never hides one. A click
 // goes there; a drag moves it on the timeline's grid (⌘ held, Ctrl on a PC: freely); a
-// double-click renames it; its right-click menu renames, deletes or loops to the next one. A new
-// one opens as a field with a short list of names, and is written once its name is kept.
+// double-click renames it; its right-click menu renames, deletes, loops to the next one or selects
+// the bars up to it (a section, ARR-9). A new one opens as a field with a short list of names, and
+// is written once its name is kept.
 
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
@@ -11,6 +12,7 @@ import { barAt, type TimelineView } from "../lib/graph";
 import { skipsSnap, snapSong } from "../lib/grid";
 import { barOf, markerAt, markersOf, NAME_MAX, nextName, PICKS, useMarkerEdit, usePendingMarkers, writeMarkers, type Marker } from "../lib/markers";
 import { isMac, mod, opt } from "../lib/native";
+import { onBarLine, selectBars } from "../lib/sections";
 import { useStore } from "../lib/store";
 import PointMenu from "./ClipMenu";
 import { MenuRow, Popover } from "./ui";
@@ -72,6 +74,16 @@ export function RulerMarkers({
   const loopFrom = (m: Marker) => {
     const end = list.find((x) => x.beat > m.beat + 1e-6)?.beat ?? timeline.end;
     onLoop(m.beat, end > m.beat ? end : m.beat + barAt(timeline.meter, m.beat).length);
+  };
+  /** Select the bars from `m` to the next marker, or to the end of the last bar that plays (ARR-1). */
+  const selectFrom = (m: Marker) => {
+    const last = barAt(timeline.meter, Math.max(timeline.end - 1e-6, 0));
+    const end = list.find((x) => x.beat > m.beat + 1e-6)?.beat ?? last.start + last.length;
+    if (!onBarLine(timeline.meter, m.beat) || !onBarLine(timeline.meter, end)) {
+      return useStore.getState().toast(`${m.name} isn't at the start of a bar, so its bars can't be selected: move it onto a bar line first`);
+    }
+    if (end <= m.beat) return useStore.getState().toast(`Nothing plays after ${m.name}, so it marks no bars`);
+    selectBars(m.beat, end);
   };
   return (
     <>
@@ -145,6 +157,7 @@ export function RulerMarkers({
             { id: "delete", label: "Delete", off: locked ? `${locked}.` : null, run: () => write(list.filter((m) => m !== markerAt(list, menu.marker.beat)), `deleting ${menu.marker.name}`) },
             "line",
             { id: "loop", label: "Loop to next marker", run: () => loopFrom(menu.marker) },
+            { id: "select", label: "Select to next marker", run: () => selectFrom(menu.marker) },
           ]}
         />
       )}

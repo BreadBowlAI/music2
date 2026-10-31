@@ -150,7 +150,7 @@ fn a_shared_literal_is_one_control() {
     f.write("music2.toml", crate::testing::MANIFEST);
     f.write(
         "song.ts",
-        "import { frac, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+        "import { frac, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"@m2/effects\";\n\
          export default song(() => {\n  const g = frac(0.3);\n  return delay(osc.saw(110), { feedback: g, mix: g });\n});\n",
     );
     let s = f.open();
@@ -204,7 +204,7 @@ impl StdCopy {
     }
 
     fn packages(&self) -> m2_runtime::PackageSet {
-        let mut p = m2_runtime::PackageSet::default();
+        let mut p = m2_runtime::PackageSet::default().with_store(m2_song::pack::test_store());
         p.load(&self.0.0).unwrap();
         p
     }
@@ -222,14 +222,14 @@ fn a_broken_package_module_still_opens() {
         // filter.ts and fx.ts import neither the other, nor does any module import both.
         let filter = std::fs::read_to_string(dir.join("src/filter.ts")).unwrap();
         let another =
-            "\nexport const echo = component({ id: \"delay\", inputs: { in: port.audio() }, output: port.audio() }, (x: Audio) => x);\n";
+            "\nexport const echo = component({ id: \"limit\", inputs: { in: port.audio() }, output: port.audio() }, (x: Audio) => x);\n";
         std::fs::write(dir.join("src/filter.ts"), format!("{filter}{another}")).unwrap();
     });
     let f = Fixture::new();
     f.write("music2.toml", crate::testing::MANIFEST);
     f.write(
         "song.ts",
-        "import { song, track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\
+        "import { song, track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\
          const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
     );
     let s = Session::open(&f.0, std.packages()).unwrap_or_else(|d| panic!("the project must open: {d:?}"));
@@ -238,9 +238,9 @@ fn a_broken_package_module_still_opens() {
     assert!(invalid.iter().any(|m| m.contains("std/control") && m.contains("broken on purpose")), "{invalid:?}");
     assert!(invalid.iter().any(|m| m.contains("std/src/fx.ts") && m.contains("std/src/filter.ts")), "both places: {invalid:?}");
     let catalog = s.catalog();
-    assert!(!catalog.components.contains_key("std:lfo") && !catalog.components.contains_key("std:delay"));
-    assert!(catalog.components.contains_key("std:kick") && catalog.components.contains_key("std:reverb"));
-    assert!(s.effects().iter().all(|e| e.component != "std:delay"));
+    assert!(!catalog.components.contains_key("std:lfo") && !catalog.components.contains_key("std:limit"));
+    assert!(catalog.components.contains_key("@m2/synths:kick") && catalog.components.contains_key("std:compress"));
+    assert!(s.effects().iter().all(|e| e.component != "std:limit"));
     let rev = s.accepted();
     let r = m2_runtime::Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap().render(0.1).unwrap();
     assert_eq!(r.len(), 4800, "the song plays");

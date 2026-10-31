@@ -52,7 +52,7 @@ check(await until(async () => (await rows()).includes(KEYS), 15000), `"soft" fin
 const groups = await page.$$eval("[data-spotlight-group]", (els) => els.map((e) => e.getAttribute("aria-label")));
 check(groups.at(-1) === "From the library" && groups.length > 1, `in a group of its own, after what you have (${groups})`);
 const found = await rows();
-check(found.indexOf("sound:std/std:synth-pluck/Soft") < found.indexOf(KEYS) && found.includes(DARK), "what you have comes first; the pack's sound Dark is From the library too");
+check(found.indexOf("sound:std/@m2/synths:synth-pluck/Soft") < found.indexOf(KEYS) && found.includes(DARK), "what you have comes first; the pack's sound Dark is From the library too");
 check(
   await page.$eval(`[data-spotlight-item="${KEYS}"]`, (e) => e.textContent.includes("@bob/keys") && !!e.querySelector("[data-spotlight-get]")),
   "its row names its pack, with Get",

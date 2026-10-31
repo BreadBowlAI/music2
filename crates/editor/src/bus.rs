@@ -61,12 +61,14 @@ impl BusKind {
         }
     }
 
-    /// What its file imports (a name, from a std module) and what its function returns.
+    /// What it plays: a component (its ComponentId), by the name its package exports it as, and
+    /// what its function returns. A Reverb or a Delay is `@m2/effects`', a pack music2 ships
+    /// (PACK-15), added as any pack's item is (PACK-10); a Group is std's gain.
     fn body(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            BusKind::Reverb => ("reverb", "std/fx", "reverb(input, { mix: 1 })"),
-            BusKind::Delay => ("delay", "std/fx", "delay(input, { mix: 1 })"),
-            BusKind::Group => ("gain", "std/dsp", "gain(input)"),
+            BusKind::Reverb => ("@m2/effects:reverb", "reverb", "reverb(input, { mix: 1 })"),
+            BusKind::Delay => ("@m2/effects:delay", "delay", "delay(input, { mix: 1 })"),
+            BusKind::Group => ("std:gain", "gain", "gain(input)"),
         }
     }
 }
@@ -78,19 +80,27 @@ pub(crate) fn bus_call_text(kind: BusKind, key: &str, label: &str) -> String {
     format!("bus({}{options}, ({{ input }}) => {})", quoted(key), kind.body().2)
 }
 
-/// What a bus file imports from std to play `kind`.
+/// The name a bus file imports to play `kind`.
 pub(crate) fn bus_import(kind: BusKind) -> &'static str {
-    kind.body().0
+    kind.body().1
 }
 
-/// The text of a new bus file.
-fn bus_text(kind: BusKind, key: &str, label: &str) -> String {
-    let (name, from) = (bus_import(kind), kind.body().1);
+/// The text of a new bus file, importing what plays `kind` from `module`.
+fn bus_text(kind: BusKind, module: &str, key: &str, label: &str) -> String {
     format!(
-        "import {{ bus }} from \"@m2/core\";\nimport {{ {name} }} from {};\n\nexport default {};\n",
-        quoted(from),
+        "import {{ bus }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default {};\n",
+        bus_import(kind),
+        quoted(module),
         bus_call_text(kind, key, label)
     )
+}
+
+/// The module a bus of `kind` imports what plays it from: where the packages the lists offer export
+/// it (PACK-11), as an added effect is imported. None when no package offers it (a pack removed).
+fn bus_module(s: &Session, kind: BusKind) -> Option<String> {
+    let (component, name, _) = kind.body();
+    let catalog = s.catalog();
+    catalog.exports.get(component)?.iter().find(|e| e.name == name).map(|e| e.module.clone())
 }
 
 /// Add a bus of `kind`, shown as `label` (else the kind's name), placed after track `after` in the
@@ -99,6 +109,11 @@ fn bus_text(kind: BusKind, key: &str, label: &str) -> String {
 /// planner asserts that exactly that module is added, a bus, in a channel of its own.
 pub fn add_bus(s: &mut Session, kind: BusKind, label: Option<&str>, after: Option<&str>) -> Result<Made, EditError> {
     ready(s)?;
+    let (component, _, _) = kind.body();
+    let module =
+        bus_module(s, kind).ok_or_else(|| EditError::Rejected(format!("no package offers {component}: install the pack it comes from")))?;
+    // Its pack's [dependencies] line and lock, when the song doesn't have them (PACK-10).
+    let needs = crate::packs::needs(s, component)?;
     let rev = s.accepted();
     let mixer = tracks::the_mixer(rev)?;
     let song_text = rev.snapshot.files[Path::new(&mixer.file)].clone();
@@ -120,14 +135,18 @@ pub fn add_bus(s: &mut Session, kind: BusKind, label: Option<&str>, after: Optio
     edits.push((at, at, line));
     let edits = tracks::sorted(edits)?;
     let (song_file, new_file) = (path(&mixer.file)?, path(&file)?);
-    let ops = vec![
+    let mut ops = vec![
         plan::text_edit(&song_file, &song_text, &edits),
-        Op::Write { file: new_file.clone(), bytes: Payload::Text(bus_text(kind, &key, &label).into()) },
+        Op::Write { file: new_file.clone(), bytes: Payload::Text(bus_text(kind, &module, &key, &label).into()) },
     ];
-    let ranges =
-        [(song_file, Declared::Ranges(vec![Range::bytes(mixer.call.0, mixer.call.1), Range::bytes(at, at)])), (new_file, Declared::Whole)];
+    let mut ranges = vec![
+        (song_file, Declared::Ranges(vec![Range::bytes(mixer.call.0, mixer.call.1), Range::bytes(at, at)])),
+        (new_file, Declared::Whole),
+    ];
+    ops.extend(needs.ops);
+    ranges.extend(needs.ranges);
     let k = Key::new(&key).map_err(EditError::Rejected)?;
-    let expect = Expect::Confined(Confined { ranges: ranges.into(), lanes: vec![], modules: vec![ModuleChange::Added(k)] });
+    let expect = Expect::Confined(Confined { ranges: ranges.into_iter().collect(), lanes: vec![], modules: vec![ModuleChange::Added(k)] });
     let layout = tracks::layout_write(s, |v| {
         let mut colours = v.colours.clone();
         colours.insert(key.clone(), layout::unused(colours.values().copied()));

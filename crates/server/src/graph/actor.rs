@@ -569,7 +569,8 @@ pub(super) struct Prepared {
 
 fn packages(inner: &Inner) -> Result<PackageSet> {
     let mut p = PackageSet::default().with_host(inner.host.clone());
-    // The store the server was given, else this computer's packs (PACK-6), under `$HOME` (PLAT-7).
+    // The store the server was given, else this computer's packs (PACK-6), under `$HOME` (PLAT-7),
+    // only read: a program's start installs music2's own there (PACK-16), never a build.
     if let Some(store) = inner.store.get().cloned().or_else(m2_os::dirs::packs) {
         p = p.with_store(store);
     }

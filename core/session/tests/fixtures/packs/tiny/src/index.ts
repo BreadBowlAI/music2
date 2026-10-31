@@ -1,9 +1,7 @@
-import { component, control, file, port, signature, type Audio, type Events, type Params, type Value } from "@m2/core";
-import { drive } from "std/fx";
+import { component, control, file, kernel, poly, port, signature, type Audio, type Events, type Params, type Value } from "@m2/core";
 import { sampler } from "std/sampler";
-import { synth } from "std/synth";
 
-/** A soft pluck: std's synth pluck, darker. */
+/** A soft pluck, on std's synth kernel. */
 export const tinyKeys = component(
   {
     id: "tiny-keys",
@@ -12,9 +10,11 @@ export const tinyKeys = component(
     inputs: { notes: port.notes() },
     controls: { brightness: control.hz(1800).range(200, 20000) },
     output: port.audio(),
-    editor: { category: "Keys", description: "A soft pluck, from std's synth" },
+    editor: { category: "Keys", description: "A soft pluck, on std's synth kernel" },
   },
-  (notes: Events, { brightness }: Params): Audio => synth.pluck(notes, { brightness }),
+  // A pack never imports another (PACK-3): std's synth kernel, played as a soft pluck.
+  (notes: Events, { brightness }: Params): Audio =>
+    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: brightness, decay: 0.45, sustain: 0, release: 0.25 }), { voices: 12 }),
 );
 
 /** One recorded pluck, pitched to every note: the recording is the pack's own file. */
@@ -30,7 +30,7 @@ export const tinySampler = component(
   (notes: Events): Audio => sampler(notes, { sample: file(import.meta, "samples/pluck.wav"), mode: "gate", release: 0.1 }),
 );
 
-/** A crunch: std's drive, harder. */
+/** A crunch: std's drive kernel, harder. */
 export const tinyCrunch = component(
   {
     id: "tiny-crunch",
@@ -42,5 +42,6 @@ export const tinyCrunch = component(
     positional: ["amount"],
     editor: { category: "Distortion", description: "std's drive, harder", insert: { amount: 12 } },
   },
-  (x: Audio, { amount }: Params): Audio => drive(x, amount),
+  // std's drive kernel: a pack never imports another (PACK-3).
+  (x: Audio, { amount }: Params): Audio => kernel("std:drive", { in: x, amount }),
 );

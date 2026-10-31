@@ -892,7 +892,7 @@ mod tests {
     #[test]
     fn songs_made_at_once_each_answer_with_their_own() {
         let t = Temp::new();
-        let graph = std::sync::Arc::new(Graph::silent());
+        let graph = std::sync::Arc::new(Graph::silent().stored());
         for round in 0..3 {
             let name = format!("Pair {round}");
             let made: Vec<Value> = (0..4)
@@ -1023,7 +1023,7 @@ mod tests {
         // Through New Song, in the songs folder or another: refused first, so no folder is made,
         // the songs folder included.
         let had = songs_dir().unwrap().exists();
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         let bad = NewSong { name: "Faster".into(), tempo: Some(1000.0), ..NewSong::default() };
         assert_eq!(new_song(&graph, &bad).unwrap_err().to_string(), e);
         assert_eq!(songs_dir().unwrap().exists(), had, "the songs folder is made only for a song");
@@ -1039,7 +1039,7 @@ mod tests {
     fn naming_a_song_changes_only_the_name_line_of_its_manifest() {
         let t = Temp::new();
         let manifest = "# The starter.\n[project]\nname = \"Starter beat\"   # its label\nformat = 1\nsample_rate = 44100\n\n\
-                        [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+                        [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
         std::fs::write(t.0.join("music2.toml"), manifest).unwrap();
         let name = "Night \"drive\" \\ ☕";
         set_name(&t.0, name).unwrap();
@@ -1187,7 +1187,7 @@ mod tests {
     #[test]
     fn new_song_makes_the_folder_and_opens_it() {
         let t = Temp::new();
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         let req = |name: &str, template: Option<&str>| NewSong {
             name: name.into(),
             template: template.map(Into::into),
@@ -1219,7 +1219,7 @@ mod tests {
     #[test]
     fn new_song_refuses_bad_requests_and_keeps_nothing_it_couldnt_open() {
         let t = Temp::new();
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         let bad = |req: NewSong| new_song(&graph, &NewSong { dir: req.dir.or(Some(t.0.clone())), ..req }).unwrap_err().to_string();
         assert!(bad(NewSong { template: Some("../../std".into()), ..NewSong::default() }).contains("no template"));
         assert!(bad(NewSong { example: Some("nope".into()), ..NewSong::default() }).contains("no example"));
@@ -1232,7 +1232,7 @@ mod tests {
         // again, and the song open before stays open.
         let opened = open_new(&graph, &t.0, "Fine", &template("empty"), None).unwrap();
         let templates = Temp::new();
-        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
         let newer = templates.0.join("newer");
         std::fs::create_dir_all(&newer).unwrap();
         std::fs::write(newer.join("music2.toml"), manifest.replace("format = 1", "format = 2")).unwrap();
@@ -1262,7 +1262,7 @@ mod tests {
 
     #[test]
     fn every_template_compiles_and_renders_sound_or_silence_as_it_says() {
-        let mut packages = m2_runtime::PackageSet::default();
+        let mut packages = m2_runtime::PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&resources::std_dir()).unwrap();
         for s in templates() {
             let t = Temp::new();

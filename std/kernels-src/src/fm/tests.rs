@@ -37,7 +37,7 @@ fn patch(changes: &[(usize, f32)]) -> Vec<f32> {
     p
 }
 
-/// std/fm's electric piano and bell, as plan values.
+/// @m2/synths' FM electric piano and bell, as plan values.
 fn keys() -> Vec<f32> {
     patch(&[
         (INDEX_A, 1.8),

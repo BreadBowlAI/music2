@@ -570,7 +570,7 @@ fn tremolo_holds_while_stopped_and_never_jumps() {
         &[
             (
                 "song.ts",
-                "import { kernel, song } from \"@m2/core\";\nimport { tremolo } from \"std/fx\";\n\n\
+                "import { kernel, song } from \"@m2/core\";\nimport { tremolo } from \"@m2/effects\";\n\n\
                  export default song(() => tremolo(kernel(\"std:square\", { freq: 0 }), { rate: 3, depth: 1 }));\n",
             ),
             ("data/arrangement.json", &json!({"tempo": [{"beat": 0, "bpm": 120}], "meter": []}).to_string()),

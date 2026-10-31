@@ -41,7 +41,7 @@ impl Fixture {
     }
 
     fn open(&self) -> Session {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         Session::open(&self.0, packages).unwrap_or_else(|d| panic!("{d:?}"))
     }
@@ -167,7 +167,7 @@ fn a_renamed_lanes_file_is_moved_where_it_belongs() {
 fn a_track_that_was_there_beside_is_not_the_renamed_one() {
     let fixture = Fixture::first_song();
     let mut s = fixture.open();
-    let clap = "import { track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\n\
+    let clap = "import { track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\n\
                 export default track(\"clap\", ({ lane }) => kick(lane.notes(\"hits\")));\n";
     fixture.write("tracks/clap.ts", clap);
     let song = fixture.read("song.ts").unwrap();

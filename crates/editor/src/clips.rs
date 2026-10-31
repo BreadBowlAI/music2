@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use m2_ir::LaneDecl;
 use m2_session::{ConflictFile, Revision, Session};
+use m2_song::lane::{Step, StepClip};
 use m2_song::tx::{Confined, Expect, Op, Payload, TxPath};
 use m2_song::{AudioClip, ClipId, ControlClip, DataPath, LaneAddr, LaneData, LaneKind, Note, NoteClip, canonical};
 use serde::{Deserialize, Serialize};
@@ -403,7 +404,9 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 .iter()
                 .map(|i| match &l.was[*i] {
                     Clip::Notes(c) => Ok(c),
-                    Clip::Control(_) => Err("Automation clips can't be joined: the lane's fallback would stop playing in their gaps."),
+                    Clip::Control(_) | Clip::Steps(_) => {
+                        Err("Automation clips can't be joined: the lane's fallback would stop playing in their gaps.")
+                    }
                     Clip::Audio(_) => Err("Audio clips can't be joined yet: that needs a render of them as one sound."),
                 })
                 .collect::<Result<_, _>>()
@@ -538,72 +541,81 @@ fn joined(clips: &[&NoteClip]) -> NoteClip {
 
 /// A clip of any kind, as the lane format holds it.
 #[derive(Clone, Debug, PartialEq)]
-enum Clip {
+pub(crate) enum Clip {
     Notes(NoteClip),
     Control(ControlClip),
+    /// A clip of a lane of names (CARD-15): a choice's or a switch's.
+    Steps(StepClip),
     Audio(AudioClip),
 }
 
 impl Clip {
-    fn start(&self) -> f64 {
+    pub(crate) fn start(&self) -> f64 {
         match self {
             Clip::Notes(c) => c.start,
             Clip::Control(c) => c.start,
+            Clip::Steps(c) => c.start,
             Clip::Audio(c) => c.start,
         }
     }
 
-    fn length(&self) -> f64 {
+    pub(crate) fn length(&self) -> f64 {
         match self {
             Clip::Notes(c) => c.length,
             Clip::Control(c) => c.length,
+            Clip::Steps(c) => c.length,
             Clip::Audio(c) => c.length,
         }
     }
 
-    fn end(&self) -> f64 {
+    pub(crate) fn end(&self) -> f64 {
         self.start() + self.length()
     }
 
-    fn id(&self) -> Option<&str> {
+    pub(crate) fn id(&self) -> Option<&str> {
         match self {
             Clip::Notes(c) => c.id.as_deref(),
             Clip::Control(c) => c.id.as_deref(),
+            Clip::Steps(c) => c.id.as_deref(),
             Clip::Audio(c) => c.id.as_deref(),
         }
     }
 
-    fn set_start(&mut self, x: f64) {
+    pub(crate) fn set_start(&mut self, x: f64) {
         match self {
             Clip::Notes(c) => c.start = x,
             Clip::Control(c) => c.start = x,
+            Clip::Steps(c) => c.start = x,
             Clip::Audio(c) => c.start = x,
         }
     }
 
-    fn set_length(&mut self, x: f64) {
+    pub(crate) fn set_length(&mut self, x: f64) {
         match self {
             Clip::Notes(c) => c.length = x,
             Clip::Control(c) => c.length = x,
+            Clip::Steps(c) => c.length = x,
             Clip::Audio(c) => c.length = x,
         }
     }
 
     /// The id, in place of any it had (an id written as anything but a string too).
-    fn set_id(&mut self, id: Option<String>) {
+    pub(crate) fn set_id(&mut self, id: Option<String>) {
         let (slot, other) = match self {
             Clip::Notes(c) => (&mut c.id, &mut c.other_id),
             Clip::Control(c) => (&mut c.id, &mut c.other_id),
+            Clip::Steps(c) => (&mut c.id, &mut c.other_id),
             Clip::Audio(c) => (&mut c.id, &mut c.other_id),
         };
         (*slot, *other) = (id, None);
     }
 
     /// Whether its id names it: valid, and written as a string (FMT-12).
-    fn named(&self) -> Option<&str> {
+    pub(crate) fn named(&self) -> Option<&str> {
         let other = match self {
             Clip::Notes(c) => c.other_id.is_some(),
             Clip::Control(c) => c.other_id.is_some(),
+            Clip::Steps(c) => c.other_id.is_some(),
             Clip::Audio(c) => c.other_id.is_some(),
         };
         self.id().filter(|id| !other && ClipId::valid(id))
@@ -617,6 +629,7 @@ impl Clip {
         match self {
             Clip::Notes(c) => c.notes.iter_mut().for_each(|n| n.start += by),
             Clip::Control(c) => c.points.iter_mut().for_each(|p| p.0 += by),
+            Clip::Steps(c) => c.points.iter_mut().for_each(|p| p.0 += by),
             Clip::Audio(c) => {
                 audio_edge(c, "its left edge")?;
                 if c.warp.is_empty() {
@@ -641,7 +654,7 @@ impl Clip {
     /// the cut as the first part's last point and the second's first, so the curve plays on. An
     /// audio clip's second part starts later in its asset; the first keeps the fade in, the
     /// second the fade out.
-    fn split(&self, at: f64, tempo: &m2_song::TempoMap) -> Result<(Clip, Clip), EditError> {
+    pub(crate) fn split(&self, at: f64, tempo: &m2_song::TempoMap) -> Result<(Clip, Clip), EditError> {
         let cut = at - self.start();
         let (mut first, mut second) = (self.clone(), self.clone());
         first.set_length(cut);
@@ -666,6 +679,23 @@ impl Clip {
                     b.points = [(0.0, r)].into_iter().chain(after).collect();
                 }
             }
+            (Clip::Steps(a), Clip::Steps(b)) => {
+                // Each name holds until the next point, the first from the clip's start: the second
+                // part starts with the one in effect at the cut (a point there opens it).
+                let points = std::mem::take(&mut a.points);
+                let held = step_at(&points, cut);
+                a.points = points.iter().filter(|p| p.0 < cut).cloned().collect();
+                if a.points.is_empty()
+                    && let Some(first) = points.first()
+                {
+                    a.points.push((0.0, first.1.clone()));
+                }
+                b.points = held
+                    .map(|v| (0.0, v))
+                    .into_iter()
+                    .chain(points.iter().filter(|p| p.0 > cut).map(|p| (p.0 - cut, p.1.clone())))
+                    .collect();
+            }
             (Clip::Audio(a), Clip::Audio(b)) => {
                 audio_edge(a, "split")?;
                 if a.warp.is_empty() && a.reverse {
@@ -688,7 +718,7 @@ impl Clip {
     }
 
     /// Its line in the canonical form, as `kind` writes it.
-    fn line(&self, kind: &LaneKind) -> String {
+    pub(crate) fn line(&self, kind: &LaneKind) -> String {
         lane_data(kind, vec![self.clone()]).clip_lines().remove(0).1
     }
 }
@@ -706,6 +736,12 @@ fn value_at(points: &[(f64, f64)], t: f64) -> Option<f64> {
             if b1 > b0 { v0 + (v1 - v0) * (t - b0) / (b1 - b0) } else { v1 }
         }
     })
+}
+
+/// What a lane of names plays at `t`, beats from its clip's start: the last point at or before it,
+/// else the first (it holds from the clip's start). None with no points.
+fn step_at(points: &[(f64, Step)], t: f64) -> Option<Step> {
+    points.iter().rev().find(|p| p.0 <= t).or(points.first()).map(|p| p.1.clone())
 }
 
 /// What `points` play just before `t`: where a step is at `t`, the value it steps from.
@@ -833,13 +869,13 @@ fn fit_fades(c: &mut AudioClip, tempo: &m2_song::TempoMap) {
 }
 
 /// A lane's clips, one by one.
-fn clips_of(d: &LaneData) -> Vec<Clip> {
+pub(crate) fn clips_of(d: &LaneData) -> Vec<Clip> {
     match d {
         LaneData::Notes(c) => c.iter().cloned().map(Clip::Notes).collect(),
         LaneData::Control { clips, .. } => clips.iter().cloned().map(Clip::Control).collect(),
         LaneData::Audio(c) => c.iter().cloned().map(Clip::Audio).collect(),
-        // A gesture never reaches a lane of names (`Work::lane` refuses it).
-        LaneData::Steps { .. } => vec![],
+        // A clip gesture never reaches a lane of names (`Work::lane` refuses it); a section does.
+        LaneData::Steps { clips, .. } => clips.iter().cloned().map(Clip::Steps).collect(),
     }
 }
 
@@ -852,12 +888,13 @@ fn names(track: &str, lane: &str) -> String {
 }
 
 /// A lane of `kind` holding `clips`, in canonical order. Clips are of the lane's kind.
-fn lane_data(kind: &LaneKind, clips: Vec<Clip>) -> LaneData {
+pub(crate) fn lane_data(kind: &LaneKind, clips: Vec<Clip>) -> LaneData {
     let mut d = LaneData::empty(kind);
     for c in clips {
         match (&mut d, c) {
             (LaneData::Notes(v), Clip::Notes(c)) => v.push(c),
             (LaneData::Control { clips, .. }, Clip::Control(c)) => clips.push(c),
+            (LaneData::Steps { clips, .. }, Clip::Steps(c)) => clips.push(c),
             (LaneData::Audio(v), Clip::Audio(c)) => v.push(c),
             _ => unreachable!("kinds are checked before a clip lands on a lane"),
         }
@@ -867,10 +904,16 @@ fn lane_data(kind: &LaneKind, clips: Vec<Clip>) -> LaneData {
 }
 
 /// A clip as the lane format writes it, read as a clip of a lane of `kind`.
-fn parse(v: &Value, kind: &LaneKind) -> Result<Clip, EditError> {
+pub(crate) fn parse(v: &Value, kind: &LaneKind) -> Result<Clip, EditError> {
     let mut top = serde_json::Map::new();
-    if let LaneKind::Control { unit: Some(u) } = kind {
-        top.insert("unit".into(), Value::String(u.clone()));
+    let unit = match kind {
+        LaneKind::Control { unit: Some(u) } => Some(u.as_str()),
+        LaneKind::Choice { .. } => Some("choice"),
+        LaneKind::Switch => Some("switch"),
+        _ => None,
+    };
+    if let Some(u) = unit {
+        top.insert("unit".into(), Value::String(u.into()));
     }
     top.insert("clips".into(), Value::Array(vec![v.clone()]));
     match LaneData::read(&Value::Object(top).to_string(), kind) {
@@ -882,7 +925,7 @@ fn parse(v: &Value, kind: &LaneKind) -> Result<Clip, EditError> {
 
 /// Whether a clip of a lane of kind `from` may go on a lane of kind `to`: why not, with `{from}`
 /// and `{to}` for the lanes' names.
-fn fits(from: &LaneKind, to: &LaneKind) -> Result<(), String> {
+pub(crate) fn fits(from: &LaneKind, to: &LaneKind) -> Result<(), String> {
     let noun = |k: &LaneKind| match k {
         LaneKind::Notes => ("A notes clip", "a notes lane"),
         LaneKind::Control { .. } => ("An automation clip", "an automation lane"),
@@ -896,6 +939,8 @@ fn fits(from: &LaneKind, to: &LaneKind) -> Result<(), String> {
             Err(format!("{{from}} ({a}) and {{to}} ({b}) can't share clips: their units differ"))
         }
         (LaneKind::Control { .. }, LaneKind::Control { .. }) => Ok(()),
+        // A name the choice doesn't have plays the lane's fallback (CARD-15).
+        (LaneKind::Choice { .. }, LaneKind::Choice { .. }) | (LaneKind::Switch, LaneKind::Switch) => Ok(()),
         _ => Err(format!("{} can't go on {}", noun(from).0, noun(to).1)),
     }
 }
@@ -1071,23 +1116,30 @@ impl Work<'_> {
             if same {
                 continue;
             }
-            let mut out: Vec<(Clip, bool)> = l.keep.into_iter().flatten().map(|c| (c, false)).chain(l.added).collect();
-            let mut taken = BTreeSet::new();
-            let need: Vec<usize> = (0..out.len()).filter(|i| !out[*i].0.named().is_some_and(|id| taken.insert(id.to_string()))).collect();
-            for i in need {
-                let id = loop {
-                    let id = mint(&addr);
-                    if ClipId::valid(&id) && taken.insert(id.clone()) {
-                        break id;
-                    }
-                };
-                out[i].0.set_id(Some(id));
-            }
-            let made = out.iter().filter(|(_, m)| *m).filter_map(|(c, _)| c.id().map(str::to_string)).collect();
-            edits.push(LaneEdit { data: lane_data(&l.kind, out.into_iter().map(|(c, _)| c).collect()), lane: addr, made });
+            let out: Vec<(Clip, bool)> = l.keep.into_iter().flatten().map(|c| (c, false)).chain(l.added).collect();
+            edits.push(finished(addr, &l.kind, out, mint));
         }
         edits
     }
+}
+
+/// Lane `addr` of `kind` holding `out` (each clip with whether the gesture put it there), every clip
+/// named by an id: a clip with none, one that breaks the id rule, or one whose id an earlier clip of
+/// the lane has, gets a fresh one from `mint`.
+pub(crate) fn finished(addr: LaneAddr, kind: &LaneKind, mut out: Vec<(Clip, bool)>, mint: &mut dyn FnMut(&LaneAddr) -> String) -> LaneEdit {
+    let mut taken = BTreeSet::new();
+    let need: Vec<usize> = (0..out.len()).filter(|i| !out[*i].0.named().is_some_and(|id| taken.insert(id.to_string()))).collect();
+    for i in need {
+        let id = loop {
+            let id = mint(&addr);
+            if ClipId::valid(&id) && taken.insert(id.clone()) {
+                break id;
+            }
+        };
+        out[i].0.set_id(Some(id));
+    }
+    let made = out.iter().filter(|(_, m)| *m).filter_map(|(c, _)| c.id().map(str::to_string)).collect();
+    LaneEdit { data: lane_data(kind, out.into_iter().map(|(c, _)| c).collect()), lane: addr, made }
 }
 
 /// A clip's start: a number, and never before the song starts.
@@ -1180,10 +1232,35 @@ pub fn edit_as(s: &mut Session, g: &Gesture, tx_id: &str) -> Result<ClipsEdited,
     let rev = s.accepted();
     let edits = apply_as(rev, g, &tx_id)?;
     let made: Vec<(LaneAddr, String)> = edits.iter().flat_map(|e| e.made.iter().map(|id| (e.lane.clone(), id.clone()))).collect();
+    let (ops, wrote) = lane_ops(rev, &edits)?;
+    let shown = edits.first().map(|e| DataPath::lane(&e.lane).to_string()).unwrap_or_default();
+    if ops.is_empty() {
+        let same = "no change".to_string();
+        let edited = Edited { revision: rev.number, file: shown, before: same.clone(), after: same };
+        return Ok(ClipsEdited { edited, made: vec![] });
+    }
+    let label = describe(rev, &edits);
+    let lanes = wrote.iter().map(|w| w.lane.clone()).collect();
+    let mut tx = plan::planned(s, label.clone(), ops, Expect::Confined(Confined { lanes, ..Confined::default() }));
+    tx.id = tx_id.clone();
+    let done = plan::run(s, tx, |_, checked| read_as_written(checked, &wrote))?;
+    Ok(ClipsEdited { edited: Edited { revision: done.number, file: shown, before: label.0, after: label.1 }, made })
+}
+
+/// What a Tx writes in one lane: each clip put, by id, with its line, and the ids gone.
+pub(crate) struct Wrote {
+    pub(crate) lane: LaneAddr,
+    put: BTreeMap<String, String>,
+    gone: Vec<String>,
+}
+
+/// The ops that write `edits` over the lanes of `rev`: per lane, clip by clip where every clip has
+/// an address in the file as it is and as written, else the lane whole; none for a lane that reads
+/// the same. With what each writes, for [`read_as_written`].
+pub(crate) fn lane_ops(rev: &Revision, edits: &[LaneEdit]) -> Result<(Vec<Op>, Vec<Wrote>), EditError> {
     let mut ops = vec![];
-    // Per lane: each clip put, by id, with its line; and the ids gone.
-    let mut wrote: Vec<(LaneAddr, BTreeMap<String, String>, Vec<String>)> = vec![];
-    for e in &edits {
+    let mut wrote = vec![];
+    for e in edits {
         let file = DataPath::lane(&e.lane).path();
         let now = rev.snapshot.files.get(&file);
         if now.is_none()
@@ -1199,8 +1276,6 @@ pub fn edit_as(s: &mut Session, g: &Gesture, tx_id: &str) -> Result<ClipsEdited,
         if put.is_empty() && gone.is_empty() && was.as_deref().is_some_and(|w| canonical(w) == canonical(&e.data)) {
             continue;
         }
-        // Clip by clip where every clip has an address in the file as it is and as written; else
-        // the lane whole.
         let by_id = was.as_deref().is_none_or(LaneData::addressable) && !rev.snapshot.not_utf8.contains_key(&file);
         ops.push(match by_id {
             true => Op::Clips {
@@ -1211,34 +1286,25 @@ pub fn edit_as(s: &mut Session, g: &Gesture, tx_id: &str) -> Result<ClipsEdited,
             false => Op::Write { file: TxPath::lane(&e.lane), bytes: Payload::Text(canonical(&e.data).into()) },
         });
         let put = put.into_iter().map(|id| (id.clone(), new[id].clone())).collect();
-        wrote.push((e.lane.clone(), put, gone));
+        wrote.push(Wrote { lane: e.lane.clone(), put, gone });
     }
-    let shown = edits.first().map(|e| DataPath::lane(&e.lane).to_string()).unwrap_or_default();
-    if ops.is_empty() {
-        let same = "no change".to_string();
-        let edited = Edited { revision: rev.number, file: shown, before: same.clone(), after: same };
-        return Ok(ClipsEdited { edited, made: vec![] });
-    }
-    let label = describe(rev, &edits);
-    let lanes = wrote.iter().map(|(l, ..)| l.clone()).collect();
-    let mut tx = plan::planned(s, label.clone(), ops, Expect::Confined(Confined { lanes, ..Confined::default() }));
-    tx.id = tx_id.clone();
-    let done = plan::run(s, tx, |_, checked| {
-        // The planner's assertion: each lane reads every clip put as written, and none deleted;
-        // the rest of each lane is as the file has it, an outside edit to another clip merged
-        // (WRITE-3), and nothing else changes (`Confined`).
-        let data = &checked.candidate().compiled.data;
-        for (lane, put, gone) in &wrote {
-            let read = data.lane(lane.module.as_str(), lane.lane.as_str());
-            let line = |id: &str| read.map(|d| d.lines_of(id)).unwrap_or_default();
-            let kept = put.iter().all(|(id, l)| line(id) == [l.clone()]) && gone.iter().all(|id| line(id).is_empty());
-            if !kept {
-                return Err(EditError::Rejected(format!("writing {} would change more than its clips", DataPath::lane(lane))));
-            }
+    Ok((ops, wrote))
+}
+
+/// The planner's assertion: each lane reads every clip put as written, and none deleted; the rest of
+/// each lane is as the file has it, an outside edit to another clip merged (WRITE-3), and nothing
+/// else changes (`Confined`).
+pub(crate) fn read_as_written(checked: &m2_session::Checked, wrote: &[Wrote]) -> Result<(), EditError> {
+    let data = &checked.candidate().compiled.data;
+    for w in wrote {
+        let read = data.lane(w.lane.module.as_str(), w.lane.lane.as_str());
+        let line = |id: &str| read.map(|d| d.lines_of(id)).unwrap_or_default();
+        let kept = w.put.iter().all(|(id, l)| line(id) == [l.clone()]) && w.gone.iter().all(|id| line(id).is_empty());
+        if !kept {
+            return Err(EditError::Rejected(format!("writing {} would change more than its clips", DataPath::lane(&w.lane))));
         }
-        Ok(())
-    })?;
-    Ok(ClipsEdited { edited: Edited { revision: done.number, file: shown, before: label.0, after: label.1 }, made })
+    }
+    Ok(())
 }
 
 /// Each clip's canonical line, by id, for the clips with an id.

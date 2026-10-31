@@ -151,7 +151,7 @@ fn the_track_builders_work_while_layout_doesnt_read() {
     let f = fixture("examples/first-song");
     f.write("layout.json", "{ not json");
     let mut s = f.open();
-    s.add_track("std:synth-pluck", None, None, None).unwrap();
+    s.add_track("@m2/synths:synth-pluck", None, None, None).unwrap();
     s.duplicate_track("hats").unwrap();
     s.delete_track("keys", false).unwrap();
     assert_eq!(f.read("layout.json"), "{ not json");

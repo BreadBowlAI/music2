@@ -39,7 +39,7 @@ fn first_song(temp: &Temp, edit: impl FnOnce(&Path)) -> (Arc<AppState>, u64) {
     let song = temp.0.join("first-song");
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
     edit(&song);
-    let state = Arc::new(AppState::new(String::new(), Graph::silent()));
+    let state = Arc::new(AppState::new(String::new(), Graph::silent().stored()));
     let token = state.graph.open(&song).unwrap()["session"].as_u64().unwrap();
     (state, token)
 }

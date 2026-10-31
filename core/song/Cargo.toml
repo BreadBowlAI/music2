@@ -14,3 +14,9 @@ serde_json.workspace = true
 toml.workspace = true
 sha2.workspace = true
 icu_normalizer.workspace = true
+
+[features]
+# The tests' helpers: a scratch home and store holding the packs this source tree bundles
+# (`pack::test_home`, `pack::test_store`), with this checkout's path compiled in. Tests and the
+# gates, never the app.
+testing = []

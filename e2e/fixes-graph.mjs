@@ -90,7 +90,7 @@ const save = async (text) => {
 };
 check(
   await save(`import { track, feedback, type AudioKind } from "@m2/core";
-import { pluck } from "std/instruments";
+import { pluck } from "@m2/synths";
 import { lowpass } from "std/filter";
 import { add, scale } from "std/math";
 
@@ -122,7 +122,7 @@ await page.screenshot({ path: `${ROOT}/fix-feedback.png` });
 
 check(
   await save(`import { track } from "@m2/core";
-import { pluck } from "std/instruments";
+import { pluck } from "@m2/synths";
 import { mixer } from "std/mix";
 
 export default track("keys", ({ lane }) => {
@@ -143,7 +143,7 @@ check(
 
 check(
   await save(`import { track } from "@m2/core";
-import { pluck } from "std/instruments";
+import { pluck } from "@m2/synths";
 import { lowpass } from "std/filter";
 import { sum } from "std/math";
 

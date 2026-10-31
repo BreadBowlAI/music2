@@ -1,6 +1,6 @@
 // The root module: whatever this returns is what you hear.
-// Sixteen bars: an intro, an eight-bar drop, and a breakdown. Every track is one of std's
-// instruments (std/synth, std/fm, std/drums); the sub and the chords duck under the kick.
+// Sixteen bars: an intro, an eight-bar drop, and a breakdown. Every track is one of music2's own
+// instruments (@m2/synths, @m2/drums); the sub and the chords duck under the kick.
 
 import { db, song } from "@m2/core";
 import { gain } from "std/dsp";
