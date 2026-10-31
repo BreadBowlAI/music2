@@ -101,11 +101,13 @@ fn add_bus_reverb_writes_the_effects_packs_dependency_and_lock() {
     bus::add_bus(&mut s, BusKind::Reverb, None, None).unwrap();
     let store = m2_song::pack::Store::at(m2_song::pack::test_store());
     let effects = m2_song::pack::PackName::new("@m2/effects").unwrap();
-    let hash = store.hash(&effects, &m2_song::Version(1, 0, 0)).unwrap();
-    assert_eq!(f.read("music2.toml"), format!("{manifest}\"@m2/effects\" = \"1.0\"\n"));
+    // The version music2 ships, the one its lists offer.
+    let v = m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join("@m2/effects")).unwrap().package.version;
+    let hash = store.hash(&effects, &v).unwrap();
+    assert_eq!(f.read("music2.toml"), format!("{manifest}\"@m2/effects\" = \"{}.{}\"\n", v.0, v.1));
     let now = m2_song::pack::Lock::read(&f.read("music2.lock")).unwrap();
     let entry = now.get(&effects).expect("its lock entry");
-    assert_eq!((entry.version, entry.hash), (m2_song::Version(1, 0, 0), hash));
+    assert_eq!((entry.version, entry.hash), (v, hash));
     assert_eq!(now.packs.len(), 2, "the lock keeps @m2/synths' entry as it was");
     assert!(s.problems().is_empty(), "{:?}", s.problems());
     s.undo().unwrap();

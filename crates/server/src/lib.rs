@@ -555,7 +555,7 @@ mod tests {
         std::fs::create_dir_all(&song).unwrap();
         std::fs::write(
             song.join("music2.toml"),
-            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
+            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
         )
         .unwrap();
         std::fs::write(
@@ -698,7 +698,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("data/kick")).unwrap();
         let song = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
-        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
         std::fs::write(dir.join("music2.toml"), manifest).unwrap();
         std::fs::write(dir.join("song.ts"), song).unwrap();
         std::fs::write(dir.join("data/kick/old.json"), r#"{"clips": []}"#).unwrap();

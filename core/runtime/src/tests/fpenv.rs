@@ -40,7 +40,8 @@ fn a_flush_to_zero_set_by_the_caller_changes_no_bit() {
 
 /// One note on a synth and an fm voice, then nothing, through every std kernel that keeps state:
 /// a filter, a delay and a reverb on long feedback, chorus, phaser, tremolo, a compressor, an eq,
-/// a bitcrusher, a limiter, drive, a ducker following the fm voice, and a widener, all summed.
+/// a limiter, drive, a ducker following the fm voice, and a widener, and `@m2/effects`' own
+/// bitcrusher (PACK-21), all summed.
 fn long_tail() -> (Ir, DataSet) {
     let voice = |kernel: &str| {
         json!({"op": "poly", "events": "n", "voices": 2, "body": {"out": "x", "nodes": [
@@ -76,7 +77,7 @@ fn long_tail() -> (Ir, DataSet) {
         fx("tremolo", "std:tremolo", json!({"in": "s"})),
         fx("compress", "std:compress", json!({"in": "s", "threshold": "deep", "ratio": "ratio"})),
         fx("eq3", "std:eq3", json!({"in": "s"})),
-        fx("bitcrush", "std:bitcrush", json!({"in": "s"})),
+        fx("bitcrush", "@m2/effects:bitcrush", json!({"in": "s"})),
         fx("limit", "std:limit", json!({"in": "s"})),
         fx("drive", "std:drive", json!({"in": "s"})),
         fx("follow", "std:follow", json!({"in": "f"})),
@@ -104,14 +105,15 @@ fn long_tail() -> (Ir, DataSet) {
 }
 
 // OS-49 (8a, Decision 12): subnormal numbers are slow on x86, so std flushes its recursive state
-// below about 1e-15 (`fx.rs`). One note, then five minutes of silence, through every std kernel
-// that keeps state, counting the subnormal samples in every node's output: counted, not timed.
+// below about 1e-15 (`fx.rs`), and so does the bitcrusher, `@m2/effects`' own kernel since std 0.8.
+// One note, then five minutes of silence, through every std kernel that keeps state and the
+// bitcrusher, counting the subnormal samples in every node's output: counted, not timed.
 // std 0.2's filter, delay and envelope follower still let theirs through (a sum of subnormals is
 // one too, so the adds after them are left out). This test names them: when a std bump flushes
 // them (OS-49's deferred fix), it fails, and the list shrinks to none.
 #[test]
 fn which_std_kernels_make_subnormals_in_a_five_minute_tail() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (ir, data) = long_tail();
     let f = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Renderer::new(&f, &data, &pk, SR).unwrap();

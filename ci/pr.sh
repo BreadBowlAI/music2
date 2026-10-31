@@ -32,8 +32,10 @@
 #                               (ci/tally-test.sh) and of the npm lockfiles' check
 #                               (ci/npm-licenses-test.sh)
 #   ci/pr.sh quick              lint's checks, then the cases of the gates rule, the pool's models,
-#                               the web typecheck and build, std's kernels (tests, clippy) and
-#                               std.wasm rebuilt to the committed bytes
+#                               the web typecheck and build, the kernels' workspace (tests, clippy:
+#                               std's and music2's own packs'), every kernel module music2 ships
+#                               rebuilt to the committed bytes (std/build.sh --check, ABI-10), and
+#                               that check's own cases (ci/wasm-test.sh)
 #   ci/pr.sh models             the pool's models alone (core/pool/tests/models.rs, in release, and
 #                               their lint), as ci/check.sh's "pool models" row: the Mac's nightly
 #                               job runs them, as arm64 can catch an ordering too weak that x86 hides
@@ -281,7 +283,8 @@ case $STEP in
     check "pool models" pool-models.log models
     check "web build" web.log web
     check "std kernels" kernels.log sh -c 'cd std/kernels-src && cargo test --locked --release --workspace && cargo clippy --locked --workspace --all-targets -- -D warnings'
-    check std.wasm std-wasm.log std/build.sh --check ;;
+    check wasm wasm.log std/build.sh --check
+    check "wasm cases" wasm-test.log ci/wasm-test.sh ;;
 
   models)
     check "pool models" pool-models.log models ;;

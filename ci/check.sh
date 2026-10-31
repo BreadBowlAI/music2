@@ -31,7 +31,7 @@
 #                                at a time, built without debug info into <target>/nightly
 #
 # --pr: the checks every pull request must pass, and nothing else: rustfmt, actionlint, the gates
-# and docs rules, licences, the pool's models, the web build, std's kernels and std.wasm, clippy,
+# and docs rules, licences, the pool's models, the web build, the kernels and their wasm, clippy,
 # the Rust tests and browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the
 # 14 renders; RustSec's advisories only when the change touches a Cargo.lock or deny.toml
 # (ci/pr.sh changes). When git proves your committed change is documentation only
@@ -720,19 +720,26 @@ else
   first "$OUT/pool-lint.log" '^ *--> ' | sed 's/^ *--> /pool lint: /' >> "$OUT/failed"
 fi
 
-# 7. std: the kernels' own workspace (tests and lints), and std.wasm rebuilt to the committed
-#    bytes in another folder (PLAT-5).
+# 7. The kernels' own workspace, std's and music2's own packs' (tests and lints), and every kernel
+#    module music2 ships rebuilt to the committed bytes in another folder (PLAT-5, ABI-10), with
+#    that check's own cases.
 begin "std kernels" "2 min"
 if quiet kernels.log sh -c 'cd std/kernels-src && cargo test --locked --release --workspace && cargo clippy --locked --workspace --all-targets -- -D warnings'; then
   record "std kernels" PASS "tests and clippy"
 else
   record "std kernels" FAIL "see kernels.log"
 fi
-begin std.wasm "2 min"
-if quiet std-wasm.log std/build.sh --check; then
-  record std.wasm PASS "rebuilt to the same bytes in another folder"
+begin wasm "2 min"
+if quiet wasm.log std/build.sh --check; then
+  record wasm PASS "each rebuilt to the same bytes in another folder"
 else
-  record std.wasm FAIL "$(tail -1 "$OUT/std-wasm.log" | cut -c1-100)"
+  record wasm FAIL "$(tail -1 "$OUT/wasm.log" | cut -c1-100)"
+fi
+begin "wasm cases" "1 min"
+if quiet wasm-test.log ci/wasm-test.sh; then
+  record "wasm cases" PASS "$(tail -1 "$OUT/wasm-test.log" | cut -c1-100)"
+else
+  record "wasm cases" FAIL "$(grep '^FAIL' "$OUT/wasm-test.log" | head -1 | cut -c1-100)"
 fi
 
 # 8. Linux only: the macOS-only code, type-checked and linted for aarch64-apple-darwin. There is

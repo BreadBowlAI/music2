@@ -355,6 +355,24 @@ struct Checker<'a> {
     diags: Vec<Diagnostic>,
 }
 
+/// The kernels that left std for a pack music2 ships, each its pack's own since (PACK-21): its id in
+/// std, its id now, the std that lost it, the pack's first version with it, and the component of
+/// the pack that plays it. The one table: a song (or an older pack's code) calling an old id is
+/// told where it went.
+pub const MOVED_KERNELS: &[(&str, &str, &str, &str, &str)] = &[("std:bitcrush", "@m2/effects:bitcrush", "0.8", "1.1", "bitcrush")];
+
+/// Why kernel `id` isn't there, when it left std for a pack ([`MOVED_KERNELS`]): where it is now,
+/// and how a song moves to it.
+fn moved_from_std(id: &str) -> Option<String> {
+    let (old, new, std, version, component) = MOVED_KERNELS.iter().find(|(old, ..)| *old == id)?;
+    let pack = new.split_once(':')?.0;
+    Some(format!(
+        "`{old}` is no longer std's: since std {std} it is `{new}`, the pack {pack}' own kernel, from {pack} {version}, which \
+         comes with music2. A song plays it as `{component}` from \"{pack}\"; a song locked to an older {pack} moves with \
+         `m2 pack update <song> {pack}`"
+    ))
+}
+
 /// A `code.check` error at a node, or at the module.
 fn diag(m: &Module, n: Option<&Node>, message: impl Into<String>) -> Diagnostic {
     coded("code.check", m, n, message)
@@ -977,6 +995,10 @@ impl<'a> Checker<'a> {
                                 "`{kernel}` is an offline kernel: music2 runs it to make a clip's render, and song code can't call it"
                             );
                             self.diags.push(coded("kernel.offline", m, Some(node), message));
+                            continue;
+                        }
+                        if let Some(why) = moved_from_std(kernel).filter(|_| !is_plugin) {
+                            self.diags.push(coded("pkg.missing", m, Some(node), why));
                             continue;
                         }
                         let what = if is_plugin { "plugin (is it installed?)" } else { "kernel" };

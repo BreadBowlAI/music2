@@ -60,7 +60,7 @@ fn m2_set_reads_a_word_as_its_setting_takes_it() {
     put(
         &song,
         "music2.toml",
-        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n",
     );
     put(&song, "song.ts", SONG);
     let dir = song.to_str().unwrap();

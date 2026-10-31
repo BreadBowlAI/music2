@@ -302,6 +302,33 @@ fn a_song_written_instrument_too_slow_names_the_pack_whose_code_it_runs() {
     std::fs::remove_dir_all(&pack).ok();
 }
 
+// ABI-7, ABI-11: the sound code named is only what runs with the time checks. A voice that runs a
+// stranger's kernel and `@m2/effects`' own bitcrusher, music2's own code with no limit, names the
+// stranger alone.
+#[test]
+fn a_song_written_instrument_too_slow_names_no_code_of_music2s_own_packs() {
+    let pack = std::env::temp_dir().join(format!("m2-faults-hum-own-{}", std::process::id()));
+    hum_at(&pack);
+    let at = serde_json::to_string(&pack.to_string_lossy()).unwrap();
+    let song = SONG
+        .replace("import { mixer }", "import { kernel, poly } from '@m2/core';\nimport { mixer }")
+        .replace(
+            "export default",
+            "const keys = track('keys', { name: 'Keys' }, ({ lane }) => poly(lane.notes('k'), (n) => \
+             kernel('@m2/effects:bitcrush', { in: kernel('@test/hum:hum', { in: n.pitch }) })));\nexport default",
+        )
+        .replace("hats: hats.out", "hats: hats.out, keys: keys.out");
+    let rig = Rig::with(&song, |f| {
+        let manifest = std::fs::read_to_string(f.0.join("music2.toml")).unwrap();
+        f.put("music2.toml", &format!("{manifest}\"@test/hum\" = {{ path = {at} }}\n"));
+    });
+    rig.report(Code::TooSlow, rig.node("keys", |op| matches!(op, FOp::Poly { .. })));
+    let said = "The instrument on Keys, from the song's own code, with sound code from @test/hum, took too long and was stopped. It \
+                stays silent until the song is built again. The rest of the song plays on.";
+    assert_eq!(rig.told(), [said]);
+    std::fs::remove_dir_all(&pack).ok();
+}
+
 // ABI-7: a change whose sound's kernel never gets ready (its `k_new` never returns) isn't made: it
 // is stopped at the limit, the version before plays on, and the user is told once which sound
 // and whose, in words with no node's or rule's id. The catch-up doesn't try that revision again,

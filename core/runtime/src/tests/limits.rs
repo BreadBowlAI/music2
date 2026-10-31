@@ -205,11 +205,12 @@ fn spinning(name: &str, turns: u32) -> PathBuf {
 
 // ABI-6 (the owner's decision on the review's T1): the limit is a pack's own kernels' only. std's
 // kernels are music2's own code and run with no time checks, as before ABI-6: the same module, every
-// call of it far past the limit, renders as std and is stopped as a pack. The package decides, by
-// its name alone (`packages::checked`), which engine compiles its module.
+// call of it far past the limit, renders as std and is stopped as a pack. The package decides
+// (`packages::checked`, by its name and, for a pack, its version's hash: ABI-11) which engine
+// compiles its module.
 #[test]
 fn only_a_packs_own_kernels_are_checked() {
-    assert!(!crate::packages::checked("std") && crate::packages::checked("@test/l"));
+    assert!(!crate::packages::checked("std", "0.8.0", None) && crate::packages::checked("@test/l", "0.1.0", None));
     let limits = Limits { live: Duration::from_millis(50), offline: Duration::from_millis(50) };
     for (name, checked) in [("std", false), ("@test/s", true)] {
         let mut pk = PackageSet::default().with_limits(limits);
@@ -232,6 +233,76 @@ fn only_a_packs_own_kernels_are_checked() {
             }
         }
     }
+}
+
+// ABI-11: a pack music2 ships runs its own kernels as std does, with no time checks and no
+// deadline: one `packages::checked` says so, by its version's hash (`m2_song::pack::own`), never its
+// name. Installed as music2 installs it, or copied whole elsewhere, `@m2/effects` is music2's own. A
+// copy whose module or m2pkg.toml was changed under its listing, one listed again as a stranger
+// would, and its folder in the source tree (a pack in a folder, with no listing) are all checked.
+#[test]
+fn music2s_own_pack_runs_unchecked_and_a_changed_copy_is_checked() {
+    let dir = project(&[]);
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/@m2/effects");
+    let store = m2_song::pack::Store::at(dir.join("Packs"));
+    store.install(&source).unwrap();
+    let m = m2_song::pack::PkgManifest::at(&source).unwrap();
+    let installed = store.version_dir(&m.package.name, &m.package.version);
+    let id = "@m2/effects:bitcrush";
+    // Whether the pack in `at` runs its kernels with the checks, as loaded, and as compiled.
+    let checked = |at: &Path| {
+        let mut pk = std_packages();
+        let said = pk.load(at).unwrap_or_else(|e| panic!("{}: {e:#}", at.display())).checked;
+        let (module, ..) = pk.module_for(id).expect("its kernel");
+        assert_eq!(crate::packages::checks(module), said, "{}: compiled as it says", at.display());
+        said
+    };
+    assert!(!checked(&installed), "installed, it is music2's own");
+    // A copy of `installed`, changed by `change` in it.
+    let copy = |name: &str, change: &dyn Fn(&Path)| {
+        let to = dir.join(name);
+        let mut files = m2_song::pack::pack_files(&installed).unwrap();
+        files.push((m2_song::pack::LISTING.to_string(), installed.join(m2_song::pack::LISTING)));
+        for (rel, from) in files {
+            std::fs::create_dir_all(to.join(&rel).parent().unwrap()).unwrap();
+            std::fs::copy(from, to.join(&rel)).unwrap();
+            m2_song::pack::set_read_only(&to.join(&rel), false).unwrap();
+        }
+        change(&to);
+        to
+    };
+    assert!(!checked(&copy("whole", &|_| ())), "the same files elsewhere are the same code");
+    // A custom section at the module's end: still a module, with all its kernels, but other bytes.
+    let other = |at: &Path| {
+        let wasm = at.join("kernels/effects.wasm");
+        let mut bytes = std::fs::read(&wasm).unwrap();
+        bytes.extend_from_slice(&[0, 5, 4, b'n', b'o', b't', b'e']);
+        std::fs::write(&wasm, bytes).unwrap();
+    };
+    assert!(checked(&copy("changed", &other)), "a changed module under music2's listing is checked");
+    let relisted = |at: &Path| {
+        other(at);
+        let listing = m2_song::pack::Listing::of(at).unwrap();
+        std::fs::write(at.join(m2_song::pack::LISTING), listing.text()).unwrap();
+    };
+    assert!(checked(&copy("relisted", &relisted)), "a changed copy, listed again, is a stranger's");
+    let manifest = |at: &Path| {
+        let toml = at.join("m2pkg.toml");
+        let text = std::fs::read_to_string(&toml).unwrap();
+        std::fs::write(&toml, text.replacen("description = \"", "description = \"Not quite ", 1)).unwrap();
+    };
+    assert!(checked(&copy("manifest", &manifest)), "a changed m2pkg.toml under music2's listing is checked");
+    assert!(checked(&source), "a pack in a folder has no listing, so no hash");
+    // The one function, by name, version and hash.
+    let hash = store.hash(&m.package.name, &m.package.version).unwrap();
+    let v = m.package.version.to_string();
+    assert!(!crate::packages::checked("std", "0.8.0", None));
+    assert!(!crate::packages::checked("@m2/effects", &v, Some(&hash)));
+    assert!(crate::packages::checked("@m2/effects", &v, None));
+    assert!(crate::packages::checked("@m2/effects", "9.9.9", Some(&hash)), "another version, the same hash");
+    assert!(crate::packages::checked("@m2/drums", &v, Some(&hash)), "another name, the same hash");
+    store.remove(&m.package.name, &m.package.version).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 // ABI-6, ABI-7, RENDER-28: live, a kernel whose call never returns is stopped at its limit. The
@@ -602,10 +673,12 @@ fn a_slow_file_read_is_not_the_kernels_time() {
     }
 }
 
-// ABI-6: what the time checks cost a kernel's call. Each std kernel's `k_process` (a block, stereo,
-// its inputs at their defaults) is timed as std's, which has none, and as a pack's: std's own
-// module and kernels under a pack's name, compiled with them. The best of 7 rounds of 3000 calls,
-// in ns. By hand: `cargo test -p m2-runtime --lib kernel_call_cost -- --ignored --nocapture`.
+// ABI-6, ABI-11: what the time checks cost a kernel's call. Each std kernel's `k_process` (a block,
+// stereo, its inputs at their defaults) is timed as std's, which has none, and as a pack's: std's
+// own module and kernels under a pack's name, compiled with them. Then each kernel of music2's own
+// packs, as music2's own (installed, as the app installs it: no checks) and as a stranger's (the
+// same files in a folder, with no listing: checked). The best of 7 rounds of 3000 calls, in ns. By
+// hand: `cargo test -p m2-runtime --lib kernel_call_cost -- --ignored --nocapture`.
 #[test]
 #[ignore]
 fn kernel_call_cost() {
@@ -643,4 +716,37 @@ fn kernel_call_cost() {
         println!("BENCH {id} {p:.0} {c:.0}");
     }
     println!("BENCH total {plain:.0} {checked:.0} ({:+.1}%)", 100.0 * (checked / plain - 1.0));
+    // music2's own packs: installed (theirs, unchecked) and from their folders (a stranger's, checked).
+    let store = m2_song::pack::Store::at(project(&[]).join("Packs"));
+    let (mut own, mut stranger) = (std_packages(), std_packages());
+    for dir in m2_song::pack::bundled(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")) {
+        let m = m2_song::pack::PkgManifest::at(&dir).unwrap();
+        if m.package.wasm.is_some() {
+            store.install(&dir).unwrap();
+            assert!(!own.load(&store.version_dir(&m.package.name, &m.package.version)).unwrap().checked);
+            assert!(stranger.load(&dir).unwrap().checked);
+        }
+    }
+    let mut ids: Vec<String> = own.kernel_sigs().map(|s| s.id.clone()).filter(|id| !id.starts_with("std:")).collect();
+    ids.sort();
+    let time = |pk: &PackageSet, id: &str| {
+        let mut k = crate::tests::std_kernel(pk, id, SR as f64);
+        let KernelInst { own, state, .. } = &mut k;
+        let sb = own.as_mut().unwrap();
+        for _ in 0..500 {
+            state.process(sb, BLOCK).unwrap();
+        }
+        (0..7)
+            .map(|_| {
+                let t = Instant::now();
+                for _ in 0..3000 {
+                    state.process(sb, BLOCK).unwrap();
+                }
+                t.elapsed().as_nanos() as f64 / 3000.0
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    for id in ids {
+        println!("BENCH {id} {:.0} {:.0}", time(&own, &id), time(&stranger, &id));
+    }
 }

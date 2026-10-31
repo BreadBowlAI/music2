@@ -196,6 +196,32 @@ fn a_listing_names_every_file_with_its_size_and_hash() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+// PACK-20: a pack's kernels' source, `kernels-src/` at its top, is no part of it: not listed, so
+// not in its hash, and never installed; a build left in it changes nothing. A folder of that name
+// deeper in the pack is the pack's like any other.
+#[test]
+fn a_packs_kernel_source_is_no_part_of_it() {
+    let dir = scratch("kernels-src");
+    pack_at(&dir, "@alice/x", "1.0.0");
+    let bare = Listing::of(&dir).unwrap();
+    for (file, text) in [("kernels-src/Cargo.toml", "[package]\n"), ("kernels-src/src/lib.rs", "//! x\n"), ("kernels-src/target/x.wasm", "x")] {
+        std::fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    assert_eq!(Listing::of(&dir).unwrap(), bare, "its source changes neither its listing nor its hash");
+    std::fs::create_dir_all(dir.join("src/kernels-src")).unwrap();
+    std::fs::write(dir.join("src/kernels-src/a.ts"), "export const a = 1;\n").unwrap();
+    let paths: Vec<String> = Listing::of(&dir).unwrap().files.into_iter().map(|f| f.path).collect();
+    assert_eq!(paths, ["m2pkg.toml", "src/index.ts", "src/kernels-src/a.ts"], "only the top's is the source");
+    let store = Store::at(scratch("kernels-src-store"));
+    store.install(&dir).unwrap();
+    let at = store.version_dir(&PackName::new("@alice/x").unwrap(), &Version(1, 0, 0));
+    assert!(!at.join("kernels-src").exists(), "never installed");
+    store.check(&PackName::new("@alice/x").unwrap(), &Version(1, 0, 0)).unwrap();
+    remove_tree(&store.dir).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 // PACK-9: every way a song's packs resolve, and what each problem says.
 #[test]
 fn every_resolution_case_says_what_it_is() {
@@ -555,7 +581,7 @@ fn installing_the_bundled_packs_twice_writes_nothing() {
             other => panic!("{other:?}"),
         })
         .collect();
-    assert_eq!(names, ["@m2/drums 1.0.0", "@m2/effects 1.0.0", "@m2/synths 1.0.0"]);
+    assert_eq!(names, ["@m2/drums 1.0.0", "@m2/effects 1.1.0", "@m2/synths 1.0.0"]);
     for (dir, _) in &first {
         let m = PkgManifest::at(dir).unwrap();
         let hash = store.check(&m.package.name, &m.package.version).unwrap();

@@ -374,11 +374,13 @@ impl Namer {
         });
         let Some((m, frame, kernels, what, kernel)) = found else { return name.to_string() };
         let place = self.place_of(&m.key);
-        // The packages whose time-checked code it runs, in order, once each.
+        // The packages whose time-checked code it runs, in order, once each: as the build loaded
+        // them, so never std's, nor a pack music2 ships (ABI-11).
+        let view = self.song.view();
         let mut code: Vec<&str> = kernels
             .iter()
             .filter_map(|k| m2_song::pack::split_id(k).map(|(p, _)| p))
-            .filter(|p| m2_runtime::packages::checked(p))
+            .filter(|p| view.get(p).is_none_or(|p| p.checked))
             .collect();
         code.sort();
         code.dedup();

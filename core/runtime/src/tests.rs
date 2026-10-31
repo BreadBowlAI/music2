@@ -118,6 +118,18 @@ fn std_packages() -> PackageSet {
     p
 }
 
+/// std and every pack music2 ships with kernels of its own (PACK-21), from the source tree: every
+/// kernel music2 ships, which the tests of every kernel play.
+fn own_packages() -> PackageSet {
+    let mut p = std_packages();
+    for dir in m2_song::pack::bundled(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")) {
+        if m2_song::pack::PkgManifest::at(&dir).unwrap().package.wasm.is_some() {
+            p.load(&dir).unwrap_or_else(|e| panic!("{}: {e:#}", dir.display()));
+        }
+    }
+    p
+}
+
 fn song(nodes: Value, out: &str, lanes: Value) -> Ir {
     serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
         "modules": [{"key": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": out}}]}))
@@ -304,8 +316,9 @@ fn feedback_delays_one_block() {
 
 #[test]
 fn std_manifest_matches_its_kernels() {
-    // Instantiating every kernel checks its port counts against the manifest.
-    let pk = std_packages();
+    // Instantiating every kernel checks its port counts against the manifest: std's, and those of
+    // music2's own packs (PACK-21).
+    let pk = own_packages();
     let mut ids: Vec<String> = pk.kernel_sigs().map(|s| s.id.clone()).collect();
     ids.sort();
     assert!(ids.len() >= 20, "{ids:?}");
@@ -324,15 +337,15 @@ fn std_manifest_matches_its_kernels() {
     }
 }
 
-// RENDER-32: every std kernel fits under the 256 MiB a sandbox may take at its birth, at the highest
-// rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they are born
+// RENDER-32: every std kernel, and every kernel of music2's own packs (PACK-21), fits under the 256
+// MiB a sandbox may take at its birth, at the highest rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they are born
 // (delay lines and reverbs sized by the rate), and never after, so born, one block played and reset
 // is the most an instance ever holds. A kernel added later is checked too. Prints the one that holds
 // the most.
 #[test]
 fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
     const RATE: f64 = 384_000.0;
-    let pk = std_packages();
+    let pk = own_packages();
     let mut held: Vec<(usize, String)> = vec![];
     for sig in pk.kernel_sigs() {
         let inputs: Vec<Input> = sig.inputs.iter().map(|p| Input::Const(p.default.unwrap_or(0.0))).collect();
@@ -374,13 +387,13 @@ fn std_kernel(pk: &PackageSet, id: &str, rate: f64) -> KernelInst {
     plain_kernel(pk, &node, id, 2, &inputs, rate).unwrap_or_else(|e| panic!("{id}: {e:#}"))
 }
 
-// ABI v1 (rules 1 and 2), RENDER-28: every std kernel resets in its sealed sandbox, taking no
-// memory, back to where it was born: born and sealed, it plays a block, resets, and plays the same
+// ABI v1 (rules 1 and 2), RENDER-28: every std kernel, and every kernel of music2's own packs
+// (PACK-21), resets in its sealed sandbox, taking no memory, back to where it was born: born and sealed, it plays a block, resets, and plays the same
 // block again, bit for bit, its memory as big as at its seal. A kernel whose state holds a `Vec` and
 // built it again at a reset would ask for memory there, and trap.
 #[test]
 fn every_std_kernel_resets_in_a_sealed_sandbox() {
-    let pk = std_packages();
+    let pk = own_packages();
     let mut ids: Vec<String> = pk.kernel_sigs().map(|s| s.id.clone()).collect();
     ids.sort();
     assert!(ids.len() >= 20, "{ids:?}");
@@ -1378,6 +1391,28 @@ fn song_code_cannot_call_an_offline_kernel() {
     assert_eq!(e.iter().map(|d| (d.code, d.src.as_deref())).collect::<Vec<_>>(), [("kernel.offline", Some("song.ts:3:5"))], "{e:?}");
     assert!(e[0].message.starts_with("`std:stretch` is an offline kernel"), "{}", e[0].message);
     assert!(m2_ir::Kernels::kernel(&pk, "std:stretch").is_none() && pk.kernel_sigs().all(|s| s.id != "std:stretch"));
+}
+
+// PACK-21: a kernel that left std for a pack music2 ships is no longer std's, and a song (or an
+// older pack's code) that calls it by its old id is told where it went, in `pkg.missing`'s words,
+// at its node: its new id, the pack and the first version with it, and how to move.
+#[test]
+fn a_kernel_that_left_std_says_where_it_went() {
+    let ir = song(json!([{"id": "c", "op": "kernel", "kernel": "std:bitcrush", "src": "song.ts:4:3"}]), "c", json!([]));
+    let pk = std_packages();
+    assert!(m2_ir::Kernels::kernel(&pk, "std:bitcrush").is_none(), "std has no bitcrusher");
+    let e = check(&ir, &pk).expect_err("refused");
+    assert_eq!(e.iter().map(|d| (d.code, d.src.as_deref())).collect::<Vec<_>>(), [("pkg.missing", Some("song.ts:4:3"))], "{e:?}");
+    assert_eq!(
+        e[0].message,
+        "`std:bitcrush` is no longer std's: since std 0.8 it is `@m2/effects:bitcrush`, the pack @m2/effects' own kernel, from \
+         @m2/effects 1.1, which comes with music2. A song plays it as `bitcrush` from \"@m2/effects\"; a song locked to an older \
+         @m2/effects moves with `m2 pack update <song> @m2/effects`"
+    );
+    // Any other unknown kernel is unknown, as before.
+    let ir = song(json!([{"id": "c", "op": "kernel", "kernel": "std:crush"}]), "c", json!([]));
+    let e = check(&ir, &pk).expect_err("refused");
+    assert_eq!((e[0].code, e[0].message.as_str()), ("code.check", "unknown kernel `std:crush`"));
 }
 
 // Information only (PLAT-1): how fast `std:stretch` makes a warped clip's render here. A minute of

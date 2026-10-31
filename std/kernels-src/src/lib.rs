@@ -711,7 +711,7 @@ export!(limit, Limit);
 
 mod fx;
 
-pub use fx::{Bitcrush, Chorus, Compress, Eq3, Phaser, Reverb, Tremolo, Widen};
+pub use fx::{Chorus, Compress, Eq3, Phaser, Reverb, Tremolo, Widen};
 
 // ---------------------------------------------------------------- instruments
 

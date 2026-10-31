@@ -4,7 +4,8 @@
 // Each declares an `editor.category`, so the editor offers it after any audio and writes its
 // `insert` when it is added. A control is `.smooth()` when its kernel reads it every sample without
 // smoothing it, so a step would click (PKG-14); the others' kernels smooth their controls
-// themselves, or read them once per block. Each plays std's kernel of its name.
+// themselves, or read them once per block. Each plays std's kernel of its name, but the
+// bitcrusher, which plays the pack's own (`@m2/effects:bitcrush`, built from kernels-src/, PACK-21).
 //
 // Chorus, phaser, tremolo and bitcrush follow the song: each passes `time.playing` to its
 // kernel, so its wobble (or the bitcrusher's sample clock) moves only while the song plays.
@@ -139,7 +140,7 @@ export const bitcrush = component(
     output: port.audio(),
     editor: { category: "Distortion", description: "Lo-fi digital crunch, like an old sampler", insert: { bits: 8, rate: 12000, mix: 1 } },
   },
-  (x: Audio, { bits, rate, mix }: Params) => kernel("std:bitcrush", { in: x, bits, rate, mix, playing: time.playing }),
+  (x: Audio, { bits, rate, mix }: Params) => kernel("@m2/effects:bitcrush", { in: x, bits, rate, mix, playing: time.playing }),
 );
 
 // ---------------------------------------------------------------- stereo

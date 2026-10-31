@@ -1,6 +1,6 @@
 //! The effects behind the editor's effect menu: reverb, chorus, phaser, tremolo,
-//! compressor, three-band EQ, bitcrusher and stereo widener. Port order must match
-//! `std/m2pkg.toml`.
+//! compressor, three-band EQ and stereo widener. Port order must match `std/m2pkg.toml`. The
+//! bitcrusher is `@m2/effects`' own kernel since std 0.8 (`packs/@m2/effects/kernels-src`).
 //!
 //! Each is safe to feed anything. Audio that isn't finite counts as silence and absurd
 //! levels are capped before they reach any state; controls are clamped to their useful
@@ -10,10 +10,10 @@
 //! every sample and nothing depends on block boundaries, so the output is the same
 //! however the host splits its blocks.
 //!
-//! Chorus, phaser, tremolo and the bitcrusher follow the song, not the engine: their last input,
-//! `playing`, is 1 while the song plays (@m2/effects passes `time.playing`; left out it is 1). Stopped,
-//! the LFOs wait where they are, and the bitcrusher's clock is put back at Play to where it was at
-//! Stop. So after the engine sat stopped they play the export, bit for bit (RENDER-33).
+//! Chorus, phaser and tremolo follow the song, not the engine: their last input, `playing`, is 1
+//! while the song plays (@m2/effects passes `time.playing`; left out it is 1). Stopped, the LFOs
+//! wait where they are. So after the engine sat stopped they play the export, bit for bit
+//! (RENDER-33).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -658,70 +658,6 @@ impl Kernel for Eq3 {
 }
 
 export!(eq3, Eq3);
-
-/// Bitcrusher: holds samples at a lower `rate` (Hz) and rounds them to `bits` of
-/// resolution (fractional bits sweep smoothly). Inputs: in, bits, rate, mix, playing.
-///
-/// Its clock runs on while the song is stopped, so a tail is still crushed; it can't wait, as a
-/// held sample would freeze into a DC level. Instead it is put back at Play to where it was at
-/// Stop, or to its start, 1, if the song has not played: where the export's clock is.
-pub struct Bitcrush {
-    sr: f32,
-    /// Fraction of a held sample elapsed; a new sample is taken when it reaches 1.
-    clock: f32,
-    /// The clock at the last Stop, put back at the next Play.
-    kept: f32,
-    /// Whether the song played at the last sample.
-    playing: bool,
-    held: [f32; 2],
-    bits: f32,
-    /// Quantisation steps per unit for `bits`.
-    steps: f32,
-    mix: Glide,
-}
-
-impl Kernel for Bitcrush {
-    const INPUTS: usize = 5;
-    const OUTPUTS: usize = 1;
-
-    fn new(cfg: &Cfg) -> Self {
-        let sample_rate = cfg.sample_rate;
-        let sr = sample_rate.max(1.0);
-        Bitcrush { sr, clock: 1.0, kept: 1.0, playing: false, held: [0.0; 2], bits: f32::NAN, steps: 1.0, mix: Glide::new(0.02, sr) }
-    }
-
-    fn process(&mut self, io: &mut Io) {
-        let stereo = io.channels > 1;
-        let ([l, r, bits, rate, mix, playing], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0)], [(0, 0), (0, 1)]);
-        for i in 0..ol.len() {
-            let now = playing[i] > 0.5;
-            if now != self.playing {
-                if now {
-                    self.clock = self.kept;
-                } else {
-                    self.kept = self.clock;
-                }
-                self.playing = now;
-            }
-            let b = clampf(bits[i], 1.0, 24.0);
-            if b != self.bits {
-                self.bits = b;
-                self.steps = (b - 1.0).exp2();
-            }
-            let x = [sane(l[i]), if stereo { sane(r[i]) } else { 0.0 }];
-            if self.clock >= 1.0 {
-                self.clock -= 1.0;
-                self.held = x.map(|x| (x * self.steps).round() / self.steps);
-            }
-            self.clock += clampf(rate[i], 20.0, self.sr) / self.sr;
-            let m = self.mix.next(clampf(mix[i], 0.0, 1.0));
-            ol[i] = x[0] * (1.0 - m) + self.held[0] * m;
-            or[i] = x[1] * (1.0 - m) + self.held[1] * m;
-        }
-    }
-}
-
-export!(bitcrush, Bitcrush);
 
 // ---------------------------------------------------------------- stereo
 

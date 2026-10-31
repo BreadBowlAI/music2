@@ -31,6 +31,9 @@ pub const PKG_MANIFEST: &str = "m2pkg.toml";
 /// An installed version's listing, at its root.
 pub const LISTING: &str = "m2pack.json";
 
+/// The folder at a package's top that holds its kernels' source (PACK-20, ABI-10): no part of a pack.
+pub const KERNELS_SRC: &str = "kernels-src";
+
 /// A package's name (PACK-1): `std`, or `@owner/name`, each part 1 to 39 characters of `a-z`,
 /// `0-9` and `-`, neither starting nor ending with `-`. Never `@m2/core`, the SDK, and never a `:`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -319,7 +322,9 @@ impl Listing {
 }
 
 /// Every file under `dir`, by its path there, `/`-separated, sorted bytewise; dot files and
-/// folders left out. A symbolic link, to a file or a folder, is an error naming it: a pack holds
+/// folders left out, and the kernels' source at its top, [`KERNELS_SRC`], which is no part of a
+/// pack (PACK-20): its listing, its install and its check all read it here. A symbolic link, to a
+/// file or a folder, is an error naming it: a pack holds
 /// none, and nothing of a pack is ever read through one (PACK-6), so the tools never leave it. So
 /// is anything else that isn't a folder or a plain file (a pipe, a device), found before any file
 /// is opened: reading one could wait for ever.
@@ -330,7 +335,7 @@ pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
         for e in std::fs::read_dir(&d)? {
             let e = e?;
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') {
+            if name.starts_with('.') || (rel.is_empty() && name == KERNELS_SRC) {
                 continue;
             }
             let r = if rel.is_empty() { name } else { format!("{rel}/{name}") };

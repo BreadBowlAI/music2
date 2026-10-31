@@ -303,12 +303,22 @@ fn std_effects_are_the_manifests_old_effects() {
 }
 
 /// Port defaults declared in `m2pkg.toml`, by `(kernel id, port)`: `"freq: control<hz> = 440"`.
+/// std's, and those of the packs' own kernels (PACK-21: `@m2/effects:bitcrush`).
 fn port_defaults() -> BTreeMap<(String, String), f64> {
-    let manifest = std::fs::read_to_string(std_dir().join("m2pkg.toml")).unwrap();
+    let mut out = BTreeMap::new();
+    for (package, dir) in packages() {
+        out.extend(port_defaults_of(&package, &dir));
+    }
+    out
+}
+
+/// Port defaults declared in the `m2pkg.toml` of package `package`, in `dir`.
+fn port_defaults_of(package: &str, dir: &Path) -> BTreeMap<(String, String), f64> {
+    let manifest = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
     let (mut kernel, mut inputs, mut out) = (String::new(), false, BTreeMap::new());
     for line in manifest.lines().map(str::trim) {
         if let Some(name) = line.strip_prefix("name = \"").and_then(|s| s.strip_suffix('"')) {
-            kernel = format!("std:{name}");
+            kernel = format!("{package}:{name}");
         }
         if line.starts_with("inputs = [") {
             inputs = true;

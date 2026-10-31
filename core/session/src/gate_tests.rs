@@ -432,6 +432,51 @@ fn mono_sounds_keep_their_bits_on_keyboard_velocities() {
     assert_eq!(bits(&sound), MONO_K127, "std's one-note sounds changed their bits on keyboard velocities");
 }
 
+/// A stereo saw and a mono square through `@m2/effects`' bitcrusher, as std's `std:bitcrush` played
+/// them (std 0.7.0, `@m2/effects` 1.0.0, `3be7bc3`): recorded before the kernel moved into its pack
+/// (PACK-21).
+const BITCRUSH: &str = "817bb3d128ec6d90df492758bea12b0c813701b71ec42e4cd8cc7e1b396fe126";
+
+// PACK-21, ABI-10: the bitcrusher plays from `@m2/effects`' own module, by the pack's id, and std
+// has it no more: the same bits as when it was std's, mono and stereo, held at two rates.
+#[test]
+fn bitcrush_plays_from_its_pack_with_the_bits_it_had_in_std() {
+    let f = Fixture::new();
+    let std = m2_song::Version::parse(&std_packages().get("std").unwrap().version).unwrap();
+    f.write(
+        "music2.toml",
+        format!(
+            "[project]\nname = \"crush\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}.{}\"\n\
+             \"@m2/effects\" = \"1\"\n",
+            std.0, std.1
+        ),
+    );
+    f.write(
+        "song.ts",
+        "import { song } from \"@m2/core\";\nimport { osc, pan } from \"std/dsp\";\nimport { sum } from \"std/math\";\n\
+         import { bitcrush } from \"@m2/effects\";\n\n\
+         export default song(() =>\n  sum(\n    bitcrush(pan(osc.saw(110), -0.4), { bits: 5, rate: 7000, mix: 0.8 }),\n    \
+         pan(bitcrush(osc.square(165), { bits: 3.5, rate: 2500 }), 0.5),\n  ),\n);\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{:?} {:?}", s.draft_errors, s.problems());
+    let sound = render_song(&s);
+    assert!(peak(&sound) > 0.3, "the song plays");
+    assert_eq!(bits(&sound), BITCRUSH, "the bitcrusher plays other bits from its pack than it did from std");
+    let kernels: Vec<&str> = s
+        .accepted()
+        .compiled
+        .flat
+        .nodes
+        .iter()
+        .filter_map(|n| match &n.op {
+            FOp::Kernel { kernel, .. } if kernel.ends_with(":bitcrush") => Some(kernel.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(kernels, ["@m2/effects:bitcrush"; 2], "the bitcrusher is the pack's own");
+}
+
 fn peak(x: &[[f32; 2]]) -> f32 {
     x.iter().fold(0.0, |m, f| m.max(f[0].abs()).max(f[1].abs()))
 }

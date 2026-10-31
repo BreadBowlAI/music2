@@ -128,7 +128,7 @@ pub fn project(what: &str, files: &[(&str, &str)]) -> Song {
 pub fn project_on(what: &str, files: &[(&str, &str)], host: Option<std::sync::Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let dir = temp(what);
     let manifest = format!(
-        "[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n"
+        "[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n"
     );
     for (rel, text) in [("music2.toml", manifest.as_str())].into_iter().chain(files.iter().copied()) {
         let path = dir.join(rel);

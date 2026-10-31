@@ -7,7 +7,8 @@
 //
 // In short: the Rust crates the app and m2 are built from (cargo metadata of this workspace, for
 // that target: the crates music2-desktop and m2 reach by normal dependencies, not build or dev
-// ones), the crates std.wasm is built from (std/kernels-src, for wasm32), the npm packages of the
+// ones), the crates the kernel modules are built from (std/kernels-src's workspace: std.wasm and music2's
+// own packs', for wasm32), the npm packages of the
 // UI that aren't dev ones (web/package-lock.json, read from web/node_modules, which the UI's
 // build installs), and the Inter font (web/public/fonts/OFL.txt). For each: its name, version
 // and licence, then every licence file it carries (LICENSE*, COPYING*, NOTICE*, ...), each text
@@ -97,7 +98,7 @@ function crates(manifestDir, triple, roots, section) {
 }
 
 const rust = crates(ROOT, target, ["music2-desktop", "m2"], "Rust crates in the app and m2");
-const kernels = crates(path.join(ROOT, "std/kernels-src"), "wasm32-unknown-unknown", null, "Rust crates in std.wasm");
+const kernels = crates(path.join(ROOT, "std/kernels-src"), "wasm32-unknown-unknown", null, "Rust crates in the kernels' wasm");
 
 const lock = JSON.parse(fs.readFileSync(path.join(ROOT, "web/package-lock.json"), "utf8"));
 let npm = 0;
@@ -132,7 +133,7 @@ let doc = `music2: notices of the code inside it that others wrote
 music2 itself is under the MIT licence or the Apache License 2.0, at your choice (LICENSE-MIT,
 LICENSE-APACHE beside this file). It is built from the packages below, each under its own
 licence, whose texts follow. Made by ci/notices.mjs for ${target}: ${rust} crates in the app and
-m2, ${kernels} in std.wasm, ${npm} npm packages in the UI, Rust's standard library, and one
+m2, ${kernels} in the kernels' wasm, ${npm} npm packages in the UI, Rust's standard library, and one
 font.
 `;
 let section = "";
