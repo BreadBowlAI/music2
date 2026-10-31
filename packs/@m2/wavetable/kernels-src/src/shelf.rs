@@ -2,10 +2,10 @@
 //!
 //! **A table** is frames of [`FRAME`] samples, each one cycle of a wave. Each frame is kept as
 //! [`LEVELS`] copies, one a mip level: level `k` holds the frame's harmonics up to [`TOP`]`[k]`
-//! (1023, then 512, 256, … 2: an octave fewer each level), in [`LEN`]`[k]` samples (256 for each
-//! harmonic it holds, a frame's at most), with its first sample again at its end, so a read
-//! between its last sample and its first needs no wrap. A frame's levels lie one after another,
-//! [`PER_FRAME`] floats in all, and a table's frames one after another.
+//! (512, then 256, … 2: an octave fewer each level), in [`LEN`]`[k]` samples, with its last sample
+//! again before its first and its first two again after its last, so a read of the four samples
+//! about any place needs no wrap. A frame's levels lie one after another, [`PER_FRAME`] floats in
+//! all, and a table's frames one after another.
 //!
 //! **The shelf.** Every voice of a sound plays the same tables, so they are made once for a
 //! sandbox, at the birth of its first voice that plays them, and kept in the module's static memory:
@@ -27,29 +27,34 @@ pub const FRAME: usize = 2048;
 pub const MAX_FRAMES: usize = 64;
 
 /// Mip levels: an octave each.
-pub const LEVELS: usize = 10;
+pub const LEVELS: usize = 9;
 
-/// The highest harmonic each level holds: all a frame has below its Nyquist at level 0, then an
-/// octave fewer each level.
+/// The highest harmonic each level holds: 512 at level 0, then an octave fewer each level. A
+/// frame's harmonics from 513 to 1023 are left out: a level that held them in a frame's 2048
+/// samples would be read too close to its Nyquist to be clean, and they would sound only on notes
+/// below 39 Hz (about D#1), above 20 kHz.
 pub const TOP: [usize; LEVELS] = {
     let mut t = [0; LEVELS];
     let mut k = 0;
     while k < LEVELS {
-        t[k] = if k == 0 { FRAME / 2 - 1 } else { (FRAME / 2) >> k };
+        t[k] = (FRAME / 4) >> k;
         k += 1;
     }
     t
 };
 
-/// Samples of each level's copy of a frame: 256 for each harmonic it holds, a frame's at most. A
-/// read draws a straight line between two samples, which makes an image of each harmonic `h`
-/// about `(h / LEN)²` of it, so 96 dB under the top harmonic, and further under the rest.
+/// Samples of each level's copy of a frame: 256 for each harmonic it holds, a frame's at most, and
+/// never fewer than 8 for its top harmonic. A read draws a cubic through the four samples about its
+/// place, which images each harmonic far under it while it has 8 samples or more a cycle: the top
+/// harmonics of the levels of low notes (above 20 kHz themselves) would fold back into hearing
+/// otherwise. The levels of high notes, whose images could land under the fundamental, have 256.
 pub const LEN: [usize; LEVELS] = {
     let mut l = [0; LEVELS];
     let mut k = 0;
     while k < LEVELS {
-        let want = 256 * ((FRAME / 2) >> k);
-        l[k] = if want < FRAME { want } else { FRAME };
+        let want = 256 * TOP[k];
+        let fit = if want < FRAME { want } else { FRAME };
+        l[k] = if 8 * TOP[k] > fit { 8 * TOP[k] } else { fit };
         k += 1;
     }
     l
@@ -60,14 +65,14 @@ pub const OFFSET: [usize; LEVELS] = {
     let mut o = [0; LEVELS];
     let mut k = 1;
     while k < LEVELS {
-        o[k] = o[k - 1] + LEN[k - 1] + 1;
+        o[k] = o[k - 1] + LEN[k - 1] + 3;
         k += 1;
     }
     o
 };
 
-/// Floats a frame takes: each level's copy and its one sample again.
-pub const PER_FRAME: usize = OFFSET[LEVELS - 1] + LEN[LEVELS - 1] + 1;
+/// Floats a frame takes: each level's copy and its three samples again.
+pub const PER_FRAME: usize = OFFSET[LEVELS - 1] + LEN[LEVELS - 1] + 3;
 
 /// Frames the shelf has room for.
 pub const ROOM: usize = 2 * MAX_FRAMES;
@@ -102,14 +107,14 @@ impl Table {
         self.at
     }
 
-    /// Level `k`'s copy of frame `frame` (the last frame past the end), with its first sample again
-    /// at its end: [`LEN`]`[k] + 1` floats.
+    /// Level `k`'s copy of frame `frame` (the last frame past the end): its last sample, its
+    /// [`LEN`]`[k]` samples, then its first two, [`LEN`]`[k] + 3` floats. Its sample `i` is at `i + 1`.
     pub fn level(&self, frame: usize, k: usize) -> &[f32] {
         let at = frame.min(self.frames - 1) * PER_FRAME + OFFSET[k];
         // SAFETY: a table holds `frames` frames of PER_FRAME floats, made in full before this
         // voice was born and never changed after: on the shelf, which lives as long as the module,
         // or in `_own`, which lives as long as `self`.
-        unsafe { std::slice::from_raw_parts(self.at.add(at), LEN[k] + 1) }
+        unsafe { std::slice::from_raw_parts(self.at.add(at), LEN[k] + 3) }
     }
 }
 

@@ -152,12 +152,14 @@ impl Reader {
 
 /// A table of `frames` frames into `out` (`frames * PER_FRAME` floats): each frame's mip levels
 /// from its harmonics (`harmonics(j, a, fft)` writes frame `j`'s into `a`, all 0 to start), each
-/// level the frame's harmonics up to its top, by an inverse transform of its length. Then the table
-/// is scaled so its loudest frame peaks at 1 (a silent one stays silent).
+/// level the frame's harmonics up to its top, by an inverse transform of its length, laid out as
+/// [`crate::shelf::Table::level`] reads it. Then the table is scaled so its loudest frame peaks at 1
+/// (a silent one stays silent).
 pub fn make(frames: usize, out: &mut [f32], mut harmonics: impl FnMut(usize, &mut Harmonics, &Fft)) {
     let fft = Fft::new();
     let mut a = vec![[0.0; 2]; FRAME / 2];
-    let (mut re, mut im) = (vec![0.0; FRAME], vec![0.0; FRAME]);
+    let longest = LEN.iter().copied().max().unwrap_or(FRAME);
+    let (mut re, mut im) = (vec![0.0; longest], vec![0.0; longest]);
     for j in 0..frames {
         a.fill([0.0; 2]);
         harmonics(j, &mut a, &fft);
@@ -171,14 +173,14 @@ pub fn make(frames: usize, out: &mut [f32], mut harmonics: impl FnMut(usize, &mu
                 [re[h], im[h]] = a[h];
             }
             fft.run(re, im, true);
-            let copy = &mut frame[OFFSET[k]..OFFSET[k] + n + 1];
-            for (c, r) in copy.iter_mut().zip(re.iter()) {
+            let copy = &mut frame[OFFSET[k]..OFFSET[k] + n + 3];
+            for (c, r) in copy[1..].iter_mut().zip(re.iter()) {
                 *c = *r as f32;
             }
-            copy[n] = copy[0];
+            [copy[0], copy[n + 1], copy[n + 2]] = [copy[n], copy[1], copy[2]];
         }
     }
-    let peak = (0..frames).flat_map(|j| &out[j * PER_FRAME..j * PER_FRAME + LEN[0]]).fold(0.0f32, |m, v| m.max(v.abs()));
+    let peak = (0..frames).flat_map(|j| &out[j * PER_FRAME + 1..j * PER_FRAME + 1 + LEN[0]]).fold(0.0f32, |m, v| m.max(v.abs()));
     if peak > 0.0 {
         let gain = 1.0 / peak;
         out[..frames * PER_FRAME].iter_mut().for_each(|v| *v *= gain);

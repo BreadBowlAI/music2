@@ -143,9 +143,12 @@ fn a_note_plays_at_its_pitch() {
 fn position_morphs_between_frames_as_declared() {
     use std::f64::consts::PI;
     // Each frame's harmonics 1 to 3, as declared, in the same phase (sines).
-    let tri = |h: usize| if h % 2 == 1 { 8.0 / (PI * PI) * if h % 4 == 3 { -1.0 } else { 1.0 } / (h * h) as f64 } else { 0.0 };
-    let frames: [&dyn Fn(usize) -> f64; 4] =
-        [&|h| if h == 1 { 1.0 } else { 0.0 }, &tri, &|h| 2.0 / (PI * h as f64), &|h| if h % 2 == 1 { 4.0 / (PI * h as f64) } else { 0.0 }];
+    let tri = |h: usize| {
+        if h % 2 == 1 { 8.0 / (PI * PI) * if h % 4 == 3 { -1.0 } else { 1.0 } / (h * h) as f64 } else { 0.0 }
+    };
+    let frames: [&dyn Fn(usize) -> f64; 4] = [&|h| if h == 1 { 1.0 } else { 0.0 }, &tri, &|h| 2.0 / (PI * h as f64), &|h| {
+        if h % 2 == 1 { 4.0 / (PI * h as f64) } else { 0.0 }
+    }];
     let f0 = hz(57.0) as f64;
     for position in [0.0f32, 1.0 / 6.0, TRIANGLE, 0.5, SAW, 0.8, SQUARE] {
         let at = position as f64 * 3.0;
@@ -192,6 +195,24 @@ fn a_high_note_folds_nothing_below_its_fundamental() {
     let f0 = hz(108.0) as f64;
     let naive: Vec<f32> = (0..1 << 16).map(|i| (1.0 - 2.0 * (i as f64 * f0 / SR as f64).fract()) as f32).collect();
     assert!(below(&naive, SR, f0) > FLOOR + 40.0, "the measure sees a saw's aliasing");
+}
+
+// PACK-27: across the keyboard, A0 to C8, a note holds little but its harmonics: what isn't one,
+// A-weighted from 20 Hz to 16 kHz (std's synths' measure), stays under -65 dB of them, on the saw,
+// the narrowest pulse, a vowel and a digital frame. A level's copy holds 8 samples or more for its
+// top harmonic, and a read draws a cubic through four samples: the images of a level's top
+// harmonics, above hearing themselves, fold back into it otherwise (a 2048-sample copy of 1023
+// harmonics, read in a straight line, left a saw at A1 at -45 dB).
+#[test]
+fn every_note_holds_little_but_its_harmonics() {
+    const FLOOR: f64 = -65.0;
+    for (table, position, what) in [(0.0, SAW, "saw"), (1.0, 1.0, "narrowest pulse"), (2.0, 0.5, "vowel"), (4.0, 0.5, "digital")] {
+        for pitch in (21..=108).step_by(3) {
+            let x = held(cfg(SR, &[table, table], &[]), &patch(&[(A_POSITION, position), (SUSTAIN, 1.0)]), pitch as f32, s(0.1), 1 << 16);
+            let got = alias_db(&x, hz(pitch as f32), SR);
+            assert!(got < FLOOR, "{what} at note {pitch}: {got:.1} dB not its harmonics");
+        }
+    }
 }
 
 // ---------------------------------------------------------------- unison
@@ -469,7 +490,10 @@ fn a_reset_starts_over() {
 #[test]
 fn silent_without_a_note_and_its_release_ends_in_exact_silence() {
     let p = patch(&[]);
-    let quiet = play_cfg::<Wavetable>(cfg(SR, &[], &[]), s(0.5), BLOCK, &|port, _, _| if port == GATE { 0.0 } else { p[port] }).left();
+    let quiet = play_cfg::<Wavetable>(cfg(SR, &[], &[]), s(0.5), BLOCK, &|port, _, _| {
+        if port == GATE { 0.0 } else { p[port] }
+    })
+    .left();
     assert!(quiet.iter().all(|&v| v == 0.0));
     let p = patch(&[(RELEASE, 0.1)]);
     let played = play_cfg::<Wavetable>(cfg(SR, &[], &[]), s(1.0), BLOCK, &|port, _, t| match port {

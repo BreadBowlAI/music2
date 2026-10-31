@@ -98,7 +98,7 @@ export const wavetable = component(
     const files = [...new Set([p.fileA, p.fileB].filter((f): f is string => f !== undefined))];
     const file = (f: string | undefined) => (f === undefined ? -1 : files.indexOf(f));
     const values = [TABLES.indexOf(p.tableA), TABLES.indexOf(p.tableB), file(p.fileA), file(p.fileB), p.unison];
-    const voice = (n: Voice) =>
+    const voice = (n: Voice): Audio =>
       kernel(
         "@m2/wavetable:voice",
         {

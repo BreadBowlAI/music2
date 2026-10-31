@@ -10,8 +10,8 @@
 //! Each oscillator is a stack of 1 to 8 unison voices, spread evenly from `detune` semitones below
 //! the note to `detune` above and panned out by `spread`. They run at twice the song's rate: each
 //! unison voice reads the mip level whose top harmonic stays below that rate's Nyquist (`shelf`),
-//! and m2-dsp's halfband brings the sum back to the song's rate, cutting all above 20 kHz. So
-//! nothing folds back however high a note is. Then a filter (m2-dsp's TPT state-variable filter:
+//! between its samples by a cubic through four, and m2-dsp's halfband brings the sum back to the
+//! song's rate, cutting all above 20 kHz. So nothing folds back however high a note is. Then a filter (m2-dsp's TPT state-variable filter:
 //! lowpass, bandpass, highpass or notch, a choice), whose cutoff follows the key, its envelope and
 //! the LFO, and the amp envelope (m2-dsp's ADSR). The LFO, a sine from the note's start, also moves
 //! both positions.
@@ -95,6 +95,16 @@ fn level_for(dt: f32) -> usize {
         k += 1;
     }
     k
+}
+
+/// The wave `f` of the way from sample `i` of a level's copy to the next ([`Table::level`]'s
+/// layout): a cubic (Catmull-Rom) through the four samples about it.
+fn read(y: &[f32], i: usize, f: f32) -> f32 {
+    let [before, a, b, after]: [f32; 4] = y[i..i + 4].try_into().unwrap_or([0.0; 4]);
+    let c1 = 0.5 * (b - before);
+    let c2 = before - 2.5 * a + 2.0 * b - 0.5 * after;
+    let c3 = 0.5 * (after - before) + 1.5 * (a - b);
+    ((c3 * f + c2) * f + c1) * f + a
 }
 
 /// The filter's mix for its shape (lowpass, bandpass, highpass, notch), with damping `k`: how much
@@ -368,8 +378,7 @@ impl Play {
                     let at = p * len as f32;
                     let i = (at as usize).min(len - 1);
                     let f = at - i as f32;
-                    let va = a[i] + f * (a[i + 1] - a[i]);
-                    let vb = b[i] + f * (b[i + 1] - b[i]);
+                    let (va, vb) = (read(a, i, f), read(b, i, f));
                     let v = g * (va + m * (vb - va));
                     xs[0] += v * gl;
                     xs[1] += v * gr;
