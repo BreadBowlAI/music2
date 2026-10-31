@@ -15,15 +15,21 @@
 //! shared and outside every sandbox, which allocates nothing and never waits; or, for a sandbox off
 //! the audio thread, from its file on disk.
 //!
+//! Every call into a pack's sandbox runs with a deadline ([`crate::limit`], ABI-6): its birth's
+//! limit while it is born and prewarmed, its plan's once it plays. A call past it stops, and the
+//! sandbox is stuck: a panic never calls it again (ABI-7). std's, music2's own, run with no checks
+//! ([`crate::packages::checked`]).
+//!
 //! The rest of the runtime sees states and their port buffers, and never a `Store`.
 
 use std::ptr::NonNull;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use wasmtime::{Caller, Engine, Extern, ExternType, Func, Instance, Memory, Module, ResourceLimiter, Store, TypedFunc, ValType};
+use wasmtime::{AsContextMut, Caller, Extern, ExternType, Func, Instance, Memory, Module, ResourceLimiter, Store, TypedFunc, ValType};
 
 use crate::audio::Asset;
+use crate::limit::{self, Deadline, TooSlow};
 use crate::stream::Wav;
 use crate::{BLOCK, KERNEL_MEMORY, PORT_BYTES, WasmContext};
 
@@ -100,6 +106,9 @@ pub(crate) struct Host {
     buf: Vec<u8>,
     pcm: [Vec<f32>; 2],
     piece: Option<(u32, u64, u64)>,
+    /// The epoch ([`limit::epoch`]) the call that runs now is stopped at: what a read from a file
+    /// moves on by the time it took.
+    deadline: u64,
 }
 
 impl ResourceLimiter for Host {
@@ -146,6 +155,7 @@ pub(crate) const ASSET_READ: (&str, &str) = ("m2", "asset_read");
 /// index (RENDER-28). From a [`Held::Disk`] one it reads the file, and a file it can't read traps.
 fn asset_read(mut caller: Caller<'_, Host>, handle: u32, channel: u32, frame: u32, dst: u32, frames: u32) -> wasmtime::Result<u32> {
     let Some(memory) = caller.data().memory else { wasmtime::bail!("m2.asset_read before its sandbox has a memory") };
+    let started = limit::epoch();
     let (bytes, host) = memory.data_and_store_mut(&mut caller);
     let (at, n) = (dst as usize, frames as usize);
     let Some(out) = at.checked_add(4 * n).and_then(|end| bytes.get_mut(at..end)) else {
@@ -166,6 +176,13 @@ fn asset_read(mut caller: Caller<'_, Host>, handle: u32, channel: u32, frame: u3
         None => 0,
     };
     out[4 * got..].fill(0);
+    // The ticks a read from a file took aren't the kernel's (ABI-6): its deadline moves on by them.
+    let spent = limit::epoch() - started;
+    if spent > 0 && matches!(host.assets.get(handle as usize), Some(Held::Disk(_))) {
+        host.deadline += spent;
+        let left = host.deadline.saturating_sub(limit::epoch());
+        caller.as_context_mut().set_epoch_deadline(left);
+    }
     Ok(got as u32)
 }
 
@@ -192,6 +209,8 @@ fn read_disk(
         let want = (handle, from + done as u64, from + (done + n) as u64);
         if *piece != Some(want) {
             *piece = None;
+            #[cfg(test)]
+            std::thread::sleep(SLOW.with(std::cell::Cell::take));
             if let Err(e) = w.read(want.1, want.2, buf, pcm) {
                 wasmtime::bail!("m2.asset_read: its file can't be read: {e:#}")
             }
@@ -201,6 +220,22 @@ fn read_disk(
         done += n;
     }
     Ok(got)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The next read from a file on this thread waits this long first ([`slow_disk`]).
+    static SLOW: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+/// `f`, with the first read from a file it makes on this thread waiting `d` first: a drive
+/// waking up (tests).
+#[cfg(test)]
+pub(crate) fn slow_disk<R>(d: std::time::Duration, f: impl FnOnce() -> R) -> R {
+    SLOW.with(|s| s.set(d));
+    let r = f();
+    SLOW.with(|s| s.set(std::time::Duration::ZERO));
+    r
 }
 
 /// What `module` imports, made in `store`: only [`ASSET_READ`], with its signature. Anything else
@@ -223,13 +258,36 @@ fn imports(store: &mut Store<Host>, module: &Module) -> Result<Vec<Extern>> {
     Ok(out)
 }
 
-/// A store and an instance of `module` in it, with its limits and its imports, and its memory.
-pub(crate) fn instantiate(engine: &Engine, module: &Module) -> Result<(Store<Host>, Instance, Memory)> {
-    let host = Host { sealed: false, refused: false, memory: None, assets: vec![], buf: vec![], pcm: [vec![], vec![]], piece: None };
-    let mut store = Store::new(engine, host);
+/// Give the next call into `store` `ticks` before it is stopped (ABI-6).
+fn arm(store: &mut Store<Host>, ticks: u64) {
+    store.data_mut().deadline = limit::epoch() + ticks;
+    store.set_epoch_deadline(ticks);
+}
+
+/// Whether `e` says a call ran past its deadline (ABI-6).
+fn interrupted(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<wasmtime::Trap>() == Some(&wasmtime::Trap::Interrupt))
+}
+
+/// A store and an instance of `module` in it, on its module's engine, with its limits and its
+/// imports, and its memory. Its start function, if it has one, may run for `limit` when the module
+/// has the time checks (ABI-6).
+pub(crate) fn instantiate(module: &Module, limit: std::time::Duration) -> Result<(Store<Host>, Instance, Memory)> {
+    let host =
+        Host { sealed: false, refused: false, memory: None, assets: vec![], buf: vec![], pcm: [vec![], vec![]], piece: None, deadline: 0 };
+    let mut store = Store::new(module.engine(), host);
     store.limiter(|l| l);
     let ext = imports(&mut store, module)?;
-    let instance = Instance::new(&mut store, module, &ext).wctx(|| "instantiating")?;
+    if crate::packages::checks(module) {
+        arm(&mut store, limit::ticks(limit));
+    }
+    let instance = match Instance::new(&mut store, module, &ext).wctx(|| "instantiating") {
+        Ok(i) => i,
+        Err(e) if interrupted(&e) => {
+            bail!("its module took too long to start and was stopped: its start ran past {}", limit::said(limit))
+        }
+        Err(e) => return Err(e),
+    };
     let memory = instance.get_memory(&mut store, "memory").context("missing export `memory`")?;
     store.data_mut().memory = Some(memory);
     Ok((store, instance, memory))
@@ -245,6 +303,13 @@ pub(crate) struct Sandbox {
     /// hundreds, and cold) where its memory is. A sealed memory never grows or moves.
     base: NonNull<u8>,
     len: usize,
+    /// Its limits, and the one each call has now, in ticks too: its birth's until it plays (ABI-6).
+    /// None for a module with no time checks: std's.
+    deadline: Option<Deadline>,
+    limit: std::time::Duration,
+    ticks: u64,
+    /// A call ran past its deadline: a panic never calls it again in this plan (ABI-7).
+    stuck: bool,
 }
 
 // SAFETY: `base` is dereferenced only through `&mut Sandbox` (or `&Sandbox` for reads), and so with
@@ -265,12 +330,41 @@ pub(crate) struct State {
 }
 
 impl Sandbox {
-    /// A sandbox of `module`, to be born: states may be made in it until it is sealed.
-    pub(crate) fn new(engine: &Engine, module: &Module) -> Result<Sandbox> {
-        let (mut store, instance, memory) = instantiate(engine, module)?;
+    /// A sandbox of `module`, on its module's engine, to be born: states may be made in it until it
+    /// is sealed. Each call into it may run as `deadline` says when the module has the time checks
+    /// (ABI-6).
+    pub(crate) fn new(module: &Module, deadline: Deadline) -> Result<Sandbox> {
+        let (mut store, instance, memory) = instantiate(module, deadline.born)?;
         let alloc = instance.get_typed_func::<(u32, u32), u32>(&mut store, "m2_alloc")?;
         let base = NonNull::new(memory.data_ptr(&store)).context("the kernel memory has no address")?;
-        Ok(Sandbox { store, instance, memory, alloc, base, len: 0 })
+        let (limit, ticks) = (deadline.born, limit::ticks(deadline.born));
+        let deadline = crate::packages::checks(module).then_some(deadline);
+        Ok(Sandbox { store, instance, memory, alloc, base, len: 0, deadline, limit, ticks, stuck: false })
+    }
+
+    /// Give the next call its deadline, when it has the checks (ABI-6). Never allocates.
+    fn arm(&mut self) {
+        if self.deadline.is_some() {
+            arm(&mut self.store, self.ticks);
+        }
+    }
+
+    /// From now on each call has its plan's limit, not its birth's: it plays, once born, sealed and
+    /// prewarmed (ABI-6).
+    pub(crate) fn play(&mut self) {
+        if let Some(d) = self.deadline {
+            (self.limit, self.ticks) = (d.sealed, limit::ticks(d.sealed));
+        }
+    }
+
+    /// Whether a call into it ran past its deadline, so it is called no more in this plan (ABI-7).
+    pub(crate) fn stuck(&self) -> bool {
+        self.stuck
+    }
+
+    /// It may be called again: its box was reset, as the next plan moved it (RENDER-25).
+    pub(crate) fn unstick(&mut self) {
+        self.stuck = false;
     }
 
     /// A state of kernel `prefix` (the export names' prefix), as `spec` says. One block per state
@@ -285,6 +379,7 @@ impl Sandbox {
         let process = self.instance.get_typed_func::<(u32, u32, u32, u32), ()>(&mut self.store, &f("process"))?;
         let reset = self.instance.get_typed_func::<u32, ()>(&mut self.store, &f("reset"))?;
         let active = self.instance.get_typed_func::<u32, u32>(&mut self.store, &f("active"))?;
+        self.arm();
         let declared = ports.call(&mut self.store, ())?;
         if declared != ((inputs as u32) << 8 | outputs as u32) {
             bail!(
@@ -324,6 +419,7 @@ impl Sandbox {
         let map_at = (assets_at + ASSET_BYTES * na).next_multiple_of(8);
         let table_at = map_at + 16 * nm;
         let bytes = table_at + 4 * table_len;
+        self.arm();
         let block = self.alloc.call(&mut self.store, (bytes as u32, 16))? as usize;
         if block == 0 || !block.is_multiple_of(16) || block + bytes > self.memory.data_size(&self.store) {
             bail!("`{prefix}`'s module gave no room for a state's ports ({bytes} bytes)");
@@ -370,6 +466,7 @@ impl Sandbox {
             }
         }
         data[block + table_at..block + bytes].copy_from_slice(bytemuck::cast_slice(&io));
+        self.arm();
         let handle = new.call(&mut self.store, (block + settings_at) as u32)?;
         if handle == 0 || handle as usize >= self.memory.data_size(&self.store) {
             bail!("`{prefix}_new` made no state");
@@ -433,29 +530,38 @@ impl Sandbox {
     }
 
     /// `e`, from a call into node `name`: [`OutOfMemory`] when the call asked for memory it may not
-    /// take, else `e` itself. The refusal is taken: a later error, once a panic or an activation
-    /// made it play again, is its own.
+    /// take, [`TooSlow`] when it ran past its deadline (and the sandbox is stuck, ABI-7), else `e`
+    /// itself. The refusal is taken: a later error, once a panic or an activation made it play
+    /// again, is its own. It ran out of memory, or of time.
     pub(crate) fn ran_out(&mut self, name: &str, e: impl Into<anyhow::Error>) -> anyhow::Error {
-        match std::mem::take(&mut self.store.data_mut().refused) {
-            true => OutOfMemory { node: name.to_string() }.into(),
-            false => e.into(),
+        let e = e.into();
+        if std::mem::take(&mut self.store.data_mut().refused) {
+            return OutOfMemory { node: name.to_string() }.into();
         }
+        if interrupted(&e) {
+            self.stuck = true;
+            return TooSlow { node: name.to_string(), limit: self.limit }.into();
+        }
+        e
     }
 }
 
 impl State {
     /// `k_process` for frames `0..frames` of the block.
     pub(crate) fn process(&self, sb: &mut Sandbox, frames: usize) -> wasmtime::Result<()> {
+        sb.arm();
         self.process.call(&mut sb.store, (self.handle, self.io, 0, frames as u32))
     }
 
     /// `k_reset`.
     pub(crate) fn reset(&self, sb: &mut Sandbox) -> wasmtime::Result<()> {
+        sb.arm();
         self.reset.call(&mut sb.store, self.handle)
     }
 
     /// `k_active`.
     pub(crate) fn active(&self, sb: &mut Sandbox) -> wasmtime::Result<bool> {
+        sb.arm();
         Ok(self.active.call(&mut sb.store, self.handle)? != 0)
     }
 }

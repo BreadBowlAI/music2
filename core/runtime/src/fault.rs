@@ -12,7 +12,7 @@ use std::mem::MaybeUninit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use crate::OutOfMemory;
+use crate::{OutOfMemory, TooSlow};
 
 /// What went wrong.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -22,6 +22,9 @@ pub enum Code {
     Stopped,
     /// A node stopped live: a kernel asked for more memory than a sound may use (`sound.stopped`).
     OutOfMemory,
+    /// A call into a kernel ran past its time limit (ABI-6): live, its node stopped until the next
+    /// plan; offline, the render failed (`sound.too-slow`, ABI-7).
+    TooSlow,
     /// A plugin reported an error live, or didn't come back after an export (`plugin.failed`).
     PluginFailed,
     /// The plugin host process crashed (`plugin.crashed`).
@@ -54,6 +57,9 @@ impl Code {
         if e.downcast_ref::<OutOfMemory>().is_some() {
             return Code::OutOfMemory;
         }
+        if e.downcast_ref::<TooSlow>().is_some() {
+            return Code::TooSlow;
+        }
         match e.downcast_ref::<PluginStopped>() {
             Some(p) => p.code,
             None => Code::Stopped,
@@ -64,6 +70,7 @@ impl Code {
     pub fn diag(self) -> &'static str {
         match self {
             Code::Stopped | Code::OutOfMemory => "sound.stopped",
+            Code::TooSlow => "sound.too-slow",
             Code::PluginFailed => "plugin.failed",
             Code::PluginCrashed | Code::PluginHung => "plugin.crashed",
             Code::Unreadable | Code::NotWav | Code::TooLong => "asset.unreadable",
