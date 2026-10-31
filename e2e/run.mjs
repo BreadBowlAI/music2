@@ -133,6 +133,7 @@ export const SUITES = [
   ["newsong", "none", { expect: 71, s: 10, tier: "nightly", why: "flake: the New Song dialog didn't open after Cmd-N, at half CPU (2026-10-21)" }],
   ["pl-projects", "none", { expect: 66, s: 10 }],
   ["nx-settings", "none", { expect: 42, s: 12 }],
+  ["tr-trust", "none", { expect: 18, s: 12 }],
   ["nx-nodevice", "none", { expect: 11, s: 2 }],
   ["sound-stops", "none", { expect: 13, s: 8 }],
   ["ex-faults", "none", { expect: 10, s: 6 }],

@@ -862,6 +862,10 @@ impl Open {
                 // What they would take back, in words (gaps #29, `steps`).
                 "undo_name": super::steps::named(s.step_names().0.as_ref(), &self.timeline),
                 "redo_name": super::steps::named(s.step_names().1.as_ref(), &self.timeline),
+                // Why they go back no further, when something cut them off (WRITE-24):
+                // `outside` or `unread`.
+                "undo_end": s.undo_end().map(|e| e.as_str()),
+                "redo_end": s.redo_end().map(|e| e.as_str()),
                 "effects": s.effects(),
                 "instruments": s.instruments(),
                 "palette": m2_editor::layout::DEFAULT_ORDER,
@@ -1499,7 +1503,9 @@ impl Actor {
             let local = super::view_file::local(&shown.dir);
             // The metronome as this song had it here: off for one that never had it on.
             device.player.set_click(super::view_file::metronome(&local));
-            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local }).and_then(|p| p.owed())
+            // Unsaved code the song closed with, offered back; a read-only window keeps none (WRITE-27).
+            let drafts = if shown.read_only.is_none() { super::drafts::left(&shown.dir) } else { vec![] };
+            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local, drafts }).and_then(|p| p.owed())
         };
         self.inner.save_owed(owed);
         *self.inner.watch.lock() = Some(watcher::Watch::new(token, o.session.accepted(), before));

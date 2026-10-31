@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { ArrowLeft, Check, CircleAlert, FileCode2, Folder, Lock, LoaderCircle, Save, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type * as Monaco from "monaco-editor/editor";
-import { codeApi, fileOrder, moduleFile } from "../lib/code";
+import { codeApi, fileOrder, moduleFile, type Left } from "../lib/code";
 import { Workspace, type Doc } from "../lib/codeWorkspace";
 import { editorHooks, graphApi, moduleName, type GraphState, type Problem } from "../lib/graph";
 import { chord, isMac } from "../lib/native";
@@ -394,6 +394,8 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
   const moduleOf = (path: string) => ws?.modules.find((m) => m.file === path)?.key;
   const name = (key: string) => moduleName(graph.view.modules.find((m) => m.key === key) ?? { key });
   const problems = graph.diagnostics ?? [];
+  // Text left unsaved when the song last closed (WRITE-27): the open file's first, else the first.
+  const left = ws ? ((doc && ws.left.get(doc.path)) ?? ws.left.values().next().value) : undefined;
 
   return (
     <div data-testid="code" className="flex-1 min-h-0 flex bg-canvas">
@@ -474,6 +476,18 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
             <span className="opacity-60 font-normal">{chord("S")}</span>
           </Button>
         </div>
+        {ws && left && (
+          <Unsaved
+            left={left}
+            here={ws.docs.has(left.file)}
+            onRestore={() => {
+              open(left.file);
+              ws.restore(left.file);
+              editor.current?.focus();
+            }}
+            onDiscard={() => ws.discard(left.file)}
+          />
+        )}
         {doc && doc.theirs !== undefined && ws && (
           <Changed
             doc={doc}
@@ -582,6 +596,38 @@ function FileList({
       )}
       {other.map((p) => row(p, p, false))}
     </nav>
+  );
+}
+
+/**
+ * Text left unsaved when the song last closed, kept in its `.music2/drafts/` (WRITE-27): Restore puts
+ * it in the editor, unsaved, Discard throws it away. A file changed since says so; one that is gone
+ * offers its text to copy.
+ */
+function Unsaved({ left, here, onRestore, onDiscard }: { left: Left; here: boolean; onRestore: () => void; onDiscard: () => void }) {
+  const toast = useStore((s) => s.toast);
+  const name = left.file.slice(left.file.lastIndexOf("/") + 1);
+  const text = !here
+    ? `${left.file} had changes that weren't saved, but the file is gone now.`
+    : left.changed
+      ? `${left.file} has changes that weren't saved, but ${name} was changed since. Restore them over it?`
+      : `${left.file} has changes that weren't saved. Restore them?`;
+  const copy = () =>
+    void navigator.clipboard.writeText(left.text).then(
+      () => toast(`Copied the text ${name} had.`),
+      () => toast("The text couldn't be copied."),
+    );
+  return (
+    <div role="alert" data-testid="code-unsaved" className="shrink-0 flex items-center gap-3 px-3 py-2 bg-warn-soft border-b border-line text-base text-warn-strong">
+      <TriangleAlert size={16} className="shrink-0 text-warn" />
+      <span className="flex-1 min-w-0">{text}</span>
+      <Button size="sm" variant="secondary" onClick={onDiscard}>
+        Discard
+      </Button>
+      <Button size="sm" variant="primary" onClick={here ? onRestore : copy}>
+        {here ? "Restore" : "Copy the text"}
+      </Button>
+    </div>
   );
 }
 

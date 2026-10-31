@@ -2,9 +2,13 @@
 // disk it was last in step with (its base). Saves are based on it, so a file changed since
 // (a knob, a cable, another editor) is never overwritten unasked. A clean file follows the
 // disk in place; a file with unsaved edits keeps them and holds what the disk says instead.
+//
+// Unsaved text is kept in the song's `.music2/drafts/` a second after its last change, and taken
+// out once the file is clean (WRITE-27), so a crash doesn't lose it. What a song opens with is
+// offered back (`left`): Restore puts it in the buffer, unsaved; Discard throws it away.
 
 import type * as Monaco from "monaco-editor/editor";
-import { codeApi, onDisk, type ProjectFiles } from "./code";
+import { codeApi, onDisk, type Left, type ProjectFiles } from "./code";
 import type { GraphState, Problem } from "./graph";
 import { editing, recorded } from "./history";
 import { useStore } from "./store";
@@ -24,7 +28,14 @@ export interface Doc {
   saving?: string;
   /** Whether it had unsaved edits when listeners were last told. */
   edited: boolean;
+  /** A draft of its text is kept in the song's `.music2/drafts/` (WRITE-27). */
+  drafted?: boolean;
+  /** When its next draft is kept. */
+  later?: ReturnType<typeof setTimeout>;
 }
+
+/** How long after the last change a file's unsaved text is kept in the song's `.music2/drafts/` (WRITE-27). */
+export const DRAFT_MS = 1000;
 
 export class Workspace {
   readonly docs = new Map<string, Doc>();
@@ -33,8 +44,12 @@ export class Workspace {
   version = 0;
   /** Counts finished saves: a listing asked for before one is older than what it wrote. */
   epoch = 0;
+  /** Text left unsaved when the song last closed, by file: offered back until restored or discarded (WRITE-27). */
+  left = new Map<string, Left>();
   private listeners = new Set<() => void>();
   private disposed = false;
+  /** The drafts sent, one after another, so an older text never lands after a newer one. */
+  private drafting: Promise<void> = Promise.resolve();
 
   constructor(
     private monaco: typeof Monaco,
@@ -48,7 +63,11 @@ export class Workspace {
   }
 
   private emit() {
-    for (const d of this.docs.values()) d.edited = this.dirty(d);
+    for (const d of this.docs.values()) {
+      d.edited = this.dirty(d);
+      // Clean again (saved, reverted, or the disk says the same): its draft goes at once.
+      if (!d.edited && d.drafted) this.keep(d);
+    }
     this.version++;
     this.listeners.forEach((f) => f());
   }
@@ -92,6 +111,12 @@ export class Workspace {
       if (this.dirty(d)) d.theirs = null;
       else this.drop(d);
     }
+    // What the server still offers back, but a file whose buffer has edits of its own now.
+    const mine = (file: string) => {
+      const d = this.docs.get(file);
+      return !!d && this.dirty(d);
+    };
+    this.left = new Map((project.left ?? []).filter((l) => !mine(l.file)).map((l) => [l.file, l]));
     this.emit();
   }
 
@@ -102,13 +127,54 @@ export class Workspace {
     if (model.getValue() !== text) model.setValue(text);
     const d: Doc = { path, model, base: text, saved: model.getAlternativeVersionId(), edited: false };
     // Typing doesn't re-render anything, except where it makes the file edited or clean again.
-    model.onDidChangeContent(() => this.dirty(d) !== d.edited && this.emit());
+    // Its text is kept as a draft a second after the last change.
+    model.onDidChangeContent(() => {
+      clearTimeout(d.later);
+      d.later = setTimeout(() => this.keep(d), DRAFT_MS);
+      if (this.dirty(d) !== d.edited) this.emit();
+    });
     this.docs.set(path, d);
   }
 
   private drop(d: Doc) {
+    clearTimeout(d.later);
     d.model.dispose();
     this.docs.delete(d.path);
+  }
+
+  /** Keep `d`'s unsaved text as its draft, or take its draft out once it is clean (WRITE-27). */
+  private keep(d: Doc) {
+    if (this.disposed) return;
+    clearTimeout(d.later);
+    const dirty = this.dirty(d);
+    if (!dirty && !d.drafted) return;
+    d.drafted = dirty;
+    this.send(d.path, d.base, dirty ? d.model.getValue() : null);
+  }
+
+  private send(path: string, base: string, text: string | null) {
+    const session = this.session;
+    this.drafting = this.drafting.then(() => codeApi.draft(session, path, base, text)).catch(() => {});
+  }
+
+  /** Put the text `path` was left with in its buffer, unsaved, and keep it as its draft: never on disk (WRITE-27). */
+  restore(path: string) {
+    const l = this.left.get(path);
+    const d = this.docs.get(path);
+    if (!l || !d) return;
+    this.left.delete(path);
+    d.model.pushStackElement();
+    d.model.pushEditOperations([], [{ range: d.model.getFullModelRange(), text: l.text }], () => null);
+    d.model.pushStackElement();
+    this.keep(d);
+    this.emit();
+  }
+
+  /** Throw away the text `path` was left with (WRITE-27). */
+  discard(path: string) {
+    if (!this.left.delete(path)) return;
+    this.send(path, this.docs.get(path)?.base ?? "", null);
+    this.emit();
   }
 
   /** The buffer says what the disk does: clean, nothing pending. */
@@ -216,7 +282,10 @@ export class Workspace {
 
   dispose() {
     this.disposed = true;
-    for (const d of this.docs.values()) d.model.dispose();
+    for (const d of this.docs.values()) {
+      clearTimeout(d.later);
+      d.model.dispose();
+    }
     this.docs.clear();
     this.listeners.clear();
   }

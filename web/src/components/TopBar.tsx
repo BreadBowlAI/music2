@@ -3,7 +3,7 @@ import { Download, Metronome, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, 
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
-import { next, said } from "../lib/history";
+import { ended, next, said } from "../lib/history";
 import { useMetronome, toggleMetronome } from "../lib/metronome";
 import { chord, keyName } from "../lib/native";
 import { canvas, useShell } from "../lib/shell";
@@ -217,7 +217,7 @@ export default function TopBar({
         onClick={() => void undoTop(graph, "undo")}
         // A step undo can't take back still answers, offering to skip it (AGENT-2).
         disabled={!graph.can_undo && !graph.undo_stuck}
-        title={`Undo${undoing ? ` ${said(undoing)}` : ""} (${chord("Z")})`}
+        title={ended(graph, false) ?? `Undo${undoing ? ` ${said(undoing)}` : ""} (${chord("Z")})`}
         aria-label="Undo"
         className="w-ctl !px-0"
       >
@@ -226,7 +226,7 @@ export default function TopBar({
       <BarButton
         onClick={() => void undoTop(graph, "redo")}
         disabled={!graph.can_redo}
-        title={`Redo${redoing ? ` ${said(redoing)}` : ""} (${chord("Z", { shift: true })})`}
+        title={ended(graph, true) ?? `Redo${redoing ? ` ${said(redoing)}` : ""} (${chord("Z", { shift: true })})`}
         aria-label="Redo"
         className="w-ctl !px-0"
       >

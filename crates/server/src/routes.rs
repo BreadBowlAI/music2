@@ -185,6 +185,9 @@ crate::api::routes! {
     POST "/api/graph/unsaved" => graph_unsaved; reads, musician,
         "Say which files have changes not yet saved in the code editor",
         r#"{"session": 7, "files": ["tracks/keys.ts"]}"#;
+    POST "/api/graph/draft" => graph_draft up to crate::TX_BODY; reads, musician,
+        "Keep the code editor's text of a file not yet saved, so a crash doesn't lose it (text null takes it out)",
+        r#"{"session": 7, "file": "tracks/keys.ts", "base": "the text it had", "text": "the text typed so far"}"#;
     POST "/api/graph/export" => graph_export; reads, musician,
         "Export the song's audio, which may pause playback (agents render with m2 render)",
         r#"{"path": "/Users/you/Music/Night drive.wav"}"#;
@@ -1122,6 +1125,23 @@ struct FileReq {
 struct UnsavedReq {
     session: u64,
     files: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct DraftReq {
+    session: u64,
+    file: String,
+    /// The file's text the editor was in step with.
+    base: String,
+    /// Null: there is nothing unsaved now.
+    text: Option<String>,
+}
+
+/// The code editor keeps a file's unsaved text in `.music2/drafts/` (WRITE-27), never in the song.
+async fn graph_draft(State(s): S, Json(r): Json<DraftReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.set_draft(r.session, &r.file, &r.base, r.text.as_deref())).await?;
+    Ok(Json(json!({})))
 }
 
 /// The code editor says which files have edits not yet saved, so the app asks before

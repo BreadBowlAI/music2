@@ -144,7 +144,7 @@ impl Graph {
                     match newest {
                         Some(t) if t.id == step && t.source != Source::Page => {}
                         Some(t) if t.id == step => return Err(steps::NotElsewhere { newest: took }.into()),
-                        _ => return Err(steps::NotNewest { redo: false, newest: took }.into()),
+                        _ => return Err(steps::NotNewest { redo: false, newest: took, end: None }.into()),
                     }
                     let name = steps::said(&took).unwrap_or_default();
                     let before = o.session.undone().map_err(|e| anyhow!("V can't compare {name} now: {e}"))?;

@@ -16,7 +16,12 @@ export interface ProjectFiles {
   files: ProjectFile[];
   /** The file each module (by key) is defined in, when the compiler says. */
   modules: { key: string; label?: string; file: string | null }[];
+  /** Text left unsaved when the song last closed, offered back (WRITE-27); `changed`: its file changed since, or is gone. */
+  left?: Left[];
 }
+
+/** A draft the song opened with: a file's text that wasn't saved (WRITE-27). */
+export interface Left { file: string; text: string; changed: boolean }
 
 /** What the file says on disk, which a save must be based on; null if it is gone. */
 export const onDisk = (f: ProjectFile) => (f.draft === undefined ? f.text : f.draft);
@@ -48,6 +53,11 @@ export const codeApi = {
     if (status === 409 && typeof data.current === "string") return { ok: false, current: data.current };
     if (status >= 400) throw new Error(data.error ?? `HTTP ${status}`);
     return { ok: true, graph: data, step: (data as { step?: number }).step };
+  },
+  /** Keep a file's unsaved text in the song's `.music2/drafts/`, so a crash doesn't lose it (WRITE-27); null: nothing unsaved now. */
+  draft: async (session: number, file: string, base: string, text: string | null) => {
+    const { status, data } = await request<object>("POST", "/draft", { session, file, base, text });
+    if (status >= 400) throw new Error(data.error ?? `HTTP ${status}`);
   },
 };
 

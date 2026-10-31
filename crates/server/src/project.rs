@@ -667,8 +667,8 @@ pub struct Rename {
 /// Rename the open song (Q20): its name, as one undo step (the title builder), and with `folder`
 /// its folder too, to the name made safe. The folder's new name is checked before anything is
 /// written: one there already (in any capitals) is refused. Then the name is written, the song
-/// closes, its folder is renamed in the same parent (with `.music2/` in it), and the song opens
-/// again from there, so Undo starts over. While the code editor has unsaved edits, a rename that
+/// closes, its folder is renamed in the same parent (with `.music2/` in it, its undo history
+/// too, WRITE-23), and the song opens again from there. While the code editor has unsaved edits, a rename that
 /// closes the song is refused unless `anyway` says so (they would be lost). If the folder can't be
 /// renamed then, the name stays changed, the song opens again where it was, and the answer's
 /// `warning` says why (X21).
