@@ -11,13 +11,6 @@ import { token } from "./native";
 import { useStore } from "./store";
 import { undoAction } from "../components/GraphCanvas";
 
-declare module "./graph" {
-  interface ViewNode {
-    /** A Sampler's card: the files it plays (none yet, one, one per zone, or its regions' files), and for regions what it plays in words ("5 recordings, 2 layers, round robin of 2"). */
-    sampler?: { files: string[]; regions?: string };
-  }
-}
-
 /** A drop on a recording: the call, the setting it is (`sample`), and the card's title ("Sampler"). */
 export type RecordingTarget = { kind: "recording"; call: string; setting: string; title: string };
 

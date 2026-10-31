@@ -622,31 +622,39 @@ fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plu
         .with_context(|| format!("no CLAP plugin `{clap_id}` is installed (looked in {:?})", m2_plugins::search_paths()))?;
     let (h, mut info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
     // Here, off the audio thread, once for the plugin: never while a card is drawn (CARD-6).
-    let steps = steps_of(host, h, &info.params);
+    let steps = steps_of(&info.params, &mut |id, v| match host.main_call(h, m2_plugins::MainCall::Text(id, v)) {
+        Ok(m2_plugins::Reply::Text(Some(t))) => Some(t.trim().to_string()),
+        _ => None,
+    });
     let latency = host.activate(h, 48_000, 128);
     host.destroy(h);
     info.latency = latency?;
     Ok((plugin_sig(id, &info)?, info, steps))
 }
 
-/// What instance `h` calls each step of each stepped parameter of 2 to [`MOST_STEPS`] steps, by
-/// parameter id, in their order until [`MOST_NAMES`] are asked; a parameter with a step it gives no
-/// name is left out (CARD-6).
-fn steps_of(host: &dyn PluginHost, h: m2_plugins::Handle, params: &[m2_plugins::Param]) -> Steps {
+/// What the plugin calls each step of each stepped parameter of 2 to [`MOST_STEPS`] steps, by
+/// parameter id, `name(id, value)` asking it one; in their order, while the names asked stay within
+/// [`MOST_NAMES`]. A parameter with a step it gives no name is left out (CARD-6).
+fn steps_of(params: &[m2_plugins::Param], name: &mut dyn FnMut(u32, f64) -> Option<String>) -> Steps {
     let stepped = |p: &&m2_plugins::Param| {
         p.stepped && p.min.fract() == 0.0 && p.max.fract() == 0.0 && p.max > p.min && p.max - p.min < f64::from(MOST_STEPS)
-    };
-    let name = |id: u32, v: f64| match host.main_call(h, m2_plugins::MainCall::Text(id, v)) {
-        Ok(m2_plugins::Reply::Text(Some(t))) => Some(t.trim().to_string()),
-        _ => None,
     };
     let mut left = MOST_NAMES;
     let mut out = Steps::new();
     for p in params.iter().filter(stepped) {
         let steps = (p.max - p.min) as u32 + 1;
-        let Some(after) = left.checked_sub(steps) else { break };
-        left = after;
-        if let Some(names) = (0..steps).map(|i| name(p.id, p.min + f64::from(i))).collect() {
+        if steps > left {
+            break;
+        }
+        let mut names = vec![];
+        for i in 0..steps {
+            left -= 1;
+            match name(p.id, p.min + f64::from(i)) {
+                Some(n) => names.push(n),
+                None => break,
+            }
+        }
+        if names.len() == steps as usize {
             out.insert(p.id, names);
         }
     }
@@ -794,6 +802,37 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
 
 #[cfg(test)]
 mod tests {
+    // CARD-6: the names of a plugin's stepped parameters are asked once each, for one of 2 to 64
+    // steps only, and at most MOST_NAMES of them for one plugin: past that a parameter has none (and
+    // is a number on its card). A parameter with a step the plugin gives no name has none.
+    #[test]
+    fn a_plugins_step_names_are_asked_within_the_budget() {
+        let param = |id: u32, max: f64, stepped: bool| m2_plugins::Param {
+            id,
+            name: format!("p{id}"),
+            module: String::new(),
+            min: 0.0,
+            max,
+            default: 0.0,
+            stepped,
+        };
+        let mut asked = 0u32;
+        let mut name = |id: u32, v: f64| {
+            asked += 1;
+            (id != 7).then(|| format!("{id}:{v}"))
+        };
+        // 5000 parameters of two steps, after one of 65 steps, one not stepped and one unnamed.
+        let mut params = vec![param(1, 64.0, true), param(2, 3.0, false), param(7, 1.0, true)];
+        params.extend((100..5100).map(|id| param(id, 1.0, true)));
+        let steps = super::steps_of(&params, &mut name);
+        // The unnamed one stops at its first step: 1 asked; then 2 for each that fits in what is left.
+        assert_eq!(asked, 1 + 2 * ((super::MOST_NAMES - 1) / 2), "the names it may ask, and no more");
+        assert!(!steps.contains_key(&1) && !steps.contains_key(&2) && !steps.contains_key(&7));
+        assert_eq!(steps.len() as u32, (super::MOST_NAMES - 1) / 2, "the parameters that fit, each named");
+        assert_eq!(steps[&100], ["100:0", "100:1"]);
+        assert!(!steps.contains_key(&5099), "the last are past the budget");
+    }
+
     use super::*;
 
     // One engine for the process: a view one set loaded can be played by any other set, as the

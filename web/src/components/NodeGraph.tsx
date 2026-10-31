@@ -62,7 +62,7 @@ import { MenuRow, Popover } from "./ui";
 import { undoAction } from "./GraphCanvas";
 import PointMenu, { unautomate } from "./ClipMenu";
 import PresetPopover from "./PresetPopover";
-import { KnobPick, SettingRow, settingHeight, shown } from "./Settings";
+import { MenuValue, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 const Locked = createContext<string | null>(null);
@@ -1204,11 +1204,6 @@ function InputRow({
   // Keyed by the knob alone: a save that breaks the code mid-drag must not remount it, which
   // would cancel the drag (WRITE-22: the server keeps it, and a release then is saved once the
   // code compiles); nor may one that renumbers it (see `held`).
-  if (knob && (knob.kind === "choice" || knob.kind === "switch")) {
-    // A plugin's stepped parameter (CARD-6): a menu of its names, or a switch.
-    const label = controlLabel(input.label, tracks);
-    return <KnobPick knob={knob} label={label} owner={owner} session={session} revision={revision} editable={editable} locked={why} dot={<Dot id={input.id} kind="control" filled={false} />} />;
-  }
   if (knob) {
     const key = knobKey(knob.id);
     return (
@@ -1459,9 +1454,19 @@ function KnobControl({
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   // A control the call leaves out plays its default until its first edit writes it into the call (PKG-3).
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
+  // A plugin's stepped parameter (CARD-6) is a menu of its names or a switch, in this same row: still
+  // a knob to the rest of the app (its glow, its id for the focus, the pointer and cables).
+  const pick = knob.kind === "choice" || knob.kind === "switch";
+  const how = pick
+    ? `Click to ${knob.kind === "switch" ? "turn it on or off" : "choose"} · right-click to automate it`
+    : `Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
   const title = !editable
     ? `${why ?? "It can't be edited right now"}.`
-    : `${shared}Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
+    : `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
+  /** A menu's or a switch's pick: its option's number written into the code, one undo step. */
+  const pickValue = (v: number | string | boolean) =>
+    graphApi.setValue(session, revision, knob.id, v, { name: knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}` }).catch((error) => toast(words(error)));
+  const off = editable ? null : `${why ?? "It can't be edited right now"}.`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
   // The whole row drags it, its label and value too, not only the 28px circle (taste.md §2.2).
@@ -1482,12 +1487,13 @@ function KnobControl({
       data-default={!knob.written || undefined}
       aria-disabled={disabled}
       title={title}
-      {...grip.handlers}
+      data-kind={knob.kind ?? "number"}
+      {...(pick ? {} : grip.handlers)}
       // A double-click anywhere on it types a value (taste.md §2.14), but on its input's port.
-      onDoubleClick={(e) => e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
+      onDoubleClick={(e) => !pick && e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
       className={clsx(
         "group/knob relative h-10 pl-4 pr-4 flex items-center gap-2 min-w-0 transition-colors duration-80",
-        !disabled && "cursor-ns-resize touch-none",
+        !disabled && !pick && "cursor-ns-resize touch-none",
         // While a cable is dragged, the knobs it can land on: washed, and the one under it more.
         "[[data-cabling]_&[data-knob-id]]:bg-accent-wash [[data-cabling]_&[data-knob-id]:hover]:bg-accent-soft",
       )}
@@ -1502,6 +1508,17 @@ function KnobControl({
         <div className="text-xs text-fg-muted truncate">{label}</div>
         {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
       </div>
+      {pick ? (
+        <>
+          {knob.kind === "switch" ? (
+            <SwitchValue value={knob} label={label} off={off} onFlip={pickValue} />
+          ) : (
+            <MenuValue value={knob} label={label} off={off} title={title} onPick={pickValue} />
+          )}
+          <HomeMarker home={knob.home} label={label} />
+        </>
+      ) : (
+        <>
       {/* Its home (HOME-1): a value the code leaves out plays its default, in muted text; written, in full. */}
       {typing ? (
         <span className="relative shrink-0">
@@ -1567,6 +1584,8 @@ function KnobControl({
           onType={type}
         />
       </div>
+        </>
+      )}
       {menu && (
         <KnobMenu
           knob={knob}

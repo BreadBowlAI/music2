@@ -133,7 +133,13 @@ const box = component(
     id: "box",
     label: "Box",
     inputs: { notes: port.notes() },
-    settings: { held: setting.bool(false), voices: setting.int(4), sample: setting.asset().optional(), tone: setting.choice(["soft", "hard"], "soft") },
+    settings: {
+      held: setting.bool(false),
+      voices: setting.int(4),
+      sample: setting.asset().optional(),
+      tone: setting.choice(["soft", "hard"], "soft"),
+      follows: setting.key().optional(),
+    },
     output: port.audio(),
   },
   (notes, p) => sampler(notes, { sample: p.sample, mode: p.held ? "gate" : "oneshot", voices: p.voices, tune: p.tone === "hard" ? 12 : 0 }),
@@ -217,7 +223,15 @@ fn a_value_of_the_wrong_kind_is_refused_in_words() {
     let why = refused(&mut s, "lfo", "shape", json!("triangle"));
     assert!(why.contains(r#"shape is one of "sine", "tri", "saw", "square""#) && why.contains("triangle"), "{why}");
     let why = refused(&mut s, "box", "held", json!(1));
-    assert!(why.contains("held is on or off"), "{why}");
+    assert!(why.contains("held is true or false, not 1"), "{why}");
+    let why = refused(&mut s, "box", "held", json!("on"));
+    assert!(why.contains(r#"held is true or false, not "on""#), "{why}");
+    // CARD-4, CARD-5: a recording names a file in assets/, as a drop's does.
+    let why = refused(&mut s, "box", "sample", json!("missing.wav"));
+    assert!(why.contains("missing.wav isn't in assets/") && why.contains("drop the file on the card"), "{why}");
+    // CARD-2: a key setting names a track by its key; the build judges which.
+    let why = refused(&mut s, "box", "follows", json!("Not A Key"));
+    assert!(why.contains("follows names a track by its key") && why.contains("Not A Key"), "{why}");
     assert_eq!(f.read("song.ts"), before, "nothing written");
     assert_eq!(s.accepted().number, at, "no revision");
 }
@@ -354,48 +368,183 @@ fn a_stepped_plugin_parameter_from_0_to_1_is_a_switch() {
     assert_eq!((knob("dry").kind, knob("dry").options.len()), (Kind::Number, 0));
 }
 
-// CARD-1, CARD-4 for a dictionary entry (PKG-6): each channel of the song's mixer has its `to`, a
-// menu of the song's tracks. Written into a bare channel, it wraps it (`kick: { in: kick.out, to: … }`);
-// into an object, it is one more property. Each one Tx and one undo step.
+// CARD-4: the value a setting has already writes nothing: no revision, no undo step, the code as it
+// was; whether it plays its default (left out) or is written.
 #[test]
-fn a_dictionary_entrys_setting_is_written_into_its_entry() {
+fn the_value_a_setting_has_already_writes_nothing() {
+    let f = song(BOX);
+    let mut s = f.open();
+    let before = f.read("song.ts");
+    let (at, steps) = (s.accepted().number, s.last_step());
+    for (callee, slot, value) in [("lfo", "shape", json!("sine")), ("box", "voices", json!(6)), ("box", "held", json!(false))] {
+        let id = setting(&s, callee, slot).id;
+        let done = set(&mut s, at, &id, &value, None).unwrap_or_else(|e| panic!("{slot}: {e}"));
+        assert_eq!(done.revision, at, "{slot}: no revision");
+    }
+    assert_eq!((f.read("song.ts"), s.last_step(), s.accepted().number), (before, steps, at));
+}
+
+// CARD-4: a setting write is confined to its call. A component that hands its setting to code
+// outside its call (here through a variable the song reads after it) would change a node made
+// there: refused in words, and nothing is written.
+#[test]
+fn a_setting_whose_change_reaches_outside_its_call_is_refused() {
+    let f = song(
+        r#"import { component, port, setting, song } from "@m2/core";
+import { gain, osc } from "std/dsp";
+
+let level = 1;
+const box = component(
+  { id: "box", label: "Box", inputs: { in: port.audio() }, settings: { level: setting.number(1) }, output: port.audio() },
+  (x, p) => {
+    level = p.level;
+    return gain(x, 0.5);
+  },
+);
+
+export default song(() => {
+  const a = box(osc.saw(110));
+  return gain(a, level);
+});
+"#,
+    );
+    let mut s = f.open();
+    let before = f.read("song.ts");
+    let x = setting(&s, "box", "level");
+    assert_eq!((&x.value, &x.readonly), (&json!(1), &None));
+    let at = s.accepted().number;
+    let e = set(&mut s, at, &x.id, &json!(0.5), None).unwrap_err().to_string();
+    assert!(e.contains("setting level would change more than its call"), "{e}");
+    assert_eq!(f.read("song.ts"), before, "nothing written");
+}
+
+// CARD-3, C4: a Sampler that plays zones shows its file read-only, as theirs, and its zones say
+// what they play: one file by its name, more by how many and which.
+#[test]
+fn a_samplers_zones_say_their_files_and_take_its_file() {
+    let one = song(
+        "import { song, track } from \"@m2/core\";\nimport { sampler } from \"std/sampler\";\n\
+         const s = track(\"s\", ({ lane }) => sampler(lane.notes(\"n\"), { zones: { 60: \"tone.wav\" } }));\n\
+         export default song(() => s.out);\n",
+    );
+    let s = one.open();
+    let zones = setting(&s, "sampler", "zones");
+    assert_eq!((zones.kind, zones.written, zones.said.as_deref()), (Kind::Keymap, true, Some("tone.wav")));
+    let sample = setting(&s, "sampler", "sample");
+    assert!(sample.readonly.as_deref().is_some_and(|w| w.contains("This Sampler plays zones")), "{sample:?}");
+    let two = song(
+        "import { song, track } from \"@m2/core\";\nimport { sampler } from \"std/sampler\";\n\
+         const s = track(\"s\", ({ lane }) => sampler(lane.notes(\"n\"), { zones: { 36: \"a.wav\", 38: \"b.wav\" } }));\n\
+         export default song(() => s.out);\n",
+    );
+    let s = two.open();
+    assert_eq!(setting(&s, "sampler", "zones").said.as_deref(), Some("2 files: a.wav, b.wav"));
+}
+
+// CARD-4, CARD-5 (C2): a recording set by the write alone (`m2 set`, the route) names a file in
+// assets/, and the planner checks that the call's sound reads it, as for a dropped file.
+#[test]
+fn a_recording_written_by_name_must_be_a_file_the_sound_reads() {
+    let f = song(BOX);
+    f.write("assets/kick.wav", tone());
+    let mut s = f.open();
+    let before = f.read("song.ts");
+    let id = setting(&s, "box", "sample").id;
+    let at = s.accepted().number;
+    set(&mut s, at, &id, &json!("kick.wav"), None).unwrap();
+    assert_eq!(f.read("song.ts"), before.replace("{ voices: 6 }", r#"{ voices: 6, sample: "kick.wav" }"#));
+    let c = &s.accepted().compiled;
+    let mut reads = false;
+    for m in &c.ir.modules {
+        crate::controls::walk(&m.nodes, &mut |n| {
+            reads |= matches!(&n.op, m2_ir::Op::Kernel { assets, .. } if assets.contains(&"kick.wav".to_string()))
+        });
+    }
+    assert!(reads, "a kernel reads it");
+}
+
+/// A song whose mixer has a bus channel keyed `wet` (not its bus's key), reading the Reverb bus.
+fn bused() -> (Fixture, Session) {
     let f = crate::testing::fixture("examples/first-song");
     let mut s = f.open();
     crate::bus::add_bus(&mut s, crate::bus::BusKind::Reverb, None, None).unwrap();
+    f.write("song.ts", f.read("song.ts").replace("      reverb: reverb.out,", "      wet: reverb.out,"));
+    assert!(s.refresh());
+    (f, s)
+}
+
+// CARD-2, CARD-4 (C1): a mixer channel's `to` offers exactly what the song's mixer takes: Master
+// (none) and the bus channels it can go to without a loop, by their channel keys, named by their
+// buses. Written into a bare channel, it wraps it; Master takes it out again. Anything else is
+// refused in words. A key setting of any other sound offers no list of its own (the page offers the
+// song's tracks) and takes any key, which the build judges.
+#[test]
+fn a_mixer_channels_to_offers_master_and_its_bus_channels() {
+    let (f, mut s) = bused();
     let to = setting(&s, "mixer", "channels.kick.to");
     assert_eq!((to.kind, to.label.as_str(), &to.value, to.written, &to.readonly), (Kind::Track, "kick.to", &Json::Null, false, &None));
-    // By key; the card lists them in the timeline's order.
-    let tracks: Vec<(&Json, &str)> = to.options.iter().map(|o| (&o.value, o.label.as_str())).collect();
-    assert_eq!(
-        tracks,
-        [
-            (&json!("bass"), "Bass"),
-            (&json!("hats"), "Hats"),
-            (&json!("keys"), "Keys"),
-            (&json!("kick"), "Kick"),
-            (&json!("reverb"), "Reverb")
-        ]
-    );
+    let options: Vec<(Json, &str)> = to.options.iter().map(|o| (o.value.clone(), o.label.as_str())).collect();
+    assert_eq!(options, [(Json::Null, "Master"), (json!("wet"), "Reverb")]);
+    let wet = setting(&s, "mixer", "channels.wet.to");
+    assert_eq!(wet.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), ["Master"], "a bus can't go to itself");
     set_then_undo(
         &f,
         &mut s,
         "mixer",
         "channels.kick.to",
-        json!("reverb"),
+        json!("wet"),
         "      kick: kick.out,",
-        "      kick: { in: kick.out, to: \"reverb\" },",
+        "      kick: { in: kick.out, to: \"wet\" },",
     );
-    set_then_undo(
-        &f,
-        &mut s,
-        "mixer",
-        "channels.hats.to",
-        json!("reverb"),
-        "hats: { in: hats.out, db: db(-6), pan: 0.3 }",
-        "hats: { in: hats.out, db: db(-6), pan: 0.3, to: \"reverb\" }",
-    );
-    // A track the song hasn't is refused in words.
+    // Master takes `to` out: a channel left with only its input is bare again.
+    let before = f.read("song.ts");
     let at = s.accepted().number;
-    let e = set(&mut s, at, &to.id, &json!("strings"), None).unwrap_err().to_string();
-    assert!(e.contains("kick.to is one of") && e.contains("\"reverb\""), "{e}");
+    set(&mut s, at, &to.id, &json!("wet"), None).unwrap();
+    let (at, id) = (s.accepted().number, setting(&s, "mixer", "channels.kick.to").id);
+    set(&mut s, at, &id, &Json::Null, None).unwrap();
+    assert_eq!(f.read("song.ts"), before, "Master takes it out again");
+    assert_eq!(setting(&s, "mixer", "channels.kick.to").value, Json::Null);
+    // A track that isn't a bus channel of this mixer, and a bus's own key, are refused in words.
+    let at = s.accepted().number;
+    for wrong in ["hats", "reverb"] {
+        let e = set(&mut s, at, &to.id, &json!(wrong), None).unwrap_err().to_string();
+        assert!(e.contains(r#"kick.to is one of Master, "wet""#) && e.contains(wrong), "{e}");
+    }
+    assert_eq!(f.read("song.ts"), before);
+    // Any other key setting: no list of its own, any key.
+    let f = song(BOX);
+    let mut s = f.open();
+    let follows = setting(&s, "box", "follows");
+    assert_eq!((follows.kind, follows.options.len(), &follows.readonly), (Kind::Track, 0, &None));
+    set_then_undo(&f, &mut s, "box", "follows", json!("keys"), "{ voices: 6 }", r#"{ voices: 6, follows: "keys" }"#);
+}
+
+// CARD-6 with a real host: the probe plugin's Mode is stepped from 0 to 2, and the host names its
+// steps Soft, Warm and Hard when it describes the plugin. Its knob is a choice of those names, each
+// writing its step's number; the menu's write puts the number in the code, one undo step. Its
+// Bright, stepped from 0 to 1 and named Off and On, is a switch.
+#[test]
+fn a_plugins_named_steps_become_a_menu() {
+    m2_plugins::test_main_thread();
+    m2_plugins::probe::install();
+    let f = song(
+        "import { plugin, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
+         export default song(() => plugin(\"clap:m2.probe\", { in: osc.saw(110), mode_3: 1, bright_4: 0 }));\n",
+    );
+    let mut s = f.open();
+    let (param, steps) = s.packages.plugin_param("clap:m2.probe", "mode_3").expect("Mode");
+    assert_eq!((param.stepped, param.min, param.max), (true, 0.0, 2.0));
+    assert_eq!(steps, Some(&["Soft".to_string(), "Warm".to_string(), "Hard".to_string()][..]), "the host named its steps");
+    let knob = card(&s, "plugin").knobs.into_iter().find(|k| k.label.starts_with("mode")).expect("Mode's knob");
+    let options: Vec<(Json, &str)> = knob.options.iter().map(|o| (o.value.clone(), o.label.as_str())).collect();
+    assert_eq!((knob.kind, knob.value), (Kind::Choice, 1.0));
+    assert_eq!(options, [(json!(0), "Soft"), (json!(1), "Warm"), (json!(2), "Hard")]);
+    let bright = card(&s, "plugin").knobs.into_iter().find(|k| k.label.starts_with("bright")).expect("Bright's knob");
+    let options: Vec<(Json, &str)> = bright.options.iter().map(|o| (o.value.clone(), o.label.as_str())).collect();
+    assert_eq!((bright.kind, options), (Kind::Switch, vec![(json!(0), "Off"), (json!(1), "On")]));
+    let before = f.read("song.ts");
+    let (at, steps) = (s.accepted().number, s.last_step());
+    s.set(at, &knob.id, 2.0, None).unwrap();
+    assert_eq!(f.read("song.ts"), before.replace("mode_3: 1", "mode_3: 2"));
+    assert_eq!(s.last_step(), steps + 1);
 }

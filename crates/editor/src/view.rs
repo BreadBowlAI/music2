@@ -29,7 +29,6 @@ use crate::cable::{Inlet, Outlet, inlets, outlets};
 use crate::controls::{Control, Declared, controls, declared, not_insertable};
 use crate::effect::{Listens, bypass_refused, calls_of, effect_at, is_bypassed, listens, move_row};
 use crate::kind::{self, Choice};
-use crate::sampler::{self, SamplerCard};
 use crate::settings::Setting;
 use crate::sites::{Params, fn_params};
 use crate::voices;
@@ -168,9 +167,6 @@ pub struct ViewNode {
     /// graph state's `plugins` and the plugin routes name it (HOST-7).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
-    /// A sampler's card: the files it plays. A WAV dropped on it sets its file.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sampler: Option<SamplerCard>,
     /// An instrument's card: how it plays its notes, in plain words (RENDER-16). Read-only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voices: Option<String>,
@@ -799,10 +795,6 @@ pub fn view(session: &Session) -> GraphView {
                 Group::Site(s) if kind == "call" => listens(session, sites[s]),
                 _ => None,
             };
-            let sampler = match g {
-                Group::Site(s) if kind == "call" => sampler::card(&rev.compiled, *s),
-                _ => None,
-            };
             let voices = match g {
                 Group::Site(s) if kind == "call" => voices::card(&rev.compiled, *s),
                 _ => None,
@@ -831,7 +823,6 @@ pub fn view(session: &Session) -> GraphView {
                 menu,
                 listens,
                 plugin: plugins.get(g).cloned(),
-                sampler,
                 voices,
                 settings,
             });
@@ -941,7 +932,6 @@ pub fn view(session: &Session) -> GraphView {
                 menu: None,
                 listens: None,
                 plugin: None,
-                sampler: None,
                 voices: None,
                 settings: vec![],
             });

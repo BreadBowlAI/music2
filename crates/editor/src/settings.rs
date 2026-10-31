@@ -8,6 +8,7 @@
 //! read-only. The write is one `TextEdit` Tx confined to the call: over the literal written there,
 //! or into the call by PKG-3's insertion rules, as a knob's first edit is.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use m2_ir::{Module, Op};
@@ -25,9 +26,13 @@ use crate::effect::calls_of;
 use crate::import::{self, Imported};
 use crate::kind::{self, Choice, Kind};
 use crate::lens::{self, Insertion};
+use crate::mix::{self, Mixing};
 use crate::plan::{self, path, unmoved};
 use crate::sampler::{self, SamplerCard};
 use crate::{EditError, Edited, ready};
+
+/// std's mixer, whose channels' `to` the song's routing decides (RENDER-34).
+const MIXER: &str = "std:mixer";
 
 /// A setting as a card shows it (CARD-1).
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -85,19 +90,42 @@ struct Call<'a> {
     text: &'a str,
     /// Which argument held its options when it ran (`Frame.options`), or why that isn't known.
     options: Result<Option<usize>, &'static str>,
-    /// The song's tracks, for a setting that names one.
-    tracks: Vec<Choice>,
+    /// For std's mixer, where each channel can go (its `to`), by channel key; or why the card
+    /// can't say, when it isn't the song's one mixer.
+    routes: Option<Result<BTreeMap<String, Vec<Choice>>, &'static str>>,
     /// What a Sampler plays, for its keymap's and its regions' words.
     sampler: Option<SamplerCard>,
 }
 
-/// The song's tracks as a menu offers them: each by its key, called by its label.
-fn tracks(rev: &Revision) -> Vec<Choice> {
-    rev.compiled.ir.modules.iter().filter(|m| m.track).map(|m| Choice::new(m.key.clone(), m.label())).collect()
+/// Where each channel of the song's mixer `m` can go (CARD-2): Master (none), then each bus
+/// channel it can go to without a loop, by its key, called by its bus's name: exactly what the
+/// mixer takes, as the Mix view's routing offers it.
+fn routes_of(rev: &Revision, m: &mix::Mixer) -> BTreeMap<String, Vec<Choice>> {
+    let buses = crate::bus::bus_channels(rev, m);
+    let feeds = crate::bus::feeds(rev);
+    m.channels
+        .iter()
+        .map(|c| {
+            let mut options = vec![Choice::new(Json::Null, "Master")];
+            for x in &m.channels {
+                if let Some(b) = buses.get(&x.key).filter(|b| crate::bus::looped(rev, &feeds, c, b, true).is_none()) {
+                    options.push(Choice::new(x.key.clone(), crate::bus::label_of(rev, b)));
+                }
+            }
+            (c.key.clone(), options)
+        })
+        .collect()
 }
 
-/// What a setting declared as `d` is on a card (CARD-2), whether it is whole, and its options.
-fn kind_of(d: &SettingDesc, tracks: &[Choice]) -> (Kind, bool, Vec<Choice>) {
+/// The channel whose `to` slot `slot` of std's mixer is (`channels.vox.to`: `vox`).
+fn routed(desc: &Descriptor, slot: &str) -> Option<String> {
+    let rest = slot.strip_prefix("channels.")?.strip_suffix(".to")?;
+    (desc.id == MIXER && !rest.contains('.')).then(|| rest.to_string())
+}
+
+/// What a setting declared as `d` is on a card (CARD-2), whether it is whole, and its options. A
+/// key carries none: it names one of the song's tracks, which the view gives once (its timeline).
+fn kind_of(d: &SettingDesc) -> (Kind, bool, Vec<Choice>) {
     match d.kind {
         SettingKind::Number => (Kind::Number, false, vec![]),
         SettingKind::Int => (Kind::Number, true, vec![]),
@@ -106,7 +134,7 @@ fn kind_of(d: &SettingDesc, tracks: &[Choice]) -> (Kind, bool, Vec<Choice>) {
         SettingKind::Asset => (Kind::Recording, false, vec![]),
         SettingKind::Keymap => (Kind::Keymap, false, vec![]),
         SettingKind::Regions => (Kind::Regions, false, vec![]),
-        SettingKind::Key => (Kind::Track, false, tracks.to_vec()),
+        SettingKind::Key => (Kind::Track, false, vec![]),
     }
 }
 
@@ -150,7 +178,11 @@ fn read(a: &Arg, text: &str) -> Option<Json> {
 impl<'a> Call<'a> {
     fn new(rev: &'a Revision, m: &Module, site: &'a Site, desc: &'a Descriptor, text: &'a str) -> Call<'a> {
         let sampler = (desc.id == sampler::SAMPLER).then(|| sampler::card(&rev.compiled, site.id)).flatten();
-        Call { rev, site, desc, text, options: options_of(m, site.id), tracks: tracks(rev), sampler }
+        let routes = (desc.id == MIXER).then(|| match mix::mixer(rev) {
+            Mixing::One(mixer) if mixer.site == site.id => Ok(routes_of(rev, &mixer)),
+            _ => Err("only the song's one mixer sends a channel to a bus from here"),
+        });
+        Call { rev, site, desc, text, options: options_of(m, site.id), routes, sampler }
     }
 
     /// Where setting `slot` (or a dictionary, by its name) is written in the call: at its place
@@ -190,7 +222,7 @@ impl<'a> Call<'a> {
 
     /// The setting declared as `d` at `slot`, as the card shows it.
     fn setting(&self, slot: String, d: &SettingDesc) -> Setting {
-        let (kind, whole, options) = kind_of(d, &self.tracks);
+        let (kind, whole, mut options) = kind_of(d);
         let words = matches!(kind, Kind::Regions | Kind::Keymap);
         let (mut value, mut written, mut readonly, mut expression) = (Json::Null, true, None, None);
         match self.find(&slot) {
@@ -206,13 +238,26 @@ impl<'a> Call<'a> {
                 (value, written) = (d.default.clone().unwrap_or(Json::Null), false);
                 readonly = match words {
                     true => None,
-                    false => self.insertion(&slot).err().map(|why| format!("it can't be written into the call: {why}")),
+                    false => self.insertion(&slot).err().map(|why| match why {
+                        // A dictionary entry written as one value (`verb: db(-12)`) has no room for it.
+                        "its entry is a bare signal, which this dictionary doesn't take" => {
+                            "its entry is written as one value, so it is set in its code".to_string()
+                        }
+                        why => format!("it can't be written into the call: {why}"),
+                    }),
                 };
             }
             At::Unknown(why) => readonly = Some(why.to_string()),
         }
         if words {
-            readonly = Some("the card says what it plays in words; it is set in its code".to_string());
+            readonly = Some("it is set in its code".to_string());
+        }
+        // A channel of std's mixer goes where the song's mixer takes it: Master, or a bus channel.
+        if let (Some(channel), Some(routes)) = (routed(self.desc, &slot), &self.routes) {
+            match routes {
+                Ok(routes) => options = routes.get(&channel).cloned().unwrap_or_else(|| vec![Choice::new(Json::Null, "Master")]),
+                Err(why) => readonly = Some(why.to_string()),
+            }
         }
         // The Sampler plays one of a file, zones and regions (PKG-16): with zones or regions written,
         // its file is theirs to change, in its code.
@@ -221,9 +266,11 @@ impl<'a> Call<'a> {
         }
         let said = match (&self.sampler, kind) {
             (Some(c), Kind::Regions) => c.regions.clone(),
-            (Some(c), Kind::Keymap) if c.regions.is_none() && c.files.len() > 1 => {
-                Some(format!("{} files: {}", c.files.len(), c.files.join(", ")))
-            }
+            (Some(c), Kind::Keymap) if written && c.regions.is_none() => match c.files.as_slice() {
+                [] => None,
+                [one] => Some(one.clone()),
+                files => Some(format!("{} files: {}", files.len(), files.join(", "))),
+            },
             _ => None,
         };
         let label = slot.split_once('.').map_or(slot.as_str(), |(_, rest)| rest).to_string();
@@ -340,6 +387,25 @@ pub fn names(s: &Session, at: u64, id: &str) -> bool {
     resolve(s, at, id).is_ok()
 }
 
+/// Setting `id`, named at revision `at`, as its card shows it now; None when no setting has it.
+pub fn find(s: &Session, at: u64, id: &str) -> Option<Setting> {
+    resolve(s, at, id).ok().map(|(_, now, _)| now)
+}
+
+/// Whether recording `id` (named at revision `at`) can take a file, before one is brought in
+/// (CARD-5): it is a recording, and the card can change it. What its call is called ("Sampler").
+pub fn can_take(s: &Session, at: u64, id: &str) -> Result<String, EditError> {
+    ready(s)?;
+    let (_, now, title) = resolve(s, at, id)?;
+    if now.kind != Kind::Recording {
+        return Err(EditError::Rejected(format!("{title}'s {} isn't a recording: drop a WAV or FLAC file on one", now.label)));
+    }
+    match &now.readonly {
+        Some(why) => Err(EditError::Rejected(format!("{title}'s {} can be changed only in its code: {why}", now.label))),
+        None => Ok(title),
+    }
+}
+
 /// `value` written as setting `now`'s literal, quoted as `old` (the literal written there) is, or
 /// refused in words when it isn't of the setting's kind.
 fn literal(now: &Setting, value: &Json, old: Option<&str>) -> Result<String, EditError> {
@@ -348,7 +414,10 @@ fn literal(now: &Setting, value: &Json, old: Option<&str>) -> Result<String, Edi
         Some('\'') if !v.contains(['\'', '\\', '\n']) => format!("'{v}'"),
         _ => serde_json::to_string(v).expect("a string"),
     };
-    let one_of = |options: &[Choice]| options.iter().map(|o| o.value.to_string()).collect::<Vec<_>>().join(", ");
+    let one_of = |options: &[Choice]| {
+        let said = |o: &Choice| if o.value.is_null() { o.label.clone() } else { o.value.to_string() };
+        options.iter().map(said).collect::<Vec<_>>().join(", ")
+    };
     match now.kind {
         Kind::Number => match value.as_f64().filter(|v| v.is_finite()) {
             Some(v) if !now.whole || v.fract() == 0.0 => Ok(lens::propose(v, 1.0)?.text),
@@ -357,12 +426,24 @@ fn literal(now: &Setting, value: &Json, old: Option<&str>) -> Result<String, Edi
         },
         Kind::Switch => match value {
             Json::Bool(b) => Ok(b.to_string()),
-            _ => no("on or off (true or false)".into()),
+            _ => no("true or false".into()),
         },
-        Kind::Choice | Kind::Track => match value.as_str() {
+        Kind::Choice => match value.as_str() {
             Some(v) if now.options.iter().any(|o| o.value == *value) => Ok(quoted(v)),
-            _ if now.options.is_empty() => Err(EditError::Rejected(format!("{} names a track, and the song has none", now.label))),
             _ => no(format!("one of {}", one_of(&now.options))),
+        },
+        // A list of its own is exactly what it takes (a mixer channel's `to`); else any key, which the
+        // build judges (ID-1).
+        Kind::Track if !now.options.is_empty() => match value.as_str() {
+            Some(v) if now.options.iter().any(|o| o.value == *value) => Ok(quoted(v)),
+            _ => no(format!("one of {}", one_of(&now.options))),
+        },
+        Kind::Track => match value.as_str().filter(|v| m2_ir::key::is_key(v)) {
+            Some(v) => Ok(quoted(v)),
+            None => Err(EditError::Rejected(format!(
+                "{} names a track by its key (lowercase letters, digits and dashes), not {value}",
+                now.label
+            ))),
         },
         Kind::Recording => match value.as_str().filter(|v| !v.is_empty()) {
             Some(v) => Ok(quoted(v)),
@@ -374,23 +455,14 @@ fn literal(now: &Setting, value: &Json, old: Option<&str>) -> Result<String, Edi
 
 /// Write `value` into setting `id` (CARD-4), named at revision `at`: one Tx confined to its call,
 /// over the literal written there or into the call by PKG-3's insertion rules, checked against the
-/// graph; one undo step. A value of the wrong kind, or a setting the card can't change, is refused
-/// in words. The value it has already writes nothing. With `expect`, only while it is that.
+/// graph; one undo step. A value not of the setting's kind, or a setting the card can't change, is
+/// refused in words; so is a recording that names no file of `assets/`, and the planner checks that
+/// a kernel the call makes reads the one it names (CARD-5), however the name came. A channel of the
+/// song's mixer goes where the Mix view's routing sends it ([`crate::bus::route`]): Master (`null`)
+/// takes its `to` out. The value it has already writes nothing. With `expect`, only while it is that.
 pub fn set(s: &mut Session, at: u64, id: &str, value: &Json, expect: Option<&Json>) -> Result<Edited, EditError> {
-    write(s, at, id, value, expect, |_, _, _| Ok(()))
-}
-
-/// [`set`], with the planner's own assertion on the checked candidate, given the call's site there.
-fn write(
-    s: &mut Session,
-    at: u64,
-    id: &str,
-    value: &Json,
-    expect: Option<&Json>,
-    assert: impl FnOnce(&Session, &Checked, &Site) -> Result<(), EditError>,
-) -> Result<Edited, EditError> {
     ready(s)?;
-    let (site, now, _) = resolve(s, at, id)?;
+    let (site, now, title) = resolve(s, at, id)?;
     if let Some(why) = &now.readonly {
         return Err(EditError::Rejected(format!("{} can be changed only in its code: {why}", now.label)));
     }
@@ -400,6 +472,12 @@ fn write(
     let rev = s.accepted();
     let text = rev.snapshot.files.get(Path::new(&site.file)).cloned().ok_or_else(|| EditError::NotFound(site.file.clone()))?;
     let (m, desc) = instance(rev, site.id).ok_or_else(|| EditError::NotFound(id.to_string()))?;
+    if let Some(channel) = routed(desc, &now.slot).filter(|_| !now.options.is_empty()) {
+        if !now.options.iter().any(|o| o.value == *value) {
+            literal(&now, value, None)?;
+        }
+        return crate::bus::route(s, &channel, value.as_str());
+    }
     let call = Call::new(rev, m, &site, desc, &text);
     let written = match call.find(&now.slot) {
         At::Written(a) => Some(a.span()),
@@ -407,6 +485,13 @@ fn write(
     };
     let old = written.and_then(|(a, b)| text.get(a as usize..b as usize));
     let literal = literal(&now, value, old)?;
+    // A recording plays a file the song has: one brought in first, as a drop brings it (CARD-5).
+    let recording = value.as_str().filter(|_| now.kind == Kind::Recording).map(str::to_string);
+    if let Some(name) = recording.as_deref()
+        && !rev.snapshot.binaries.contains_key(&Path::new(m2_song::path::ASSETS).join(name))
+    {
+        return Err(EditError::Rejected(format!("{name} isn't in assets/: drop the file on the card to bring it in")));
+    }
     if same(value, &now.value) {
         let shown = old.unwrap_or_default().to_string();
         return Ok(Edited { revision: rev.number, file: site.file, before: shown.clone(), after: shown });
@@ -434,45 +519,46 @@ fn write(
     let said = |why: &str| EditError::Rejected(format!("setting {} would change more than its call ({why})", now.label));
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;
-        assert(s, checked, &site)
+        match &recording {
+            Some(name) => reads(checked, &site, name, &title),
+            None => Ok(()),
+        }
     })?;
     Ok(Edited { revision: done.number, file: site.file, before: label.0, after: label.1 })
 }
 
+/// The planner's check for a recording (CARD-5): in the checked candidate, a kernel call `site` makes
+/// reads file `name`.
+fn reads(checked: &Checked, site: &Site, name: &str, title: &str) -> Result<(), EditError> {
+    let c = &checked.candidate().compiled;
+    let new = c.sites.iter().find(|x| x.file == site.file && x.start == site.start && x.callee == site.callee).map(|x| x.id);
+    let mut reads = false;
+    for m in &c.ir.modules {
+        walk(&m.nodes, &mut |n| {
+            if let Op::Kernel { assets, .. } = &n.op {
+                reads |= assets.iter().any(|a| a == name) && calls_of(m, n).any(|f| Some(f) == new);
+            }
+        });
+    }
+    match reads {
+        true => Ok(()),
+        false => Err(EditError::Rejected(format!("{title} wouldn't play {name}: no sound it makes reads the file"))),
+    }
+}
+
 /// Play `file` (just brought in, as Import Audio brings one in, FMT-14) in recording `id` (CARD-5),
-/// named at revision `at`: the file is taken in, then [`set`] writes its name. The planner checks
-/// that a kernel the call makes reads it. One undo step; the file stays in `assets/`.
+/// named at revision `at`: checked as [`can_take`] checks it (which a drop runs before the file is
+/// copied in), taken in, then written by [`set`], with [`set`]'s checks. One undo step; the file
+/// stays in `assets/`.
 pub fn set_recording(s: &mut Session, at: u64, id: &str, file: &Imported) -> Result<Edited, EditError> {
-    ready(s)?;
-    let (_, now, title) = resolve(s, at, id)?;
+    let title = can_take(s, at, id)?;
     let name = file.asset.as_str().to_string();
-    if now.kind != Kind::Recording {
-        return Err(EditError::Rejected(format!("{title}'s {} isn't a recording: drop a WAV or FLAC file on one", now.label)));
-    }
-    if let Some(why) = &now.readonly {
-        return Err(EditError::Rejected(format!("{title}'s {} can be changed only in its code: {why}", now.label)));
-    }
-    if now.value.as_str() == Some(name.as_str()) {
+    if find(s, at, id).is_some_and(|now| now.value.as_str() == Some(name.as_str())) {
         return Err(EditError::Rejected(format!("{title} plays {name} already.")));
     }
     // Taken in before the Tx names it, so the revision plays it from the start.
     import::take_in(s, std::slice::from_ref(file))?;
-    write(s, at, id, &Json::String(name.clone()), None, |_, checked, site| {
-        let c = &checked.candidate().compiled;
-        let new = c.sites.iter().find(|x| x.file == site.file && x.start == site.start && x.callee == site.callee).map(|x| x.id);
-        let mut reads = false;
-        for m in &c.ir.modules {
-            walk(&m.nodes, &mut |n| {
-                if let Op::Kernel { assets, .. } = &n.op {
-                    reads |= assets.contains(&name) && calls_of(m, n).any(|f| Some(f) == new);
-                }
-            });
-        }
-        match reads {
-            true => Ok(()),
-            false => Err(EditError::Rejected(format!("{title} wouldn't play {name}: no sound it makes reads the file"))),
-        }
-    })
+    set(s, at, id, &Json::String(name), None)
 }
 
 #[cfg(test)]

@@ -5,7 +5,8 @@
 // number box and a recording: the switch writes `held: true`; the number box refuses 2.5 in words,
 // writing nothing, and writes 6 on Return; a WAV dropped on the recording (as a browser drops it)
 // comes into assets/ and the call names it (`sample: "tone.wav"`), one undo step ("Undo setting Box
-// to tone.wav"), its waveform drawn. Each state linted.
+// to tone.wav"), its waveform drawn; and a track's menu lists the song's tracks as the timeline has
+// them, and writes the key picked. Each state linted.
 //
 //   node e2e/cards.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -124,7 +125,7 @@ const box = component(
     id: "box",
     label: "Box",
     inputs: { notes: port.notes() },
-    settings: { held: setting.bool(false), voices: setting.int(4), sample: setting.asset().optional() },
+    settings: { held: setting.bool(false), voices: setting.int(4), sample: setting.asset().optional(), follows: setting.key().optional() },
     output: port.audio(),
   },
   (notes, p) => sampler(notes, { sample: p.sample, mode: p.held ? "gate" : "oneshot", voices: p.voices }),
@@ -140,7 +141,7 @@ check(await until(async () => !!(await page.$(`${card} [data-setting="held"]`)))
 await page.$eval(card, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
 await sleep(150);
 const kinds = await page.$$eval(`${card} [data-setting]`, (els) => els.map((e) => `${e.dataset.setting}:${e.dataset.kind}`));
-check(JSON.stringify(kinds) === '["held:switch","voices:number","sample:recording"]', `in its descriptor's order, each by its kind: ${JSON.stringify(kinds)}`);
+check(JSON.stringify(kinds) === '["held:switch","voices:number","sample:recording","follows:track"]', `in its descriptor's order, each by its kind: ${JSON.stringify(kinds)}`);
 await linted(card, "Box's card");
 
 // A switch.
@@ -170,6 +171,15 @@ await page.keyboard.press("Enter");
 check(await until(() => read("tracks/box.ts").includes("{ held: true, voices: 6 }")), `6 on Return writes voices: 6: ${read("tracks/box.ts").match(/box\(lane.*\)/)?.[0]}`);
 check(await stepIs("Box voices"), `one undo step: ${await undoTitle()}`);
 
+// A track: a menu of the song's tracks, as the timeline has them, top to bottom.
+await page.click(`${card} [data-setting="follows"] [data-testid=setting-menu]`);
+await page.waitForSelector("[data-testid=setting-options]");
+const listed = await page.$$eval("[data-testid=setting-options] [role=menuitem]", (els) => els.map((e) => e.textContent));
+const headers = await page.$$eval("[data-module-tab] [data-testid=track-label]", (els) => els.map((e) => e.textContent));
+check(listed.length > 3 && JSON.stringify(listed) === JSON.stringify(headers.filter((h) => h !== "Song")), `its menu lists the song's tracks in the timeline's order: ${JSON.stringify(listed)} (${JSON.stringify(headers)})`);
+await page.click('[data-testid=setting-options] [data-option="Hats"]');
+check(await until(() => read("tracks/box.ts").includes('{ held: true, voices: 6, follows: "hats" }')), `picking Hats writes its key: ${read("tracks/box.ts").match(/box\(lane.*\)/)?.[0]}`);
+
 // A recording: a WAV dropped on it.
 fs.mkdirSync(`${ROOT}/files`, { recursive: true });
 wav(`${ROOT}/files/tone.wav`);
@@ -178,7 +188,7 @@ check((await page.$eval(rec, (e) => e.textContent).catch(() => null)) === "Drop 
 const b = await box(rec);
 const dropped = await dropFiles(b.x + b.width / 2, b.y + b.height / 2, [{ name: "tone.wav", path: `${ROOT}/files/tone.wav` }]);
 check(dropped.hint === "Play it in Box" && dropped.outline === "recording", `while dragging, the hint says so and outlines it: ${JSON.stringify(dropped)}`);
-check(await until(() => read("tracks/box.ts").includes('{ held: true, voices: 6, sample: "tone.wav" }')), `its call names the file: ${read("tracks/box.ts").match(/box\(lane.*\)/)?.[0]}`);
+check(await until(() => read("tracks/box.ts").includes('{ held: true, voices: 6, follows: "hats", sample: "tone.wav" }')), `its call names the file: ${read("tracks/box.ts").match(/box\(lane.*\)/)?.[0]}`);
 check(fs.existsSync(`${PROJ}/assets/tone.wav`) && fs.readFileSync(`${PROJ}/assets/tone.wav`).equals(fs.readFileSync(`${ROOT}/files/tone.wav`)), "the file came into assets/");
 check(await until(async () => (await toasts()).some((t) => t.startsWith("Box plays tone.wav"))), `a toast says so: ${await toasts()}`);
 check(await stepIs("setting Box to tone.wav"), `one undo step: ${await undoTitle()}`);

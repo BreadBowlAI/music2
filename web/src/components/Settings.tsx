@@ -4,12 +4,13 @@
 // menu of the song's tracks, and a sentence for regions and a keymap. A setting decides what is
 // built, so a change rebuilds the sound: pointing at one says so. One the code works out shows what
 // it is, with "edit in code" and why. Each change is one edit of the call, one undo step (CARD-4).
-// A plugin's stepped parameter is drawn here too, as a menu or a switch in its knob's row (CARD-6).
+// A plugin's stepped parameter uses the same menu and switch, in its knob's row (CARD-6, NodeGraph's
+// KnobControl, which keeps it a knob to the rest of the app).
 
 import clsx from "clsx";
 import { Check, ChevronDown, FileAudio } from "lucide-react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import { controlLabel, graphApi, type Choice, type Knob, type Setting } from "../lib/graph";
+import { controlLabel, graphApi, moduleName, type Choice, type Setting } from "../lib/graph";
 import { MISSING, usePeaks, type Peaks } from "../lib/peaks";
 import { useStore } from "../lib/store";
 import { MenuRow, Popover } from "./ui";
@@ -44,7 +45,7 @@ function said(x: { value: unknown; options?: Choice[] }): string {
 }
 
 /** An error's words, without "edit rejected: " in front. */
-const words = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, "");
+export const words = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, "");
 
 interface Props {
   x: Setting;
@@ -89,7 +90,8 @@ export function SettingRow(p: Props) {
   if (x.readonly) {
     // Its value, or the code that works it out; regions and a keymap in words.
     const shownAs = x.said ?? (x.value != null && !empty(x.value) ? said(x) : x.expression);
-    const why = x.readonly.charAt(0).toUpperCase() + x.readonly.slice(1);
+    // A sentence, once: a reason may end with its own full stop.
+    const why = (x.readonly.charAt(0).toUpperCase() + x.readonly.slice(1)).replace(/\.?$/, ".");
     return row(
       <>
         <span className={clsx("min-w-0 max-w-[55%] truncate text-right", x.expression && !x.said ? "font-mono text-fg" : "text-fg")} data-code={x.expression ? "" : undefined}>
@@ -97,30 +99,27 @@ export function SettingRow(p: Props) {
         </span>
         <span className="shrink-0 text-fg-faint">edit in code</span>
       </>,
-      `${why}.\n${where}${x.expression ? `\n${x.expression}` : ""}`,
+      `${why}\n${where}${x.expression ? `\n${x.expression}` : ""}`,
     );
   }
   const title = `${off ?? REBUILDS}\n${where}${x.written ? "" : " (the default: not written in the code yet, changing it writes it in)"}`;
   if (x.kind === "choice") return row(<MenuValue value={x} label={label} off={off} title={title} onPick={write} />, title);
-  if (x.kind === "track") return row(<MenuValue value={{ ...x, options: inOrder(x.options ?? []) }} label={label} off={off} title={title} onPick={write} />, title);
+  // A track: the list its setting offers (a mixer channel's: Master and its bus channels), else the
+  // song's tracks, top to bottom, which the view gives once (its timeline).
+  if (x.kind === "track") return row(<MenuValue value={{ ...x, options: x.options?.length ? x.options : songTracks() }} label={label} off={off} title={title} onPick={write} />, title);
   if (x.kind === "switch") return row(<SwitchValue value={x} label={label} off={off} onFlip={write} />, title);
   if (x.kind === "number") return row(<NumberBox x={x} label={label} off={off} onCommit={write} />, title);
   if (x.kind === "recording") return <RecordingRow {...p} label={label} tip={title} />;
   return row(<span className="text-fg truncate">{x.said ?? "—"}</span>, title);
 }
 
-/** The song's tracks in the timeline's order, top to bottom (the server sends them by key). */
-function inOrder(options: Choice[]): Choice[] {
-  const order = (useStore.getState().graph?.timeline.tracks ?? []).map((t) => t.module);
-  const at = (o: Choice) => {
-    const i = order.indexOf(String(o.value));
-    return i < 0 ? order.length : i;
-  };
-  return [...options].sort((a, b) => at(a) - at(b));
+/** The song's tracks as a menu offers them, top to bottom as the timeline has them: each by its key, called by its name. */
+function songTracks(): Choice[] {
+  return (useStore.getState().graph?.timeline.tracks ?? []).filter((t) => t.track).map((t) => ({ value: t.module, label: moduleName({ key: t.module, label: t.label }) }));
 }
 
 /** A choice's menu, or the song's tracks: the option now, and the others to pick from. */
-function MenuValue({ value, label, off, title, onPick }: { value: { value: unknown; written?: boolean; options?: Choice[] }; label: string; off: string | null; title?: string; onPick: (v: Choice["value"]) => void }) {
+export function MenuValue({ value, label, off, title, onPick }: { value: { value: unknown; written?: boolean; options?: Choice[] }; label: string; off: string | null; title?: string; onPick: (v: Choice["value"]) => void }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const options = value.options ?? [];
   return (
@@ -171,7 +170,7 @@ function MenuValue({ value, label, off, title, onPick }: { value: { value: unkno
 }
 
 /** A switch: off or on, its two options in that order; a click (or Space) flips it. */
-function SwitchValue({ value, label, off, onFlip }: { value: { value: unknown; written?: boolean; options?: Choice[] }; label: string; off: string | null; onFlip: (v: Choice["value"]) => void }) {
+export function SwitchValue({ value, label, off, onFlip }: { value: { value: unknown; written?: boolean; options?: Choice[] }; label: string; off: string | null; onFlip: (v: Choice["value"]) => void }) {
   const [no, yes] = value.options ?? [];
   const on = !!yes && value.value === yes.value;
   return (
@@ -322,29 +321,4 @@ function levels(p: Peaks, n: number): number[] {
     }
     return most / 127;
   });
-}
-
-/**
- * A hosted plugin's stepped parameter (CARD-6), in its knob's row: a menu of the plugin's names for
- * its steps, or a switch. Each writes its option's number into the code, one undo step.
- */
-export function KnobPick({ knob, label, owner, session, revision, editable, locked, dot }: { knob: Knob; label: string; owner: string; session: number; revision: number; editable: boolean; locked: string | null; dot: ReactNode }) {
-  const toast = useStore((s) => s.toast);
-  const off = !editable ? `${locked ?? "It can't be edited right now"}.` : null;
-  const write = (value: Choice["value"]) =>
-    graphApi.setValue(session, revision, knob.id, value, { name: `${owner} ${label.toLowerCase()}` }).catch((error) => toast(words(error)));
-  const value = { value: knob.value, written: knob.written, options: knob.options };
-  return (
-    <div
-      className="relative h-10 pl-4 pr-3 flex items-center gap-2 text-xs min-w-0"
-      data-knob={knob.label}
-      data-kind={knob.kind}
-      data-value={knob.value}
-      title={off ?? `In your code: ${knob.file}, line ${knob.line}`}
-    >
-      {dot}
-      <span className="flex-1 min-w-0 text-fg-muted truncate">{label}</span>
-      {knob.kind === "switch" ? <SwitchValue value={value} label={label} off={off} onFlip={write} /> : <MenuValue value={value} label={label} off={off} onPick={write} />}
-    </div>
-  );
 }

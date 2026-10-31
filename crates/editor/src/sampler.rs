@@ -30,8 +30,9 @@ pub const SAMPLER: &str = "std:sampler";
 /// The kernel a sampler's voices are when it plays regions.
 const REGIONS: &str = "std:regions";
 
-/// What a sampler's card shows: the files its voices play (none yet, one, one per zone, or each its
-/// regions name once), and for regions what it plays, in words.
+/// What a sampler plays: the files its voices play (none yet, one, one per zone, or each its regions
+/// name once), and for regions what it plays, in words. Its card says these through its settings
+/// (CARD-1): its keymap's and its regions' words.
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct SamplerCard {
     pub files: Vec<String>,
@@ -127,6 +128,13 @@ pub(crate) fn plays_others(options: Option<&Arg>) -> Option<&'static str> {
 /// as any recording is (CARD-5, [`crate::settings::set_recording`]): `sample: "<name>"` written into
 /// its options, or the name written there replaced. One undo step, "Sampler plays kick.wav".
 pub fn set_sample(s: &mut Session, at: u64, call: &str, file: &Imported) -> Result<Edited, EditError> {
+    can_take(s, at, call)?;
+    crate::settings::set_recording(s, at, &format!("{call}/@sample"), file)
+}
+
+/// Whether sampler call `call` of revision `at` can take a file, before one is brought in (CARD-5):
+/// it is a Sampler, playing no zones or regions, whose file the card can change.
+pub fn can_take(s: &Session, at: u64, call: &str) -> Result<(), EditError> {
     ready(s)?;
     let site: Site = current_site(s, at, call)?.clone();
     let rev = s.accepted();
@@ -135,7 +143,7 @@ pub fn set_sample(s: &mut Session, at: u64, call: &str, file: &Imported) -> Resu
     if let Some(why) = options_of(m, site.id).ok().flatten().and_then(|i| plays_others(site.args.get(i))) {
         return Err(EditError::Rejected(why.into()));
     }
-    crate::settings::set_recording(s, at, &format!("{call}/@sample"), file)
+    crate::settings::can_take(s, at, &format!("{call}/@sample")).map(drop)
 }
 
 #[cfg(test)]

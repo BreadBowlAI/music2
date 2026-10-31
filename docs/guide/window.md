@@ -78,7 +78,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
     | a small switch | on or off | click it |
     | a box with a number | a number | click it, type, then Return (Escape leaves it). **Voices** and other counts take whole numbers only: `2.5` is refused, in red under the box |
     | a waveform and a file name | a recording | drop a WAV or FLAC file on it (or on the card) to play that instead |
-    | a track's name with ▾ | a track | pick another track |
+    | a track's name with ▾ | a track | pick another track. A mixer channel's **to** lists **Master** and the song's buses |
 
     Each change is written into the sound's code (`lfo(time.beats, { shape: "saw" })`) as one Undo step. A setting decides what is built, so changing one rebuilds that sound: a note playing just then may stop. A grey value is the default, not written in the code yet. A setting the code works out, or a list of regions, says **edit in code**.
   - A plugin's parameter that has a few steps with names (a filter's type, say) is a menu of the plugin's own names, and one that is just off or on (a bypass) is a switch. The code still holds the number.
