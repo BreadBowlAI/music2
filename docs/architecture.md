@@ -708,7 +708,7 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 ### Presentation and local files
 
 **FMT-19.** `layout.json` holds shared presentation keyed by track key: track order and colour, markers, later canvas positions. It is never part of a revision and never read by the build. Unknown keys in it are ignored.
-- Its schema: `order`, the track keys top to bottom; `tracks.<key>.colour`, one of the palette's twelve names (a `#rrggbb` written by hand reads as the nearest name by hue, and is rewritten as a name when that track's colour is next written); `markers`, a list of `{"beat", "name"}`, sorted by beat, one a beat, each name one line of 1 to 40 characters; `key`, the song's musical key, `{"root": "A", "scale": "minor"}` (roots in ASCII: `C`, `F#`, `Bb`; `major` or `minor`), which nothing that plays reads.
+- Its schema: `order`, the track keys top to bottom; `tracks.<key>.colour`, one of the palette's twelve names (a `#rrggbb` written by hand reads as the nearest name by hue, and is rewritten as a name when that track's colour is next written); `markers`, a list of `{"beat", "name"}`, sorted by beat, one a beat, each name one line of 1 to 40 characters; `key`, the song's musical key, `{"root": "A", "scale": "minor"}` (roots in ASCII: `C`, `F#`, `Bb`; a scale by its name in [NOTE-1](#notes-and-scales)'s table), which nothing that plays reads.
 - A key that names no track (one commented out of the song for a while) is ignored when read and kept when the file is written: in `order` after the key before it, in `tracks` with its colour. Only deleting the track removes its key. Unknown keys are written back as read, in the order read. The canonical form is two-space JSON with `order`, `tracks` and `markers` first. Markers are written by `POST /api/graph/markers` (the whole list) and the key by `POST /api/graph/song-key`, not by `/api/graph/layout`; each is a layout-only Tx, one undo step with no revision.
 - The server reads it, watches it, and publishes an outside change with no revision. A Tx that writes it is based on what the disk says when it is planned, since no snapshot holds it, so an outside write in between is a conflict.
 - A file that doesn't parse is `layout.invalid`: the view shows the defaults; the track builders leave it out of their Tx; reorder, recolour and markers refuse; Reset layout writes the defaults over it as one undo step.
@@ -1266,6 +1266,75 @@ The build MUST refuse a list that isn't one, a region that isn't an object, any 
 7. `sample` and `zones` play as they did, bit for bit, through `std:sampler`; regions play through `std:regions`. A call gives one of `sample`, `zones` and `regions`; `sample` with `zones` still plays the zones, as before.
 - *Why:* one engine for real recorded instruments (a piano's velocity layers, a drum's takes, a release noise, a held string), from SFZ's ideas; and a turn that a voice took from engine time, or from the voices that happened to be free, would make live playback differ from the export.
 - *Today:* since track sampler2 (std 0.5.0): `std/kernels-src/src/sampler.rs` (both kernels, the values layout in its header and in `std/m2pkg.toml`; tested in `sampler/tests.rs`: keys and velocity, layers, turns from the count, release regions (and a held note one matches is active), loops held then played out with a bounded step (and a loop to the file's last frame, past it, or within a step of it above the root), tune, volume, pan and offset, any block split, and the zones' bits as before), `std/src/sampler.ts`, which checks the one-of rule and counts the note starts for every call with regions (`std:regions`' `count` is an audio input, which must be connected). `core/session/tests/fixtures/sampler-regions` (two velocity layers, a round robin of 2, a release sound and a loop) is one of the pure fixtures: it renders the same bits on 1 to 7 threads, live, and live after the engine sat stopped (`std_plays_the_export_after_the_engine_sat_stopped`), and is recorded in `renders.json` and, as `m2 render` writes it (whole, and 6 s from 4 s in, where the replay must bring the count), in `e2e/renders.sha256` ([PLAT-4](#platforms)); four C4s on two takes play take 1, 2, 1, 2, live after idling as in the export (`round_robin_takes_turns_by_the_notes_live_as_in_the_export`, `core/play/tests/bit_identity.rs`). The component's regions reach the kernel in its layout (`the_sampler_gives_its_regions_their_kernel`). The Device card says what a Sampler with regions plays in words ("5 recordings, 2 layers, round robin of 2, release sounds, loops") and refuses a dropped WAV in words, as for zones (`crates/editor/src/sampler.rs`, `a_sampler_with_regions_says_what_it_plays_and_refuses_a_drop`). Not yet (gap #22): a sustain pedal, choke groups, crossfades between velocity layers, band-limited playback and streaming; a turn counted for each key or region alone, as SFZ does, which needs a count that sees each note's pitch: one signal outside the voices can't say which keys of a chord started, and kernels get no events yet ([ABI-2](#kernel-abi-reservations) reserves them).
+
+## Notes and scales
+
+**In short:** the piano roll's tools and its help with scales. A scale is the set of notes that sound right together, and music2 knows thirteen, in one table. The song's key, a root and a scale, says which notes fit: the roll shades the others, can lock new and moved notes to the key, and stamps whole chords built on the key's notes. Notes copy and paste between clips, a groove gives notes a feel, and a drum kit's roll folds to the drums a clip uses. Rules NOTE-1 to NOTE-9 (track `notes`, gaps #6, #16, #15 and #3).
+
+**NOTE-1.** music2 knows its scales from one table, `m2_editor::scales` (`crates/editor/src/scales.rs`): each scale's name as files write it, its label, what it sounds like in a few words, and its steps (semitones from the root). Nothing else lists scales. `layout.json`'s `key` names one of them by its name ([FMT-19](#presentation-and-local-files)); the key field and agents read the table from `GET /api/theory`, and the roll reads what the song's key means from the timeline ([NOTE-2](#notes-and-scales)).
+
+| Name | Label | Steps |
+|---|---|---|
+| `major` | Major | 0 2 4 5 7 9 11 |
+| `minor` | Minor | 0 2 3 5 7 8 10 |
+| `dorian` | Dorian | 0 2 3 5 7 9 10 |
+| `phrygian` | Phrygian | 0 1 3 5 7 8 10 |
+| `lydian` | Lydian | 0 2 4 6 7 9 11 |
+| `mixolydian` | Mixolydian | 0 2 4 5 7 9 10 |
+| `locrian` | Locrian | 0 1 3 5 6 8 10 |
+| `harmonic-minor` | Harmonic minor | 0 2 3 5 7 8 11 |
+| `melodic-minor` | Melodic minor | 0 2 3 5 7 9 11 |
+| `major-pentatonic` | Major pentatonic | 0 2 4 7 9 |
+| `minor-pentatonic` | Minor pentatonic | 0 3 5 7 10 |
+| `blues` | Blues | 0 3 5 6 7 10 |
+| `chromatic` | Chromatic | 0 1 2 3 4 5 6 7 8 9 10 11 |
+
+- A request may write a scale with capitals or spaces (`Harmonic Minor`); the file always gets the name. The file format changes only by adding names: a song written before this table still reads, and a name this version doesn't know is no key, as before.
+- *Why:* a scale said twice (the page's list, the server's) drifts, and an agent must be able to ask which scales there are rather than guess.
+- *Today:* since track `notes`: `Scale` (an enum, so a scale that isn't one can't be built) and `SongKey` in `crates/editor/src/scales.rs` and `songkey.rs`; `GET /api/theory` (`crates/server/src/routes_notes.rs`). Tested by `every_scale_has_its_notes_in_every_key` and `a_scale_is_read_by_any_spelling_and_written_by_its_name` (`scales_tests.rs`), `a_key_in_any_scale_is_written_into_layout_json` (`songkey_tests.rs`), and `the_theory_route_lists_the_tables` (`crates/server/src/routes_notes_tests.rs`).
+
+**NOTE-2.** The timeline publishes the song's key with what it means, worked out from the table: `notes`, its pitch classes from the root up (0 is C); `snap`, for each of the twelve pitch classes from C, the semitones to the nearest note of the key; and `chords`, one for each note of the key that has a chord ([NOTE-4](#notes-and-scales)), with its numeral, and each kind's name and notes. The page looks these up and never works out a scale, a snap or a chord itself.
+- *Why:* the roll draws and snaps while a pointer moves, so it can't ask the server each time; but the music it applies must be the server's, the same an agent gets.
+- *Today:* since track `notes`: `KeyView` in `crates/editor/src/scales.rs`, `TimelineView.key`. Tested by `the_timeline_publishes_what_the_key_means` (`songkey_tests.rs`).
+
+**NOTE-3.** **Lock to key** is a switch in the roll, off by default, shown while the song has a key and the lane isn't a drum kit's. While it is on, a note drawn, dragged or pasted goes to the nearest note of the key; a pitch exactly between two notes of the key goes **down** to the lower one. A dragged note lands on the key's note nearest the pointer, and the other selected notes move by as much, each then to its nearest note of the key. ↑ and ↓ move selected notes to the next note of the key. Notes already written never change when it is turned on. It is a view setting ([NOTE-9](#notes-and-scales)), never song data.
+- *Why:* a beginner drawing a melody gets only notes that fit. A tie must go one way, said once, or two tools would snap one pitch two ways.
+- *Today:* since track `notes`: `SongKey::snap` (its table is the published `snap`), the roll's `fit` in `web/src/components/NoteView.tsx`. Tested by `snapping_goes_to_the_nearest_note_and_a_tie_goes_down` (`scales_tests.rs`) and `e2e/nt-notes.mjs`.
+
+**NOTE-4.** A **chord stamp** places a whole chord in one click. Its notes are stacked from the key's notes, so every chord fits the key: counted in the key's notes from the root (1), a **triad** is 1-3-5, a **7th** 1-3-5-7, a **sus2** 1-2-5, a **sus4** 1-4-5 and an **add9** 1-3-5-9. Its root is the row clicked, moved to the nearest note of the key (a tie going down, [NOTE-3](#notes-and-scales)). Inversion k moves the k lowest notes up an octave: a triad, a sus and an add9 have 3 inversions, a 7th 4 (the I key steps through them). A pentatonic or blues key stamps the chords of its major or minor (major pentatonic of major; minor pentatonic and blues of minor), only on its own notes: the blues' added note has no chord. A chromatic key has none. A chord is named by its root and its sound: `C`, `Dm`, `Bdim`, `G7`, `Fmaj7`, `Am7♭5`, `Dsus2`, `Csus4`, `Cadd9`; its numeral is its place in the key, upper case for a major chord (`IV`), lower for a minor (`ii`), with ° for diminished and + for augmented. In the roll it is drawn like a note: the press places it, sounding, and a drag sets its length. Agents stamp with the `stamp` clip gesture ([WRITE-10](#writes)), which builds the same notes. Either way it is one Tx and one undo step.
+- *Why:* chords that fit are the hardest part for a beginner; building them from the key's own notes means every stamp sounds right, and numerals teach what a progression is (I–V–vi–IV).
+- *Today:* since track `notes`: `SongKey::chords` and `Chord` in `crates/editor/src/scales.rs`, `Gesture::Stamp` in `clips.rs`. Tested by `chord_stamps_in_c_major` and `chord_stamps_in_a_minor` (every degree, every kind, every inversion, `scales_tests.rs`), `a_stamp_is_one_undo_step` (`clips_tests.rs`) and `e2e/nt-notes.mjs`.
+
+**NOTE-5.** Notes **copy and paste between clips** through the window's one clipboard, the one the timeline copies clips to: ⌘C in the roll copies the selected notes as one notes clip that starts where the first of them starts, ⌘X copies and deletes them, and ⌘V pastes the clipboard's notes clips **into** the clip the roll shows. They keep their distances, the earliest at the playhead when it is inside the clip, else at the clip's start (on the grid while it snaps), and fit the key while Lock to key is on. The pasted notes are added to the clip's own, and selected. The timeline pastes the same clipboard as clips. It is the `paste` clip gesture with `into`, the same for agents: one Tx, one undo step.
+- *Why:* a part is built by copying (a bass line into a second clip, a fill into the next bar), and one clipboard means a note copied in the roll pastes in the timeline too.
+- *Today:* since track `notes`: `Gesture::Paste`'s `into` and `fit` in `crates/editor/src/clips.rs`. Tested by `notes_paste_into_another_clip` (exact lanes before and after, one undo, `clips_tests.rs`) and `e2e/nt-notes.mjs`.
+
+**NOTE-6.** Holding ⌘ (Ctrl on Linux) while a note is drawn, dragged or resized places it **off the grid**, as if snap were off, for as long as it is held.
+- *Why:* a note a little early or late is a feel; turning snap off and on again for it breaks the flow.
+- *Today:* since track `notes`: `snapBeat` in `web/src/components/NoteView.tsx`. Tested by `e2e/nt-notes.mjs`.
+
+**NOTE-7.** A **groove** gives notes a feel. It is one mechanism: a step (an eighth or a sixteenth of a beat), and for each step of a beat a timing (a move, or none) and a velocity (or none). A note belongs to the step whose straight place it starts from a quarter step before to 45% of a step after; a note nowhere near a step (a triplet, a 32nd) is left as it is. A note on a step that has a timing moves to that step's place and keeps its end (never shorter than 1/64 of a beat); one on a step that has a velocity takes it. So a groove applied twice is applied once, and one groove after another puts the notes at the second one's places. The grooves:
+
+| Groove | Step | Timing | Velocity |
+|---|---|---|---|
+| Swing, 50% to 71% (the roll offers 50%, 55%, 60%, 66% and 71%) | an eighth, or a sixteenth (the roll's: a sixteenth while its grid is finer than 1/8) | the second step of each pair at that share of the pair; 50% is straight | none |
+| Shuffle | an eighth | the second eighth of each beat at 2/3 of the beat (a triplet feel) | none |
+| Laid back | a sixteenth | the 2nd, 3rd and 4th sixteenths of each beat 1/32 of a beat late | none |
+| Pushed | a sixteenth | the same, 1/32 of a beat early | none |
+| Accents | a sixteenth | none | the beat 0.9, the "and" 0.75, the other two 0.6 |
+
+Pairs and beats are counted from the song's start, as the roll's grid lines are. It acts on the selected notes, or with none, on every note of the clip, as the `groove` clip gesture (the roll's menu sends it, and so may agents): one Tx, one undo step.
+- *Why:* swing and feel are what make a drawn part sound played; one mechanism (a groove table) holds swing's amounts and the named feels, so a new feel is a row, not new code.
+- *Today:* since track `notes`: `Groove` and `Gesture::Groove` in `crates/editor/src/clips.rs` (its table in `grooves.rs`). Tested by `each_groove_moves_notes_to_exact_places`, `a_groove_twice_is_a_groove_once` and `a_groove_is_one_undo_step` (`grooves_tests.rs`, `clips_tests.rs`).
+
+**NOTE-8.** On a lane whose rows are named for a drum kit's drums (the names its instrument's descriptor gives its notes, `editor.notes`), the roll is **folded** by default: it shows only the rows of the drums the clip's notes use, highest first, and the kit's named rows while the clip has no notes. **Fold** in the roll's header shows every row, and again folds. A drag moves notes among the rows shown. It is a view setting ([NOTE-9](#notes-and-scales)).
+- *Why:* a kit has 30 rows and a beat uses five; scrolling past the 25 empty ones hides the beat.
+- *Today:* since track `notes`: the roll's `rows` in `web/src/components/NoteView.tsx`. Tested by `e2e/nt-notes.mjs`.
+
+**NOTE-9.** The roll's **view settings** are this machine's, kept in the song's `.music2/view.json` under `roll` ([FMT-20](#presentation-and-local-files)): `lock` (Lock to key, [NOTE-3](#notes-and-scales)), `fold` ([NOTE-8](#notes-and-scales)) and `rows`, the height of a row, 10 to 24 px (14 by default), which ⌘↓ makes 2 px taller and ⌘↑ 2 px shorter while the roll has the keyboard (taste.md NT-5). None is song data, none is an undo step, and none is shared with the song ([HOME-1](#homes-of-values): their home is `local`). The chord a stamp places, and its inversion, belong to the window, as Draw mode does. Every change the roll makes to notes is one Tx and one undo step.
+- *Why:* how you look at notes isn't the song; a collaborator who opens it gets their own view.
+- *Today:* since track `notes`: `roll` in `KEYS` (`crates/server/src/graph/view_file.rs`), the roll's `useLocal("roll")`. Tested by `the_rolls_view_settings_are_kept` (`crates/server/src/graph/view_file_tests.rs`) and `e2e/nt-notes.mjs`.
+- *Not yet:* an **arpeggiator** (gap #16). With std kept small ([Typed sounds](designs/cards/design.md) §7), it belongs in a pack, and it needs kernels that make events, which the kernel ABI reserves but doesn't build ([ABI-2](#kernel-abi-reservations)).
 
 ## Cards
 
