@@ -1,6 +1,6 @@
 # Kernel ABI v1
 
-The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3 and ABI-5](architecture.md#kernel-abi-reservations); this page is the detail behind them.
+The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3, ABI-5, ABI-6 and ABI-7](architecture.md#kernel-abi-reservations); this page is the detail behind them.
 
 ## In short
 
@@ -12,6 +12,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 - An **offline kernel** is run by music2 off the audio thread, to make something from a file: `std:stretch` makes a warped clip's stretch. Song code can't call one.
 - A module says its version in a small part of its file named **`m2_abi`**: **1**. music2 reads it first, before it looks at anything else. It refuses a module built for any other version, and says which.
 - v1 only ever grows at the end: new optional exports, and new fields at the end of the settings block. Anything else is v2.
+- A pack's kernels have a **time limit** on every call: 100 ms while the song plays, 5 s for everything else. A call still running then is stopped, and its sound goes silent ([below](#the-time-limit-abi-6-abi-7)). std's kernels, music2's own, have none.
 
 | Part | Where below |
 |---|---|
@@ -21,6 +22,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 | Reading an audio file | [The asset import](#the-asset-import) |
 | A kernel music2 runs to make a render | [Offline kernels](#offline-kernels) |
 | What every kernel must keep | [The five rules](#the-five-rules-abi-5) |
+| How long a call may take | [The time limit](#the-time-limit-abi-6-abi-7) |
 | What is fixed now, built later | [Reserved shapes](#reserved-shapes) |
 
 The Rust kit (`std/kernels-src/kernel`) writes all of this for you. Write a `struct`, implement `Kernel`, and call `export!`. In `Kernel::new`, `cfg.values` holds your numbers and `cfg.assets` your audio files; `asset.read(channel, frame, &mut buf)` reads one. `std:sampler` (`std/kernels-src/src/sampler.rs`) is a whole example.
@@ -159,6 +161,21 @@ The five rules hold for offline kernels too: memory only at birth, a reset that 
 | 5 | Keep no per-state data in statics: every state in the sandbox shares them. Let no static point at memory a state took. All one `k_new` takes lies in one run of bytes | many states share one sandbox, and a later layout may move a state's bytes |
 
 The host checks rules 1 and 2 by construction (the seal and the prewarm). Debug builds check rule 3 at every call.
+
+## The time limit (ABI-6, ABI-7)
+
+Every call into a pack's kernel must return within its limit. A call still running then is stopped where it is (a trap), however far it got. std's kernels, music2's own code, run with no limit and no checks.
+
+| Calls | Limit |
+|---|---|
+| `k_process`, `k_reset` and `k_active` while the song plays live | 100 ms |
+| Everything else: instantiating the module (its start function), `m2_alloc`, `k_ports`, `k_new`, the first `k_reset` as the sound is made (live too), and every call of an export, a render, a preview or an offline kernel | 5 s |
+
+- A block's call should take microseconds: the whole song shares a block's time (2.7 ms at 48 kHz). The limits are far past that, so only a kernel that never returns meets them, or a computer so busy it gives the call no time.
+- The time `m2.asset_read` spends reading a file for the kernel (an offline kernel's source, [held as **disk**](#the-asset-import)) isn't counted.
+- Stopped while the song plays, the kernel's sound is silent until the song is built again, and its sandbox isn't called again until then; the status names the sound, its track and whose code it runs (`sound.too-slow`). Offline, the render fails, naming it. Stopped as it is made (`k_new`, or its first `k_reset`), the sound doesn't load, and music2 doesn't make that kernel with those settings again until the song opens again or the pack changes. The registry refuses a version whose preview was stopped.
+- What it costs: the checks are compiled into a pack's kernels, at each function's start and each loop's turn. Measured on std's 36 kernels compiled as a pack's, a call costs about a fifth more (+20.6 % in all; least for kernels with long straight runs, most for small kernels with tight loops). Keep the work of a call in few, long loops.
+- How it works, for the curious: wasmtime's epochs. A thread moves a counter on every 10 ms, and the compiled code checks it at each function's start and each loop's turn.
 
 ## Reserved shapes
 
