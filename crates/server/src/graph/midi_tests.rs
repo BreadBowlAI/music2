@@ -281,6 +281,9 @@ fn midi_never_waits_for_a_compile() {
     let graph = std::sync::Arc::new(fixture.open());
     graph.midi(Event::Plugged("Keys"));
     graph.midi_target(Some(("kick".into(), "hits".into()))).unwrap();
+    // The compile is a request that starts after the save. The actor is still busy with the one
+    // before for a moment after answering it, and that request isn't the compile.
+    let saved = graph.now_ns();
     let saver = {
         let (g, dir) = (graph.clone(), fixture.0.clone());
         std::thread::spawn(move || {
@@ -288,7 +291,7 @@ fn midi_never_waits_for_a_compile() {
             g.poll()
         })
     };
-    eventually("the session compiles", || graph.busy().is_some());
+    eventually("the session compiles", || graph.busy().is_some_and(|since| since >= saved));
     let busy_from = graph.busy().unwrap();
     let t = Instant::now();
     send(&graph, &[0x90, 36, 100]);
@@ -304,7 +307,7 @@ fn midi_never_waits_for_a_compile() {
         eprintln!("void: the compile took only {compile_ms:.0} ms");
         return;
     }
-    eprintln!("midi: sent in {sent_ms:.2} ms, heard {:.0} ms before a {compile_ms:.0} ms compile ended", (end - heard) as f64 / 1e6);
+    eprintln!("midi: sent in {sent_ms:.2} ms, heard {:.0} ms into a {compile_ms:.0} ms compile", (heard - start) as f64 / 1e6);
     assert!(sent_ms < 20.0, "sending took {sent_ms:.1} ms");
     assert!(heard < end, "heard only after the compile ended");
 }
