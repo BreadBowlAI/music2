@@ -231,11 +231,11 @@ impl Chord {
     /// What it is, in plain words.
     pub fn words(self) -> &'static str {
         match self {
-            Chord::Triad => "Three notes: the root, a third and a fifth",
-            Chord::Seventh => "Four notes: a triad and a seventh, richer",
-            Chord::Sus2 => "The root, a second and a fifth: open",
-            Chord::Sus4 => "The root, a fourth and a fifth: waiting to move on",
-            Chord::Add9 => "A triad with a ninth on top: bright",
+            Chord::Triad => "Three notes, each two notes of the key above the last: the most common chord",
+            Chord::Seventh => "A triad with a fourth note on top, two notes of the key higher: richer",
+            Chord::Sus2 => "A triad with its middle note one note of the key lower: open, and on some notes tense",
+            Chord::Sus4 => "A triad with its middle note one note of the key higher: waiting to move on, and on some notes tense",
+            Chord::Add9 => "A triad with the note just above its lowest one added, an octave up: bright",
         }
     }
 
@@ -278,10 +278,15 @@ pub struct KeyView {
 pub struct Degree {
     /// Its root's pitch class (0 is C).
     pub root: u8,
-    /// Its place in the key: `IV`, `ii`, `vii°`.
-    pub numeral: String,
-    /// Each kind of chord on it.
+    /// Its root's name in the key: `D`, `F♯`.
+    pub name: String,
+    /// Its place in the key: `IV`, `ii`, `vii°`; none on a note no chord is built on (the blues'
+    /// blue note).
+    pub numeral: Option<String>,
+    /// Each kind of chord on it whose notes are all in the key (NOTE-4).
     pub kinds: BTreeMap<Chord, Stamp>,
+    /// Each other kind, with the words a stamp of it is refused in.
+    pub refused: BTreeMap<Chord, String>,
 }
 
 /// One chord: its name, and its notes for each inversion, in semitones from the root's row.
@@ -337,12 +342,12 @@ impl SongKey {
         let Some(i) = scale.steps().iter().position(|s| (self.pc() + s) % 12 == pc) else { return pc_name(pc) };
         let first = LETTERS.find(&self.root()[..1]).expect("a root starts with its letter");
         let letter = (first + i) % 7;
+        // A double sharp or flat (C♯ Lydian's F𝄪) is spelled as the note on its own (G): many
+        // fonts lack the signs, and a beginner reads the row's name.
         let sign = match (pc + 12 - NATURAL[letter]) % 12 {
             0 => "",
             1 => "♯",
-            2 => "𝄪",
             11 => "♭",
-            10 => "𝄫",
             _ => return pc_name(pc),
         };
         format!("{}{sign}", &LETTERS[letter..=letter])
@@ -367,39 +372,77 @@ impl SongKey {
         std::array::from_fn(|pc| (self.snap(60.0 + pc as f64) - (60.0 + pc as f64)) as i8)
     }
 
-    /// The chords on the key's notes (NOTE-4), from the root up: none for a scale with no chords
-    /// (chromatic), and none on a note its chords' scale doesn't have (the blues' blue note).
+    /// The chords on each note of the key (NOTE-4), from the root up, built from its chords'
+    /// scale: none for a scale with no chords (chromatic). A kind whose notes aren't all in the key
+    /// (in a pentatonic or blues key) is refused in words, naming the notes that aren't; so is
+    /// every kind on a note its chords' scale doesn't have (the blues' blue note).
     pub fn chords(&self) -> Vec<Degree> {
         let Some(scale) = self.scale().chords() else { return vec![] };
         let steps = scale.steps();
         let n = steps.len();
         // The scale's kth note up from the root, in semitones; past the seventh, an octave up.
         let note = |k: usize| steps[k % n] as i32 + 12 * (k / n) as i32;
-        let notes = self.notes();
-        (0..n)
-            .filter_map(|i| {
-                let root = (self.pc() + steps[i]) % 12;
-                if !notes.contains(&root) {
-                    return None;
+        let key = self.notes();
+        let why = "a stamp places only chords whose notes are all in the key";
+        key.iter()
+            .map(|&root| {
+                let name = self.spelled(root);
+                let Some(i) = steps.iter().position(|s| (self.pc() + s) % 12 == root) else {
+                    let no = format!("{} has no chord on {name}, its blue note", self.name());
+                    let refused = Chord::ALL.iter().map(|c| (*c, no.clone())).collect();
+                    return Degree { root, name, numeral: None, kinds: BTreeMap::new(), refused };
+                };
+                let (mut kinds, mut refused) = (BTreeMap::new(), BTreeMap::new());
+                let mut third = (0, 0);
+                for c in Chord::ALL {
+                    let offsets: Vec<u8> = c.steps().iter().map(|s| (note(i + s) - note(i)) as u8).collect();
+                    if c == Chord::Triad {
+                        third = (offsets[1], offsets[2]);
+                    }
+                    let chord = format!("{name}{}", suffix(c, &offsets));
+                    let out: Vec<String> =
+                        offsets.iter().map(|o| (root + o) % 12).filter(|pc| !key.contains(pc)).map(|pc| self.spelled(pc)).collect();
+                    if !out.is_empty() {
+                        let (them, are) = if out.len() == 1 { (out[0].clone(), "isn't") } else { (out.join(" and "), "aren't") };
+                        refused.insert(c, format!("{chord} has {them}, which {are} in {}: {why}", self.name()));
+                        continue;
+                    }
+                    let shapes = (0..c.inversions())
+                        .map(|inv| {
+                            let mut v: Vec<u8> = offsets.iter().enumerate().map(|(j, o)| if j < inv { o + 12 } else { *o }).collect();
+                            v.sort_unstable();
+                            v
+                        })
+                        .collect();
+                    kinds.insert(c, Stamp { name: chord, shapes });
                 }
-                let kinds = Chord::ALL
-                    .iter()
-                    .map(|c| {
-                        let offsets: Vec<u8> = c.steps().iter().map(|s| (note(i + s) - note(i)) as u8).collect();
-                        let shapes = (0..c.inversions())
-                            .map(|inv| {
-                                let mut v: Vec<u8> = offsets.iter().enumerate().map(|(j, o)| if j < inv { o + 12 } else { *o }).collect();
-                                v.sort_unstable();
-                                v
-                            })
-                            .collect();
-                        (*c, Stamp { name: format!("{}{}", self.spelled(root), suffix(*c, &offsets)), shapes })
-                    })
-                    .collect::<BTreeMap<_, _>>();
-                let triad = &kinds[&Chord::Triad].shapes[0];
-                Some(Degree { root, numeral: numeral(i + 1, triad[1], triad[2]), kinds })
+                Degree { root, name, numeral: Some(numeral(i + 1, third.0, third.1)), kinds, refused }
             })
             .collect()
+    }
+
+    /// The key a sample must be in, or be the relative of, to fit a song in this key (LIB-1): a
+    /// key with the same notes. A mode is the major key whose notes it has (D Dorian, C major), a
+    /// minor scale its own minor, a pentatonic or the blues its major or minor. None for a
+    /// chromatic key, which every key fits as well as any other. The root's pitch class, and
+    /// whether the key is minor.
+    pub fn sample_key(&self) -> Option<(u8, bool)> {
+        let minor = self.scale().minor()?;
+        let notes: Vec<u8> = {
+            let mut v = self.notes();
+            v.sort_unstable();
+            v
+        };
+        if matches!(self.scale(), Scale::Major | Scale::Minor) || notes.len() != 7 {
+            return Some((self.pc(), minor));
+        }
+        // A mode: the major key of the same seven notes, when there is one.
+        let major = (0..12u8).find(|r| {
+            let mut m: Vec<u8> = Scale::Major.steps().iter().map(|s| (r + s) % 12).collect();
+            m.sort_unstable();
+            m == notes
+        });
+        Some(major.map_or((self.pc(), minor), |r| (r, false)))
     }
 
     /// The notes of chord `chord` on root `root`, a note of the key with a chord, in inversion
@@ -407,22 +450,28 @@ impl SongKey {
     /// no chord or a note would be above the highest.
     pub fn stamp(&self, root: f64, chord: Chord, inversion: usize) -> Result<Vec<f64>, String> {
         let p = root.round() as i32;
+        if !(0..=TOP).contains(&p) {
+            return Err(format!("A chord's root is a pitch from 0 (C-1) to 127 (G9), not {}", m2_song::lane::number(root)));
+        }
         let pc = p.rem_euclid(12) as u8;
-        let names = || self.names().join(", ");
         let Some(d) = self.chords().into_iter().find(|d| d.root == pc) else {
             return Err(match self.scale().chords() {
                 None => format!("{} has no chords to stamp: pick a key with a scale of seven notes", self.name()),
-                Some(_) if self.has(p) => format!("{} has no chord on {}, its blue note", self.name(), self.spelled(pc)),
-                Some(_) => format!("{} isn't in {}: a chord is built on one of its notes ({})", pc_name(pc), self.name(), names()),
+                Some(_) => {
+                    format!("{} isn't in {}: a chord is built on one of its notes ({})", pc_name(pc), self.name(), self.names().join(", "))
+                }
             });
         };
-        let stamp = &d.kinds[&chord];
+        let Some(stamp) = d.kinds.get(&chord) else {
+            return Err(d.refused.get(&chord).cloned().unwrap_or_default());
+        };
         let shape = stamp.shapes.get(inversion).ok_or_else(|| {
             format!("{} has {} inversions, 0 to {}, not {inversion}", stamp.name, stamp.shapes.len(), stamp.shapes.len() - 1)
         })?;
         let notes: Vec<f64> = shape.iter().map(|o| (p + *o as i32) as f64).collect();
         if notes.iter().any(|n| *n > TOP as f64) {
-            return Err(format!("{} from {} goes above the highest note, G9", stamp.name, root));
+            let from = m2_song::lane::pitch_name(p as f64).unwrap_or_else(|| p.to_string());
+            return Err(format!("{} from {from} goes above the highest note, G9", stamp.name));
         }
         Ok(notes)
     }
@@ -465,13 +514,10 @@ fn suffix(chord: Chord, offsets: &[u8]) -> String {
             ("aug", 10) => "aug7".into(),
             (t, s) => format!("{t}({})", ["6", "♭7", "7"][(s as usize).clamp(9, 11) - 9]),
         },
+        // Named by the second or fourth as it is: a minor, major or augmented second; a
+        // diminished, perfect or augmented fourth.
         Chord::Sus2 | Chord::Sus4 => {
-            let sus = match offsets[1] {
-                1 => "sus♭2",
-                2 => "sus2",
-                5 => "sus4",
-                _ => "sus♯4",
-            };
+            let sus = ["sus♭2", "sus2", "sus♯2", "sus♭4", "sus4", "sus♯4"][(offsets[1] as usize).clamp(1, 6) - 1];
             format!("{sus}{}", fifth(offsets[2]))
         }
         Chord::Add9 => {

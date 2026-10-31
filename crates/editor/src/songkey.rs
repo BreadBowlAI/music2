@@ -29,11 +29,12 @@ pub struct SongKey {
     scale: Scale,
 }
 
-/// A key as a file or a request writes it, before it is read.
-#[derive(Deserialize)]
-struct Written {
-    root: String,
-    scale: String,
+/// A key as a file or a request writes it, before it is read: what `POST /api/graph/song-key`
+/// takes, so a key that doesn't read is refused as an edit, in words ([`set_written`]).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Written {
+    pub root: String,
+    pub scale: String,
 }
 
 impl TryFrom<Written> for SongKey {
@@ -115,6 +116,13 @@ pub fn of(dir: &Path) -> Option<SongKey> {
         Read::Valid(l) => read(&l),
         _ => None,
     }
+}
+
+/// [`set`] from a key as a request writes it: one that doesn't read is refused in
+/// [`SongKey::new`]'s words, writing nothing.
+pub fn set_written(s: &mut Session, key: Option<Written>) -> Result<Edited, EditError> {
+    let key = key.map(|w| SongKey::new(&w.root, &w.scale)).transpose().map_err(EditError::Rejected)?;
+    set(s, key)
 }
 
 /// Set the song's key, or with None take it out: one undo step that writes only `layout.json`.

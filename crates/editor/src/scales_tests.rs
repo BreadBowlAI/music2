@@ -119,8 +119,8 @@ fn stamps(k: &SongKey) -> Vec<String> {
     k.chords()
         .iter()
         .map(|d| {
-            let names: Vec<String> = Chord::ALL.iter().map(|c| d.kinds[c].name.clone()).collect();
-            format!("{} {}", d.numeral, names.join(" "))
+            let names: Vec<String> = Chord::ALL.iter().map(|c| d.kinds.get(c).map_or("-".to_string(), |k| k.name.clone())).collect();
+            format!("{} {}", d.numeral.as_deref().unwrap_or("-"), names.join(" "))
         })
         .collect()
 }
@@ -200,19 +200,164 @@ fn chord_stamps_in_a_minor() {
     assert_eq!(voicings(&am, "E3", Chord::Seventh), ["E3 G3 B3 D4", "G3 B3 D4 E4", "B3 D4 E4 G4", "D4 E4 G4 B4"]);
     // Harmonic minor raises the seventh: its V is E major, E7, its III augmented, its vii° a dim7.
     let hm = key("A", "harmonic-minor");
-    let numerals: Vec<String> = hm.chords().iter().map(|d| format!("{} {}", d.numeral, d.kinds[&Chord::Seventh].name)).collect();
+    let numerals: Vec<String> =
+        hm.chords().iter().map(|d| format!("{} {}", d.numeral.as_deref().unwrap(), d.kinds[&Chord::Seventh].name)).collect();
     assert_eq!(numerals, ["i Am(maj7)", "ii° Bm7♭5", "III+ Caug(maj7)", "iv Dm7", "V E7", "VI Fmaj7", "vii° G♯dim7"]);
-    // A pentatonic key stamps its minor's chords on its own five notes; the blues' blue note has
-    // none; a chromatic key has no chords.
-    let roots: Vec<String> =
-        key("A", "minor-pentatonic").chords().iter().map(|d| format!("{} {}", d.numeral, d.kinds[&Chord::Triad].name)).collect();
-    assert_eq!(roots, ["i Am", "III C", "iv Dm", "v Em", "VII G"]);
+    // A pentatonic key stamps its minor's chords on its own five notes, only those whose notes are
+    // all in it (NOTE-4, review N1); the blues' blue note has none; a chromatic key has no chords.
+    assert_eq!(
+        stamps(&key("A", "minor-pentatonic")),
+        ["i Am Am7 - Asus4 -", "III C - Csus2 - Cadd9", "iv - - Dsus2 Dsus4 -", "v - - - - -", "VII - - Gsus2 Gsus4 -"]
+    );
     let blues = key("A", "blues");
-    assert_eq!(blues.chords().len(), 5);
+    assert_eq!(blues.chords().len(), 6, "a place for each of its notes");
     assert_eq!(blues.stamp(63.0, Chord::Triad, 0).unwrap_err(), "A blues has no chord on E♭, its blue note");
     assert!(key("C", "chromatic").chords().is_empty());
     assert_eq!(
         key("C", "chromatic").stamp(60.0, Chord::Triad, 0).unwrap_err(),
         "C chromatic has no chords to stamp: pick a key with a scale of seven notes"
     );
+}
+
+// NOTE-4 (review N1): in a pentatonic or blues key a stamp offers only the chords whose notes are
+// all in the key, and refuses the others in words, naming the notes that aren't; every chord it
+// does place is notes of the key, in every inversion, from every root.
+#[test]
+fn a_pentatonic_or_blues_key_stamps_only_chords_all_in_it() {
+    let c = key("C", "major-pentatonic");
+    assert_eq!(stamps(&c), ["I C - Csus2 - Cadd9", "ii - - Dsus2 Dsus4 -", "iii - - - - -", "V - - Gsus2 Gsus4 -", "vi Am Am7 - Asus4 -"]);
+    assert_eq!(
+        c.stamp(62.0, Chord::Triad, 0).unwrap_err(),
+        "Dm has F, which isn't in C major pentatonic: a stamp places only chords whose notes are all in the key"
+    );
+    assert_eq!(
+        c.stamp(64.0, Chord::Seventh, 0).unwrap_err(),
+        "Em7 has B, which isn't in C major pentatonic: a stamp places only chords whose notes are all in the key"
+    );
+    assert_eq!(
+        c.stamp(67.0, Chord::Seventh, 0).unwrap_err(),
+        "G7 has B and F, which aren't in C major pentatonic: a stamp places only chords whose notes are all in the key"
+    );
+    // The published refusals are the stamp's.
+    let d = c.chords().into_iter().find(|d| d.root == 2).unwrap();
+    assert_eq!(d.refused[&Chord::Triad], c.stamp(62.0, Chord::Triad, 0).unwrap_err());
+    assert!(!d.refused.contains_key(&Chord::Sus2) && d.kinds.contains_key(&Chord::Sus2));
+    for scale in ["major-pentatonic", "minor-pentatonic", "blues"] {
+        for root in ROOTS {
+            let k = key(root, scale);
+            for d in k.chords() {
+                for (chord, stamp) in &d.kinds {
+                    for inv in 0..stamp.shapes.len() {
+                        let p = 48.0 + d.root as f64;
+                        for n in k.stamp(p, *chord, inv).unwrap() {
+                            assert!(k.has(n as i32), "{} {scale}: {} inversion {inv} has {n}, out of the key", root, stamp.name);
+                        }
+                    }
+                }
+                assert_eq!(d.kinds.len() + d.refused.len(), Chord::ALL.len(), "{root} {scale} on {}: each kind offered or refused", d.name);
+            }
+        }
+    }
+}
+
+// NOTE-4 (review N2): a sus chord is named by its second or fourth as it is: ♭2, 2, ♯2, ♭4, 4, ♯4;
+// every kind on every degree of the harmonic and melodic minors and a mode.
+#[test]
+fn every_chord_of_the_minors_and_a_mode_is_named_as_it_sounds() {
+    assert_eq!(
+        stamps(&key("C", "harmonic-minor")),
+        [
+            "i Cm Cm(maj7) Csus2 Csus4 Cm(add9)",
+            "ii° Ddim Dm7♭5 Dsus♭2♭5 Dsus4♭5 Ddim(add♭9)",
+            "III+ E♭aug E♭aug(maj7) E♭sus2♯5 E♭sus4♯5 E♭aug(add9)",
+            "iv Fm Fm7 Fsus2 Fsus♯4 Fm(add9)",
+            "V G G7 Gsus♭2 Gsus4 Gadd♭9",
+            "VI A♭ A♭maj7 A♭sus♯2 A♭sus♯4 A♭add♯9",
+            "vii° Bdim Bdim7 Bsus♭2♭5 Bsus♭4♭5 Bdim(add♭9)",
+        ]
+    );
+    assert_eq!(
+        stamps(&key("C", "melodic-minor")),
+        [
+            "i Cm Cm(maj7) Csus2 Csus4 Cm(add9)",
+            "ii Dm Dm7 Dsus♭2 Dsus4 Dm(add♭9)",
+            "III+ E♭aug E♭aug(maj7) E♭sus2♯5 E♭sus♯4♯5 E♭aug(add9)",
+            "IV F F7 Fsus2 Fsus♯4 Fadd9",
+            "V G G7 Gsus2 Gsus4 Gadd9",
+            "vi° Adim Am7♭5 Asus2♭5 Asus4♭5 Adim(add9)",
+            "vii° Bdim Bm7♭5 Bsus♭2♭5 Bsus♭4♭5 Bdim(add♭9)",
+        ]
+    );
+    assert_eq!(
+        stamps(&key("C", "dorian")),
+        [
+            "i Cm Cm7 Csus2 Csus4 Cm(add9)",
+            "ii Dm Dm7 Dsus♭2 Dsus4 Dm(add♭9)",
+            "III E♭ E♭maj7 E♭sus2 E♭sus♯4 E♭add9",
+            "IV F F7 Fsus2 Fsus4 Fadd9",
+            "v Gm Gm7 Gsus2 Gsus4 Gm(add9)",
+            "vi° Adim Am7♭5 Asus♭2♭5 Asus4♭5 Adim(add♭9)",
+            "VII B♭ B♭maj7 B♭sus2 B♭sus4 B♭add9",
+        ]
+    );
+    // The sus2 of A♭ in C harmonic minor has B, an augmented second, and no D.
+    assert_eq!(voicings(&key("C", "harmonic-minor"), "G#3", Chord::Sus2)[0], "G#3 B3 D#4");
+}
+
+// Review N10: no note of any key is spelled with a double sharp or a double flat, which many fonts
+// lack: where its own letter would need one, a note is spelled on its own, as a root is.
+#[test]
+fn no_note_is_spelled_with_a_double_sharp_or_flat() {
+    for row in TABLE.iter() {
+        for root in ROOTS {
+            let k = key(root, row.name);
+            let names: Vec<String> = k
+                .names()
+                .into_iter()
+                .chain(
+                    k.chords()
+                        .into_iter()
+                        .flat_map(|d| std::iter::once(d.name.clone()).chain(d.kinds.into_values().map(|s| s.name)).collect::<Vec<_>>()),
+                )
+                .collect();
+            assert!(names.iter().all(|n| !n.contains('𝄪') && !n.contains('𝄫')), "{}: {names:?}", k.name());
+        }
+    }
+    assert_eq!(key("Eb", "locrian").names().join(" "), "E♭ F♭ G♭ A♭ A C♭ D♭");
+    assert_eq!(key("C#", "lydian").names().join(" "), "C♯ D♯ E♯ G G♯ A♯ B♯");
+}
+
+// Review N12: a chord's root is a pitch on the keyboard; one that would go past an end is refused,
+// naming the root as a pitch.
+#[test]
+fn a_stamp_stays_on_the_keyboard() {
+    let c = key("C", "major");
+    assert_eq!(c.stamp(-5.0, Chord::Triad, 0).unwrap_err(), "A chord's root is a pitch from 0 (C-1) to 127 (G9), not -5");
+    assert_eq!(c.stamp(128.0, Chord::Triad, 0).unwrap_err(), "A chord's root is a pitch from 0 (C-1) to 127 (G9), not 128");
+    assert_eq!(c.stamp(127.4, Chord::Triad, 0).unwrap_err(), "G from G9 goes above the highest note, G9");
+    assert_eq!(c.stamp(0.0, Chord::Triad, 0).unwrap(), [0.0, 4.0, 7.0]);
+}
+
+// LIB-1, review N7: a sample fits a song whose key has the notes of the sample's key: a mode by the
+// major key with its notes (or that key's relative minor), a minor scale by its minor, a
+// pentatonic or the blues by its major or minor; a chromatic key fits no key.
+#[test]
+fn a_sample_fits_by_the_keys_own_notes() {
+    let fits = |root: &str, scale: &str| {
+        key(root, scale).sample_key().map(|(r, minor)| format!("{} {}", pc_name(r), if minor { "minor" } else { "major" }))
+    };
+    assert_eq!(fits("C", "major").as_deref(), Some("C major"));
+    assert_eq!(fits("A", "minor").as_deref(), Some("A minor"));
+    assert_eq!(fits("D", "dorian").as_deref(), Some("C major"));
+    assert_eq!(fits("E", "phrygian").as_deref(), Some("C major"));
+    assert_eq!(fits("F", "lydian").as_deref(), Some("C major"));
+    assert_eq!(fits("G", "mixolydian").as_deref(), Some("C major"));
+    assert_eq!(fits("B", "locrian").as_deref(), Some("C major"));
+    assert_eq!(fits("F#", "dorian").as_deref(), Some("E major"));
+    assert_eq!(fits("A", "harmonic-minor").as_deref(), Some("A minor"));
+    assert_eq!(fits("A", "melodic-minor").as_deref(), Some("A minor"));
+    assert_eq!(fits("G", "major-pentatonic").as_deref(), Some("G major"));
+    assert_eq!(fits("E", "minor-pentatonic").as_deref(), Some("E minor"));
+    assert_eq!(fits("E", "blues").as_deref(), Some("E minor"));
+    assert_eq!(fits("C", "chromatic"), None);
 }

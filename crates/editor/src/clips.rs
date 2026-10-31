@@ -321,7 +321,7 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 return Err(EditError::Rejected("Paste into a clip, or onto a lane: not both.".into()));
             }
             finite("the place", *at)?;
-            let key = if *fit { Some(song_key(rev, "fit the notes to")?) } else { None };
+            let key = if *fit { Some(song_key(rev, "pasted notes fit to it")?) } else { None };
             let mut earliest = f64::INFINITY;
             let mut copied = vec![];
             for c in clips {
@@ -340,8 +340,13 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
             let Clip::Notes(mut c) = l.was[i].clone() else {
                 return Err(EditError::Rejected("Notes paste into a notes clip, not an automation or audio clip.".into()));
             };
-            if *at < c.start - 1e-9 {
-                return Err(EditError::Rejected(format!("Paste inside the clip: from beat {} on.", number(c.start))));
+            // Notes pasted past the clip's end would never play (review N6): inside it, as a stamp.
+            if !(c.start - 1e-9..c.start + c.length - 1e-9).contains(at) {
+                return Err(EditError::Rejected(format!(
+                    "Paste inside the clip: from beat {} to beat {}.",
+                    number(c.start),
+                    number(c.start + c.length)
+                )));
             }
             for n in &copied {
                 let by = at + (n.start - earliest) - c.start;
@@ -556,7 +561,7 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 if let Some(k) = picked.iter().find(|k| **k >= c.notes.len()) {
                     return Err(EditError::Missing(format!("The clip has {} notes, so it has no note {}.", c.notes.len(), k + 1)));
                 }
-                grooves::apply(&mut c.notes, &picked, c.start, groove).map_err(EditError::Rejected)?;
+                grooves::apply(&mut c.notes, &picked, c.start, arr, groove).map_err(EditError::Rejected)?;
                 l.keep[i] = Some(Clip::Notes(c));
             }
         }
@@ -594,7 +599,7 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
 fn song_key(rev: &Revision, what: &str) -> Result<SongKey, EditError> {
     crate::songkey::of(&rev.project.dir).ok_or_else(|| match what {
         "stamp a chord" => EditError::Rejected("Set the song's key first: a chord stamp is built on its notes.".into()),
-        _ => EditError::Rejected(format!("Set the song's key first, to {what}.")),
+        _ => EditError::Rejected(format!("Set the song's key first: {what}.")),
     })
 }
 

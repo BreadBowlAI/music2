@@ -72,19 +72,23 @@ fn markers_and_unknown_keys_stay() {
     assert_eq!(s.timeline().tracks.iter().find(|t| t.module == "kick").unwrap().colour, "cyan");
 }
 
-// NOTE-1: a scale that isn't in the table, or a root that isn't one, is no key: a request's is
-// refused as it is read (`SongKey` is only made by `SongKey::new`), so nothing is written.
+// NOTE-1: a scale that isn't in the table, or a root that isn't one, is no key: a key as a request
+// writes it is refused in words, as an edit, and nothing is written (review N9, N13).
 #[test]
 fn a_scale_that_isnt_in_the_table_is_refused() {
     let f = fixture("examples/first-song");
-    let s = f.open();
-    let e = SongKey::new("A", "bebop").unwrap_err();
-    assert!(e.contains("a key's scale is one of major, minor, dorian"), "{e}");
-    let e = serde_json::from_str::<SongKey>("{\"root\": \"A\", \"scale\": \"bebop\"}").unwrap_err().to_string();
-    assert!(e.contains("a key's scale is one of major, minor, dorian"), "{e}");
-    let e = SongKey::new("H", "minor").unwrap_err();
+    let mut s = f.open();
+    let written = |root: &str, scale: &str| Some(Written { root: root.into(), scale: scale.into() });
+    let e = set_written(&mut s, written("A", "bebop")).unwrap_err().to_string();
+    assert_eq!(
+        e,
+        "edit rejected: a key's scale is one of major, minor, dorian, phrygian, lydian, mixolydian, locrian, harmonic-minor, melodic-minor, major-pentatonic, minor-pentatonic, blues, chromatic, not bebop"
+    );
+    let e = set_written(&mut s, written("H", "minor")).unwrap_err().to_string();
     assert!(e.contains("H isn't a key's root"), "{e}");
     assert!(!f.0.join("layout.json").exists());
+    let done = set_written(&mut s, written("d♭", "Major Pentatonic")).unwrap();
+    assert_eq!(done.after, "C♯ major pentatonic");
     // A key written by hand that doesn't read is no key.
     f.write("layout.json", "{\"key\": {\"root\": \"A\", \"scale\": \"bebop\"}}");
     assert_eq!(shown(&s), None);

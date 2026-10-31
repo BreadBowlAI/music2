@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use m2_editor::grooves::{NAMED, SWINGS};
+use m2_editor::grooves::SWINGS;
 use m2_editor::scales::{Chord, TABLE};
-use m2_editor::songkey::SongKey;
+use m2_editor::songkey::Written;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -28,7 +28,7 @@ crate::api::routes! {
 
 /// The one table of scales (NOTE-1), the chord stamps' kinds (NOTE-4) and the grooves (NOTE-7):
 /// `{scales: [{name, label, words, steps}], chords: [{name, label, words, inversions}], grooves:
-/// [{name, label, words}], swings: [0.5, …]}`. The key field and the roll's menus read it, and so
+/// [{name, label, words, example}], swings: [0.5, …]}`, where `example` is what a request writes. The key field and the roll's menus read it, and so
 /// may agents. It needs no song.
 async fn theory() -> ApiResult {
     Ok(Json(table()))
@@ -40,15 +40,19 @@ fn table() -> Value {
         .iter()
         .map(|c| json!({"name": c.name(), "label": c.label(), "words": c.words(), "inversions": c.inversions()}))
         .collect();
-    let grooves: Vec<Value> = NAMED.iter().map(|(name, label, words)| json!({"name": name, "label": label, "words": words})).collect();
+    let grooves: Vec<Value> = m2_editor::grooves::named()
+        .into_iter()
+        .map(|(name, label, words, example)| json!({"name": name, "label": label, "words": words, "example": example}))
+        .collect();
     json!({"scales": scales, "chords": chords, "grooves": grooves, "swings": SWINGS})
 }
 
 #[derive(Deserialize)]
 struct SongKeyReq {
     session: u64,
-    /// `{root, scale}`, or null for no key.
-    key: Option<SongKey>,
+    /// `{root, scale}`, or null for no key: read by the edit, so one that doesn't read is
+    /// refused in words.
+    key: Option<Written>,
 }
 
 /// The song's key (D2, Q22): `{session, key: {root, scale} | null}`, written into `layout.json` as

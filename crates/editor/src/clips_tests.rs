@@ -1047,8 +1047,17 @@ fn a_stamp_is_one_undo_step() {
         refused(&mut s, stamp(serde_json::json!("C4"), "triad", 0, 12.0)),
         "edit rejected: A chord goes inside its clip: from beat 4 to beat 12."
     );
+    // A root off the keyboard (review N12), a chord that isn't all in a pentatonic key (N1).
+    assert_eq!(
+        refused(&mut s, stamp(serde_json::json!(-5), "triad", 0, 6.0)),
+        "edit rejected: A chord's root is a pitch from 0 (C-1) to 127 (G9), not -5"
+    );
+    song_key(&mut s, "C", "major-pentatonic");
+    assert!(refused(&mut s, stamp(serde_json::json!("D4"), "triad", 0, 6.0)).contains("Dm has F, which isn't in C major pentatonic"));
+    let before = f.read("data/keys/chords.json");
     song_key(&mut s, "C", "chromatic");
     assert!(refused(&mut s, stamp(serde_json::json!("C4"), "triad", 0, 6.0)).contains("has no chords to stamp"));
+    assert_eq!(f.read("data/keys/chords.json"), before, "nothing refused is written");
     assert!(serde_json::from_value::<Gesture>(serde_json::json!({"op": "stamp", "clip": {"module": "keys", "lane": "chords", "id": "a"}, "at": 4, "root": "H4", "chord": "triad"})).is_err());
 }
 
@@ -1100,7 +1109,9 @@ fn notes_paste_into_another_clip() {
     assert_eq!(full_notes(&s, "keys/chords"), [vec![(33.0, 0.0, 0.25, 0.8), (72.0, 0.0, 1.0, 0.8), (36.0, 0.75, 0.5, 0.6)]]);
     // Refused in words: before the clip, into an automation clip, automation into notes, both
     // `into` and `to`.
-    assert_eq!(refused(&mut s, paste(6.0, false)), "edit rejected: Paste inside the clip: from beat 8 on.");
+    assert_eq!(refused(&mut s, paste(6.0, false)), "edit rejected: Paste inside the clip: from beat 8 to beat 16.");
+    // Past the clip's end nothing pasted would play (review N6): refused as a stamp is.
+    assert_eq!(refused(&mut s, paste(16.0, false)), "edit rejected: Paste inside the clip: from beat 8 to beat 16.");
     let into_points =
         Gesture::Paste { clips: vec![copied.clone()], to: None, at: 0.0, into: Some(by_id("bass/cutoff", "adp0sw76")), fit: false };
     assert!(refused(&mut s, into_points).contains("notes clip"));
@@ -1136,10 +1147,10 @@ fn a_groove_is_one_undo_step() {
         serde_json::from_value(v).unwrap()
     };
     let n = s.accepted().number;
-    go(&mut s, groove(None, serde_json::json!({"name": "swing", "amount": 0.6, "step": 0.25})));
+    go(&mut s, groove(None, serde_json::json!({"name": "swing", "amount": 0.6, "step": "sixteenths"})));
     assert_eq!(s.accepted().number, n + 1);
     assert_eq!(notes_by_id(&s, "keys/chords")[0].3, [(60.0, 0.0, 0.25), (60.0, 0.3, 0.2), (60.0, 0.5, 0.25), (60.0, 0.8, 0.2)]);
-    let again = go(&mut s, groove(None, serde_json::json!({"name": "swing", "amount": 0.6, "step": 0.25})));
+    let again = go(&mut s, groove(None, serde_json::json!({"name": "swing", "amount": 0.6, "step": "sixteenths"})));
     assert_eq!((s.accepted().number, again.edited.after.as_str()), (n + 1, "no change"), "twice is once");
     crate::undo(&mut s).unwrap();
     assert_eq!(f.read("data/keys/chords.json"), before);
@@ -1148,14 +1159,17 @@ fn a_groove_is_one_undo_step() {
     let v: Vec<f64> = full_notes(&s, "keys/chords")[0].iter().map(|n| n.3).collect();
     assert_eq!(v, [0.9, 0.8, 0.75, 0.8]);
     assert!(
-        refused(&mut s, groove(None, serde_json::json!({"name": "swing", "amount": 0.8, "step": 0.25})))
+        refused(&mut s, groove(None, serde_json::json!({"name": "swing", "amount": 0.8, "step": "sixteenths"})))
             .contains("Swing goes from 50% to 71%")
     );
-    assert_eq!(
-        refused(&mut s, groove(Some(vec![4]), serde_json::json!({"name": "shuffle"}))),
-        "The clip has 4 notes, so it has no note 5."
-    );
+    // A swing's step is eighths or sixteenths, by name: another is refused as the gesture is read
+    // (review N15); Shuffle is a swing of eighths, not a groove of its own (N3).
+    for wrong in [serde_json::json!({"name": "swing", "amount": 0.6, "step": 0.3}), serde_json::json!({"name": "shuffle"})] {
+        let g = serde_json::json!({"op": "groove", "clips": [{"module": "keys", "lane": "chords", "id": "a"}], "groove": wrong});
+        assert!(serde_json::from_value::<Gesture>(g).is_err(), "{wrong}");
+    }
+    assert_eq!(refused(&mut s, groove(Some(vec![4]), serde_json::json!({"name": "pushed"}))), "The clip has 4 notes, so it has no note 5.");
     let why =
-        refused(&mut s, Gesture::Groove { clips: vec![by_id("bass/cutoff", "adp0sw76")], notes: None, groove: grooves::Groove::Shuffle });
+        refused(&mut s, Gesture::Groove { clips: vec![by_id("bass/cutoff", "adp0sw76")], notes: None, groove: grooves::Groove::Pushed });
     assert!(why.contains("notes"), "{why}");
 }
