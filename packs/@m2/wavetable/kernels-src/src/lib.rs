@@ -299,7 +299,9 @@ impl Play {
         }
 
         let sr = self.sr;
-        let top = OSC_MAX / (2.0 * sr);
+        // Under 20 kHz, and under the song's own Nyquist at a low rate (0.45 of it), so a phase never
+        // moves a cycle or more in a sample.
+        let top = OSC_MAX.min(0.45 * sr) / (2.0 * sr);
         for (o, (offset, position, gain)) in [(A_PITCH, a_position, a_level), (B_PITCH, b_position, b_level)].into_iter().enumerate() {
             let p = pitch + clampf(at(offset), -48.0, 48.0);
             let base = self.memo[o].get(p, |p| clampf(hz(p), 1.0, OSC_MAX) / (2.0 * sr));

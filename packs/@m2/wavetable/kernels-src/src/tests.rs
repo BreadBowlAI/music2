@@ -453,6 +453,18 @@ fn a_fast_filter_sweep_never_steps() {
     assert!(got < -120.0, "the sweep steps at the ticks' rate: {got:.1} dB under the sine");
 }
 
+// PACK-27 (review B6): an oscillator is held under the song's own Nyquist, so at the lowest rate a
+// song may have (8 kHz), a note as high as it goes (127, pitch A two octaves up) plays bounded for a
+// whole minute: its phase never runs past a cycle. It grew past 1e15 in 10 s.
+#[test]
+fn a_note_too_high_for_a_low_rate_stays_bounded() {
+    for sr in [8_000.0f32, 11_025.0] {
+        let p = patch(&[(A_POSITION, SAW), (SUSTAIN, 1.0), (A_PITCH, 24.0), (CUTOFF, 20_000.0)]);
+        let x = note(cfg(sr, &[0.0, 0.0], &[]), &p, 127.0, (60.0 * sr) as usize, BLOCK).left();
+        assert!(x.iter().all(|v| v.is_finite()) && peak(&x) < 2.0, "{sr} Hz: peak {}", peak(&x));
+    }
+}
+
 // ---------------------------------------------------------------- every voice
 
 mod counting {
@@ -590,11 +602,14 @@ fn silent_without_a_note_and_its_release_ends_in_exact_silence() {
 #[test]
 fn extreme_controls_never_make_nan() {
     let base = patch(&[(B_LEVEL, 0.5)]);
-    for set in torture(&base, &[PITCH, GATE]) {
-        for pitch in [f32::NAN, -1e9, 0.0, 60.0, 200.0] {
-            let x = note(cfg(SR, &[0.0, 4.0, -1.0, -1.0, 3.0], &[]), &set, pitch, s(0.1), BLOCK);
-            let l = x.left();
-            assert!(l.iter().all(|v| v.is_finite()) && peak(&l) < 16.0, "{set:?} at {pitch}: peak {}", peak(&l));
+    // At the lowest rate a song may have too (review B6): a note as high as can be stays under it.
+    for sr in [SR, 8_000.0] {
+        for set in torture(&base, &[PITCH, GATE]) {
+            for pitch in [f32::NAN, -1e9, 0.0, 60.0, 200.0] {
+                let x = note(cfg(sr, &[0.0, 4.0, -1.0, -1.0, 3.0], &[]), &set, pitch, (0.1 * sr) as usize, BLOCK);
+                let l = x.left();
+                assert!(l.iter().all(|v| v.is_finite()) && peak(&l) < 16.0, "{set:?} at {pitch}, {sr} Hz: peak {}", peak(&l));
+            }
         }
     }
     // Absurd settings too.
