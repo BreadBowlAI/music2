@@ -37,7 +37,7 @@ pub mod fft;
 pub mod shelf;
 pub mod tables;
 
-use shelf::{LEN, LEVELS, Source, TOP, Table};
+use shelf::{Found, LEN, LEVELS, Source, TOP, Table};
 
 abi!();
 
@@ -125,9 +125,9 @@ pub struct Wavetable {
 }
 
 impl Wavetable {
-    /// Where oscillator `o`'s table lies: on the shelf it shares, or in its own memory.
+    /// Where oscillator `o`'s table lies now: on the shelf it shares, or in its own memory.
     pub fn table_at(&self, o: usize) -> *const f32 {
-        self.tables[o].at()
+        self.tables[o].find().map_or(std::ptr::null(), |t| t.at())
     }
 }
 
@@ -342,7 +342,7 @@ impl Play {
     }
 
     /// One output sample, before the amp envelope.
-    fn sample(&mut self, tables: &[Table; 2]) -> [f32; 2] {
+    fn sample(&mut self, tables: &[Option<Found>; 2]) -> [f32; 2] {
         let n = self.unison;
         let gains = [self.gain[0].next(), self.gain[1].next()];
         let places = [self.pos[0].next(), self.pos[1].next()];
@@ -352,14 +352,18 @@ impl Play {
                 d.next();
             }
             let g = gains[o];
-            if g == 0.0 {
-                // Silent, it keeps time, so turning it up never starts it somewhere else.
-                for k in 0..n {
-                    let p = self.phase[o][k] + 2.0 * self.dt[o][k].value;
-                    self.phase[o][k] = p - p.floor();
+            let table = match table {
+                Some(t) if g != 0.0 => t,
+                // Silent (or its table not on this sandbox's shelf), it keeps time, so turning it
+                // up never starts it somewhere else.
+                _ => {
+                    for k in 0..n {
+                        let p = self.phase[o][k] + 2.0 * self.dt[o][k].value;
+                        self.phase[o][k] = p - p.floor();
+                    }
+                    continue;
                 }
-                continue;
-            }
+            };
             let place = places[o];
             let j = place as usize;
             let m = place - j as f32;
@@ -435,6 +439,8 @@ impl Kernel for Wavetable {
 
     fn process(&mut self, io: &mut Io) {
         let (ins, [ol, or]) = io.ports(std::array::from_fn::<_, INPUTS, _>(|p| (p, 0)), [(0, 0), (0, 1)]);
+        // Each table, where it is for this call: found on the shelf by its settings (ABI-5).
+        let found = [self.tables[0].find(), self.tables[1].find()];
         let play = &mut self.play;
         for i in 0..ol.len() {
             let at = |p: usize| ins[p][i];
@@ -464,7 +470,7 @@ impl Kernel for Wavetable {
                 or[i] = 0.0;
                 continue;
             }
-            let [l, r] = play.sample(&self.tables);
+            let [l, r] = play.sample(&found);
             let g = a * play.out.next();
             ol[i] = l * g;
             or[i] = r * g;

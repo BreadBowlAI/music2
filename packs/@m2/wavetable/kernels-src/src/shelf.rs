@@ -10,13 +10,15 @@
 //! **The shelf.** Every voice of a sound plays the same tables, so they are made once for a
 //! sandbox, at the birth of its first voice that plays them, and kept in the module's static memory:
 //! the shelf, room for [`ROOM`] frames (two tables of the most frames one may have). Each table on it
-//! is kept by what it was made from ([`Source`]): a built-in table's place, or a file's handle,
-//! which the host gives every state of a sandbox that reads the same audio. A table is made in
-//! full before any voice reads it and never changed after, and none is made while a voice plays.
-//! So kernel ABI v1's fifth rule holds (ABI-5): no state's own data is in a static (a table is
-//! the same for every state that plays it, a pure function of its source), and no static points
-//! at memory a state took (the shelf is the module's own). A table the shelf has no room for is
-//! made in the voice's own memory, as its birth takes it, and plays the same bits.
+//! is kept by its settings, what it was made from ([`Source`]): a built-in table's place, or a
+//! file's handle (the host gives every state of a sandbox that reads the same audio the same
+//! one). A voice keeps only those settings, and finds its table on the shelf by them at each call
+//! ([`Table::find`]), never by an address: so its bytes mean the same in any sandbox whose voices
+//! made the same tables, in whatever order they were born. A table is made in full before any
+//! voice reads it and never changed after, and none is made while a voice plays. This is kernel ABI
+//! v1's sandbox-wide data (ABI-5): made only at a birth, the same for the same settings whatever
+//! the order of births, found by settings, holding no voice's own bytes. A table the shelf has no
+//! room for is made in the voice's own memory, as its birth takes it, and plays the same bits.
 
 use std::cell::UnsafeCell;
 
@@ -89,12 +91,12 @@ pub enum Source {
     File(u32),
 }
 
-/// A table, where it lies: on the shelf, or in the voice's own memory.
+/// A voice's table: what it was made from, and, when the shelf had no room for it, the voice's
+/// own copy. Never an address on the shelf: [`Table::find`] looks it up there at each call.
 pub struct Table {
-    at: *const f32,
+    source: Source,
     frames: usize,
-    /// The table, when the voice made it in memory of its own.
-    _own: Option<Box<[f32]>>,
+    own: Option<Box<[f32]>>,
 }
 
 impl Table {
@@ -102,6 +104,31 @@ impl Table {
         self.frames
     }
 
+    /// The table, where it is now: the voice's own copy, or the shelf's, found by its settings.
+    /// None when the shelf doesn't hold it, which a voice's bytes moved into a sandbox whose voices
+    /// weren't born first would meet (ABI-5: a host births them first); the oscillator is silent.
+    pub fn find(&self) -> Option<Found> {
+        let at = match &self.own {
+            Some(own) => own.as_ptr(),
+            None => store::with(|kept, base| {
+                kept.tables[..kept.n].iter().find(|t| t.0 == self.source).map(|&(_, start, _)| {
+                    // SAFETY: `start` frames in, inside the shelf.
+                    unsafe { base.add(start * PER_FRAME) as *const f32 }
+                })
+            })?,
+        };
+        Some(Found { at, frames: self.frames })
+    }
+}
+
+/// A table found for one call: its first float and its frames.
+#[derive(Clone, Copy)]
+pub struct Found {
+    at: *const f32,
+    frames: usize,
+}
+
+impl Found {
     /// Where its first float lies.
     pub fn at(&self) -> *const f32 {
         self.at
@@ -111,9 +138,9 @@ impl Table {
     /// [`LEN`]`[k]` samples, then its first two, [`LEN`]`[k] + 3` floats. Its sample `i` is at `i + 1`.
     pub fn level(&self, frame: usize, k: usize) -> &[f32] {
         let at = frame.min(self.frames - 1) * PER_FRAME + OFFSET[k];
-        // SAFETY: a table holds `frames` frames of PER_FRAME floats, made in full before this
-        // voice was born and never changed after: on the shelf, which lives as long as the module,
-        // or in `_own`, which lives as long as `self`.
+        // SAFETY: a table holds `frames` frames of PER_FRAME floats, made in full at a birth and
+        // never changed after: on the shelf, which lives as long as the module, or in the voice's
+        // own copy, which lives as long as the voice, and a `Found` lives for one call.
         unsafe { std::slice::from_raw_parts(self.at.add(at), LEN[k] + 3) }
     }
 }
@@ -132,30 +159,28 @@ impl Kept {
     }
 }
 
-/// The table made from `source`: from the shelf when it is there; else made by `make` (into the
-/// `frames * PER_FRAME` floats it is given), on the shelf when it has room, else in memory of the
-/// voice's own. Only a birth calls it.
+/// The table made from `source`: on the shelf when it is there already; else made by `make` (into
+/// the `frames * PER_FRAME` floats it is given), onto the shelf when it has room, else into memory
+/// of the voice's own. Only a birth calls it.
 pub fn table(source: Source, frames: usize, make: impl FnOnce(&mut [f32])) -> Table {
     let frames = frames.clamp(1, MAX_FRAMES);
     store::with(|kept, base| {
-        if let Some(&(_, start, frames)) = kept.tables[..kept.n].iter().find(|t| t.0 == source) {
-            // SAFETY: `start` frames in, inside the shelf.
-            return Table { at: unsafe { base.add(start * PER_FRAME) }, frames, _own: None };
+        if kept.tables[..kept.n].iter().any(|t| t.0 == source) {
+            return Table { source, frames, own: None };
         }
         if kept.n < KEPT && kept.used + frames <= ROOM {
             let start = kept.used;
             // SAFETY: frames `start..start + frames` of the shelf, which no table holds yet and no
             // voice reads.
-            let room = unsafe { std::slice::from_raw_parts_mut(base.add(start * PER_FRAME), frames * PER_FRAME) };
-            make(room);
+            make(unsafe { std::slice::from_raw_parts_mut(base.add(start * PER_FRAME), frames * PER_FRAME) });
             kept.tables[kept.n] = (source, start, frames);
             kept.n += 1;
             kept.used += frames;
-            return Table { at: room.as_ptr(), frames, _own: None };
+            return Table { source, frames, own: None };
         }
         let mut own = vec![0.0; frames * PER_FRAME].into_boxed_slice();
         make(&mut own);
-        Table { at: own.as_ptr(), frames, _own: Some(own) }
+        Table { source, frames, own: Some(own) }
     })
 }
 
