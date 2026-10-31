@@ -58,6 +58,7 @@ m2-server graph::midi::tests::midi_never_waits_for_a_compile  flake: "the compil
 m2-session tx::tests::a_second_session_is_read_only  flake: its refresh after the lock came back, under load (HANDOFF.md)
 m2-os os::cores::tests::cores_are_read_from_sysfs  flake: shares one temp folder with the next test (HANDOFF.md)
 m2-os os::cores::tests::the_affinity_mask_and_quota_cut_them  flake: shares one temp folder with the test above (HANDOFF.md)
+m2-play::no_alloc taps_and_the_load_never_allocate  flake: "the rings' frames were read" needs its reader thread scheduled within 40 short callbacks; failed once each in the starter, sections and recording checks at load 50 to 70, passes alone (core/play/tests/no_alloc.rs)
 
 # slow: over a minute alone on 4 cores (2026-10-21)
 m2-session tx::kill_tests::killed_at_every_commit_step_the_project_recovers  slow: 133 s

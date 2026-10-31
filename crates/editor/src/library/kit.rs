@@ -1,7 +1,8 @@
-//! std's kit (LIB-8): a few one-shots of std's own drum machine, rendered by music2 itself, so a
-//! beginner has sounds to drop in before getting any pack, under std's licence.
+//! std's kit (LIB-8): a few one-shots of music2's own drum machine (`@m2/drums`, PACK-15),
+//! rendered by music2 itself, so a beginner has sounds to drop in before getting any pack, under
+//! std's licence.
 //!
-//! [`make`] renders one drum: a small song in a scratch folder in which `std/drums`' kit plays the
+//! [`make`] renders one drum: a small song in a scratch folder in which `@m2/drums`' kit plays the
 //! drum's note once at beat 0, an offline render (RENDER-1, so the same bits every time), cut where
 //! it falls 80 dB under its peak, brought to a peak of −1 dBFS and written as a 16-bit WAV at
 //! 48 kHz, mono as the drum is. `std/samples/make.sh` writes them into `std/samples/kit/`; the test
@@ -47,27 +48,30 @@ const PEAK: f64 = 0.891_250_938_133_745_6;
 /// Where its tail is cut: 80 dB under its peak.
 const FLOOR: f64 = 1e-4;
 
-/// The song that plays `note` once, on std's drum kit.
-const SONG: &str = "import { song, track } from \"@m2/core\";\nimport { drums } from \"std/drums\";\n\n\
+/// The song that plays `note` once, on music2's drum kit.
+const SONG: &str = "import { song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\n\
                     const kit = track(\"kit\", { name: \"Kit\" }, ({ lane }) => drums.kit(lane.notes(\"notes\")));\n\n\
                     export default song(() => kit.out);\n";
 
-/// The bytes of the kit's file for `note`: std in `std` plays it, rendered in the scratch folder
-/// `work` (made here, and removed after).
-pub fn make(std: &Path, note: u8, work: &Path) -> Result<Vec<u8>> {
+/// The bytes of the kit's file for `note`: the drum kit of the pack `@m2/drums` in `drums`, on std
+/// in `std`, plays it, rendered in the scratch folder `work` (made here, and removed after).
+pub fn make(std: &Path, drums: &Path, note: u8, work: &Path) -> Result<Vec<u8>> {
     let _ = std::fs::remove_dir_all(work);
-    let made = make_in(std, note, work);
+    let made = make_in(std, drums, note, work);
     let _ = std::fs::remove_dir_all(work);
     made
 }
 
-fn make_in(std: &Path, note: u8, work: &Path) -> Result<Vec<u8>> {
+fn make_in(std: &Path, drums: &Path, note: u8, work: &Path) -> Result<Vec<u8>> {
     let mut set = PackageSet::default();
     let version = set.load(std).context("loading std")?.version.clone();
+    // The pack from its folder (PACK-7), by its whole path: the song is in `work`.
+    let drums = drums.canonicalize().with_context(|| format!("finding @m2/drums at {}", drums.display()))?;
     let manifest = format!(
-        "[project]\nname = \"Kit\"\nformat = 1\nsample_rate = {RATE}\n\n[dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{}\"\n",
+        "[project]\nname = \"Kit\"\nformat = 1\nsample_rate = {RATE}\n\n[dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{}\"\n\"@m2/drums\" = {{ path = {} }}\n",
         wanted(m2_script::SDK_VERSION),
-        wanted(&version)
+        wanted(&version),
+        serde_json::to_string(&drums.to_string_lossy()).expect("a string")
     );
     let files = [
         ("music2.toml", manifest),
@@ -119,11 +123,12 @@ mod tests {
     #[test]
     fn std_kit_is_made_again_to_the_same_bytes() {
         let std = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let drums = m2_song::pack::source_packs().join("@m2/drums");
         let folder = std.join(FOLDER);
         let write = std::env::var_os("M2_WRITE_KIT").is_some();
         for (name, note) in KIT {
             let work = std::env::temp_dir().join(format!("m2-kit-{name}-{}", std::process::id()));
-            let made = make(&std, note, &work).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            let made = make(&std, &drums, note, &work).unwrap_or_else(|e| panic!("{name}: {e:#}"));
             let file = folder.join(format!("{name}.wav"));
             if write {
                 std::fs::create_dir_all(&folder).unwrap();

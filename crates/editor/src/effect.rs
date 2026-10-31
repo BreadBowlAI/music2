@@ -9,7 +9,7 @@
 //! Removing is the inverse, `delay(x, …)` back to `x`: the effect's own options go with it.
 //!
 //! A call is an effect by the ComponentId its frame records (PKG-9), never by how its callee is
-//! spelled: `echo(x)` after `import { delay as echo }` is `std:delay`.
+//! spelled: `echo(x)` after `import { delay as echo }` is `@m2/effects:delay`.
 //!
 //! Each is one `TextEdit` Tx confined to the call (WRITE-10). Adding is two insertions around the
 //! call, `delay(` before it and `, …)` after it, so the wrapped call's characters stay as they are
@@ -49,11 +49,11 @@ use crate::{EditError, Edited, ready};
 /// An effect the packages offer, as the effect browser lists it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct EffectInfo {
-    /// The ComponentId (`std:delay`): what adding it names.
+    /// The ComponentId (`@m2/effects:delay`): what adding it names.
     pub component: String,
     /// What it is called (`Delay`).
     pub label: String,
-    /// Where it is imported from and as what: `delay` from `std/fx`.
+    /// Where it is imported from and as what: `delay` from `@m2/effects`.
     pub name: String,
     pub module: String,
     pub description: String,
@@ -168,7 +168,9 @@ fn insert_args(d: &Descriptor, units: &[m2_script::UnitCtor]) -> (String, Vec<St
 }
 
 /// The effects the packages offer: every catalogued component with an editor category, and
-/// where to import it from; in the order their packages declare them (by file, then line).
+/// where to import it from; in the search's order of packages ([`crate::library::origin`]: std's
+/// and music2's own first, std's toolbox before the packs', then the song's, then everyone else's),
+/// each in the order its package declares them (by file, then line).
 pub fn effects(s: &Session) -> Vec<EffectInfo> {
     let catalog = s.catalog();
     let mut found: Vec<(&Descriptor, EffectInfo)> = catalog
@@ -190,7 +192,12 @@ pub fn effects(s: &Session) -> Vec<EffectInfo> {
         .collect();
     // `at` is `file:line:col`.
     let line = |d: &Descriptor| d.at.rsplit(':').nth(1).and_then(|l| l.parse::<u32>().ok()).unwrap_or(0);
-    found.sort_by(|(a, _), (b, _)| (&a.file, line(a)).cmp(&(&b.file, line(b))));
+    let rank = |d: &Descriptor| {
+        let package = d.id.split_once(':').map_or("song", |(p, _)| p);
+        let own = s.offered_one(package).is_some_and(|(_, dir)| crate::library::own(package, dir));
+        (crate::library::origin(package, own), package != m2_song::pack::STD)
+    };
+    found.sort_by_cached_key(|(d, _)| (rank(d), d.file.clone(), line(d)));
     found.into_iter().map(|(_, e)| e).collect()
 }
 
@@ -223,7 +230,7 @@ fn joined(mut imports: Vec<(u32, String)>) -> Vec<(u32, String)> {
     out
 }
 
-/// Put effect `component` (a ComponentId, `std:delay`, or an installed plugin, `clap:<id>`) after
+/// Put effect `component` (a ComponentId, `@m2/effects:delay`, or an installed plugin, `clap:<id>`) after
 /// call `call` (`file#ordinal` at revision `at`).
 pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Result<Edited, EditError> {
     if component.starts_with("clap:") {

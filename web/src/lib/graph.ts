@@ -86,7 +86,7 @@ export interface ViewNode {
   inlets: { id: string; label: string; name: string; from: string }[];
   /** Whether its result is audio, which an effect can go after. */
   audio: boolean;
-  /** The component it is a call of (`std:delay`), whatever name the code calls it by (PKG-9). */
+  /** The component it is a call of (`@m2/effects:delay`), whatever name the code calls it by (PKG-9). */
   component: string | null;
   /** The effect this node is, by its label (`Delay`), if it can be removed. */
   effect: string | null;
@@ -124,7 +124,7 @@ export interface OutputPort { id: string; label: string; kind: PortKind; outlet:
 export interface PortEdge { from: string; from_port: string; to: string; to_port: string; kind: PortKind; late?: boolean }
 
 /**
- * An effect the packages offer: a component (`std:delay`) imported as `name` from `module`. `insert` is
+ * An effect the packages offer: a component (`@m2/effects:delay`) imported as `name` from `module`. `insert` is
  * what adding it writes after the audio (`, 1000` gives `lowpass(x, 1000)`). `category` is a free string
  * the browser groups by (PKG-7).
  */
@@ -223,7 +223,15 @@ export type TimelineLane =
       max: number;
       clips: ControlClip[];
     }
-  | { key: string; label: string; kind: "audio"; channels: number; clips: AudioClip[] };
+  | {
+      key: string;
+      label: string;
+      kind: "audio";
+      channels: number;
+      clips: AudioClip[];
+      /** Each file that is a take over a loop: where each take starts in it, in seconds (MON-11). */
+      takes?: Record<string, number[]>;
+    };
 
 /** A module that is a track or declares lanes, by its key (as `ModuleView.key`), with its label. */
 export interface TimelineTrack {
@@ -496,6 +504,15 @@ export interface GraphState extends GraphStatus {
   can_redo: boolean;
   /** Undo can't take the newest step back (a file it puts back changed since): it can be skipped (AGENT-2). */
   undo_stuck?: boolean;
+  /**
+   * Why Undo, and Redo, go back no further than their oldest steps, when something cut them off as
+   * the song opened (WRITE-24): a change made outside music2 while it was closed, or an undo history
+   * that couldn't be read. Null when nothing did.
+   */
+  undo_end?: "outside" | "unread" | null;
+  redo_end?: "outside" | "unread" | null;
+  /** The code files with text left unsaved when the song last closed, which the code editor offers back (WRITE-27). */
+  drafts?: string[];
   /** Effects the packages offer to put after audio. */
   effects: Effect[];
   /** Instruments a new track can play, drums first. Absent from older servers. */

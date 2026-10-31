@@ -7,6 +7,8 @@
 //! PkgManifest   m2pkg.toml, read strictly (PACK-2)
 //! Listing       m2pack.json: every file of an installed version, its size and hash (PACK-6)
 //! Store         ~/Music/music2/Packs/<name>/<version>/ (PACK-6)
+//! Store::install  a pack's folder copied in as a version, read-only (PACK-6, PACK-16)
+//! install_bundled the packs music2 ships, installed into the store when it starts (PACK-15 to PACK-17)
 //! Lock          music2.lock: the exact version and hash of each pack a song uses (PACK-8)
 //! resolve       the packs a song builds with, and what keeps one from it (PACK-9)
 //! relock        the lock `m2 pack lock` and `m2 pack update` write (PACK-8)
@@ -411,7 +413,7 @@ impl Store {
 
     /// The versions of `name` being installed again (PACK-6), oldest first, each with the copy put
     /// aside: a repair by `m2 pack install` moved the changed copy out of the way,
-    /// `.<version>.<pid>.old` beside it, and the new one may not be in place yet. One an install
+    /// `.<version>.<pid>-<n>.old` beside it, and the new one may not be in place yet. One an install
     /// that stopped left is removed by the next install of that version.
     pub fn aside(&self, name: &PackName) -> Vec<(Version, PathBuf)> {
         let mut out: Vec<(Version, PathBuf)> = std::fs::read_dir(self.dir.join(name.folder()))
@@ -421,7 +423,7 @@ impl Store {
             .filter_map(|e| {
                 let file = e.file_name().to_string_lossy().into_owned();
                 let (v, pid) = file.strip_prefix('.')?.strip_suffix(".old")?.rsplit_once('.')?;
-                let pid = !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit());
+                let pid = pid.split('-').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
                 Some((Version::parse(v).filter(|_| pid)?, e.path()))
             })
             .collect();
@@ -615,16 +617,14 @@ fn no_store(name: &PackName, req: &Requirement) -> Diagnostic {
     .file(MANIFEST)
 }
 
-/// What says how to put back version `v` of `name` whose installed copy was changed (`why`).
-fn changed(name: &PackName, v: &Version, why: &str) -> Diagnostic {
-    Diagnostic::error(
-        "pkg.changed",
-        format!(
-            "The installed {name} {v} was changed after it was installed: {why}. Install it again from its folder with `m2 pack \
-             install <folder>`, which puts it back as it was"
-        ),
-    )
-    .file(LOCK)
+/// What says how to put back version `v` of `name` whose installed copy was changed (`why`): for
+/// one of music2's own (`own`, PACK-19), starting music2 again, which puts it back (PACK-16).
+fn changed(name: &PackName, v: &Version, why: &str, own: bool) -> Diagnostic {
+    let fix = match own {
+        true => format!("{name} comes with music2: start music2 again, and it puts it back as it was"),
+        false => "Install it again from its folder with `m2 pack install <folder>`, which puts it back as it was".into(),
+    };
+    Diagnostic::error("pkg.changed", format!("The installed {name} {v} was changed after it was installed: {why}. {fix}")).file(LOCK)
 }
 
 /// What a build says while `m2 pack install` puts version `v` of `name` back (PACK-6): its changed
@@ -644,7 +644,7 @@ fn reinstalling(name: &PackName, v: &Version) -> Diagnostic {
 fn whole(store: &Store, name: &PackName, v: Version) -> Result<Resolved, Diagnostic> {
     let hash = store.check(name, &v).map_err(|why| match store.reinstalling(name, &v) {
         true => reinstalling(name, &v),
-        false => changed(name, &v, &why),
+        false => changed(name, &v, &why, store.hash(name, &v).is_ok_and(|h| own(name, &v, &h))),
     })?;
     Ok(Resolved { name: name.clone(), version: v, dir: store.version_dir(name, &v), hash: Some(hash), path: false })
 }
@@ -728,31 +728,40 @@ fn resolve_one(
             Some(v) => format!(", or run `m2 pack lock <song>` to use {v}, which is installed (the song may sound different)"),
             None => String::new(),
         };
+        // One of music2's own comes back when music2 starts, if this music2 comes with it (PACK-16).
+        let fix = match own(name, &l.version, &l.hash) {
+            true => "It comes with music2: start music2 again to put back the packs it comes with",
+            false => "Install it from its folder with `m2 pack install <folder>`",
+        };
         return Err(Diagnostic::error(
             "pkg.missing",
-            format!(
-                "This song uses {name} {}, which isn't installed. Install it from its folder with `m2 pack install <folder>`{instead}",
-                l.version
-            ),
+            format!("This song uses {name} {}, which isn't installed. {fix}{instead}", l.version),
         )
         .file(LOCK));
     }
     let r = whole(store, name, l.version)?;
     if r.hash != Some(l.hash) {
-        return Err(not_locked(name, &l.version));
+        return Err(not_locked(name, &l.version, own(name, &l.version, &l.hash)));
     }
     Ok(r)
 }
 
-/// What to say when the installed `v` of `name` isn't the copy the lock names.
-fn not_locked(name: &PackName, v: &Version) -> Diagnostic {
+/// What to say when the installed `v` of `name` isn't the copy the lock names: when the lock's is
+/// music2's own (`own`, PACK-19), how to put music2's back.
+fn not_locked(name: &PackName, v: &Version, own: bool) -> Diagnostic {
+    let back = match own {
+        true => format!(
+            "The installed {name} {v} isn't the one music2 comes with, which this song was made with. To use music2's: `m2 pack \
+             remove {name} {v}`, then start music2 again"
+        ),
+        false => format!(
+            "The installed {name} {v} isn't the one this song was made with: its files differ from those {LOCK} names. To keep the \
+             song's sound, put the one it was made with back: `m2 pack remove {name} {v}`, then `m2 pack install <its folder>`"
+        ),
+    };
     Diagnostic::error(
         "pkg.changed",
-        format!(
-            "The installed {name} {v} isn't the one this song was made with: its files differ from those {LOCK} names. To keep the \
-             song's sound, put the one it was made with back: `m2 pack remove {name} {v}`, then `m2 pack install <its folder>`. To \
-             use the installed one, run `m2 pack update <song> {name}` (the song may sound different)"
-        ),
+        format!("{back}. To use the installed one, run `m2 pack update <song> {name}` (the song may sound different)"),
     )
     .file(LOCK)
 }
@@ -805,7 +814,7 @@ pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, app: &App
         let resolved = match kept {
             Some(l) => whole(store, &name, l.version).and_then(|r| match r.hash == Some(l.hash) {
                 true => Ok(r),
-                false => Err(not_locked(&name, &l.version)),
+                false => Err(not_locked(&name, &l.version, own(&name, &l.version, &l.hash))),
             }),
             None => highest(store, &name, req, app),
         };
@@ -819,6 +828,13 @@ pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, app: &App
         false => Err(problems),
     }
 }
+
+mod bundled;
+mod install;
+pub use bundled::{bundled, install_bundled, own, recorded};
+#[cfg(any(test, feature = "testing"))]
+pub use bundled::{source_packs, test_home, test_packs, test_store};
+pub use install::{Install, read_only_inside, remove_tree, set_read_only};
 
 #[cfg(test)]
 mod tests;

@@ -119,7 +119,7 @@ Put an effect after a call's sound, by its component id as the state's effects l
 An example body:
 
 ```json
-{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "std:delay"}
+{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "@m2/effects:delay"}
 ```
 
 ### `POST /api/graph/effect/bypass`
@@ -370,6 +370,26 @@ An example body:
 {"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}
 ```
 
+### `POST /api/graph/sections`
+
+A section gesture, on whole bars of every track: paste, duplicate, move, delete, insert-bars or delete-bars. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "gesture": {"op": "duplicate", "start": 32, "end": 64}}
+```
+
+### `POST /api/graph/sections/copy`
+
+Copy whole bars of every track: each lane's kind and the clips that overlap them, for a section paste.
+
+An example body:
+
+```json
+{"session": 7, "start": 32, "end": 64}
+```
+
 ### `POST /api/graph/set`
 
 Write a knob's value, or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step (for an agent, never a drag's commit). It writes the song: one undo step.
@@ -404,6 +424,16 @@ An example body:
 {"session": 7}
 ```
 
+### `POST /api/graph/take`
+
+Choose which take an audio clip over a loop plays (from 1). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2}
+```
+
 ### `POST /api/graph/tempo`
 
 Set the tempo at a beat, or add or remove a tempo change there. It writes the song: one undo step.
@@ -431,7 +461,7 @@ Add a track playing an instrument, by its component id as the state's instrument
 An example body:
 
 ```json
-{"session": 7, "component": "std:synth-pluck", "label": "Pluck", "after": "keys"}
+{"session": 7, "component": "@m2/synths:synth-pluck", "label": "Pluck", "after": "keys"}
 ```
 
 ### `POST /api/graph/track/delete`
@@ -461,7 +491,7 @@ Change a track's instrument, by its component id as the state's instruments list
 An example body:
 
 ```json
-{"session": 7, "module": "keys", "component": "std:synth-pad"}
+{"session": 7, "module": "keys", "component": "@m2/synths:synth-pad"}
 ```
 
 ### `POST /api/graph/track/mute`
@@ -547,7 +577,7 @@ An item's preview: a short WAV of it playing, rendered offline and kept; a sampl
 Its query, as JSON:
 
 ```json
-{"id": "std:synth-pluck"}
+{"id": "@m2/synths:synth-pluck"}
 ```
 
 ### `POST /api/library/sample`
@@ -634,6 +664,10 @@ The tools key gets 403 for these (AGENT-11): ask the musician, or show them wher
 
 Say what the musician looks at (the page posts it).
 
+### `POST /api/graph/arm`
+
+Arm a track to record, or disarm it, and choose the input channels it records.
+
 ### `POST /api/graph/audition`
 
 Play or let go of notes on a lane, as the piano roll and the keyboard do.
@@ -645,6 +679,14 @@ Close the open song.
 ### `POST /api/graph/compare`
 
 Hear the newest change made elsewhere Before or After it (V), or close the pill.
+
+### `POST /api/graph/draft`
+
+Keep a window's text of a code file not yet saved, so a crash doesn't lose it (text null takes it out).
+
+### `POST /api/graph/draft/left`
+
+Say that unsaved code the song opened with was restored or discarded, so it isn't offered again.
 
 ### `POST /api/graph/export`
 
@@ -744,7 +786,7 @@ Drop the take, or stop counting in.
 
 ### `POST /api/graph/record/start`
 
-Record a take on a notes lane or an audio lane.
+Record a take on the armed tracks, or on a notes lane or an audio lane; punch on the loop, overdub notes.
 
 ### `POST /api/graph/record/stop`
 

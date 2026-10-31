@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// A component as its descriptor declares it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Descriptor {
-    /// The ComponentId: `<package>:<id>` (`std:delay`), or a project component's bare id (PKG-9).
+    /// The ComponentId: `<package>:<id>` (`@m2/effects:delay`), or a project component's bare id (PKG-9).
     pub id: String,
     pub label: String,
     /// The module that defines it, as imported: `std/fx`, or a project path (`lib/fx.ts`).
@@ -155,6 +155,9 @@ pub struct Editor {
     /// Its card's groups, in order (CARD-17). Written only when there are some.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<Group>,
+    /// Said on purpose: code plays it, and no list offers it (PKG-7). Such a component has no category.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
 }
 
 /// A view (CARD-16): a picture over values the sound declares, by a name of its own (`amp`).

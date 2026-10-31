@@ -6,7 +6,7 @@ use m2_play::{DeviceErrorKind, Driver};
 use super::*;
 use m2_editor::Gestures;
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
 
 pub(super) struct Fixture(pub(super) PathBuf);
 
@@ -56,7 +56,7 @@ impl Fixture {
     }
 
     pub(super) fn open(&self) -> Graph {
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         graph.open(&self.0).unwrap();
         graph
     }
@@ -80,7 +80,7 @@ impl Drop for Fixture {
 fn a_project_that_does_not_compile_says_where_without_its_folder() {
     let fixture = Fixture::new();
     fixture.write("export default song(() => osc.sine(hz(800)) oops);\n");
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     let state = graph.open(&fixture.0).unwrap();
     let first = &state["diagnostics"][0];
     assert_eq!((&first["file"], &first["line"]), (&json!("song.ts"), &json!(3)), "{state:#}");
@@ -370,17 +370,21 @@ fn effects_are_listed_added_and_removed_and_the_player_follows() {
     let state = graph.state().unwrap();
     let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
     // PKG-2, PKG-11: listed from the descriptors, each by its ComponentId and where it is imported from.
-    let delay = state["effects"].as_array().unwrap().iter().find(|e| e["component"] == "std:delay").cloned().unwrap();
-    assert_eq!((&delay["name"], &delay["module"]), (&json!("delay"), &json!("std/fx")));
+    let delay = state["effects"].as_array().unwrap().iter().find(|e| e["component"] == "@m2/effects:delay").cloned().unwrap();
+    assert_eq!((&delay["name"], &delay["module"]), (&json!("delay"), &json!("@m2/effects")));
     assert!(delay["label"].as_str().is_some_and(|l| !l.is_empty()));
     let node = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["audio"] == true).unwrap().clone();
     let call = node["id"].as_str().unwrap();
-    let added = graph.add_effect(token, revision, call, "std:delay").unwrap();
+    let added = graph.add_effect(token, revision, call, "@m2/effects:delay").unwrap();
     assert_eq!(added["after"], "delay(osc.sine(hz(800)), { time: 0.25, feedback: 0.3, mix: 0.3 })");
     let state = graph.state().unwrap();
     // The node is the effect by its component, named by its label.
-    let delay = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["component"] == "std:delay").unwrap().clone();
-    assert_eq!(delay["effect"], state["effects"].as_array().unwrap().iter().find(|e| e["component"] == "std:delay").unwrap()["label"]);
+    let delay =
+        state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["component"] == "@m2/effects:delay").unwrap().clone();
+    assert_eq!(
+        delay["effect"],
+        state["effects"].as_array().unwrap().iter().find(|e| e["component"] == "@m2/effects:delay").unwrap()["label"]
+    );
     assert!(synced(&graph));
     let revision = state["view"]["revision"].as_u64().unwrap();
     graph.remove_effect(token, revision, delay["id"].as_str().unwrap()).unwrap();
@@ -391,7 +395,7 @@ fn effects_are_listed_added_and_removed_and_the_player_follows() {
 fn a_lane_write_plays_the_new_notes_and_undo_takes_them_back() {
     let fixture = Fixture::new();
     fixture.write(
-        "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+        "import { track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
          const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
     );
     let graph = fixture.open();
@@ -419,7 +423,7 @@ fn a_lane_write_plays_the_new_notes_and_undo_takes_them_back() {
 fn the_published_timeline_is_the_sessions_and_shares_what_didnt_change() {
     let fixture = Fixture::new();
     fixture.write(
-        "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+        "import { track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
          const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\n\
          const s = track('snare', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => sum(k.out, s.out));\n",
     );
@@ -506,7 +510,7 @@ fn a_track_renamed_and_a_knob_automated_play_and_undo() {
 /// A Kick track renamed Kicks in its code, with its notes left under the old name.
 fn renamed_kick(fixture: &Fixture) {
     fixture.write(
-        "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+        "import { track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
          const k = track('kicks', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
     );
     std::fs::create_dir_all(fixture.0.join("data/kick")).unwrap();
@@ -695,7 +699,7 @@ fn seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo() {
     eventually("it lands far past the song", || graph.status() == stopped(2002.0, 2004.0, 60.0));
     assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
 
-    let closed = Graph::silent();
+    let closed = Graph::silent().stored();
     assert!(closed.seek(1.0).is_err(), "no project is open");
     assert_eq!(closed.status().beat, 0.0);
     graph.close();
@@ -832,7 +836,7 @@ fn a_saved_file_plays_at_once_and_a_save_over_a_change_is_refused() {
 }
 
 /// A kick track whose decay is a knob at 0.3 s.
-pub(super) const KICK: &str = "import { secs, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+pub(super) const KICK: &str = "import { secs, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits'), { decay: secs(0.3) }));\n\
                     export default song(() => k.out);\n";
 
@@ -1021,7 +1025,7 @@ fn a_lane_written_in_two_halves_never_plays_empty() {
         let fixture = Fixture::new();
         fixture.write(KICK);
         fixture.put("data/kick/hits.json", &hits_of(4));
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         graph.watch_by_walking(walk);
         graph.open(&fixture.0).unwrap();
         assert_eq!(graph.watch_stats().unwrap().events, !walk);
@@ -1087,7 +1091,7 @@ fn a_structural_edit_takes_over_where_playback_is() {
     let nodes = state["view"]["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap().clone());
     let call = nodes.into_iter().find(|n| n["kind"] == "call" && n["audio"] == true && n["label"].as_str().unwrap().contains("kick"));
     let before = graph.status().beat;
-    graph.add_effect(token, revision, call.unwrap()["id"].as_str().unwrap(), "std:delay").unwrap();
+    graph.add_effect(token, revision, call.unwrap()["id"].as_str().unwrap(), "@m2/effects:delay").unwrap();
     let after = graph.status();
     assert!(after.playing && after.beat >= before, "no jump back: beat {before} then {}", after.beat);
     assert_ne!(generation(&graph), first, "a new renderer plays");
@@ -1183,7 +1187,7 @@ fn the_loop_range_survives_reopening() {
     graph.set_loop(None, Some(true)).unwrap();
     assert_eq!((&read()["loop"]["on"], &read()["zoom"]), (&json!(true), &json!(24)));
     // Another window, read-only while this one writes: its loop isn't kept.
-    let other = Graph::silent();
+    let other = Graph::silent().stored();
     assert!(!other.open(&fixture.0).unwrap()["read_only"].is_null());
     assert_eq!(other.status().looping, Some(Loop { start: 8.0, end: 16.0, on: true }), "it opens with the loop kept");
     other.set_loop(Some((1.0, 2.0)), None).unwrap();
@@ -1238,7 +1242,7 @@ fn a_stop_stays_where_it_stopped_and_play_carries_on_from_there() {
 }
 
 /// A bass holding one note for 16 bars.
-const HELD: &str = "import { song, track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+const HELD: &str = "import { song, track } from '@m2/core';\nimport { bass } from '@m2/synths';\n\
                     const b = track('bass', ({ lane }) => bass(lane.notes('notes')));\nexport default song(() => b.out);\n";
 
 // RENDER-10, design-8b §4.3: Stop all sound ends a note held in the middle of its clip and resets
@@ -1254,7 +1258,7 @@ fn panic_ends_every_note_and_never_touches_the_session() {
             .unwrap();
     fixture.put("data/bass/notes.json", &m2_song::canonical(&m2_song::LaneData::Notes(clips)));
     let (p, mut driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     graph.transport("play").unwrap();
     // The loudest sample of `n` blocks.
@@ -1280,7 +1284,7 @@ fn panic_ends_every_note_and_never_touches_the_session() {
     assert_eq!((&after["view"]["revision"], &after["can_undo"]), (&before.0["view"]["revision"], &json!(false)));
     assert_eq!((fixture.read("song.ts"), fixture.read("data/bass/notes.json")), (before.1, before.2));
     // With no player (nothing played yet, or a device let go), it does nothing and opens none.
-    let idle = Graph::default();
+    let idle = Graph::default().stored();
     idle.panic().unwrap();
     assert!(idle.inner.current_device().is_none(), "no audio device opened to stop nothing");
 }
@@ -1332,7 +1336,7 @@ fn a_stalled_player_is_replaced_and_the_project_plays_on_where_it_was() {
     let fixture = Fixture::new();
     // A device that never calls back.
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let t = Instant::now();
     let e = loop {
@@ -1551,7 +1555,7 @@ impl Dc {
         fixture.put("tracks/a.ts", a);
         fixture.put("tracks/b.ts", B_SILENT);
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         Dc { fixture, graph, driver }
     }
@@ -1612,7 +1616,7 @@ fn a_broken_project_opens_and_plays_once_saved_fixed() {
     fixture.put("tracks/a.ts", &broken);
     fixture.put("tracks/b.ts", B_SILENT);
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     let state = graph.open(&fixture.0).unwrap();
     assert_eq!(state["diagnostics"][0]["file"], json!("tracks/a.ts"), "{state:#}");
     let token = state["session"].as_u64().unwrap();
@@ -1652,7 +1656,7 @@ fn an_outside_save_to_another_file_during_a_drag_does_not_interrupt_it() {
         "tracks/b.ts",
         &B_SILENT
             .replace("vca(osc.saw(hz(110)), 0)", "delay(vca(osc.saw(hz(110)), 0))")
-            .replace("import { osc, vca } from 'std/dsp';", "import { osc, vca } from 'std/dsp';\nimport { delay } from 'std/fx';"),
+            .replace("import { osc, vca } from 'std/dsp';", "import { osc, vca } from 'std/dsp';\nimport { delay } from '@m2/effects';"),
     );
     assert!(dc.graph.poll());
     let mut heard = dc.frames(1);
@@ -1880,7 +1884,7 @@ fn three_tracks(fixture: &Fixture) {
     fixture.put(
         "song.ts",
         "import { hz, secs, song, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\nimport { sum } from 'std/math';\n\
-         import { kick } from 'std/instruments';\nimport { a } from './tracks/a';\nimport { b } from './tracks/b';\n\
+         import { kick } from '@m2/synths';\nimport { a } from './tracks/a';\nimport { b } from './tracks/b';\n\
          import { c } from './tracks/c';\nconst k = track('kick', ({ lane }) => kick(lane.notes('hits'), { decay: secs(0.3) }));\n\
          export default song(() => vca(sum(a.out, b.out, c.out, k.out), 0.25));\n",
     );
@@ -2030,7 +2034,7 @@ fn with_probe() -> Dc {
         r#"{"clips": [{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C4", "start": 0, "length": 60}]}]}"#,
     );
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -2256,7 +2260,7 @@ fn a_pending_commit_that_ends_unsaved_says_so() {
         assert!(said.len() == 1 && said[0].starts_with("song.ts:4: the value wasn't saved: ") && said[0].ends_with(why), "{said:?}");
         assert!(graph.leases().is_empty());
     };
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     pending(&graph);
     graph.close();
     said(&graph, "the project was closed");
@@ -2385,7 +2389,7 @@ fn example(rel: &str) -> Dc {
     let fixture = Fixture::new();
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel), &fixture.0);
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -2519,7 +2523,7 @@ fn swapping_two_plugin_keys_moves_the_instances() {
     fixture.probe_state("song", "lead", &lead);
     fixture.probe_state("song", "pad", &pad);
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -2557,7 +2561,7 @@ fn a_state_change_loads_into_the_running_instance() {
     );
     fixture.probe_state("p", "lead", &m2_plugins::probe::state("one", 0.25));
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -2636,7 +2640,7 @@ impl Ex {
         );
         fixture.probe_state("p", "lead", state);
         let (p, driver) = Player::driven(48_000);
-        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player_on(p, host)));
+        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player_on(p, host).stored()));
         state.graph.open(&fixture.0).unwrap();
         state.graph.transport("play").unwrap();
         let mut ex = Ex { fixture, state, driver };
@@ -3506,7 +3510,7 @@ fn a_refused_state_is_said_once_by_the_plugins_name() {
     fixture.put("data/p/lead.state.json", r#"{"plugin": "clap:m2.probe.fails-state", "plugin_version": "1.0.0"}"#);
     std::fs::write(fixture.0.join("data/p/lead.state"), m2_plugins::probe::state("fine", 1.0)).unwrap();
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -3667,7 +3671,7 @@ fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
         ("Drum kit", "FM metal", "FM keys", "Sampler", "Polysynth")
     );
     assert_eq!(graph.state().unwrap()["palette"][0], "rose");
-    let added = graph.add_track(token, "std:synth-pluck", None, None, Some("kick".into())).unwrap();
+    let added = graph.add_track(token, "@m2/synths:synth-pluck", None, None, Some("kick".into())).unwrap();
     assert_eq!(
         (&added["module"], &added["label"], &added["file"]),
         (&json!("synth-pluck"), &json!("Synth pluck"), &json!("tracks/synth-pluck.ts"))
@@ -3716,12 +3720,12 @@ fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
         );
         fixture.put(
             "tracks/keys.ts",
-            "import { track } from '@m2/core';\nimport { fm } from 'std/fm';\n\
+            "import { track } from '@m2/core';\nimport { fm } from '@m2/synths';\n\
              export default track('keys', { name: 'Keys' }, ({ lane }) => fm.keys(lane.notes('notes')));\n",
         );
         fixture.put(
             "tracks/pad.ts",
-            "import { track } from '@m2/core';\nimport { synth } from 'std/synth';\n\
+            "import { track } from '@m2/core';\nimport { synth } from '@m2/synths';\n\
              export default track('pad', { name: 'Pad' }, ({ lane }) => synth.pad(lane.notes('notes')));\n",
         );
         fixture.put("data/keys/notes.json", "{\"clips\": []}\n");
@@ -3733,7 +3737,7 @@ fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
             &format!("{{\"clips\": [{{\"id\": \"chord\", \"start\": 0, \"length\": 8, \"notes\": [{}]}}]}}\n", notes.join(", ")),
         );
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         let token = graph.state().unwrap()["session"].as_u64().unwrap();
         let mut dc = Dc { fixture, graph, driver };
@@ -3744,7 +3748,7 @@ fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
     let (mut dc, token) = ringing();
     let mut heard: Vec<f32> = vec![];
     let mut checked: Vec<(&str, std::ops::Range<usize>)> = vec![];
-    let add = |g: &Graph| drop(g.add_track(token, "std:synth-pluck", None, None, None).unwrap());
+    let add = |g: &Graph| drop(g.add_track(token, "@m2/synths:synth-pluck", None, None, None).unwrap());
     let delete = |g: &Graph| assert_eq!(g.delete_track(token, "keys", false).unwrap().0, 200);
     let edits: [&dyn Fn(&Graph); 2] = [&add, &delete];
     for (what, edit) in ["adding a track", "deleting the first channel's track"].into_iter().zip(edits) {
@@ -3793,7 +3797,7 @@ fn a_first_pan_in_a_mono_mix_keeps_the_masters_gain_and_limiter() {
     fixture.put("tracks/a.ts", &A_DC.replace("0.5)", "2)"));
     fixture.put("tracks/b.ts", B_SILENT);
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -3947,7 +3951,7 @@ fn the_bus_routes_answer_with_the_new_view() {
     mixed(&fixture);
     let song = fixture.read("song.ts");
     let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
-    let running = crate::start_with(options, Graph::silent()).unwrap();
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
     let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
     let post = |path: &str, body: Value| crate::routes_8b::tests::post(&running.url, path, Some("t0k"), &body);
     let strip = |answer: &Value, key: &str| {
@@ -4074,18 +4078,18 @@ fn a_first_pan_in_a_mono_mix_while_playing_is_inaudible() {
         );
         fixture.put(
             "tracks/low.ts",
-            "import { track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+            "import { track } from '@m2/core';\nimport { bass } from '@m2/synths';\n\
              export default track('low', { name: 'Low' }, ({ lane }) => bass(lane.notes('notes')));\n",
         );
         fixture.put(
             "tracks/thump.ts",
-            "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+            "import { track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
              export default track('thump', { name: 'Thump' }, ({ lane }) => kick(lane.notes('hits')));\n",
         );
         fixture.put("data/low/notes.json", "{\"clips\": []}\n");
         fixture.put("data/thump/hits.json", "{\"clips\": []}\n");
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         let mut dc = Dc { fixture, graph, driver };
         let token = dc.graph.state().unwrap()["session"].as_u64().unwrap();
@@ -4152,7 +4156,7 @@ fn two_probes(tag: &str) -> Dc {
     fixture.probe_state("p", "lead", &m2_plugins::probe::state(tag, 1.0));
     fixture.probe_state("q", "lead", &m2_plugins::probe::state("fine", 1.0));
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player_on(p, remote());
+    let graph = Graph::with_player_on(p, remote()).stored();
     graph.open(&fixture.0).unwrap();
     graph.transport("play").unwrap();
     Dc { fixture, graph, driver }

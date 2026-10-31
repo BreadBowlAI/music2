@@ -277,7 +277,7 @@ await page.click('[data-testid=chord-menu] [data-chord="none"]');
 
 // ---------------------------------------------------------------- folded drum rows (NOTE-8)
 
-const added = await post("/track/add", { session: (await state()).session, component: "std:drum-kit" });
+const added = await post("/track/add", { session: (await state()).session, component: "@m2/drums:drum-kit" });
 check(added.status === 200, `a Drum kit track is added (${added.status})`);
 await until(async () => (await state()).timeline.tracks.some((t) => t.module === "drum-kit"));
 const writeKit = async (notes) => {

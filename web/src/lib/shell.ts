@@ -201,6 +201,9 @@ export const canvas: {
   split?: () => void;
   join?: () => void;
   quantize?: () => void;
+  /** Edit ▸ Insert Bars (⌘I) and Delete Bars (⇧⌘⌫): on the selected bars (ARR-9). */
+  insertBars?: () => void;
+  deleteBars?: () => void;
   /** Whether ⌘C, ⌘X and ⌘V are the timeline's now (clips are selected), not the page's. */
   takesClipboard?: () => boolean;
   clipboard?: (op: "copy" | "cut" | "paste") => void;

@@ -29,7 +29,8 @@ impl Temp {
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
@@ -44,6 +45,13 @@ pub fn copy(from: &Path, to: &Path) {
 /// An example of the repository, `name`.
 pub fn example(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(name)
+}
+
+/// The song in `dir` lists `pack`, one of the packs music2 ships (PACK-15), as adding one of its
+/// items would write (PACK-10): for code a test writes that plays it.
+pub fn listing(dir: &Path, pack: &str) {
+    let manifest = std::fs::read_to_string(dir.join("music2.toml")).unwrap();
+    std::fs::write(dir.join("music2.toml"), format!("{manifest}\"{pack}\" = \"1\"\n")).unwrap();
 }
 
 /// No sound output and no MIDI for this process's server, as for every program the tests run.
@@ -130,6 +138,9 @@ impl App {
         let home = temp.0.join("home");
         let options = m2_server::ServeOptions { port: 0, web_dir: temp.0.join("no-web"), token: "tools".into(), page_token: "page".into() };
         let running = m2_server::start(options).unwrap();
+        // A store of the packs this tree bundles: the test's server never installs into the store
+        // under the HOME it runs with (PACK-16), and the song builds as in the app.
+        running.state.graph.keep_store(&m2_song::pack::test_store());
         let session = running.state.graph.open(&song).unwrap()["session"].as_u64().unwrap();
         publish(&home, &running.url, "tools", std::process::id());
         App { temp, song, home, running, session }
@@ -246,7 +257,7 @@ pub fn fake(state: Value, answer: impl FnMut(&Asked) -> Option<(u16, Value)> + S
 
 /// std, as `m2` and the app load it.
 pub fn packages() -> m2_runtime::PackageSet {
-    let mut p = m2_runtime::PackageSet::default();
+    let mut p = m2_runtime::PackageSet::default().with_store(m2_song::pack::test_store());
     p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     p
 }

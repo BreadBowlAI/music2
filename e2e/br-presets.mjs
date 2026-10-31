@@ -12,7 +12,7 @@ const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) })
 const toasted = (text) => until(async () => (await toasts()).some((t) => t.includes(text)), 8000);
 
 // A Synth pluck track, as + Track adds one.
-const added = await post("/track/add", { session: (await state()).session, component: "std:synth-pluck" });
+const added = await post("/track/add", { session: (await state()).session, component: "@m2/synths:synth-pluck" });
 const module = added.body.module;
 const file = `tracks/${module}.ts`;
 await view("graph");
@@ -55,14 +55,14 @@ check(await until(() => read(file) === before), "Undo puts the code back, byte f
 
 // ---------------------------------------------------------------- save as yours
 
-const yours = `${HOME}/Music/music2/Presets/std/synth-pluck`;
+const yours = `${HOME}/Music/music2/Presets/_m2_synths/synth-pluck`;
 check(await openPresets(), "Presets opens again");
 await page.click("[data-testid=preset-save]");
 await page.type("[data-testid=preset-name]", "My Pluck");
 await page.keyboard.press("Enter");
 check(await toasted("Saved Synth pluck's settings as My Pluck"), "Save as preset… says it saved");
 const saved = fs.existsSync(`${yours}/My Pluck.json`) ? JSON.parse(fs.readFileSync(`${yours}/My Pluck.json`, "utf8")) : null;
-check(saved?.sound === "std:synth-pluck" && saved?.values?.brightness === 4500 && saved?.m2preset === 1, `a file in the Presets folder holds every setting (${JSON.stringify(saved)})`);
+check(saved?.sound === "@m2/synths:synth-pluck" && saved?.values?.brightness === 4500 && saved?.m2preset === 1, `a file in the Presets folder holds every setting (${JSON.stringify(saved)})`);
 check(read(file) === before, "and no song file changed");
 check(await openPresets(), "Presets opens again");
 check(await until(() => page.$("[data-preset-group=yours] [data-preset='My Pluck']")), "My Pluck is listed under Yours");

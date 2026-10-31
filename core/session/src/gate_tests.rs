@@ -11,7 +11,7 @@ use m2_song::{LaneData, Project, Snapshot};
 use crate::{Session, compile_sources};
 
 pub(crate) fn std_packages() -> PackageSet {
-    let mut p = PackageSet::default();
+    let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
     p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     p
 }

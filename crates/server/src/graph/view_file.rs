@@ -4,13 +4,12 @@
 //! reads in the state's `local` and sets through `POST /api/graph/view`. Entries it doesn't know
 //! (a newer version's) are kept as read.
 //!
-//! Written whole, through a temporary file in `.music2/` renamed over it, so a reader never sees
-//! half of one; one write at a time in this process, so the loop's route and the view route never
+//! Written whole (`m2_os::fs::replace`: a temporary file in `.music2/`, pushed and renamed over
+//! it), so a reader never sees half of one; one write at a time in this process, so the loop's route and the view route never
 //! lose each other's keys. A file that doesn't read is written over: it holds nothing the song
 //! needs.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
 use parking_lot::Mutex;
@@ -27,8 +26,6 @@ pub const KEYS: [&str; 9] = ["zoom", "follow", "heights", "hidden", "grid", "aud
 
 /// Held over each write's read, change and rename.
 static WRITING: Mutex<()> = Mutex::new(());
-/// Each write's own temporary name.
-static TMP: AtomicU64 = AtomicU64::new(0);
 
 fn file(dir: &Path) -> PathBuf {
     dir.join(m2_song::path::LOCAL).join("view.json")
@@ -60,10 +57,8 @@ pub(super) fn set(dir: &Path, changes: &Map<String, Value>) -> Result<()> {
     let to = file(dir);
     let local = to.parent().expect("in .music2");
     std::fs::create_dir_all(local).with_context(|| format!("making {}", local.display()))?;
-    let tmp = local.join(format!("view.json.{}.{}.tmp", std::process::id(), TMP.fetch_add(1, Ordering::Relaxed)));
     let text = serde_json::to_string_pretty(&Value::Object(view)).expect("JSON") + "\n";
-    std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &to).with_context(|| format!("writing {}", to.display()))
+    m2_os::fs::replace(&to, text.as_bytes()).with_context(|| format!("writing {}", to.display()))
 }
 
 /// `changes` merged into `into`: a null takes its key out.

@@ -34,7 +34,7 @@ export const STEPS: { id: StepId; title: string; hint: () => string }[] = [
   { id: "export", title: "Export it.", hint: () => `Press ${chord("E", { shift: true })}. Your song becomes a file you can share.` },
 ];
 
-const BASSES = new Set(["std:synth-bass", "std:synth-sub"]);
+const BASSES = new Set(["@m2/synths:synth-bass", "@m2/synths:synth-sub"]);
 
 /** The tracks that play an instrument for which `which` holds. */
 function playing(graph: GraphState, which: (component: string) => boolean) {

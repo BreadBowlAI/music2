@@ -1,7 +1,8 @@
-//! What music2 ships with: the std package, the song templates and the examples.
+//! What music2 ships with: the std package, its own packs (PACK-15), the song templates and the
+//! examples.
 //!
-//! Each is found, in order (PLAT-8): at its environment override (`$M2_STD`, `$M2_TEMPLATES`,
-//! `$M2_EXAMPLES`); in the bundle the running program is in, where Tauri puts its resources:
+//! Each is found, in order (PLAT-8): at its environment override (`$M2_STD`, `$M2_PACKS`,
+//! `$M2_TEMPLATES`, `$M2_EXAMPLES`); in the bundle the running program is in, where Tauri puts its resources:
 //! `Contents/Resources` beside `music2.app/Contents/MacOS/music2`, or `lib/music2` beside
 //! `bin/` in the Linux packages (`/usr/bin/music2` and `/usr/lib/music2` in the `.deb`, the same
 //! inside the AppImage, `bin/m2` and `lib/music2` in m2's `.tar.gz`); or in this source tree, for
@@ -34,6 +35,58 @@ pub fn keep_hashes() {
 /// The std package: `m2pkg.toml`, `kernels/*.wasm` and `src/*.ts`.
 pub fn std_dir() -> PathBuf {
     resolve("M2_STD", "std")
+}
+
+/// The packs music2 ships (PACK-15): `@m2/synths`, `@m2/drums` and `@m2/effects`, each a pack's
+/// folder, `packs/@m2/<name>`. Nothing reads them here but [`install_packs`]: songs and the lists
+/// read them from the store, as any pack (PACK-16).
+pub fn packs_dir() -> PathBuf {
+    resolve("M2_PACKS", "packs")
+}
+
+/// Install the packs music2 ships into the store at `store` (PACK-16): each version it hasn't got;
+/// one it holds with its hash and its files whole is left alone, so a start that finds them all
+/// writes nothing. One it holds with another hash is refused (PACK-17), and the log says what puts
+/// music2's back; the others go on. `quiet` leaves out what went as it should, as `m2` does: its
+/// output is its answer. Only a program's start calls it: the app, the headless server, `m2`.
+pub fn install_packs(store: &Path, quiet: bool) {
+    for line in installing_packs(&packs_dir(), store, quiet) {
+        eprintln!("music2: {line}");
+    }
+}
+
+/// [`install_packs`] from `from`: what it says, a line each.
+pub(crate) fn installing_packs(from: &Path, store: &Path, quiet: bool) -> Vec<String> {
+    use m2_song::pack::{Install, Listing, PkgManifest, Store};
+    let into = Store::at(store.to_path_buf());
+    let from = std::fs::canonicalize(from).unwrap_or_else(|_| from.to_path_buf());
+    let mut said = vec![];
+    for (dir, done) in m2_song::pack::install_bundled(&from, &into) {
+        // Another copy under music2's version: what the user does, not what a pack's author would.
+        let theirs = || {
+            let m = PkgManifest::at(&dir).ok()?;
+            let installed = into.hash(&m.package.name, &m.package.version).ok()?;
+            (Listing::of(&dir).ok()?.hash() != installed).then_some(m.package)
+        };
+        match done {
+            Ok(Install::Installed { name, version, .. }) if !quiet => {
+                said.push(format!("installed {name} {version}, which comes with music2, into {}", store.display()))
+            }
+            Ok(Install::Repaired { name, version, why }) if !quiet => {
+                said.push(format!("put {name} {version} back as it comes with music2: its installed copy was changed ({why})"))
+            }
+            Ok(_) => {}
+            Err(e) => said.push(match theirs() {
+                Some(p) => format!(
+                    "{} {} in your packs folder isn't the one music2 comes with. To use music2's: `m2 pack remove {} {}`, then start \
+                     music2 again",
+                    p.name, p.version, p.name, p.version
+                ),
+                None => format!("{}, which comes with music2, wasn't installed: {e}", dir.display()),
+            }),
+        }
+    }
+    said
 }
 
 /// Song templates, one complete project per folder, each with a `template.toml`.
@@ -150,6 +203,7 @@ mod tests {
         std::fs::create_dir_all(contents.join("Resources/std/kernels")).unwrap();
         std::fs::write(contents.join("Resources/std/m2pkg.toml"), "").unwrap();
         std::fs::create_dir_all(contents.join("Resources/templates/starter")).unwrap();
+        std::fs::create_dir_all(contents.join("Resources/packs/@m2/synths")).unwrap();
         exe
     }
 
@@ -160,6 +214,8 @@ mod tests {
         let resources = t.0.join("music2.app/Contents/Resources");
         assert_eq!(find(None, &[Some(&exe)], "std"), resources.join("std"));
         assert_eq!(find(None, &[Some(&exe)], "templates"), resources.join("templates"));
+        // The packs music2 ships, beside std (PACK-15).
+        assert_eq!(find(None, &[Some(&exe)], "packs"), resources.join("packs"));
         // Not bundled: the source tree's.
         assert_eq!(find(None, &[Some(&exe)], "examples"), source_tree().join("examples"));
     }
@@ -179,8 +235,9 @@ mod tests {
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         assert_eq!(find(None, &[Some(&exe), None], "std"), source_tree().join("std"));
         assert_eq!(find(None, &[], "templates"), source_tree().join("templates"));
-        // The source tree's std is the real package.
+        // The source tree's std is the real package, and its packs the real ones.
         assert!(std_dir().join("m2pkg.toml").is_file() || std::env::var_os("M2_STD").is_some());
+        assert!(packs_dir().join("@m2/synths/m2pkg.toml").is_file() || std::env::var_os("M2_PACKS").is_some());
     }
 
     /// An empty file at `path`, its folders made.
@@ -256,6 +313,7 @@ mod tests {
         let exe = touch(&usr.join("bin/music2"));
         touch(&usr.join("lib/music2/std/m2pkg.toml"));
         std::fs::create_dir_all(usr.join("lib/music2/templates/starter")).unwrap();
+        std::fs::create_dir_all(usr.join("lib/music2/packs/@m2/synths")).unwrap();
         exe
     }
 
@@ -270,6 +328,7 @@ mod tests {
         let found = |name| find(None, &[Some(&exe)], name).canonicalize().unwrap();
         assert_eq!(found("std"), lib.join("std"));
         assert_eq!(found("templates"), lib.join("templates"));
+        assert_eq!(found("packs"), lib.join("packs"));
         // Not carried: the source tree's.
         assert_eq!(find(None, &[Some(&exe)], "examples"), source_tree().join("examples"));
         // m2 in the .tar.gz: bin/m2 and lib/music2.
@@ -319,5 +378,38 @@ mod tests {
         let real = link.canonicalize().unwrap();
         let found = find(None, &[Some(&link), Some(&real)], "std");
         assert_eq!(found.canonicalize().unwrap(), t.0.join("music2.app/Contents/Resources/std").canonicalize().unwrap());
+    }
+
+    // PACK-17, PACK-19 (review S7): a store holding another copy under music2's version tells the
+    // user what puts music2's back, in their words: no pack author's advice, no path with `..`.
+    #[test]
+    fn a_start_that_finds_another_copy_says_what_puts_music2s_back() {
+        let t = Temp::new("theirs");
+        let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
+        let theirs = t.0.join("theirs");
+        let ours = from.join("@m2/synths");
+        let mut stack = vec![(ours.clone(), theirs.clone())];
+        while let Some((a, b)) = stack.pop() {
+            std::fs::create_dir_all(&b).unwrap();
+            for e in std::fs::read_dir(&a).unwrap().flatten() {
+                match e.file_type().unwrap().is_dir() {
+                    true => stack.push((e.path(), b.join(e.file_name()))),
+                    false => drop(std::fs::copy(e.path(), b.join(e.file_name())).unwrap()),
+                }
+            }
+        }
+        std::fs::write(theirs.join("README.md"), "theirs\n").unwrap();
+        let store = m2_song::pack::Store::at(t.0.join("Packs"));
+        store.install(&theirs).unwrap();
+        let said = installing_packs(&from, &store.dir, true);
+        assert_eq!(
+            said,
+            ["@m2/synths 1.0.0 in your packs folder isn't the one music2 comes with. To use music2's: `m2 pack remove @m2/synths \
+              1.0.0`, then start music2 again"],
+        );
+        let loud = installing_packs(&from, &t.0.join("Packs-2"), false);
+        assert_eq!(loud.len(), 3, "{loud:?}");
+        assert!(loud.iter().all(|l| !l.contains("..")), "{loud:?}");
+        m2_song::pack::remove_tree(&t.0).unwrap();
     }
 }

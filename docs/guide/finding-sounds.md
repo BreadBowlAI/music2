@@ -44,7 +44,7 @@ Each is one step that **Undo** (⌘Z) takes back, and a note at the bottom says 
 ## How it finds things
 
 - Each word you type must match somewhere: the name, the start of a word in it, a word of what it is (its group, what code calls it, a drum the kit plays), or a word of its description. Capitals don't matter, and neither do dashes, dots and other marks: `hi-hat` finds what `hi hat` finds, and `synth.pluck` the Synth pluck.
-- An item's id, as code and `m2 search` write it (`std:reverb`), finds that item first.
+- An item's id, as code and `m2 search` write it (`@m2/effects:reverb`), finds that item first.
 - The best match is selected: the name itself, then names that start with what you typed, then a word of the name, a tag, the description.
 - music2's own sounds come before yours, and yours before plugins.
 

@@ -1,6 +1,6 @@
 //! Presets (FMT-22, gaps #26): a sound's settings under a name, one JSON file each. Yours are in
-//! the Presets folder (`m2_os::dirs::presets()`), one folder per sound; std's ship in
-//! `std/presets/<component>/`. A preset's identity is its `sound` and its `name`, never its folder
+//! the Presets folder (`m2_os::dirs::presets()`), one folder per sound; a package's own ship in
+//! its `presets/<component>/`, as music2's own sounds' do in `@m2/synths` and `@m2/effects`. A preset's identity is its `sound` and its `name`, never its folder
 //! (P1): a file whose `sound` isn't the call's is left out of its list.
 //!
 //! Saving writes a file outside the song: no Tx. Loading is one `Values` Tx, as a knob's edit is
@@ -42,7 +42,7 @@ pub const FORMAT: u64 = 1;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Preset {
     pub name: String,
-    /// What it is for: a ComponentId (`std:synth-pluck`) or a plugin's id (`clap:…`).
+    /// What it is for: a ComponentId (`@m2/synths:synth-pluck`) or a plugin's id (`clap:…`).
     pub sound: String,
     /// Numbers by name: a std control's slot, in base units; a plugin parameter by its CLAP id.
     pub values: BTreeMap<String, f64>,
@@ -133,8 +133,9 @@ fn folder_name(part: &str) -> String {
     }
 }
 
-/// Where your presets for `sound` go inside the Presets folder: `std/synth-pluck` for
-/// `std:synth-pluck`, `clap/org.surge-synth-team.surge-xt` for a plugin. A project's own
+/// Where your presets for `sound` go inside the Presets folder: `_m2_synths/synth-pluck` for
+/// `@m2/synths:synth-pluck`, `std/sampler` for `std:sampler`, `clap/org.surge-synth-team.surge-xt`
+/// for a plugin. A project's own
 /// component, which has no package, goes in `project`.
 pub fn folder(sound: &str) -> PathBuf {
     let (package, name) = m2_song::pack::split_id(sound).unwrap_or(("project", sound));
@@ -142,7 +143,7 @@ pub fn folder(sound: &str) -> PathBuf {
 }
 
 /// Where a package's own presets for `sound` are, in that package's folder `dir`:
-/// `presets/synth-pluck` for `std:synth-pluck` in std's, `presets/felt-piano` for
+/// `presets/synth-pluck` for `@m2/synths:synth-pluck` in that pack's, `presets/felt-piano` for
 /// `@alice/felt-piano:felt-piano` in that pack's (PACK-11). None for a project's own component or
 /// a plugin, which no package makes.
 pub fn factory(dir: &Path, sound: &str) -> Option<PathBuf> {

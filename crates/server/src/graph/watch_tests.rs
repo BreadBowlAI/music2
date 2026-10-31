@@ -193,7 +193,7 @@ fn a_case_only_rename_settles_as_one_path() {
 fn the_watch_lock_is_never_held_over_a_stat() {
     let fixture = Fixture::new();
     fixture.write(KICK);
-    let graph = Arc::new(Graph::silent());
+    let graph = Arc::new(Graph::silent().stored());
     graph.watch_by_walking(true);
     graph.open(&fixture.0).unwrap();
     assert!(!stats(&graph).events);

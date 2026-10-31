@@ -9,7 +9,7 @@ use super::super::tests::Fixture;
 use super::*;
 
 /// A kick on every beat, from std's drum.
-const KICK: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+const KICK: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
 
 /// Kick and bass tracks into std's mixer, and `more` after them.
@@ -36,7 +36,7 @@ impl Rig {
             fixture.put(path, text);
         }
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         // A window watches (TAP-4); the first read after the taps start sends nothing.
         graph.watch_meters(true);
@@ -265,7 +265,7 @@ fn the_masters_loudness_matches_m2_listen() {
     let short = last["loudness"]["short"].as_f64().unwrap_or_else(|| panic!("no loudness in {last}"));
     assert_eq!(rig.graph.loudness(rig.token(), "w1", true).unwrap()["loudness"], last["loudness"], "asked again: what the meters said");
     let true_peak = last["loudness"]["true_peak"].as_f64().unwrap();
-    let mut packages = m2_runtime::PackageSet::default();
+    let mut packages = m2_runtime::PackageSet::default().with_store(m2_song::pack::test_store());
     packages.load(&crate::resources::std_dir()).unwrap();
     let session = m2_session::Session::open(&rig._fixture.0, packages.clone()).unwrap_or_else(|d| panic!("{d:?}"));
     let ask = m2_editor::listen::Ask {
@@ -348,7 +348,7 @@ fn meters_that_cant_be_laid_out_fall_back_and_say_so() {
     super::BREAK.lock().push(fixture.0.clone());
     fixture.put("song.ts", &song);
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     graph.watch_meters(true);
     graph.meters();
@@ -360,4 +360,16 @@ fn meters_that_cant_be_laid_out_fall_back_and_say_so() {
     assert!(m["channels"].as_object().unwrap().is_empty(), "read before the faders: {m}");
     let words = rig.graph.activity().meters.unwrap_or_default();
     assert!(words.starts_with("The meters show each track before its fader for now"), "the status says why: {words}");
+}
+
+// MON-13 (review Q7): the take's level bar of a track that records one channel is that channel's,
+// never the louder of its pair.
+#[test]
+fn a_mono_takes_input_level_is_its_own_channel() {
+    let ring = m2_play::ring::Ring::new(4800);
+    ring.write(&[[0.9, 0.1]; 480], Some(0));
+    let mut m = Meters::default();
+    assert_eq!(m.input_level(&ring, m2_play::Channels::One(1)), 0.1, "channel 2 alone");
+    ring.write(&[[0.9, 0.1]; 480], Some(480));
+    assert_eq!(m.input_level(&ring, m2_play::Channels::Pair(0)), 0.9, "a pair: the louder");
 }

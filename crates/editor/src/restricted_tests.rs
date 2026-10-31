@@ -26,7 +26,7 @@ impl ProjectFixture {
     }
 
     fn open(&self) -> Session {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         Session::open(&self.0, packages).unwrap()
     }
@@ -263,7 +263,7 @@ fn graph_values_cannot_escape_into_javascript_arithmetic() {
         let fixture = ProjectFixture::new(&song(&format!(
             "const base = hz(800);\nexport default song(() => add(osc.sine(base), osc.saw({escape})));"
         )));
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         // WRITE-20: the project opens, with no accepted code and the build's errors.
         let session = Session::open(&fixture.0, packages).unwrap();

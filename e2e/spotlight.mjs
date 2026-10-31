@@ -82,19 +82,19 @@ await until(async () => !(await panel()), 3000);
 
 await find("synth pluck");
 const found = await rows();
-check(found[0] === "std:synth-pluck" && (await activeRow()) === "std:synth-pluck", `the best hit is first and selected (${found.slice(0, 3)})`);
-check(found.includes("sound:std/std:synth-pluck/Glass") && found.includes("sound:std/std:synth-pluck/Soft"), "its sounds are found too");
+check(found[0] === "@m2/synths:synth-pluck" && (await activeRow()) === "@m2/synths:synth-pluck", `the best hit is first and selected (${found.slice(0, 3)})`);
+check(found.includes("sound:std/@m2/synths:synth-pluck/Glass") && found.includes("sound:std/@m2/synths:synth-pluck/Soft"), "its sounds are found too");
 const groups = await page.$$eval("[data-spotlight-group]", (els) => els.map((e) => e.getAttribute("aria-label")));
 check(groups.join() === "Instruments,Sounds", `grouped, empty groups hidden (${groups})`);
-check(!found.some((id) => id === "std:synth-pad" || id === "std:reverb"), "what doesn't match is left out");
+check(!found.some((id) => id === "@m2/synths:synth-pad" || id === "@m2/effects:reverb"), "what doesn't match is left out");
 
 // ---------------------------------------------------------------- ↓↑ and Enter add an instrument, with Undo
 
 const before = await modules();
 await key("ArrowDown");
-check((await activeRow()) === "sound:std/std:synth-pluck/Glass", "↓ moves into the next group");
+check((await activeRow()) === "sound:std/@m2/synths:synth-pluck/Glass", "↓ moves into the next group");
 await key("ArrowUp");
-check((await activeRow()) === "std:synth-pluck", "↑ moves back");
+check((await activeRow()) === "@m2/synths:synth-pluck", "↑ moves back");
 await key("Enter");
 check(await until(async () => !(await panel()), 3000), "Enter closes the panel");
 check(await until(async () => (await modules()).length === before.length + 1, 10000), "Enter adds a track playing it");
@@ -110,7 +110,7 @@ await key("Enter");
 check(await until(async () => (await modules()).length === before.length + 1, 10000), "a Synth pluck track again");
 const track = (await modules()).find((m) => !before.includes(m));
 await find("glass");
-check((await activeRow()) === "sound:std/std:synth-pluck/Glass", "Glass is the best hit for glass");
+check((await activeRow()) === "sound:std/@m2/synths:synth-pluck/Glass", "Glass is the best hit for glass");
 
 // ---------------------------------------------------------------- Space plays a preview
 
@@ -122,7 +122,7 @@ const answer = await heard;
 check(answer.status() === 200 && answer.headers()["content-type"] === "audio/wav", `Space fetches its preview: a WAV (${answer.status()} ${answer.headers()["content-type"]})`);
 // Asked again in the page: it is kept, so this renders nothing.
 const head = await page.evaluate(async (token) => {
-  const r = await fetch(`/api/library/preview?id=${encodeURIComponent("sound:std/std:synth-pluck/Glass")}`, { headers: { "x-m2-token": token } });
+  const r = await fetch(`/api/library/preview?id=${encodeURIComponent("sound:std/@m2/synths:synth-pluck/Glass")}`, { headers: { "x-m2-token": token } });
   const b = new Uint8Array(await r.arrayBuffer());
   return String.fromCharCode(...b.subarray(0, 4)) + String.fromCharCode(...b.subarray(8, 12));
 }, sess.page_token);
@@ -137,7 +137,7 @@ check(await toasted("Loaded Glass into Synth pluck"), "and says so");
 
 await find("soft");
 await page.evaluate((into) => {
-  const row = document.querySelector('[data-spotlight-item="sound:std/std:synth-pluck/Soft"]');
+  const row = document.querySelector('[data-spotlight-item="sound:std/@m2/synths:synth-pluck/Soft"]');
   const at = document.querySelector(`[data-testid=timeline] [data-track="${into}"]`);
   const dt = new DataTransfer();
   row.dispatchEvent(new DragEvent("dragstart", { dataTransfer: dt, bubbles: true, cancelable: true }));
@@ -150,7 +150,7 @@ check(await toasted("Loaded Soft into Synth pluck"), "and says so");
 // ---------------------------------------------------------------- a click on a row keeps the keys in the panel
 
 await find("glass");
-await page.click('[data-spotlight-item="sound:std/std:synth-pluck/Glass"]');
+await page.click('[data-spotlight-item="sound:std/@m2/synths:synth-pluck/Glass"]');
 check(await page.$eval("[data-spotlight] input", (e) => e === document.activeElement), "a click on a row gives the keys back to the field");
 const clicked = page.waitForResponse((r) => r.url().includes("/api/library/preview?id="), { timeout: 30000 }).catch(() => null);
 await key("Space");
@@ -176,7 +176,7 @@ await until(async () => !(await panel()), 3000);
 
 await page.click('[data-module-tab="keys"] [data-testid=track-label]');
 await find("reverb");
-check((await activeRow()) === "std:reverb", "Reverb is the best hit for reverb");
+check((await activeRow()) === "@m2/effects:reverb", "Reverb is the best hit for reverb");
 await key("Enter");
 check(await until(() => /reverb\(/.test(read("tracks/keys.ts")), 10000), "Enter adds the effect to the selected track");
 check(await toasted("Added Reverb after"), "and says where");
@@ -205,7 +205,7 @@ const asked = page.waitForResponse((r) => r.url().includes("/api/library?q=hall"
 await page.type("[data-browser] input", "hall");
 check((await asked).status() === 200, "the side browser's field asks the library's search");
 check(
-  await until(async () => (await page.$$eval("[data-browser-item]", (els) => els.map((e) => e.getAttribute("data-browser-item")))).join() === "std:reverb", 5000),
+  await until(async () => (await page.$$eval("[data-browser-item]", (els) => els.map((e) => e.getAttribute("data-browser-item")))).join() === "@m2/effects:reverb", 5000),
   "and lists what it found: Reverb, by its description",
 );
 
@@ -219,7 +219,7 @@ await until(async () => (await page.$$eval("[data-browser-item]", (els) => els.l
 const reverbAnswer = hold("/api/library?q=", null, true);
 await page.type("[data-browser] input", "reverb");
 const effects = await page.$$eval("[data-browser-item]", (els) => els.map((e) => e.getAttribute("data-browser-item")));
-check(effects[0] === "std:reverb" && !effects.includes("std:lowpass"), `the side browser filters as you type, before the search answers (${effects.slice(0, 4)})`);
+check(effects[0] === "@m2/effects:reverb" && !effects.includes("std:lowpass"), `the side browser filters as you type, before the search answers (${effects.slice(0, 4)})`);
 const sideBefore = await modules();
 const reverbs = () => (read("tracks/keys.ts").match(/reverb\(/g) ?? []).length;
 const reverbsBefore = reverbs();

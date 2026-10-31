@@ -13,7 +13,7 @@ use super::Refusal;
 use crate::{Session, StepError};
 
 pub(crate) fn std_packages() -> PackageSet {
-    let mut p = PackageSet::default();
+    let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
     p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     p
 }
@@ -299,7 +299,7 @@ fn values_refuses_more_than_its_values() {
 }
 
 /// A project of one sound, for wraps.
-pub(crate) const SAW: &str = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+pub(crate) const SAW: &str = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"@m2/effects\";\n\
                    export default song(() => osc.saw(hz(110)));\n";
 
 /// Wrapping `osc.saw(hz(110))` in `delay(`…`)` with two insertions, confined to the call.
@@ -719,7 +719,7 @@ fn a_data_tx_of_several_files_undoes_as_one_step() {
 // path doesn't.
 #[test]
 fn claiming_unclaimed_data_is_a_notice() {
-    let src = "import { song, track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\
+    let src = "import { song, track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\
                const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n";
     let d = Dir::with(&[("song.ts", src), ("data/snare/hits.json", "{\"clips\": []}\n")]);
     let mut s = d.open();
@@ -810,7 +810,7 @@ fn outside_data_is_taken_in_while_the_code_is_broken() {
     assert_ne!(a.compiled.data.notes("kick", "hits"), notes, "the lane plays its new notes");
 
     // A track key renamed back by hand claims the folder it left: said for the outside write.
-    let src = "import { song, track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\
+    let src = "import { song, track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\
                const k = track(\"kicks\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n";
     let d = Dir::with(&[("song.ts", src), ("data/kick/hits.json", "{\"clips\": []}\n")]);
     let mut s = d.open();

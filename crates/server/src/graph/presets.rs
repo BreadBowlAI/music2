@@ -23,14 +23,10 @@ use super::Graph;
 /// How long a plugin may take to save its state for a preset.
 const SAVE_WAIT: Duration = Duration::from_secs(60);
 
-/// Your Presets folder.
-fn yours() -> Result<PathBuf> {
-    m2_os::dirs::presets().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set)"))
-}
-
 /// The folder presets `from` (`std`: the package's own, std's or a pack's, in `own`, its folder;
-/// or `yours`) for `sound` are in.
-fn folder(from: &str, sound: &str, own: Option<&std::path::Path>) -> Result<PathBuf> {
+/// or `yours`, in your Presets folder `yours`) for `sound` are in.
+fn folder(yours: Option<&std::path::Path>, from: &str, sound: &str, own: Option<&std::path::Path>) -> Result<PathBuf> {
+    let yours = || yours.map(std::path::Path::to_path_buf).ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set)"));
     match from {
         "std" => {
             let dir = own.map_or_else(crate::resources::std_dir, std::path::Path::to_path_buf);
@@ -47,8 +43,8 @@ fn named(controls: &[(String, Why)]) -> Value {
 }
 
 /// The names of `sound`'s presets from `from`.
-fn names(from: &str, sound: &str, own: Option<&std::path::Path>) -> Vec<Value> {
-    let listed = folder(from, sound, own).map(|d| presets::list(&d, sound)).unwrap_or_default();
+fn names(yours: Option<&std::path::Path>, from: &str, sound: &str, own: Option<&std::path::Path>) -> Vec<Value> {
+    let listed = folder(yours, from, sound, own).map(|d| presets::list(&d, sound)).unwrap_or_default();
     listed.into_iter().map(|l| json!({"name": l.name})).collect()
 }
 
@@ -99,9 +95,9 @@ impl Graph {
         let (of, found) = self.preset_call(token, at, node)?;
         let (sound, label) = of.named();
         let own = self.package_dir(token, &sound);
-        let mut out = json!({"sound": sound, "label": label, "std": [], "yours": names("yours", &sound, None), "plugin": []});
+        let mut out = json!({"sound": sound, "label": label, "std": [], "yours": names(self.presets_dir().as_deref(), "yours", &sound, None), "plugin": []});
         match (&of, found) {
-            (Of::Sound(_), _) => out["std"] = names("std", &sound, own.as_deref()).into(),
+            (Of::Sound(_), _) => out["std"] = names(None, "std", &sound, own.as_deref()).into(),
             (Of::Plugin(_), Some(found)) => match self.offered(&found) {
                 Ok(offered) => out["plugin"] = offered.iter().map(|o| json!({"name": o.name})).collect(),
                 Err(e) => out["plugin_error"] = format!("Couldn't read {label}'s presets: {e}").into(),
@@ -134,7 +130,7 @@ impl Graph {
                 presets::capture_plugin(&p, &name, &blob.bytes).map_err(|e| anyhow!("{e}"))?
             }
         };
-        match presets::store(&folder("yours", &saved.preset.sound, None)?, &saved.preset, replace) {
+        match presets::store(&folder(self.presets_dir().as_deref(), "yours", &saved.preset.sound, None)?, &saved.preset, replace) {
             Ok(_) => Ok(json!({"name": saved.preset.name, "left": named(&saved.left)})),
             Err(NotStored::Taken(name)) => Ok(json!({"taken": name})),
             Err(NotStored::Refused(why)) => bail!(why),
@@ -153,7 +149,8 @@ impl Graph {
         match self.preset_call(token, Some(at), &node)? {
             (Of::Sound(x), _) => {
                 let own = self.package_dir(token, &x.component);
-                let preset = presets::read(&folder(from, &x.component, own.as_deref())?, &x.component, name).map_err(|e| anyhow!(e))?;
+                let preset = presets::read(&folder(self.presets_dir().as_deref(), from, &x.component, own.as_deref())?, &x.component, name)
+                    .map_err(|e| anyhow!(e))?;
                 self.call(move |a| a.edit_and(token, |s| answer(presets::load(s, at, &node, &preset)?)))
             }
             (Of::Plugin(p), found) => {
@@ -165,7 +162,8 @@ impl Graph {
                         self.scratch(&found, &p, name)?
                     }
                     _ => {
-                        let preset = presets::read(&folder(from, &p.plugin, None)?, &p.plugin, name).map_err(|e| anyhow!(e))?;
+                        let preset = presets::read(&folder(self.presets_dir().as_deref(), from, &p.plugin, None)?, &p.plugin, name)
+                            .map_err(|e| anyhow!(e))?;
                         let blob = preset.blob().map_err(|e| anyhow!(e))?;
                         (preset, blob)
                     }

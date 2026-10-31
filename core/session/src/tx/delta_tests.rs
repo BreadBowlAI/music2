@@ -164,7 +164,7 @@ fn a_wrap_keeps_the_wrapped_calls_names() {
 }
 
 /// A one-track song: a kick playing lane `hits`.
-const KICK_SONG: &str = "import { secs, song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+const KICK_SONG: &str = "import { secs, song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                          const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
 const HITS: &str = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#;
 
@@ -260,7 +260,7 @@ fn an_asset_a_clip_plays_is_in_the_delta() {
     assert_eq!(delta.assets, ["keys-bounce.wav"], "{delta:?}");
 }
 
-/// Whether some segment of `name` is a frame of component `id` (`std:delay@…`).
+/// Whether some segment of `name` is a frame of component `id` (`@m2/effects:delay@…`).
 fn in_frame(name: &[String], id: &str) -> bool {
     name.iter().any(|seg| seg.starts_with(&format!("{id}@")))
 }
@@ -280,15 +280,19 @@ fn a_wrap_by_a_file_write_keeps_the_wrapped_names() {
         let wrapped = text.replace(call, &format!("delay({call})"));
         let delta = after(&d, &mut s, |d| d.write(file, &wrapped));
         assert!(delta.removed.is_empty() && delta.values.is_empty(), "{file}: {delta:?}");
-        assert!(!delta.added.is_empty() && delta.added.iter().all(|n| in_frame(&n.name, "std:delay")), "{file}: {:?}", delta.added);
+        assert!(!delta.added.is_empty() && delta.added.iter().all(|n| in_frame(&n.name, "@m2/effects:delay")), "{file}: {:?}", delta.added);
         let delta = after(&d, &mut s, |d| d.write(file, &text));
         assert!(delta.added.is_empty() && delta.values.is_empty(), "{file}: {delta:?}");
-        assert!(!delta.removed.is_empty() && delta.removed.iter().all(|n| in_frame(&n.name, "std:delay")), "{file}: {:?}", delta.removed);
+        assert!(
+            !delta.removed.is_empty() && delta.removed.iter().all(|n| in_frame(&n.name, "@m2/effects:delay")),
+            "{file}: {:?}",
+            delta.removed
+        );
     }
 }
 
 /// A saw through a lowpass, then a delay, each with a literal on its own line.
-const ADJACENT: &str = "import { hz, song } from \"@m2/core\";\nimport { osc, svf } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+const ADJACENT: &str = "import { hz, song } from \"@m2/core\";\nimport { osc, svf } from \"std/dsp\";\nimport { delay } from \"@m2/effects\";\n\
                         export default song(() => {\n  const a = svf.lowpass(osc.saw(hz(110)), hz(800));\n  const b = delay(a, { mix: 0.3 });\n  return b;\n});\n";
 
 // ID-13 (identity note F1), WRITE-8: two literals on adjacent lines edited in one save are two
@@ -306,15 +310,19 @@ fn adjacent_value_edits_are_values() {
 // written at the call (`delay` → `echo`) is the same instance, and changes nothing.
 #[test]
 fn a_component_swap_at_one_call_is_new_and_an_alias_is_not() {
-    let base = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+    let base = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"@m2/effects\";\n\
                 export default song(() => delay(osc.saw(hz(110))));\n";
     let d = Dir::with(&[("song.ts", base)]);
     let mut s = d.open();
     let swapped = base.replace("{ delay }", "{ chorus }").replace("delay(osc", "chorus(osc");
     let delta = after(&d, &mut s, |d| d.write("song.ts", &swapped));
     assert!(delta.values.is_empty(), "{:?}", delta.values);
-    assert!(delta.removed.iter().any(|n| in_frame(&n.name, "std:delay") && n.name.iter().any(|x| x == "@mix")), "{:?}", delta.removed);
-    assert!(delta.added.iter().any(|n| in_frame(&n.name, "std:chorus") && n.name.iter().any(|x| x == "@mix")), "{:?}", delta.added);
+    assert!(
+        delta.removed.iter().any(|n| in_frame(&n.name, "@m2/effects:delay") && n.name.iter().any(|x| x == "@mix")),
+        "{:?}",
+        delta.removed
+    );
+    assert!(delta.added.iter().any(|n| in_frame(&n.name, "@m2/effects:chorus") && n.name.iter().any(|x| x == "@mix")), "{:?}", delta.added);
     after(&d, &mut s, |d| d.write("song.ts", base));
     let alias = base.replace("{ delay }", "{ delay as echo }").replace("delay(osc", "echo(osc");
     assert!(after(&d, &mut s, |d| d.write("song.ts", &alias)).is_empty());
@@ -324,7 +332,7 @@ fn a_component_swap_at_one_call_is_new_and_an_alias_is_not() {
 // a `key()` frame names what it holds: moving the component call around it renames none of it.
 #[test]
 fn names_ignore_everything_above_a_key_frame() {
-    let lib = "import { component, key, port, signature, type Audio } from \"@m2/core\";\nimport { delay } from \"std/fx\";\n\
+    let lib = "import { component, key, port, signature, type Audio } from \"@m2/core\";\nimport { delay } from \"@m2/effects\";\n\
                export const chain = component(\n  { id: \"chain\", label: \"Chain\", signature: signature<(x: Audio) => Audio>(), inputs: { in: port.audio() }, output: port.audio() },\n  \
                (x: Audio) => key(\"inner\", () => delay(x)),\n);\n";
     let song = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { chain } from \"./lib/chain\";\n\
@@ -342,7 +350,7 @@ fn names_ignore_everything_above_a_key_frame() {
     assert!(matches!(at.point("song.ts", open as usize), crate::text::Point::Own { .. }), "the chain call is new text");
     let delta = delta_between(&old, new);
     let touched: Vec<&Vec<String>> = delta.added.iter().chain(&delta.removed).map(|n| &n.name).collect();
-    assert!(touched.iter().all(|n| !in_frame(n, "std:delay")), "{touched:?}");
+    assert!(touched.iter().all(|n| !in_frame(n, "@m2/effects:delay")), "{touched:?}");
     let g = Side { compiled: &new.compiled, snapshot: &new.snapshot, at }.graph();
     let held: Vec<&Vec<String>> = g.nodes.keys().filter(|n| n.iter().any(|x| x == "key:inner")).collect();
     assert!(!held.is_empty() && held.iter().all(|n| !in_frame(n, "chain")), "{held:?}");
@@ -443,7 +451,7 @@ fn a_call_reading_time_added_or_removed_beside_another_renames_nothing() {
 fn a_new_tracks_voices_are_placed_where_its_poly_is() {
     let d = Dir::first_song();
     let mut s = d.open();
-    let text = "import { track } from \"@m2/core\";\nimport { pluck } from \"std/instruments\";\n\
+    let text = "import { track } from \"@m2/core\";\nimport { pluck } from \"@m2/synths\";\n\
                 const probe = track(\"probe\", ({ lane }) => pluck(lane.notes(\"notes\")));\n";
     let op = TxOp::TextEdit { file: p("song.ts"), edits: vec![insert(0, text)] };
     let ranges = m2_song::tx::Declared::Ranges(vec![Range::bytes(0, 0)]);

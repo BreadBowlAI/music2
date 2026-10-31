@@ -52,6 +52,7 @@ export default function KeyboardPiano() {
 
 function Card() {
   const octave = usePiano((s) => s.octave);
+  const velocity = usePiano((s) => s.velocity);
   const held = usePiano((s) => s.held);
   const target = usePlayTarget();
   // While a take records, what the keys play is kept (lane B).
@@ -116,16 +117,30 @@ function Card() {
           </span>
         ))}
       </div>
-      <div data-testid="piano-octave" className="mt-2 flex items-center justify-center gap-2 text-xs text-fg-muted">
-        <Cap title={`Octave down (Z)${octave === LOWEST ? ": the lowest" : ""}`} off={octave === LOWEST}>
-          Z
-        </Cap>
-        <span className="min-w-14 text-center text-fg">
-          {low}–{high}
-        </span>
-        <Cap title={`Octave up (X)${octave === HIGHEST ? ": the highest" : ""}`} off={octave === HIGHEST}>
-          X
-        </Cap>
+      <div className="mt-2 flex items-center justify-center gap-3 text-xs text-fg-muted">
+        <div data-testid="piano-octave" className="flex items-center gap-2">
+          <Cap title={`Octave down (Z)${octave === LOWEST ? ": the lowest" : ""}`} off={octave === LOWEST}>
+            Z
+          </Cap>
+          <span className="min-w-14 text-center text-fg">
+            {low}–{high}
+          </span>
+          <Cap title={`Octave up (X)${octave === HIGHEST ? ": the highest" : ""}`} off={octave === HIGHEST}>
+            X
+          </Cap>
+        </div>
+        {/* How hard each key strikes, a step down (−) and up (=) (MON-15). */}
+        <div data-testid="piano-velocity" data-velocity={velocity} className="flex items-center gap-2">
+          <Cap title={`Softer (−)${velocity <= 0.1 ? ": the softest" : ""}`} off={velocity <= 0.1}>
+            −
+          </Cap>
+          <span className="text-center text-fg" title="Velocity: how hard each key strikes">
+            {Math.round(velocity * 100)}%
+          </span>
+          <Cap title={`Louder (=)${velocity >= 1 ? ": the loudest" : ""}`} off={velocity >= 1}>
+            =
+          </Cap>
+        </div>
       </div>
     </div>,
     document.body,

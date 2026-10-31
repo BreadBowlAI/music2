@@ -13,7 +13,7 @@ fn song(name: &str, view: &Value) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("m2-view-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join(".music2")).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
@@ -37,7 +37,7 @@ fn set(v: Value) -> Map<String, Value> {
 fn view_settings_merge_and_keep_the_loop() {
     let looped = json!({"start": 0.0, "end": 4.0, "on": false});
     let dir = song("merge", &json!({"loop": looped, "zoom": 36.0, "newer": 1}));
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     let state = graph.open(&dir).unwrap();
     let session = state["session"].as_u64().unwrap();
     // As read when the song opened: the known keys only, not the loop.
@@ -77,7 +77,7 @@ fn view_settings_merge_and_keep_the_loop() {
 #[test]
 fn the_rolls_view_settings_are_kept() {
     let dir = song("roll", &json!({}));
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let steps = graph.state().unwrap()["view"]["revision"].clone();
     let roll = json!({"lock": true, "fold": false, "rows": 18});
@@ -95,7 +95,7 @@ fn the_rolls_view_settings_are_kept() {
 fn a_read_only_window_keeps_view_settings_in_memory() {
     let dir = song("ro", &json!({"zoom": 36.0}));
     let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     assert!(graph.read_only().is_some());
     let answer = graph.set_view(session, set(json!({"zoom": 81.0, "follow": false, "metronome": true}))).unwrap();
@@ -120,7 +120,7 @@ fn the_metronome_is_kept_per_song() {
     let a = song("click-a", &json!({}));
     let b = song("click-b", &json!({"zoom": 36.0}));
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     let session = graph.open(&a).unwrap()["session"].as_u64().unwrap();
     assert!(!clicks(&graph), "off for a new song");
     let answer = graph.set_view(session, set(json!({"metronome": true}))).unwrap();
@@ -156,7 +156,7 @@ fn the_metronome_is_kept_per_song() {
 #[test]
 fn an_export_never_has_the_click() {
     let dir = song("click-export", &json!({}));
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let export = |name: &str| {
         let e = graph.export(Length::Seconds(1.0)).unwrap();
@@ -179,7 +179,7 @@ fn an_export_never_has_the_click() {
 #[test]
 fn the_guide_is_kept_per_song() {
     let dir = song("guide", &json!({}));
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let guide = json!({"open": true, "folded": false, "done": ["drums", "listen"]});
     graph.set_view(session, set(json!({ "guide": guide }))).unwrap();

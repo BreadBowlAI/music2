@@ -16,7 +16,7 @@
 //! A path that waits stays waiting until a batch makes the draft build, and a Tx touching one is
 //! a conflict: so a lane moved together with a broken code change never plays empty.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -266,6 +266,7 @@ impl Session {
         let others = changed.len().saturating_sub(1);
         let mut ops = vec![];
         let mut bases = vec![];
+        let mut before = BTreeMap::new();
         for p in &changed {
             let name = m2_song::path::slashed(p);
             let cant = |why| Outside::Cant { file: name.clone(), why, others };
@@ -291,6 +292,8 @@ impl Session {
             if let Some(why) = self.unwritable(&file, &left) {
                 return cant(why);
             }
+            // What its undo puts back: the text the app knew, or nothing (WRITE-23).
+            before.insert(file.clone(), text_of(&was, p).map(|t| Sha::of(t.as_bytes())));
             bases.push((file, left));
             ops.push(op);
         }
@@ -307,12 +310,16 @@ impl Session {
         inverse.base.extend(bases);
         // Raw, as a save's step is: taken in like an outside write when undone (WRITE-21).
         let mut step = TxStep::new(inverse, true, false, file.clone());
+        step.before = before;
         // More than undo keeps would push every other step out of it.
-        if step.retained() > crate::session::RETAINED {
+        if step.retained() > self.bound.text {
             return Outside::Cant { file, why: Cant::TooBig, others };
         }
         step.source = crate::session::Source::Outside;
-        Outside::Step(self.record_tx(step))
+        let id = self.record_tx(step);
+        // Its files were written by others before it: its history is written after it (WRITE-25).
+        self.keep_history();
+        Outside::Step(id)
     }
 
     /// Why undo couldn't write `p` back over `base`, the way a commit would refuse it: a name that
@@ -467,7 +474,27 @@ impl Session {
         let before = cur.bytes.clone().map(|bytes| Before { sha: cur.sha.expect("bytes have a hash"), bytes });
         let target = Target::Write { path: p.to_string(), before, bytes: Arc::from(text.as_bytes()), after };
         let tx = Tx::new("save", (p.to_string(), p.to_string()), vec![], Expect::Identical);
-        self.stage(&tx, &[target], vec![], None)?;
+        // Its undo step: the old text written back while the file is as the save left it.
+        let undo = match &cur.bytes {
+            Some(old) => Op::Write { file: p.clone(), bytes: Payload::Text(String::from_utf8_lossy(old).into()) },
+            None => Op::Remove { file: p.clone() },
+        };
+        let shown = summarize(cur.text.as_deref().unwrap_or(""), text);
+        let mut inverse = Tx::new("undo-save", (shown.1, shown.0), vec![undo], Expect::Identical);
+        inverse.base.insert(p.clone(), Base::Sha(after));
+        let mut step = TxStep::new(inverse, true, false, p.to_string());
+        step.before.insert(p.clone(), cur.sha);
+        // A save that goes in as written is a step: in the history ahead of its file (WRITE-25).
+        let ahead = matches!(&settled, Some(Settle::Accept { built, .. }) if built.0.files.get(file).map(|t| &**t) == Some(text));
+        if ahead {
+            self.history_ahead(&mut step, &draft);
+        }
+        if let Err(e) = self.stage(&tx, &[target], vec![], None) {
+            if ahead {
+                self.keep_history();
+            }
+            return Err(e);
+        }
         // Whatever outside writers did to it before, the file is the musician's now (AGENT-2).
         self.outside_was.paths.remove(file);
         let taken = match settled {
@@ -476,14 +503,10 @@ impl Session {
         };
         let recorded = taken.accepted.is_some() && self.accepted.snapshot.files.get(file).map(|t| &**t) == Some(text);
         if recorded {
-            let undo = match &cur.bytes {
-                Some(old) => Op::Write { file: p.clone(), bytes: Payload::Text(String::from_utf8_lossy(old).into()) },
-                None => Op::Remove { file: p.clone() },
-            };
-            let shown = summarize(cur.text.as_deref().unwrap_or(""), text);
-            let mut inverse = Tx::new("undo-save", (shown.1, shown.0), vec![undo], Expect::Identical);
-            inverse.base.insert(p.clone(), Base::Sha(after));
-            self.record_tx(TxStep::new(inverse, true, false, p.to_string()));
+            self.record_tx(step);
+        }
+        if recorded != ahead {
+            self.keep_history();
         }
         Ok(Saved { taken, recorded })
     }

@@ -403,7 +403,7 @@ fn a_first_clip_makes_the_lane_file() {
     f.write("music2.toml", crate::testing::MANIFEST);
     f.write(
         "song.ts",
-        "import { song, track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\
+        "import { song, track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\
          const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
     );
     let mut s = f.open();
@@ -739,7 +739,15 @@ struct Settings {
 
 fn set_on(lane: &str, id: &str, o: Settings) -> Gesture {
     let clip = by_id(lane, id);
-    Gesture::Audio { clip, gain_db: o.gain_db, fade_in: o.fade_in, fade_out: o.fade_out, reverse: o.reverse, follow: o.follow }
+    Gesture::Audio {
+        clip,
+        gain_db: o.gain_db,
+        fade_in: o.fade_in,
+        fade_out: o.fade_out,
+        reverse: o.reverse,
+        follow: o.follow,
+        offset: None,
+    }
 }
 
 fn set(id: &str, o: Settings) -> Gesture {
@@ -1201,4 +1209,63 @@ fn a_groove_on_a_clip_changed_since_is_refused() {
     let paste = Gesture::Paste { clips: vec![copied], to: None, at: 4.0, into: Some(seen), fit: false };
     assert!(matches!(edit(&mut s, &paste), Err(EditError::Changed(_))), "a paste into what the window saw");
     assert_eq!(f.read("data/keys/chords.json"), before, "nothing written");
+}
+
+/// A take's clip for [`Gesture::Record`]: notes as (pitch, start, length) from its start.
+fn take(start: f64, length: f64, notes: &[(f64, f64, f64)]) -> Value {
+    let notes: Vec<Value> =
+        notes.iter().map(|(p, s, l)| serde_json::json!({"pitch": p, "start": s, "length": l, "velocity": 0.5})).collect();
+    serde_json::json!({"start": start, "length": length, "notes": notes})
+}
+
+// MON-10: a punched take replaces only its range. The clip under it is cut at both edges, as Split
+// cuts it: the part before keeps its id, the part after gets one of its own, and what lay inside
+// goes. One undo puts every byte back.
+#[test]
+fn a_take_replaces_its_range_as_split_cuts() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let before = f.read("data/kick/hits.json");
+    let lane = addr("kick/hits");
+    let t = Taken { lane: lane.clone(), clip: take(8.5, 4.0, &[(28.0, 0.25, 0.5)]), how: How::Replace };
+    let done = go(&mut s, Gesture::Record { takes: vec![t] });
+    let c = clips(&s, "kick/hits");
+    assert_eq!(c.len(), 3, "{c:?}");
+    assert_eq!((c[0].0.as_deref(), c[0].1, c[0].2), (Some("my53vvkc"), 0.0, 8.5), "the part before keeps its id");
+    assert_eq!((c[1].1, c[1].2, c[2].1, c[2].2), (8.5, 4.0, 12.5, 19.5), "the take, then the part after: {c:?}");
+    let [(made_lane, id)] = &done.made[..] else { panic!("{:?}", done.made) };
+    assert!(made_lane == &lane && c[1].0.as_deref() == Some(id.as_str()) && c[2].0.as_deref() != Some("my53vvkc"));
+    let starts: Vec<(f64, f64)> = notes(&s, "kick/hits").iter().map(|n| (n.start, n.pitch)).collect();
+    let want: Vec<(f64, f64)> = (0..=8).map(|b| (b as f64, 24.0)).chain([(8.75, 28.0)]).chain((13..32).map(|b| (b as f64, 24.0))).collect();
+    assert_eq!(starts, want, "the kicks before and after, and the take's one note between");
+    s.undo().unwrap();
+    assert_eq!(f.read("data/kick/hits.json"), before, "one undo");
+}
+
+// MON-12: with Overdub, a take's notes go into the clip that holds its first note, which grows to
+// hold them; a take over no clip makes its own.
+#[test]
+fn overdub_grows_the_clip_to_hold_the_take() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let lane = addr("kick/hits");
+    let into = |clip| Gesture::Record { takes: vec![Taken { lane: lane.clone(), clip, how: How::Into }] };
+    let done = go(&mut s, into(take(28.0, 8.0, &[(26.0, 0.5, 0.25), (26.0, 6.0, 0.25)])));
+    assert_eq!(clips(&s, "kick/hits"), [(Some("my53vvkc".into()), 0.0, 36.0)], "one clip, grown");
+    assert!(done.made.is_empty(), "nothing new: {:?}", done.made);
+    let n = notes(&s, "kick/hits");
+    assert_eq!(n.len(), 34);
+    assert!(n.iter().any(|x| x.start == 28.5 && x.pitch == 26.0) && n.iter().any(|x| x.start == 34.0 && x.pitch == 26.0), "{n:?}");
+    let done = go(&mut s, into(take(40.0, 4.0, &[(26.0, 1.0, 0.25)])));
+    assert_eq!(clips(&s, "kick/hits").len(), 2, "over no clip: one of its own");
+    assert_eq!(done.made.len(), 1);
+}
+
+// MON-10 (review Q9): the take's gesture is the server's own: the clips and drag routes can't be
+// asked for it.
+#[test]
+fn the_takes_gesture_is_off_the_wire() {
+    let asked =
+        serde_json::json!({"op": "record", "takes": [{"module": "kick", "lane": "hits", "clip": take(0.0, 4.0, &[]), "how": "replace"}]});
+    assert!(serde_json::from_value::<Gesture>(asked).is_err(), "refused");
 }

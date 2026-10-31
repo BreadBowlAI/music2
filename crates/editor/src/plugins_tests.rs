@@ -18,7 +18,7 @@ fn kick_song() -> Fixture {
     f.write(
         "song.ts",
         format!(
-            "import {{ song, track }} from \"@m2/core\";\nimport {{ kick }} from \"std/instruments\";\n\n\
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ kick }} from \"@m2/synths\";\n\n\
              const drums = track(\"kick\", {{ name: \"Kick\" }}, ({{ lane }}) => {KICK});\n\
              export default song(() => drums.out);\n"
         ),

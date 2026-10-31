@@ -325,7 +325,7 @@ mod tests {
         }
 
         fn open(&self) -> Session {
-            let mut packages = PackageSet::default();
+            let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
             packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
             Session::open(&self.0, packages).unwrap_or_else(|d| panic!("{d:?}"))
         }
@@ -389,7 +389,7 @@ mod tests {
         let fixture = Fixture::empty();
         fixture.write(
             "song.ts",
-            "import { song, track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\
+            "import { song, track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\
              const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
         );
         fixture.write("music2.toml", crate::testing::MANIFEST);

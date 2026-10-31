@@ -216,13 +216,14 @@ impl Meters {
     }
 
     /// The input's loudest sample since the last read, of its latest [`LEVEL`] frames.
-    fn input_level(&mut self, ring: &Ring) -> f32 {
+    /// Through `channels`: one channel alone reads only it (MON-13).
+    fn input_level(&mut self, ring: &Ring, channels: m2_play::Channels) -> f32 {
         let (id, head) = (ring as *const Ring as usize, ring.head());
         let from = if self.input_at.0 == id { self.input_at.1 } else { 0 }.max(head.saturating_sub(LEVEL));
         self.input_at = (id, head);
         let mut frames = vec![[0.0f32; 2]; (head - from.min(head)) as usize];
         let got = ring.read(from, &mut frames);
-        frames[..got.frames].iter().fold(0.0, |m, f| m.max(f[0].abs()).max(f[1].abs()))
+        frames[..got.frames].iter().map(|f| channels.pick(*f)).fold(0.0, |m, f| m.max(f[0].abs()).max(f[1].abs()))
     }
 
     fn read(&mut self, epoch: u64, l: Load) {
@@ -327,7 +328,7 @@ impl Graph {
             let plays = current?;
             let taps = plays.info.taps.as_ref()?;
             let loudness = asks.loudness().then(|| meters.loudness());
-            let input = record.input().map(|ring| meters.input_level(ring));
+            let input = record.input().map(|(ring, ch)| meters.input_level(ring, ch));
             let dropouts = player.device_errors().xruns + meters.late;
             (open.engine.token, taps.take(), plays.meters.clone(), loudness, asks.frames(taps), meters.load(), dropouts, input)
         };

@@ -1212,7 +1212,8 @@ export type Descriptor = {
    * the piano roll's rows: whole numbers 0 to 127, each name one line of 1 to 24 characters.
    * `views` are pictures over this sound's controls, each by a name of its own (CARD-16), and
    * `groups` put its card in order: `{ Filter: ["filter", "cutoff", "q"] }`, each entry one of its
-   * values or views, each named once (CARD-17).
+   * values or views, each named once (CARD-17). `unlisted: true` says on purpose that code plays
+   * it and no list offers it: such a component has no category (PKG-7, PACK-12).
    */
   editor?: {
     category?: string;
@@ -1221,6 +1222,7 @@ export type Descriptor = {
     notes?: Record<number, string>;
     views?: Record<string, ViewDecl<any>>;
     groups?: Record<string, readonly string[]>;
+    unlisted?: true;
   };
 };
 
@@ -1705,9 +1707,11 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   // Editor metadata.
   const editor = desc.editor ?? {};
   if (typeof editor !== "object" || editor === null) fail("editor must be an object");
-  const fields = ["category", "description", "insert", "notes", "views", "groups"];
+  const fields = ["category", "description", "insert", "notes", "views", "groups", "unlisted"];
   for (const k of Object.keys(editor)) if (!fields.includes(k)) fail(`editor has no field "${k}" (fields: ${fields.join(", ")})`);
   if (editor.category !== undefined && (typeof editor.category !== "string" || !editor.category)) fail("editor.category must be a non-empty string");
+  if (editor.unlisted !== undefined && editor.unlisted !== true) fail("editor.unlisted is true, or left out");
+  if (editor.unlisted && editor.category !== undefined) fail("an unlisted component (editor.unlisted) has no editor.category: no list offers it");
   if (editor.description !== undefined && typeof editor.description !== "string") fail("editor.description must be a string");
   const insert = record("editor.insert", editor.insert).map(([slot, v]) => {
     const c = controls.find((x) => x.name === slot && !x.each);
@@ -1835,8 +1839,17 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     settings: settings.map(setJson),
     output: output ? portJson(output) : null,
     positional: [...positional],
-    // `views` and `groups` written only when there are some, so every other descriptor keeps its bytes.
-    editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes, ...(views.length ? { views } : {}), ...(groups.length ? { groups } : {}) },
+    // `views`, `groups` and `unlisted` written only when there are some, so every other descriptor
+    // keeps its bytes.
+    editor: {
+      category: editor.category ?? null,
+      description: editor.description ?? "",
+      insert,
+      notes,
+      ...(views.length ? { views } : {}),
+      ...(groups.length ? { groups } : {}),
+      ...(editor.unlisted ? { unlisted: true } : {}),
+    },
   });
   const first = lead[0] === inputs[0] ? lead[0] : undefined;
   const bypassable = first?.spec.kind === "audio" && !first.spec.many && output?.kind === "audio" && !names.has("bypass");

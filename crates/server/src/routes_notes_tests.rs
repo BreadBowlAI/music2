@@ -12,9 +12,11 @@ use crate::{ServeOptions, start_with};
 #[test]
 fn the_theory_route_lists_the_tables() {
     let dir = std::env::temp_dir().join(format!("m2-routes-notes-{}", std::process::id()));
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let addr = running.url.trim_start_matches("http://").to_string();
     let get = |token: Option<&str>| -> (u16, Value) {
         let mut s = std::net::TcpStream::connect(&addr).unwrap();
@@ -57,7 +59,7 @@ fn a_key_that_doesnt_read_is_refused_in_words() {
     let dir = std::env::temp_dir().join(format!("m2-routes-notes-key-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
@@ -65,9 +67,11 @@ fn a_key_that_doesnt_read_is_refused_in_words() {
          const kick = track('kick', () => osc.sine(55));\nexport default song(() => kick.out);\n",
     )
     .unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let post = |key: Value| {
         crate::routes_8b::tests::post(&running.url, "/api/graph/song-key", Some("t0k"), &json!({"session": session, "key": key}))

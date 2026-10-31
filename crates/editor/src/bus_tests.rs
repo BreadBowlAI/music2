@@ -62,7 +62,7 @@ fn add_bus_writes_a_bus_file_and_a_channel() {
     assert_eq!((made.module.as_str(), made.label.as_str()), ("reverb", "Reverb"));
     assert_eq!(
         f.read("tracks/reverb.ts"),
-        "import { bus } from \"@m2/core\";\nimport { reverb } from \"std/fx\";\n\n\
+        "import { bus } from \"@m2/core\";\nimport { reverb } from \"@m2/effects\";\n\n\
          export default bus(\"reverb\", { name: \"Reverb\" }, ({ input }) => reverb(input, { mix: 1 }));\n"
     );
     let now = f.read("song.ts");
@@ -83,6 +83,34 @@ fn add_bus_writes_a_bus_file_and_a_channel() {
     assert_eq!((delay.module.as_str(), group.module.as_str(), group.label.as_str()), ("delay", "drums", "Drums"));
     assert!(f.read("tracks/drums.ts").contains("bus(\"drums\", { name: \"Drums\" }, ({ input }) => gain(input))"));
     assert!(s.accepted().compiled.ir.modules.iter().filter(|m| m.bus).count() == 2);
+}
+
+// PACK-10, PACK-15: Add bus ▸ Reverb (or Delay) adds @m2/effects' reverb as any pack's item is
+// added: the song that doesn't list the pack gets its [dependencies] line and its lock entry, at the
+// version the lists offer, in the same one undo step. A Group, std's gain, needs neither.
+#[test]
+fn add_bus_reverb_writes_the_effects_packs_dependency_and_lock() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let (manifest, lock) = (f.read("music2.toml"), f.read("music2.lock"));
+    assert!(!manifest.contains("@m2/effects") && !lock.contains("@m2/effects"), "first-song plays no effect of the pack");
+    let group = bus::add_bus(&mut s, BusKind::Group, None, None).unwrap();
+    assert_eq!((f.read("music2.toml"), f.read("music2.lock")), (manifest.clone(), lock.clone()), "a Group is std's");
+    s.undo().unwrap();
+    assert!(!f.0.join(format!("tracks/{}.ts", group.module)).exists());
+    bus::add_bus(&mut s, BusKind::Reverb, None, None).unwrap();
+    let store = m2_song::pack::Store::at(m2_song::pack::test_store());
+    let effects = m2_song::pack::PackName::new("@m2/effects").unwrap();
+    let hash = store.hash(&effects, &m2_song::Version(1, 0, 0)).unwrap();
+    assert_eq!(f.read("music2.toml"), format!("{manifest}\"@m2/effects\" = \"1.0\"\n"));
+    let now = m2_song::pack::Lock::read(&f.read("music2.lock")).unwrap();
+    let entry = now.get(&effects).expect("its lock entry");
+    assert_eq!((entry.version, entry.hash), (m2_song::Version(1, 0, 0), hash));
+    assert_eq!(now.packs.len(), 2, "the lock keeps @m2/synths' entry as it was");
+    assert!(s.problems().is_empty(), "{:?}", s.problems());
+    s.undo().unwrap();
+    assert_eq!((f.read("music2.toml"), f.read("music2.lock")), (manifest, lock), "one undo takes both back");
+    assert!(!f.0.join("tracks/reverb.ts").exists());
 }
 
 // A send, added and taken out: into a bare entry (wrapped), into an object with sends; taken out of

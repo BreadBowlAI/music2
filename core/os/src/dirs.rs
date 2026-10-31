@@ -28,7 +28,12 @@ pub fn presets() -> Option<PathBuf> {
 /// The store of installed packs (PACK-6): `~/Music/music2/Packs`, beside your presets, on every
 /// OS. One folder per version inside it: `Packs/@alice/felt-piano/1.2.0/`.
 pub fn packs() -> Option<PathBuf> {
-    songs().map(|s| s.join("Packs"))
+    home().map(|h| packs_under(&h))
+}
+
+/// The store of packs [`packs`] names for the home folder `home`.
+pub fn packs_under(home: &std::path::Path) -> PathBuf {
+    home.join("Music").join("music2").join("Packs")
 }
 
 /// Where music2 keeps what it can always rebuild, outside every project: the hash cache (FMT-16),

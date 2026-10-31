@@ -60,7 +60,7 @@ fn a_label_is_replaced_taken_back_to_the_key_and_written_again() {
 fn a_label_is_written_as_a_string_whatever_it_holds() {
     let f = Fixture::new();
     f.write("music2.toml", MANIFEST);
-    let song = "import { song, track } from \"@m2/core\";\nimport { hat } from \"std/instruments\";\n\
+    let song = "import { song, track } from \"@m2/core\";\nimport { hat } from \"@m2/synths\";\n\
                 const h = track(\"hats\", {}, ({ lane }) => hat(lane.notes(\"hits\")));\n\
                 export default song(() => h.out);\n";
     f.write("song.ts", song);
@@ -82,7 +82,7 @@ fn a_label_is_written_as_a_string_whatever_it_holds() {
 fn a_name_the_call_doesnt_write_plainly_is_changed_in_the_code() {
     let f = Fixture::new();
     f.write("music2.toml", MANIFEST);
-    let song = "import { song, track } from \"@m2/core\";\nimport { hat, kick } from \"std/instruments\";\n\
+    let song = "import { song, track } from \"@m2/core\";\nimport { hat, kick } from \"@m2/synths\";\n\
                 import { mixer } from \"std/mix\";\nconst name = \"Hats\";\nconst opts = { name: \"Kick\" };\n\
                 const h = track(\"hats\", { name }, ({ lane }) => hat(lane.notes(\"hits\")));\n\
                 const k = track(\"kick\", opts, ({ lane }) => kick(lane.notes(\"hits\")));\n\

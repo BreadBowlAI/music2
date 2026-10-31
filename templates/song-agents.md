@@ -14,7 +14,8 @@
 | `song.ts`, `tracks/`, `lib/` | the code: how the song sounds (instruments, effects, the mix) |
 | `data/` | what plays: notes, automation (knob moves over time) and audio clips |
 | `assets/` | audio files. Never overwritten |
-| `music2.toml` | the song's name, format and sample rate |
+| `music2.toml` | the song's name, format, sample rate, and the packs its code uses (`[dependencies]`) |
+| `music2.lock` | the exact version of each pack the song uses, made by music2. Never edit it by hand |
 | `layout.json` | the tracks' order and colours, markers and the song's key. Never heard |
 | `.music2/` | this computer's own state. Never touch it |
 | `AGENTS.md`, `CLAUDE.md` | this page, for agents. The app ignores both |
@@ -34,7 +35,7 @@ Below, `.` is this song's folder.
 | `m2 controls .` | every knob, with its id |
 | `m2 set . <id> <value>` | turn one knob |
 | `m2 add-track . <instrument>` | add a track (`synth.pluck`, `drums.kit`…) |
-| `m2 add-effect . <call> <effect>` | add an effect (`std:delay`) after a sound |
+| `m2 add-effect . <call> <effect>` | add an effect (`@m2/effects:delay`) after a sound |
 | `m2 clips . <gesture> <clip>…` | make, move, split, join or delete clips |
 | `m2 clips . json -` | any other clip gesture, as JSON: a chord built on the song's key (`stamp`), a feel (`groove`), notes pasted into a clip (`paste` with `into`); `m2 call . /api/theory` lists the scales, chords and grooves |
 | `m2 edit . <file> --old <text> --new <text>` | change text in one file of the song |

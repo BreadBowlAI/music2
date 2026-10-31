@@ -14,7 +14,7 @@ export type ItemKind = "instrument" | "sound" | "effect" | "sample" | "plugin";
 /** An item, as the server's search answers it. */
 export interface LibraryItem {
   kind: ItemKind;
-  /** `std:synth-pluck`, `clap:<id>`, `sound:<from>/<sound>/<name>`. */
+  /** `@m2/synths:synth-pluck`, `clap:<id>`, `sound:<from>/<sound>/<name>`. */
   id: string;
   label: string;
   category: string;
@@ -23,6 +23,8 @@ export interface LibraryItem {
   tags: string[];
   /** `std`, `song`, `yours`, `plugin`, or a pack. */
   package: string;
+  /** It is music2's own: std's, or a pack version music2 comes with (PACK-19), whatever its name. */
+  own?: boolean;
   /** What adding it names; for a sound, the sound it is for. */
   component: string;
   /** Adding it makes a new track. */
@@ -197,9 +199,9 @@ export async function sampleFolders(change?: { add: string } | { remove: string 
   return data.folders ?? [];
 }
 
-/** Where an item comes from, in words: "music2", "Yours", "This song", a plugin's maker; a pack's name, "music2" for ours (`@m2/`). */
+/** Where an item comes from, in words: "music2", "Yours", "This song", a plugin's maker; a pack's name, "music2" for a version music2 comes with (`own`, PACK-19). */
 export function fromWords(item: LibraryItem): string {
-  if (item.package === "std" || item.package.startsWith("@m2/")) return "music2";
+  if (item.package === "std" || item.own) return "music2";
   if (item.package === "yours") return "Yours";
   if (item.package === "song") return "This song";
   if (item.kind === "plugin") return item.tags[0] || "Plugin";

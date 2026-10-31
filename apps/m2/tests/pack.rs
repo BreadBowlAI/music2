@@ -139,6 +139,66 @@ fn installing_twice_is_a_no_op_and_a_new_hash_is_refused() {
     assert!(!installed.exists() && !t.store().join("@test").exists(), "its empty folders go too");
 }
 
+/// Every file and folder under `dir`, with when it last changed.
+fn stamps(dir: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut out = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            out.push((e.path(), e.metadata().unwrap().modified().unwrap()));
+            if e.file_type().unwrap().is_dir() {
+                stack.push(e.path());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// PACK-16, PACK-18: m2 installs the packs music2 ships into a fresh HOME's store the first time it
+// opens it, so a song made from the starter template builds offline, with no registry; a second
+// m2 finds them there and writes nothing in the store.
+#[test]
+fn m2_installs_the_bundled_packs_and_a_template_song_builds_offline() {
+    let t = Temp::new("bundled");
+    let song = t.0.join("song");
+    ok(t.m2(&["new", song.to_str().unwrap(), "--template", "starter"]));
+    assert!(song.join("music2.lock").is_file(), "the template's lock comes with it");
+    ok(t.m2(&["check", song.to_str().unwrap()]));
+    let listed = ok(t.m2(&["pack", "list"]));
+    for pack in ["@m2/drums 1.0.0", "@m2/effects 1.0.0", "@m2/synths 1.0.0"] {
+        assert!(listed.contains(pack), "{pack} in {listed}");
+    }
+    let before = stamps(&t.store());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    ok(t.m2(&["check", song.to_str().unwrap()]));
+    assert_eq!(stamps(&t.store()), before, "a second m2 writes nothing in the store");
+}
+
+// PACK-19 (review S9): `m2 pack install` takes a folder's pack named in music2's own scope only as
+// a version music2 comes with, those very files; any other `@m2/` is refused in words.
+#[test]
+fn a_folders_m2_pack_installs_only_as_music2s_own() {
+    let t = Temp::new("scope");
+    let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/@m2/effects");
+    let same = t.0.join("same");
+    copy(&ours, &same);
+    let said = ok(t.m2(&["pack", "install", same.to_str().unwrap()]));
+    assert!(said.contains("@m2/effects 1.0.0 is already installed"), "{said}");
+    let changed = t.0.join("changed");
+    copy(&ours, &changed);
+    std::fs::write(changed.join("README.md"), "# Not music2's\n").unwrap();
+    let said = failed(t.m2(&["pack", "install", changed.to_str().unwrap()]));
+    assert!(said.contains("@m2/ is music2's own scope: @m2/effects 1.0.0") && said.contains("`@you/effects`"), "{said}");
+    let new = t.0.join("new");
+    copy(&fixtures().join("tiny"), &new);
+    let toml = std::fs::read_to_string(new.join("m2pkg.toml")).unwrap().replace("name = \"@test/tiny\"", "name = \"@m2/free-synths\"");
+    std::fs::write(new.join("m2pkg.toml"), toml).unwrap();
+    let said = failed(t.m2(&["pack", "install", new.to_str().unwrap()]));
+    assert!(said.contains("@m2/ is music2's own scope: @m2/free-synths 0.1.0"), "{said}");
+    assert!(!ok(t.m2(&["pack", "list"])).contains("free-synths"));
+}
+
 // PACK-12: check names each problem in words and exits 1.
 #[test]
 fn check_says_what_is_wrong() {
@@ -165,8 +225,9 @@ fn check_says_what_is_wrong() {
     for want in ["tool.sh", "licence", "sparkle", "samples/gone.wav"] {
         assert!(text.contains(want), "says {want}: {text}");
     }
-    // An effect without a category isn't one the lists can offer, nor an instrument.
-    assert!(text.contains("tiny-crunch"), "{text}");
+    // An effect without a category isn't one the lists can offer, nor an instrument: named, as one
+    // its author forgot (PACK-12).
+    assert!(text.lines().any(|l| l.contains("tiny-crunch") && l.contains("has no category")), "{text}");
 }
 
 // PACK-12: a new pack checks as made, and installs.
@@ -178,6 +239,10 @@ fn a_new_pack_checks() {
     assert!(out.status.success(), "{}", said(&out));
     let out = t.m2(&["pack", "check", folder.to_str().unwrap()]);
     assert!(out.status.success(), "{}", said(&out));
+    // Its voice is std's typed blocks, which TypeScript checks as you type; never a kernel's
+    // inputs by name, which only the build checks (review S8).
+    let index = std::fs::read_to_string(folder.join("src/index.ts")).unwrap();
+    assert!(index.contains("from \"std/dsp\"") && !index.contains("kernel("), "{index}");
     let out = t.m2(&["pack", "new", t.0.join("x").to_str().unwrap(), "--name", "felt"]);
     assert_eq!(out.status.code(), Some(1), "a name that isn't @owner/name: {}", said(&out));
 }
@@ -437,7 +502,7 @@ fn tiny_with_kernel(t: &Temp, version: &str, tag: &str) -> PathBuf {
     wasm.extend(tag.as_bytes());
     std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
     let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
-    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+    let tone = "\nimport { hz } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
                 id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
                 inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
                 (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
@@ -587,7 +652,7 @@ fn sfz_fixture() -> PathBuf {
 fn tiny_keys_song(dir: &Path, pack: &Path) {
     std::fs::create_dir_all(dir.join("data/keys")).unwrap();
     let manifest = format!(
-        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\
+        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n\
          \"@test/tiny-keys\" = {{ path = {:?} }}\n",
         pack.to_str().unwrap()
     );

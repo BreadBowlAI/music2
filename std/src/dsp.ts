@@ -1,6 +1,7 @@
-// std/dsp: oscillators, envelopes, filters and amplifiers.
+// std/dsp: oscillators, envelopes, filters and amplifiers, and `mono` to play one note at a time:
+// the blocks a voice of your own is made of.
 
-import { component, control, kernel, port, setting, signature, type Audio, type Control, type Params, type Signal, type Value } from "@m2/core";
+import { component, control, kernel, poly, port, setting, signature, type Audio, type Control, type Events, type Params, type Signal, type Value } from "@m2/core";
 import { mtof } from "./math";
 
 /** Oscillators take a frequency, or a pitch in semitones (converted for you). */
@@ -173,3 +174,20 @@ export const pan = component(
   },
   (x: Audio, { position }: Params) => kernel("std:pan", { in: x, pan: position }),
 );
+
+// ---------------------------------------------------------------- voices
+
+/** What a voice plays: the note's pitch (in semitones, the pitch wheel in it), gate and velocity, and the mod wheel, as `poly` gives them. */
+export type Voice = { pitch: Control<"semitones">; gate: Control<"unit01">; velocity: Control<"unit01">; modWheel: Control<"unit01"> };
+
+/**
+ * Play `voice` one note at a time: `poly` in `"legato"` mode, without retriggering. The
+ * latest note wins. One that starts while another is still held slides to its pitch over
+ * `glide` (seconds) and keeps the envelopes going (legato); notes that only touch start
+ * again, their envelopes from where they are. When the note sounding ends while older ones
+ * are still held, the newest of those sounds again, sliding back to it (an 808's slide up
+ * and back). Notes that start together count as one, the last of them.
+ */
+export function mono(notes: Events, voice: (note: Voice) => Audio, opts: { glide?: Value } = {}): Audio {
+  return poly(notes, voice, { mode: "legato", retrigger: false, glide: opts.glide ?? 0 });
+}

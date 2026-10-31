@@ -14,9 +14,10 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | You can | Where |
 |---|---|
 | Start a song from a template, or open an example | the start screen: **New Song…**, **Examples** |
-| Add a track: 22 std sounds, a Sampler, or an empty audio track | **+ Track** (⌘T), or the browser on the left |
+| Add a track: 22 of music2's own sounds (synths, FM keys, a drum machine), a Sampler, a pack's sound, or an empty audio track | **+ Track** (⌘T), or the browser on the left |
 | Draw and edit notes | **Notes** (⌥2), the piano roll |
 | Edit clips: move, copy, trim, split, join, repeat | the timeline |
+| Copy a chorus, or insert and delete bars, on every track at once | drag across the ruler, then ⌘C and ⌘V, or right-click ([Sections](sections.md)) |
 | Turn knobs, add effects, connect cables | **Device** (⌥1) |
 | Mix: faders, pans, mute, solo, meters, and how loud the song is (LUFS) | **Mix** (⌥3), and each track's header |
 | Share a reverb or a delay, or group tracks under one fader | **Mix** (⌥3) ▸ **Add bus** |
@@ -25,6 +26,8 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Play live: the computer's keys, or a MIDI keyboard with its wheels | ⌘K; or plug a keyboard in |
 | Hear a click on each beat | K |
 | Record notes, or your voice or a guitar | R |
+| Record several tracks at once, each from its own input (3–4 too) | **R** on each track's header; right-click it for its input |
+| Fix one part by punching in, or keep a take each time round a loop | right-click Record ▸ **Punch in and out**; the clip's menu ▸ **Take 1**, **Take 2**, … |
 | Bring in WAV or FLAC files, long ones too | File ▸ Import Audio… (⇧⌘I), or drag them onto the window |
 | Keep an audio clip in time when the tempo changes | right-click the clip ▸ **Follow tempo** |
 | Bring in a MIDI file as new tracks | File ▸ Import MIDI…, or drop the `.mid` file |
@@ -35,4 +38,4 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | See what's wrong, in plain words, with fixes | the status pill in the top bar |
 | Learn step by step | Help ▸ Make Your First Song |
 
-Every change is written into the song's files at once, and Undo (⌘Z) takes it back.
+Every change is written into the song's files at once, and Undo (⌘Z) takes it back, also after you close the song. Code you typed and didn't save is offered back after a crash ([Saving and undo](saving.md)).

@@ -19,6 +19,8 @@ serde_json.workspace = true
 memchr.workspace = true
 
 [dev-dependencies]
+# A store of the packs this tree bundles (`pack::test_store`).
+m2-song = { workspace = true, features = ["testing"] }
 # The kill tests' children: a signal's number, and no core dump on Linux (OS-72).
 libc.workspace = true
 # The probe plugin and the tests' plugin main thread (HOST-2): keyed plugins in `continues`.

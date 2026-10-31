@@ -142,7 +142,7 @@ pub struct ViewNode {
     pub inlets: Vec<InletView>,
     /// Whether its result is audio, which an effect can go after.
     pub audio: bool,
-    /// The ComponentId of the component the call is an instance of (`std:delay`), whatever the
+    /// The ComponentId of the component the call is an instance of (`@m2/effects:delay`), whatever the
     /// name it is called by (PKG-9).
     pub component: Option<String>,
     /// The effect this node is, by its descriptor's label (`Delay`), if it can be removed.

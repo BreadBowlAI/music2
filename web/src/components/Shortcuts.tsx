@@ -31,6 +31,9 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Delete the selected clips or notes", keyName("Backspace")],
       ["Select more clips / one in or out", `${mod.shift}-click / ${mod.cmd}-click`],
       ["Select the clips in some bars", "drag on empty lanes"],
+      ["Select bars of every track", "drag along the ruler's top"],
+      ["Insert bars where the selected ones start", chord("I")],
+      ["Delete the selected bars", chord("Backspace", { shift: true })],
       ["Copy a clip", `${mod.alt}-drag`],
       ["Duplicate the selection", chord("D")],
       ["Split clips at the playhead", chord("E")],
@@ -105,11 +108,12 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     ],
   },
   {
-    // While it is on (lib/piano.ts): the selected track plays.
+    // While it is on (lib/piano.ts): the selected track plays, or the armed notes track.
     name: "Keyboard piano",
     keys: [
       ["Play notes", "A to ' and W to P"],
       ["Octave down / up", "Z / X"],
+      ["Softer / louder", "− / ="],
     ],
   },
 ];

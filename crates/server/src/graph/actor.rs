@@ -569,7 +569,8 @@ pub(super) struct Prepared {
 
 fn packages(inner: &Inner) -> Result<PackageSet> {
     let mut p = PackageSet::default().with_host(inner.host.clone());
-    // The store the server was given, else this computer's packs (PACK-6), under `$HOME` (PLAT-7).
+    // The store the server was given, else this computer's packs (PACK-6), under `$HOME` (PLAT-7),
+    // only read: a program's start installs music2's own there (PACK-16), never a build.
     if let Some(store) = inner.store.get().cloned().or_else(m2_os::dirs::packs) {
         p = p.with_store(store);
     }
@@ -886,6 +887,10 @@ impl Open {
                 // What they would take back, in words (gaps #29, `steps`).
                 "undo_name": super::steps::named(s.step_names().0.as_ref(), &self.timeline),
                 "redo_name": super::steps::named(s.step_names().1.as_ref(), &self.timeline),
+                // Why they go back no further, when something cut them off (WRITE-24):
+                // `outside` or `unread`.
+                "undo_end": s.undo_end().map(|e| e.as_str()),
+                "redo_end": s.redo_end().map(|e| e.as_str()),
                 "effects": s.effects(),
                 "instruments": s.instruments(),
                 "palette": m2_editor::layout::DEFAULT_ORDER,
@@ -1435,6 +1440,8 @@ impl Actor {
                 p.aliases = a;
             }
         }
+        // Arms on tracks the song no longer shows go (MON-9).
+        super::record::prune_arms(&mut cp, token);
         drop(cp);
         // The view it replaces is a tree of every note: freed elsewhere, neither under the lock
         // nor before the reply (or the next request) on this thread.
@@ -1559,6 +1566,9 @@ impl Actor {
         let rev = o.session.accepted();
         *self.inner.timing.lock() = Some(Timing { tempo: rev.tempo(), rate: rev.project.sample_rate(), range: None, on: false });
         let shown = Arc::new(o.shown());
+        // Unsaved code the song closed with, moved aside and offered back; read before the control
+        // plane's lock is taken. A read-only window keeps none (WRITE-27).
+        let drafts = if shown.read_only.is_none() { super::drafts::set_aside(&shown.dir) } else { vec![] };
         let owed = {
             let mut cp = self.inner.control.lock();
             // Every gesture of the project before ends: a fresh engine plays this one's code.
@@ -1571,7 +1581,7 @@ impl Actor {
             let local = super::view_file::local(&shown.dir);
             // The metronome as this song had it here: off for one that never had it on.
             device.player.set_click(super::view_file::metronome(&local));
-            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local }).and_then(|p| p.owed())
+            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local, drafts }).and_then(|p| p.owed())
         };
         self.inner.save_owed(owed);
         *self.inner.watch.lock() = Some(watcher::Watch::new(token, o.session.accepted(), before));
@@ -1598,8 +1608,16 @@ impl Actor {
     pub(super) fn retry_lock(&mut self, token: u64) -> Result<Value> {
         let o = self.open.as_mut().context("no project is open")?;
         o.check_token(token)?;
+        let was = o.session.access().writer();
         o.session.retry_lock();
+        // The lock taken: the unsaved code left from before is offered, as at an open (WRITE-27).
+        let drafts = (!was && o.session.access().writer()).then(|| super::drafts::set_aside(&o.session.accepted().project.dir));
         self.settle(None);
+        if let Some(drafts) = drafts
+            && let Some(p) = self.inner.control.lock().open.as_mut().filter(|p| p.engine.token == token)
+        {
+            p.drafts = drafts;
+        }
         self.inner.state().context("no project is open")
     }
 

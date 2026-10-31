@@ -17,13 +17,14 @@ use crate::{Running, ServeOptions, start_with};
 const PAGE: &str = "t0k";
 const TOOLS: &str = "t00ls";
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
 
 /// What AGENT-11 names as the musician's: each is in the table, and not for agents.
-const THE_MUSICIANS: [(&str, &str); 45] = [
+const THE_MUSICIANS: [(&str, &str); 46] = [
     ("POST", "/api/graph/transport"),
+    ("POST", "/api/graph/arm"),
     ("POST", "/api/graph/seek"),
     ("POST", "/api/graph/loop"),
     ("POST", "/api/graph/panic"),
@@ -71,8 +72,9 @@ const THE_MUSICIANS: [(&str, &str); 45] = [
 ];
 
 /// Every song change the page makes, which stays open to agents (AGENT-11), and is a write.
-const SONG_CHANGES: [(&str, &str); 40] = [
+const SONG_CHANGES: [(&str, &str); 42] = [
     ("POST", "/api/tx/commit"),
+    ("POST", "/api/graph/take"),
     ("POST", "/api/graph/set"),
     ("POST", "/api/graph/connect"),
     ("POST", "/api/graph/disconnect"),
@@ -103,6 +105,7 @@ const SONG_CHANGES: [(&str, &str); 40] = [
     ("POST", "/api/graph/meter"),
     ("POST", "/api/graph/title"),
     ("POST", "/api/graph/clips"),
+    ("POST", "/api/graph/sections"),
     ("POST", "/api/graph/song-key"),
     ("POST", "/api/graph/markers"),
     ("POST", "/api/graph/audio/import"),
@@ -128,7 +131,7 @@ fn song(name: &str) -> PathBuf {
 /// A server with `song` open, and its session.
 fn serve(song: &Path) -> (Running, u64) {
     let options = ServeOptions { port: 0, web_dir: song.join("no-web"), token: TOOLS.into(), page_token: PAGE.into() };
-    let running = start_with(options, Graph::silent()).unwrap();
+    let running = start_with(options, Graph::silent().stored()).unwrap();
     let session = running.state.graph.open(song).unwrap()["session"].as_u64().unwrap();
     (running, session)
 }
@@ -404,7 +407,7 @@ fn each_route_takes_bodies_up_to_its_limit() {
 
 /// A server of `routes`, as the app serves them (`routes::served`), with no song open: its url.
 fn serving_routes(routes: axum::Router<std::sync::Arc<crate::AppState>>) -> String {
-    let mut state = crate::AppState::new(TOOLS.into(), Graph::silent());
+    let mut state = crate::AppState::new(TOOLS.into(), Graph::silent().stored());
     state.page_token = PAGE.into();
     let app = crate::routes::served(std::sync::Arc::new(state), routes, Path::new("no-web"));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

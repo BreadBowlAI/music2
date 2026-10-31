@@ -36,8 +36,9 @@ musician sees it there, and `m2 undo` takes it back. While the musician drags wh
 records, or has unsaved code in its file, the app refuses it: `m2` waits up to 30 s, then exits 3, \
 changing nothing. Don't write the song's files directly while the app has it open: the app can't \
 refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files \
-itself, and undo isn't kept once it exits. Reading, rendering and `bounce` without `--place` work all \
-the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while \
+itself, each write an undo step of the song's history, yours by `--as`, which the app reads back \
+when it opens the song (`m2 undo` needs the app open). Reading, rendering and `bounce` without \
+`--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while \
 listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can \
 do: `m2 call` refuses it, and `m2 point` shows them where instead.
 
@@ -63,7 +64,7 @@ m2 render /tmp/m2-scratch out.wav
 m2 controls /tmp/m2-scratch                                     # ids look like song.ts#2/0.hats.pan
 m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
 m2 set /tmp/m2-scratch 'tracks/hats.ts#1/@decay' 0.08            # a control the call leaves out: writes { decay: 0.08 }
-m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std:delay
+m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' @m2/effects:delay
 
 m2 new /tmp/m2-resample --example resample
 m2 bounce /tmp/m2-resample keys-again --track keys              # render the keys track to assets/keys-again.wav
@@ -171,7 +172,7 @@ pub const COMMANDS: &[Command] = &[
         name: "add-track",
         also: &[],
         usage: "m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]",
-        words: "add a track playing an instrument (`std:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its \
+        words: "add a track playing an instrument (`@m2/synths:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its \
                 import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in \
                 `layout.json`, verified",
         more: "It is what + Track does. `--name \"Lead Vox\"` names it, `--key` gives its key, `--after kick` puts it \
@@ -273,15 +274,15 @@ pub const COMMANDS: &[Command] = &[
         name: "effects",
         also: &[],
         usage: "m2 effects <project>",
-        words: "the effects packages offer, by id (`std:delay`), and the calls they can go after",
+        words: "the effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after",
         more: "",
     },
     Command {
         name: "add-effect",
         also: &[],
         usage: "m2 add-effect <project> <call> <effect>",
-        words: "wrap a call's audio in an effect, named by its component id (`std:delay`) or its export \
-                (`std/fx.delay`), verified",
+        words: "wrap a call's audio in an effect, named by its component id (`@m2/effects:delay`) or its export \
+                (`@m2/effects.delay`), verified",
         more: "",
     },
     Command {
@@ -410,6 +411,23 @@ pub const COMMANDS: &[Command] = &[
                `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the \
                song's key) and `groove` (swing, laid back, pushed or accents). `m2 call <song> /api/theory` \
                lists the chords and grooves.",
+    },
+    Command {
+        name: "sections",
+        also: &[],
+        usage: "m2 sections <project> duplicate <bars> [--to <bar>]\n\
+                m2 sections <project> move <bars> --to <bar>\n\
+                m2 sections <project> delete <bars>\n\
+                m2 sections <project> insert-bars <bars>\n\
+                m2 sections <project> delete-bars <bars>\n\
+                m2 sections <project> json <gesture.json | ->",
+        words: "one gesture on whole bars of every track at once, as one edit that undo takes back. `<bars>` are bars \
+                counted from 1 (`9-16`, or `9` for one), or a marker's name (`Chorus`: to the next marker). \
+                `duplicate` copies them right after themselves (or to bar `--to`) and `move` moves them, each in \
+                place of what was there; `delete` empties them; `insert-bars` opens as many empty bars where they \
+                start, and `delete-bars` takes them out: everything after moves, markers and tempo changes too",
+        more: "A clip that crosses the bars' edge is split there. `json` also takes `paste`, with a copied section, \
+               as `POST /api/graph/sections` does. See [Sections](sections.md).",
     },
     Command {
         name: "unautomate",

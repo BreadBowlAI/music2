@@ -166,7 +166,9 @@ async fn settings_set(State(s): S, Json(r): Json<SettingsReq>) -> ApiResult {
                 (Some(_), Some(i)) => Some(i.name),
                 (Some(_), None) => input.name,
             };
-            k.change(|kept| kept.input = input)?;
+            k.change(|kept| kept.input = input.clone())?;
+            // Armed audio tracks hear the input chosen now, when you hear yourself (MON-9).
+            state.graph.set_input(input.choice(), input.monitor);
         }
         Ok(shown(&state, stopped))
     })

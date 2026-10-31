@@ -165,6 +165,7 @@ fn named(g: &Gesture) -> Vec<LaneAddr> {
             into.iter().for_each(|c| add(&c.lane));
         }
         Gesture::Set { lane, .. } => add(lane),
+        Gesture::Record { takes } => takes.iter().for_each(|t| add(&t.lane)),
     }
     out
 }

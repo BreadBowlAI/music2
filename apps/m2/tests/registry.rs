@@ -33,7 +33,8 @@ impl Temp {
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
@@ -263,10 +264,9 @@ fn a_bucket_is_read_over_http() {
     assert!(out.contains("@alice/drums 1.0.0 is published with the hash"), "{out}");
 }
 
-const KEYS: &str = r#"import { component, control, port, signature, type Audio, type Events, type Params } from "@m2/core";
-import { synth } from "std/synth";
+const KEYS: &str = r#"import { component, control, kernel, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
 
-/** A soft pluck: std's synth pluck, darker. */
+/** A soft pluck, on std's synth kernel. */
 export const softKeys = component(
   {
     id: "soft-keys",
@@ -275,9 +275,11 @@ export const softKeys = component(
     inputs: { notes: port.notes() },
     controls: { brightness: control.hz(1800).range(200, 20000) },
     output: port.audio(),
-    editor: { category: "Keys", description: "A soft pluck, from std's synth" },
+    editor: { category: "Keys", description: "A soft pluck, on std's synth kernel" },
   },
-  (notes: Events, { brightness }: Params): Audio => synth.pluck(notes, { brightness }),
+  // A pack never imports another (PACK-3): std's synth kernel, played as a soft pluck.
+  (notes: Events, { brightness }: Params): Audio =>
+    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: brightness, decay: 0.45, sustain: 0, release: 0.25 }), { voices: 12 }),
 );
 "#;
 
@@ -299,7 +301,7 @@ fn library_bucket(t: &Temp) -> (PathBuf, String, String) {
     write(
         &keys.join("m2pkg.toml"),
         "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nauthors = [\"Bob\"]\n\
-         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n",
+         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
     );
     write(&keys.join("src/index.ts"), KEYS);
     let r = reg.to_str().unwrap();
@@ -355,7 +357,7 @@ fn no_registry_is_said_plainly() {
     let out = failed(t.m2(&["pack", "get", "@bob/keys"]));
     assert!(out.contains("No registry is set") && out.contains("M2_REGISTRY"), "{out}");
     let out = ok(t.m2(&["search", "reverb"]));
-    assert!(out.contains("std:reverb") && !out.contains("library"), "{out}");
+    assert!(out.contains("@m2/effects:reverb") && !out.contains("library"), "{out}");
 }
 
 // REG-17, REG-15: `m2 pack get <name>` gets the latest version, whole and checked, into the store;
