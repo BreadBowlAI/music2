@@ -79,7 +79,11 @@ fn with_the_app_closed_m2_searches_std_and_your_presets() {
     let ids: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
     assert_eq!(
         ids,
-        ["sound:std/@m2/wavetable:wavetable/Short pluck", "sound:std/@m2/synths:synth-pluck/Glass", "sound:std/@m2/synths:synth-pluck/Soft"],
+        [
+            "sound:std/@m2/wavetable:wavetable/Short pluck",
+            "sound:std/@m2/synths:synth-pluck/Glass",
+            "sound:std/@m2/synths:synth-pluck/Soft"
+        ],
         "--kind sound: only sounds"
     );
 
