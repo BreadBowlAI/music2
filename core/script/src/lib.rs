@@ -149,6 +149,13 @@ pub struct DataReader {
 /// Where a pack's instruments written as data are, and the module that exports them (PACK-13).
 const DATA: &str = "instruments";
 
+/// A package's kernels' source, at its top: no part of the pack, never installed, so no import
+/// reaches it (PACK-20). `m2_song::pack::KERNELS_SRC`, and its words, `NOT_IN_KERNELS_SRC` (this crate
+/// doesn't depend on m2-song; a test in m2-session holds them equal).
+pub const KERNELS_SRC: &str = "kernels-src";
+pub const NOT_IN_KERNELS_SRC: &str =
+    "kernels-src/ is no part of the pack (the source of its kernels, never installed): put the built wasm in kernels/";
+
 pub struct Options {
     /// The project's code: every Code file of the snapshot, by its path in the project,
     /// `/`-separated (`song.ts`, `tracks/bass.ts`). Nothing of the project is read from
@@ -563,6 +570,10 @@ impl State {
             // A hidden file is no part of a package (its listing leaves it out, PACK-6).
             if real.strip_prefix(dir).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))) {
                 return Err(("import.outside-code", "it is a hidden file, and no part of its package".into()));
+            }
+            // Nor is its kernels' source, which is never installed (PACK-20).
+            if real.strip_prefix(dir).is_ok_and(|rel| rel.components().next().is_some_and(|c| c.as_os_str() == KERNELS_SRC)) {
+                return Err(("import.outside-code", NOT_IN_KERNELS_SRC.into()));
             }
             return Ok(self.display(&c.to_string_lossy()));
         }

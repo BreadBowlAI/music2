@@ -425,6 +425,38 @@ fn the_bundled_packs_pass_check() {
     }
 }
 
+// PACK-20 (review X4): a pack's `kernels-src/` is never installed, so nothing of the pack is read
+// from it: `m2 pack check` refuses a module there, and code that imports from there, as a song
+// would once the pack is installed.
+#[test]
+fn check_refuses_a_pack_that_reads_its_kernel_source() {
+    let f = Fixture::new();
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    // Its module in kernels-src/.
+    let fx = f.0.join("fx");
+    copy(&m2_song::pack::source_packs().join("@m2/effects"), &fx);
+    std::fs::rename(fx.join("kernels/effects.wasm"), fx.join("kernels-src/fx.wasm")).unwrap();
+    std::fs::remove_dir_all(fx.join("presets")).unwrap();
+    let toml = std::fs::read_to_string(fx.join("m2pkg.toml")).unwrap();
+    let toml = toml.replace("name = \"@m2/effects\"", "name = \"@alice/fx\"").replace("kernels/effects.wasm", "kernels-src/fx.wasm");
+    std::fs::write(fx.join("m2pkg.toml"), toml).unwrap();
+    let said = check(&fx, &std_dir).join("\n");
+    assert!(said.contains("`kernels-src/fx.wasm`") && said.contains("kernels-src/ is no part of the pack"), "{said}");
+    // Code that imports from it.
+    let small = f.0.join("tiny");
+    copy(&tiny(), &small);
+    std::fs::create_dir_all(small.join("kernels-src")).unwrap();
+    std::fs::write(small.join("kernels-src/extra.ts"), "export const extra = 1;\n").unwrap();
+    let code = std::fs::read_to_string(small.join("src/index.ts")).unwrap();
+    std::fs::write(
+        small.join("src/index.ts"),
+        format!("import {{ extra }} from \"../kernels-src/extra\";\nexport const e = extra;\n{code}"),
+    )
+    .unwrap();
+    let said = check(&small, &std_dir).join("\n");
+    assert!(said.contains("../kernels-src/extra") && said.contains("kernels-src/ is no part of the pack"), "{said}");
+}
+
 // PACK-12, PKG-7: a component with no category is named, as one its author forgot; one that says
 // `unlisted: true` is code's on purpose, and no list offers it.
 #[test]
