@@ -41,7 +41,8 @@ export const wobble = component(
 ";
 
 /// The regions the song gives Wobble: two recordings, the second for softer notes only.
-pub(crate) const REGIONS: &str = "[{ file: \"c4.wav\", root: 60, keys: [48, 72] }, { file: \"c5.wav\", root: 72, keys: [73, 96], velocity: [1, 100] }]";
+pub(crate) const REGIONS: &str =
+    "[{ file: \"c4.wav\", root: 60, keys: [48, 72] }, { file: \"c5.wav\", root: 72, keys: [73, 96], velocity: [1, 100] }]";
 
 /// A song whose one track plays Wobble with `options` written in its call.
 pub(crate) fn wobble(options: &str) -> Fixture {
@@ -92,7 +93,10 @@ fn a_choice_and_a_switch_control_are_a_menu_and_a_switch() {
     assert_eq!((cutoff.kind, &cutoff.value, cutoff.options.is_empty()), (Kind::Number, &json!(800), true));
     // As sent: what an agent reads.
     let sent = serde_json::to_value(&shape).unwrap();
-    assert_eq!((sent["kind"].clone(), sent["value"].clone(), sent["options"][1].clone()), (json!("choice"), json!("square"), json!({"value": "square", "label": "square"})));
+    assert_eq!(
+        (sent["kind"].clone(), sent["value"].clone(), sent["options"][1].clone()),
+        (json!("choice"), json!("square"), json!({"value": "square", "label": "square"}))
+    );
 }
 
 // CARD-21: the one write sets a choice by its name, keeping the literal's quotes, and a switch the
@@ -155,7 +159,8 @@ fn values_one_gesture_moves_are_one_undo_step() {
     let song = f.read("song.ts");
     let (attack, decay, sustain) = (knob(&s, "attack"), knob(&s, "decay"), knob(&s, "sustain"));
     let at = s.accepted().number;
-    let done = s.write_all(at, &[(decay.id.clone(), json!(0.25)), (sustain.id.clone(), json!(0.5)), (attack.id.clone(), json!(0.01))]).unwrap();
+    let done =
+        s.write_all(at, &[(decay.id.clone(), json!(0.25)), (sustain.id.clone(), json!(0.5)), (attack.id.clone(), json!(0.01))]).unwrap();
     assert_eq!(f.read("song.ts"), song.replace("{ decay: 0.4 }", "{ decay: 0.25, sustain: 0.5, attack: 0.01 }"));
     assert_eq!(done.iter().map(|c| c.value).collect::<Vec<_>>(), [0.25, 0.5, 0.01]);
     assert_eq!((knob(&s, "sustain").value, knob(&s, "attack").written), (json!(0.5), true));
@@ -198,7 +203,10 @@ fn a_lane_of_names_is_a_lane_of_steps_on_the_timeline() {
         }
         other => panic!("not a lane of steps: {other:?}"),
     }
-    f.write("data/lead/shape.json", steps_file("{\"id\": \"a\", \"start\": 0, \"length\": 4, \"points\": [[0, \"sine\"], [2, \"sqaure\"]]}"));
+    f.write(
+        "data/lead/shape.json",
+        steps_file("{\"id\": \"a\", \"start\": 0, \"length\": 4, \"points\": [[0, \"sine\"], [2, \"sqaure\"]]}"),
+    );
     s.refresh();
     let sent = serde_json::to_value(lane(&s, "shape")).unwrap();
     assert_eq!(sent["kind"], "steps");
@@ -233,19 +241,31 @@ fn clip_gestures_draw_a_lane_of_names() {
     let clip = ClipRef { lane: addr.clone(), id: Some(id.clone()), at: None, sha: None };
     let name = |n: &str| Point::Step(m2_song::lane::Step::Name(n.into()));
     edit(&mut s, &Gesture::Points { clip: clip.clone(), points: vec![(2.0, name("sine")), (0.0, name("saw"))] }).unwrap();
-    assert!(file().contains(&format!("{{\"id\": \"{id}\", \"start\": 4, \"length\": 4, \"points\": [[0, \"saw\"], [2, \"sine\"]]}}")), "{}", file());
+    assert!(
+        file().contains(&format!("{{\"id\": \"{id}\", \"start\": 4, \"length\": 4, \"points\": [[0, \"saw\"], [2, \"sine\"]]}}")),
+        "{}",
+        file()
+    );
     let e = edit(&mut s, &Gesture::Points { clip: clip.clone(), points: vec![(0.0, name("squar"))] }).unwrap_err().to_string();
     assert!(e.contains("lead's shape lane is one of \"saw\", \"square\" or \"sine\", not \"squar\""), "{e}");
     let e = edit(&mut s, &Gesture::Points { clip: clip.clone(), points: vec![(0.0, Point::Number(1.0))] }).unwrap_err().to_string();
     assert!(e.contains("lead's shape lane is one of \"saw\", \"square\" or \"sine\", not 1"), "{e}");
     let before = file();
     edit(&mut s, &Gesture::Move { clips: vec![clip.clone()], by: 4.0, to: None, copy: false }).unwrap();
-    assert!(file().contains(&format!("{{\"id\": \"{id}\", \"start\": 8, \"length\": 4, \"points\": [[0, \"saw\"], [2, \"sine\"]]}}")), "{}", file());
+    assert!(
+        file().contains(&format!("{{\"id\": \"{id}\", \"start\": 8, \"length\": 4, \"points\": [[0, \"saw\"], [2, \"sine\"]]}}")),
+        "{}",
+        file()
+    );
     s.undo().unwrap();
     assert_eq!(file(), before, "one undo step");
     let split = edit(&mut s, &Gesture::Split { clips: vec![clip.clone()], at: 7.0 }).unwrap();
     let second = split.made[0].1.clone();
-    assert!(file().contains(&format!("{{\"id\": \"{id}\", \"start\": 4, \"length\": 3, \"points\": [[0, \"saw\"], [2, \"sine\"]]}}")), "{}", file());
+    assert!(
+        file().contains(&format!("{{\"id\": \"{id}\", \"start\": 4, \"length\": 3, \"points\": [[0, \"saw\"], [2, \"sine\"]]}}")),
+        "{}",
+        file()
+    );
     assert!(file().contains(&format!("{{\"id\": \"{second}\", \"start\": 7, \"length\": 1, \"points\": [[0, \"sine\"]]}}")), "{}", file());
     let both = vec![clip.clone(), ClipRef { lane: addr.clone(), id: Some(second.clone()), at: None, sha: None }];
     let e = edit(&mut s, &Gesture::Join { clips: both }).unwrap_err().to_string();
@@ -269,7 +289,8 @@ fn a_cards_groups_are_in_the_view() {
     let s = f.open();
     assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
     let card = card(&s);
-    let input = |slot: &str| card.inputs.iter().find(|p| p.slot.as_deref() == Some(slot)).unwrap_or_else(|| panic!("no {slot} input")).id.clone();
+    let input =
+        |slot: &str| card.inputs.iter().find(|p| p.slot.as_deref() == Some(slot)).unwrap_or_else(|| panic!("no {slot} input")).id.clone();
     let regions = card.settings.iter().find(|x| x.slot == "regions").expect("the regions setting").id.clone();
     use crate::views::Row::{Input, Setting, View};
     let groups: Vec<(&str, Vec<crate::views::Row>)> = card.groups.iter().map(|g| (g.name.as_str(), g.rows.clone())).collect();
@@ -278,13 +299,19 @@ fn a_cards_groups_are_in_the_view() {
         [
             ("Sound", vec![Input(input("shape")), Input(input("sub")), View("scope".into())]),
             ("Filter", vec![View("filter".into()), Input(input("cutoff")), Input(input("q"))]),
-            ("Amp", vec![View("amp".into()), Input(input("attack")), Input(input("decay")), Input(input("sustain")), Input(input("release"))]),
+            (
+                "Amp",
+                vec![View("amp".into()), Input(input("attack")), Input(input("decay")), Input(input("sustain")), Input(input("release"))]
+            ),
             ("More", vec![Setting(regions), View("keys".into())]),
         ]
     );
     assert!(card.inputs.iter().any(|p| p.kind == "notes" && p.slot.is_none()), "the notes input is a connection: {:?}", card.inputs);
     let sent = serde_json::to_value(&card).unwrap();
-    assert_eq!(sent["groups"][0], json!({"name": "Sound", "rows": [{"input": input("shape")}, {"input": input("sub")}, {"view": "scope"}]}));
+    assert_eq!(
+        sent["groups"][0],
+        json!({"name": "Sound", "rows": [{"input": input("shape")}, {"input": input("sub")}, {"view": "scope"}]})
+    );
 }
 
 // CARD-26: the view carries the card's views, resolved for the call: each part of an envelope and

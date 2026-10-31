@@ -67,14 +67,22 @@ fn a_choice_a_switch_and_a_drag_of_two_knobs_through_the_routes() {
     let before = read();
     let (at, shape) = knob(graph, "shape");
     let (status, why) = set(json!({"session": session, "revision": at, "id": shape["id"], "gesture": "set", "value": "squar"}));
-    assert!(status == 400 && why["error"].as_str().unwrap().contains("shape is one of \"saw\", \"square\" or \"sine\", not \"squar\""), "{why:#}");
+    assert!(
+        status == 400 && why["error"].as_str().unwrap().contains("shape is one of \"saw\", \"square\" or \"sine\", not \"squar\""),
+        "{why:#}"
+    );
     assert_eq!(read(), before, "nothing written");
 
     // A drag of the decay's corner: decay and sustain, heard as they move, written at release.
     let (at, decay) = knob(graph, "decay");
     let (_, sustain) = knob(graph, "sustain");
     let preview = |id: &Value, v: f64| {
-        let (status, why) = post(&url, "/api/graph/preview", Some("t0k"), &json!({"session": session, "revision": at, "id": id, "gesture": "corner-1", "value": v}));
+        let (status, why) = post(
+            &url,
+            "/api/graph/preview",
+            Some("t0k"),
+            &json!({"session": session, "revision": at, "id": id, "gesture": "corner-1", "value": v}),
+        );
         assert_eq!(status, 200, "{why:#}");
     };
     preview(&decay["id"], 0.3);
@@ -94,7 +102,12 @@ fn a_choice_a_switch_and_a_drag_of_two_knobs_through_the_routes() {
     let (at, decay) = knob(graph, "decay");
     let (_, sustain) = knob(graph, "sustain");
     for (id, v) in [(&decay["id"], 0.3), (&sustain["id"], 0.45)] {
-        let (status, why) = post(&url, "/api/graph/preview", Some("t0k"), &json!({"session": session, "revision": at, "id": id, "gesture": "corner-2", "value": v}));
+        let (status, why) = post(
+            &url,
+            "/api/graph/preview",
+            Some("t0k"),
+            &json!({"session": session, "revision": at, "id": id, "gesture": "corner-2", "value": v}),
+        );
         assert_eq!(status, 200, "{why:#}");
     }
     let body = json!({"session": session, "revision": at, "id": decay["id"], "gesture": "corner-2", "value": 0.25, "with": [{"id": sustain["id"], "value": "loud"}]});

@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use m2_ir::LaneDecl;
 use m2_session::{ConflictFile, Revision, Session};
-use m2_song::tx::{Confined, Expect, Op, Payload, TxPath};
 use m2_song::lane::{Step, StepClip};
+use m2_song::tx::{Confined, Expect, Op, Payload, TxPath};
 use m2_song::{AudioClip, ClipId, ControlClip, DataPath, LaneAddr, LaneData, LaneKind, Note, NoteClip, canonical};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

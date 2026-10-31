@@ -680,9 +680,15 @@ fn run(args: Vec<String>) -> Result<()> {
                             serde_json::Value::String(s) => s.clone(),
                             v => v.to_string(),
                         };
-                        Ok(format!("      {:14} {:>9} {:9} {range}  {written}{shared}{options}", k.label, value, k.unit.unwrap_or("number")))
+                        Ok(format!(
+                            "      {:14} {:>9} {:9} {range}  {written}{shared}{options}",
+                            k.label,
+                            value,
+                            k.unit.unwrap_or("number")
+                        ))
                     };
-                    let readonly_line = |r: &m2_editor::ReadOnly| format!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
+                    let readonly_line =
+                        |r: &m2_editor::ReadOnly| format!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
                     // Its settings (CARD-1): what each is, what it plays, and its id for `m2 set`.
                     let setting_line = |x: &m2_editor::settings::Setting| -> Result<String> {
                         // What the card says: an option by its name (Master, for a channel's `to` left
@@ -705,7 +711,8 @@ fn run(args: Vec<String>) -> Result<()> {
                     };
                     // A view (CARD-26): its name and what it draws.
                     let view_line = |v: &m2_editor::views::CardView| {
-                        let what = serde_json::to_value(&v.of).ok().and_then(|o| o["kind"].as_str().map(str::to_string)).unwrap_or_default();
+                        let what =
+                            serde_json::to_value(&v.of).ok().and_then(|o| o["kind"].as_str().map(str::to_string)).unwrap_or_default();
                         format!("      {:14} {what} view", v.name)
                     };
                     if n.groups.is_empty() {
@@ -814,7 +821,11 @@ fn run(args: Vec<String>) -> Result<()> {
                 match (option, kind) {
                     (Some(o), _) => o.value.clone(),
                     (None, m2_editor::kind::Kind::Switch) if w == "true" || w == "false" => serde_json::Value::Bool(w == "true"),
-                    (None, _) => w.parse::<f64>().ok().and_then(serde_json::Number::from_f64).map_or(serde_json::Value::String(w), serde_json::Value::Number),
+                    (None, _) => w
+                        .parse::<f64>()
+                        .ok()
+                        .and_then(serde_json::Number::from_f64)
+                        .map_or(serde_json::Value::String(w), serde_json::Value::Number),
                 }
             };
             let (value, expect) = (read(arg(3)?), flag(&args, "--expect").map(read));

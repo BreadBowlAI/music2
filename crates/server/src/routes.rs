@@ -464,8 +464,14 @@ struct WithValue {
 /// `{"pending": true, "errors": …}` (C5).
 async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
     let state = s.clone();
-    let with = r.with.into_iter().map(|w| (w.id, w.value)).collect();
-    let result = blocking(move || state.graph.set_any(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect, with)).await;
+    let result = match r.with.is_empty() {
+        true => blocking(move || state.graph.set_any(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await,
+        false if r.expect.is_some() => Err(err("a gesture of several values takes no `expect`")),
+        false => {
+            let values = std::iter::once((r.id, r.value)).chain(r.with.into_iter().map(|w| (w.id, w.value))).collect();
+            blocking(move || state.graph.set_all(r.session, r.revision, &r.gesture, values)).await
+        }
+    };
     s.graph_changed();
     Ok(Json(result?))
 }

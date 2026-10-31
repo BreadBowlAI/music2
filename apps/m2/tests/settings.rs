@@ -139,9 +139,15 @@ fn m2_set_writes_a_choice_by_its_name() {
     let graph = m2(&["graph", dir, "--json"]);
     assert!(graph.status.success(), "{}", said(&graph));
     let view: serde_json::Value = serde_json::from_slice(&graph.stdout).unwrap();
-    let knobs: Vec<&serde_json::Value> =
-        view["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap()).flat_map(|n| n["knobs"].as_array().unwrap()).collect();
-    let id = |slot: &str| knobs.iter().find(|k| k["slot"] == slot).unwrap_or_else(|| panic!("no {slot}"))["id"].as_str().unwrap().to_string();
+    let knobs: Vec<&serde_json::Value> = view["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["nodes"].as_array().unwrap())
+        .flat_map(|n| n["knobs"].as_array().unwrap())
+        .collect();
+    let id =
+        |slot: &str| knobs.iter().find(|k| k["slot"] == slot).unwrap_or_else(|| panic!("no {slot}"))["id"].as_str().unwrap().to_string();
     let read = || std::fs::read_to_string(song.join("song.ts")).unwrap();
 
     let o = m2(&["set", dir, &id("shape"), "square"]);
@@ -161,7 +167,10 @@ fn m2_set_writes_a_choice_by_its_name() {
     assert!(o.status.success(), "{text}");
     let at = |word: &str| text.lines().position(|l| l.trim() == word).unwrap_or_else(|| panic!("no heading {word} in {text}"));
     let line = |word: &str| text.lines().position(|l| l.trim_start().starts_with(word)).unwrap_or_else(|| panic!("no {word} in {text}"));
-    assert!(at("Sound") < line("shape") && line("shape") < at("Amp") && at("Amp") < line("attack") && line("attack") < at("More"), "{text}");
+    assert!(
+        at("Sound") < line("shape") && line("shape") < at("Amp") && at("Amp") < line("attack") && line("attack") < at("More"),
+        "{text}"
+    );
     assert!(at("More") < line("decay") && at("More") < line("sustain"), "{text}");
     let shape = text.lines().nth(line("shape")).unwrap();
     assert!(shape.contains("choice: saw | square | sine (square)"), "{shape}");

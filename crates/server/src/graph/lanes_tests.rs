@@ -472,7 +472,10 @@ fn an_automation_drag_is_heard_before_it_is_written() {
     d.fill(4);
     assert!((level(&mut d) - 0.25).abs() < 1e-3, "heard");
     assert_eq!(d.revision(), before);
-    assert!(matches!(d.graph.lane_commit(lease, Gesture::Points { clip: g1, points: vec![(0.0, m2_editor::clips::Point::Number(0.25))] }).unwrap(), Answer::Done(_)));
+    assert!(matches!(
+        d.graph.lane_commit(lease, Gesture::Points { clip: g1, points: vec![(0.0, m2_editor::clips::Point::Number(0.25))] }).unwrap(),
+        Answer::Done(_)
+    ));
     d.fill(4);
     assert!((level(&mut d) - 0.25).abs() < 1e-3, "kept");
     assert_eq!(d.revision(), before + 1);

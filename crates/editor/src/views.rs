@@ -109,8 +109,12 @@ pub(crate) fn groups(desc: &Descriptor, node: &ViewNode) -> Vec<CardGroup> {
         }
         rows
     };
-    let mut out: Vec<CardGroup> =
-        desc.editor.groups.iter().map(|g| CardGroup { name: g.name.clone(), rows: g.items.iter().flat_map(|i| rows_of(i)).collect() }).collect();
+    let mut out: Vec<CardGroup> = desc
+        .editor
+        .groups
+        .iter()
+        .map(|g| CardGroup { name: g.name.clone(), rows: g.items.iter().flat_map(|i| rows_of(i)).collect() })
+        .collect();
     // More: the values and views no group names, in the card's order.
     let more: Vec<Row> = node
         .inputs

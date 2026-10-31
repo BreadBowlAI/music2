@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use m2_ir::{Kind, LaneDecl, Unit};
-use m2_song::{AudioClip, ControlClip, DataSet, LaneData, LaneKind, Meter, NoteClip, Project, Tempo};
 use m2_song::lane::StepClip;
+use m2_song::{AudioClip, ControlClip, DataSet, LaneData, LaneKind, Meter, NoteClip, Project, Tempo};
 use serde::Serialize;
 
 use m2_session::{Home, Revision, Session};

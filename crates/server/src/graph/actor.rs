@@ -1987,7 +1987,14 @@ impl Actor {
     /// value refused refuses them all: each lease ends, and its control plays the code's value
     /// again. Unlike one knob's, a gesture of several values isn't kept pending while the code
     /// doesn't compile (C5): it is refused, in words.
-    pub(super) fn set_all(&mut self, token: u64, revision: u64, gesture: &str, values: Vec<(String, Value)>, leases: Vec<Option<u64>>) -> Result<Value> {
+    pub(super) fn set_all(
+        &mut self,
+        token: u64,
+        revision: u64,
+        gesture: &str,
+        values: Vec<(String, Value)>,
+        leases: Vec<Option<u64>>,
+    ) -> Result<Value> {
         let inner = self.inner.clone();
         let end_all = |inner: &Arc<Inner>, why: &str| {
             let device = inner.current_device();
@@ -2002,7 +2009,8 @@ impl Actor {
         let ready = (|| -> Result<Vec<String>> {
             let o = self.open.as_mut().context("no project is open")?;
             o.check_token(token)?;
-            let files: Vec<String> = values.iter().filter_map(|(id, _)| o.session.carry(revision, id, &o.controls).ok().map(|c| c.file)).collect();
+            let files: Vec<String> =
+                values.iter().filter_map(|(id, _)| o.session.carry(revision, id, &o.controls).ok().map(|c| c.file)).collect();
             self.arrive(Some(&files))?;
             let ids: Vec<String> = values.iter().map(|(id, _)| id.clone()).collect();
             self.unheld(token, revision, gesture, &ids)

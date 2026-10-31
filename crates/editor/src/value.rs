@@ -210,7 +210,8 @@ pub fn write_all(s: &mut Session, at: u64, values: &[(String, Json)]) -> Result<
         anchors.push((p.anchor, p.value));
     }
     for ((file, _), items) in inserts {
-        let joined = lens::together(&items).ok_or_else(|| EditError::Rejected("these values can't be written into the call at once".into()))?;
+        let joined =
+            lens::together(&items).ok_or_else(|| EditError::Rejected("these values can't be written into the call at once".into()))?;
         edits.entry(file).or_default().extend(joined);
     }
     let mut ops = vec![];
@@ -236,7 +237,14 @@ pub fn write_all(s: &mut Session, at: u64, values: &[(String, Json)]) -> Result<
                 Edit::Insert(_) if number != c.value => written(s, &c.origin).unwrap_or_else(|| c.origin.clone()),
                 _ => c.origin.clone(),
             };
-            Committed { revision: done.number, file: c.file.clone(), before: label.0.clone(), after: label.1.clone(), origin, value: number }
+            Committed {
+                revision: done.number,
+                file: c.file.clone(),
+                before: label.0.clone(),
+                after: label.1.clone(),
+                origin,
+                value: number,
+            }
         })
         .collect())
 }
@@ -301,7 +309,14 @@ fn part(s: &Session, c: &Control, value: f64, text: String) -> Result<Option<Par
                 true => Anchor::Written { file, range: Range::bytes(lens.start, lens.end) },
                 false => by_slot(file)?.0,
             };
-            Ok(Some(Part { file: c.file.clone(), site: c.origin.site, rewrite: Some((lens.start, lens.end, text)), insertion: None, anchor, value }))
+            Ok(Some(Part {
+                file: c.file.clone(),
+                site: c.origin.site,
+                rewrite: Some((lens.start, lens.end, text)),
+                insertion: None,
+                anchor,
+                value,
+            }))
         }
         Edit::Insert(insertion) => {
             if value == c.value {
