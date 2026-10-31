@@ -22,7 +22,7 @@ fn project(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("m2-routes-views-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("lib")).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(dir.join("lib/wobble.ts"), WOBBLE).unwrap();
     std::fs::write(dir.join("song.ts"), SONG).unwrap();
@@ -46,7 +46,7 @@ fn knob(graph: &Graph, slot: &str) -> (u64, Value) {
 fn a_choice_a_switch_and_a_drag_of_two_knobs_through_the_routes() {
     let dir = project("rw");
     let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent().stored())
             .unwrap();
     let (url, graph) = (running.url.clone(), &running.state.graph);
     let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
