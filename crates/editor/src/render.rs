@@ -556,7 +556,8 @@ impl Out {
 
     fn push(&mut self, frames: &[[f32; 2]]) -> Result<()> {
         let [l, r] = &mut self.sides;
-        (l.clear(), r.clear());
+        l.clear();
+        r.clear();
         for f in frames {
             for &s in f {
                 self.peak = self.peak.max(s.abs());

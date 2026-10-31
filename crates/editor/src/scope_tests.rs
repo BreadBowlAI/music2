@@ -34,16 +34,16 @@ fn a_scope_reads_a_calls_own_output() {
     let (_f, s) = session();
     let rev = s.accepted();
     let flat = &rev.compiled.flat;
-    let (at, channels) = point(&rev, &s.packages, "a", &id(&s, "osc.sine")).unwrap();
+    let (at, channels) = point(rev, &s.packages, "a", &id(&s, "osc.sine")).unwrap();
     let TapAt::Node(i) = at else { panic!("{at:?}") };
     assert!(matches!(&flat.nodes[i].op, FOp::Kernel { kernel, .. } if kernel == "std:sine"), "{:?}", flat.nodes[i]);
     assert_eq!((flat.nodes[i].module.as_str(), channels), ("a", 1));
-    let (at, _) = point(&rev, &s.packages, "a", &id(&s, "scale")).unwrap();
+    let (at, _) = point(rev, &s.packages, "a", &id(&s, "scale")).unwrap();
     assert!(matches!(at, TapAt::Node(j) if flat.nodes[j].module == "a" && j != i), "the call around it is another box: {at:?}");
     assert!(view_has(&s, "a", &id(&s, "osc.sine")), "the id is the view's");
     // TAP-9: from the node back to the id the view gives its call.
-    assert_eq!(id_of(&rev, &s.packages, "a", i), Some(id(&s, "osc.sine")));
-    assert_eq!(id_of(&rev, &s.packages, "c", i), None, "not c's");
+    assert_eq!(id_of(rev, &s.packages, "a", i), Some(id(&s, "osc.sine")));
+    assert_eq!(id_of(rev, &s.packages, "c", i), None, "not c's");
 }
 
 /// Whether the graph view of module `module` has a box with id `node`.
@@ -57,7 +57,7 @@ fn view_has(s: &Session, module: &str, node: &str) -> bool {
 fn a_scope_is_refused_in_words_for_what_isnt_sound() {
     let (_f, s) = session();
     let rev = s.accepted();
-    let no = |module: &str, node: &str| point(&rev, &s.packages, module, node).unwrap_err();
+    let no = |module: &str, node: &str| point(rev, &s.packages, module, node).unwrap_err();
     assert_eq!(no("a", &id(&s, "lfo")), "lfo gives a control or notes, not sound: a scope shows sound.");
     assert_eq!(
         no("b", &id(&s, "osc.saw")),
@@ -67,5 +67,5 @@ fn a_scope_is_refused_in_words_for_what_isnt_sound() {
     assert_eq!(no("a", "nothing"), "There's no box nothing in a now, so there's nothing to show.");
     let sine = id(&s, "osc.sine");
     assert_eq!(no("c", &sine), format!("There's no box {sine} in c now, so there's nothing to show."), "the sine is a's, not c's");
-    assert!(point(&rev, &s.packages, "b", &id(&s, "poly")).is_ok(), "the instrument is one sound");
+    assert!(point(rev, &s.packages, "b", &id(&s, "poly")).is_ok(), "the instrument is one sound");
 }

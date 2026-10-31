@@ -124,7 +124,8 @@ impl Loud {
         if let Some(first) = taps.frames(LOUD, from, RING, &mut self.frames) {
             self.at = (id, first + self.frames.len() as u64);
             let [l, r] = &mut self.sides;
-            (l.clear(), r.clear());
+            l.clear();
+            r.clear();
             l.extend(self.frames.iter().map(|f| f[0]));
             r.extend(self.frames.iter().map(|f| f[1]));
             self.meter.push(l, r);
