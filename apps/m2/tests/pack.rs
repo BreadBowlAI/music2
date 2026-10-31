@@ -927,9 +927,16 @@ fn an_sfz_beside_the_working_folder_reads_only_its_folder() {
 fn m2_kernels_lists_the_kernels_of_the_packs_music2_comes_with() {
     let t = Temp::new("kernels");
     let listed = ok(t.m2(&["kernels"]));
-    for id in
-        ["std:svf", "@m2/synths:synth", "@m2/synths:fm", "@m2/drums:drum", "@m2/drums:one", "@m2/effects:delay", "@m2/effects:bitcrush"]
-    {
+    for id in [
+        "std:svf",
+        "@m2/synths:synth",
+        "@m2/synths:fm",
+        "@m2/drums:drum",
+        "@m2/drums:one",
+        "@m2/effects:delay",
+        "@m2/effects:bitcrush",
+        "@m2/mixing:eq",
+    ] {
         assert!(
             listed.lines().any(|l| l.starts_with(&format!("{id} ")) || l.starts_with(&format!("{id}("))),
             "{id} isn't listed:\n{listed}"

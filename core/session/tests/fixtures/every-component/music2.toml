@@ -8,4 +8,5 @@ sample_rate = 48000
 std = "0.9"
 "@m2/drums" = "2"
 "@m2/effects" = "1"
+"@m2/mixing" = "1"
 "@m2/synths" = "2"

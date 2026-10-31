@@ -445,6 +445,7 @@ fn every_kernel(sigs: &[&KernelSig], p: &str, src: &Sources, site: &mut u32, nod
                     });
                     *site += 1;
                     let mut node = if site.is_multiple_of(2) { smooth_const(&cell, value, *site) } else { step_const(&cell, value, *site) };
+                    // A choice's unit is its options (CARD-12): `choice<low cut|bell>`.
                     if let Some(u) = unit {
                         node["unit"] = json!(u.to_string());
                     }

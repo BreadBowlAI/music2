@@ -282,8 +282,8 @@ const SPELLED: [(&str, &str); 2] =
 
 // Critique 1 of the step 5 design, D5, D11, PKG-1: every call the planners write type-checks as
 // the code editor checks songs (strict, against the SDK and std sources). On every-component,
-// each control a call leaves out is written in (a number as a value edit writes it, and a signal's
-// name as `connect` does), each effect is added, and each instrument + Track lists is added as a
+// each control a call leaves out is written in (a number as a value edit writes it, a choice's name
+// or a switch's true or false, and a number's signal by name as `connect` does), each effect is added, and each instrument + Track lists is added as a
 // new track's `track(…)` call (8b.1); each mixer channel with no pan gets its first pan, and each
 // that leaves out its fader gets one in the style of a mixer whose other entries write `db(…)`
 // (8b.3b); every call so written is listed in tests/forms/forms.ts, which must be as recorded
@@ -305,14 +305,17 @@ fn planned_call_forms_are_current() {
     for c in &inherited {
         let call = site(c.origin.site);
         let slot = c.origin.slot().unwrap();
-        // A choice is written by its name, and takes no cable of numbers (CARD-10, CARD-12).
-        let options = c.options();
-        let value = match &options {
-            Some(names) => format!("\"{}\"", names[c.value as usize]),
+        // A choice's value is written as its name and a switch's as true or false (CARD-21); no
+        // cable of a number reaches either (CARD-12).
+        let steps = c.unit.filter(|u| !u.is_number());
+        let value = match steps {
+            Some(u) => crate::kind::said(Some(u), c.value).expect("one of its places").to_string(),
             None => c.number(&if c.value == 0.0 { "0".to_string() } else { c.value.to_string() }),
         };
-        let cable = if options.is_some() { None } else { Some(("a cable", "wobble")) };
-        for (what, written) in [Some(("a value", value.as_str())), cable].into_iter().flatten() {
+        for (what, written) in [("a value", value.as_str()), ("a cable", "wobble")] {
+            if steps.is_some() && written == "wobble" {
+                continue;
+            }
             let Some(edits) = c.planned(written) else { continue };
             if written == "wobble" && edits[0].0 < wobble_end {
                 continue;
