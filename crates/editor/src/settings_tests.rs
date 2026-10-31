@@ -353,3 +353,49 @@ fn a_stepped_plugin_parameter_from_0_to_1_is_a_switch() {
     );
     assert_eq!((knob("dry").kind, knob("dry").options.len()), (Kind::Number, 0));
 }
+
+// CARD-1, CARD-4 for a dictionary entry (PKG-6): each channel of the song's mixer has its `to`, a
+// menu of the song's tracks. Written into a bare channel, it wraps it (`kick: { in: kick.out, to: … }`);
+// into an object, it is one more property. Each one Tx and one undo step.
+#[test]
+fn a_dictionary_entrys_setting_is_written_into_its_entry() {
+    let f = crate::testing::fixture("examples/first-song");
+    let mut s = f.open();
+    crate::bus::add_bus(&mut s, crate::bus::BusKind::Reverb, None, None).unwrap();
+    let to = setting(&s, "mixer", "channels.kick.to");
+    assert_eq!((to.kind, to.label.as_str(), &to.value, to.written, &to.readonly), (Kind::Track, "kick.to", &Json::Null, false, &None));
+    // By key; the card lists them in the timeline's order.
+    let tracks: Vec<(&Json, &str)> = to.options.iter().map(|o| (&o.value, o.label.as_str())).collect();
+    assert_eq!(
+        tracks,
+        [
+            (&json!("bass"), "Bass"),
+            (&json!("hats"), "Hats"),
+            (&json!("keys"), "Keys"),
+            (&json!("kick"), "Kick"),
+            (&json!("reverb"), "Reverb")
+        ]
+    );
+    set_then_undo(
+        &f,
+        &mut s,
+        "mixer",
+        "channels.kick.to",
+        json!("reverb"),
+        "      kick: kick.out,",
+        "      kick: { in: kick.out, to: \"reverb\" },",
+    );
+    set_then_undo(
+        &f,
+        &mut s,
+        "mixer",
+        "channels.hats.to",
+        json!("reverb"),
+        "hats: { in: hats.out, db: db(-6), pan: 0.3 }",
+        "hats: { in: hats.out, db: db(-6), pan: 0.3, to: \"reverb\" }",
+    );
+    // A track the song hasn't is refused in words.
+    let at = s.accepted().number;
+    let e = set(&mut s, at, &to.id, &json!("strings"), None).unwrap_err().to_string();
+    assert!(e.contains("kick.to is one of") && e.contains("\"reverb\""), "{e}");
+}

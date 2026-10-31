@@ -101,11 +101,22 @@ export function SettingRow(p: Props) {
     );
   }
   const title = `${off ?? REBUILDS}\n${where}${x.written ? "" : " (the default: not written in the code yet, changing it writes it in)"}`;
-  if (x.kind === "choice" || x.kind === "track") return row(<MenuValue value={x} label={label} off={off} title={title} onPick={write} />, title);
+  if (x.kind === "choice") return row(<MenuValue value={x} label={label} off={off} title={title} onPick={write} />, title);
+  if (x.kind === "track") return row(<MenuValue value={{ ...x, options: inOrder(x.options ?? []) }} label={label} off={off} title={title} onPick={write} />, title);
   if (x.kind === "switch") return row(<SwitchValue value={x} label={label} off={off} onFlip={write} />, title);
   if (x.kind === "number") return row(<NumberBox x={x} label={label} off={off} onCommit={write} />, title);
   if (x.kind === "recording") return <RecordingRow {...p} label={label} tip={title} />;
   return row(<span className="text-fg truncate">{x.said ?? "—"}</span>, title);
+}
+
+/** The song's tracks in the timeline's order, top to bottom (the server sends them by key). */
+function inOrder(options: Choice[]): Choice[] {
+  const order = (useStore.getState().graph?.timeline.tracks ?? []).map((t) => t.module);
+  const at = (o: Choice) => {
+    const i = order.indexOf(String(o.value));
+    return i < 0 ? order.length : i;
+  };
+  return [...options].sort((a, b) => at(a) - at(b));
 }
 
 /** A choice's menu, or the song's tracks: the option now, and the others to pick from. */
