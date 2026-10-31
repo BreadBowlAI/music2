@@ -350,6 +350,16 @@ An example body:
 {"session": 7, "at": 42, "call": "tracks/drums.ts#2", "file": "/Users/you/Samples/kick.wav"}
 ```
 
+### `POST /api/graph/sections`
+
+A section gesture, on whole bars of every track: paste, duplicate, move, delete, insert-bars or delete-bars. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "gesture": {"op": "duplicate", "start": 32, "end": 64}}
+```
+
 ### `POST /api/graph/set`
 
 Write a knob's value into the code, as one undo step (for an agent, never a drag's commit). It writes the song: one undo step.

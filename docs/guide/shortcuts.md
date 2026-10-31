@@ -33,13 +33,15 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⌘R or ⇧Return | Ctrl+R or Shift+Enter | Rename the selected track |
 | ⌘D | Ctrl+D | Duplicate the selected notes, or with none, the selected track (in the code editor, its own: the next match) |
 | ⌘A | Ctrl+A | Select all notes in the open clip |
-| ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste clips (at the playhead) |
+| ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste clips (at the playhead), or the bars selected on the ruler (at the playhead's bar: [Sections](sections.md)) |
+| ⌘I | Ctrl+I | Insert as many empty bars as are selected, where they start |
+| ⇧⌘⌫ | Ctrl+Shift+Backspace | Delete the selected bars: what follows moves up |
 | ⌘E | Ctrl+E | Split the selected clips at the playhead |
 | ⌘J | Ctrl+J | Join the selected clips |
 | ← → (⇧: a bar) | ← → (Shift: a bar) | Move the selected clips or notes by the grid |
 | ↑ ↓ (⇧: an octave) | ↑ ↓ (Shift: an octave) | Move the selected notes a semitone |
 | ⌘1 / ⌘2 / ⌘3 / ⌘4 | Ctrl+1 / 2 / 3 / 4 | Narrower grid / wider grid / triplets / snap on or off |
-| Delete | Backspace | Remove the selected clip or notes |
+| Delete | Backspace | Remove the selected clip or notes, or empty the selected bars |
 | Escape | Escape | Deselect |
 | ⌘= / ⌘− | Ctrl+= / Ctrl+− | Zoom in / out: the timeline, or the roll while it has the keyboard |
 | Z | Z | Fit the selected clips, or the song; again to go back |

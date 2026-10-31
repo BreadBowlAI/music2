@@ -36,6 +36,8 @@ const MONACO_CHORDS: Record<string, string> = {
   join: "editor.action.joinLines",
   // ⌘F finds sounds (the library); in the editor, its own find.
   find: "actions.find",
+  // ⌘I inserts bars (sections); in the editor, its suggestions.
+  insert_bars: "editor.action.triggerSuggest",
   // ⌘↑ and ⌘↓ are Shorter and Taller Tracks; in the editor, to its top and foot on a Mac, and a
   // line's scroll elsewhere, as Monaco binds Ctrl+↑ and Ctrl+↓ there.
   shorter: isMac ? "cursorTop" : "scrollLineUp",

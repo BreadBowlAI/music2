@@ -111,6 +111,10 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean
   // Stop all sound works from a text field too; in the code editor, ⌘. is its quick fix.
   if (e.key === "." && !e.shiftKey) return { id: "panic", always: true };
   if (e.key === "Backspace" && !e.shiftKey) return { id: "delete_track" };
+  // Edit ▸ Insert Bars (⌘I) and Delete Bars (⇧⌘⌫): the selected bars' (ARR-9), as Live's Insert
+  // Silence and Delete Time.
+  if (k === "i" && !e.shiftKey && !e.altKey) return { id: "insert_bars" };
+  if (e.key === "Backspace" && e.shiftKey && !e.altKey) return { id: "delete_bars" };
   if (e.code === "KeyB" && e.altKey) return { id: "browser" };
   // View ▸ Zoom In and Zoom Out (⌘= and ⌘−, and ⇧⌘= that types +), Taller and Shorter Tracks
   // (⌘↓ and ⌘↑); Transport ▸ Follow Playhead (⇧⌘F).
@@ -434,6 +438,11 @@ export function appCommand(id: string) {
     case "cut":
     case "paste":
       return canvas.clipboard?.(id);
+    case "insert_bars":
+    case "delete_bars":
+      // The selected bars' (ARR-9); in the code editor or a field, nothing of the timeline's.
+      if (editorHooks.chord?.(id) || editing()) return;
+      return id === "insert_bars" ? canvas.insertBars?.() : canvas.deleteBars?.();
     case "zoom_in":
     case "zoom_out": {
       // Focus decides (taste.md §5.3): the roll's own zoom while it has the keyboard, else the timeline's.

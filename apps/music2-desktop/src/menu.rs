@@ -76,6 +76,10 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("split", "Split at Playhead", Some("CmdOrCtrl+E")),
     ("join", "Join Clips", Some("CmdOrCtrl+J")),
     ("quantize", "Quantize", None),
+    // The bars selected on the ruler (ARR-9), as Live's Insert Silence and Delete Time: empty bars
+    // where they start, or the bars taken out; everything after moves.
+    ("insert_bars", "Insert Bars", Some("CmdOrCtrl+I")),
+    ("delete_bars", "Delete Bars", Some("CmdOrCtrl+Shift+Backspace")),
     // The instrument list at + Track; the selected track goes, asking first when others read it.
     ("new_track", "New Track…", Some("CmdOrCtrl+T")),
     // In a field, the field's own: to the line's start on a Mac, the word before elsewhere.
@@ -229,7 +233,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("rename_song"),
     ];
     // What is selected: the roll's notes, the timeline's clips, the track.
-    let selected = [Item("duplicate"), Item("split"), Item("join"), Item("quantize")];
+    let selected = [Item("duplicate"), Item("split"), Item("join"), Item("quantize"), Item("insert_bars"), Item("delete_bars")];
     let track = vec![
         Item("new_track"),
         Item("delete_track"),

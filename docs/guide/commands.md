@@ -329,6 +329,19 @@ m2 clips <project> json <gesture.json | ->
 
 One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste`, `notes`, `points`, `audio` and `set`.
 
+## m2 sections
+
+```
+m2 sections <project> duplicate <bars> [--to <bar>]
+m2 sections <project> move <bars> --to <bar>
+m2 sections <project> delete <bars>
+m2 sections <project> insert-bars <bars>
+m2 sections <project> delete-bars <bars>
+m2 sections <project> json <gesture.json | ->
+```
+
+One gesture on whole bars of every track at once, as one edit that undo takes back. `<bars>` are bars counted from 1 (`9-16`, or `9` for one), or a marker's name (`Chorus`: to the next marker). `duplicate` copies them right after themselves (or to bar `--to`) and `move` moves them, each in place of what was there; `delete` empties them; `insert-bars` opens as many empty bars where they start, and `delete-bars` takes them out: everything after moves, markers and tempo changes too. A clip that crosses the bars' edge is split there. `json` also takes `paste`, with a copied section, as `POST /api/graph/sections` does. See [Sections](sections.md).
+
 ## m2 unautomate
 
 ```

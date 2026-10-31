@@ -69,6 +69,7 @@ import { listedInstrument } from "../lib/plugins";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, useReorder } from "./Tracks";
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { RulerMarkers } from "./Markers";
+import { barCount, barsWords, clearBars, onBarLine, sectionOf, selectBars, sendSection, snapBars, useSection, type SectionGesture } from "../lib/sections";
 import { Hatch, VLines } from "./draw";
 import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
@@ -152,7 +153,26 @@ interface MenuAt {
   module: string;
   lane: string;
   beat: number;
-  on: "clip" | "lane" | "header";
+  on: "clip" | "lane" | "header" | "section";
+}
+
+/**
+ * The selected bars' gestures (ARR-9), each one gesture across every track, one undo step. Each
+ * says whether bars were selected (or, for paste, copied) to act on.
+ */
+interface SectionEdits {
+  /** ⌘C, or (`cut`) ⌘X: the bars to the clipboard (cut: emptied too). */
+  copy: (cut: boolean) => boolean;
+  /** ⌘V: the copied bars at the playhead's bar, in place of what is there. */
+  paste: () => boolean;
+  /** ⌘D: a copy right after them; the copy is the selection then, so ⌘D again goes on. */
+  duplicate: () => boolean;
+  /** ⌫: the bars stay, empty. */
+  clear: () => boolean;
+  /** ⌘I: as many empty bars where they start; everything from there moves later. */
+  insert: () => boolean;
+  /** ⇧⌘⌫: the bars go; everything after moves up. */
+  remove: () => boolean;
 }
 
 /** A marquee being dragged (design-8b §7.4): its box in the content's pixels, and the bars it covers. */
@@ -560,8 +580,19 @@ export default function SongTimeline({
   // the edit. Named by id, so an edit that reorders a lane (a move, an undo, an edit elsewhere)
   // keeps them.
   const [drag, setDrag] = useState<Drag | null>(null);
-  const latest = useRef({ timeline, revision, onOpenClip, locked, playing, onSeek, headerW });
-  latest.current = { timeline, revision, onOpenClip, locked, playing, onSeek, headerW };
+  const latest = useRef({ timeline, revision, onOpenClip, locked, playing, onSeek, headerW, onLoop });
+  latest.current = { timeline, revision, onOpenClip, locked, playing, onSeek, headerW, onLoop };
+  // The ruler's loops (a drag across it, a marker's Loop to next marker) select the bars they loop
+  // too, when they are whole bars (ARR-9): the section the bars' gestures act on.
+  const loopBars = useMemo(
+    () => (start: number, end: number) => {
+      latest.current.onLoop(start, end);
+      const { meter } = latest.current.timeline;
+      if (onBarLine(meter, start) && onBarLine(meter, end)) selectBars(start, end);
+    },
+    [],
+  );
+  const bars = useSection((s) => s.bars);
   // A press on a lane's empty space, until it is let go or becomes a marquee.
   const pressed = useRef<{ pointer: number; x: number } | null>(null);
   const made = useRef<Made | null>(null);
@@ -597,7 +628,12 @@ export default function SongTimeline({
   // A new song starts with nothing selected; the second Esc (the track deselected) clears it too.
   useEffect(() => {
     useClipSelection.getState().clear();
-    return useShell.subscribe((s, was) => s.selected === null && was.selected !== null && useClipSelection.getState().clear());
+    clearBars();
+    return useShell.subscribe((s, was) => {
+      if (s.selected !== null || was.selected === null) return;
+      useClipSelection.getState().clear();
+      clearBars();
+    });
   }, []);
 
   const edits = useMemo<ClipEdits>(() => {
@@ -1128,7 +1164,11 @@ export default function SongTimeline({
       },
       press(e) {
         pressed.current = e && e.button === 0 ? { pointer: e.pointerId, x: e.clientX } : null;
-        if (e && e.button === 0) marqueeFrom(e);
+        if (e && e.button === 0) {
+          // A press on empty lane space lets go of the selected bars, as of the clips.
+          clearBars();
+          marqueeFrom(e);
+        }
       },
       place(e, beat) {
         const p = pressed.current;
@@ -1228,6 +1268,8 @@ export default function SongTimeline({
       menu(e, module, lane, beat, clip) {
         e.preventDefault();
         if (clip === "header") return setMenu({ x: e.clientX, y: e.clientY, module, lane, beat, on: "header" });
+        const bars = useSection.getState().bars;
+        if (bars && beat >= bars[0] && beat < bars[1]) return setMenu({ x: e.clientX, y: e.clientY, module, lane, beat, on: "section" });
         if (clip) {
           // A right-click on a clip that isn't selected picks it alone, as a click would.
           const sel = useClipSelection.getState();
@@ -1262,6 +1304,64 @@ export default function SongTimeline({
     // `latest` carries everything that changes; the edits themselves never do.
   }, []);
 
+  const sections = useMemo<SectionEdits>(() => {
+    const toast = (error: unknown) => useStore.getState().toast(error instanceof Error ? error.message : String(error));
+    /** Send `gesture` when the timeline can take one now (it shows the last edit), then `after`. */
+    const go = (gesture: SectionGesture, step: string, after?: () => void) => {
+      const graph = useStore.getState().graph;
+      if (!graph || busy(graph) || latest.current.locked) return;
+      sendSection(graph, gesture, { name: step }).then(() => after?.(), toast);
+    };
+    const meter = () => latest.current.timeline.meter;
+    const words = (a: number, b: number) => barsWords(meter(), a, b);
+    const selected = () => useSection.getState().bars;
+    return {
+      copy(cut) {
+        const b = selected();
+        if (!b) return false;
+        useSection.setState({ copied: sectionOf(latest.current.timeline, b[0], b[1]) });
+        useClipboard.setState({ copied: [] });
+        if (cut && !latest.current.locked) go({ op: "delete", start: b[0], end: b[1] }, `cutting ${words(b[0], b[1])}`);
+        return true;
+      },
+      paste() {
+        const copied = useSection.getState().copied;
+        if (!copied) return false;
+        const at = barAt(meter(), playhead()).start;
+        const end = at + (copied.end - copied.start);
+        const step = `pasting ${words(copied.start, copied.end)} at bar ${barAt(meter(), at).bar + 1}`;
+        go({ op: "paste", section: copied, at }, step, () => onBarLine(meter(), end) && selectBars(at, end));
+        return true;
+      },
+      duplicate() {
+        const b = selected();
+        if (!b) return false;
+        const [a, z] = b;
+        go({ op: "duplicate", start: a, end: z }, `duplicating ${words(a, z)}`, () => onBarLine(meter(), 2 * z - a) && selectBars(z, 2 * z - a));
+        return true;
+      },
+      clear() {
+        const b = selected();
+        if (!b) return false;
+        go({ op: "delete", start: b[0], end: b[1] }, `emptying ${words(b[0], b[1])}`);
+        return true;
+      },
+      insert() {
+        const b = selected();
+        if (!b) return false;
+        const n = barCount(meter(), b[0], b[1]);
+        go({ op: "insert-bars", at: b[0], bars: n }, `inserting ${n === 1 ? "a bar" : `${n} bars`} at bar ${barAt(meter(), b[0]).bar + 1}`);
+        return true;
+      },
+      remove() {
+        const b = selected();
+        if (!b) return false;
+        go({ op: "delete-bars", start: b[0], end: b[1] }, `deleting ${words(b[0], b[1])}`, clearBars);
+        return true;
+      },
+    };
+  }, []);
+
   // ⌘1 to ⌘4 (View's grid rows) change the grid of the view last pointed at or focused, while it
   // is on screen: this one's or the roll's. The timeline's zoom says what Auto is.
   useEffect(() => {
@@ -1272,16 +1372,30 @@ export default function SongTimeline({
   // Edit ▸ Split, Join and Quantize (⌘E, ⌘J), ⌘D after the roll's notes, and ⌘C ⌘X ⌘V: the
   // timeline's while clips are selected (or, for ⌘V, copied) and the roll doesn't have the keyboard.
   useEffect(() => {
-    const takes = () => !document.activeElement?.closest("#dock") && (useClipSelection.getState().picked.length > 0 || useClipboard.getState().copied.length > 0);
-    const run = (op: "copy" | "cut" | "paste") => (op === "paste" ? edits.paste() : edits.copy(op === "cut"));
-    Object.assign(canvas, { split: edits.split, join: edits.join, quantize: edits.quantize, duplicate: edits.duplicate, takesClipboard: takes, clipboard: run });
+    // The selected bars and a copy of bars come first: picking clips lets go of the bars, and a copy
+    // of clips is the one ⌘V pastes until bars are copied.
+    const section = () => useSection.getState();
+    const takes = () =>
+      !document.activeElement?.closest("#dock") &&
+      (useClipSelection.getState().picked.length > 0 || useClipboard.getState().copied.length > 0 || !!section().bars || !!section().copied);
+    const run = (op: "copy" | "cut" | "paste") => {
+      if (op === "paste") return void (sections.paste() || edits.paste());
+      if (!sections.copy(op === "cut")) edits.copy(op === "cut");
+    };
+    const duplicate = () => sections.duplicate() || edits.duplicate();
+    const insertBars = () => void sections.insert();
+    const deleteBars = () => void sections.remove();
+    Object.assign(canvas, { split: edits.split, join: edits.join, quantize: edits.quantize, duplicate, takesClipboard: takes, clipboard: run, insertBars, deleteBars });
     // In the app the menu bar's Cut, Copy and Paste (and Linux's own keys) run the web view's
     // commands, which do nothing with no text selected unless the page takes them first (M7).
     const typing = () => {
       const a = document.activeElement;
       return a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a instanceof HTMLElement && a.isContentEditable);
     };
-    const mine = (op: "copy" | "cut" | "paste") => !typing() && takes() && (op === "paste" ? useClipboard.getState().copied.length > 0 : useClipSelection.getState().picked.length > 0);
+    const mine = (op: "copy" | "cut" | "paste") =>
+      !typing() &&
+      takes() &&
+      (op === "paste" ? useClipboard.getState().copied.length > 0 || !!section().copied : useClipSelection.getState().picked.length > 0 || !!section().bars);
     const before = (op: "copy" | "cut" | "paste") => (e: Event) => void (mine(op) && e.preventDefault());
     const take = (op: "copy" | "cut" | "paste") => (e: Event) => {
       if (!mine(op)) return;
@@ -1294,10 +1408,10 @@ export default function SongTimeline({
     ]) as [string, (e: Event) => void][];
     for (const [type, f] of listeners) document.addEventListener(type, f);
     return () => {
-      for (const k of ["split", "join", "quantize", "duplicate", "takesClipboard", "clipboard"] as const) delete canvas[k];
+      for (const k of ["split", "join", "quantize", "duplicate", "takesClipboard", "clipboard", "insertBars", "deleteBars"] as const) delete canvas[k];
       for (const [type, f] of listeners) document.removeEventListener(type, f);
     };
-  }, [edits]);
+  }, [edits, sections]);
 
   // Once the timeline shows the last edit: clips an edit took away leave the selection, and nudges
   // asked for meanwhile go out.
@@ -1345,8 +1459,9 @@ export default function SongTimeline({
     };
   }, []);
 
-  // The timeline's own keys while it has the keyboard: ⌫ deletes the selected clips, Q quantizes
-  // them, ← and → nudge them (⇧: by a bar), Esc lets go of them (and of the clip Notes shows).
+  // The timeline's own keys while it has the keyboard: ⌫ deletes the selected clips (or empties the
+  // selected bars), Q quantizes them, ← and → nudge them (⇧: by a bar), Esc lets go of them (and of
+  // the clip Notes shows, and of the bars).
   const onKeyDown = (e: React.KeyboardEvent) => {
     const s = useShell.getState();
     const sel = useClipSelection.getState();
@@ -1354,13 +1469,16 @@ export default function SongTimeline({
     const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
     // A point picked is the selection while no clip is.
     const point = sel.picked.length ? null : usePoints.getState().picked;
+    const bars = useSection.getState().bars;
     if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && point) edits.unpoint();
     else if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && sel.picked.length) edits.remove();
+    else if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && bars) sections.clear();
     else if (e.key.toLowerCase() === "q" && plain && !e.shiftKey && sel.picked.length) edits.quantize();
     else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && plain && sel.picked.length) edits.nudge(e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
     else if (e.key === "Escape" && point) usePoints.setState({ picked: null });
-    else if (e.key === "Escape" && (sel.picked.length || shown)) {
+    else if (e.key === "Escape" && (sel.picked.length || shown || bars)) {
       sel.clear();
+      clearBars();
       if (shown) s.deselect();
     } else return;
     e.preventDefault();
@@ -1425,7 +1543,7 @@ export default function SongTimeline({
               )}
             </div>
           </div>
-          <Ruler timeline={timeline} width={width} loopStart={loopStart} loopEnd={loopEnd} looping={looping} locked={locked} onSeek={onSeek} onLoop={onLoop} />
+          <Ruler timeline={timeline} width={width} loopStart={loopStart} loopEnd={loopEnd} looping={looping} locked={locked} onSeek={onSeek} onLoop={loopBars} />
           <ViewTools ppb={ppb} follow={follow} onZoom={zoomStep} />
           <PlayCap headerW={headerW} />
         </div>
@@ -1437,6 +1555,18 @@ export default function SongTimeline({
             aria-hidden
             className="absolute bottom-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply"
             style={{ top: RULER_H, left: headerW + loopStart * ppb, width: (loopEnd - loopStart) * ppb }}
+          />
+        )}
+        {/* The selected bars, across every lane (ARR-9): a wash with an accent edge at each end, over
+            the clips as the loop's is. */}
+        {bars && (
+          <div
+            data-testid="section"
+            data-start={bars[0]}
+            data-end={bars[1]}
+            aria-hidden
+            className="absolute bottom-0 z-[14] pointer-events-none bg-accent/10 border-x border-accent mix-blend-multiply"
+            style={{ top: RULER_H, left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }}
           />
         )}
         <Tracks
@@ -1478,13 +1608,16 @@ export default function SongTimeline({
           </>
         )}
         {bubble && <DragBubble at={bubble.at}>{bubble.text}</DragBubble>}
-        {menu && <TimelineMenu at={menu} timeline={timeline} edits={edits} locked={locked} onOpenClip={onOpenClip} onRepeat={setRepeating} onClose={() => setMenu(null)} />}
+        {menu && <TimelineMenu at={menu} timeline={timeline} edits={edits} sections={sections} locked={locked} onOpenClip={onOpenClip} onRepeat={setRepeating} onClose={() => setMenu(null)} />}
         {repeating && <RepeatPopover at={repeating} onRepeat={(n) => edits.repeat(n)} onClose={() => setRepeating(null)} />}
         <VolumePopover />
         {/* The Song's row, Live's Main track: pinned at the foot of the track list, with its own playhead and loop wash. */}
         <div className="sticky bottom-0 z-[26] shrink-0 border-t border-line bg-canvas" data-song-row>
           {looping && loopStart !== null && loopEnd !== null && (
             <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply" style={{ left: headerW + loopStart * ppb, width: (loopEnd - loopStart) * ppb }} />
+          )}
+          {bars && (
+            <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none bg-accent/10 border-x border-accent mix-blend-multiply" style={{ left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }} />
           )}
           <TrackRows
             track={song}
@@ -1616,8 +1749,9 @@ function fineStep(grid: GridSetting, bar: number, ppb: number) {
 
 /**
  * Bars and beats along the top. A click moves the playhead there; a drag across it sets a loop over
- * the beats it covered, and turns looping on. Its tempo and time signature marks open their change
- * in a popover; a right-click adds one (design-8b §4.4).
+ * the bars it covered (with ⌘ held, the beats), turns looping on, and selects those bars across
+ * every track (ARR-9). Its tempo and time signature marks open their change in a popover; a
+ * right-click adds one (design-8b §4.4).
  */
 const Ruler = memo(function Ruler({
   timeline,
@@ -1687,7 +1821,7 @@ const Ruler = memo(function Ruler({
       data-testid="ruler"
       className="relative overflow-hidden bg-chrome border-b border-line cursor-pointer touch-none"
       style={{ width }}
-      title={`Click to move the playhead · drag across to loop${locked ? "" : " · right-click to change the tempo or time signature here, or add a marker"}`}
+      title={`Click to move the playhead · drag across to select and loop bars (hold ${mod.cmd} for beats)${locked ? "" : " · right-click to change the tempo or time signature here, or add a marker"}`}
       onContextMenu={(e) => {
         e.preventDefault();
         // Its popovers are portals, whose events reach the ruler through React: only its own.
@@ -1699,13 +1833,15 @@ const Ruler = memo(function Ruler({
         if (e.button !== 0 || !e.currentTarget.contains(e.target as Node)) return;
         const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX;
         const left = el.getBoundingClientRect().left;
-        const beatAt = (x: number) => Math.max(0, Math.round((x - left) / ppb));
+        const at = (x: number) => Math.max(0, (x - left) / ppb);
+        const beatAt = (x: number) => Math.round(at(x));
         el.setPointerCapture(pointer);
         let range: { start: number; end: number } | null = null;
         const move = (ev: PointerEvent) => {
           if (ev.pointerId !== pointer || (range === null && Math.abs(ev.clientX - x0) < 4)) return;
-          const a = beatAt(x0), b = beatAt(ev.clientX);
-          range = { start: Math.min(a, b), end: Math.max(a, b) };
+          // Whole bars, each end at the nearest bar line (ARR-9); with ⌘ held, whole beats.
+          const lo = Math.min(at(x0), at(ev.clientX)), hi = Math.max(at(x0), at(ev.clientX));
+          range = skipsSnap(ev) ? { start: Math.round(lo), end: Math.round(hi) } : snapBars(timeline.meter, lo, hi);
           setDrag(range);
         };
         const end = (ev: PointerEvent) => {
@@ -2207,6 +2343,7 @@ function TimelineMenu({
   at,
   timeline,
   edits,
+  sections,
   locked,
   onOpenClip,
   onRepeat,
@@ -2215,6 +2352,7 @@ function TimelineMenu({
   at: MenuAt;
   timeline: TimelineView;
   edits: ClipEdits;
+  sections: SectionEdits;
   locked: string | null;
   onOpenClip: (clip: ClipRef) => void;
   /** Repeat…: its popover opens where the menu was. */
@@ -2223,13 +2361,39 @@ function TimelineMenu({
 }) {
   const picked = pickedIn(timeline, useClipSelection((s) => s.picked));
   const copied = useClipboard((s) => s.copied.length > 0);
+  const bars = useSection((s) => s.bars);
+  const copiedBars = useSection((s) => s.copied);
   const grid = useGrid((s) => s.notes);
   const lane = findLane(timeline, at.module, at.lane);
   if (!lane) return null;
   const off = locked ? `${locked}.` : null;
   const none = off ?? (copied ? null : "Copy or cut a clip first.");
   let items: (MenuItem | "line" | null)[];
-  if (at.on === "header") {
+  if (at.on === "section") {
+    // The selected bars' menu (ARR-9): each row one gesture across every track.
+    if (!bars) return null;
+    const n = barCount(timeline.meter, bars[0], bars[1]);
+    const to = barAt(timeline.meter, playhead());
+    items = [
+      { id: "cut", label: "Cut", shortcut: chord("X"), off, run: () => void sections.copy(true) },
+      { id: "copy", label: "Copy", shortcut: chord("C"), run: () => void sections.copy(false) },
+      {
+        id: "paste",
+        label: `Paste at bar ${to.bar + 1}`,
+        detail: "At the playhead's bar, in place of what is there",
+        shortcut: chord("V"),
+        off: off ?? (copiedBars ? null : "Copy or cut bars first."),
+        run: () => void sections.paste(),
+      },
+      { id: "duplicate", label: "Duplicate", detail: "A copy right after them, in place of what is there", shortcut: chord("D"), off, run: () => void sections.duplicate() },
+      { id: "delete", label: "Delete", detail: "The bars stay, empty", shortcut: keyName("Backspace"), off, run: () => void sections.clear() },
+      "line",
+      { id: "insert-bars", label: n === 1 ? "Insert a bar" : `Insert ${n} bars`, detail: "Empty bars where these start; the rest moves later", shortcut: chord("I"), off, run: () => void sections.insert() },
+      { id: "delete-bars", label: "Delete bars", detail: "The rest moves up to close the gap", shortcut: chord("Backspace", { shift: true }), off, run: () => void sections.remove() },
+      "line",
+      { id: "loop", label: "Loop these bars", shortcut: chord("L"), run: () => canvas.loopSelection?.() },
+    ];
+  } else if (at.on === "header") {
     items = [
       { id: "unautomate", label: "Remove automation", off: off ?? (lane.kind === "control" ? null : "Only an automation lane can be removed."), run: () => edits.unautomate(at.module, at.lane) },
       // One lane out of sight, kept so with the song (D4); a line under the track's lanes brings it back.
@@ -2267,7 +2431,8 @@ function TimelineMenu({
       lane.kind === "control" ? { id: "hide", label: "Hide automation", shortcut: "A", run: () => useShell.getState().toggleLanes(at.module, []) } : null,
     ];
   }
-  return <PointMenu at={at} label={at.on === "clip" ? "Clip menu" : `${laneTitle(lane)} lane menu`} items={items} onClose={onClose} />;
+  const label = at.on === "section" ? `Menu of ${barsWords(timeline.meter, bars![0], bars![1])}` : at.on === "clip" ? "Clip menu" : `${laneTitle(lane)} lane menu`;
+  return <PointMenu at={at} label={label} items={items} onClose={onClose} />;
 }
 
 /**
