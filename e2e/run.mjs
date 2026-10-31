@@ -122,7 +122,7 @@ export const SUITES = [
   ["pl-notes", "fix", { expect: 102, s: 16 }],
   ["nt-notes", "fix", { expect: 63, s: 10 }],
   ["pl-lanes", "fix", { expect: 28, s: 4 }],
-  ["ports", "proj", { expect: 46, s: 5 }],
+  ["ports", "proj", { expect: 49, s: 14 }],
   ["s8-meters", "fix", { expect: 24, s: 17, tier: "nightly", why: "speed: 20 to 40 meter messages a second", sleeps: "the meters' 33 ms tick is a sleep" }],
   ["dsp", "proj", { expect: 33, s: 3 }],
   ["start", "proj", { expect: 24, s: 3 }],

@@ -835,7 +835,9 @@ This replaces "TRACKS" and "4/4 · 124 BPM".
 - port shapes and neutral cables (§2.8);
 - node titles in `text-sm` 600 from the label, with the code name in the tooltip;
 - no file:line;
-- Fit is clamped to 75–100%, top-left aligned;
+- Fit is clamped to 75–100%, top-left aligned. It fits the panel less a scrollbar's room each way,
+  never the room the scrollbars showing now leave: a scrollbar coming or going never changes the
+  fit, so the graph never flickers between two sizes;
 - the zoom bar shows only when the content overflows.
 - **Cable drag (fixes D3):** only compatible inputs get an `accent` ring. Others dim to 40% and say
   why on hover: "Frequency (Hz) can't drive Drive (dB)", using the label and never the slot (`amount`).
