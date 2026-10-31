@@ -281,6 +281,60 @@ fn round_robin_takes_turns_by_the_notes_live_as_in_the_export() {
     }
 }
 
+// PKG-16 §3, RENDER-39: `turns: "key"` gives each key its own turns, as SFZ does, from each note's
+// `keyCount`. A kick (C2) and a snare (D2) that alternate on one lane, each with two takes (the same
+// two files, played at their roots): with the lane's count the kick takes only the first and the
+// snare only the second; with a turn for each key each takes 1, 2. The same live after the engine
+// sat stopped as in the export; and a jump back to the start carries each key's count on, as the
+// lane's does.
+#[test]
+fn a_turn_for_each_key() {
+    let keys = |turns: &str| {
+        format!(
+            "import {{ track }} from \"@m2/core\";\nimport {{ sampler }} from \"std/sampler\";\n\
+             export default track(\"keys\", {{ name: \"Keys\" }}, ({{ lane }}) => sampler(lane.notes(\"notes\"), {{ {turns}regions: [\
+             {{ file: \"soft-1.wav\", root: 36, keys: [36, 36], round_robin: [1, 2] }}, {{ file: \"soft-2.wav\", root: 36, keys: [36, 36], round_robin: [2, 2] }},\
+             {{ file: \"soft-1.wav\", root: 38, keys: [38, 38], round_robin: [1, 2] }}, {{ file: \"soft-2.wav\", root: 38, keys: [38, 38], round_robin: [2, 2] }}] }}));\n"
+        )
+    };
+    // Kick, snare, kick, snare, a beat apart.
+    let notes = "{\"clips\": [{\"id\": \"kicksnar\", \"start\": 0, \"length\": 4, \"notes\": [\
+                 {\"pitch\": 36, \"start\": 0, \"length\": 0.5, \"velocity\": 0.5}, {\"pitch\": 38, \"start\": 1, \"length\": 0.5, \"velocity\": 0.5},\
+                 {\"pitch\": 36, \"start\": 2, \"length\": 0.5, \"velocity\": 0.5}, {\"pitch\": 38, \"start\": 3, \"length\": 0.5, \"velocity\": 0.5}]}]}";
+    let fixture = "core/session/tests/fixtures/sampler-regions";
+    let lane = fixture_with(fixture, &[("tracks/keys.ts", &keys("")), ("data/keys/notes.json", notes)]);
+    let key = fixture_with(fixture, &[("tracks/keys.ts", &keys("turns: \"key\", ")), ("data/keys/notes.json", notes)]);
+    let frames = (key.seconds() * key.rate as f64) as usize;
+    // A beat is 0.5 s at 120 bpm; each take is 0.12 s, so each note's sound is its own.
+    let beat = key.rate as usize / 2;
+    let note = |out: &[[f32; 2]], k: usize| out[k * beat..k * beat + beat / 2].to_vec();
+    let by_lane = offline(&lane, frames);
+    assert!(note(&by_lane, 0) == note(&by_lane, 2) && note(&by_lane, 1) == note(&by_lane, 3), "the lane's count: each drum one take");
+    assert!(note(&by_lane, 0) != note(&by_lane, 1));
+    let export = offline(&key, frames);
+    assert!(peak(&note(&export, 0)) > 0.05, "the notes sound");
+    assert!(note(&export, 0) == note(&export, 1) && note(&export, 2) == note(&export, 3), "the kick's turn 1 is the snare's");
+    assert!(note(&export, 0) != note(&export, 2), "each takes turns on its own key");
+    for idle in [2 * SR as usize, 5 * BLOCK] {
+        assert_eq!(first_diff(&live_after_idle(&key, idle, frames), &export), None, "played after {idle} frames stopped");
+    }
+    // Kick, snare, kick, then back to the start before the second snare: the snare's second note
+    // takes its second take, where it took its first before.
+    let (player, mut d) = Player::driven(key.rate);
+    player.open(key.renderer()).unwrap();
+    let play = player.transport(Cmd::Play).unwrap();
+    let first = hear(&mut d, 5 * beat / 2, &mut |_, _| {});
+    let back = player.transport(Cmd::Seek(0.0)).unwrap();
+    let second = hear(&mut d, 3 * beat, &mut |_, _| {});
+    let from = |seq: u64, heard: usize| player.applied(seq).expect("applied").clock as usize - heard;
+    let (a, b) = (from(play, 0), from(back, first.len()));
+    let (first, second) = (&first[a..], &second[b..]);
+    assert!(note(first, 1) == note(&export, 1) && note(first, 2) == note(&export, 2), "the first time, as the export");
+    // (The jump's fade touches the kick right after it: the notes after are bit for bit.)
+    assert!(note(second, 1) == note(&export, 3), "the snare's second note: its second take");
+    assert!(note(second, 2) == note(&export, 2), "the kick's fourth note: its second take");
+}
+
 // PKG-16.4, RENDER-16: a release region plays when its note ends, wherever on the block grid. A
 // poly frees a voice whose note's Off lands on a block line before the voice runs that block, when
 // its last block was silent and its kernels say they aren't active; std:regions says it is active

@@ -1,7 +1,8 @@
 // A MIDI keyboard (8b.10; Q3 to Q6, X37): plugged in, a toast and the top bar's mark, whose tooltip
 // names it and what it plays; its keys play the selected track (the server's `live`); the window
-// tells the server what plays as the selection changes (`midi.target`); the sustain pedal holds an
-// Off until it lifts; unplugged while a key is held, the note stops, the mark goes and a toast says
+// tells the server what plays as the selection changes (`midi.target`); the sustain pedal reaches
+// the lane as the wheels do, and a key's Off reaches it at once; unplugged while a key is held, the
+// note stops, the mark goes and a toast says
 // so; two keyboards; the Song row; a page loaded later and a PC page see it too; the lint.
 //
 // No keyboard can be opened here (`/dev/snd/seq` is EACCES): the suite starts a server of its own
@@ -120,13 +121,15 @@ try {
   check(await until(async () => (await mark()) === "MIDI keyboard: Test Keys · plays Keys", 3000), `the mark follows: ${await mark()}`);
   await key([0x90, 64, 90]);
   check(await liveIs(1), "a key plays Keys");
-  // The pedal holds the Off until it lifts.
+  // The pedal reaches the lane, as the wheels do (RENDER-35); the key's Off reaches it at once, and
+  // the lane's voices hold the sound while the pedal is down (RENDER-38).
+  const wheels = async () => (await api("/graph/status")).body.wheels;
   await key([0xb0, 64, 127]);
+  check(await until(async () => (await wheels()) === 1, 3000), `the pedal down reaches the lane (wheels ${await wheels()})`);
   await key([0x80, 64, 0]);
-  await sleep(300);
-  check((await live()) === 1, "with the pedal down, the key let go still sounds");
+  check(await liveIs(0), "the key let go: its Off reaches the lane at once");
   await key([0xb0, 64, 0]);
-  check(await liveIs(0), "the pedal up ends it");
+  check(await until(async () => (await wheels()) === 0, 3000), "the pedal up: the lane at rest");
 
   // The Song row: nothing plays, and the mark says how to make it play.
   await select("song");

@@ -587,7 +587,7 @@ fn sfz_fixture() -> PathBuf {
 fn tiny_keys_song(dir: &Path, pack: &Path) {
     std::fs::create_dir_all(dir.join("data/keys")).unwrap();
     let manifest = format!(
-        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n\
+        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\
          \"@test/tiny-keys\" = {{ path = {:?} }}\n",
         pack.to_str().unwrap()
     );

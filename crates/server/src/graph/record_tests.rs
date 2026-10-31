@@ -191,6 +191,49 @@ fn a_take_records_midi_notes_where_they_were_heard() {
     assert!(!r.graph.status().playing, "the stop stopped");
 }
 
+// RENDER-36: the pedal isn't recorded, but a take keeps each note as it sounded: a key let go under
+// the pedal ends where the pedal lifts, or where the key is struck again; one let go with the pedal
+// up ends at its Off.
+#[test]
+fn a_take_keeps_a_note_the_pedal_held() {
+    let mut r = Rig::new();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(0.5);
+    let on = r.key(&[0x90, 60, 100]);
+    r.key(&[0xB0, 64, 127]);
+    r.to(1.0);
+    r.key(&[0x80, 60, 0]);
+    r.to(1.5);
+    let up = r.key(&[0xB0, 64, 0]);
+    r.to(2.0);
+    r.key(&[0xB0, 64, 127]);
+    let on2 = r.key(&[0x90, 62, 100]);
+    r.to(2.25);
+    r.key(&[0x80, 62, 0]);
+    r.to(2.75);
+    let again = r.key(&[0x90, 62, 90]);
+    r.to(3.0);
+    r.key(&[0xB0, 64, 0]);
+    let off3 = r.key(&[0x80, 62, 0]);
+    r.to(3.5);
+    r.graph.transport("stop").unwrap();
+    r.written();
+    let c = &r.clips()[0];
+    let (pitch, start, length, _) = note(c, 0);
+    assert_eq!(pitch, 60.0);
+    assert!(on.has(start) && up.has(start + length), "held to the pedal's lift: {on:?} to {up:?}, written {start} for {length}");
+    let (pitch, start, length, _) = note(c, 1);
+    assert_eq!(pitch, 62.0);
+    assert!(
+        on2.has(start) && again.has(start + length),
+        "held to the key struck again: {on2:?} to {again:?}, written {start} for {length}"
+    );
+    let (_, start, length, velocity) = note(c, 2);
+    assert!(again.has(start) && off3.has(start + length) && velocity == 90.0 / 127.0, "the new one, to its Off: {start} for {length}");
+    assert_eq!(c["notes"].as_array().unwrap().len(), 3, "no pedal in the lane");
+}
+
 // D4: a note goes where it was heard between two callbacks, not on the callback's line.
 #[test]
 fn notes_land_between_callbacks() {

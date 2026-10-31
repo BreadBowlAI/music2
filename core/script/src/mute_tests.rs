@@ -34,8 +34,8 @@ fn muted_is_a_track_option() {
         assert!(!serde_json::to_string(&off).unwrap().contains("muted"), "{opts}");
     }
     assert_eq!(
-        SDK_VERSION, "1.7.0",
-        "additions to @m2/core (FMT-2): muted in 1.2.0, kernel settings in 1.3.0, poly options in 1.4.0, buses in 1.5.0, regions in 1.6.0, file() in 1.7.0"
+        SDK_VERSION, "1.9.0",
+        "additions to @m2/core (FMT-2): muted in 1.2.0, kernel settings in 1.3.0, poly options in 1.4.0, buses in 1.5.0, regions in 1.6.0, file() in 1.7.0, keyCount in 1.9.0"
     );
 }
 

@@ -494,6 +494,8 @@ fn sampler_controls_are_stds() {
     assert_eq!(setting("voices").default, Some(serde_json::json!(m2_song::instrument::VOICES as i64)));
     assert_eq!(setting("mode").default, Some(serde_json::json!(m2_song::instrument::MODE)));
     assert_eq!(setting("mode").options, Some(m2_song::instrument::MODES.iter().map(|m| m.to_string()).collect()));
+    assert_eq!(setting("turns").default, Some(serde_json::json!(m2_song::instrument::TURN)));
+    assert_eq!(setting("turns").options, Some(m2_song::instrument::TURNS.iter().map(|m| m.to_string()).collect()));
 }
 
 // PACK-11, REG-15: a pack installed while a song is open (a Get) is offered once the session is

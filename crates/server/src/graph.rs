@@ -202,7 +202,7 @@ pub struct Activity {
     pub device_errors: u64,
     /// Live notes sounding: audition's (MON-7).
     pub live: u32,
-    /// Lanes whose pitch wheel or mod wheel a MIDI keyboard left away from rest.
+    /// Lanes whose pitch wheel, mod wheel or sustain pedal a MIDI keyboard left away from rest.
     pub wheels: u32,
     /// The DSP load: the longest audio callback of the last second, as a share of the device's
     /// period, while the meters read it (8b.8).

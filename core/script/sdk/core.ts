@@ -168,7 +168,9 @@ export type Value<K = unknown> = Signal<K> | number | Quantity;
 /**
  * One sounding note, as seen by a voice inside `poly`. `pitch` has the lane's pitch wheel in it
  * (2 semitones at either end); `modWheel` is the lane's mod wheel, 0 to 1, the same for every
- * voice. Both come from a MIDI keyboard played live; songs never record them yet.
+ * voice. Both come from a MIDI keyboard played live; songs never record them yet. `keyCount` is
+ * how many notes have started on the note's key in its lane, this one included (1 for the key's
+ * first): what a round robin for each key turns on (1.9.0).
  */
 export type Note = {
   pitch: Control<"semitones">;
@@ -177,6 +179,7 @@ export type Note = {
   pressure: Control<"unit01">;
   timbre: Control<"unit01">;
   modWheel: Control<"unit01">;
+  keyCount: Audio;
 };
 
 // ---------------------------------------------------------------- building
@@ -594,15 +597,16 @@ export function poly(notes: Events, voice: (note: Note) => Audio, opts: PolyOpti
   const { voices, alloc, glide: glideValue } = polyOptions(opts);
   const glide = glideValue === undefined ? undefined : ref(glideValue, "poly glide");
   const body = new Scope(outer.module, outer);
-  const field = (lane: string, unit: Unit) => {
+  const field = (lane: string, unit?: Unit) => {
     const id = `n${outer.module.counter++}`;
     body.nodes.push({ id, op: "lane", lane });
     return new Signal<any>(id, body, unit);
   };
-  // The mod wheel's node is made only when the voice reads it, so a voice that doesn't has the
-  // IR it had before (1.4.0).
+  // The mod wheel's node and the key count's are made only when the voice reads them, so a voice
+  // that doesn't has the IR it had before (1.4.0, 1.9.0).
   let open = true;
   let modWheel: Signal<any> | undefined;
+  let keyCount: Signal<any> | undefined;
   const note: Note = {
     pitch: field("pitch", "semitones"),
     gate: field("gate", "unit01"),
@@ -612,6 +616,10 @@ export function poly(notes: Events, voice: (note: Note) => Audio, opts: PolyOpti
     get modWheel() {
       if (!open) throw new Error("a note's modWheel is read inside its poly's voice, not after it");
       return (modWheel ??= field("modWheel", "unit01"));
+    },
+    get keyCount() {
+      if (!open) throw new Error("a note's keyCount is read inside its poly's voice, not after it");
+      return (keyCount ??= field("keyCount"));
     },
   };
   current = body;

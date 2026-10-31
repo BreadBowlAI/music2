@@ -35,7 +35,7 @@ sample_rate = 48000
 
 [dependencies]
 "@m2/core" = "1"
-std = "0.5"
+std = "0.6"
 ```
 
 `arrangement.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes, the first at beat 0) and `meter` (a list of `{ "beat", "beats", "unit" }` time signatures; empty is 4/4). A beat is a quarter note.
@@ -128,7 +128,7 @@ A number in the code can carry a unit, written as a function. Plugging a value w
 | `lane.notes(key)`, `lane.control(key, unit, fallback)`, `lane.mask(key)`, `lane.audio(key)` | the timeline lanes, each with an optional last argument `{ name, shared }` |
 | `key(k, fn)` | runs `fn` in a frame named `k`, which files the saved settings of the plugins built inside it under `k` |
 | `time.beats`, `time.seconds`, `time.playing` | the song's position, and 1 while it plays (0 while stopped). A track gets `time` in its `fn`; a component's body imports it from `@m2/core` |
-| `poly(notes, voice, { voices, mode, retrigger, steal, glide })` | plays a voice for each note at once (`voices`, 16); or one note at a time, each starting again (`mode: "mono"`) or sliding from the one held (`"legato"`) over `glide` seconds; `retrigger: false` carries a voice on into its next note; `steal` says which note stops when too many are held: `"oldest"`, `"quietest"` or `"none"` |
+| `poly(notes, voice, { voices, mode, retrigger, steal, glide })` | plays a voice for each note at once (`voices`, 16); or one note at a time, each starting again (`mode: "mono"`) or sliding from the one held (`"legato"`) over `glide` seconds; `retrigger: false` carries a voice on into its next note; `steal` says which note stops when too many are held: `"oldest"`, `"quietest"` or `"none"`. Inside the voice, its note gives `pitch`, `gate`, `velocity`, `modWheel` and `keyCount` (how many notes its key has played on the lane, this one included: what `turns: "key"` counts) |
 | `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
 | `kernel(id, inputs)` | one kernel, such as `kernel("std:svf", { … })` |
 | `plugin("clap:<id>", inputs)` | a CLAP plugin; `key` in its inputs names its saved settings (see [CLAP plugins](plugins.md)) |

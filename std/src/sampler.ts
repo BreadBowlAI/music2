@@ -12,6 +12,10 @@
 // `volume`, `pan` and `offset`. Every region that matches a note plays (PKG-16), through the
 // `std:regions` kernel. Give one of `sample`, `zones` and `regions`.
 //
+// A region's turn (`round_robin`) counts the notes the lane has started (`turns: "lane"`, the
+// default), or each key's own (`turns: "key"`, as SFZ does): a kick and a snare that alternate on
+// one lane then each take their own turns.
+//
 // `mode: "oneshot"` (the default) plays the whole file however short the note, as drum hits and
 // chops want; `"gate"` stops with the note, fading out over `release`. `velocity` is how much a
 // note's velocity changes its level: 1 (the default) follows it all the way, 0 not at all. With no
@@ -76,6 +80,7 @@ export const sampler = component(
       regions: setting.regions(),
       mode: setting.choice(["oneshot", "gate"], "oneshot"),
       voices: setting.int(8),
+      turns: setting.choice(["lane", "key"], "lane"),
     },
     output: port.audio(),
     editor: { category: "Sampler", description: "Plays a WAV file on every note, pitched by the note: drop a WAV on its card" },
@@ -90,13 +95,19 @@ export const sampler = component(
     }
     const also = [p.sample !== undefined ? "sample" : "", Object.keys(p.zones).length > 0 ? "zones" : ""].filter((x) => x !== "");
     if (also.length > 0) throw new Error(`sampler(): give one of sample, zones and regions, not ${[...also, "regions"].join(" and ")}`);
-    // Round robin: a note's turn is counted outside the voices, as std's drums count their hits. One
-    // voice marks each sample on which notes start (as a tom, which chokes nothing), so notes that
-    // start together count once, and hitcount counts the marks: never engine time, so live playback
-    // from 0 takes the export's turns.
+    const settings = layout(regions);
+    // A turn for each key: each note's count on its key, which the voices keep (`keyCount`).
+    if (p.turns === "key") {
+      return poly(notes, (n) => kernel("std:regions", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch, count: n.keyCount }, settings), {
+        voices: p.voices,
+      });
+    }
+    // The lane's turn: counted outside the voices, as std's drums count their hits. One voice marks
+    // each sample on which notes start (as a tom, which chokes nothing), so notes that start together
+    // count once, and hitcount counts the marks: never engine time, so live playback from 0 takes the
+    // export's turns.
     const starts = poly(notes, (n) => kernel("std:drumhit", { pitch: n.pitch, model: 4 }), { voices: 1 });
     const count = kernel("std:hitcount", { hits: starts });
-    const settings = layout(regions);
     return poly(notes, (n) => kernel("std:regions", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch, count }, settings), { voices: p.voices });
   },
 );

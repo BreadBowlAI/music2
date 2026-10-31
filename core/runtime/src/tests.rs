@@ -9,6 +9,7 @@ use super::*;
 mod audition;
 mod cell;
 mod decode;
+mod events;
 mod fpenv;
 mod latency;
 mod live;
@@ -434,6 +435,7 @@ fn two_states_in_one_instance_play_independently() {
                 values: &[],
                 assets: &[],
                 offline: None,
+                notes: &[],
             },
         )
         .unwrap()
@@ -1577,6 +1579,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
             values: &values,
             assets: &assets,
             offline: None,
+            notes: &[],
         };
         let s = sb.state(prefix, &spec).unwrap();
         sb.seal().unwrap();

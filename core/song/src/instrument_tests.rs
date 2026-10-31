@@ -166,7 +166,9 @@ fn the_code_is_laid_out_on_the_files_lines() {
     assert!(lines[0].starts_with("export const feltPiano = __m2_component({ id: \"felt-piano\", label: \"Felt Piano\","), "{}", lines[0]);
     assert!(lines[0].contains("controls: { tune: __m2_control.semis(0).range(-24, 24), level: __m2_control.db(0).range(-24, 12), attack: __m2_control.secs(0).range(0, 2), release: __m2_control.secs(0.4).range(0, 5), velocity: __m2_control.frac(0.7).range(0, 1) }"), "{}", lines[0]);
     assert!(
-        lines[0].contains("settings: { mode: __m2_setting.choice([\"oneshot\", \"gate\"], \"gate\"), voices: __m2_setting.int(16) }"),
+        lines[0].contains(
+            "settings: { mode: __m2_setting.choice([\"oneshot\", \"gate\"], \"gate\"), voices: __m2_setting.int(16), turns: __m2_setting.choice([\"lane\", \"key\"], \"lane\") }"
+        ),
         "{}",
         lines[0]
     );
@@ -249,10 +251,32 @@ fn code_editors_see_each_instrument_in_one_module() {
     let lines: Vec<&str> = t.lines().collect();
     assert_eq!(lines.len(), 4, "a comment, the imports and the two that read: {t}");
     assert!(lines[2].starts_with("export const feltPiano = __m2_component({ id: \"felt-piano\""), "{t}");
-    assert!(lines[2].ends_with("__m2_sampler(__m2_notes, { regions: [], tune: __m2_p.tune, level: __m2_p.level, attack: __m2_p.attack, release: __m2_p.release, velocity: __m2_p.velocity, mode: __m2_p.mode, voices: __m2_p.voices }));"), "{t}");
+    assert!(lines[2].ends_with("__m2_sampler(__m2_notes, { regions: [], tune: __m2_p.tune, level: __m2_p.level, attack: __m2_p.attack, release: __m2_p.release, velocity: __m2_p.velocity, mode: __m2_p.mode, voices: __m2_p.voices, turns: __m2_p.turns }));"), "{t}");
     assert!(lines[3].starts_with("export const _808Kit = __m2_component("), "{t}");
     // A name that isn't an id, or whose name in code an earlier one has, is left out.
     let t =
         types(&[("a-b".into(), PIANO.into()), ("a--b".into(), PIANO.into()), ("new".into(), PIANO.into()), ("x y".into(), PIANO.into())]);
     assert_eq!(t.matches("export const").count(), 1, "{t}");
+}
+
+// PACK-13, PKG-16 §3: `turns`, the Sampler's choice setting, "lane" (its default) or "key": a turn
+// for each key, as SFZ counts. Written into the component's settings, and given to the Sampler; any
+// other value refused at its line.
+#[test]
+fn a_turn_for_each_key_is_a_setting() {
+    let keyed = PIANO.replace("voices = 16\n", "voices = 16\nturns = \"key\"\n");
+    let i = DataInstrument::read(&keyed).unwrap();
+    assert_eq!(i.turns.as_deref(), Some("key"));
+    let code = i.module("@alice/felt-piano", &Id::new("felt-piano").unwrap());
+    assert!(code.contains("turns: __m2_setting.choice([\"lane\", \"key\"], \"key\") }"), "{code}");
+    assert!(code.contains("voices: __m2_p.voices, turns: __m2_p.turns }"), "{code}");
+    let plain = DataInstrument::read(PIANO).unwrap();
+    assert_eq!(plain.turns, None);
+    assert!(
+        plain
+            .module("@alice/felt-piano", &Id::new("felt-piano").unwrap())
+            .contains("turns: __m2_setting.choice([\"lane\", \"key\"], \"lane\") }")
+    );
+    let p = err(&PIANO.replace("voices = 16\n", "voices = 16\nturns = \"note\"\n"));
+    assert_eq!((p.line, p.message.as_str()), (11, "`turns = \"note\"` must be \"lane\" or \"key\""));
 }

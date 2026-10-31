@@ -76,9 +76,6 @@ impl KernelSig {
             outputs: parse_all(outputs).map_err(|e| format!("kernel `{id}`: {e}"))?,
             latency,
         };
-        if let Some(p) = sig.inputs.iter().find(|p| matches!(p.kind, PortKind::Events(_))) {
-            return Err(format!("kernel `{id}`: input `{}`: kernels can't take events yet (notes reach kernels through poly)", p.name));
-        }
         if sig.outputs.is_empty() {
             return Err(format!("kernel `{id}`: needs at least one output"));
         }
@@ -88,6 +85,7 @@ impl KernelSig {
             return Err(format!("kernel `{id}`: port `{}` declared twice", w[0]));
         }
         for o in &sig.outputs {
+            // An events output's shape is reserved in kernel ABI v1, not built (ABI-8).
             if o.default.is_some() || matches!(o.kind, PortKind::Events(_)) {
                 return Err(format!("kernel `{id}`: output `{}` must be audio or control, without a default", o.name));
             }
@@ -161,6 +159,16 @@ mod tests {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         assert!(KernelSig::parse("p:k", "", &s(&["a: control<hz>"]), &s(&["out: *"]), 0).is_err());
         assert!(KernelSig::parse("p:k", "", &s(&["a: *"]), &s(&["out: *"]), 0).is_ok());
-        assert!(KernelSig::parse("p:k", "", &s(&["n: events<note>"]), &s(&["out: audio<1>"]), 0).is_err());
+    }
+
+    // ABI-8: a kernel takes notes through an `events<note>` input; an events output's shape is
+    // reserved, not built.
+    #[test]
+    fn a_kernel_takes_events_but_never_gives_them() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let k = KernelSig::parse("p:k", "", &s(&["n: events<note>"]), &s(&["out: audio<1>"]), 0).unwrap();
+        assert_eq!(k.inputs[0].kind, PortKind::Events(crate::EventType::Note));
+        let e = KernelSig::parse("p:k", "", &s(&["n: events<note>"]), &s(&["out: events<note>"]), 0).unwrap_err();
+        assert!(e.contains("output `out` must be audio or control"), "{e}");
     }
 }

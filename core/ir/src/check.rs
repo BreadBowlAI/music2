@@ -32,21 +32,26 @@ pub enum NoteField {
     Timbre,
     /// The lane's mod wheel, 0 to 1, the same for every voice (RENDER-14's `Midi`, from live input).
     ModWheel,
+    /// How many notes have started on the note's key in its lane, itself included (RENDER-39):
+    /// `audio<1>`, as std's counts are.
+    KeyCount,
 }
 
 impl NoteField {
-    pub const ALL: [(&'static str, NoteField); 6] = [
+    pub const ALL: [(&'static str, NoteField); 7] = [
         ("pitch", NoteField::Pitch),
         ("gate", NoteField::Gate),
         ("velocity", NoteField::Velocity),
         ("pressure", NoteField::Pressure),
         ("timbre", NoteField::Timbre),
         ("modWheel", NoteField::ModWheel),
+        ("keyCount", NoteField::KeyCount),
     ];
 
     pub fn kind(self) -> Kind {
         match self {
             NoteField::Pitch => Kind::Control(Some(Unit::Semitones)),
+            NoteField::KeyCount => Kind::Audio(1),
             _ => Kind::Control(Some(Unit::Unit01)),
         }
     }
@@ -303,7 +308,7 @@ impl<'a> Scope<'a> for VoiceScope<'a, '_> {
 
     fn lane(&self, _: &'a Module, lane: &str) -> Result<(FOp, Kind), String> {
         let (_, f) = NoteField::ALL.iter().find(|(n, _)| *n == lane).ok_or_else(|| {
-            format!("inside poly, lanes are note fields (pitch, gate, velocity, pressure, timbre, modWheel), not `{lane}`")
+            format!("inside poly, lanes are note fields (pitch, gate, velocity, pressure, timbre, modWheel, keyCount), not `{lane}`")
         })?;
         Ok((FOp::NoteField(*f), f.kind()))
     }
@@ -998,8 +1003,20 @@ impl<'a> Checker<'a> {
                         conns.iter().map(|(p, _)| p.as_str()).filter(|p| !sig.inputs.iter().any(|s| s.name == *p)).collect();
                     let notes_not_lane = is_plugin
                         && typed_conns.get("notes").is_some_and(|(p, _)| !matches!(ops.get(p.node), Some(Some(FOp::Lane { .. }))));
+                    // ABI-8: a kernel's notes too, and never inside a voice, whose kernels get their
+                    // note from its fields.
+                    let kernel_notes_not_lane = !is_plugin
+                        && sig.inputs.iter().any(|i| {
+                            matches!(i.kind, PortKind::Events(_))
+                                && typed_conns.get(i.name.as_str()).is_some_and(|(p, k)| {
+                                    matches!(k, Kind::Events(_))
+                                        && (scope.in_voice() || !matches!(ops.get(p.node), Some(Some(FOp::Lane { .. }))))
+                                })
+                        });
                     if notes_not_lane {
                         Err("a plugin's notes must come straight from a notes lane".into())
+                    } else if kernel_notes_not_lane {
+                        Err("a kernel's notes come straight from a notes lane, outside poly: a voice's kernels get their note from its fields".into())
                     } else if !unknown.is_empty() {
                         let have: Vec<&str> = sig.inputs.iter().map(|p| p.name.as_str()).collect();
                         Err(format!("`{kernel}` has no input `{}` (inputs: {})", unknown.join("`, `"), have.join(", ")))
@@ -1240,8 +1257,8 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>, plugin: 
             }
         };
         let mismatch = || format!("input `{}` expects {}, got {k}", p.name, p.kind);
-        if matches!(k, Kind::Events(_)) && !(plugin && matches!(p.kind, PortKind::Events(_))) {
-            errs.push(format!("input `{}`: events can't feed a kernel; play notes with poly", p.name));
+        if matches!(k, Kind::Events(_)) && !matches!(p.kind, PortKind::Events(_)) {
+            errs.push(format!("input `{}`: notes feed only an `events<note>` input; play notes with poly", p.name));
             continue;
         }
         match p.kind {
@@ -1677,7 +1694,42 @@ mod tests {
             &k,
         )
         .unwrap_err();
-        assert!(e[0].message.contains("events can't feed a kernel"), "{}", e[0]);
+        assert!(e[0].message.contains("input `a`: notes feed only an `events<note>` input; play notes with poly"), "{}", e[0]);
+    }
+
+    // ABI-8: a kernel's `events<note>` input takes notes straight from a notes lane, outside any
+    // voice (a voice's kernels get their note through the note fields), and must be connected.
+    #[test]
+    fn a_kernel_takes_notes_straight_from_a_lane_outside_voices() {
+        let mut k = kernels();
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        k.insert(
+            "t:arp".into(),
+            KernelSig::parse("t:arp", "", &s(&["notes: events<note>", "rate: control<hz> = 4"]), &s(&["out: audio<1>"]), 0).unwrap(),
+        );
+        let ir = |nodes: serde_json::Value| {
+            serde_json::from_value::<Ir>(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"},
+                "modules": [{"key": "song", "lanes": [{"key": "n", "kind": "events<note>"}, {"key": "c", "kind": "control<hz>"}],
+                    "nodes": nodes, "exports": {"out": "x"}}]}))
+            .unwrap()
+        };
+        let lane = json!({"id": "n", "op": "lane", "lane": "n"});
+        let f = check(&ir(json!([lane, {"id": "x", "op": "kernel", "kernel": "t:arp", "inputs": {"notes": "n"}}])), &k).unwrap();
+        let FOp::Kernel { inputs, .. } = &f.nodes[f.out.node].op else { panic!("a kernel") };
+        assert!(matches!(inputs[0], Input::Port { src_channels: 1, channels: 1, .. }), "{inputs:?}");
+        let refused = |nodes: serde_json::Value| check(&ir(nodes), &k).unwrap_err()[0].message.clone();
+        let e = refused(json!([lane, {"id": "x", "op": "kernel", "kernel": "t:arp"}]));
+        assert!(e.contains("input `notes` (events<note>) is not connected"), "{e}");
+        let e = refused(
+            json!([{"id": "c", "op": "lane", "lane": "c"}, {"id": "x", "op": "kernel", "kernel": "t:arp", "inputs": {"notes": "c"}}]),
+        );
+        assert!(e.contains("input `notes` expects events<note>, got control<hz>"), "{e}");
+        let e = refused(json!([lane, {"id": "x", "op": "poly", "events": "n", "voices": 2, "body": {"out": "a", "nodes": [
+            {"id": "a", "op": "kernel", "kernel": "t:arp", "inputs": {"notes": "n"}}]}}]));
+        assert!(
+            e.contains("a kernel's notes come straight from a notes lane, outside poly: a voice's kernels get their note from its fields"),
+            "{e}"
+        );
     }
 
     #[test]

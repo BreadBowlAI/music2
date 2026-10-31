@@ -41,6 +41,11 @@
 //! port's channel 1 to its channel 0 for reads, and to a scratch buffer of its own for writes, so a
 //! kernel may treat every port as stereo.
 //!
+//! **Notes** (ABI-8): an input of kind `events<note>` takes one entry in the port table, the address
+//! of a header `{count, cap, events}` the host writes each block, with the lane's events after it,
+//! 24 bytes each ([`RawEvent`]). A kernel names those inputs in [`Kernel::NOTES`] and reads them with
+//! [`Io::events`]: each [`Event`] with its frame counted from the call's first frame.
+//!
 //! Input memory is the host's (ABI-1). `k_process` reads its inputs and never writes them, and
 //! `k_reset` never changes them: the host may write an input once and leave it there for as long
 //! as its value holds (a knob's cell). [`Io`] gives inputs as shared slices, so a kernel written
@@ -234,6 +239,8 @@ pub const SETTINGS_BYTES: u32 = 60;
 pub trait Kernel: Sized {
     const INPUTS: usize;
     const OUTPUTS: usize;
+    /// Its inputs of kind `events<note>`, by place: the ones [`Io::events`] reads (ABI-8).
+    const NOTES: &'static [usize] = &[];
     /// Build a state. It may take memory: it runs only while its sandbox is born.
     fn new(cfg: &Cfg) -> Self;
     /// Back to the state `new` made, from the settings kept. It must take no memory, so a kernel
@@ -253,6 +260,130 @@ pub trait Kernel: Sized {
     }
 }
 
+/// A note event as a kernel reads it (ABI-8): the host's `Event` (architecture.md, RENDER-14), its
+/// frame counted from the first frame of the call that reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Event {
+    /// A note starts: its pitch in semitones (60 is C4), its velocity 0 to 1, and the pitch it
+    /// slides from, if any.
+    On { frame: usize, id: u32, pitch: f32, velocity: f32, from_pitch: Option<f32> },
+    /// A note ends: its release velocity.
+    Off { frame: usize, id: u32, velocity: f32 },
+    /// A note's pitch, pressure or timbre changes (reserved: not sent yet).
+    Expression { frame: usize, id: u32, kind: Expression, value: f32 },
+    /// A parameter changes at a frame (reserved: not sent yet).
+    Param { frame: usize, id: u32, value: f32 },
+    /// A controller from MIDI input: the pitch wheel, the mod wheel, the sustain pedal (CC 64).
+    Midi { frame: usize, bytes: [u8; 3] },
+}
+
+/// What a note expression changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Expression {
+    Pitch,
+    Pressure,
+    Timbre,
+}
+
+impl Event {
+    pub fn frame(&self) -> usize {
+        match *self {
+            Event::On { frame, .. }
+            | Event::Off { frame, .. }
+            | Event::Expression { frame, .. }
+            | Event::Param { frame, .. }
+            | Event::Midi { frame, .. } => frame,
+        }
+    }
+}
+
+/// One event as the host lays it out (24 bytes, `docs/kernel-abi.md`): its kind (0 on, 1 off, 2
+/// note expression, 3 param, 4 MIDI), its frame in the block, its note's id, and three values: an
+/// on's pitch, velocity and `from_pitch` (NaN for none); an off's release velocity; a note
+/// expression's kind (0 pitch, 1 pressure, 2 timbre) and value; a param's value; a MIDI message's
+/// three bytes in the low bytes of the first.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RawEvent {
+    pub kind: u32,
+    pub frame: u32,
+    pub id: u32,
+    pub values: [u32; 3],
+}
+
+impl RawEvent {
+    /// `e` as the host writes it, its frame in the block.
+    pub fn of(e: &Event) -> RawEvent {
+        let (kind, frame, id, values) = match *e {
+            Event::On { frame, id, pitch, velocity, from_pitch } => {
+                (0, frame, id, [pitch.to_bits(), velocity.to_bits(), from_pitch.unwrap_or(f32::NAN).to_bits()])
+            }
+            Event::Off { frame, id, velocity } => (1, frame, id, [velocity.to_bits(), 0, 0]),
+            Event::Expression { frame, id, kind, value } => (2, frame, id, [kind as u32, value.to_bits(), 0]),
+            Event::Param { frame, id, value } => (3, frame, id, [value.to_bits(), 0, 0]),
+            Event::Midi { frame, bytes: [a, b, c] } => (4, frame, 0, [u32::from_le_bytes([a, b, c, 0]), 0, 0]),
+        };
+        RawEvent { kind, frame: frame as u32, id, values }
+    }
+
+    /// The event, if its frame is in `from..to` and its kind is one the kit knows: its frame
+    /// counted from `from`.
+    pub fn event(&self, from: usize, to: usize) -> Option<Event> {
+        let at = self.frame as usize;
+        if !(from..to).contains(&at) {
+            return None;
+        }
+        let (frame, id, [a, b, c]) = (at - from, self.id, self.values);
+        let f = f32::from_bits;
+        Some(match self.kind {
+            0 => Event::On { frame, id, pitch: f(a), velocity: f(b), from_pitch: Some(f(c)).filter(|x| !x.is_nan()) },
+            1 => Event::Off { frame, id, velocity: f(a) },
+            2 => {
+                let kind = match a {
+                    0 => Expression::Pitch,
+                    1 => Expression::Pressure,
+                    2 => Expression::Timbre,
+                    _ => return None,
+                };
+                Event::Expression { frame, id, kind, value: f(b) }
+            }
+            3 => Event::Param { frame, id, value: f(a) },
+            4 => {
+                let [x, y, z, _] = a.to_le_bytes();
+                Event::Midi { frame, bytes: [x, y, z] }
+            }
+            _ => return None,
+        })
+    }
+}
+
+/// An events input's header, as the host writes it each block (ABI-8).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Notes {
+    /// Events this block: never more than `cap`.
+    pub count: u32,
+    pub cap: u32,
+    /// The first of them.
+    pub events: *const RawEvent,
+}
+
+/// One events input's events in one call, in order: an iterator of [`Event`]s.
+pub struct Events<'a> {
+    raw: std::slice::Iter<'a, RawEvent>,
+    from: usize,
+    to: usize,
+}
+
+impl Iterator for Events<'_> {
+    type Item = Event;
+
+    fn next(&mut self) -> Option<Event> {
+        let (from, to) = (self.from, self.to);
+        self.raw.by_ref().find_map(|r| r.event(from, to))
+    }
+}
+
 /// Where one port's channels are: its first channel's place in the port table, its channel count,
 /// and for a mono output, which scratch buffer its channel 1 writes.
 #[derive(Clone, Copy)]
@@ -267,6 +398,8 @@ pub struct Io<'a> {
     table: &'a [*mut f32],
     ports: &'a [Port],
     inputs: usize,
+    /// The kernel's `events<note>` inputs ([`Kernel::NOTES`]).
+    notes: &'static [usize],
     scratch: *mut f32,
     max_block: usize,
     from: usize,
@@ -306,6 +439,24 @@ impl Io<'_> {
         // SAFETY: the host gives each channel `max_block` floats, `from + frames <= max_block`, and
         // no output overlaps an input; outputs are lent out only through `&mut self`.
         unsafe { std::slice::from_raw_parts(self.input_at(i, ch), self.frames) }
+    }
+
+    /// Input `i`'s events in this call's frames, in order, each frame counted from the call's first
+    /// (ABI-8). Input `i` must be one [`Kernel::NOTES`] names.
+    pub fn events(&self, i: usize) -> Events<'_> {
+        assert!(self.notes.contains(&i) && i < self.inputs, "input {i} isn't one of the kernel's `events<note>` inputs");
+        let head = self.table[self.ports[i].first as usize] as *const Notes;
+        // SAFETY: the host gives an events input's one table entry as the address of its header,
+        // whose `events` hold `count` (at most `cap`) events, in input memory nothing writes during
+        // the call (ABI-1); the slice is lent with `&self`.
+        let raw = unsafe {
+            let h = &*head;
+            match h.events.is_null() {
+                true => &[][..],
+                false => std::slice::from_raw_parts(h.events, h.count.min(h.cap) as usize),
+            }
+        };
+        Events { raw: raw.iter(), from: self.from, to: self.from + self.frames }
     }
 
     /// First sample of input `i` this call (for values read once per block).
@@ -402,6 +553,7 @@ impl<K: Kernel> State<K> {
             table,
             ports: &self.ports,
             inputs: K::INPUTS,
+            notes: K::NOTES,
             scratch: self.scratch.as_mut_ptr(),
             max_block: mb,
             from,
@@ -420,6 +572,8 @@ pub struct Host<K: Kernel> {
     ports: Vec<Vec<f32>>,
     table: Vec<*mut f32>,
     max_block: usize,
+    /// Each events input's header and events, as [`Host::events`] gave them.
+    notes: Vec<Option<(Box<Notes>, Vec<RawEvent>)>>,
 }
 
 impl<K: Kernel> Host<K> {
@@ -435,7 +589,16 @@ impl<K: Kernel> Host<K> {
             ports: (0..n).map(|_| vec![0.0; PORT_CHANNELS * cfg.max_block]).collect(),
             table: Vec::with_capacity(n * PORT_CHANNELS),
             max_block: cfg.max_block,
+            notes: (0..n).map(|_| None).collect(),
         }
+    }
+
+    /// Give events input `i` these events for the next calls, their frames in the block, as a host
+    /// lays them out (ABI-8).
+    pub fn events(&mut self, i: usize, events: &[Event]) {
+        let raw: Vec<RawEvent> = events.iter().map(RawEvent::of).collect();
+        let head = Box::new(Notes { count: raw.len() as u32, cap: raw.len() as u32, events: raw.as_ptr() });
+        self.notes[i] = Some((head, raw));
     }
 
     /// A port buffer: inputs first, then outputs; channel `c` starts at `c × max_block`.
@@ -456,14 +619,24 @@ impl<K: Kernel> Host<K> {
     }
 
     pub fn process(&mut self, frames: u32) {
+        self.process_range(0, frames);
+    }
+
+    /// Frames `from..to` of a block, as a host calls a voice's kernels where its note changes.
+    pub fn process_range(&mut self, from: u32, to: u32) {
         let mb = self.max_block;
         self.table.clear();
-        for p in &mut self.ports {
+        for (p, notes) in self.ports.iter_mut().zip(&self.notes) {
             let at = p.as_mut_ptr();
-            self.table.extend((0..PORT_CHANNELS).map(|c| at.wrapping_add(c * mb)));
+            match notes {
+                // An events input: its header, in its one entry (and the one after, unread).
+                Some((head, _)) => self.table.extend([&**head as *const Notes as *mut f32; PORT_CHANNELS]),
+                None => self.table.extend((0..PORT_CHANNELS).map(|c| at.wrapping_add(c * mb))),
+            }
         }
-        // SAFETY: each address is of a channel of `max_block` floats, and the ports are distinct.
-        unsafe { self.state.process(self.table.as_ptr(), 0, frames) }
+        // SAFETY: each address is of a channel of `max_block` floats, or an events input's header,
+        // and the ports are distinct.
+        unsafe { self.state.process(self.table.as_ptr(), from, to) }
     }
 }
 
@@ -666,4 +839,95 @@ mod heap {
 
 pub fn db_to_gain(db: f32) -> f32 {
     if db <= -96.0 { 0.0 } else { 10f32.powf(db / 20.0) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A kernel whose input 0 is `events<note>`: it keeps every event it reads, by call.
+    struct Heard {
+        calls: Vec<Vec<Event>>,
+    }
+
+    impl Kernel for Heard {
+        const INPUTS: usize = 2;
+        const OUTPUTS: usize = 1;
+        const NOTES: &'static [usize] = &[0];
+
+        fn new(_: &Cfg) -> Self {
+            Heard { calls: vec![] }
+        }
+
+        fn process(&mut self, io: &mut Io) {
+            self.calls.push(io.events(0).collect());
+            io.output(0).fill(0.0);
+        }
+    }
+
+    // ABI-9: a kernel reads its events through the kit: as many as the host counted, in order,
+    // each with its values, and its frame counted from the call's first frame. A call reads only its
+    // own frames' events.
+    #[test]
+    fn a_kernel_reads_its_events_through_the_kit() {
+        let mut host = Host::<Heard>::new(48_000.0, 128, 1);
+        let given = [
+            Event::Midi { frame: 0, bytes: [0xB0, 64, 127] },
+            Event::Off { frame: 5, id: 1, velocity: 0.0 },
+            Event::On { frame: 5, id: 2, pitch: 61.5, velocity: 0.25, from_pitch: None },
+            Event::Expression { frame: 9, id: 2, kind: Expression::Timbre, value: 0.5 },
+            Event::Param { frame: 9, id: 7, value: -3.0 },
+            Event::On { frame: 100, id: 3, pitch: 40.0, velocity: 1.0, from_pitch: Some(38.0) },
+        ];
+        host.events(0, &given);
+        host.process(128);
+        host.process_range(5, 64);
+        host.process_range(64, 128);
+        let calls = &host.state.kernel.calls;
+        assert_eq!(calls[0], given, "the whole block");
+        assert_eq!(
+            calls[1],
+            [
+                Event::Off { frame: 0, id: 1, velocity: 0.0 },
+                Event::On { frame: 0, id: 2, pitch: 61.5, velocity: 0.25, from_pitch: None },
+                Event::Expression { frame: 4, id: 2, kind: Expression::Timbre, value: 0.5 },
+                Event::Param { frame: 4, id: 7, value: -3.0 },
+            ],
+            "frames 5 to 64, counted from 5"
+        );
+        assert_eq!(calls[2], [Event::On { frame: 36, id: 3, pitch: 40.0, velocity: 1.0, from_pitch: Some(38.0) }]);
+    }
+
+    // ABI-8: the bytes are the host's: each event 24 bytes, as `docs/kernel-abi.md` lays them out; a
+    // kind the kit doesn't know is skipped.
+    #[test]
+    fn an_event_is_24_bytes_as_the_host_writes_it() {
+        assert_eq!(std::mem::size_of::<RawEvent>(), 24);
+        let on = RawEvent::of(&Event::On { frame: 3, id: 9, pitch: 60.0, velocity: 0.5, from_pitch: None });
+        assert_eq!((on.kind, on.frame, on.id, f32::from_bits(on.values[0]), f32::from_bits(on.values[1])), (0, 3, 9, 60.0, 0.5));
+        assert!(f32::from_bits(on.values[2]).is_nan(), "no `from_pitch` is NaN");
+        let midi = RawEvent::of(&Event::Midi { frame: 0, bytes: [0xE0, 0x12, 0x40] });
+        assert_eq!((midi.kind, midi.values), (4, [0x0040_12E0, 0, 0]));
+        let unknown = RawEvent { kind: 9, ..on };
+        assert_eq!(unknown.event(0, 128), None);
+    }
+
+    // ABI-9: a kernel asks for events only of an input it says is `events<note>`.
+    #[test]
+    #[should_panic(expected = "input 1 isn't one of the kernel's `events<note>` inputs")]
+    fn events_of_another_input_are_refused() {
+        struct Wrong;
+        impl Kernel for Wrong {
+            const INPUTS: usize = 2;
+            const OUTPUTS: usize = 1;
+            const NOTES: &'static [usize] = &[0];
+            fn new(_: &Cfg) -> Self {
+                Wrong
+            }
+            fn process(&mut self, io: &mut Io) {
+                let _ = io.events(1).count();
+            }
+        }
+        Host::<Wrong>::new(48_000.0, 128, 1).process(128);
+    }
 }

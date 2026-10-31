@@ -8,11 +8,15 @@
 //!   WebSocket, [`Graph::midi_target`]): its selected track's notes lane. It stays until another
 //!   window says otherwise or another song opens; with none, or a lane that has gone, a key plays
 //!   nothing. A target changed while a key is held leaves that note where it sounds until its Off.
-//! - **Which messages:** Note On (velocity 0 is an Off) and Note Off; the sustain pedal (CC 64),
-//!   which holds back Offs until it lifts; All Notes Off and All Sound Off (CC 123, 120), which let
-//!   go of every note; the pitch wheel (pitch bend), the mod wheel (CC 1) and reset all controllers
-//!   (CC 121), which reach the target lane live (RENDER-14's `Midi`, D8 of track pm). The rest are
-//!   ignored (aftertouch, other controllers, clock…).
+//! - **Which messages:** Note On (velocity 0 is an Off) and Note Off; All Notes Off and All Sound
+//!   Off (CC 123, 120), which let go of every note; the pitch wheel (pitch bend), the mod wheel
+//!   (CC 1), the sustain pedal (CC 64) and reset all controllers (CC 121), which reach the target
+//!   lane live (RENDER-14's `Midi`, D8 of track pm, RENDER-35). The rest are ignored (aftertouch,
+//!   other controllers, clock…).
+//! - **The pedal** reaches the lane, and each key's Off reaches it when the key is let go: the
+//!   lane's voices hold the sound while the pedal is down (RENDER-38), and a plugin holds its own
+//!   (RENDER-37). A take keeps a key let go under the pedal until the pedal lifts or the key is
+//!   struck again, so it records the note as it sounded (RENDER-36).
 //! - **The wheels go back to rest** on the lane they moved when the keyboard lets go: unplugged, All
 //!   Notes Off, turned off in Settings, another target, or ⌘. (a panic, in the engine). A song
 //!   closed takes its lanes with it.
@@ -44,7 +48,8 @@ struct Keyboard {
     name: String,
     /// The sustain pedal is down.
     pedal: bool,
-    /// Keys let go while the pedal was down: their Offs, sent when it lifts.
+    /// Keys let go while the pedal was down: a take keeps their notes until it lifts, or until the
+    /// key is struck again (RENDER-36).
     held_back: BTreeSet<u32>,
 }
 
@@ -77,7 +82,8 @@ enum Said {
     Off {
         h: u32,
     },
-    Pedal(bool),
+    /// The sustain pedal (CC 64), as it goes to the lane: down at 64 or more.
+    Pedal([u8; 3]),
     AllOff,
     /// A wheel: pitch bend, CC 1 or CC 121.
     Wheel([u8; 3]),
@@ -93,7 +99,7 @@ fn read(bytes: &[u8]) -> Said {
             Said::On { h: key(n), pitch: f64::from(n & 0x7F), velocity: f64::from(v & 0x7F) / 127.0 }
         }
         (0x90 | 0x80, Some(n), Some(_)) => Said::Off { h: key(n) },
-        (0xB0, Some(64), Some(v)) => Said::Pedal(v >= 64),
+        (0xB0, Some(64), Some(v)) => Said::Pedal([status, 64, v & 0x7F]),
         (0xE0, Some(l), Some(m)) => Said::Wheel([status, l & 0x7F, m & 0x7F]),
         (0xB0, Some(c @ (1 | 121)), Some(v)) => Said::Wheel([status, c, v & 0x7F]),
         (0xB0, Some(120 | 123), _) => Said::AllOff,
@@ -135,8 +141,8 @@ impl Graph {
         }
     }
 
-    /// One message from keyboard `name`, as audition: an On on the target, an Off (or held back by
-    /// the pedal), the pedal, or every note let go.
+    /// One message from keyboard `name`, as audition: an On on the target, an Off (kept in a take
+    /// while the pedal is down), the pedal, or every note let go.
     fn midi_message(&self, name: &str, bytes: &[u8]) {
         let said = read(bytes);
         if said == Said::Nothing {
@@ -158,25 +164,35 @@ impl Graph {
             let Some(k) = cp.midi.keyboards.iter_mut().find(|k| k.name == name) else { return };
             match said {
                 Said::On { h, pitch, velocity } => {
-                    // Struck again under the pedal: audition lets the old one go first.
-                    k.held_back.remove(&h);
+                    // Struck again under the pedal: the take's note it held ends here (RENDER-36).
+                    let again = k.held_back.remove(&h);
+                    drop(cp);
+                    if again {
+                        self.take_lets_go(&client(name), &[h]);
+                    }
                     let Some(t) = target else { return };
                     Audition { module: Some(t.module), lane: Some(t.lane), on: vec![Strike { h, pitch, velocity }], ..Audition::default() }
                 }
-                Said::Off { h } if k.pedal => {
-                    k.held_back.insert(h);
+                // The lane hears it let go: its voices hold the sound while the pedal is down
+                // (RENDER-38). A take keeps the note until the pedal lifts (RENDER-36).
+                Said::Off { h } => {
+                    if k.pedal {
+                        k.held_back.insert(h);
+                    }
+                    Audition { off: vec![h], pedalled: k.pedal, ..Audition::default() }
+                }
+                Said::Pedal(bytes) => {
+                    let down = bytes[2] >= 64;
+                    let lifted = if k.pedal && !down { std::mem::take(&mut k.held_back) } else { BTreeSet::new() };
+                    k.pedal = down;
+                    drop(cp);
+                    self.wheel(&client(name), target.map(|t| (t.module, t.lane)), bytes);
+                    self.take_lets_go(&client(name), &lifted.into_iter().collect::<Vec<_>>());
                     return;
                 }
-                Said::Off { h } => Audition { off: vec![h], ..Audition::default() },
-                Said::Pedal(down) => {
-                    k.pedal = down;
-                    if down {
-                        return;
-                    }
-                    Audition { off: std::mem::take(&mut k.held_back).into_iter().collect(), ..Audition::default() }
-                }
                 Said::AllOff => {
-                    k.held_back.clear();
+                    // Its release puts the lane's pedal up, and ends what a take kept.
+                    (k.pedal, k.held_back) = (false, BTreeSet::new());
                     drop(cp);
                     self.audition_gone(&client(name));
                     return;

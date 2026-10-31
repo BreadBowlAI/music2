@@ -157,7 +157,7 @@ fn a_track_is_one_partition() {
 fn reader(inputs: &[usize]) -> Exec {
     let inputs: Vec<Input> =
         inputs.iter().map(|&n| Input::Port { src: PortRef { node: n, port: 0 }, src_channels: 1, channels: 1 }).collect();
-    Exec::Kernel(KernelNode { seen: vec![COPY; inputs.len()], inputs, inst: None })
+    Exec::Kernel(KernelNode { seen: vec![COPY; inputs.len()], inputs, inst: None, notes: None })
 }
 
 fn boxed(labels: &[&str]) -> Vec<Box<str>> {
