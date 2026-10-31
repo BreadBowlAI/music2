@@ -37,7 +37,7 @@ import {{ add, xrange }} from "std/math";
     }
 
     fn open(&self) -> Session {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         Session::open(&self.0, packages).unwrap()
     }

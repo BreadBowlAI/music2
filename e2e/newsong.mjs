@@ -25,7 +25,8 @@ const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); o
 const until = async (f, ms = 6000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return true; await new Promise((r) => setTimeout(r, 100)); } return false; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const text = () => page.evaluate(() => document.body.innerText);
-const folders = () => (fs.existsSync(songs) ? fs.readdirSync(songs).filter((n) => !n.startsWith(".")).sort() : []);
+// The songs: not the store of packs music2 keeps beside them (PACK-6), made when it starts (PACK-16).
+const folders = () => (fs.existsSync(songs) ? fs.readdirSync(songs).filter((n) => !n.startsWith(".") && n !== "Packs").sort() : []);
 const manifestName = (dir) => /name = "(.*)"/.exec(fs.readFileSync(`${dir}/music2.toml`, "utf8"))?.[1];
 const graphName = async () => (await api("graph")).json?.name;
 
@@ -36,7 +37,7 @@ check(JSON.stringify(cat.json.templates.map((t) => t.id)) === '["starter","empty
 check(cat.json.templates.every((t) => t.name && t.description), "each with a name and a description");
 check(cat.json.examples.some((e) => e.id === "first-song" && e.name === "First song"), `examples: ${cat.json.examples.map((e) => e.id).join(", ")}`);
 check(cat.json.songs === songs, `the songs folder is under HOME: ${cat.json.songs}`);
-check(!fs.existsSync(songs), "and isn't made until a song is");
+check(folders().length === 0 && fs.existsSync(`${songs}/Packs/@m2/synths`), `and holds no song until one is made, only the store, with the packs music2 ships (${fs.existsSync(songs) ? fs.readdirSync(songs) : "none"})`);
 
 // ---------------------------------------------------------------- the start screen
 await page.goto(sess.url, { waitUntil: "domcontentloaded" });

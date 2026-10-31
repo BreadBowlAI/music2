@@ -23,7 +23,7 @@ impl Fixture {
     }
 
     fn open(&self) -> Session {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         Session::open(&self.0, packages).unwrap()
     }
@@ -46,7 +46,7 @@ impl Drop for Fixture {
 }
 
 const HEAD: &str = "import { song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { lowpass } from \"std/filter\";\n\
-                    import { delay } from \"std/fx\";\n";
+                    import { delay } from \"@m2/effects\";\n";
 
 /// The control of slot `slot` that call `callee` leaves out.
 fn inherited(s: &Session, callee: &str, slot: &str) -> Control {
@@ -318,7 +318,7 @@ fn a_knob_edit_of_an_inserted_argument_is_undone_first() {
 #[test]
 fn connecting_a_control_the_call_leaves_out_writes_the_name_into_it() {
     let original = "import { song } from \"@m2/core\";\nimport { lfo } from \"std/control\";\nimport { osc } from \"std/dsp\";\n\
-                    import { delay } from \"std/fx\";\nexport default song(({ time }) => {\n  const wobble = lfo(time.beats);\n  \
+                    import { delay } from \"@m2/effects\";\nexport default song(({ time }) => {\n  const wobble = lfo(time.beats);\n  \
                     return delay(osc.saw(110));\n});\n";
     let fixture = Fixture::new(original);
     let mut s = fixture.open();
@@ -341,7 +341,7 @@ fn connecting_a_control_the_call_leaves_out_writes_the_name_into_it() {
 fn disconnect_writes_the_spelled_default() {
     for imported in ["song", "ms, song"] {
         let source = format!(
-            "import {{ {imported} }} from \"@m2/core\";\nimport {{ lfo }} from \"std/control\";\nimport {{ hat }} from \"std/instruments\";\n\
+            "import {{ {imported} }} from \"@m2/core\";\nimport {{ lfo }} from \"std/control\";\nimport {{ hat }} from \"@m2/synths\";\n\
              import {{ xrange }} from \"std/math\";\nexport default song(({{ lane, time }}) => {{\n  \
              const d = xrange(lfo(time.beats), 0.02, 0.08);\n  return hat(lane.notes(\"hits\"), {{ decay: d }});\n}});\n"
         );

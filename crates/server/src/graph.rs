@@ -41,6 +41,7 @@ pub mod audition;
 pub mod busy;
 pub mod clips;
 pub(crate) mod compare;
+mod drafts;
 mod events;
 pub(crate) mod exchange;
 mod faults;
@@ -63,6 +64,7 @@ mod projects;
 pub mod record;
 mod rekey;
 pub mod scope;
+mod sections;
 mod songkey;
 pub(crate) mod steps;
 mod take_audio;
@@ -338,6 +340,9 @@ struct Published {
     /// The page's view settings (`view_file::KEYS`), as read at the open and set since: the
     /// state's `local`.
     local: serde_json::Map<String, Value>,
+    /// The code editor's drafts found when the song opened, not yet restored or discarded
+    /// (WRITE-27): what the code editor offers back.
+    drafts: Vec<drafts::Left>,
 }
 
 /// What `begin`, `update`, `cancel` and every read use, behind one short lock. The actor holds it
@@ -472,6 +477,9 @@ struct Inner {
     /// The store of packs songs build with (PACK-6), when the server was given one
     /// ([`Graph::keep_store`]): the one the library installs into. Else this user's.
     store: std::sync::OnceLock<PathBuf>,
+    /// Your Presets folder, when the server was given one ([`Graph::keep_presets`]). Else this
+    /// user's.
+    presets: std::sync::OnceLock<PathBuf>,
     /// Tests: what an export of this project does inside its window, and whether it holds.
     #[cfg(test)]
     export_hooks: Arc<crate::export::Hooks>,
@@ -639,6 +647,7 @@ impl Inner {
             wake: Arc::default(),
             walk_only: AtomicBool::default(),
             store: std::sync::OnceLock::new(),
+            presets: std::sync::OnceLock::new(),
             #[cfg(test)]
             export_hooks: Arc::default(),
             layout: Mutex::default(),
@@ -781,14 +790,15 @@ impl Inner {
     /// above a dragged knob gives it a new id, and the page finds its drag's knob by its lease
     /// (WRITE-22).
     fn state(&self) -> Option<Value> {
-        let (shown, leases, overlays, local, token) = {
+        let (shown, leases, overlays, local, drafts, token) = {
             let cp = self.control.lock();
             let p = cp.open.as_ref()?;
             let now = Instant::now();
             let token = p.engine.token;
             let leases: Vec<LeaseInfo> =
                 cp.leases.live.iter().filter(|l| l.token == token).filter_map(|l| l.seen_at(p.shown.revision, now)).collect();
-            (p.shown.clone(), leases, p.overlays.state(), Value::Object(p.local.clone()), token)
+            let drafts: Vec<&str> = p.drafts.iter().map(|d| d.file.as_str()).collect();
+            (p.shown.clone(), leases, p.overlays.state(), Value::Object(p.local.clone()), json!(drafts), token)
         };
         let status = self.status();
         let mut state = shown.state.clone();
@@ -803,6 +813,8 @@ impl Inner {
         state["leases"] = json!(leases);
         state["overlays"] = overlays;
         state["local"] = local;
+        // The code files with text left unsaved when the song last closed (WRITE-27).
+        state["drafts"] = drafts;
         state["midi"] = self.midi_state();
         state["record"] = self.record_state();
         state["plugins"] = self.plugins.lock().clone();
@@ -957,6 +969,15 @@ impl Graph {
         Graph::with(Some(Device { player: Player::silent().expect("a silent player"), epoch: 0, resume: 0.0 }))
     }
 
+    /// This graph, given the tests' store of the packs this tree bundles (PACK-16), as every test
+    /// harness gives its server one: a song with music2's packs builds as in the app, and no test
+    /// reads or writes the store under the `HOME` it runs with.
+    #[cfg(test)]
+    pub(crate) fn stored(self) -> Graph {
+        self.keep_store(&m2_song::pack::test_store());
+        self
+    }
+
     /// One whose player is `player`, such as a driven one ([`Player::driven`]) a test or a gate
     /// fills itself.
     #[doc(hidden)]
@@ -1021,6 +1042,17 @@ impl Graph {
     /// is the one a song finds. Once; before it, this user's store.
     pub fn keep_store(&self, store: &Path) {
         let _ = self.inner.store.set(store.to_path_buf());
+    }
+
+    /// Save and load your presets in `dir` from now on (FMT-22): the Presets folder the library
+    /// reads ([`crate::library::Folders::presets`]). Once; before it, this user's.
+    pub fn keep_presets(&self, dir: &Path) {
+        let _ = self.inner.presets.set(dir.to_path_buf());
+    }
+
+    /// Your Presets folder: the one kept, else this user's (`m2_os::dirs::presets`).
+    pub(crate) fn presets_dir(&self) -> Option<PathBuf> {
+        self.inner.presets.get().cloned().or_else(m2_os::dirs::presets)
     }
 
     /// The store changed: a Get installed a pack (REG-15). The open song's lists are made again,
@@ -1641,7 +1673,7 @@ impl Graph {
         self.edit(token, move |s| s.disconnect(revision, &id))
     }
 
-    /// Put one of the packages' effects, named by its ComponentId (`std:delay`), after a call's
+    /// Put one of the packages' effects, named by its ComponentId (`@m2/effects:delay`), after a call's
     /// audio, in code.
     pub fn add_effect(&self, token: u64, revision: u64, call: &str, component: &str) -> Result<Value> {
         let (call, component) = (call.to_string(), component.to_string());
@@ -1709,7 +1741,7 @@ impl Graph {
         })
     }
 
-    /// Add a track playing instrument `component` (`std:synth-pluck`), named `label` (else the
+    /// Add a track playing instrument `component` (`@m2/synths:synth-pluck`), named `label` (else the
     /// instrument's), keyed `key` (else proposed from the label), below track `after` (WRITE-10).
     /// The answer names the track: `module` and `label`.
     pub fn add_track(
@@ -2139,8 +2171,15 @@ impl Graph {
     /// The project's TypeScript files, for the code editor (see [`files::list`]): the accepted
     /// revision's as published, with what the disk says now.
     pub fn files(&self) -> Result<Value> {
-        let shown = self.inner.control.lock().open.as_ref().context("no project is open")?.shown.clone();
-        files::list(&shown.files)
+        let (shown, left) = {
+            let cp = self.inner.control.lock();
+            let p = cp.open.as_ref().context("no project is open")?;
+            (p.shown.clone(), p.drafts.clone())
+        };
+        let mut list = files::list(&shown.files)?;
+        // The drafts the song opened with, offered back (WRITE-27).
+        list["left"] = json!(left);
+        Ok(list)
     }
 
     /// The SDK and package sources the code editor checks imports against.

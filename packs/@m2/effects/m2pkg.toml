@@ -1,0 +1,13 @@
+[package]
+name = "@m2/effects"
+version = "1.0.0"
+license = "MIT OR Apache-2.0"
+description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen"
+authors = ["music2"]
+repository = "https://github.com/BreadBowlAI/music2"
+tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion", "stereo"]
+
+[dependencies]
+# Any @m2/core 1.x: what these components use is older than std 0.7 (below), which comes only with apps that have it all.
+"@m2/core" = "1"
+std = "0.7"

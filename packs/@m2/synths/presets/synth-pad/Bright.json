@@ -1,0 +1,12 @@
+{
+  "m2preset": 1,
+  "name": "Bright",
+  "sound": "@m2/synths:synth-pad",
+  "values": {
+    "attack": 0.3,
+    "cutoff": 6000,
+    "release": 1.2,
+    "spread": 1,
+    "velSens": 0.35
+  }
+}

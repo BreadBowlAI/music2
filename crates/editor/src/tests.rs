@@ -15,7 +15,7 @@ fn carry(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
 }
 
 fn std_packages() -> PackageSet {
-    let mut p = PackageSet::default();
+    let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
     p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     p
 }

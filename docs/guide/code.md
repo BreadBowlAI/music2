@@ -35,8 +35,11 @@ sample_rate = 48000
 
 [dependencies]
 "@m2/core" = "1"
-std = "0.6"
+std = "0.7"
+"@m2/synths" = "1"
 ```
+
+Each package the code imports from is listed: the SDK (`@m2/core`), std (the toolbox) and each pack, such as `@m2/synths`, one of the packs music2 ships ([Packs](packs.md)). `music2.lock` beside it holds the exact version of each pack.
 
 `arrangement.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes, the first at beat 0) and `meter` (a list of `{ "beat", "beats", "unit" }` time signatures; empty is 4/4). A beat is a quarter note.
 
@@ -50,14 +53,14 @@ This is a whole track, the shape of `tracks/hats.ts`:
 
 ```ts
 import { track } from "@m2/core";
-import { hat } from "std/instruments";
+import { hat } from "@m2/synths";
 
 export default track("hats", { name: "Hats" }, ({ lane }) => hat(lane.notes("hits")));
 ```
 
 - `track("hats", { name: "Hats" }, …)` makes a track with the key `hats`, shown as Hats. Without the options, `track("hats", fn)`, it is shown by its key. Its data is filed under the key, so changing the name moves nothing; changing the key leaves its data behind until you move it (the app offers to).
 - `lane.notes("hits")` is a notes lane with the key hits. Its clips are in `data/hats/hits.json`. `lane.notes("hits", { name: "Hits" })` gives it a label too.
-- `hat(…)` is the hi-hat instrument from std. It plays those notes.
+- `hat(…)` is a hi-hat instrument from `@m2/synths`, a pack that comes with music2. It plays those notes. The song lists the pack in `music2.toml` and locks it in `music2.lock` ([Packs](packs.md)).
 
 ## The mix
 
@@ -162,7 +165,7 @@ export const crunch = component(
 );
 ```
 
-- `id` is what the app knows the component by, whatever name a file imports it as. In a package it is `<package>:<id>` (`std:delay`).
+- `id` is what the app knows the component by, whatever name a file imports it as. In a package it is `<package>:<id>` (`std:eq3`, `@m2/effects:delay`).
 - `inputs` are the signals it reads. `port.audio({ sidechain: true })` marks one that only listens, like a compressor's key input.
 - Each control has a unit and a default (`control.db(12)` is 12 dB), written in that unit, like every number in the descriptor. `.range(lo, hi)` is the knob's range (a hint: a number outside it is never changed), `.log()` turns it on a log scale, `.smooth()` glides a change over one block (for a control the sound reads every sample, so a jump would click), and `.optional()` means a call that leaves it out gets no node at all. The body always gets a signal for a control, whether the call wrote a number, connected a signal or left it out.
 - `settings` are values that shape the graph, such as `setting.int(4)` voices: never knobs.

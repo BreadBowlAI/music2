@@ -97,7 +97,7 @@ await until(async () => (await state()).timeline.end < 156);
 
 // ---------------------------------------------------------------- c: a drum lane (Q30)
 
-const added = await post("/track/add", { session, component: "std:drum-kit" });
+const added = await post("/track/add", { session, component: "@m2/drums:drum-kit" });
 check(added.status === 200, `a Drum kit track is added (${added.status})`);
 await until(async () => (await state()).timeline.tracks.some((t) => t.module === "drum-kit"));
 const s1 = await state();

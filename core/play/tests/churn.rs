@@ -109,6 +109,9 @@ fn random_structural_edits_leak_nothing() {
     let _alone = ALONE.lock().unwrap_or_else(|e| e.into_inner());
     let first = temp("churn-first-song");
     copy(&repo().join("examples/first-song"), &first);
+    // The edits wrap @m2/effects' delay and reverb: the song lists it, as adding one would (PACK-10).
+    let manifest = std::fs::read_to_string(first.join("music2.toml")).unwrap() + "\"@m2/effects\" = \"1\"\n";
+    std::fs::write(first.join("music2.toml"), manifest).unwrap();
     let tracks = ["bass", "hats", "keys", "kick"];
     let mut edits: Vec<Edit> = vec![];
     let file = |t: &str| -> &'static str { Box::leak(format!("tracks/{t}.ts").into_boxed_str()) };
@@ -133,7 +136,7 @@ fn random_structural_edits_leak_nothing() {
                 } else {
                     text.replacen("return bass(", &format!("return {fx}(bass("), 1).replacen("drop) });", "drop) }));", 1)
                 };
-                format!("import {{ {import} }} from \"std/fx\";\n{wrapped}")
+                format!("import {{ {import} }} from \"@m2/effects\";\n{wrapped}")
             }),
         ));
         if k % 10 == 9 {

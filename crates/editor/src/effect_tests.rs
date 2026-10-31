@@ -20,7 +20,7 @@ impl Fixture {
     }
 
     fn open(&self) -> Session {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         Session::open(&self.0, packages).unwrap()
     }
@@ -56,13 +56,13 @@ fn adding_wraps_the_call_and_imports_the_effect_and_removing_restores_it_exactly
     let mut s = fixture.open();
     let graph = canonical(&s.accepted().compiled.ir);
 
-    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "std:delay").unwrap();
+    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "@m2/effects:delay").unwrap();
     let delayed = "delay(osc.saw(hz(110)), { time: 0.25, feedback: 0.3, mix: 0.3 })";
     assert_eq!((added.before.as_str(), added.after.as_str()), ("osc.saw(hz(110))", delayed));
     assert_eq!(
         fixture.source(),
         original
-            .replace("from \"std/dsp\";\n", "from \"std/dsp\";\nimport { delay } from \"std/fx\";\n")
+            .replace("from \"std/dsp\";\n", "from \"std/dsp\";\nimport { delay } from \"@m2/effects\";\n")
             .replace("song(() => osc.saw(hz(110)))", &format!("song(() => {delayed})"))
     );
     // Its settings are knobs.
@@ -95,21 +95,21 @@ fn adding_wraps_the_call_and_imports_the_effect_and_removing_restores_it_exactly
 #[test]
 fn an_existing_import_is_joined_and_effects_go_inside_arguments() {
     let original = format!(
-        "{HEAD}import {{ drive }} from \"std/fx\";\nimport {{ add }} from \"std/math\";\nexport default song(() => add(drive(osc.saw(hz(110))), osc.sine(hz(220))));\n"
+        "{HEAD}import {{ eq3 }} from \"std/fx\";\nimport {{ add }} from \"std/math\";\nexport default song(() => add(eq3(osc.saw(hz(110))), osc.sine(hz(220))));\n"
     );
     let fixture = Fixture::new(&original);
     let mut s = fixture.open();
     s.add_effect(rev(&s), &call(&s, "osc.sine"), "std:limit").unwrap();
     assert_eq!(
         fixture.source(),
-        original.replace("{ drive }", "{ drive, limit }").replace("osc.sine(hz(220))", "limit(osc.sine(hz(220)), -1)")
+        original.replace("{ eq3 }", "{ eq3, limit }").replace("osc.sine(hz(220))", "limit(osc.sine(hz(220)), -1)")
     );
 }
 
 #[test]
 fn removing_takes_the_effects_own_options_with_it() {
     let original = format!(
-        "{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.3, mix: 0.5 }}));\n"
+        "{HEAD}import {{ delay }} from \"@m2/effects\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.3, mix: 0.5 }}));\n"
     );
     let fixture = Fixture::new(&original);
     let mut s = fixture.open();
@@ -133,7 +133,7 @@ fn only_calls_of_imported_effects_can_be_removed() {
 #[test]
 fn removing_the_outer_of_two_effects_keeps_the_inner_one_and_its_options() {
     let fixture = Fixture::new(&format!(
-        "{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(delay(osc.saw(hz(110)), {{ mix: 1 }})));\n"
+        "{HEAD}import {{ delay }} from \"@m2/effects\";\nexport default song(() => delay(delay(osc.saw(hz(110)), {{ mix: 1 }})));\n"
     ));
     let mut s = fixture.open();
     let outer = s.accepted().compiled.sites.iter().filter(|x| x.callee == "delay").min_by_key(|x| x.start).unwrap().clone();
@@ -143,7 +143,8 @@ fn removing_the_outer_of_two_effects_keeps_the_inner_one_and_its_options() {
 
 #[test]
 fn the_check_accepts_exactly_the_graph_without_the_effect() {
-    let with = Fixture::new(&format!("{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(osc.saw(hz(110))));\n"));
+    let with =
+        Fixture::new(&format!("{HEAD}import {{ delay }} from \"@m2/effects\";\nexport default song(() => delay(osc.saw(hz(110))));\n"));
     let same = Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n"));
     let other = Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(120)));\n"));
     let s = with.open();
@@ -161,7 +162,7 @@ fn adding_is_refused_where_it_would_not_compile() {
     let fixture = Fixture::new(&original);
     let mut s = fixture.open();
     let hz = call(&s, "hz");
-    assert!(s.add_effect(rev(&s), &hz, "std:delay").is_err());
+    assert!(s.add_effect(rev(&s), &hz, "@m2/effects:delay").is_err());
     assert!(matches!(s.add_effect(rev(&s), &call(&s, "osc.sine"), "std:wobble"), Err(EditError::NotFound(_))));
     assert_eq!(fixture.source(), original);
 }
@@ -177,8 +178,8 @@ fn effects_are_listed_with_their_component_and_category() {
     let found = (lowpass.component.as_str(), lowpass.module.as_str(), lowpass.category.as_str());
     assert_eq!(found, ("std:lowpass", "std/filter", "Filter"));
     assert_eq!(lowpass.label, s.catalog().components["std:lowpass"].label, "named by its descriptor's label");
-    let delay = effects.iter().find(|e| e.component == "std:delay").unwrap();
-    assert_eq!((delay.name.as_str(), delay.module.as_str(), delay.category.as_str()), ("delay", "std/fx", "Delay & Reverb"));
+    let delay = effects.iter().find(|e| e.component == "@m2/effects:delay").unwrap();
+    assert_eq!((delay.name.as_str(), delay.module.as_str(), delay.category.as_str()), ("delay", "@m2/effects", "Delay & Reverb"));
     // Every effect inserts only its own controls, and is nothing but its descriptor says.
     for e in &effects {
         let d = &s.catalog().components[&e.component];
@@ -263,11 +264,11 @@ fn an_effect_goes_into_a_voice_and_comes_out_again() {
     let mut s = fixture.open();
     let graph = canonical(&s.accepted().compiled.ir);
     // The + on a node inside the voice: the effect goes on every voice.
-    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "std:chorus").unwrap();
+    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "@m2/effects:chorus").unwrap();
     assert_eq!(added.after, "chorus(osc.saw(n.pitch), { rate: 0.8, depth: 0.5, mix: 0.5 })");
     assert!(fixture.source().contains("vca(svf.lowpass(chorus(osc.saw(n.pitch), { rate: 0.8, depth: 0.5, mix: 0.5 }), 800)"));
     let view = s.view();
-    let chorus = view.modules[0].nodes.iter().find(|n| n.component.as_deref() == Some("std:chorus") && n.effect.is_some());
+    let chorus = view.modules[0].nodes.iter().find(|n| n.component.as_deref() == Some("@m2/effects:chorus") && n.effect.is_some());
     let chorus = chorus.expect("the effect can be removed");
     s.remove_effect(rev(&s), &chorus.id.clone()).unwrap();
     assert!(fixture.source().contains("vca(svf.lowpass(osc.saw(n.pitch), 800)"));
@@ -279,15 +280,15 @@ fn an_effect_goes_into_a_voice_and_comes_out_again() {
 // knobs are delay's three controls with their declared ranges, and it can be taken out.
 #[test]
 fn an_import_alias_is_the_component() {
-    let original = format!("{HEAD}import {{ delay as echo }} from \"std/fx\";\nexport default song(() => echo(osc.saw(hz(110))));\n");
+    let original = format!("{HEAD}import {{ delay as echo }} from \"@m2/effects\";\nexport default song(() => echo(osc.saw(hz(110))));\n");
     let fixture = Fixture::new(&original);
     let mut s = fixture.open();
     let frames: Vec<Option<&str>> = s.accepted().compiled.ir.modules[0].frames.iter().map(|f| f.component.as_deref()).collect();
-    assert!(frames.contains(&Some("std:delay")), "{frames:?}");
+    assert!(frames.contains(&Some("@m2/effects:delay")), "{frames:?}");
     let view = s.view();
     let echo = view.modules[0].nodes.iter().find(|n| n.label == "echo").expect("the echo call");
-    let label = s.catalog().components["std:delay"].label.clone();
-    assert_eq!((echo.effect.as_deref(), echo.component.as_deref()), (Some(label.as_str()), Some("std:delay")));
+    let label = s.catalog().components["@m2/effects:delay"].label.clone();
+    assert_eq!((echo.effect.as_deref(), echo.component.as_deref()), (Some(label.as_str()), Some("@m2/effects:delay")));
     let knobs: Vec<(&str, bool, Option<[f64; 2]>, bool)> =
         echo.knobs.iter().map(|k| (k.slot.as_deref().unwrap(), k.written, k.range, k.log)).collect();
     assert_eq!(
@@ -326,7 +327,7 @@ impl StdCopy {
     }
 
     fn packages(&self) -> PackageSet {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&self.0).unwrap();
         packages
     }
@@ -338,20 +339,21 @@ impl Drop for StdCopy {
     }
 }
 
-// PKG-9: moving `delay` from std/fx.ts to its own file changes nothing: its ComponentId names the
-// package and the descriptor's id, never the file, so the IR and the view are the same.
+// PKG-9: moving `compress` from std/fx.ts to its own file changes nothing: its ComponentId names
+// the package and the descriptor's id, never the file, so the IR and the view are the same.
 #[test]
 fn moving_a_component_keeps_its_id() {
     let source =
-        format!("{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.5 }}));\n");
+        format!("{HEAD}import {{ compress }} from \"std/fx\";\nexport default song(() => compress(osc.saw(hz(110)), {{ ratio: 4 }}));\n");
     let fixture = Fixture::new(&source);
     let moved = StdCopy::new(|dir| {
         let fx = std::fs::read_to_string(dir.join("src/fx.ts")).unwrap();
-        let start = fx.find("/** Feedback delay.").expect("delay's doc comment");
-        let end = start + fx[start..].find("\n);\n").expect("delay's end") + 4;
+        let start = fx.find("/**\n * Compressor:").expect("compress's doc comment");
+        let end = start + fx[start..].find("\n);\n").expect("compress's end") + 4;
         let imports = "import { component, control, kernel, port, signature, type Audio, type Params, type Value } from \"@m2/core\";\n";
-        std::fs::write(dir.join("src/delay.ts"), format!("{imports}{}", &fx[start..end])).unwrap();
-        std::fs::write(dir.join("src/fx.ts"), format!("{}export {{ delay }} from \"./delay\";\n{}", &fx[..start], &fx[end..])).unwrap();
+        std::fs::write(dir.join("src/compress.ts"), format!("{imports}{}", &fx[start..end])).unwrap();
+        std::fs::write(dir.join("src/fx.ts"), format!("{}export {{ compress }} from \"./compress\";\n{}", &fx[..start], &fx[end..]))
+            .unwrap();
     });
     let here = fixture.open();
     // A second session of one project in one process can't take its lock (C10): it only reads.
@@ -360,12 +362,12 @@ fn moving_a_component_keeps_its_id() {
     let components =
         |s: &Session| -> Vec<Option<String>> { s.accepted().compiled.ir.modules[0].frames.iter().map(|f| f.component.clone()).collect() };
     assert_eq!(components(&there), components(&here));
-    assert!(components(&there).contains(&Some("std:delay".into())));
-    assert_eq!(there.accepted().compiled.components["std:delay"].module, "std/delay");
+    assert!(components(&there).contains(&Some("std:compress".into())));
+    assert_eq!(there.accepted().compiled.components["std:compress"].module, "std/compress");
     assert_eq!(there.view(), here.view());
     // The catalog still offers it, from the module that defines it now.
-    let delay = there.effects().into_iter().find(|e| e.component == "std:delay").unwrap();
-    assert_eq!((delay.module.as_str(), delay.name.as_str()), ("std/delay", "delay"));
+    let compress = there.effects().into_iter().find(|e| e.component == "std:compress").unwrap();
+    assert_eq!((compress.module.as_str(), compress.name.as_str()), ("std/compress", "compress"));
 }
 
 // ID-15, D17: a component that native code calls (`Array.from` passing it as the mapping) takes no
@@ -454,11 +456,11 @@ fn made(new: &str) -> (String, Option<String>) {
 #[test]
 fn a_delay_added_inside_a_delay_keeps_the_users_delay() {
     let f = Fixture::new(&format!(
-        "{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.388 }}));\n"
+        "{HEAD}import {{ delay }} from \"@m2/effects\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.388 }}));\n"
     ));
     let mut s = f.open();
     let saw = call(&s, "osc.saw");
-    let pairs = continued(&mut s, "std:delay", |s| drop(s.add_effect(rev(s), &saw, "std:delay").unwrap()));
+    let pairs = continued(&mut s, "std:delay", |s| drop(s.add_effect(rev(s), &saw, "@m2/effects:delay").unwrap()));
     assert!(f.source().contains("delay(delay(osc.saw(hz(110)), { time: 0.25, feedback: 0.3, mix: 0.3 }), { time: 0.388 })"));
     assert_eq!(pairs, [made("std:delay[0.25,0.3,0.3]"), kept("std:delay[0.388,0.3,0.3]", "std:delay[0.388,0.3,0.3]")]);
 }
@@ -468,11 +470,11 @@ fn a_delay_added_inside_a_delay_keeps_the_users_delay() {
 #[test]
 fn a_delay_wrapped_around_a_delay_keeps_the_wrapped_one() {
     let f = Fixture::new(&format!(
-        "{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.388 }}));\n"
+        "{HEAD}import {{ delay }} from \"@m2/effects\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.388 }}));\n"
     ));
     let mut s = f.open();
     let delay = call(&s, "delay");
-    let pairs = continued(&mut s, "std:delay", |s| drop(s.add_effect(rev(s), &delay, "std:delay").unwrap()));
+    let pairs = continued(&mut s, "std:delay", |s| drop(s.add_effect(rev(s), &delay, "@m2/effects:delay").unwrap()));
     assert!(f.source().contains("delay(delay(osc.saw(hz(110)), { time: 0.388 }), { time: 0.25, feedback: 0.3, mix: 0.3 })"));
     assert_eq!(pairs, [made("std:delay[0.25,0.3,0.3]"), kept("std:delay[0.388,0.3,0.3]", "std:delay[0.388,0.3,0.3]")]);
 }
@@ -482,7 +484,7 @@ fn a_delay_wrapped_around_a_delay_keeps_the_wrapped_one() {
 #[test]
 fn removing_either_of_two_delays_keeps_the_other() {
     let source = format!(
-        "{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(delay(osc.saw(hz(110)), {{ time: 0.25 }}), {{ time: 0.388 }}));\n"
+        "{HEAD}import {{ delay }} from \"@m2/effects\";\nexport default song(() => delay(delay(osc.saw(hz(110)), {{ time: 0.25 }}), {{ time: 0.388 }}));\n"
     );
     for (which, stays) in [(1, "std:delay[0.388,0.3,0.3]"), (0, "std:delay[0.25,0.3,0.3]")] {
         let f = Fixture::new(&source);
@@ -518,7 +520,7 @@ fn the_starters_add_reverb_keeps_the_hooks_reverb() {
     let f = crate::testing::fixture("templates/starter");
     let mut s = f.open();
     let widen = calls_in(&s, "tracks/hook.ts", "widen")[0].clone();
-    let pairs = continued(&mut s, "std:reverb", |s| drop(s.add_effect(rev(s), &widen, "std:reverb").unwrap()));
+    let pairs = continued(&mut s, "std:reverb", |s| drop(s.add_effect(rev(s), &widen, "@m2/effects:reverb").unwrap()));
     assert!(
         f.read("tracks/hook.ts")
             .contains("reverb(reverb(widen(echoes, { width: 1.3 }), { size: 0.6, damping: 0.5, mix: 0.25 }), { size: 0.6, mix: 0.2 })")
@@ -526,7 +528,7 @@ fn the_starters_add_reverb_keeps_the_hooks_reverb() {
     let hook = [made("std:reverb[0.6,0.5,0.25]"), kept("std:reverb[0.6,0.5,0.2]", "std:reverb[0.6,0.5,0.2]")];
     assert!(pairs.iter().filter(|p| p.1.is_none()).count() == 1 && hook.iter().all(|p| pairs.contains(p)), "{pairs:?}");
     let widen = calls_in(&s, "tracks/chords.ts", "widen")[0].clone();
-    let pairs = continued(&mut s, "std:chorus", |s| drop(s.add_effect(rev(s), &widen, "std:chorus").unwrap()));
+    let pairs = continued(&mut s, "std:chorus", |s| drop(s.add_effect(rev(s), &widen, "@m2/effects:chorus").unwrap()));
     assert_eq!(pairs, [kept("std:chorus[0.6,0.4,0.4]", "std:chorus[0.6,0.4,0.4]"), made("std:chorus[0.8,0.5,0.5]")]);
 }
 
@@ -572,7 +574,7 @@ fn played(rev: &m2_session::Revision, packages: &PackageSet, frames: usize, next
 #[test]
 fn a_delay_added_inside_a_ringing_delay_changes_no_bit_of_its_echoes() {
     let f = Fixture::new(
-        "import { poly, song, track } from \"@m2/core\";\nimport { osc, vca } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+        "import { poly, song, track } from \"@m2/core\";\nimport { osc, vca } from \"std/dsp\";\nimport { delay } from \"@m2/effects\";\n\
          const t = track(\"t\", ({ lane }) => delay(poly(lane.notes(\"n\"), (n) => vca(osc.sine(n.pitch), n.gate)), { time: 0.388, feedback: 0.5 }));\n\
          export default song(() => t.out);\n",
     );
@@ -584,7 +586,7 @@ fn a_delay_added_inside_a_ringing_delay_changes_no_bit_of_its_echoes() {
     let mut s = f.open();
     let before = s.accepted_arc();
     let poly = call(&s, "poly");
-    s.add_effect(rev(&s), &poly, "std:delay").unwrap();
+    s.add_effect(rev(&s), &poly, "@m2/effects:delay").unwrap();
     let after = s.accepted_arc();
     let (at, frames) = (33_600, 48_000 * 2);
     let alone = played(&before, &s.packages, frames, None);
@@ -600,7 +602,7 @@ fn a_delay_added_inside_a_ringing_delay_changes_no_bit_of_its_echoes() {
 /// The song with `body` as its function's result, the saw and std's effects imported.
 fn fx_song(body: &str) -> String {
     format!(
-        "{HEAD}import {{ delay, reverb }} from \"std/fx\";\nimport {{ lowpass }} from \"std/filter\";\nimport {{ master, mixer }} from \"std/mix\";\n\
+        "{HEAD}import {{ delay, reverb }} from \"@m2/effects\";\nimport {{ lowpass }} from \"std/filter\";\nimport {{ master, mixer }} from \"std/mix\";\n\
          export default song(() => {body});\n"
     )
 }
@@ -970,14 +972,11 @@ fn a_duck_in_a_track_file_is_refused_in_words() {
     let bass = f.read("tracks/bass.ts");
     f.write(
         "tracks/bass.ts",
-        bass.replace(
-            "import { bass } from \"std/instruments\";",
-            "import { bass } from \"std/instruments\";\nimport { duck } from \"std/fx\";",
-        )
-        .replace(
-            "({ lane }) => bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 })",
-            "({ lane }) => duck(bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 }), lane.mask(\"pump\"))",
-        ),
+        bass.replace("import { bass } from \"@m2/synths\";", "import { bass } from \"@m2/synths\";\nimport { duck } from \"std/fx\";")
+            .replace(
+                "({ lane }) => bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 })",
+                "({ lane }) => duck(bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 }), lane.mask(\"pump\"))",
+            ),
     );
     let mut s = f.open();
     let id = s

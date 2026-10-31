@@ -218,7 +218,7 @@ export default song(() => mixer({ drums: drums.out }));
             (
                 "tracks/drums.ts",
                 r#"import { track } from "@m2/core";
-import { drums } from "std/drums";
+import { drums } from "@m2/drums";
 import { mixer } from "std/mix";
 
 export default track("drums", ({ lane }) =>
@@ -238,12 +238,13 @@ export default track("drums", ({ lane }) =>
     )
 }
 
-/// A chord held for 3 seconds at 120 bpm, on std's pad, through `effect`, a call of one of
-/// std/fx's effects on `x`: one song per effect, so each is judged on its own.
+/// A chord held for 3 seconds at 120 bpm, on @m2/synths' pad, through `effect`, a call of one of
+/// @m2/effects' effects on `x` (std/fx's before std 0.6): one song per effect, so each is judged on
+/// its own.
 fn held(name: &str, effect: &str) -> Song {
     let chord: Vec<Value> = [48, 55, 60, 64, 67].iter().map(|p| json!({"pitch": p, "start": 0, "length": 6})).collect();
     let track = format!(
-        "import {{ track }} from \"@m2/core\";\nimport {{ pad }} from \"std/instruments\";\nimport {{ {name} }} from \"std/fx\";\n\n\
+        "import {{ track }} from \"@m2/core\";\nimport {{ pad }} from \"@m2/synths\";\nimport {{ {name} }} from \"@m2/effects\";\n\n\
          export default track(\"held\", ({{ lane }}) => {{\n  const x = pad(lane.notes(\"notes\"));\n  return {effect};\n}});\n"
     );
     project(

@@ -63,8 +63,10 @@ const catalog = (await api("graph")).effects;
 const by = Object.fromEntries(catalog.map((e) => [e.name, e]));
 check(
   // Since step 5 by their descriptors: a ComponentId, and what adding one writes (`insert`).
-  ["reverb", "chorus", "phaser", "tremolo", "compress", "eq3", "bitcrush", "widen"].every((n) => by[n]?.module === "std/fx" && by[n].component === `std:${n}` && by[n].insert),
-  "the std package offers the eight new effects, each with starting settings",
+  // Since std 0.6 the effects that colour a sound are @m2/effects', a pack music2 ships (PACK-15); the ones mixing needs stay std's (PKG-17).
+  ["reverb", "chorus", "phaser", "tremolo", "bitcrush", "widen"].every((n) => by[n]?.module === "@m2/effects" && by[n].component === `@m2/effects:${n}` && by[n].insert) &&
+    ["compress", "eq3"].every((n) => by[n]?.module === "std/fx" && by[n].component === `std:${n}` && by[n].insert),
+  "@m2/effects and std offer the eight effects, each with starting settings",
 );
 check(
   by.reverb.category === "Delay & Reverb" && by.compress.category === "Dynamics" && by.chorus.category === "Modulation" && by.eq3.category === "EQ" && by.bitcrush.category === "Distortion" && by.widen.category === "Utility",
@@ -86,7 +88,7 @@ const reverbArgs = "{ size: 0.6, damping: 0.5, mix: 0.25 }";
 check(await add("pluck", "reverb", "reverb"), "Enter adds a reverb node");
 const reverbed = `reverb(${pluck}, ${reverbArgs})`;
 check(await until(async () => read().includes(`({ lane }) => ${reverbed}`)), `keys.ts wraps the pluck: ${reverbed}`);
-check(read().includes('import { reverb } from "std/fx";'), "and imports reverb from std/fx");
+check(read().includes('import { reverb } from "@m2/effects";'), "and imports reverb from @m2/effects");
 const r = await knobs("reverb");
 check(r.size?.value === "0.6" && r.damping?.value === "0.5" && r.mix?.value === "0.25" && Object.values(r).every((k) => k.editable), `its settings are live knobs (${JSON.stringify(r)})`);
 
@@ -107,10 +109,12 @@ const chorusArgs = "{ rate: 0.8, depth: 0.5, mix: 0.5 }";
 check(await add("compress", "chorus", "chorus"), "a chorus goes after the compressor");
 const chained = `reverb(chorus(compress(${pluck}, ${compArgs}), ${chorusArgs}), ${reverbArgs})`;
 check(await until(async () => read().includes(`({ lane }) => ${chained}`)), `the chain reads pluck → compress → chorus → reverb: ${chained}`);
-const imports = read().split("\n").filter((l) => l.includes('from "std/fx"'));
-check(imports.length >= 1 && ["reverb", "compress", "chorus"].every((n) => imports.some((l) => new RegExp(`\\b${n}\\b`).test(l))), `all three are imported from std/fx (${imports.join(" / ")})`);
-const without = read().split("\n").filter((l) => !l.includes('from "std/fx"')).join("\n");
-check(without === original.split("\n").filter((l) => !l.includes('from "std/fx"')).join("\n").replace(`({ lane }) => ${pluck}`, `({ lane }) => ${chained}`), "nothing else in keys.ts changed");
+const fxImport = (l) => l.includes('from "std/fx"') || l.includes('from "@m2/effects"');
+const imports = read().split("\n").filter(fxImport);
+const from = (n, m) => imports.some((l) => l.includes(`from "${m}"`) && new RegExp(`\\b${n}\\b`).test(l));
+check(from("reverb", "@m2/effects") && from("chorus", "@m2/effects") && from("compress", "std/fx"), `reverb and chorus are imported from @m2/effects, compress from std/fx (${imports.join(" / ")})`);
+const without = read().split("\n").filter((l) => !fxImport(l)).join("\n");
+check(without === original.split("\n").filter((l) => !fxImport(l)).join("\n").replace(`({ lane }) => ${pluck}`, `({ lane }) => ${chained}`), "nothing else in keys.ts changed");
 const ch = await knobs("chorus");
 check(ch.rate?.shown === "0.8 Hz" && ch.depth?.value === "0.5" && ch.mix?.value === "0.5", `the chorus's rate, depth and mix are knobs (${Object.entries(ch).map(([k, v]) => `${k} ${v.shown}`).join(", ")})`);
 const keys = await keysModule();

@@ -13,7 +13,7 @@ export interface PresetName {
 
 /** A sound card's presets, each group by name. */
 export interface PresetList {
-  /** What they are for: the ComponentId (`std:synth-pluck`), or a plugin's id (`clap:…`). */
+  /** What they are for: the ComponentId (`@m2/synths:synth-pluck`), or a plugin's id (`clap:…`). */
   sound: string;
   /** What the app calls the sound: "Synth pluck", or the plugin's name. */
   label: string;

@@ -111,7 +111,7 @@ impl Module {
 pub struct Frame {
     /// The call.
     pub site: u32,
-    /// The ComponentId: the package and the descriptor's `id` (`std:delay`), or a project
+    /// The ComponentId: the package and the descriptor's `id` (`@m2/effects:delay`), or a project
     /// component's bare id (PKG-9). Absent for a `key()` frame and for a component declared
     /// the old way, `component({ controls })`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

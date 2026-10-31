@@ -149,6 +149,24 @@ export function next(graph: GraphState, redo: boolean): StepName | null {
   return named;
 }
 
+/**
+ * Why Undo (or Redo) can go back no further, said where it is when it has nothing to take back and
+ * something cut it off as the song opened (WRITE-24): a change made outside music2, or an undo
+ * history that couldn't be read. Null otherwise.
+ */
+export function ended(graph: GraphState, redo: boolean): string | null {
+  if (redo ? graph.redo_name : (graph.undo_name || graph.undo_stuck)) return null;
+  const what = redo ? "Redo" : "Undo";
+  switch (redo ? graph.redo_end : graph.undo_end) {
+    case "outside":
+      return `${what} isn't possible past the change made outside music2`;
+    case "unread":
+      return `${what} isn't possible past this point: the undo history kept with the song couldn't be read`;
+    default:
+      return null;
+  }
+}
+
 /** What an Undo (or Redo) took back, as its answer names it: `name` and `structural`. */
 export function tookBack(answer: object): Step | null {
   const a = answer as { name?: string | null; structural?: boolean };

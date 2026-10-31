@@ -188,11 +188,21 @@ fn number(x: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// This computer's store of packs (PACK-6), under `$HOME` (PLAT-7), with the packs music2 ships
+/// installed in it (PACK-16): the first time `m2` opens it in a run, quietly unless one can't be.
+/// None without a home folder.
+fn packs_store() -> Option<m2_song::pack::Store> {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    let dir = m2_os::dirs::packs()?;
+    INSTALLED.call_once(|| m2_server::resources::install_packs(&dir, true));
+    Some(m2_song::pack::Store::at(dir))
+}
+
 fn packages() -> Result<PackageSet> {
     let mut p = PackageSet::default();
-    // This computer's packs (PACK-6), under `$HOME` (PLAT-7).
-    if let Some(store) = m2_os::dirs::packs() {
-        p = p.with_store(store);
+    // This computer's packs (PACK-6), under `$HOME` (PLAT-7), music2's own among them.
+    if let Some(store) = packs_store() {
+        p = p.with_store(store.dir);
     }
     // Found the way the app finds it, so both load the same std.
     p.load(&m2_server::resources::std_dir()).context("loading the std package")?;
@@ -262,10 +272,15 @@ fn locked(dir: &Path, also: &str) -> Result<Session> {
         s.forward_to(Box::new(to));
         return Ok(s);
     }
-    let s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
+    let mut s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
     if let Some(r) = s.access().refusal() {
         bail!("{}{also}", r.message);
     }
+    // With the app closed, its step goes in the song's one history, which the app reads back when
+    // it opens the song: an agent's, by the name it gives (WRITE-23, AGENT-10).
+    let who = app::who();
+    let caller = m2_server::caller::Caller::agent(who.by.as_deref(), who.why.as_deref());
+    s.act_as(caller.source(), caller.why());
     Ok(s)
 }
 
@@ -863,7 +878,7 @@ fn run(args: Vec<String>) -> Result<()> {
         Some("add-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let wanted = arg(2)?;
-            // By ComponentId (`std:synth-pluck`) or by its export (`synth.pluck`, `std/synth.synth.pluck`).
+            // By ComponentId (`@m2/synths:synth-pluck`) or by its export (`synth.pluck`, `@m2/synths.synth.pluck`).
             let list = s.instruments();
             let inst = list
                 .iter()
@@ -1077,7 +1092,7 @@ change that code first",
             let at = s.accepted().number;
             let e = match command {
                 "add-effect" => {
-                    // By its ComponentId (`std:delay`), or by where it is exported (`std/fx.delay`).
+                    // By its ComponentId (`@m2/effects:delay`), or by where it is exported (`@m2/effects.delay`).
                     let effect = arg(3)?;
                     let by_export = || {
                         let (module, name) = effect.rsplit_once('.')?;
@@ -1086,8 +1101,9 @@ change that code first",
                     let component = if effect.contains(':') {
                         effect.clone()
                     } else {
-                        by_export()
-                            .context("name the effect by its id (std:delay) or its export (std/fx.delay); `m2 effects` lists them")?
+                        by_export().context(
+                            "name the effect by its id (@m2/effects:delay) or its export (@m2/effects.delay); `m2 effects` lists them",
+                        )?
                     };
                     s.add_effect(at, &arg(2)?, &component)
                 }
@@ -1230,7 +1246,8 @@ change that code first",
         Some("edit") => text::edit(&args)?,
         Some("write") => text::write(&args)?,
         Some("undo") => {
-            // Undo lives in the open app (AGENT-4): history is in its memory.
+            // Undo lives in the open app (AGENT-4): the one writer of the song's history, kept with
+            // the song (WRITE-23); with it closed, there is nothing to take back from here.
             let dir = PathBuf::from(arg(1)?);
             let Some(holder) = app::holder(&dir) else {
                 bail!("nothing to undo: undo lives in the open app, and music2 doesn't have this song open");
@@ -1258,10 +1275,10 @@ change that code first",
 /// from the library; list and remove what is installed; lock a song's.
 fn pack(args: &[String]) -> Result<()> {
     use m2_editor::packs;
-    use m2_song::pack::{PackName, Store};
+    use m2_song::pack::PackName;
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument: {}", usage_of("pack")));
     let std = m2_server::resources::std_dir();
-    let store = || Store::here().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"));
+    let store = || packs_store().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"));
     let failed = |problems: Vec<String>| {
         for p in &problems {
             eprintln!("problem: {p}");
@@ -1323,7 +1340,7 @@ fn pack(args: &[String]) -> Result<()> {
         }
         "install" => {
             let dir = PathBuf::from(arg(2)?);
-            match packs::install(&dir, &store()?, &std).map_err(failed)? {
+            match packs::install_from_folder(&dir, &store()?, &std).map_err(failed)? {
                 packs::Install::Installed { name, version, dir, hash } => {
                     println!("installed {name} {version} in {} ({hash})", dir.display())
                 }

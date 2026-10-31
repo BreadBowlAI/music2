@@ -18,12 +18,13 @@ struct Temp(PathBuf);
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
 fn m2(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", std::env::temp_dir().join("m2-tests-no-app")).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", m2_song::pack::test_home()).args(args).output().unwrap()
 }
 
 /// A mono 16-bit WAV of `seconds` at 48 kHz.

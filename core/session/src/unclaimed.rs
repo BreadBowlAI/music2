@@ -657,7 +657,7 @@ mod tests {
 
     /// `data.unclaimed` for the project in `dir`, as a session that has seen `seen` gives it.
     fn seeing(dir: &Path, seen: &Seen) -> Vec<Diagnostic> {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         let project = Project::open(dir).unwrap();
         let ir = crate::compile(&project, &mut packages).unwrap_or_else(|d| panic!("{d:?}")).ir.clone();
@@ -675,7 +675,7 @@ mod tests {
 
     fn song(kick: &str, lanes: &str) -> String {
         format!(
-            "import {{ song, track }} from \"@m2/core\";\nimport {{ kick }} from \"std/instruments\";\n\
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ kick }} from \"@m2/synths\";\n\
              const k = track(\"{kick}\", ({{ lane }}) => {{ {lanes} return kick(lane.notes(\"hits\")); }});\n\
              export default song(() => k.out);\n"
         )
@@ -696,7 +696,7 @@ mod tests {
             .collect();
         let outs: Vec<String> = (0..names.len()).map(|i| format!("t{i}.out")).collect();
         format!(
-            "import {{ song, track }} from \"@m2/core\";\nimport {{ kick }} from \"std/instruments\";\n\
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ kick }} from \"@m2/synths\";\n\
              import {{ sum }} from \"std/math\";\n{}export default song(() => sum({}));\n",
             made.concat(),
             outs.join(", ")

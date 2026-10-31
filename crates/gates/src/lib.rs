@@ -146,7 +146,7 @@ pub fn fixture(rel: &str) -> PathBuf {
 }
 
 pub fn load_std() -> Result<PackageSet> {
-    let mut p = PackageSet::default();
+    let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
     p.load(&std_dir()).with_context(|| format!("loading std from {}", std_dir().display()))?;
     Ok(p)
 }

@@ -1,0 +1,10 @@
+{
+  "m2preset": 1,
+  "name": "Slapback",
+  "sound": "@m2/effects:delay",
+  "values": {
+    "feedback": 0.1,
+    "mix": 0.25,
+    "time": 0.09
+  }
+}

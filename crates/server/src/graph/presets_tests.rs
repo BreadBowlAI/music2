@@ -1,7 +1,8 @@
 //! A plugin's presets (HOST-8, FMT-22, gaps #26): saved from its live instance, loaded as one Undo
 //! step that reaches the instance that plays, and its own loaded on an instance made for it. The
 //! probe runs in this process, so its records can be read; the test is the device's thread. Your
-//! Presets folder is the scratch HOME's: each test names its presets apart.
+//! Presets folder is the tests' own, which the graph is given ([`Graph::keep_presets`]), never the
+//! one under the `HOME` they run with: each test names its presets apart.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -40,7 +41,8 @@ impl Rig {
         std::fs::write(fixture.0.join("data/p/lead.state"), probe::state_with(tag, 1.0, 0.1)).unwrap();
         fixture.put("data/p/lead.state.json", r#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#);
         let (p, driver) = Player::driven(48_000);
-        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p)));
+        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p).stored()));
+        state.graph.keep_presets(&presets_dir());
         state.graph.open(&fixture.0).unwrap();
         state.graph.transport("play").unwrap();
         let mut r = Rig { fixture, state, driver };
@@ -118,7 +120,12 @@ impl Rig {
 
 /// Your presets for the probe.
 fn yours() -> std::path::PathBuf {
-    m2_os::dirs::presets().unwrap().join(presets::folder("clap:m2.probe"))
+    presets_dir().join(presets::folder("clap:m2.probe"))
+}
+
+/// The tests' Presets folder: this process's, in the temp folder.
+fn presets_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("m2-presets-tests-{}", std::process::id()))
 }
 
 fn store(name: &str, sound: &str, gain: f64, state: &[u8]) {
@@ -129,7 +136,7 @@ fn store(name: &str, sound: &str, gain: f64, state: &[u8]) {
         plugin_version: Some("1.0.0".into()),
         state: Some(m2_song::tx::base64(state)),
     };
-    let dir = m2_os::dirs::presets().unwrap().join(presets::folder(sound));
+    let dir = presets_dir().join(presets::folder(sound));
     presets::store(&dir, &p, true).unwrap();
 }
 

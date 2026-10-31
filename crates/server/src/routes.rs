@@ -97,7 +97,7 @@ crate::api::routes! {
         r#"{"session": 7, "revision": 42, "id": "song.ts#5/0"}"#;
     POST "/api/graph/effect/add" => graph_add_effect; writes, agents,
         "Put an effect after a call's sound, by its component id as the state's effects list it",
-        r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "std:delay"}"#;
+        r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "@m2/effects:delay"}"#;
     POST "/api/graph/effect/remove" => graph_remove_effect; writes, agents,
         "Take an effect out, keeping what it was applied to",
         r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1"}"#;
@@ -121,7 +121,7 @@ crate::api::routes! {
         r#"{"session": 7, "revision": 42, "id": "tracks/keys.ts#1/@brightness"}"#;
     POST "/api/graph/track/add" => track_add; writes, agents,
         "Add a track playing an instrument, by its component id as the state's instruments list it",
-        r#"{"session": 7, "component": "std:synth-pluck", "label": "Pluck", "after": "keys"}"#;
+        r#"{"session": 7, "component": "@m2/synths:synth-pluck", "label": "Pluck", "after": "keys"}"#;
     POST "/api/graph/track/duplicate" => track_duplicate; writes, agents,
         "Copy a track: its code, its clips with new ids, its plugin states and its channel",
         r#"{"session": 7, "module": "keys"}"#;
@@ -185,6 +185,12 @@ crate::api::routes! {
     POST "/api/graph/unsaved" => graph_unsaved; reads, musician,
         "Say which files have changes not yet saved in the code editor",
         r#"{"session": 7, "files": ["tracks/keys.ts"]}"#;
+    POST "/api/graph/draft" => graph_draft up to crate::TX_BODY; reads, musician,
+        "Keep a window's text of a code file not yet saved, so a crash doesn't lose it (text null takes it out)",
+        r#"{"session": 7, "client": "the window's id", "file": "tracks/keys.ts", "base": "the text it had", "text": "the text typed so far"}"#;
+    POST "/api/graph/draft/left" => graph_draft_left; reads, musician,
+        "Say that unsaved code the song opened with was restored or discarded, so it isn't offered again",
+        r#"{"session": 7, "id": "5d41402abc4b2a76-9e107d9d372bb682"}"#;
     POST "/api/graph/export" => graph_export; reads, musician,
         "Export the song's audio, which may pause playback (agents render with m2 render)",
         r#"{"path": "/Users/you/Music/Night drive.wav"}"#;
@@ -587,7 +593,7 @@ struct EffectReq {
     session: u64,
     revision: u64,
     call: String,
-    /// The effect's ComponentId (`std:delay`), as the graph state's `effects` list it; or an
+    /// The effect's ComponentId (`@m2/effects:delay`), as the graph state's `effects` list it; or an
     /// installed plugin's id, `clap:<id>`, as `GET /api/plugins` lists it (gaps #32).
     #[serde(default)]
     component: String,
@@ -718,7 +724,7 @@ async fn graph_automate(State(s): S, Json(r): Json<AutomateReq>) -> ApiResult {
 struct TrackAddReq {
     /// The open project. A `revision` sent with it is ignored: the builder plans on the accepted one.
     session: u64,
-    /// The instrument, by ComponentId (`std:synth-pluck`), as the graph state's `instruments` list it;
+    /// The instrument, by ComponentId (`@m2/synths:synth-pluck`), as the graph state's `instruments` list it;
     /// or an installed instrument plugin, `clap:<id>`, as `GET /api/plugins` lists it (gaps #32).
     component: String,
     #[serde(default)]
@@ -1125,7 +1131,14 @@ async fn graph_export(State(s): S, Json(r): Json<ExportReq>) -> ApiResult {
 
 async fn graph_files(State(s): S) -> ApiResult {
     let state = s.clone();
-    Ok(Json(blocking(move || state.graph.files()).await?))
+    let mut files = blocking(move || state.graph.files()).await?;
+    // The text left unsaved is the musician's: an agent reads the song's files, not it (WRITE-27).
+    if crate::caller::now().is_agent()
+        && let Some(o) = files.as_object_mut()
+    {
+        o.remove("left");
+    }
+    Ok(Json(files))
 }
 
 async fn graph_types(State(s): S) -> ApiResult {
@@ -1154,6 +1167,39 @@ struct FileReq {
 struct UnsavedReq {
     session: u64,
     files: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct DraftReq {
+    session: u64,
+    /// The window whose draft it is: each window keeps its own.
+    #[serde(default)]
+    client: String,
+    file: String,
+    /// The file's text the editor was in step with.
+    base: String,
+    /// Null: there is nothing unsaved now.
+    text: Option<String>,
+}
+
+/// The code editor keeps a file's unsaved text in `.music2/drafts/` (WRITE-27), never in the song.
+async fn graph_draft(State(s): S, Json(r): Json<DraftReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.set_draft(r.session, &r.client, &r.file, &r.base, r.text.as_deref())).await?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct DraftLeftReq {
+    session: u64,
+    id: String,
+}
+
+/// A draft the song opened with was restored or discarded (WRITE-27).
+async fn graph_draft_left(State(s): S, Json(r): Json<DraftLeftReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.answer_draft(r.session, &r.id)).await?;
+    Ok(Json(json!({})))
 }
 
 /// The code editor says which files have edits not yet saved, so the app asks before

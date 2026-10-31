@@ -284,7 +284,7 @@ mod tests {
     use crate::Gestures;
 
     const SONG: &str = r#"import { hz, song, track } from "@m2/core";
-import { bass } from "std/instruments";
+import { bass } from "@m2/synths";
 import { mixer } from "std/mix";
 const b = track("bass", { name: "Bass" }, ({ lane }) => {
   const notes = lane.notes("notes", { name: "Notes" });
@@ -332,7 +332,7 @@ export default song(() => mixer({ bass: b.out, vox: v.out }));
     }
 
     fn open(dir: &Path) -> Session {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         Session::open(dir, packages).unwrap_or_else(|d| panic!("{d:?}"))
     }

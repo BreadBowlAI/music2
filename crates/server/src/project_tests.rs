@@ -6,8 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::*;
 use crate::graph::Graph;
 
-const MANIFEST: &str =
-    "[project]\nname = \"Night Drive\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+const MANIFEST: &str = "[project]\nname = \"Night Drive\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
 const SONG: &str = "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n";
 
 /// A temporary folder holding `songs/Night Drive` (with a `.music2/` and a `.git` of its own) and
@@ -41,7 +40,7 @@ impl Songs {
 
     /// A server state with the song open, keeping its recent list here.
     fn open(&self) -> AppState {
-        let state = AppState::new(String::new(), Graph::silent());
+        let state = AppState::new(String::new(), Graph::silent().stored());
         state.keep_recent(self.0.join("recent.json"));
         state.open_song(&self.song()).unwrap();
         state

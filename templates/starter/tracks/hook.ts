@@ -1,6 +1,6 @@
 import { hz, track } from "@m2/core";
-import { pluck } from "std/instruments";
-import { delay, reverb, widen } from "std/fx";
+import { pluck } from "@m2/synths";
+import { delay, reverb, widen } from "@m2/effects";
 
 // The tune: a bright pluck with echoes three 16ths apart (0.388 s at 116 bpm).
 export default track("hook", { name: "Hook" }, ({ lane }) => {

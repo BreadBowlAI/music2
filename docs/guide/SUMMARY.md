@@ -13,6 +13,7 @@
 
 - [What you can do](what-you-can-do.md)
 - [The window](window.md)
+- [Sections: copy a chorus](sections.md)
 - [Audio, recording and MIDI files](audio.md)
 - [New songs, the songs folder and export](songs.md)
 - [Saving and undo](saving.md)

@@ -1,6 +1,6 @@
 import { hz, track } from "@m2/core";
-import { pad } from "std/instruments";
-import { chorus, reverb, widen } from "std/fx";
+import { pad } from "@m2/synths";
+import { chorus, reverb, widen } from "@m2/effects";
 
 // A soft pad, spread wide, thickened by a chorus and placed in a big room.
 export default track("chords", { name: "Chords" }, ({ lane }) => {

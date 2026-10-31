@@ -17,6 +17,7 @@ import {
 } from "../lib/graph";
 import { setClock } from "../lib/clock";
 import { pickedIn, useClipSelection } from "../lib/clips";
+import { useSection } from "../lib/sections";
 import { madeHere, onTheirWay, said, tookBack, type StepName } from "../lib/history";
 import { forget, stepped } from "../lib/notice";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
@@ -98,6 +99,15 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     useShell.getState().resetSelection();
     forget();
     if (graph.has_code === false) useShell.setState({ view: "code", dock: true });
+    // Code typed and not saved when the song last closed: the code editor offers it back (WRITE-27).
+    const left = graph.drafts ?? [];
+    if (left.length)
+      useStore
+        .getState()
+        .toast(left.length === 1 ? `${left[0]} has changes that weren't saved.` : `${left.length} code files have changes that weren't saved.`, {
+          label: "Show code",
+          run: () => useShell.setState({ view: "code", dock: true }),
+        });
   }, []);
 
   // The selection, by module key. A label changed in the code changes nothing here; a key changed
@@ -224,11 +234,13 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
 }
 
 /**
- * Loop the selection (⌘L): a marquee's bars, else the clips picked on the timeline, else the clip
- * the timeline outlines (the selected track's; the other tracks' remembered clips aren't selected),
- * else the bar the playhead is in. It turns looping on.
+ * Loop the selection (⌘L): the bars selected on the ruler, else a marquee's bars, else the clips
+ * picked on the timeline, else the clip the timeline outlines (the selected track's; the other
+ * tracks' remembered clips aren't selected), else the bar the playhead is in. It turns looping on.
  */
 function loopSelection(timeline: TimelineView, beat: number, onLoop: (req: { start: number; end: number }) => void) {
+  const bars = useSection.getState().bars;
+  if (bars) return onLoop({ start: bars[0], end: bars[1] });
   // The timeline's selection: a marquee's bars, or the clips picked; else the clip it outlines.
   const sel = useClipSelection.getState();
   if (sel.range) return onLoop({ start: sel.range[0], end: sel.range[1] });

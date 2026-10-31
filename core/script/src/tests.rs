@@ -13,10 +13,20 @@ fn std_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")
 }
 
+/// The packs music2 ships (PACK-15), each from its folder in the repo.
+fn bundled() -> Vec<(String, PathBuf)> {
+    let packs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
+    ["@m2/drums", "@m2/effects", "@m2/synths"].map(|p| (p.to_string(), packs.join(p))).into()
+}
+
 fn options(files: &[(&str, &str)]) -> Options {
     let mut o = Options::new(code(files), "song.ts");
     o.packages.push(("std".into(), std_dir()));
     o.dependencies.push("std".into());
+    for (name, dir) in bundled() {
+        o.dependencies.push(name.clone());
+        o.packages.push((name, dir));
+    }
     o.time_limit = Duration::from_secs(2);
     o
 }
@@ -113,6 +123,84 @@ fn randomness_and_outside_files_are_refused() {
     let e = error_of(&[("song.ts", "import fs from \"fs\";\nexport default fs;\n")]);
     assert_eq!(e.code, "pkg.undeclared", "{e}");
     assert!(e.message.contains("`fs`") && e.message.contains("[dependencies]"), "{e}");
+}
+
+// PKG-17: a std module that moved to a pack music2 ships is refused in words that name the pack
+// to import from and the line to add, as `pkg.missing`.
+#[test]
+fn a_moved_std_module_names_the_pack_to_use() {
+    for (module, name, pack) in [
+        ("std/instruments", "kick", "@m2/synths"),
+        ("std/synth", "synth", "@m2/synths"),
+        ("std/fm", "fm", "@m2/synths"),
+        ("std/drums", "drums", "@m2/drums"),
+    ] {
+        let song =
+            format!("import {{ song }} from \"@m2/core\";\nimport {{ {name} }} from \"{module}\";\nexport default song(() => {name});\n");
+        let e = error_of(&[("song.ts", &song)]);
+        assert_eq!(e.code, "pkg.missing", "{module}: {e}");
+        assert!(e.message.starts_with(&format!("`{module}` is no longer std's: since std 0.7 its sounds are in the pack {pack}")), "{e}");
+        assert!(
+            e.message.contains(&format!("Import them from \"{pack}\""))
+                && e.message.contains(&format!("\"{pack}\" = \"1\" under [dependencies]")),
+            "{e}"
+        );
+        // In the file that imports it, as every import's error is (the editor finds the line).
+        assert_eq!(e.src.as_deref(), Some("song.ts"), "{e:?}");
+    }
+    // `mono` and `Voice` stayed: std/synth's message says where.
+    let e = error_of(&[("song.ts", "import { mono } from \"std/synth\";\nexport default mono;\n")]);
+    assert!(e.message.contains("(`mono` and `Voice` stay std's, in std/dsp)"), "{e}");
+    // A std module that never was is the build's error, as before.
+    let e = error_of(&[("song.ts", "import { x } from \"std/nope\";\nexport default x;\n")]);
+    assert_eq!(e.code, "code.build", "{e}");
+}
+
+// PKG-17 (review S11): one of std/fx's effects that moved, called through a namespace import
+// (`fx.reverb`), says which pack it is in, as a named import does.
+#[test]
+fn a_moved_std_effect_through_a_namespace_names_the_pack_to_use() {
+    let song = "import { song, kernel } from \"@m2/core\";\nimport * as fx from \"std/fx\";\n\
+                export default song(() => fx.compress(fx.reverb(kernel(\"std:saw\", { freq: 110 }))));\n";
+    let e = error_of(&[("song.ts", song)]);
+    assert_eq!(e.code, "pkg.missing", "{e}");
+    assert!(e.message.starts_with("`reverb` is no longer in std/fx: since std 0.7 it is in the pack @m2/effects"), "{e}");
+    assert_eq!(e.src.as_deref(), Some("song.ts:3:42"), "at the name: {e:?}");
+    let fine = "import { song, kernel } from \"@m2/core\";\nimport * as fx from \"std/fx\";\n\
+                export default song(() => fx.limit(fx.compress(kernel(\"std:saw\", { freq: 110 }))));\n";
+    build_of(&[("song.ts", fine)]).unwrap_or_else(|e| panic!("{e:?}"));
+}
+
+// PKG-17 (review S11): MOVED's effects are exactly those @m2/effects exports, and std/fx exports
+// none of them, so an effect moved later can't be left out of the words.
+#[test]
+fn moved_names_every_effect_of_m2_effects_and_std_fx_none() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = describe(&[("std".into(), root.join("std")), ("@m2/effects".into(), root.join("packs/@m2/effects"))]);
+    assert!(catalog.problems.is_empty(), "{:?}", catalog.problems);
+    let exported = |module: &str| -> std::collections::BTreeSet<String> {
+        catalog.exports.values().flatten().filter(|e| e.module == module).map(|e| e.name.clone()).collect()
+    };
+    let moved: std::collections::BTreeSet<String> =
+        MOVED.iter().find(|(m, ..)| *m == "fx").unwrap().1.iter().map(|n| n.to_string()).collect();
+    assert_eq!(moved, exported("@m2/effects"), "MOVED's fx names and @m2/effects' exports");
+    assert!(exported("std/fx").is_disjoint(&moved), "std/fx keeps {:?}", exported("std/fx"));
+    assert!(!exported("std/fx").is_empty());
+}
+
+// PKG-17: one of std/fx's effects that moved to @m2/effects says so; one that stayed is std's.
+#[test]
+fn a_moved_std_effect_names_the_pack_to_use() {
+    let song = "import { song, kernel } from \"@m2/core\";\nimport { compress, reverb } from \"std/fx\";\n\
+                export default song(() => compress(reverb(kernel(\"std:saw\", { freq: 110 }))));\n";
+    let e = error_of(&[("song.ts", song)]);
+    assert_eq!(e.code, "pkg.missing", "{e}");
+    assert!(e.message.starts_with("`reverb` is no longer in std/fx: since std 0.7 it is in the pack @m2/effects"), "{e}");
+    assert!(e.message.contains("Import it from \"@m2/effects\"") && e.message.contains("\"@m2/effects\" = \"1\""), "{e}");
+    assert_eq!(e.src.as_deref(), Some("song.ts:2:20"), "at the name: {e:?}");
+    let fine = "import { song, kernel } from \"@m2/core\";\nimport { compress, limit } from \"std/fx\";\n\
+                export default song(() => limit(compress(kernel(\"std:saw\", { freq: 110 }))));\n";
+    build_of(&[("song.ts", fine)]).unwrap_or_else(|e| panic!("{e:?}"));
 }
 
 #[test]
@@ -627,7 +715,7 @@ fn a_label_change_changes_only_the_label() {
     let with = |name: &str| {
         let t = format!(
             r#"import {{ track }} from "@m2/core";
-import {{ kick }} from "std/instruments";
+import {{ kick }} from "@m2/synths";
 export default track("kick", {{ name: "{name}" }}, ({{ lane }}) => kick(lane.notes("hits", {{ name: "{name} hits" }})));
 "#
         );
@@ -1914,6 +2002,33 @@ export const osc = {
 // with where each is exported (its defining module first). A module that throws, or one id at
 // two places, is `pkg.invalid` naming the files; those components are left out, and the rest is
 // listed. Describing never fails.
+// PKG-7, PACK-12: `editor.unlisted: true` says on purpose that code plays a component and no list
+// offers it: the descriptor carries it, a component that says it has no category, and it is
+// `true` or left out (SDK 1.8.0).
+#[test]
+fn editor_unlisted_says_code_plays_it() {
+    let one = |editor: &str| {
+        format!(
+            "import {{ component, port, type Events }} from \"@m2/core\";\nexport const v = component({{ id: \"v\", inputs: {{ notes: port.notes() }}, output: port.audio(), editor: {editor} }}, (n: Events) => n as any);\n"
+        )
+    };
+    let fine = TempPackage::new("unlisted", &[("index.ts", &one("{ unlisted: true, description: \"A plain voice\" }"))]);
+    let catalog = describe(&[("pkg".into(), fine.0.clone())]);
+    assert!(catalog.problems.is_empty(), "{:?}", catalog.problems);
+    let v = &catalog.components["pkg:v"];
+    assert!(v.editor.unlisted && v.editor.category.is_none(), "{:?}", v.editor);
+    let listed = TempPackage::new("listed", &[("index.ts", &one("{ category: \"Keys\" }"))]);
+    assert!(!describe(&[("pkg".into(), listed.0.clone())]).components["pkg:v"].editor.unlisted, "left out, it is listed");
+    for (editor, said) in [
+        ("{ unlisted: true, category: \"Keys\" }", "an unlisted component (editor.unlisted) has no editor.category"),
+        ("{ unlisted: false }", "editor.unlisted is true, or left out"),
+    ] {
+        let bad = TempPackage::new("unlisted-bad", &[("index.ts", &one(editor))]);
+        let catalog = describe(&[("pkg".into(), bad.0.clone())]);
+        assert!(catalog.problems.iter().any(|d| d.message.contains(said)), "{editor}: {:?}", catalog.problems);
+    }
+}
+
 #[test]
 fn describe_lists_components_and_problems() {
     let delay = |id: &str| {

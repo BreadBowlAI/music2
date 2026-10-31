@@ -1,5 +1,5 @@
 //! The 8b back ends' commands, each a Tx builder of `crates/editor` taking the project's lock
-//! (WRITE-18): mute in song, clip gestures, and Remove automation.
+//! (WRITE-18): mute in song, clip gestures, section gestures, and Remove automation.
 
 use std::path::Path;
 use std::time::Instant;
@@ -10,7 +10,7 @@ use crate::words::{on, places, value};
 
 /// Whether `cmd` is one of these.
 pub fn handles(cmd: &str) -> bool {
-    matches!(cmd, "mute-in-song" | "clips" | "unautomate")
+    matches!(cmd, "mute-in-song" | "clips" | "sections" | "unautomate")
 }
 
 /// Run `cmd`, with the words `words::read` handed on (`args[0]` is `cmd`): its usage took them
@@ -19,6 +19,7 @@ pub fn run(cmd: &str, args: &[String]) -> Result<()> {
     match cmd {
         "mute-in-song" => mute_in_song(args),
         "clips" => clips(args),
+        "sections" => sections(args),
         "unautomate" => unautomate(args),
         _ => unreachable!("handled: {cmd}"),
     }
@@ -115,6 +116,100 @@ fn clips(args: &[String]) -> Result<()> {
         println!("  made {lane}:{id}");
     }
     Ok(())
+}
+
+/// `m2 sections <project> <gesture> …`: one section gesture on every track, one Tx, one undo step
+/// (ARR-9). Bars are counted from 1 (`9-16`, `9`), or named by a marker: from it to the next one,
+/// or to the end of the last bar that plays.
+fn sections(args: &[String]) -> Result<()> {
+    use m2_editor::sections::{Gesture, edit};
+    let [dir, op, words @ ..] = &places(args)[..] else { unreachable!("its usage takes two words at least") };
+    let mut s = super::session(Path::new(dir))?;
+    let arr = s.accepted().project.arrangement.clone();
+    let span = || bars(&s, &words[0]);
+    let to = |name: &str| value(args, name).map(|t| m2_editor::clips::position(&arr, &t).map_err(|e| anyhow!("{name}: {e}"))).transpose();
+    let g = match op.as_str() {
+        "duplicate" => {
+            let (start, end) = span()?;
+            Gesture::Duplicate { start, end, to: to("--to")? }
+        }
+        "move" => {
+            let (start, end) = span()?;
+            Gesture::Move { start, end, to: to("--to")?.ok_or_else(|| anyhow!("say where the bars go: --to 17"))? }
+        }
+        "delete" => {
+            let (start, end) = span()?;
+            Gesture::Delete { start, end }
+        }
+        "insert-bars" => {
+            let (start, end) = span()?;
+            let count = arr.bar_at(end).0 - arr.bar_at(start).0;
+            Gesture::InsertBars { at: start, bars: u32::try_from(count).unwrap_or(u32::MAX) }
+        }
+        "delete-bars" => {
+            let (start, end) = span()?;
+            Gesture::DeleteBars { start, end }
+        }
+        "json" => {
+            let text = match words[0].as_str() {
+                "-" => std::io::read_to_string(std::io::stdin())?,
+                path => std::fs::read_to_string(path)?,
+            };
+            serde_json::from_str(&text).map_err(|e| anyhow!("the gesture doesn't read: {e}"))?
+        }
+        _ => unreachable!("its usage takes only these"),
+    };
+    let t = Instant::now();
+    let done = edit(&mut s, &g).map_err(|e| anyhow!("{e}"))?;
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    let e = &done.edited;
+    match e.before == e.after {
+        true => println!("{}: nothing to write", e.after),
+        false => println!("{}: {} → {} (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision),
+    }
+    for (lane, id) in &done.made {
+        println!("  made {lane}:{id}");
+    }
+    Ok(())
+}
+
+/// The bars `text` names, as beats `[start, end)`: `9-16` (bars 9 to 16), `9` (bar 9), or a
+/// marker's name: from it to the next marker, or to the end of the last bar that plays.
+fn bars(s: &m2_session::Session, text: &str) -> Result<(f64, f64)> {
+    let arr = &s.accepted().project.arrangement;
+    let bar = |w: &str| w.trim().parse::<u64>().ok().filter(|n| *n >= 1);
+    let (first, last) = match text.split_once('-') {
+        Some((a, b)) => (bar(a), bar(b)),
+        None => (bar(text), bar(text)),
+    };
+    if let (Some(first), Some(last)) = (first, last) {
+        if last < first {
+            bail!("`{text}`: the last bar comes before the first; write them in order, such as 9-16");
+        }
+        return Ok((m2_editor::clips::bar_start(arr, first - 1), m2_editor::clips::bar_start(arr, last)));
+    }
+    let marks = m2_editor::markers::on_disk(&s.accepted().project.dir);
+    let Some(i) = marks.iter().position(|m| m.name == text).or_else(|| marks.iter().position(|m| m.name.eq_ignore_ascii_case(text))) else {
+        let names: Vec<&str> = marks.iter().map(|m| m.name.as_str()).collect();
+        bail!(
+            "`{text}` isn't bars or a marker: write bars counted from 1, such as 9-16, or a marker's name{}",
+            if names.is_empty() { " (the song has none)".to_string() } else { format!(" ({})", names.join(", ")) }
+        );
+    };
+    let start = marks[i].beat;
+    let end = match marks.get(i + 1) {
+        Some(next) => next.beat,
+        None => {
+            // The end of the last bar that plays.
+            let last = m2_editor::timeline::timeline(s).end;
+            let (n, into) = arr.bar_at(last);
+            m2_editor::clips::bar_start(arr, if into > 0.0 { n + 1 } else { n })
+        }
+    };
+    if end <= start {
+        bail!("nothing plays after the {} marker, so it marks no bars", marks[i].name);
+    }
+    Ok((start, end))
 }
 
 /// `track/lane`.

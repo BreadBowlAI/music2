@@ -71,6 +71,10 @@ pub fn needs_all(s: &Session, components: &[&str]) -> Result<Needs, EditError> {
             continue;
         }
         let name = PackName::new(package).map_err(EditError::Rejected)?;
+        // Two items of one pack in one Tx (two drum tracks of a MIDI file) need it once.
+        if lines.iter().any(|(n, _)| *n == name) {
+            continue;
+        }
         let listed = manifest.dependencies.get(package);
         // Listed and locked, or taken from a folder: the song has it. A lock entry for a pack the
         // manifest doesn't list is left from before, and is replaced with the line (PACK-10).
@@ -340,9 +344,14 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     {
         out.push(format!("{}: its tags hold a control character{ONE_LINE}", crate::library::samples::SAMPLES_TOML));
     }
-    for d in &ours {
+    // A component no list offers says so on purpose (`unlisted`, PKG-7): a missing category is one forgotten.
+    for d in ours.iter().filter(|d| !d.editor.unlisted) {
         if d.editor.category.is_none() {
-            out.push(format!("{} ({}) has no category: give it `editor: {{ category: \"Keys\" }}` or another", d.id, d.at));
+            out.push(format!(
+                "{} ({}) has no category: give it `editor: {{ category: \"Keys\" }}` or another, or `editor: {{ unlisted: true }}` \
+                 if only code plays it",
+                d.id, d.at
+            ));
         } else if !d.is_instrument() && !d.is_effect() {
             out.push(format!("{} ({}) is neither an instrument (notes in, sound out) nor an effect (sound in, sound out)", d.id, d.at));
         }
@@ -525,182 +534,55 @@ pub fn build(dir: &Path) -> std::io::Result<(Listing, Sha)> {
     Ok((listing, hash))
 }
 
-/// What an install did.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Install {
-    /// Copied into the store, at its folder, with its hash.
-    Installed { name: PackName, version: Version, dir: PathBuf, hash: Sha },
-    /// That version was there with this very hash and its files whole: nothing to do.
-    Already { name: PackName, version: Version, hash: Sha },
-    /// That version was there with this very hash, but its copy no longer matched its listing
-    /// (`why`): the copy was replaced with these files (PACK-6).
-    Repaired { name: PackName, version: Version, why: String },
-}
+pub use m2_song::pack::Install;
 
 /// Check the pack in `dir`, build its listing and copy it into `store`, its files and folders
 /// read-only (`m2 pack install`, PACK-6): refused when it doesn't check, or when its version is
 /// there with another hash (design P5). With the same hash it does nothing when the installed copy
-/// still matches its listing, and replaces the copy when it doesn't. A link is never followed: a
-/// pack holding one doesn't check.
+/// still matches its listing, and replaces the copy when it doesn't (`Store::install`). A link is
+/// never followed: a pack holding one doesn't check.
 pub fn install(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<String>> {
+    install_checked(dir, store, std)
+}
+
+/// `m2 pack install <folder>`: [`install`], but a pack named in music2's own scope (`@m2/…`,
+/// PACK-1) only as a version music2 comes with, those very files (PACK-19): any folder can say
+/// `@m2/`, and the lists would take it for music2's.
+pub fn install_from_folder(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<String>> {
+    if let Ok(m) = pack::PkgManifest::at(dir)
+        && let Some(rest) = m.package.name.as_str().strip_prefix("@m2/")
+    {
+        let hash = Listing::of(dir).map_err(|e| vec![e.to_string()])?.hash();
+        if !pack::own(&m.package.name, &m.package.version, &hash) {
+            return Err(vec![format!(
+                "@m2/ is music2's own scope: {} {} in {} isn't a version music2 comes with. Give your pack a name of your own \
+                 scope in its m2pkg.toml (`@you/{rest}`)",
+                m.package.name,
+                m.package.version,
+                dir.display()
+            )]);
+        }
+    }
+    install_checked(dir, store, std)
+}
+
+fn install_checked(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<String>> {
     let problems = check(dir, std);
     if !problems.is_empty() {
         return Err(problems);
     }
-    let io = |e: std::io::Error| vec![e.to_string()];
-    let m = pack::PkgManifest::at(dir).map_err(|e| vec![e])?;
-    let (name, version) = (m.package.name, m.package.version);
-    let (listing, hash) = build(dir).map_err(io)?;
-    let target = store.version_dir(&name, &version);
-    let parent = target.parent().expect("a version's folder is in its pack's");
-    // The changed copy an install of this version that stopped left aside goes, so no build takes
-    // the version for one being installed again (PACK-6).
-    for (_, old) in store.aside(&name).into_iter().filter(|(v, _)| *v == version) {
-        let _ = remove_tree(&old);
-    }
-    let mut repair = None;
-    if std::fs::symlink_metadata(&target).is_ok() {
-        match store.hash(&name, &version) {
-            Ok(h) if h == hash => match store.check(&name, &version) {
-                Ok(_) => return Ok(Install::Already { name, version, hash }),
-                Err(why) => repair = Some(why),
-            },
-            _ => {
-                return Err(vec![format!(
-                    "{name} {version} is installed already with other files. A version is never changed (P5): give this one a \
-                     new version in m2pkg.toml, or remove the installed one first with `m2 pack remove {name} {version}`"
-                )]);
-            }
-        }
-    }
-    std::fs::create_dir_all(parent).map_err(io)?;
-    let temp = parent.join(format!(".{version}.{}.tmp", std::process::id()));
-    let _ = remove_tree(&temp);
-    let copied = (|| -> std::io::Result<()> {
-        for f in &listing.files {
-            let (from, to) = (dir.join(&f.path), temp.join(&f.path));
-            // Listed with no link, and copied only as a plain file, never through one.
-            if !std::fs::symlink_metadata(&from)?.file_type().is_file() {
-                return Err(std::io::Error::other(format!("{} is no longer a plain file: install it again", f.path)));
-            }
-            std::fs::create_dir_all(to.parent().expect("inside the pack"))?;
-            std::fs::copy(&from, &to)?;
-        }
-        std::fs::write(temp.join(pack::LISTING), listing.text())?;
-        // What is copied must be what was listed.
-        if Listing::of(&temp)? != listing {
-            return Err(std::io::Error::other("the pack's files changed while it was copied: install it again"));
-        }
-        read_only_inside(&temp)?;
-        match repair {
-            Some(_) => {
-                swap(&temp, &target, &parent.join(format!(".{version}.{}.old", std::process::id())), &mut |a, b| std::fs::rename(a, b))?
-            }
-            None => std::fs::rename(&temp, &target)?,
-        }
-        set_read_only(&target, true)
-    })();
-    if let Err(e) = copied {
-        let _ = remove_tree(&temp);
-        return Err(io(e));
-    }
-    Ok(match repair {
-        Some(why) => Install::Repaired { name, version, why },
-        None => Install::Installed { name, version, dir: target, hash },
-    })
-}
-
-/// Put the copy in `temp` in place of the installed copy at `target` (a repair, PACK-6), through
-/// `rename` (`std::fs::rename` but in tests). The changed copy is moved aside to `old` first, so
-/// the version is never half one and half the other, and removed once the new one is in. Should
-/// the new one not go in, the changed one is put back as it was, read-only: a failed repair
-/// leaves the version installed, never missing.
-fn swap(temp: &Path, target: &Path, old: &Path, rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>) -> std::io::Result<()> {
-    // A folder is renamed while it can be written, on every OS, and made read-only after.
-    set_read_only(target, false)?;
-    if let Err(e) = rename(target, old) {
-        let _ = set_read_only(target, true);
-        return Err(e);
-    }
-    if let Err(e) = rename(temp, target) {
-        return match rename(old, target).and_then(|()| set_read_only(target, true)) {
-            Ok(()) => Err(e),
-            Err(back) => {
-                Err(std::io::Error::other(format!("{e}; and the copy before couldn't be put back ({back}): it is at {}", old.display())))
-            }
-        };
-    }
-    remove_tree(old)
-}
-
-/// Make every file and folder in `dir` read-only (PACK-6): its folders last, deepest first, so
-/// nothing can be added to, removed from or renamed in an installed version.
-fn read_only_inside(dir: &Path) -> std::io::Result<()> {
-    let mut folders = vec![];
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d)? {
-            let e = e?;
-            let kind = e.file_type()?;
-            if kind.is_dir() {
-                folders.push(e.path());
-                stack.push(e.path());
-            } else if kind.is_file() {
-                set_read_only(&e.path(), true)?;
-            }
-        }
-    }
-    for d in folders.iter().rev() {
-        set_read_only(d, true)?;
-    }
-    Ok(())
-}
-
-fn set_read_only(path: &Path, on: bool) -> std::io::Result<()> {
-    let mut perm = std::fs::symlink_metadata(path)?.permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
-    perm.set_readonly(on);
-    std::fs::set_permissions(path, perm)
+    build(dir).map_err(|e| vec![e.to_string()])?;
+    store.install(dir).map_err(|e| vec![e])
 }
 
 /// Take version `version` of `name` out of `store` (`m2 pack remove`). A song that locks it then
 /// says `pkg.missing`: the store can't know every song.
 pub fn remove(store: &Store, name: &PackName, version: &Version) -> std::io::Result<()> {
-    let dir = store.version_dir(name, version);
-    if !dir.join(pack::LISTING).is_file() {
-        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name} {version} isn't installed")));
-    }
-    remove_tree(&dir)?;
-    // The pack's folder, and its owner's, go when nothing is left in them.
-    let pack = dir.parent().expect("a version is in its pack's folder");
-    if std::fs::remove_dir(pack).is_ok() {
-        let _ = std::fs::remove_dir(pack.parent().expect("a pack is in its owner's folder"));
-    }
-    Ok(())
-}
-
-/// Remove `dir` and everything in it, read-only files and folders included. A link is removed,
-/// never followed.
-fn remove_tree(dir: &Path) -> std::io::Result<()> {
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        if !std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()) {
-            continue;
-        }
-        let _ = set_read_only(&d, false);
-        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-            match e.file_type() {
-                Ok(t) if t.is_dir() => stack.push(e.path()),
-                Ok(t) if t.is_file() => drop(set_read_only(&e.path(), false)),
-                _ => {}
-            }
-        }
-    }
-    std::fs::remove_dir_all(dir)
+    store.remove(name, version)
 }
 
 /// A new pack in `folder` named `name` (`m2 pack new`): `m2pkg.toml`, `src/index.ts` with one
-/// instrument on std's synth, an empty `presets/`, a README and no licence yet. Refused when the
+/// instrument built from std's typed blocks, an empty `presets/`, a README and no licence yet. Refused when the
 /// folder is there.
 pub fn new_pack(folder: &Path, name: &PackName, std: &Path) -> Result<(), String> {
     if name.is_std() {
@@ -717,15 +599,24 @@ pub fn new_pack(folder: &Path, name: &PackName, std: &Path) -> Result<(), String
          [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}\"\n",
         std_requirement(std)
     );
+    // Built from std's typed blocks, as `@m2/synths`' simple instruments are: TypeScript checks
+    // every call as the author types (design §2.5), which a kernel's inputs by name it can't.
     let index = format!(
-        "import {{ component, control, port, signature, type Audio, type Events, type Params }} from \"@m2/core\";\n\
-         import {{ synth }} from \"std/synth\";\n\n\
+        "import {{ component, control, hz, ms, poly, port, secs, signature, type Audio, type Events, type Params }} from \"@m2/core\";\n\
+         import {{ adsr, osc, svf, vca }} from \"std/dsp\";\n\
+         import {{ scale, xrange }} from \"std/math\";\n\n\
          /** An instrument: notes in, sound out. Its id is {name}:{short}. */\n\
          export const {binding} = component(\n  {{\n    id: \"{short}\",\n    label: \"{label}\",\n    \
          signature: signature<(notes: Events) => Audio>(),\n    inputs: {{ notes: port.notes() }},\n    \
-         controls: {{ brightness: control.hz(2400).range(200, 20000) }},\n    output: port.audio(),\n    \
-         editor: {{ category: \"Keys\", description: \"A pluck, from std's synth\" }},\n  }},\n  \
-         (notes: Events, {{ brightness }}: Params): Audio => synth.pluck(notes, {{ brightness }}),\n);\n"
+         // The filter reads it every sample, so it ramps.\n    \
+         controls: {{ brightness: control.hz(2400).range(200, 20000).log().smooth() }},\n    output: port.audio(),\n    \
+         editor: {{ category: \"Keys\", description: \"A pluck, built from std's blocks\" }},\n  }},\n  \
+         // A voice for each note: a saw through a lowpass that closes as the note fades.\n  \
+         (notes: Events, {{ brightness }}: Params): Audio =>\n    \
+         poly(\n      notes,\n      (n) => {{\n        \
+         const env = adsr(n.gate, {{ attack: ms(2), decay: secs(0.45), sustain: 0, release: secs(0.2) }});\n        \
+         return vca(svf.lowpass(osc.saw(n.pitch), xrange(env, hz(200), brightness), 0.7), scale(env, n.velocity));\n      \
+         }},\n      {{ voices: 12 }},\n    ),\n);\n"
     );
     let readme = format!(
         "# {name}\n\n**In short:** a music2 pack. `m2 pack check .` checks it, and `m2 pack install .` puts it where songs find it.\n\n\

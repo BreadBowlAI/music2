@@ -160,6 +160,8 @@ if [ -e "$OUT" ] && [ ! -e "$OUT/.m2-check" ]; then
   echo "ci/check.sh: $OUT wasn't made by a check, so it is left alone: name another folder in M2_CHECK_OUT"
   exit 2
 fi
+# A pack installed in the last check's scratch HOME is read-only (PACK-6, PACK-16).
+if [ -e "$OUT" ]; then chmod -R u+w "$OUT"; fi
 rm -rf "$OUT" && mkdir -p "$OUT/home" && : > "$OUT/.m2-check" || exit 2
 SCR=$(mktemp -d "${TMPDIR:-/tmp}/m2-check.XXXXXX") || exit 2
 START=$(date +%s)
@@ -344,7 +346,7 @@ stopped() {
   summary
   exit 1
 }
-trap 'closeapp; rm -rf "$SCR"' EXIT
+trap 'closeapp; chmod -R u+w "$SCR" 2> /dev/null; rm -rf "$SCR"' EXIT
 trap stopped INT TERM
 
 echo "music2 check of $SHA on $MACHINE (logs in $OUT)"
@@ -653,14 +655,14 @@ else
   { first "$OUT/test.log" '^error' | sed 's/^/tests: /'; cause "$OUT/test.log"; } >> "$OUT/failed"
 fi
 
-# 5a. PLAT-7: no test wrote in the cache folder of the HOME it ran with: a file there is one a
-#     plain `cargo test` would have written in your own cache (ci/cache-left.sh).
-begin "cache untouched" "seconds"
+# 5a. PLAT-7, PACK-16: no test wrote in the cache folder or the Music folder of the HOME it ran
+#     with: a file there is one a plain `cargo test` would have written in your own (ci/cache-left.sh).
+begin "home untouched" "seconds"
 if quiet cache-left.log ci/cache-left.sh "$OUT/home"; then
-  record "cache untouched" PASS ""
+  record "home untouched" PASS ""
 else
-  record "cache untouched" FAIL "see cache-left.log"
-  sed -n '2,6p' "$OUT/cache-left.log" | sed 's/^/cache untouched: /' | cut -c1-160 >> "$OUT/failed"
+  record "home untouched" FAIL "see cache-left.log"
+  sed -n '1,5p' "$OUT/cache-left.log" | sed 's/^/home untouched: /' | cut -c1-160 >> "$OUT/failed"
 fi
 
 # 5b. Linux: every line of ci/nightly-tests.txt names a test that is there (ci/nightly-list.sh, as

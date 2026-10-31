@@ -24,7 +24,7 @@ fn put(dir: &Path, name: &str, text: &str) {
 /// `m2 <args>`, the probe plugin playable, with no audio device and no MIDI one.
 fn m2(args: &[&str]) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_m2"));
-    c.env("HOME", std::env::temp_dir().join("m2-tests-no-app"));
+    c.env("HOME", m2_song::pack::test_home());
     c.args(args).env("M2_PROBE", "1").env("M2_AUDIO", "none").env("M2_MIDI", "none");
     c.output().unwrap()
 }
@@ -60,7 +60,7 @@ fn m2_set_reads_a_word_as_its_setting_takes_it() {
     put(
         &song,
         "music2.toml",
-        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
     );
     put(&song, "song.ts", SONG);
     let dir = song.to_str().unwrap();

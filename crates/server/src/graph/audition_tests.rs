@@ -6,7 +6,7 @@ use super::super::tests::{Fixture, eventually};
 use super::*;
 
 /// A kick track that plays its `hits` lane, and declares a `spare` lane it never reads.
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                     const k = track('kick', ({ lane }) => { lane.notes('spare'); return kick(lane.notes('hits')); });\n\
                     export default song(() => k.out);\n";
 
@@ -54,7 +54,7 @@ fn a_note_sounds_until_it_is_let_go() {
 // MON-7: a handle struck again on another lane is let go on the first: nothing is left on.
 #[test]
 fn a_handle_struck_again_elsewhere_lets_go_first() {
-    let two = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+    let two = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
                const k = track('kick', ({ lane }) => sum(kick(lane.notes('hits')), kick(lane.notes('more'))));\n\
                export default song(() => k.out);\n";
     let (_f, graph) = opened(two);
@@ -161,7 +161,7 @@ fn an_off_after_an_edit_finds_its_lane() {
     eventually("the note sounds", || live(&graph) == 1);
     fixture.put(
         "song.ts",
-        "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+        "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
          const s = track('snare', ({ lane }) => kick(lane.notes('hits')));\n\
          const k = track('kick', ({ lane }) => { lane.notes('spare'); return kick(lane.notes('hits')); });\n\
          export default song(() => sum(s.out, k.out));\n",
@@ -188,7 +188,7 @@ fn audition_never_waits_for_a_compile() {
     fixture.put("tracks/b.ts", &slow(0));
     fixture.put(
         "song.ts",
-        "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+        "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
          import { b } from './tracks/b';\nconst k = track('kick', ({ lane }) => kick(lane.notes('hits')));\n\
          export default song(() => sum(k.out, b.out));\n",
     );

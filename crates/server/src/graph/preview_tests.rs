@@ -119,7 +119,7 @@ impl Disk for Faulty {
 /// written once (so the next write replaces it): the token and the revision.
 fn kick(fixture: &Fixture, disk: Option<Faulty>) -> (Graph, u64, u64) {
     fixture.write(KICK);
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     if let Some(disk) = disk {
         graph.inspect(move |a| a.disk = Some(Box::new(move || Box::new(disk.clone()))));
     }
