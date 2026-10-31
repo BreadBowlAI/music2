@@ -178,7 +178,8 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
         };
         // From here the session prepares nothing for a song whose plugins play: until `lent` drops.
         let Export { song, dir, render, problems, lent, token, revision } = state.graph.export(Length::Song)?;
-        let render = render.stop_when(state.exports.stop.clone());
+        // Its loudness, measured as it is written (TAP-7).
+        let render = render.stop_when(state.exports.stop.clone()).measuring();
         *state.exports.song.lock() = Some(song.clone());
         let thread_state = state.clone();
         let thread_path = path.clone();

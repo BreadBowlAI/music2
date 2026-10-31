@@ -89,9 +89,10 @@ pub struct AppState {
     /// didn't open. The next page to connect gets them: an agent's socket (`m2 watch`) hears them
     /// live but never takes one (AGENT-6).
     unheard: Arc<Mutex<Unheard>>,
-    /// The latest meters message (8b.8), for every window: only the latest is kept, so a window
-    /// that falls behind skips to it (empty until the first).
-    pub meters: watch::Sender<String>,
+    /// The latest meters (8b.8), for every socket that listens for them (a window's always does,
+    /// an agent's when it asks, TAP-4): only the latest is kept, so one that falls behind skips to
+    /// it (empty until the first). Each window's own scopes ride with them (TAP-8).
+    pub meters: watch::Sender<Arc<Meters>>,
     /// The recent songs list (polish C2), when this server keeps one ([`AppState::keep_recent`]):
     /// the app and the headless server do; tests don't, so none writes the real `~/.music2`.
     recent: OnceLock<recent::Recent>,
@@ -131,7 +132,7 @@ impl AppState {
             graph,
             exports: Default::default(),
             unheard: Arc::default(),
-            meters: watch::channel(String::new()).0,
+            meters: watch::channel(Arc::default()).0,
             recent: OnceLock::new(),
             settings: OnceLock::new(),
             midi: OnceLock::new(),
@@ -430,6 +431,14 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
         .expect("spawn the server's notices");
 }
 
+/// The meters as the sockets get them (TAP-4, TAP-8): what every listener gets, and each window's
+/// own scopes, by its client id; both as the JSON text sent.
+#[derive(Debug, Default)]
+pub struct Meters {
+    pub all: String,
+    pub scopes: Vec<(String, String)>,
+}
+
 /// How often the meters are read and sent: about 30 times a second.
 const METERS_EVERY: Duration = Duration::from_millis(33);
 
@@ -447,7 +456,8 @@ fn spawn_meters(state: &Arc<AppState>) {
                 let Some(state) = weak.upgrade() else { return };
                 state.graph.watch_meters(state.meters.receiver_count() > 0);
                 if let Some(m) = state.graph.meters() {
-                    state.meters.send_replace(m.to_string());
+                    let scopes = m.scopes.into_iter().map(|(c, v)| (c, v.to_string())).collect();
+                    state.meters.send_replace(Arc::new(Meters { all: m.all.to_string(), scopes }));
                 }
             }
         })

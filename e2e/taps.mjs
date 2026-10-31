@@ -1,7 +1,8 @@
 // Taps in the app (TAP-5 to TAP-8, gaps #20): a fader dragged down while the song plays moves its
 // strip's meter down by what it moved, as the server's channel meter does; Master's strip says the
-// song's loudness in LUFS, as the meters' message does; an export's loudness shows in the Export
-// dialog; and a scope's frames arrive over the socket while it is asked for, and stop when it stops.
+// song's loudness in LUFS, which the Mix view asks for while it shows, as the meters' message does;
+// an export's loudness shows in the Export dialog; and a scope's frames arrive over the socket of
+// the window that asked while it asks, and stop when it stops.
 //
 //   node e2e/taps.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
@@ -9,14 +10,21 @@ import { ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
 const { page, errors, api, state, key, box } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
-// The page's meters messages, as they arrive (CDP).
+// The page's meters and scopes messages, as they arrive (CDP), and the window's client id, from
+// its socket's address.
 const heard = [];
+const scoped = [];
+let client = null;
 const cdp = await page.createCDPSession();
 await cdp.send("Network.enable");
+cdp.on("Network.webSocketCreated", ({ url }) => {
+  client = new URL(url).searchParams.get("client") ?? client;
+});
 cdp.on("Network.webSocketFrameReceived", ({ response }) => {
   try {
     const m = JSON.parse(response.payloadData);
     if (m.t === "meters") heard.push({ at: Date.now(), m });
+    if (m.t === "scopes") scoped.push({ at: Date.now(), m });
   } catch {}
 });
 await page.reload({ waitUntil: "domcontentloaded" });
@@ -100,21 +108,30 @@ await page.screenshot({ path: `${ROOT}/taps-playing.png` });
 const view = (await state()).view;
 const bass = view.modules.find((m) => m.key === "bass")?.nodes.find((n) => n.label === "bass" && n.audio);
 check(!!bass, `the Bass track's instrument is a box in the view (${bass?.id})`);
-const asked = await post("/scope", { session, client: "taps-suite", module: "bass", node: bass?.id, on: true });
-check(asked.status === 200 && asked.body.scope?.channels >= 1, `asked for, its scope answers with its channels (${JSON.stringify(asked.body)})`);
-let from = heard.length;
+const asked = await post("/scope", { session, client, module: "bass", node: bass?.id, on: true });
+check(asked.status === 200 && asked.body.scope?.channels >= 1, `asked for by this window, its scope answers with its channels (${JSON.stringify(asked.body).slice(0, 120)})`);
+let from = scoped.length;
+let met = heard.length;
 await sleep(1500);
-const shown = heard.slice(from).filter((h) => h.m.scopes?.some((s) => s.module === "bass" && s.node === bass?.id));
+const shown = scoped.slice(from).filter((h) => h.m.scopes?.some((s) => s.module === "bass" && s.node === bass?.id));
 const frames = shown.at(-1)?.m.scopes.find((s) => s.node === bass?.id)?.frames;
-check(shown.length >= 10, `its frames arrive with the meters while it is asked for (${shown.length} messages in 1.5 s)`);
+check(shown.length >= 10 && heard.slice(met).every((h) => !h.m.scopes), `its frames come to this window's socket alone, beside the meters (${shown.length} messages in 1.5 s)`);
 check(frames?.length === asked.body.scope?.channels && frames.every((c) => c.length === 1024), `the last 1,024 frames, a list per channel (${frames?.map((c) => c.length)})`);
-const refused = await post("/scope", { session, client: "taps-suite", module: "bass", node: view.modules.find((m) => m.key === "bass")?.nodes.find((n) => n.label === "lfo")?.id, on: true });
+const refused = await post("/scope", { session, client, module: "bass", node: view.modules.find((m) => m.key === "bass")?.nodes.find((n) => n.label === "lfo")?.id, on: true });
 check(refused.status >= 400 && /a scope shows sound/.test(refused.body.error ?? ""), `a box that isn't sound is refused in words: "${refused.body.error}"`);
-await post("/scope", { session, client: "taps-suite", module: "bass", node: bass?.id, on: false });
+await post("/scope", { session, client, module: "bass", node: bass?.id, on: false });
 await sleep(300);
-from = heard.length;
+from = scoped.length;
+met = heard.length;
 await sleep(800);
-check(heard.length - from > 5 && heard.slice(from).every((h) => !h.m.scopes), "stopped, its frames stop; the meters go on");
+check(heard.length - met > 5 && scoped.length === from, "stopped, its frames stop; the meters go on");
+
+// The loudness is measured only while the Mix view shows (TAP-4, TAP-6).
+await key("Alt+1");
+await sleep(600);
+met = heard.length;
+await sleep(600);
+check(heard.length - met > 5 && heard.slice(met).every((h) => !h.m.loudness), "the Mix view gone, the meters carry no loudness: nothing measures it");
 
 // ---------------------------------------------------------------- the song's loudness at export (TAP-7)
 

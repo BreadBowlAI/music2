@@ -706,6 +706,8 @@ type Stepped = Edit & { undo_name?: StepName | null; redo_name?: StepName | null
 
 export const graphApi = {
   get: () => call<GraphState>(""),
+  /** Ask for the song's loudness (TAP-6), again within 10 s to keep it, or stop. */
+  loudness: (session: number, on: boolean) => call("/loudness", { session, client: clientId, on }),
   /** Open or close a plugin's own window (HOST-7); a plugin without one, or no screen, says why. */
   pluginWindow: (session: number, node: string, open: boolean) => call<{ window: string }>("/plugin/window", { session, node, open }),
   /** Re-enable: the lane or cable drives a latched parameter again (every one without `id`, MON-6). */

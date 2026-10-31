@@ -572,7 +572,7 @@ fn packages(inner: &Inner) -> Result<PackageSet> {
 
 /// What of `from`'s graph each node of `to`'s continues (ID-15): every node itself for the same
 /// build, else the names of what changed. An activation keeps by it, and an export borrows by it.
-pub(super) fn continuing(from: &Revision, to: &Revision) -> Continues {
+fn continuing(from: &Revision, to: &Revision) -> Continues {
     match Arc::ptr_eq(from.compiled.code(), to.compiled.code()) {
         true => Continues::identity(&to.compiled.flat),
         false => m2_session::tx::continues::continues(from, to),
@@ -617,16 +617,9 @@ fn build(
     let packages = packages.viewing(&rev.compiled.view);
     let mut r = Renderer::prepare(flat, data, &packages, rate, audio, owner, basis)?;
     audio.prune();
-    // Its meters, after the fader (TAP-5). A layout that can't be made leaves it with none.
-    let (taps, layout) = super::meters::layout(rev);
-    let layout = match r.tap(&taps) {
-        Ok(()) => layout,
-        Err(e) => {
-            eprintln!("music2: the meters couldn't be laid out: {e:#}");
-            super::meters::Layout::default()
-        }
-    };
-    Ok((r, Arc::new(layout)))
+    // Its meters, after the faders, or before them when that can't be (TAP-5).
+    let layout = super::meters::lay_out(&mut r, rev);
+    Ok((r, layout))
 }
 
 impl Open {
@@ -1194,11 +1187,13 @@ impl Actor {
             if let Some(p) = cp.open.as_ref().filter(|p| p.engine.token == token) {
                 r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, &target));
             }
-            // Its taps as asked (TAP-9): watched as the meters are, and each scope pointed at its
-            // box in what it is built from.
+            // Its taps as asked (TAP-9): watched as the meters are, the loudness's ring and each
+            // scope's pointed, each scope's call followed into the accepted revision first.
             if let Some(taps) = r.info().taps.as_deref() {
                 super::meters::watch(taps, cp.meters.watched);
-                cp.scopes.point(taps, &target, &o.session.packages);
+                let accepted = o.session.accepted_arc();
+                cp.asks.follow(&accepted);
+                cp.asks.point(taps, &target, &accepted, &o.session.packages);
             }
         }
         let sent = (|| -> Result<Sent> {
@@ -1355,6 +1350,15 @@ impl Actor {
                 }
             }
         }
+        // What is asked of what plays when no new renderer was sent (TAP-9): the scopes follow the
+        // accepted revision, and show only while what plays is built from its code.
+        if !renderer && let Some(p) = o.plays.as_ref().filter(|p| dev.is_some_and(|d| d.epoch == p.epoch)) {
+            let accepted = o.session.accepted_arc();
+            cp.asks.follow(&accepted);
+            if let Some(taps) = p.info.taps.as_deref() {
+                cp.asks.point(taps, &p.revision, &accepted, &o.session.packages);
+            }
+        }
         if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
             p.revs.push(number, o.code_rev);
             let accepted = o.session.accepted_arc();
@@ -1480,8 +1484,9 @@ impl Actor {
                 let (controls, accepted) = (p.engine.controls.clone(), p.engine.accepted.clone());
                 p.engine = Arc::new(EngineView { plays: None, controls, accepted, ..*p.engine });
             }
-            // The song before's scopes end; the new plan's meters are watched as they are (TAP-9).
-            cp.scopes = Default::default();
+            // What was asked of the song before ends; the new plan's meters are watched as they
+            // are (TAP-9).
+            cp.asks = Default::default();
             if let Some(taps) = built.as_ref().and_then(|(r, _)| r.info().taps.clone()) {
                 super::meters::watch(&taps, cp.meters.watched);
             }

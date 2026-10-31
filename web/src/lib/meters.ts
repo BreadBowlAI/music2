@@ -16,8 +16,9 @@
 // - The output's loudness (TAP-6), for Master's strip, is kept here too, and told only when the
 //   words it is shown in change.
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { CLOSED, on } from "./events";
+import { graphApi } from "./graph";
 import type { MetersIn } from "./graph8b";
 import { useStore } from "./store";
 
@@ -143,8 +144,25 @@ function hearLoudness(l: MetersIn["loudness"]) {
   loudnessTold.forEach((f) => f());
 }
 
-/** The output's loudness, while a meter shows (the listening runs while one does); re-rendered only when its words change. */
+/** How often a view that shows the loudness asks for it again: the server keeps an ask 10 s. */
+const ASK_MS = 4000;
+
+/**
+ * The output's loudness, asked for while the calling view shows (TAP-6: the server measures it only
+ * then), and stopped when it goes; re-rendered only when its words change.
+ */
 export function useLoudness(): Loudness {
+  const session = useStore((s) => s.graph?.session);
+  useEffect(() => {
+    if (session === undefined) return;
+    const ask = (on: boolean) => void graphApi.loudness(session, on).catch(() => {});
+    ask(true);
+    const again = setInterval(() => ask(true), ASK_MS);
+    return () => {
+      clearInterval(again);
+      ask(false);
+    };
+  }, [session]);
   return useSyncExternalStore(
     (f) => {
       loudnessTold.add(f);

@@ -191,7 +191,7 @@ fn an_audio_take_through_the_routes() {
     let mut level = 0.0;
     while level < 0.4 && t.elapsed() < Duration::from_secs(3) {
         std::thread::sleep(Duration::from_millis(30));
-        level = state.graph.meters().and_then(|m| m["input"][0].as_f64()).unwrap_or(0.0).max(level);
+        level = state.graph.meters().and_then(|m| m.all["input"][0].as_f64()).unwrap_or(0.0).max(level);
     }
     assert!((0.4..=0.51).contains(&level), "the input's level: {level}");
     std::thread::sleep(Duration::from_millis(300));

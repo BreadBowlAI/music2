@@ -320,7 +320,7 @@ function MasterLoudness() {
     <div
       data-testid="master-loudness"
       className="h-[46px] shrink-0 px-1.5 flex flex-col items-center justify-center gap-0.5 tabular-nums cursor-default"
-      title="How loud the song is, as ears hear it: the last 3 seconds, in LUFS. Streaming services play songs at about −14 LUFS. Peak is the loudest point between samples: keep it under 0 dB."
+      title="How loud the song is, as ears hear it: the last 3 seconds, in LUFS. Streaming services play songs at about −14 LUFS. Peak is the loudest point between samples: over 0 dB, it can distort when it's played or streamed."
     >
       <span data-testid="master-lufs" className="text-sm font-medium text-fg whitespace-nowrap">
         {short === null ? "— LUFS" : `${minus(short)} LUFS`}

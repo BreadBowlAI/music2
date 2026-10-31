@@ -221,6 +221,9 @@ pub struct Activity {
     pub disk: Option<String>,
     /// No output started, so the silent player stands in: the song plays silently (gaps #13).
     pub no_output: bool,
+    /// Why the meters of what plays read before the faders, when they couldn't be laid out after
+    /// them (TAP-5): a bug, said in words.
+    pub meters: Option<String>,
 }
 
 impl Activity {
@@ -357,8 +360,8 @@ struct ControlPlane {
     tempo: tempo_lease::TempoLeases,
     /// The take recording, and the takes waiting to be written (lane B).
     record: record::Recorder,
-    /// The scopes windows and agents ask for (TAP-8).
-    scopes: scope::Scopes,
+    /// What windows and agents ask to look at: scopes and the loudness (TAP-6, TAP-8).
+    asks: scope::Asks,
 }
 
 /// How a control named at a revision is found without the session.
@@ -739,9 +742,10 @@ impl Inner {
         let device = self.current_device();
         let held = device.as_ref().is_some_and(|d| d.player.held());
         let e = device.as_ref().map(|d| d.player.device_errors()).unwrap_or_default();
-        let (load, late) = {
+        let (load, late, meters) = {
             let cp = self.control.lock();
-            (cp.meters.load(), cp.meters.late())
+            let why = cp.open.as_ref().and_then(|o| o.engine.plays.as_ref()).and_then(|p| p.meters.why.clone());
+            (cp.meters.load(), cp.meters.late(), why)
         };
         Activity {
             paused: held.then_some("exporting"),
@@ -755,6 +759,7 @@ impl Inner {
             output: device.as_ref().filter(|d| !self.output.standing_in(d.epoch)).map(|d| d.player.device.clone()),
             disk: device.as_ref().and_then(|d| self.disk_words(&d.player)),
             no_output: device.as_ref().is_some_and(|d| self.output.standing_in(d.epoch)),
+            meters,
         }
     }
 
@@ -1438,7 +1443,7 @@ impl Graph {
     /// values play again. Its pending commits stay: it let go, so it meant to save.
     pub fn client_gone(&self, client: &str) {
         self.audition_gone(client);
-        self.scopes_gone(client);
+        self.asks_gone(client);
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
         let mut i = 0;
