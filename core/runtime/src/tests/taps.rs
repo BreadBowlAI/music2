@@ -253,6 +253,63 @@ fn a_ring_keeps_its_last_frames() {
     assert_eq!(bits(&frames), bits(&out[first as usize..]));
 }
 
+// TAP-3 (the review's P1): a ring read while the audio thread writes it is never torn. One thread
+// writes blocks into a ring as fast as it can, each frame the number of its place; another reads the
+// whole ring over and over, and every frame it gets must be the number of its place. Turning off the
+// reader's check of what was overwritten meanwhile tears reads here at once (a plan's render writes
+// too slowly to lap an optimised reader often: that version, the review's, tore 17 of 2,644 reads
+// only in its build).
+#[test]
+fn a_ring_read_while_written_is_never_torn() {
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    // A frame's place, exact as an f32: it counts up to 2^24, then again from 0.
+    let place = |f: usize| (f % (1 << 24)) as f32;
+    let mut taps = crate::taps::Taps::new(TapSlots::new(Box::new([2]), Box::new([])));
+    let slots = taps.slots().clone();
+    slots.point(0, Some(TapAt::Node(0))).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let (slots, stop) = (slots.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut out = vec![];
+            let (mut reads, mut torn) = (0u64, 0u64);
+            while !stop.load(Relaxed) {
+                if let Some(first) = slots.frames(0, 0, RING, &mut out) {
+                    reads += 1;
+                    let wrong = |(i, f): (usize, &[f32; 2])| f[0] != place(first as usize + i) || f[1] != f[0];
+                    torn += out.iter().enumerate().any(wrong) as u64;
+                }
+            }
+            (reads, torn)
+        })
+    };
+    let (mut bufs, out) = (vec![vec![vec![0.0f32; 2 * BLOCK]]], [[0.0f32; 2]; BLOCK]);
+    for b in 0..(1 << 26) / BLOCK {
+        for (i, x) in bufs[0][0].iter_mut().enumerate() {
+            *x = place(b * BLOCK + i % BLOCK);
+        }
+        taps.write(&bufs, &out);
+    }
+    stop.store(true, Relaxed);
+    let (reads, torn) = reader.join().unwrap();
+    assert!(reads > 10, "it read while the ring was written: {reads} reads");
+    assert_eq!(torn, 0, "{torn} of {reads} reads were torn");
+}
+
+// TAP-3 (the review's P4): a read from a frame past the ring's head (a place in another ring) reads
+// from where the ring's point was taken, never from past its head.
+#[test]
+fn a_read_from_past_the_head_starts_where_the_point_was_taken() {
+    let (mut r, taps) = metered(&two(false, None));
+    taps.point(0, Some(TapAt::Out)).unwrap();
+    let out = blocks(&mut r, 4);
+    let mut frames = vec![];
+    assert_eq!(taps.frames(0, 1 << 40, RING, &mut frames), Some(0), "from the ring's first frame");
+    assert_eq!(bits(&frames), bits(&out));
+    assert_eq!(taps.frames(0, 4 * BLOCK as u64, RING, &mut frames), Some(4 * BLOCK as u64), "at the head: nothing yet");
+    assert!(frames.is_empty());
+}
+
 // AGENT-7: a copy tap at a site copies the track's own sound where it enters the song, one at a
 // node copies that node, and the output's the output: each block from the one that holds the frame
 // asked, none before it. Nothing in this song is late.

@@ -228,10 +228,12 @@ impl TapSlots {
     }
 
     /// Ring `ring`'s frames from frame `from` of it on, the last `most` at most, into `out`, which
-    /// is cleared first: both sides of each. Where the first frame is, by the ring's count; None
-    /// while the audio thread hasn't taken the ring's point yet, or it points nowhere. Frames from
-    /// before its point was taken, or that the audio thread overwrote while they were read, are
-    /// left out: what is returned is always the point's, frame after frame.
+    /// is cleared first: both sides of each. Where the first frame is, by the ring's count, never
+    /// past its head: a `from` past the head is a place in another ring, so it reads from where
+    /// this ring's point was taken. None while the audio thread hasn't taken the ring's point yet,
+    /// or it points nowhere, or it was pointed elsewhere while it was read. Frames from before its
+    /// point was taken, or that the audio thread overwrote while they were read, are left out: what
+    /// is returned is always the point's, frame after frame, whoever points the ring meanwhile.
     pub fn frames(&self, ring: usize, from: u64, most: usize, out: &mut Vec<[f32; 2]>) -> Option<u64> {
         out.clear();
         let r = self.rings.get(ring)?;
@@ -241,13 +243,19 @@ impl TapSlots {
         }
         let since = r.since.load(Ordering::Relaxed);
         let head = r.head.load(Ordering::Acquire);
+        let from = if from > head { since } else { from };
         // The block being written may be overwriting the oldest block's room already.
         let kept = (head + BLOCK as u64).saturating_sub(RING as u64);
         let first = from.max(since).max(kept).max(head.saturating_sub(most as u64));
         let load = |c: usize, f: u64| f32::from_bits(r.frames[c * RING + (f % RING as u64) as usize].load(Ordering::Relaxed));
         out.extend((first..head).map(|f| [load(0, f), load(1, f)]));
-        // Whatever the audio thread overwrote meanwhile goes.
+        // A frame of a block written after it is marked makes the marks before it seen here: what
+        // the audio thread overwrote meanwhile goes, and a point taken meanwhile spoils the read.
         fence(Ordering::Acquire);
+        if r.took.load(Ordering::Relaxed) != asked {
+            out.clear();
+            return None;
+        }
         let gone = r.started.load(Ordering::Relaxed).saturating_sub(RING as u64);
         if gone > first {
             let lost = ((gone - first) as usize).min(out.len());
