@@ -72,6 +72,25 @@ fn view_settings_merge_and_keep_the_loop() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// NOTE-9: the roll's view settings (Lock to key, folded drum rows, row height) are kept in
+// `.music2/view.json` under `roll`, given back when the song opens, and never a step of the song.
+#[test]
+fn the_rolls_view_settings_are_kept() {
+    let dir = song("roll", &json!({}));
+    let graph = Graph::silent().stored();
+    let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let steps = graph.state().unwrap()["view"]["revision"].clone();
+    let roll = json!({"lock": true, "fold": false, "rows": 18});
+    let answer = graph.set_view(session, set(json!({ "roll": roll }))).unwrap();
+    assert_eq!(answer["local"], json!({ "roll": roll }));
+    assert_eq!(file(&dir), json!({ "roll": roll }));
+    assert_eq!(graph.state().unwrap()["view"]["revision"], steps, "no revision");
+    assert!(!dir.join("layout.json").exists(), "nothing shared with the song");
+    graph.close();
+    assert_eq!(graph.open(&dir).unwrap()["local"], json!({ "roll": roll }), "as kept, when the song opens again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_read_only_window_keeps_view_settings_in_memory() {
     let dir = song("ro", &json!({"zoom": 36.0}));

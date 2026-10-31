@@ -26,31 +26,33 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⇧⌘E | Ctrl+Shift+E | Export: the song, stems or MIDI |
 | ⇧⌘I | Ctrl+Shift+I | Import audio |
 | ⌘, | Ctrl+, | Settings |
-| ⌘K | Ctrl+K | The keyboard piano on or off |
+| ⌘K | Ctrl+K | The keyboard piano on or off (while it is on: Z and X an octave down and up, − and = softer and louder) |
 | ⌘Q | Ctrl+Q | Quit (on Linux, File → Quit) |
 | ⌘T | Ctrl+T | New track |
 | ⌘⌫ | Ctrl+Backspace | Delete the selected track. In a field or the code editor it edits the text instead: on a Mac up to the line's start, on Linux the word before |
 | ⌘R or ⇧Return | Ctrl+R or Shift+Enter | Rename the selected track |
 | ⌘D | Ctrl+D | Duplicate the selected notes, clips or bars, or with none, the selected track (in the code editor, its own: the next match) |
 | ⌘A | Ctrl+A | Select all notes in the open clip |
-| ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste clips (at the playhead), or the bars selected along the ruler's top (at the playhead's bar: [Sections](sections.md)) |
+| ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste clips (at the playhead), or the bars selected along the ruler's top (at the playhead's bar: [Sections](sections.md)); in Notes, the selected notes, pasted into the clip shown |
 | ⌘I | Ctrl+I | Insert as many empty bars as are selected, where they start |
 | ⇧⌘⌫ | Ctrl+Shift+Backspace | Delete the selected bars: what follows moves up |
 | ⌘E | Ctrl+E | Split the selected clips at the playhead |
 | ⌘J | Ctrl+J | Join the selected clips |
 | ← → (⇧: a bar) | ← → (Shift: a bar) | Move the selected clips or notes by the grid |
-| ↑ ↓ (⇧: an octave) | ↑ ↓ (Shift: an octave) | Move the selected notes a semitone |
+| ↑ ↓ (⇧: an octave) | ↑ ↓ (Shift: an octave) | Move the selected notes a semitone (with **Lock to key** on, to the next note of the key; on a folded drum kit, to the next row shown) |
 | ⌘1 / ⌘2 / ⌘3 / ⌘4 | Ctrl+1 / 2 / 3 / 4 | Narrower grid / wider grid / triplets / snap on or off |
 | Delete | Backspace | Remove the selected clip or notes, or empty the selected bars |
 | Escape | Escape | Deselect |
 | ⌘= / ⌘− | Ctrl+= / Ctrl+− | Zoom in / out: the timeline, or the roll while it has the keyboard |
 | Z | Z | Fit the selected clips, or the song; again to go back |
-| ⌘↓ / ⌘↑ | Ctrl+↓ / Ctrl+↑ | Taller / shorter tracks: the selected one, or all |
+| ⌘↓ / ⌘↑ | Ctrl+↓ / Ctrl+↑ | Taller / shorter tracks: the selected one, or all; in Notes, its rows |
 | ⇧⌘F | Ctrl+Shift+F | Follow the playhead on or off |
 | ⌥← / ⌥→ | Alt+← / Alt+→ | Go to the marker before / after |
 | Q | Q | Quantize: in Notes the selected notes (or with none, every note), else the selected clips' notes |
 | B | B | Draw mode: notes, and automation points |
 | ⌥-drag | Alt-drag | In Draw mode in Notes: paint a note in each grid step |
+| ⌘-drag | Ctrl-drag | In Notes: place a note off the grid while drawing, dragging or resizing it |
+| I | I | In Notes, with a chord picked: its next inversion |
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Device / Notes / Mix / Code (X: Mix) |
 | E | E | Show or hide the dock |

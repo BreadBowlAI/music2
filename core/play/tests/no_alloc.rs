@@ -75,7 +75,10 @@ fn nodes(fx: bool) -> (Value, &'static str) {
         json!({"id": "vc", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": if fx { "half" } else { "c" }}}),
         json!({"id": "vl", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "vc", "by": "l"}}),
         json!({"id": "a", "op": "lane", "lane": "clips"}),
-        json!({"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "vl", "b": "a"}}),
+        // A second audio lane, which nothing plays but a live input (MON-8).
+        json!({"id": "a2", "op": "lane", "lane": "heard"}),
+        json!({"id": "aa", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "a2"}}),
+        json!({"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "vl", "b": "aa"}}),
         json!({"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "sum"}),
         json!({"id": "k", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}}),
         json!({"id": "h", "op": "const", "value": 0.3, "origin": {"site": 11, "arg": ["0"]}}),
@@ -128,7 +131,7 @@ fn build(fx: bool, bpm: f64) -> Song {
     let ir: m2_ir::Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
         "modules": [{"key": "song", "nodes": n, "exports": {"out": out}, "frames": [{"site": 1, "component": "test:level"}], "lanes": [
             {"key": "notes", "kind": "events<note>"}, {"key": "level", "kind": "control<gain>", "default": 0},
-            {"key": "clips", "kind": "audio<1>"}]}]}))
+            {"key": "clips", "kind": "audio<1>"}, {"key": "heard", "kind": "audio<1>"}]}]}))
     .unwrap();
     let packages = std_packages();
     let flat = m2_ir::check(&ir, &packages).unwrap_or_else(|e| panic!("{e:?}"));
@@ -463,21 +466,27 @@ fn live_notes_never_allocate() {
     }
 }
 
-// RENDER-30a: a sound input's callback allocates and frees nothing: a device's at 44.1 kHz, stereo,
-// converted to the song's 48 kHz, in buffers of odd sizes; and the output's callback, as it hands
-// the silent input what was injected and the engine hears it on the audio lane (MON-8), across a
-// stop, the idle engine kept awake, a loop's wraps, and hearing stopped and started again.
+// RENDER-30a, MON-13: a sound input's callback allocates and frees nothing: a device's at 44.1 kHz
+// with four channels, converted to the song's 48 kHz, in buffers of odd sizes, into a ring for each
+// pair; and the output's callback, as it hands the silent input what was injected and the engine
+// hears channels 3–4 on one audio lane and channel 1 alone on another, at once (MON-8, review Q11),
+// across a stop, the idle engine kept awake, a loop's wraps, and hearing stopped and started again.
 #[test]
 fn the_input_callback_never_allocates() {
     let song = build(false, 120.0);
     let r = song.renderer();
     let (generation, info) = (r.generation(), r.info());
     let slot = info.lanes.iter().position(|l| l.lane.lane == "clips").unwrap() as u32;
+    let other = info.lanes.iter().position(|l| l.lane.lane == "heard").unwrap() as u32;
     let (player, mut d) = Player::driven(SR);
     player.open(r).unwrap();
-    player.open_input(&m2_play::InputChoice::default()).unwrap();
-    let (mut device, engine_ring, take_ring) = player.driven_input(44_100, 2);
-    let wave: Vec<f32> = (0..2 * 4096).map(|i| (i as f32 * 0.01).sin() * 0.25).collect();
+    player.name_inputs(&["Desk:4"]);
+    let silent = player.open_input(&m2_play::InputChoice::default()).unwrap();
+    let (mut device, rings) = player.driven_input(44_100, 4);
+    let driven = m2_play::Listen { rings: rings.clone(), channels: 4, ..silent.clone() };
+    // Channels 1 and 2 silent, 3 and 4 a wave: what is heard is 3–4's.
+    let wave: Vec<f32> = (0..4 * 4096).map(|i| if i % 4 >= 2 { ((i / 4) as f32 * 0.01).sin() * 0.25 } else { 0.0 }).collect();
+    let three: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.01).sin() * 0.25).collect();
     let mut data = vec![0.0f32; 2 * 4096];
     let (mut allocs, mut heard) = (0, 0.0f32);
     let mut fill = |d: &mut m2_play::Driver, frames: usize| {
@@ -487,8 +496,8 @@ fn the_input_callback_never_allocates() {
             if n == 0 {
                 break;
             }
-            player.inject_input(&wave[..n]).unwrap();
-            allocs += trapped(|| device.fill(&wave[..2 * n], std::time::Duration::from_micros(700)));
+            player.inject_channels(&[vec![0.0; n], vec![0.0; n], three[..n].to_vec(), three[..n].to_vec()]).unwrap();
+            allocs += trapped(|| device.fill(&wave[..4 * n], std::time::Duration::from_micros(700)));
             allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
             heard = heard.max(peak(&data[..2 * n].chunks(2).map(|f| [f[0], f[1]]).collect::<Vec<_>>()));
             done += n;
@@ -496,20 +505,26 @@ fn the_input_callback_never_allocates() {
         drop(d.drain_retired());
     };
     fill(&mut d, 4096);
-    player.hear(generation, slot, true).unwrap();
+    let three_four = m2_play::Channels::Pair(2);
+    player.hear(generation, slot, Some((&silent, three_four))).unwrap();
+    player.hear(generation, other, Some((&silent, m2_play::Channels::One(0)))).unwrap();
     player.play();
     player.set_loop(Some((0.0, 1.0))).unwrap();
     fill(&mut d, 60_000);
     player.stop();
     fill(&mut d, 48_000);
     assert!(!player.idle(), "never idle while it hears");
-    player.hear(generation, slot, false).unwrap();
+    player.hear(generation, slot, None).unwrap();
     fill(&mut d, 4096);
-    player.hear(generation, slot, true).unwrap();
+    player.hear(generation, slot, Some((&driven, three_four))).unwrap();
     fill(&mut d, 4096);
     assert_eq!(allocs, 0, "an input's callback or the engine's hearing allocated or freed");
-    assert!(heard > 0.1, "the input was heard: {heard}");
-    assert!(engine_ring.head() > 100_000 && take_ring.head() == engine_ring.head(), "the device's input reached both rings");
+    assert!(heard > 0.1, "channels 3–4 were heard: {heard}");
+    assert_eq!(rings.len(), 2, "a ring for each pair");
+    assert!(rings[1].head() > 100_000 && rings[0].head() == rings[1].head(), "the device's input reached every pair's ring");
+    let mut last = [[9.0f32; 2]; 64];
+    rings[0].read(rings[0].head() - 64, &mut last);
+    assert!(last.iter().all(|f| *f == [0.0; 2]), "channels 1–2 are their own: silence");
     assert!(player.input_frames() > 100_000, "the silent input handed over what was injected");
     assert!(!player.crashed());
 }

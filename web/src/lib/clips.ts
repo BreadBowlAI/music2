@@ -55,8 +55,13 @@ export type Gesture =
    * bar or more lands on the next bar line, a shorter one on the next line of `grid`.
    */
   | { op: "duplicate"; clips: ServerRef[]; range?: [number, number]; grid?: number; times?: number }
-  /** Copied clips at `at`, keeping their distances: onto lane `to` when it takes them all. */
-  | { op: "paste"; clips: Copied[]; to?: LaneAddr; at: number }
+  /**
+   * Copied clips at `at`, keeping their distances: onto lane `to` when it takes them all; or with
+   * `into`, their notes into that notes clip (NOTE-5), fitted to the song's key with `fit`.
+   */
+  | { op: "paste"; clips: Copied[]; to?: LaneAddr; at: number; into?: ServerRef; fit?: boolean }
+  /** A groove (NOTE-7) on the clips' notes, or on notes `notes` of one clip: a feel from the server's table. */
+  | { op: "groove"; clips: ServerRef[]; notes?: number[]; groove: { name: string; amount?: number; step?: "eighths" | "sixteenths" } }
   /** Every note's start onto the nearest line of `grid` beats. */
   | { op: "quantize"; clips: ServerRef[]; grid: number; ends?: boolean }
   /** An automation clip's points, `[beat in the clip, value]`, all of them. */

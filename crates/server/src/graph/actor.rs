@@ -1443,6 +1443,8 @@ impl Actor {
                 p.aliases = a;
             }
         }
+        // Arms on tracks the song no longer shows go (MON-9).
+        super::record::prune_arms(&mut cp, token);
         drop(cp);
         // The view it replaces is a tree of every note: freed elsewhere, neither under the lock
         // nor before the reply (or the next request) on this thread.

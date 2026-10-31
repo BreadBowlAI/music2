@@ -844,6 +844,7 @@ impl Inner {
         state["drafts"] = drafts;
         state["midi"] = self.midi_state();
         state["record"] = self.record_state();
+        state["arm"] = self.arm_state();
         state["plugins"] = self.plugins.lock().clone();
         // Attention (AGENT-6): a pointer an agent shows, and what Compare compares, for a window
         // that loads later.
@@ -1100,6 +1101,8 @@ impl Graph {
         if let Some(d) = self.inner.current_device() {
             d.player.close_input();
         }
+        // Nothing hears it now: an arm opens it again (MON-9).
+        self.inner.control.lock().record.forget_input();
     }
 
     /// What every change to the open project is announced with: its session, the accepted

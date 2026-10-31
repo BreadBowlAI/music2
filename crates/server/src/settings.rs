@@ -92,15 +92,25 @@ pub struct RecordKept {
     pub count_in: bool,
     #[serde(default)]
     pub quantize: bool,
+    /// Record only between the loop's edges (MON-10); written only when on.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub punch: bool,
+    /// A notes take goes into the clip under it (MON-12); written only when on.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub overdub: bool,
 }
 
 fn yes() -> bool {
     true
 }
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 impl Default for RecordKept {
     fn default() -> RecordKept {
-        RecordKept { count_in: true, quantize: false }
+        RecordKept { count_in: true, quantize: false, punch: false, overdub: false }
     }
 }
 
@@ -244,7 +254,7 @@ mod tests {
         let t = Temp::new("record");
         let file = t.0.join("settings.json");
         let s = Settings::new(file.clone());
-        assert_eq!(s.read().record, RecordKept { count_in: true, quantize: false }, "counts in, doesn't snap");
+        assert_eq!(s.read().record, RecordKept::default(), "counts in, doesn't snap");
         assert!(s.read().midi.off.is_empty());
         s.change(|k| k.songs = Some("/x".into())).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
@@ -252,7 +262,7 @@ mod tests {
         s.change(|k| (k.record.count_in, k.record.quantize) = (false, true)).unwrap();
         s.change(|k| k.midi.off = vec!["Keystation 49".into()]).unwrap();
         let again = Settings::new(file.clone()).read();
-        assert_eq!(again.record, RecordKept { count_in: false, quantize: true });
+        assert_eq!(again.record, RecordKept { count_in: false, quantize: true, ..RecordKept::default() });
         assert_eq!(again.midi.off, ["Keystation 49"]);
         assert_eq!(again.songs.as_deref(), Some(Path::new("/x")), "the others are kept");
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
@@ -270,7 +280,7 @@ mod tests {
         assert_eq!(s.read().input, kept.input, "read back");
         // Half a record object reads with the other half's default.
         std::fs::write(&file, r#"{"record": {"quantize": true}}"#).unwrap();
-        assert_eq!(s.read().record, RecordKept { count_in: true, quantize: true });
+        assert_eq!(s.read().record, RecordKept { count_in: true, quantize: true, ..RecordKept::default() });
     }
 
     // REG-11: the registry the settings name is read, and kept through a change of another

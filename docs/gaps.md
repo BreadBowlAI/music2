@@ -13,9 +13,17 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 24 | **The rest of recording notes**: recording the pitch and mod wheels and the sustain pedal (it needs controller data in a notes lane, a format bump: today the pedal plays live only, and a take keeps each of a keyboard's notes as long as its pedal held it, but a note from the computer's keys only as long as its key, RENDER-36); recording over a clip into it (overdub), and one clip for each time round a loop; the computer keyboard's velocity and sustain. | Expressive parts use the wheels; loop recording builds a part in layers. | No | medium |
-| 25 | **The rest of recording audio**: an arm button (hear yourself without recording); takes stacked per loop pass; punch in and out; inputs 3 and 4 (only the first two channels record); a recording offset for a device that reports its latency wrongly (the output's is taken as two buffers). | Singers stack takes and fix one line by punching in. | No | medium |
+| 24 | **The rest of recording notes**: recording the pitch and mod wheels and the sustain pedal into a clip (it needs controller data in a notes lane, a format bump: left for later on purpose; today the pedal plays live only, and a take keeps each of a keyboard's notes as long as its pedal held it, but a note from the computer's keys only as long as its key, RENDER-36); the computer keyboard's sustain. Overdub, a clip for each time round a loop and the keyboard piano's velocity are built (track `recording`, MON-11, MON-12, MON-15). | Expressive parts use the wheels and the pedal. | No | medium |
+| 25 | **The rest of recording audio**: a recording offset for a device that reports its latency wrongly (the output's is taken as two buffers); comping (a clip plays one whole take, not parts of several). Arm, takes for each time round a loop, punch in and out, and inputs 3 and 4 are built (track `recording`, MON-9 to MON-14). | A singer builds the best take from the best lines. | No | medium |
 
+- **Arms and each track's input channels last only while the song is open**: they aren't kept with it, and every window shares them.
+- **One notes track records at a time**: the keyboards play one track, so arming a second notes track disarms the first. Audio tracks, any number.
+- **A key held over a loop's wrap** ends at the loop's end, and isn't carried into the next pass.
+- **The loop moved, turned off or on after a take's first pass** ends the take where it is heard.
+- **An audio clip that can't be cut** (its pitch changed, or reversed and warped) stays whole under a punch: the take plays over it.
+- **The take's level bar** shows the first armed audio track's input only.
+- **An armed track stops hearing its input when the sound output changes** (a new player), until it is armed again or a take starts.
+- **An input with many channels** keeps 4 s of each pair in memory, ready for any track: a 64-channel one takes about 50 MB.
 - **A take waits while the code doesn't compile.** It is written once the code compiles; closing the song first loses it (a message says so).
 - **Sound made during the count-in** isn't kept in the take.
 - **An input on its own clock** (not the output's device) can drift a little against the song in a long take.
@@ -168,10 +176,10 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 16 | **Scale help**: lock notes to the key, chord stamps and an arpeggiator. `std/theory` and `std/gen` are designed but not built. | Beginners write better melodies and chords with a scale guide. | Partly (a key and scale, only in-key notes shown) | medium |
-| 15 | **The rest of the note tools**: copy and paste notes between clips, hold ⌘ to place a note off the grid, other swing amounts, and groove templates. | These clean up a drawn or played part. | Partly (humanize, octave up and down) | small |
-| 3 | **Drum rows folded to the drums a clip uses**, and zooming the piano roll up and down (taste.md NT-5). | A kit has 30 rows; a beat uses five. | Yes | small |
-| 6 | **More scales** than major and minor (dorian, pentatonic…). | A key tells you which notes fit. | Yes | small |
+| 16 | **The rest of scale help: an arpeggiator, and scales in code.** An arpeggiator waits: with std kept small ([Typed sounds](designs/cards/design.md) §7) it belongs in a pack, and it needs kernels that make events, which the kernel ABI reserves but doesn't build ([ABI-2](architecture.md#kernel-abi-reservations)). `std/theory` (keys and scales for song code) and `std/gen` (generators) are designed ([song-as-program.md](song-as-program.md)) but not built; the song's key lives in `layout.json`, which code doesn't read. Built since track `notes` ([NOTE-1 to NOTE-9](architecture.md#notes-and-scales)): thirteen scales (#6), Lock to key and chord stamps (#16), copy and paste of notes between clips, ⌘ to place a note off the grid, more swing and grooves (#15), folded drum rows and taller rows (#3). | Beginners write better melodies and chords with a scale guide; an arpeggio is how a held chord becomes a part. | Partly (a key and scale, only in-key notes shown) | medium |
+
+- **A groove of sixteenths after one of eighths** sees the swung eighths as off its grid, so it leaves those beats as they are: undo, or Quantize, before changing the step. Grooves of one step (the swings of a step; Laid back and Pushed) replace each other's places.
+- **A stamp's chord names spell a note of the key with its own letter** (G♯ in A harmonic minor), but a key's root keeps the app's one spelling (E♭ minor, never D♯ minor), so a few keys spell notes as C♭, F♭ or E♯ (a note whose letter would need a double sharp or flat is spelled on its own: E♭ Locrian's fifth is A).
 
 ## Automation
 
@@ -363,7 +371,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 ## The old app's parts not back yet
 
-Every row marked **No** was missing from the old app too. Of the rows marked **Partly**, the old app also lacked: copying notes between clips (#15), chord stamps and an arpeggiator (#16), and loudness and meters after the fader (#20, built since). Undo that survives closing (#29), which it lacked too, is built since `trust` ([Saving and undo](guide/saving.md)).
+Every row marked **No** was missing from the old app too. Of the rows marked **Partly**, the old app also lacked: an arpeggiator (#16), and loudness and meters after the fader (#20, built since).
 
 | From the old app | Still missing |
 |---|---|
@@ -373,6 +381,6 @@ Every row marked **No** was missing from the old app too. Of the rows marked **P
 | The Sounds panel, and m2plug's sampler | the rest of the Sampler (#22) |
 | m2plug's Pump | #21 |
 | Drawing automation | curves (#14) |
-| The key and scale picker | other scales (#6), locking notes to the key (#16) |
+| The key and scale picker | an arpeggiator (#16) |
 | The command API, `music2-cli` | a schema for each route (#38), the missing commands with the app closed (#37) |
 | Installing sounds from GitHub | shared sound packages (#39) |

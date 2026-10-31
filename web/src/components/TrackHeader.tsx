@@ -4,6 +4,7 @@ import { moduleName, type Diagnostic, type TimelineTrack } from "../lib/graph";
 import { useHeard } from "../lib/graph8b";
 import { ROW_H } from "../lib/layout";
 import { useShell } from "../lib/shell";
+import Arm from "./Arm";
 import MuteSolo from "./MuteSolo";
 import TrackMeter from "./TrackMeter";
 import { TrackMenuButton } from "./Tracks";
@@ -11,8 +12,9 @@ import TrackName from "./TrackName";
 
 /**
  * What a track's header row shows (taste.md §3.4), placed from its right edge so it fits the
- * 200 px headers of a small window too: the fold chevron at x = 12, the name from x = 28, M and S
- * 60 and 38 px in from the right, the meter 9 px in. The ⋯ shows on hover, just left of M. The
+ * 200 px headers of a small window too: the fold chevron at x = 12, the name from x = 28, R (arm,
+ * MON-9) 82 px in from the right, M and S 60 and 38 px in, the meter 9 px in. The ⋯ shows on
+ * hover, just left of R. The
  * Song row has no M or S (MON-1); its meter is the song's output. Offsets from the right count
  * from inside the header's 1 px right border: at 240 px, M is at x = 180. In a row taller than 44
  * px they keep to its top 44 px, the meter 28 px tall from 8 px down; in a shorter one they are
@@ -67,7 +69,7 @@ export default function TrackHeader({
       <div
         className={clsx(
           "absolute left-7 flex items-center gap-1.5 min-w-0",
-          mine ? "right-[71px] group-hover/head:right-[87px] group-focus-within/head:right-[87px]" : song ? "right-[20px]" : "right-3",
+          mine ? "right-[93px] group-hover/head:right-[109px] group-focus-within/head:right-[109px]" : song ? "right-[20px]" : "right-3",
         )}
       >
         <TrackName
@@ -87,8 +89,11 @@ export default function TrackHeader({
       </div>
       {mine && (
         <>
-          <div className="absolute right-[63px]">
+          <div className="absolute right-[85px]">
             <TrackMenuButton module={module} name={track.label || module} />
+          </div>
+          <div data-slot="arm" className="absolute right-[61px] inset-y-0 flex items-center">
+            <Arm track={track} name={name} />
           </div>
           <div data-slot="mute-solo" className="absolute right-[17px] inset-y-0 w-[42px] flex items-center">
             <MuteSolo module={module} name={name} />

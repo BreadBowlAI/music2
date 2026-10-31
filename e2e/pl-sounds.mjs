@@ -156,6 +156,9 @@ const lanes = (await state()).timeline.tracks.find((t) => t.module === "drum-kit
 check(lanes[0].names?.["36"] === "Kick" && lanes[0].names?.["42"] === "Closed hat", "the timeline names its notes");
 await until(async () => !!(await page.$('[data-lane="drum-kit.hits"] [data-clip]')), 5000);
 check(await openClip("drum-kit.hits"), "its clip opens in Notes");
+// Folded, the roll shows only the drums the beat uses (NOTE-8): Fold off shows every row's name.
+await page.click("[data-testid=fold-rows]");
+await until(async () => !!(await page.$('[data-testid=roll-keys] [data-key="60"]')));
 check((await keyLabel(36)) === "Kick", `key 36 says Kick: ${await keyLabel(36)}`);
 check((await keyLabel(38)) === "Snare" && (await keyLabel(42)) === "Closed hat" && (await keyLabel(46)) === "Open hat", "38 says Snare, 42 Closed hat, 46 Open hat");
 check((await keyLabel(60)) === "" && (await keyLabel(40)) === "", "a row with no name has no label, not even a C");

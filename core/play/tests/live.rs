@@ -921,6 +921,44 @@ fn profile() -> &'static str {
     if cfg!(debug_assertions) { "debug assertions on: the dev profile" } else { "release" }
 }
 
+// MON-8, MON-13: two audio lanes hear at once, each its own channel of a four-channel input, through
+// its own track; stopping one leaves the other.
+#[test]
+fn hearing_two_lanes_each_hears_its_own() {
+    let nodes = json!([{"id": "a", "op": "lane", "lane": "a"}, {"id": "b", "op": "lane", "lane": "b"},
+        {"id": "ha", "op": "const", "value": 0.5}, {"id": "hb", "op": "const", "value": 0.25},
+        {"id": "ga", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "a", "by": "ha"}},
+        {"id": "gb", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "b", "by": "hb"}},
+        {"id": "sum", "op": "kernel", "kernel": "std:add", "inputs": {"a": "ga", "b": "gb"}}]);
+    let lanes = json!([{"key": "a", "kind": "audio<1>"}, {"key": "b", "kind": "audio<1>"}]);
+    let s = song(nodes, "sum", lanes, DataSet::with_lanes(at_bpm(120.0), []));
+    let r = s.renderer();
+    let generation = r.generation();
+    let slot = |k: &str| r.info().lanes.iter().position(|l| l.lane.lane == k).unwrap() as u32;
+    let (a, b) = (slot("a"), slot("b"));
+    let (player, mut d) = playing(r, SR);
+    player.name_inputs(&["Desk:4"]);
+    let listen = player.open_input(&m2_play::InputChoice::default()).unwrap();
+    assert_eq!((listen.channels, listen.rings.len()), (4, 2), "a ring for each pair");
+    player.hear(generation, a, Some((&listen, m2_play::Channels::One(0)))).unwrap();
+    player.hear(generation, b, Some((&listen, m2_play::Channels::One(2)))).unwrap();
+    let mut buf = vec![0.0f32; 2 * 480];
+    let mut run = |player: &m2_play::Player, d: &mut m2_play::Driver| {
+        let mut heard = vec![];
+        for _ in 0..20 {
+            player.inject_channels(&[vec![0.8; 480], vec![0.1; 480], vec![0.4; 480], vec![0.2; 480]]).unwrap();
+            d.fill(&mut buf, 2);
+            heard.extend_from_slice(&buf);
+        }
+        heard[heard.len() / 2..].to_vec()
+    };
+    let both = run(&player, &mut d);
+    assert!(both.iter().all(|x| (x - 0.5).abs() < 1e-6), "channel 1 at half and channel 3 at a quarter: {:?}", &both[..4]);
+    player.hear(generation, a, None).unwrap();
+    let one = run(&player, &mut d);
+    assert!(one.iter().all(|x| (x - 0.1).abs() < 1e-6), "only lane b hears now: {:?}", &one[..4]);
+}
+
 // MON-8: hearing yourself plays the sound input on the take's audio lane, so the track's effects and
 // fader play it: here a fader at half. An export renders without it, and once it stops, the lane is
 // silent again.
@@ -933,8 +971,8 @@ fn hearing_yourself_plays_through_the_track_and_never_in_an_export() {
     let generation = r.generation();
     let slot = r.info().lanes.iter().position(|l| l.lane.lane == "clips").unwrap() as u32;
     let (player, mut d) = playing(r, SR);
-    player.open_input(&m2_play::InputChoice::default()).unwrap();
-    player.hear(generation, slot, true).unwrap();
+    let listen = player.open_input(&m2_play::InputChoice::default()).unwrap();
+    player.hear(generation, slot, Some((&listen, m2_play::Channels::One(0)))).unwrap();
     let mut buf = vec![0.0f32; 2 * 480];
     let mut heard = vec![];
     for _ in 0..40 {
@@ -949,7 +987,7 @@ fn hearing_yourself_plays_through_the_track_and_never_in_an_export() {
     for b in 0..40 {
         assert!(offline.render_block(b * 128).unwrap().iter().all(|f| *f == [0.0; 2]), "the export hears nothing");
     }
-    player.hear(generation, slot, false).unwrap();
+    player.hear(generation, slot, None).unwrap();
     for _ in 0..4 {
         player.inject_input(&[0.8; 480]).unwrap();
         d.fill(&mut buf, 2);

@@ -730,7 +730,7 @@ Keep these rules that already follow the block in `index.css`, with these change
 | 336 | Divider | |
 | 348 | Tempo | A field 76 px wide: "124" in `text-base` 500 plus "BPM" in `text-xs` `fg-faint`. Drag up and down: 1 BPM per 4 px, or 0.1 with ⇧. Double-click to type. No ⌥-click reset and no tap tempo (§5.2). While a lease is live (RENDER-27a) the number is `accent`. Lands with 8b's tempo bar. |
 | 428 | Meter (time signature) | A field 40 px wide, "4/4". Click opens a picker (beats 1–16, unit 2/4/8/16). Lands with the tempo bar. |
-| 472 | Key | Built by polish (D2), right after the time signature: a 28 px ghost field in `text-base`, "Key" in `fg-faint` while none is set, else "A minor" in `fg`. A click opens a picker: twelve roots in two rows of six (C, C♯, D, E♭, E, F, F♯, G, A♭, A, B♭, B), Major · Minor, and No key. It is kept in `layout.json` (`key`). In Notes, rows not in the key are shaded instead of the black keys' (never on a drum kit's lane). |
+| 472 | Key | Built by polish (D2), right after the time signature: a 28 px ghost field in `text-base`, "Key" in `fg-faint` while none is set, else "A minor" in `fg`. A click opens a picker: the key's scale menu first, the thirteen scales of the one table (NOTE-1) in two columns, Major and Minor first, each with its sound in its tooltip; then twelve roots in two rows of six (C, C♯, D, E♭, E, F, F♯, G, A♭, A, B♭, B), and No key. It is kept in `layout.json` (`key`). In Notes, rows not in the key are shaded instead of the black keys' (never on a drum kit's lane), and the header has Lock to key and Chord ▾ (track `notes`). |
 | centre | Song name | `text-base` 600 `fg-strong`, centred in the window. As polish built it (Q23), it keeps clear of the measured groups on either side (not a fixed 480 px), is cut with an ellipsis, and goes when under 56 px are left. While it is being typed in it keeps its width and stays, over its neighbours. Its tooltip has the folder and sample rate (keep). |
 | right − 544 | MIDI keyboard | A 14 px `Keyboard` mark in `fg-muted`, only while a MIDI keyboard is plugged in (`next`, B3). Its tooltip: "MIDI keyboard: Keystation 49 · plays Bass", or "Select a track with notes to play it". |
 | right − 520 | Status pill | One pill, and only when something needs saying (§4 ST-1). "No sound output" (`warn`, `VolumeX`) has **Settings…** in its popover; **Heavy load** has **Audio settings…**. |
@@ -763,7 +763,8 @@ none is selected. "Automate" unfolds the track and flashes the new lane (`lit`).
 |---|---|---|
 | 0 | 4 | Colour bar (`bar`, full height, including the track's sub-rows) |
 | 12 | 12 | Fold chevron (only if the track has control lanes) |
-| 28 | 140 | Name in `text-base` 500 `fg`, cut with an ellipsis ("Shakers & Hats" and "Lead Vox Double" fit). Double-click (or ⌘R) to rename inline, in a field the width of the header. |
+| 28 | 118 | Name in `text-base` 500 `fg`, cut with an ellipsis ("Shakers & Hats" and "Lead Vox Double" fit). Double-click (or ⌘R) to rename inline, in a field the width of the header. |
+| 158 | 20 | R, arm (since track `recording`, MON-9): as M, `danger` with a white letter while armed; right-click on an audio track's for its input's channels. On a track with no notes or audio lane, empty. |
 | 180 | 20 | M (`ctl-xs`, `text-xs` 600) |
 | 202 | 20 | S |
 | 231 | 3 | Meter, 28 px tall (two 1 px bars) |
@@ -997,9 +998,10 @@ tools after Hear notes, 24 px like every Notes tool):
 - Its caps are 22×20 px in `text-xs`: A S D F G H J K L ; ' the white keys (`canvas`, `line-strong`),
   W E T Y U O P the black ones (`gray-700`) over them. A held cap is in the track's `tint`, `bar` and
   `ink`. The white keys' notes sit under them (C's with their octave).
-- Under the caps: "Z  C4–F5  X" (Z and X change the octave), then "Plays Bass", or "Select a track
+- Under the caps: "Z  C4–F5  X" (Z and X change the octave) and "−  80%  =" (− and = the velocity, a
+  10% step, MON-15), then "Plays Bass", or "Select a track
   with notes to play it". A × at the top right: "Keyboard piano off (⌘K)".
-- While it is on, its 20 keys only play notes; Space, C, M and the rest work as always; typing in a
+- While it is on, its 22 keys only play notes (and step the octave and velocity); Space, C, M and the rest work as always; typing in a
   field or the code editor never plays. It is off when the app starts.
 
 **Settings** (⌘,; the Mac's app menu, File elsewhere; from the start screen too):
