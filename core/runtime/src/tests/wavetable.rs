@@ -188,3 +188,35 @@ fn the_oscillators_tables_swapped_play_the_same_bits() {
     let one = render(&[2.0, 4.0, -1.0, -1.0, 1.0], &both);
     assert!(render(&[4.0, 2.0, -1.0, -1.0, 1.0], &swapped) == one, "the tables swapped with the oscillators play other bits");
 }
+
+/// A song of one kernel node `id`, playing its asset `bad.wav` (4 frames of a sine, and a NaN, a
+/// +∞ and a −∞) from its first sample, with `inputs` held: its render.
+fn bad_file(id: &str, values: Value, inputs: Value) -> Result<Vec<[f32; 2]>> {
+    let pk = own_packages();
+    let mut nodes = vec![json!({"id": "k", "op": "kernel", "kernel": id, "assets": ["bad.wav"], "values": values, "inputs": inputs})];
+    for (name, v) in [("one", 1.0), ("note", 57.0)] {
+        nodes.push(json!({"id": name, "op": "const", "value": v}));
+    }
+    let ir = song(Value::Array(nodes), "k", json!([]));
+    let dir = project(&[]);
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    let mut x: Vec<f32> = (0..4 * 2048).map(|i| 0.5 * (std::f64::consts::TAU * (i % 2048) as f64 / 2048.0).sin() as f32).collect();
+    (x[3000], x[5000], x[7000]) = (f32::NAN, f32::INFINITY, f32::NEG_INFINITY);
+    audio::write_wav(&dir.join("assets/bad.wav"), &[x], SR).unwrap();
+    let tl = data(&ir, &dir);
+    let out = Renderer::new(&check(&ir, &pk).unwrap(), &tl, &pk, SR)?.render(0.3);
+    std::fs::remove_dir_all(dir).ok();
+    out
+}
+
+// FMT-24 (review B2): a file with samples that aren't numbers plays in both instruments that read
+// files, as its numbers: the Wavetable's table and std's Sampler. Before, one NaN made the
+// Wavetable's every frame NaN, and the song was silenced.
+#[test]
+fn a_file_with_samples_that_arent_numbers_plays_in_the_wavetable_and_the_sampler() {
+    let inputs = json!({"pitch": "note", "gate": "one"});
+    for (id, values) in [("@m2/wavetable:voice", json!([0, 0, 0, -1, 1])), ("std:sampler", json!([57, 0, 127]))] {
+        let out = bad_file(id, values, inputs.clone()).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        assert!(out.iter().all(|f| f[0].is_finite() && f[1].is_finite()) && peak(&out) > 0.05, "{id}: peak {}", peak(&out));
+    }
+}

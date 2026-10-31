@@ -162,7 +162,7 @@ impl Wav {
             hound::SampleFormat::Float => {
                 for _ in 0..n {
                     for o in out[..keep].iter_mut() {
-                        o.push(<f32 as Sample>::read(&mut cur, format, bytes, bits)?);
+                        o.push(crate::decode::finite(<f32 as Sample>::read(&mut cur, format, bytes, bits)?));
                     }
                     for _ in keep..self.channels {
                         <f32 as Sample>::read(&mut cur, format, bytes, bits)?;
