@@ -131,6 +131,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **Glide in `"poly"` mode** isn't built: `glide` does nothing there.
 - **The wavetable synth's tables are its five and a WAV** ([PACK-27](architecture.md#packs)): no drawing or editing a table, frames of 2048 samples only (a file of other frames is cut wrongly), at most 64 frames, a frame's harmonics up to the 512th only (a note below 39 Hz has nothing above 512 times its pitch: A0's stops at 14 kHz), and position only crossfades between two frames (no spectral morph, no warp, sync or FM between the oscillators). Its LFO counts in Hz from each note's start, never in beats; nothing else modulates (no matrix); there is no noise or sub oscillator.
 - **A preset holds no table**: the tables are settings, so Slow pad, Round bass, Sharp lead and Short pluck play whatever tables the card has.
+- **Changing a wavetable's table ends the notes that are playing**: a table is a setting, made when the sound is built, so picking another from the menu rebuilds the sound (RENDER-26a).
+- **A file in `fileA` (or `fileB`) plays in place of the table menu, which still shows its pick**: changing the menu then changes nothing you hear, yet rebuilds the sound. Only the guide says that the file wins.
 - **A setting has no label of its own**: the card names it by its slot, so the wavetable's table A reads `TableA`, and its undo step "Wavetable tablea".
 - **Every wavetable sound holds 11.8 MiB**, whatever tables it plays: its voices share their tables in the module's static memory, sized for two tables of 64 frames, since the kernel ABI gives a sandbox's states no other way to share what they make.
 - **`steal: "none"` waits for a voice to fall silent**, not for its key to be let go.
