@@ -27,7 +27,7 @@ use serde_json::Value as Json;
 use m2_session::{Home, Session};
 
 use crate::cable::{Inlet, Outlet, inlets, outlets};
-use crate::controls::{Control, Declared, controls, declared, not_insertable};
+use crate::controls::{Control, Declared, controls, declared, not_insertable, options_of};
 use crate::effect::{Listens, bypass_refused, calls_of, effect_at, is_bypassed, listens, move_row};
 use crate::kind::{self, Choice};
 use crate::settings::Setting;
@@ -97,6 +97,10 @@ pub struct InputPort {
     /// The automation lane that drives it (8b.5): "Follows the Cutoff lane", and Show lane.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lane: Option<LaneRef>,
+    /// The declared control of the call it is (`cutoff`, `channels.hats.db`), whatever drives it: a
+    /// knob, a cable, a lane or the code (CARD-25). None for an input port (notes, audio).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
 }
 
 /// A lane, by its module's key and its own.
@@ -108,7 +112,7 @@ pub struct LaneRef {
 
 impl InputPort {
     fn new(id: String, label: &str, kind: &'static str) -> InputPort {
-        InputPort { id, label: label.to_string(), kind, knob: None, inlet: None, readonly: None, lane: None }
+        InputPort { id, label: label.to_string(), kind, knob: None, inlet: None, readonly: None, lane: None, slot: None }
     }
 }
 
@@ -174,6 +178,12 @@ pub struct ViewNode {
     /// Its component's settings, in its descriptor's order (CARD-1).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub settings: Vec<Setting>,
+    /// Its card's groups, when its descriptor declares some (CARD-25).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<crate::views::CardGroup>,
+    /// Its card's views, resolved for the call (CARD-26).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<crate::views::CardView>,
 }
 
 /// An effect card's ⋯ menu (Next D1, D2): each row's words when it can't run here.
@@ -529,6 +539,8 @@ pub fn view(session: &Session) -> GraphView {
         // Where each knob (by id) and read-only value is written, to order a node's inputs.
         let mut knob_at: HashMap<String, Written> = HashMap::new();
         let mut readonly_at: BTreeMap<Group, Vec<Written>> = BTreeMap::new();
+        // The declared control each read-only value is, in the same order (CARD-25).
+        let mut readonly_slot: BTreeMap<Group, Vec<Option<String>>> = BTreeMap::new();
         let groups: Vec<Group> = {
             let mut g: Vec<Group> = all.iter().filter_map(|n| call_group(n)).collect();
             g.sort();
@@ -615,6 +627,7 @@ pub fn view(session: &Session) -> GraphView {
                     (expression, reason.to_string(), start)
                 };
                 readonly_at.entry(home.clone()).or_default().push((at.file.clone(), start));
+                readonly_slot.entry(home.clone()).or_default().push(declared.as_ref().map(|d| d.slot.clone()));
                 readonly.entry(home).or_default().push(ReadOnly {
                     label,
                     expression,
@@ -831,6 +844,8 @@ pub fn view(session: &Session) -> GraphView {
                 plugin: plugins.get(g).cloned(),
                 voices,
                 settings,
+                groups: vec![],
+                views: vec![],
             });
             id
         };
@@ -940,6 +955,8 @@ pub fn view(session: &Session) -> GraphView {
                 plugin: None,
                 voices: None,
                 settings: vec![],
+                groups: vec![],
+                views: vec![],
             });
             // A track's output that an effect turned off gives on comes from its card.
             let (r, g) = match off.iter().find(|(_, _, input)| input.contains(r.as_str())) {
@@ -972,6 +989,13 @@ pub fn view(session: &Session) -> GraphView {
             ("out", _) => kind(r).to_string(),
             (port, _) => port.to_string(),
         };
+        // The declared control written at an argument path of a group's call (CARD-25).
+        let declared_at = |g: &Group, path: &[String]| -> Option<String> {
+            let Group::Site(s) = g else { return None };
+            let component = m.frames.iter().find(|f| f.site == *s && f.component.is_some())?.component.as_deref()?;
+            let desc = rev.compiled.components.get(component)?;
+            crate::views::slot_at(desc, options_of(m, *s).ok().flatten(), path)
+        };
         let mut inputs: HashMap<String, Vec<(InputPort, Option<Written>)>> = HashMap::new();
         // The argument each signal input is written at, by node and port id: inputs that
         // would be named alike (the `b` of each `add` a `sum` makes) go by position instead.
@@ -982,18 +1006,25 @@ pub fn view(session: &Session) -> GraphView {
         for &(g, id) in &ordered {
             let row = inputs.entry(id.clone()).or_default();
             for k in knobs.get(g).into_iter().flatten() {
-                let port = InputPort { knob: Some(k.id.clone()), ..InputPort::new(format!("knob:{}", k.id), &k.label, "control") };
+                let port = InputPort {
+                    knob: Some(k.id.clone()),
+                    slot: k.slot.clone(),
+                    ..InputPort::new(format!("knob:{}", k.id), &k.label, "control")
+                };
                 row.push((port, knob_at.get(&k.id).cloned()));
             }
+            let slots = readonly_slot.get(g).cloned().unwrap_or_default();
             for (i, (value, at)) in readonly.get(g).into_iter().flatten().zip(readonly_at.get(g).into_iter().flatten()).enumerate() {
-                let port = InputPort { readonly: Some(i), ..InputPort::new(format!("value:{i}"), &value.label, "control") };
+                let slot = slots.get(i).cloned().flatten();
+                let port = InputPort { readonly: Some(i), slot, ..InputPort::new(format!("value:{i}"), &value.label, "control") };
                 row.push((port, Some(at.clone())));
             }
             for c in connected.get(g).into_iter().flatten() {
                 let (inlet, outlet) = cabled[&c.id];
                 let kind =
                     call_output(session, outlet.site).and_then(|(module, r)| kind_of(session, module, r)).map_or("control", kind_name);
-                let port = InputPort { inlet: Some(c.id.clone()), ..InputPort::new(format!("inlet:{}", c.id), &c.label, kind) };
+                let slot = declared_at(g, &inlet.path);
+                let port = InputPort { inlet: Some(c.id.clone()), slot, ..InputPort::new(format!("inlet:{}", c.id), &c.label, kind) };
                 if let Some(i) = inlet.path.first().and_then(|i| i.parse().ok()) {
                     written_at.insert((id.clone(), port.id.clone()), i);
                 }
@@ -1048,8 +1079,10 @@ pub fn view(session: &Session) -> GraphView {
                 at.into_iter().min_by_key(|c| c.label != *port)
             });
         }
-        // The inputs an automation lane drives, by node and port (8b.5).
+        // The inputs an automation lane drives, by node and port (8b.5); the notes lane each node
+        // reads, for a keys view's audition (CARD-28).
         let mut driven: HashMap<(String, String), LaneRef> = HashMap::new();
+        let mut notes_of: HashMap<String, LaneRef> = HashMap::new();
         for ((to, _, r, from), cable) in reads.iter().zip(cables) {
             let (to_id, from_id) = (&ids[to], &ids[from]);
             let from_port = give(from_id, r);
@@ -1076,7 +1109,8 @@ pub fn view(session: &Session) -> GraphView {
                             (Some(p), _) => format!("input {}", p[0].parse::<usize>().map_or(1, |i| i + 1)),
                             (None, _) => "in".to_string(),
                         };
-                        let port = InputPort::new(id.clone(), &label, kind(r));
+                        let slot = path.as_deref().and_then(|p| declared_at(to, p));
+                        let port = InputPort { slot, ..InputPort::new(id.clone(), &label, kind(r)) };
                         if let Some(i) = path.as_ref().and_then(|p| p[0].parse().ok()) {
                             written_at.insert((to_id.clone(), id.clone()), i);
                         }
@@ -1089,6 +1123,11 @@ pub fn view(session: &Session) -> GraphView {
                 && m.lanes.iter().any(|l| &l.key == lane && matches!(l.kind, Kind::Control(_)))
             {
                 driven.insert((to_id.clone(), to_port.clone()), LaneRef { module: m.key.clone(), lane: lane.clone() });
+            }
+            if let Some(Op::Lane { lane }) = source(r).map(|n| &n.op)
+                && m.lanes.iter().any(|l| &l.key == lane && matches!(l.kind, Kind::Events(_)))
+            {
+                notes_of.entry(to_id.clone()).or_insert_with(|| LaneRef { module: m.key.clone(), lane: lane.clone() });
             }
             let late = late.contains(&(to.clone(), *r));
             let bypassed = through.contains(&(to.clone(), *r));
@@ -1110,6 +1149,15 @@ pub fn view(session: &Session) -> GraphView {
                 _ => None,
             })
             .collect();
+        // Each call card's site and descriptor, for its groups and views.
+        let card_of: HashMap<String, (u32, &m2_script::Descriptor)> = ids
+            .iter()
+            .filter_map(|(g, id)| {
+                let Group::Site(s) = g else { return None };
+                let component = m.frames.iter().find(|f| f.site == *s && f.component.is_some())?.component.as_deref()?;
+                Some((id.clone(), (*s, &**rev.compiled.components.get(component)?)))
+            })
+            .collect();
         for n in &mut nodes {
             let mut row = inputs.remove(&n.id).unwrap_or_default();
             row.sort_by_key(|(_, at)| at.as_ref().filter(|(f, _)| files.get(&n.id) == Some(&f.as_str())).map(|(_, o)| *o));
@@ -1124,6 +1172,11 @@ pub fn view(session: &Session) -> GraphView {
                     Some(p) => l.port = p.id.clone(),
                     None => n.listens = None,
                 }
+            }
+            // Its groups and views (CARD-25, CARD-26), over its inputs and settings as they now are.
+            if let Some((site, desc)) = card_of.get(&n.id) {
+                n.groups = crate::views::groups(desc, n);
+                n.views = crate::views::views(m, *site, desc, n, notes_of.get(&n.id));
             }
             let mut names = HashSet::new();
             if !n.inputs.iter().all(|p| names.insert(p.label.clone())) {

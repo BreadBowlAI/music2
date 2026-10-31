@@ -583,10 +583,10 @@ fn notes_and_points_edit_one_clip() {
         go(&mut s, Gesture::Notes { clip: by_id("kick/hits", "my53vvkc"), notes: vec![n(36.0, 1.0), n(36.0, 0.0)], length: Some(8.0) });
     assert_eq!(notes_by_id(&s, "kick/hits"), [("my53vvkc".into(), 0.0, 8.0, vec![(36.0, 0.0, 0.5), (36.0, 1.0, 0.5)])]);
     assert!(done.edited.after.contains("bar 1"), "{:?}", done.edited);
-    go(&mut s, Gesture::Points { clip: by_id("bass/cutoff", "adp0sw76"), points: vec![(8.0, 1000.0), (0.0, 200.0)] });
+    go(&mut s, Gesture::Points { clip: by_id("bass/cutoff", "adp0sw76"), points: vec![(8.0, Point::Number(1000.0)), (0.0, Point::Number(200.0))] });
     let LaneData::Control { clips, .. } = data(&s, "bass/cutoff").unwrap() else { unreachable!() };
     assert_eq!(clips[0].points, [(0.0, 200.0), (8.0, 1000.0)]);
-    let why = refused(&mut s, Gesture::Points { clip: by_id("kick/hits", "my53vvkc"), points: vec![(0.0, 1.0)] });
+    let why = refused(&mut s, Gesture::Points { clip: by_id("kick/hits", "my53vvkc"), points: vec![(0.0, Point::Number(1.0))] });
     assert!(why.contains("automation"), "{why}");
     let why = refused(&mut s, Gesture::Notes { clip: by_id("bass/cutoff", "adp0sw76"), notes: vec![n(36.0, 0.0)], length: None });
     assert!(why.contains("notes"), "{why}");

@@ -660,36 +660,31 @@ fn run(args: Vec<String>) -> Result<()> {
                         n.kind,
                         if to.is_empty() { String::new() } else { format!("  → {}", to.join(", ")) }
                     );
-                    for k in &n.knobs {
+                    // Each row as the card shows it: a knob, a value the code works out, a setting.
+                    let knob_line = |k: &m2_editor::Knob| -> Result<String> {
                         let shared = if k.uses > 1 { format!("  shared ×{}", k.uses) } else { String::new() };
                         // A range only where one is declared (PKG-8); the code's text, or the default it plays.
                         let range =
                             k.range.map_or("—".to_string(), |[lo, hi]| format!("[{lo} … {hi}]{}", if k.log { " log" } else { "" }));
                         let written = if k.written { format!("`{}`", k.literal) } else { "(default)".to_string() };
-                        // A plugin's stepped parameter is a menu or a switch on its card (CARD-6): its options too.
+                        // A choice or a switch is a menu or a switch on its card (CARD-20, CARD-6): its options too.
                         let options = match k.options.as_slice() {
                             [] => String::new(),
                             all => {
                                 let kind = serde_json::to_value(k.kind)?.as_str().unwrap_or_default().to_string();
-                                let now = all
-                                    .iter()
-                                    .find(|o| o.value == k.value)
-                                    .map_or(String::new(), |o| format!(" ({})", o.label));
+                                let now = all.iter().find(|o| o.value == k.value).map_or(String::new(), |o| format!(" ({})", o.label));
                                 format!("  {kind}: {}{now}", all.iter().map(|o| o.label.as_str()).collect::<Vec<_>>().join(" | "))
                             }
                         };
-                        println!(
-                            "      {:14} {:>9} {:9} {range}  {written}{shared}{options}",
-                            k.label,
-                            k.value,
-                            k.unit.unwrap_or("number")
-                        );
-                    }
-                    for r in &n.readonly {
-                        println!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
-                    }
+                        let value = match &k.value {
+                            serde_json::Value::String(s) => s.clone(),
+                            v => v.to_string(),
+                        };
+                        Ok(format!("      {:14} {:>9} {:9} {range}  {written}{shared}{options}", k.label, value, k.unit.unwrap_or("number")))
+                    };
+                    let readonly_line = |r: &m2_editor::ReadOnly| format!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
                     // Its settings (CARD-1): what each is, what it plays, and its id for `m2 set`.
-                    for x in &n.settings {
+                    let setting_line = |x: &m2_editor::settings::Setting| -> Result<String> {
                         // What the card says: an option by its name (Master, for a channel's `to` left
                         // out), the words for regions or a keymap, or the code that works it out.
                         let option = x.options.iter().find(|o| o.value == x.value).map(|o| o.label.clone());
@@ -706,7 +701,63 @@ fn run(args: Vec<String>) -> Result<()> {
                             (None, false) => "  (default)".to_string(),
                             (None, true) => String::new(),
                         };
-                        println!("      {:14} {:>9} {kind:9} {}{how}", x.label, value, x.id);
+                        Ok(format!("      {:14} {:>9} {kind:9} {}{how}", x.label, value, x.id))
+                    };
+                    // A view (CARD-26): its name and what it draws.
+                    let view_line = |v: &m2_editor::views::CardView| {
+                        let what = serde_json::to_value(&v.of).ok().and_then(|o| o["kind"].as_str().map(str::to_string)).unwrap_or_default();
+                        format!("      {:14} {what} view", v.name)
+                    };
+                    if n.groups.is_empty() {
+                        for k in &n.knobs {
+                            println!("{}", knob_line(k)?);
+                        }
+                        for r in &n.readonly {
+                            println!("{}", readonly_line(r));
+                        }
+                        for x in &n.settings {
+                            println!("{}", setting_line(x)?);
+                        }
+                        for v in &n.views {
+                            println!("{}", view_line(v));
+                        }
+                        continue;
+                    }
+                    // Its groups as headings over their rows (CARD-25).
+                    for g in &n.groups {
+                        println!("    {}", g.name);
+                        for row in &g.rows {
+                            let line = match row {
+                                m2_editor::views::Row::Input(id) => {
+                                    let Some(p) = n.inputs.iter().find(|p| &p.id == id) else { continue };
+                                    match (&p.knob, p.readonly, &p.inlet, &p.lane) {
+                                        (Some(k), ..) => match n.knobs.iter().find(|x| &x.id == k) {
+                                            Some(k) => knob_line(k)?,
+                                            None => continue,
+                                        },
+                                        (_, Some(i), ..) => match n.readonly.get(i) {
+                                            Some(r) => readonly_line(r),
+                                            None => continue,
+                                        },
+                                        (_, _, Some(c), _) => {
+                                            let from = n.inlets.iter().find(|x| &x.id == c).map_or("", |x| x.name.as_str());
+                                            format!("      {:14} ← {from}", p.label)
+                                        }
+                                        (_, _, _, Some(l)) => format!("      {:14} follows the {} lane", p.label, l.lane),
+                                        _ => format!("      {}", p.label),
+                                    }
+                                }
+                                m2_editor::views::Row::Setting(id) => match n.settings.iter().find(|x| &x.id == id) {
+                                    Some(x) => setting_line(x)?,
+                                    None => continue,
+                                },
+                                m2_editor::views::Row::View(name) => match n.views.iter().find(|v| &v.name == name) {
+                                    Some(v) => view_line(v),
+                                    None => continue,
+                                },
+                            };
+                            println!("{line}");
+                        }
                     }
                 }
             }

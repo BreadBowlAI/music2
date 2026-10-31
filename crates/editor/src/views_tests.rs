@@ -167,3 +167,176 @@ fn values_one_gesture_moves_are_one_undo_step() {
     assert!(e.contains("sustain is a number, not \"loud\""), "{e}");
     assert_eq!(f.read("song.ts"), song, "nothing written");
 }
+
+/// `{"unit": "choice", "clips": [...]}` as a lane of names' file holds it.
+fn steps_file(clips: &str) -> String {
+    format!("{{\"unit\": \"choice\", \"clips\": [{clips}]}}\n")
+}
+
+/// The lead's lane `key` as the timeline shows it.
+fn lane(s: &m2_session::Session, key: &str) -> crate::timeline::TimelineLane {
+    let t = s.timeline();
+    let track = t.tracks.into_iter().find(|t| t.module == "lead").expect("the lead");
+    track.lanes.into_iter().find(|l| l.key() == key).unwrap_or_else(|| panic!("no {key} lane"))
+}
+
+// CARD-23: Automate on a choice makes a lane of names, and the timeline shows it as a lane of steps:
+// its options, its fallback as written, and its clips with each point's name, an unknown one too.
+// A switch's lane has false and true.
+#[test]
+fn a_lane_of_names_is_a_lane_of_steps_on_the_timeline() {
+    let f = wobble("{ shape: \"square\" }");
+    let mut s = f.open();
+    let shape = knob(&s, "shape");
+    s.automate(s.accepted().number, &shape.id).unwrap();
+    let sub = knob(&s, "sub");
+    s.automate(s.accepted().number, &sub.id).unwrap();
+    let want_options = options(&[(json!("saw"), "saw"), (json!("square"), "square"), (json!("sine"), "sine")]);
+    match lane(&s, "shape") {
+        crate::timeline::TimelineLane::Steps { label, options: got, default, clips, .. } => {
+            assert_eq!((label.as_str(), &got, &default, clips.len()), ("shape", &want_options, &json!("square"), 0));
+        }
+        other => panic!("not a lane of steps: {other:?}"),
+    }
+    f.write("data/lead/shape.json", steps_file("{\"id\": \"a\", \"start\": 0, \"length\": 4, \"points\": [[0, \"sine\"], [2, \"sqaure\"]]}"));
+    s.refresh();
+    let sent = serde_json::to_value(lane(&s, "shape")).unwrap();
+    assert_eq!(sent["kind"], "steps");
+    assert_eq!(sent["clips"], json!([{"id": "a", "start": 0.0, "length": 4.0, "points": [[0.0, "sine"], [2.0, "sqaure"]]}]));
+    match lane(&s, "sub") {
+        crate::timeline::TimelineLane::Steps { options: got, default, .. } => {
+            assert_eq!((got, default), (options(&[(json!(false), "Off"), (json!(true), "On")]), json!(false)));
+        }
+        other => panic!("not a lane of steps: {other:?}"),
+    }
+}
+
+// CARD-24: the clip gestures on a lane of names, one Tx each: a new clip holds the name the lane
+// plays there; points drawn by name, an unknown name refused in words naming the options; a move,
+// a split (its second part starting with the name playing at the cut), a duplicate and a delete; a
+// copy onto a switch's lane refused; join refused.
+#[test]
+fn clip_gestures_draw_a_lane_of_names() {
+    use crate::clips::{ClipRef, Gesture, Point, edit};
+    use m2_song::LaneAddr;
+    let f = wobble("{ shape: \"square\" }");
+    let mut s = f.open();
+    let shape = knob(&s, "shape");
+    s.automate(s.accepted().number, &shape.id).unwrap();
+    let sub = knob(&s, "sub");
+    s.automate(s.accepted().number, &sub.id).unwrap();
+    let addr = LaneAddr::new("lead", "shape").unwrap();
+    let file = || f.read("data/lead/shape.json");
+    let made = edit(&mut s, &Gesture::Create { lane: addr.clone(), start: 4.0, length: Some(4.0) }).unwrap();
+    let id = made.made[0].1.clone();
+    assert!(file().contains(&format!("{{\"id\": \"{id}\", \"start\": 4, \"length\": 4, \"points\": [[0, \"square\"]]}}")), "{}", file());
+    let clip = ClipRef { lane: addr.clone(), id: Some(id.clone()), at: None, sha: None };
+    let name = |n: &str| Point::Step(m2_song::lane::Step::Name(n.into()));
+    edit(&mut s, &Gesture::Points { clip: clip.clone(), points: vec![(2.0, name("sine")), (0.0, name("saw"))] }).unwrap();
+    assert!(file().contains(&format!("{{\"id\": \"{id}\", \"start\": 4, \"length\": 4, \"points\": [[0, \"saw\"], [2, \"sine\"]]}}")), "{}", file());
+    let e = edit(&mut s, &Gesture::Points { clip: clip.clone(), points: vec![(0.0, name("squar"))] }).unwrap_err().to_string();
+    assert!(e.contains("lead's shape lane is one of \"saw\", \"square\" or \"sine\", not \"squar\""), "{e}");
+    let e = edit(&mut s, &Gesture::Points { clip: clip.clone(), points: vec![(0.0, Point::Number(1.0))] }).unwrap_err().to_string();
+    assert!(e.contains("lead's shape lane is one of \"saw\", \"square\" or \"sine\", not 1"), "{e}");
+    let before = file();
+    edit(&mut s, &Gesture::Move { clips: vec![clip.clone()], by: 4.0, to: None, copy: false }).unwrap();
+    assert!(file().contains(&format!("{{\"id\": \"{id}\", \"start\": 8, \"length\": 4, \"points\": [[0, \"saw\"], [2, \"sine\"]]}}")), "{}", file());
+    s.undo().unwrap();
+    assert_eq!(file(), before, "one undo step");
+    let split = edit(&mut s, &Gesture::Split { clips: vec![clip.clone()], at: 7.0 }).unwrap();
+    let second = split.made[0].1.clone();
+    assert!(file().contains(&format!("{{\"id\": \"{id}\", \"start\": 4, \"length\": 3, \"points\": [[0, \"saw\"], [2, \"sine\"]]}}")), "{}", file());
+    assert!(file().contains(&format!("{{\"id\": \"{second}\", \"start\": 7, \"length\": 1, \"points\": [[0, \"sine\"]]}}")), "{}", file());
+    let both = vec![clip.clone(), ClipRef { lane: addr.clone(), id: Some(second.clone()), at: None, sha: None }];
+    let e = edit(&mut s, &Gesture::Join { clips: both }).unwrap_err().to_string();
+    assert!(e.contains("can't be joined"), "{e}");
+    let to = LaneAddr::new("lead", "sub").unwrap();
+    let e = edit(&mut s, &Gesture::Move { clips: vec![clip.clone()], by: 0.0, to: Some(to), copy: true }).unwrap_err().to_string();
+    assert!(e.contains("A choice's clip can't go on a switch's lane"), "{e}");
+    edit(&mut s, &Gesture::Duplicate { clips: vec![clip.clone()], range: None, grid: None, times: None }).unwrap();
+    assert_eq!(file().matches("\"points\": [[0, \"saw\"], [2, \"sine\"]]").count(), 2, "{}", file());
+    edit(&mut s, &Gesture::Delete { clips: vec![clip] }).unwrap();
+    assert_eq!(file().matches("\"points\": [[0, \"saw\"], [2, \"sine\"]]").count(), 1, "{}", file());
+}
+
+// CARD-25: the view carries the card's groups in their declared order, each with its rows in the
+// order the group names them (an input by its id, a setting by its id, a view by its name), and a
+// last group, More, of what no group names; every control input says its slot. The notes input is
+// a connection, in no group.
+#[test]
+fn a_cards_groups_are_in_the_view() {
+    let f = wobble(&format!("{{ shape: \"square\", regions: {REGIONS} }}"));
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let card = card(&s);
+    let input = |slot: &str| card.inputs.iter().find(|p| p.slot.as_deref() == Some(slot)).unwrap_or_else(|| panic!("no {slot} input")).id.clone();
+    let regions = card.settings.iter().find(|x| x.slot == "regions").expect("the regions setting").id.clone();
+    use crate::views::Row::{Input, Setting, View};
+    let groups: Vec<(&str, Vec<crate::views::Row>)> = card.groups.iter().map(|g| (g.name.as_str(), g.rows.clone())).collect();
+    assert_eq!(
+        groups,
+        [
+            ("Sound", vec![Input(input("shape")), Input(input("sub")), View("scope".into())]),
+            ("Filter", vec![View("filter".into()), Input(input("cutoff")), Input(input("q"))]),
+            ("Amp", vec![View("amp".into()), Input(input("attack")), Input(input("decay")), Input(input("sustain")), Input(input("release"))]),
+            ("More", vec![Setting(regions), View("keys".into())]),
+        ]
+    );
+    assert!(card.inputs.iter().any(|p| p.kind == "notes" && p.slot.is_none()), "the notes input is a connection: {:?}", card.inputs);
+    let sent = serde_json::to_value(&card).unwrap();
+    assert_eq!(sent["groups"][0], json!({"name": "Sound", "rows": [{"input": input("shape")}, {"input": input("sub")}, {"view": "scope"}]}));
+}
+
+// CARD-26: the view carries the card's views, resolved for the call: each part of an envelope and
+// a filter names its slot and its knob; a keys view its setting, the regions the Sampler plays and
+// the notes lane; a scope nothing. A part driven by a lane has no knob, and says why.
+#[test]
+fn a_cards_views_are_in_the_view() {
+    use crate::views::{Drawn, KeyRegion};
+    let f = wobble(&format!("{{ shape: \"square\", cutoff: 1200, regions: {REGIONS} }}"));
+    let mut s = f.open();
+    let card_now = card(&s);
+    let knob_id = |slot: &str| card_now.knobs.iter().find(|k| k.slot.as_deref() == Some(slot)).map(|k| k.id.clone());
+    let names: Vec<&str> = card_now.views.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, ["amp", "filter", "keys", "scope"]);
+    match &card_now.views[0].of {
+        Drawn::Envelope { attack, decay, sustain, release } => {
+            for (part, slot) in [(attack, "attack"), (decay, "decay"), (sustain, "sustain"), (release, "release")] {
+                assert_eq!((part.slot.as_str(), &part.knob, &part.why), (slot, &knob_id(slot), &None), "{slot}");
+            }
+        }
+        other => panic!("not an envelope: {other:?}"),
+    }
+    match &card_now.views[1].of {
+        Drawn::Filter { cutoff, q } => {
+            assert_eq!((cutoff.knob.clone(), q.knob.clone()), (knob_id("cutoff"), knob_id("q")));
+            assert!(cutoff.knob.is_some());
+        }
+        other => panic!("not a filter: {other:?}"),
+    }
+    let regions = card_now.settings.iter().find(|x| x.slot == "regions").unwrap().id.clone();
+    match &card_now.views[2].of {
+        Drawn::Keys { setting, regions: played, lane, why } => {
+            assert_eq!((setting, why), (&regions, &None));
+            assert_eq!(lane.as_ref().map(|l| (l.module.as_str(), l.lane.as_str())), Some(("lead", "notes")));
+            let c4 = KeyRegion { file: "c4.wav".into(), root: 60, keys: [48, 72], velocity: [1, 127], round_robin: [1, 1], release: false };
+            let c5 = KeyRegion { file: "c5.wav".into(), root: 72, keys: [73, 96], velocity: [1, 100], round_robin: [1, 1], release: false };
+            assert_eq!(played, &vec![c4, c5]);
+        }
+        other => panic!("not keys: {other:?}"),
+    }
+    assert!(matches!(card_now.views[3].of, Drawn::Scope {}));
+    let sent = serde_json::to_value(&card_now).unwrap();
+    assert_eq!(sent["views"][3], json!({"name": "scope", "kind": "scope"}));
+    assert_eq!(sent["views"][0]["attack"]["slot"], "attack");
+    // The attack automated: its part has no knob, and says the lane drives it.
+    let attack = knob(&s, "attack");
+    s.automate(s.accepted().number, &attack.id).unwrap();
+    match &card(&s).views[0].of {
+        Drawn::Envelope { attack, .. } => {
+            assert_eq!(attack.knob, None);
+            assert_eq!(attack.why.as_deref(), Some("it follows the attack lane"));
+        }
+        other => panic!("not an envelope: {other:?}"),
+    }
+}

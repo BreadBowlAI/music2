@@ -72,7 +72,7 @@ Render a track, named by its key (or the whole song), to a new `assets/<asset-na
 m2 graph <project> [--json]
 ```
 
-The graph the canvas shows: calls, their knobs and settings, connections.
+The graph the canvas shows: calls, their knobs and settings, connections. A card whose sound puts its values in groups prints each group as a heading over its rows, with More last; its views (an envelope, a filter's curve, a key map, a scope) are rows too.
 
 ## m2 controls
 
@@ -88,7 +88,7 @@ Every number written in the project that the graph can edit, with its id, and ev
 m2 set <project> <control> <value> [--expect V]
 ```
 
-Change one, verified by the compiler (values in the control's units); `--expect` refuses unless it is V now. A setting is set the same way, by its id (a card's `settings` in `m2 graph <project> --json`, such as `tracks/bass.ts#3/@shape`): a number, true or false, or a word such as `square`.
+Change one, verified by the compiler (values in the control's units); `--expect` refuses unless it is V now. A knob that is a menu or a switch takes a word: one of its options' names (`square`), or true or false (On, Off). A setting is set the same way, by its id (a card's `settings` in `m2 graph <project> --json`, such as `tracks/bass.ts#3/@shape`): a number, true or false, or a word such as `square`.
 
 ## m2 automate
 

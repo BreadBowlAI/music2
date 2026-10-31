@@ -939,6 +939,7 @@ impl Open {
                 let clips = match &mut lane {
                     TimelineLane::Notes { clips, .. } => Clips::Notes(std::mem::take(clips)),
                     TimelineLane::Control { clips, .. } => Clips::Control(std::mem::take(clips)),
+                    TimelineLane::Steps { clips, .. } => Clips::Steps(std::mem::take(clips)),
                     TimelineLane::Audio { clips, .. } => Clips::Audio(std::mem::take(clips)),
                 };
                 let rest = serde_json::to_string(&lane).expect("a lane serialises");
@@ -956,6 +957,7 @@ impl Open {
                         match (&mut lane, clips) {
                             (TimelineLane::Notes { clips, .. }, Clips::Notes(c)) => *clips = c,
                             (TimelineLane::Control { clips, .. }, Clips::Control(c)) => *clips = c,
+                            (TimelineLane::Steps { clips, .. }, Clips::Steps(c)) => *clips = c,
                             (TimelineLane::Audio { clips, .. }, Clips::Audio(c)) => *clips = c,
                             _ => unreachable!("taken from this lane"),
                         }
@@ -980,6 +982,7 @@ impl Open {
 enum Clips {
     Notes(Vec<m2_song::NoteClip>),
     Control(Vec<m2_song::ControlClip>),
+    Steps(Vec<m2_song::lane::StepClip>),
     Audio(Vec<m2_song::AudioClip>),
 }
 
