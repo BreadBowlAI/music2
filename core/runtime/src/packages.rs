@@ -146,6 +146,10 @@ type Steps = BTreeMap<u32, Vec<String>>;
 /// editor (CARD-6), and asking would cost a call to the plugin for each step.
 pub const MOST_STEPS: u32 = 64;
 
+/// The most names asked of one plugin, all its parameters together: a plugin with thousands of
+/// stepped parameters is described in a moment still, and those past it are numbers (CARD-6).
+pub const MOST_NAMES: u32 = 4096;
+
 /// The engine every kernel runs in.
 ///
 /// WebAssembly floating point is bit-exact on every machine except for the bits
@@ -626,7 +630,8 @@ fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plu
 }
 
 /// What instance `h` calls each step of each stepped parameter of 2 to [`MOST_STEPS`] steps, by
-/// parameter id; a parameter with a step it gives no name is left out (CARD-6).
+/// parameter id, in their order until [`MOST_NAMES`] are asked; a parameter with a step it gives no
+/// name is left out (CARD-6).
 fn steps_of(host: &dyn PluginHost, h: m2_plugins::Handle, params: &[m2_plugins::Param]) -> Steps {
     let stepped = |p: &&m2_plugins::Param| {
         p.stepped && p.min.fract() == 0.0 && p.max.fract() == 0.0 && p.max > p.min && p.max - p.min < f64::from(MOST_STEPS)
@@ -635,11 +640,17 @@ fn steps_of(host: &dyn PluginHost, h: m2_plugins::Handle, params: &[m2_plugins::
         Ok(m2_plugins::Reply::Text(Some(t))) => Some(t.trim().to_string()),
         _ => None,
     };
-    params
-        .iter()
-        .filter(stepped)
-        .filter_map(|p| Some((p.id, (0..=(p.max - p.min) as u32).map(|i| name(p.id, p.min + f64::from(i))).collect::<Option<Vec<_>>>()?)))
-        .collect()
+    let mut left = MOST_NAMES;
+    let mut out = Steps::new();
+    for p in params.iter().filter(stepped) {
+        let steps = (p.max - p.min) as u32 + 1;
+        let Some(after) = left.checked_sub(steps) else { break };
+        left = after;
+        if let Some(names) = (0..steps).map(|i| name(p.id, p.min + f64::from(i))).collect() {
+            out.insert(p.id, names);
+        }
+    }
+    out
 }
 
 /// The ports of an installed plugin: `in`, `notes`, each parameter by its address (FMT-18), `out`.
