@@ -198,6 +198,7 @@ fn an_import_writes_a_pack_and_says_what_it_left_out() {
     let t = std::fs::read_to_string(folder.join("instruments/tiny-keys.toml")).unwrap();
     let inst = m2_song::instrument::DataInstrument::read(&t).unwrap();
     assert_eq!((inst.label.as_str(), inst.category.as_str(), inst.mode.as_deref()), ("Tiny Keys", "Keys", Some("gate")));
+    assert_eq!(inst.turns.as_deref(), Some("key"), "a turn for each key, as SFZ counts (PKG-16 §3)");
     assert_eq!(inst.controls, [("velocity", 0.8)]);
     assert_eq!(inst.regions.len(), 3);
     assert!(t.contains("file = \"samples/C4-LOUD.wav\"") || t.contains("file = \"samples/c4-loud.wav\""), "{t}");

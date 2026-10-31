@@ -56,7 +56,7 @@ crate::api::routes! {
         "Add a folder of samples to the library, or remove one",
         r#"{"add": "/Users/you/Samples"}"#;
     POST "/api/library/sample" => add_sample; writes, agents,
-        "Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or a Sampler's file at `call`",
+        "Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or the recording of call `call` (a Sampler's file, or its `setting`)",
         r#"{"session": 7, "id": "sample:std:samples/kit/kick.wav", "to": {"kind": "below", "beat": 0}}"#;
     POST "/api/library/get" => get_item; writes, agents,
         "Get a pack or a sample from the library (the registry): a pack's whole version installed, checked, or one sample added to the song with its note; or a version the open song locks and is missing. Answers once it is done; `get` events say how far",
@@ -269,11 +269,14 @@ struct SampleReq {
     /// or `{kind: "below", beat}`.
     #[serde(default)]
     to: Option<Target>,
-    /// Or the Sampler call it becomes the file of, in revision `at`.
+    /// Or the call it becomes the recording of, in revision `at`: a Sampler's file, or its recording
+    /// `setting` (CARD-5).
     #[serde(default)]
     at: Option<u64>,
     #[serde(default)]
     call: Option<String>,
+    #[serde(default)]
+    setting: Option<String>,
 }
 
 /// Add sample `id` from the library to the open song (LIB-7): a clip at `to`, one undo step,
@@ -288,7 +291,7 @@ async fn add_sample(State(s): S, Json(r): Json<SampleReq>) -> Result<Json<Value>
         samples::still_plain(&sample).map_err(|e| anyhow::anyhow!("{} can't be added: {e}.", item.label))?;
         match (r.to, r.at, r.call) {
             (Some(to), None, None) => state.graph.add_sample(r.session, sample, to),
-            (None, Some(at), Some(call)) => state.graph.sample_to_sampler(r.session, at, call, sample),
+            (None, Some(at), Some(call)) => state.graph.sample_to_sampler(r.session, at, call, r.setting, sample),
             _ => anyhow::bail!("A sample goes to a place (`to`) or to a Sampler (`at` and `call`)."),
         }
     })

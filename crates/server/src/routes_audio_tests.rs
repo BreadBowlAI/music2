@@ -17,7 +17,7 @@ fn project(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("data/vox")).unwrap();
     std::fs::create_dir_all(dir.join("assets")).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(dir.join("song.ts"), SONG).unwrap();
     let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
@@ -206,12 +206,15 @@ fn an_audio_track_through_the_route() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The sampler card's node in the open song's view: its call's id and what it shows.
+/// The sampler card's node in the open song's view: its call's id and what its recording, `sample`,
+/// plays (CARD-1).
 fn sampler_node(graph: &Graph) -> (u64, String, serde_json::Value) {
     let view = graph.state().unwrap()["view"].clone();
     let nodes = view["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap().clone()).collect::<Vec<_>>();
     let node = nodes.into_iter().find(|n| n["component"] == "std:sampler").expect("a sampler's card");
-    (view["revision"].as_u64().unwrap(), node["id"].as_str().unwrap().to_string(), node["sampler"].clone())
+    let sample = node["settings"].as_array().into_iter().flatten().find(|x| x["slot"] == "sample").expect("its recording");
+    assert_eq!((&sample["kind"], &sample.get("readonly")), (&serde_json::json!("recording"), &None), "{sample:#}");
+    (view["revision"].as_u64().unwrap(), node["id"].as_str().unwrap().to_string(), sample["value"].clone())
 }
 
 // Track ab: a WAV dropped on a sampler's card comes into assets/ and makes one Tx, one undo step
@@ -227,7 +230,7 @@ fn a_wav_dropped_on_a_sampler_sets_its_file_through_the_route() {
             .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let (at, call, card) = sampler_node(&running.state.graph);
-    assert_eq!(card, serde_json::json!({"files": []}), "no file yet");
+    assert_eq!(card, serde_json::Value::Null, "no file yet");
     let enc = |s: &str| s.bytes().map(|b| format!("%{b:02X}")).collect::<String>();
     let mut kick = std::fs::read(dir.join("assets/tone.wav")).unwrap();
     *kick.last_mut().unwrap() ^= 1;
@@ -240,13 +243,89 @@ fn a_wav_dropped_on_a_sampler_sets_its_file_through_the_route() {
     let state = running.state.graph.state().unwrap();
     assert_eq!(state["undo_name"]["name"], "setting Sampler to kick.wav", "{:#}", state["undo_name"]);
     let (at, call, card) = sampler_node(&running.state.graph);
-    assert_eq!(card, serde_json::json!({"files": ["kick.wav"]}));
+    assert_eq!(card, serde_json::json!("kick.wav"));
     // Not a WAV: refused in words; nothing is copied or written.
     let path = format!("/api/graph/sample?session={session}&at={at}&call={}&name=notes.txt", enc(&call));
     let (status, why) = post(&running.url, &path, "application/octet-stream", b"hello, not a sound");
     assert!(status == 400 && why["error"].as_str().unwrap().contains("notes.txt isn't a WAV or FLAC file"), "{status} {why:#}");
     assert!(!dir.join("assets/notes.txt").exists());
     assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("{ sample: \"kick.wav\" }"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Setting `slot` of the card whose title is `title` in the open song's view, as it is sent.
+fn setting_of(graph: &Graph, title: &str, slot: &str) -> (u64, serde_json::Value) {
+    let view = graph.state().unwrap()["view"].clone();
+    let nodes = view["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap().clone()).collect::<Vec<_>>();
+    let node = nodes.into_iter().find(|n| n["title"] == title).unwrap_or_else(|| panic!("no {title}"));
+    let found = node["settings"].as_array().into_iter().flatten().find(|x| x["slot"] == slot).cloned();
+    (view["revision"].as_u64().unwrap(), found.unwrap_or_else(|| panic!("no {slot} on {title}: {node:#}")))
+}
+
+// CARD-4, CARD-5 over HTTP: `POST /api/graph/set` writes a setting's value (a word, a boolean) as
+// one undo step, and refuses a fraction for a whole number in words; `POST /api/graph/sample` with
+// a `setting` brings a file in and makes it that recording, named as the drop names it.
+#[test]
+fn a_setting_and_a_recording_change_through_the_routes() {
+    let dir = project("settings");
+    let song = "import { component, port, setting, song, track } from '@m2/core';\nimport { lfo } from 'std/control';\n\
+                import { vca } from 'std/dsp';\nimport { sampler } from 'std/sampler';\n\
+                const box = component({ id: 'box', label: 'Box', inputs: { notes: port.notes() },\n\
+                  settings: { held: setting.bool(false), voices: setting.int(4), sample: setting.asset().optional() }, output: port.audio() },\n\
+                  (notes, p) => sampler(notes, { sample: p.sample, mode: p.held ? 'gate' : 'oneshot', voices: p.voices }));\n\
+                const s = track('s', ({ lane }) => box(lane.notes('notes')));\n\
+                export default song(({ time }) => vca(s.out, lfo(time.beats)));\n";
+    std::fs::write(dir.join("song.ts"), song).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let set = |id: &serde_json::Value, at: u64, value: serde_json::Value| {
+        let body = serde_json::json!({"session": session, "revision": at, "id": id, "gesture": "set", "value": value});
+        post(&running.url, "/api/graph/set", "application/json", body.to_string().as_bytes())
+    };
+    let (at, shape) = setting_of(&running.state.graph, "LFO", "shape");
+    assert_eq!(
+        (&shape["kind"], &shape["value"], &shape["written"]),
+        (&serde_json::json!("choice"), &serde_json::json!("sine"), &serde_json::json!(false))
+    );
+    let (status, done) = set(&shape["id"], at, serde_json::json!("square"));
+    assert_eq!(status, 200, "{done:#}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("lfo(time.beats, { shape: \"square\" })"));
+    assert!(done["step"].is_number(), "one undo step: {done:#}");
+    let (at, held) = setting_of(&running.state.graph, "Box", "held");
+    let (status, done) = set(&held["id"], at, serde_json::json!(true));
+    assert_eq!(status, 200, "{done:#}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("box(lane.notes('notes'), { held: true })"));
+    let (at, voices) = setting_of(&running.state.graph, "Box", "voices");
+    let before = std::fs::read_to_string(dir.join("song.ts")).unwrap();
+    let (status, why) = set(&voices["id"], at, serde_json::json!(2.5));
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("voices is a whole number, not 2.5"), "{status} {why:#}");
+    assert_eq!(std::fs::read_to_string(dir.join("song.ts")).unwrap(), before, "nothing written");
+    // A file dropped on Box's recording.
+    let (at, sample) = setting_of(&running.state.graph, "Box", "sample");
+    let call = sample["id"].as_str().unwrap().rsplit_once("/@").unwrap().0.to_string();
+    let file = dir.join("assets/tone.wav").to_string_lossy().to_string();
+    let body = serde_json::json!({"session": session, "at": at, "call": call, "setting": "sample", "file": file});
+    let (status, done) = post(&running.url, "/api/graph/sample", "application/json", body.to_string().as_bytes());
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!((done["asset"].as_str(), done["name"].as_str()), (Some("tone.wav"), Some("setting Box to tone.wav")), "{done:#}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("{ held: true, sample: \"tone.wav\" }"));
+    assert_eq!(setting_of(&running.state.graph, "Box", "sample").1["value"], "tone.wav");
+    // CARD-5: a drop the call can't take is refused before the file is copied in: not a recording.
+    let elsewhere = dir.with_extension("elsewhere.wav");
+    let mut other = std::fs::read(dir.join("assets/tone.wav")).unwrap();
+    *other.last_mut().unwrap() ^= 1;
+    std::fs::write(&elsewhere, other).unwrap();
+    let files =
+        || std::fs::read_dir(dir.join("assets")).unwrap().flatten().map(|e| e.file_name()).collect::<std::collections::BTreeSet<_>>();
+    let before = files();
+    let (at, _) = setting_of(&running.state.graph, "Box", "voices");
+    let body = serde_json::json!({"session": session, "at": at, "call": call, "setting": "voices", "file": elsewhere.to_string_lossy()});
+    let (status, why) = post(&running.url, "/api/graph/sample", "application/json", body.to_string().as_bytes());
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("Box's voices isn't a recording"), "{status} {why:#}");
+    assert_eq!(files(), before, "nothing was copied into assets/");
+    let _ = std::fs::remove_file(&elsewhere);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

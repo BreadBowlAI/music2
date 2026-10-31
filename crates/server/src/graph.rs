@@ -207,7 +207,7 @@ pub struct Activity {
     pub device_errors: u64,
     /// Live notes sounding: audition's (MON-7).
     pub live: u32,
-    /// Lanes whose pitch wheel or mod wheel a MIDI keyboard left away from rest.
+    /// Lanes whose pitch wheel, mod wheel or sustain pedal a MIDI keyboard left away from rest.
     pub wheels: u32,
     /// The DSP load: the longest audio callback of the last second, as a share of the device's
     /// period, while the meters read it (8b.8).
@@ -1141,6 +1141,7 @@ impl Graph {
             bail!("can't seek to beat {beat}");
         }
         self.record_jump();
+        self.midi_pedals_up();
         if self.inner.timing.lock().is_none() {
             bail!("no project is open");
         }
@@ -1567,6 +1568,23 @@ impl Graph {
         }
     }
 
+    /// [`Graph::set`] for any value (CARD-4): a number for a knob, through its gesture's lease
+    /// when it has one; or a setting's value (a number, a string or a boolean), one Tx on its call.
+    pub fn set_any(&self, token: u64, revision: u64, id: &str, gesture: &str, value: Value, expect: Option<Value>) -> Result<Value> {
+        let number = value.as_f64().filter(|_| expect.as_ref().is_none_or(Value::is_number));
+        if let Some(v) = number
+            && !crate::caller::now().is_agent()
+            && let Some(lease) = self.lease_of(token, revision, id, gesture)?
+        {
+            return match self.commit(lease, v, expect.and_then(|e| e.as_f64()))? {
+                Committed::Written(v) => Ok(v),
+                Committed::Pending { errors } => Ok(json!({"pending": true, "errors": errors})),
+            };
+        }
+        let (id, gesture) = (id.to_string(), gesture.to_string());
+        self.call(move |a| a.set_any(token, revision, &id, &gesture, value, expect))
+    }
+
     // ------------------------------------------------------------ edits through the session
 
     /// Connect a named signal to a control's input, in code. The graph changes shape, so a new
@@ -1964,6 +1982,9 @@ impl Graph {
             other => bail!("unknown transport action {other}"),
         };
         player.transport(cmd)?;
+        if cmd == Cmd::Stop && st.playing {
+            self.midi_pedals_up();
+        }
         // The status says stopped at once, but the engine takes the stop at its next block line, up
         // to a block on. A seek back to where the status was, sent with it, keeps the playhead where
         // it was seen to stop: it never moves after that.

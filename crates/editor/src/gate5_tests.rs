@@ -164,9 +164,10 @@ fn a_shared_literal_is_one_control() {
     assert_eq!((knobs[0].slot.as_deref(), knobs[0].range), (None, None), "the two slots declare other ranges");
 }
 
-// HOME-1 (a CI gate from step 5): every value `controls()` and the view return names its home. The
-// view is checked as it is sent, so a value without the field fails; so is the timeline, whose tempo
-// and time signatures live in `data/arrangement.json` (8b.2).
+// HOME-1 (a CI gate from step 5): every value `controls()` and the view return names its home, a
+// card's settings included (CARD-1). The view is checked as it is sent, so a value without the
+// field fails; so is the timeline, whose tempo and time signatures live in `data/arrangement.json`
+// (8b.2).
 #[test]
 fn every_value_names_its_home() {
     for (name, f) in FIXTURES.iter().map(|n| (*n, fixture(n))).chain([("every-component", every_component())]) {
@@ -177,7 +178,9 @@ fn every_value_names_its_home() {
         let view = serde_json::to_value(s.view()).unwrap();
         let mut values = 0;
         for n in view["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap()) {
-            for v in n["knobs"].as_array().unwrap().iter().chain(n["readonly"].as_array().unwrap()) {
+            // A card's settings too (CARD-1), sent only when it has some.
+            let settings = n["settings"].as_array().into_iter().flatten();
+            for v in n["knobs"].as_array().unwrap().iter().chain(n["readonly"].as_array().unwrap()).chain(settings) {
                 assert_eq!(v["home"], "code", "{name}: {v}");
                 values += 1;
             }
