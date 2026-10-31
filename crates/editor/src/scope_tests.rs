@@ -41,9 +41,37 @@ fn a_scope_reads_a_calls_own_output() {
     let (at, _) = point(rev, &s.packages, "a", &id(&s, "scale")).unwrap();
     assert!(matches!(at, TapAt::Node(j) if flat.nodes[j].module == "a" && j != i), "the call around it is another box: {at:?}");
     assert!(view_has(&s, "a", &id(&s, "osc.sine")), "the id is the view's");
-    // TAP-9: from the node back to the id the view gives its call.
-    assert_eq!(id_of(rev, &s.packages, "a", i), Some(id(&s, "osc.sine")));
-    assert_eq!(id_of(rev, &s.packages, "c", i), None, "not c's");
+}
+
+// TAP-9, ID-13: a call is carried into a later revision by its `(`: an edit above it gives it
+// another id, a change of what it calls keeps it, and one that deletes it leaves it nowhere.
+#[test]
+fn a_call_is_carried_by_its_open_bracket() {
+    let (f, mut s) = session();
+    let was = s.accepted_arc();
+    let sine = id(&s, "osc.sine");
+    let edited =
+        SONG.replace("const a", "const z = track('z', () => osc.square(55));\nconst a").replace("osc.saw(v.pitch)", "osc.tri(v.pitch)");
+    f.write("song.ts", &edited);
+    assert!(s.refresh(), "the save is taken in");
+    let now = s.accepted_arc();
+    let moved = id(&s, "osc.sine");
+    assert_ne!(moved, sine, "the square's call above renumbers it");
+    assert_eq!(carry(&was, &now, &sine), Some(moved.clone()), "the same call, under its new id");
+    let saw = was.compiled.sites.iter().find(|x| x.callee == "osc.saw").map(|x| format!("{}#{}", x.file, x.ordinal)).unwrap();
+    assert_eq!(carry(&was, &now, &saw), Some(id(&s, "osc.tri")), "a changed callee is the same call");
+    // A call deleted: its `(` is gone with it.
+    let two = edited
+        .replace("import { scale }", "import { scale, sum }")
+        .replace("export default", "const d = track('d', () => sum(osc.sine(110), osc.square(55)));\nexport default");
+    f.write("song.ts", &two);
+    assert!(s.refresh(), "the save is taken in");
+    let was = s.accepted_arc();
+    let call =
+        was.compiled.sites.iter().filter(|x| x.callee == "osc.sine").map(|x| format!("{}#{}", x.file, x.ordinal)).next_back().unwrap();
+    f.write("song.ts", two.replace("sum(osc.sine(110), osc.square(55))", "sum(osc.square(55))"));
+    assert!(s.refresh(), "the save is taken in");
+    assert_eq!(carry(&was, &s.accepted_arc(), &call), None, "deleted: gone");
 }
 
 /// Whether the graph view of module `module` has a box with id `node`.

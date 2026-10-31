@@ -1,11 +1,12 @@
 //! Where a scope reads (TAP-8): a box of the graph view, by its id, as a point of a plan. The id is
 //! the view's for a call (`tracks/bass.ts#3`: its file and its place among the file's calls). An
-//! edit may move a call to another place, so the server follows the call itself into each new
-//! revision (ID-13's continuity) and finds the id the new view gives it ([`id_of`], TAP-9).
+//! edit may give a call another place, so the server follows the call itself into each new
+//! revision, as ID-13 names a call, and takes the id the new view gives it ([`carry`], TAP-9).
 
 use m2_ir::{FOp, Kernels, Kind, Op, split_ref};
 use m2_runtime::TapAt;
 use m2_session::Revision;
+use m2_session::text::Edits;
 
 /// Where a scope on box `node` of module `module` reads in `rev`: the call's own output, at the top
 /// of its track, as sound; and its channels. Refused in words when it isn't one. `kernels` names
@@ -37,20 +38,20 @@ pub fn point(rev: &Revision, kernels: &dyn Kernels, module: &str, node: &str) ->
     }
 }
 
-/// The id the graph view gives the call of `module` whose own output is flat node `node` of `rev`,
-/// at the top of its track: where a scope on that call is found after an edit moved it (TAP-9).
-pub fn id_of(rev: &Revision, kernels: &dyn Kernels, module: &str, node: usize) -> Option<String> {
-    let compiled = &rev.compiled;
-    let found = compiled
-        .outputs
-        .iter()
-        .filter(|o| o.module == module && o.top)
-        .filter(|o| matches!(resolve(rev, kernels, &o.module, &o.port), Some((Some(TapAt::Node(i)), _, 0)) if i == node));
-    // The view draws the song's own calls, not those inside a package's components; of two that
-    // give the same node (one wrapping the other), the outer one.
-    let sites = found.filter_map(|o| compiled.sites.iter().find(|s| s.id == o.site && s.in_project));
-    let outer = sites.max_by_key(|s| s.end - s.start)?;
-    Some(format!("{}#{}", outer.file, outer.ordinal))
+/// The id `now`'s view gives the call `node` names in `was` (its view's id there): the same call,
+/// as ID-13 says, by its file and the `(` of its arguments carried through the edits between the
+/// two (`Edits::between`), wherever the edits around it moved it. None when that `(` was edited
+/// away: the call is gone (TAP-9).
+pub fn carry(was: &Revision, now: &Revision, node: &str) -> Option<String> {
+    let (file, ordinal) = node.rsplit_once('#')?;
+    let ordinal: u32 = ordinal.parse().ok()?;
+    let site = was.compiled.sites.iter().find(|s| s.file == file && s.ordinal == ordinal)?;
+    let path = std::path::Path::new(file);
+    let (before, after) = (was.snapshot.files.get(path)?, now.snapshot.files.get(path)?);
+    let open = site.open as usize;
+    let to = Edits::between(before, after).carry(open..open + 1)?.start as u32;
+    let found = now.compiled.sites.iter().find(|s| s.file == file && s.open == to)?;
+    Some(format!("{}#{}", found.file, found.ordinal))
 }
 
 /// What output reference `r` of `module` is in `rev`'s flat graph: the node, when it is sound, its
