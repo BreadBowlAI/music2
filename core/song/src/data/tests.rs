@@ -4,7 +4,7 @@ use super::*;
 use crate::Snapshot;
 use crate::diag::Severity;
 
-const MANIFEST: &str = "[project]\nname = \"Test\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+const MANIFEST: &str = "[project]\nname = \"Test\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
 
 /// A project folder with `files`, removed when dropped.
 struct Dir(PathBuf);

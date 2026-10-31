@@ -8,6 +8,9 @@
 // @m2/synths does); the others play the pack's own (`@m2/effects:delay` …, built from kernels-src/,
 // PACK-21).
 //
+// A card with more than a few knobs is put in order by its groups (CARD-17): reverb's room and its
+// mix, phaser's sweep and its mix. None is a filter, so none draws a filter's curve.
+//
 // Chorus, phaser, tremolo and bitcrush follow the song: each passes `time.playing` to its
 // kernel, so its wobble (or the bitcrusher's sample clock) moves only while the song plays.
 // Stopped, they wait; Play carries on. Played after a stop, a song sounds as its export does.
@@ -51,7 +54,12 @@ export const reverb = component(
       mix: control.frac(0.25).range(0, 1),
     },
     output: port.audio(),
-    editor: { category: "Delay & Reverb", description: "Space: the sound of a room or a hall around it", insert: { size: 0.6, damping: 0.5, mix: 0.25 } },
+    editor: {
+      category: "Delay & Reverb",
+      description: "Space: the sound of a room or a hall around it",
+      insert: { size: 0.6, damping: 0.5, mix: 0.25 },
+      groups: { Room: ["size", "damping"], Mix: ["mix"] },
+    },
   },
   (x: Audio, { size, damping, mix }: Params) => kernel("@m2/effects:reverb", { in: x, size, damping, mix }),
 );
@@ -90,7 +98,12 @@ export const phaser = component(
       mix: control.frac(0.5).range(0, 1),
     },
     output: port.audio(),
-    editor: { category: "Modulation", description: "A swirling, sweeping whoosh", insert: { rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 } },
+    editor: {
+      category: "Modulation",
+      description: "A swirling, sweeping whoosh",
+      insert: { rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 },
+      groups: { Sweep: ["rate", "depth", "feedback"], Mix: ["mix"] },
+    },
   },
   (x: Audio, { rate, depth, feedback, mix }: Params) => kernel("@m2/effects:phaser", { in: x, rate, depth, feedback, mix, playing: time.playing }),
 );

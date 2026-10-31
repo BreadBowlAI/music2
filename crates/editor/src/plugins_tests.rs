@@ -7,7 +7,7 @@ use crate::Gestures;
 use crate::controls::walk;
 use crate::testing::{Fixture, MANIFEST};
 
-const KICK: &str = "kick(lane.notes(\"hits\"))";
+const KICK: &str = "drums.drum(lane.notes(\"hits\"))";
 
 /// A song whose one track plays a kick, with the probe plugin findable (tests: in this process).
 fn kick_song() -> Fixture {
@@ -18,9 +18,9 @@ fn kick_song() -> Fixture {
     f.write(
         "song.ts",
         format!(
-            "import {{ song, track }} from \"@m2/core\";\nimport {{ kick }} from \"@m2/synths\";\n\n\
-             const drums = track(\"kick\", {{ name: \"Kick\" }}, ({{ lane }}) => {KICK});\n\
-             export default song(() => drums.out);\n"
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\n\n\
+             const kick = track(\"kick\", {{ name: \"Kick\" }}, ({{ lane }}) => {KICK});\n\
+             export default song(() => kick.out);\n"
         ),
     );
     f.write("data/kick/hits.json", m2_song::canonical(&m2_song::LaneData::Notes(vec![])));
@@ -57,7 +57,7 @@ fn adding_a_plugin_effect_wraps_the_call_in_one_tx() {
     let mut s = f.open();
     let before = f.read("song.ts");
     let at = s.accepted().number;
-    let added = s.add_effect(at, &call(&s, "kick"), "clap:m2.probe").unwrap();
+    let added = s.add_effect(at, &call(&s, "drums.drum"), "clap:m2.probe").unwrap();
     let wrapped = format!("plugin(\"clap:m2.probe\", {{ in: {KICK}, key: \"m2-probe\" }})");
     assert_eq!((added.before.as_str(), added.after.as_str()), (KICK, wrapped.as_str()));
     assert_eq!(f.read("song.ts"), before.replace("{ song, track }", "{ song, track, plugin }").replace(KICK, &wrapped));
@@ -83,7 +83,7 @@ fn a_second_plugin_in_one_frame_gets_a_free_key() {
     let f = kick_song();
     let mut s = f.open();
     let at = s.accepted().number;
-    s.add_effect(at, &call(&s, "kick"), "clap:m2.probe").unwrap();
+    s.add_effect(at, &call(&s, "drums.drum"), "clap:m2.probe").unwrap();
     let at = s.accepted().number;
     let added = s.add_effect(at, &call(&s, "plugin"), "clap:m2.probe").unwrap_or_else(|e| panic!("{e}"));
     assert!(added.after.ends_with(", key: \"m2-probe-2\" })"), "{}", added.after);
@@ -100,7 +100,7 @@ fn a_plugin_that_isnt_installed_is_refused_in_words() {
     let mut s = f.open();
     let before = f.read("song.ts");
     let at = s.accepted().number;
-    let refused = s.add_effect(at, &call(&s, "kick"), "clap:org.example.not-installed").unwrap_err();
+    let refused = s.add_effect(at, &call(&s, "drums.drum"), "clap:org.example.not-installed").unwrap_err();
     assert_eq!(
         refused.to_string(),
         "org.example.not-installed isn't installed on this computer, so it can't be added. Install it, then choose Look again."

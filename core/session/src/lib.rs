@@ -404,7 +404,7 @@ mod tests {
         p
     }
 
-    pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+    pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -422,9 +422,9 @@ mod tests {
     }
 
     const SONG: &str = r#"import { song } from "@m2/core";
-import { kick } from "@m2/synths";
+import { drums } from "@m2/drums";
 import { track } from "@m2/core";
-const k = track("kick", ({ lane }) => kick(lane.notes("hits")));
+const k = track("kick", ({ lane }) => drums.drum(lane.notes("hits")));
 export default song(() => k.out);
 "#;
 
@@ -647,9 +647,9 @@ export default song(() => v.out);
     #[test]
     fn a_missing_plugin_is_a_problem_not_a_failure() {
         let src = r#"import { plugin, song, track } from "@m2/core";
-import { kick } from "@m2/synths";
+import { drums } from "@m2/drums";
 import { sum } from "std/math";
-const k = track("kick", ({ lane }) => kick(lane.notes("hits")));
+const k = track("kick", ({ lane }) => drums.drum(lane.notes("hits")));
 const s = track("synth", { name: "Synth" }, ({ lane }) =>
   plugin("clap:org.example.not-installed", { notes: lane.notes("notes"), cutoff_7: 0.5 }));
 export default song(() => sum(k.out, s.out));

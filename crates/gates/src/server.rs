@@ -449,7 +449,7 @@ fn update_heard_ms(graph: &Graph, seq: u64, from_ns: u64, rate: u32) -> Option<f
 /// with-plugins' `tracks/kick.ts` with the kick wrapped in a delay: a structural save.
 fn delayed_kick(kick: &str) -> String {
     kick.replace("import { kick }", "import { delay } from \"@m2/effects\";\nimport { kick }")
-        .replace("const out = kick(lane.notes(\"hits\"));", "const out = delay(kick(lane.notes(\"hits\")));")
+        .replace("const out = drums.drum(lane.notes(\"hits\"));", "const out = delay(drums.drum(lane.notes(\"hits\")));")
 }
 
 fn slow(base: &str, n: u64) -> String {

@@ -389,8 +389,8 @@ mod tests {
         let fixture = Fixture::empty();
         fixture.write(
             "song.ts",
-            "import { song, track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\
-             const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
+            "import { song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\
+             const k = track(\"kick\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
         );
         fixture.write("music2.toml", crate::testing::MANIFEST);
         let mut s = fixture.open();

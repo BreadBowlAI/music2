@@ -2,12 +2,12 @@
 // whose input is a sidechain input. Muting the kick must leave the bass ducked.
 
 import { db, ms, song, track } from "@m2/core";
-import { kick as drum } from "@m2/synths";
+import { drums } from "@m2/drums";
 import { follow, osc } from "std/dsp";
 import { duck } from "std/fx";
 import { mixer } from "std/mix";
 
-const kick = track("kick", { name: "Kick" }, ({ lane }) => drum(lane.notes("hits")));
+const kick = track("kick", { name: "Kick" }, ({ lane }) => drums.drum(lane.notes("hits")));
 const bass = track("bass", { name: "Bass" }, () => osc.saw(55));
 
 export default song(() =>

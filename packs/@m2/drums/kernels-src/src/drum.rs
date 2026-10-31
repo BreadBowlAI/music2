@@ -42,7 +42,12 @@ const SNARE_LEVEL: usize = 24;
 const HAT_LEVEL: usize = 25;
 const TOM_LEVEL: usize = 26;
 const PERC_LEVEL: usize = 27;
-const INPUTS: usize = 28;
+// The Drum's own (`drums.drum`), which move whatever drum it plays; the kit leaves them at their
+// defaults, where they change no bit.
+const TUNE: usize = 28;
+const DECAY: usize = 29;
+const PUSH: usize = 30;
+const INPUTS: usize = 31;
 
 /// The input that sets drum `kind`'s level in the kit, by group: kick; snare, clap and rim; hats;
 /// toms; cymbals and percussion.
@@ -216,6 +221,19 @@ impl Drum {
         let sr = self.sr;
         let (kind, semis, alt) = kind_of(at(MODEL), at(PITCH));
         self.kind = kind;
+        // The Drum's knobs: its pitch moved by `tune` semitones, its decays `decay` times as long
+        // (the rim's and the cowbell's ring is their tone, so theirs stays), and `push` added to a
+        // kick's punch or a snare's snap. At 0, 1 and 0 (the kit's) each is left out, so no bit
+        // changes.
+        let shift = if at(TUNE).is_finite() { clampf(at(TUNE), -48.0, 48.0) } else { 0.0 };
+        let semis = if shift != 0.0 { semis + shift } else { semis };
+        let ratio = if shift != 0.0 { (shift / 12.0).exp2() } else { 1.0 };
+        let length = if at(DECAY).is_finite() { clampf(at(DECAY), 0.05, 20.0) } else { 1.0 };
+        let longer = |t: f32| if length != 1.0 { t * length } else { t };
+        let push = if at(PUSH).is_finite() { clampf(at(PUSH), -1.0, 1.0) } else { 0.0 };
+        let pushed = |x: f32| if push != 0.0 { x + push } else { x };
+        // A drum's own frequency, `ratio` times higher, inside its range.
+        let moved = |f: f32, lo: f32, hi: f32| if ratio != 1.0 { clampf(f * ratio, lo, hi) } else { f };
         let velocity = clampf(at(VELOCITY), 0.0, 1.0);
         // About -2 dB at 0.8, -12 dB at 0.3, then the kit's level for the drum's group.
         self.gain = velocity.powf(1.1) * db_to_gain(clampf(at(level(kind)), -60.0, 12.0));
@@ -229,13 +247,13 @@ impl Drum {
         self.drive = (drive > 0.0).then(|| (Drive::new(drive), Clip::default()));
         let ms = |x: f32| ((x * 0.001 * sr) as u32).max(1);
         let tune = |p: usize, lo: f32, hi: f32| clampf(at(p), lo, hi) * (semis / 12.0).exp2();
-        let time = |p: usize, lo: f32, hi: f32| clampf(at(p), lo, hi);
+        let time = |p: usize, lo: f32, hi: f32| longer(clampf(at(p), lo, hi));
         self.rise = ms(0.3);
         self.choke_len = CHOKE;
         self.sound = match kind {
             Kind::Silent => Sound::Silent,
             Kind::Kick => {
-                let punch = clampf(at(PUNCH), 0.0, 1.0) * if alt { 0.6 } else { 1.0 };
+                let punch = clampf(pushed(at(PUNCH)), 0.0, 1.0) * if alt { 0.6 } else { 1.0 };
                 self.gain *= KICK_GAIN;
                 self.choke_len = KICK_CHOKE;
                 let push = 1.0 + 2.0 * punch;
@@ -255,7 +273,7 @@ impl Drum {
                 }
             }
             Kind::Snare => {
-                let snap = clampf(at(SNAP) + if alt { 0.2 } else { 0.0 }, 0.0, 1.0);
+                let snap = clampf(pushed(at(SNAP) + if alt { 0.2 } else { 0.0 }), 0.0, 1.0);
                 let decay = time(SNARE_DECAY, 0.02, 2.0);
                 let f = tune(SNARE_TUNE, 60.0, 1_000.0);
                 self.gain *= SNARE_GAIN;
@@ -275,7 +293,7 @@ impl Drum {
                 }
             }
             Kind::Clap => {
-                let bp = Svf::bandpass(sr, clampf(at(CLAP_TONE), 300.0, 8_000.0), 1.8);
+                let bp = Svf::bandpass(sr, moved(clampf(at(CLAP_TONE), 300.0, 8_000.0), 300.0, 8_000.0), 1.8);
                 let short = |start: f32| Burst { start: ms(start), rise: ms(1.0), decay: Decay::new(0.017, sr) };
                 self.gain *= CLAP_GAIN;
                 self.rise = 1;
@@ -290,10 +308,10 @@ impl Drum {
                 }
             }
             Kind::ClosedHat | Kind::PedalHat | Kind::OpenHat => {
-                let tone = clampf(at(HAT_TONE), 2_000.0, 16_000.0);
+                let tone = moved(clampf(at(HAT_TONE), 2_000.0, 16_000.0), 2_000.0, 16_000.0);
                 let (decay, hold, level) = match kind {
                     Kind::ClosedHat => (time(HAT_DECAY, 0.005, 2.0), 0, 1.0),
-                    Kind::PedalHat => (0.025, 0, 1.0),
+                    Kind::PedalHat => (longer(0.025), 0, 1.0),
                     // Held open, it rings up louder than a closed hat.
                     _ => (time(OPEN_DECAY, 0.02, 5.0), ms(15.0), 0.55),
                 };
@@ -354,16 +372,18 @@ impl Drum {
             }
             Kind::Rim | Kind::Claves => {
                 let (res, mix, life, level) = if kind == Kind::Rim {
-                    let f = clampf(at(RIM_TONE), 300.0, 8_000.0);
+                    // A click into resonators, whose ring is their tone: `decay` leaves it as it is.
+                    let f = moved(clampf(at(RIM_TONE), 300.0, 8_000.0), 300.0, 8_000.0);
                     ([resonator(sr, f, 0.025), resonator(sr, 0.27 * f, 0.025)], [1.0, 0.6], 0.025, RIM_GAIN)
                 } else {
-                    ([resonator(sr, 2_500.0, 0.06), resonator(sr, 2_500.0, 0.06)], [1.0, 0.0], 0.06, CLAVES_GAIN)
+                    let f = moved(2_500.0, 300.0, 8_000.0);
+                    ([resonator(sr, f, 0.06), resonator(sr, f, 0.06)], [1.0, 0.0], 0.06, CLAVES_GAIN)
                 };
                 self.gain *= level;
                 Sound::Rim { res, mix, pulse: ms(0.25), hp: Svf::highpass(sr, 300.0, 0.7), life: Decay::new(life, sr) }
             }
             Kind::Cowbell => {
-                let f = clampf(at(BELL_TUNE), 100.0, 3_000.0);
+                let f = moved(clampf(at(BELL_TUNE), 100.0, 3_000.0), 100.0, 3_000.0);
                 self.gain *= BELL_GAIN;
                 Sound::Cowbell {
                     squares: free_squares(self.seed),

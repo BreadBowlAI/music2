@@ -596,7 +596,11 @@ mod tests {
         assert_eq!(added("track(\"k\", ({}) => osc.sine(440))"), "track(\"k\", ({ lane }) => osc.sine(440))");
         assert_eq!(added("track(\"k\", ({ time }: Ctx) => osc.sine(440))"), "track(\"k\", ({ time, lane }: Ctx) => osc.sine(440))");
         assert_eq!(named("track(\"k\", ({ lane, time }) => osc.sine(440))"), "lane");
-        assert_eq!(named("track(\"k\", ({ lane }) => hat(lane.notes(\"hits\")))"), "lane", "its own uses are its");
+        assert_eq!(
+            named("track(\"k\", ({ lane }) => drums.drum(lane.notes(\"hits\"), { drum: \"hats\" }))"),
+            "lane",
+            "its own uses are its"
+        );
         assert_eq!(named("track(\"k\", ({ lane: l }) => osc.sine(440))"), "l");
         assert_eq!(named("track(\"k\", (ctx) => osc.sine(440))"), "ctx.lane");
         assert_eq!(named("track(\"k\", (ctx: Ctx) => osc.sine(440))"), "ctx.lane");

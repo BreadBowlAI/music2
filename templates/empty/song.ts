@@ -7,15 +7,15 @@
 // "lead-vox".
 
 import { song, track } from "@m2/core";
-import { kick } from "@m2/synths";
+import { drums } from "@m2/drums";
 import { master, mixer } from "std/mix";
 
-// const drums = track("drums", { name: "Drums" }, ({ lane }) => kick(lane.notes("hits"))); // drums
+// const beat = track("drums", { name: "Drums" }, ({ lane }) => drums.drum(lane.notes("hits"))); // drums
 
 export default song(() =>
   master(
     mixer({
-      // drums: drums.out, // drums
+      // drums: beat.out, // drums
     }),
   ),
 );

@@ -1,23 +1,29 @@
 // @m2/drums: an 808/909-style drum machine (PACK-15).
 //
 // One engine, the pack's own `@m2/drums:drum` kernel (built from kernels-src/), plays every drum.
-// `drums.kit` maps notes to drums by their General MIDI numbers, so one notes lane plays a whole beat: C2 (36) kick, D2 (38)
-// snare, D#2 (39) clap, F#2 (42) closed hat, G#2 (44) pedal hat, A#2 (46) open hat, toms
-// on F2, G2, A2, B2, C3 and D3 (41 to 50), C#2 (37) rim, C#3 (49) crash, D#3 (51) ride,
-// F#3 (54) tambourine, G#3 (56) cowbell, A4 and A#4 (69, 70) shakers, D#5 (75) claves.
-// Each drum is also an instrument of its own.
+// `drums.kit` maps notes to drums by their General MIDI numbers, so one notes lane plays a whole beat:
+// C2 (36) kick, D2 (38) snare, D#2 (39) clap, F#2 (42) closed hat, G#2 (44) pedal hat, A#2 (46) open
+// hat, toms on F2, G2, A2, B2, C3 and D3 (41 to 50), C#2 (37) rim, C#3 (49) crash, D#3 (51) ride,
+// F#3 (54) tambourine, G#3 (56) cowbell, A4 and A#4 (69, 70) shakers, D#5 (75) claves. `drums.drum`
+// plays one drum on every note, the one its menu picks (`drum: "snare"`): a drum to process on its
+// own (a kick to duck the bass under) goes on a lane of its own, played by a Drum.
 //
 // A hit cuts off the drum it replaces, as on a drum machine: a kick the kick before it,
 // and a closed hat an open one (the hats choke each other). Toms, rim, cowbell, ride and
 // shakers ring on. Every drum reads its knobs when it is hit. No two hits are quite the
 // same (each catches its noise and metal at a new place, as on an analog machine), yet
-// every render of a song is. The kit is one sound: a drum to process on its own (a kick to
-// duck the bass under) goes on a lane of its own, played by that drum alone.
+// every render of a song is.
 
 import { component, control, kernel, poly, port, setting, signature, type Audio, type Events, type Params, type Value } from "@m2/core";
 
-/** Drums by `model`: -1 picks each note's drum from its General MIDI number. */
-const MODEL = { kit: -1, kick: 0, snare: 1, clap: 2, hats: 3, tom: 4, rim: 5, cowbell: 6, cymbal: 7, shaker: 8 } as const;
+/** The drums a Drum can play, as its menu names them. */
+const DRUMS = ["kick", "snare", "clap", "hats", "tom", "rim", "cowbell", "cymbal", "shaker"] as const;
+type Drum = (typeof DRUMS)[number];
+
+/** Each drum's `model` in the kernel (-1, the kit, picks each note's drum from its General MIDI number). */
+const MODEL: Record<Drum | "kit", number> = { kit: -1, kick: 0, snare: 1, clap: 2, hats: 3, tom: 4, rim: 5, cowbell: 6, cymbal: 7, shaker: 8 };
+/** Whether a hit of the drum cuts off the one before it (a choke): the toms, rim, cowbell and shaker ring on. */
+const CHOKES: Record<Drum, boolean> = { kick: true, snare: true, clap: true, hats: true, tom: false, rim: false, cowbell: false, cymbal: true, shaker: false };
 
 /**
  * The drum voices for `notes`, with a patch of kernel inputs (see `@m2/drums:drum` in the pack's `m2pkg.toml`).
@@ -98,7 +104,18 @@ export const drums = {
       },
       settings: { voices: setting.int(16) },
       output: port.audio(),
-      editor: { category: "Drums", description: "An 808/909 drum machine: kick, snare, clap, hats, toms and more, one per note", notes: KIT_NOTES },
+      editor: {
+        category: "Drums",
+        description: "An 808/909 drum machine: kick, snare, clap, hats, toms and more, one per note",
+        notes: KIT_NOTES,
+        groups: {
+          Kick: ["kickTune", "kickDecay", "punch", "kickLevel"],
+          "Snare & clap": ["snareTune", "snap", "snareLevel"],
+          Hats: ["hatTone", "hatDecay", "openDecay", "hatLevel"],
+          Toms: ["tomTune", "tomLevel"],
+          Percussion: ["percLevel", "drive"],
+        },
+      },
     },
     (notes: Events, p: Params): Audio =>
       machine(notes, MODEL.kit, p.voices, true, {
@@ -120,141 +137,35 @@ export const drums = {
       }),
   ),
 
-  /** A kick on every note, whatever its pitch: from a deep 808 boom (`punch` 0) to a hard 909 thump (1). */
-  kick: component(
+  /**
+   * One drum on every note, the one its menu picks: kick, snare, clap, hats (G#2 pedal, A#2 open),
+   * tom (chromatic: A2 is the drum's own pitch), rim, cowbell, cymbal or shaker. Its knobs move
+   * whichever it plays: `tune` in semitones from the drum's own, `decay` times its own length, and
+   * `punch` more or less of a kick's thump or a snare's snap. At 0, 1 and 0 it is the drum as the kit
+   * plays it. Which drum is a setting: it decides which hits cut each other off, so a pick rebuilds.
+   */
+  drum: component(
     {
-      id: "drum-kick",
-      label: "Kick drum",
+      id: "drum",
+      // Not "Drum": beside "Drum kit" in the + Track list it would be hard to tell apart (taste T3).
+      label: "One drum",
       signature: signature<(notes: Events) => Audio>(),
       inputs: { notes: port.notes() },
-      controls: { tune: KICK_TUNE, decay: KICK_DECAY, punch: PUNCH, drive: DRIVE },
-      settings: { voices: setting.int(4) },
+      controls: {
+        tune: control.semis(0).range(-24, 24),
+        decay: control.scalar(1).range(0.1, 10).log(),
+        punch: control.bipolar(0).range(-1, 1),
+        drive: DRIVE,
+      },
+      settings: { drum: setting.choice(DRUMS, "kick"), voices: setting.int(6) },
       output: port.audio(),
-      editor: { category: "Drums", description: "An 808/909 kick: a deep boom or a punchy thump" },
+      editor: {
+        category: "Drums",
+        description: "One 808/909 drum on every note, from its menu: kick, snare, clap, hi-hats, tom, rim, cowbell, cymbal or shaker",
+        groups: { Drum: ["drum", "tune", "decay", "punch", "drive"] },
+      },
     },
-    (notes: Events, { tune, decay, punch, drive, voices }: Params): Audio =>
-      machine(notes, MODEL.kick, voices, true, { kick_tune: tune, kick_decay: decay, punch, drive }),
-  ),
-
-  /** A snare on every note: a tuned body and a noisy rattle, balanced by `snap`. */
-  snare: component(
-    {
-      id: "drum-snare",
-      label: "Snare",
-      signature: signature<(notes: Events) => Audio>(),
-      inputs: { notes: port.notes() },
-      controls: { tune: SNARE_TUNE, snap: SNAP, decay: control.secs(0.18).range(0.02, 2).log() },
-      settings: { voices: setting.int(4) },
-      output: port.audio(),
-      editor: { category: "Drums", description: "An 808/909 snare: a tuned body and a crisp rattle" },
-    },
-    (notes: Events, { tune, snap, decay, voices }: Params): Audio =>
-      machine(notes, MODEL.snare, voices, true, { snare_tune: tune, snap, snare_decay: decay }),
-  ),
-
-  /** A hand clap on every note. */
-  clap: component(
-    {
-      id: "drum-clap",
-      label: "Clap",
-      signature: signature<(notes: Events) => Audio>(),
-      inputs: { notes: port.notes() },
-      controls: { tone: control.hz(1200).range(300, 8000).log(), decay: control.secs(0.25).range(0.03, 3).log() },
-      settings: { voices: setting.int(4) },
-      output: port.audio(),
-      editor: { category: "Drums", description: "An 808-style hand clap" },
-    },
-    (notes: Events, { tone, decay, voices }: Params): Audio => machine(notes, MODEL.clap, voices, true, { clap_tone: tone, clap_decay: decay }),
-  ),
-
-  /** Hi-hats: closed on every note, except G#2 (44) pedal and A#2 (46) open, which the next hat cuts off. */
-  hats: component(
-    {
-      id: "drum-hats",
-      label: "Hats",
-      signature: signature<(notes: Events) => Audio>(),
-      inputs: { notes: port.notes() },
-      controls: { decay: HAT_DECAY, openDecay: OPEN_DECAY.label("open decay"), tone: HAT_TONE },
-      settings: { voices: setting.int(6) },
-      output: port.audio(),
-      editor: { category: "Drums", description: "808 hi-hats: closed, pedal (G#2) and open (A#2), metallic and crisp", notes: HAT_NOTES },
-    },
-    (notes: Events, { decay, openDecay, tone, voices }: Params): Audio =>
-      machine(notes, MODEL.hats, voices, true, { hat_decay: decay, open_decay: openDecay, hat_tone: tone }),
-  ),
-
-  /** A tom, played chromatically: A2 (45) is at `tune`. Lower notes ring longer. */
-  tom: component(
-    {
-      id: "drum-tom",
-      label: "Tom",
-      signature: signature<(notes: Events) => Audio>(),
-      inputs: { notes: port.notes() },
-      controls: { tune: TOM_TUNE, decay: control.secs(0.35).range(0.03, 5).log() },
-      settings: { voices: setting.int(6) },
-      output: port.audio(),
-      editor: { category: "Drums", description: "An 808 tom, tuned by the note: A2 plays at its tune" },
-    },
-    (notes: Events, { tune, decay, voices }: Params): Audio => machine(notes, MODEL.tom, voices, false, { tom_tune: tune, tom_decay: decay }),
-  ),
-
-  /** A rim shot (side stick) on every note. */
-  rim: component(
-    {
-      id: "drum-rim",
-      label: "Rim",
-      signature: signature<(notes: Events) => Audio>(),
-      inputs: { notes: port.notes() },
-      controls: { tone: control.hz(1700).range(300, 8000).log() },
-      settings: { voices: setting.int(4) },
-      output: port.audio(),
-      editor: { category: "Drums", description: "A short wooden rim shot" },
-    },
-    (notes: Events, { tone, voices }: Params): Audio => machine(notes, MODEL.rim, voices, false, { rim_tone: tone }),
-  ),
-
-  /** The 808 cowbell on every note. */
-  cowbell: component(
-    {
-      id: "drum-cowbell",
-      label: "Cowbell",
-      signature: signature<(notes: Events) => Audio>(),
-      inputs: { notes: port.notes() },
-      controls: { tune: control.hz(540).range(100, 3000).log() },
-      settings: { voices: setting.int(4) },
-      output: port.audio(),
-      editor: { category: "Drums", description: "The 808 cowbell: two clanging squares" },
-    },
-    (notes: Events, { tune, voices }: Params): Audio => machine(notes, MODEL.cowbell, voices, false, { bell_tune: tune }),
-  ),
-
-  /** A crash cymbal on every note; the next crash cuts it off. */
-  cymbal: component(
-    {
-      id: "drum-cymbal",
-      label: "Cymbal",
-      signature: signature<(notes: Events) => Audio>(),
-      inputs: { notes: port.notes() },
-      controls: { decay: control.secs(1.6).range(0.1, 10).log() },
-      settings: { voices: setting.int(4) },
-      output: port.audio(),
-      editor: { category: "Drums", description: "An 808 crash cymbal: a wash of metal" },
-    },
-    (notes: Events, { decay, voices }: Params): Audio => machine(notes, MODEL.cymbal, voices, true, { cymbal_decay: decay }),
-  ),
-
-  /** A shaker on every note. */
-  shaker: component(
-    {
-      id: "drum-shaker",
-      label: "Shaker",
-      signature: signature<(notes: Events) => Audio>(),
-      inputs: { notes: port.notes() },
-      controls: { decay: control.ms(60).range(10, 2000).log() },
-      settings: { voices: setting.int(4) },
-      output: port.audio(),
-      editor: { category: "Drums", description: "A crisp shaker" },
-    },
-    (notes: Events, { decay, voices }: Params): Audio => machine(notes, MODEL.shaker, voices, false, { shake_decay: decay }),
+    (notes: Events, { drum, voices, tune, decay, punch, drive }: Params): Audio =>
+      machine(notes, MODEL[drum as Drum], voices, CHOKES[drum as Drum], { tune, decay, push: punch, drive }),
   ),
 };

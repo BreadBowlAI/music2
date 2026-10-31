@@ -33,6 +33,9 @@ const NAMES: [&str; INPUTS] = [
     "hat_level",
     "tom_level",
     "perc_level",
+    "tune",
+    "decay",
+    "push",
 ];
 
 fn patch(changes: &[(usize, f32)]) -> Vec<f32> {
@@ -459,4 +462,26 @@ fn noise_drums_are_as_loud_at_any_sample_rate() {
         let (a, b) = (at(48_000.0), at(96_000.0));
         assert!((a - b).abs() < 1.5, "pitch {pitch}: {a:.1} dB at 48 kHz, {b:.1} at 96");
     }
+}
+
+// CARD-33: a Drum's own knobs move whatever drum it plays. At 0, 1 and 0 (the kit's, left out)
+// they change no bit; a tune of 12 plays a tom an octave up, a decay of 2 lets a kick ring about
+// twice as long, and a push makes a snare snap harder.
+#[test]
+fn a_drums_knobs_move_the_drum_it_plays() {
+    let with = |model: f32, pitch: f32, changes: &[(usize, f32)]| {
+        let mut p = patch(changes);
+        p[MODEL] = model;
+        hit(&p, pitch, 0.8, s(3.0), &|_| 0.0).left()
+    };
+    for model in 0..9 {
+        let plain = with(model as f32, 45.0, &[]);
+        assert_eq!(plain, with(model as f32, 45.0, &[(TUNE, 0.0), (DECAY, 1.0), (PUSH, 0.0)]), "model {model}");
+    }
+    let tom = |tune: f32| peak_hz(&with(4.0, 45.0, &[(TUNE, tune)])[s(0.05)..s(0.3)], SR, 40.0, 1_000.0);
+    assert!((tom(12.0) / tom(0.0) - 2.0).abs() < 0.05, "a tom an octave up: {} → {}", tom(0.0), tom(12.0));
+    let rings = |decay: f32| last_sound(&with(0.0, 36.0, &[(DECAY, decay)])).unwrap() as f32;
+    assert!((rings(2.0) / rings(1.0) - 2.0).abs() < 0.3, "a kick rings {} then {} samples", rings(1.0), rings(2.0));
+    let bright = |push: f32| centroid(&with(1.0, 38.0, &[(PUSH, push)])[..s(0.2)], SR);
+    assert!(bright(0.4) > bright(0.0), "a pushed snare snaps harder: {} against {}", bright(0.4), bright(0.0));
 }

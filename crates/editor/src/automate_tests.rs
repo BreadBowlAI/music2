@@ -110,8 +110,8 @@ fn an_inherited_control_is_written_into_its_call_as_a_lane() {
     let a = s.automate(s.accepted().number, "tracks/kick.ts#1/@decay").unwrap();
     assert_eq!((a.lane.to_string(), a.name.as_str()), ("kick/decay".to_string(), "decay"));
     let now = f.read("tracks/kick.ts");
-    assert!(now.contains("kick(lane.notes(\"hits\"), { decay: lane.control(\"decay\", \"seconds\", "), "{now}");
-    assert_eq!(lane(&s, "kick", "decay").map(|l| (l.0, l.2)), Some((Some("seconds"), 0)));
+    assert!(now.contains("drums.drum(lane.notes(\"hits\"), { decay: lane.control(\"decay\", \"scalar\", "), "{now}");
+    assert_eq!(lane(&s, "kick", "decay").map(|l| (l.0, l.2)), Some((Some("scalar"), 0)));
     assert_eq!(render(&s), sound, "the default, as spelled, is what played");
     s.undo().unwrap();
     assert_eq!(f.read("tracks/kick.ts"), kick);

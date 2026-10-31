@@ -185,7 +185,8 @@ pub(crate) fn views(m: &Module, site: u32, desc: &Descriptor, node: &ViewNode, n
                         release: part(release, time),
                     }
                 }
-                ViewOf::Filter { cutoff, q } => Drawn::Filter { cutoff: part(cutoff, &["hz"]), q: part(q, &["scalar"]) },
+                // Its q a q, or a resonance from 0 to 1 (CARD-30): the window draws either.
+                ViewOf::Filter { cutoff, q } => Drawn::Filter { cutoff: part(cutoff, &["hz"]), q: part(q, &["scalar", "unit01"]) },
                 ViewOf::Keys { regions } => {
                     let setting = node.settings.iter().find(|x| &x.slot == regions).map(|x| x.id.clone()).unwrap_or_default();
                     let (regions, why) = match crate::sampler::key_regions(m, site) {

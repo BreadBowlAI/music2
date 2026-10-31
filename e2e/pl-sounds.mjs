@@ -64,7 +64,7 @@ check(
   first?.title === "Change Hats's instrument" && first.shown === "Change Hats's instrument" && first.placeholder === "Find an instrument…" && first.focused,
   `titled for the track, its search field focused (${JSON.stringify(first)})`,
 );
-check(first?.ticked.length === 0, "Hats plays @m2/synths' simple hat, which the list doesn't offer: nothing is ticked");
+check(same(first?.ticked, ["@m2/drums:drum"]), `Hats plays One drum, which the list ticks (${JSON.stringify(first?.ticked)})`);
 await linted(LIST, "the list in change mode");
 await page.screenshot({ path: `${ROOT}/pl-sounds-list.png` });
 await page.keyboard.type("kit");
@@ -72,7 +72,7 @@ check(await until(async () => (await listInfo())?.active === "@m2/drums:drum-kit
 check((await listInfo())?.code === 'tracks/hats.ts · drums.kit(lane.notes("hits"))', `its foot shows the code it writes: ${(await listInfo())?.code}`);
 const rev0 = await revision();
 await page.keyboard.press("Enter");
-const kit = orig.hats.replace('import { hat } from "@m2/synths";', 'import { drums } from "@m2/drums";').replace('hat(lane.notes("hits"))', 'drums.kit(lane.notes("hits"))');
+const kit = orig.hats.replace('import { drums } from "@m2/drums";', 'import { drums } from "@m2/drums";').replace(/drums\.drum\(lane\.notes\("hits"\), \{[^}]*\}\)/, 'drums.kit(lane.notes("hits"))');
 check(await until(() => read("tracks/hats.ts") === kit), `Return writes drums.kit(lane.notes("hits")) in tracks/hats.ts (${read("tracks/hats.ts").split("\n").find((l) => l.includes("track("))})`);
 // The toast says the edit is done: since std 0.6 it writes music2.toml and music2.lock too (PACK-10),
 // so the files may land a moment before the revision does.

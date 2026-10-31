@@ -11,9 +11,9 @@ use super::super::tests::Fixture;
 
 /// A bass through a delay and a hat, each a track with its own name, into std's mixer.
 const SONG: &str = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { delay } from '@m2/effects';\n\
-                    import { hat } from '@m2/synths';\nimport { mixer } from 'std/mix';\n\
+                    import { drums } from '@m2/drums';\nimport { mixer } from 'std/mix';\n\
                     const bass = track('bass', { name: 'Bass' }, () => delay(osc.saw(110)));\n\
-                    const hats = track('hats', { name: 'Hats' }, ({ lane }) => hat(lane.notes('hits')));\n\
+                    const hats = track('hats', { name: 'Hats' }, ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
                     export default song(() => mixer({ bass: bass.out, hats: hats.out }));\n";
 
 /// The song open with a driven player, playing.
@@ -183,7 +183,7 @@ fn a_sound_too_slow_is_named_with_its_pack_and_stays_through_stop_all_sound() {
     };
     rig.report(Code::TooSlow, rig.node("bass", delay));
     rig.report(Code::TooSlow, rig.node("hats", |op| matches!(op, FOp::Poly { .. })));
-    let said = [slow("Delay on Bass, from @m2/effects,"), slow("Hat on Hats, from @m2/synths,")];
+    let said = [slow("Delay on Bass, from @m2/effects,"), slow("One drum on Hats, from @m2/drums,")];
     assert_eq!(rig.told(), said);
     let listed: Vec<_> =
         said.iter().zip(["bass", "hats"]).map(|(w, k)| ("sound.too-slow".to_string(), Some(k.to_string()), w.clone())).collect();

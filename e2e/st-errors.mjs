@@ -131,7 +131,7 @@ const hats0 = read("tracks/hats.ts");
 write("data/hats/loop.json", JSON.stringify({ clips: [{ id: "a", start: 0, length: 4, asset: "loop.wav" }] }));
 write(
   "tracks/hats.ts",
-  hats0.replace('import { hat } from "@m2/synths";', 'import { hat } from "@m2/synths";\nimport { sum } from "std/math";').replace('hat(lane.notes("hits"))', 'sum(hat(lane.notes("hits")), lane.audio("loop"))'),
+  hats0.replace('import { drums } from "@m2/drums";', 'import { drums } from "@m2/drums";\nimport { sum } from "std/math";').replace(/drums\.drum\(lane\.notes\("hits"\), \{[^}]*\}\)/, 'sum($&, lane.audio("loop"))'),
 );
 check(await until(async () => (await state()).problems?.some((p) => p.code === "asset.missing"), 10000), "a clip whose sound file isn't in assets/");
 await status();

@@ -10,15 +10,15 @@ use serde_json::{Value, json};
 use crate::graph::Graph;
 use crate::{ServeOptions, start_with};
 
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
-                    const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\nexport default song(() => b.out);\n";
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+                    const b = track('bass', { name: 'Bass' }, ({ lane }) => drums.drum(lane.notes('notes')));\nexport default song(() => b.out);\n";
 
 /// A project of [`SONG`] in a folder of its own, named `name`.
 fn project(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("m2-routes-record-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(dir.join("song.ts"), SONG).unwrap();
     dir

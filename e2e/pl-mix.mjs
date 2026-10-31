@@ -229,13 +229,13 @@ await until(() => read("song.ts") === orig.song);
 
 // ---------------------------------------------------------------- the clip dot (Q3)
 
-write("tracks/hats.ts", orig.hats.replace('import { hat } from "@m2/synths";', 'import { hat } from "@m2/synths";\nimport { scale } from "std/math";').replace('hat(lane.notes("hits"))', 'scale(hat(lane.notes("hits")), 8)'));
+write("tracks/hats.ts", orig.hats.replace('import { drums } from "@m2/drums";', 'import { drums } from "@m2/drums";\nimport { scale } from "std/math";').replace(/drums\.drum\(lane\.notes\("hits"\), \{[^}]*\}\)/, "scale($&, 32)"));
 const rev = (await state()).view.revision;
 await until(async () => (await state()).view.revision !== rev, 10000);
 const dot = `${strip("hats")} [data-testid=clip-dot]`;
 check(!(await page.$(dot)), "no clip dot on Hats before it goes over the top");
 await playSong();
-check(await until(async () => !!(await page.$(dot)), 6000), "Hats, 8 times louder, goes over the top: its strip's clip dot lights");
+check(await until(async () => !!(await page.$(dot)), 6000), "Hats, 32 times louder, goes over the top: its strip's clip dot lights");
 const dotInfo = await page.$eval(dot, (e) => {
   const d = e.firstElementChild.getBoundingClientRect(), m = e.closest("[data-strip]").querySelector("[role=meter]").getBoundingClientRect();
   return { title: e.title, colour: getComputedStyle(e.firstElementChild).backgroundColor, size: d.width, above: d.bottom <= m.top + 1, centred: Math.abs(d.left + d.width / 2 - (m.left + m.width / 2)) <= 1 };

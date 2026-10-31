@@ -23,8 +23,8 @@ music2's sounds are packs too, made by music2 and kept in the repository at `pac
 
 | Pack | What is in it |
 |---|---|
-| `@m2/synths` | the polysynth's sounds (supersaw, lead, pad, pluck, 808 sub, bass, strings), the FM synth's (keys, bell, metal), each synth with every knob, and five simple instruments to read and copy |
-| `@m2/drums` | an 808/909 drum machine: the whole kit, and each drum on its own |
+| `@m2/synths` | the polysynth's sounds (supersaw, lead, pad, pluck, 808 sub, bass, strings), the FM synth's (keys, bell, metal), each synth with every knob, and three simple instruments to read and copy |
+| `@m2/drums` | an 808/909 drum machine: the whole kit, and One drum, which plays one drum, picked from its menu |
 | `@m2/effects` | delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen |
 
 They come with the app and with `m2`. When either starts, it installs each one your store doesn't have yet, as `m2 pack install` would; a start that finds them there writes nothing. From then on they are packs like any other: a song lists them in `music2.toml`, locks them in `music2.lock`, and keeps the version it was made with when a newer music2 brings a newer one. The templates and examples come locked to them.

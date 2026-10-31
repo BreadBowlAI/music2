@@ -1,6 +1,8 @@
 //! `synth`, the polysynth voice behind @m2/synths: a unison stack of saws and pulses with
 //! a sub sine and noise, at 2× (band-limited steps, a drive, then a 4-pole ladder with its
-//! own envelope, whose saturation would alias at 1×), decimated, then the amp envelope.
+//! own envelope, whose saturation would alias at 1×), decimated, then the amp envelope. Its
+//! `shape`, a choice (CARD-12), says what the stack's main wave is: a saw (as it always was), a
+//! square, a triangle or a sine.
 //! Port order must match the pack's `m2pkg.toml`.
 
 use m2_dsp::voice::{
@@ -41,7 +43,13 @@ const VEL_AMOUNT: usize = 27;
 const LEVEL: usize = 28;
 const SEED: usize = 29;
 const WHEEL: usize = 30;
-const INPUTS: usize = 31;
+const SHAPE: usize = 31;
+const INPUTS: usize = 32;
+
+/// The stack's main wave, by its place in `shape`'s choice: `saw|square|triangle|sine`.
+const SQUARE_WAVE: u32 = 1;
+const TRIANGLE_WAVE: u32 = 2;
+const SINE_WAVE: u32 = 3;
 
 /// Most unison voices.
 const UNISON_MAX: usize = 7;
@@ -143,7 +151,8 @@ pub struct Synth {
     sub_dt: Ramp,
     vib_phase: f32,
     noise: Noise,
-    levels: [Ramp; 4],
+    /// The levels of the saw, the pulse, the sub, the noise, the triangle and the sine.
+    levels: [Ramp; 6],
     width: Ramp,
     bus: Steps,
     // Shaping, per channel.
@@ -278,7 +287,16 @@ impl Synth {
             self.dt[k].to((base * self.ratios[k]).min(top), jump);
         }
         self.sub_dt.to(base * self.sub_octave.exp2(), jump);
-        for (r, v) in self.levels.iter_mut().zip([saw, square, sub, noise]) {
+        // The shape says which wave the `saw` level plays on the stack's phases: the saw (as it
+        // always was), the pulse (with its own level, at `width`), a triangle or a sine. A change
+        // glides over a tick, as the levels do.
+        let (saw, square, tri, sine) = match clampf(at(SHAPE).round(), 0.0, 3.0) as u32 {
+            SQUARE_WAVE => (0.0, square + saw, 0.0, 0.0),
+            TRIANGLE_WAVE => (0.0, square, saw, 0.0),
+            SINE_WAVE => (0.0, square, 0.0, saw),
+            _ => (saw, square, 0.0, 0.0),
+        };
+        for (r, v) in self.levels.iter_mut().zip([saw, square, sub, noise, tri, sine]) {
             r.to(v, jump);
         }
         self.width.to(width, jump);
@@ -361,7 +379,10 @@ impl Synth {
     /// One output sample on `CH` channels: a mono voice works out only the left.
     fn sample_in<const CH: usize>(&mut self) -> [f32; 2] {
         let n = self.voices;
-        let [saw, square, sub, noise] = self.levels.each_mut().map(|r| r.next());
+        let [saw, square, sub, noise, tri, sine] = self.levels.each_mut().map(|r| r.next());
+        // A triangle or a sine on the stack: neither steps, so neither needs a band-limited step,
+        // and both are centred, so neither adds to `dc`. Off (the saw), not a bit changes.
+        let shaped = tri != 0.0 || sine != 0.0;
         let w = self.width.next();
         let (saw2, sq2) = (2.0 * saw, 2.0 * square);
         let pulse = square != 0.0;
@@ -405,7 +426,10 @@ impl Synth {
                     self.high[k] = true;
                 }
                 self.phase[k] = t;
-                let v = saw2 * t + if self.high[k] && pulse { sq2 } else { 0.0 };
+                let mut v = saw2 * t + if self.high[k] && pulse { sq2 } else { 0.0 };
+                if shaped {
+                    v += tri * (1.0 - 4.0 * (t - 0.5).abs()) + sine * sin2pi(t);
+                }
                 for (a, g) in acc.iter_mut().zip(gain).take(CH) {
                     *a += g * v;
                 }
@@ -481,7 +505,7 @@ impl Kernel for Synth {
             sub_dt: Ramp::default(),
             vib_phase: 0.0,
             noise: Noise::new(1),
-            levels: [Ramp::default(); 4],
+            levels: [Ramp::default(); 6],
             width: Ramp::default(),
             bus: Steps::default(),
             drive_on: false,

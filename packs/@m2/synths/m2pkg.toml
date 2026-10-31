@@ -1,8 +1,8 @@
 [package]
 name = "@m2/synths"
-version = "1.1.0"
+version = "2.0.0"
 license = "MIT OR Apache-2.0"
-description = "music2's synths: a polysynth's leads, pads, plucks and basses, an FM synth's keys and bells, and five simple instruments to read and copy"
+description = "music2's synths: a polysynth's leads, pads, plucks and basses, an FM synth's keys and bells, and three simple instruments to read and copy"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
 tags = ["synth", "polysynth", "fm", "keys", "bass", "pad", "lead"]
@@ -11,7 +11,8 @@ tags = ["synth", "polysynth", "fm", "keys", "bass", "pad", "lead"]
 wasm = "kernels/synths.wasm"
 
 [dependencies]
-# @m2/core 1.10 or later: the five simple instruments say `editor: { unlisted: true }`, which 1.10.0 added.
+# @m2/core 1.10 or later: the three simple instruments say `editor: { unlisted: true }` (1.10.0), and
+# the sounds' cards their menus, views and groups (1.8.0).
 "@m2/core" = "1.10"
 # The std kernels its sounds play are all in std 0.7 and later; the voices are its own.
 std = "0.7"
@@ -25,7 +26,7 @@ std = "0.7"
 
 [[kernel]]
 name = "synth"
-description = "Polysynth voice: a unison saw and pulse stack, a sub sine and noise, driven into a 4-pole ladder lowpass with its own envelope, then an amp envelope; stereo. The level follows velocity^(2 × vel_amount), so velocity 0 is silent. `wheel` (the mod wheel) deepens the vibrato by up to half a semitone, at once"
+description = "Polysynth voice: a unison saw and pulse stack, a sub sine and noise, driven into a 4-pole ladder lowpass with its own envelope, then an amp envelope; stereo. The level follows velocity^(2 × vel_amount), so velocity 0 is silent. `wheel` (the mod wheel) deepens the vibrato by up to half a semitone, at once. `shape` is the stack's main wave, whose level is `saw`: 0 the saw (as it always was), 1 a square (the level joins the pulse's, at `width`), 2 a triangle, 3 a sine; a change glides over a tick"
 inputs = [
   "pitch: control<semitones>",
   "gate: control<unit01>",
@@ -58,6 +59,7 @@ inputs = [
   "level: control<db> = 0 in -24..12",
   "seed: control<scalar> = 1",
   "wheel: control<unit01> = 0",
+  "shape: control<choice<saw|square|triangle|sine>> = 0",
 ]
 outputs = ["out: audio<2>"]
 

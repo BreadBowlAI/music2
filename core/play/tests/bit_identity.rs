@@ -224,8 +224,8 @@ import { mixer } from "std/mix";
 export default track("drums", ({ lane }) =>
   mixer({
     kit: drums.kit(lane.notes("kit")),
-    snare: drums.snare(lane.notes("snare")),
-    hats: drums.hats(lane.notes("hats")),
+    snare: drums.drum(lane.notes("snare"), { drum: "snare" }),
+    hats: drums.drum(lane.notes("hats"), { drum: "hats" }),
   }),
 );
 "#,

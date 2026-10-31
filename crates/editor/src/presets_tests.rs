@@ -127,8 +127,17 @@ fn saving_a_std_preset_writes_every_control_of_the_call() {
     let s = f.open();
     let before = f.read("tracks/keys.ts");
     let saved = capture(&s, s.accepted().number, &call(&s, "synth.pluck"), "Mine").unwrap();
-    let want: BTreeMap<String, f64> =
-        [("brightness", 3000.0), ("decay", 0.45), ("spread", 0.7), ("velSens", 0.5)].map(|(k, v)| (k.to_string(), v)).into();
+    let want: BTreeMap<String, f64> = [
+        ("attack", 0.003),
+        ("brightness", 3000.0),
+        ("decay", 0.45),
+        ("release", 0.25),
+        ("spread", 0.7),
+        ("sustain", 0.0),
+        ("velSens", 0.5),
+    ]
+    .map(|(k, v)| (k.to_string(), v))
+    .into();
     assert_eq!(
         saved.preset,
         Preset { name: "Mine".into(), sound: "@m2/synths:synth-pluck".into(), values: want, plugin_version: None, state: None }

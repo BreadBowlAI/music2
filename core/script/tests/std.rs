@@ -56,7 +56,7 @@ fn component_of<'a>(m: &'a Module, n: &Node) -> &'a str {
 }
 
 /// Each std export songs had at step 5, as `(ComponentId, module, name)`: 46 components.
-const EXPORTS: [(&str, &str, &str); 46] = [
+const EXPORTS: [(&str, &str, &str); 44] = [
     ("std:add", "std/math", "add"),
     ("std:scale", "std/math", "scale"),
     ("std:blend", "std/math", "blend"),
@@ -97,8 +97,6 @@ const EXPORTS: [(&str, &str, &str); 46] = [
     ("@m2/effects:bitcrush", "@m2/effects", "bitcrush"),
     ("@m2/effects:widen", "@m2/effects", "widen"),
     ("@m2/synths:bass", "@m2/synths", "bass"),
-    ("@m2/synths:kick", "@m2/synths", "kick"),
-    ("@m2/synths:hat", "@m2/synths", "hat"),
     ("@m2/synths:pluck", "@m2/synths", "pluck"),
     ("@m2/synths:pad", "@m2/synths", "pad"),
     ("std:mixer", "std/mix", "mixer"),
@@ -107,7 +105,7 @@ const EXPORTS: [(&str, &str, &str); 46] = [
 
 /// The instruments added since step 5, as `(ComponentId, module, name)`: one engine each for
 /// the synth, FM and drums, and the instruments voiced on them.
-const INSTRUMENTS: [(&str, &str, &str); 23] = [
+const INSTRUMENTS: [(&str, &str, &str); 15] = [
     ("@m2/synths:synth-custom", "@m2/synths", "synth.custom"),
     ("@m2/synths:synth-supersaw", "@m2/synths", "synth.supersaw"),
     ("@m2/synths:synth-lead", "@m2/synths", "synth.lead"),
@@ -121,15 +119,7 @@ const INSTRUMENTS: [(&str, &str, &str); 23] = [
     ("@m2/synths:fm-bell", "@m2/synths", "fm.bell"),
     ("@m2/synths:fm-metal", "@m2/synths", "fm.metal"),
     ("@m2/drums:drum-kit", "@m2/drums", "drums.kit"),
-    ("@m2/drums:drum-kick", "@m2/drums", "drums.kick"),
-    ("@m2/drums:drum-snare", "@m2/drums", "drums.snare"),
-    ("@m2/drums:drum-clap", "@m2/drums", "drums.clap"),
-    ("@m2/drums:drum-hats", "@m2/drums", "drums.hats"),
-    ("@m2/drums:drum-tom", "@m2/drums", "drums.tom"),
-    ("@m2/drums:drum-rim", "@m2/drums", "drums.rim"),
-    ("@m2/drums:drum-cowbell", "@m2/drums", "drums.cowbell"),
-    ("@m2/drums:drum-cymbal", "@m2/drums", "drums.cymbal"),
-    ("@m2/drums:drum-shaker", "@m2/drums", "drums.shaker"),
+    ("@m2/drums:drum", "@m2/drums", "drums.drum"),
     ("std:sampler", "std/sampler", "sampler"),
 ];
 
@@ -167,7 +157,7 @@ fn std_is_declared_with_descriptors() {
 
 // Polish A4: the drum kit names the notes it plays, for the piano roll's rows: the General MIDI
 // notes the `@m2/drums:drum` kernel maps (m2_dsp::gm; packs/@m2/drums/kernels-src/src/drum/tests.rs,
-// KIT); the hats name their pedal and open notes. No other std instrument names its notes.
+// KIT). No other instrument names its notes (the Drum plays any one drum on every note).
 #[test]
 fn the_drum_kit_names_its_notes() {
     let catalog = describe(&packages());
@@ -197,9 +187,8 @@ fn the_drum_kit_names_its_notes() {
             (75, "Claves"),
         ]
     );
-    assert_eq!(names("@m2/drums:drum-hats"), [(42, "Closed hat"), (44, "Pedal hat"), (46, "Open hat")]);
     for (id, _, _) in INSTRUMENTS {
-        if id != "@m2/drums:drum-kit" && id != "@m2/drums:drum-hats" {
+        if id != "@m2/drums:drum-kit" {
             assert!(catalog.components[id].editor.notes.is_empty(), "{id} names no notes");
         }
     }
@@ -226,9 +215,9 @@ fn every_std_control_is_found_by_its_slot() {
         assert_eq!(d.control("nothing"), None);
     }
     assert!(found > 46, "std declares {found} controls");
-    let kick = &catalog.components["@m2/synths:kick"];
-    assert_eq!(kick.controls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["tune", "decay"]);
-    assert_eq!(kick.range_for("decay", Some(Unit::Seconds)), Some(((0.01, 2.0), true)), "the second control's range");
+    let bass = &catalog.components["@m2/synths:bass"];
+    assert_eq!(bass.controls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["cutoff", "drive"]);
+    assert_eq!(bass.range_for("drive", Some(Unit::Db)), Some(((0.0, 36.0), false)), "the second control's range");
 }
 
 /// The effects `m2pkg.toml` listed before step 5, as `[[effect]]` entries: module, name,
@@ -351,7 +340,8 @@ import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
 import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
 import { compress, duck, eq3, limit } from "std/fx";
-import { bass, hat, kick, pad, pluck } from "@m2/synths";
+import { bass, pad, pluck } from "@m2/synths";
+import { drums } from "@m2/drums";
 import { master, mixer } from "std/mix";
 export default song(({ lane, time }) => {
   const x = kernel("std:saw", { freq: 110 });
@@ -363,7 +353,7 @@ export default song(({ lane, time }) => {
     svf.lowpass(x), svf.bandpass(x), svf.highpass(x), vca(x), gain(x), pan(x),
     lowpass(x), highpass(x), bandpass(x), notch(x),
     duck(x, l), delay(x), drive(x), limit(x), reverb(x), chorus(x), phaser(x), tremolo(x), compress(x), eq3(x), bitcrush(x), widen(x),
-    bass(notes), kick(notes), hat(notes), pluck(notes), pad(notes),
+    bass(notes), pluck(notes), pad(notes),
   ];
   return master(mixer({ a: x, b: all[0] }));
 });
@@ -375,9 +365,6 @@ export default song(({ lane, time }) => {
     let fallbacks: BTreeMap<(&str, &str), f64> = [
         (("@m2/synths:bass", "cutoff"), 600.0),
         (("@m2/synths:bass", "drive"), 4.0),
-        (("@m2/synths:kick", "tune"), 48.0),
-        (("@m2/synths:kick", "decay"), 0.32),
-        (("@m2/synths:hat", "decay"), 45.0 * 0.001),
         (("@m2/synths:pluck", "brightness"), 5000.0),
         (("@m2/synths:pad", "cutoff"), 1800.0),
         (("std:master", "ceiling"), -1.0),
@@ -434,10 +421,7 @@ export default song(({ lane, time }) => {
             _ => None,
         })
         .collect();
-    assert_eq!(
-        voices,
-        [("@m2/synths:bass", 4), ("@m2/synths:hat", 4), ("@m2/synths:kick", 2), ("@m2/synths:pad", 12), ("@m2/synths:pluck", 12)].into()
-    );
+    assert_eq!(voices, [("@m2/synths:bass", 4), ("@m2/synths:pad", 12), ("@m2/synths:pluck", 12)].into());
     let input = |kernel: &str, port: &str| -> Vec<(f64, bool)> {
         ns.iter()
             .filter_map(|n| match &n.op {
@@ -452,7 +436,7 @@ export default song(({ lane, time }) => {
             .collect()
     };
     // Settings are no cells: constants with no origin, which the checker folds as before (D3).
-    assert_eq!(input("std:noise", "seed"), [(1.0, false), (7.0, false)], "noise() and hat's noise(7)");
+    assert_eq!(input("std:noise", "seed"), [(1.0, false)], "noise()");
     assert_eq!(input("std:lfo", "shape"), [(0.0, false)]);
 }
 
@@ -623,21 +607,7 @@ export default song(() => {
 /// The engines' own knobs and each drum's: left out, each is its kernel port's default, so an
 /// engine and its kernel agree on what a bare note sounds like. The other instruments are
 /// voiced: their defaults are their patches'.
-const ENGINES: [&str; 13] = [
-    "@m2/synths:synth-custom",
-    "@m2/synths:fm-custom",
-    "@m2/drums:drum-kit",
-    "@m2/drums:drum-kick",
-    "@m2/drums:drum-snare",
-    "@m2/drums:drum-clap",
-    "@m2/drums:drum-hats",
-    "@m2/drums:drum-tom",
-    "@m2/drums:drum-rim",
-    "@m2/drums:drum-cowbell",
-    "@m2/drums:drum-cymbal",
-    "@m2/drums:drum-shaker",
-    "std:sampler",
-];
+const ENGINES: [&str; 5] = ["@m2/synths:synth-custom", "@m2/synths:fm-custom", "@m2/drums:drum-kit", "@m2/drums:drum", "std:sampler"];
 
 // PKG-3, PKG-4: every instrument builds bare, and every knob a call leaves out reaches a kernel,
 // or a glide reaches the poly that plays one note at a time: none is left over (except the

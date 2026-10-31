@@ -715,8 +715,8 @@ fn a_label_change_changes_only_the_label() {
     let with = |name: &str| {
         let t = format!(
             r#"import {{ track }} from "@m2/core";
-import {{ kick }} from "@m2/synths";
-export default track("kick", {{ name: "{name}" }}, ({{ lane }}) => kick(lane.notes("hits", {{ name: "{name} hits" }})));
+import {{ drums }} from "@m2/drums";
+export default track("kick", {{ name: "{name}" }}, ({{ lane }}) => drums.drum(lane.notes("hits", {{ name: "{name} hits" }})));
 "#
         );
         build_of(&[("tracks/t.ts", &t), ("song.ts", PLAY_T)]).unwrap_or_else(|e| panic!("{e:?}"))

@@ -1,8 +1,8 @@
 [package]
 name = "@m2/drums"
-version = "1.1.0"
+version = "2.0.0"
 license = "MIT OR Apache-2.0"
-description = "music2's 808/909 drum machine: a whole kit on one notes lane, and each drum as an instrument of its own"
+description = "music2's 808/909 drum machine: a whole kit on one notes lane, and a Drum that plays one drum from its menu"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
 tags = ["drums", "drum machine", "808", "909", "kit"]
@@ -11,8 +11,8 @@ tags = ["drums", "drum machine", "808", "909", "kit"]
 wasm = "kernels/drums.wasm"
 
 [dependencies]
-# Any @m2/core 1.x: what these components use is older than std 0.7 (below), which comes only with apps that have it all.
-"@m2/core" = "1"
+# @m2/core 1.8 or later: the cards' groups (1.8.0).
+"@m2/core" = "1.8"
 # std's drumhit and hitcount, which mark and count its hits, are in std 0.7 and later; the drum
 # voice is its own.
 std = "0.7"
@@ -24,7 +24,7 @@ std = "0.7"
 
 [[kernel]]
 name = "drum"
-description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the kit"
+description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the kit. A Drum's own knobs move whatever drum it plays: `tune` its pitch in semitones, `decay` times its decays, `push` added to a kick's punch or a snare's snap; at 0, 1 and 0 they change no bit"
 inputs = [
   "pitch: control<semitones>",
   "velocity: control<unit01> = 0.8",
@@ -54,5 +54,8 @@ inputs = [
   "hat_level: control<db> = 0 in -24..12",
   "tom_level: control<db> = 0 in -24..12",
   "perc_level: control<db> = 0 in -24..12",
+  "tune: control<semitones> = 0 in -24..24",
+  "decay: control<scalar> = 1 in 0.1..10",
+  "push: control<bipolar> = 0 in -1..1",
 ]
 outputs = ["out: audio<1>"]

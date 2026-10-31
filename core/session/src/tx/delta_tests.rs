@@ -164,8 +164,8 @@ fn a_wrap_keeps_the_wrapped_calls_names() {
 }
 
 /// A one-track song: a kick playing lane `hits`.
-const KICK_SONG: &str = "import { secs, song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
-                         const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
+const KICK_SONG: &str = "import { secs, song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+                         const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\nexport default song(() => k.out);\n";
 const HITS: &str = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#;
 
 /// The delta from the revision accepted now to the one `change` makes: what the engine reads
@@ -195,12 +195,13 @@ fn between_revisions_lane_data_alone_is_a_lane_change() {
     assert!(after(&d, &mut s, |d| d.write("data/kick/hits.json", "{")).is_empty());
     assert_eq!(lanes(&after(&d, &mut s, |d| d.write("data/kick/hits.json", HITS))), ["kick/hits"]);
     // A value written for a control the call left out: a value change, by its slot.
-    let longer = KICK_SONG.replace("kick(lane.notes('hits'))", "kick(lane.notes('hits'), { decay: secs(0.9) })");
+    let longer = KICK_SONG.replace("drums.drum(lane.notes('hits'))", "drums.drum(lane.notes('hits'), { decay: 2 })");
     let delta = after(&d, &mut s, |d| d.write("song.ts", &longer));
     assert!(!delta.structural() && delta.values.len() == 1 && delta.lanes.is_empty(), "{delta:?}");
     // A new node is structural; the arrangement says so.
-    let spare = longer.replace("export default", "const spare = kick(lane.notes('hits'));\nexport default");
-    let spare = spare.replace("const spare = kick(lane.notes('hits'));", "const k2 = track('k2', ({ lane }) => kick(lane.notes('hits')));");
+    let spare = longer.replace("export default", "const spare = drums.drum(lane.notes('hits'));\nexport default");
+    let spare = spare
+        .replace("const spare = drums.drum(lane.notes('hits'));", "const k2 = track('k2', ({ lane }) => drums.drum(lane.notes('hits')));");
     let delta = after(&d, &mut s, |d| d.write("song.ts", &spare));
     assert!(delta.structural(), "{delta:?}");
     assert!(after(&d, &mut s, |d| d.write("data/arrangement.json", r#"{"tempo": [{"beat": 0, "bpm": 90}]}"#)).arrangement);

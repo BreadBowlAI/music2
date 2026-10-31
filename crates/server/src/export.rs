@@ -591,7 +591,7 @@ pub(crate) mod tests {
     fn open(project: &Temp, song: &str) -> Arc<AppState> {
         project.write(
             "music2.toml",
-            "[project]\nname = \"untitled\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
+            "[project]\nname = \"untitled\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n",
         );
         project.write("song.ts", song);
         let notes: Vec<String> = [45, 52, 57, 60, 64].iter().map(|p| format!(r#"{{"pitch": {p}, "start": 0, "length": 120}}"#)).collect();

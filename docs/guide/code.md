@@ -36,7 +36,7 @@ sample_rate = 48000
 [dependencies]
 "@m2/core" = "1"
 std = "0.9"
-"@m2/synths" = "1"
+"@m2/synths" = "2"
 ```
 
 Each package the code imports from is listed: the SDK (`@m2/core`), std (the toolbox) and each pack, such as `@m2/synths`, one of the packs music2 ships ([Packs](packs.md)). `music2.lock` beside it holds the exact version of each pack.
@@ -53,9 +53,9 @@ This is a whole track, the shape of `tracks/hats.ts`:
 
 ```ts
 import { track } from "@m2/core";
-import { hat } from "@m2/synths";
+import { drums } from "@m2/drums";
 
-export default track("hats", { name: "Hats" }, ({ lane }) => hat(lane.notes("hits")));
+export default track("hats", { name: "Hats" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "hats" }));
 ```
 
 - `track("hats", { name: "Hats" }, …)` makes a track with the key `hats`, shown as Hats. Without the options, `track("hats", fn)`, it is shown by its key. Its data is filed under the key, so changing the name moves nothing; changing the key leaves its data behind until you move it (the app offers to).
