@@ -102,11 +102,16 @@ pub fn set(s: &mut Session, mut markers: Vec<Marker>) -> Result<Edited, EditErro
     if before == markers {
         return Ok(Edited { revision: s.accepted().number, file: layout::FILE.into(), before: label.0, after: label.1 });
     }
+    put(&mut l, &markers);
+    let text = l.canonical();
+    layout::commit(s, layout::layout_tx(s, label, text))
+}
+
+/// Write `markers` (sorted, one a beat) as `layout`'s list: none takes the key out.
+pub(crate) fn put(l: &mut Layout, markers: &[Marker]) {
     l.markers = (!markers.is_empty()).then(|| {
         J::Arr(markers.iter().map(|m| J::Obj(vec![("beat".into(), number(m.beat)), ("name".into(), J::Str(m.name.clone()))])).collect())
     });
-    let text = l.canonical();
-    layout::commit(s, layout::layout_tx(s, label, text))
 }
 
 /// What a change to the list did, in words, as (before, after): one marker added ("", "Chorus at

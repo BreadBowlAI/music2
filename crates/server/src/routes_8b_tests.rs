@@ -376,6 +376,57 @@ fn clip_gestures_over_http() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// ARR-9: `POST /api/graph/sections` takes a section gesture as JSON, answers as the clip route does,
+// says a refusal in words, and is a write: 423 in a read-only window.
+#[test]
+fn section_gestures_over_http() {
+    let dir = std::env::temp_dir().join(format!("m2-routes-8b-sections-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("data/kick")).unwrap();
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    std::fs::write(
+        dir.join("song.ts"),
+        "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+         const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+    )
+    .unwrap();
+    let hits = "{\"clips\": [\n  {\"id\": \"k0000001\", \"start\": 0, \"length\": 4, \"notes\": []}\n]}\n";
+    std::fs::write(dir.join("data/kick/hits.json"), hits).unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let url = &running.url;
+    let duplicate = json!({"session": session, "gesture": {"op": "duplicate", "start": 0, "end": 4}});
+    assert_eq!(post(url, "/api/graph/sections", None, &duplicate).0, 401, "behind the token");
+    let (status, done) = post(url, "/api/graph/sections", Some("t0k"), &duplicate);
+    assert_eq!((status, &done["before"], &done["after"]), (200, &json!("bar 2"), &json!("a copy of bar 1")), "{done:#}");
+    assert_eq!((&done["file"], &done["made"][0]["lane"]), (&json!("data/kick/hits.json"), &json!("hits")), "{done:#}");
+    let file = std::fs::read_to_string(dir.join("data/kick/hits.json")).unwrap();
+    assert!(file.contains("\"start\": 4, \"length\": 4"), "{file}");
+    let off = json!({"session": session, "gesture": {"op": "insert-bars", "at": 2, "bars": 1}});
+    let (status, refused) = post(url, "/api/graph/sections", Some("t0k"), &off);
+    assert_eq!(
+        (status, &refused["error"]),
+        (400, &json!("edit rejected: New bars must be on a bar line: beat 2 is inside bar 1.")),
+        "said whole"
+    );
+    let unknown = json!({"session": session, "gesture": {"op": "fold", "start": 0, "end": 4}});
+    assert_eq!(post(url, "/api/graph/sections", Some("t0k"), &unknown).0, 422, "a gesture that doesn't read");
+
+    // Read-only: refused before anything is planned, and nothing changes.
+    running.state.graph.close();
+    let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let delete = json!({"session": session, "gesture": {"op": "delete", "start": 0, "end": 4}});
+    let (status, answer) = post(url, "/api/graph/sections", Some("t0k"), &delete);
+    assert_eq!(status, 423, "{answer:#}");
+    assert_eq!(std::fs::read_to_string(dir.join("data/kick/hits.json")).unwrap(), file);
+    drop(held);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // Q9: until the piano roll sends `notes` gestures, it writes a whole lane, with the clips as the
 // timeline shows them, each with its `sha` (8b.5): the lane route reads them as clips.
 #[test]

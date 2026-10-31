@@ -29,6 +29,9 @@ crate::api::routes! {
     POST "/api/graph/clips" => graph_clips; writes, agents,
         "A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio or set",
         r#"{"session": 7, "gesture": {"op": "move", "clips": [{"module": "keys", "lane": "chords", "id": "k3f9q2zt"}], "by": 4}}"#;
+    POST "/api/graph/sections" => graph_sections; writes, agents,
+        "A section gesture, on whole bars of every track: paste, duplicate, move, delete, insert-bars or delete-bars",
+        r#"{"session": 7, "gesture": {"op": "duplicate", "start": 32, "end": 64}}"#;
     POST "/api/graph/automate/remove" => automate_remove; writes, agents,
         "Take a knob's automation out: the lane's value at the beat (else its fallback) goes back into the code",
         r#"{"session": 7, "module": "bass", "lane": "cutoff", "beat": 16}"#;
@@ -116,6 +119,25 @@ async fn track_mute(State(s): S, Json(r): Json<MuteReq>) -> ApiResult {
     let result = blocking(move || state.graph.mute_in_song(r.session, r.modules, r.muted)).await;
     s.graph_changed();
     Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct SectionsReq {
+    session: u64,
+    gesture: m2_editor::sections::Gesture,
+}
+
+/// A section gesture (ARR-9): `{session, gesture: {op, …}}`, beats on bar lines, one Tx and one
+/// undo step. A write. Answers as `POST /api/graph/clips` does: `{file, before, after, revision,
+/// made}`; 409 `{error, changed: true}` when a file it writes changed since (WRITE-12).
+async fn graph_sections(State(s): S, Json(r): Json<SectionsReq>) -> Result<Response, ApiError> {
+    let state = s.clone();
+    let result = blocking(move || state.graph.sections(r.session, r.gesture)).await;
+    s.graph_changed();
+    Ok(match result? {
+        Answer::Done(v) => Json(v).into_response(),
+        Answer::Changed(why) => (StatusCode::CONFLICT, Json(json!({"error": why, "changed": true}))).into_response(),
+    })
 }
 
 #[derive(Deserialize)]
