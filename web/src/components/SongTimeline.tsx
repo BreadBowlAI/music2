@@ -69,7 +69,7 @@ import { listedInstrument } from "../lib/plugins";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, useReorder } from "./Tracks";
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { RulerMarkers } from "./Markers";
-import { barCount, barsWords, clearBars, onBarLine, sectionOf, selectBars, sendSection, snapBars, useSection, type SectionGesture } from "../lib/sections";
+import { barCount, barsWords, clearBars, copyBars, onBarLine, selectBars, sendSection, snapBars, useSection, type SectionGesture } from "../lib/sections";
 import { Hatch, VLines } from "./draw";
 import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
@@ -580,18 +580,8 @@ export default function SongTimeline({
   // the edit. Named by id, so an edit that reorders a lane (a move, an undo, an edit elsewhere)
   // keeps them.
   const [drag, setDrag] = useState<Drag | null>(null);
-  const latest = useRef({ timeline, revision, onOpenClip, locked, playing, onSeek, headerW, onLoop });
-  latest.current = { timeline, revision, onOpenClip, locked, playing, onSeek, headerW, onLoop };
-  // The ruler's loops (a drag across it, a marker's Loop to next marker) select the bars they loop
-  // too, when they are whole bars (ARR-9): the section the bars' gestures act on.
-  const loopBars = useMemo(
-    () => (start: number, end: number) => {
-      latest.current.onLoop(start, end);
-      const { meter } = latest.current.timeline;
-      if (onBarLine(meter, start) && onBarLine(meter, end)) selectBars(start, end);
-    },
-    [],
-  );
+  const latest = useRef({ timeline, revision, onOpenClip, locked, playing, onSeek, headerW });
+  latest.current = { timeline, revision, onOpenClip, locked, playing, onSeek, headerW };
   const bars = useSection((s) => s.bars);
   // A press on a lane's empty space, until it is let go or becomes a marquee.
   const pressed = useRef<{ pointer: number; x: number } | null>(null);
@@ -1318,10 +1308,14 @@ export default function SongTimeline({
     return {
       copy(cut) {
         const b = selected();
-        if (!b) return false;
-        useSection.setState({ copied: sectionOf(latest.current.timeline, b[0], b[1]) });
-        useClipboard.setState({ copied: [] });
-        if (cut && !latest.current.locked) go({ op: "delete", start: b[0], end: b[1] }, `cutting ${words(b[0], b[1])}`);
+        const graph = useStore.getState().graph;
+        if (!b || !graph) return !!b;
+        // The server's copy (ARR-5), every lane's kind with it; a cut empties the bars once it is kept.
+        copyBars(graph, b[0], b[1]).then((section) => {
+          useSection.setState({ copied: section });
+          useClipboard.setState({ copied: [] });
+          if (cut && !latest.current.locked) go({ op: "delete", start: b[0], end: b[1] }, `cutting ${words(b[0], b[1])}`);
+        }, toast);
         return true;
       },
       paste() {
@@ -1543,7 +1537,7 @@ export default function SongTimeline({
               )}
             </div>
           </div>
-          <Ruler timeline={timeline} width={width} loopStart={loopStart} loopEnd={loopEnd} looping={looping} locked={locked} onSeek={onSeek} onLoop={loopBars} />
+          <Ruler timeline={timeline} width={width} loopStart={loopStart} loopEnd={loopEnd} looping={looping} locked={locked} onSeek={onSeek} onLoop={onLoop} />
           <ViewTools ppb={ppb} follow={follow} onZoom={zoomStep} />
           <PlayCap headerW={headerW} />
         </div>
@@ -1557,15 +1551,15 @@ export default function SongTimeline({
             style={{ top: RULER_H, left: headerW + loopStart * ppb, width: (loopEnd - loopStart) * ppb }}
           />
         )}
-        {/* The selected bars, across every lane (ARR-9): a wash with an accent edge at each end, over
-            the clips as the loop's is. */}
+        {/* The selected bars, across every lane (ARR-9), as a marquee's box looks (design-8b §7.4): a
+            1 px accent outline and an accent wash, unlike the loop's plain wash. */}
         {bars && (
           <div
             data-testid="section"
             data-start={bars[0]}
             data-end={bars[1]}
             aria-hidden
-            className="absolute bottom-0 z-[14] pointer-events-none bg-accent/10 border-x border-accent mix-blend-multiply"
+            className="absolute bottom-0 z-[14] pointer-events-none rounded-xs border border-accent bg-accent/10"
             style={{ top: RULER_H, left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }}
           />
         )}
@@ -1617,7 +1611,7 @@ export default function SongTimeline({
             <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply" style={{ left: headerW + loopStart * ppb, width: (loopEnd - loopStart) * ppb }} />
           )}
           {bars && (
-            <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none bg-accent/10 border-x border-accent mix-blend-multiply" style={{ left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }} />
+            <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none rounded-xs border border-accent bg-accent/10" style={{ left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }} />
           )}
           <TrackRows
             track={song}
@@ -1749,9 +1743,9 @@ function fineStep(grid: GridSetting, bar: number, ppb: number) {
 
 /**
  * Bars and beats along the top. A click moves the playhead there; a drag across it sets a loop over
- * the bars it covered (with ⌘ held, the beats), turns looping on, and selects those bars across
- * every track (ARR-9). Its tempo and time signature marks open their change in a popover; a
- * right-click adds one (design-8b §4.4).
+ * the beats it covered, and turns looping on. Its top band, where the markers are, selects bars of
+ * every track (ARR-9): a drag there whole bars, a click the bar. Its tempo and time signature marks
+ * open their change in a popover; a right-click adds one (design-8b §4.4).
  */
 const Ruler = memo(function Ruler({
   timeline,
@@ -1821,7 +1815,7 @@ const Ruler = memo(function Ruler({
       data-testid="ruler"
       className="relative overflow-hidden bg-chrome border-b border-line cursor-pointer touch-none"
       style={{ width }}
-      title={`Click to move the playhead · drag across to select and loop bars (hold ${mod.cmd} for beats)${locked ? "" : " · right-click to change the tempo or time signature here, or add a marker"}`}
+      title={`Click to move the playhead · drag across to loop${locked ? "" : " · right-click to change the tempo or time signature here, or add a marker"}`}
       onContextMenu={(e) => {
         e.preventDefault();
         // Its popovers are portals, whose events reach the ruler through React: only its own.
@@ -1833,15 +1827,13 @@ const Ruler = memo(function Ruler({
         if (e.button !== 0 || !e.currentTarget.contains(e.target as Node)) return;
         const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX;
         const left = el.getBoundingClientRect().left;
-        const at = (x: number) => Math.max(0, (x - left) / ppb);
-        const beatAt = (x: number) => Math.round(at(x));
+        const beatAt = (x: number) => Math.max(0, Math.round((x - left) / ppb));
         el.setPointerCapture(pointer);
         let range: { start: number; end: number } | null = null;
         const move = (ev: PointerEvent) => {
           if (ev.pointerId !== pointer || (range === null && Math.abs(ev.clientX - x0) < 4)) return;
-          // Whole bars, each end at the nearest bar line (ARR-9); with ⌘ held, whole beats.
-          const lo = Math.min(at(x0), at(ev.clientX)), hi = Math.max(at(x0), at(ev.clientX));
-          range = skipsSnap(ev) ? { start: Math.round(lo), end: Math.round(hi) } : snapBars(timeline.meter, lo, hi);
+          const a = beatAt(x0), b = beatAt(ev.clientX);
+          range = { start: Math.min(a, b), end: Math.max(a, b) };
           setDrag(range);
         };
         const end = (ev: PointerEvent) => {
@@ -1856,6 +1848,7 @@ const Ruler = memo(function Ruler({
         for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
       }}
     >
+      <SectionBand meter={timeline.meter} ppb={ppb} />
       {shown && (
         <div
           data-testid="loop-range"
@@ -1938,6 +1931,51 @@ const Ruler = memo(function Ruler({
     </div>
   );
 });
+
+/** The ruler's top band, where the markers are (ARR-9): its own drag selects whole bars of every track (each end at the bar line nearest it), a click the bar under it. The selected bars are lit there. */
+function SectionBand({ meter, ppb }: { meter: Meter[]; ppb: number }) {
+  const bars = useSection((s) => s.bars);
+  return (
+    <>
+      {bars && (
+        <div
+          data-testid="section-band"
+          aria-hidden
+          className="absolute top-0 h-3.5 z-[1] pointer-events-none bg-accent-soft border-x border-accent"
+          style={{ left: bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }}
+        />
+      )}
+      <div
+        data-testid="bars-band"
+        className="absolute top-0 inset-x-0 h-3.5 z-[1] cursor-pointer"
+        title="Drag along here to select bars on every track, or click to select one bar"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          // The ruler's own click and drag (the playhead, the loop) are below the band.
+          e.stopPropagation();
+          const el = e.currentTarget, pointer = e.pointerId;
+          const left = el.getBoundingClientRect().left;
+          const at = (x: number) => Math.max(0, (x - left) / ppb);
+          const x0 = e.clientX;
+          el.setPointerCapture(pointer);
+          const select = (x: number) => {
+            const lo = Math.min(at(x0), at(x)), hi = Math.max(at(x0), at(x));
+            const r = Math.abs(x - x0) < 4 ? snapBars(meter, lo, lo) : snapBars(meter, lo, hi);
+            selectBars(r.start, r.end);
+          };
+          select(x0);
+          const move = (ev: PointerEvent) => ev.pointerId === pointer && select(ev.clientX);
+          const end = (ev: PointerEvent) => {
+            if (ev.pointerId !== pointer) return;
+            for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
+          };
+          const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
+          for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
+        }}
+      />
+    </>
+  );
+}
 
 /** Every track's rows, then empty grid to the foot. Memoized: the playhead moves without redrawing clips. */
 const Tracks = memo(function Tracks({
@@ -2098,7 +2136,12 @@ const TrackRows = memo(function TrackRows({
   const laneH = (l: TimelineLane) => (last ? LANE_H : laneHeight(heights, module, l.key));
   /** Where a reference's clip is in `lane`, if it is one of its clips. */
   const at = (ref: ClipRef | null, lane: TimelineLane) => (ref?.lane === lane.key ? clipIndex(lane.clips, ref) : -1);
-  const select = () => useShell.getState().select(module);
+  // A right-click while bars are selected opens their menu (or a clip's, which picks the clip): it
+  // doesn't select the track, which would let go of the bars first (one selection at a time, ARR-9).
+  const select = (e: React.PointerEvent) => {
+    if (e.button !== 0 && useSection.getState().bars) return;
+    useShell.getState().select(module);
+  };
 
   /** A row: its header (sticky at the left) and its lane. */
   const row = (lane: TimelineLane | null, header: ReactNode, opts: { first?: boolean; height: number; movable?: boolean; edge?: string }) => (
@@ -2227,7 +2270,7 @@ const TrackRows = memo(function TrackRows({
         const graph = useStore.getState().graph;
         if (!component && !(sound && graph)) return;
         e.preventDefault();
-        select();
+        useShell.getState().select(module);
         if (component) addEffectTo(module, component);
         else if (sound && graph) loadSound(sound, graph, module);
       }}
@@ -2386,10 +2429,10 @@ function TimelineMenu({
         run: () => void sections.paste(),
       },
       { id: "duplicate", label: "Duplicate", detail: "A copy right after them, in place of what is there", shortcut: chord("D"), off, run: () => void sections.duplicate() },
-      { id: "delete", label: "Delete", detail: "The bars stay, empty", shortcut: keyName("Backspace"), off, run: () => void sections.clear() },
+      { id: "delete", label: "Empty bars", detail: "What plays in them goes; the bars stay", shortcut: keyName("Backspace"), off, run: () => void sections.clear() },
       "line",
       { id: "insert-bars", label: n === 1 ? "Insert a bar" : `Insert ${n} bars`, detail: "Empty bars where these start; the rest moves later", shortcut: chord("I"), off, run: () => void sections.insert() },
-      { id: "delete-bars", label: "Delete bars", detail: "The rest moves up to close the gap", shortcut: chord("Backspace", { shift: true }), off, run: () => void sections.remove() },
+      { id: "delete-bars", label: "Delete bars", detail: "The rest moves earlier to close the gap", shortcut: chord("Backspace", { shift: true }), off, run: () => void sections.remove() },
       "line",
       { id: "loop", label: "Loop these bars", shortcut: chord("L"), run: () => canvas.loopSelection?.() },
     ];

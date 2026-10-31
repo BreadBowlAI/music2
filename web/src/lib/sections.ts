@@ -1,21 +1,28 @@
-// Sections (gap #23, ARR-1 to ARR-9): whole bars of every track at once. A drag across the ruler
-// selects them (and loops them, TL-10); ⌘C, ⌘X, ⌘V, ⌘D, ⌫, ⌘I, ⇧⌘⌫ and the lanes' menu act on them,
-// each one gesture of the server's `POST /api/graph/sections`, one undo step.
+// Sections (gap #23, ARR-1 to ARR-9): whole bars of every track at once. A drag along the ruler's
+// top band, where the markers are, selects them; ⌘C, ⌘X, ⌘V, ⌘D, ⌫, ⌘I, ⇧⌘⌫ and the lanes' menu act
+// on them, each one gesture of the server's `POST /api/graph/sections`, one undo step.
 //
-// The copy is kept in this window, as the clips' is: every lane's clips that overlap the bars,
-// whole, as the timeline draws them. The server cuts them to the bars when they are pasted (ARR-5),
-// so a cut and then a paste puts back what was cut.
+// One selection at a time (ARR-9): selecting bars lets go of the selected track, clips and
+// automation point, and selecting any of those lets go of the bars.
+//
+// The copy is the server's (`POST /api/graph/sections/copy`): every lane's kind and the clips that
+// overlap the bars, whole, lanes of names too. It is kept in this window, as the clips' copy is, and
+// the server cuts it to the bars when it is pasted (ARR-5), so a cut and then a paste puts back what
+// was cut.
 
 import { create } from "zustand";
-import { barAt, type GraphState, type Meter, type TimelineView } from "./graph";
+import { barAt, readJson, type GraphState, type Meter } from "./graph";
 import { send, useClipboard, useClipSelection, type Done, type LaneAddr } from "./clips";
 import type { Step } from "./history";
+import { token } from "./native";
+import { usePoints } from "./points";
+import { useShell } from "./shell";
 
-/** A copied section (ARR-5): its bars, `[start, end)` in beats, and every lane's clips that overlap them. */
+/** A copied section (ARR-5): its bars, `[start, end)` in beats, and every lane's kind and the clips that overlap them. */
 export interface Section {
   start: number;
   end: number;
-  lanes: (LaneAddr & { clips: Record<string, unknown>[] })[];
+  lanes: (LaneAddr & { kind: string; unit?: string; options?: string[]; clips: Record<string, unknown>[] })[];
 }
 
 /** What can be done to a section (the server's section `Gesture`, tagged by `op`). Beats on bar lines. */
@@ -34,17 +41,22 @@ export type SectionGesture =
  */
 export const useSection = create<{ bars: [number, number] | null; copied: Section | null }>(() => ({ bars: null, copied: null }));
 
-/** Select bars `start` to `end`, across every track. */
+/** Select bars `start` to `end`, across every track: the one selection (ARR-9). */
 export function selectBars(start: number, end: number) {
   useClipSelection.getState().clear();
+  usePoints.setState({ picked: null });
+  if (useShell.getState().selected !== null) useShell.getState().set({ selected: null, auto: false });
   useSection.setState({ bars: [start, end] });
 }
 
 /** Let go of the selected bars. */
 export const clearBars = () => useSection.getState().bars && useSection.setState({ bars: null });
 
-// Picking clips lets go of the bars; copying clips puts them on the clipboard instead of a section.
+// Picking clips, an automation point or a track lets go of the bars; copying clips puts them on the
+// clipboard instead of a section.
 useClipSelection.subscribe((s, was) => s.picked.length > 0 && s.picked !== was.picked && clearBars());
+usePoints.subscribe((s, was) => s.picked !== null && s.picked !== was.picked && clearBars());
+useShell.subscribe((s, was) => s.selected !== null && s.selected !== was.selected && clearBars());
 useClipboard.subscribe((s, was) => s.copied.length > 0 && s.copied !== was.copied && useSection.setState({ copied: null }));
 
 /** Whether `beat` is on a bar line. */
@@ -54,14 +66,6 @@ export const onBarLine = (meter: readonly Meter[], beat: number) => Math.abs(bar
 export function nearestBarLine(meter: readonly Meter[], beat: number) {
   const b = barAt(meter, beat);
   return beat - b.start < b.start + b.length - beat ? b.start : b.start + b.length;
-}
-
-/** The bars a drag from beat `lo` to `hi` covers: each end at the nearest bar line, or, both nearest the same one, the bar `lo` is in. */
-export function snapBars(meter: readonly Meter[], lo: number, hi: number) {
-  const [start, end] = [nearestBarLine(meter, lo), nearestBarLine(meter, hi)];
-  if (end > start) return { start, end };
-  const b = barAt(meter, lo);
-  return { start: b.start, end: b.start + b.length };
 }
 
 /** How many bars `[start, end)` holds, both on bar lines. */
@@ -76,22 +80,24 @@ export function barsWords(meter: readonly Meter[], start: number, end: number) {
   return first === last ? `bar ${first}` : `bars ${first}–${last}`;
 }
 
-/** The section `start` to `end` of `timeline`, as the clipboard keeps it: every lane, each with its clips that overlap the bars, whole. */
-export function sectionOf(timeline: TimelineView, start: number, end: number): Section {
-  const lanes = timeline.tracks.flatMap((t) =>
-    t.lanes.map((l) => ({
-      module: t.module,
-      lane: l.key,
-      clips: (l.clips as { start: number; length: number }[])
-        .filter((c) => c.start < end && c.start + c.length > start)
-        .map((c) => {
-          // Without the hash the timeline drew it with: a copy names no clip of the song.
-          const { sha: _sha, ...rest } = c as unknown as Record<string, unknown>;
-          return rest;
-        }),
-    })),
-  );
-  return { start, end, lanes };
+/** The whole bars a drag from beat `lo` to `hi` covers: each end at the bar line nearest it, or, when both meet, the bar `lo` is in. */
+export function snapBars(meter: readonly Meter[], lo: number, hi: number) {
+  const [start, end] = [nearestBarLine(meter, lo), nearestBarLine(meter, hi)];
+  if (end > start) return { start, end };
+  const b = barAt(meter, lo);
+  return { start: b.start, end: b.start + b.length };
+}
+
+/** A copy of bars `start` to `end` of the open song, made by the server (ARR-5). Refused, it throws its words. */
+export async function copyBars(graph: GraphState, start: number, end: number): Promise<Section> {
+  const res = await fetch("/api/graph/sections/copy", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
+    body: JSON.stringify({ session: graph.session, start, end }),
+  });
+  const json = await readJson(res);
+  if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+  return json.section as Section;
 }
 
 /** Send one section gesture: one Tx, one undo step named `step`. Refused, it throws the server's words. */

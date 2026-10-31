@@ -31,9 +31,9 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⌘T | Ctrl+T | New track |
 | ⌘⌫ | Ctrl+Backspace | Delete the selected track. In a field or the code editor it edits the text instead: on a Mac up to the line's start, on Linux the word before |
 | ⌘R or ⇧Return | Ctrl+R or Shift+Enter | Rename the selected track |
-| ⌘D | Ctrl+D | Duplicate the selected notes, or with none, the selected track (in the code editor, its own: the next match) |
+| ⌘D | Ctrl+D | Duplicate the selected notes, clips or bars, or with none, the selected track (in the code editor, its own: the next match) |
 | ⌘A | Ctrl+A | Select all notes in the open clip |
-| ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste clips (at the playhead), or the bars selected on the ruler (at the playhead's bar: [Sections](sections.md)) |
+| ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste clips (at the playhead), or the bars selected along the ruler's top (at the playhead's bar: [Sections](sections.md)) |
 | ⌘I | Ctrl+I | Insert as many empty bars as are selected, where they start |
 | ⇧⌘⌫ | Ctrl+Shift+Backspace | Delete the selected bars: what follows moves up |
 | ⌘E | Ctrl+E | Split the selected clips at the playhead |

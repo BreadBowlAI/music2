@@ -338,8 +338,8 @@ export function appCommand(id: string) {
       return void undoTop(graph, id);
     case "duplicate": {
       // Focus decides (taste.md §5.3): in the code editor, its own ⌘D; else the roll's selected
-      // notes; else the timeline's selected clips; else the selected track, when no clip of it is
-      // selected (design-8b §2.6).
+      // notes; else the timeline's selected bars or clips (one selection at a time, ARR-9); else the
+      // selected track, when no clip of it is selected (design-8b §2.6).
       if (editorHooks.chord?.("duplicate")) return;
       if (editorHooks.duplicate?.()) return;
       if (editing()) return;

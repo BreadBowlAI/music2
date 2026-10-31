@@ -31,7 +31,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Delete the selected clips or notes", keyName("Backspace")],
       ["Select more clips / one in or out", `${mod.shift}-click / ${mod.cmd}-click`],
       ["Select the clips in some bars", "drag on empty lanes"],
-      ["Select bars of every track, and loop them", "drag on the ruler"],
+      ["Select bars of every track", "drag along the ruler's top"],
       ["Insert bars where the selected ones start", chord("I")],
       ["Delete the selected bars", chord("Backspace", { shift: true })],
       ["Copy a clip", `${mod.alt}-drag`],
