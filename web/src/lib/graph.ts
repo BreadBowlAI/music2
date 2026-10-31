@@ -186,7 +186,15 @@ export type TimelineLane =
       max: number;
       clips: ControlClip[];
     }
-  | { key: string; label: string; kind: "audio"; channels: number; clips: AudioClip[] };
+  | {
+      key: string;
+      label: string;
+      kind: "audio";
+      channels: number;
+      clips: AudioClip[];
+      /** Each file that is a take over a loop: where each take starts in it, in seconds (MON-11). */
+      takes?: Record<string, number[]>;
+    };
 
 /** A module that is a track or declares lanes, by its key (as `ModuleView.key`), with its label. */
 export interface TimelineTrack {

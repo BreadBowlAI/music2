@@ -25,6 +25,8 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Play live: the computer's keys, or a MIDI keyboard with its wheels | ⌘K; or plug a keyboard in |
 | Hear a click on each beat | K |
 | Record notes, or your voice or a guitar | R |
+| Record several tracks at once, each from its own input (3–4 too) | **R** on each track's header; right-click it for its input |
+| Fix one part by punching in, or keep a take each time round a loop | right-click Record ▸ **Punch in and out**; the clip's menu ▸ **Take 1**, **Take 2**, … |
 | Bring in WAV or FLAC files, long ones too | File ▸ Import Audio… (⇧⌘I), or drag them onto the window |
 | Keep an audio clip in time when the tempo changes | right-click the clip ▸ **Follow tempo** |
 | Bring in a MIDI file as new tracks | File ▸ Import MIDI…, or drop the `.mid` file |

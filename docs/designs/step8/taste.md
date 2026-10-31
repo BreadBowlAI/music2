@@ -763,7 +763,8 @@ none is selected. "Automate" unfolds the track and flashes the new lane (`lit`).
 |---|---|---|
 | 0 | 4 | Colour bar (`bar`, full height, including the track's sub-rows) |
 | 12 | 12 | Fold chevron (only if the track has control lanes) |
-| 28 | 140 | Name in `text-base` 500 `fg`, cut with an ellipsis ("Shakers & Hats" and "Lead Vox Double" fit). Double-click (or ⌘R) to rename inline, in a field the width of the header. |
+| 28 | 118 | Name in `text-base` 500 `fg`, cut with an ellipsis ("Shakers & Hats" and "Lead Vox Double" fit). Double-click (or ⌘R) to rename inline, in a field the width of the header. |
+| 158 | 20 | R, arm (since track `recording`, MON-9): as M, `danger` with a white letter while armed; right-click on an audio track's for its input's channels. On a track with no notes or audio lane, empty. |
 | 180 | 20 | M (`ctl-xs`, `text-xs` 600) |
 | 202 | 20 | S |
 | 231 | 3 | Meter, 28 px tall (two 1 px bars) |
@@ -997,9 +998,10 @@ tools after Hear notes, 24 px like every Notes tool):
 - Its caps are 22×20 px in `text-xs`: A S D F G H J K L ; ' the white keys (`canvas`, `line-strong`),
   W E T Y U O P the black ones (`gray-700`) over them. A held cap is in the track's `tint`, `bar` and
   `ink`. The white keys' notes sit under them (C's with their octave).
-- Under the caps: "Z  C4–F5  X" (Z and X change the octave), then "Plays Bass", or "Select a track
+- Under the caps: "Z  C4–F5  X" (Z and X change the octave) and "−  80%  =" (− and = the velocity, a
+  10% step, MON-15), then "Plays Bass", or "Select a track
   with notes to play it". A × at the top right: "Keyboard piano off (⌘K)".
-- While it is on, its 20 keys only play notes; Space, C, M and the rest work as always; typing in a
+- While it is on, its 22 keys only play notes (and step the octave and velocity); Space, C, M and the rest work as always; typing in a
   field or the code editor never plays. It is off when the app starts.
 
 **Settings** (⌘,; the Mac's app menu, File elsewhere; from the start screen too):

@@ -1,10 +1,13 @@
 //! A take on an audio lane (the io plan's D17 to D22): what the input played, written into the
 //! song's `assets/` as it records, then placed as one clip.
 //!
-//! - **The writer** ([`Writer`]): one `m2-take` thread a take. Every 50 ms it moves what the input's
-//!   take ring holds into the take's hidden part file ([`Growing`]), from the frame heard at the
-//!   take's start: the engine clock where the transport was at its start (its anchor), less the
-//!   input's stamp (D20). Nothing before it is kept, so a count-in's sound never is.
+//! - **The writer** ([`Writer`]): one `m2-take` thread a lane. Every 50 ms it moves what the ring of
+//!   its channels holds (MON-13: a pair, or one channel of it) into the take's hidden part file
+//!   ([`Growing`]), from the frame heard at the take's start: the engine clock where the transport
+//!   was at its start (its anchor), less the input's stamp (D20). Nothing before it is kept, so a
+//!   count-in's sound never is. A take over a loop that starts inside it is led by silence from the
+//!   loop's start (its `lead`), so each pass of the file starts a loop's length after the one
+//!   before (MON-11).
 //! - **A full ring** (D22): frames the ring lost before the writer moved them are written as
 //!   silence, so everything after stays where it was heard; the take says "The disk was too slow:
 //!   part of the take is silent."
@@ -22,8 +25,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use m2_editor::import::{self, Imported, Target};
+use m2_editor::import::Imported;
 use m2_editor::take::Growing;
+use m2_play::Channels;
 use m2_play::ring::Ring;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -49,6 +53,8 @@ pub const DISK_FULL: &str = "The disk is full or stopped working: the take was k
 struct Shared {
     /// The take's anchor plus one; 0 while unknown.
     anchor: AtomicU64,
+    /// Frames of silence the file starts with, before the anchor's.
+    lead: AtomicU64,
     /// The take's length in frames plus one, once it ended; 0 before.
     end: AtomicU64,
     cancel: AtomicBool,
@@ -78,9 +84,9 @@ pub(super) struct Writer {
 pub(super) type Written = (Imported, u64, Option<String>);
 
 impl Writer {
-    /// Start writing the input's `ring` into `file` once the anchor is known; `name` is what the
-    /// file is called once named (the take's).
-    pub(super) fn start(ring: Arc<Ring>, file: Growing, name: String, channels: u16) -> Result<Writer> {
+    /// Start writing `channels` of the input from their `ring` into `file` once the anchor is known;
+    /// `name` is what the file is called once named (the take's).
+    pub(super) fn start(ring: Arc<Ring>, channels: Channels, file: Growing, name: String) -> Result<Writer> {
         let shared = Arc::new(Shared::default());
         let s = shared.clone();
         let (poke, poked) = mpsc::channel();
@@ -96,12 +102,14 @@ impl Writer {
         })
     }
 
-    /// The engine clock where the transport is at the take's start (its anchor).
-    pub(super) fn anchor(&self, clock: u64) {
+    /// The engine clock where the transport is at the take's start (its anchor), and the frames of
+    /// silence the file starts with before it.
+    pub(super) fn anchor(&self, clock: u64, lead: u64) {
+        self.shared.lead.store(lead, Ordering::Release);
         self.shared.anchor.store(clock + 1, Ordering::Release);
     }
 
-    /// The take ended, `frames` long: the writer finishes the file.
+    /// The take ended, `frames` after its anchor: the writer finishes the file.
     pub(super) fn end(&self, frames: u64) {
         self.shared.end.store(frames + 1, Ordering::Release);
         let _ = self.poke.send(());
@@ -167,13 +175,20 @@ impl Drop for Writer {
 /// The writer's thread: from the frame heard at the anchor, move what the ring holds into `file`
 /// every 50 ms; at the end, finish it. A write that fails (a full disk), or a file as long as a
 /// WAV can be, ends it at once with what it holds, and says why (the review's io-r3).
-fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, poked: &mpsc::Receiver<()>) -> Result<Option<Written>> {
+fn write(
+    ring: &Ring,
+    mut file: Growing,
+    name: &str,
+    channels: Channels,
+    s: &Shared,
+    poked: &mpsc::Receiver<()>,
+) -> Result<Option<Written>> {
     // The ring's number for the take's first frame: below 0 when it was heard before the input's
     // first frame (it opened a moment after).
     let mut start: Option<i64> = None;
     let (mut at, mut gone, mut peaks) = (0u64, 0u64, Peaks::builder());
     let mut buf = vec![[0.0f32; 2]; PIECE];
-    let mut planar = vec![Vec::with_capacity(PIECE); channels as usize];
+    let mut planar = vec![Vec::with_capacity(PIECE); channels.width() as usize];
     let mut ended: Option<Instant> = None;
     let mut stopped: Option<String> = None;
     let mut put = |file: &mut Growing, frames: &[[f32; 2]]| -> Option<String> {
@@ -183,7 +198,7 @@ fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, 
             return Some(DISK_FULL.into());
         }
         add(&mut peaks, &mut planar, &frames[..n]);
-        (n < frames.len()).then(|| too_long(file.rate(), channels))
+        (n < frames.len()).then(|| too_long(file.rate(), channels.width()))
     };
     loop {
         let _ = poked.recv_timeout(EVERY);
@@ -199,7 +214,8 @@ fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, 
             && let (Some(anchor), Some(offset)) = (s.anchor.load(Ordering::Acquire).checked_sub(1), ring.offset())
         {
             let first = anchor as i64 - offset;
-            let before = vec![[0.0f32; 2]; (-first).max(0) as usize];
+            let lead = s.lead.load(Ordering::Acquire) as usize;
+            let before = vec![[0.0f32; 2]; lead + (-first).max(0) as usize];
             stopped = put(&mut file, &before);
             (start, at) = (Some(first), first.max(0) as u64);
         }
@@ -216,6 +232,7 @@ fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, 
         while at < to && stopped.is_none() {
             let n = ((to - at) as usize).min(PIECE);
             let got = ring.read(at, &mut buf[..n]);
+            buf[..got.frames].iter_mut().for_each(|f| *f = channels.pick(*f));
             gone += got.gone as u64;
             stopped = put(&mut file, &buf[..got.frames]);
             at += got.frames as u64;
@@ -236,7 +253,7 @@ fn write(ring: &Ring, mut file: Growing, name: &str, channels: u16, s: &Shared, 
         if stopped.is_some() || until.is_some_and(|u| at >= u) {
             // The take thread ends a take whose writer stopped.
             s.stopped.store(stopped.is_some(), Ordering::Release);
-            if file.frames() == 0 {
+            if file.frames() <= s.lead.load(Ordering::Acquire) {
                 return Ok(None);
             }
             let rate = file.rate();
@@ -264,18 +281,23 @@ fn add(peaks: &mut crate::peaks::Builder, planar: &mut [Vec<f32>], frames: &[[f3
 }
 
 impl Graph {
-    /// Plan a written take's Tx (WRITE-1): its file, already durable, taken in, and one clip on
-    /// lane `(module, lane)` from beat `from`, as long as the file. Answers the edit, or why it was
-    /// refused.
-    pub(super) fn place_take(&self, token: u64, f: &Imported, module: &str, lane: &str, from: f64) -> (Result<Value>, Option<Refused>) {
+    /// Write a recording's clips (WRITE-1, MON-14): its files, durable already, taken in, and each
+    /// take's clip on its lane, as one Tx. Answers the edit, or why it was refused.
+    pub(super) fn place_takes(
+        &self,
+        token: u64,
+        files: Vec<Imported>,
+        takes: Vec<m2_editor::clips::Taken>,
+    ) -> (Result<Value>, Option<Refused>) {
         let why = Arc::new(Mutex::new(None));
         let saw = why.clone();
-        let (f, target) = (f.clone(), Target::Lane { module: module.into(), lane: lane.into(), beat: from });
         let done = self.call(move |a| {
             a.edit_and(token, |s| {
                 let folder: PathBuf = s.accepted().project.dir.join(m2_song::path::ASSETS);
-                m2_editor::take::seen(&folder, "tx");
-                match import::place(s, &[f], &target) {
+                if !files.is_empty() {
+                    m2_editor::take::seen(&folder, "tx");
+                }
+                match m2_editor::take::place(s, &files, takes) {
                     Ok(p) => {
                         let made: Vec<Value> =
                             p.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();

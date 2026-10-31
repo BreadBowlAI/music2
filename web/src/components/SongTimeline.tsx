@@ -79,6 +79,7 @@ import { edgeLimits, fileSeconds, respanned } from "../lib/peaks";
 import Take from "./Take";
 import { exportMidi } from "../lib/midiFiles";
 import { useGlows } from "../lib/notice";
+import { loadRecordOptions, useRecordOptions } from "../lib/record";
 
 /** A clip sits this far inside its row, inside its 1px border; its drawing this far inside that. */
 const CLIP_INSET = 4;
@@ -1643,6 +1644,9 @@ const Ruler = memo(function Ruler({
   const [drag, setDrag] = useState<{ start: number; end: number } | null>(null);
   const shown = drag ?? (loopStart !== null && loopEnd !== null ? { start: loopStart, end: loopEnd } : null);
   const on = drag ? true : looping;
+  // Punch records between the loop's edges (MON-10).
+  const punch = useRecordOptions((o) => o.punch) && !drag;
+  useEffect(() => void loadRecordOptions(), []);
   const session = useStore((s) => s.graph?.session);
   // The change whose popover is open (by its beat; `typing` when just made), and the right-click menu.
   const [mark, setMark] = useState<{ beat: number; typing: boolean } | null>(null);
@@ -1726,9 +1730,14 @@ const Ruler = memo(function Ruler({
           data-start={shown.start}
           data-end={shown.end}
           data-on={on}
+          data-punch={punch || undefined}
           aria-hidden
-          // A brace along the ruler's foot: lit while it loops, a grey bar while it is only set.
-          className={clsx("absolute bottom-0 h-1.5 z-[1] pointer-events-none", on ? "bg-accent-range border-x border-accent" : "bg-line-strong")}
+          // A brace along the ruler's foot: lit while it loops, a grey bar while it is only set; in
+          // `danger` while Punch records between its edges (MON-10).
+          className={clsx(
+            "absolute bottom-0 h-1.5 z-[1] pointer-events-none",
+            punch ? "bg-danger-soft border-x border-danger" : on ? "bg-accent-range border-x border-accent" : "bg-line-strong",
+          )}
           style={{ left: shown.start * ppb, width: (shown.end - shown.start) * ppb }}
         />
       )}

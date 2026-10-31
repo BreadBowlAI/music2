@@ -26,7 +26,7 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⇧⌘E | Ctrl+Shift+E | Export: the song, stems or MIDI |
 | ⇧⌘I | Ctrl+Shift+I | Import audio |
 | ⌘, | Ctrl+, | Settings |
-| ⌘K | Ctrl+K | The keyboard piano on or off |
+| ⌘K | Ctrl+K | The keyboard piano on or off (while it is on: Z and X an octave down and up, − and = softer and louder) |
 | ⌘Q | Ctrl+Q | Quit (on Linux, File → Quit) |
 | ⌘T | Ctrl+T | New track |
 | ⌘⌫ | Ctrl+Backspace | Delete the selected track. In a field or the code editor it edits the text instead: on a Mac up to the line's start, on Linux the word before |

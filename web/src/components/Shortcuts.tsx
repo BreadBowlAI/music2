@@ -103,11 +103,12 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     ],
   },
   {
-    // While it is on (lib/piano.ts): the selected track plays.
+    // While it is on (lib/piano.ts): the selected track plays, or the armed notes track.
     name: "Keyboard piano",
     keys: [
       ["Play notes", "A to ' and W to P"],
       ["Octave down / up", "Z / X"],
+      ["Softer / louder", "− / ="],
     ],
   },
 ];

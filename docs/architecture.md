@@ -1486,11 +1486,11 @@ Everything else is counted and named in plain words when the import ends, never 
 - *Why:* an interface with four inputs records a band; one microphone on input 2 records mono.
 - *Today:* built in track `recording` (`m2_play::Channels`, `Pairs` in `core/play/src/inputs.rs`; the take's writer picks its channels, `crates/server/src/graph/take_audio.rs`). Tested by `input_three_and_four_record_their_own_channels` (`record_tests.rs`) and `the_input_callback_never_allocates` (`core/play/tests/no_alloc.rs`).
 
-**MON-14.** Each musical result of recording MUST be one Tx and one undo step: each notes pass of a loop; the end of a take (every lane's clip together, its last notes pass included); choosing a take. Each is named ("recording on Vox", "Vox take 2"). A take's files are durable before the Tx names them, notes included ([WRITE-1](#the-two-write-primitives)). Arming, a track's channels, Punch and Overdub are no edit. Agents reach every one: `POST /api/graph/record/start` (`punch`, `overdub`), `stop`, `cancel`, `/api/graph/arm` and `/api/graph/take`, through `m2 call`.
+**MON-14.** Each musical result of recording MUST be one Tx and one undo step: each notes pass of a loop; the end of a take (every lane's clip together, its last notes pass included); choosing a take. Each is named ("recording on Vox", "Vox take 2"). A take's files are durable before the Tx names them, notes included ([WRITE-1](#the-two-write-primitives)). Arming, a track's channels, Punch and Overdub are no edit. Recording and arming are the musician's ([AGENT-11](#agents)): `POST /api/graph/record/start` (`punch`, `overdub`), `stop`, `cancel` and `/api/graph/arm`. Choosing a take is a song change, open to agents too: `POST /api/graph/take`, through `m2 call`.
 - *Why:* undo must take back what the musician thinks of as one thing.
 - *Today:* built in track `recording`. Tested by `three_loop_passes_make_three_takes` and `record_records_into_every_armed_track` (`record_tests.rs`).
 
-**MON-15.** The keyboard piano MUST play at a velocity the musician sets: C and V step it down and up by 10%, from 10% to 100% (80% at first), as Logic's and Live's musical typing do. The card shows it. While the piano is on, C and V are its keys, as Z and X are.
+**MON-15.** The keyboard piano MUST play at a velocity the musician sets: − and = step it down and up by 10%, from 10% to 100% (80% at first), as C and V do in Logic's and Live's musical typing. The card shows it. While the piano is on, − and = are its keys, as Z and X are; C stays the loop's key ([taste.md](designs/step8/taste.md) §3.9).
 - *Why:* a part played all at one velocity sounds like a machine.
 - *Today:* built in track `recording` (`web/src/lib/piano.ts`). Tested by `e2e/rec-takes.mjs`.
 

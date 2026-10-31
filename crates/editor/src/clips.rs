@@ -135,8 +135,9 @@ pub enum Gesture {
         ends: bool,
     },
     /// An audio clip's settings (lane A's A3): its volume (−48 to +12 dB), its fades (seconds, at
-    /// most the clip together), its direction, and whether it follows the song's tempo (the sx
-    /// plan's D11). Those not given stay.
+    /// most the clip together), its direction, whether it follows the song's tempo (the sx plan's
+    /// D11), and where in its file it starts (seconds, 0 or more: a take chosen, MON-11). Those not
+    /// given stay.
     Audio {
         clip: ClipRef,
         #[serde(default)]
@@ -149,6 +150,12 @@ pub enum Gesture {
         reverse: Option<bool>,
         #[serde(default)]
         follow: Option<bool>,
+        #[serde(default)]
+        offset: Option<f64>,
+    },
+    /// A take written (MON-10 to MON-12): each take's clip on its lane, as its `how` says.
+    Record {
+        takes: Vec<Taken>,
     },
     /// The general form, for agents: whole clips put (each replacing the clip with its id, or
     /// added) and clips deleted by id.
@@ -160,6 +167,33 @@ pub enum Gesture {
         #[serde(default)]
         delete: Vec<String>,
     },
+}
+
+/// One take of [`Gesture::Record`]: its clip, in the lane format, with no id, and how it goes on the
+/// lane.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Taken {
+    #[serde(flatten)]
+    pub lane: LaneAddr,
+    pub clip: Value,
+    #[serde(default)]
+    pub how: How,
+}
+
+/// How a take goes on its lane.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum How {
+    /// A clip of its own, over whatever is there (MON-11).
+    #[default]
+    New,
+    /// Over its range only: a clip that crosses an edge of it is cut there, as Split cuts it, and
+    /// whatever lies inside goes (MON-10, Punch). A clip that can't be cut (its pitch changed, or
+    /// reversed and warped) stays whole.
+    Replace,
+    /// A notes take's notes into the clip that holds its first note (of several, the one that
+    /// starts last), which grows to hold them; a clip of its own when none does (MON-12, Overdub).
+    Into,
 }
 
 /// What a gesture makes of one lane: all its clips, in canonical order, and the ids of the clips
@@ -305,7 +339,7 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 w.lanes.get_mut(&target).expect("loaded").added.push((clip, true));
             }
         }
-        Gesture::Audio { clip, gain_db, fade_in, fade_out, reverse, follow } => {
+        Gesture::Audio { clip, gain_db, fade_in, fade_out, reverse, follow, offset } => {
             let (lane, i) = w.resolve(clip)?;
             let l = w.lanes.get_mut(&lane).expect("resolved");
             let Clip::Audio(mut c) = l.was[i].clone() else {
@@ -337,6 +371,12 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
             if let Some(r) = reverse {
                 c.reverse = *r;
             }
+            if let Some(o) = offset {
+                if !(o.is_finite() && *o >= 0.0) {
+                    return Err(EditError::Rejected("Where a clip starts in its file is a number of seconds, 0 or more.".into()));
+                }
+                c.offset = *o;
+            }
             // On again keeps the markers it has: they hold its beats since it was turned on.
             match follow {
                 Some(true) if c.warp.is_empty() => c.warp = follow_markers(&c, tempo),
@@ -361,6 +401,77 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                         rest.iter().for_each(|i| l.keep[*i] = None);
                     }
                     None => l.added.push((c, true)),
+                }
+            }
+        }
+        Gesture::Record { takes } => {
+            let tempo = rev.compiled.data.tempo();
+            for t in takes {
+                let l = w.lane(&t.lane)?;
+                let mut c = parse(&t.clip, &l.kind)?;
+                c.set_id(None);
+                starts(c.start())?;
+                lasts(c.length())?;
+                match t.how {
+                    How::New => l.added.push((c, true)),
+                    How::Replace => {
+                        let (lo, hi) = (c.start(), c.end());
+                        for i in 0..l.keep.len() {
+                            let Some(k) = l.keep[i].clone().filter(|k| k.start() < hi && lo < k.end()) else { continue };
+                            // What lies outside the range stays, cut where it crosses an edge.
+                            let cut = |k: &Clip, at: f64| k.split(at, tempo).ok();
+                            let (before, rest) = match k.start() < lo {
+                                true => match cut(&k, lo) {
+                                    Some((a, b)) => (Some(a), Some(b)),
+                                    None => continue,
+                                },
+                                false => (None, Some(k.clone())),
+                            };
+                            let after = match rest.filter(|r| r.end() > hi) {
+                                Some(r) => match cut(&r, hi) {
+                                    Some((_, b)) => Some(b),
+                                    None => continue,
+                                },
+                                None => None,
+                            };
+                            match (before, after) {
+                                (Some(a), b) => {
+                                    l.keep[i] = Some(a);
+                                    l.added.extend(b.map(|b| (b, false)));
+                                }
+                                // Trimmed at its start only: it keeps its id.
+                                (None, Some(mut b)) => {
+                                    b.set_id(k.id().map(str::to_string));
+                                    l.keep[i] = Some(b);
+                                }
+                                (None, None) => l.keep[i] = None,
+                            }
+                        }
+                        l.added.push((c, true));
+                    }
+                    How::Into => {
+                        let Clip::Notes(take) = &c else {
+                            l.added.push((c, true));
+                            continue;
+                        };
+                        let first = take.notes.iter().map(|n| take.start + n.start).fold(f64::INFINITY, f64::min);
+                        let at = if first.is_finite() { first } else { take.start };
+                        let under = (0..l.keep.len())
+                            .filter(|i| matches!(&l.keep[*i], Some(Clip::Notes(k)) if k.start <= at && at < k.start + k.length))
+                            .max_by(|a, b| {
+                                let start = |i: usize| l.keep[i].as_ref().map_or(f64::NEG_INFINITY, Clip::start);
+                                start(*a).total_cmp(&start(*b)).then(a.cmp(b))
+                            });
+                        match under {
+                            Some(i) => {
+                                let Some(Clip::Notes(mut k)) = l.keep[i].clone() else { unreachable!("a notes clip") };
+                                k.notes.extend(take.notes.iter().map(|n| Note { start: take.start + n.start - k.start, ..n.clone() }));
+                                k.length = k.length.max(take.start + take.length - k.start);
+                                l.keep[i] = Some(Clip::Notes(k));
+                            }
+                            None => l.added.push((c, true)),
+                        }
+                    }
                 }
             }
         }
@@ -1152,7 +1263,7 @@ pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
         Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } | Gesture::Audio { clip, .. } => {
             pin(clip)?
         }
-        Gesture::Create { .. } | Gesture::Paste { .. } | Gesture::Set { .. } => {}
+        Gesture::Create { .. } | Gesture::Paste { .. } | Gesture::Set { .. } | Gesture::Record { .. } => {}
     }
     Ok(g)
 }

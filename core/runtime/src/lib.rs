@@ -3503,31 +3503,19 @@ impl Renderer {
         }
     }
 
-    /// Hear `input` on audio lane `slot` (MON-8), or with None stop hearing on every lane: Ok with
-    /// what was heard before, to retire; Err with `input` back for a slot that isn't one of its
-    /// audio lanes. Only one lane hears at a time. Never allocates.
+    /// Hear `input` on audio lane `slot` (MON-8), or with None stop hearing there: Ok with what that
+    /// lane heard before, to retire; Err with `input` back for a slot that isn't one of its audio
+    /// lanes. Each lane hears its own input, and several hear at once (MON-13). Never allocates.
     #[allow(clippy::type_complexity)]
     pub fn hear(
         &mut self,
         slot: usize,
         input: Option<Arc<dyn LiveInput>>,
     ) -> Result<Option<Arc<dyn LiveInput>>, Option<Arc<dyn LiveInput>>> {
-        let lanes = &mut self.lanes.slots[..self.lanes.live];
-        if input.is_some() && !matches!(lanes.get(slot), Some(LaneSlot::Audio(Some(_)))) {
-            return Err(input);
+        match self.lanes.slots[..self.lanes.live].get_mut(slot) {
+            Some(LaneSlot::Audio(Some(p))) => Ok(p.hear(input)),
+            _ => Err(input),
         }
-        let mut old = None;
-        for l in lanes.iter_mut() {
-            if let LaneSlot::Audio(Some(p)) = l
-                && p.hearing()
-            {
-                old = p.hear(None);
-            }
-        }
-        if let Some(LaneSlot::Audio(Some(p))) = lanes.get_mut(slot).filter(|_| input.is_some()) {
-            p.hear(input);
-        }
-        Ok(old)
     }
 
     /// Whether an audio lane hears a live input (MON-8).

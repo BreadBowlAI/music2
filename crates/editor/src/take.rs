@@ -9,7 +9,13 @@
 //! taken in any capitals: `Vox take 2.wav`) and syncs the folder. Only then may a Tx name it. A
 //! take let go unfinished (cancelled, or its song closed) leaves nothing. After a failed write (a
 //! full disk), [`Growing::finish`] keeps what was written before it; and a take is never longer
-//! than a WAV can say ([`Growing::room`]).
+//! than a WAV can say ([`Growing::room`]). A name whose note's name is taken is taken too, as an
+//! import's is (LIB-7).
+//!
+//! A take over a loop (MON-11) is one file of every pass; its note, written with [`note_takes`]
+//! before the Tx names the file, lists where each pass starts, `{"takes": [0, 8, 16]}` in seconds,
+//! and [`takes_of`] reads it back for the Takes menu. [`place`] writes a recording's clips, every
+//! lane's, as one Tx.
 
 use std::fs::File;
 use std::io::{BufWriter, ErrorKind, Seek, SeekFrom, Write};
@@ -194,7 +200,10 @@ impl Growing {
         m2_os::fs::push(&file).map_err(io)?;
         seen(&self.folder, "push");
         let hash = Sha::of_file(&self.part).map_err(io)?;
-        let mut taken: Vec<String> = assets_in(&self.folder).into_iter().map(|(n, _)| n).collect();
+        let there: Vec<String> = assets_in(&self.folder).into_iter().map(|(n, _)| n).collect();
+        // A note's name taken takes its asset's: `Vox take.wav.json` takes `Vox take.wav`.
+        let notes: Vec<String> = there.iter().filter_map(|n| n.strip_suffix(".json")).map(String::from).collect();
+        let mut taken: Vec<String> = there.into_iter().chain(notes).collect();
         let asset = loop {
             let name = self.wanted.untaken_folded(taken.iter().map(String::as_str));
             match name_new(&self.part, &self.folder.join(name.as_str())) {
@@ -258,6 +267,41 @@ impl Drop for Growing {
             let _ = std::fs::remove_file(&self.part);
         }
     }
+}
+
+/// Write the note of a take over a loop beside its file `asset` in the song in `dir` (MON-11): where
+/// each pass starts in it, in seconds. Created only, its bytes pushed and its folder synced, before
+/// a Tx names the file (WRITE-1).
+pub fn note_takes(dir: &Path, asset: &str, takes: &[f64]) -> Result<(), EditError> {
+    let note = serde_json::json!({ "takes": takes });
+    match crate::library::samples::write_note(dir, asset, &note) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(io(format!("{asset} has a note already"))),
+        Err(e) => Err(io(e)),
+    }
+}
+
+/// Where each take of file `asset` starts in it, in seconds, as its note lists them; none for a
+/// file that isn't a take over a loop (MON-11).
+pub fn takes_of(dir: &Path, asset: &str) -> Vec<f64> {
+    let path = dir.join(ASSETS).join(crate::library::samples::note_name(asset));
+    let Ok(text) = std::fs::read_to_string(path) else { return vec![] };
+    let Ok(note) = serde_json::from_str::<serde_json::Value>(&text) else { return vec![] };
+    note["takes"]
+        .as_array()
+        .map(|t| t.iter().filter_map(|x| x.as_f64().filter(|x| x.is_finite() && *x >= 0.0)).collect())
+        .unwrap_or_default()
+}
+
+/// Write a recording's clips, `takes`, as one Tx, one undo step (MON-14): its audio `files`,
+/// durable already, taken in first.
+pub fn place(
+    s: &mut m2_session::Session,
+    files: &[Imported],
+    takes: Vec<crate::clips::Taken>,
+) -> Result<crate::clips::ClipsEdited, EditError> {
+    crate::import::take_in(s, files)?;
+    crate::clips::edit(s, &crate::clips::Gesture::Record { takes })
 }
 
 /// What a test watches: each step of each take's finish, by its `assets/` folder's real path, and
