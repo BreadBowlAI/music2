@@ -35,13 +35,16 @@ use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, l
 pub enum Shape {
     /// The kernel, the SHA-256 of its package's wasm module (which fixes its state ABI), and its
     /// settings (kernel ABI v1): its channel count, the hash of each asset it reads (`None`: it
-    /// reads silence), and its values, as bits.
+    /// reads silence), and its values, as bits. And each `events<note>` input's lane, how late it
+    /// comes (a note delay's frames) and its room (ABI-8): the plan sets them
+    /// ([`Shape::with_notes`]).
     Kernel {
         id: String,
         wasm: Sha,
         channels: u8,
         assets: Vec<Option<Sha>>,
         values: Vec<u64>,
+        notes: Vec<(String, String, u32, usize)>,
     },
     /// The plugin, its version and its channels. Not its state: a new committed blob is loaded
     /// into the instance (RENDER-26b), and a state path is the same for every pair the path pass
@@ -87,6 +90,7 @@ impl Shape {
                 channels: *channels,
                 assets: names.iter().map(|a| assets.sha(a)).collect(),
                 values: values.iter().map(|v| v.to_bits()).collect(),
+                notes: vec![],
             }),
             FOp::Plugin { plugin, .. } if packages.plugin_missing(plugin) => None,
             FOp::Plugin { plugin, channels, .. } => {
@@ -104,6 +108,15 @@ impl Shape {
             // Its room is its lane's: the plan sets it ([`Shape::with_room`]).
             FOp::NoteDelay { frames, .. } => Some(Shape::NoteDelay { frames: *frames, room: 0 }),
             _ => None,
+        }
+    }
+
+    /// A kernel's shape, with what its `events<note>` inputs read: each one's lane, its delay's
+    /// frames and its room (ABI-8).
+    pub(crate) fn with_notes(self, notes: Vec<(String, String, u32, usize)>) -> Shape {
+        match self {
+            Shape::Kernel { id, wasm, channels, assets, values, .. } => Shape::Kernel { id, wasm, channels, assets, values, notes },
+            s => s,
         }
     }
 
@@ -192,8 +205,7 @@ pub struct PlanInfo {
     /// audio it carries, the module that reads it, and the cell (MON-1, RENDER-23). Their ids come
     /// after every value cell's.
     pub overlays: Vec<(String, String, CellId)>,
-    /// What its meters read (8b.8): the song's output and each track, after its mute. Only a live
-    /// plan has them.
+    /// Its taps (TAP-1): the meters' peaks and the frame rings. Only a live plan has them.
     pub taps: Option<Arc<TapSlots>>,
     /// The ring its parts report faults to (RENDER-25): a live plan's is the app's.
     pub faults: Arc<Faults>,
@@ -429,7 +441,7 @@ pub(crate) struct Plan {
     /// The window's own overlays with no site to follow, each with the old plan's site whose gain
     /// it keeps from the block line on (MON-1).
     pub(crate) window_held: Vec<(usize, usize)>,
-    /// Its taps, written after each block: a live plan's only.
+    /// Its taps, written after each block: a live plan's only (TAP-2).
     pub(crate) taps: Option<Taps>,
     /// What a copy tap at each top-level node reads (AGENT-7): its first output's audio channels
     /// (0 when it isn't sound) and when it arrives, in frames after the song time it carries: its

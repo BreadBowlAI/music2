@@ -18,7 +18,7 @@ fn project(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("m2-routes-record-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(dir.join("song.ts"), SONG).unwrap();
     dir
@@ -185,12 +185,13 @@ fn an_audio_take_through_the_routes() {
     let tone = json!({"tone": {"hz": 440.0, "seconds": 0.5, "gain": 0.5}});
     let (status, injected) = post(&running.url, "/api/graph/input/inject", &tone);
     assert_eq!(status, 200, "{injected:#}");
-    // The meters say the input's level while it records.
+    // The meters say the input's level while it records, to a window that listens (TAP-4).
+    let _window = state.meters.subscribe();
     let t = Instant::now();
     let mut level = 0.0;
     while level < 0.4 && t.elapsed() < Duration::from_secs(3) {
         std::thread::sleep(Duration::from_millis(30));
-        level = state.graph.meters().and_then(|m| m["input"][0].as_f64()).unwrap_or(0.0).max(level);
+        level = state.graph.meters().and_then(|m| m.all["input"][0].as_f64()).unwrap_or(0.0).max(level);
     }
     assert!((0.4..=0.51).contains(&level), "the input's level: {level}");
     std::thread::sleep(Duration::from_millis(300));

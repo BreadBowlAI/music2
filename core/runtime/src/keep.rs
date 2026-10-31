@@ -110,12 +110,20 @@ fn port(nodes: &[FNode], p: PortRef) -> Input {
     Input::Port { src: p, src_channels: ch, channels: ch }
 }
 
-/// The edges of node `n` that may fade, with what each reads: a kernel's inputs, a plugin's audio
+/// The edges of node `n` that may fade, with what each reads: a kernel's inputs but its notes (a
+/// kernel rewired to other notes is new, its lane being part of its shape: ABI-8), a plugin's audio
 /// input (parameters are events the plugin smooths itself, §6.3), a missing plugin's pass-through,
 /// a feedback's input and a poly's captures.
 fn edges(nodes: &[FNode], n: &FNode, packages: &PackageSet) -> Vec<(Edge, Input)> {
     match &n.op {
-        FOp::Kernel { inputs, .. } => inputs.iter().cloned().enumerate().map(|(p, i)| (Edge::Input(p), i)).collect(),
+        FOp::Kernel { kernel, inputs, .. } => {
+            let notes = |p: usize| {
+                m2_ir::Kernels::kernel(packages, kernel)
+                    .and_then(|s| s.inputs.get(p))
+                    .is_some_and(|s| matches!(s.kind, m2_ir::PortKind::Events(_)))
+            };
+            inputs.iter().cloned().enumerate().filter(|(p, _)| !notes(*p)).map(|(p, i)| (Edge::Input(p), i)).collect()
+        }
         FOp::Plugin { plugin, inputs, .. } if packages.plugin_missing(plugin) => inputs
             .first()
             .map(|i| (Edge::Input(0), if matches!(i, Input::Port { .. }) { i.clone() } else { Input::Unset }))

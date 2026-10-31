@@ -3,7 +3,7 @@
 //! can choose a graph target or approve its own result: revision resolution and independent
 //! graph verification belong to the session.
 
-use m2_ir::Origin;
+use m2_ir::{Origin, Unit};
 use m2_script::component::EachDesc;
 use m2_script::sites::{Arg, Site};
 use m2_script::{Descriptor, UnitCtor};
@@ -52,6 +52,32 @@ impl LiteralLens {
 
     pub fn propose(&self, value: f64) -> Result<LiteralEdit, EditError> {
         propose(value, self.scale)
+    }
+
+    /// A choice's name or a switch's `true` or `false` written at `origin` (CARD-10, CARD-11): its
+    /// literal, when it says `value`, the place (or 1 or 0) the build made of it. A name is a
+    /// string written without escapes.
+    pub fn named(site: &Site, origin: &Origin, source: &str, unit: Unit, value: f64) -> Option<Self> {
+        let (start, end) = site.arg(&origin.arg)?.span();
+        let literal = source.get(start as usize..end as usize)?;
+        let says = match unit {
+            Unit::Switch => f64::from(u8::from(match literal {
+                "true" => true,
+                "false" => false,
+                _ => return None,
+            })),
+            Unit::Choice(o) => {
+                let quote =
+                    literal.chars().next().filter(|q| matches!(q, '"' | '\'' | '`') && literal.len() >= 2 && literal.ends_with(*q))?;
+                let name = &literal[quote.len_utf8()..literal.len() - quote.len_utf8()];
+                if name.contains(['\\', quote]) || (quote == '`' && name.contains("${")) {
+                    return None;
+                }
+                o.place(name)? as f64
+            }
+            _ => return None,
+        };
+        (says == value).then(|| Self { start, end, literal: literal.into(), scale: 1.0 })
     }
 }
 
@@ -118,9 +144,7 @@ impl Insertion {
         if args.iter().any(|a| text(a).trim_start().starts_with("...")) {
             return Err("the call spreads its arguments, so where it would go isn't known");
         }
-        // The call's parameters in order: the inputs `positional` doesn't name, then `positional`.
-        let mut params: Vec<&str> = desc.inputs.iter().filter(|i| !desc.positional.contains(&i.name)).map(|i| i.name.as_str()).collect();
-        params.extend(desc.positional.iter().map(String::as_str));
+        let params = params(desc);
         let each = |name: &str| desc.controls.iter().any(|c| c.name == name && c.each.is_some());
         // The options always come last, so the arguments before them are positional.
         let n = args.len();
@@ -302,6 +326,14 @@ impl Insertion {
     }
 }
 
+/// A call's parameters in order, as a call of `desc` is read: the inputs `positional` doesn't name,
+/// then `positional`.
+pub(crate) fn params(desc: &Descriptor) -> Vec<&str> {
+    let mut params: Vec<&str> = desc.inputs.iter().filter(|i| !desc.positional.contains(&i.name)).map(|i| i.name.as_str()).collect();
+    params.extend(desc.positional.iter().map(String::as_str));
+    params
+}
+
 /// The edits writing several declared controls a call leaves out into it at once, each
 /// `(insertion, written)` as [`Insertion::edits`] takes it, in the file's order: where several
 /// share a place (a preset's load, FMT-22), one insertion writes them all, so two never collide.
@@ -361,13 +393,18 @@ fn entry(
     units: &[UnitCtor],
     path: Vec<String>,
 ) -> Result<Insertion, &'static str> {
-    let declared = each.controls.iter().find(|c| c.name == control).ok_or("its entry declares no such control")?;
+    // A control of the entry, or a setting of it (CARD-4), which has no unit to follow.
+    let unit = match each.controls.iter().find(|c| c.name == control) {
+        Some(c) => c.unit,
+        None if each.settings.iter().any(|s| s.name == control) => None,
+        None => return Err("its entry declares no such control"),
+    };
     let Arg::Object { props, .. } = written else { return Err("its dictionary isn't an object written in the call") };
     let (_, value) = props.iter().find(|(k, _)| k == key).ok_or("its entry isn't written in the call")?;
     let (start, end) = value.span();
     let text = source.get(start as usize..end as usize).unwrap_or("");
     let shorthand = matches!(value, Arg::Other { .. }) && text == key;
-    let spelling = style(props, key, control, declared.unit, source, units);
+    let spelling = style(props, key, control, unit, source, units);
     let entry = Some(Entry { key: key.to_string(), value: (start, end), shorthand });
     match value {
         Arg::Object { props: fields, .. } => {

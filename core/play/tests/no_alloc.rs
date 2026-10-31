@@ -5,7 +5,7 @@
 //! ghost lane while its edges fade, a panic in that window, the window's end and its leftovers, a
 //! stale activation refused, stop, idle, play, panic, and a full retire channel; and, from step 5,
 //! cell writes from another thread all along (a step, a ramp and a cell in voices), with no
-//! rebuild; from 8b, overlay cell writes, live notes, and the meters' taps and the callback's timer. Kernel memory never grows either: a reset on the audio thread would grow a delay's
+//! rebuild; from 8b, overlay cell writes, live notes, and the taps (meters and rings, TAP-3) and the callback's timer. Kernel memory never grows either: a reset on the audio thread would grow a delay's
 //! (§1.5 of the step 3a design).
 //!
 //! Everything is built and sent on the test's thread; only the callback runs under the trap.
@@ -21,7 +21,7 @@ use std::sync::{Arc, mpsc};
 use common::*;
 use m2_ir::Origin;
 use m2_play::{DeviceError, DeviceErrorKind, Driver, Gone, Player, alloc};
-use m2_runtime::{BLOCK, CellTarget, Continues, LaneSwap, LiveEv, NotesData, Renderer, Retired};
+use m2_runtime::{BLOCK, CellTarget, Continues, LaneSwap, LiveEv, NotesData, RINGS, Renderer, Retired, TapAt};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -524,8 +524,10 @@ fn the_input_callback_never_allocates() {
     assert!(!player.crashed());
 }
 
-// RENDER-28, 8b.8: a live plan's taps and the callback's timer allocate and free nothing, while
-// another thread reads and resets them as the server's meters do.
+// RENDER-28, TAP-3, 8b.8: a live plan's taps and the callback's timer allocate and free nothing,
+// while another thread reads and resets the meters, as the server's meters do, turns them off and
+// on, and points the rings at the output and at every node with sound, one after another, reading
+// their frames.
 #[test]
 fn taps_and_the_load_never_allocate() {
     let song = project(
@@ -539,8 +541,15 @@ fn taps_and_the_load_never_allocate() {
     );
     let owner = m2_plugins::Owner::discard();
     let mut cache = m2_runtime::audio::Cache::default();
-    let r = Renderer::prepare(&song.flat, &song.data, &song.packages, SR, &mut cache, &owner, m2_runtime::Basis::Fresh).unwrap();
+    let mut r = Renderer::prepare(&song.flat, &song.data, &song.packages, SR, &mut cache, &owner, m2_runtime::Basis::Fresh).unwrap();
+    let site = |k: &str| TapAt::Site(song.flat.overlays.iter().position(|o| o.module == k).unwrap());
+    let sound: Vec<TapAt> = (0..song.flat.nodes.len())
+        .filter(|&i| matches!(song.flat.nodes[i].outputs.first(), Some(m2_ir::Kind::Audio(_))))
+        .map(TapAt::Node)
+        .collect();
+    r.tap(&[vec![site("kick")], vec![site("bass")], sound.clone()]).unwrap();
     let taps = r.info().taps.clone().expect("a live plan has taps");
+    taps.watch(true);
     let (player, mut d) = Player::driven(SR);
     player.open(r).unwrap();
     player.play();
@@ -548,20 +557,30 @@ fn taps_and_the_load_never_allocate() {
     let reader = {
         let (player, reading) = (player.clone(), reading.clone());
         std::thread::spawn(move || {
-            let (mut seen, mut longest) = (vec![0.0f32; 3], 0.0f32);
+            let (mut seen, mut longest, mut framed) = (vec![0.0f32; 3], 0.0f32, 0);
+            let points: Vec<TapAt> = std::iter::once(TapAt::Out).chain(sound).collect();
+            let mut frames = vec![];
             // Once more after the last fill: what it left is read too.
-            loop {
+            for turn in 0.. {
                 let last = !reading.load(Ordering::Relaxed);
+                taps.watch(turn % 7 != 3);
+                for ring in 0..RINGS {
+                    if taps.frames(ring, 0, 1024, &mut frames).is_some() {
+                        framed += frames.len();
+                    }
+                    taps.point(ring, (turn % 5 != ring).then(|| points[(turn + ring) % points.len()])).unwrap();
+                }
                 let p = taps.take();
-                for (s, x) in seen.iter_mut().zip([p.out[0], p.track("kick").unwrap()[0], p.track("bass").unwrap()[0]]) {
+                for (s, x) in seen.iter_mut().zip([p.out[0], p.meters[0][0], p.meters[1][0]]) {
                     *s = s.max(x);
                 }
                 longest = longest.max(player.load().longest);
                 if last {
-                    return (seen, longest);
+                    break;
                 }
                 std::thread::yield_now();
             }
+            (seen, longest, framed)
         })
     };
     let mut data = vec![0.0f32; 2 * 4096];
@@ -570,9 +589,10 @@ fn taps_and_the_load_never_allocate() {
         allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
     }
     reading.store(false, Ordering::Relaxed);
-    let (seen, longest) = reader.join().unwrap();
+    let (seen, longest, framed) = reader.join().unwrap();
     assert_eq!(allocs, 0, "the callback allocated or freed");
     assert!(seen.iter().all(|&x| x > 0.1), "the output, the kick and the bass were read: {seen:?}");
+    assert!(framed > 0, "the rings' frames were read");
     assert!(longest > 0.0);
 }
 

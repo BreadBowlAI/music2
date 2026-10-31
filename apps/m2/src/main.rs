@@ -666,10 +666,47 @@ fn run(args: Vec<String>) -> Result<()> {
                         let range =
                             k.range.map_or("—".to_string(), |[lo, hi]| format!("[{lo} … {hi}]{}", if k.log { " log" } else { "" }));
                         let written = if k.written { format!("`{}`", k.literal) } else { "(default)".to_string() };
-                        println!("      {:14} {:>9} {:9} {range}  {written}{shared}", k.label, k.value, k.unit.unwrap_or("number"));
+                        // A plugin's stepped parameter is a menu or a switch on its card (CARD-6): its options too.
+                        let options = match k.options.as_slice() {
+                            [] => String::new(),
+                            all => {
+                                let kind = serde_json::to_value(k.kind)?.as_str().unwrap_or_default().to_string();
+                                let now = all
+                                    .iter()
+                                    .find(|o| o.value.as_f64() == Some(k.value))
+                                    .map_or(String::new(), |o| format!(" ({})", o.label));
+                                format!("  {kind}: {}{now}", all.iter().map(|o| o.label.as_str()).collect::<Vec<_>>().join(" | "))
+                            }
+                        };
+                        println!(
+                            "      {:14} {:>9} {:9} {range}  {written}{shared}{options}",
+                            k.label,
+                            k.value,
+                            k.unit.unwrap_or("number")
+                        );
                     }
                     for r in &n.readonly {
                         println!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
+                    }
+                    // Its settings (CARD-1): what each is, what it plays, and its id for `m2 set`.
+                    for x in &n.settings {
+                        // What the card says: an option by its name (Master, for a channel's `to` left
+                        // out), the words for regions or a keymap, or the code that works it out.
+                        let option = x.options.iter().find(|o| o.value == x.value).map(|o| o.label.clone());
+                        let value = match (option, &x.expression, &x.said) {
+                            (Some(o), ..) => o,
+                            (_, _, Some(said)) => said.clone(),
+                            (_, Some(e), _) if x.value.is_null() && e.starts_with('`') => e.clone(),
+                            (_, Some(e), _) if x.value.is_null() => format!("`{e}`"),
+                            _ => x.value.to_string(),
+                        };
+                        let kind = serde_json::to_value(x.kind)?.as_str().unwrap_or_default().to_string();
+                        let how = match (&x.readonly, x.written) {
+                            (Some(why), _) => format!("  (edit in code: {why})"),
+                            (None, false) => "  (default)".to_string(),
+                            (None, true) => String::new(),
+                        };
+                        println!("      {:14} {:>9} {kind:9} {}{how}", x.label, value, x.id);
                     }
                 }
             }
@@ -688,10 +725,41 @@ fn run(args: Vec<String>) -> Result<()> {
         Some("set") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let id = arg(2)?;
-            let value: f64 = arg(3)?.parse().context("value")?;
-            let expect: Option<f64> = flag(&args, "--expect").map(|v| v.parse()).transpose().context("--expect")?;
             let t = Instant::now();
             let at = s.accepted().number;
+            // A setting (CARD-4): the word read as its kind takes it: one of its options by its value
+            // or its name (`2`, `square`, `Master`, `On`), a number, true or false, or a word.
+            if let Some(x) = m2_editor::settings::find(&s, at, &id) {
+                let read = |w: String| {
+                    let option = x.options.iter().find(|o| o.value.as_str() == Some(w.as_str()) || o.label.eq_ignore_ascii_case(&w));
+                    match (option, x.kind) {
+                        (Some(o), _) => o.value.clone(),
+                        (None, m2_editor::kind::Kind::Number) => w
+                            .parse::<f64>()
+                            .ok()
+                            .and_then(serde_json::Number::from_f64)
+                            .map_or(serde_json::Value::String(w), serde_json::Value::Number),
+                        (None, m2_editor::kind::Kind::Switch) if w == "true" || w == "false" => serde_json::Value::Bool(w == "true"),
+                        (None, _) => serde_json::Value::String(w),
+                    }
+                };
+                let expect = flag(&args, "--expect").map(read);
+                let e = m2_editor::settings::set(&mut s, at, &id, &read(arg(3)?), expect.as_ref()).map_err(|e| anyhow!("{e}"))?;
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                match e.revision == at {
+                    true => println!("{id}: it is that already; nothing to write"),
+                    false => println!("{}: `{}` → `{}` (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision),
+                }
+                return Ok(());
+            }
+            let word = arg(3)?;
+            let Ok(value) = word.parse::<f64>() else {
+                match s.controls().iter().any(|c| c.id == id) {
+                    true => bail!("`{id}` is a knob: its value is a number, not {word}"),
+                    false => bail!("no control or setting `{id}` in that revision: `m2 graph {} --json` lists them", arg(1)?),
+                }
+            };
+            let expect: Option<f64> = flag(&args, "--expect").map(|v| v.parse()).transpose().context("--expect")?;
             let c = s.set(at, &id, value, expect).map_err(|e| anyhow!("{e}"))?;
             println!(
                 "{}: `{}` → `{}` (revision {}, verified in {:.0} ms)",

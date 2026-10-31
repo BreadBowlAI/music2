@@ -62,6 +62,7 @@ mod preview;
 mod projects;
 pub mod record;
 mod rekey;
+pub mod scope;
 mod songkey;
 pub(crate) mod steps;
 mod take_audio;
@@ -184,6 +185,10 @@ pub struct Export {
     /// The live plugin instances it borrows, taken on the export's thread with playback paused,
     /// given back when this drops.
     pub lent: Option<crate::export::Lent>,
+    /// The song's session and the accepted revision it renders: what its loudness is the
+    /// loudness of (TAP-7).
+    pub token: u64,
+    pub revision: u64,
 }
 
 /// What the engine is busy with besides playing, and what its device reported. Its fields go into
@@ -202,7 +207,7 @@ pub struct Activity {
     pub device_errors: u64,
     /// Live notes sounding: audition's (MON-7).
     pub live: u32,
-    /// Lanes whose pitch wheel or mod wheel a MIDI keyboard left away from rest.
+    /// Lanes whose pitch wheel, mod wheel or sustain pedal a MIDI keyboard left away from rest.
     pub wheels: u32,
     /// The DSP load: the longest audio callback of the last second, as a share of the device's
     /// period, while the meters read it (8b.8).
@@ -216,6 +221,9 @@ pub struct Activity {
     pub disk: Option<String>,
     /// No output started, so the silent player stands in: the song plays silently (gaps #13).
     pub no_output: bool,
+    /// Why the meters of what plays read before the faders, when they couldn't be laid out after
+    /// them (TAP-5): a bug, said in words.
+    pub meters: Option<String>,
 }
 
 impl Activity {
@@ -352,6 +360,8 @@ struct ControlPlane {
     tempo: tempo_lease::TempoLeases,
     /// The take recording, and the takes waiting to be written (lane B).
     record: record::Recorder,
+    /// What windows and agents ask to look at: scopes and the loudness (TAP-6, TAP-8).
+    asks: scope::Asks,
 }
 
 /// How a control named at a revision is found without the session.
@@ -472,6 +482,9 @@ struct Inner {
     output: output::Outputs,
     /// The graph state's `plugins` (HOST-7, MON-6), as the actor last published it.
     plugins: Mutex<Value>,
+    /// The last export's integrated loudness, with the session and the revision it rendered
+    /// (TAP-7): the state's `loudness` while that revision is accepted.
+    exported: Mutex<Option<(u64, u64, f64)>>,
     /// The plugin instances whose window is open, by handle.
     open_windows: Mutex<HashSet<u64>>,
     /// `plugins` changed since the watcher last asked.
@@ -631,6 +644,7 @@ impl Inner {
             layout: Mutex::default(),
             output,
             plugins: Mutex::new(Value::Object(Default::default())),
+            exported: Mutex::default(),
             open_windows: Mutex::default(),
             plugins_changed: AtomicBool::new(false),
             offered: Mutex::new(HashMap::new()),
@@ -728,9 +742,10 @@ impl Inner {
         let device = self.current_device();
         let held = device.as_ref().is_some_and(|d| d.player.held());
         let e = device.as_ref().map(|d| d.player.device_errors()).unwrap_or_default();
-        let (load, late) = {
+        let (load, late, meters) = {
             let cp = self.control.lock();
-            (cp.meters.load(), cp.meters.late())
+            let why = cp.open.as_ref().and_then(|o| o.engine.plays.as_ref()).and_then(|p| p.meters.why.clone());
+            (cp.meters.load(), cp.meters.late(), why)
         };
         Activity {
             paused: held.then_some("exporting"),
@@ -744,6 +759,7 @@ impl Inner {
             output: device.as_ref().filter(|d| !self.output.standing_in(d.epoch)).map(|d| d.player.device.clone()),
             disk: device.as_ref().and_then(|d| self.disk_words(&d.player)),
             no_output: device.as_ref().is_some_and(|d| self.output.standing_in(d.epoch)),
+            meters,
         }
     }
 
@@ -795,6 +811,11 @@ impl Inner {
         // that loads later.
         state["point"] = self.pointer(token);
         state["comparing"] = self.compared(token);
+        // The song's loudness, while it is the revision the last export measured (TAP-7).
+        state["loudness"] = match *self.exported.lock() {
+            Some((t, r, lufs)) if t == token && r == shown.revision => json!({"lufs": (lufs * 10.0).round() / 10.0}),
+            _ => Value::Null,
+        };
         Some(state)
     }
 
@@ -1080,6 +1101,12 @@ impl Graph {
         Ok(export)
     }
 
+    /// An export of revision `revision` of session `token` measured `lufs` (TAP-7): the graph
+    /// state carries it while that revision is accepted. One under the gate forgets it.
+    pub fn exported(&self, token: u64, revision: u64, lufs: Option<f64>) {
+        *self.inner.exported.lock() = lufs.map(|l| (token, revision, l));
+    }
+
     /// What the engine is busy with besides playing: paused for an export, and the plugins being
     /// loaded for the next plan, by name (RENDER-1, RENDER-25); and what its device reported
     /// (RENDER-28).
@@ -1117,6 +1144,7 @@ impl Graph {
             bail!("can't seek to beat {beat}");
         }
         self.record_jump();
+        self.midi_pedals_up();
         if self.inner.timing.lock().is_none() {
             bail!("no project is open");
         }
@@ -1419,6 +1447,7 @@ impl Graph {
     /// values play again. Its pending commits stay: it let go, so it meant to save.
     pub fn client_gone(&self, client: &str) {
         self.audition_gone(client);
+        self.asks_gone(client);
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
         let mut i = 0;
@@ -1540,6 +1569,23 @@ impl Graph {
                 self.call(move |a| a.set_value(token, revision, &id, &gesture, value, expect))
             }
         }
+    }
+
+    /// [`Graph::set`] for any value (CARD-4): a number for a knob, through its gesture's lease
+    /// when it has one; or a setting's value (a number, a string or a boolean), one Tx on its call.
+    pub fn set_any(&self, token: u64, revision: u64, id: &str, gesture: &str, value: Value, expect: Option<Value>) -> Result<Value> {
+        let number = value.as_f64().filter(|_| expect.as_ref().is_none_or(Value::is_number));
+        if let Some(v) = number
+            && !crate::caller::now().is_agent()
+            && let Some(lease) = self.lease_of(token, revision, id, gesture)?
+        {
+            return match self.commit(lease, v, expect.and_then(|e| e.as_f64()))? {
+                Committed::Written(v) => Ok(v),
+                Committed::Pending { errors } => Ok(json!({"pending": true, "errors": errors})),
+            };
+        }
+        let (id, gesture) = (id.to_string(), gesture.to_string());
+        self.call(move |a| a.set_any(token, revision, &id, &gesture, value, expect))
     }
 
     // ------------------------------------------------------------ edits through the session
@@ -1939,6 +1985,9 @@ impl Graph {
             other => bail!("unknown transport action {other}"),
         };
         player.transport(cmd)?;
+        if cmd == Cmd::Stop && st.playing {
+            self.midi_pedals_up();
+        }
         // The status says stopped at once, but the engine takes the stop at its next block line, up
         // to a block on. A seek back to where the status was, sent with it, keeps the playhead where
         // it was seen to stop: it never moves after that.

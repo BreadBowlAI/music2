@@ -2144,3 +2144,82 @@ fn ghosts_and_window_overlays_go_quiet_after_the_window() {
     assert_eq!(left[0].exec.len(), r.plan.ghosts.len(), "only the ghosts left");
     assert!(left[0].exec.iter().all(|e| !matches!(e, Exec::Overlay { .. })));
 }
+
+// RENDER-26a, RENDER-38 (review E2): a kept poly rewired to another lane while the old lane's pedal is
+// down lets that pedal up with the notes it releases: the new lane's pedal is up, so its notes end at
+// their Offs, and after a Stop nothing is held. In a poly and in a legato pool.
+#[test]
+fn a_rewired_poly_lets_the_old_lanes_pedal_up() {
+    for mono in [false, true] {
+        a_rewired_poly_lets_its_pedal_up(mono);
+    }
+}
+
+fn a_rewired_poly_lets_its_pedal_up(mono: bool) {
+    let pk = std_packages();
+    let lanes = |lane: &str| {
+        let mut ir = legato_if(synth(0.1, json!([]), "v"), mono);
+        ir.modules[0].nodes[0].op = serde_json::from_value(json!({"op": "lane", "lane": lane})).unwrap();
+        ir.modules[0].lanes =
+            serde_json::from_value(json!([{"key": "a", "kind": "events<note>"}, {"key": "b", "kind": "events<note>"}])).unwrap();
+        flat(&ir)
+    };
+    let notes = |n: Value| super::notes(json!({"clips": [{"start": 0, "length": 16, "notes": [n]}]}));
+    let data = DataSet::with_lanes(
+        at_bpm(120.0),
+        [
+            (addr("a"), notes(json!({"pitch": 69, "start": 0, "length": 0.5}))),
+            (addr("b"), notes(json!({"pitch": 72, "start": 2, "length": 1}))),
+        ],
+    );
+    let (a, b) = (lanes("a"), lanes("b"));
+    let mut rig = playing(&a, &data, &pk, BLOCK);
+    let generation = rig.e.current().unwrap().generation();
+    rig.send(Msg::Live { generation, slot: 0, ev: LiveEv::Midi { source: 1, bytes: [0xB0, 64, 127] } });
+    rig.run(BEAT as usize - 2 * BLOCK);
+    assert_eq!(rig.e.current().unwrap().active_voices(), 1, "lane a's note rings on under its pedal (mono: {mono})");
+    let r = rig.prepare(&b, &data, &pk);
+    rig.send(Msg::Activate { renderer: Box::new(r) });
+    // Lane b's note: beat 2 to 3, its release 0.1 s. To beat 5.
+    let out = rig.run(4 * BEAT as usize);
+    assert_eq!(rig.e.current().unwrap().stats().kept.polys, 1, "kept (mono: {mono})");
+    assert!(peak(&out[out.len() - BEAT as usize / 2..]) < 1e-3, "lane b's pedal is up: its note ended at beat 3 (mono: {mono})");
+    rig.cmd(Cmd::Stop);
+    rig.run(BEAT as usize);
+    assert_eq!(rig.e.current().unwrap().held_notes(), 0, "nothing held (mono: {mono})");
+}
+
+// RENDER-26a, RENDER-37 (review E2): a kept plugin rewired to another lane gets the old lane's pedal
+// up with the NoteOffs it releases, and its wheels at rest: the new lane sends its own.
+#[test]
+fn a_rewired_plugin_lets_the_old_lanes_pedal_up() {
+    let mut pk = probe_packages();
+    let owner = Owner::discard();
+    let data = chord(&[57, 60, 64]);
+    let a = probe_song(&mut pk, 1.0, None, json!([]), "p");
+    let other = song(
+        json!([{"id": "n", "op": "lane", "lane": "other"}, {"id": "g", "op": "const", "value": 1.0},
+            {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"notes": "n", "gain_1": "g"}}]),
+        "p",
+        json!([{"key": "notes", "kind": "events<note>"}, {"key": "other", "kind": "events<note>"}]),
+    );
+    let b = plugged(&mut pk, other);
+    let r = build(&a, &data, &pk, &owner);
+    let h = r.plugin_handles()[0];
+    let stats = probe::stats(h).unwrap();
+    let mut rig = Rig::of(&a, &data, r);
+    rig.cmd(Cmd::Play);
+    let generation = rig.e.current().unwrap().generation();
+    rig.send(Msg::Live { generation, slot: 0, ev: LiveEv::Midi { source: 1, bytes: [0xB0, 64, 127] } });
+    rig.send(Msg::Live { generation, slot: 0, ev: LiveEv::Midi { source: 1, bytes: [0xE0, 0x7F, 0x7F] } });
+    rig.run(BEAT as usize);
+    let r = rig.prepare_with(&b, &data, &pk, &owner, &Continues::named(&a, &b)).unwrap();
+    let at = rig.e.clock() as i64;
+    rig.send(Msg::Activate { renderer: Box::new(r) });
+    rig.run(BLOCK);
+    assert_eq!(rig.e.current().unwrap().plugin_handles(), [h], "kept");
+    let midi = |b: [u8; 3]| i32::from_le_bytes([b[0], b[1], b[2], 0]);
+    let sent: Vec<(i64, Note, i32)> = notes_from(&stats, at).into_iter().filter(|e| e.1 == Note::Midi).collect();
+    let rest = [midi([0xE0, 0, 0x40]), midi([0xB0, 1, 0]), midi([0xB0, 64, 0])];
+    assert_eq!(sent, rest.map(|m| (at, Note::Midi, m)), "the old lane's wheels and pedal at rest, at the activation");
+}

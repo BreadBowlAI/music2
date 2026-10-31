@@ -73,8 +73,9 @@ Every route is in one table, declared once with its method, its path, the larges
 | `focus` | what the musician looks at changed: `focus`, as `GET /api/focus` says it |
 | `point` | a pointer shown, or taken away (`point` is null) |
 | `lagged` | this socket fell behind and missed `missed` events: read the song again (the window reads its pointer and the Compare pill again too). `m2 watch` says its own, with `"by": "m2"`, when whoever reads it falls behind |
-| `export` | while a song is exported, with the `song`'s name and its folder (`dir`): `progress` (0 to 1, at most ten a second), then `done` with `path`, `seconds` and `peak_db`, or `error` |
+| `export` | while a song is exported, with the `song`'s name and its folder (`dir`): `progress` (0 to 1, at most ten a second), then `done` with `path`, `seconds`, `peak_db` and `lufs` (the file's loudness), or `error` |
 | `take` | a recording's count-in, its end, and the take written |
 | `midi` | a MIDI keyboard came or went, or what it plays changed |
-| `meters` | the meters, about 30 times a second |
+| `meters` | the meters, about 30 times a second while the song sounds, to a window's socket, and to an agent's that asks for them (`m2 watch --meters`): each track's (`tracks`) and each mixer channel's (`channels`) loudest sample, linear, after its fader; the song's (`out`); and its `loudness` (`short`, the last 3 s in LUFS, and `true_peak` in dBTP) while someone asks for it with `POST /api/graph/loudness` |
+| `scopes` | with the meters, to the window that asked for scopes with `POST /api/graph/scope` alone: each one's `module`, `node` and its last 1,024 `frames`, a list per channel, or `why` it can't show now. An agent gets a scope's last frames in each answer to its ask |
 | `audition` | why a note this window asked to hear plays nothing |

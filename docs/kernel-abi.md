@@ -1,6 +1,6 @@
 # Kernel ABI v1
 
-The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3 and ABI-5](architecture.md#kernel-abi-reservations); this page is the detail behind them.
+The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3, ABI-5, ABI-6, ABI-7, ABI-8 and ABI-9](architecture.md#kernel-abi-reservations); this page is the detail behind them.
 
 ## In short
 
@@ -10,8 +10,10 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 - The host writes each state's **settings block** before the state is made. The kernel reads its rate, its ports, its numbers and its audio files there.
 - The only thing a kernel may import is **`m2.asset_read`**: it copies part of an audio file into the kernel's memory.
 - An **offline kernel** is run by music2 off the audio thread, to make something from a file: `std:stretch` makes a warped clip's stretch. Song code can't call one.
+- A kernel may take **notes**: an `events<note>` input gets its lane's notes and controllers each block, stamped to the sample.
 - A module says its version in a small part of its file named **`m2_abi`**: **1**. music2 reads it first, before it looks at anything else. It refuses a module built for any other version, and says which.
 - v1 only ever grows at the end: new optional exports, and new fields at the end of the settings block. Anything else is v2.
+- A pack's kernels have a **time limit** on every call: 100 ms while the song plays, 5 s for everything else. A call still running then is stopped, and its sound goes silent ([below](#the-time-limit-abi-6-abi-7)). std's kernels, music2's own, have none.
 
 | Part | Where below |
 |---|---|
@@ -19,11 +21,13 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 | The settings block, byte by byte | [The settings block](#the-settings-block) |
 | Where the sound goes in and out | [The port table](#the-port-table) |
 | Reading an audio file | [The asset import](#the-asset-import) |
+| Notes in, each block | [Event inputs](#event-inputs) |
 | A kernel music2 runs to make a render | [Offline kernels](#offline-kernels) |
 | What every kernel must keep | [The five rules](#the-five-rules-abi-5) |
+| How long a call may take | [The time limit](#the-time-limit-abi-6-abi-7) |
 | What is fixed now, built later | [Reserved shapes](#reserved-shapes) |
 
-The Rust kit (`std/kernels-src/kernel`) writes all of this for you. Write a `struct`, implement `Kernel`, and call `export!`. In `Kernel::new`, `cfg.values` holds your numbers and `cfg.assets` your audio files; `asset.read(channel, frame, &mut buf)` reads one. `std:sampler` (`std/kernels-src/src/sampler.rs`) is a whole example.
+The Rust kit (`std/kernels-src/kernel`) writes all of this for you. Write a `struct`, implement `Kernel`, and call `export!`. In `Kernel::new`, `cfg.values` holds your numbers and `cfg.assets` your audio files; `asset.read(channel, frame, &mut buf)` reads one. A kernel that takes notes names those inputs in `Kernel::NOTES` and reads them with `io.events(i)`. `std:sampler` (`std/kernels-src/src/sampler.rs`) is a whole example.
 
 ## Words used here
 
@@ -106,6 +110,7 @@ The song names a kernel's assets and values in its code: `kernel(id, inputs, { a
 - The host places every buffer. No two overlap.
 - Read the addresses from `io` at each call. Never keep them.
 - A mono input may be read as stereo by reading channel 0 twice; the Rust kit does this for you, and gives a mono output's channel 1 a scratch buffer of its own.
+- An `events<note>` input has a channel count of 1 in the settings block's list, and one entry in the table: the address of its header ([below](#event-inputs)).
 
 ## The asset import
 
@@ -129,6 +134,38 @@ Where the host reads from is its choice, per sandbox. The kernel can't tell, and
 | **disk**: the file, read in pieces at each call | offline kernels (on their own thread) | reads the file, so it may wait. A file that can't be read traps |
 
 **Streaming live, later, still v1.** A live kernel may one day read a file the host streams. Then a frame the host has not loaded yet is given as silence (0.0), and counted as a **miss**, as a lane's chunk is. The count returned is the same as if the frame were there, so the kernel goes on the same. This never happens in an export or an offline render: those wait for every frame. A kernel must not try to tell a miss from silence.
+
+## Event inputs
+
+A kernel's input of kind `events<note>` in its manifest (ABI-8). Built in track events; outputs of kind `events` are still [reserved](#reserved-shapes).
+
+| Part | Rule |
+|---|---|
+| Wiring | connected straight to a notes lane at a module's top level, never inside a `poly` voice (a voice's kernels get their note from its note fields). It must be connected |
+| Calls | whole blocks: `from` 0, `to` 128. So an event's frame is also its index in the call's other inputs |
+| Table | one entry: the address of the header |
+| Header (16 bytes) | `count` u32 at 0: events this block; `cap` u32 at 4: how many it has room for; `events` address at 8: where they start (just after the header); 4 bytes kept at 12 |
+| Each event (24 bytes) | `kind` u32 at 0, `frame` u32 at 4, `id` u32 at 8, then three 4-byte values at 12, 16 and 20 (below) |
+| `frame` | the frame in the block, 0 to `max_block` − 1: never counted from `from`. A call reads the events whose frame is in its `from..to` |
+| Order | by frame; at one frame the controllers (MIDI) first, then Offs, then Ons, so a key can be struck again where it was let go |
+| What comes | the lane's notes, live ones (a keyboard, the window's keys) included, and its controllers from live input: pitch bend, CC 1 (the mod wheel), CC 64 (the sustain pedal), CC 121. Late with the lane when the kernel is late |
+| When | written by the host before each `k_process`, in the state's own block, placed at birth. Read-only: a kernel never writes it (ABI-1), and debug builds check the whole header and its events after each call |
+| Room (`cap`) | all its lane's buffer can bring in a block, so no event is ever left out: 812 for most lanes, more for a lane whose notes need more than 256 sounding at once or 128 starting in one block, twice that through a note delay |
+| Shape | its lane, how late it comes and its room are part of the kernel's shape: rewired to another lane, made late or on time by latency compensation, or its lane grown past its room, the kernel is new, and the old one plays out the edit's window hearing no notes. So a kernel never hears one lane's notes start and another's end |
+
+| `kind` | Means | Values at 12, 16, 20 |
+|---|---|---|
+| 0 | a note starts (On) | pitch (f32, semitones, 60 is C4), velocity (f32, 0 to 1), `from_pitch` (f32, NaN for none) |
+| 1 | a note ends (Off) | release velocity (f32), 0, 0 |
+| 2 | a note expression (reserved: not sent yet) | which (u32: 0 pitch, 1 pressure, 2 timbre), value (f32), 0 |
+| 3 | a parameter (reserved: not sent yet) | value (f32), 0, 0 |
+| 4 | a MIDI message | its 3 bytes in the low 3 bytes of the first (status at 12, data at 13 and 14, 0 at 15), 0, 0 |
+
+`id` is the note's: an On and its Off share it, and no two notes sounding at once have the same. A MIDI message's `id` is 0.
+
+The Rust kit reads all this for you (ABI-9): name the inputs in `Kernel::NOTES`, and `io.events(i)` gives this call's events, each as an `Event`, its frame counted from the call's first frame, so `frame` indexes the call's other inputs. A kind the kit doesn't know is skipped.
+
+**Why it keeps v1:** this shape was fixed among v1's reservations, and a module without an events input sees nothing new. So it is an addition, as an optional export is.
 
 ## Offline kernels
 
@@ -160,13 +197,28 @@ The five rules hold for offline kernels too: memory only at birth, a reset that 
 
 The host checks rules 1 and 2 by construction (the seal and the prewarm). Debug builds check rule 3 at every call.
 
+## The time limit (ABI-6, ABI-7)
+
+Every call into a pack's kernel must return within its limit. A call still running then is stopped where it is (a trap), however far it got. std's kernels, music2's own code, run with no limit and no checks.
+
+| Calls | Limit |
+|---|---|
+| `k_process`, `k_reset` and `k_active` while the song plays live | 100 ms |
+| Everything else: instantiating the module (its start function), `m2_alloc`, `k_ports`, `k_new`, the first `k_reset` as the sound is made (live too), and every call of an export, a render, a preview or an offline kernel | 5 s |
+
+- A block's call should take microseconds: the whole song shares a block's time (2.7 ms at 48 kHz). The limits are far past that, so only a kernel that never returns meets them, or a computer so busy it gives the call no time.
+- The time `m2.asset_read` spends reading a file for the kernel (an offline kernel's source, [held as **disk**](#the-asset-import)) isn't counted.
+- Stopped while the song plays, the kernel's sound is silent until the song is built again, and its sandbox isn't called again until then; the status names the sound, its track and whose code it runs (`sound.too-slow`). Offline, the render fails, naming it. Stopped as it is made (`k_new`, or its first `k_reset`), the sound doesn't load, and music2 doesn't make that kernel with those settings again until the song opens again or the pack changes. The registry refuses a version whose preview was stopped.
+- What it costs: the checks are compiled into a pack's kernels, at each function's start and each loop's turn. Measured on std's 36 kernels compiled as a pack's, a call costs about a fifth more (+20.6 % in all; least for kernels with long straight runs, most for small kernels with tight loops). Keep the work of a call in few, long loops.
+- How it works, for the curious: wasmtime's epochs. A thread moves a counter on every 10 ms, and the compiled code checks it at each function's start and each loop's turn.
+
 ## Reserved shapes
 
-Fixed now, so later work can't collide with v1. None is built yet. Each is built with the first kernel that needs it, as an optional export or a new settings field, so v1 modules keep working. Offline kernels were reserved here too; they are built now ([above](#offline-kernels)).
+Fixed now, so later work can't collide with v1. Each is built with the first kernel that needs it, as an optional export or a new settings field, so v1 modules keep working. Offline kernels were reserved here too; they are built now ([above](#offline-kernels)), and so are event inputs ([above](#event-inputs)).
 
 | Shape | Fixed now | Built when |
 |---|---|---|
-| Event ports | a port of kind `events` has one port-table entry: the address of `{count: u32, cap: u32, events: address}`. Each event is 24 bytes: `kind` u32 (0 on, 1 off, 2 note expression, 3 param, 4 MIDI), `frame` u32, `id` u32, then three f32: on: pitch, velocity, `from_pitch` (NaN for none); off: release velocity; note expression: kind (0 pitch, 1 pressure, 2 timbre, as a u32), value; param: value; MIDI: the 3 bytes in the low bytes of the first. The host sets an input's `count`; a kernel writes up to `cap` events to an output and sets its `count`. RENDER-14's `Event`, in bytes | the first arpeggiator or event kernel |
+| Event outputs | as [event inputs](#event-inputs): one port-table entry, the address of `{count: u32, cap: u32, events: address}`, and the same 24-byte events. A kernel writes up to `cap` events to an output and sets its `count` | the first arpeggiator or kernel that makes notes |
 | `k_save`, `k_load` | `k_save(state, dst, cap) -> i32`: writes the state's bytes at `dst`, returns how many (more than `cap`: nothing written, that many needed). `k_load(state, src, len) -> i32`: 1 loaded, 0 refused. Both run off the audio thread, as a plugin's state load does. A loaded state is the one `k_reset` returns to; the settings block's `saved`/`saved_len` give it at birth | the first kernel with state worth saving |
 | `k_latency`, `k_tail` | `k_latency(state) -> i32` and `k_tail(state) -> i32`, in frames. Each depends only on the settings, so the host may ask once, after `k_new` | latency compensation; a kernel whose tail outlasts `k_active` |
 

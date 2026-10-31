@@ -1141,6 +1141,8 @@ pub fn import(i: &Import) -> Result<Imported, String> {
         t.push_str(&format!("velocity = {}\n", show((v / 100.0).clamp(0.0, 1.0))));
     }
     t.push_str("voices = 32\n");
+    // SFZ counts a round robin's turns by key, not by lane (PKG-16 §3).
+    t.push_str("turns = \"key\"\n");
     for m in &kept {
         t.push_str(&format!("\n[[region]]\nfile = {}\nroot = {}\nkeys = [{}, {}]\n", quote(pack_path(m)), m.root, m.keys.0, m.keys.1));
         if m.velocity != (1, 127) {
