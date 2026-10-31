@@ -93,17 +93,14 @@ pub fn song_sample(s: &m2_session::Session, id: &str) -> Result<library::Sample>
 
 /// Run `m2 search`.
 pub fn search(args: &[String]) -> Result<()> {
-    let (mut words, mut json) = (vec![], false);
-    let mut rest = args.iter().skip(1);
-    while let Some(a) = rest.next() {
-        match a.as_str() {
-            "--json" => json = true,
-            "--kind" => match rest.next() {
-                Some(k) if Kind::named(k).is_some() => words.push(k.clone()),
-                other => bail!("--kind is instrument, sound, effect, sample or plugin, not {}", other.map_or("nothing", String::as_str)),
-            },
-            w => words.push(w.to_string()),
+    // Its usage took them (AGENT-13): the words to find, then --kind and --json.
+    let mut words = crate::words::places(args);
+    let json = crate::words::on(args, "--json");
+    if let Some(k) = crate::words::value(args, "--kind") {
+        if Kind::named(&k).is_none() {
+            bail!("--kind is instrument, sound, effect, sample or plugin, not {k}");
         }
+        words.push(k);
     }
     let q = words.join(" ");
     let items: Vec<Value> = match crate::app::library(&q)? {
