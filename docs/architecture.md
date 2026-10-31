@@ -1373,6 +1373,50 @@ A lane of names declared twice agrees when its fallbacks name one option (one le
 - *Why:* a sound's author knows which values belong together; a typo there would quietly drop a knob from its group.
 - *Today:* since track kinds: `editor.groups` in `core/script/sdk/core.ts`, `Group` in `core/script/src/component.rs` (`Editor.groups`, written only when there are some); `groups_are_checked_against_their_descriptor` in `core/script/src/kinds_tests.rs`. Nothing draws them yet (track `views`).
 
+### Views on the card
+
+**In short:** a choice or a switch a sound plays is a menu or a switch on its card, written by its name; a lane of names is drawn and edited on the timeline; a card is put in order by its groups; and its views draw an envelope, a filter's curve, a key map and a scope, each moving only values that have homes ([Typed sounds](designs/cards/design.md) §3.1 to §3.3).
+
+**CARD-20.** A choice control's knob MUST be a `choice` and a switch control's a `switch` ([CARD-2](#cards)), said by the one function that says what a setting, a control or a plugin's parameter is: a choice's options are its names in their order, each its own label; a switch's are `false` (Off) and `true` (On), never 0 and 1 as a plugin's. A knob's `value` and `default` are what its code writes: a number in base units, a choice's name, or a switch's `true` or `false`. So the option a knob plays is the one whose value is its value, for a control as for a plugin's parameter ([CARD-6](#cards)), and a choice's place never leaves its cell and its kernel ([CARD-10](#kinds-of-values)). The card draws it as a menu or a switch in the knob's row, which stays a knob to the rest of the app ([CARD-7](#cards)).
+- *Why:* a choice is its name everywhere a person or a file sees it (the design's D4), and one rule for every option a card shows keeps the API one vocabulary.
+- *Today:* being built by track `views`.
+
+**CARD-21.** The one write ([CARD-4](#cards): `POST /api/graph/set`, `m2 set`) MUST write a choice control's name and a switch control's `true` or `false`: one `Values` Tx that replaces the literal written there (keeping its quotes) or writes it into the call by [PKG-3](#component-descriptors)'s insertion, checked by core's delta against the place (or 1 or 0) it makes; one undo step. A name the choice doesn't have, anything but a boolean for a switch, and a number for either, is refused in words that say what it takes. A menu's pick and a switch's flip are one click and one Tx: never a drag, a lease or a run of steps. `m2 set` reads a word as the knob takes it: one of its names, or `true`, `false`, On or Off.
+- *Why:* the design's §4: one write for any value, and the name is what is written.
+- *Today:* being built by track `views`.
+
+**CARD-22.** Values that one gesture moves together MUST be written as one `Values` Tx and one undo step: `POST /api/graph/set` takes more values of the same gesture in `with` (`[{id, value}]`), and commits each one's lease of that gesture ([WRITE-22](#gesture-leases)), all ending in the step that writes them. A value refused refuses them all: nothing is written, and each lease's control plays the code's value again.
+- *Why:* a view's corner stands for two controls (an envelope's decay and sustain, a filter's cutoff and q); one drag must be one undo, as a knob's is.
+- *Today:* being built by track `views`.
+
+**CARD-23.** The timeline MUST show a lane of names ([CARD-15](#kinds-of-values)) as a lane of its own kind, `steps`: its options as [CARD-20](#views-on-the-card) gives them, its fallback as written, and its clips with each point's name (or `true` or `false`), an unknown one included. The app draws each point as a step that holds until the next, with its option's name on it.
+- *Why:* a lane of names steps; drawing it as a line between numbers would show places, which mean nothing to a person.
+- *Today:* being built by track `views`.
+
+**CARD-24.** Every clip gesture (8b.5) MUST work on a lane of names as on an automation lane, one Tx each: a new clip holds the name the lane plays where it starts; a move, a resize, a split (the second part starts with the name playing at the cut), a duplicate and a delete; a copy goes onto a lane of the same options, or a switch's onto a switch's; join is refused, as for automation. `points` draws a clip's points with names (or `true` and `false`): a name the lane's choice doesn't have is refused in words that name its options. While the song plays, a drag is a lane lease ([WRITE-22a](#gesture-leases)).
+- *Why:* a lane Automate made must be drawable where it shows, by the gestures every lane has.
+- *Today:* being built by track `views`.
+
+**CARD-25.** The view MUST carry each card's groups (`ViewNode.groups`) when its descriptor declares some ([CARD-17](#kinds-of-values)): in their declared order, each its name and its rows, in the order the group names them: inputs of the call (by `InputPort.id`: a knob, a cable, a lane, a value the code works out), settings (by id) and views (by name); then a last group, More, of the rows no group names, when there are any. Each input of a component's call says the declared control it is (`InputPort.slot`). The card shows each group under its title in that order, and a folded card shows its first group; with no groups it is as before. `m2 graph` prints each group as a heading over its rows.
+- *Why:* the author's order is part of the one declaration; an agent sees the card as the musician does.
+- *Today:* being built by track `views`.
+
+**CARD-26.** The view MUST carry each card's views (`ViewNode.views`), in their declared order, resolved for the call. An envelope's four parts and a filter's two each name their control's slot and, when the card can move it, its knob's id; a part it can't move says why. A keys view names its setting's id, the regions the call plays (each its file, root, keys, velocities, turn and trigger, read from what std's Sampler plays, [PKG-16](#component-descriptors)) and the notes lane that plays the call; a call whose regions don't reach std's Sampler draws no keys and says why. A scope names nothing: it shows its own call. A view holds no value ([HOME-1](#homes-of-values)): it shows, and moves, values that have homes.
+- *Why:* an agent reads what a view shows from the same view the window draws, and a view of a value the card can't move must say so rather than pretend.
+- *Today:* being built by track `views`.
+
+**CARD-27.** The envelope view MUST draw its attack, decay, sustain and release from their controls (a time in seconds, or in beats at the song's first tempo; a level from 0 to 1, a gain, or dB), and its corners move them: the peak's x the attack; the decay's corner the decay (x) and the sustain (y); the end's x the release. The filter view MUST draw a 12 dB per octave resonant low-pass curve (a two-pole filter's magnitude, `1 / √((1 − r²)² + (r / q)²)` at `r = f / cutoff`) from cutoff and q, and say that it is a picture of a low-pass, not a measurement of the sound; its peak moves cutoff (x, from 20 Hz to 20 kHz on a log scale) and q (y: the curve's height at the cutoff, 20 · log10(q) dB). Each drag holds a lease on each control it moves, heard as it goes, and is written at release as one Tx ([CARD-22](#views-on-the-card)).
+- *Why:* the shape is what a musician thinks in; the drag must be heard at once and undone at once, as a knob's.
+- *Today:* being built by track `views`.
+
+**CARD-28.** The keys view MUST draw the 128 notes as a keyboard, and each region as a box over its keys and velocities; clicking a key MUST play it on the card's notes lane through audition ([MON-7](#monitoring-overlays-and-mute-in-song)), as the piano roll's keys do, and let it go when the pointer lifts.
+- *Why:* which recording plays where is the first question about a sampled instrument, and hearing a key answers it.
+- *Today:* being built by track `views`.
+
+**CARD-29.** The scope view MUST ask for its card's scope ([TAP-8](#taps)) while it is shown, ask again every few seconds, and stop asking when it goes. It draws the last frames each `scopes` message brings for its call, and says in words why it shows none (the ask refused, or the message's `why`).
+- *Why:* looking costs nothing only while no one looks ([TAP-4](#taps)).
+- *Today:* being built by track `views`.
+
 ## Packs
 
 A pack is a package other than std: instruments, effects, sounds and recordings anyone can make ([design](designs/packs/design.md)). To the build a pack is a package like std ([PKG-1](#component-descriptors) to [PKG-14](#component-descriptors)); these rules say how it is named, found, pinned and added.
