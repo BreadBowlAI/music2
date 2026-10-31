@@ -129,7 +129,7 @@ fn project(dir: &Path) {
     };
     put(
         "music2.toml",
-        b"[project]\nname = \"app\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
+        b"[project]\nname = \"app\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n",
     );
     put(
         "song.ts",
@@ -167,6 +167,11 @@ fn work(dir: PathBuf) -> String {
     let running =
         m2_server::start(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "app-tools".into(), page_token: "app".into() })
             .unwrap();
+    // A store of its own holding the packs music2 ships, as every test gives its server (PACK-16):
+    // with-plugins plays @m2/synths, and no test installs into the store under its HOME.
+    let store = dir.with_file_name("packs");
+    m2_server::resources::install_packs(&store, true);
+    running.state.graph.keep_store(&store);
     let server = running.state.clone();
     let created = || m2_plugins::host().counts().0;
     // The launch project, as `setup` opens it: off the main thread.
@@ -292,6 +297,24 @@ fn main() {
     #[cfg(target_os = "macos")]
     appkit::run(app);
     worker.join().unwrap();
+    // The packs installed in it are read-only (PACK-6): writable again first, so it all goes.
+    let mut stack = vec![dir.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let path = e.path();
+            if let Ok(m) = std::fs::symlink_metadata(&path)
+                && !m.file_type().is_symlink()
+            {
+                let mut p = m.permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                p.set_readonly(false);
+                let _ = std::fs::set_permissions(&path, p);
+                if m.is_dir() {
+                    stack.push(path);
+                }
+            }
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
     match result.lock().unwrap().take() {
         Some(Ok(said)) => println!("app_main_thread: ok ({said})"),
