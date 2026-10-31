@@ -4,7 +4,8 @@
 // recording as well as problems (D18). Drawn from the playhead's own clock on every frame: the server
 // says the take only when its notes change. An audio take (the io plan's slice 3) starts where
 // recording started, has no notes, and shows the sound input's level as a bar at its growing edge:
-// the meters' `input` (no waveform until it is written: gaps).
+// the meters' `input` (no waveform until it is written: gaps). A take on several armed tracks
+// (MON-9) draws on each of their lanes; over the loop, each pass from the loop's start (MON-11).
 
 import { useEffect, useState } from "react";
 import { onFrame } from "../lib/clock";
@@ -17,29 +18,32 @@ import { Notes } from "./SongTimeline";
 
 /** The take in lane `module.lane`, if one records there. */
 export default function Take({ module, lane, color }: { module: string; lane: string; color: TrackColor }) {
-  const take = useRecord((s) => (s.take?.phase === "take" && s.take.module === module && s.take.lane === lane ? s.take : null));
+  const take = useRecord((s) => (s.take?.phase === "take" && (s.take.lanes ?? [s.take]).some((l) => l.module === module && l.lane === lane) ? s.take : null));
+  const mine = take?.lanes?.find((l) => l.module === module && l.lane === lane);
   const ppb = useZoom();
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => (take ? onFrame(setNow) : undefined), [take]);
   if (!take || now === null) return null;
   // To the playhead; never past the loop's end, where the take ends; never before where it started.
   const end = Math.max(take.from, take.until === null ? now : Math.min(now, take.until));
-  const length = Math.max(end - take.start, 1 / 64);
-  const audio = take.kind === "audio";
-  const notes = take.notes.map((n) => ({
+  const audio = (mine?.kind ?? take.kind) === "audio";
+  const start = mine?.start ?? take.start;
+  const length = Math.max(end - start, 1 / 64);
+  const notes = (audio ? [] : take.notes).map((n) => ({
     pitch: n.pitch,
-    start: n.start - take.start,
+    start: n.start - start,
     length: n.held ? Math.max(end - n.start, 1 / 64) : n.length,
     velocity: n.velocity,
   }));
   return (
     <div
       data-testid="take"
-      data-start={take.start}
-      data-notes={take.notes.length}
+      data-start={start}
+      data-pass={take.pass ?? 0}
+      data-notes={audio ? 0 : take.notes.length}
       data-kind={audio ? "audio" : "notes"}
       className="absolute rounded-sm overflow-hidden pointer-events-none z-10 bg-danger-soft outline-[1.5px] outline-danger -outline-offset-[1.5px]"
-      style={{ top: 4, bottom: 4, left: take.start * ppb + 1, width: Math.max(length * ppb - 2, 4) }}
+      style={{ top: 4, bottom: 4, left: start * ppb + 1, width: Math.max(length * ppb - 2, 4) }}
     >
       <span className="absolute left-1.5 top-0.5 text-xs font-medium text-danger-strong whitespace-nowrap">Recording</span>
       {audio ? (

@@ -35,10 +35,8 @@ impl Graph {
             Ok(a.open.as_ref().map(|o| {
                 let rev = o.session.accepted();
                 let bpm = rev.compiled.data.tempo().bpm_at(beat.max(0.0));
-                let key = m2_editor::songkey::of(&rev.project.dir).and_then(|k| {
-                    let root = m2_editor::songkey::ROOTS.iter().position(|r| *r == k.root)? as u8;
-                    Some(Key { root, minor: k.scale == "minor" })
-                });
+                // The key with the song key's notes (a mode's major key); none for chromatic.
+                let key = m2_editor::songkey::of(&rev.project.dir).and_then(|k| k.sample_key()).map(|(root, minor)| Key { root, minor });
                 Fits { bpm, key }
             }))
         })

@@ -69,7 +69,7 @@ crate::api::routes! {
         "End a knob drag without saving, so the code's value plays again",
         r#"{"session": 7, "id": "tracks/keys.ts#1/@brightness", "gesture": "drag-1"}"#;
     POST "/api/graph/set" => graph_set; writes, agents,
-        "Write a knob's value, or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step (for an agent, never a drag's commit)",
+        "Write a knob's value (a number, a choice's name, true or false), or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step; more knobs in `with` are written with it as the same step (for an agent, never a drag's commit)",
         r#"{"session": 7, "revision": 42, "id": "tracks/bass.ts#3/@shape", "gesture": "set", "value": "square"}"#;
     GET "/api/graph/leases" => graph_leases; reads, agents,
         "The drags in progress: knobs, clips and the tempo",
@@ -449,10 +449,20 @@ struct SetReq {
     revision: u64,
     id: String,
     gesture: String,
-    /// A knob's number, or a setting's value: a number, a string or a boolean (CARD-4).
+    /// A knob's value (a number, a choice's name, a switch's true or false), or a setting's: a
+    /// number, a string or a boolean (CARD-4, CARD-21).
     value: Value,
     #[serde(default)]
     expect: Option<Value>,
+    /// More knobs' values the same gesture moved, written with it as one undo step (CARD-22).
+    #[serde(default)]
+    with: Vec<WithValue>,
+}
+
+#[derive(Deserialize)]
+struct WithValue {
+    id: String,
+    value: Value,
 }
 
 /// Commit a value: the gesture's lease when it has one, else a plain value edit; a setting's value
@@ -460,7 +470,14 @@ struct SetReq {
 /// `{"pending": true, "errors": …}` (C5).
 async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.set_any(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await;
+    let result = match r.with.is_empty() {
+        true => blocking(move || state.graph.set_any(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await,
+        false if r.expect.is_some() => Err(err("a gesture of several values takes no `expect`")),
+        false => {
+            let values = std::iter::once((r.id, r.value)).chain(r.with.into_iter().map(|w| (w.id, w.value))).collect();
+            blocking(move || state.graph.set_all(r.session, r.revision, &r.gesture, values)).await
+        }
+    };
     s.graph_changed();
     Ok(Json(result?))
 }
@@ -1220,3 +1237,7 @@ async fn graph_put_file(State(s): S, Json(r): Json<FileReq>) -> Response {
         Err(e) => err(e.to_string()).into_response(),
     }
 }
+
+#[cfg(test)]
+#[path = "routes_views_tests.rs"]
+mod views_tests;

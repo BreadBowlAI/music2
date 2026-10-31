@@ -43,11 +43,11 @@ export interface Setting {
   line: number;
 }
 
-export interface Knob {
+/** What every knob says, whatever it is. */
+interface KnobCommon {
   id: string;
   label: string;
-  value: number;
-  /** The number written in the code; empty while the control plays its default. */
+  /** The text written in the code (`0.3`, `"square"`); empty while the control plays its default. */
   literal: string;
   unit: string | null;
   /** The range its control declares, for its unit: a hint, never a clamp (PKG-8). Null when none is declared, so the page picks a span. */
@@ -55,7 +55,6 @@ export interface Knob {
   log: boolean;
   /** Written in the code; false while the call leaves it out and it plays its declared default (its first edit writes it in). */
   written: boolean;
-  default: number | null;
   /** The declared control (`cutoff`, `channels.hats.db`) and its component (`std:lowpass`), when it is exactly one. */
   slot: string | null;
   component: string | null;
@@ -66,10 +65,34 @@ export interface Knob {
   home: Home;
   /** Why it can't be automated (HOME-2), when it can't: its menu says so instead of offering it. */
   automate_refused?: string;
-  /** A number (the server always says; a knob made here may leave it out), or a plugin's stepped parameter as a choice or a switch (CARD-6), whose options write their numbers. */
-  kind?: ValueKind;
-  options?: Choice[];
 }
+
+/** A knob of a number: dragged, typed, stepped (the server always says `number`; a knob made here may leave it out). */
+export interface NumberKnob extends KnobCommon {
+  kind?: "number";
+  value: number;
+  default: number | null;
+  options?: undefined;
+}
+
+/**
+ * A knob that is a menu or a switch (CARD-20, CARD-6): a choice control's names, a switch's false and
+ * true, or a plugin's stepped parameter's numbers. Its `value` and `default` are what its code
+ * writes, so the option it plays is the one whose value is its value. Picked with one click, never
+ * dragged.
+ */
+export interface PickKnob extends KnobCommon {
+  kind: "choice" | "switch";
+  value: Choice["value"];
+  default: Choice["value"] | null;
+  options: Choice[];
+}
+
+/** A control as the card shows it (CARD-20): a number's knob, or a menu or a switch. */
+export type Knob = NumberKnob | PickKnob;
+
+/** Whether a knob is a menu or a switch (CARD-20). */
+export const picks = (k: Knob): k is PickKnob => k.kind === "choice" || k.kind === "switch";
 
 export interface ViewNode {
   id: string;
@@ -102,7 +125,31 @@ export interface ViewNode {
   plugin?: string;
   /** Its component's settings, in its descriptor's order (CARD-1). */
   settings?: Setting[];
+  /** Its card's groups, when its sound declares some (CARD-25): each a title over its rows, More last. */
+  groups?: CardGroup[];
+  /** Its card's views, resolved for the call (CARD-26). */
+  views?: CardView[];
 }
+
+/** A row of a card (CARD-25): an input of its call (`InputPort.id`), a setting (its id), or a view (its name). */
+export type CardRow = { input: string } | { setting: string } | { view: string };
+
+/** A group of a card (CARD-25): its title, and its rows in the order the sound names them. */
+export interface CardGroup { name: string; rows: CardRow[] }
+
+/** A value a view draws and moves (CARD-26): its control's slot, its knob when the card can move it, else what plays (a lane's fallback, in `unit`) and why not. */
+export interface ViewPart { slot: string; knob?: string; value?: number; unit?: string; why?: string }
+
+/** A region std's Sampler plays, as a key map draws it: its notes and velocities, each lowest and highest. */
+export interface KeyRegion { file: string; root: number; keys: [number, number]; velocity: [number, number]; round_robin: [number, number]; release?: boolean }
+
+/** A view of a card (CARD-26): a picture over values with homes; it holds none of its own. */
+export type CardView = { name: string } & (
+  | { kind: "envelope"; attack: ViewPart; decay: ViewPart; sustain: ViewPart; release: ViewPart }
+  | { kind: "filter"; cutoff: ViewPart; q: ViewPart }
+  | { kind: "keys"; setting: string; regions: KeyRegion[]; lane?: LaneRef; why?: string }
+  | { kind: "scope" }
+);
 
 /** A plugin's box (HOST-7, MON-6): its own window, the parameters a gesture in it latched, and whether its window changed its sound, not saved yet (AGENT-3). */
 export interface PluginBox {
@@ -115,7 +162,18 @@ export interface PluginBox {
 export type PortKind = "audio" | "control" | "notes";
 
 /** An input: set by a knob, connected by a cable, a value only code can change, or a signal from another node. */
-export interface InputPort { id: string; label: string; kind: PortKind; knob?: string; inlet?: string; readonly?: number }
+export interface InputPort {
+  id: string;
+  label: string;
+  kind: PortKind;
+  knob?: string;
+  inlet?: string;
+  readonly?: number;
+  /** The automation lane that drives it (8b.5). */
+  lane?: LaneRef;
+  /** The declared control of the call it is, whatever drives it (CARD-25); none for a connection (notes, audio). */
+  slot?: string;
+}
 
 /** An output; `outlet` is where a cable can start (the result has a `const` name). */
 export interface OutputPort { id: string; label: string; kind: PortKind; outlet: boolean }
@@ -192,6 +250,8 @@ export interface NoteClip { id?: string; start: number; length: number; notes: N
 /** `pitch` in semitones (60 is middle C); `velocity` 0..1. */
 export interface Note { pitch: number; start: number; length: number; velocity: number }
 export interface ControlClip { id?: string; start: number; length: number; points: [number, number][] }
+/** A clip of a lane of names (CARD-23): each point's name, or true or false, held until the next; the first from the clip's start. */
+export interface StepClip { id?: string; start: number; length: number; points: [number, string | boolean][]; sha?: string }
 /** `asset` is a path under `assets/`; `hash` pins its bytes (FMT-15). */
 export interface AudioClip {
   id?: string;
@@ -223,7 +283,29 @@ export type TimelineLane =
       max: number;
       clips: ControlClip[];
     }
-  | { key: string; label: string; kind: "audio"; channels: number; clips: AudioClip[] };
+  | {
+      key: string;
+      label: string;
+      /** A lane of names (CARD-23): a choice's or a switch's, drawn as steps with each name on it. */
+      kind: "steps";
+      /** What it may hold, as its knob's menu or switch offers it: names, or false and true. */
+      options: { value: string | boolean; label: string }[];
+      /** Its fallback, as written: a name, or true or false. */
+      default: string | boolean;
+      clips: StepClip[];
+    }
+  | {
+      key: string;
+      label: string;
+      kind: "audio";
+      channels: number;
+      clips: AudioClip[];
+      /** Each file that is a take over a loop: where each take starts in it, in seconds (MON-11). */
+      takes?: Record<string, number[]>;
+    };
+
+/** Whether a lane is automation: numbers, or a lane of names (CARD-23). Its track shows it under its own lanes, and it can be hidden or removed. */
+export const automation = (l: TimelineLane): l is Extract<TimelineLane, { kind: "control" | "steps" }> => l.kind === "control" || l.kind === "steps";
 
 /** A module that is a track or declares lanes, by its key (as `ModuleView.key`), with its label. */
 export interface TimelineTrack {
@@ -718,6 +800,11 @@ export const editorHooks: {
   quantize?: () => boolean;
   /** View ▸ Zoom In / Zoom Out (`dir` 1 or -1): the roll's own zoom while it has the keyboard (X3). */
   zoom?: (dir: 1 | -1) => boolean;
+  /** View ▸ Taller (1) and Shorter (-1) Tracks, ⌘↓ and ⌘↑: the roll's rows while it has the keyboard (NOTE-9). */
+  rows?: (dir: 1 | -1) => boolean;
+  /** Whether ⌘C, ⌘X and ⌘V are the roll's notes now: it has the keyboard (NOTE-5). */
+  takesClipboard?: () => boolean;
+  clipboard?: (op: "copy" | "cut" | "paste") => void;
   undo?: (redo: boolean) => boolean;
   /** A menu command whose chord the code editor binds (⌘D): its own action while it has the keyboard. */
   chord?: (id: string) => boolean;
@@ -775,6 +862,27 @@ export const graphApi = {
       step,
       call<Edit & { pending?: boolean; errors?: unknown[] }>("/set", { session, revision, id, gesture, value, expect, client: clientId }),
     ),
+  /**
+   * Release of a drag that moved several knobs (a view's corner, CARD-22): each one's value, the first
+   * named by `id`, the rest in `with`; every lease of `gesture` is committed by it, as one undo step.
+   */
+  setWith: (session: number, revision: number, gesture: string, values: [string, number][], step: Step) =>
+    edit(
+      session,
+      step,
+      call<Edit & { pending?: boolean }>("/set", {
+        session,
+        revision,
+        id: values[0][0],
+        gesture,
+        value: values[0][1],
+        with: values.slice(1).map(([id, value]) => ({ id, value })),
+        client: clientId,
+      }),
+    ),
+  /** Ask for the scope of box `node` of `module` (TAP-8), again within 10 s to keep it, or stop: its frames come on this window's socket. */
+  scope: (session: number, module: string, node: string, on: boolean) =>
+    call<{ scope?: { module: string; node: string; channels: number; frames: number[][] } }>("/scope", { session, client: clientId, module, node, on }),
   /** A setting's value, or a knob's as a menu or a switch sets it (CARD-4): one edit of its call, one undo step. */
   setValue: (session: number, revision: number, id: string, value: Choice["value"], step: Step) =>
     edit(session, step, call<Edit>("/set", { session, revision, id, gesture: "set", value, client: clientId })),
@@ -1001,6 +1109,9 @@ export function afterLaneWrites<T>(graph: GraphState, f: (within: Editing) => Pr
   return write;
 }
 
+/** Whether `graph` shows every lane write of its song this window has finished (its own on their way aside). */
+export const lanesShown = (graph: GraphState) => lanes.session !== graph.session || graph.view.revision >= lanes.revision;
+
 /** Whether a lane write is on its way, or made a revision `graph` doesn't show yet. */
 export const laneWriting = (graph: GraphState) => lanes.session === graph.session && (lanes.pending > 0 || graph.view.revision < lanes.revision);
 
@@ -1038,28 +1149,28 @@ function unitSpan(unit: string | null, v: number): [number, number, boolean] {
  * its value if that lies outside, never clamping it (PKG-8). It depends on the knob's value in the
  * code, not on one being dragged, so a knob turned to an end of it turns back.
  */
-export function span(k: Knob): { lo: number; hi: number; log: boolean } {
+export function span(k: NumberKnob): { lo: number; hi: number; log: boolean } {
   const [lo, hi, log] = k.range ? [k.range[0], k.range[1], k.log] : unitSpan(k.unit, k.value);
   const low = Math.min(lo, k.value);
   return { lo: low, hi: Math.max(hi, k.value), log: log && low > 0 };
 }
 
 /** Knob position 0..1 ↔ value, linear or logarithmic. */
-export function toUnit(k: Knob, v: number) {
+export function toUnit(k: NumberKnob, v: number) {
   const { lo, hi, log } = span(k);
   if (hi <= lo) return 0.5;
   if (log) return Math.log(v / lo) / Math.log(hi / lo);
   return (v - lo) / (hi - lo);
 }
 
-export function fromUnit(k: Knob, u: number) {
+export function fromUnit(k: NumberKnob, u: number) {
   const { lo, hi, log } = span(k);
   const value = log ? lo * Math.pow(hi / lo, u) : lo + (hi - lo) * u;
   // Three significant figures: what gets written into the code.
   return Number(value.toPrecision(3));
 }
 
-export function display(k: Knob, v: number) {
+export function display(k: NumberKnob, v: number) {
   return formatValue(k.unit, v, k.label);
 }
 
@@ -1113,7 +1224,7 @@ const NOTE: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11
  * the unit the knob shows ("3" on a knob reading 2.5 kHz is 3 kHz). Held to the knob's span and
  * written to three significant figures, as a drag writes it; null if it doesn't read as a value.
  */
-export function parseValue(k: Knob, text: string): number | null {
+export function parseValue(k: NumberKnob, text: string): number | null {
   const t = text.trim().toLowerCase().replace(/\u2212/g, "-").replace(/\s+/g, "");
   let v: number | null = null;
   const pitch = /^([a-g])([#b]?)(-?\d)$/.exec(t);
@@ -1160,7 +1271,7 @@ export function parseValue(k: Knob, text: string): number | null {
  * One step of a knob from `v` (taste.md §5.2), `n` of them (negative is down): a 1% ratio on a
  * logarithmic span (Hz), 0.1 dB, a semitone, or else 1% of the span. Held to the span.
  */
-export function stepValue(k: Knob, v: number, n: number) {
+export function stepValue(k: NumberKnob, v: number, n: number) {
   const { lo, hi, log } = span(k);
   const next = log ? v * 1.01 ** n : k.unit === "db" ? v + 0.1 * n : k.unit === "semitones" ? v + n : v + (hi - lo) * 0.01 * n;
   return Number(Math.min(hi, Math.max(lo, next)).toPrecision(3));

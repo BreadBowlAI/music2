@@ -111,6 +111,61 @@ pub fn card(compiled: &Compiled, site: u32) -> Option<SamplerCard> {
     })
 }
 
+/// One region std's Sampler plays (PKG-15, PKG-16), as a key map draws it (CARD-26, CARD-28): its
+/// file, the note it was recorded at, its notes and velocities (each lowest and highest), its turn
+/// (`[position, of]`), and whether it plays when the note ends.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct KeyRegion {
+    pub file: String,
+    pub root: u8,
+    pub keys: [u8; 2],
+    pub velocity: [u8; 2],
+    pub round_robin: [u8; 2],
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub release: bool,
+}
+
+/// The regions call `site` of `m` plays through std's Sampler, read from its first voice kernel's
+/// layout (`std/m2pkg.toml`): `std:regions`' regions, or `std:sampler`'s file or zones, each its
+/// notes at every velocity. None when no Sampler kernel is made by the call.
+pub fn key_regions(m: &Module, site: u32) -> Option<Vec<KeyRegion>> {
+    let (kernel, files, values) = voices_of(m, site).0?;
+    let file = |i: f64| files.get(i as usize).cloned().unwrap_or_default();
+    let note = |v: f64| v.clamp(0.0, 127.0) as u8;
+    if kernel == REGIONS {
+        let fields = values.first().map_or(0, |&f| f as usize);
+        let regions = values.get(1..).filter(|_| fields > 0).map(|v| v.chunks(fields).collect::<Vec<_>>()).unwrap_or_default();
+        let field = |r: &[f64], k: usize, or: f64| r.get(k).copied().unwrap_or(or);
+        return Some(
+            regions
+                .iter()
+                .map(|r| KeyRegion {
+                    file: file(field(r, 0, 0.0)),
+                    root: note(field(r, 1, 60.0)),
+                    keys: [note(field(r, 2, 0.0)), note(field(r, 3, 127.0))],
+                    velocity: [note(field(r, 4, 1.0)), note(field(r, 5, 127.0))],
+                    round_robin: [field(r, 6, 1.0) as u8, field(r, 7, 1.0) as u8],
+                    release: field(r, 8, 0.0) >= 0.5,
+                })
+                .collect(),
+        );
+    }
+    Some(
+        values
+            .chunks(3)
+            .enumerate()
+            .map(|(i, v)| KeyRegion {
+                file: file(i as f64),
+                root: note(v.first().copied().unwrap_or(60.0)),
+                keys: [note(v.get(1).copied().unwrap_or(0.0)), note(v.get(2).copied().unwrap_or(127.0))],
+                velocity: [1, 127],
+                round_robin: [1, 1],
+                release: false,
+            })
+            .collect(),
+    )
+}
+
 /// Why a Sampler's file is set only in its code: its call's options (`options`, as written) give it
 /// zones or regions, which it plays instead (PKG-16, rule 7).
 pub(crate) fn plays_others(options: Option<&Arg>) -> Option<&'static str> {

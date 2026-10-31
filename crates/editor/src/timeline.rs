@@ -4,9 +4,10 @@
 //! Like the graph view, it is derived from the accepted revision every time, so the
 //! clips shown are the ones that play.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use m2_ir::{Kind, LaneDecl, Unit};
+use m2_song::lane::StepClip;
 use m2_song::{AudioClip, ControlClip, DataSet, LaneData, LaneKind, Meter, NoteClip, Project, Tempo};
 use serde::Serialize;
 
@@ -25,8 +26,9 @@ pub struct TimelineView {
     pub tracks: Vec<TimelineTrack>,
     /// The ruler's markers, by beat, from `layout.json` (Q13): none while it doesn't read.
     pub markers: Vec<crate::markers::Marker>,
-    /// The song's key, from `layout.json` (the polish plan's D2): None when it says none.
-    pub key: Option<crate::songkey::SongKey>,
+    /// The song's key, from `layout.json` (the polish plan's D2), with what it means (NOTE-2):
+    /// None when it says none.
+    pub key: Option<crate::scales::KeyView>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -71,11 +73,26 @@ pub enum TimelineLane {
         max: f64,
         clips: Vec<ControlClip>,
     },
+    /// A lane of names (CARD-23): a choice's or a switch's, whose points hold names, or true and
+    /// false, each held until the next.
+    Steps {
+        key: String,
+        label: String,
+        /// What it may hold, as a knob of its choice or switch offers it (CARD-20).
+        options: Vec<crate::kind::Choice>,
+        /// Its fallback, as written: a name, or true or false.
+        default: serde_json::Value,
+        clips: Vec<StepClip>,
+    },
     Audio {
         key: String,
         label: String,
         channels: u8,
         clips: Vec<AudioClip>,
+        /// The takes of each file its clips play that is a take over a loop: where each starts in
+        /// it, in seconds (MON-11), for the clip's Takes menu.
+        #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+        takes: BTreeMap<String, Vec<f64>>,
     },
 }
 
@@ -83,7 +100,10 @@ impl TimelineLane {
     /// The lane's key.
     pub fn key(&self) -> &str {
         match self {
-            TimelineLane::Notes { key, .. } | TimelineLane::Control { key, .. } | TimelineLane::Audio { key, .. } => key,
+            TimelineLane::Notes { key, .. }
+            | TimelineLane::Control { key, .. }
+            | TimelineLane::Steps { key, .. }
+            | TimelineLane::Audio { key, .. } => key,
         }
     }
 }
@@ -127,7 +147,7 @@ pub fn timeline(s: &Session) -> TimelineView {
     let a = &rev.project.arrangement;
     let bar = a.meter_at(0.0).bar();
     let markers = crate::markers::on_disk(&rev.project.dir);
-    let key = crate::songkey::of(&rev.project.dir);
+    let key = crate::songkey::of(&rev.project.dir).map(|k| k.view());
     TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks, markers, key }
 }
 
@@ -154,7 +174,7 @@ fn last_known(rev: &Revision) -> TimelineView {
     let Ok(project) = Project::from_snapshot(&rev.snapshot) else {
         let a = &rev.project.arrangement;
         let markers = crate::markers::on_disk(&rev.project.dir);
-        let key = crate::songkey::of(&rev.project.dir);
+        let key = crate::songkey::of(&rev.project.dir).map(|k| k.view());
         return TimelineView {
             tempo: a.tempo.clone(),
             meter: a.meter.clone(),
@@ -178,7 +198,8 @@ fn last_known(rev: &Revision) -> TimelineView {
             let (min, max) = range(unit, None, &clips);
             TimelineLane::Control { key, label, unit: unit.map(Unit::name), default: None, min, max, clips }
         } else if let Ok(LaneData::Audio(clips)) = LaneData::read(text, &LaneKind::Audio) {
-            TimelineLane::Audio { key, label, channels: 2, clips }
+            let takes = takes(&rev.project.dir, &clips);
+            TimelineLane::Audio { key, label, channels: 2, clips, takes }
         } else {
             continue;
         };
@@ -198,7 +219,7 @@ fn last_known(rev: &Revision) -> TimelineView {
     in_order(&mut tracks, &layout);
     let a = &project.arrangement;
     let markers = crate::markers::on_disk(&rev.project.dir);
-    let key = crate::songkey::of(&rev.project.dir);
+    let key = crate::songkey::of(&rev.project.dir).map(|k| k.view());
     TimelineView {
         tempo: a.tempo.clone(),
         meter: a.meter.clone(),
@@ -222,9 +243,16 @@ fn lane_end(lane: &TimelineLane) -> f64 {
     let ends: Vec<f64> = match lane {
         TimelineLane::Notes { clips, .. } => clips.iter().map(|c| c.start + c.length).collect(),
         TimelineLane::Control { clips, .. } => clips.iter().map(|c| c.start + c.length).collect(),
+        TimelineLane::Steps { clips, .. } => clips.iter().map(|c| c.start + c.length).collect(),
         TimelineLane::Audio { clips, .. } => clips.iter().map(|c| c.start + c.length).collect(),
     };
     ends.into_iter().fold(0.0, f64::max)
+}
+
+/// The takes of each file `clips` play that has two or more (MON-11), by its name: its note's.
+fn takes(dir: &std::path::Path, clips: &[AudioClip]) -> BTreeMap<String, Vec<f64>> {
+    let files: BTreeSet<&str> = clips.iter().map(|c| c.asset.as_str()).collect();
+    files.into_iter().map(|f| (f.to_string(), crate::take::takes_of(dir, f))).filter(|(_, t)| t.len() > 1).collect()
 }
 
 /// A declared lane and the clips it plays, in canonical order (by start, then id), which is
@@ -239,6 +267,12 @@ fn lane(rev: &Revision, data: &DataSet, module: &str, decl: &LaneDecl) -> Timeli
             let names = crate::note_names::of(rev, module, &key);
             TimelineLane::Notes { key, label, clips, names }
         }
+        Kind::Control(Some(unit)) if !unit.is_number() => {
+            let clips = if let Some(LaneData::Steps { clips, .. }) = lane { clips.clone() } else { vec![] };
+            let (_, options) = crate::kind::of_unit(Some(unit));
+            let default = crate::kind::said(Some(unit), decl.default.unwrap_or(0.0)).unwrap_or(serde_json::Value::Null);
+            TimelineLane::Steps { key, label, options, default, clips }
+        }
         Kind::Control(unit) => {
             let clips = if let Some(LaneData::Control { clips, .. }) = lane { clips.clone() } else { vec![] };
             let (min, max) = range(unit, decl.default, &clips);
@@ -246,7 +280,8 @@ fn lane(rev: &Revision, data: &DataSet, module: &str, decl: &LaneDecl) -> Timeli
         }
         Kind::Audio(channels) => {
             let clips = data.audio(module, &key).to_vec();
-            TimelineLane::Audio { key, label, channels, clips }
+            let takes = takes(&rev.project.dir, &clips);
+            TimelineLane::Audio { key, label, channels, clips, takes }
         }
     }
 }
@@ -396,6 +431,7 @@ export default song(() => mixer({ bass: b.out, vox: v.out }));
         assert!(t.tracks.iter().flat_map(|t| &t.lanes).all(|l| match l {
             TimelineLane::Notes { clips, .. } => clips.is_empty(),
             TimelineLane::Control { clips, .. } => clips.is_empty(),
+            TimelineLane::Steps { clips, .. } => clips.is_empty(),
             TimelineLane::Audio { clips, .. } => clips.is_empty(),
         }));
         std::fs::remove_dir_all(dir).ok();

@@ -72,7 +72,7 @@ Render a track, named by its key (or the whole song), to a new `assets/<asset-na
 m2 graph <project> [--json]
 ```
 
-The graph the canvas shows: calls, their knobs and settings, connections.
+The graph the canvas shows: calls, their knobs and settings, connections. A card whose sound puts its values in groups prints each group as a heading over its rows, with More last; its views (an envelope, a filter's curve, a key map, a scope) are rows too.
 
 ## m2 controls
 
@@ -88,7 +88,7 @@ Every number written in the project that the graph can edit, with its id, and ev
 m2 set <project> <control> <value> [--expect V]
 ```
 
-Change one, verified by the compiler (values in the control's units); `--expect` refuses unless it is V now. A setting is set the same way, by its id (a card's `settings` in `m2 graph <project> --json`, such as `tracks/bass.ts#3/@shape`): a number, true or false, or a word such as `square`.
+Change one, verified by the compiler (values in the control's units); `--expect` refuses unless it is V now. A knob that is a menu or a switch takes a word: one of its options' names (`square`), or true or false (On, Off). A setting is set the same way, by its id (a card's `settings` in `m2 graph <project> --json`, such as `tracks/bass.ts#3/@shape`): a number, true or false, or a word such as `square`.
 
 ## m2 automate
 
@@ -327,7 +327,7 @@ m2 clips <project> delete <clip>… [--beats]
 m2 clips <project> json <gesture.json | ->
 ```
 
-One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste`, `notes`, `points`, `audio` and `set`.
+One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste` (with `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the song's key) and `groove` (swing, laid back, pushed or accents). `m2 call <song> /api/theory` lists the chords and grooves.
 
 ## m2 sections
 

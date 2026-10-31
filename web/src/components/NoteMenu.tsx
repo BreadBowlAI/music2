@@ -1,11 +1,12 @@
 // The roll's right-click menu (D1): what it acts on, then the note tools with their keys. One
 // popover style (taste.md §2.14), opened where the pointer is. A row that can't run now is greyed,
 // its tooltip saying why. The roll keeps the keyboard: Esc closes the menu and the keys still work.
+// Swing's amounts and the grooves are the server's table (NOTE-7, `GET /api/theory`).
 
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { chord, keyName, shifted } from "../lib/native";
-import type { Swing } from "../lib/noteTools";
+import { useTheory } from "../lib/songKey";
 import { keepFocus, MenuRow, Popover, Segment } from "./ui";
 
 /** What a row of the menu does. */
@@ -14,7 +15,10 @@ export type NoteTool =
   | { kind: "quantize" }
   | { kind: "legato" }
   | { kind: "humanize" }
-  | { kind: "swing"; amount: Swing }
+  /** Swing at `amount` of each pair (0.5 is straight). */
+  | { kind: "swing"; amount: number }
+  /** One of the server's named grooves, by its name. */
+  | { kind: "groove"; name: string }
   | { kind: "duplicate" }
   | { kind: "delete" };
 
@@ -26,11 +30,14 @@ export const TOOL_HELP = {
   swing: "Push every second note a little later, for a bouncy feel",
 } as const;
 
-const SWING_NAMES: [Swing, string][] = [
-  ["light", "Light"],
-  ["medium", "Medium"],
-  ["heavy", "Heavy"],
-];
+/** What each swing the table offers sounds like, by its share of the pair. */
+const SWING_WORDS: Record<string, string> = {
+  "0.5": "50%: straight, no swing (takes it out)",
+  "0.55": "55%: a light swing",
+  "0.6": "60%: a medium swing",
+  "0.66": "66%: a heavy swing, nearly a triplet",
+  "0.71": "71%: the most swing",
+};
 
 export default function NoteMenu({
   at,
@@ -58,6 +65,7 @@ export default function NoteMenu({
   onClose: () => void;
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const theory = useTheory((t) => t.theory);
   const why = off ?? (count === 0 ? "This clip has no notes yet: double-click in the grid to add one" : null);
   const run = (tool: NoteTool) => {
     onClose();
@@ -84,7 +92,7 @@ export default function NoteMenu({
     <>
       {createPortal(<span ref={setAnchor} aria-hidden className="fixed size-px pointer-events-none" style={{ left: at.x, top: at.y - 4 }} />, document.body)}
       {anchor && (
-        <Popover anchor={anchor} onClose={onClose} role="menu" aria-label={`Note tools: ${heading}`} data-testid="note-menu" className="w-[240px]">
+        <Popover anchor={anchor} onClose={onClose} role="menu" aria-label={`Note tools: ${heading}`} data-testid="note-menu" className="w-[272px]">
           <div data-testid="note-menu-heading" className="px-2 pt-1 pb-1.5 text-xs font-medium text-fg-muted">
             {heading}
           </div>
@@ -99,13 +107,25 @@ export default function NoteMenu({
           <div role="group" aria-label="Swing" data-menu-item="swing" title={why ?? TOOL_HELP.swing} className="min-h-ctl pl-2 pr-1 flex items-center gap-2 text-sm">
             <span className={why ? "flex-1 text-fg-off" : "flex-1 text-fg"}>Swing</span>
             <div className="h-ctl-sm flex items-center gap-0.5 p-0.5 rounded-sm bg-hover">
-              {SWING_NAMES.map(([amount, name]) => (
-                <Segment key={amount} role="menuitem" on={false} data-swing={amount} disabled={!!why} onClick={() => run({ kind: "swing", amount })}>
-                  {name}
+              {(theory?.swings ?? []).map((amount) => (
+                <Segment
+                  key={amount}
+                  role="menuitem"
+                  on={false}
+                  data-swing={Math.round(amount * 100)}
+                  disabled={!!why}
+                  title={why ?? SWING_WORDS[String(amount)]}
+                  onClick={() => run({ kind: "swing", amount })}
+                  className="!px-1.5"
+                >
+                  {Math.round(amount * 100)}%
                 </Segment>
               ))}
             </div>
           </div>
+          {(theory?.grooves ?? [])
+            .filter((g) => g.name !== "swing")
+            .map((g) => row(`groove-${g.name}`, g.label, { kind: "groove", name: g.name }, undefined, g.words))}
           {line("l2")}
           {row("duplicate", "Duplicate", { kind: "duplicate" }, keys ? chord("D") : undefined)}
           {row("delete", "Delete", { kind: "delete" }, keys ? keyName("Backspace") : undefined)}

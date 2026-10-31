@@ -310,7 +310,10 @@ fn the_view_shows_the_calls_written_in_the_project() {
     let hi = knob(&node(bass, "xrange"), "hi");
     // `xrange`'s ends take any unit, so no range is declared for them (D4): the UI picks a span
     // for a frequency, and core guesses none (P10).
-    assert_eq!((hi.value, hi.literal.as_str(), hi.unit, hi.range, hi.log), (2500.0, "2.5", Some("hz"), None, false));
+    assert_eq!(
+        (hi.value.clone(), hi.literal.as_str(), hi.unit, hi.range, hi.log),
+        (serde_json::json!(2500), "2.5", Some("hz"), None, false)
+    );
     let edge = |m: &crate::ModuleView, a: &str, b: &str| {
         let id = |l: &str| node(m, l).id;
         m.edges.contains(&(id(a), id(b)))
@@ -323,9 +326,13 @@ fn the_view_shows_the_calls_written_in_the_project() {
     let song = module("song");
     let mixer = node(song, "mixer");
     let pan = knob(&mixer, "hats.pan");
-    assert_eq!((pan.value, pan.range, pan.slot.as_deref()), (0.3, Some([-1.0, 1.0]), Some("channels.hats.pan")), "the mixer declares pan");
-    assert_eq!(knob(&mixer, "hats.db").value, -6.0);
-    assert_eq!(knob(&node(song, "duck"), "depth").value, -9.0);
+    assert_eq!(
+        (pan.value.clone(), pan.range, pan.slot.as_deref()),
+        (serde_json::json!(0.3), Some([-1.0, 1.0]), Some("channels.hats.pan")),
+        "the mixer declares pan"
+    );
+    assert_eq!(knob(&mixer, "hats.db").value, serde_json::json!(-6));
+    assert_eq!(knob(&node(song, "duck"), "depth").value, serde_json::json!(-9));
     // An import is shown by the imported track's label, and addressed by its key (ID-10).
     assert!(edge(song, "Kick.env", "duck") && edge(song, "duck", "mixer") && edge(song, "mixer", "master"));
     std::fs::remove_dir_all(dir).ok();
