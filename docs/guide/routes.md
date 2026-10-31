@@ -74,7 +74,7 @@ An example body:
 
 ### `POST /api/graph/clips`
 
-A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio or set. It writes the song: one undo step.
+A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord) or groove. It writes the song: one undo step.
 
 An example body:
 
@@ -424,6 +424,16 @@ An example body:
 {"session": 7}
 ```
 
+### `POST /api/graph/take`
+
+Choose which take an audio clip over a loop plays (from 1). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2}
+```
+
 ### `POST /api/graph/tempo`
 
 Set the tempo at a beat, or add or remove a tempo change there. It writes the song: one undo step.
@@ -618,6 +628,10 @@ The templates and examples a new song can start from, and the songs folder.
 
 This computer's settings: the sound output, where new songs go, Record's options, the MIDI keyboards and the sound input.
 
+### `GET /api/theory`
+
+The scales a key can have, the chords a stamp places and the grooves, each with its name and what it does.
+
 ### `POST /api/tx/check`
 
 Check a Tx: its delta, the delta's hash and the diagnostics; nothing is written. Bodies up to 144 MiB.
@@ -649,6 +663,10 @@ The tools key gets 403 for these (AGENT-11): ask the musician, or show them wher
 ### `POST /api/focus`
 
 Say what the musician looks at (the page posts it).
+
+### `POST /api/graph/arm`
+
+Arm a track to record, or disarm it, and choose the input channels it records.
 
 ### `POST /api/graph/audition`
 
@@ -768,7 +786,7 @@ Drop the take, or stop counting in.
 
 ### `POST /api/graph/record/start`
 
-Record a take on a notes lane or an audio lane.
+Record a take on the armed tracks, or on a notes lane or an audio lane; punch on the loop, overdub notes.
 
 ### `POST /api/graph/record/stop`
 

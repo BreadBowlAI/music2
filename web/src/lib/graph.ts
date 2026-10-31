@@ -223,7 +223,15 @@ export type TimelineLane =
       max: number;
       clips: ControlClip[];
     }
-  | { key: string; label: string; kind: "audio"; channels: number; clips: AudioClip[] };
+  | {
+      key: string;
+      label: string;
+      kind: "audio";
+      channels: number;
+      clips: AudioClip[];
+      /** Each file that is a take over a loop: where each take starts in it, in seconds (MON-11). */
+      takes?: Record<string, number[]>;
+    };
 
 /** A module that is a track or declares lanes, by its key (as `ModuleView.key`), with its label. */
 export interface TimelineTrack {
@@ -718,6 +726,11 @@ export const editorHooks: {
   quantize?: () => boolean;
   /** View ▸ Zoom In / Zoom Out (`dir` 1 or -1): the roll's own zoom while it has the keyboard (X3). */
   zoom?: (dir: 1 | -1) => boolean;
+  /** View ▸ Taller (1) and Shorter (-1) Tracks, ⌘↓ and ⌘↑: the roll's rows while it has the keyboard (NOTE-9). */
+  rows?: (dir: 1 | -1) => boolean;
+  /** Whether ⌘C, ⌘X and ⌘V are the roll's notes now: it has the keyboard (NOTE-5). */
+  takesClipboard?: () => boolean;
+  clipboard?: (op: "copy" | "cut" | "paste") => void;
   undo?: (redo: boolean) => boolean;
   /** A menu command whose chord the code editor binds (⌘D): its own action while it has the keyboard. */
   chord?: (id: string) => boolean;
@@ -1000,6 +1013,9 @@ export function afterLaneWrites<T>(graph: GraphState, f: (within: Editing) => Pr
   q.queue = write.catch(() => {});
   return write;
 }
+
+/** Whether `graph` shows every lane write of its song this window has finished (its own on their way aside). */
+export const lanesShown = (graph: GraphState) => lanes.session !== graph.session || graph.view.revision >= lanes.revision;
 
 /** Whether a lane write is on its way, or made a revision `graph` doesn't show yet. */
 export const laneWriting = (graph: GraphState) => lanes.session === graph.session && (lanes.pending > 0 || graph.view.revision < lanes.revision);

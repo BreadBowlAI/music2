@@ -59,6 +59,11 @@ interface Shell {
   renaming: { module: string; at: "header" | "strip" } | null;
   /** The roll's Draw mode (B): a click adds a note and a drag paints; else a click selects (D4). */
   draw: boolean;
+  /**
+   * The chord the roll stamps (NOTE-4): a kind of the server's table ("triad", "seventh"…) and its
+   * inversion; null for single notes. The window's, as Draw mode is.
+   */
+  chord: { kind: string; inversion: number } | null;
   /** A place the Code view opens at, once it can: a file and a line (a Mix strip's Edit in code). */
   codeAt: { file: string; line: number } | null;
 
@@ -104,6 +109,7 @@ export const useShell = create<Shell>((set, get) => ({
   sheet: false,
   renaming: null,
   draw: false,
+  chord: null,
   codeAt: null,
 
   setView: (view) => {

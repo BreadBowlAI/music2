@@ -92,7 +92,7 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean
   const n = /^Digit([1-4])$/.exec(e.code);
   if (n && !e.shiftKey && !e.altKey) return { id: GRID_IDS[Number(n[1]) - 1] };
   // Cut, copy and paste are the clips' while the timeline takes them; else the page's own, for text.
-  if ((k === "c" || k === "x" || k === "v") && !e.shiftKey && !e.altKey && !editing() && !field(e.target) && canvas.takesClipboard?.()) {
+  if ((k === "c" || k === "x" || k === "v") && !e.shiftKey && !e.altKey && !editing() && !field(e.target) && (editorHooks.takesClipboard?.() || canvas.takesClipboard?.())) {
     return { id: ({ c: "copy", x: "cut", v: "paste" } as const)[k] };
   }
   if (k === "s" && !e.shiftKey) return { id: "save", always: true };
@@ -437,6 +437,8 @@ export function appCommand(id: string) {
     case "copy":
     case "cut":
     case "paste":
+      // The roll's notes while it has the keyboard (NOTE-5); else the timeline's clips.
+      if (editorHooks.takesClipboard?.()) return editorHooks.clipboard?.(id);
       return canvas.clipboard?.(id);
     case "insert_bars":
     case "delete_bars":
@@ -465,6 +467,8 @@ export function appCommand(id: string) {
         return el.setSelectionRange(at, at);
       }
       if (editing()) return;
+      // The roll's rows while it has the keyboard (NOTE-9); else the timeline's tracks.
+      if (editorHooks.rows?.(id === "taller" ? 1 : -1)) return;
       return canvas.height?.(id === "taller" ? 1 : -1);
     }
     case "add_marker":

@@ -19,9 +19,10 @@ use super::Graph;
 
 /// The page's view settings, the keys `POST /api/graph/view` takes (Q16): the timeline's zoom
 /// (px a beat), whether it follows the playhead, track and lane heights by key, the automation
-/// lanes hidden, each view's grid and snap, the audition toggle, and the metronome (gaps #19),
-/// which the player follows ([`metronome`]). `loop` has its own route.
-pub const KEYS: [&str; 8] = ["zoom", "follow", "heights", "hidden", "grid", "audition", "metronome", "guide"];
+/// lanes hidden, each view's grid and snap, the audition toggle, the metronome (gaps #19), which
+/// the player follows ([`metronome`]), and the piano roll's own (NOTE-9: `lock`, `fold`, `rows`).
+/// `loop` has its own route.
+pub const KEYS: [&str; 9] = ["zoom", "follow", "heights", "hidden", "grid", "audition", "metronome", "guide", "roll"];
 
 /// Held over each write's read, change and rename.
 static WRITING: Mutex<()> = Mutex::new(());

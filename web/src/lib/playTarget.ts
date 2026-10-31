@@ -2,7 +2,7 @@
 // Notes shows, when it is that track's; else the track's first notes lane. The Song row, nothing
 // selected, or a track with no notes lane: nothing. The keyboard piano plays it (lib/piano.ts), and
 // a MIDI keyboard plays it once the window tells the server (lib/midi.ts). While a take records,
-// its lane, whatever is selected (lane B, D8).
+// its lane, whatever is selected (lane B, D8); while a notes track is armed, its lane (MON-9).
 
 import { useMemo } from "react";
 import { create } from "zustand";
@@ -33,6 +33,8 @@ function held(graph: GraphState | null, lane: { module: string; lane: string } |
 export function playTarget(graph: GraphState | null, selected: string | null, clips: Record<string, ClipRef>): PlayTarget | null {
   const take = held(graph, useHeld.getState().lane);
   if (take) return take;
+  const armed = armedNotes(graph);
+  if (armed) return armed;
   if (!graph || !selected || selected === "song") return null;
   const track = graph.timeline.tracks.find((t) => t.module === selected && t.track);
   if (!track) return null;
@@ -40,6 +42,15 @@ export function playTarget(graph: GraphState | null, selected: string | null, cl
   const clip = clips[selected];
   const lane = (clip?.module === selected ? notes.find((l) => l.key === clip.lane) : undefined) ?? notes[0];
   return lane ? { module: selected, lane: lane.key, label: track.label, colour: track.colour } : null;
+}
+
+/** The armed notes track's lane, as a target (MON-9): what keys play then, whatever is selected. */
+function armedNotes(graph: GraphState | null): PlayTarget | null {
+  for (const [module, lane] of Object.entries(graph?.arm?.armed ?? {})) {
+    const track = graph?.timeline.tracks.find((t) => t.module === module);
+    if (track?.lanes.some((l) => l.key === lane && l.kind === "notes")) return held(graph, { module, lane });
+  }
+  return null;
 }
 
 /** What plays now, outside React. */
