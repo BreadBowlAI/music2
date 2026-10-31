@@ -2,7 +2,7 @@
 //! plugins with saved state, and the assets its kernels read. The project's data is read against these ([`m2_song::Project::data`]),
 //! and a renderer plays the result.
 
-use m2_ir::{Ir, Kind, Node, Op};
+use m2_ir::{Ir, Kind, Node, Op, Unit};
 use m2_song::{AssetDecl, Decls, Key, LaneAddr, LaneKind, StateDecl};
 
 /// The declarations of `ir`. A lane or plugin whose keys break the key rule declares nothing:
@@ -46,10 +46,13 @@ fn walk<'a>(nodes: &'a [Node], f: &mut impl FnMut(&'a Node)) {
     }
 }
 
-/// How a lane of `kind` reads its file. A control lane records its unit by its name.
+/// How a lane of `kind` reads its file. A control lane records its unit by its name; a lane of a
+/// choice holds the names of its options, and of a switch true and false (CARD-15).
 pub fn lane_kind(kind: Kind) -> LaneKind {
     match kind {
         Kind::Events(_) => LaneKind::Notes,
+        Kind::Control(Some(Unit::Choice(o))) => LaneKind::Choice { options: o.names().iter().map(|n| n.to_string()).collect() },
+        Kind::Control(Some(Unit::Switch)) => LaneKind::Switch,
         Kind::Control(unit) => LaneKind::Control { unit: unit.map(|u| u.name().to_string()) },
         Kind::Audio(_) => LaneKind::Audio,
     }

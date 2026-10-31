@@ -151,6 +151,8 @@ impl DataSet {
     pub fn control(&self, module: &str, lane: &str) -> ControlLane {
         match self.lane(module, lane).map(|d| &**d) {
             Some(LaneData::Control { clips, .. }) => ControlLane::new(clips.clone()),
+            // Names become places here, off the audio thread (CARD-15).
+            Some(LaneData::Steps { options, clips }) => ControlLane::steps(clips, options.as_deref()),
             _ => ControlLane::default(),
         }
     }
@@ -278,6 +280,9 @@ impl Project {
                             if let LaneData::Audio(clips) = &*data {
                                 diags.extend(self.assets(addr, &file, text, clips, &data));
                             }
+                            if let LaneData::Steps { options: Some(options), clips } = &*data {
+                                diags.extend(unknown_options(addr, &file, options, clips));
+                            }
                             lanes.insert(addr.clone(), data);
                             read.insert(addr.clone(), (kind.clone(), source));
                             continue;
@@ -323,6 +328,8 @@ impl Project {
             let kind = match Holds::of(text) {
                 Holds::Notes => LaneKind::Notes,
                 Holds::Control => LaneKind::Control { unit: None },
+                Holds::Choice => LaneKind::Choice { options: vec![] },
+                Holds::Switch => LaneKind::Switch,
                 Holds::Audio => LaneKind::Audio,
                 Holds::Empty | Holds::Unknown => return None,
             };
@@ -782,6 +789,38 @@ fn unknown_file(file: &str) -> String {
     m
 }
 
+/// `lane.unknown-option` (CARD-15): a warning for each name the lane's points give that its
+/// choice doesn't have, naming the first clip it is in. The lane plays its fallback there.
+fn unknown_options(addr: &LaneAddr, file: &str, options: &[String], clips: &[lane::StepClip]) -> Vec<Diagnostic> {
+    let mut seen = BTreeSet::new();
+    let names = options.iter().map(|o| format!("{o:?}")).collect::<Vec<_>>().join(", ");
+    let mut out = vec![];
+    for (i, c) in clips.iter().enumerate() {
+        for (_, p) in &c.points {
+            let lane::Step::Name(n) = p else { continue };
+            if options.contains(n) || !seen.insert(n.clone()) {
+                continue;
+            }
+            out.push(
+                Diagnostic::warning(
+                    "lane.unknown-option",
+                    format!(
+                        "{file}: clip {} (at beat {}) names {n:?}, which isn't one of the options of lane `{}` of {}: {names}. \
+                         Until the next point it plays the lane's fallback. Name one of those options there, or take the point out",
+                        i + 1,
+                        number(c.start),
+                        addr.lane,
+                        addr.module
+                    ),
+                )
+                .file(file)
+                .module(&addr.module),
+            );
+        }
+    }
+    out
+}
+
 /// `lane.invalid` or `lane.unit-mismatch` (FMT-9, FMT-10), naming the file, the field and the fix.
 fn lane_error(addr: &LaneAddr, file: &str, text: &str, e: LaneError, then: &str) -> Diagnostic {
     match e {
@@ -803,8 +842,11 @@ fn lane_error(addr: &LaneAddr, file: &str, text: &str, e: LaneError, then: &str)
             )
             .file(file)
             .module(&addr.module);
-            // Retag: the same points, recorded in the declared unit.
-            if let Ok(LaneData::Control { clips, .. }) = LaneData::read(text, &LaneKind::Control { unit: None }) {
+            // Retag: the same points, recorded in the declared unit. A lane of names holds no numbers.
+            let numbers = !matches!(declared.as_str(), "choice" | "switch");
+            if let Ok(LaneData::Control { clips, .. }) = LaneData::read(text, &LaneKind::Control { unit: None })
+                && numbers
+            {
                 let fixed = LaneData::Control { unit: Some(declared.clone()), clips };
                 d = d.fix(rewrite("retag", format!("Record it in `{declared}`"), found.is_none(), file, text, &fixed));
             }

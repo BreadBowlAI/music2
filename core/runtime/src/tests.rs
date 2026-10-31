@@ -10,6 +10,7 @@ mod audition;
 mod cell;
 mod decode;
 mod fpenv;
+mod kinds;
 mod latency;
 mod live;
 mod overlay;
