@@ -56,7 +56,7 @@ impl Fixture {
     }
 
     pub(super) fn open(&self) -> Graph {
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         graph.open(&self.0).unwrap();
         graph
     }
@@ -80,7 +80,7 @@ impl Drop for Fixture {
 fn a_project_that_does_not_compile_says_where_without_its_folder() {
     let fixture = Fixture::new();
     fixture.write("export default song(() => osc.sine(hz(800)) oops);\n");
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     let state = graph.open(&fixture.0).unwrap();
     let first = &state["diagnostics"][0];
     assert_eq!((&first["file"], &first["line"]), (&json!("song.ts"), &json!(3)), "{state:#}");
@@ -699,7 +699,7 @@ fn seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo() {
     eventually("it lands far past the song", || graph.status() == stopped(2002.0, 2004.0, 60.0));
     assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
 
-    let closed = Graph::silent();
+    let closed = Graph::silent().stored();
     assert!(closed.seek(1.0).is_err(), "no project is open");
     assert_eq!(closed.status().beat, 0.0);
     graph.close();
@@ -1025,7 +1025,7 @@ fn a_lane_written_in_two_halves_never_plays_empty() {
         let fixture = Fixture::new();
         fixture.write(KICK);
         fixture.put("data/kick/hits.json", &hits_of(4));
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         graph.watch_by_walking(walk);
         graph.open(&fixture.0).unwrap();
         assert_eq!(graph.watch_stats().unwrap().events, !walk);
@@ -1187,7 +1187,7 @@ fn the_loop_range_survives_reopening() {
     graph.set_loop(None, Some(true)).unwrap();
     assert_eq!((&read()["loop"]["on"], &read()["zoom"]), (&json!(true), &json!(24)));
     // Another window, read-only while this one writes: its loop isn't kept.
-    let other = Graph::silent();
+    let other = Graph::silent().stored();
     assert!(!other.open(&fixture.0).unwrap()["read_only"].is_null());
     assert_eq!(other.status().looping, Some(Loop { start: 8.0, end: 16.0, on: true }), "it opens with the loop kept");
     other.set_loop(Some((1.0, 2.0)), None).unwrap();
@@ -1258,7 +1258,7 @@ fn panic_ends_every_note_and_never_touches_the_session() {
             .unwrap();
     fixture.put("data/bass/notes.json", &m2_song::canonical(&m2_song::LaneData::Notes(clips)));
     let (p, mut driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     graph.transport("play").unwrap();
     // The loudest sample of `n` blocks.
@@ -1284,7 +1284,7 @@ fn panic_ends_every_note_and_never_touches_the_session() {
     assert_eq!((&after["view"]["revision"], &after["can_undo"]), (&before.0["view"]["revision"], &json!(false)));
     assert_eq!((fixture.read("song.ts"), fixture.read("data/bass/notes.json")), (before.1, before.2));
     // With no player (nothing played yet, or a device let go), it does nothing and opens none.
-    let idle = Graph::default();
+    let idle = Graph::default().stored();
     idle.panic().unwrap();
     assert!(idle.inner.current_device().is_none(), "no audio device opened to stop nothing");
 }
@@ -1336,7 +1336,7 @@ fn a_stalled_player_is_replaced_and_the_project_plays_on_where_it_was() {
     let fixture = Fixture::new();
     // A device that never calls back.
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let t = Instant::now();
     let e = loop {
@@ -1555,7 +1555,7 @@ impl Dc {
         fixture.put("tracks/a.ts", a);
         fixture.put("tracks/b.ts", B_SILENT);
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         Dc { fixture, graph, driver }
     }
@@ -1616,7 +1616,7 @@ fn a_broken_project_opens_and_plays_once_saved_fixed() {
     fixture.put("tracks/a.ts", &broken);
     fixture.put("tracks/b.ts", B_SILENT);
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     let state = graph.open(&fixture.0).unwrap();
     assert_eq!(state["diagnostics"][0]["file"], json!("tracks/a.ts"), "{state:#}");
     let token = state["session"].as_u64().unwrap();
@@ -2034,7 +2034,7 @@ fn with_probe() -> Dc {
         r#"{"clips": [{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C4", "start": 0, "length": 60}]}]}"#,
     );
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -2260,7 +2260,7 @@ fn a_pending_commit_that_ends_unsaved_says_so() {
         assert!(said.len() == 1 && said[0].starts_with("song.ts:4: the value wasn't saved: ") && said[0].ends_with(why), "{said:?}");
         assert!(graph.leases().is_empty());
     };
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     pending(&graph);
     graph.close();
     said(&graph, "the project was closed");
@@ -2389,7 +2389,7 @@ fn example(rel: &str) -> Dc {
     let fixture = Fixture::new();
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel), &fixture.0);
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -2523,7 +2523,7 @@ fn swapping_two_plugin_keys_moves_the_instances() {
     fixture.probe_state("song", "lead", &lead);
     fixture.probe_state("song", "pad", &pad);
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -2561,7 +2561,7 @@ fn a_state_change_loads_into_the_running_instance() {
     );
     fixture.probe_state("p", "lead", &m2_plugins::probe::state("one", 0.25));
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -2640,7 +2640,7 @@ impl Ex {
         );
         fixture.probe_state("p", "lead", state);
         let (p, driver) = Player::driven(48_000);
-        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player_on(p, host)));
+        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player_on(p, host).stored()));
         state.graph.open(&fixture.0).unwrap();
         state.graph.transport("play").unwrap();
         let mut ex = Ex { fixture, state, driver };
@@ -3510,7 +3510,7 @@ fn a_refused_state_is_said_once_by_the_plugins_name() {
     fixture.put("data/p/lead.state.json", r#"{"plugin": "clap:m2.probe.fails-state", "plugin_version": "1.0.0"}"#);
     std::fs::write(fixture.0.join("data/p/lead.state"), m2_plugins::probe::state("fine", 1.0)).unwrap();
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -3737,7 +3737,7 @@ fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
             &format!("{{\"clips\": [{{\"id\": \"chord\", \"start\": 0, \"length\": 8, \"notes\": [{}]}}]}}\n", notes.join(", ")),
         );
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         let token = graph.state().unwrap()["session"].as_u64().unwrap();
         let mut dc = Dc { fixture, graph, driver };
@@ -3797,7 +3797,7 @@ fn a_first_pan_in_a_mono_mix_keeps_the_masters_gain_and_limiter() {
     fixture.put("tracks/a.ts", &A_DC.replace("0.5)", "2)"));
     fixture.put("tracks/b.ts", B_SILENT);
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player(p);
+    let graph = Graph::with_player(p).stored();
     graph.open(&fixture.0).unwrap();
     let mut dc = Dc { fixture, graph, driver };
     dc.graph.transport("play").unwrap();
@@ -3951,7 +3951,7 @@ fn the_bus_routes_answer_with_the_new_view() {
     mixed(&fixture);
     let song = fixture.read("song.ts");
     let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
-    let running = crate::start_with(options, Graph::silent()).unwrap();
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
     let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
     let post = |path: &str, body: Value| crate::routes_8b::tests::post(&running.url, path, Some("t0k"), &body);
     let strip = |answer: &Value, key: &str| {
@@ -4089,7 +4089,7 @@ fn a_first_pan_in_a_mono_mix_while_playing_is_inaudible() {
         fixture.put("data/low/notes.json", "{\"clips\": []}\n");
         fixture.put("data/thump/hits.json", "{\"clips\": []}\n");
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         let mut dc = Dc { fixture, graph, driver };
         let token = dc.graph.state().unwrap()["session"].as_u64().unwrap();
@@ -4156,7 +4156,7 @@ fn two_probes(tag: &str) -> Dc {
     fixture.probe_state("p", "lead", &m2_plugins::probe::state(tag, 1.0));
     fixture.probe_state("q", "lead", &m2_plugins::probe::state("fine", 1.0));
     let (p, driver) = Player::driven(48_000);
-    let graph = Graph::with_player_on(p, remote());
+    let graph = Graph::with_player_on(p, remote()).stored();
     graph.open(&fixture.0).unwrap();
     graph.transport("play").unwrap();
     Dc { fixture, graph, driver }

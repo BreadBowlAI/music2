@@ -34,7 +34,7 @@ impl Rig {
         fixture.put("song.ts", song);
         files(&fixture);
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         let mut rig = Rig { fixture, graph, driver };
         rig.graph.transport("play").unwrap();
@@ -183,7 +183,7 @@ fn a_sound_too_slow_is_named_with_its_pack_and_stays_through_stop_all_sound() {
     };
     rig.report(Code::TooSlow, rig.node("bass", delay));
     rig.report(Code::TooSlow, rig.node("hats", |op| matches!(op, FOp::Poly { .. })));
-    let said = [slow("Delay on Bass, from std,"), slow("Hat on Hats, from std,")];
+    let said = [slow("Delay on Bass, from @m2/effects,"), slow("Hat on Hats, from @m2/synths,")];
     assert_eq!(rig.told(), said);
     let listed: Vec<_> =
         said.iter().zip(["bass", "hats"]).map(|(w, k)| ("sound.too-slow".to_string(), Some(k.to_string()), w.clone())).collect();

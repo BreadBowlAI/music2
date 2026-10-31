@@ -53,10 +53,12 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 
 ## An instrument
 
-An instrument is a `component(…)` whose first input is notes and whose output is sound; an effect's first input is sound. Give each a label and a category: the browser groups by it.
+An instrument is a `component(…)` whose first input is notes and whose output is sound; an effect's first input is sound. Give each a label and a category: the browser groups by it. A component only code should play says `editor: { unlisted: true }` instead of a category: no list offers it. `m2 pack check` names one that says neither, as one you forgot. Build a voice from std's blocks (`std/dsp`, `std/math`), as below: the code editor checks every call as you type. A kernel called by its id, `kernel("std:synth", { … })`, works too, but only the build checks the names of its inputs.
 
 ```ts
-import { component, control, file, kernel, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
+import { component, control, file, hz, ms, poly, port, secs, signature, type Audio, type Events, type Params } from "@m2/core";
+import { adsr, osc, svf, vca } from "std/dsp";
+import { scale, xrange } from "std/math";
 import { sampler } from "std/sampler";
 
 export const feltPiano = component(
@@ -65,13 +67,21 @@ export const feltPiano = component(
     label: "Felt piano",
     signature: signature<(notes: Events) => Audio>(),
     inputs: { notes: port.notes() },
-    controls: { brightness: control.hz(1800).range(200, 20000) },
+    controls: { brightness: control.hz(1800).range(200, 20000).log().smooth() },
     output: port.audio(),
     editor: { category: "Keys", description: "A soft pluck" },
   },
-  // std's synth kernel, one voice a note. A pack builds on std only: never on another pack, `@m2/synths` included.
+  // One voice a note, from std's blocks: a saw, a lowpass that closes as the note fades, a volume.
+  // A pack builds on std only: never on another pack, `@m2/synths` included.
   (notes: Events, { brightness }: Params): Audio =>
-    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: brightness, sustain: 0 }), { voices: 12 }),
+    poly(
+      notes,
+      (n) => {
+        const env = adsr(n.gate, { attack: ms(2), decay: secs(0.45), sustain: 0, release: secs(0.2) });
+        return vca(svf.lowpass(osc.saw(n.pitch), xrange(env, hz(200), brightness), 0.7), scale(env, n.velocity));
+      },
+      { voices: 12 },
+    ),
 );
 
 // A recording of the pack's own: file(import.meta, …) names it, "@alice/felt-piano:samples/C4.wav".

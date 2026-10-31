@@ -146,6 +146,9 @@ pub struct Editor {
     /// What an instrument's notes play, by MIDI note (`36: "Kick"`): the piano roll's row names.
     #[serde(default)]
     pub notes: BTreeMap<u8, String>,
+    /// Said on purpose: code plays it, and no list offers it (PKG-7). Such a component has no category.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

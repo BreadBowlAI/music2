@@ -40,7 +40,7 @@ fn float_wav(frames: usize) -> (Vec<u8>, Vec<i32>) {
 }
 
 fn opened(dir: &Path) -> (Graph, u64) {
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     let session = graph.open(dir).unwrap()["session"].as_u64().unwrap();
     (graph, session)
 }

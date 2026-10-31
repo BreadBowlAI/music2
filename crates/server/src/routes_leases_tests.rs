@@ -56,9 +56,11 @@ fn moved(by: f64, sha: Option<&str>) -> Value {
 #[test]
 fn lane_leases_through_the_routes() {
     let dir = project("rw");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     let (status, begun) =
@@ -89,9 +91,11 @@ fn lane_leases_through_the_routes() {
 #[test]
 fn a_tempo_lease_through_the_routes() {
     let dir = project("tempo");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     let (status, begun) = call(url, "POST", "/api/graph/tempo/lease/begin", &json!({"session": session, "at": 3.5, "client": "w1"}));
@@ -121,9 +125,11 @@ fn a_tempo_lease_through_the_routes() {
 fn a_read_only_window_begins_no_lane_lease() {
     let dir = project("ro");
     let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let (status, answer) =
         call(&running.url, "POST", "/api/graph/lane/lease/begin", &json!({"session": session, "gesture": moved(1.0, None)}));

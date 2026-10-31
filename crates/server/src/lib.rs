@@ -166,6 +166,9 @@ impl AppState {
             resources::install_packs(store, false);
             self.graph.keep_store(store);
         }
+        if let Some(presets) = &folders.presets {
+            self.graph.keep_presets(presets);
+        }
         if self.library.set(folders).is_ok() {
             self.warm_samples();
             self.catalog();
@@ -592,7 +595,7 @@ mod tests {
     }
 
     fn state() -> AppState {
-        AppState::new(String::new(), graph::Graph::default())
+        AppState::new(String::new(), graph::Graph::default().stored())
     }
 
     // PACK-15, PACK-16: the server's start installs the packs music2 ships into the store it is
@@ -689,7 +692,7 @@ mod tests {
         std::fs::write(dir.join("music2.toml"), manifest).unwrap();
         std::fs::write(dir.join("song.ts"), song).unwrap();
         std::fs::write(dir.join("data/kick/old.json"), r#"{"clips": []}"#).unwrap();
-        let s = AppState::new(String::new(), graph::Graph::silent());
+        let s = AppState::new(String::new(), graph::Graph::silent().stored());
         let (_, mut events, _page) = s.subscribe(true);
         s.graph_changed();
         // With no song open, it says so (AGENT-6).

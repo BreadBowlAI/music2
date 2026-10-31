@@ -875,7 +875,7 @@ fn keep(file: &Path, kept: &Kept) -> std::io::Result<()> {
 
 /// Where a root's samples come from, as their notes say it.
 enum Origin {
-    Package { name: String, from: Value },
+    Package { name: String, from: Value, own: bool },
     Folder,
 }
 
@@ -894,7 +894,7 @@ impl Origin {
         if let Some(l) = m.and_then(|m| m.package.license) {
             from["license"] = json!(l);
         }
-        Origin::Package { name: name.to_string(), from }
+        Origin::Package { name: name.to_string(), from, own: super::own(name, dir) }
     }
 }
 
@@ -946,14 +946,16 @@ fn item(origin: &Origin, rel: &str, path: &Path, m: &Measured, said: &Said) -> I
     }
     words.push(seconds_words(m.seconds));
     words.push(if m.channels == 1 { "mono".into() } else { "stereo".into() });
-    let (id, package, component, from) = match origin {
-        Origin::Package { name, from } => {
+    let (id, package, component, from, own) = match origin {
+        Origin::Package { name, from, own } => {
             let file = format!("{SAMPLES_DIR}/{rel}");
             let mut from = from.clone();
             from["file"] = json!(file);
-            (format!("sample:{name}:{file}"), name.clone(), format!("{name}:{file}"), from)
+            (format!("sample:{name}:{file}"), name.clone(), format!("{name}:{file}"), from, *own)
         }
-        Origin::Folder => (format!("sample:folder:{}", path_key(path)), "yours".to_string(), String::new(), json!({ "folder": true })),
+        Origin::Folder => {
+            (format!("sample:folder:{}", path_key(path)), "yours".to_string(), String::new(), json!({ "folder": true }), false)
+        }
     };
     Item {
         kind: Kind::Sample,
@@ -963,6 +965,7 @@ fn item(origin: &Origin, rel: &str, path: &Path, m: &Measured, said: &Said) -> I
         description: words.join(", "),
         tags,
         package,
+        own,
         component,
         instrument: false,
         effect: false,

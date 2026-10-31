@@ -892,7 +892,7 @@ mod tests {
     #[test]
     fn songs_made_at_once_each_answer_with_their_own() {
         let t = Temp::new();
-        let graph = std::sync::Arc::new(Graph::silent());
+        let graph = std::sync::Arc::new(Graph::silent().stored());
         for round in 0..3 {
             let name = format!("Pair {round}");
             let made: Vec<Value> = (0..4)
@@ -1023,7 +1023,7 @@ mod tests {
         // Through New Song, in the songs folder or another: refused first, so no folder is made,
         // the songs folder included.
         let had = songs_dir().unwrap().exists();
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         let bad = NewSong { name: "Faster".into(), tempo: Some(1000.0), ..NewSong::default() };
         assert_eq!(new_song(&graph, &bad).unwrap_err().to_string(), e);
         assert_eq!(songs_dir().unwrap().exists(), had, "the songs folder is made only for a song");
@@ -1187,7 +1187,7 @@ mod tests {
     #[test]
     fn new_song_makes_the_folder_and_opens_it() {
         let t = Temp::new();
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         let req = |name: &str, template: Option<&str>| NewSong {
             name: name.into(),
             template: template.map(Into::into),
@@ -1219,7 +1219,7 @@ mod tests {
     #[test]
     fn new_song_refuses_bad_requests_and_keeps_nothing_it_couldnt_open() {
         let t = Temp::new();
-        let graph = Graph::silent();
+        let graph = Graph::silent().stored();
         let bad = |req: NewSong| new_song(&graph, &NewSong { dir: req.dir.or(Some(t.0.clone())), ..req }).unwrap_err().to_string();
         assert!(bad(NewSong { template: Some("../../std".into()), ..NewSong::default() }).contains("no template"));
         assert!(bad(NewSong { example: Some("nope".into()), ..NewSong::default() }).contains("no example"));

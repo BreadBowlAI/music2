@@ -35,7 +35,7 @@ impl Rig {
             fixture.put(path, text);
         }
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         let mut rig = Rig { _fixture: fixture, graph, driver };
         // The engine takes what was loaded at its first callback.

@@ -329,8 +329,8 @@ case $STEP in
           check "sleeps list" sleeps-list.log sleeps_list "$OUT"
         fi
       fi
-      # PLAT-7: no test wrote in the cache folder of the HOME it ran with.
-      check "cache untouched" cache-left.log ci/cache-left.sh "$OUT/home"
+      # PLAT-7, PACK-16: no test wrote in the cache folder or the Music folder of the HOME it ran with.
+      check "home untouched" cache-left.log ci/cache-left.sh "$OUT/home"
     fi ;;
 
   suites)

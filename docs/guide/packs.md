@@ -29,7 +29,7 @@ music2's sounds are packs too, made by music2 and kept in the repository at `pac
 
 They come with the app and with `m2`. When either starts, it installs each one your store doesn't have yet, as `m2 pack install` would; a start that finds them there writes nothing. From then on they are packs like any other: a song lists them in `music2.toml`, locks them in `music2.lock`, and keeps the version it was made with when a newer music2 brings a newer one. The templates and examples come locked to them.
 
-If your store holds an `@m2/` pack of that version with other files (someone else's), music2 leaves it as it is, says so in its log, and starts all the same.
+If your store holds an `@m2/` pack of that version with other files (someone else's), music2 leaves it as it is, says so in its log, and starts all the same. A new song locked to music2's own then says `pkg.changed`: run `m2 pack remove <pack> <version>` (the error names both), then start music2 again, and it puts its own back. A pack named `@m2/…` is music2's only when its files are a version music2 comes with: `m2 pack install` refuses any other.
 
 std itself is no pack: it is the toolbox the packs are built from ([Sounds and effects](sounds.md)).
 

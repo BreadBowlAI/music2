@@ -15,6 +15,7 @@ fn item(kind: Kind, id: &str, label: &str, tags: &[&str], description: &str, pac
         description: description.into(),
         tags: tags.iter().map(|t| t.to_string()).collect(),
         package: package.into(),
+        own: false,
         component: id.into(),
         instrument: kind == Kind::Instrument,
         effect: kind == Kind::Effect,
@@ -94,22 +95,29 @@ fn the_label_ranks_above_tags_and_tags_above_the_description() {
     assert_eq!(found(&two, "reverb hall"), ["both-label", "label-and-desc"]);
 }
 
-// LIB-1: then std's and music2's own before yours and the song's, before plugins and others; then
-// by kind, label and id. The same list and words give the same order every time.
+// LIB-1: then std's and music2's own (`own`: a version music2 comes with, PACK-19) before yours and
+// the song's, before plugins and others; then by kind, label and id. A pack named `@m2/` that isn't
+// music2's own ranks with everyone else's. The same list and words give the same order every time.
 #[test]
 fn std_and_ours_come_first_then_kind_label_and_id() {
+    let mut ours = item(Kind::Instrument, "@m2/piano:keys", "Keys", &[], "", "@m2/piano");
+    ours.own = true;
     let items = [
         item(Kind::Plugin, "clap:x", "Keys", &[], "", "plugin"),
         item(Kind::Sound, "sound:yours/k", "Keys", &[], "", "yours"),
         item(Kind::Instrument, "song-keys", "Keys", &[], "", "song"),
         item(Kind::Instrument, "other:keys", "Keys", &[], "", "acme"),
+        item(Kind::Instrument, "@m2/fake:keys", "Keys", &[], "", "@m2/fake"),
         item(Kind::Sound, "sound:std/k", "Keys", &[], "", "std"),
-        item(Kind::Instrument, "@m2/piano:keys", "Keys", &[], "", "@m2/piano"),
+        ours,
         item(Kind::Instrument, "std:keys", "Keys", &[], "", "std"),
         item(Kind::Instrument, "std:keys2", "keys", &[], "", "std"),
     ];
     let order = found(&items, "keys");
-    assert_eq!(order, ["@m2/piano:keys", "std:keys", "std:keys2", "sound:std/k", "song-keys", "sound:yours/k", "other:keys", "clap:x"]);
+    assert_eq!(
+        order,
+        ["@m2/piano:keys", "std:keys", "std:keys2", "sound:std/k", "song-keys", "sound:yours/k", "@m2/fake:keys", "other:keys", "clap:x"]
+    );
     let mut reversed = items.clone();
     reversed.reverse();
     assert_eq!(found(&reversed, "keys"), order, "whatever order the items came in");

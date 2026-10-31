@@ -128,7 +128,7 @@ fn song(name: &str) -> PathBuf {
 /// A server with `song` open, and its session.
 fn serve(song: &Path) -> (Running, u64) {
     let options = ServeOptions { port: 0, web_dir: song.join("no-web"), token: TOOLS.into(), page_token: PAGE.into() };
-    let running = start_with(options, Graph::silent()).unwrap();
+    let running = start_with(options, Graph::silent().stored()).unwrap();
     let session = running.state.graph.open(song).unwrap()["session"].as_u64().unwrap();
     (running, session)
 }
@@ -404,7 +404,7 @@ fn each_route_takes_bodies_up_to_its_limit() {
 
 /// A server of `routes`, as the app serves them (`routes::served`), with no song open: its url.
 fn serving_routes(routes: axum::Router<std::sync::Arc<crate::AppState>>) -> String {
-    let mut state = crate::AppState::new(TOOLS.into(), Graph::silent());
+    let mut state = crate::AppState::new(TOOLS.into(), Graph::silent().stored());
     state.page_token = PAGE.into();
     let app = crate::routes::served(std::sync::Arc::new(state), routes, Path::new("no-web"));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

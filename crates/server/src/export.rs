@@ -591,7 +591,7 @@ pub(crate) mod tests {
             &format!(r#"{{"clips": [{{"id": "a", "start": 0, "length": 120, "notes": [{}]}}]}}"#, notes.join(", ")),
         );
         project.write("data/arrangement.json", r#"{"tempo": [{"beat": 0, "bpm": 120}]}"#);
-        let state = Arc::new(AppState::new(String::new(), Graph::silent()));
+        let state = Arc::new(AppState::new(String::new(), Graph::silent().stored()));
         state.graph.open(&project.0).unwrap();
         state
     }

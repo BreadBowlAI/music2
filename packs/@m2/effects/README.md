@@ -9,5 +9,5 @@
 import { delay, reverb } from "@m2/effects";
 ```
 
-Each plays std's kernel of its name (`std:reverb` …). The guide's [Sounds and effects](../../../docs/guide/sounds.md)
-says what each knob does.
+Each plays std's kernel of its name (`std:reverb` …). The guide's page Sounds and effects says what each
+knob does: `m2 docs sounds` prints it.

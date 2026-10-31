@@ -1060,8 +1060,10 @@ export type Descriptor = {
    * notes first; `insert` is written when the effect is added, each value in its control's
    * spelling; `notes` names what an instrument's notes play, by MIDI note (`{ 36: "Kick" }`), for
    * the piano roll's rows: whole numbers 0 to 127, each name one line of 1 to 24 characters.
+   * `unlisted: true` says on purpose that code plays it and no list offers it: such a component
+   * has no category (PKG-7, PACK-12).
    */
-  editor?: { category?: string; description?: string; insert?: Record<string, number>; notes?: Record<number, string> };
+  editor?: { category?: string; description?: string; insert?: Record<string, number>; notes?: Record<number, string>; unlisted?: true };
 };
 
 /** What a component's body receives after its inputs: a signal per control, a value per setting. */
@@ -1457,8 +1459,10 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   // Editor metadata.
   const editor = desc.editor ?? {};
   if (typeof editor !== "object" || editor === null) fail("editor must be an object");
-  for (const k of Object.keys(editor)) if (!["category", "description", "insert", "notes"].includes(k)) fail(`editor has no field "${k}" (fields: category, description, insert, notes)`);
+  for (const k of Object.keys(editor)) if (!["category", "description", "insert", "notes", "unlisted"].includes(k)) fail(`editor has no field "${k}" (fields: category, description, insert, notes, unlisted)`);
   if (editor.category !== undefined && (typeof editor.category !== "string" || !editor.category)) fail("editor.category must be a non-empty string");
+  if (editor.unlisted !== undefined && editor.unlisted !== true) fail("editor.unlisted is true, or left out");
+  if (editor.unlisted && editor.category !== undefined) fail("an unlisted component (editor.unlisted) has no editor.category: no list offers it");
   if (editor.description !== undefined && typeof editor.description !== "string") fail("editor.description must be a string");
   const insert = record("editor.insert", editor.insert).map(([slot, v]) => {
     const c = controls.find((x) => x.name === slot && !x.each);
@@ -1538,7 +1542,8 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     settings: settings.map(setJson),
     output: output ? portJson(output) : null,
     positional: [...positional],
-    editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes },
+    // `unlisted` written only when true, so every other descriptor keeps its bytes.
+    editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes, ...(editor.unlisted ? { unlisted: true } : {}) },
   });
   const first = lead[0] === inputs[0] ? lead[0] : undefined;
   const bypassable = first?.spec.kind === "audio" && !first.spec.many && output?.kind === "audio" && !names.has("bypass");

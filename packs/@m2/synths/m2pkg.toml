@@ -8,5 +8,6 @@ repository = "https://github.com/BreadBowlAI/music2"
 tags = ["synth", "polysynth", "fm", "keys", "bass", "pad", "lead"]
 
 [dependencies]
-"@m2/core" = "1.7"
+# @m2/core 1.8 or later: the five simple instruments say `editor: { unlisted: true }`, which 1.8.0 added.
+"@m2/core" = "1.8"
 std = "0.6"

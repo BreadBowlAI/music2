@@ -37,7 +37,7 @@ impl Drag {
         fixture.put("song.ts", SONG);
         fixture.put("data/bass/notes.json", NOTES);
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         let token = graph.state().unwrap()["session"].as_u64().unwrap();
         graph.transport("play").unwrap();

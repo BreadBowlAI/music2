@@ -9,5 +9,5 @@
 import { drums } from "@m2/drums";
 ```
 
-Every drum plays std's `std:drum` kernel. The guide's [Sounds and effects](../../../docs/guide/sounds.md)
-lists the kit's notes and knobs.
+Every drum plays std's `std:drum` kernel. The guide's page Sounds and effects lists the kit's notes and
+knobs: `m2 docs sounds` prints it.

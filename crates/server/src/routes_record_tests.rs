@@ -46,9 +46,11 @@ fn post(url: &str, path: &str, body: &Value) -> (u16, Value) {
 #[test]
 fn a_take_through_the_routes() {
     let dir = project("rw");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let state = running.state.clone();
     let session = state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let mut events = state.events.subscribe();
@@ -97,9 +99,11 @@ fn a_take_through_the_routes() {
 fn a_read_only_window_cant_record() {
     let dir = project("ro");
     let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let (status, answer) = post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "bass", "lane": "notes"}));
     assert_eq!(status, 423, "{answer:#}");
@@ -116,9 +120,11 @@ fn a_read_only_window_cant_record() {
 #[test]
 fn settings_name_the_keyboards_with_no_song_open() {
     let dir = project("kb");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     use m2_os::midi::Event;
     running.state.midi(Event::Plugged("Keys"));
     let addr = running.url.trim_start_matches("http://");
@@ -156,9 +162,11 @@ fn an_audio_take_through_the_routes() {
     std::fs::write(dir.join("song.ts"), VOX).unwrap();
     std::fs::create_dir_all(dir.join("data/vox")).unwrap();
     std::fs::write(dir.join("data/vox/clips.json"), "{\"clips\": []}\n").unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let state = running.state.clone();
     state.keep_settings(dir.join("settings.json"));
     let (status, inputs) = get(&running.url, "/api/audio/inputs");
@@ -234,9 +242,11 @@ fn the_inject_api_unplugs_the_input() {
     std::fs::write(dir.join("song.ts"), VOX).unwrap();
     std::fs::create_dir_all(dir.join("data/vox")).unwrap();
     std::fs::write(dir.join("data/vox/clips.json"), "{\"clips\": []}\n").unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let state = running.state.clone();
     let session = state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let mut events = state.events.subscribe();
@@ -284,9 +294,11 @@ fn the_inject_api_unplugs_the_input() {
 #[test]
 fn the_inject_api_needs_an_open_input() {
     let dir = project("inject");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     running.state.graph.open(&dir).unwrap();
     let (status, answer) = post(&running.url, "/api/graph/input/inject", &json!({"samples": [0.0, 0.5]}));
     assert_eq!(status, 400, "{answer:#}");

@@ -40,6 +40,14 @@ impl Store {
         for (_, old) in self.aside(&name).into_iter().filter(|(v, _)| *v == version) {
             let _ = remove_tree(&old);
         }
+        // A folder with no listing in it is no installed version (an interrupted copy, a restore, a
+        // sync): it goes, and the version is installed in its place, as `remove` would take it out.
+        if std::fs::symlink_metadata(&target).is_ok() && std::fs::symlink_metadata(target.join(LISTING)).is_err() {
+            match remove_tree(&target) {
+                Err(e) if std::fs::symlink_metadata(&target).is_ok() => return Err(format!("{}: {e}", target.display())),
+                _ => {}
+            }
+        }
         let there = |store: &Store| -> Result<Option<Result<Sha, String>>, String> {
             if std::fs::symlink_metadata(&target).is_err() {
                 return Ok(None);
@@ -58,7 +66,10 @@ impl Store {
             None => None,
         };
         std::fs::create_dir_all(&parent).map_err(io)?;
-        let temp = parent.join(format!(".{version}.{}.tmp", std::process::id()));
+        // Its own name in this process too, so two threads installing at once never share a copy.
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp = parent.join(format!(".{version}.{}.{n}.tmp", std::process::id()));
         let _ = remove_tree(&temp);
         let copied = (|| -> std::io::Result<()> {
             for f in &listing.files {
@@ -77,9 +88,9 @@ impl Store {
             }
             read_only_inside(&temp)?;
             match repair {
-                Some(_) => {
-                    swap(&temp, &target, &parent.join(format!(".{version}.{}.old", std::process::id())), &mut |a, b| std::fs::rename(a, b))?
-                }
+                Some(_) => swap(&temp, &target, &parent.join(format!(".{version}.{}-{n}.old", std::process::id())), &mut |a, b| {
+                    std::fs::rename(a, b)
+                })?,
                 None => std::fs::rename(&temp, &target)?,
             }
             set_read_only(&target, true)
@@ -102,10 +113,11 @@ impl Store {
     }
 
     /// Take version `version` of `name` out of the store (`m2 pack remove`). A song that locks it
-    /// then says `pkg.missing`: the store can't know every song.
+    /// then says `pkg.missing`: the store can't know every song. A folder of its version with no
+    /// listing in it, which no build takes, goes too.
     pub fn remove(&self, name: &PackName, version: &Version) -> std::io::Result<()> {
         let dir = self.version_dir(name, version);
-        if !dir.join(LISTING).is_file() {
+        if std::fs::symlink_metadata(&dir).is_err() {
             return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name} {version} isn't installed")));
         }
         remove_tree(&dir)?;

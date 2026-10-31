@@ -24,7 +24,7 @@ impl Drop for Temp {
 /// `m2 render <song> <out> --seconds 4 <more>`, with `M2_THREADS` set to `env` when given.
 fn render(song: &Path, out: &Path, more: &[&str], env: Option<&str>) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_m2"));
-    c.env("HOME", std::env::temp_dir().join("m2-tests-no-app"));
+    c.env("HOME", m2_song::pack::test_home());
     c.arg("render").arg(song).arg(out).args(["--from", "1", "--seconds", "4"]).args(more).env("M2_AUDIO", "none").env_remove("M2_THREADS");
     if let Some(v) = env {
         c.env("M2_THREADS", v);
@@ -67,7 +67,7 @@ fn a_bounce_that_places_its_clip_isnt_beside_itself() {
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/resample"), &song);
     let bounce = |name: &str, place: &[&str]| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_m2"));
-        c.env("HOME", std::env::temp_dir().join("m2-tests-no-app"));
+        c.env("HOME", m2_song::pack::test_home());
         c.arg("bounce").arg(&song).arg(name).args(["--track", "keys", "--seconds", "0.5"]).args(place);
         let out = said(&c.env("M2_AUDIO", "none").env_remove("M2_THREADS").output().unwrap());
         let line = out.lines().find(|l| l.starts_with("bounced ")).unwrap_or_else(|| panic!("{out}")).to_string();

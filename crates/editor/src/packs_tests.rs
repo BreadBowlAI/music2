@@ -425,30 +425,62 @@ fn the_bundled_packs_pass_check() {
     }
 }
 
-// PACK-12, PKG-7: a component with no category is code's only, as std's are: the lists leave it
-// out and the check takes it. A pack that offers nothing (no component with a category, no
-// sample) is refused, in words.
+// PACK-12, PKG-7: a component with no category is named, as one its author forgot; one that says
+// `unlisted: true` is code's on purpose, and no list offers it.
 #[test]
-fn a_component_with_no_category_is_codes_only() {
+fn a_component_with_no_category_is_named_unless_it_says_unlisted() {
     let f = Fixture::new();
     let dir = f.0.join("tiny");
     copy(&tiny(), &dir);
     let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
-    let plain = "\n/** A plain sine, for code. */\nexport const tinyPlain = component(\n  {\n    id: \"tiny-plain\",\n    label: \"Tiny plain\",\n    \
-                 signature: signature<(notes: Events) => Audio>(),\n    inputs: { notes: port.notes() },\n    output: port.audio(),\n  },\n  \
-                 (notes: Events): Audio => poly(notes, (n) => kernel(\"std:sine\", { freq: 440 })),\n);\n";
+    let plain = |editor: &str| {
+        format!(
+            "\n/** A plain sine, for code. */\nexport const tinyPlain = component(\n  {{\n    id: \"tiny-plain\",\n    label: \"Tiny plain\",\n    \
+             signature: signature<(notes: Events) => Audio>(),\n    inputs: {{ notes: port.notes() }},\n    output: port.audio(),{editor}\n  }},\n  \
+             (notes: Events): Audio => poly(notes, (n) => vca(osc.sine(n.pitch), adsr(n.gate))),\n);\n"
+        )
+    };
     let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
-    std::fs::write(dir.join("src/index.ts"), format!("{index}{plain}")).unwrap();
-    assert_eq!(check(&dir, &std_dir), Vec::<String>::new(), "beside the pack's offered items");
-    // Alone, with no category anywhere and no sample: nothing to offer.
-    let only = format!("import {{ component, kernel, poly, port, signature, type Audio, type Events }} from \"@m2/core\";\n{plain}");
-    std::fs::write(dir.join("src/index.ts"), only).unwrap();
-    for gone in ["presets", "samples"] {
-        std::fs::remove_dir_all(dir.join(gone)).unwrap();
-    }
-    let _ = std::fs::remove_file(dir.join("samples.toml"));
+    let blocks = "import { adsr, osc, vca } from \"std/dsp\";\n";
+    std::fs::write(dir.join("src/index.ts"), format!("{blocks}{index}{}", plain(""))).unwrap();
     let problems = check(&dir, &std_dir);
-    assert!(problems.iter().any(|p| p.starts_with("@test/tiny offers no instrument, effect or sample")), "{problems:?}");
+    assert!(problems.iter().any(|p| p.starts_with("@test/tiny:tiny-plain") && p.contains("has no category")), "{problems:?}");
+    std::fs::write(dir.join("src/index.ts"), format!("{blocks}{index}{}", plain("\n    editor: { unlisted: true },"))).unwrap();
+    assert_eq!(check(&dir, &std_dir), Vec::<String>::new(), "said on purpose");
+    let s = song_and_store_with(&f, &[("src/index.ts", &std::fs::read_to_string(dir.join("src/index.ts")).unwrap())]).0;
+    assert!(s.catalog().components.contains_key("@test/tiny:tiny-plain"), "code can play it");
+    assert!(!crate::tracks::instruments(&s).iter().any(|i| i.component == "@test/tiny:tiny-plain"), "no list offers it");
+}
+
+// PACK-19 (review S9, S13): music2's own is a pack version music2 comes with, by its files, never
+// by its name: a folder's `@m2/fake` is everyone else's. Every list ranks by that one rule, std's
+// and music2's own first: + Effect as the search; and the library marks music2's alone `own`.
+#[test]
+fn music2s_own_is_by_its_files_and_every_list_ranks_by_it() {
+    let f = Fixture::new();
+    song_and_store(&f);
+    // Named to sort before `@m2/` and inside it.
+    install_as(&f, "@aa/tiny", "0.1.0", |t| t, None);
+    install_as(&f, "@m2/fake", "0.1.0", |t| t, None);
+    let s = open(&f);
+    let order: Vec<String> = crate::effect::effects(&s).into_iter().map(|e| e.component).collect();
+    let at = |id: &str| order.iter().position(|c| c == id).unwrap_or_else(|| panic!("{id}: {order:?}"));
+    for theirs in ["@aa/tiny:tiny-crunch", "@m2/fake:tiny-crunch", "@test/tiny:tiny-crunch"] {
+        assert!(at("std:lowpass") < at(theirs) && at("@m2/effects:delay") < at(theirs), "{theirs}: {order:?}");
+    }
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    let mut packages = vec![("std".to_string(), std_dir.clone())];
+    packages.extend(crate::library::store_packs(&f.0.join("Packs"), &std_dir));
+    let lib = crate::library::without_song(&packages, None, &[], &[]);
+    let own = |id: &str| lib.get(id).unwrap_or_else(|| panic!("{id}")).own;
+    assert!(own("std:lowpass") && own("@m2/effects:delay") && own("@m2/synths:synth-pluck"));
+    assert!(!own("@m2/fake:tiny-crunch") && !own("@aa/tiny:tiny-crunch"), "its name alone isn't music2's");
+    let all: Vec<&str> = lib.items.iter().map(|i| i.id.as_str()).collect();
+    let first_theirs = all.iter().position(|id| id.starts_with("@m2/fake:")).unwrap();
+    assert!(all.iter().rposition(|id| id.starts_with("@m2/effects:")).unwrap() < first_theirs, "{all:?}");
+    assert!(
+        all.iter().position(|id| id.starts_with("@aa/tiny:")).unwrap() > all.iter().rposition(|id| id.starts_with("@m2/synths:")).unwrap()
+    );
 }
 
 // PACK-12 (review G12): every word a pack gives the lists (its m2pkg.toml's, its components'

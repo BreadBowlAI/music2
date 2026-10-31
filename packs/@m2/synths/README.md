@@ -10,5 +10,5 @@
 import { fm, synth } from "@m2/synths";
 ```
 
-Every sound here plays std's kernels (`std:synth`, `std:fm`, and std/dsp's blocks). The guide's
-[Sounds and effects](../../../docs/guide/sounds.md) says what each knob does.
+Every sound here plays std's kernels (`std:synth`, `std:fm`, and std/dsp's blocks). The guide's page
+Sounds and effects says what each knob does: `m2 docs sounds` prints it.

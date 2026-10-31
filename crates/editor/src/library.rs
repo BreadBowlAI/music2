@@ -197,6 +197,10 @@ pub struct Item {
     /// Where it comes from: a package (`std`), `song` (the song's own code), `yours` (your
     /// presets) or `plugin`.
     pub package: String,
+    /// Its package is music2's own ([`own`]): std, or a pack version music2 comes with. The lists
+    /// say "music2" for it and rank it first, whatever the pack's name (PACK-19).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub own: bool,
     /// What adding it names: a ComponentId or a plugin's `clap:<id>`; for a sound, its sound's.
     pub component: String,
     /// Adding it makes a new track: it plays notes (an instrument, an instrument plugin, a sound of
@@ -249,6 +253,10 @@ pub struct Sources<'a> {
 pub fn items(src: &Sources) -> Vec<Item> {
     let mut out = components(src.catalog);
     out.extend(sounds(src, &out));
+    let ours: BTreeSet<&str> = src.packages.iter().filter(|(name, dir)| own(name, dir)).map(|(name, _)| name.as_str()).collect();
+    for i in &mut out {
+        i.own = ours.contains(i.package.as_str());
+    }
     out.extend(plugins(src.plugins));
     let mut seen = BTreeSet::new();
     out.retain(|i| seen.insert(i.id.clone()));
@@ -318,6 +326,20 @@ pub fn store_packs(store: &Path, std: &Path) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
+/// Whether the package `name` in `dir` is music2's own (PACK-19): std, or an installed pack
+/// version whose files are one music2 comes with ([`m2_song::pack::own`]). Its name alone says
+/// nothing: anyone can name a pack `@m2/…` in a folder.
+pub fn own(name: &str, dir: &Path) -> bool {
+    use m2_song::pack::{LISTING, PackName, PkgManifest};
+    if name == m2_song::pack::STD {
+        return true;
+    }
+    let (Ok(n), Ok(m), Ok(hash)) = (PackName::new(name), PkgManifest::at(dir), m2_song::Sha::of_file(&dir.join(LISTING))) else {
+        return false;
+    };
+    m.package.name == n && m2_song::pack::own(&n, &m.package.version, &hash)
+}
+
 /// The package a ComponentId is from: `std` of `@m2/effects:delay`; `song` for the song's own.
 fn package_of(component: &str) -> String {
     component.split_once(':').map_or("song", |(p, _)| p).to_string()
@@ -360,6 +382,7 @@ fn components(catalog: &Catalog) -> Vec<Item> {
             preview: preview::none_for(d).is_none(),
             no_preview: preview::none_for(d),
             package,
+            own: false,
             component: d.id.clone(),
             instrument: kind == Kind::Instrument,
             effect: kind == Kind::Effect,
@@ -387,6 +410,7 @@ fn sounds(src: &Sources, components: &[Item]) -> Vec<Item> {
                 description: of.description.clone(),
                 tags,
                 package: if from == "yours" { from.to_string() } else { package_of(&of.component) },
+                own: false,
                 component: of.component.clone(),
                 instrument: of.instrument,
                 effect: of.effect,
@@ -422,6 +446,7 @@ fn sounds(src: &Sources, components: &[Item]) -> Vec<Item> {
                     description: String::new(),
                     tags: vec![],
                     package: "plugin".into(),
+                    own: false,
                     component: sound.clone(),
                     instrument: false,
                     effect: false,
@@ -485,6 +510,7 @@ fn plugins(list: &[Plugin]) -> Vec<Item> {
                 description: format!("{} plugin by {}", if p.instrument { "An instrument" } else { "An effect" }, p.vendor),
                 tags,
                 package: "plugin".into(),
+                own: false,
                 component: p.id.clone(),
                 instrument: p.instrument,
                 effect: p.effect,
@@ -665,12 +691,13 @@ fn place(item: &Item, q: &Query, label: &[String]) -> Option<u8> {
     Some(worst)
 }
 
-/// Where an item's package puts it: std's and music2's own (`@m2/`) first, then yours and the
-/// song's, then plugins and everyone else's.
-fn origin(package: &str) -> u8 {
+/// Where an item's package puts it: music2's own first (std's, and the packs it comes with:
+/// [`own`], PACK-19), then yours and the song's, then plugins and everyone else's. The one order
+/// of every list: the search, + Effect's ([`crate::effect::effects`]).
+pub fn origin(package: &str, own: bool) -> u8 {
     match package {
+        _ if own => 0,
         "std" => 0,
-        p if p.starts_with("@m2/") => 0,
         "yours" | "song" => 1,
         _ => 2,
     }
@@ -689,7 +716,7 @@ pub fn search<'a>(items: impl IntoIterator<Item = &'a Item>, q: &Query) -> Vec<&
             seen.insert(i.id.as_str()).then_some((at, i))
         })
         .collect();
-    found.sort_by_cached_key(|(at, x)| (*at, origin(&x.package), x.kind, x.label.to_lowercase(), x.label.as_str(), x.id.as_str()));
+    found.sort_by_cached_key(|(at, x)| (*at, origin(&x.package, x.own), x.kind, x.label.to_lowercase(), x.label.as_str(), x.id.as_str()));
     found.into_iter().map(|(_, i)| i).collect()
 }
 

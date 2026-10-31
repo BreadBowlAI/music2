@@ -1,0 +1,7 @@
+# In short: every version of music2's own packs this source tree has bundled, with its hash. A
+# version's files never change once it is here (PACK-17): a changed pack gets a new version, and a
+# new line. `m2_song::pack::own` reads this to say which installed packs are music2's (PACK-19);
+# `every_bundled_pack_is_the_version_its_record_names` checks it against packs/@m2/*.
+"@m2/drums 1.0.0" = "sha256:e280a78290f7a657d735f2cb5223ac095fcd32da3c87433cacd2c167991e7578"
+"@m2/effects 1.0.0" = "sha256:fd8178a6c75b9c028ece4d70d63d707d9c9a58cb80941c15fa4d066665abed32"
+"@m2/synths 1.0.0" = "sha256:b4d664b3a2fd3459158aebcedc4b9b76a34fa046dafe43a4d42adbc86199a06e"

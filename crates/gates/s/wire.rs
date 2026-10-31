@@ -269,9 +269,88 @@ impl<R: BufRead, W: Write> Client<R, W> {
     }
 }
 
+/// Where S's std had what today is in music2's own packs (PACK-15): the module S imports each name
+/// from. None for a name S's std hadn't.
+fn in_s(pack: &str, name: &str) -> Option<&'static str> {
+    match (pack, name) {
+        ("@m2/synths", "synth") => Some("std/synth"),
+        ("@m2/synths", "fm") => Some("std/fm"),
+        ("@m2/synths", "bass" | "kick" | "hat" | "pluck" | "pad") => Some("std/instruments"),
+        ("@m2/drums", "drums") => Some("std/drums"),
+        ("@m2/effects", "delay" | "reverb" | "chorus" | "phaser" | "tremolo" | "drive" | "bitcrush" | "widen") => Some("std/fx"),
+        _ => None,
+    }
+}
+
+/// `text`, a TypeScript file of today's, with each import from music2's own packs (`@m2/synths`,
+/// `@m2/drums`, `@m2/effects`) taken from the std module S had it in, name by name: S's std held
+/// them (G7f plays S's own std). An import from `@m2/` that S can't have (`import *`, a default, a
+/// name S's std hadn't, another pack) is refused, in words, rather than left to fail S's build.
+pub fn imports_for_s(text: &str) -> Result<String, String> {
+    let mut out = String::new();
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let Some((head, from)) = body.trim().strip_prefix("import ").and_then(|r| r.rsplit_once(" from ")) else {
+            if body.contains("from \"@m2/") && !body.contains("from \"@m2/core\"") {
+                return Err(format!("S can't take `{}`: write an import from music2's packs on one line", body.trim()));
+            }
+            out.push_str(line);
+            continue;
+        };
+        let pack = from.trim_end_matches(';').trim().trim_matches('"');
+        if !pack.starts_with("@m2/") || pack == "@m2/core" {
+            out.push_str(line);
+            continue;
+        }
+        let names = head
+            .trim()
+            .strip_prefix('{')
+            .and_then(|h| h.strip_suffix('}'))
+            .ok_or_else(|| format!("S can't take `{body}`: only `import {{ … }}` from {pack} maps to S's std"))?;
+        let mut by: Vec<(&str, Vec<&str>)> = vec![];
+        for spec in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            let name = spec.strip_prefix("type ").unwrap_or(spec).split(" as ").next().unwrap_or(spec).trim();
+            let module =
+                in_s(pack, name).ok_or_else(|| format!("S's std had no `{name}` (today in {pack}): G7f can't play this song on S"))?;
+            match by.iter_mut().find(|(m, _)| *m == module) {
+                Some((_, specs)) => specs.push(spec),
+                None => by.push((module, vec![spec])),
+            }
+        }
+        let indent = &body[..body.len() - body.trim_start().len()];
+        for (module, specs) in by {
+            out.push_str(&format!("{indent}import {{ {} }} from \"{module}\";\n", specs.join(", ")));
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // RENDER-32 (G7f, review S12): a song's imports from music2's own packs go to the std module S
+    // had each name in; one S can't have is refused in words.
+    #[test]
+    fn imports_from_music2s_packs_go_where_s_had_them() {
+        let song = "import { song } from \"@m2/core\";\nimport { synth, pluck as p, fm } from \"@m2/synths\";\n\
+                    import { drums } from \"@m2/drums\";\nimport { reverb } from \"@m2/effects\";\nexport default song(() => p);\n";
+        assert_eq!(
+            imports_for_s(song).unwrap(),
+            "import { song } from \"@m2/core\";\nimport { synth } from \"std/synth\";\nimport { pluck as p } from \"std/instruments\";\n\
+             import { fm } from \"std/fm\";\nimport { drums } from \"std/drums\";\nimport { reverb } from \"std/fx\";\nexport default song(() => p);\n"
+        );
+        for refused in [
+            "import {\n  synth,\n} from \"@m2/synths\";\n",
+            "import * as s from \"@m2/synths\";\n",
+            "import { strings } from \"@m2/synths\";\n",
+            "import { x } from \"@m2/vocals\";\n",
+        ] {
+            let e = imports_for_s(refused).unwrap_err();
+            assert!(e.starts_with("S can't take") || e.starts_with("S's std had no"), "{refused}: {e}");
+        }
+        assert_eq!(imports_for_s("const a = 1;\n").unwrap(), "const a = 1;\n");
+    }
 
     // RENDER-32 (G7f): every command and answer reads back as itself, a folder with spaces too.
     #[test]

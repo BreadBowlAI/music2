@@ -67,9 +67,11 @@ fn unchunk(mut b: &[u8]) -> Vec<u8> {
 #[test]
 fn peaks_of_an_asset() {
     let dir = project("peaks");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let (status, body) = get(&running.url, &format!("/api/graph/audio/peaks?session={session}&asset=tone.wav"));
     assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
@@ -89,9 +91,11 @@ fn peaks_of_an_asset() {
 #[test]
 fn peaks_never_wait_for_the_actor() {
     let dir = project("busy");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let held = running.state.graph.hold();
     let (status, body) = get(&running.url, &format!("/api/graph/audio/peaks?session={session}&asset=tone.wav"));
@@ -131,9 +135,11 @@ fn clips_of(dir: &std::path::Path) -> Vec<serde_json::Value> {
 #[test]
 fn an_upload_and_paths_import_through_the_route() {
     let dir = project("import");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let tone = std::fs::read(dir.join("assets/tone.wav")).unwrap();
     let mut other = tone.clone();
@@ -171,9 +177,11 @@ fn an_upload_and_paths_import_through_the_route() {
 fn a_read_only_window_cant_import() {
     let dir = project("ro");
     let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let json = serde_json::json!({"session": session, "paths": [dir.join("assets/tone.wav")], "to": {"kind": "below", "beat": 0}});
     let (status, why) = post(&running.url, "/api/graph/audio/import", "application/json", json.to_string().as_bytes());
@@ -193,9 +201,11 @@ fn an_audio_track_through_the_route() {
     let dir = std::env::temp_dir().join(format!("m2-routes-audio-track-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir);
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let (status, done) =
         post(&running.url, "/api/graph/audio/track", "application/json", serde_json::json!({"session": session}).to_string().as_bytes());
@@ -222,9 +232,11 @@ fn a_wav_dropped_on_a_sampler_sets_its_file_through_the_route() {
     let song = "import { song, track } from '@m2/core';\nimport { sampler } from 'std/sampler';\n\
                 const s = track('s', ({ lane }) => sampler(lane.notes('notes')));\nexport default song(() => s.out);\n";
     std::fs::write(dir.join("song.ts"), song).unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let (at, call, card) = sampler_node(&running.state.graph);
     assert_eq!(card, serde_json::json!({"files": []}), "no file yet");

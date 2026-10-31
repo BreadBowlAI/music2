@@ -335,12 +335,8 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     // Its samples (LIB-4): a pack of samples alone needs no component.
     let (samples, any_samples) = crate::library::samples::check(dir);
     out.extend(samples);
-    // A component with no category is code's only, as std's are (PKG-7): the lists leave it out.
-    if !ours.iter().any(|d| d.editor.category.is_some()) && !any_samples {
-        out.push(format!(
-            "{name} offers no instrument, effect or sample: an instrument or an effect is a component(…) in src/ with an \
-             `editor: {{ category: \"Keys\" }}` (or another), a sample a WAV file under samples/ that samples.toml names"
-        ));
+    if ours.is_empty() && !any_samples {
+        out.push(format!("{name} declares no component and no sample: an instrument or an effect is a component(…) in src/, a sample a WAV file under samples/ that samples.toml names"));
     }
     out.extend(component_words(&ours));
     if let Ok(said) = crate::library::samples::SamplesToml::of_package(dir)
@@ -348,8 +344,15 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     {
         out.push(format!("{}: its tags hold a control character{ONE_LINE}", crate::library::samples::SAMPLES_TOML));
     }
-    for d in ours.iter().filter(|d| d.editor.category.is_some()) {
-        if !d.is_instrument() && !d.is_effect() {
+    // A component no list offers says so on purpose (`unlisted`, PKG-7): a missing category is one forgotten.
+    for d in ours.iter().filter(|d| !d.editor.unlisted) {
+        if d.editor.category.is_none() {
+            out.push(format!(
+                "{} ({}) has no category: give it `editor: {{ category: \"Keys\" }}` or another, or `editor: {{ unlisted: true }}` \
+                 if only code plays it",
+                d.id, d.at
+            ));
+        } else if !d.is_instrument() && !d.is_effect() {
             out.push(format!("{} ({}) is neither an instrument (notes in, sound out) nor an effect (sound in, sound out)", d.id, d.at));
         }
     }
@@ -539,6 +542,31 @@ pub use m2_song::pack::Install;
 /// still matches its listing, and replaces the copy when it doesn't (`Store::install`). A link is
 /// never followed: a pack holding one doesn't check.
 pub fn install(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<String>> {
+    install_checked(dir, store, std)
+}
+
+/// `m2 pack install <folder>`: [`install`], but a pack named in music2's own scope (`@m2/…`,
+/// PACK-1) only as a version music2 comes with, those very files (PACK-19): any folder can say
+/// `@m2/`, and the lists would take it for music2's.
+pub fn install_from_folder(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<String>> {
+    if let Ok(m) = pack::PkgManifest::at(dir)
+        && let Some(rest) = m.package.name.as_str().strip_prefix("@m2/")
+    {
+        let hash = Listing::of(dir).map_err(|e| vec![e.to_string()])?.hash();
+        if !pack::own(&m.package.name, &m.package.version, &hash) {
+            return Err(vec![format!(
+                "@m2/ is music2's own scope: {} {} in {} isn't a version music2 comes with. Give your pack a name of your own \
+                 scope in its m2pkg.toml (`@you/{rest}`)",
+                m.package.name,
+                m.package.version,
+                dir.display()
+            )]);
+        }
+    }
+    install_checked(dir, store, std)
+}
+
+fn install_checked(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec<String>> {
     let problems = check(dir, std);
     if !problems.is_empty() {
         return Err(problems);
@@ -554,7 +582,7 @@ pub fn remove(store: &Store, name: &PackName, version: &Version) -> std::io::Res
 }
 
 /// A new pack in `folder` named `name` (`m2 pack new`): `m2pkg.toml`, `src/index.ts` with one
-/// instrument on std's synth, an empty `presets/`, a README and no licence yet. Refused when the
+/// instrument built from std's typed blocks, an empty `presets/`, a README and no licence yet. Refused when the
 /// folder is there.
 pub fn new_pack(folder: &Path, name: &PackName, std: &Path) -> Result<(), String> {
     if name.is_std() {
@@ -571,16 +599,24 @@ pub fn new_pack(folder: &Path, name: &PackName, std: &Path) -> Result<(), String
          [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}\"\n",
         std_requirement(std)
     );
+    // Built from std's typed blocks, as `@m2/synths`' simple instruments are: TypeScript checks
+    // every call as the author types (design §2.5), which a kernel's inputs by name it can't.
     let index = format!(
-        "import {{ component, control, kernel, poly, port, signature, type Audio, type Events, type Params }} from \"@m2/core\";\n\n\
+        "import {{ component, control, hz, ms, poly, port, secs, signature, type Audio, type Events, type Params }} from \"@m2/core\";\n\
+         import {{ adsr, osc, svf, vca }} from \"std/dsp\";\n\
+         import {{ scale, xrange }} from \"std/math\";\n\n\
          /** An instrument: notes in, sound out. Its id is {name}:{short}. */\n\
          export const {binding} = component(\n  {{\n    id: \"{short}\",\n    label: \"{label}\",\n    \
          signature: signature<(notes: Events) => Audio>(),\n    inputs: {{ notes: port.notes() }},\n    \
-         controls: {{ brightness: control.hz(2400).range(200, 20000) }},\n    output: port.audio(),\n    \
-         editor: {{ category: \"Keys\", description: \"A pluck, on std's synth kernel\" }},\n  }},\n  \
-         // A voice for each note, each std's synth kernel (std's m2pkg.toml lists its inputs).\n  \
+         // The filter reads it every sample, so it ramps.\n    \
+         controls: {{ brightness: control.hz(2400).range(200, 20000).log().smooth() }},\n    output: port.audio(),\n    \
+         editor: {{ category: \"Keys\", description: \"A pluck, built from std's blocks\" }},\n  }},\n  \
+         // A voice for each note: a saw through a lowpass that closes as the note fades.\n  \
          (notes: Events, {{ brightness }}: Params): Audio =>\n    \
-         poly(notes, (n) => kernel(\"std:synth\", {{ pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: brightness, decay: 0.45, sustain: 0 }}), {{ voices: 12 }}),\n);\n"
+         poly(\n      notes,\n      (n) => {{\n        \
+         const env = adsr(n.gate, {{ attack: ms(2), decay: secs(0.45), sustain: 0, release: secs(0.2) }});\n        \
+         return vca(svf.lowpass(osc.saw(n.pitch), xrange(env, hz(200), brightness), 0.7), scale(env, n.velocity));\n      \
+         }},\n      {{ voices: 12 }},\n    ),\n);\n"
     );
     let readme = format!(
         "# {name}\n\n**In short:** a music2 pack. `m2 pack check .` checks it, and `m2 pack install .` puts it where songs find it.\n\n\

@@ -3,14 +3,14 @@
 [[pack]]
 name = "@m2/drums"
 version = "1.0.0"
-hash = "sha256:1347c2ef1c08e5c9418fb583da5d71984e7fefb59e1cd18c0f8c5b6b09087b88"
+hash = "sha256:e280a78290f7a657d735f2cb5223ac095fcd32da3c87433cacd2c167991e7578"
 
 [[pack]]
 name = "@m2/effects"
 version = "1.0.0"
-hash = "sha256:e257f68b6b33ece92f27315ca40995369a56a2282949322a7111077794ccbfc6"
+hash = "sha256:fd8178a6c75b9c028ece4d70d63d707d9c9a58cb80941c15fa4d066665abed32"
 
 [[pack]]
 name = "@m2/synths"
 version = "1.0.0"
-hash = "sha256:9342aeee7426acd39cfe1fb294efd27139a39c17def71efa2c69da5df364e74d"
+hash = "sha256:b4d664b3a2fd3459158aebcedc4b9b76a34fa046dafe43a4d42adbc86199a06e"

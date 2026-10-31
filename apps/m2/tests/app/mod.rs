@@ -138,6 +138,9 @@ impl App {
         let home = temp.0.join("home");
         let options = m2_server::ServeOptions { port: 0, web_dir: temp.0.join("no-web"), token: "tools".into(), page_token: "page".into() };
         let running = m2_server::start(options).unwrap();
+        // A store of the packs this tree bundles: the test's server never installs into the store
+        // under the HOME it runs with (PACK-16), and the song builds as in the app.
+        running.state.graph.keep_store(&m2_song::pack::test_store());
         let session = running.state.graph.open(&song).unwrap()["session"].as_u64().unwrap();
         publish(&home, &running.url, "tools", std::process::id());
         App { temp, song, home, running, session }

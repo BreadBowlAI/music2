@@ -43,6 +43,12 @@ fn period(rate: u32) -> f64 {
     frames / rate as f64
 }
 
+/// `graph` builds with a store of the packs this tree bundles (PACK-16): a gate never installs
+/// into the store of the `HOME` it runs with, and its songs build as in the app.
+pub(crate) fn with_store(graph: &Graph) {
+    graph.keep_store(&m2_song::pack::test_store());
+}
+
 /// The project in `dir`, open and playing from 1:00 in a fresh [`Graph`].
 fn open(dir: &Path, song: &Song) -> Result<Arc<Graph>> {
     open_with(Arc::new(Graph::default()), dir, song)
@@ -58,6 +64,7 @@ fn open_at(graph: Arc<Graph>, dir: &Path, song: &Song, seconds: f64) -> Result<A
     if std::env::var("M2_AUDIO").as_deref() != Ok("none") {
         bail!("server gates run on the silent player only: set M2_AUDIO=none");
     }
+    with_store(&graph);
     graph.open(dir)?;
     graph.seek(song.beat((seconds * song.rate as f64) as u64))?;
     graph.transport("play")?;
@@ -569,6 +576,7 @@ fn with_plugins(lab: &Lab, name: &str) -> Result<std::result::Result<(std::path:
         return Ok(Err(format!("{d} (CLAP_PATH says where Surge XT and Airwindows are)")));
     }
     let graph = Arc::new(Graph::default());
+    with_store(&graph);
     graph.open(&dir)?;
     graph.transport("play")?;
     std::thread::sleep(Duration::from_millis(500));
@@ -1210,6 +1218,7 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     let (player, tape) = Tape::start(song.rate, frames)?;
     let state = Arc::new(m2_server::AppState::new(String::new(), Graph::with_player(player)));
     let graph = &state.graph;
+    with_store(graph);
     graph.open(&dir)?;
     // Stopped, the engine still runs (RENDER-6a): the code's values reach the instances at once.
     std::thread::sleep(Duration::from_millis(200));

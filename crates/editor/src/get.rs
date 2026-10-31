@@ -285,7 +285,8 @@ fn note(p: &CatalogPack, version: Version, f: &ItemFacts) -> Value {
 }
 
 /// The library item `f` of pack `p` at `version` would be, under [`PREFIX`].
-fn item_of(p: &CatalogPack, version: Version, f: &ItemFacts) -> Item {
+fn item_of(p: &CatalogPack, v: &CatalogVersion, f: &ItemFacts) -> Item {
+    let version = v.version;
     let kind = match f.kind {
         ItemKind::Instrument => Kind::Instrument,
         ItemKind::Sound => Kind::Sound,
@@ -317,6 +318,8 @@ fn item_of(p: &CatalogPack, version: Version, f: &ItemFacts) -> Item {
         description: f.description.clone(),
         tags: f.tags.clone(),
         package: p.name.as_str().to_string(),
+        // Music2's own only as the version music2 comes with (PACK-19), never by its name.
+        own: m2_song::pack::own(&p.name, &version, &v.hash),
         component: f.component.clone(),
         instrument: f.instrument,
         effect: f.effect,
@@ -348,7 +351,7 @@ pub fn offers(catalog: &Catalog, have: &dyn Fn(&PackName) -> Option<Version>, us
         }
         for f in &p.items {
             out.push(Offer {
-                item: item_of(p, version.version, f),
+                item: item_of(p, version, f),
                 pack: p.name.clone(),
                 version: version.clone(),
                 license: p.license.clone(),

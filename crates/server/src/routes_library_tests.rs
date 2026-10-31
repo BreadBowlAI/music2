@@ -16,7 +16,7 @@ fn serving(mut folders: Folders) -> crate::Running {
     folders.packs.get_or_insert_with(m2_song::pack::test_store);
     let options =
         crate::ServeOptions { port: 0, web_dir: std::env::temp_dir().join("m2-no-web"), token: "t00ls".into(), page_token: "t0k".into() };
-    let running = crate::start_with(options, Graph::silent()).unwrap();
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
     running.state.keep_library(folders);
     running
 }

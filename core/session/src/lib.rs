@@ -543,8 +543,9 @@ export default song(() => v.out);
 
     // PACK-18: every song the repo ships that imports a pack music2 ships (PACK-15) lists it in
     // [dependencies] and locks it at the bundled version and hash; and no song locks another
-    // version of one. A bundled pack whose files changed fails here: give it a new version (PACK-17)
-    // and lock the songs again.
+    // version of one. A bundled pack whose files changed under its version fails here, as in
+    // `every_bundled_pack_is_the_version_its_record_names`: it moves to a new version (PACK-17), then
+    // the songs move to it.
     #[test]
     fn every_shipped_song_locks_the_bundled_packs_it_plays() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -577,15 +578,54 @@ export default song(() => v.out);
                     (false, false, None) => {}
                     (true, true, Some((v, h))) if v == *version && h == *hash => {}
                     (true, false, _) => wrong.push(format!("{name}: plays {pack} but music2.toml doesn't list it")),
-                    (_, _, Some((v, h))) if v != *version || h != *hash => wrong.push(format!(
-                        "{name}: locks {pack} {v} ({h}), but music2 ships {version} ({hash}): lock it again with `m2 pack update {pack}` in it"
+                    (_, _, Some((v, h))) if v == *version && h != *hash => wrong.push(format!(
+                        "{name}: locks {pack} {v} ({h}), but music2 ships {v} with other files ({hash}). A version's files never change \
+                         (PACK-17): move {pack} to {} in packs/{pack}/m2pkg.toml, record it in packs/versions.toml, and relock the \
+                         songs (`m2 pack update {pack}` in each)",
+                        Version(v.0, v.1, v.2 + 1)
                     )),
+                    (_, _, Some((v, _))) if v != *version => wrong
+                        .push(format!("{name}: locks {pack} {v}, but music2 ships {version}: move it with `m2 pack update {pack}` in it")),
                     _ => wrong.push(format!("{name}: {pack} is listed but not locked, or locked but not played")),
                 }
             }
         }
         assert!(songs > 10, "found {songs} songs");
         assert!(wrong.is_empty(), "songs the repo ships that don't lock the packs music2 ships (PACK-18):\n{}", wrong.join("\n"));
+    }
+
+    // PACK-17 (review S6): the packs whose hashes a lock or packs/versions.toml pins keep their
+    // bytes on every checkout: .gitattributes leaves their files as committed (`-text`, never a
+    // CRLF on Windows), and none holds a CR, which a checkout that turned LF into CRLF would.
+    #[test]
+    fn pinned_packs_keep_their_bytes_on_every_checkout() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let attributes = std::fs::read_to_string(repo.join(".gitattributes")).unwrap_or_default();
+        let (mut files, mut wrong) = (0, vec![]);
+        for root in ["packs", "core/session/tests/fixtures/packs", "e2e/fixtures/library"] {
+            if !attributes.lines().any(|l| l.split_whitespace().collect::<Vec<_>>() == [&format!("{root}/**"), "-text"]) {
+                wrong.push(format!(".gitattributes doesn't say `{root}/** -text`"));
+            }
+            let mut stack = vec![repo.join(root)];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display())).flatten() {
+                    let path = e.path();
+                    if e.file_type().unwrap().is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|x| ["ts", "toml", "json", "md", "txt", "sfz"].contains(&x.to_str().unwrap())) {
+                        files += 1;
+                        if std::fs::read(&path).unwrap().contains(&b'\r') {
+                            wrong.push(format!(
+                                "{} holds a CR: its hash isn't the one its locks name",
+                                path.strip_prefix(&repo).unwrap().display()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(files > 20, "found {files} files");
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     // DIAG-1: data no lane reads is a Warning among the revision's problems.

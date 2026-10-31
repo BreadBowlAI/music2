@@ -40,7 +40,7 @@ impl Songs {
 
     /// A server state with the song open, keeping its recent list here.
     fn open(&self) -> AppState {
-        let state = AppState::new(String::new(), Graph::silent());
+        let state = AppState::new(String::new(), Graph::silent().stored());
         state.keep_recent(self.0.join("recent.json"));
         state.open_song(&self.song()).unwrap();
         state

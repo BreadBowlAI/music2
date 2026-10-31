@@ -567,29 +567,13 @@ pub(super) struct Prepared {
 
 fn packages(inner: &Inner) -> Result<PackageSet> {
     let mut p = PackageSet::default().with_host(inner.host.clone());
-    // The store the server was given, else this computer's packs (PACK-6), under `$HOME` (PLAT-7).
-    if let Some(store) = inner.store.get().cloned().or_else(this_users_store) {
+    // The store the server was given, else this computer's packs (PACK-6), under `$HOME` (PLAT-7),
+    // only read: a program's start installs music2's own there (PACK-16), never a build.
+    if let Some(store) = inner.store.get().cloned().or_else(m2_os::dirs::packs) {
         p = p.with_store(store);
     }
     p.load(&crate::resources::std_dir()).context("loading the std package")?;
     Ok(p)
-}
-
-/// This computer's store of packs (PACK-6), under `$HOME` (PLAT-7), with the packs music2 ships
-/// installed in it once a run (PACK-16): what a server that was given no store builds with. In this
-/// crate's own tests, a store of the packs the source tree bundles (PACK-15), so a song of the repo
-/// builds as in the app and no unit test reads or writes the store under `$HOME`.
-#[cfg(not(test))]
-fn this_users_store() -> Option<std::path::PathBuf> {
-    static INSTALLED: std::sync::Once = std::sync::Once::new();
-    let store = m2_os::dirs::packs()?;
-    INSTALLED.call_once(|| crate::resources::install_packs(&store, false));
-    Some(store)
-}
-
-#[cfg(test)]
-fn this_users_store() -> Option<std::path::PathBuf> {
-    Some(m2_song::pack::test_store())
 }
 
 /// What of `from`'s graph each node of `to`'s continues (ID-15): every node itself for the same

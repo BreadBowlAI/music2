@@ -8,5 +8,6 @@ repository = "https://github.com/BreadBowlAI/music2"
 tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion", "stereo"]
 
 [dependencies]
-"@m2/core" = "1.7"
+# Any @m2/core 1.x: what these components use is older than std 0.6 (below), which comes only with apps that have it all.
+"@m2/core" = "1"
 std = "0.6"

@@ -462,6 +462,9 @@ struct Inner {
     /// The store of packs songs build with (PACK-6), when the server was given one
     /// ([`Graph::keep_store`]): the one the library installs into. Else this user's.
     store: std::sync::OnceLock<PathBuf>,
+    /// Your Presets folder, when the server was given one ([`Graph::keep_presets`]). Else this
+    /// user's.
+    presets: std::sync::OnceLock<PathBuf>,
     /// Tests: what an export of this project does inside its window, and whether it holds.
     #[cfg(test)]
     export_hooks: Arc<crate::export::Hooks>,
@@ -626,6 +629,7 @@ impl Inner {
             wake: Arc::default(),
             walk_only: AtomicBool::default(),
             store: std::sync::OnceLock::new(),
+            presets: std::sync::OnceLock::new(),
             #[cfg(test)]
             export_hooks: Arc::default(),
             layout: Mutex::default(),
@@ -936,6 +940,15 @@ impl Graph {
         Graph::with(Some(Device { player: Player::silent().expect("a silent player"), epoch: 0, resume: 0.0 }))
     }
 
+    /// This graph, given the tests' store of the packs this tree bundles (PACK-16), as every test
+    /// harness gives its server one: a song with music2's packs builds as in the app, and no test
+    /// reads or writes the store under the `HOME` it runs with.
+    #[cfg(test)]
+    pub(crate) fn stored(self) -> Graph {
+        self.keep_store(&m2_song::pack::test_store());
+        self
+    }
+
     /// One whose player is `player`, such as a driven one ([`Player::driven`]) a test or a gate
     /// fills itself.
     #[doc(hidden)]
@@ -1000,6 +1013,17 @@ impl Graph {
     /// is the one a song finds. Once; before it, this user's store.
     pub fn keep_store(&self, store: &Path) {
         let _ = self.inner.store.set(store.to_path_buf());
+    }
+
+    /// Save and load your presets in `dir` from now on (FMT-22): the Presets folder the library
+    /// reads ([`crate::library::Folders::presets`]). Once; before it, this user's.
+    pub fn keep_presets(&self, dir: &Path) {
+        let _ = self.inner.presets.set(dir.to_path_buf());
+    }
+
+    /// Your Presets folder: the one kept, else this user's (`m2_os::dirs::presets`).
+    pub(crate) fn presets_dir(&self) -> Option<PathBuf> {
+        self.inner.presets.get().cloned().or_else(m2_os::dirs::presets)
     }
 
     /// The store changed: a Get installed a pack (REG-15). The open song's lists are made again,

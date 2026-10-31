@@ -1197,7 +1197,7 @@ fn pack(args: &[String]) -> Result<()> {
         }
         "install" => {
             let dir = PathBuf::from(arg(2)?);
-            match packs::install(&dir, &store()?, &std).map_err(failed)? {
+            match packs::install_from_folder(&dir, &store()?, &std).map_err(failed)? {
                 packs::Install::Installed { name, version, dir, hash } => {
                     println!("installed {name} {version} in {} ({hash})", dir.display())
                 }

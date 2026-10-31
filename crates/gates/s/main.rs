@@ -62,8 +62,8 @@ impl S {
     }
 
     /// A copy of the project in `dir`, in the runner's own folder, whose manifest asks for S's std.
-    /// S's std had the sounds that are packs since std 0.6 (PACK-15): the copy imports them from
-    /// it, as songs did then, and lists and locks no pack.
+    /// S's std had the sounds that are packs since std 0.6 (PACK-15): the copy imports each from
+    /// the std module S had it in ([`wire::imports_for_s`]), and lists and locks no pack.
     fn asking_for_own_std(&self, dir: &Path) -> Result<PathBuf, String> {
         let std = &self.lab.packages.get("std").ok_or("S has no std")?.version;
         let to = self.lab.dir(&format!("{}-s", dir.file_name().unwrap_or_default().to_string_lossy()));
@@ -94,7 +94,7 @@ impl S {
                     stack.push(p);
                 } else if p.extension().is_some_and(|x| x == "ts") {
                     let text = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-                    let then = text.replace("from \"@m2/synths\"", "from \"std/instruments\"").replace("from \"@m2/effects\"", "from \"std/fx\"");
+                    let then = wire::imports_for_s(&text).map_err(|e| format!("{}: {e}", p.display()))?;
                     if then != text {
                         std::fs::write(&p, then).map_err(|e| format!("{}: {e}", p.display()))?;
                     }

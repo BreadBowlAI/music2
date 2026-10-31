@@ -46,23 +46,47 @@ pub fn packs_dir() -> PathBuf {
 
 /// Install the packs music2 ships into the store at `store` (PACK-16): each version it hasn't got;
 /// one it holds with its hash and its files whole is left alone, so a start that finds them all
-/// writes nothing. One it holds with another hash is refused (PACK-17), and the log says so; the
-/// others go on. `quiet` leaves out what went as it should, as `m2` does: its output is its answer.
+/// writes nothing. One it holds with another hash is refused (PACK-17), and the log says what puts
+/// music2's back; the others go on. `quiet` leaves out what went as it should, as `m2` does: its
+/// output is its answer. Only a program's start calls it: the app, the headless server, `m2`.
 pub fn install_packs(store: &Path, quiet: bool) {
-    use m2_song::pack::{Install, Store};
-    for (dir, done) in m2_song::pack::install_bundled(&packs_dir(), &Store::at(store.to_path_buf())) {
+    for line in installing_packs(&packs_dir(), store, quiet) {
+        eprintln!("music2: {line}");
+    }
+}
+
+/// [`install_packs`] from `from`: what it says, a line each.
+pub(crate) fn installing_packs(from: &Path, store: &Path, quiet: bool) -> Vec<String> {
+    use m2_song::pack::{Install, Listing, PkgManifest, Store};
+    let into = Store::at(store.to_path_buf());
+    let from = std::fs::canonicalize(from).unwrap_or_else(|_| from.to_path_buf());
+    let mut said = vec![];
+    for (dir, done) in m2_song::pack::install_bundled(&from, &into) {
+        // Another copy under music2's version: what the user does, not what a pack's author would.
+        let theirs = || {
+            let m = PkgManifest::at(&dir).ok()?;
+            let installed = into.hash(&m.package.name, &m.package.version).ok()?;
+            (Listing::of(&dir).ok()?.hash() != installed).then_some(m.package)
+        };
         match done {
-            Ok(Install::Already { .. }) => {}
             Ok(Install::Installed { name, version, .. }) if !quiet => {
-                eprintln!("music2: installed {name} {version}, which comes with music2, into {}", store.display())
+                said.push(format!("installed {name} {version}, which comes with music2, into {}", store.display()))
             }
             Ok(Install::Repaired { name, version, why }) if !quiet => {
-                eprintln!("music2: put {name} {version} back as it comes with music2: its installed copy was changed ({why})")
+                said.push(format!("put {name} {version} back as it comes with music2: its installed copy was changed ({why})"))
             }
             Ok(_) => {}
-            Err(e) => eprintln!("music2: the pack in {}, which comes with music2, wasn't installed: {e}", dir.display()),
+            Err(e) => said.push(match theirs() {
+                Some(p) => format!(
+                    "{} {} in your packs folder isn't the one music2 comes with. To use music2's: `m2 pack remove {} {}`, then start \
+                     music2 again",
+                    p.name, p.version, p.name, p.version
+                ),
+                None => format!("{}, which comes with music2, wasn't installed: {e}", dir.display()),
+            }),
         }
     }
+    said
 }
 
 /// Song templates, one complete project per folder, each with a `template.toml`.
@@ -354,5 +378,38 @@ mod tests {
         let real = link.canonicalize().unwrap();
         let found = find(None, &[Some(&link), Some(&real)], "std");
         assert_eq!(found.canonicalize().unwrap(), t.0.join("music2.app/Contents/Resources/std").canonicalize().unwrap());
+    }
+
+    // PACK-17, PACK-19 (review S7): a store holding another copy under music2's version tells the
+    // user what puts music2's back, in their words: no pack author's advice, no path with `..`.
+    #[test]
+    fn a_start_that_finds_another_copy_says_what_puts_music2s_back() {
+        let t = Temp::new("theirs");
+        let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
+        let theirs = t.0.join("theirs");
+        let ours = from.join("@m2/synths");
+        let mut stack = vec![(ours.clone(), theirs.clone())];
+        while let Some((a, b)) = stack.pop() {
+            std::fs::create_dir_all(&b).unwrap();
+            for e in std::fs::read_dir(&a).unwrap().flatten() {
+                match e.file_type().unwrap().is_dir() {
+                    true => stack.push((e.path(), b.join(e.file_name()))),
+                    false => drop(std::fs::copy(e.path(), b.join(e.file_name())).unwrap()),
+                }
+            }
+        }
+        std::fs::write(theirs.join("README.md"), "theirs\n").unwrap();
+        let store = m2_song::pack::Store::at(t.0.join("Packs"));
+        store.install(&theirs).unwrap();
+        let said = installing_packs(&from, &store.dir, true);
+        assert_eq!(
+            said,
+            ["@m2/synths 1.0.0 in your packs folder isn't the one music2 comes with. To use music2's: `m2 pack remove @m2/synths \
+              1.0.0`, then start music2 again"],
+        );
+        let loud = installing_packs(&from, &t.0.join("Packs-2"), false);
+        assert_eq!(loud.len(), 3, "{loud:?}");
+        assert!(loud.iter().all(|l| !l.contains("..")), "{loud:?}");
+        m2_song::pack::remove_tree(&t.0).unwrap();
     }
 }

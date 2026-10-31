@@ -45,7 +45,7 @@ impl Rig {
         std::fs::write(fixture.0.join("data/p/lead.state"), probe::state_with(tag, 1.0, 0.1)).unwrap();
         fixture.put("data/p/lead.state.json", r#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#);
         let (p, driver) = Player::driven(48_000);
-        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p)));
+        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p).stored()));
         state.graph.open(&fixture.0).unwrap();
         state.graph.transport("play").unwrap();
         let mut r = Rig { fixture, state, driver };
@@ -356,7 +356,7 @@ fn a_plugin_keyed_aux_is_held_by_its_window() {
     std::fs::write(fixture.0.join("data/p/aux-.state"), probe::state_with("dirty-at-10-400", 1.0, 0.1)).unwrap();
     fixture.put("data/p/aux-.state.json", r#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#);
     let (p, driver) = Player::driven(48_000);
-    let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p)));
+    let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p).stored()));
     state.graph.open(&fixture.0).unwrap();
     state.graph.transport("play").unwrap();
     let mut r = Rig { fixture, state, driver };
