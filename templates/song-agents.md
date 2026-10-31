@@ -44,7 +44,7 @@ Below, `.` is this song's folder.
 | `m2 undo .` | take back your own newest change |
 | `m2 routes`, `m2 call . <path>` | every other change the app can make |
 
-`m2 docs commands` lists every command.
+`m2 docs commands` lists every command; `m2 <command> --help` says how to call one.
 
 ## Rules
 
@@ -54,5 +54,6 @@ Below, `.` is this song's folder.
 4. You can't hear. `m2 listen` measures: say its numbers as numbers, then ask the musician to listen.
    `m2 point` shows them where; V in the app plays before and after your change.
 5. Explain each change to the musician in plain words: they may be new to music.
-6. Exit status 3 means the musician is busy with that part: wait, then try again.
+6. Exit status 3 means the musician is busy with that part: wait, then try again. Exit status 2 means
+   `m2` didn't take a word: it says which, and how to call the command.
 7. Playing, recording, mute and solo while listening, and the view are the musician's. Ask.
