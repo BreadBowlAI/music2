@@ -331,7 +331,8 @@ pub(crate) struct State {
     /// events input's header and its events (ABI-8).
     pub(crate) ins: Vec<usize>,
     pub(crate) outs: Vec<usize>,
-    /// Each input's bytes: what debug builds compare (ABI-1).
+    /// Each input's bytes: what debug builds compare (ABI-1). A release build doesn't compare them.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub(crate) in_len: Vec<usize>,
 }
 
