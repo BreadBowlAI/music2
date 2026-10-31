@@ -12,5 +12,5 @@
     "isolatedModules": true,
     "paths": { "@m2/core": ["../core.ts"], "std/*": ["../../../../std/src/*"] }
   },
-  "files": ["calls.ts", "std.ts"]
+  "files": ["calls.ts", "std.ts", "kinds.ts"]
 }
