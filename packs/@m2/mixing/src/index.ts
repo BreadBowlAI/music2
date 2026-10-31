@@ -7,7 +7,7 @@
 // kernels-src/, PACK-21), which smooths its own controls where a step would click, so none is
 // `.smooth()`. The pack uses none of std's code.
 
-import { component, control, kernel, port, signature, view, type Audio, type Params } from "@m2/core";
+import { component, control, kernel, port, signature, type Audio, type Params } from "@m2/core";
 
 // ---------------------------------------------------------------- the parametric EQ
 
@@ -25,8 +25,9 @@ const on = (band: number, v: boolean) => control.bool(v).label(`On ${band}`);
 /**
  * Parametric EQ: eight bands, each a `shape` (low cut, low shelf, bell, high shelf or high cut), a
  * `freq` in Hz, a `gain` in dB (a cut has none), a `q` (how narrow a bell is, how sharp a cut's
- * corner) and an `on` switch, numbered 1 to 8: `eq(x, { gain3: 4, freq3: 300 })`. It starts flat: the
- * low cut (band 1) and the high cut (band 8) off, the rest at 0 dB.
+ * corner, how big a shelf's bump at its corner) and an `on` switch, numbered 1 to 8:
+ * `eq(x, { gain3: 4, freq3: 300 })`. It starts flat: the low cut (band 1) and the high cut (band 8)
+ * off, the rest at 0 dB. A change never booms: a band crossfades to its new setting.
  */
 export const eq = component(
   {
@@ -48,9 +49,8 @@ export const eq = component(
     editor: {
       category: "EQ",
       description: "Eight bands to shape the tone: cut the lows or highs, or turn any part up or down",
-      // No view draws an EQ's whole curve; the filter view draws a low-pass, which band 8 is at its
-      // start (a high cut), so it alone has one (PACK-26, CARD-27).
-      views: { curve: view.filter("freq8", "q8") },
+      // No picture: no view draws an EQ's whole curve, and the filter view draws a low-pass, which no
+      // band is at the EQ's start (PACK-26, gaps.md).
       groups: {
         "Band 1": ["on1", "shape1", "freq1", "gain1", "q1"],
         "Band 2": ["on2", "shape2", "freq2", "gain2", "q2"],
@@ -59,7 +59,7 @@ export const eq = component(
         "Band 5": ["on5", "shape5", "freq5", "gain5", "q5"],
         "Band 6": ["on6", "shape6", "freq6", "gain6", "q6"],
         "Band 7": ["on7", "shape7", "freq7", "gain7", "q7"],
-        "Band 8": ["on8", "shape8", "freq8", "gain8", "q8", "curve"],
+        "Band 8": ["on8", "shape8", "freq8", "gain8", "q8"],
       },
     },
   },
@@ -81,8 +81,9 @@ export const gate = component(
     id: "gate",
     label: "Gate",
     signature: signature<(x: Audio, key?: Audio) => Audio>(),
-    // `key` only listens (PKG-13): muting the track it comes from must not shut the gate. Given as
-    // `many()` so it can be left out; TypeScript allows one, and the body refuses more.
+    // `key` only listens (PKG-13): muting the track it comes from must not shut the gate. It is
+    // `many()` only because core has no input that may be left out yet (gaps.md): TypeScript allows
+    // one, the body refuses more, and the descriptor says `many`.
     inputs: { in: port.audio(), key: port.audio({ sidechain: true }).many() },
     controls: {
       threshold: control.db(-40).range(-80, 0),
@@ -122,8 +123,9 @@ export const transient = component(
 
 /**
  * De-esser: tames the hiss of S and T sounds in a voice. The band around `freq` (Hz: 5 to 8 kHz for
- * most voices) is turned down while it is louder than `threshold` (dB), by at most `amount` (dB).
- * The rest of the sound is never touched.
+ * most voices; a bell about an octave and a half wide) is turned down while it is louder than
+ * `threshold` (dB), by at most `amount` (dB), most at `freq`. A loud tone an octave away loses a dB
+ * or so while it works; two octaves away, nothing to speak of.
  */
 export const deesser = component(
   {
@@ -137,7 +139,7 @@ export const deesser = component(
       amount: control.db(6).range(0, 24),
     },
     output: port.audio(),
-    editor: { category: "Dynamics", description: "Tames harsh S sounds in a voice, and nothing else", insert: { freq: 6000, threshold: -30, amount: 6 } },
+    editor: { category: "Dynamics", description: "Tames harsh S sounds in a voice: turns down only the band they sit in", insert: { freq: 6000, threshold: -30, amount: 6 } },
   },
   (x: Audio, { freq, threshold, amount }: Params) => kernel("@m2/mixing:deesser", { in: x, freq, threshold, amount }),
 );
@@ -152,10 +154,11 @@ const release = (band: string, ms: number) => control.ms(ms).range(5, 5000).log(
 const level = (band: string) => control.db(0).range(-24, 24).label(`${band} gain`);
 
 /**
- * Multiband compressor: splits the sound into lows, mids and highs at `lowMid` and `midHigh` (Hz),
- * and compresses each on its own, so a booming bass doesn't squeeze the voice above it. Each band
- * has its `threshold`, `ratio`, `attack`, `release` and `gain` (`lowRatio`, `midGain` …). At ratio
- * 1 and gain 0 everywhere it leaves the level of every frequency as it is.
+ * Multiband compressor: splits the sound into lows, mids and highs at `lowMid` and `midHigh` (Hz;
+ * crossed, the lower one splits low from mid), and compresses each on its own, so a booming bass
+ * doesn't squeeze the voice above it. Each band has its `threshold`, `ratio`, `attack`, `release`
+ * and `gain` (`lowRatio`, `midGain` …). At ratio 1 and gain 0 everywhere it leaves the level of every
+ * frequency as it is.
  */
 export const multiband = component(
   {

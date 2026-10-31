@@ -18,12 +18,12 @@ wasm = "kernels/mixing.wasm"
 
 # ---------------------------------------------------------------- its own kernels
 # Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/mixing:eq", …)`.
-# Each is safe with any input or setting (no NaN, nothing unbounded but the EQ's own boosts), and its
-# tails end in exact silence. A choice's port reads its option's place, a switch's 0 or 1 (CARD-12).
+# Each is safe with any input or setting (no NaN, nothing over +80 dBFS), and its tails end in exact
+# silence. A choice's port reads its option's place, a switch's 0 or 1 (CARD-12).
 
 [[kernel]]
 name = "eq"
-description = "Eight-band parametric EQ: each band an RBJ biquad (low cut, low shelf, bell, high shelf or high cut; cuts are 12 dB per octave) run as a TPT state-variable filter, its coefficients gliding over 20 ms. Flat with every band off or at 0 dB"
+description = "Eight-band parametric EQ: each band an RBJ biquad (low cut, low shelf, bell, high shelf or high cut; cuts are 12 dB per octave) run as a TPT state-variable filter. A band moves by crossfading to a settled filter at its new setting, so no change booms. Flat with every band off or at 0 dB; never over +80 dBFS"
 inputs = [
   "in: audio<*>",
   "shape1: control<choice<low cut|low shelf|bell|high shelf|high cut>> = 0", "freq1: control<hz> = 30 in 20..20000", "gain1: control<db> = 0 in -24..24", "q1: control<scalar> = 0.71 in 0.1..18", "on1: control<switch> = 0",
@@ -59,7 +59,7 @@ outputs = ["out: audio<*>"]
 
 [[kernel]]
 name = "deesser"
-description = "De-esser: the part above freq (a 12 dB per octave split that sums back to the input) turned down while louder than threshold (dB), by at most amount (dB). The rest is never touched"
+description = "De-esser: the band around freq (a band-pass of Q 1) turned down while louder than threshold (dB), by at most amount (dB): a bell, deepest at freq, whose depth follows the band's level. Its detector hears the band through a second band-pass, so a loud low note never sets it off"
 inputs = [
   "in: audio<*>",
   "freq: control<hz> = 6000 in 2000..16000",
@@ -70,7 +70,7 @@ outputs = ["out: audio<*>"]
 
 [[kernel]]
 name = "multiband"
-description = "Three-band compressor: Linkwitz-Riley crossovers (24 dB per octave) at low_mid and mid_high, each band a stereo-linked soft-knee compressor (ratio 1 is off). The bands sum to an all-pass: flat in level"
+description = "Three-band compressor: Linkwitz-Riley crossovers (24 dB per octave) at low_mid and mid_high (crossed, the lower splits low from mid), each band a stereo-linked soft-knee compressor (ratio 1 is off). The bands sum to an all-pass: flat in level"
 inputs = [
   "in: audio<*>",
   "low_mid: control<hz> = 200 in 40..2000",

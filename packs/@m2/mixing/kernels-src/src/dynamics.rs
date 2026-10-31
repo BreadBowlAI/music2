@@ -1,9 +1,9 @@
 //! The tools that follow a sound's level: the gate, the transient shaper and the de-esser.
 
-use m2_dsp::fx::{Filter, clampf, flush, prewarp, sane};
+use m2_dsp::fx::{Filter, Glide, clampf, flush, prewarp, sane};
 use m2_kernel::{Cfg, Io, Kernel};
 
-use crate::{Slide, gain, pole, toward};
+use crate::{Follow, gain, pole};
 
 /// A level that counts as silence, so a ratio of two silences is 1.
 const FLOOR: f32 = 1e-6;
@@ -173,13 +173,13 @@ const MOST_DB: f32 = 24.0;
 /// the sound comes out as it went in.
 pub struct Transient {
     window: Window,
-    level: f32,
-    rise: f32,
-    fall: f32,
+    level: Follow,
+    rise: Follow,
+    fall: Follow,
     /// One-pole coefficients: the level's glide, the riser's and the faller's.
     poles: [f32; 3],
-    attack: Slide,
-    sustain: Slide,
+    attack: Glide,
+    sustain: Glide,
 }
 
 impl Kernel for Transient {
@@ -190,12 +190,12 @@ impl Kernel for Transient {
         let sr = cfg.sample_rate.max(1.0);
         Transient {
             window: Window::new(sr),
-            level: 0.0,
-            rise: 0.0,
-            fall: 0.0,
+            level: Follow::new(),
+            rise: Follow::new(),
+            fall: Follow::new(),
             poles: [pole(LEVEL_TIME, sr), pole(RISE_TIME, sr), pole(FALL_TIME, sr)],
-            attack: Slide::new(0.02, sr),
-            sustain: Slide::new(0.02, sr),
+            attack: Glide::new(0.02, sr),
+            sustain: Glide::new(0.02, sr),
         }
     }
 
@@ -206,11 +206,11 @@ impl Kernel for Transient {
         for i in 0..outs[0].len() {
             let x = [sane(ins[0][i]), if channels > 1 { sane(ins[1][i]) } else { 0.0 }];
             let loudest = self.window.next(x[0].abs().max(x[1].abs()));
-            self.level = toward(self.level, loudest, self.poles[0]);
-            self.rise = if self.level <= self.rise { self.level } else { toward(self.rise, self.level, self.poles[1]) };
-            self.fall = if self.level >= self.fall { self.level } else { toward(self.fall, self.level, self.poles[2]) };
-            let start = ((db(self.level) - db(self.rise)) / FULL_DB).min(1.0);
-            let tail = ((db(self.fall) - db(self.level)) / FULL_DB).min(1.0);
+            let level = self.level.next(loudest, self.poles[0]);
+            let rise = if level <= self.rise.value { self.rise.set(level) } else { self.rise.next(level, self.poles[1]) };
+            let fall = if level >= self.fall.value { self.fall.set(level) } else { self.fall.next(level, self.poles[2]) };
+            let start = ((db(level) - db(rise)) / FULL_DB).min(1.0);
+            let tail = ((db(fall) - db(level)) / FULL_DB).min(1.0);
             let a = self.attack.next(clampf(attack[i], -MOST_DB, MOST_DB));
             let s = self.sustain.next(clampf(sustain[i], -MOST_DB, MOST_DB));
             let g = gain(clampf(a * start + s * tail, -MOST_DB, MOST_DB));
@@ -238,7 +238,7 @@ const DEESS_RELEASE: f32 = 0.05;
 /// band-pass of its own, so a loud low note never sets it off.
 pub struct Deesser {
     sr: f32,
-    freq: Slide,
+    freq: Glide,
     /// The frequency the filters were made for.
     at: f32,
     band: Filter,
@@ -246,8 +246,8 @@ pub struct Deesser {
     state: [[[f32; 2]; 2]; 2],
     env: f32,
     poles: [f32; 2],
-    threshold: Slide,
-    amount: Slide,
+    threshold: Glide,
+    amount: Glide,
 }
 
 impl Kernel for Deesser {
@@ -258,14 +258,14 @@ impl Kernel for Deesser {
         let sr = cfg.sample_rate.max(1.0);
         Deesser {
             sr,
-            freq: Slide::new(0.03, sr),
+            freq: Glide::new(0.03, sr),
             at: f32::NAN,
             band: Filter::new(1.0, 1.0, [0.0; 3]),
             state: [[[0.0; 2]; 2]; 2],
             env: 0.0,
             poles: [pole(DEESS_ATTACK, sr), pole(DEESS_RELEASE, sr)],
-            threshold: Slide::new(0.02, sr),
-            amount: Slide::new(0.02, sr),
+            threshold: Glide::new(0.02, sr),
+            amount: Glide::new(0.02, sr),
         }
     }
 

@@ -1,5 +1,6 @@
 //! The multiband compressor: three bands split by Linkwitz-Riley crossovers, each compressed on
-//! its own, as std's `compress` compresses.
+//! its own, as std's `compress` compresses. Of its two split points, whichever is lower splits the
+//! low band from the mid, so the mid band is never empty.
 //!
 //! A Linkwitz-Riley crossover of 24 dB per octave is two Butterworth filters of 12 dB per octave in
 //! a row (Q 1/√2), a low-pass for the band below and a high-pass for the band above. The two sum to
@@ -10,10 +11,10 @@
 
 use std::f32::consts::SQRT_2;
 
-use m2_dsp::fx::{Coef, Filter, clampf, flush, prewarp, sane};
+use m2_dsp::fx::{Coef, Filter, Glide, clampf, flush, prewarp, sane};
 use m2_kernel::{Cfg, Io, Kernel};
 
-use crate::{Slide, gain};
+use crate::gain;
 
 /// The compressors' soft knee, as std's `compress` has it.
 const KNEE: f32 = 6.0;
@@ -45,18 +46,20 @@ struct States {
     all: [f32; 2],
 }
 
-/// One band's compressor: stereo-linked, soft-knee, as std's `compress`.
+/// One band's compressor: stereo-linked, soft-knee, std's `compress`'s gain computer line for line.
+/// It is a copy because std's lives in std's crate, whose source wave 3 is moving: the two become
+/// one in `m2-dsp` after it lands (review Z9).
 struct Squeeze {
     /// Gain reduction now, in dB (0 or more).
     env: f32,
     attack: Coef,
     release: Coef,
-    gain: Slide,
+    gain: Glide,
 }
 
 impl Squeeze {
     fn new(sr: f32) -> Squeeze {
-        Squeeze { env: 0.0, attack: Coef::new(), release: Coef::new(), gain: Slide::new(0.02, sr) }
+        Squeeze { env: 0.0, attack: Coef::new(), release: Coef::new(), gain: Glide::new(0.02, sr) }
     }
 
     /// The gain for a band whose loudest channel is `peak` now, with its controls.
@@ -85,7 +88,7 @@ impl Squeeze {
 /// each its threshold (dB), ratio, attack and release (seconds) and gain (dB).
 pub struct Multiband {
     sr: f32,
-    split: [Slide; 2],
+    split: [Glide; 2],
     /// The frequencies the crossovers were made for.
     at: [f32; 2],
     crossovers: [Crossover; 2],
@@ -101,7 +104,7 @@ impl Kernel for Multiband {
         let sr = cfg.sample_rate.max(1.0);
         Multiband {
             sr,
-            split: [Slide::new(0.03, sr), Slide::new(0.03, sr)],
+            split: [Glide::new(0.03, sr), Glide::new(0.03, sr)],
             at: [f32::NAN; 2],
             crossovers: [Crossover::at(200.0, sr), Crossover::at(2500.0, sr)],
             states: [States::default(); 2],
@@ -116,7 +119,9 @@ impl Kernel for Multiband {
         let mut outs = [ol, or];
         for i in 0..outs[0].len() {
             let nyquist = 0.45 * self.sr;
-            let hz = [self.split[0].next(clampf(ins[2][i], 10.0, nyquist)), self.split[1].next(clampf(ins[3][i], 10.0, nyquist))];
+            let [a, b] = [self.split[0].next(clampf(ins[2][i], 10.0, nyquist)), self.split[1].next(clampf(ins[3][i], 10.0, nyquist))];
+            // Split points that cross are put in order: the lower splits low from mid (review Z7).
+            let hz = [a.min(b), a.max(b)];
             if hz != self.at {
                 self.at = hz;
                 self.crossovers = hz.map(|f| Crossover::at(f, self.sr));

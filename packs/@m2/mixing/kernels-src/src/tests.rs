@@ -83,11 +83,6 @@ fn all() -> Vec<Fx> {
     ]
 }
 
-/// All but the EQ, which starts flat, and whose eight bands may boost one frequency by 8 × 24 dB.
-fn all_but_the_eq() -> Vec<Fx> {
-    all().into_iter().filter(|fx| fx.name != "eq").collect()
-}
-
 #[test]
 fn silence_in_silence_out() {
     effects::silence_in_silence_out(&all());
@@ -103,9 +98,10 @@ fn extreme_settings_and_broken_input_never_make_nan() {
     effects::extreme_settings_and_broken_input_never_make_nan(&all());
 }
 
+// The EQ too (review Z8): eight bands boosting one frequency are capped just under +80 dBFS.
 #[test]
 fn output_stays_bounded() {
-    effects::output_stays_bounded(&all_but_the_eq());
+    effects::output_stays_bounded(&all());
 }
 
 #[test]
@@ -121,7 +117,7 @@ fn mono_stays_mono() {
 // The EQ starts flat; with a bell up 6 dB it changes a saw as the others do at their start.
 #[test]
 fn every_effect_changes_the_sound() {
-    let mut fxs = all_but_the_eq();
+    let mut fxs: Vec<Fx> = all().into_iter().filter(|fx| fx.name != "eq").collect();
     let mut boosted = defaults("eq", &eq_ports(), 1);
     boosted[eq(4, "gain")] = 6.0;
     fxs.push(Fx { name: "eq, a bell up 6 dB", run: run::<Eq>, controls: leak(boosted) });
@@ -366,6 +362,133 @@ fn no_eq_change_clicks() {
     assert!(high_rise(&jumped, s(0.3)) > 20.0, "an unsmoothed jump: {:.1} dB", high_rise(&jumped, s(0.3)));
 }
 
+/// A tone of `hz` at a quarter of full scale through the EQ, its controls `before` until `at` (a
+/// whole number of blocks) and `after` from there, for `frames`: its first channel.
+fn eq_jump(before: &[f32], after: &[f32], at: usize, frames: usize, hz: f64) -> Vec<f32> {
+    let mut host = Host::<Eq>::new(SR, BLOCK as u32, 1);
+    let mut out = Vec::with_capacity(frames);
+    for start in (0..frames).step_by(BLOCK) {
+        let controls = if start < at { before } else { after };
+        for (p, &v) in controls.iter().enumerate() {
+            host.port_mut(p + 1).fill(v);
+        }
+        for (k, x) in host.port_mut(0)[..BLOCK].iter_mut().enumerate() {
+            *x = (0.25 * (2.0 * PI * hz * (start + k) as f64 / SR as f64).sin()) as f32;
+        }
+        host.process(BLOCK as u32);
+        out.extend_from_slice(&host.port_mut(Eq::INPUTS)[..BLOCK]);
+    }
+    out
+}
+
+/// How far, in dB, the EQ's output while it moves from `before` to `after` goes over the louder of
+/// its settled peaks before and after, the worst of tones from a half to twice `hz`; and which tone.
+fn overshoot(before: &[f32], after: &[f32], hz: f32) -> (f64, f64) {
+    let (at, end) = (s(0.5) / BLOCK * BLOCK, s(3.0));
+    let mut worst = (f64::MIN, 0.0);
+    for r in [0.5, 0.71, 0.95, 1.0, 1.05, 1.41, 2.0] {
+        let tone = hz as f64 * r;
+        let out = eq_jump(before, after, at, end, tone);
+        let peak = |r: std::ops::Range<usize>| out[r].iter().fold(0.0f32, |m, v| m.max(v.abs())) as f64;
+        let settled = peak(s(0.3)..at).max(peak(s(2.5)..end));
+        let over = db(peak(at..s(2.5)) / settled);
+        if over > worst.0 {
+            worst = (over, tone);
+        }
+    }
+    worst
+}
+
+// PACK-26: a shape change goes through off, so it never booms: every pair of shapes, at every Q up
+// to 18, gains of 12 and 24 dB, at 150 Hz and 1 kHz, over tones from a half to twice the band's
+// frequency, peaks within 1 dB of the louder settled level.
+#[test]
+fn no_shape_change_booms() {
+    let mut worst = (f64::MIN, String::new());
+    for q in [0.71, 2.0, 4.0, 18.0] {
+        for gain in [12.0, 24.0] {
+            for hz in [150.0, 1000.0] {
+                for (from, from_name) in SHAPES.iter().enumerate() {
+                    for to in (0..5).filter(|&to| to != from) {
+                        let (before, after) = (one_band(3, from, hz, gain, q), one_band(3, to, hz, gain, q));
+                        let (over, tone) = overshoot(&before, &after, hz);
+                        let what = format!(
+                            "{} to {} at {hz} Hz, {gain} dB, q {q}: {over:+.2} dB over settled (a {tone:.0} Hz tone)",
+                            from_name, SHAPES[to]
+                        );
+                        assert!(over < 1.0, "{what}");
+                        if over > worst.0 {
+                            worst = (over, what);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!("the worst shape change: {}", worst.1);
+}
+
+// PACK-26 (review Z2): a band moves to a new gain, Q or frequency by crossfading to a settled
+// filter there, so no jump of them booms: shelves and a bell at every Q up to 18, the gain from 0 to
+// 24 dB, -24 to 24 and back, -12 to 12, and small steps of 1 and 2 dB that settle for less; every
+// shape's Q from 0.5 to 18 and back, and its frequency a quarter octave and a whole octave and a half
+// away; at 150 Hz and 1 kHz: within 1 dB of the louder settled level.
+#[test]
+fn no_jump_of_a_bands_values_booms() {
+    let mut worst = (f64::MIN, String::new());
+    for shape in [1, 2, 3, 0, 4] {
+        for hz in [150.0, 1000.0] {
+            let mut jumps = vec![];
+            for q in [0.71, 2.0, 4.0, 18.0] {
+                for (g0, g1) in [(0.0, 24.0), (-24.0, 24.0), (24.0, -24.0), (-12.0, 12.0), (0.0, 1.0), (0.0, 2.0)] {
+                    if shape != 0 && shape != 4 {
+                        jumps.push((format!("gain {g0} to {g1} dB, q {q}"), one_band(3, shape, hz, g0, q), one_band(3, shape, hz, g1, q)));
+                    }
+                }
+            }
+            for (q0, q1) in [(0.5, 18.0), (18.0, 0.5)] {
+                jumps.push((format!("q {q0} to {q1}, 12 dB"), one_band(3, shape, hz, 12.0, q0), one_band(3, shape, hz, 12.0, q1)));
+            }
+            for (q, octaves) in [(4.0, 0.25), (4.0, -1.5), (18.0, 0.25)] {
+                let to = hz * 2f32.powf(octaves);
+                jumps.push((format!("{hz} to {to:.0} Hz, 12 dB, q {q}"), one_band(3, shape, hz, 12.0, q), one_band(3, shape, to, 12.0, q)));
+            }
+            for (what, before, after) in jumps {
+                let (over, tone) = overshoot(&before, &after, hz);
+                let what = format!("a {} at {hz} Hz, {what}: {over:+.2} dB over settled (a {tone:.0} Hz tone)", SHAPES[shape]);
+                assert!(over < 1.0, "{what}");
+                if over > worst.0 {
+                    worst = (over, what);
+                }
+            }
+        }
+    }
+    println!("the worst jump: {}", worst.1);
+}
+
+// PACK-26: a small move, a lane's line or a knob's drag, is followed at once, as std's eq3 follows
+// it: a bell's gain drawn from 0 to 12 dB over half a second is +6 dB halfway, and +12 dB as the line
+// ends.
+#[test]
+fn a_lanes_line_is_followed_at_once() {
+    let tone = |_: usize, t: usize| (0.25 * (2.0 * PI * 1000.0 * t as f64 / SR as f64).sin()) as f32;
+    let start = one_band(3, 2, 1000.0, 0.0, 1.0);
+    let gain = eq(3, "gain");
+    let out = left(&run::<Eq>(1, s(0.6), BLOCK, &|p, c, t| {
+        if p == 0 {
+            tone(c, t)
+        } else if p - 1 == gain {
+            12.0 * (t as f32 / s(0.5) as f32).min(1.0)
+        } else {
+            start[p - 1]
+        }
+    }));
+    let dry: Vec<f32> = (0..s(0.6)).map(|t| tone(0, t)).collect();
+    let halfway = gain_db(&out, &dry, s(0.245)..s(0.255));
+    let ended = gain_db(&out, &dry, s(0.5)..s(0.51));
+    assert!((halfway - 6.0).abs() < 0.3 && (ended - 12.0).abs() < 0.1, "halfway {halfway:.2} dB, as the line ends {ended:.2} dB");
+}
+
 // ---------------------------------------------------------------- the gate
 
 /// A tone of `hz` whose peak is `level` dBFS.
@@ -516,6 +639,42 @@ fn sustain_raises_the_tail_not_the_start() {
     }
 }
 
+/// A hit every second: a 100 Hz tone, or noise, that starts at half of full scale and fades by 1/e
+/// every `fade` seconds.
+fn faded(noisy: bool, fade: f32) -> impl Fn(usize, usize) -> f32 {
+    move |_, t| {
+        let at = t % s(1.0);
+        let source = if noisy { noise(0, at) } else { (2.0 * PI * 100.0 * at as f64 / SR as f64).sin() as f32 };
+        source * 0.5 * (-(at as f32) / (fade * SR)).exp()
+    }
+}
+
+// PACK-26 (review Z1): `sustain` turns every tail, however slowly it fades: a tone's and noise's,
+// fading by 1/e every 30 ms to 1 s. The faster a tail fades below the slow follower, the more of
+// `sustain` it gets: all of it from 120 ms down, and at least a sixth of it at 1 s (200 to 400 ms
+// into the third hit).
+#[test]
+fn sustain_turns_tails_that_fade_slowly_too() {
+    for noisy in [false, true] {
+        for fade in [0.03, 0.12, 0.3, 0.6, 1.0] {
+            for sustain in [12.0f32, -12.0] {
+                let hit = faded(noisy, fade);
+                let out = left(&run::<Transient>(1, s(3.0), BLOCK, &with(&hit, &[0.0, sustain])));
+                let dry: Vec<f32> = (0..s(3.0)).map(|t| hit(0, t)).collect();
+                let tail = gain_db(&out, &dry, s(2.2)..s(2.4)) / sustain as f64;
+                let what = format!(
+                    "{} fading by 1/e every {} ms, sustain {sustain}: its tail by {:+.2} dB",
+                    if noisy { "noise" } else { "a tone" },
+                    fade * 1000.0,
+                    tail * sustain as f64
+                );
+                assert!(tail <= 1.0 + 1e-3, "{what}: more than sustain");
+                assert!(tail >= if fade <= 0.12 { 0.99 } else { 1.0 / 6.0 }, "{what}");
+            }
+        }
+    }
+}
+
 // Where the level holds, nothing changes: a steady tone comes out bit for bit once its start is past.
 #[test]
 fn a_steady_sound_passes_the_transient_shaper() {
@@ -531,11 +690,11 @@ fn deessed(x: &dyn Fn(usize) -> f32, freq: f32, threshold: f32, amount: f32) -> 
     left(&run::<Deesser>(2, 2 * N, BLOCK, &|p, _, t| [x(t), freq, threshold, amount][p]))
 }
 
-// PACK-26: it turns down only the part above its frequency, by at most `amount`, while that part is
-// over the threshold. A 200 Hz tone, loud as it may be, comes out bit for bit; a 7 kHz one is
+// PACK-26: it turns down the band around its frequency (6 kHz here), by at most `amount`, while that
+// band is over the threshold. A 200 Hz tone, loud as it may be, comes out bit for bit; a 7 kHz one is
 // turned down; together, the 200 Hz tone keeps its level.
 #[test]
-fn the_deesser_turns_down_only_the_sibilant_band() {
+fn the_deesser_turns_down_its_band() {
     let (low, high) = (bin_of(200.0), bin_of(7000.0));
     let on = |k: usize, amp: f64| move |t: usize| (amp * (2.0 * PI * k as f64 * t as f64 / N as f64).sin()) as f32;
     let low_tone = on(low, 0.99);
@@ -557,6 +716,22 @@ fn the_deesser_turns_down_only_the_sibilant_band() {
     assert!((0..2 * N).all(|t| out[t].to_bits() == soft(t).to_bits()), "a 7 kHz tone under the threshold changed");
     let out = deessed(&high_tone, 6000.0, -30.0, 0.0);
     assert!((0..2 * N).all(|t| out[t].to_bits() == high_tone(t).to_bits()), "amount 0 changed the sound");
+}
+
+// PACK-26 (review Z4): its band is a bell around `freq`, so a loud tone near it is turned down a
+// little too, and one far from it not at all. At the defaults (6 kHz, -30 dB) and the most `amount`,
+// 24 dB: a tone at 1 kHz is untouched, at 2 kHz down at most 0.5 dB, at 3 kHz (an octave under) at
+// most 1.5 dB, at 4 kHz at most 3.5 dB, and at 12 kHz (an octave over) at most 0.5 dB.
+#[test]
+fn the_deessers_bell_spares_what_is_far_from_it() {
+    for (hz, level, most) in [(1000.0, -6.0, 0.0), (2000.0, -6.0, 0.5), (3000.0, -6.0, 1.5), (4000.0, -12.0, 3.5), (12_000.0, -12.0, 0.5)] {
+        let k = bin_of(hz);
+        let amp = 10f64.powf(level / 20.0);
+        let tone = move |t: usize| (amp * (2.0 * PI * k as f64 * t as f64 / N as f64).sin()) as f32;
+        let out = deessed(&tone, 6000.0, -30.0, 24.0);
+        let change = db(amplitude(&out[N..], k) / amp);
+        assert!(change <= 1e-6 && change >= -most - 1e-6, "a {hz} Hz tone at {level} dBFS: {change:.3} dB");
+    }
 }
 
 // ---------------------------------------------------------------- the multiband compressor
@@ -640,6 +815,25 @@ fn each_multiband_band_compresses_on_its_own() {
             assert!((level - want).abs() < 0.1, "the {name} band's gain at 6 dB: the tone at {:.0} Hz by {level:.3} dB", bin_hz(k));
         }
     }
+}
+
+// PACK-26 (review Z7): split points that cross are put in order: the lower splits low from mid,
+// whichever knob it is, so the mid band is never empty. Swapped, they play the same bits; and
+// squeezing the mid band turns down a tone between them.
+#[test]
+fn crossed_split_points_are_put_in_order() {
+    let probe = [bin_of(1000.0)];
+    let x = tones(&probe, 0.3);
+    let squeezed = |low_mid: f32, mid_high: f32| {
+        let mut c = multiband(low_mid, mid_high, 1.0);
+        c[2 + 5] = -40.0;
+        c[2 + 5 + 1] = 20.0;
+        left(&run::<Multiband>(1, 2 * N, BLOCK, &with(&x, &c)))
+    };
+    let (ordered, crossed) = (squeezed(500.0, 2000.0), squeezed(2000.0, 500.0));
+    assert!(ordered.iter().zip(&crossed).all(|(a, b)| a.to_bits() == b.to_bits()), "crossed split points play otherwise than ordered ones");
+    let level = db(amplitude(&crossed[N..], probe[0]) / 0.3);
+    assert!(level < -10.0, "split at 2000 and 500 Hz, the mid band squeezed: a 1 kHz tone by {level:.2} dB");
 }
 
 // ---------------------------------------------------------------- real time

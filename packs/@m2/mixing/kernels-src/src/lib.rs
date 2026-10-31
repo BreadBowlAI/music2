@@ -39,37 +39,39 @@ export!(transient, Transient);
 export!(deesser, Deesser);
 export!(multiband, Multiband);
 
-/// One sample of `value` moving toward `target` by `coef` (a one-pole's), landing on it once it is
-/// within a millionth, or once a step no longer moves it (a float one-pole stalls short of its
-/// target, a few hundred-thousandths away when it is slow): so a follower that has caught up holds
-/// its target exactly, and a ratio of two that agree is exactly 1.
-fn toward(value: f32, target: f32, coef: f32) -> f32 {
-    let v = target + (value - target) * coef;
-    if v == value || (v - target).abs() <= 1e-6 * target.abs() { target } else { m2_dsp::fx::flush(v) }
-}
-
-/// A value that glides to each new target, a one-pole's way, starting on its first: a control
-/// that would click if it stepped, or a filter's coefficient. It lands as [`toward`] does, where
-/// `m2_dsp::fx::Glide` (std's, whose bits must not change) may stall just short.
-struct Slide {
+/// A follower of a level that moves (the transient shaper's), a one-pole's way: it lands on its
+/// level only once the level holds still, when within a millionth of it or when a step no longer
+/// moves it (a slow float one-pole stalls short). Chasing a level that moves, it is never snapped
+/// onto it, however small the gap: a slow follower snapped onto a slowly falling level would never
+/// hang over it (review Z1). Controls glide with `m2_dsp::fx::Glide`, std's, which lands within a
+/// millionth of any target, moving or not: right for a control, wrong for this.
+struct Follow {
     value: f32,
-    coef: f32,
-    primed: bool,
+    /// The level it was given last.
+    last: f32,
 }
 
-impl Slide {
-    fn new(time: f32, sr: f32) -> Slide {
-        Slide { value: 0.0, coef: pole(time, sr), primed: false }
+impl Follow {
+    fn new() -> Follow {
+        Follow { value: 0.0, last: 0.0 }
     }
 
-    fn next(&mut self, target: f32) -> f32 {
-        if !self.primed {
-            self.primed = true;
-            self.value = target;
-        } else if self.value != target {
-            self.value = toward(self.value, target, self.coef);
+    /// A sample toward `level` by `coef` (a one-pole's).
+    fn next(&mut self, level: f32, coef: f32) -> f32 {
+        let still = level == self.last;
+        self.last = level;
+        if self.value != level {
+            let v = level + (self.value - level) * coef;
+            let landed = still && (v == self.value || (v - level).abs() <= 1e-6 * level.abs());
+            self.value = if landed { level } else { m2_dsp::fx::flush(v) };
         }
         self.value
+    }
+
+    /// At `level` at once.
+    fn set(&mut self, level: f32) -> f32 {
+        (self.value, self.last) = (level, level);
+        level
     }
 }
 

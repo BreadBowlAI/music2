@@ -1,7 +1,7 @@
 //! `@m2/mixing`'s descriptors (PACK-26): each tool is an effect in its category, and what a call
 //! that leaves a value out gets is its kernel's port default (PKG-4), so the kernels' own tests,
 //! which play their manifest's defaults, test what songs play. The gate's key only listens, and may
-//! be left out; the EQ's card has a group for each band and band 8's curve.
+//! be left out; the EQ's card has a group for each band and no picture.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -68,10 +68,13 @@ fn the_mixing_tools_are_effects_that_start_where_their_kernels_do() {
     }
     let gate = &catalog.components["@m2/mixing:gate"];
     let key = gate.inputs.iter().find(|i| i.name == "key").expect("the gate's key");
+    // `many` only because core has no input that may be left out yet (gaps.md); one at most.
     assert!(key.sidechain && key.many, "the gate's key only listens, and may be left out: {key:?}");
     let eq = &catalog.components["@m2/mixing:eq"];
     let groups: Vec<&str> = eq.editor.groups.iter().map(|g| g.name.as_str()).collect();
     assert_eq!(groups, (1..=8).map(|b| format!("Band {b}")).collect::<Vec<_>>(), "the EQ's groups");
-    let curve: Vec<&str> = eq.editor.views.iter().map(|v| v.name.as_str()).collect();
-    assert_eq!(curve, ["curve"], "the EQ's one view, band 8's curve");
+    // No picture until a view of an EQ's whole curve exists (review Z3, gaps.md): the filter view
+    // draws a low-pass, which no band is at the EQ's start.
+    let views: Vec<&str> = eq.editor.views.iter().map(|v| v.name.as_str()).collect();
+    assert!(views.is_empty(), "the EQ draws {views:?}");
 }

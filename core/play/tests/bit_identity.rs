@@ -1089,17 +1089,18 @@ fn the_mixing_tools_give_the_same_bits_on_1_and_4_threads() {
         assert!(on_workers > 0, "the mixing song on {n} threads: tasks ran on workers");
     }
     check("the mixing song", &song, frames, None);
-    // The pad alone, through the gate the kick keys: open just after each kick (a beat is 0.5 s),
-    // shut before the next, 40 dB down or more (its range is -80 dB; the multiband after it squeezes
-    // the open pad more than the shut one).
-    let gated = mixing_song("{ pad: gate(pad.out, kick.out, { threshold: -30, hold: 0.04, release: 0.08 }) }");
-    let out = offline(&gated, frames);
+    // The pad alone, through the gate the kick keys, against the pad alone ungated: open just after
+    // each kick (a beat is 0.5 s), as it is; shut at its range, -80 dB, once its release is over. The
+    // kick holds the key over the closing level for about 230 ms, then come the hold (40 ms) and the
+    // release (80 ms), so it is shut from about 390 ms: measured from 400 ms to 475 ms (review Z5).
+    let gated = offline(&mixing_song("{ pad: gate(pad.out, kick.out, { threshold: -30, hold: 0.04, release: 0.08 }) }"), frames);
+    let ungated = offline(&mixing_song("{ pad: pad.out }"), frames);
     let beat = song.rate as usize / 2;
-    let (open, shut): (Vec<f32>, Vec<f32>) = (1..7)
-        .map(|b| (rms(&out[b * beat + beat / 50..b * beat + beat / 5]), rms(&out[b * beat + beat * 7 / 10..b * beat + beat * 19 / 20])))
-        .unzip();
+    let db = |r: std::ops::Range<usize>| 20.0 * (rms(&gated[r.clone()]) / rms(&ungated[r])).log10();
+    let (open, shut): (Vec<f32>, Vec<f32>) =
+        (1..7).map(|b| (db(b * beat + beat / 50..b * beat + beat / 5), db(b * beat + beat * 8 / 10..b * beat + beat * 19 / 20))).unzip();
     assert!(
-        open.iter().zip(&shut).all(|(&o, &s)| o > 0.01 && s < o / 100.0),
-        "the kick opens the pad's gate: open {open:?}, shut {shut:?}"
+        open.iter().all(|o| o.abs() < 1.0) && shut.iter().all(|s| (s + 80.0).abs() < 2.0),
+        "the kick opens the pad's gate, and it shuts to its range: open {open:?} dB, shut {shut:?} dB"
     );
 }
