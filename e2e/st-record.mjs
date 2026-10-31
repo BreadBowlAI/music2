@@ -1,12 +1,13 @@
 // Record (studio lane B, Q17 to Q28): the top bar's Record button after Play (28 px, its tooltip,
-// everything to its right 32 px further); its right-click menu and its two checks, kept in this
-// machine's settings.json; R stopped counts in one bar (the button says 4 … 1), then plays and
-// records; keys injected as a MIDI keyboard's make a growing take in the lane; Space stops both and
-// writes one clip over whole bars, selected, "Undo recording on Bass", ⌘Z takes it back; the
-// keyboard piano records, Notes' own clicks don't; snapped to the grid; while looping the first pass
-// is written at the wrap and play goes on; R while playing records from now; Esc and Space while
-// counting cancel and nothing plays; nothing played says so; a PC page's R; with the code broken R
-// says so and starts nothing (the review's R1); Settings' MIDI keyboards
+// everything to its right 32 px further); its right-click menu and its four checks (Punch and
+// Overdub since track recording: MON-10, MON-12), kept in this machine's settings.json; R stopped
+// counts in one bar (the button says 4 … 1), then plays and records; keys injected as a MIDI
+// keyboard's make a growing take in the lane; Space stops both and writes one clip over whole bars,
+// selected, "Undo recording on Bass", ⌘Z takes it back; the keyboard piano records, Notes' own
+// clicks don't; snapped to the grid; while looping the first pass is written at the wrap, and the
+// song plays on and records the next pass (MON-11); R while playing records from now; Esc and Space
+// while counting cancel and nothing plays; nothing played says so; a PC page's R; with the code
+// broken R says so and starts nothing (the review's R1); Settings' MIDI keyboards
 // (one turned off plays and records nothing, the mark says so, one unplugged says "(not connected)",
 // one plugged in before the window opened has its row on the start screen: the review's F3);
 // the lint; and on a server of the suite's own that plays into a file, the count's four clicks a beat
@@ -49,9 +50,14 @@ const press = async (k) => {
   await blur();
   await page.keyboard.press(k);
 };
+/** Each row's words (its name, then its line of detail, if any), ✓ when ticked; "—" a separator. */
 const menuRows = () =>
   page.$$eval("[data-testid=record-menu] [role^=menuitem], [data-testid=record-menu] [role=separator]", (els) =>
-    els.map((e) => (e.getAttribute("role") === "separator" ? "—" : `${e.textContent}${e.getAttribute("aria-checked") === "true" ? " ✓" : ""}`)),
+    els.map((e) => {
+      if (e.getAttribute("role") === "separator") return "—";
+      const words = [...e.querySelectorAll("span")].filter((s) => s.childElementCount === 0 && s.textContent).map((s) => s.textContent);
+      return `${words.join(": ")}${e.getAttribute("aria-checked") === "true" ? " ✓" : ""}`;
+    }),
   );
 const openMenu = async () => {
   const b = await box("[data-testid=record]");
@@ -85,8 +91,11 @@ check(b0?.phase === "off" && b0.color === DANGER && b0.bg === "rgba(0, 0, 0, 0)"
 check(await openMenu(), "a right-click opens its menu");
 const rows0 = await menuRows();
 check(
-  rows0.join("|") === "Count in first (one bar of clicks) ✓|Snap notes to the grid|—|MIDI keyboards…|Sound input…",
-  `its rows: count in (ticked), snap (not), a line, MIDI keyboards, Sound input (${rows0.join(" | ")})`,
+  rows0.join("|") ===
+    "Count in first (one bar of clicks) ✓|Snap notes to the grid|" +
+      "Punch in and out: Record only between the loop's edges, and replace what was there.|" +
+      "Overdub: Add the notes you play to the clip under them.|—|MIDI keyboards…|Sound input…",
+  `its rows: count in (ticked), snap, Punch and Overdub (not), each saying what it does, a line, MIDI keyboards, Sound input (${rows0.join(" | ")})`,
 );
 const bad0 = await page.evaluate(lint, "[data-testid=record-menu]");
 check(bad0.length === 0, `the lint finds nothing in the menu${bad0.length ? `: ${bad0.slice(0, 6).join(" | ")}` : ""}`);
@@ -193,7 +202,7 @@ check(await until(async () => (await toasts()).some((t) => t.includes("Nothing w
 check(takes().length === 0, "and nothing is written");
 await press("Space");
 
-// ---------------------------------------------------------------- snapped, and the first pass of a loop (Q26, Q27)
+// ---------------------------------------------------------------- snapped, and the first pass of a loop (Q26, Q27, MON-11)
 
 await settled();
 await pick("quantize");
@@ -201,13 +210,17 @@ await api("/loop", { method: "POST", body: JSON.stringify({ start: 0, end: 4 }) 
 await api("/seek", { method: "POST", body: JSON.stringify({ beat: 0 }) });
 await press("r");
 await until(async () => (await record())?.phase === "take", 2000);
-check((await record())?.until === 4, "looping bar 1: the take ends at the loop's end");
+check((await record())?.until === 4, "looping bar 1: each pass of the take ends at the loop's end");
 await sleep(560);
 await midi([0x90, 50, 100]);
 await sleep(150);
 await midi([0x80, 50, 0]);
-check(await until(() => takes().length === 1, 5000), "at the wrap the take is written");
-check((await status()).playing && (await record()) === null, "the loop plays on, no longer recording");
+check(await until(() => takes().length === 1, 5000), "at the wrap the first pass is written");
+// MON-11: the take goes round the loop until it stops, a pass at a time.
+check(
+  await until(async () => (await status()).playing && (await record())?.phase === "take" && (await record())?.pass === 1, 1000),
+  `the loop plays on, recording its second pass (${JSON.stringify(await record())})`,
+);
 const t3 = takes()[0];
 check(t3?.start === 0 && t3.length === 4 && t3.notes.length === 1 && Math.abs((t3.notes[0].start * 4) % 1) < 1e-9, `one bar, its note's start on a sixteenth (${JSON.stringify(t3)})`);
 await press("Space");
