@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { ArrowLeftRight, Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
-import { graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
+import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
 import { trackMade } from "../lib/events";
 import { changeInstrument, currentInstrument, notesLane } from "../lib/instrument";
 import { chord, opt } from "../lib/native";
@@ -472,7 +472,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
   const [colours, setColours] = useState<HTMLElement | null>(null);
   const locked = lockReason(graph, useStore.getState().connected);
   const track = graph.timeline.tracks.find((t) => t.module === module);
-  const automation = !!track?.lanes.some((l) => l.kind === "control");
+  const automated = !!track?.lanes.some(isAutomation);
   const open = useShell((s) => s.open.has(module));
   const file = fileOf(graph, module);
   const run = (f: () => void) => () => {
@@ -544,7 +544,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
       >
         Colour
       </MenuRow>
-      {automation && (
+      {automated && (
         <MenuRow icon={<SlidersHorizontal size={14} />} shortcut="A" onClick={run(() => useShell.getState().toggleLanes(module, []))}>
           {open ? "Hide automation" : "Show automation"}
         </MenuRow>

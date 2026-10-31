@@ -176,6 +176,7 @@ export const SUITES = [
   ["pc-keys", "fix", { expect: 37, s: 3 }],
   ["ab-sampler", "export", { expect: 23, s: 4 }],
   ["cards", "fix", { expect: 33, s: 6 }],
+  ["card-views", "fix", { expect: 44, s: 12 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],

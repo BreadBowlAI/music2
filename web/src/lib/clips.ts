@@ -60,7 +60,7 @@ export type Gesture =
   /** Every note's start onto the nearest line of `grid` beats. */
   | { op: "quantize"; clips: ServerRef[]; grid: number; ends?: boolean }
   /** An automation clip's points, `[beat in the clip, value]`, all of them. */
-  | { op: "points"; clip: ServerRef; points: [number, number][] }
+  | { op: "points"; clip: ServerRef; points: [number, number][] | [number, string | boolean][] }
   /** The roll's edit of one notes clip: all its notes, and its length. */
   | { op: "notes"; clip: ServerRef; notes: { pitch: number; start: number; length: number; velocity: number }[]; length?: number }
   /** An audio clip's volume (dB), fades (seconds), direction and Follow tempo: those given (lane A's A3, sx's D11). */

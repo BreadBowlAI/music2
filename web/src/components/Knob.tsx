@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { RotateCcw, Spline } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { display, graphApi, type Home, type Knob as KnobInfo } from "../lib/graph";
+import { display, graphApi, picks, type Home, type Knob, type NumberKnob as KnobInfo } from "../lib/graph";
 import { useStore } from "../lib/store";
 import { guideDid } from "../lib/guide";
 
@@ -555,9 +555,10 @@ export function KnobMenu({
   onReset,
   onClose,
 }: {
-  knob: KnobInfo;
+  /** A number's knob, or a menu's or a switch's (CARD-20), which has no reset here: its options show its default. */
+  knob: Knob;
   label: string;
-  value: number;
+  value: Knob["value"];
   at: { x: number; y: number; above: number };
   editable: boolean;
   locked: string | null;
@@ -578,7 +579,7 @@ export function KnobMenu({
       disabled: !editable || !!knob.automate_refused,
       run: onAutomate,
     },
-    ...(onReset && knob.default != null
+    ...(onReset && !picks(knob) && knob.default != null
       ? [{
           id: "reset",
           Icon: RotateCcw,
@@ -646,7 +647,9 @@ export function KnobMenu({
     >
       <div className="h-ctl px-2 flex items-center gap-2">
         <span className="text-sm font-semibold text-fg truncate">{label}</span>
-        <span className="ml-auto shrink-0 text-xs text-fg-muted">{display(knob, value)}</span>
+        <span className="ml-auto shrink-0 text-xs text-fg-muted">
+          {picks(knob) ? (knob.options.find((o) => o.value === value)?.label ?? String(value)) : display(knob, typeof value === "number" ? value : knob.value)}
+        </span>
       </div>
       <div className="h-px my-1 bg-line" />
       {items.map((item, k) => (

@@ -12,11 +12,12 @@ import {
   laneValue,
   lockReason,
   parseValue,
+  picks,
   stepValue,
   toUnit,
   type BusKind,
   type GraphState,
-  type Knob as KnobInfo,
+  type NumberKnob as KnobInfo,
   type LaneRef,
   type MixStrip,
   type StripSend,
@@ -129,8 +130,11 @@ function Empty({ children, at }: { children: React.ReactNode; at?: { file: strin
 export default function Mix({ graph }: { graph: GraphState }) {
   const locked = useStore((s) => lockReason(graph, s.connected));
   const selected = useShell((s) => s.selected);
-  // Every knob of the view, by id: a strip names its fader and pan by them.
-  const knobs = useMemo(() => new Map(graph.view.modules.flatMap((m) => m.nodes.flatMap((n) => n.knobs.map((k) => [k.id, k] as const)))), [graph.view.modules]);
+  // Every knob of the view, by id: a strip names its fader and pan by them. Only numbers have faders.
+  const knobs = useMemo(
+    () => new Map(graph.view.modules.flatMap((m) => m.nodes.flatMap((n) => n.knobs.flatMap((k) => (picks(k) ? [] : [[k.id, k] as const]))))),
+    [graph.view.modules],
+  );
   const mix = graph.mix;
   // The bus channels, in the mixer's order: each strip has a row for each (RENDER-34).
   const buses = useMemo(() => mix.strips.flatMap((s) => (s.bus && s.channel ? [{ key: s.channel, label: s.label }] : [])), [mix.strips]);
