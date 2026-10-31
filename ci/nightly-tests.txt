@@ -36,7 +36,9 @@ m2-plugins::remote a_hung_call_ends_its_process  speed: ended within 480 ms to 3
 m2-plugins::remote a_main_thread_call_that_hangs_ends_its_process  speed: ended within 950 ms to 5 s (core/plugins/tests/remote.rs)
 m2-plugins::remote an_offline_call_that_hangs_ends_its_process  speed: ended within 950 ms to 5 s (core/plugins/tests/remote.rs)
 m2-server export::tests::an_export_renders_on_its_own_while_a_second_is_refused  speed: answered within 250 ms (crates/server/src/export.rs)
+m2-server graph::audition::tests::audition_never_waits_for_a_compile  speed: sent within 20 ms, heard before the compile ends (crates/server/src/graph/audition_tests.rs)
 m2-server graph::lanes::tests::lane_previews_never_wait_for_a_compile  speed: within 500 ms (crates/server/src/graph/lanes_tests.rs)
+m2-server graph::midi::tests::midi_never_waits_for_a_compile  speed: sent within 20 ms, heard before the compile ends (crates/server/src/graph/midi_tests.rs)
 m2-server graph::presets::tests::loading_a_plugin_preset_is_one_undo_step  speed: within 600 ms (crates/server/src/graph/presets_tests.rs)
 m2-server graph::preview_tests::a_save_the_disk_is_slow_to_make_is_said  speed: within 1.9 s (crates/server/src/graph/preview_tests.rs)
 m2-server graph::preview_tests::the_server_says_a_slow_save_while_an_outside_save_waits_behind_it  speed: within 300 ms (crates/server/src/graph/preview_tests.rs)
@@ -53,8 +55,6 @@ m2::forward a_forwarded_write_doesnt_wait_for_the_lock  speed: reaches the app w
 
 # flake: failed on correct code, cause not fixed
 m2-runtime tests::live::keep::an_edit_window_renders_the_same_bits_on_1_and_n_threads  flake: asserts work crossed threads, which the scheduler decides; 3 of 5 runs on 4 cores (2026-10-21)
-m2-server graph::audition::tests::audition_never_waits_for_a_compile  flake: "the compile's span" not found, under load (HANDOFF.md)
-m2-server graph::midi::tests::midi_never_waits_for_a_compile  flake: "the compile's span" not found, under load (HANDOFF.md)
 m2-session tx::tests::a_second_session_is_read_only  flake: its refresh after the lock came back, under load (HANDOFF.md)
 m2-os os::cores::tests::cores_are_read_from_sysfs  flake: shares one temp folder with the next test (HANDOFF.md)
 m2-os os::cores::tests::the_affinity_mask_and_quota_cut_them  flake: shares one temp folder with the test above (HANDOFF.md)
