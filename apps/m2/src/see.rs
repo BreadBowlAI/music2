@@ -14,7 +14,7 @@ use crate::app;
 
 /// `m2 focus <song>`: what the musician looks at in the open app, as JSON.
 pub fn focus(args: &[String]) -> Result<()> {
-    let dir = song(args, "m2 focus <song>")?;
+    let dir = song(args);
     let app = app::looking(dir.as_ref())?;
     let (status, v) = app.looked("GET", "/api/focus", None)?;
     if status != 200 {
@@ -28,14 +28,13 @@ pub fn focus(args: &[String]) -> Result<()> {
 /// lane, a knob or bars in the open app, by the agent's name (`--as`, `M2_AS`). The musician
 /// dismisses it with OK; it never moves their view or changes their selection.
 pub fn point(args: &[String]) -> Result<()> {
-    const USE: &str = "m2 point <song> <target> \"<words>\" | --clear (a target is track:bass, clip:bass/notes:<id>, lane:bass/cutoff, knob:<id> or bars:9-16)";
-    let dir = song(args, USE)?;
-    let clear = args.iter().skip(2).any(|a| a == "--clear");
-    let (target, words) = match (clear, args.get(2), args.get(3)) {
-        (true, ..) => (None, String::new()),
-        (false, Some(target), words) => (Some(target.clone()), words.cloned().unwrap_or_default()),
-        (false, None, _) => bail!("say where to point: {USE}"),
+    // Its usage took them (AGENT-13): `m2 point <song> --clear` is the form with no target.
+    let (dir, target, words) = match &crate::words::places(args)[..] {
+        [dir] => (dir.clone(), None, String::new()),
+        [dir, target, words @ ..] => (dir.clone(), Some(target.clone()), words.first().cloned().unwrap_or_default()),
+        [] => unreachable!("its usage takes a song first"),
     };
+    let clear = target.is_none();
     let app = app::looking(dir.as_ref())?;
     let body = json!({"session": app.session(), "target": target, "words": words, "clear": clear, "as": app::who().by});
     let (status, v) = app.looked("POST", "/api/point", Some(&body))?;
@@ -79,8 +78,8 @@ const WAITING: usize = 1024;
 /// app goes away it prints `closed` (`why: app`) and exits 0; when the app opens another song, or
 /// closes this one, `closed` with `why: song`. When whoever reads it goes away, it ends quietly.
 pub fn watch(args: &[String]) -> Result<()> {
-    let dir = song(args, "m2 watch <song> [--meters]")?;
-    let meters = args.iter().any(|a| a == "--meters");
+    let dir = song(args);
+    let meters = crate::words::on(args, "--meters");
     let app = app::looking(dir.as_ref())?;
     let session = app.session();
     let mut socket = m2_server::socket::Socket::open(app.url(), &format!("/api/ws?token={}", app.key()))
@@ -236,12 +235,9 @@ fn line(v: &Value) -> String {
     }
 }
 
-/// The song folder these commands name first.
-fn song(args: &[String], usage: &str) -> Result<String> {
-    match args.get(1) {
-        Some(dir) if !dir.starts_with("--") => Ok(dir.clone()),
-        _ => bail!("name the song first: {usage}"),
-    }
+/// The song folder these commands name first: their usage takes it (AGENT-13).
+fn song(args: &[String]) -> String {
+    crate::words::places(args).swap_remove(0)
 }
 
 #[cfg(test)]

@@ -86,23 +86,12 @@ fn refused(r: Refusal, dir: &Path, path: &TxPath, fixing: bool) -> anyhow::Error
 /// it read; or, while the code doesn't build, as a save of the file. A file that changed since it
 /// was read is read again, and the edit tried once more.
 pub fn edit(args: &[String]) -> Result<()> {
-    let [_, dir, file, rest @ ..] = args else { bail!("{EDIT}") };
-    let (mut old, mut new, mut all) = (None, None, false);
-    let mut i = 0;
-    while i < rest.len() {
-        match rest[i].as_str() {
-            "--old" => old = rest.get(i + 1).cloned(),
-            "--new" => new = rest.get(i + 1).cloned(),
-            "--all" => {
-                all = true;
-                i += 1;
-                continue;
-            }
-            other => bail!("m2 edit doesn't know `{other}`: {EDIT}"),
-        }
-        i += 2;
-    }
-    let (Some(old), Some(new)) = (old, new) else { bail!("say what to replace and with what: {EDIT}") };
+    // Its usage took them (AGENT-13): each `<text>` is the word after its flag, whatever it is.
+    let [dir, file] = &crate::words::places(args)[..] else { unreachable!("its usage takes two words") };
+    let (Some(old), Some(new)) = (crate::words::value(args, "--old"), crate::words::value(args, "--new")) else {
+        unreachable!("its usage needs both: {EDIT}")
+    };
+    let all = crate::words::on(args, "--all");
     if old.is_empty() {
         bail!("--old can't be empty: give the text to replace");
     }
