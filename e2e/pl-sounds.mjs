@@ -74,8 +74,10 @@ const rev0 = await revision();
 await page.keyboard.press("Enter");
 const kit = orig.hats.replace('import { hat } from "@m2/synths";', 'import { drums } from "@m2/drums";').replace('hat(lane.notes("hits"))', 'drums.kit(lane.notes("hits"))');
 check(await until(() => read("tracks/hats.ts") === kit), `Return writes drums.kit(lane.notes("hits")) in tracks/hats.ts (${read("tracks/hats.ts").split("\n").find((l) => l.includes("track("))})`);
-check((await revision()) === rev0 + 1 && read("song.ts") === orig.song, "one revision, and song.ts as it was");
+// The toast says the edit is done: since std 0.6 it writes music2.toml and music2.lock too (PACK-10),
+// so the files may land a moment before the revision does.
 check(await toasted("Hats plays Drum kit now"), `a toast says "Hats plays Drum kit now" (${await toasts()})`);
+check((await revision()) === rev0 + 1 && read("song.ts") === orig.song, `one revision, and song.ts as it was (${rev0} → ${await revision()})`);
 check(!(await page.$(LIST)), "the list closes");
 // Opened again, the list ticks what it plays now.
 await openMenu("hats");

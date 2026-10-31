@@ -264,6 +264,8 @@ await view("graph");
 
 // ------------------------------------------------------------------ alias
 const echo = `import { track } from "@m2/core";\nimport { delay as echo } from "@m2/effects";\nimport { pluck } from "@m2/synths";\n\nexport default track("keys", { name: "Keys" }, ({ lane }) => echo(pluck(lane.notes("chords"))));\n`;
+// The song lists the pack the delay is from (PACK-10), as adding it would have written.
+write("music2.toml", read("music2.toml") + '"@m2/effects" = "1"\n');
 write("tracks/keys.ts", echo);
 const echoNode = async () => (await state()).view.modules.find((m) => m.key === "keys")?.nodes.find((n) => n.component === "@m2/effects:delay");
 check(await until(async () => !!(await echoNode()), 10000), "a delay imported as echo, saved by another editor, is a @m2/effects:delay call");

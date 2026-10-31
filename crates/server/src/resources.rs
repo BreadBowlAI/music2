@@ -179,6 +179,7 @@ mod tests {
         std::fs::create_dir_all(contents.join("Resources/std/kernels")).unwrap();
         std::fs::write(contents.join("Resources/std/m2pkg.toml"), "").unwrap();
         std::fs::create_dir_all(contents.join("Resources/templates/starter")).unwrap();
+        std::fs::create_dir_all(contents.join("Resources/packs/@m2/synths")).unwrap();
         exe
     }
 
@@ -189,6 +190,8 @@ mod tests {
         let resources = t.0.join("music2.app/Contents/Resources");
         assert_eq!(find(None, &[Some(&exe)], "std"), resources.join("std"));
         assert_eq!(find(None, &[Some(&exe)], "templates"), resources.join("templates"));
+        // The packs music2 ships, beside std (PACK-15).
+        assert_eq!(find(None, &[Some(&exe)], "packs"), resources.join("packs"));
         // Not bundled: the source tree's.
         assert_eq!(find(None, &[Some(&exe)], "examples"), source_tree().join("examples"));
     }
@@ -208,8 +211,9 @@ mod tests {
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         assert_eq!(find(None, &[Some(&exe), None], "std"), source_tree().join("std"));
         assert_eq!(find(None, &[], "templates"), source_tree().join("templates"));
-        // The source tree's std is the real package.
+        // The source tree's std is the real package, and its packs the real ones.
         assert!(std_dir().join("m2pkg.toml").is_file() || std::env::var_os("M2_STD").is_some());
+        assert!(packs_dir().join("@m2/synths/m2pkg.toml").is_file() || std::env::var_os("M2_PACKS").is_some());
     }
 
     /// An empty file at `path`, its folders made.
@@ -285,6 +289,7 @@ mod tests {
         let exe = touch(&usr.join("bin/music2"));
         touch(&usr.join("lib/music2/std/m2pkg.toml"));
         std::fs::create_dir_all(usr.join("lib/music2/templates/starter")).unwrap();
+        std::fs::create_dir_all(usr.join("lib/music2/packs/@m2/synths")).unwrap();
         exe
     }
 
@@ -299,6 +304,7 @@ mod tests {
         let found = |name| find(None, &[Some(&exe)], name).canonicalize().unwrap();
         assert_eq!(found("std"), lib.join("std"));
         assert_eq!(found("templates"), lib.join("templates"));
+        assert_eq!(found("packs"), lib.join("packs"));
         // Not carried: the source tree's.
         assert_eq!(find(None, &[Some(&exe)], "examples"), source_tree().join("examples"));
         // m2 in the .tar.gz: bin/m2 and lib/music2.

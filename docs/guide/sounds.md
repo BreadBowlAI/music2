@@ -26,7 +26,9 @@ import { drums } from "@m2/drums";
 import { reverb } from "@m2/effects";
 ```
 
-When you add one of their sounds from + Track or the browser, music2 writes those lines for you, and `music2.lock` too. A song made before std 0.6 that imports `std/synth`, `std/fm`, `std/drums`, `std/instruments`, or `std/fx`'s `reverb` and the other sounds, is told in words which pack to use instead.
+When you add one of their sounds from + Track or the browser, music2 writes those lines for you, and `music2.lock` too.
+
+A song made before std 0.6 is told, in words, what to change: first its std line, to `std = "0.6"`; then, for each import of `std/synth`, `std/fm`, `std/drums` or `std/instruments`, or of `std/fx`'s `reverb` and the other effects that colour a sound, which pack it is in now and the line to add. The move changed no sound: the song plays the same bits as before.
 
 **Instruments.** Each takes a notes lane and returns sound. The `voices` setting is how many notes can sound at once (`synth.lead(notes, { voices: 4 })` plays chords). A typical note, at velocity 0.8, peaks between -15 and -12 dBFS, so a four-note chord still has room, and the drums sit as on a drum machine: the kick near -6, snare and clap near -9, hats near -16. Notes played harder are louder, and most sounds get brighter too. On the synths and FM sounds, `velSens` ("vel sens") is how much: the level follows velocity^(2 × velSens), so a note at velocity 0 is silent, and at 0.5 a note at 0.3 is 10 dB below one at 1. The keys start widest (0.8), the 808 narrowest (0.3).
 

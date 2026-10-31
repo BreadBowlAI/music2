@@ -139,6 +139,42 @@ fn installing_twice_is_a_no_op_and_a_new_hash_is_refused() {
     assert!(!installed.exists() && !t.store().join("@test").exists(), "its empty folders go too");
 }
 
+/// Every file and folder under `dir`, with when it last changed.
+fn stamps(dir: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut out = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            out.push((e.path(), e.metadata().unwrap().modified().unwrap()));
+            if e.file_type().unwrap().is_dir() {
+                stack.push(e.path());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// PACK-16, PACK-18: m2 installs the packs music2 ships into a fresh HOME's store the first time it
+// opens it, so a song made from the starter template builds offline, with no registry; a second
+// m2 finds them there and writes nothing in the store.
+#[test]
+fn m2_installs_the_bundled_packs_and_a_template_song_builds_offline() {
+    let t = Temp::new("bundled");
+    let song = t.0.join("song");
+    ok(t.m2(&["new", song.to_str().unwrap(), "--template", "starter"]));
+    assert!(song.join("music2.lock").is_file(), "the template's lock comes with it");
+    ok(t.m2(&["check", song.to_str().unwrap()]));
+    let listed = ok(t.m2(&["pack", "list"]));
+    for pack in ["@m2/drums 1.0.0", "@m2/effects 1.0.0", "@m2/synths 1.0.0"] {
+        assert!(listed.contains(pack), "{pack} in {listed}");
+    }
+    let before = stamps(&t.store());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    ok(t.m2(&["check", song.to_str().unwrap()]));
+    assert_eq!(stamps(&t.store()), before, "a second m2 writes nothing in the store");
+}
+
 // PACK-12: check names each problem in words and exits 1.
 #[test]
 fn check_says_what_is_wrong() {

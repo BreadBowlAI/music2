@@ -1,5 +1,5 @@
-// Every std component called once (step 5's gates): some controls written, some connected to a
-// signal, some left out to play their declared defaults.
+// Every component of std and of the packs music2 ships called once (step 5's gates): some controls
+// written, some connected to a signal, some left out to play their declared defaults.
 import { semis, song } from "@m2/core";
 import { choose, lfo, when } from "std/control";
 import { adsr, follow, gain, mono, noise, osc, pan, svf, vca } from "std/dsp";
