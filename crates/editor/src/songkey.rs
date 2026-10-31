@@ -1,7 +1,7 @@
 //! The song's key (the polish plan's D2, Q22): `layout.json`'s `key`, as
 //! `{ "root": "A", "scale": "minor" }`. Shared with the song in git, like the rest of the layout,
-//! and nothing that plays reads it (PLANE-3): Notes shades the rows out of the key, and nothing is
-//! locked. Major and minor only, or none; more scales are gaps #6.
+//! and nothing that plays reads it (PLANE-3): Notes shades the rows out of the key, can lock notes to
+//! it and stamps its chords. A scale is one of the table's (`scales.rs`, NOTE-1), or none.
 //!
 //! Written by a Tx of `layout.json` alone: no revision, one undo step, as a reorder is. Like
 //! reorder and recolour it never writes over a `layout.json` that doesn't read (R15), and it keeps
@@ -14,40 +14,66 @@ use m2_song::tx::Expect;
 use serde::{Deserialize, Serialize};
 
 use crate::layout::{self, J, Layout, Read};
+use crate::scales::Scale;
 use crate::{EditError, Edited, plan};
 
 /// The roots as `layout.json` writes them, by pitch class from C. The app spells them with ♯ and ♭
 /// (Q32); the file keeps to ASCII, so a hand or a script can write it.
 pub const ROOTS: [&str; 12] = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
-/// The scales a key can have.
-pub const SCALES: [&str; 2] = ["major", "minor"];
-
-/// A key: its root (one of [`ROOTS`]) and its scale (one of [`SCALES`]).
+/// A key: its root (one of [`ROOTS`]) and its scale, one of the table's (NOTE-1). Only
+/// [`SongKey::new`] makes one, and a request's is read through it, so every key is one that reads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Written")]
 pub struct SongKey {
-    pub root: String,
-    pub scale: String,
+    root: String,
+    scale: Scale,
+}
+
+/// A key as a file or a request writes it, before it is read.
+#[derive(Deserialize)]
+struct Written {
+    root: String,
+    scale: String,
+}
+
+impl TryFrom<Written> for SongKey {
+    type Error = String;
+
+    fn try_from(w: Written) -> Result<SongKey, String> {
+        SongKey::new(&w.root, &w.scale)
+    }
 }
 
 impl SongKey {
     /// A key from what a file or a request says: the root by any of its names (`C#`, `C♯`, `Db`,
-    /// `D♭`), the scale `major` or `minor`. The root is kept in [`ROOTS`]'s spelling.
+    /// `D♭`), the scale by its name in any case (`Harmonic Minor`). The root is kept in [`ROOTS`]'s
+    /// spelling.
     pub fn new(root: &str, scale: &str) -> Result<SongKey, String> {
         let pc = pitch_class(root).ok_or_else(|| format!("{root} isn't a key's root: one of {}", ROOTS.join(", ")))?;
-        let scale = scale.trim().to_lowercase();
-        if !SCALES.contains(&scale.as_str()) {
-            return Err(format!("a key's scale is major or minor, not {scale}"));
-        }
+        let scale = Scale::try_from(scale.to_string())?;
         Ok(SongKey { root: ROOTS[pc].to_string(), scale })
     }
 
-    /// Its name, as the app says it: `E♭ major`, `F♯ minor`.
+    /// Its root, as [`ROOTS`] spells it: `C#`, `Bb`.
+    pub fn root(&self) -> &str {
+        &self.root
+    }
+
+    /// Its scale.
+    pub fn scale(&self) -> Scale {
+        self.scale
+    }
+
+    /// Its name, as the app says it: `E♭ major`, `F♯ minor`, `D Dorian`, `A harmonic minor`. A
+    /// mode's name is a name, so it keeps its capital.
     pub fn name(&self) -> String {
-        format!("{} {}", self.root.replace('#', "♯").replace('b', "♭"), self.scale)
+        let mode = matches!(self.scale, Scale::Dorian | Scale::Phrygian | Scale::Lydian | Scale::Mixolydian | Scale::Locrian);
+        let scale = if mode { self.scale.label().to_string() } else { self.scale.label().to_lowercase() };
+        format!("{} {scale}", crate::scales::pc_name(self.pc()))
     }
 
     fn json(&self) -> J {
-        J::Obj(vec![("root".into(), J::Str(self.root.clone())), ("scale".into(), J::Str(self.scale.clone()))])
+        J::Obj(vec![("root".into(), J::Str(self.root.clone())), ("scale".into(), J::Str(self.scale.name().into()))])
     }
 }
 
@@ -95,7 +121,6 @@ pub fn of(dir: &Path) -> Option<SongKey> {
 /// Labelled by the keys' names, `("C major", "A minor")`, an empty side for none. Setting the key
 /// it has already writes nothing.
 pub fn set(s: &mut Session, key: Option<SongKey>) -> Result<Edited, EditError> {
-    let key = key.map(|k| SongKey::new(&k.root, &k.scale)).transpose().map_err(EditError::Rejected)?;
     let mut l = match layout::read_disk(&s.accepted().project.dir) {
         Read::Valid(l) => l,
         Read::Absent => Layout::default(),

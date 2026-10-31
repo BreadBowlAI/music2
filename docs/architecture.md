@@ -1313,7 +1313,7 @@ The build MUST refuse a list that isn't one, a region that isn't an object, any 
 - *Why:* a note a little early or late is a feel; turning snap off and on again for it breaks the flow.
 - *Today:* since track `notes`: `snapBeat` in `web/src/components/NoteView.tsx`. Tested by `e2e/nt-notes.mjs`.
 
-**NOTE-7.** A **groove** gives notes a feel. It is one mechanism: a step (an eighth or a sixteenth of a beat), and for each step of a beat a timing (a move, or none) and a velocity (or none). A note belongs to the step whose straight place it starts from a quarter step before to 45% of a step after; a note nowhere near a step (a triplet, a 32nd) is left as it is. A note on a step that has a timing moves to that step's place and keeps its end (never shorter than 1/64 of a beat); one on a step that has a velocity takes it. So a groove applied twice is applied once, and one groove after another puts the notes at the second one's places. The grooves:
+**NOTE-7.** A **groove** gives notes a feel. It is one mechanism: a step (an eighth or a sixteenth of a beat), and for each step of a beat a timing (a move, or none) and a velocity (or none). A note belongs to the step whose straight place it starts from a quarter step before to 45% of a step after; a note between two steps (a 32nd note) is left as it is. A note on a step that has a timing moves to that step's place and keeps its end (never shorter than 1/64 of a beat); one on a step that has a velocity takes it. So a groove applied twice is applied once, and one that times the same steps as the groove before it (one swing after another, Pushed after Laid back) puts the notes at its own places. The grooves:
 
 | Groove | Step | Timing | Velocity |
 |---|---|---|---|

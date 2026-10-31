@@ -25,8 +25,9 @@ pub struct TimelineView {
     pub tracks: Vec<TimelineTrack>,
     /// The ruler's markers, by beat, from `layout.json` (Q13): none while it doesn't read.
     pub markers: Vec<crate::markers::Marker>,
-    /// The song's key, from `layout.json` (the polish plan's D2): None when it says none.
-    pub key: Option<crate::songkey::SongKey>,
+    /// The song's key, from `layout.json` (the polish plan's D2), with what it means (NOTE-2):
+    /// None when it says none.
+    pub key: Option<crate::scales::KeyView>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -127,7 +128,7 @@ pub fn timeline(s: &Session) -> TimelineView {
     let a = &rev.project.arrangement;
     let bar = a.meter_at(0.0).bar();
     let markers = crate::markers::on_disk(&rev.project.dir);
-    let key = crate::songkey::of(&rev.project.dir);
+    let key = crate::songkey::of(&rev.project.dir).map(|k| k.view());
     TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks, markers, key }
 }
 
@@ -154,7 +155,7 @@ fn last_known(rev: &Revision) -> TimelineView {
     let Ok(project) = Project::from_snapshot(&rev.snapshot) else {
         let a = &rev.project.arrangement;
         let markers = crate::markers::on_disk(&rev.project.dir);
-        let key = crate::songkey::of(&rev.project.dir);
+        let key = crate::songkey::of(&rev.project.dir).map(|k| k.view());
         return TimelineView {
             tempo: a.tempo.clone(),
             meter: a.meter.clone(),
@@ -198,7 +199,7 @@ fn last_known(rev: &Revision) -> TimelineView {
     in_order(&mut tracks, &layout);
     let a = &project.arrangement;
     let markers = crate::markers::on_disk(&rev.project.dir);
-    let key = crate::songkey::of(&rev.project.dir);
+    let key = crate::songkey::of(&rev.project.dir).map(|k| k.view());
     TimelineView {
         tempo: a.tempo.clone(),
         meter: a.meter.clone(),

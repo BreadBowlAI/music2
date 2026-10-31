@@ -27,7 +27,7 @@ crate::api::routes! {
         "Mute tracks in the song, written in their code, or unmute them",
         r#"{"session": 7, "modules": ["keys"], "muted": true}"#;
     POST "/api/graph/clips" => graph_clips; writes, agents,
-        "A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio or set",
+        "A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord) or groove",
         r#"{"session": 7, "gesture": {"op": "move", "clips": [{"module": "keys", "lane": "chords", "id": "k3f9q2zt"}], "by": 4}}"#;
     POST "/api/graph/automate/remove" => automate_remove; writes, agents,
         "Take a knob's automation out: the lane's value at the beat (else its fallback) goes back into the code",

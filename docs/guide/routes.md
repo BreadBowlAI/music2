@@ -74,7 +74,7 @@ An example body:
 
 ### `POST /api/graph/clips`
 
-A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio or set. It writes the song: one undo step.
+A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord) or groove. It writes the song: one undo step.
 
 An example body:
 
@@ -577,6 +577,10 @@ The templates and examples a new song can start from, and the songs folder.
 ### `GET /api/settings`
 
 This computer's settings: the sound output, where new songs go, Record's options, the MIDI keyboards and the sound input.
+
+### `GET /api/theory`
+
+The scales a key can have, the chords a stamp places and the grooves, each with its name and what it does.
 
 ### `POST /api/tx/check`
 

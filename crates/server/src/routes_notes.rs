@@ -1,12 +1,15 @@
-//! The routes of the polish track's lane D, in the one route table (AGENT-8): the song's key.
+//! The routes of the polish track's lane D, in the one route table (AGENT-8): the song's key; and
+//! track notes' table of what music2 knows of scales, chords and grooves (NOTE-1).
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use m2_editor::grooves::{NAMED, SWINGS};
+use m2_editor::scales::{Chord, TABLE};
 use m2_editor::songkey::SongKey;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::routes::ApiError;
@@ -18,6 +21,27 @@ crate::api::routes! {
     POST "/api/graph/song-key" => song_key; writes, agents,
         "Set the song's key, or take it away (null)",
         r#"{"session": 7, "key": {"root": "A", "scale": "minor"}}"#;
+    GET "/api/theory" => theory; reads, agents,
+        "The scales a key can have, the chords a stamp places and the grooves, each with its name and what it does",
+        r#"{}"#;
+}
+
+/// The one table of scales (NOTE-1), the chord stamps' kinds (NOTE-4) and the grooves (NOTE-7):
+/// `{scales: [{name, label, words, steps}], chords: [{name, label, words, inversions}], grooves:
+/// [{name, label, words}], swings: [0.5, …]}`. The key field and the roll's menus read it, and so
+/// may agents. It needs no song.
+async fn theory() -> ApiResult {
+    Ok(Json(table()))
+}
+
+fn table() -> Value {
+    let scales: Vec<Value> = TABLE.iter().map(|r| json!({"name": r.name, "label": r.label, "words": r.words, "steps": r.steps})).collect();
+    let chords: Vec<Value> = Chord::ALL
+        .iter()
+        .map(|c| json!({"name": c.name(), "label": c.label(), "words": c.words(), "inversions": c.inversions()}))
+        .collect();
+    let grooves: Vec<Value> = NAMED.iter().map(|(name, label, words)| json!({"name": name, "label": label, "words": words})).collect();
+    json!({"scales": scales, "chords": chords, "grooves": grooves, "swings": SWINGS})
 }
 
 #[derive(Deserialize)]
@@ -36,3 +60,7 @@ async fn song_key(State(s): S, Json(r): Json<SongKeyReq>) -> ApiResult {
     s.graph_changed();
     Ok(Json(result?))
 }
+
+#[cfg(test)]
+#[path = "routes_notes_tests.rs"]
+mod tests;

@@ -19,12 +19,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use m2_ir::LaneDecl;
 use m2_session::{ConflictFile, Revision, Session};
+use m2_song::lane::number;
 use m2_song::tx::{Confined, Expect, Op, Payload, TxPath};
 use m2_song::{AudioClip, ClipId, ControlClip, DataPath, LaneAddr, LaneData, LaneKind, Note, NoteClip, canonical};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::grooves::{self, Groove};
 use crate::plan;
+use crate::scales::Chord;
+use crate::songkey::SongKey;
 use crate::{EditError, Edited, ready};
 
 /// The shortest a clip can be: 1/64 of a beat.
@@ -102,12 +106,18 @@ pub enum Gesture {
         times: Option<u32>,
     },
     /// Clips at `at`, keeping their offsets from the earliest: on lane `to` when it fits them all,
-    /// else on the lanes they came from.
+    /// else on the lanes they came from. With `into`, notes clips' notes go into that notes clip
+    /// instead, the earliest clip's start at `at` (NOTE-5); with `fit`, each note's pitch to the
+    /// nearest note of the song's key (NOTE-3).
     Paste {
         clips: Vec<Copied>,
         #[serde(default)]
         to: Option<LaneAddr>,
         at: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        into: Option<ClipRef>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        fit: bool,
     },
     Delete {
         clips: Vec<ClipRef>,
@@ -123,6 +133,29 @@ pub enum Gesture {
     Points {
         clip: ClipRef,
         points: Vec<(f64, f64)>,
+    },
+    /// A chord stamp (NOTE-4): chord `chord` built on the song's key, its root `root` (a pitch, as
+    /// a number or a name: `D4`), in inversion `inversion` (0 is the root's), at song beat `at` in
+    /// the clip, `length` beats long (a beat when not given), at `velocity` (0.8 when not given).
+    Stamp {
+        clip: ClipRef,
+        at: f64,
+        #[serde(deserialize_with = "pitch")]
+        root: f64,
+        chord: Chord,
+        #[serde(default)]
+        inversion: usize,
+        #[serde(default = "a_beat")]
+        length: f64,
+        #[serde(default)]
+        velocity: Option<f64>,
+    },
+    /// A groove (NOTE-7) on the notes of clips; `notes` picks notes of one clip by their place in it.
+    Groove {
+        clips: Vec<ClipRef>,
+        #[serde(default)]
+        notes: Option<Vec<u32>>,
+        groove: Groove,
     },
     /// Note starts to the nearest line of `grid` (beats), and ends too when `ends`. `notes` picks
     /// notes of one clip by their place in it.
@@ -282,7 +315,47 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 }
             }
         }
-        Gesture::Paste { clips, to, at } => {
+        Gesture::Paste { clips, to, at, into: Some(into), fit } => {
+            if to.is_some() {
+                return Err(EditError::Rejected("Paste into a clip, or onto a lane: not both.".into()));
+            }
+            finite("the place", *at)?;
+            let key = if *fit { Some(song_key(rev, "fit the notes to")?) } else { None };
+            let mut earliest = f64::INFINITY;
+            let mut copied = vec![];
+            for c in clips {
+                if w.copied_kind(c)? != LaneKind::Notes {
+                    return Err(EditError::Rejected("Only notes paste into a notes clip.".into()));
+                }
+                let Clip::Notes(n) = parse(&c.clip, &LaneKind::Notes)? else { unreachable!("read as notes") };
+                earliest = earliest.min(n.start);
+                copied.push(n);
+            }
+            if copied.is_empty() {
+                return Err(EditError::Rejected("Nothing to paste.".into()));
+            }
+            let (lane, i) = w.resolve(into)?;
+            let l = w.lanes.get_mut(&lane).expect("resolved");
+            let Clip::Notes(mut c) = l.was[i].clone() else {
+                return Err(EditError::Rejected("Notes paste into a notes clip, not an automation or audio clip.".into()));
+            };
+            if *at < c.start - 1e-9 {
+                return Err(EditError::Rejected(format!("Paste inside the clip: from beat {} on.", number(c.start))));
+            }
+            for n in &copied {
+                let by = at + (n.start - earliest) - c.start;
+                // What the copied clip played: a note hidden past its end stays hidden.
+                for note in n.notes.iter().filter(|x| x.start < n.length) {
+                    let pitch = key.as_ref().map_or(note.pitch, |k| k.snap(note.pitch));
+                    c.notes.push(Note { pitch, start: by + note.start, ..note.clone() });
+                }
+            }
+            l.keep[i] = Some(Clip::Notes(c));
+        }
+        Gesture::Paste { clips, to, at, into: None, fit } => {
+            if *fit {
+                return Err(EditError::Rejected("Only notes pasted into a clip fit the key.".into()));
+            }
             starts(*at)?;
             let mut kinds = vec![];
             let mut earliest = f64::INFINITY;
@@ -441,6 +514,51 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
             c.points.sort_by(|a, b| a.0.total_cmp(&b.0));
             l.keep[i] = Some(Clip::Control(c));
         }
+        Gesture::Stamp { clip, at, root, chord, inversion, length, velocity } => {
+            finite("the place", *at)?;
+            lasts(*length)?;
+            let velocity = velocity.unwrap_or(m2_song::lane::VELOCITY);
+            if !(velocity.is_finite() && velocity > 0.0 && velocity <= 1.0) {
+                return Err(EditError::Rejected(format!("A velocity is above 0 and at most 1, not {velocity}.")));
+            }
+            let key = song_key(rev, "stamp a chord")?;
+            let (lane, i) = w.resolve(clip)?;
+            let l = w.lanes.get_mut(&lane).expect("resolved");
+            let Clip::Notes(mut c) = l.was[i].clone() else {
+                return Err(EditError::Rejected("A chord goes into a notes clip.".into()));
+            };
+            if !(c.start - 1e-9..c.start + c.length - 1e-9).contains(at) {
+                return Err(EditError::Rejected(format!(
+                    "A chord goes inside its clip: from beat {} to beat {}.",
+                    number(c.start),
+                    number(c.start + c.length)
+                )));
+            }
+            let pitches = key.stamp(*root, *chord, *inversion).map_err(EditError::Rejected)?;
+            c.notes.extend(pitches.into_iter().map(|pitch| Note { pitch, start: at - c.start, length: *length, velocity }));
+            l.keep[i] = Some(Clip::Notes(c));
+        }
+        Gesture::Groove { clips, notes, groove } => {
+            let refs = w.resolve_all(clips)?;
+            if notes.is_some() && refs.len() > 1 {
+                return Err(EditError::Rejected("Pick notes in one clip, or whole clips.".into()));
+            }
+            for (lane, i) in refs {
+                let l = w.lanes.get_mut(&lane).expect("resolved");
+                let Clip::Notes(mut c) = l.was[i].clone() else {
+                    return Err(EditError::Rejected("A groove changes notes: pick a notes clip.".into()));
+                };
+                let picked: Vec<usize> = match notes {
+                    Some(n) => n.iter().map(|&k| k as usize).collect(),
+                    None => (0..c.notes.len()).collect(),
+                };
+                if let Some(k) = picked.iter().find(|k| **k >= c.notes.len()) {
+                    return Err(EditError::Missing(format!("The clip has {} notes, so it has no note {}.", c.notes.len(), k + 1)));
+                }
+                grooves::apply(&mut c.notes, &picked, c.start, groove).map_err(EditError::Rejected)?;
+                l.keep[i] = Some(Clip::Notes(c));
+            }
+        }
         Gesture::Quantize { clips, notes, grid, ends } => {
             if !(grid.is_finite() && *grid > 0.0) {
                 return Err(EditError::Rejected("The grid is a number of beats above 0, such as 0.25 for sixteenths.".into()));
@@ -469,6 +587,35 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
         }
     }
     Ok(w.finish(mint))
+}
+
+/// The song's key, to `what` with: refused in words while the song has none.
+fn song_key(rev: &Revision, what: &str) -> Result<SongKey, EditError> {
+    crate::songkey::of(&rev.project.dir).ok_or_else(|| match what {
+        "stamp a chord" => EditError::Rejected("Set the song's key first: a chord stamp is built on its notes.".into()),
+        _ => EditError::Rejected(format!("Set the song's key first, to {what}.")),
+    })
+}
+
+/// A beat: a stamp's length when the request gives none.
+fn a_beat() -> f64 {
+    1.0
+}
+
+/// A pitch as a number (60 is middle C) or a name (`C4`, `F#3`), as a lane file writes one.
+fn pitch<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum P {
+        Number(f64),
+        Name(String),
+    }
+    match P::deserialize(d)? {
+        P::Number(n) if n.is_finite() => Ok(n),
+        P::Number(n) => Err(serde::de::Error::custom(format!("{n} isn't a pitch"))),
+        P::Name(s) => m2_song::parse_pitch(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("{s} isn't a pitch: a number (60 is middle C) or a name such as C4"))),
+    }
 }
 
 /// Notes as the lane format holds them: each a pitch, a start, a length above 0 and a velocity of 0
@@ -1148,11 +1295,15 @@ pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
         | Gesture::Join { clips }
         | Gesture::Duplicate { clips, .. }
         | Gesture::Delete { clips }
+        | Gesture::Groove { clips, .. }
         | Gesture::Quantize { clips, .. } => clips.iter_mut().try_for_each(&mut pin)?,
-        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } | Gesture::Audio { clip, .. } => {
-            pin(clip)?
-        }
-        Gesture::Create { .. } | Gesture::Paste { .. } | Gesture::Set { .. } => {}
+        Gesture::Resize { clip, .. }
+        | Gesture::Notes { clip, .. }
+        | Gesture::Points { clip, .. }
+        | Gesture::Audio { clip, .. }
+        | Gesture::Stamp { clip, .. }
+        | Gesture::Paste { into: Some(clip), .. } => pin(clip)?,
+        Gesture::Create { .. } | Gesture::Paste { into: None, .. } | Gesture::Set { .. } => {}
     }
     Ok(g)
 }

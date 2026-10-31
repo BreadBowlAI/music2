@@ -106,7 +106,8 @@ fn every_copy_mints() {
     let copied = go(&mut s, Gesture::Move { clips: vec![by_id("kick/hits", "my53vvkc")], by: 64.0, to: None, copy: true });
     let duplicated = go(&mut s, Gesture::Duplicate { clips: vec![by_id("kick/hits", "my53vvkc")], range: None, grid: None, times: None });
     let clip = data(&s, "kick/hits").unwrap().clip_value("my53vvkc").unwrap();
-    let pasted = go(&mut s, Gesture::Paste { clips: vec![Copied { from: addr("kick/hits"), clip }], to: None, at: 128.0 });
+    let pasted =
+        go(&mut s, Gesture::Paste { clips: vec![Copied { from: addr("kick/hits"), clip }], to: None, at: 128.0, into: None, fit: false });
     let ids: Vec<String> = clips(&s, "kick/hits").into_iter().map(|c| c.0.unwrap()).collect();
     assert_eq!(ids.len(), 4, "{ids:?}");
     assert_eq!(ids.iter().collect::<BTreeSet<_>>().len(), 4, "every id once: {ids:?}");
@@ -288,10 +289,10 @@ fn a_paste_mints_and_keeps_offsets() {
     go(&mut s, Gesture::Resize { clip: by_id("hats/hits", "92gr2959"), start: 4.0, length: 4.0 });
     let copy = |s: &Session, lane: &str, id: &str| Copied { from: addr(lane), clip: data(s, lane).unwrap().clip_value(id).unwrap() };
     let copied = vec![copy(&s, "kick/hits", "my53vvkc"), copy(&s, "hats/hits", "92gr2959")];
-    let done = go(&mut s, Gesture::Paste { clips: copied.clone(), to: None, at: 64.0 });
+    let done = go(&mut s, Gesture::Paste { clips: copied.clone(), to: None, at: 64.0, into: None, fit: false });
     assert_eq!(done.made.len(), 2);
     assert!(clips(&s, "kick/hits").iter().any(|c| c.1 == 64.0) && clips(&s, "hats/hits").iter().any(|c| c.1 == 68.0));
-    let done = go(&mut s, Gesture::Paste { clips: copied, to: Some(addr("keys/chords")), at: 128.0 });
+    let done = go(&mut s, Gesture::Paste { clips: copied, to: Some(addr("keys/chords")), at: 128.0, into: None, fit: false });
     let keys: Vec<(f64, f64)> = clips(&s, "keys/chords").into_iter().map(|c| (c.1, c.2)).collect();
     assert_eq!(keys, [(0.0, 32.0), (128.0, 32.0), (132.0, 4.0)]);
     assert!(done.made.iter().all(|(l, id)| l == &addr("keys/chords") && ClipId::valid(id)));
@@ -312,8 +313,16 @@ fn kinds_and_units_never_mix() {
     let why = refused(&mut s, Gesture::Move { clips: cutoff, by: 0.0, to: Some(addr("bass/drop")), copy: true });
     assert!(why.contains("hz") && why.contains("unit01") && why.contains("can't share clips"), "{why}");
     let clip = data(&s, "bass/cutoff").unwrap().clip_value("adp0sw76").unwrap();
-    let why =
-        refused(&mut s, Gesture::Paste { clips: vec![Copied { from: addr("bass/cutoff"), clip }], to: Some(addr("kick/hits")), at: 0.0 });
+    let why = refused(
+        &mut s,
+        Gesture::Paste {
+            clips: vec![Copied { from: addr("bass/cutoff"), clip }],
+            to: Some(addr("kick/hits")),
+            at: 0.0,
+            into: None,
+            fit: false,
+        },
+    );
     assert!(why.contains("An automation clip can't go on a notes lane"), "{why}");
     let why = refused(&mut s, Gesture::Move { clips: kick(), by: -1.0, to: None, copy: false });
     assert!(why.contains("before the song starts"), "{why}");
@@ -975,4 +984,177 @@ fn follow_tempo_keeps_the_clip_where_it_plays_and_undo_takes_it_back() {
     }
     assert_eq!(audio(&s, "a3s9vpxb"), was, "three undos: off, the tempo and on, taken back");
     assert_eq!(s.accepted().compiled.data.tempo().segments().len(), 2);
+}
+
+/// Each note of the clips of `lane` as `(pitch, start, length, velocity)`, clip by clip.
+fn full_notes(s: &Session, lane: &str) -> Vec<Vec<(f64, f64, f64, f64)>> {
+    let Some(LaneData::Notes(c)) = data(s, lane) else { panic!("{lane} isn't a notes lane") };
+    c.iter().map(|c| c.notes.iter().map(|n| (n.pitch, n.start, n.length, n.velocity)).collect()).collect()
+}
+
+/// Set the song's key, a layout-only step of its own.
+fn song_key(s: &mut Session, root: &str, scale: &str) {
+    crate::songkey::set(s, Some(crate::songkey::SongKey::new(root, scale).unwrap())).unwrap();
+}
+
+// NOTE-4: a stamp places the chord built on the key's notes in one Tx, which one undo takes back
+// byte for byte. Its root is a note of the key; a name or a number; the chord goes inside its clip.
+#[test]
+fn a_stamp_is_one_undo_step() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let clip = notes_clip("a", 4.0, 8.0, &[(45.0, 0.0, 1.0)]);
+    go(&mut s, Gesture::Set { lane: addr("keys/chords"), put: vec![clip], delete: vec!["6ryexzev".into()] });
+    let stamp = |root: serde_json::Value, chord: &str, inversion: u32, at: f64| -> Gesture {
+        serde_json::from_value(serde_json::json!({
+            "op": "stamp", "clip": {"module": "keys", "lane": "chords", "id": "a"},
+            "at": at, "root": root, "chord": chord, "inversion": inversion, "length": 2
+        }))
+        .unwrap()
+    };
+    let why = refused(&mut s, stamp(serde_json::json!("D4"), "triad", 0, 6.0));
+    assert_eq!(why, "edit rejected: Set the song's key first: a chord stamp is built on its notes.");
+    song_key(&mut s, "C", "major");
+    let before = f.read("data/keys/chords.json");
+    let n = s.accepted().number;
+    let done = go(&mut s, stamp(serde_json::json!("D4"), "triad", 0, 6.0));
+    assert_eq!(s.accepted().number, n + 1, "one Tx");
+    assert_eq!(
+        full_notes(&s, "keys/chords"),
+        [vec![(45.0, 0.0, 1.0, 0.8), (62.0, 2.0, 2.0, 0.8), (65.0, 2.0, 2.0, 0.8), (69.0, 2.0, 2.0, 0.8)]]
+    );
+    assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("no note", "3 notes"), "what only one side has");
+    // A 7th of G in its second inversion, the root a number, at a velocity.
+    let mut g = stamp(serde_json::json!(55), "seventh", 2, 4.0);
+    if let Gesture::Stamp { velocity, .. } = &mut g {
+        *velocity = Some(0.5);
+    }
+    go(&mut s, g);
+    assert_eq!(
+        full_notes(&s, "keys/chords")[0][..4],
+        [(45.0, 0.0, 1.0, 0.8), (62.0, 0.0, 2.0, 0.5), (65.0, 0.0, 2.0, 0.5), (67.0, 0.0, 2.0, 0.5)]
+    );
+    crate::undo(&mut s).unwrap();
+    crate::undo(&mut s).unwrap();
+    assert_eq!(f.read("data/keys/chords.json"), before, "two undos put every byte back");
+    // Refused in words: a root out of the key, a place outside the clip, a drum-kit-free chromatic key.
+    assert_eq!(
+        refused(&mut s, stamp(serde_json::json!("C#4"), "triad", 0, 6.0)),
+        "edit rejected: C♯ isn't in C major: a chord is built on one of its notes (C, D, E, F, G, A, B)"
+    );
+    assert_eq!(
+        refused(&mut s, stamp(serde_json::json!("C4"), "triad", 0, 12.0)),
+        "edit rejected: A chord goes inside its clip: from beat 4 to beat 12."
+    );
+    song_key(&mut s, "C", "chromatic");
+    assert!(refused(&mut s, stamp(serde_json::json!("C4"), "triad", 0, 6.0)).contains("has no chords to stamp"));
+    assert!(serde_json::from_value::<Gesture>(serde_json::json!({"op": "stamp", "clip": {"module": "keys", "lane": "chords", "id": "a"}, "at": 4, "root": "H4", "chord": "triad"})).is_err());
+}
+
+// NOTE-5: notes copied from one clip paste into another, the earliest at the place given, keeping
+// their distances; only the target lane changes, by exactly those notes, and one undo takes it
+// back. With `fit`, each pitch goes to the nearest note of the key.
+#[test]
+fn notes_paste_into_another_clip() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    go(
+        &mut s,
+        Gesture::Set {
+            lane: addr("keys/chords"),
+            put: vec![notes_clip("a", 8.0, 8.0, &[(72.0, 0.0, 1.0)])],
+            delete: vec!["6ryexzev".into()],
+        },
+    );
+    let (bass, keys) = (f.read("data/bass/notes.json"), f.read("data/keys/chords.json"));
+    // Two notes of the bass, as the roll copies them: a notes clip that starts at the first.
+    let copied = Copied {
+        from: addr("bass/notes"),
+        clip: serde_json::json!({"start": 0.75, "length": 1.25, "notes": [
+            {"pitch": "A1", "start": 0, "length": 0.25, "velocity": 0.8},
+            {"pitch": "C#2", "start": 0.75, "length": 0.5, "velocity": 0.6}]}),
+    };
+    let paste =
+        |at: f64, fit: bool| Gesture::Paste { clips: vec![copied.clone()], to: None, at, into: Some(by_id("keys/chords", "a")), fit };
+    let n = s.accepted().number;
+    let done = go(&mut s, paste(10.0, false));
+    assert_eq!(s.accepted().number, n + 1, "one Tx");
+    assert!(done.made.is_empty(), "no clip made: {:?}", done.made);
+    assert_eq!(f.read("data/bass/notes.json"), bass, "the clip copied from is as it was");
+    assert_eq!(full_notes(&s, "keys/chords"), [vec![(72.0, 0.0, 1.0, 0.8), (33.0, 2.0, 0.25, 0.8), (37.0, 2.75, 0.5, 0.6)]]);
+    assert_eq!(
+        changed_lines(&keys, &f.read("data/keys/chords.json")),
+        [
+            "    {\"pitch\": \"C5\", \"start\": 0, \"length\": 1, \"velocity\": 0.8},",
+            "    {\"pitch\": \"A1\", \"start\": 2, \"length\": 0.25, \"velocity\": 0.8},",
+            "    {\"pitch\": \"C#2\", \"start\": 2.75, \"length\": 0.5, \"velocity\": 0.6}",
+        ],
+        "the note before them gains its comma; the two pasted follow it"
+    );
+    crate::undo(&mut s).unwrap();
+    assert_eq!(f.read("data/keys/chords.json"), keys, "one undo puts every byte back");
+    // Fitted to A minor, C♯2 is a tie between C2 and D2: down to C2.
+    song_key(&mut s, "A", "minor");
+    go(&mut s, paste(8.0, true));
+    assert_eq!(full_notes(&s, "keys/chords"), [vec![(33.0, 0.0, 0.25, 0.8), (72.0, 0.0, 1.0, 0.8), (36.0, 0.75, 0.5, 0.6)]]);
+    // Refused in words: before the clip, into an automation clip, automation into notes, both
+    // `into` and `to`.
+    assert_eq!(refused(&mut s, paste(6.0, false)), "edit rejected: Paste inside the clip: from beat 8 on.");
+    let into_points =
+        Gesture::Paste { clips: vec![copied.clone()], to: None, at: 0.0, into: Some(by_id("bass/cutoff", "adp0sw76")), fit: false };
+    assert!(refused(&mut s, into_points).contains("notes clip"));
+    let points = Copied { from: addr("bass/cutoff"), clip: serde_json::json!({"start": 0, "length": 4, "points": [[0, 100]]}) };
+    let wrong = Gesture::Paste { clips: vec![points], to: None, at: 8.0, into: Some(by_id("keys/chords", "a")), fit: false };
+    assert_eq!(refused(&mut s, wrong), "edit rejected: Only notes paste into a notes clip.");
+    let both = Gesture::Paste {
+        clips: vec![copied.clone()],
+        to: Some(addr("keys/chords")),
+        at: 8.0,
+        into: Some(by_id("keys/chords", "a")),
+        fit: false,
+    };
+    assert_eq!(refused(&mut s, both), "edit rejected: Paste into a clip, or onto a lane: not both.");
+}
+
+// NOTE-7: a groove on some notes of a clip is one Tx and one undo step; again, it changes nothing.
+#[test]
+fn a_groove_is_one_undo_step() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let sixteenths: Vec<(f64, f64, f64)> = (0..4).map(|k| (60.0, k as f64 * 0.25, 0.25)).collect();
+    go(
+        &mut s,
+        Gesture::Set { lane: addr("keys/chords"), put: vec![notes_clip("a", 4.0, 4.0, &sixteenths)], delete: vec!["6ryexzev".into()] },
+    );
+    let before = f.read("data/keys/chords.json");
+    let groove = |notes: Option<Vec<u32>>, g: serde_json::Value| -> Gesture {
+        let mut v = serde_json::json!({"op": "groove", "clips": [{"module": "keys", "lane": "chords", "id": "a"}], "groove": g});
+        if let Some(n) = notes {
+            v["notes"] = serde_json::json!(n);
+        }
+        serde_json::from_value(v).unwrap()
+    };
+    let n = s.accepted().number;
+    go(&mut s, groove(None, serde_json::json!({"name": "swing", "amount": 0.6, "step": 0.25})));
+    assert_eq!(s.accepted().number, n + 1);
+    assert_eq!(notes_by_id(&s, "keys/chords")[0].3, [(60.0, 0.0, 0.25), (60.0, 0.3, 0.2), (60.0, 0.5, 0.25), (60.0, 0.8, 0.2)]);
+    let again = go(&mut s, groove(None, serde_json::json!({"name": "swing", "amount": 0.6, "step": 0.25})));
+    assert_eq!((s.accepted().number, again.edited.after.as_str()), (n + 1, "no change"), "twice is once");
+    crate::undo(&mut s).unwrap();
+    assert_eq!(f.read("data/keys/chords.json"), before);
+    // Accents on two notes picked: their velocities only.
+    go(&mut s, groove(Some(vec![0, 2]), serde_json::json!({"name": "accents"})));
+    let v: Vec<f64> = full_notes(&s, "keys/chords")[0].iter().map(|n| n.3).collect();
+    assert_eq!(v, [0.9, 0.8, 0.75, 0.8]);
+    assert!(
+        refused(&mut s, groove(None, serde_json::json!({"name": "swing", "amount": 0.8, "step": 0.25})))
+            .contains("Swing goes from 50% to 71%")
+    );
+    assert_eq!(
+        refused(&mut s, groove(Some(vec![4]), serde_json::json!({"name": "shuffle"}))),
+        "The clip has 4 notes, so it has no note 5."
+    );
+    let why =
+        refused(&mut s, Gesture::Groove { clips: vec![by_id("bass/cutoff", "adp0sw76")], notes: None, groove: grooves::Groove::Shuffle });
+    assert!(why.contains("notes"), "{why}");
 }
