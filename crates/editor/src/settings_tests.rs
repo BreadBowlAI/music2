@@ -537,7 +537,7 @@ fn a_plugins_named_steps_become_a_menu() {
     assert_eq!(steps, Some(&["Soft".to_string(), "Warm".to_string(), "Hard".to_string()][..]), "the host named its steps");
     let knob = card(&s, "plugin").knobs.into_iter().find(|k| k.label.starts_with("mode")).expect("Mode's knob");
     let options: Vec<(Json, &str)> = knob.options.iter().map(|o| (o.value.clone(), o.label.as_str())).collect();
-    assert_eq!((knob.kind, knob.value), (Kind::Choice, 1.0));
+    assert_eq!((knob.kind, knob.value), (Kind::Choice, json!(1)));
     assert_eq!(options, [(json!(0), "Soft"), (json!(1), "Warm"), (json!(2), "Hard")]);
     let bright = card(&s, "plugin").knobs.into_iter().find(|k| k.label.starts_with("bright")).expect("Bright's knob");
     let options: Vec<(Json, &str)> = bright.options.iter().map(|o| (o.value.clone(), o.label.as_str())).collect();

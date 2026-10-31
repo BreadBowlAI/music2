@@ -392,7 +392,7 @@ An example body:
 
 ### `POST /api/graph/set`
 
-Write a knob's value, or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step (for an agent, never a drag's commit). It writes the song: one undo step.
+Write a knob's value (a number, a choice's name, true or false), or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step; more knobs in `with` are written with it as the same step (for an agent, never a drag's commit). It writes the song: one undo step.
 
 An example body:
 

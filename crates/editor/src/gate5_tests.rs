@@ -101,7 +101,8 @@ fn every_declared_control_is_a_knob() {
                         );
                     }
                     if let Some([lo, hi]) = k.range {
-                        assert!(lo <= k.value && k.value <= hi, "{at}: {} is outside {lo}..{hi}", k.value);
+                        let v = k.value.as_f64().unwrap_or_else(|| panic!("{at}: {} isn't a number", k.value));
+                        assert!(lo <= v && v <= hi, "{at}: {v} is outside {lo}..{hi}");
                     }
                     if !k.written {
                         assert_eq!(*node, format!("{}#{}", site.file, site.ordinal), "{at}: on its call");
@@ -138,7 +139,7 @@ fn knob_unit_is_the_constants() {
     let knobs: Vec<&Knob> = view.modules[0].nodes.iter().flat_map(|n| &n.knobs).collect();
     let knob = |label: &str| knobs.iter().find(|k| k.label == label).unwrap_or_else(|| panic!("no {label} in {knobs:?}"));
     assert_eq!((knob("freq").unit, knob("freq").range, knob("freq").log), (Some(Unit::Semitones.name()), Some([0.0, 127.0]), false));
-    assert_eq!((knob("gain").unit, knob("gain").range, knob("gain").default), (Some(Unit::Unit01.name()), None, None));
+    assert_eq!((knob("gain").unit, knob("gain").range, knob("gain").default.clone()), (Some(Unit::Unit01.name()), None, None));
 }
 
 // D4, D10: one literal reaching two slots (`const g = frac(0.3)` given to a delay's feedback and

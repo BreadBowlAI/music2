@@ -7,6 +7,7 @@ import {
   bars,
   clipIndex,
   clipRef,
+  automation,
   findLane,
   formatValue,
   hasOwnId,
@@ -20,6 +21,7 @@ import {
   type AudioClip,
   type ClipRef,
   type ControlClip,
+  type StepClip,
   type Diagnostic,
   type GraphState,
   type Meter,
@@ -54,6 +56,7 @@ import {
 } from "../lib/clips";
 import { clean, gridOp, gridTarget, pickName, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
 import { added, bounded, hit, line, moved, painted, pickedIn as pointIn, usePoints, type Point } from "../lib/points";
+import { pickedStep, putStep, stepLabel, useSteps, type StepPoint } from "../lib/steps";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { laneScale, type LaneScale } from "../lib/laneScale";
 import { hide as hideLane, useAllHidden, useHidden } from "../lib/hiddenLanes";
@@ -105,6 +108,8 @@ interface Made { revision: number; clip: ClipRef }
 interface ClipEdits {
   /** A press on a clip: on its body or (`data-edge`) one of its edges. */
   down: (clip: ClipRef, e: React.PointerEvent<HTMLElement>) => void;
+  /** A name picked from a lane of names' menu (CARD-24): a point of it at the menu's beat, or the point it was opened on named anew. */
+  step: (at: NamesAt, value: string | boolean) => void;
   /** A double-click on empty space in a notes or automation lane (module and lane keys), at `beat`. */
   create: (module: string, lane: string, beat: number) => void;
   unpick: (module: string) => void;
@@ -148,6 +153,15 @@ interface ClipEdits {
 }
 
 /** A menu open on a clip, a lane's empty space or an automation lane's header: where the pointer was, the lane and the beat. */
+/** Where a lane of names' menu of names opened (CARD-24): its clip, the beat in it, and the point it was opened on, if one. */
+interface NamesAt {
+  x: number;
+  y: number;
+  ref: ClipRef;
+  beat: number;
+  index: number | null;
+}
+
 interface MenuAt {
   x: number;
   y: number;
@@ -213,7 +227,7 @@ interface Drag {
   landed?: number;
 }
 
-type AnyClip = NoteClip | ControlClip | AudioClip;
+type AnyClip = NoteClip | ControlClip | StepClip | AudioClip;
 
 /** The lane under a point, by its row's `data-lane` (`module.lane`), or null. */
 function laneUnder(x: number, y: number): LaneAddr | null {
@@ -230,8 +244,12 @@ const UNITS: Record<string, string> = { hz: "Hz", db: "dB", seconds: "seconds", 
  * automation crosses only within its unit. Null when it can.
  */
 function refusal(from: TimelineLane, to: TimelineLane): string | null {
-  if (from.kind !== to.kind) return { notes: "Notes clips only", audio: "Audio clips only", control: "Automation only" }[to.kind];
+  if (from.kind !== to.kind) return { notes: "Notes clips only", audio: "Audio clips only", control: "Automation only", steps: "Names only" }[to.kind];
   if (from.kind === "control" && to.kind === "control" && (from.unit ?? null) !== (to.unit ?? null)) return `Only ${UNITS[to.unit ?? ""] ?? "plain-number"} automation`;
+  // A lane of names takes clips of the same names (CARD-24).
+  if (from.kind === "steps" && to.kind === "steps" && from.options.map((o) => String(o.value)).join("|") !== to.options.map((o) => String(o.value)).join("|")) {
+    return `Only ${to.options.map((o) => o.label).join(", ")}`;
+  }
   return null;
 }
 
@@ -290,11 +308,11 @@ function room(meter: Meter[], end: number, beat: number) {
  * automation lanes are 32px rows under those, folded until asked for (A).
  */
 function rowsOf(track: TimelineTrack) {
-  const primary = track.lanes.find((l) => l.kind !== "control") ?? null;
+  const primary = track.lanes.find((l) => !automation(l)) ?? null;
   return {
     primary,
-    others: track.lanes.filter((l) => l !== primary && l.kind !== "control"),
-    controls: track.lanes.filter((l) => l.kind === "control"),
+    others: track.lanes.filter((l) => l !== primary && !automation(l)),
+    controls: track.lanes.filter(automation),
   };
 }
 
@@ -591,6 +609,8 @@ export default function SongTimeline({
   const content = useRef<HTMLDivElement>(null);
   const [marquee, setMarquee] = useState<Marquee | null>(null);
   const [menu, setMenu] = useState<MenuAt | null>(null);
+  // A lane of names' menu of names, at a click on one of its clips (CARD-24): a pick puts a point there.
+  const [names, setNames] = useState<NamesAt | null>(null);
   // Repeat…'s popover, where the clip menu was.
   const [repeating, setRepeating] = useState<{ x: number; y: number } | null>(null);
   // An automation point being dragged or painted: what the bubble at the pointer says.
@@ -615,6 +635,8 @@ export default function SongTimeline({
     if (drag?.landed !== undefined && revision >= drag.landed) setDrag(null);
     const editing = usePoints.getState().editing;
     if (editing?.landed !== undefined && revision >= editing.landed) usePoints.setState({ editing: null });
+    const steps = useSteps.getState().editing;
+    if (steps?.landed !== undefined && revision >= steps.landed) useSteps.setState({ editing: null });
   }, [revision, drag]);
   // A new song starts with nothing selected; the second Esc (the track deselected) clears it too.
   useEffect(() => {
@@ -861,6 +883,80 @@ export default function SongTimeline({
         },
       );
     };
+    /** A lane of names' new points (CARD-24): one gesture, drawn as sent until the timeline shows it. */
+    const sendSteps = (graph: GraphState, clip: ClipRef, server: ServerRef, points: StepPoint[], step: string, lease: LaneLease | null = null) => {
+      useSteps.setState({ editing: { clip, points, landed: Infinity } });
+      const gesture: Gesture = { op: "points", clip: server, points };
+      (lease ? lease.finish(gesture, { name: step }) : send(graph, gesture, { name: step })).then(
+        (done) => useSteps.setState((s) => (s.editing?.clip === clip ? { editing: { ...s.editing, landed: done.revision } } : s)),
+        (error) => {
+          useSteps.setState((s) => (s.editing?.clip === clip ? { editing: null } : s));
+          toast(error);
+        },
+      );
+    };
+    /**
+     * A press on a step of a lane of names (CARD-24): the point is picked (⌫ deletes it), a drag moves
+     * it along the clip, heard while the song plays; a click without a move opens the menu of names
+     * there, whose pick names it anew.
+     */
+    const stepFrom = (ref: ClipRef, lane: Extract<TimelineLane, { kind: "steps" }>, clip: StepClip, r: DOMRect, e: React.PointerEvent<HTMLElement>, index: number) => {
+      const graph = ready();
+      const server = serverRef(lane, ref);
+      if (!graph || !server) return;
+      useClipSelection.getState().clear();
+      scroller.current?.focus({ preventScroll: true });
+      const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX;
+      el.setPointerCapture(pointer);
+      const { meter } = latest.current.timeline;
+      const beatAt = (x: number, free: boolean) => {
+        const b = clip.start + ((x - r.left) / r.width) * clip.length;
+        return Math.min(clip.length, Math.max(0, clean(snapSong(meter, b, zoomNow(), free) - clip.start)));
+      };
+      // One point picked in the window: this one.
+      usePoints.setState({ picked: null });
+      let points: StepPoint[] = clip.points;
+      useSteps.setState({ picked: { clip: ref, index, at: points[index] } });
+      let moving = false;
+      let lease: LaneLease | null = null;
+      const move = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointer) return;
+        if (!moving && Math.abs(ev.clientX - x0) < 3) return;
+        moving = true;
+        const at = beatAt(ev.clientX, skipsSnap(ev));
+        points = clip.points.map((p, k): StepPoint => (k === index ? [at, p[1]] : p));
+        useSteps.setState({ editing: { clip: ref, points } });
+        setBubble({ at: { x: ev.clientX, y: ev.clientY }, text: `${stepLabel(lane.options, points[index][1])} · ${position(meter, clip.start + at)}` });
+        const gesture: Gesture = { op: "points", clip: server, points };
+        if (lease) lease.update(gesture);
+        else
+          lease = leaseDrag(graph, gesture, (why) => {
+            toast(why);
+            cancel();
+          });
+      };
+      const off = () => {
+        for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
+        setBubble(null);
+      };
+      const cancel = () => {
+        off();
+        lease?.abort();
+        useSteps.setState({ editing: null });
+        if (el.hasPointerCapture(pointer)) el.releasePointerCapture(pointer);
+      };
+      const end = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointer) return;
+        if (ev.type !== "pointerup") return cancel();
+        off();
+        if (!moving) return setNames({ x: ev.clientX, y: ev.clientY, ref, beat: clip.points[index][0], index });
+        const sorted = [...points].sort((a, b) => a[0] - b[0]);
+        useSteps.setState({ picked: { clip: ref, index: sorted.indexOf(points[index]), at: points[index] } });
+        sendSteps(graph, ref, server, sorted, `moving a ${laneTitle(lane)} point`, lease);
+      };
+      const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
+      for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
+    };
     /**
      * A press on an automation clip's curve (TL-6): on a point, it is picked and a drag moves it; on
      * the line, a point is added there and a drag moves it; in Draw mode (B), a drag paints a point
@@ -872,6 +968,7 @@ export default function SongTimeline({
       if (!graph || !server) return;
       // A point is the selection now, not the clip.
       useClipSelection.getState().clear();
+      useSteps.setState({ picked: null });
       scroller.current?.focus({ preventScroll: true });
       const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX, y0 = e.clientY;
       el.setPointerCapture(pointer);
@@ -1009,7 +1106,19 @@ export default function SongTimeline({
             if (draw || point !== null || (at && !onEdge)) return pointsFrom(ref, lane, c as ControlClip, r, e, point);
           }
         }
+        // On a step's mark of a lane of names: that point (CARD-24).
+        let stepBeat: number | null = null;
+        if (lane.kind === "steps" && !latest.current.locked && !add && !toggle && !onEdge) {
+          const box = e.currentTarget.getBoundingClientRect();
+          const r = new DOMRect(box.left + BORDER, box.top + BORDER + BODY_TOP, box.width - 2 * BORDER, box.height - 2 * BORDER - BODY_TOP - BODY_BOTTOM);
+          const clip = lane.clips[i];
+          const near = clip.points.findIndex((p) => Math.abs(r.left + (p[0] / clip.length) * r.width - e.clientX) <= 4);
+          if (near >= 0) return stepFrom(ref, lane, clip, r, e, near);
+          const b = clip.start + ((e.clientX - r.left) / r.width) * clip.length;
+          stepBeat = Math.min(clip.length, Math.max(0, clean(snapSong(latest.current.timeline.meter, b, zoomNow(), skipsSnap(e)) - clip.start)));
+        }
         usePoints.setState({ picked: null });
+        useSteps.setState({ picked: null });
         const sel = useClipSelection.getState();
         if (add) sel.add(ref);
         else if (!toggle && !isPicked(sel.picked, ref)) sel.only([ref]);
@@ -1099,9 +1208,10 @@ export default function SongTimeline({
           if (ev.pointerId !== pointer) return;
           off();
           if (!moved) {
-            // A click: the selection's rules.
+            // A click: the selection's rules; on a lane of names, the menu of names to put a point there.
             if (ev.type === "pointerup" && toggle) useClipSelection.getState().toggle(ref);
             else if (ev.type === "pointerup" && !add) useClipSelection.getState().only([ref]);
+            if (ev.type === "pointerup" && stepBeat !== null) setNames({ x: ev.clientX, y: ev.clientY, ref, beat: stepBeat, index: null });
             return;
           }
           // Let go over a lane that can't take the clips, or the drag cancelled: nothing happens.
@@ -1133,7 +1243,7 @@ export default function SongTimeline({
         // The server gives it a new id (FMT-12); it is selected and opens once the timeline shows it.
         const m: Made = { revision: Infinity, clip: { module, lane: key, id: "" } };
         made.current = m;
-        const what = lane.kind === "control" ? `${laneTitle(lane)} automation` : named(module);
+        const what = automation(lane) ? `${laneTitle(lane)} automation` : named(module);
         send(graph, { op: "create", module, lane: key, start, length }, { name: `adding a ${what} clip` }).then(
           (done) => {
             const id = done.made.find((x) => x.module === module && x.lane === key)?.id;
@@ -1152,6 +1262,7 @@ export default function SongTimeline({
         useShell.getState().setClip(module, null);
         useClipSelection.getState().clear();
         usePoints.setState({ picked: null });
+        useSteps.setState({ picked: null });
       },
       press(e) {
         pressed.current = e && e.button === 0 ? { pointer: e.pointerId, x: e.clientX } : null;
@@ -1184,7 +1295,7 @@ export default function SongTimeline({
           // Nothing selected: every clip under the playhead on the selected track, in the lanes it shows.
           const m = useShell.getState().selected;
           const track = m ? timeline.tracks.find((t) => t.module === m) : undefined;
-          const shown = track?.lanes.filter((l) => l.kind !== "control" || useShell.getState().open.has(track.module)) ?? [];
+          const shown = track?.lanes.filter((l) => !automation(l) || useShell.getState().open.has(track.module)) ?? [];
           targets = shown.flatMap((l) =>
             l.clips.flatMap((c: AnyClip, i) => {
               const ref = clipRef(track!.module, l.key, l.clips, i);
@@ -1272,7 +1383,29 @@ export default function SongTimeline({
         setMenu({ x: e.clientX, y: e.clientY, module, lane, beat, on: clip ? "clip" : "lane" });
       },
       unautomate: (module, key) => !latest.current.locked && unautomate({ module, lane: key }),
+      step(at, value) {
+        const graph = ready();
+        const lane = findLane(latest.current.timeline, at.ref.module, at.ref.lane);
+        const c = lane?.kind === "steps" ? lane.clips[clipIndex(lane.clips, at.ref)] : undefined;
+        const server = lane && c ? serverRef(lane, at.ref) : null;
+        if (!graph || !lane || !c || !server) return;
+        const points = at.index !== null ? c.points.map((p, k): StepPoint => (k === at.index ? [p[0], value] : p)) : putStep(c.points, [at.beat, value]);
+        const what = at.index !== null ? `naming a ${laneTitle(lane)} point` : `adding a ${laneTitle(lane)} point`;
+        sendSteps(graph, at.ref, server, points, what);
+      },
       unpoint() {
+        // A lane of names' point (CARD-24).
+        const step = useSteps.getState().picked;
+        if (step) {
+          const graph = ready();
+          const lane = findLane(latest.current.timeline, step.clip.module, step.clip.lane);
+          const c = lane?.kind === "steps" ? lane.clips[clipIndex(lane.clips, step.clip)] : undefined;
+          const server = lane && c ? serverRef(lane, step.clip) : null;
+          useSteps.setState({ picked: null });
+          if (!lane || !c || !server || pickedStep(step, c.points, false) < 0 || !graph) return !!graph;
+          sendSteps(graph, step.clip, server, c.points.filter((_, k) => k !== step.index), `deleting a ${laneTitle(lane)} point`);
+          return true;
+        }
         const { picked } = usePoints.getState();
         if (!picked) return false;
         const graph = ready();
@@ -1463,14 +1596,18 @@ export default function SongTimeline({
     const shown = s.selected ? s.clips[s.selected] : undefined;
     const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
     // A point picked is the selection while no clip is.
-    const point = sel.picked.length ? null : usePoints.getState().picked;
+    // A number lane's point, or a lane of names' (CARD-24): ⌫ deletes it, Esc unpicks it.
+    const point = sel.picked.length ? null : (usePoints.getState().picked ?? useSteps.getState().picked);
     const bars = useSection.getState().bars;
     if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && point) edits.unpoint();
     else if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && sel.picked.length) edits.remove();
     else if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && bars) sections.clear();
     else if (e.key.toLowerCase() === "q" && plain && !e.shiftKey && sel.picked.length) edits.quantize();
     else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && plain && sel.picked.length) edits.nudge(e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
-    else if (e.key === "Escape" && point) usePoints.setState({ picked: null });
+    else if (e.key === "Escape" && point) {
+      usePoints.setState({ picked: null });
+      useSteps.setState({ picked: null });
+    }
     else if (e.key === "Escape" && (sel.picked.length || shown || bars)) {
       sel.clear();
       clearBars();
@@ -1487,7 +1624,7 @@ export default function SongTimeline({
   const songLanesH = songShown * LANE_H + (songShown < songRows.controls.length ? HIDDEN_ROW_H : 0);
   const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songLanesH : 0);
   songRow.current = songH;
-  const all = [...rows, song].filter((t) => t.lanes.some((l) => l.kind === "control")).map((t) => t.module);
+  const all = [...rows, song].filter((t) => t.lanes.some(automation)).map((t) => t.module);
   const anyOpen = all.some((m) => open.has(m));
   return (
     <div
@@ -1604,6 +1741,7 @@ export default function SongTimeline({
         )}
         {bubble && <DragBubble at={bubble.at}>{bubble.text}</DragBubble>}
         {menu && <TimelineMenu at={menu} timeline={timeline} edits={edits} sections={sections} locked={locked} onOpenClip={onOpenClip} onRepeat={setRepeating} onClose={() => setMenu(null)} />}
+        {names && <NamesMenu at={names} timeline={timeline} onPick={edits.step} onClose={() => setNames(null)} />}
         {repeating && <RepeatPopover at={repeating} onRepeat={(n) => edits.repeat(n)} onClose={() => setRepeating(null)} />}
         <VolumePopover />
         {/* The Song's row, Live's Main track: pinned at the foot of the track list, with its own playhead and loop wash. */}
@@ -2189,7 +2327,7 @@ const TrackRows = memo(function TrackRows({
                 if (dots) openTrackMenu(module, dots);
               }
             : // An automation lane's header: Remove automation, Hide automation.
-              lane?.kind === "control" && !waiting
+              lane && automation(lane) && !waiting
               ? (e) => edits.menu(e, module, lane.key, 0, "header")
               : undefined
         }
@@ -2314,7 +2452,7 @@ function LaneLabel({ lane, height }: { lane: TimelineLane; height: number }) {
   const name = laneTitle(lane);
   // In a taller row, at the top, where it sits at the usual height.
   return (
-    <div className="absolute inset-x-0 top-0 flex items-center" style={{ height: Math.min(height, lane.kind === "control" ? LANE_H : ROW_H) }}>
+    <div className="absolute inset-x-0 top-0 flex items-center" style={{ height: Math.min(height, automation(lane) ? LANE_H : ROW_H) }}>
       <span className="absolute left-7 right-[64px] text-sm text-fg-muted truncate" title={name === lane.key ? lane.key : `${name} (${lane.key})`}>
         {name}
       </span>
@@ -2447,9 +2585,9 @@ function TimelineMenu({
     ];
   } else if (at.on === "header") {
     items = [
-      { id: "unautomate", label: "Remove automation", off: off ?? (lane.kind === "control" ? null : "Only an automation lane can be removed."), run: () => edits.unautomate(at.module, at.lane) },
+      { id: "unautomate", label: "Remove automation", off: off ?? (automation(lane) ? null : "Only an automation lane can be removed."), run: () => edits.unautomate(at.module, at.lane) },
       // One lane out of sight, kept so with the song (D4); a line under the track's lanes brings it back.
-      lane.kind === "control" ? { id: "hide-lane", label: "Hide this lane", run: () => hideLane(at.module, at.lane) } : null,
+      automation(lane) ? { id: "hide-lane", label: "Hide this lane", run: () => hideLane(at.module, at.lane) } : null,
       { id: "hide", label: "Hide automation", shortcut: "A", run: () => useShell.getState().toggleLanes(at.module, []) },
     ];
   } else if (at.on === "clip") {
@@ -2480,11 +2618,29 @@ function TimelineMenu({
     items = [
       lane.kind !== "audio" ? { id: "add", label: "Add clip", off: off ?? (taken ? "A clip is here already." : null), run: () => edits.create(at.module, at.lane, at.beat) } : null,
       { id: "paste", label: "Paste here", off: none, run: () => edits.paste(snapSong(timeline.meter, at.beat, zoomNow()), { module: at.module, lane: at.lane }) },
-      lane.kind === "control" ? { id: "hide", label: "Hide automation", shortcut: "A", run: () => useShell.getState().toggleLanes(at.module, []) } : null,
+      automation(lane) ? { id: "hide", label: "Hide automation", shortcut: "A", run: () => useShell.getState().toggleLanes(at.module, []) } : null,
     ];
   }
   const label = at.on === "section" ? `Menu of ${barsWords(timeline.meter, bars![0], bars![1])}` : at.on === "clip" ? "Clip menu" : `${laneTitle(lane)} lane menu`;
   return <PointMenu at={at} label={label} items={items} onClose={onClose} />;
+}
+
+/** A lane of names' menu of names (CARD-24), at a click on one of its clips: its options, the one there checked. */
+function NamesMenu({ at, timeline, onPick, onClose }: { at: NamesAt; timeline: TimelineView; onPick: (at: NamesAt, value: string | boolean) => void; onClose: () => void }) {
+  const lane = findLane(timeline, at.ref.module, at.ref.lane);
+  if (!lane || lane.kind !== "steps") return null;
+  const c = lane.clips[clipIndex(lane.clips, at.ref)];
+  const now = c && at.index !== null ? c.points[at.index]?.[1] : undefined;
+  const items: MenuItem[] = lane.options.map((o) => ({
+    id: `name-${String(o.value)}`,
+    label: o.label,
+    checked: o.value === now,
+    run: () => {
+      onClose();
+      onPick(at, o.value);
+    },
+  }));
+  return <PointMenu at={at} label={`${laneTitle(lane)} names`} items={items} onClose={onClose} />;
 }
 
 /**
@@ -2580,6 +2736,9 @@ function LaneClips({
   // An automation point picked, and points being edited: drawn in place of the clip's own.
   const point = usePoints((s) => (s.picked && s.picked.clip.module === module && s.picked.clip.lane === lane.key ? s.picked : null));
   const editing = usePoints((s) => (s.editing && s.editing.clip.module === module && s.editing.clip.lane === lane.key ? s.editing : null));
+  // A lane of names' point picked, and its points being edited (CARD-24).
+  const step = useSteps((s) => (s.picked && s.picked.clip.module === module && s.picked.clip.lane === lane.key ? s.picked : null));
+  const stepping = useSteps((s) => (s.editing && s.editing.clip.module === module && s.editing.clip.lane === lane.key ? s.editing : null));
   // Draw mode (B) paints on automation clips: the pointer says so there.
   const painting = useShell((s) => s.draw) && lane.kind === "control" && editable;
   // A clip is named by its id; one without its own (FMT-12) only by where it is.
@@ -2591,9 +2750,12 @@ function LaneClips({
   // 0 at the bottom of a clip's drawing, 1 at its top, on the lane's scale (D3).
   const scale = lane.kind === "control" ? laneScale(lane) : null;
   const level = (v: number) => scale?.level(v) ?? 0;
+  const steps = (c: AnyClip): c is StepClip => lane.kind === "steps" && "points" in c;
   const inside = (c: AnyClip, tone: TrackColor, pickedPoint = -1, wave?: WaveEdit) =>
     "notes" in c ? (
       <Notes notes={audible(c)} length={c.length} color={tone} />
+    ) : steps(c) ? (
+      <Steps clip={c} options={lane.kind === "steps" ? lane.options : []} color={tone} picked={pickedPoint} />
     ) : "points" in c ? (
       <Curve clip={c} level={level} path={scale?.path ?? line} color={tone} picked={pickedPoint} />
     ) : (
@@ -2602,6 +2764,7 @@ function LaneClips({
   const words = (c: AnyClip) => {
     const how = editable ? `drag to move · ${mod.alt}-drag to copy · drag an edge to resize · Delete removes` : "";
     if ("notes" in c) return `${audible(c).length} notes, ${span(c)}\nDouble-click to edit the notes${how ? ` · ${how}` : ""}`;
+    if (steps(c)) return `${span(c)}${editable ? `\nClick to put a name there · drag a step's mark to move it · ${keyName("Backspace")} removes the picked one · drag elsewhere to move the clip` : ""}`;
     if ("points" in c) return `${span(c)}${editable ? `\nClick the line to add a point · drag a point to move it · B to draw · drag elsewhere to move the clip · ${mod.alt}-drag to copy` : ""}`;
     return `${audioLabel(c)}, ${span(c)}${how ? `\n${how[0].toUpperCase()}${how.slice(1)} · drag the top corners to fade` : ""}`;
   };
@@ -2615,7 +2778,8 @@ function LaneClips({
     const d = drag?.clips.find((x) => sameClip(x.ref, ref));
     let drawn: AnyClip = c;
     let hidden = false;
-    if (editing && "points" in c && sameClip(editing.clip, ref)) drawn = { ...c, points: editing.points };
+    if (editing && "points" in c && !steps(c) && sameClip(editing.clip, ref)) drawn = { ...c, points: editing.points };
+    if (stepping && steps(c) && sameClip(stepping.clip, ref)) drawn = { ...c, points: stepping.points };
     if (d && drag) {
       if (drag.kind === "move" && !drag.copy) {
         // Gone to another lane: hidden here, but kept, so the drag keeps the pointer it captured.
@@ -2645,7 +2809,13 @@ function LaneClips({
         {inside(
           drawn,
           color,
-          point && sameClip(point.clip, ref) && "points" in drawn ? pointIn(point, drawn.points, !!editing && sameClip(editing.clip, ref)) : -1,
+          steps(drawn)
+            ? step && sameClip(step.clip, ref)
+              ? pickedStep(step, drawn.points, !!stepping && sameClip(stepping.clip, ref))
+              : -1
+            : point && sameClip(point.clip, ref) && "points" in drawn
+              ? pointIn(point, drawn.points, !!editing && sameClip(editing.clip, ref))
+              : -1,
           lane.kind === "audio" ? { ref, lane, editable, picked: isPicked(picked, ref) } : undefined,
         )}
       </Clip>
@@ -2667,6 +2837,7 @@ function LaneClips({
       : [];
   return (
     <>
+      {lane.kind === "steps" && <NamesFallback clips={lane.clips} name={stepLabel(lane.options, lane.default)} />}
       {lane.kind === "control" && lane.default != null && (
         <Fallback clips={lane.clips} y={CLIP_INSET + BORDER + BODY_TOP + (1 - level(lane.default)) * (height - 2 * (CLIP_INSET + BORDER) - BODY_TOP - BODY_BOTTOM)} />
       )}
@@ -2852,6 +3023,63 @@ function Curve({
           />
         ))}
       </div>
+    </>
+  );
+}
+
+/**
+ * A clip of a lane of names (CARD-23): each point's name held until the next, the first from the
+ * clip's start, each step marked at its start. A name the choice no longer has shows struck through
+ * (it plays the fallback there, `lane.unknown-option`).
+ */
+function Steps({ clip, options, color, picked }: { clip: StepClip; options: { value: string | boolean; label: string }[]; color: TrackColor; picked: number }) {
+  const { points, length } = clip;
+  return (
+    <div className="absolute left-0 w-full" style={{ top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)` }}>
+      {points.map(([b, v], i) => {
+        // Each name from its point (the first from the clip's start; one before the start, which a
+        // file may hold, from the start) to the next, inside the clip.
+        const from = i === 0 ? 0 : Math.min(length, Math.max(0, b));
+        const to = i + 1 < points.length ? Math.min(length, Math.max(0, points[i + 1][0])) : length;
+        if (to <= from && i + 1 < points.length) return null;
+        const known = options.some((o) => o.value === v);
+        return (
+          <div
+            key={i}
+            data-step={stepLabel(options, v)}
+            data-step-index={i}
+            data-picked={i === picked || undefined}
+            className="absolute inset-y-0 flex items-center min-w-0 overflow-hidden"
+            style={{ left: `${(from / length) * 100}%`, width: `${(Math.max(0, to - from) / length) * 100}%` }}
+          >
+            <span aria-hidden className={clsx("absolute inset-y-0", i === picked ? "w-0.5 bg-fg-strong" : "w-px")} style={{ left: `${(Math.max(0, b - from) / Math.max(to - from, 1e-9)) * 100}%`, background: i === picked ? undefined : color.ink }} />
+            <span className={clsx("pl-1.5 text-xs truncate", !known && "line-through")} style={{ color: color.ink }}>
+              {stepLabel(options, v)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A lane of names' fallback where no clip is (CARD-23): its name, faint, at the start of each gap. */
+function NamesFallback({ clips, name }: { clips: StepClip[]; name: string }) {
+  const ppb = useZoom();
+  const gaps: number[] = [];
+  let at = 0;
+  for (const c of [...clips].sort((a, b) => a.start - b.start)) {
+    if (c.start > at) gaps.push(at);
+    at = Math.max(at, c.start + c.length);
+  }
+  gaps.push(at);
+  return (
+    <>
+      {gaps.map((a) => (
+        <span key={a} aria-hidden data-fallback={name} className="absolute top-1/2 -translate-y-1/2 pl-1.5 text-xs text-fg-faint pointer-events-none" style={{ left: a * ppb }}>
+          {name}
+        </span>
+      ))}
     </>
   );
 }

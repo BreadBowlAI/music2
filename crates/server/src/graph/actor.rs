@@ -230,7 +230,7 @@ impl Actor {
             }
             o.session.keep_change();
         }
-        self.settle_as(None, view)
+        self.settle_as(vec![], view)
     }
 
     /// The open song and its accepted revision now: what a step told after the job is read from.
@@ -944,6 +944,7 @@ impl Open {
                 let clips = match &mut lane {
                     TimelineLane::Notes { clips, .. } => Clips::Notes(std::mem::take(clips)),
                     TimelineLane::Control { clips, .. } => Clips::Control(std::mem::take(clips)),
+                    TimelineLane::Steps { clips, .. } => Clips::Steps(std::mem::take(clips)),
                     TimelineLane::Audio { clips, .. } => Clips::Audio(std::mem::take(clips)),
                 };
                 let rest = serde_json::to_string(&lane).expect("a lane serialises");
@@ -961,6 +962,7 @@ impl Open {
                         match (&mut lane, clips) {
                             (TimelineLane::Notes { clips, .. }, Clips::Notes(c)) => *clips = c,
                             (TimelineLane::Control { clips, .. }, Clips::Control(c)) => *clips = c,
+                            (TimelineLane::Steps { clips, .. }, Clips::Steps(c)) => *clips = c,
                             (TimelineLane::Audio { clips, .. }, Clips::Audio(c)) => *clips = c,
                             _ => unreachable!("taken from this lane"),
                         }
@@ -985,6 +987,7 @@ impl Open {
 enum Clips {
     Notes(Vec<m2_song::NoteClip>),
     Control(Vec<m2_song::ControlClip>),
+    Steps(Vec<m2_song::lane::StepClip>),
     Audio(Vec<m2_song::AudioClip>),
 }
 
@@ -1008,12 +1011,12 @@ impl Actor {
     /// publish it, in two phases (see the module). `install` is a value commit the engine must
     /// hear as its gesture ends.
     fn settle(&mut self, install: Option<Install>) -> Settled {
-        self.settle_as(install, true)
+        self.settle_as(install.into_iter().collect(), true)
     }
 
     /// [`Actor::settle`]; with `view` false (a tempo drag's preview) the view isn't published
     /// again while it shows the accepted revision: only what plays changed.
-    pub(super) fn settle_as(&mut self, install: Option<Install>, view: bool) -> Settled {
+    pub(super) fn settle_as(&mut self, install: Vec<Install>, view: bool) -> Settled {
         let inner = self.inner.clone();
         #[cfg(test)]
         let fail = self.fail_builds;
@@ -1158,14 +1161,14 @@ impl Actor {
             super::plugin_window::hear_now(o, &self.events, &mut self.unheard);
         }
         let mut cp = inner.control.lock();
-        let closing = install.as_ref().and_then(|i| i.lease);
+        let closing: Vec<u64> = install.iter().filter_map(|i| i.lease).collect();
         // Each live lease is carried to the accepted code, or ends (WRITE-22): it stays only while
         // its call is untouched and still reads its value.
         let decisions: Vec<(u64, Result<Control, &'static str>)> = cp
             .leases
             .live
             .iter()
-            .filter(|l| l.token == token && Some(l.id) != closing)
+            .filter(|l| l.token == token && !closing.contains(&l.id))
             .map(|l| {
                 let carried = if l.code_rev == o.code_rev {
                     let mut c = l.control.clone();
@@ -1380,7 +1383,7 @@ impl Actor {
                 }
             }
         }
-        if let Some(inst) = &install {
+        for inst in &install {
             let lease = inst.lease.and_then(|id| cp.leases.index(id).ok()).map(|i| cp.leases.close(i));
             // The new renderer was built from the revision that holds the value; any other
             // hears it now, in the step that ends the gesture.
@@ -1811,7 +1814,7 @@ impl Actor {
     /// engine is. The view stays as it is.
     pub(super) fn tempo_preview(&mut self, token: u64) {
         if self.open.as_ref().is_some_and(|o| o.token == token) {
-            self.settle_as(None, false);
+            self.settle_as(vec![], false);
         }
     }
 
@@ -1937,39 +1940,33 @@ impl Actor {
         }
     }
 
-    /// A plain value edit, with no gesture lease (an agent's `POST /set`). A control another
-    /// gesture holds is refused.
+    /// A plain value edit, with no gesture lease (an agent's `POST /set`): a number, a choice's name
+    /// or a switch's true or false, as its code writes it (CARD-21). A control another gesture holds
+    /// is refused.
     pub(super) fn set_value(
         &mut self,
         token: u64,
         revision: u64,
         id: &str,
         gesture: &str,
-        value: f64,
-        expect: Option<f64>,
+        value: Value,
+        expect: Option<Value>,
     ) -> Result<Value> {
-        let inner = self.inner.clone();
         let o = self.open.as_mut().context("no project is open")?;
         o.check_token(token)?;
         let file = o.session.carry(revision, id, &o.controls).ok().map(|c| c.file);
         self.arrive(file.as_ref().map(std::slice::from_ref))?;
-        let o = self.open.as_mut().context("no project is open")?;
         // The edit plans on the accepted revision, which the watcher keeps up with the disk; an
         // outside change in the knob's own file rides along through the commit's baseline (R2).
-        let mut target = id.to_string();
-        if let Ok(c) = o.session.carry(revision, id, &o.controls) {
-            let cp = inner.control.lock();
-            let owned = |l: &&super::Lease| {
-                l.token == token && l.control.origin.same_value(&c.origin) && l.owner.gesture.as_deref() != Some(gesture)
-            };
-            if cp.leases.live.iter().any(|l| owned(&l)) {
-                bail!("this control is being edited by another gesture");
-            }
-            target = c.id;
-        }
-        match o.session.set(revision, id, value, expect) {
+        let target = self.unheld(token, revision, gesture, std::slice::from_ref(&id.to_string()))?.remove(0);
+        let o = self.open.as_mut().context("no project is open")?;
+        let steps = o.session.last_step();
+        match o.session.write(revision, id, &value, expect.as_ref()) {
             Ok(c) => {
-                let v = json!({"file": c.file, "before": c.before, "after": c.after, "revision": c.revision});
+                let mut v = json!({"file": c.file, "before": c.before, "after": c.after, "revision": c.revision});
+                if o.session.last_step() > steps {
+                    v["step"] = json!(o.session.last_step());
+                }
                 self.settle(Some(Install { lease: None, id: target, origin: c.origin, value: c.value }));
                 Ok(v)
             }
@@ -1980,8 +1977,89 @@ impl Actor {
         }
     }
 
+    /// Each control `ids` names, as the accepted revision names it; refused when a gesture other than
+    /// `gesture` holds one of them.
+    fn unheld(&mut self, token: u64, revision: u64, gesture: &str, ids: &[String]) -> Result<Vec<String>> {
+        let inner = self.inner.clone();
+        let o = self.open.as_mut().context("no project is open")?;
+        let mut out = vec![];
+        for id in ids {
+            let mut target = id.clone();
+            if let Ok(c) = o.session.carry(revision, id, &o.controls) {
+                let cp = inner.control.lock();
+                let owned = |l: &&super::Lease| {
+                    l.token == token && l.control.origin.same_value(&c.origin) && l.owner.gesture.as_deref() != Some(gesture)
+                };
+                if cp.leases.live.iter().any(|l| owned(&l)) {
+                    bail!("this control is being edited by another gesture");
+                }
+                target = c.id;
+            }
+            out.push(target);
+        }
+        Ok(out)
+    }
+
+    /// The values one gesture moved, written as one Tx (CARD-22): each one's lease of the gesture
+    /// (`leases`, in the order of `values`, closing already) ends in the step that writes them. A
+    /// value refused refuses them all: each lease ends, and its control plays the code's value
+    /// again. Unlike one knob's, a gesture of several values isn't kept pending while the code
+    /// doesn't compile (C5): it is refused, in words.
+    pub(super) fn set_all(
+        &mut self,
+        token: u64,
+        revision: u64,
+        gesture: &str,
+        values: Vec<(String, Value)>,
+        leases: Vec<Option<u64>>,
+    ) -> Result<Value> {
+        let inner = self.inner.clone();
+        let ours: Vec<u64> = leases.iter().flatten().copied().collect();
+        let end_all = |inner: &Arc<Inner>, why: &str| inner.end_leases(|l| ours.contains(&l.id), why);
+        let ready = (|| -> Result<Vec<String>> {
+            let o = self.open.as_mut().context("no project is open")?;
+            o.check_token(token)?;
+            let files: Vec<String> =
+                values.iter().filter_map(|(id, _)| o.session.carry(revision, id, &o.controls).ok().map(|c| c.file)).collect();
+            self.arrive(Some(&files))?;
+            let ids: Vec<String> = values.iter().map(|(id, _)| id.clone()).collect();
+            self.unheld(token, revision, gesture, &ids)
+        })();
+        let targets = match ready {
+            Ok(t) => t,
+            Err(e) => {
+                end_all(&inner, &e.to_string());
+                return Err(e);
+            }
+        };
+        let o = self.open.as_mut().context("no project is open")?;
+        let steps = o.session.last_step();
+        match o.session.write_all(revision, &values) {
+            Ok(done) => {
+                let first = &done[0];
+                let mut v = json!({"file": first.file, "before": first.before, "after": first.after, "revision": first.revision});
+                if o.session.last_step() > steps {
+                    v["step"] = json!(o.session.last_step());
+                }
+                let installs = done
+                    .into_iter()
+                    .zip(targets)
+                    .zip(&leases)
+                    .map(|((c, id), lease)| Install { lease: *lease, id, origin: c.origin, value: c.value })
+                    .collect();
+                self.settle_as(installs, true);
+                Ok(v)
+            }
+            Err(e) => {
+                end_all(&inner, &e.to_string());
+                self.settle(None);
+                Err(anyhow!("{e}"))
+            }
+        }
+    }
+
     /// A plain write of any value, with no gesture lease (CARD-4): a setting's, one Tx on its call;
-    /// else a knob's number, as [`Actor::set_value`] writes it.
+    /// else a knob's, as [`Actor::set_value`] writes it.
     pub(super) fn set_any(
         &mut self,
         token: u64,
@@ -1996,12 +2074,7 @@ impl Actor {
             let id = id.to_string();
             return self.edit(token, move |s| m2_editor::settings::set(s, revision, &id, &value, expect.as_ref()));
         }
-        let number = value.as_f64().ok_or_else(|| anyhow!("`{id}` is a knob: its value is a number, not {value}"))?;
-        let expect = match expect {
-            None => None,
-            Some(e) => Some(e.as_f64().ok_or_else(|| anyhow!("`{id}` is a knob: expect a number, not {e}"))?),
-        };
-        self.set_value(token, revision, id, gesture, number, expect)
+        self.set_value(token, revision, id, gesture, value, expect)
     }
 
     /// An edit through the session; whatever happened, the accepted revision plays after it.

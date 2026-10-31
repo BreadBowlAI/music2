@@ -17,7 +17,7 @@ import SaveAsDialog, { openSaveAs } from "./components/SaveAsDialog";
 import SettingsDialog from "./components/SettingsDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
 import { openSettings } from "./lib/settings";
-import { CutOff, editorHooks, graphApi } from "./lib/graph";
+import { automation, CutOff, editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
 import { followGridView } from "./lib/grid";
 import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
@@ -389,7 +389,7 @@ export function appCommand(id: string) {
       return;
     case "lanes": {
       // The selected track's automation, or every track's with none selected.
-      const all = graph.timeline.tracks.filter((t) => t.lanes.some((l) => l.kind === "control")).map((t) => t.module);
+      const all = graph.timeline.tracks.filter((t) => t.lanes.some(automation)).map((t) => t.module);
       if (shell.selected && !all.includes(shell.selected)) return;
       return shell.toggleLanes(shell.selected, all);
     }
