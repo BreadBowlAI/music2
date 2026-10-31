@@ -115,7 +115,7 @@ export const SUITES = [
   ["notes", "proj", { expect: 69, s: 11 }],
   ["s8-audition", "fix", { expect: 51, s: 10, tier: "nightly", why: "speed: a closed page lets go of its note within 1 s" }],
   ["nx-piano", "fix", { expect: 41, s: 6 }],
-  ["nx-midi", "fix", { expect: 24, s: 3 }],
+  ["nx-midi", "fix", { expect: 25, s: 3 }],
   ["st-record", "fix", { expect: 66, s: 24, tier: "nightly", why: "speed: R records within 2 s", sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["io-record", "fix", { expect: 38, s: 7 }],
   ["pl-notes", "fix", { expect: 102, s: 16 }],
