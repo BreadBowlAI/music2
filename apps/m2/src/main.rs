@@ -272,10 +272,15 @@ fn locked(dir: &Path, also: &str) -> Result<Session> {
         s.forward_to(Box::new(to));
         return Ok(s);
     }
-    let s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
+    let mut s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
     if let Some(r) = s.access().refusal() {
         bail!("{}{also}", r.message);
     }
+    // With the app closed, its step goes in the song's one history, which the app reads back when
+    // it opens the song: an agent's, by the name it gives (WRITE-23, AGENT-10).
+    let who = app::who();
+    let caller = m2_server::caller::Caller::agent(who.by.as_deref(), who.why.as_deref());
+    s.act_as(caller.source(), caller.why());
     Ok(s)
 }
 
@@ -1172,7 +1177,8 @@ change that code first",
         Some("edit") => text::edit(&args)?,
         Some("write") => text::write(&args)?,
         Some("undo") => {
-            // Undo lives in the open app (AGENT-4): history is in its memory.
+            // Undo lives in the open app (AGENT-4): the one writer of the song's history, kept with
+            // the song (WRITE-23); with it closed, there is nothing to take back from here.
             let dir = PathBuf::from(arg(1)?);
             let Some(holder) = app::holder(&dir) else {
                 bail!("nothing to undo: undo lives in the open app, and music2 doesn't have this song open");

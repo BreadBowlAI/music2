@@ -14,6 +14,7 @@
 //! gesture (P10, WRITE-9): `crates/editor` plans each one as a Tx and asserts what it means.
 
 pub mod forward;
+pub mod history;
 pub mod lock;
 pub mod reference;
 pub mod session;
@@ -33,6 +34,7 @@ use m2_script::{Descriptor, UnitCtor};
 use m2_song::{DataSet, Manifest, Project, Version};
 use serde::Serialize;
 
+pub use history::{Bound, End};
 pub use session::{Past, Revision, Session, Source, StepError, StepName, Stepped, journal_problems};
 pub use tx::{BeforeWrite, Checked, Committed, ConflictFile, Patch, Refusal, Uncommitted, Writing};
 pub use unclaimed::{Seen, SeenLane};
@@ -385,6 +387,8 @@ pub fn problem(d: Diagnostic) -> m2_song::Diagnostic {
 mod bus_tests;
 #[cfg(test)]
 mod gate_tests;
+#[cfg(test)]
+mod history_tests;
 #[cfg(test)]
 mod pack_tests;
 

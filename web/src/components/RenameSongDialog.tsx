@@ -36,7 +36,7 @@ export default function RenameSongDialog() {
 /**
  * Rename the open song (Q20): "Rename Night Drive", the name (selected), and "Also rename its
  * folder" (on). The name is one undo step. With the folder, the song closes and opens again from
- * the renamed folder, so Undo can't go back past it: the dialog says so while the box is on. A
+ * the renamed folder, its undo kept with it (WRITE-23): the dialog says so while the box is on. A
  * folder name that is taken is refused in words, and nothing is changed. Unsaved code in the editor
  * is said first while the box is on, as Save As says it: closing the song loses it, so the button
  * says Rename Anyway (review PL-R1). The keys are every dialog's (`useModalKeys`): Return renames
@@ -121,7 +121,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
         </label>
         {folder && (
           <p className="mt-1 pl-5.5 text-sm text-fg-muted" data-testid="rename-song-note">
-            The song closes and opens again. After that, Undo can't go back past this.
+            The song closes and opens again from its new folder.
           </p>
         )}
         {losing && (

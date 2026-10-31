@@ -15,7 +15,7 @@ From left to right: the browser's toggle, back to the start, play/stop, record, 
 | Hear a click on each beat | Click the **Metronome** button after Loop, or press K (Transport → Metronome). While the song plays it clicks each beat, higher on the first beat of a bar. Each song keeps its own setting; an export never has the click. |
 | Change the time signature | Click it, then pick the beats in a bar (1 to 16 with the buttons, up to 64 typed) and the note a beat is (2, 4, 8 or 16). |
 | Set the song's key | Click **Key** after the time signature, then pick the root (C to B) and Major or Minor; **No key** takes it away. Notes then shades the rows not in the key. It is kept in `layout.json`, and changes nothing you hear. |
-| Rename the song | Double-click its name, type, then Enter. Escape cancels. The folder keeps its name. **File → Rename Song…** renames its folder too ("Also rename its folder", on at first): the song closes and opens again from there, so Undo can't go back past it. With unsaved code in the editor it says so first. |
+| Rename the song | Double-click its name, type, then Enter. Escape cancels. The folder keeps its name. **File → Rename Song…** renames its folder too ("Also rename its folder", on at first): the song closes and opens again from there, with its undo history. Undo then takes back the name, and the folder keeps its new one. With unsaved code in the editor it says so first. |
 
 Both fields change the tempo or time signature in effect where the playhead is. Each change is one Undo step, written in `data/arrangement.json` (the song's name in `music2.toml`). There is no Alt-click reset on the tempo: one stray click shouldn't change the song.
 

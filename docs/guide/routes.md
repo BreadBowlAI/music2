@@ -642,6 +642,14 @@ Close the open song.
 
 Hear the newest change made elsewhere Before or After it (V), or close the pill.
 
+### `POST /api/graph/draft`
+
+Keep a window's text of a code file not yet saved, so a crash doesn't lose it (text null takes it out).
+
+### `POST /api/graph/draft/left`
+
+Say that unsaved code the song opened with was restored or discarded, so it isn't offered again.
+
 ### `POST /api/graph/export`
 
 Export the song's audio, which may pause playback (agents render with m2 render).

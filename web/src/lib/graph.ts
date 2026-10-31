@@ -496,6 +496,15 @@ export interface GraphState extends GraphStatus {
   can_redo: boolean;
   /** Undo can't take the newest step back (a file it puts back changed since): it can be skipped (AGENT-2). */
   undo_stuck?: boolean;
+  /**
+   * Why Undo, and Redo, go back no further than their oldest steps, when something cut them off as
+   * the song opened (WRITE-24): a change made outside music2 while it was closed, or an undo history
+   * that couldn't be read. Null when nothing did.
+   */
+  undo_end?: "outside" | "unread" | null;
+  redo_end?: "outside" | "unread" | null;
+  /** The code files with text left unsaved when the song last closed, which the code editor offers back (WRITE-27). */
+  drafts?: string[];
   /** Effects the packages offer to put after audio. */
   effects: Effect[];
   /** Instruments a new track can play, drums first. Absent from older servers. */

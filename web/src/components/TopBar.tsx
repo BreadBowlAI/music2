@@ -3,7 +3,7 @@ import { Download, Metronome, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, 
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
-import { next, said } from "../lib/history";
+import { ended, next, said } from "../lib/history";
 import { useMetronome, toggleMetronome } from "../lib/metronome";
 import { chord, keyName } from "../lib/native";
 import { canvas, useShell } from "../lib/shell";
@@ -213,25 +213,31 @@ export default function TopBar({
       {/* V's pill (D2): before or after the newest change an agent or another program made. */}
       <ComparePill session={graph.session} />
       <Divider />
-      <BarButton
-        onClick={() => void undoTop(graph, "undo")}
-        // A step undo can't take back still answers, offering to skip it (AGENT-2).
-        disabled={!graph.can_undo && !graph.undo_stuck}
-        title={`Undo${undoing ? ` ${said(undoing)}` : ""} (${chord("Z")})`}
-        aria-label="Undo"
-        className="w-ctl !px-0"
-      >
-        <Undo2 size={16} />
-      </BarButton>
-      <BarButton
-        onClick={() => void undoTop(graph, "redo")}
-        disabled={!graph.can_redo}
-        title={`Redo${redoing ? ` ${said(redoing)}` : ""} (${chord("Z", { shift: true })})`}
-        aria-label="Redo"
-        className="w-ctl !px-0"
-      >
-        <Redo2 size={16} />
-      </BarButton>
+      {/* Why Undo and Redo go back no further (WRITE-24): said on what holds each button, which a
+          pointer reaches while the button itself, disabled, takes none. */}
+      <span title={ended(graph, false) ?? undefined} data-testid="undo-said" className="inline-flex">
+        <BarButton
+          onClick={() => void undoTop(graph, "undo")}
+          // A step undo can't take back still answers, offering to skip it (AGENT-2).
+          disabled={!graph.can_undo && !graph.undo_stuck}
+          title={`Undo${undoing ? ` ${said(undoing)}` : ""} (${chord("Z")})`}
+          aria-label="Undo"
+          className="w-ctl !px-0"
+        >
+          <Undo2 size={16} />
+        </BarButton>
+      </span>
+      <span title={ended(graph, true) ?? undefined} data-testid="redo-said" className="inline-flex">
+        <BarButton
+          onClick={() => void undoTop(graph, "redo")}
+          disabled={!graph.can_redo}
+          title={`Redo${redoing ? ` ${said(redoing)}` : ""} (${chord("Z", { shift: true })})`}
+          aria-label="Redo"
+          className="w-ctl !px-0"
+        >
+          <Redo2 size={16} />
+        </BarButton>
+      </span>
       <ExportButton dir={graph.dir} />
     </header>
   );

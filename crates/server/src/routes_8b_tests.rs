@@ -77,7 +77,7 @@ fn mute_and_solo_answer_with_the_overlay_state() {
 }
 
 /// `GET path` with the token: the JSON answer.
-fn get(url: &str, path: &str, token: &str) -> Value {
+pub(crate) fn get(url: &str, path: &str, token: &str) -> Value {
     let addr = url.trim_start_matches("http://");
     let mut s = std::net::TcpStream::connect(addr).unwrap();
     let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: {token}\r\nConnection: close\r\n\r\n");

@@ -43,7 +43,7 @@ mod steps_tests;
 #[cfg(test)]
 mod take_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -316,12 +316,53 @@ pub(crate) struct TxStep {
     /// (AGENT-2): both follow it through undo and redo.
     pub id: u64,
     pub source: crate::session::Source,
+    /// The hash each file it touches held before its change, None where there was none: what its
+    /// undo puts back (WRITE-23). A file it touches that isn't here held what the step left.
+    pub before: BTreeMap<TxPath, Option<Sha>>,
+    /// The before-images it names in `.music2/tx/blobs/`, each with its size, read when it is
+    /// recorded: undo's bound for them counts each once (WRITE-26).
+    pub images: Vec<(Sha, u64)>,
+    /// The name of its record in `.music2/undo/`, once written (WRITE-25).
+    pub record: Option<Sha>,
 }
 
 impl TxStep {
     pub fn new(inverse: Tx, raw: bool, data_only: bool, file: String) -> TxStep {
         let size = retained(&inverse);
-        TxStep { inverse, raw, data_only, file, size, made: 0, name: None, id: 0, source: crate::session::Source::Page }
+        let source = crate::session::Source::Page;
+        TxStep {
+            inverse,
+            raw,
+            data_only,
+            file,
+            size,
+            made: 0,
+            name: None,
+            id: 0,
+            source,
+            before: BTreeMap::new(),
+            images: vec![],
+            record: None,
+        }
+    }
+
+    /// [`TxStep::new`] for a Tx whose disk work was `targets`: what each held before is what its
+    /// undo puts back.
+    fn of_targets(inverse: Tx, raw: bool, data_only: bool, file: String, targets: &[Target]) -> TxStep {
+        let mut step = TxStep::new(inverse, raw, data_only, file);
+        for t in targets {
+            let held: Vec<(&str, Option<Sha>)> = match t {
+                Target::Write { path, before, .. } => vec![(path, before.as_ref().map(|b| b.sha))],
+                Target::Remove { path, before } => vec![(path, Some(before.sha))],
+                Target::Rename { from, to, hash, .. } => vec![(from, Some(*hash)), (to, None)],
+            };
+            for (path, sha) in held {
+                if let Ok(p) = TxPath::new(path) {
+                    step.before.insert(p, sha);
+                }
+            }
+        }
+        step
     }
 
     /// The before-images in `blobs/` it needs.
@@ -1582,11 +1623,7 @@ impl Session {
                 None,
             ));
         }
-        let wrote = {
-            let writing = self.before_write.is_some().then(|| self.writing(&candidate));
-            self.stage(tx, &planned.targets, vec![], writing.as_ref())?
-        };
-        // The draft follows the files this commit wrote; nothing else of it changes.
+        // The draft follows the files this commit writes; nothing else of it changes.
         let mut draft = self.draft.clone();
         for (path, _) in &planned.news {
             remove_under(&mut draft, &path.path());
@@ -1606,13 +1643,22 @@ impl Session {
             }
         }
         settle_assets(&mut draft);
+        // Its undo step, in the history ahead of its files (WRITE-25).
+        let mut step = self.inverse_step(tx, &planned, self.accepted.number + 1, Some(&baseline));
+        self.history_ahead(&mut step, &draft);
+        let wrote = {
+            let writing = self.before_write.is_some().then(|| self.writing(&candidate));
+            match self.stage(tx, &planned.targets, vec![], writing.as_ref()) {
+                Ok(wrote) => wrote,
+                Err(e) => return Err(self.never_landed(e)),
+            }
+        };
         for (file, text) in &planned.bases {
             match planned.base_shas.get(file) {
                 Some(sha) => self.texts.put_hashed(*sha, text),
                 None => self.texts.put(text),
             };
         }
-        let step = self.inverse_step(tx, &planned, self.accepted.number + 1, Some(&baseline));
         // Only layout.json written: no revision (PLANE-3), though it is undone like any Tx.
         let number = if changed_paths(&self.accepted.snapshot, &candidate.snapshot).is_empty() {
             self.accepted.number
@@ -1652,7 +1698,17 @@ impl Session {
         inverse.base = planned.inverse_base.clone();
         // Shown where the change is now: a renamed file or folder by its new name.
         let file = inverse.touched().first().or(tx.touched().first()).map(|p| p.to_string()).unwrap_or_default();
-        TxStep::new(inverse, raw, data_only, file)
+        TxStep::of_targets(inverse, raw, data_only, file, &planned.targets)
+    }
+
+    /// A change written ahead in the history whose files never landed (WRITE-25): a new change's
+    /// history is written as it is again. An undo's or a redo's is, once its step is back on its
+    /// stack ([`Session::step`]).
+    fn never_landed(&mut self, e: Refusal) -> Refusal {
+        if self.moving.is_none() {
+            self.keep_history();
+        }
+        e
     }
 
     /// What a commit to `candidate` tells the host before it is journaled (PLANE-5).
@@ -1784,21 +1840,26 @@ impl Session {
             ));
         }
         let before = self.accepted.clone();
-        let wrote = self.stage(tx, &planned.targets, tidy.clone(), None)?;
+        let mut draft = self.draft.clone();
+        apply_news(&mut draft, &planned.news);
+        settle_assets(&mut draft);
+        // Its undo step, in the history ahead of its files (WRITE-25).
+        let step = self.inverse_step(tx, &planned, self.accepted.number + 1, None);
+        let mut step = TxStep { raw: true, ..step };
+        self.history_ahead(&mut step, &draft);
+        let wrote = match self.stage(tx, &planned.targets, tidy.clone(), None) {
+            Ok(wrote) => wrote,
+            Err(e) => return Err(self.never_landed(e)),
+        };
         if !tidy.is_empty() {
             // Every journal is judged again: one this recovery completed (an older commit whose
             // Finish this was) is tidied, and no fix stays offered that no longer applies.
             self.rescan();
         }
-        let mut draft = self.draft.clone();
-        apply_news(&mut draft, &planned.news);
-        settle_assets(&mut draft);
         self.cache = None;
         self.take_in(draft);
         self.problems = self.gather_problems();
         let number = self.accepted.number;
-        let step = self.inverse_step(tx, &planned, number, None);
-        let step = TxStep { raw: true, ..step };
         let a = &self.accepted;
         let delta = if Arc::ptr_eq(&before, a) {
             GraphDelta::default()
