@@ -1,0 +1,53 @@
+{"clips": [
+  {"id": "pvqcm97p", "start": 16, "length": 16, "notes": [
+    {"pitch": "E5", "start": 0, "length": 1, "velocity": 0.85},
+    {"pitch": "C5", "start": 1, "length": 0.5, "velocity": 0.75},
+    {"pitch": "D5", "start": 1.5, "length": 0.5, "velocity": 0.75},
+    {"pitch": "E5", "start": 2, "length": 1.25, "velocity": 0.85},
+    {"pitch": "G5", "start": 3, "length": 1, "velocity": 0.9},
+    {"pitch": "A5", "start": 4, "length": 1.5, "velocity": 0.95},
+    {"pitch": "G5", "start": 5.5, "length": 0.5, "velocity": 0.75},
+    {"pitch": "F5", "start": 6, "length": 0.5, "velocity": 0.75},
+    {"pitch": "E5", "start": 6.5, "length": 0.5, "velocity": 0.75},
+    {"pitch": "C5", "start": 7, "length": 1, "velocity": 0.8},
+    {"pitch": "E5", "start": 8, "length": 0.5, "velocity": 0.8},
+    {"pitch": "G5", "start": 8.5, "length": 0.5, "velocity": 0.8},
+    {"pitch": "E5", "start": 9, "length": 0.5, "velocity": 0.75},
+    {"pitch": "D5", "start": 9.5, "length": 0.5, "velocity": 0.75},
+    {"pitch": "C5", "start": 10, "length": 1.6, "velocity": 0.85},
+    {"pitch": "D5", "start": 11.5, "length": 0.5, "velocity": 0.7},
+    {"pitch": "D5", "start": 12, "length": 1.1, "velocity": 0.85},
+    {"pitch": "B4", "start": 13, "length": 1, "velocity": 0.75},
+    {"pitch": "D5", "start": 14, "length": 0.6, "velocity": 0.8},
+    {"pitch": "G5", "start": 14.5, "length": 1.5, "velocity": 0.9}
+  ]},
+  {"id": "43dqr372", "start": 32, "length": 16, "notes": [
+    {"pitch": "E5", "start": 0, "length": 1, "velocity": 0.85},
+    {"pitch": "C5", "start": 1, "length": 0.5, "velocity": 0.75},
+    {"pitch": "D5", "start": 1.5, "length": 0.5, "velocity": 0.75},
+    {"pitch": "E5", "start": 2, "length": 1.25, "velocity": 0.85},
+    {"pitch": "G5", "start": 3, "length": 1, "velocity": 0.9},
+    {"pitch": "A5", "start": 4, "length": 1.5, "velocity": 0.95},
+    {"pitch": "G5", "start": 5.5, "length": 0.5, "velocity": 0.75},
+    {"pitch": "F5", "start": 6, "length": 0.5, "velocity": 0.75},
+    {"pitch": "E5", "start": 6.5, "length": 0.5, "velocity": 0.75},
+    {"pitch": "C5", "start": 7, "length": 1, "velocity": 0.8},
+    {"pitch": "E5", "start": 8, "length": 0.5, "velocity": 0.8},
+    {"pitch": "G5", "start": 8.5, "length": 0.5, "velocity": 0.8},
+    {"pitch": "E5", "start": 9, "length": 0.5, "velocity": 0.75},
+    {"pitch": "D5", "start": 9.5, "length": 0.5, "velocity": 0.75},
+    {"pitch": "C5", "start": 10, "length": 1.6, "velocity": 0.85},
+    {"pitch": "D5", "start": 11.5, "length": 0.5, "velocity": 0.7},
+    {"pitch": "D5", "start": 12, "length": 1.1, "velocity": 0.85},
+    {"pitch": "B4", "start": 13, "length": 1, "velocity": 0.75},
+    {"pitch": "E5", "start": 14, "length": 0.6, "velocity": 0.85},
+    {"pitch": "A5", "start": 14.5, "length": 1.5, "velocity": 1}
+  ]},
+  {"id": "djavg74y", "start": 48, "length": 8, "notes": [
+    {"pitch": "E5", "start": 0, "length": 2, "velocity": 0.8},
+    {"pitch": "D5", "start": 2, "length": 1, "velocity": 0.7},
+    {"pitch": "C5", "start": 3, "length": 1.25, "velocity": 0.75},
+    {"pitch": "B4", "start": 4, "length": 1.5, "velocity": 0.7},
+    {"pitch": "A4", "start": 5.5, "length": 2.5, "velocity": 0.75}
+  ]}
+]}

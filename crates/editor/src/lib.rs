@@ -61,6 +61,7 @@ pub mod swap;
 pub mod take;
 pub mod timeline;
 pub mod tracks;
+pub mod upgrade;
 pub mod value;
 pub mod view;
 pub mod views;

@@ -1,0 +1,12 @@
+{"clips": [
+  {"id": "vx6jw7c1", "start": 32, "length": 16, "notes": [
+    {"pitch": "D#2", "start": 1, "length": 0.25, "velocity": 0.8},
+    {"pitch": "D#2", "start": 3, "length": 0.25, "velocity": 0.85},
+    {"pitch": "D#2", "start": 5, "length": 0.25, "velocity": 0.8},
+    {"pitch": "D#2", "start": 7, "length": 0.25, "velocity": 0.85},
+    {"pitch": "D#2", "start": 9, "length": 0.25, "velocity": 0.8},
+    {"pitch": "D#2", "start": 11, "length": 0.25, "velocity": 0.85},
+    {"pitch": "D#2", "start": 13, "length": 0.25, "velocity": 0.8},
+    {"pitch": "D#2", "start": 15, "length": 0.25, "velocity": 0.85}
+  ]}
+]}

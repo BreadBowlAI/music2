@@ -325,6 +325,19 @@ pub const COMMANDS: &[Command] = &[
                `.music2/tx/<id>.json`). Every command prints the problems it finds with the commands that fix them.",
     },
     Command {
+        name: "upgrade",
+        also: &[],
+        usage: "m2 upgrade <project> [--check]",
+        words: "move a song made for an older music2 to this one in one step: its `@m2/core`, std and packs lines and its \
+                lock, its imports of what moved into the packs, the single drums as One drum with their knobs converted, and \
+                renamed knobs. One undo step, written only if the song then builds; `--check` says what it would change, \
+                and writes nothing",
+        more: "It prints each file it changes, the lines before (`-`) and after (`+`), then what it left as it is, by file and \
+               line, with the line to write; nothing is written while the song wouldn't build after it (exit 1). A song made \
+               for this music2 is left as it is. While the app has the song open, the app runs it, as one undo step there. \
+               See [Opening a song made with an older music2](songs.md#opening-a-song-made-with-an-older-music2).",
+    },
+    Command {
         name: "tx",
         also: &[],
         usage: "m2 tx <project> <tx.json | -> [--check] [--seen HASH]",

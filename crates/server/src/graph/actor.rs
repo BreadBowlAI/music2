@@ -899,6 +899,8 @@ impl Open {
                 "sample_rate": rev.project.sample_rate(),
                 // WRITE-20: opened with code that doesn't compile, nothing plays until it does.
                 "has_code": rev.has_code(),
+                // Made for an older music2: the status offers Upgrade it (AGENT-14).
+                "upgrade": m2_editor::upgrade::needed(s),
                 "read_only": read_only,
             }),
             // What needs attention though the song plays, with the fixes (DIAG-1, DIAG-4).
@@ -2274,6 +2276,26 @@ impl Actor {
             state["step"] = json!(made);
         }
         Ok(state)
+    }
+
+    /// Upgrade the open song (FMT-25, AGENT-14): an agent's is checked against what the musician
+    /// holds in the files it changes, on arrival, as any write is (AGENT-3); then one save of every
+    /// file, one undo step, the musician's or the agent's. What it did is the answer's `upgraded`;
+    /// with `check`, nothing is written.
+    pub(super) fn upgrade(&mut self, token: u64, check: bool) -> Result<Value> {
+        let o = self.open.as_ref().context("no project is open")?;
+        o.check_token(token)?;
+        if !check {
+            let files = m2_editor::upgrade::files(&o.session).map_err(|e| anyhow!("{e}"))?;
+            self.arrive(Some(&files))?;
+        }
+        self.edit_and(token, |s| {
+            let up = m2_editor::upgrade::upgrade(s, check)?;
+            let revision = up.written.unwrap_or(s.accepted().number);
+            let file = up.changes.first().map_or_else(String::new, |c| c.file.clone());
+            let said = serde_json::to_value(&up).expect("an upgrade serialises");
+            Ok((Edited { revision, file, before: String::new(), after: String::new() }, json!({ "upgraded": said })))
+        })
     }
 
     /// Check or commit an agent's Tx (WRITE-4, WRITE-5, WRITE-11), answering in the editor's one
