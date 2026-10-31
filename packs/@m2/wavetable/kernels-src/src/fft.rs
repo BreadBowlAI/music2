@@ -3,7 +3,7 @@
 use std::f64::consts::PI;
 
 /// The longest transform: the longest level's copy of a frame.
-pub const MAX: usize = 4096;
+pub const MAX: usize = 8192;
 
 /// The turns a transform of up to [`MAX`] points takes: `e^(-2πik/MAX)` for k below `MAX / 2`.
 pub struct Fft {

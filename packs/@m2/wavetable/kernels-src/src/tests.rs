@@ -197,22 +197,43 @@ fn a_high_note_folds_nothing_below_its_fundamental() {
     assert!(below(&naive, SR, f0) > FLOOR + 40.0, "the measure sees a saw's aliasing");
 }
 
-// PACK-27: across the keyboard, A0 to C8, a note holds little but its harmonics: what isn't one,
-// A-weighted from 20 Hz to 16 kHz (std's synths' measure), stays under -65 dB of them, on the saw,
-// the narrowest pulse, a vowel and a digital frame. A level's copy holds 8 samples or more for its
-// top harmonic, and a read draws a cubic through four samples: the images of a level's top
-// harmonics, above hearing themselves, fold back into it otherwise (a 2048-sample copy of 1023
-// harmonics, read in a straight line, left a saw at A1 at -45 dB).
+// PACK-27 (review B4, B7): across the keyboard, every note from A0 to C8, a note holds little but
+// its harmonics: what isn't one, A-weighted from 20 Hz to 16 kHz (std's synths' measure), stays
+// under -65 dB of them, for any table: the saw, the narrowest pulse, a vowel, a digital frame, and
+// files whose every harmonic is as loud as the first (an impulse, white noise), the brightest a
+// table can be. A level's copy holds 16 samples or more for its top harmonic, and a read draws a
+// cubic through four samples: the images of a level's top harmonics, above hearing themselves,
+// fold back into it otherwise (with 8 samples, an impulse held -48 dB; with 2048 samples for 1023
+// harmonics read in a straight line, a saw at A1 held -45 dB).
 #[test]
 fn every_note_holds_little_but_its_harmonics() {
     const FLOOR: f64 = -65.0;
-    for (table, position, what) in [(0.0, SAW, "saw"), (1.0, 1.0, "narrowest pulse"), (2.0, 0.5, "vowel"), (4.0, 0.5, "digital")] {
-        for pitch in (21..=108).step_by(3) {
-            let x = held(cfg(SR, &[table, table], &[]), &patch(&[(A_POSITION, position), (SUSTAIN, 1.0)]), pitch as f32, s(0.1), 1 << 16);
-            let got = alias_db(&x, hz(pitch as f32), SR);
-            assert!(got < FLOOR, "{what} at note {pitch}: {got:.1} dB not its harmonics");
+    let impulse: Vec<f32> = (0..2048).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
+    let mut rng = Lcg(7);
+    let noise: Vec<f32> = (0..2048).map(|_| rng.next() as f32 / 32768.0 - 1.0).collect();
+    let file = |x: &Vec<f32>| (vec![0.0, 0.0, 0.0, -1.0, 1.0], vec![native::asset(SR, vec![x.clone()])], 0.0);
+    let built = |t: f64, position: f32| (vec![t, t], vec![], position);
+    let mut loud = vec![];
+    for (what, (values, assets, position)) in [
+        ("saw", built(0.0, SAW)),
+        ("narrowest pulse", built(1.0, 1.0)),
+        ("vowel", built(2.0, 0.5)),
+        ("digital", built(4.0, 0.5)),
+        ("impulse", file(&impulse)),
+        ("noise", file(&noise)),
+    ] {
+        let c = cfg(SR, &values, &assets);
+        let worst = (21..=108)
+            .map(|pitch| {
+                let x = held(c, &patch(&[(A_POSITION, position), (SUSTAIN, 1.0)]), pitch as f32, s(0.1), 1 << 16);
+                (alias_db(&x, hz(pitch as f32), SR), pitch)
+            })
+            .fold((f64::MIN, 0), |m, a| if a.0 > m.0 { a } else { m });
+        if worst.0 >= FLOOR {
+            loud.push(format!("{what}: {:.1} dB not its harmonics at note {}", worst.0, worst.1));
         }
     }
+    assert!(loud.is_empty(), "{}", loud.join("\n"));
 }
 
 /// Frames of 4096 from `from`, half overlapping, while the pitch moves as `pitch(t)`: in each, the

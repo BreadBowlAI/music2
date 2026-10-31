@@ -46,17 +46,20 @@ pub const TOP: [usize; LEVELS] = {
 };
 
 /// Samples of each level's copy of a frame: 256 for each harmonic it holds, a frame's at most, and
-/// never fewer than 8 for its top harmonic. A read draws a cubic through the four samples about its
-/// place, which images each harmonic far under it while it has 8 samples or more a cycle: the top
-/// harmonics of the levels of low notes (above 20 kHz themselves) would fold back into hearing
-/// otherwise. The levels of high notes, whose images could land under the fundamental, have 256.
+/// never fewer than 16 for its top harmonic (8192 at level 0, 4096 at level 1). A read draws a cubic
+/// through the four samples about its place, which images each harmonic far under it while it has
+/// 16 samples or more a cycle: the top harmonics of the levels of low notes (above 20 kHz
+/// themselves) would fold back into hearing otherwise, and in a bright table (an impulse, noise:
+/// every harmonic as loud as the first) they are as loud as its fundamental. At 8 samples a cycle
+/// such a table held -48 dB of what isn't a harmonic. The levels of high notes, whose images could
+/// land under the fundamental, have 256.
 pub const LEN: [usize; LEVELS] = {
     let mut l = [0; LEVELS];
     let mut k = 0;
     while k < LEVELS {
         let want = 256 * TOP[k];
         let fit = if want < FRAME { want } else { FRAME };
-        l[k] = if 8 * TOP[k] > fit { 8 * TOP[k] } else { fit };
+        l[k] = if 16 * TOP[k] > fit { 16 * TOP[k] } else { fit };
         k += 1;
     }
     l
