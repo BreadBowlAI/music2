@@ -107,7 +107,7 @@ impl Control {
     }
 
     /// Why it isn't set as a number, when it is a choice or a switch: its value is a name, or true or
-    /// false (CARD-10, CARD-11), never a place, and nothing writes one but the code yet.
+    /// false (CARD-10, CARD-11), never a place, and it is written as one (CARD-21), never dragged.
     pub(crate) fn numbered(&self) -> Result<(), EditError> {
         let name = self.declared.first().map_or("this value", |d| d.label.as_str());
         let words = match (self.options(), self.is_switch()) {
@@ -116,9 +116,9 @@ impl Control {
                 let (last, rest) = listed.split_last().expect("a choice has an option");
                 let names = if rest.is_empty() { last.clone() } else { format!("{} or {last}", rest.join(", ")) };
                 let example = o.get(1).or(o.first()).expect("a choice has an option");
-                format!("{name} is a choice, written by its name ({names}): change it in the code, as {name}: {example:?}")
+                format!("{name} is a choice, set by its name ({names}), as {example:?}, not by a number")
             }
-            (None, true) => format!("{name} is a switch, written true or false: change it in the code, as {name}: true"),
+            (None, true) => format!("{name} is a switch, set to true or false, not to a number"),
             (None, false) => return Ok(()),
         };
         Err(EditError::Rejected(words))

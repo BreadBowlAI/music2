@@ -22,6 +22,7 @@ use std::path::Path;
 use m2_ir::{FNode, FOp, Kernels, Kind, Node, Op, Origin, PortKind, Unit, split_ref};
 use m2_script::sites::{Arg, Site};
 use serde::Serialize;
+use serde_json::Value as Json;
 
 use m2_session::{Home, Session};
 
@@ -233,7 +234,9 @@ pub struct ReadOnly {
 pub struct Knob {
     pub id: String,
     pub label: String,
-    pub value: f64,
+    /// What it plays, as its code writes it (CARD-20): a number in its unit, a choice's name, or a
+    /// switch's `true` or `false`. So the option it plays is the one whose value this is.
+    pub value: Json,
     /// The number written in the code; empty while the control is inherited.
     pub literal: String,
     /// The constant's unit: a quantity's own (`semis(60)` is semitones wherever it goes), else
@@ -248,8 +251,9 @@ pub struct Knob {
     /// Written in the code; false while it plays its declared default (inherited), until its
     /// first edit writes it into the call.
     pub written: bool,
-    /// The declared default, when the controls it feeds declare one in its unit.
-    pub default: Option<f64>,
+    /// The declared default, as its code would write it, when the controls it feeds declare one in
+    /// its unit.
+    pub default: Option<Json>,
     /// The declared control it is (`cutoff`, `channels.hats.db`) and its component
     /// (`std:lowpass`), when it feeds exactly one.
     pub slot: Option<String>,
@@ -263,7 +267,8 @@ pub struct Knob {
     /// Why it can't be automated (HOME-2), when it can't: its menu says so instead of offering it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automate_refused: Option<String>,
-    /// What it is (CARD-2): a number, or a plugin's stepped parameter as a choice or a switch
+    /// What it is (CARD-2): a number, a choice or a switch control (CARD-20), whose menu writes its
+    /// option's name or `true` or `false`, or a plugin's stepped parameter as a choice or a switch
     /// (CARD-6), whose menu writes its option's number.
     pub kind: kind::Kind,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -620,7 +625,8 @@ pub fn view(session: &Session) -> GraphView {
                 });
                 continue;
             };
-            // A hosted plugin's parameter it sets: a switch or a choice when stepped (CARD-6).
+            // A hosted plugin's parameter it sets: a switch or a choice when stepped (CARD-6); else
+            // what its unit says: a choice or a switch control (CARD-20), or a number.
             let (kind, options) = all
                 .iter()
                 .find_map(|k| match &k.op {
@@ -628,7 +634,7 @@ pub fn view(session: &Session) -> GraphView {
                     _ => None,
                 })
                 .and_then(|(plugin, port)| session.packages.plugin_param(plugin, port))
-                .map_or((kind::Kind::Number, vec![]), |(p, steps)| kind::of_param(p.stepped, p.min, p.max, steps));
+                .map_or_else(|| kind::of_unit(c.unit), |(p, steps)| kind::of_param(p.stepped, p.min, p.max, steps));
             let port = consumer.and_then(|(sig, p)| sig?.inputs.iter().find(|i| i.name == p));
             let port_unit = port.and_then(|p| match p.kind {
                 PortKind::Control(u) => u,
@@ -654,13 +660,13 @@ pub fn view(session: &Session) -> GraphView {
             knobs.entry(home).or_default().push(Knob {
                 id: c.id.clone(),
                 label,
-                value: c.value,
+                value: kind::said(c.unit, c.value).unwrap_or(Json::Null),
                 literal: c.literal.clone(),
                 unit: unit.map(Unit::name),
                 range: range.map(|(lo, hi)| [lo, hi]),
                 log,
                 written: c.written,
-                default,
+                default: default.and_then(|d| kind::said(c.unit, d)),
                 slot: single.map(|d| d.slot.clone()),
                 component: single.map(|d| d.component.clone()),
                 origin: c.origin.clone(),

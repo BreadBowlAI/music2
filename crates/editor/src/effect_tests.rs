@@ -203,10 +203,10 @@ fn an_effects_args_are_written_after_the_audio_as_knobs_and_removing_restores_th
     let label = s.catalog().components["std:lowpass"].label.clone();
     assert_eq!((filter.effect.as_deref(), filter.component.as_deref()), (Some(label.as_str()), Some("std:lowpass")));
     let cutoff = filter.knobs.iter().find(|k| k.label == "cutoff").unwrap_or_else(|| panic!("{:?}", filter.knobs));
-    assert_eq!((cutoff.value, cutoff.unit, cutoff.log, cutoff.written), (1000.0, Some("hz"), true, true));
+    assert_eq!((cutoff.value.clone(), cutoff.unit, cutoff.log, cutoff.written), (serde_json::json!(1000), Some("hz"), true, true));
     // The resonance it leaves out is a knob too, at its default (PKG-3).
     let q = filter.knobs.iter().find(|k| k.label == "q").unwrap_or_else(|| panic!("{:?}", filter.knobs));
-    assert_eq!((q.value, q.written, q.default), (0.707, false, Some(0.707)));
+    assert_eq!((q.value.clone(), q.written, q.default.clone()), (serde_json::json!(0.707), false, Some(serde_json::json!(0.707))));
 
     s.remove_effect(rev(&s), &call(&s, "lowpass")).unwrap();
     assert!(fixture.source().contains("song(() => osc.saw(hz(110)))"));

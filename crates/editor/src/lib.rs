@@ -59,6 +59,7 @@ pub mod timeline;
 pub mod tracks;
 pub mod value;
 pub mod view;
+pub mod views;
 pub mod voices;
 
 use std::collections::HashMap;
@@ -218,6 +219,11 @@ pub trait Gestures {
     fn preview(&self, at: u64, id: &str, value: f64) -> Result<Audition, EditError>;
     /// Set a value: one `Values` Tx (WRITE-10, WRITE-22's commit).
     fn set(&mut self, at: u64, id: &str, value: f64, expect: Option<f64>) -> Result<Committed, EditError>;
+    /// Write a value as its code writes it: a number, a choice's name, a switch's true or false
+    /// (CARD-21). One `Values` Tx.
+    fn write(&mut self, at: u64, id: &str, value: &serde_json::Value, expect: Option<&serde_json::Value>) -> Result<Committed, EditError>;
+    /// Write the values one gesture moved: one `Values` Tx, one undo step (CARD-22).
+    fn write_all(&mut self, at: u64, values: &[(String, serde_json::Value)]) -> Result<Vec<Committed>, EditError>;
     fn outlets(&self) -> Vec<Outlet>;
     fn inlets(&self) -> Vec<Inlet>;
     fn connect(&mut self, at: u64, from: &str, to: &str) -> Result<Edited, EditError>;
@@ -276,6 +282,14 @@ impl Gestures for Session {
 
     fn set(&mut self, at: u64, id: &str, value: f64, expect: Option<f64>) -> Result<Committed, EditError> {
         value::set(self, at, id, value, expect)
+    }
+
+    fn write(&mut self, at: u64, id: &str, value: &serde_json::Value, expect: Option<&serde_json::Value>) -> Result<Committed, EditError> {
+        value::write(self, at, id, value, expect)
+    }
+
+    fn write_all(&mut self, at: u64, values: &[(String, serde_json::Value)]) -> Result<Vec<Committed>, EditError> {
+        value::write_all(self, at, values)
     }
 
     fn outlets(&self) -> Vec<Outlet> {

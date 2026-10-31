@@ -13,7 +13,7 @@ use std::path::Path;
 
 use m2_ir::{Module, Op};
 use m2_script::Descriptor;
-use m2_script::component::{EachDesc, SettingDesc, SettingKind};
+use m2_script::component::{EachDesc, SettingDesc};
 use m2_script::sites::{Arg, Site};
 use m2_session::{Checked, Home, Revision, Session};
 use m2_song::tx::{Confined, Declared, Expect, Range};
@@ -123,29 +123,6 @@ fn routed(desc: &Descriptor, slot: &str) -> Option<String> {
     (desc.id == MIXER && !rest.contains('.')).then(|| rest.to_string())
 }
 
-/// What a setting declared as `d` is on a card (CARD-2), whether it is whole, and its options. A
-/// key carries none: it names one of the song's tracks, which the view gives once (its timeline).
-fn kind_of(d: &SettingDesc) -> (Kind, bool, Vec<Choice>) {
-    match d.kind {
-        SettingKind::Number => (Kind::Number, false, vec![]),
-        SettingKind::Int => (Kind::Number, true, vec![]),
-        SettingKind::Bool => (Kind::Switch, false, kind::switch(false, true, None)),
-        SettingKind::Choice => (Kind::Choice, false, d.options.iter().flatten().map(|o| Choice::new(o.clone(), o.clone())).collect()),
-        SettingKind::Asset => (Kind::Recording, false, vec![]),
-        SettingKind::Keymap => (Kind::Keymap, false, vec![]),
-        SettingKind::Regions => (Kind::Regions, false, vec![]),
-        SettingKind::Key => (Kind::Track, false, vec![]),
-    }
-}
-
-/// A number as JSON: whole numbers as integers, so `8` written reads as the `8` a descriptor declares.
-fn number(v: f64) -> Json {
-    match v.fract() == 0.0 && v.abs() < 9.0e15 {
-        true => Json::from(v as i64),
-        false => serde_json::Number::from_f64(v).map_or(Json::Null, Json::Number),
-    }
-}
-
 /// Whether two values are the same: numbers by what they are, whatever their JSON form.
 fn same(a: &Json, b: &Json) -> bool {
     match (a.as_f64(), b.as_f64()) {
@@ -165,7 +142,7 @@ fn string_literal(t: &str) -> Option<&str> {
 /// or a plain string.
 fn read(a: &Arg, text: &str) -> Option<Json> {
     match a {
-        Arg::Number { value, .. } => Some(number(*value)),
+        Arg::Number { value, .. } => Some(kind::number_json(*value)),
         Arg::Other { start, end } => match text.get(*start as usize..*end as usize)?.trim() {
             "true" => Some(Json::Bool(true)),
             "false" => Some(Json::Bool(false)),
@@ -222,7 +199,7 @@ impl<'a> Call<'a> {
 
     /// The setting declared as `d` at `slot`, as the card shows it.
     fn setting(&self, slot: String, d: &SettingDesc) -> Setting {
-        let (kind, whole, mut options) = kind_of(d);
+        let (kind, whole, mut options) = kind::of_setting(d);
         let words = matches!(kind, Kind::Regions | Kind::Keymap);
         let (mut value, mut written, mut readonly, mut expression) = (Json::Null, true, None, None);
         match self.find(&slot) {

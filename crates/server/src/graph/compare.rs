@@ -86,12 +86,12 @@ impl Actor {
         c.n = self.told_compare(&c, c.after, None);
         let before = (!c.after).then(|| c.before.clone());
         *self.inner.comparing.lock() = Some(c);
-        let settled = self.settle_as(None, false);
+        let settled = self.settle_as(vec![], false);
         let Some(before) = before else { return Ok(()) };
         let plays = self.open.as_ref().and_then(|o| o.plays.as_ref()).is_some_and(|p| Arc::ptr_eq(&p.revision, &before));
         if !plays {
             self.end_compare("failed");
-            self.settle_as(None, false);
+            self.settle_as(vec![], false);
             let why = settled.failed.map(|e| format!(" (In detail: {e})")).unwrap_or_default();
             bail!("Before couldn't be got ready to play, so Compare closed.{why}");
         }
@@ -113,7 +113,7 @@ impl Actor {
         let newest = |o: &Open| o.session.step_names().0.is_some_and(|t| t.id == c.step);
         let kept = self.open.as_ref().filter(|o| o.token == c.token).is_some_and(newest);
         if !kept && self.end_compare("changed") {
-            self.settle_as(None, false);
+            self.settle_as(vec![], false);
         }
     }
 }
@@ -174,13 +174,13 @@ impl Graph {
                     }
                     Err(e) => {
                         a.told_compare(&c, true, Some("closed"));
-                        a.settle_as(None, false);
+                        a.settle_as(vec![], false);
                         Err(e)
                     }
                 };
             }
             if a.end_compare("closed") {
-                a.settle_as(None, false);
+                a.settle_as(vec![], false);
             }
             Ok(json!({"comparing": null}))
         })
@@ -193,7 +193,7 @@ impl Graph {
         let _ = self.call(move |a| {
             let its = a.inner.comparing.lock().as_ref().is_some_and(|c| !others || (c.client.is_some() && c.client == client));
             if its && a.end_compare("page") {
-                a.settle_as(None, false);
+                a.settle_as(vec![], false);
             }
             Ok(())
         });

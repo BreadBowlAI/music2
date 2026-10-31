@@ -673,7 +673,7 @@ fn run(args: Vec<String>) -> Result<()> {
                                 let kind = serde_json::to_value(k.kind)?.as_str().unwrap_or_default().to_string();
                                 let now = all
                                     .iter()
-                                    .find(|o| o.value.as_f64() == Some(k.value))
+                                    .find(|o| o.value == k.value)
                                     .map_or(String::new(), |o| format!(" ({})", o.label));
                                 format!("  {kind}: {}{now}", all.iter().map(|o| o.label.as_str()).collect::<Vec<_>>().join(" | "))
                             }
@@ -752,15 +752,22 @@ fn run(args: Vec<String>) -> Result<()> {
                 }
                 return Ok(());
             }
-            let word = arg(3)?;
-            let Ok(value) = word.parse::<f64>() else {
-                match s.controls().iter().any(|c| c.id == id) {
-                    true => bail!("`{id}` is a knob: its value is a number, not {word}"),
-                    false => bail!("no control or setting `{id}` in that revision: `m2 graph {} --json` lists them", arg(1)?),
+            // A knob: a number, or one of its options by its value or its name (a choice's name, a
+            // switch's On, a plugin's step), or true or false, as its card writes it (CARD-21).
+            let view = s.view();
+            let knob = view.modules.iter().flat_map(|m| &m.nodes).flat_map(|n| &n.knobs).find(|k| k.id == id);
+            let Some(knob) = knob else { bail!("no control or setting `{id}` in that revision: `m2 graph {} --json` lists them", arg(1)?) };
+            let (kind, options) = (knob.kind, knob.options.clone());
+            let read = |w: String| {
+                let option = options.iter().find(|o| o.value.as_str() == Some(w.as_str()) || o.label.eq_ignore_ascii_case(&w));
+                match (option, kind) {
+                    (Some(o), _) => o.value.clone(),
+                    (None, m2_editor::kind::Kind::Switch) if w == "true" || w == "false" => serde_json::Value::Bool(w == "true"),
+                    (None, _) => w.parse::<f64>().ok().and_then(serde_json::Number::from_f64).map_or(serde_json::Value::String(w), serde_json::Value::Number),
                 }
             };
-            let expect: Option<f64> = flag(&args, "--expect").map(|v| v.parse()).transpose().context("--expect")?;
-            let c = s.set(at, &id, value, expect).map_err(|e| anyhow!("{e}"))?;
+            let (value, expect) = (read(arg(3)?), flag(&args, "--expect").map(read));
+            let c = s.write(at, &id, &value, expect.as_ref()).map_err(|e| anyhow!("{e}"))?;
             println!(
                 "{}: `{}` → `{}` (revision {}, verified in {:.0} ms)",
                 c.file,

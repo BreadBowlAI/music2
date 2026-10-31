@@ -1535,14 +1535,33 @@ impl Graph {
             },
             None => {
                 let (id, gesture) = (id.to_string(), gesture.to_string());
-                self.call(move |a| a.set_value(token, revision, &id, &gesture, value, expect))
+                self.call(move |a| a.set_value(token, revision, &id, &gesture, json!(value), expect.map(|e| json!(e))))
             }
         }
     }
 
     /// [`Graph::set`] for any value (CARD-4): a number for a knob, through its gesture's lease
-    /// when it has one; or a setting's value (a number, a string or a boolean), one Tx on its call.
-    pub fn set_any(&self, token: u64, revision: u64, id: &str, gesture: &str, value: Value, expect: Option<Value>) -> Result<Value> {
+    /// when it has one; a choice's name or a switch's true or false for a knob of one (CARD-21); or
+    /// a setting's value (a number, a string or a boolean), one Tx on its call. Values the same
+    /// gesture moved with it (`with`, CARD-22) are written with it as one Tx, each one's lease of
+    /// the gesture committed by it.
+    pub fn set_any(
+        &self,
+        token: u64,
+        revision: u64,
+        id: &str,
+        gesture: &str,
+        value: Value,
+        expect: Option<Value>,
+        with: Vec<(String, Value)>,
+    ) -> Result<Value> {
+        if !with.is_empty() {
+            if expect.is_some() {
+                bail!("a gesture of several values takes no `expect`");
+            }
+            let values: Vec<(String, Value)> = std::iter::once((id.to_string(), value)).chain(with).collect();
+            return self.set_all(token, revision, gesture, values);
+        }
         let number = value.as_f64().filter(|_| expect.as_ref().is_none_or(Value::is_number));
         if let Some(v) = number
             && !crate::caller::now().is_agent()
@@ -1555,6 +1574,46 @@ impl Graph {
         }
         let (id, gesture) = (id.to_string(), gesture.to_string());
         self.call(move |a| a.set_any(token, revision, &id, &gesture, value, expect))
+    }
+
+    /// Several values of one gesture as one Tx (CARD-22): each one's lease of `gesture`, when it has
+    /// one (an agent's never does), is closed here and ends in the step that writes them all, or in
+    /// the refusal.
+    fn set_all(&self, token: u64, revision: u64, gesture: &str, values: Vec<(String, Value)>) -> Result<Value> {
+        let agent = crate::caller::now().is_agent();
+        let mut leases = vec![];
+        for (id, _) in &values {
+            leases.push(if agent { None } else { self.lease_of(token, revision, id, gesture)? });
+        }
+        {
+            let mut cp = self.inner.control.lock();
+            for (lease, (_, value)) in leases.iter().zip(&values) {
+                let Some(lease) = lease else { continue };
+                let i = cp.leases.index(*lease).map_err(|e| anyhow!(e))?;
+                let l = &mut cp.leases.live[i];
+                match l.state {
+                    State::Closing { .. } => bail!("this gesture is being committed"),
+                    _ => l.state = State::Closing { value: value.as_f64().unwrap_or_default(), expect: None },
+                }
+            }
+        }
+        let gesture = gesture.to_string();
+        let ours = leases.clone();
+        let written = self.call(move |a| a.set_all(token, revision, &gesture, values, leases));
+        if written.is_err() {
+            // The actor failed without deciding (a bug): no lease may stay closing forever.
+            let device = self.inner.current_device();
+            let mut cp = self.inner.control.lock();
+            for lease in ours.iter().flatten() {
+                if let Ok(i) = cp.leases.index(*lease)
+                    && matches!(cp.leases.live[i].state, State::Closing { .. })
+                {
+                    let l = cp.leases.end(i, "its commit failed");
+                    put_back(&l, device.as_ref());
+                }
+            }
+        }
+        written
     }
 
     // ------------------------------------------------------------ edits through the session

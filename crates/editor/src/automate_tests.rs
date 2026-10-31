@@ -319,17 +319,15 @@ fn automate_writes_a_lane_of_names() {
     let song = f.read("song.ts");
     let shape = s.controls().into_iter().find(|c| c.literal == "\"square\"").expect("the choice, written by its name");
     assert_eq!((shape.value, shape.unit.map(|u| u.to_string())), (1.0, Some("choice<saw|square|sine>".into())));
-    // What a menu offers (review K6), and why a number isn't written: m2 and the API can't write a name yet.
+    // What a menu offers (review K6), and why a number isn't written: a choice is set by its name, a
+    // switch to true or false (CARD-21).
     assert_eq!(shape.options(), Some(vec!["saw", "square", "sine"]));
     let sub = s.controls().into_iter().find(|c| c.id.ends_with("/@sub")).expect("the switch left out");
     assert!(sub.is_switch() && sub.options().is_none() && !shape.is_switch());
     let e = s.set(s.accepted().number, &shape.id, 2.0, None).unwrap_err().to_string();
-    assert!(
-        e.contains("shape is a choice, written by its name (\"saw\", \"square\" or \"sine\"): change it in the code, as shape: \"square\""),
-        "{e}"
-    );
+    assert!(e.contains("shape is a choice, set by its name (\"saw\", \"square\" or \"sine\"), as \"square\", not by a number"), "{e}");
     let e = s.set(s.accepted().number, &sub.id, 1.0, None).unwrap_err().to_string();
-    assert!(e.contains("sub is a switch, written true or false: change it in the code, as sub: true"), "{e}");
+    assert!(e.contains("sub is a switch, set to true or false, not to a number"), "{e}");
     let a = s.automate(s.accepted().number, &shape.id).unwrap();
     assert_eq!((a.lane.to_string(), a.edited.before.as_str()), ("lead/shape".to_string(), "shape \"square\""));
     let want =

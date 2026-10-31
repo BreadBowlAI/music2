@@ -1,7 +1,11 @@
 //! What a value on a card is (CARD-2): one closed vocabulary, said by the descriptor (a setting's
-//! kind) or by a plugin's parameter (CARD-6), never by how it is drawn. The app picks the widget:
-//! a knob, a menu, a switch, a number box, a waveform, a menu of tracks or a sentence.
+//! kind, a control's unit, CARD-20) or by a plugin's parameter (CARD-6), never by how it is drawn.
+//! The app picks the widget: a knob, a menu, a switch, a number box, a waveform, a menu of tracks
+//! or a sentence. This module is the one place that says what any value is, and how a choice's or
+//! a switch's number is written in code.
 
+use m2_ir::Unit;
+use m2_script::component::{SettingDesc, SettingKind};
 use serde::Serialize;
 use serde_json::Value as Json;
 
@@ -43,6 +47,81 @@ impl Choice {
 pub fn switch(off: impl Into<Json>, on: impl Into<Json>, names: Option<(&str, &str)>) -> Vec<Choice> {
     let (a, b) = names.unwrap_or(("Off", "On"));
     vec![Choice::new(off, a), Choice::new(on, b)]
+}
+
+/// A choice's options: each name, written as itself, is its own label.
+fn names<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<Choice> {
+    names.into_iter().map(|n| Choice::new(n, n)).collect()
+}
+
+/// What a control is (CARD-20), by its constant's unit: a choice of its names, a switch of `false`
+/// and `true` (as the code writes it, never 0 and 1), else a number.
+pub fn of_unit(unit: Option<Unit>) -> (Kind, Vec<Choice>) {
+    match unit {
+        Some(Unit::Switch) => (Kind::Switch, switch(false, true, None)),
+        Some(Unit::Choice(o)) => (Kind::Choice, names(o.names().iter().map(|n| &**n))),
+        _ => (Kind::Number, vec![]),
+    }
+}
+
+/// What a setting declared as `d` is (CARD-2), whether it is a whole number, and its options. A key
+/// carries none: it names one of the song's tracks, which the view gives once (its timeline).
+pub fn of_setting(d: &SettingDesc) -> (Kind, bool, Vec<Choice>) {
+    match d.kind {
+        SettingKind::Number => (Kind::Number, false, vec![]),
+        SettingKind::Int => (Kind::Number, true, vec![]),
+        SettingKind::Bool => (Kind::Switch, false, switch(false, true, None)),
+        SettingKind::Choice => (Kind::Choice, false, names(d.options.iter().flatten().map(String::as_str))),
+        SettingKind::Asset => (Kind::Recording, false, vec![]),
+        SettingKind::Keymap => (Kind::Keymap, false, vec![]),
+        SettingKind::Regions => (Kind::Regions, false, vec![]),
+        SettingKind::Key => (Kind::Track, false, vec![]),
+    }
+}
+
+/// What a cell's number is, as the code writes it (CARD-20): a choice's place as its name, a
+/// switch's 1 or 0 as `true` or `false`, a number as itself. None for a place no option has, or a
+/// number that isn't finite.
+pub fn said(unit: Option<Unit>, value: f64) -> Option<Json> {
+    match unit {
+        Some(Unit::Switch) => Some(Json::Bool(value != 0.0)),
+        Some(Unit::Choice(o)) => {
+            let name = o.name(value as usize).filter(|_| value >= 0.0 && value.fract() == 0.0)?;
+            Some(Json::String(name.to_string()))
+        }
+        _ => value.is_finite().then(|| number_json(value)),
+    }
+}
+
+/// A number as JSON: a whole number as an integer, so `8` written reads as the `8` a descriptor
+/// declares, and a plugin's step as the step its option writes.
+pub fn number_json(v: f64) -> Json {
+    match v.fract() == 0.0 && v.abs() < 9.0e15 {
+        true => Json::from(v as i64),
+        false => serde_json::Number::from_f64(v).map_or(Json::Null, Json::Number),
+    }
+}
+
+/// The number a value written as `value` plays as in a cell of `unit` (CARD-21): a choice's name
+/// as its place, `true` or `false` as 1 or 0, a number as itself. Why not, in words that say what
+/// `name` takes, when `value` isn't one.
+pub fn number(unit: Option<Unit>, name: &str, value: &Json) -> Result<f64, String> {
+    match unit {
+        Some(Unit::Switch) => match value {
+            Json::Bool(b) => Ok(f64::from(u8::from(*b))),
+            _ => Err(format!("{name} is a switch: true or false, not {value}")),
+        },
+        Some(Unit::Choice(o)) => match value.as_str().and_then(|v| o.place(v)) {
+            Some(place) => Ok(place as f64),
+            None => {
+                let listed: Vec<String> = o.names().iter().map(|n| format!("{n:?}")).collect();
+                let (last, rest) = listed.split_last().expect("a choice has an option");
+                let one_of = if rest.is_empty() { last.clone() } else { format!("{} or {last}", rest.join(", ")) };
+                Err(format!("{name} is one of {one_of}, not {value}"))
+            }
+        },
+        _ => value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| format!("{name} is a number, not {value}")),
+    }
 }
 
 /// What a hosted plugin's parameter is on a card (CARD-6), from what the plugin says of it: stepped
