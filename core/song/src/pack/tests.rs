@@ -697,7 +697,7 @@ fn a_song_locked_to_music2s_own_pack_is_told_how_to_get_it_back() {
     installed(&store, name.as_str(), &v.to_string());
     let (code, other) = said(&store);
     assert_eq!(code, "pkg.changed");
-    assert!(other.contains(&format!("isn't the one music2 comes with")), "{other}");
+    assert!(other.contains("isn't the one music2 comes with"), "{other}");
     assert!(
         other.contains(&format!("`m2 pack remove {name} {v}`, then start music2 again")) && !other.contains("m2 pack install"),
         "{other}"

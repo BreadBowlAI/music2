@@ -328,7 +328,7 @@ impl State {
     fn moved_through_namespace(&self, at: &str) -> Option<Diagnostic> {
         let file = at.rsplitn(3, ':').nth(2)?;
         let source = &self.files.get(file)?.original;
-        let line: usize = self.remap(at).rsplitn(3, ':').nth(1)?.parse().ok()?;
+        let line: usize = self.remap(at).rsplit(':').nth(1)?.parse().ok()?;
         let text = source.lines().nth(line.checked_sub(1)?)?;
         let allocator = Allocator::default();
         let program = Parser::new(&allocator, source, SourceType::ts()).parse().program;
