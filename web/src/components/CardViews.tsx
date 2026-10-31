@@ -11,10 +11,11 @@
 // A drag holds a lease on each control it moves (WRITE-22), heard as it goes, and is written at
 // release as one edit, one undo step (CARD-22).
 
+import clsx from "clsx";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { attach, release, strike } from "../lib/audition";
+import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
-import { graphApi, picks, type CardView, type KeyRegion, type NumberKnob, type ViewNode, type ViewPart } from "../lib/graph";
+import { controlLabel, graphApi, picks, type CardView, type KeyRegion, type NumberKnob, type ViewNode, type ViewPart } from "../lib/graph";
 import { useStore } from "../lib/store";
 import { words } from "./Settings";
 
@@ -55,38 +56,68 @@ export function ViewRow({ view, ...p }: ViewProps & { view: CardView }) {
   );
 }
 
-/** A part's knob on the card, when the card can move it and it is a number. */
-function knobOf(node: ViewNode, part: ViewPart): NumberKnob | null {
-  const k = part.knob ? node.knobs.find((x) => x.id === part.knob) : undefined;
-  return k && !picks(k) ? k : null;
+/**
+ * A part of a view as it is drawn (CARD-26, CARD-27): its knob, when the card can move it; else
+ * what plays (a lane's fallback), which is drawn but fixed; and why the card can't move it.
+ */
+interface Drawn {
+  name: string;
+  knob: NumberKnob | null;
+  value: number;
+  unit: string | null;
+  why: string | null;
 }
 
-/** Why the view can't move `parts` now, in one sentence, or null when it can. */
-function blocked(p: ViewProps, parts: [string, ViewPart][]): string | null {
-  if (!p.editable) return `${p.locked ?? "It can't be edited right now"}.`;
-  const stuck = parts.find(([, part]) => !knobOf(p.node, part));
-  if (!stuck) return null;
-  const [name, part] = stuck;
-  return `${name.charAt(0).toUpperCase()}${name.slice(1)} can't be moved here: ${part.why ?? "it isn't a knob of this card"}.`;
+/** Each of `parts`, as the view draws it; or why the view can't be drawn: a part with no value it can show. */
+function drawn(p: ViewProps, parts: [string, ViewPart][]): { parts: Drawn[] } | { cant: string } {
+  const out: Drawn[] = [];
+  for (const [name, part] of parts) {
+    const k = part.knob ? p.node.knobs.find((x) => x.id === part.knob) : undefined;
+    const knob = k && !picks(k) ? k : null;
+    const words = `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+    if (knob) out.push({ name, knob, value: knob.value, unit: knob.unit, why: p.editable ? null : `${p.locked ?? "It can't be edited right now"}.` });
+    else if (part.value != null) out.push({ name, knob: null, value: part.value, unit: part.unit ?? null, why: `${words} can't be moved here: ${part.why ?? "it isn't a knob of this card"}.` });
+    else return { cant: `${words} can't be drawn here: ${part.why ?? "it isn't a knob of this card"}.` };
+  }
+  return { parts: out };
 }
+
+/** `v` inside knob `k`'s declared range, as a knob's own drag keeps it (PKG-8: a gesture, never the code). */
+const inRange = (k: NumberKnob | null, v: number) => (k?.range ? Math.min(k.range[1], Math.max(k.range[0], v)) : v);
+
+/** What an undo step of a view's drag is called: the card and what moved ("Wobble decay and sustain"). */
+const stepName = (owner: string, moved: Drawn[]) => `${owner} ${moved.map((d) => controlLabel(d.knob?.label ?? d.name).toLowerCase()).join(" and ")}`;
 
 /**
  * One drag of a view over the knobs it moves (WRITE-22, CARD-22): each value heard as it moves
- * (`/preview` begins each knob's lease under one gesture, and keeps it alive while held still), and
- * all of them written at release by one `/set` with `with`: one undo step.
+ * (`/preview` begins each knob's lease under one gesture, and keeps it alive while held still; one
+ * in flight for each knob, the newest sent when it lands), and all of them written at release by
+ * one `/set` with `with`: one undo step. A release refused, or a drag let go of, ends every lease.
  */
 function useViewDrag(p: ViewProps) {
   const toast = useStore((s) => s.toast);
-  type Live = { token: string; knobs: NumberKnob[]; values: number[]; sent: (number | null)[]; chain: Promise<void>; keep: number };
+  type Live = { token: string; knobs: NumberKnob[]; values: number[]; begun: boolean[]; flying: (Promise<void> | null)[]; queued: boolean[]; keep: number };
   const live = useRef<Live | null>(null);
-  /** Each value not sent yet (with `all`, every value: the keepalive), in order. */
-  const send = (d: Live, all = false) => {
-    d.knobs.forEach((k, i) => {
-      const v = d.values[i];
-      if (!all && v === (d.sent[i] ?? k.value)) return;
-      d.sent[i] = v;
-      d.chain = d.chain.then(() => graphApi.preview(p.session, p.revision, k.id, d.token, v)).catch((e) => toast(words(e)));
-    });
+  /** Send knob `i`'s newest value, unless one is on its way: then once that lands. */
+  const send = (d: Live, i: number) => {
+    if (d.flying[i]) {
+      d.queued[i] = true;
+      return;
+    }
+    d.begun[i] = true;
+    d.queued[i] = false;
+    const k = d.knobs[i];
+    d.flying[i] = graphApi
+      .preview(p.session, p.revision, k.id, d.token, d.values[i])
+      .catch((e) => toast(words(e)))
+      .finally(() => {
+        d.flying[i] = null;
+        if (d.queued[i]) send(d, i);
+      });
+  };
+  /** Every value on its way has landed. */
+  const landed = async (d: Live) => {
+    while (d.flying.some(Boolean)) await Promise.all(d.flying.filter(Boolean));
   };
   /** Each lease begun ends: the code's values play again. */
   const cancel = async () => {
@@ -94,23 +125,29 @@ function useViewDrag(p: ViewProps) {
     live.current = null;
     if (!d) return;
     clearInterval(d.keep);
-    await d.chain;
-    for (const [i, k] of d.knobs.entries()) if (d.sent[i] !== null) await graphApi.cancel(p.session, k.id, d.token).catch(() => {});
+    d.queued.fill(false);
+    await landed(d);
+    for (const [i, k] of d.knobs.entries()) if (d.begun[i]) await graphApi.cancel(p.session, k.id, d.token).catch(() => {});
   };
   useEffect(() => () => void cancel(), []);
   return {
     /** A drag of `knobs` begins. */
     begin(knobs: NumberKnob[]) {
-      const d: Live = { token: crypto.randomUUID(), knobs, values: knobs.map((k) => k.value), sent: knobs.map(() => null), chain: Promise.resolve(), keep: 0 };
-      d.keep = window.setInterval(() => live.current === d && d.sent.some((x) => x !== null) && send(d, true), 2000);
+      const n = knobs.length;
+      const d: Live = { token: crypto.randomUUID(), knobs, values: knobs.map((k) => k.value), begun: Array(n).fill(false), flying: Array(n).fill(null), queued: Array(n).fill(false), keep: 0 };
+      // Held still, each lease is kept alive (the server ends one nobody moves for 10 s).
+      d.keep = window.setInterval(() => live.current === d && d.knobs.forEach((_, i) => d.begun[i] && send(d, i)), 2000);
       live.current = d;
     },
     /** Its knobs' values now, each in its own unit: heard at once. */
     move(values: number[]) {
       const d = live.current;
       if (!d) return;
-      d.values = values;
-      send(d);
+      values.forEach((v, i) => {
+        if (v === d.values[i] && (d.begun[i] || v === d.knobs[i].value)) return;
+        d.values[i] = v;
+        send(d, i);
+      });
     },
     /** Let go: what it shows is written, as one undo step named `name`; every knob it moved in it. */
     async end(name: string) {
@@ -119,9 +156,13 @@ function useViewDrag(p: ViewProps) {
       if (d.knobs.every((k, i) => d.values[i] === k.value)) return cancel();
       live.current = null;
       clearInterval(d.keep);
-      await d.chain;
+      await landed(d);
       const all = d.knobs.map((k, i): [string, number] => [k.id, d.values[i]]);
-      await graphApi.setWith(p.session, p.revision, d.token, all, { name }).catch((e) => toast(words(e)));
+      await graphApi.setWith(p.session, p.revision, d.token, all, { name }).catch((e) => {
+        toast(words(e));
+        // The server ended them with the refusal; say so to any it may have missed.
+        for (const [i, k] of d.knobs.entries()) if (d.begun[i]) void graphApi.cancel(p.session, k.id, d.token).catch(() => {});
+      });
     },
     cancel,
   };
@@ -133,24 +174,61 @@ function svgPoint(svg: SVGSVGElement, e: { clientX: number; clientY: number }, w
   return { x: ((e.clientX - r.left) / r.width) * w, y: ((e.clientY - r.top) / r.height) * h };
 }
 
-/** A corner a drag can take: a 7 px circle, `accent` while held. */
-function Handle({ x, y, id, held, title, disabled, onDown }: { x: number; y: number; id: string; held: boolean; title: string; disabled: boolean; onDown: (e: React.PointerEvent<SVGCircleElement>) => void }) {
+/** A corner a drag can take: a 7 px circle, `accent` while held; a fixed one hollow and grey, which says why. */
+function Handle({ x, y, id, held, title, fixed, onDown }: { x: number; y: number; id: string; held: boolean; title: string; fixed: boolean; onDown: (e: React.PointerEvent<SVGCircleElement>) => void }) {
   return (
     <>
-      <circle cx={x} cy={y} r={3.5} fill={held ? "var(--color-accent)" : "var(--color-raised)"} stroke={held ? "var(--color-accent)" : "var(--color-fg)"} strokeWidth={1.5} pointerEvents="none" />
       <circle
-        data-handle={id}
         cx={x}
         cy={y}
-        r={9}
-        fill="transparent"
-        className={disabled ? "cursor-default" : "cursor-grab"}
-        onPointerDown={disabled ? undefined : onDown}
-      >
+        r={3.5}
+        fill={held ? "var(--color-accent)" : "var(--color-raised)"}
+        stroke={held ? "var(--color-accent)" : fixed ? "var(--color-fg-off)" : "var(--color-fg)"}
+        strokeWidth={1.5}
+        pointerEvents="none"
+      />
+      <circle data-handle={id} data-fixed={fixed || undefined} cx={x} cy={y} r={9} fill="transparent" className={fixed ? "cursor-default" : "cursor-grab"} onPointerDown={fixed ? undefined : onDown}>
         <title>{title}</title>
       </circle>
     </>
   );
+}
+
+/** A view that can't be drawn: its frame greyed, and why in words. */
+function Cant({ why }: { why: string }) {
+  return (
+    <Picture title={why} greyed>
+      <p className="p-2 text-xs text-fg-muted">{why}</p>
+    </Picture>
+  );
+}
+
+/**
+ * A drag of a corner: from where the corner is, the pointer's moves (in the drawing's units) added
+ * to it, so grabbing a corner off its centre moves nothing until the pointer does (review V11).
+ * `move` gets how far the pointer went, and whether it went across, and up or down.
+ */
+function cornerDrag(e: React.PointerEvent<SVGCircleElement>, svg: SVGSVGElement, w: number, h: number, move: (dx: number, dy: number, across: boolean, upDown: boolean) => void, end: (ok: boolean) => void) {
+  e.stopPropagation();
+  e.preventDefault();
+  const el = e.currentTarget, pointer = e.pointerId;
+  el.setPointerCapture(pointer);
+  const p0 = svgPoint(svg, e, w, h);
+  const moved = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointer) return;
+    const p = svgPoint(svg, ev, w, h);
+    move(p.x - p0.x, p.y - p0.y, Math.abs(p.x - p0.x) >= 0.5, Math.abs(p.y - p0.y) >= 0.5);
+  };
+  const up = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointer) return;
+    el.removeEventListener("pointermove", moved);
+    el.removeEventListener("pointerup", up);
+    el.removeEventListener("pointercancel", up);
+    end(ev.type === "pointerup");
+  };
+  el.addEventListener("pointermove", moved);
+  el.addEventListener("pointerup", up);
+  el.addEventListener("pointercancel", up);
 }
 
 // ---------------------------------------------------------------- envelope (CARD-27)
@@ -168,80 +246,73 @@ function EnvelopeView({ view, ...p }: ViewProps & { view: Extract<CardView, { ki
   const bpm = useStore((s) => s.graph?.timeline.tempo[0]?.bpm ?? 120);
   const svg = useRef<SVGSVGElement>(null);
   const drag = useViewDrag(p);
-  const [held, setHeld] = useState<{ corner: string; values: number[]; scale: number } | null>(null);
-  const parts: [string, ViewPart][] = [["attack", view.attack], ["decay", view.decay], ["sustain", view.sustain], ["release", view.release]];
-  const knobs = parts.map(([, part]) => knobOf(p.node, part));
-  const why = blocked(p, parts);
-  // What each plays: its knob's value, or one to draw by when the card can't show it.
-  const now = knobs.map((k, i) => k?.value ?? [0.01, 0.2, 0.6, 0.3][i]);
-  const values = held?.values ?? now;
-  const units = knobs.map((k) => k?.unit ?? null);
+  const [held, setHeld] = useState<{ corner: string; values: number[]; scale: number; hold: number } | null>(null);
+  const shown = drawn(p, [["attack", view.attack], ["decay", view.decay], ["sustain", view.sustain], ["release", view.release]]);
+  if ("cant" in shown) return <Cant why={shown.cant} />;
+  const parts = shown.parts;
+  const units = parts.map((d) => d.unit);
+  const values = held?.values ?? parts.map((d) => d.value);
   const H = VIEW_H.envelope - 8;
   const [a, d, r] = [0, 1, 3].map((i) => seconds(values[i], units[i], bpm));
   const s = level(values[2], units[2]);
-  const hold = Math.max(0.25 * (a + d + r), 0.05);
-  // Pixels a second: kept while a corner is held, so the corner stays under the pointer.
+  // The sustain is held for a quarter of the rest, kept as it was while a corner is held, so the
+  // corners stay under the pointer.
+  const hold = held?.hold ?? Math.max(0.25 * (a + d + r), 0.05);
   const k = held?.scale ?? (W - 8) / (a + d + hold + r);
   const x = { peak: 4 + a * k, decay: 4 + (a + d) * k, hold: 4 + (a + d + hold) * k, end: 4 + (a + d + hold + r) * k };
   const y = (l: number) => 4 + (1 - l) * (H - 8);
-  const press = (corner: "attack" | "decay" | "release") => (e: React.PointerEvent<SVGCircleElement>) => {
-    if (e.button !== 0 || why) return;
-    e.stopPropagation();
-    e.preventDefault();
-    const el = e.currentTarget, pointer = e.pointerId;
-    el.setPointerCapture(pointer);
-    const used = corner === "attack" ? [0] : corner === "decay" ? [1, 2] : [3];
-    drag.begin(used.map((i) => knobs[i]!));
-    const scale = k;
-    let vals = [...now];
-    setHeld({ corner, values: vals, scale });
-    const move = (ev: PointerEvent) => {
-      if (ev.pointerId !== pointer || !svg.current) return;
-      const at = svgPoint(svg.current, ev, W, H);
-      const sec = (at.x - 4) / scale;
-      const [a0, d0] = [seconds(vals[0], units[0], bpm), seconds(vals[1], units[1], bpm)];
-      vals = [...vals];
-      if (corner === "attack") vals[0] = roundTime(fromSeconds(sec, units[0], bpm), units[0]);
-      if (corner === "decay") {
-        vals[1] = roundTime(fromSeconds(sec - a0, units[1], bpm), units[1]);
-        vals[2] = fromLevel(Math.min(1, Math.max(0, 1 - (at.y - 4) / (H - 8))), units[2]);
-      }
-      if (corner === "release") vals[3] = roundTime(fromSeconds(sec - a0 - d0 - hold, units[3], bpm), units[3]);
-      setHeld({ corner, values: vals, scale });
-      drag.move(used.map((i) => vals[i]));
-    };
-    const end = (ev: PointerEvent) => {
-      if (ev.pointerId !== pointer) return;
-      el.removeEventListener("pointermove", move);
-      el.removeEventListener("pointerup", end);
-      el.removeEventListener("pointercancel", end);
-      if (ev.type === "pointerup") void drag.end(`${p.owner} ${view.name}`).finally(() => setHeld(null));
-      else void drag.cancel().finally(() => setHeld(null));
-    };
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", end);
-    el.addEventListener("pointercancel", end);
+  /** Which parts a corner moves: those the card can move. */
+  const movable = (idx: number[]) => idx.filter((i) => parts[i].knob && !parts[i].why);
+  const press = (corner: "attack" | "decay" | "release", idx: number[]) => (e: React.PointerEvent<SVGCircleElement>) => {
+    const used = movable(idx);
+    if (e.button !== 0 || !used.length || !svg.current) return;
+    const start = parts.map((d) => d.value);
+    const frozen = { scale: k, hold };
+    drag.begin(used.map((i) => parts[i].knob!));
+    setHeld({ corner, values: start, ...frozen });
+    cornerDrag(
+      e,
+      svg.current,
+      W,
+      H,
+      (dx, dy, across, upDown) => {
+        const vals = [...start];
+        const time = (i: number, base: number) => inRange(parts[i].knob, roundTime(fromSeconds(base + dx / frozen.scale, units[i], bpm), units[i]));
+        if (corner === "attack" && across) vals[0] = time(0, seconds(start[0], units[0], bpm));
+        if (corner === "decay" && across && used.includes(1)) vals[1] = time(1, seconds(start[1], units[1], bpm));
+        if (corner === "decay" && upDown && used.includes(2)) vals[2] = inRange(parts[2].knob, fromLevel(Math.min(1, Math.max(0, level(start[2], units[2]) - dy / (H - 8))), units[2]));
+        if (corner === "release" && across) vals[3] = time(3, seconds(start[3], units[3], bpm));
+        setHeld({ corner, values: vals, ...frozen });
+        drag.move(used.map((i) => vals[i]));
+      },
+      (ok) => {
+        const moved = used.map((i) => parts[i]);
+        void (ok ? drag.end(stepName(p.owner, moved)) : drag.cancel()).finally(() => setHeld(null));
+      },
+    );
   };
   const said = (i: number) => (units[i] === "beats" ? `${values[i]} beats` : units[i] === "db" ? `${values[i]} dB` : i === 2 ? `${values[i]}` : `${Math.round(values[i] * 1000)} ms`);
+  const tip = (idx: number[], words: string) => [words, ...idx.flatMap((i) => (parts[i].why ? [parts[i].why!] : []))].join("\n");
   const shape = `M4,${y(0)} L${x.peak},${y(1)} L${x.decay},${y(s)} L${x.hold},${y(s)} L${x.end},${y(0)}`;
+  const fixed = parts.filter((d) => !d.knob);
   return (
-    <Picture title={why ?? `Attack ${said(0)} · decay ${said(1)} · sustain ${said(2)} · release ${said(3)}\nDrag a corner to change them`}>
+    <Picture title={`How loud a note is over time: attack ${said(0)}, decay ${said(1)}, sustain ${said(2)}, release ${said(3)}\nDrag a corner to change them${fixed.map((d) => `\n${d.why}`).join("")}`}>
       <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="w-full h-full overflow-visible" data-envelope>
         <line x1={0} x2={W} y1={y(0)} y2={y(0)} stroke="var(--color-line)" />
         <path d={`${shape} Z`} fill="var(--color-fg)" fillOpacity={0.06} stroke="none" />
         <path d={shape} fill="none" stroke={held ? "var(--color-accent)" : "var(--color-fg)"} strokeWidth={1.5} strokeLinejoin="round" />
-        <Handle id="attack" x={x.peak} y={y(1)} held={held?.corner === "attack"} title={`Attack: ${said(0)}`} disabled={!!why} onDown={press("attack")} />
-        <Handle id="decay" x={x.decay} y={y(s)} held={held?.corner === "decay"} title={`Decay: ${said(1)} · sustain: ${said(2)}`} disabled={!!why} onDown={press("decay")} />
-        <Handle id="release" x={x.end} y={y(0)} held={held?.corner === "release"} title={`Release: ${said(3)}`} disabled={!!why} onDown={press("release")} />
+        <Handle id="attack" x={x.peak} y={y(1)} held={held?.corner === "attack"} title={tip([0], `Attack: ${said(0)}`)} fixed={!movable([0]).length} onDown={press("attack", [0])} />
+        <Handle id="decay" x={x.decay} y={y(s)} held={held?.corner === "decay"} title={tip([1, 2], `Decay: ${said(1)} · sustain: ${said(2)}`)} fixed={!movable([1, 2]).length} onDown={press("decay", [1, 2])} />
+        <Handle id="release" x={x.end} y={y(0)} held={held?.corner === "release"} title={tip([3], `Release: ${said(3)}`)} fixed={!movable([3]).length} onDown={press("release", [3])} />
       </svg>
     </Picture>
   );
 }
 
-/** A view's frame: a 1 px `line` box, its words in the tooltip. */
-function Picture({ title, children, caption }: { title: string; children: ReactNode; caption?: string }) {
+/** A view's frame: a 1 px `line` box, its words in the tooltip; greyed when it can't be moved or drawn. */
+function Picture({ title, children, caption, greyed }: { title: string; children: ReactNode; caption?: string; greyed?: boolean }) {
   return (
-    <div className="relative h-full rounded-sm ring-1 ring-line bg-canvas overflow-hidden" title={title}>
+    <div className={clsx("relative h-full rounded-sm ring-1 ring-line bg-canvas overflow-hidden", greyed && "opacity-60")} data-greyed={greyed || undefined} title={title}>
       {children}
       {caption && <span className="absolute right-1 top-0.5 text-xs text-fg-faint pointer-events-none">{caption}</span>}
     </div>
@@ -263,10 +334,10 @@ function FilterView({ view, ...p }: ViewProps & { view: Extract<CardView, { kind
   const svg = useRef<SVGSVGElement>(null);
   const drag = useViewDrag(p);
   const [held, setHeld] = useState<number[] | null>(null);
-  const parts: [string, ViewPart][] = [["cutoff", view.cutoff], ["q", view.q]];
-  const knobs = parts.map(([, part]) => knobOf(p.node, part));
-  const why = blocked(p, parts);
-  const [cutoff, q] = held ?? [knobs[0]?.value ?? 1000, knobs[1]?.value ?? 0.707];
+  const shown = drawn(p, [["cutoff", view.cutoff], ["q", view.q]]);
+  if ("cant" in shown) return <Cant why={shown.cant} />;
+  const parts = shown.parts;
+  const [cutoff, q] = held ?? parts.map((d) => d.value);
   const H = VIEW_H.filter - 8;
   const xOf = (f: number) => (Math.log(f / F_LO) / Math.log(F_HI / F_LO)) * W;
   const yOf = (db: number) => (1 - (Math.min(DB_HI, Math.max(DB_LO, db)) - DB_LO) / (DB_HI - DB_LO)) * H;
@@ -275,46 +346,46 @@ function FilterView({ view, ...p }: ViewProps & { view: Extract<CardView, { kind
     return `${i ? "L" : "M"}${xOf(f).toFixed(1)},${yOf(lowpassDb(f, cutoff, q)).toFixed(1)}`;
   }).join(" ");
   const peak = { x: xOf(cutoff), y: yOf(20 * Math.log10(q)) };
+  const used = [0, 1].filter((i) => parts[i].knob && !parts[i].why);
   const press = (e: React.PointerEvent<SVGCircleElement>) => {
-    if (e.button !== 0 || why) return;
-    e.stopPropagation();
-    e.preventDefault();
-    const el = e.currentTarget, pointer = e.pointerId;
-    el.setPointerCapture(pointer);
-    drag.begin([knobs[0]!, knobs[1]!]);
-    setHeld([cutoff, q]);
-    const move = (ev: PointerEvent) => {
-      if (ev.pointerId !== pointer || !svg.current) return;
-      const at = svgPoint(svg.current, ev, W, H);
-      const f = Math.round(Math.min(F_HI, Math.max(F_LO, F_LO * (F_HI / F_LO) ** (at.x / W))));
-      const db = DB_HI - (at.y / H) * (DB_HI - DB_LO);
-      const nq = Math.round(Math.min(40, Math.max(0.1, 10 ** (db / 20))) * 100) / 100;
-      setHeld([f, nq]);
-      drag.move([f, nq]);
-    };
-    const end = (ev: PointerEvent) => {
-      if (ev.pointerId !== pointer) return;
-      el.removeEventListener("pointermove", move);
-      el.removeEventListener("pointerup", end);
-      el.removeEventListener("pointercancel", end);
-      if (ev.type === "pointerup") void drag.end(`${p.owner} ${view.name}`).finally(() => setHeld(null));
-      else void drag.cancel().finally(() => setHeld(null));
-    };
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", end);
-    el.addEventListener("pointercancel", end);
+    if (e.button !== 0 || !used.length || !svg.current) return;
+    const start = [cutoff, q];
+    const at0 = { x: xOf(cutoff), db: 20 * Math.log10(q) };
+    drag.begin(used.map((i) => parts[i].knob!));
+    setHeld(start);
+    cornerDrag(
+      e,
+      svg.current,
+      W,
+      H,
+      (dx, dy, across, upDown) => {
+        const vals = [...start];
+        if (across && used.includes(0)) vals[0] = inRange(parts[0].knob, Math.round(Math.min(F_HI, Math.max(F_LO, F_LO * (F_HI / F_LO) ** ((at0.x + dx) / W)))));
+        if (upDown && used.includes(1)) {
+          const db = at0.db - (dy / H) * (DB_HI - DB_LO);
+          vals[1] = inRange(parts[1].knob, Math.round(Math.min(40, Math.max(0.1, 10 ** (db / 20))) * 100) / 100);
+        }
+        setHeld(vals);
+        drag.move(used.map((i) => vals[i]));
+      },
+      (ok) => {
+        const moved = used.map((i) => parts[i]);
+        void (ok ? drag.end(stepName(p.owner, moved)) : drag.cancel()).finally(() => setHeld(null));
+      },
+    );
   };
   const hz = cutoff < 1000 ? `${Math.round(cutoff)} Hz` : `${(cutoff / 1000).toFixed(1)} kHz`;
+  const fixed = parts.filter((d) => !d.knob);
   return (
     <Picture
-      caption="Low-pass, drawn"
-      title={why ?? `A picture of a 12 dB per octave low-pass at ${hz}, q ${q}: not a measurement of the sound\nDrag its peak: across for the cutoff, up for the q`}
+      caption="Cuts the highs · a drawing"
+      title={`A drawing of a filter that cuts the highs above the cutoff (${hz}), each octave up 12 dB quieter, with a bump at the cutoff that the q (${q}) makes taller. Worked out from the two knobs: not measured from the sound.\nDrag the bump: across for the cutoff, up for the q${fixed.map((d) => `\n${d.why}`).join("")}`}
     >
       <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="w-full h-full overflow-visible" data-filter>
         <line x1={0} x2={W} y1={yOf(0)} y2={yOf(0)} stroke="var(--color-line)" />
         <path d={`${curve} L${W},${H} L0,${H} Z`} fill="var(--color-fg)" fillOpacity={0.06} stroke="none" />
         <path d={curve} fill="none" stroke={held ? "var(--color-accent)" : "var(--color-fg)"} strokeWidth={1.5} />
-        <Handle id="peak" x={peak.x} y={peak.y} held={!!held} title={`Cutoff ${hz} · q ${q}`} disabled={!!why} onDown={press} />
+        <Handle id="peak" x={peak.x} y={peak.y} held={!!held} title={[`Cutoff ${hz} · q ${q}`, ...parts.flatMap((d) => (d.why ? [d.why] : []))].join("\n")} fixed={!used.length} onDown={press} />
       </svg>
     </Picture>
   );
@@ -332,10 +403,13 @@ function KeysView({ view }: ViewProps & { view: Extract<CardView, { kind: "keys"
   const regions: KeyRegion[] = view.regions;
   const held = useRef<number | null>(null);
   const [playing, setPlaying] = useState<number | null>(null);
+  // As the piano roll's keys do, a click sounds only while audition is on (its switch in Notes).
+  const hearing = useAudition((s) => s.on);
   if (view.why) return <Picture title={view.why}><p className="p-2 text-xs text-fg-muted">{view.why.charAt(0).toUpperCase() + view.why.slice(1)}.</p></Picture>;
-  // The keys its regions cover, two either side, at least two octaves.
-  let lo = Math.max(0, Math.min(...regions.map((r) => r.keys[0]), 60) - 2);
-  let hi = Math.min(127, Math.max(...regions.map((r) => r.keys[1]), 60) + 2);
+  // The keys its regions cover, two either side, at least two octaves; around middle C with none.
+  const covered = regions.length ? regions : [{ keys: [60, 60] }];
+  let lo = Math.max(0, Math.min(...covered.map((r) => r.keys[0])) - 2);
+  let hi = Math.min(127, Math.max(...covered.map((r) => r.keys[1])) + 2);
   while (hi - lo + 1 < 24) {
     if (lo > 0) lo -= 1;
     if (hi - lo + 1 < 24 && hi < 127) hi += 1;
@@ -353,8 +427,8 @@ function KeysView({ view }: ViewProps & { view: Extract<CardView, { kind: "keys"
     // As hard as high: the keys' strip plays at the usual velocity.
     const velocity = at.y >= H - KEYS_H ? 0.8 : Math.min(1, Math.max(0.01, 1 - at.y / (H - KEYS_H)));
     e.currentTarget.setPointerCapture(e.pointerId);
-    held.current = strike(lane.module, lane.lane, pitch, velocity, { always: true });
-    setPlaying(pitch);
+    held.current = strike(lane.module, lane.lane, pitch, velocity);
+    if (held.current !== null) setPlaying(pitch);
   };
   const lift = () => {
     release(held.current);
@@ -363,7 +437,7 @@ function KeysView({ view }: ViewProps & { view: Extract<CardView, { kind: "keys"
   };
   const files = [...new Set(regions.map((r) => r.file))];
   return (
-    <Picture title={`${files.length} ${files.length === 1 ? "recording" : "recordings"} from ${noteName(lo)} to ${noteName(hi)}${lane ? "\nClick a key to hear it: higher plays it harder" : ""}`}>
+    <Picture title={`${files.length} ${files.length === 1 ? "recording" : "recordings"} from ${noteName(lo)} to ${noteName(hi)}${lane ? (hearing ? "\nClick a key to hear it: higher plays it harder" : "\nAudition is off (in Notes' header): turn it on to hear a key you click") : ""}`}>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-full cursor-pointer" data-keys onPointerDown={play} onPointerUp={lift} onPointerCancel={lift}>
         {regions.map((r, i) => (
           <rect
@@ -385,6 +459,7 @@ function KeysView({ view }: ViewProps & { view: Extract<CardView, { kind: "keys"
           <rect
             key={i}
             data-key={lo + i}
+            data-playing={playing === lo + i || undefined}
             x={i * kw + 0.25}
             width={kw - 0.5}
             y={H - KEYS_H}
@@ -414,11 +489,28 @@ interface ScopesIn {
 function ScopeView(p: ViewProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [why, setWhy] = useState<string | null>(null);
-  const drawn = useRef(0);
+  const count = useRef(0);
   const box = useRef<HTMLDivElement>(null);
   const { session, module } = p;
   const node = p.node.id;
+  // Looked at: the card on screen, in a window that shows (TAP-4: looking costs nothing otherwise).
+  const [onScreen, setOnScreen] = useState(false);
+  const [shown, setShown] = useState(() => document.visibilityState === "visible");
   useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const io = new IntersectionObserver((seen) => setOnScreen(seen.some((s) => s.isIntersecting)));
+    io.observe(el);
+    const vis = () => setShown(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", vis);
+    return () => {
+      io.disconnect();
+      document.removeEventListener("visibilitychange", vis);
+    };
+  }, []);
+  const looking = onScreen && shown;
+  useEffect(() => {
+    if (!looking) return;
     let alive = true;
     const ask = (on: boolean) =>
       graphApi.scope(session, module, node, on).then(
@@ -436,8 +528,8 @@ function ScopeView(p: ViewProps) {
       if (!c || !frames.length || !frames[0].length) return;
       setWhy(null);
       draw(c, frames);
-      drawn.current += 1;
-      box.current?.setAttribute("data-frames", String(drawn.current));
+      count.current += 1;
+      box.current?.setAttribute("data-frames", String(count.current));
     });
     return () => {
       alive = false;
@@ -445,10 +537,10 @@ function ScopeView(p: ViewProps) {
       off();
       void ask(false).catch(() => {});
     };
-  }, [session, module, node]);
+  }, [session, module, node, looking]);
   return (
-    <div ref={box} className="h-full" data-scope={node}>
-      <Picture title={why ?? "The sound as it plays: the last frames it gave"}>
+    <div ref={box} className="h-full" data-scope={node} data-asking={looking || undefined}>
+      <Picture title={why ?? "The sound's wave, as it plays"}>
         <canvas ref={canvas} width={W * 2} height={(VIEW_H.scope - 8) * 2} className="w-full h-full" />
         {why && <p className="absolute inset-0 p-2 text-xs text-fg-muted">{why}</p>}
       </Picture>

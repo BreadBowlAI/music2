@@ -25,7 +25,6 @@ import {
 } from "lucide-react";
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { create } from "zustand";
 import {
   controlLabel,
   display,
@@ -59,7 +58,7 @@ import {
 import { listenTo, moveEffect, turnEffect } from "../lib/effects";
 import { laneMade } from "../lib/events";
 import { mod, opt } from "../lib/native";
-import { useGlows } from "../lib/notice";
+import { useGlows, useNotice } from "../lib/notice";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Dots } from "./draw";
@@ -71,6 +70,7 @@ import PointMenu, { unautomate } from "./ClipMenu";
 import PresetPopover from "./PresetPopover";
 import { MenuValue, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
 import { VIEW_H, ViewRow } from "./CardViews";
+import { useFolded } from "../lib/folded";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 const Locked = createContext<string | null>(null);
@@ -316,7 +316,7 @@ type Item =
   | { t: "setting"; x: Setting }
   | { t: "view"; v: CardView }
   | { t: "fill"; id: string }
-  | { t: "fold"; hidden: number };
+  | { t: "fold"; hidden: number; hides: string[] };
 
 function items(n: ViewNode, folded: boolean): Item[] {
   const settings = settingsOf(n);
@@ -341,7 +341,11 @@ function items(n: ViewNode, folded: boolean): Item[] {
     if (folded && i > 0) return;
     out.push({ t: "group", name: g.name, first: i === 0 }, ...rowsOf(g));
   });
-  if (folded && n.groups.length > 1) out.push({ t: "fold", hidden: n.groups.slice(1).reduce((k, g) => k + rowsOf(g).length, 0) });
+  if (folded && n.groups.length > 1) {
+    const rest = n.groups.slice(1).flatMap(rowsOf);
+    const hides = rest.flatMap((x) => (x.t === "input" && x.port.knob ? [x.port.knob] : []));
+    out.push({ t: "fold", hidden: rest.length, hides });
+  }
   const rows = out.filter((x) => x.t === "input").length;
   out.push(...n.outputs.slice(rows).map((o): Item => ({ t: "fill", id: o.id })));
   return out;
@@ -386,16 +390,6 @@ function geometry(n: ViewNode, folded = false) {
   return { w, h: all.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0), ins, outs };
 }
 
-/** The cards folded to their first group (CARD-25), by node id: this window's, for this session. */
-const useFolded = create<{ ids: Set<string>; flip: (id: string) => void }>((set) => ({
-  ids: new Set(),
-  flip: (id) =>
-    set((s) => {
-      const ids = new Set(s.ids);
-      if (!ids.delete(id)) ids.add(id);
-      return { ids };
-    }),
-}));
 
 interface Placed { node: ViewNode; x: number; y: number; w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }
 
@@ -1073,17 +1067,7 @@ function NodeCard({
                 {x.name}
               </div>
             ) : (
-              <button
-                key="fold"
-                data-unfold
-                className="h-7 w-full px-4 flex items-center gap-1 text-xs text-fg-muted hover:text-fg cursor-pointer"
-                title={`Show ${titled}'s other groups`}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => useFolded.getState().flip(node.id)}
-              >
-                <ChevronRight size={12} absoluteStrokeWidth strokeWidth={1.5} />
-                {x.hidden} more
-              </button>
+              <FoldRow key="fold" node={node} hides={x.hides} hidden={x.hidden} titled={titled} />
             ),
           )}
         </div>
@@ -1793,5 +1777,27 @@ function PickControl({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * A folded card's last row (CARD-25): how many more rows it has, a click unfolding it. It stands for
+ * the knobs it hides: an agent's pointer at one shows here (`data-hides`), and so does its glow.
+ */
+function FoldRow({ node, hides, hidden, titled }: { node: ViewNode; hides: string[]; hidden: number; titled: string }) {
+  const glows = useNotice((s) => hides.some((id) => !!s.glow?.knobs.has(id)));
+  return (
+    <button
+      data-unfold
+      data-hides={hides.join(" ") || undefined}
+      data-glow={glows || undefined}
+      className="h-7 w-full px-4 flex items-center gap-1 text-xs text-fg-muted hover:text-fg cursor-pointer"
+      title={`Show ${titled}'s other groups`}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => useFolded.getState().flip(node.id)}
+    >
+      <ChevronRight size={12} absoluteStrokeWidth strokeWidth={1.5} />
+      {hidden} more
+    </button>
   );
 }

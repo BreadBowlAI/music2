@@ -17,6 +17,18 @@ import { lint } from "./lintlib.mjs";
 const { page, errors, api, key, view, box, posts } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
+// What the page sends on its socket (audition), as it goes: CDP sees a socket made after it listens.
+const socket = [];
+const cdp = await page.createCDPSession();
+await cdp.send("Network.enable");
+cdp.on("Network.webSocketFrameSent", ({ response }) => {
+  try {
+    socket.push(JSON.parse(response.payloadData));
+  } catch {}
+});
+await page.reload({ waitUntil: "domcontentloaded" });
+await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
+
 /** The lint over what is inside `sel`. */
 const linted = async (sel, what) => {
   const bad = await page.evaluate(lint, sel);
@@ -168,7 +180,7 @@ const written = Number(read("tracks/wobble.ts").match(/attack: ([0-9.]+)/)?.[1])
 check(written > attackBefore, `a longer attack: ${attackBefore} → ${written}`);
 check(posts.slice(n).some((p) => p.url === "/api/graph/preview"), "heard while dragged (a lease)");
 check(await until(async () => Math.abs((await page.$eval(attack, (e) => Number(e.dataset.value))) - written) < 1e-9), `the attack knob shows it: ${await page.$eval(attack, (e) => e.dataset.value)}`);
-check(await stepIs("Wobble amp"), `one undo step: ${await undoTitle()}`);
+check(await stepIs("Wobble attack"), `one undo step, named by what moved: ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "⌘Z takes it back");
@@ -184,15 +196,36 @@ check(
   await until(() => /cutoff: \d+/.test(read("tracks/wobble.ts")) && /q: [0-9.]+/.test(read("tracks/wobble.ts"))),
   `dragging the filter's peak writes cutoff and q: ${read("tracks/wobble.ts").match(/wobble\(lane[^\n]*/)?.[0]}`,
 );
-check(await stepIs("Wobble filter"), `as one undo step: ${await undoTitle()}`);
+check(await stepIs("Wobble cutoff and q"), `as one undo step: ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "one ⌘Z takes both back");
+// Dragged far past the cutoff's declared range (40 Hz to 8 kHz), the peak stops at its end, as a knob's drag does.
+const peak2 = await seen(`${card} [data-view="filter"] [data-handle="peak"]`);
+await page.mouse.move(peak2.x + peak2.width / 2, peak2.y + peak2.height / 2);
+await page.mouse.down();
+await page.mouse.move(peak2.x + 400, peak2.y + peak2.height / 2, { steps: 10 });
+await sleep(200);
+await page.mouse.up();
+check(await until(() => /cutoff: 8000\b/.test(read("tracks/wobble.ts"))), `it stops at 8 kHz: ${read("tracks/wobble.ts").match(/cutoff: \d+/)?.[0]}`);
+await page.mouse.click(10, 10);
+await key("Meta+z");
+check(await until(() => read("tracks/wobble.ts") === tracked), "and ⌘Z takes it back");
 
-// The keys view: its region over its keys.
+// The keys view: its region over its keys; a click plays the key under it, as hard as it is high.
 await seen(`${card} [data-view="keys"]`);
 await page.screenshot({ path: `${ROOT}/views-pictures.png` });
 check(!!(await page.$(`${card} [data-view="keys"] [data-region="tone.wav"]`)), "the keys view draws tone.wav's region");
+const keyA3 = await box(`${card} [data-view="keys"] [data-key="57"]`);
+const regionBox = await box(`${card} [data-view="keys"] [data-region="tone.wav"]`);
+const from = socket.length;
+await page.mouse.move(keyA3.x + keyA3.width / 2, regionBox.y + 2);
+await page.mouse.down();
+check(await until(async () => !!(await page.$(`${card} [data-view="keys"] [data-key="57"][data-playing]`))), "pressed, A3 plays");
+await page.mouse.up();
+const struck = socket.slice(from).find((m) => m.t === "audition" && m.on?.length);
+check(struck?.module === "wobble" && struck.lane === "notes" && struck.on[0].pitch === 57 && struck.on[0].velocity > 0.9, `on Wobble's notes lane, hard near the top: ${JSON.stringify(struck)}`);
+check(await until(() => socket.slice(from).some((m) => m.t === "audition" && m.off?.length)), "and let go when the pointer lifts");
 
 // ---------------------------------------------------------------- the scope while playing (CARD-29)
 
@@ -203,6 +236,19 @@ await seen(`${card} [data-scope]`);
 const frames = () => page.$eval(`${card} [data-scope]`, (e) => Number(e.dataset.frames ?? 0)).catch(() => 0);
 check(await until(async () => (await frames()) >= 5, 10000), `while the song plays, the scope draws the sound's frames (${await frames()} drawings)`);
 await page.keyboard.press("Space");
+// Out of sight, the card stops asking (TAP-4): scrolled out of the Device view, or the view left.
+const scopeAsks = () => posts.filter((p) => p.url === "/api/graph/scope").map((p) => JSON.parse(p.body).on);
+await page.$eval("[data-testid=graph]", (e) => e.scrollTo({ top: 0, left: 0 }));
+await page.$eval(`${card} [data-scope]`, (e) => {
+  const g = document.querySelector("[data-testid=graph]");
+  g.scrollTop += e.getBoundingClientRect().bottom - g.getBoundingClientRect().top + 50;
+});
+check(await until(() => scopeAsks().at(-1) === false), `scrolled out of sight, the scope stops asking: ${JSON.stringify(scopeAsks().slice(-3))}`);
+await seen(`${card} [data-scope]`);
+check(await until(() => scopeAsks().at(-1) === true), "back in sight, it asks again");
+await view("mix");
+check(await until(() => scopeAsks().at(-1) === false), "the Device view left, it stops");
+await view("graph");
 
 // ---------------------------------------------------------------- a lane of names (CARD-23, CARD-24)
 
@@ -232,5 +278,30 @@ check(await until(async () => !!(await page.$(`${clip} [data-step="sine"]`))), "
 check(await stepIs("adding a Shape point"), `one undo step: ${await undoTitle()}`);
 await page.screenshot({ path: `${ROOT}/views-steps.png` });
 await linted('[data-lane="wobble.shape"]', "the lane of names");
+
+// A step's mark dragged moves its point, and picks it; Esc unpicks it; ⌫ deletes the one picked.
+const mark = async () => {
+  const b = await box(`${clip} [data-step="sine"]`);
+  return { x: b.x + 1, y: b.y + b.height / 2 };
+};
+let m = await mark();
+await page.mouse.move(m.x, m.y);
+await page.mouse.down();
+await page.mouse.move(m.x + 15, m.y, { steps: 6 });
+await page.mouse.up();
+check(await until(() => file().clips[0]?.points[1]?.[0] > 2.5), `dragging sine's mark moves its point: ${JSON.stringify(file().clips[0]?.points)}`);
+check(await until(async () => !!(await page.$(`${clip} [data-step="sine"][data-picked]`))), "and picks it");
+await key("Escape");
+check(await until(async () => !(await page.$(`${clip} [data-step="sine"][data-picked]`))), "Esc unpicks it");
+m = await mark();
+await page.mouse.move(m.x, m.y);
+await page.mouse.down();
+await page.mouse.move(m.x - 8, m.y, { steps: 3 });
+await page.mouse.up();
+await until(async () => !!(await page.$(`${clip} [data-step="sine"][data-picked]`)));
+await sleep(300);
+await key("Backspace");
+check(await until(() => file().clips[0]?.points.length === 1), `⌫ deletes the point picked: ${JSON.stringify(file().clips[0]?.points)}`);
+check(await stepIs("deleting a Shape point"), `one undo step: ${await undoTitle()}`);
 
 done(errors);

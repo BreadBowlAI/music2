@@ -912,6 +912,8 @@ export default function SongTimeline({
         const b = clip.start + ((x - r.left) / r.width) * clip.length;
         return Math.min(clip.length, Math.max(0, clean(snapSong(meter, b, zoomNow(), free) - clip.start)));
       };
+      // One point picked in the window: this one.
+      usePoints.setState({ picked: null });
       let points: StepPoint[] = clip.points;
       useSteps.setState({ picked: { clip: ref, index, at: points[index] } });
       let moving = false;
@@ -965,6 +967,7 @@ export default function SongTimeline({
       if (!graph || !server) return;
       // A point is the selection now, not the clip.
       useClipSelection.getState().clear();
+      useSteps.setState({ picked: null });
       scroller.current?.focus({ preventScroll: true });
       const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX, y0 = e.clientY;
       el.setPointerCapture(pointer);
@@ -1258,6 +1261,7 @@ export default function SongTimeline({
         useShell.getState().setClip(module, null);
         useClipSelection.getState().clear();
         usePoints.setState({ picked: null });
+        useSteps.setState({ picked: null });
       },
       press(e) {
         pressed.current = e && e.button === 0 ? { pointer: e.pointerId, x: e.clientX } : null;
@@ -1591,14 +1595,18 @@ export default function SongTimeline({
     const shown = s.selected ? s.clips[s.selected] : undefined;
     const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
     // A point picked is the selection while no clip is.
-    const point = sel.picked.length ? null : usePoints.getState().picked;
+    // A number lane's point, or a lane of names' (CARD-24): ⌫ deletes it, Esc unpicks it.
+    const point = sel.picked.length ? null : (usePoints.getState().picked ?? useSteps.getState().picked);
     const bars = useSection.getState().bars;
     if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && point) edits.unpoint();
     else if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && sel.picked.length) edits.remove();
     else if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && bars) sections.clear();
     else if (e.key.toLowerCase() === "q" && plain && !e.shiftKey && sel.picked.length) edits.quantize();
     else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && plain && sel.picked.length) edits.nudge(e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
-    else if (e.key === "Escape" && point) usePoints.setState({ picked: null });
+    else if (e.key === "Escape" && point) {
+      usePoints.setState({ picked: null });
+      useSteps.setState({ picked: null });
+    }
     else if (e.key === "Escape" && (sel.picked.length || shown || bars)) {
       sel.clear();
       clearBars();
@@ -2820,6 +2828,7 @@ function LaneClips({
       : [];
   return (
     <>
+      {lane.kind === "steps" && <NamesFallback clips={lane.clips} name={stepLabel(lane.options, lane.default)} />}
       {lane.kind === "control" && lane.default != null && (
         <Fallback clips={lane.clips} y={CLIP_INSET + BORDER + BODY_TOP + (1 - level(lane.default)) * (height - 2 * (CLIP_INSET + BORDER) - BODY_TOP - BODY_BOTTOM)} />
       )}
@@ -3019,8 +3028,11 @@ function Steps({ clip, options, color, picked }: { clip: StepClip; options: { va
   return (
     <div className="absolute left-0 w-full" style={{ top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)` }}>
       {points.map(([b, v], i) => {
-        const from = i === 0 ? 0 : b;
-        const to = i + 1 < points.length ? points[i + 1][0] : length;
+        // Each name from its point (the first from the clip's start; one before the start, which a
+        // file may hold, from the start) to the next, inside the clip.
+        const from = i === 0 ? 0 : Math.min(length, Math.max(0, b));
+        const to = i + 1 < points.length ? Math.min(length, Math.max(0, points[i + 1][0])) : length;
+        if (to <= from && i + 1 < points.length) return null;
         const known = options.some((o) => o.value === v);
         return (
           <div
@@ -3031,7 +3043,7 @@ function Steps({ clip, options, color, picked }: { clip: StepClip; options: { va
             className="absolute inset-y-0 flex items-center min-w-0 overflow-hidden"
             style={{ left: `${(from / length) * 100}%`, width: `${(Math.max(0, to - from) / length) * 100}%` }}
           >
-            <span aria-hidden className={clsx("absolute inset-y-0", i === picked ? "w-0.5 bg-fg-strong" : "w-px")} style={{ left: `${((b - from) / Math.max(to - from, 1e-9)) * 100}%`, background: i === picked ? undefined : color.ink }} />
+            <span aria-hidden className={clsx("absolute inset-y-0", i === picked ? "w-0.5 bg-fg-strong" : "w-px")} style={{ left: `${(Math.max(0, b - from) / Math.max(to - from, 1e-9)) * 100}%`, background: i === picked ? undefined : color.ink }} />
             <span className={clsx("pl-1.5 text-xs truncate", !known && "line-through")} style={{ color: color.ink }}>
               {stepLabel(options, v)}
             </span>
@@ -3039,6 +3051,27 @@ function Steps({ clip, options, color, picked }: { clip: StepClip; options: { va
         );
       })}
     </div>
+  );
+}
+
+/** A lane of names' fallback where no clip is (CARD-23): its name, faint, at the start of each gap. */
+function NamesFallback({ clips, name }: { clips: StepClip[]; name: string }) {
+  const ppb = useZoom();
+  const gaps: number[] = [];
+  let at = 0;
+  for (const c of [...clips].sort((a, b) => a.start - b.start)) {
+    if (c.start > at) gaps.push(at);
+    at = Math.max(at, c.start + c.length);
+  }
+  gaps.push(at);
+  return (
+    <>
+      {gaps.map((a) => (
+        <span key={a} aria-hidden data-fallback={name} className="absolute top-1/2 -translate-y-1/2 pl-1.5 text-xs text-fg-faint pointer-events-none" style={{ left: a * ppb }}>
+          {name}
+        </span>
+      ))}
+    </>
   );
 }
 

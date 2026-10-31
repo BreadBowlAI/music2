@@ -138,7 +138,7 @@ export async function duplicateTrack(module: string) {
   const graph = writable();
   if (!graph || module === "song") return;
   const name = nameOf(graph, module);
-  const lane = graph.timeline.tracks.find((t) => t.module === module)?.lanes.find((l) => l.kind !== "control")?.key;
+  const lane = graph.timeline.tracks.find((t) => t.module === module)?.lanes.find((l) => !isAutomation(l))?.key;
   const toast = useStore.getState().toast;
   try {
     const r = await graphApi.duplicateTrack(graph.session, module, name);

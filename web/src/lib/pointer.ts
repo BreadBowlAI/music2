@@ -5,6 +5,7 @@
 // knob of a track the dock doesn't show is named beside that track's header instead.
 
 import { create } from "zustand";
+import { unfoldFor } from "./folded";
 import { token } from "./native";
 import { canvas, useShell } from "./shell";
 import { useStore } from "./store";
@@ -73,7 +74,9 @@ export function dismissPointer() {
 /** The rows and things a pointer names, as the page draws them. */
 const rowOf = (track: string, lane: string) => document.querySelector<HTMLElement>(`[data-lane="${CSS.escape(`${track}.${lane}`)}"]`);
 const headerOf = (track: string) => document.querySelector<HTMLElement>(`[data-module-tab="${CSS.escape(track)}"]`);
-const knobOf = (id: string) => document.querySelector<HTMLElement>(`[data-knob-id="${CSS.escape(id)}"]`);
+/** A knob, or the row of a folded card that hides it (CARD-25), which stands for it. */
+const knobOf = (id: string) =>
+  document.querySelector<HTMLElement>(`[data-knob-id="${CSS.escape(id)}"]`) ?? document.querySelector<HTMLElement>(`[data-hides~="${CSS.escape(id)}"]`);
 
 /** Where a pointer's target is drawn, on screen; null when the page doesn't draw it now. */
 export function targetBox(p: Pointer): DOMRect | null {
@@ -133,6 +136,8 @@ export function reveal(p: Pointer) {
       return;
     case "knob":
       if (elsewhere(p)) return into(() => (p.track ? headerOf(p.track) : null));
+      // A folded card unfolds to show it (CARD-25).
+      if (p.knob) unfoldFor(p.knob);
       if (p.knob && !knobOf(p.knob)) {
         if (shell.view !== "device" && shell.view !== "mix") shell.setView("device");
         else if (!shell.dock) shell.setDock(true);

@@ -137,8 +137,8 @@ export type CardRow = { input: string } | { setting: string } | { view: string }
 /** A group of a card (CARD-25): its title, and its rows in the order the sound names them. */
 export interface CardGroup { name: string; rows: CardRow[] }
 
-/** A value a view draws and moves (CARD-26): its control's slot, its knob when the card can move it, else why not. */
-export interface ViewPart { slot: string; knob?: string; why?: string }
+/** A value a view draws and moves (CARD-26): its control's slot, its knob when the card can move it, else what plays (a lane's fallback, in `unit`) and why not. */
+export interface ViewPart { slot: string; knob?: string; value?: number; unit?: string; why?: string }
 
 /** A region std's Sampler plays, as a key map draws it: its notes and velocities, each lowest and highest. */
 export interface KeyRegion { file: string; root: number; keys: [number, number]; velocity: [number, number]; round_robin: [number, number]; release?: boolean }
