@@ -123,7 +123,6 @@ const want = [
   ["legato", "Legato", ""],
   ["humanize", "Humanize", ""],
   ["swing", "Swing", ""],
-  ["groove-shuffle", "Shuffle", ""],
   ["groove-laid-back", "Laid back", ""],
   ["groove-pushed", "Pushed", ""],
   ["groove-accents", "Accents", ""],
@@ -371,7 +370,7 @@ n = await noteAt(1);
 await page.mouse.click(n.x, n.y, { button: "right" });
 check(await until(() => menu().then(Boolean), 2000), "the menu still opens");
 const r3 = await rows();
-check(r3.length === 14 && r3.filter((r) => r.id !== "swing").every((r) => r.disabled && r.title.includes("compiles")), `its rows are disabled, the tooltip saying why: ${r3[0]?.title}`);
+check(r3.length === 13 && r3.filter((r) => r.id !== "swing").every((r) => r.disabled && r.title.includes("compiles")), `its rows are disabled, the tooltip saying why: ${r3[0]?.title}`);
 check(await page.$$eval("[data-testid=note-menu] [data-swing]", (els) => els.length === 5 && els.every((b) => b.disabled)), "Swing's five too");
 await page.keyboard.press("Escape");
 write("tracks/bass.ts", bassTs);

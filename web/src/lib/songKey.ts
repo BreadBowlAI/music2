@@ -26,10 +26,14 @@ export interface Stamp {
 export interface Degree {
   /** Its root's pitch class, 0 is C. */
   root: number;
-  /** Its place in the key: "IV", "ii", "vii°". */
-  numeral: string;
-  /** Each kind of chord on it, by the kind's name ("triad", "seventh"…). */
+  /** Its root's name in the key: "D", "F♯". */
+  name: string;
+  /** Its place in the key: "IV", "ii", "vii°"; null on a note no chord is built on (the blues' blue note). */
+  numeral: string | null;
+  /** Each kind of chord on it whose notes are all in the key, by the kind's name ("triad", "seventh"…). */
   kinds: Record<string, Stamp>;
+  /** Each other kind, with the server's words for why it isn't placed. */
+  refused: Record<string, string>;
 }
 
 /** The song's key as the timeline publishes it (NOTE-2): the key, and what it means. */
@@ -40,7 +44,7 @@ export interface KeyView extends SongKey {
   notes: number[];
   /** For each pitch class from C, the semitones to the nearest note of the key (a tie goes down). */
   snap: number[];
-  /** The chords on its notes, from the root up; none for a key with no chords (chromatic). */
+  /** The chords on each of its notes, from the root up; none for a key with no chords (chromatic). */
   chords: Degree[];
 }
 
@@ -83,18 +87,23 @@ export function fit(k: KeyView, p: number): number {
   return to > TOP ? stepIn(k, TOP + 1, -1) : stepIn(k, -1, 1);
 }
 
+/** What a stamp places (NOTE-4): a chord's name, numeral and pitches; or, where it places none, why, in the server's words. */
+export type Stamped = { name: string; numeral: string; pitches: number[] } | { why: string };
+
 /**
  * The chord of kind `kind` in inversion `inversion` that a stamp on row `row` places (NOTE-4): its
- * root is the row's nearest note of the key. Its name, numeral and pitches; null where the key has
- * no such chord (no key chords, the blues' blue note) or it would go past the top.
+ * root is the row's nearest note of the key. Where the key places no such chord (its notes aren't
+ * all in the key, the blues' blue note), or it would go past the top, why.
  */
-export function chordAt(k: KeyView, row: number, kind: string, inversion: number): { name: string; numeral: string; pitches: number[] } | null {
+export function chordAt(k: KeyView, row: number, kind: string, inversion: number): Stamped {
   const root = fit(k, row);
   const d = k.chords.find((c) => c.root === pc(root));
-  const stamp = d?.kinds[kind];
-  if (!d || !stamp) return null;
+  if (!d) return { why: `${k.name} has no chords to stamp: pick a key with a scale of seven notes` };
+  const stamp = d.kinds[kind];
+  if (!stamp || !d.numeral) return { why: d.refused[kind] ?? `No chord on ${d.name}` };
   const pitches = stamp.shapes[inversion % stamp.shapes.length].map((o) => root + o);
-  return pitches.every((p) => p <= TOP) ? { name: stamp.name, numeral: d.numeral, pitches } : null;
+  if (pitches.some((p) => p > TOP)) return { why: `${stamp.name} from there goes above the highest note, G9` };
+  return { name: stamp.name, numeral: d.numeral, pitches };
 }
 
 // ---------------------------------------------------------------- the table (NOTE-1)

@@ -41,7 +41,7 @@ import GridChip from "./GridChip";
 import NoteMenu, { type NoteTool } from "./NoteMenu";
 import { Hatch, HBands, VLines } from "./draw";
 import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
-import { afterLaneWrites, hasOwnId } from "../lib/graph";
+import { afterLaneWrites, hasOwnId, lanesShown } from "../lib/graph";
 import { playhead, send as sendGesture, serverRef, useClipboard, type Copied, type Gesture as ClipGesture, type ServerRef } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { look } from "../lib/focus";
@@ -213,6 +213,11 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const folded = drums && roll.fold !== false;
   const [foldFrom, setFoldFrom] = useState<number[]>(() => usedRows(names, server?.notes ?? []));
   const rows = folded ? [...new Set([...foldFrom, ...(server?.notes ?? []).map((n) => n.pitch), ...(clip?.notes ?? []).map((n) => n.pitch)])].sort((a, b) => b - a) : null;
+  // A row shown stays shown while the roll is open: kept, until Fold folds again.
+  const fresh = rows?.filter((p) => !foldFrom.includes(p)) ?? [];
+  useEffect(() => {
+    if (fresh.length) setFoldFrom((was) => [...new Set([...was, ...fresh])]);
+  });
   const nRows = rows ? rows.length : TOP + 1;
   /** The row pitch `p` is on, from the top; -1 when it isn't shown. */
   const rowOf = (p: number) => (rows ? rows.indexOf(p) : TOP - p);
@@ -409,30 +414,24 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   };
 
   /**
-   * This clip as a gesture names it now, without the hash the window drew it with: a gesture sent
-   * after this view's own writes lands on what they wrote.
-   */
-  const named = (): ServerRef | null => {
-    const l = findLane(latest.current.timeline, module, lane);
-    const r = l ? serverRef(l, ref) : null;
-    if (!r) return null;
-    const { sha: _sha, ...rest } = r;
-    return rest;
-  };
-
-  /**
    * A clip gesture on this clip that the server works out (a groove, NOTE-7; a paste, NOTE-5),
-   * sent after this view's lane writes on their way, so it lands on what they wrote: one Tx, one
-   * undo step named `name`. Its notes show when the graph does; with `select`, the notes it added
-   * are then selected.
+   * sent after this view's lane writes on their way, once the graph shows what they wrote: it names
+   * the clip with the hash the graph drew it with, so the server refuses it over a change it
+   * missed, and a change made elsewhere since the roll drew the notes (by their places) refuses it
+   * here. One Tx, one undo step named `name`. Its notes show when the graph does; with `select`,
+   * the notes it added are then selected.
    */
   const act = (make: (clip: ServerRef) => ClipGesture, name: string, select = false) => {
     if (locked) return;
     const before = clip?.notes ?? [];
-    afterLaneWrites(latest.current, (within) => {
-      const c = named();
-      if (!c) return Promise.reject(new Error("This clip is gone."));
-      return sendGesture(latest.current, make(c), { name }, undefined, within);
+    afterLaneWrites(latest.current, async (within) => {
+      const g = await graphShowing(lanesShown);
+      const l = findLane(g.timeline, module, lane);
+      const c = l ? serverRef(l, ref) : null;
+      const now = findNoteClip(g.timeline, ref);
+      if (!c || !now) throw new Error("This clip is gone.");
+      if (!sameNotes(now.notes, before)) throw new Error(`${trackName()}'s clip was changed in another window or by an agent. It shows as it is now; try again.`);
+      return sendGesture(g, make(c), { name }, undefined, within);
     })
       .then((done) => {
         if (!select || done.before === done.after) return;
@@ -586,7 +585,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     if (t.kind === "delete") return remove(all, `deleting ${who}`);
     if (t.kind === "duplicate") return void duplicate(all, `duplicating ${who}`);
     if (t.kind === "swing" || t.kind === "groove") {
-      const groove = t.kind === "swing" ? { name: "swing", amount: t.amount, step: swingUnit(gridStep) } : { name: t.name };
+      const groove = t.kind === "swing" ? { name: "swing", amount: t.amount, step: swingUnit(gridStep) === 0.5 ? ("eighths" as const) : ("sixteenths" as const) } : { name: t.name };
       const label = t.kind === "swing" ? "swinging" : `${theory?.grooves.find((g) => g.name === t.name)?.label ?? t.name} on`;
       return act((c) => ({ op: "groove", clips: [c], ...(picked.length ? { notes: picked } : {}), groove }), `${label} ${who}`);
     }
@@ -594,7 +593,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     let name = who;
     switch (t.kind) {
       case "transpose":
-        notes = transpose(clip.notes, picked, t.by);
+        // On a folded kit, a row up or down is the next row shown (NOTE-8).
+        notes = rows && Math.abs(t.by) === 1 ? rowsMoved(clip.notes, picked, t.by as 1 | -1) : transpose(clip.notes, picked, t.by);
         name = `transposing ${who}`;
         break;
       case "quantize":
@@ -620,12 +620,23 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const nudge = (dp: number, dt: number) => {
     if (!clip || !picked.length) return;
     const notes = picked.map((i) => clip.notes[i]);
-    const inKeyStep = locking && Math.abs(dp) === 1 ? (dp as 1 | -1) : 0;
+    // A step up or down: to the next note of the key with Lock to key on (NOTE-3), the next row
+    // shown on a folded kit (NOTE-8).
+    const oneStep = Math.abs(dp) === 1 ? (dp as 1 | -1) : 0;
     dp = clamp(dp, -Math.min(...notes.map((n) => n.pitch)), TOP - Math.max(...notes.map((n) => n.pitch)));
     dt = Math.max(dt, -Math.min(...notes.map((n) => n.start)));
-    if (!dp && !dt) return;
-    const pitch = (p: number) => (inKeyStep ? stepIn(keyed!, p, inKeyStep) : p + dp);
+    if (!dp && !dt && !(oneStep && rows)) return;
+    const pitch = (p: number) => (oneStep && rows ? rowStep(p, oneStep) : oneStep && locking ? stepIn(keyed!, p, oneStep) : p + dp);
     commit({ length: clip.length, notes: clip.notes.map((n, i) => (selected.has(i) ? { ...n, pitch: pitch(n.pitch), start: clean(n.start + dt) } : n)) }, selected);
+  };
+
+  /** Pitch `p` a row up (`dir` 1) or down (-1) on the rows shown; `p` itself at their end. */
+  const rowStep = (p: number, dir: 1 | -1) => pitchOfRow(rowOf(p) - dir);
+  /** The notes at `picked` (every note with none picked) a row up or down on the rows shown; null when none moves. */
+  const rowsMoved = (notes: Note[], picked: number[], dir: 1 | -1): Note[] | null => {
+    const which = new Set(targets(notes, picked));
+    const out = notes.map((n, i) => (which.has(i) ? { ...n, pitch: rowStep(n.pitch, dir) } : n));
+    return out.some((n, i) => n.pitch !== notes[i].pitch) ? out : null;
   };
 
   /** I: the next inversion of the chord a stamp places (NOTE-4). */
@@ -917,7 +928,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const one = noteAt(p, length, off);
     if (!one || !stamp || !keyed) return one ? [one] : [];
     const c = chordAt(keyed, p.pitch, stamp.kind, stamp.inversion);
-    return c ? c.pitches.map((pitch) => ({ ...one, pitch })) : [];
+    return "pitches" in c ? c.pitches.map((pitch) => ({ ...one, pitch })) : [];
   };
 
   /** A double-click on empty grid: a note in that cell, or a chord stamp's notes; they are selected. */
@@ -1037,9 +1048,18 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const keyNotes = keyed ? inKey(keyed) : null;
   // A kit's rows are drums, not keys: none shaded (next D4c).
   const shaded = (keyNotes ? Array.from({ length: 12 }, (_, pc) => pc).filter((pc) => !keyNotes.has(pc)) : drums ? [] : BLACK).join(",");
-  // Where a stamp would land under the pointer (NOTE-4): its chord's name and notes, outlined.
+  // Where a stamp would land under the pointer (NOTE-4): its chord's name and notes, outlined; or
+  // why there is none there, in the server's words (not in the key, the blues' blue note), or that
+  // it would be past the clip's end.
   const ghost = hover && stamp && keyed && !gesture.current ? notesAt(hover, clip.length, hover.off) : [];
-  const ghostChord = hover && stamp && keyed ? chordAt(keyed, hover.pitch, stamp.kind, stamp.inversion) : null;
+  const ghostChord = hover && stamp && keyed && !gesture.current ? chordAt(keyed, hover.pitch, stamp.kind, stamp.inversion) : null;
+  const stampSays = !ghostChord
+    ? null
+    : !("pitches" in ghostChord)
+      ? ghostChord.why
+      : ghost.length
+        ? `${ghostChord.name} · ${ghostChord.numeral}`
+        : "A chord goes inside the clip, before its end";
 
   return (
     <div
@@ -1103,7 +1123,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                   title={`Lock to key (${keyed.name}): ${locking ? "on" : "off"}. While it is on, notes you draw, drag or paste go to the nearest note of the key, and ↑ ↓ move to the next one`}
                   className="!px-1.5"
                 >
-                  In key
+                  Lock to key
                 </Button>
                 <ChordTool keyed={keyed} />
                 <Divider />
@@ -1180,8 +1200,10 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                     ? why === "lane"
                       ? `Read only until ${file} reads again`
                       : "Read only until the code compiles"
-                    : stamp && ghostChord
-                      ? `${draw ? "Click" : "Double-click"} to place ${ghostChord.name} (${ghostChord.numeral} in ${keyed?.name}) · I for the next inversion · hold ${mod.cmd} to place it off the grid`
+                    : ghostChord && stampSays
+                      ? "pitches" in ghostChord && ghost.length
+                        ? `${draw ? "Click" : "Double-click"} to place ${ghostChord.name} (${ghostChord.numeral} in ${keyed?.name}) · I for the next inversion · hold ${mod.cmd} to place it off the grid`
+                        : stampSays
                       : draw
                         ? `Draw: click to add a note · drag to set its length · ${mod.alt}-drag to paint notes · hold ${mod.cmd} to place off the grid · B to select`
                         : `Double-click to add a note · drag a note to move it (hold ${mod.cmd} to place it off the grid) · drag its right edge to resize · drag across empty space to select · ${keyName("Backspace")} deletes · ${chord("D")} duplicates · ${chord("C")} copies · ${chord("V")} pastes · arrows move · B to draw · right-click for note tools`
@@ -1265,13 +1287,21 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                     style={{ left: n.start * ppb, top: rowOf(n.pitch) * rowH + 1, width: Math.max(n.length * ppb - 1, 4), height: rowH - 2, borderColor: tone.ink }}
                   />
                 ))}
-                {ghost.length > 0 && ghostChord && (
+                {hover && stampSays && (
                   <div
                     data-testid="stamp-name"
-                    className="absolute z-20 pointer-events-none px-1 rounded-xs text-xs font-medium leading-4 text-white whitespace-nowrap"
-                    style={{ left: ghost[0].start * ppb, top: Math.max(0, rowOf(Math.max(...ghost.map((n) => n.pitch))) * rowH - 18), background: tone.ink }}
+                    data-placed={ghost.length > 0 || undefined}
+                    className={clsx(
+                      "absolute z-20 pointer-events-none px-1 rounded-xs text-xs font-medium leading-4 whitespace-nowrap",
+                      ghost.length ? "text-white" : "bg-raised text-fg-muted shadow-pop",
+                    )}
+                    style={{
+                      left: (ghost[0]?.start ?? hover.beat) * ppb,
+                      top: Math.max(0, (ghost.length ? rowOf(Math.max(...ghost.map((n) => n.pitch))) : rowOf(hover.pitch)) * rowH - 18),
+                      background: ghost.length ? tone.ink : undefined,
+                    }}
                   >
-                    {ghostChord.name} · {ghostChord.numeral}
+                    {stampSays}
                   </div>
                 )}
                 {marquee && (
@@ -1365,6 +1395,30 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 // In a narrow dock (the browser open in a small window) the tools' dividers go before any tool does.
 const Divider = () => <div className="w-px h-5 shrink-0 bg-line @max-[900px]/dock:hidden" />;
 
+/** The graph once `ok` holds of it (it shows a revision), at most 10 s from now. */
+function graphShowing(ok: (g: GraphState) => boolean): Promise<GraphState> {
+  return new Promise((resolve, reject) => {
+    const now = useStore.getState().graph;
+    if (now && ok(now)) return resolve(now);
+    const done = (f: () => void) => {
+      clearTimeout(timer);
+      stop();
+      f();
+    };
+    const timer = setTimeout(() => done(() => reject(new Error("The app didn't show the last edit in time; try again."))), 10000);
+    const stop = useStore.subscribe((s) => {
+      const g = s.graph;
+      if (g && ok(g)) done(() => resolve(g));
+    });
+  });
+}
+
+/** Whether two clips' notes are the same notes, in the same places. */
+function sameNotes(a: readonly Note[], b: readonly Note[]) {
+  const key = (n: Note) => [n.pitch, n.start, n.length, n.velocity].join(",");
+  return a.length === b.length && a.every((n, i) => key(n) === key(b[i]));
+}
+
 /** What a folded kit's roll starts from (NOTE-8): the drums `notes` use; the kit's named rows when they use none. */
 function usedRows(names: Record<string, string>, notes: readonly Note[]): number[] {
   return notes.length ? [...new Set(notes.map((n) => n.pitch))] : Object.keys(names).map(Number);
@@ -1402,7 +1456,7 @@ function ChordTool({ keyed }: { keyed: KeyView }) {
   const set = (chord: { kind: string; inversion: number } | null) => useShell.getState().set({ chord });
   const kind = kinds?.find((k) => k.name === tool?.kind);
   const tick = (on: boolean) => (on ? <Check size={14} className="text-fg" /> : <span className="block size-3.5" />);
-  const label = tool && kind ? `${kind.label}${tool.inversion ? ` ${INVERSIONS[tool.inversion]}` : ""}` : "Chord";
+  const label = tool && kind ? `${kind.label}${tool.inversion ? `, ${INVERSIONS[tool.inversion]} inversion` : ""}` : "Chord";
   return (
     <>
       <Button

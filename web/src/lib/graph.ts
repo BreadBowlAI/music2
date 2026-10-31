@@ -997,6 +997,9 @@ export function afterLaneWrites<T>(graph: GraphState, f: (within: Editing) => Pr
   return write;
 }
 
+/** Whether `graph` shows every lane write of its song this window has finished (its own on their way aside). */
+export const lanesShown = (graph: GraphState) => lanes.session !== graph.session || graph.view.revision >= lanes.revision;
+
 /** Whether a lane write is on its way, or made a revision `graph` doesn't show yet. */
 export const laneWriting = (graph: GraphState) => lanes.session === graph.session && (lanes.pending > 0 || graph.view.revision < lanes.revision);
 

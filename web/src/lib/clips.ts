@@ -61,7 +61,7 @@ export type Gesture =
    */
   | { op: "paste"; clips: Copied[]; to?: LaneAddr; at: number; into?: ServerRef; fit?: boolean }
   /** A groove (NOTE-7) on the clips' notes, or on notes `notes` of one clip: a feel from the server's table. */
-  | { op: "groove"; clips: ServerRef[]; notes?: number[]; groove: { name: string; amount?: number; step?: number } }
+  | { op: "groove"; clips: ServerRef[]; notes?: number[]; groove: { name: string; amount?: number; step?: "eighths" | "sixteenths" } }
   /** Every note's start onto the nearest line of `grid` beats. */
   | { op: "quantize"; clips: ServerRef[]; grid: number; ends?: boolean }
   /** An automation clip's points, `[beat in the clip, value]`, all of them. */

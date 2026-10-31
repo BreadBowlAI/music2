@@ -1173,3 +1173,32 @@ fn a_groove_is_one_undo_step() {
         refused(&mut s, Gesture::Groove { clips: vec![by_id("bass/cutoff", "adp0sw76")], notes: None, groove: grooves::Groove::Pushed });
     assert!(why.contains("notes"), "{why}");
 }
+
+// NOTE-7, review N5: a groove (and a paste into a clip) names its clip with the hash the window
+// drew it with: after a change it didn't see, it is refused as changed, and picks no notes by
+// their places in a clip that isn't the one it saw.
+#[test]
+fn a_groove_on_a_clip_changed_since_is_refused() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let sixteenths: Vec<(f64, f64, f64)> = (0..4).map(|k| (60.0, k as f64 * 0.25, 0.25)).collect();
+    go(
+        &mut s,
+        Gesture::Set { lane: addr("keys/chords"), put: vec![notes_clip("a", 4.0, 4.0, &sixteenths)], delete: vec!["6ryexzev".into()] },
+    );
+    let seen = ClipRef { sha: Some(sha_of(&s, "keys/chords", "a")), ..by_id("keys/chords", "a") };
+    // Another window adds a note before the first: note 1 is now another note.
+    let mut moved = sixteenths.clone();
+    moved.insert(0, (62.0, 0.0, 0.25));
+    go(&mut s, Gesture::Set { lane: addr("keys/chords"), put: vec![notes_clip("a", 4.0, 4.0, &moved)], delete: vec![] });
+    let before = f.read("data/keys/chords.json");
+    let accents = Gesture::Groove { clips: vec![seen.clone()], notes: Some(vec![1]), groove: grooves::Groove::Accents };
+    assert!(matches!(edit(&mut s, &accents), Err(EditError::Changed(_))), "a groove on what the window saw");
+    let copied = Copied {
+        from: addr("keys/chords"),
+        clip: serde_json::json!({"start": 0, "length": 1, "notes": [{"pitch": 60, "start": 0, "length": 1}]}),
+    };
+    let paste = Gesture::Paste { clips: vec![copied], to: None, at: 4.0, into: Some(seen), fit: false };
+    assert!(matches!(edit(&mut s, &paste), Err(EditError::Changed(_))), "a paste into what the window saw");
+    assert_eq!(f.read("data/keys/chords.json"), before, "nothing written");
+}

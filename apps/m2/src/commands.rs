@@ -408,7 +408,7 @@ pub const COMMANDS: &[Command] = &[
                 sends it",
         more: "Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste` (with \
                `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the \
-               song's key) and `groove` (swing, shuffle, laid back, pushed or accents). `m2 call <song> /api/theory` \
+               song's key) and `groove` (swing, laid back, pushed or accents). `m2 call <song> /api/theory` \
                lists the chords and grooves.",
     },
     Command {

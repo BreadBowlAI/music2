@@ -170,8 +170,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 |---|---|---|---|---|
 | 16 | **The rest of scale help: an arpeggiator, and scales in code.** An arpeggiator waits: with std kept small ([Typed sounds](designs/cards/design.md) §7) it belongs in a pack, and it needs kernels that make events, which the kernel ABI reserves but doesn't build ([ABI-2](architecture.md#kernel-abi-reservations)). `std/theory` (keys and scales for song code) and `std/gen` (generators) are designed ([song-as-program.md](song-as-program.md)) but not built; the song's key lives in `layout.json`, which code doesn't read. Built since track `notes` ([NOTE-1 to NOTE-9](architecture.md#notes-and-scales)): thirteen scales (#6), Lock to key and chord stamps (#16), copy and paste of notes between clips, ⌘ to place a note off the grid, more swing and grooves (#15), folded drum rows and taller rows (#3). | Beginners write better melodies and chords with a scale guide; an arpeggio is how a held chord becomes a part. | Partly (a key and scale, only in-key notes shown) | medium |
 
-- **A groove of sixteenths after one of eighths** moves only the notes its own steps reach: a swung eighth (at 66% of its beat) is past a sixteenth's reach and stays. Grooves of one step (the swings and Shuffle; Laid back and Pushed) replace each other's places.
-- **A stamp's chord names spell a note of the key with its own letter** (G♯ in A harmonic minor), but a key's root keeps the app's one spelling (E♭ minor, never D♯ minor), so a few keys spell notes as C♭ or E♯.
+- **A groove of sixteenths after one of eighths** sees the swung eighths as off its grid, so it leaves those beats as they are: undo, or Quantize, before changing the step. Grooves of one step (the swings of a step; Laid back and Pushed) replace each other's places.
+- **A stamp's chord names spell a note of the key with its own letter** (G♯ in A harmonic minor), but a key's root keeps the app's one spelling (E♭ minor, never D♯ minor), so a few keys spell notes as C♭, F♭ or E♯ (a note whose letter would need a double sharp or flat is spelled on its own: E♭ Locrian's fifth is A).
 
 ## Automation
 
