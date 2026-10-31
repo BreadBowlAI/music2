@@ -136,7 +136,7 @@ const choose = async (i) => {
   await menu();
   await page.$$eval("[data-relink-menu] [role=menuitem]", (els, i) => els[i].click(), i);
 };
-write("tracks/kick.ts", kickTs.replace('  const out = kick(lane.notes("hits"));', '  lane.notes("accents");\n  const out = kick(lane.notes("hits"));'));
+write("tracks/kick.ts", kickTs.replace('  const out = drums.drum(lane.notes("hits"));', '  lane.notes("accents");\n  const out = drums.drum(lane.notes("hits"));'));
 await sleep(500);
 check(await until(async () => (await pop(), !!(await page.$(pick)))), "with two lanes free, the person can also pick a lane");
 check((await page.$eval(likely, (e) => e.dataset.to).catch(() => null)) === "data/kicks", "the folder on the renamed track stays one click");
@@ -149,7 +149,7 @@ await page.click('button[aria-label="Undo"]');
 check(await until(() => exists(OLD) && !exists("data/kicks/accents.json")), "and Undo takes it back");
 
 // A lane key renamed on a track that keeps its key, with two lanes free: neither is plainly its own, so only a pick.
-write("tracks/kick.ts", kickTs.replace('track("kicks"', 'track("kick"').replace('  const out = kick(lane.notes("hits"));', '  lane.notes("accents");\n  const out = kick(lane.notes("beats"));'));
+write("tracks/kick.ts", kickTs.replace('track("kicks"', 'track("kick"').replace('  const out = drums.drum(lane.notes("hits"));', '  lane.notes("accents");\n  const out = drums.drum(lane.notes("beats"));'));
 check(
   await until(async () => JSON.stringify(await options().catch(() => [])) === JSON.stringify(["Move to…", "Move to Kick (kick) › accents", "Move to Kick (kick) › beats"])),
   `two lanes as likely: the person picks (${await options().catch(() => [])})`,

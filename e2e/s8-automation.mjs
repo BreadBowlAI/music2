@@ -1,5 +1,5 @@
 // 8b.5 Automation drawn in place (design-8b §7.5, taste.md TL-6, KN-2), U7: Automate on Kick's
-// Decay makes a lane named after the control ("Decay", `decay`); a double-click on its empty space
+// Decay makes a lane named after the control ("Decay ×", One drum's label, `decay`); a double-click on its empty space
 // makes a clip holding the lane's value; on the curve a click adds a point and a drag moves it, ⌫
 // deletes it, and Draw mode (B) paints; a click on the clip's body away from the curve picks the
 // clip and adds no point; Remove automation, from the lane's header or from the input it drives in
@@ -33,7 +33,7 @@ const orig = read("tracks/kick.ts");
 
 // ---------------------------------------------------------------- Automate names the lane after its control
 await show("kick");
-const knob = '[data-module="kick"] [data-knob="decay"]';
+const knob = '[data-module="kick"] [data-knob="decay ×"]';
 await page.waitForSelector(knob);
 await page.$eval(knob, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
 await sleep(150);
@@ -42,21 +42,21 @@ await page.mouse.click(k.x + 30, k.y + k.height / 2, { button: "right" });
 await page.waitForSelector("[data-testid=knob-menu]");
 await page.click('[data-testid=knob-menu] [data-menu-item="automate"]');
 check(await until(() => read("tracks/kick.ts").includes('lane.control("decay"') && exists("data/kick/decay.json")), `Automate on Kick's Decay writes a lane named after the control: decay (${read("tracks/kick.ts").match(/lane\.control\([^)]*\)/)?.[0]})`);
-check(await toasted("Automating decay in a new lane"), "a toast says so");
+check(await toasted("Automating decay × in a new lane"), "a toast says so");
 check(await until(async () => !!(await page.$('[data-lane="kick.decay"]'))), "the timeline unfolds Kick on the new lane");
 const header = await page.$eval('[data-lane="kick.decay"] > div:first-child', (e) => e.innerText.split("\n")[0]);
-check(header === "Decay", `its header says the control's name: ${header}`);
+check(header === "Decay ×", `its header says the control's name: ${header}`);
 const automated = read("tracks/kick.ts");
 
 // ---------------------------------------------------------------- the input it drives, in the Device view
 check(await until(async () => !!(await page.$('[data-module="kick"] [data-lane-input="kick.decay"]'))), "in the Device view, Kick's Decay input follows the lane");
 const input = await box('[data-module="kick"] [data-lane-input="kick.decay"]');
 const inputTitle = await page.$eval('[data-module="kick"] [data-lane-input="kick.decay"]', (e) => e.title);
-check(inputTitle.startsWith("Follows the Decay lane"), `its tooltip says so: ${inputTitle}`);
+check(inputTitle.startsWith("Follows the Decay × lane"), `its tooltip says so: ${inputTitle}`);
 await page.mouse.click(input.x + 40, input.y + input.height / 2, { button: "right" });
 await page.waitForSelector("[data-testid=clip-menu]");
 const inputMenu = await menuRows();
-check(inputMenu.join(" | ") === "Show Decay lane | Remove automation", `its menu: ${inputMenu.join(" | ")}`);
+check(inputMenu.join(" | ") === "Show Decay × lane | Remove automation", `its menu: ${inputMenu.join(" | ")}`);
 await key("Escape");
 
 // ---------------------------------------------------------------- a double-click makes a clip holding the lane's value
@@ -103,7 +103,7 @@ check(JSON.stringify(p3[1]) === JSON.stringify([2, v0]), `on the grid where it w
 check(gestures(n).map((g) => g.op).join() === "points" && gestures(n)[0].clip.id === id, "one points gesture naming the clip");
 check(await until(async () => (await page.$$eval(`${clipSel} [data-point][data-picked]`, (els) => els.map((e) => e.dataset.point))).join() === "1"), "the new point is picked");
 check(!(await page.$(`${clipSel}[data-picked]`)), "and not the clip");
-check(await until(async () => (await undoNow()).startsWith("Undo adding a Decay point")), `Undo names it: ${await undoNow()}`);
+check(await until(async () => (await undoNow()).startsWith("Undo adding a Decay × point")), `Undo names it: ${await undoNow()}`);
 
 // ---------------------------------------------------------------- a drag moves it
 const from = await where(2, v0);
@@ -123,7 +123,7 @@ n = posts.length;
 await key("Backspace");
 check(await until(async () => (await clips())[0]?.points.length === 2), "⌫ deletes the picked point");
 check(gestures(n).map((g) => g.op).join() === "points" && (await clips()).length === 1, "as one points gesture; the clip stays");
-check(await until(async () => (await undoNow()).startsWith("Undo deleting a Decay point")), `Undo names it: ${await undoNow()}`);
+check(await until(async () => (await undoNow()).startsWith("Undo deleting a Decay × point")), `Undo names it: ${await undoNow()}`);
 
 // ---------------------------------------------------------------- Draw mode paints
 await key("b");
@@ -141,7 +141,7 @@ const { min, max } = await lane();
 check(painted[0][1] > painted[painted.length - 1][1] && painted.every((p, i) => i === 0 || p[0] > painted[i - 1][0]), `from high to low, in order: ${JSON.stringify(painted)}`);
 check(painted.every((p) => p[1] >= min && p[1] <= max && Number.isInteger(p[0] * 2)), "each on an eighth, within the lane's range");
 check(gestures(n).length === 1, "in one gesture");
-check(await until(async () => (await undoNow()).startsWith("Undo drawing Decay automation")), `Undo names it: ${await undoNow()}`);
+check(await until(async () => (await undoNow()).startsWith("Undo drawing Decay × automation")), `Undo names it: ${await undoNow()}`);
 await page.screenshot({ path: `${ROOT}/s8-automation.png`, clip: { x: 0, y: 0, width: 760, height: 400 }, captureBeyondViewport: false });
 
 // ---------------------------------------------------------------- Remove automation, from the lane's header
@@ -184,7 +184,7 @@ check(
   Math.abs(w1.value - playing) < 0.005 && Math.abs(playing - v0) > 0.05,
   `the value it played at the playhead (${playing.toFixed(3)} at beat ${at}, not the fallback ${v0}) is written in its place: ${w1.text}`,
 );
-check(await toasted("Removed the Decay automation"), "a toast says so");
+check(await toasted("Removed the Decay × automation"), "a toast says so");
 check((await state()).view.revision === rev + 1 && !(await page.$('[data-lane="kick.decay"]')), "one revision; the lane is gone from the timeline");
 await key("Meta+z");
 check(await until(() => read("tracks/kick.ts") === automated && read("data/kick/decay.json") === lanefile), "⌘Z brings the code and the lane file back");
@@ -208,7 +208,7 @@ await page.click('[data-testid=clip-menu] [data-menu-item="unautomate"]');
 check(await until(() => !exists("data/kick/decay.json") && !read("tracks/kick.ts").includes("lane.control")), "Remove automation from the input does the same");
 const w2 = written();
 check(Math.abs(w2.value - v0) < 1e-6, `with the playhead before the clip, the lane's fallback is written: ${w2.text}`);
-check(await until(async () => !!(await page.$('[data-module="kick"] [data-knob="decay"]'))), "and the Decay knob is back in the Device view");
+check(await until(async () => !!(await page.$('[data-module="kick"] [data-knob="decay ×"]'))), "and the Decay knob is back in the Device view");
 await key("Meta+z");
 check(await until(() => read("tracks/kick.ts") === automated && exists("data/kick/decay.json")), "⌘Z brings it back again");
 void orig;

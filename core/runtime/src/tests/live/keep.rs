@@ -21,7 +21,7 @@ mod plugins;
 fn probe_packages() -> PackageSet {
     m2_plugins::test_main_thread();
     probe::install();
-    std_packages()
+    own_packages()
 }
 
 /// A probe on the notes lane, its gain a constant, keyed `key` when given; `more` adds nodes after
@@ -95,7 +95,12 @@ fn node(flat: &Flat, id: &str) -> usize {
 /// One note into sine voices releasing over 50 ms, through a 250 ms delay with feedback, plus a
 /// ring (a feedback loop at the top), out of `x`; `more` adds nodes after it.
 fn echoes(more: Value, out: &str) -> Ir {
-    shaped(0.05, json!({"op": "kernel", "kernel": "std:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "m"}}), more, out)
+    shaped(
+        0.05,
+        json!({"op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "m"}}),
+        more,
+        out,
+    )
 }
 
 /// [`echoes`], its voices releasing over `release`, its delay `d` made `d`.
@@ -138,7 +143,7 @@ fn with_edit(flat: &Flat, data: &DataSet, pk: &PackageSet, frames: usize, edit: 
 // kernels and a ring), mid-note and mid-echo, and changes no bit: nothing fades, nothing is new.
 #[test]
 fn an_activation_moves_every_instance_that_continues() {
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(&echoes(json!([]), "x"));
     let data = one_note();
     let (plain, _) = with_edit(&f, &data, &pk, SR as usize * 3 / 2, None);
@@ -156,11 +161,11 @@ fn an_activation_moves_every_instance_that_continues() {
 // plays out as a ghost, and the output fades to what replaced it.
 #[test]
 fn a_changed_shape_starts_from_init() {
-    let pk = std_packages();
+    let pk = own_packages();
     let data = one_note();
     let base = flat(&echoes(json!([]), "x"));
-    let delay = json!({"op": "kernel", "kernel": "std:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "m"}});
-    let reverb = flat(&shaped(0.05, json!({"op": "kernel", "kernel": "std:reverb", "inputs": {"in": "v"}}), json!([]), "x"));
+    let delay = json!({"op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "m"}});
+    let reverb = flat(&shaped(0.05, json!({"op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": "v"}}), json!([]), "x"));
     let longer = flat(&shaped(0.3, delay, json!([]), "x"));
     for (what, next, fresh) in [
         ("another kernel", reverb, Count { kernels: 1, ..Count::default() }),
@@ -172,8 +177,8 @@ fn a_changed_shape_starts_from_init() {
         assert!(s.ghosts >= 1 && s.fades >= 1, "{what}: the replaced one plays out, faded: {s:?}");
     }
     // A kernel whose input became stereo: another channel count, so another shape.
-    let mono = flat(&sine_then(json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}]), "d"));
-    let pan = json!([{"id": "pn", "op": "kernel", "kernel": "std:pan", "inputs": {"in": "o"}}, {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "pn"}}]);
+    let mono = flat(&sine_then(json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o"}}]), "d"));
+    let pan = json!([{"id": "pn", "op": "kernel", "kernel": "std:pan", "inputs": {"in": "o"}}, {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "pn"}}]);
     let stereo = flat(&sine_then(pan, "d"));
     let (_, rig) = with_edit(&mono, &DataSet::empty(), &pk, SR as usize / 4, Some((SR as usize / 8, &stereo, &DataSet::empty())));
     let s = rig.e.current().unwrap().stats().clone();
@@ -183,34 +188,42 @@ fn a_changed_shape_starts_from_init() {
 /// A copy of std whose wasm module holds the same code and one custom section more: another
 /// SHA-256, the same kernels.
 fn rebuilt_std() -> PathBuf {
-    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
-    let to = project(&[]).join("std");
-    std::fs::create_dir_all(to.join("kernels")).unwrap();
+    rebuilt("std", "kernels/std.wasm")
+}
+
+/// A copy of the package at `rel` in the repo (its manifest and its module, `wasm`), its module
+/// with one byte more: the same kernels, another hash.
+fn rebuilt(rel: &str, wasm: &str) -> PathBuf {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel);
+    let to = project(&[]).join(rel);
+    std::fs::create_dir_all(to.join(wasm).parent().unwrap()).unwrap();
     std::fs::copy(from.join("m2pkg.toml"), to.join("m2pkg.toml")).unwrap();
-    let mut wasm = std::fs::read(from.join("kernels/std.wasm")).unwrap();
+    let mut bytes = std::fs::read(from.join(wasm)).unwrap();
     // A custom section (id 0) named `m2-test`, one byte of payload.
-    wasm.extend_from_slice(&[0, 9, 7, b'm', b'2', b'-', b't', b'e', b's', b't', 42]);
-    std::fs::write(to.join("kernels/std.wasm"), wasm).unwrap();
+    bytes.extend_from_slice(&[0, 9, 7, b'm', b'2', b'-', b't', b'e', b's', b't', 42]);
+    std::fs::write(to.join(wasm), bytes).unwrap();
     to
 }
 
 // RENDER-25 (G7d): a kernel module rebuilt with the same kernel ids but a new hash starts every
-// instance from init: mid-echo, the same graph prepared with the rebuilt std keeps no std
-// instance, the echo is gone once the window ends, and the output differs from never activating.
+// instance from init: mid-echo, the same graph prepared with std and the delay's pack rebuilt keeps
+// no instance, the echo is gone once the window ends, and the output differs from never activating.
 // Its control: std loaded again from the same bytes (a new module, the same hash) keeps every
 // instance, and changes no bit.
 #[test]
 fn a_rebuilt_kernel_module_starts_from_init() {
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(&echoes(json!([]), "x"));
     let data = one_note();
     let frames = SR as usize * 3 / 2;
     let at = SR as usize * 6 / 10;
     let (plain, _) = with_edit(&f, &data, &pk, frames, None);
+    // std and `@m2/effects` (the delay's), each rebuilt.
     let mut rebuilt = PackageSet::default();
     rebuilt.load(&rebuilt_std()).unwrap();
-    assert_ne!(rebuilt.module_sha("std:delay"), pk.module_sha("std:delay"));
-    let (same, other) = (std_packages(), rebuilt);
+    rebuilt.load(&self::rebuilt("packs/@m2/effects", "kernels/effects.wasm")).unwrap();
+    assert_ne!(rebuilt.module_sha("@m2/effects:delay"), pk.module_sha("@m2/effects:delay"));
+    let (same, other) = (own_packages(), rebuilt);
     for (label, packages, kept) in [("same bytes", &same, true), ("rebuilt", &other, false)] {
         let mut rig = Rig::of(&f, &data, build(&f, &data, &pk, &Owner::discard()));
         rig.cmd(Cmd::Play);
@@ -239,7 +252,7 @@ fn a_rebuilt_kernel_module_starts_from_init() {
 // against another plan than the one that plays.
 #[test]
 fn a_wrong_shape_move_is_refused() {
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(&echoes(json!([]), "x"));
     let data = one_note();
     let frames = SR as usize;
@@ -262,7 +275,7 @@ fn a_wrong_shape_move_is_refused() {
 // playing another, it is refused whole.
 #[test]
 fn an_activation_against_another_plan_is_refused() {
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(&echoes(json!([]), "x"));
     let data = one_note();
     let mut a = playing(&f, &data, &pk, BLOCK);
@@ -351,7 +364,7 @@ fn t_kernels() -> PathBuf {
 }
 
 fn t_packages() -> PackageSet {
-    let mut pk = std_packages();
+    let mut pk = own_packages();
     pk.load(&t_kernels()).unwrap();
     pk
 }
@@ -365,7 +378,7 @@ fn cued(kind: &str, edit: bool) -> Ir {
         json!({"id": "den", "op": "kernel", "kernel": "@test/t:denan", "inputs": {"in": "lat"}}),
         json!({"id": "fr", "op": "const", "value": 330, "unit": "hz"}),
         json!({"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "fr"}}),
-        json!({"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}),
+        json!({"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o"}}),
     ];
     let other = if edit {
         nodes.push(json!({"id": "g", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "d", "by": "half"}}));
@@ -443,7 +456,7 @@ fn two_tracks(kind: &str, edit: bool) -> Ir {
     let mut b = vec![
         json!({"id": "fr", "op": "const", "value": 330, "unit": "hz"}),
         json!({"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "fr"}}),
-        json!({"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}),
+        json!({"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o"}}),
     ];
     if edit {
         b.push(json!({"id": "half", "op": "const", "value": 0.5}));
@@ -806,10 +819,10 @@ fn taps(rig: &mut Rig, nodes: &[usize], blocks: usize) -> (Vec<[f32; 2]>, Vec<Ve
 // from dry to wet over the next 5 ms, exactly as `xfade` says, and plays the wet side exactly.
 #[test]
 fn an_inserted_effect_fades_dry_to_wet() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (a, b) = (
         flat(&sine_then(json!([]), "o")),
-        flat(&sine_then(json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}]), "d")),
+        flat(&sine_then(json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o"}}]), "d")),
     );
     let mut rig = playing(&a, &DataSet::empty(), &pk, 8 * BLOCK);
     let r = rig.prepare(&b, &DataSet::empty(), &pk);
@@ -837,7 +850,7 @@ fn an_inserted_effect_fades_dry_to_wet() {
 // at full level: a step of 1.0.
 #[test]
 fn an_edit_on_an_idle_engine_fades_in() {
-    let pk = std_packages();
+    let pk = own_packages();
     let x = json!([{"id": "h", "op": "const", "value": 0.5}, {"id": "x", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": "h"}}]);
     let mut drone = x.as_array().unwrap().clone();
     drone.extend([
@@ -865,8 +878,8 @@ fn an_edit_on_an_idle_engine_fades_in() {
 // first echo starts as smoothly as the sine moves: no sample-to-sample step over twice the sine's.
 #[test]
 fn an_inserted_delay_plays_back_no_step() {
-    let pk = std_packages();
-    let fx = json!([{"id": "t", "op": "const", "value": 0.01, "unit": "seconds"}, {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o", "time": "t"}}]);
+    let pk = own_packages();
+    let fx = json!([{"id": "t", "op": "const", "value": 0.01, "unit": "seconds"}, {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o", "time": "t"}}]);
     let (a, b) = (flat(&sine_then(json!([]), "o")), flat(&sine_then(fx, "d")));
     let frames = 16 * BLOCK;
     let (out, rig) = with_edit(&a, &DataSet::empty(), &pk, frames, Some((4 * BLOCK, &b, &DataSet::empty())));
@@ -880,8 +893,8 @@ fn an_inserted_delay_plays_back_no_step() {
 // output fades back to dry; at the window's end it leaves the audio thread in the leftovers.
 #[test]
 fn a_removed_effect_rings_out_as_a_ghost_then_goes() {
-    let pk = std_packages();
-    let fx = json!([{"id": "t", "op": "const", "value": 0.01, "unit": "seconds"}, {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o", "time": "t"}}]);
+    let pk = own_packages();
+    let fx = json!([{"id": "t", "op": "const", "value": 0.01, "unit": "seconds"}, {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o", "time": "t"}}]);
     let (a, b) = (flat(&sine_then(fx, "d")), flat(&sine_then(json!([]), "o")));
     let mut rig = playing(&a, &DataSet::empty(), &pk, 8 * BLOCK);
     let r = rig.prepare(&b, &DataSet::empty(), &pk);
@@ -905,7 +918,7 @@ fn a_removed_effect_rings_out_as_a_ghost_then_goes() {
 // window included: equal sides stay equal through the fade.
 #[test]
 fn a_silent_edit_changes_no_bit() {
-    let pk = std_packages();
+    let pk = own_packages();
     let unit = json!([{"id": "one", "op": "const", "value": 1}, {"id": "u", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "one"}}]);
     let (a, b) = (flat(&sine_then(json!([]), "o")), flat(&sine_then(unit, "u")));
     let frames = 8 * BLOCK;
@@ -921,17 +934,17 @@ fn a_silent_edit_changes_no_bit() {
 // for bit.
 #[test]
 fn an_effect_reorder_replaces_the_cycle_and_keeps_the_rest() {
-    let pk = std_packages();
+    let pk = own_packages();
     let order = |first: &str, second: &str| {
         let (a_in, b_in) = if first == "a" { ("o", "a") } else { ("b", "o") };
         let last = second;
         flat(&sine_then(
             json!([
-                {"id": "a", "op": "kernel", "kernel": "std:delay", "inputs": {"in": a_in}},
-                {"id": "b", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": b_in}},
+                {"id": "a", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": a_in}},
+                {"id": "b", "op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": b_in}},
                 {"id": "f2", "op": "const", "value": 220, "unit": "hz"},
                 {"id": "o2", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "f2"}},
-                {"id": "y", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o2"}},
+                {"id": "y", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o2"}},
                 {"id": "s", "op": "kernel", "kernel": "std:add", "inputs": {"a": last, "b": "y"}}]),
             "s",
         ))
@@ -959,7 +972,7 @@ fn an_effect_reorder_replaces_the_cycle_and_keeps_the_rest() {
 // its window, moved in as a ghost lane, not its default.
 #[test]
 fn a_ghost_reading_a_removed_control_lane_reads_its_ghost_lane() {
-    let pk = std_packages();
+    let pk = own_packages();
     let lanes = json!([{"key": "lvl", "kind": "control<gain>", "default": 0}]);
     let mut a = sine_then(
         json!([{"id": "c", "op": "lane", "lane": "lvl"}, {"id": "g", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "c"}}]),
@@ -987,7 +1000,7 @@ fn a_ghost_reading_a_removed_control_lane_reads_its_ghost_lane() {
 // RENDER-25: a feedback ring moves with its plan: no 128-sample hole, no bit changed.
 #[test]
 fn feedback_rings_survive_an_activation() {
-    let pk = std_packages();
+    let pk = own_packages();
     let ring = json!([
         {"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "x"},
         {"id": "k", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
@@ -1501,7 +1514,7 @@ fn a_replaced_instrument_releases_its_notes() {
 }
 
 fn a_replaced_instrument_releases(mono: bool) {
-    let pk = std_packages();
+    let pk = own_packages();
     let long = with_notes(json!({"clips": [{"start": 0, "length": 16, "notes": [{"pitch": 69, "start": 0, "length": 8}]}]}), at_bpm(120.0));
     let (a, b) = (flat(&legato_if(synth(0.2, json!([]), "v"), mono)), flat(&legato_if(synth(0.3, json!([]), "v"), mono)));
     let mut rig = playing(&a, &long, &pk, BEAT as usize);
@@ -1533,7 +1546,7 @@ fn a_rewired_poly_is_kept_and_releases_its_notes() {
 }
 
 fn a_rewired_poly_releases(mono: bool) {
-    let pk = std_packages();
+    let pk = own_packages();
     let lanes = |lane: &str| {
         let mut ir = legato_if(synth(0.1, json!([]), "v"), mono);
         ir.modules[0].nodes[0].op = serde_json::from_value(json!({"op": "lane", "lane": lane})).unwrap();
@@ -1668,7 +1681,7 @@ fn voiced(bpm: f64, notes: Value, clips: Value) -> (Flat, DataSet, PathBuf) {
 // any block, where `Enter` would have held every note.
 #[test]
 fn a_jump_on_the_activation_line_ends_its_notes() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (f, data, dir) =
         voiced(120.0, json!([{"pitch": 69, "start": 0, "length": 20}]), json!([{"start": 0, "length": 20, "asset": "s.wav"}]));
     let own = max_step(&Renderer::new(&f, &data, &pk, SR).unwrap().render(0.5).unwrap());
@@ -1719,7 +1732,7 @@ fn engine_at(at: u64, t0: u64, t: u64) -> u64 {
 // in the new map.
 #[test]
 fn a_tempo_change_keeps_every_kernel_and_the_beat() {
-    let pk = std_packages();
+    let pk = own_packages();
     let notes = json!([{"pitch": 69, "start": 0, "length": 1}]);
     let clips = json!([{"start": 8, "length": 2, "asset": "dc.wav"}]);
     let (f, d120, dir1) = voiced(120.0, notes.clone(), clips.clone());
@@ -1757,7 +1770,7 @@ fn a_tempo_change_keeps_every_kernel_and_the_beat() {
 // map: its scheduler reconciles with the data rebuilt in it.
 #[test]
 fn a_tempo_change_recomputes_pending_offs() {
-    let pk = std_packages();
+    let pk = own_packages();
     let notes = json!([{"pitch": 69, "start": 0, "length": 6}]);
     let (f, d120, dir1) = voiced(120.0, notes.clone(), json!([]));
     let (_, d90, dir2) = voiced(90.0, notes, json!([]));
@@ -1785,7 +1798,7 @@ fn two_clips(gain: f64) -> Value {
 // sample, and the playing clip, the same on both sides, changes no bit through the window.
 #[test]
 fn an_audio_swap_of_unchanged_clips_changes_no_bit() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (f, d0, dir1) = voiced(120.0, json!([]), two_clips(0.0));
     let (_, d6, dir2) = voiced(120.0, json!([]), two_clips(-6.0));
     let frames = 4 * BEAT as usize;
@@ -1803,7 +1816,7 @@ fn an_audio_swap_of_unchanged_clips_changes_no_bit() {
 // over the window: every sample between the two sides, no swell.
 #[test]
 fn a_clip_gain_edit_stays_between_its_two_levels() {
-    let pk = std_packages();
+    let pk = own_packages();
     let clip = |db: f64| json!([{"start": 0, "length": 8, "asset": "s.wav", "gain_db": db}]);
     let (f, d0, dir1) = voiced(120.0, json!([]), clip(0.0));
     let (_, d1, dir2) = voiced(120.0, json!([]), clip(1.0));
@@ -1837,7 +1850,7 @@ fn leveled(lvl: f64, more: bool) -> Flat {
         json!({"id": "g", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "lvl"}}),
     ];
     let out = if more {
-        nodes.push(json!({"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}));
+        nodes.push(json!({"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o"}}));
         nodes.push(json!({"id": "s", "op": "kernel", "kernel": "std:add", "inputs": {"a": "g", "b": "d"}}));
         "s"
     } else {
@@ -1850,7 +1863,7 @@ fn leveled(lvl: f64, more: bool) -> Flat {
 // old value over the activation's first block, as a `SetCell` would, then holds.
 #[test]
 fn a_committed_smooth_value_ramps_through_an_activation() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (a, b) = (leveled(0.8, false), leveled(0.4, true));
     let mut rig = playing(&a, &DataSet::empty(), &pk, 4 * BLOCK);
     let r = rig.prepare(&b, &DataSet::empty(), &pk);
@@ -1867,7 +1880,7 @@ fn a_committed_smooth_value_ramps_through_an_activation() {
 // flat, never a ramp copied block after block.
 #[test]
 fn a_kept_polys_voice_cells_take_the_new_values() {
-    let pk = std_packages();
+    let pk = own_packages();
     let voiced = |wet: f64| {
         let mut ir = synth(0.0, json!([]), "v");
         let mut body = serde_json::to_value(&ir.modules[0].nodes[1]).unwrap();
@@ -1915,7 +1928,7 @@ fn a_kept_polys_voice_cells_take_the_new_values() {
 // plays from the new plan's first block, with no ramp from the code's value.
 #[test]
 fn a_lease_value_set_before_the_send_plays_from_the_first_block() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (a, b) = (leveled(0.8, false), leveled(0.8, true));
     let mut rig = playing(&a, &DataSet::empty(), &pk, 4 * BLOCK);
     let old = rig.e.current().unwrap();
@@ -1961,10 +1974,10 @@ fn a_changed_constant_parameter_reaches_a_kept_plugin() {
 // applies, in order, once the window before it ends.
 #[test]
 fn activations_are_never_coalesced() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (a, b) = (
         flat(&sine_then(json!([]), "o")),
-        flat(&sine_then(json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}]), "d")),
+        flat(&sine_then(json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o"}}]), "d")),
     );
     let mut rig = playing(&a, &DataSet::empty(), &pk, 4 * BLOCK);
     let seqs: Vec<u64> = [&b, &a, &b]
@@ -1985,9 +1998,9 @@ fn activations_are_never_coalesced() {
 // still ends on time.
 #[test]
 fn panic_during_a_window_resets_ghosts_and_ends_on_time() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (a, b) = (
-        flat(&sine_then(json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}]), "d")),
+        flat(&sine_then(json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o"}}]), "d")),
         flat(&sine_then(json!([]), "o")),
     );
     let mut rig = playing(&a, &DataSet::empty(), &pk, 40 * BLOCK);
@@ -2034,7 +2047,7 @@ fn window_edit() -> (Ir, Ir) {
             "a",
             json!([]),
             json!([hz("f", 220.0), k("o", "std:sine", json!({"freq": "f"})),
-            {"id": "t", "op": "const", "value": 0.01, "unit": "seconds"}, k("d", "std:delay", json!({"in": "o", "time": "t"}))]),
+            {"id": "t", "op": "const", "value": 0.01, "unit": "seconds"}, k("d", "@m2/effects:delay", json!({"in": "o", "time": "t"}))]),
             "d",
         ),
         module(
@@ -2080,7 +2093,7 @@ fn window_edit() -> (Ir, Ir) {
 /// [`window_edit`] played live on `threads` threads (spread) or this one alone: 8 blocks, the edit,
 /// then 24 blocks, its window included. What it played, the rig, and the edit's plan's facts.
 fn window_on(threads: Option<usize>) -> (Vec<[f32; 2]>, Rig, Vec<(String, u16)>) {
-    let pk = std_packages();
+    let pk = own_packages();
     let (before, after) = window_edit();
     let notes: Vec<Value> = (0..12).map(|i| json!({"pitch": 48 + (i * 7) % 24, "start": i as f64 * 0.25, "length": 0.4})).collect();
     let (data, dir) = timeline_for(
@@ -2156,7 +2169,7 @@ fn a_rewired_poly_lets_the_old_lanes_pedal_up() {
 }
 
 fn a_rewired_poly_lets_its_pedal_up(mono: bool) {
-    let pk = std_packages();
+    let pk = own_packages();
     let lanes = |lane: &str| {
         let mut ir = legato_if(synth(0.1, json!([]), "v"), mono);
         ir.modules[0].nodes[0].op = serde_json::from_value(json!({"op": "lane", "lane": lane})).unwrap();

@@ -8,7 +8,7 @@ tags = ["test"]
 wasm = "k.wasm"
 
 [dependencies]
-"@m2/core" = "1"
+"@m2/core" = "2"
 std = "0.5"
 
 # Each kernel's one output is its one input, as sound. Their module is made from text by

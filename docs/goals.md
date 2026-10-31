@@ -23,7 +23,7 @@
 |---|---|
 | **AI inside the app** | The app has no AI features. Scripts and AI agents can work on a song from the outside, through its files and the local API, like any other program. Contributors may use AI agents to write code: the same rules apply to their work. |
 | **VST3 and AU plugins** | music2 plays CLAP plugins only, the open plugin format (gap #33, decided 2026-10-19). |
-| **Backwards compatibility before 1.0** | Until 1.0, the song format, the SDK (`@m2/core`) and std can change in ways that need old songs fixed. The app reads only the current format and carries one std. It never changes an old song in silence: the song doesn't open, or opens silent, and a message says what to change ([FMT-3](architecture.md#manifest-and-versions)). One rule in the contract still asks for more: FMT-3a wants a migrator (`m2 migrate`) with any format or SDK break after format 1. Until the owner changes one of the two, the contract wins. |
+| **Backwards compatibility before 1.0** | Until 1.0, the song format, the SDK (`@m2/core`) and std can change in ways that need old songs fixed. The app reads only the current format, carries one std and one major of `@m2/core`. It never changes an old song in silence: the song doesn't open, or opens silent, and a message says what to change ([FMT-3](architecture.md#manifest-and-versions)). A break ships with `m2 upgrade <song>`, which moves an old song forward in one step ([FMT-3a](architecture.md#manifest-and-versions)). The owner, 2026-10-31: "I don't think I need backwards compatibility this early, not until wave3 is finished." Packs get one promise: [PACK-22](architecture.md#packs). |
 
 ## Principles
 

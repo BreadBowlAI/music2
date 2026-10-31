@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "m2-drums-kernels"
+version = "0.1.0"
+dependencies = [
+ "m2-dsp",
+ "m2-kernel",
+]
+
+[[package]]
 name = "m2-dsp"
 version = "0.1.0"
 dependencies = [
@@ -31,6 +39,14 @@ dependencies = [
 
 [[package]]
 name = "m2-std-kernels"
+version = "0.1.0"
+dependencies = [
+ "m2-dsp",
+ "m2-kernel",
+]
+
+[[package]]
+name = "m2-synths-kernels"
 version = "0.1.0"
 dependencies = [
  "m2-dsp",

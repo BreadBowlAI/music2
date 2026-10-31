@@ -129,7 +129,7 @@ fn project(dir: &Path) {
     };
     put(
         "music2.toml",
-        b"[project]\nname = \"app\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n",
+        b"[project]\nname = \"app\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n",
     );
     put(
         "song.ts",

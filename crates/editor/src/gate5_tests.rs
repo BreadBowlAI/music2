@@ -230,8 +230,8 @@ fn a_broken_package_module_still_opens() {
     f.write("music2.toml", crate::testing::MANIFEST);
     f.write(
         "song.ts",
-        "import { song, track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\
-         const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
+        "import { song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\
+         const k = track(\"kick\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
     );
     let s = Session::open(&f.0, std.packages()).unwrap_or_else(|d| panic!("the project must open: {d:?}"));
     let invalid: Vec<String> = s.problems().iter().filter(|d| d.code == "pkg.invalid").map(|d| d.to_string()).collect();
@@ -240,7 +240,7 @@ fn a_broken_package_module_still_opens() {
     assert!(invalid.iter().any(|m| m.contains("std/src/fx.ts") && m.contains("std/src/filter.ts")), "both places: {invalid:?}");
     let catalog = s.catalog();
     assert!(!catalog.components.contains_key("std:lfo") && !catalog.components.contains_key("std:limit"));
-    assert!(catalog.components.contains_key("@m2/synths:kick") && catalog.components.contains_key("std:compress"));
+    assert!(catalog.components.contains_key("@m2/synths:pluck") && catalog.components.contains_key("std:compress"));
     assert!(s.effects().iter().all(|e| e.component != "std:limit"));
     let rev = s.accepted();
     let r = m2_runtime::Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap().render(0.1).unwrap();

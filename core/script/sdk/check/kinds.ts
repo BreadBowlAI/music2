@@ -124,6 +124,28 @@ export const views = [
     },
     () => x,
   ),
+  // A filter's q may be a resonance from 0 to 1, as a synth's knob says it (CARD-30).
+  component(
+    {
+      id: "resonance-ok",
+      controls: { cutoff: control.hz(800), resonance: control.frac(0.3) },
+      editor: { views: { lp: view.filter("cutoff", "resonance") } },
+    },
+    () => x,
+  ),
+  component(
+    {
+      id: "q-in-db",
+      controls: { cutoff: control.hz(800), boost: control.db(0) },
+      editor: {
+        views: {
+          // @ts-expect-error a q that is a level in dB
+          lp: view.filter("cutoff", "boost"),
+        },
+      },
+    },
+    () => x,
+  ),
   component(
     {
       id: "wrong-unit",

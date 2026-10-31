@@ -141,14 +141,14 @@ fn a_kind_typed_filters_by_kind() {
 }
 
 // LIB-1: what is typed is split into words as an item's text is, at every character that isn't a
-// letter or a digit: `hi-hat` finds "808 hi-hats", `synth-pluck` and `synth.pluck` the Synth pluck,
+// letter or a digit: `hi-hat` finds the Drum's "hi-hats", `synth-pluck` and `synth.pluck` the Synth pluck,
 // `delay & reverb` what its category says. An item's whole id finds it first.
 #[test]
 fn what_is_typed_is_split_into_words_as_an_items_text_is() {
     let catalog = m2_script::describe(&std_packages());
     let all = items(&Sources { catalog: &catalog, packages: &std_packages(), yours: None, plugins: &[], samples: &[] });
     let first = |text: &str| found(&all, text).first().cloned().unwrap_or_else(|| format!("nothing for {text:?}"));
-    assert!(found(&all, "hi-hat").contains(&"@m2/drums:drum-hats".to_string()), "{:?}", found(&all, "hi-hat"));
+    assert!(found(&all, "hi-hat").contains(&"@m2/drums:drum".to_string()), "{:?}", found(&all, "hi-hat"));
     assert_eq!(found(&all, "hi-hat"), found(&all, "hi hat"));
     for typed in ["synth-pluck", "synth.pluck", "Synth  pluck", "synth pluck!"] {
         assert_eq!(first(typed), "@m2/synths:synth-pluck", "{typed}");
@@ -616,7 +616,7 @@ fn data_pack(dir: &Path) {
     std::fs::create_dir_all(dir.join("instruments")).unwrap();
     std::fs::write(
         dir.join("m2pkg.toml"),
-        "[package]\nname = \"@alice/piano\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+        "[package]\nname = \"@alice/piano\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
     )
     .unwrap();
     std::fs::write(

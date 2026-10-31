@@ -66,9 +66,9 @@ await add.click();
 const list = await page.waitForSelector("[data-testid=instrument-list]", { timeout: 2000 }).catch(() => null);
 const groups = await page.$$eval("[data-testid=instrument-list] [role=group]", (els) => els.map((e) => e.getAttribute("aria-label")));
 const options = await page.$$eval("[data-testid=instrument-list] [role=option]", (els) => els.map((e) => e.dataset.instrument));
-// std's ready-made sounds (T3): the drum kit, each drum and FM metal; the instruments; the two with every knob.
+// music2's ready-made sounds (T3): the drum kit, One drum and FM metal; the instruments; the two with every knob.
 // The last group is Audio: an audio track (studio lane A's Q8).
-check(!!list && same(groups, ["Drums", "Instruments", "Sampler", "Sound design", "Audio"]) && same(options, ["@m2/drums:drum-kit", "@m2/drums:drum-kick", "@m2/drums:drum-snare", "@m2/drums:drum-clap", "@m2/drums:drum-hats", "@m2/drums:drum-tom", "@m2/drums:drum-rim", "@m2/drums:drum-cowbell", "@m2/drums:drum-cymbal", "@m2/drums:drum-shaker", "@m2/synths:fm-metal", "@m2/synths:fm-keys", "@m2/synths:fm-bell", "@m2/synths:synth-supersaw", "@m2/synths:synth-lead", "@m2/synths:synth-pad", "@m2/synths:synth-pluck", "@m2/synths:synth-sub", "@m2/synths:synth-bass", "@m2/synths:synth-strings", "std:sampler", "@m2/synths:fm-custom", "@m2/synths:synth-custom", "audio:track"]), `it opens the instrument list, drums first: ${options}`);
+check(!!list && same(groups, ["Drums", "Instruments", "Sampler", "Sound design", "Audio"]) && same(options, ["@m2/drums:drum-kit", "@m2/drums:drum", "@m2/synths:fm-metal", "@m2/synths:fm-keys", "@m2/synths:fm-bell", "@m2/synths:synth-supersaw", "@m2/synths:synth-lead", "@m2/synths:synth-pad", "@m2/synths:synth-pluck", "@m2/synths:synth-sub", "@m2/synths:synth-bass", "@m2/synths:synth-strings", "std:sampler", "@m2/synths:fm-custom", "@m2/synths:synth-custom", "audio:track"]), `it opens the instrument list, drums first: ${options}`);
 check((await page.$eval("[data-testid=instrument-list] [data-active]", (e) => e.dataset.instrument)) === "@m2/drums:drum-kit", "in a new window, on its first row");
 await page.keyboard.type("plu");
 await sleep(150);
@@ -246,8 +246,8 @@ check(opened.status === 200 && opened.body.read_only?.why === "held", "opened ag
 await page.waitForSelector("[data-testid=read-only-banner]", { timeout: 6000 }).catch(() => {});
 check(!!(await page.$("[data-testid=read-only-banner]")) && (await page.$eval("[data-testid=add-track]", (b) => b.disabled)), "the pill says so, and + Track is off");
 const songRo = read("song.ts");
-const refused = await post("/track/add", { session: opened.body.session, component: "@m2/drums:drum-hats" });
-check(refused.status === 423 && read("song.ts") === songRo && !exists("tracks/hats-2.ts"), `an add is refused, 423, and nothing is written: ${refused.body.error?.slice(0, 60)}`);
+const refused = await post("/track/add", { session: opened.body.session, component: "@m2/drums:drum" });
+check(refused.status === 423 && read("song.ts") === songRo && !exists("tracks/one-drum.ts"), `an add is refused, 423, and nothing is written: ${refused.body.error?.slice(0, 60)}`);
 holder.stdin.end();
 await new Promise((r) => holder.once("exit", r));
 
@@ -263,16 +263,16 @@ check(!!first && (await page.$eval("[data-testid=no-tracks]", (e) => e.innerText
 await page.screenshot({ path: `${process.argv[2]}/s8-empty.png` });
 await first?.click();
 await page.waitForSelector("[data-testid=instrument-list]");
-await page.keyboard.type("kick");
+await page.keyboard.type("one d");
 await page.keyboard.press("Enter");
 const dir = empty.body.dir;
-check(await until(() => fs.existsSync(`${dir}/tracks/kick-drum.ts`)), "Add a track adds a Kick drum");
+check(await until(() => fs.existsSync(`${dir}/tracks/one-drum.ts`)), "Add a track adds One drum");
 const emptySong = fs.readFileSync(`${dir}/song.ts`, "utf8");
-check(emptySong.includes("import kickDrum from \"./tracks/kick-drum\";") && emptySong.includes("      \"kick-drum\": kickDrum.out,\n"), "into its mixer");
-await page.waitForSelector('[data-lane="kick-drum.hits"]', { timeout: 4000 }).catch(() => {});
-const lane = await box('[data-lane="kick-drum.hits"] > div:last-child');
+check(emptySong.includes("import oneDrum from \"./tracks/one-drum\";") && emptySong.includes("      \"one-drum\": oneDrum.out,\n"), "into its mixer");
+await page.waitForSelector('[data-lane="one-drum.hits"]', { timeout: 4000 }).catch(() => {});
+const lane = await box('[data-lane="one-drum.hits"] > div:last-child');
 await page.mouse.click(lane.x + 30, lane.y + lane.height / 2, { count: 2 });
-check(await until(async () => (await state()).timeline.tracks.find((t) => t.module === "kick-drum")?.lanes[0].clips.length === 1), "and its lane takes a clip");
+check(await until(async () => (await state()).timeline.tracks.find((t) => t.module === "one-drum")?.lanes[0].clips.length === 1), "and its lane takes a clip");
 await post("/transport", { action: "play" });
 check(await until(async () => (await api("/status")).body.playing), "and the song plays");
 await post("/transport", { action: "stop" });

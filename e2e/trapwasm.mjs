@@ -5,6 +5,22 @@
 //
 //   import { trapping } from "./trapwasm.mjs";
 //   const bytes = trapping(fs.readFileSync("std/kernels/std.wasm"), "noise_process");
+//
+// `NOISE_HATS` is a `tracks/hats.ts` for a copy of first-song whose hats play on std's `noise`, as
+// @m2/synths' simple hat did before wave 3: first-song's own hats play One drum, whose kernel is
+// @m2/drums' and the kick's too, so a trap there would stop both.
+export const NOISE_HATS = `import { hz, ms, poly, track } from "@m2/core";
+import { adsr, noise, svf, vca } from "std/dsp";
+import { scale } from "std/math";
+
+export default track("hats", { name: "Hats" }, ({ lane }) =>
+  poly(
+    lane.notes("hits"),
+    (n) => vca(svf.highpass(noise(7), hz(7500), 0.9), scale(adsr(n.gate, { attack: ms(1), decay: ms(45), sustain: 0, release: ms(30) }), scale(n.velocity, 0.5))),
+    { voices: 4 },
+  ),
+);
+`;
 
 const uleb = (b, at) => {
   let n = 0, shift = 0, x;

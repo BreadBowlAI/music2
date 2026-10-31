@@ -47,8 +47,8 @@ struct States {
 }
 
 /// One band's compressor: stereo-linked, soft-knee, std's `compress`'s gain computer line for line.
-/// It is a copy because std's lives in std's crate, whose source wave 3 is moving: the two become
-/// one in `m2-dsp` after it lands (review Z9).
+/// It is a copy because std's lives in std's own crate, which wave 3 left there: the two become one
+/// in `m2-dsp` when std's moves there (review Z9).
 struct Squeeze {
     /// Gain reduction now, in dB (0 or more).
     env: f32,

@@ -9,6 +9,6 @@
 import { delay, reverb } from "@m2/effects";
 ```
 
-Each plays std's kernel of its name (`std:reverb` …), but `bitcrush`, which plays the pack's own kernel,
-`@m2/effects:bitcrush`, in `kernels/effects.wasm`. The guide's page Sounds and effects says what each
-knob does: `m2 docs sounds` prints it.
+`chorus` and `drive` play std's kernel of their name (`std:chorus`, `std:drive`); the others play the
+pack's own (`@m2/effects:delay` …), in `kernels/effects.wasm`. The guide's page Sounds and effects says
+what each knob does: `m2 docs sounds` prints it.

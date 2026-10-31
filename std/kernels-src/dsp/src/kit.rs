@@ -3,6 +3,10 @@
 
 use crate::voice::{clampf, pitch_of};
 
+/// Where std's `drumhit` marks every hit, above the five choke groups' fields (16^group, 4 bits
+/// each): 16^5. `hitcount` counts this field; a drum voice reads its own group's.
+pub const HIT_FIELD: u32 = 1 << 20;
+
 /// The drums. The hats share one choke group; a crash chokes the crash, a ride doesn't.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Kind {

@@ -45,10 +45,10 @@ await page.evaluate(() => {
 });
 // Kick's sound also feeds its env (the bass ducks to it): the app asks first, as for std's effects.
 if (await toasted("would reach")) await clickIn("[data-testid=toast] button", "Add anyway");
-const wrapped = 'plugin("clap:m2.probe", { in: kick(lane.notes("hits")), key: "m2-probe" })';
+const wrapped = 'plugin("clap:m2.probe", { in: drums.drum(lane.notes("hits")), key: "m2-probe" })';
 check(await until(() => read("tracks/kick.ts").includes(`const out = ${wrapped};`)), "a drop onto Kick wraps its sound in the plugin, keyed");
 check(/import \{ ms, track, plugin \} from "@m2\/core";/.test(read("tracks/kick.ts")), "and imports plugin");
-check(await toasted("Added m2 probe after Kick"), "a toast says what was added, with Undo");
+check(await toasted("Added m2 probe after One drum"), "a toast says what was added, with Undo");
 await show("kick");
 check(await until(() => page.$$eval('[data-module="kick"] [data-node-title]', (els) => els.some((e) => e.textContent.includes("m2 probe")))), "the plugin's card shows in Kick");
 await page.click('button[aria-label="Undo"]');
@@ -78,7 +78,7 @@ check(await until(() => !fs.existsSync(file) && read("song.ts") === song), "one 
 // The probe's Mode is stepped 0 to 2, named Soft, Warm and Hard; its Bright is Off or On. Each is a
 // knob to the rest of the app (an id for the focus, the pointer and cables; a glow), drawn as a menu
 // or a switch.
-write("tracks/kick.ts", kick.replace('kick(lane.notes("hits"))', 'plugin("clap:m2.probe", { in: kick(lane.notes("hits")), key: "m2-probe", mode_3: 1, bright_4: 0 })').replace("import { ms, track }", "import { ms, plugin, track }"));
+write("tracks/kick.ts", kick.replace('drums.drum(lane.notes("hits"))', 'plugin("clap:m2.probe", { in: drums.drum(lane.notes("hits")), key: "m2-probe", mode_3: 1, bright_4: 0 })').replace("import { ms, track }", "import { ms, plugin, track }"));
 await show("kick");
 const mode = '[data-module="kick"] [data-knob="mode_3"]';
 const bright = '[data-module="kick"] [data-knob="bright_4"]';

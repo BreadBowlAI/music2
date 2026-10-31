@@ -3,7 +3,7 @@
 //            with the range its descriptor declares; one left out plays its declared default and is drawn
 //            as a default (PKG-3, PKG-8, HOME-1). Screenshot: <root>/s5-bass.png, the Bass graph.
 //   insert   turning a knob the call leaves out writes the number into the call: as a new options object
-//            (hat's decay) and after the options written (follow's attack); the knob is then written, and
+//            (the kick's decay) and after the options written (follow's attack); the knob is then written, and
 //            undo takes out exactly what was inserted (D5, WRITE-21). An ⌥-click puts a knob back at
 //            its declared default, which writes nothing.
 //   browser  the effect browser groups by the descriptors' categories and shows what adding writes (their
@@ -49,10 +49,17 @@ const EXPECTED = [
   ["bass", "std:xrange", "lo", true, null, false],
   ["bass", "std:xrange", "hi", true, null, false],
   ["bass", "@m2/synths:bass", "drive", false, [0, 36], false],
-  ["hats", "@m2/synths:hat", "decay", false, [0.005, 1], true],
+  ["hats", "@m2/drums:drum", "drum", true, null, false],
+  ["hats", "@m2/drums:drum", "tune", true, [-24, 24], false],
+  ["hats", "@m2/drums:drum", "decay", false, [0.1, 10], true],
+  ["hats", "@m2/drums:drum", "punch", false, [-1, 1], false],
+  ["hats", "@m2/drums:drum", "drive", false, [0, 24], false],
   ["keys", "@m2/synths:pluck", "brightness", false, [200, 20000], true],
-  ["kick", "@m2/synths:kick", "tune", false, [20, 200], true],
-  ["kick", "@m2/synths:kick", "decay", false, [0.01, 2], true],
+  ["kick", "@m2/drums:drum", "drum", false, null, false],
+  ["kick", "@m2/drums:drum", "tune", false, [-24, 24], false],
+  ["kick", "@m2/drums:drum", "decay", false, [0.1, 10], true],
+  ["kick", "@m2/drums:drum", "punch", false, [-1, 1], false],
+  ["kick", "@m2/drums:drum", "drive", false, [0, 24], false],
   ["kick", "std:follow", "attack", false, [0.0001, 1], true],
   ["kick", "std:follow", "release", true, [0.001, 5], true],
 ];
@@ -71,7 +78,8 @@ for (const [module, component, slot, written, range, log] of EXPECTED) {
     x.k.written === written && sameRange(x.k.range, range) && x.k.log === log && x.k.home === "code",
     `${what}: ${written ? "written" : "left out"}, range ${JSON.stringify(range)}${log ? " log" : ""}, home code (${JSON.stringify([x.k.written, x.k.range, x.k.log, x.k.home])})`,
   );
-  if (!written) check(x.k.literal === "" && x.k.default !== null && close(x.k.value, x.k.default), `${what} plays its declared default ${x.k.default}`);
+  const same = typeof x.k.value === "string" ? x.k.value === x.k.default : close(x.k.value, x.k.default);
+  if (!written) check(x.k.literal === "" && x.k.default !== null && same, `${what} plays its declared default ${x.k.default}`);
   if (range) check(range[0] <= x.k.value && x.k.value <= range[1], `${what}: ${x.k.value} lies in its range`);
 }
 
@@ -80,7 +88,8 @@ for (const [module, component, slot, written, range, log] of EXPECTED) {
 // mixer is one compact card there: its levels and pans are on the Mix view's strips (MX-6), below.
 const onStrip = (x) => x.module === "song" && x.k.component === "std:mixer";
 const LOOK = { song: [], bass: [], hats: [], keys: [], kick: [] };
-for (const x of all) if (!onStrip(x)) LOOK[x.module].push(x);
+// A choice is a menu, not a knob to turn (its own suites, card-views and dressed, check it there).
+for (const x of all) if (!onStrip(x) && x.k.kind !== "choice") LOOK[x.module].push(x);
 for (const [module, list] of Object.entries(LOOK)) {
   await show(module);
   for (const { node, k } of list) {
@@ -146,26 +155,26 @@ const undo = async () => {
   await until(async () => (await state()).view.revision !== before);
 };
 
-// A new options object: `hat(lane.notes("hits"))` leaves out its decay.
-const hats = read("tracks/hats.ts");
-await show("hats");
-const decay = '[data-module="hats"] [data-node="hat"] [data-knob="decay"]';
+// A new options object: the kick's `drums.drum(lane.notes("hits"))` leaves out its decay.
+const beat = read("tracks/kick.ts");
+await show("kick");
+const decay = '[data-module="kick"] [data-node="drums.drum"] [data-knob="decay ×"]';
 await turn(decay, 32);
-const insertedHat = /hat\(lane\.notes\("hits"\), \{ decay: (-?[0-9.e-]+) \}\)/;
-check(await until(() => insertedHat.test(read("tracks/hats.ts"))), `turning hat's decay writes it into the call (${read("tracks/hats.ts").split("\n").at(-2)})`);
-const written = Number(read("tracks/hats.ts").match(insertedHat)?.[1]);
-check(written > 0.045 && written <= 1, `as a plain number in seconds, up from the default 0.045: ${written}`);
-check(read("tracks/hats.ts").replace(insertedHat, 'hat(lane.notes("hits"))') === hats, "and nothing else in the file changed");
+const insertedDecay = /drums\.drum\(lane\.notes\("hits"\), \{ decay: (-?[0-9.e-]+) \}\)/;
+check(await until(() => insertedDecay.test(read("tracks/kick.ts"))), `turning the kick's decay writes it into the call (${read("tracks/kick.ts").match(/drums\.drum\(.*\)/)?.[0]})`);
+const written = Number(read("tracks/kick.ts").match(insertedDecay)?.[1]);
+check(written > 1 && written <= 10, `as a plain number, times the drum's own length, up from the default 1: ${written}`);
+check(read("tracks/kick.ts").replace(insertedDecay, 'drums.drum(lane.notes("hits"))') === beat, "and nothing else in the file changed");
 check(
   await until(async () => {
-    const x = await knobOf("hats", "@m2/synths:hat", "decay");
+    const x = await knobOf("kick", "@m2/drums:drum", "decay");
     return x?.k.written && close(x.k.value, written) && !(await page.$(`${decay}[data-default]`));
   }),
   "the knob is written now, no longer drawn as a default",
 );
 await undo();
-check(await until(() => read("tracks/hats.ts") === hats), "undo takes out exactly what was inserted");
-check(await until(async () => (await knobOf("hats", "@m2/synths:hat", "decay"))?.k.written === false), "and the knob plays its default again");
+check(await until(() => read("tracks/kick.ts") === beat), "undo takes out exactly what was inserted");
+check(await until(async () => (await knobOf("kick", "@m2/drums:drum", "decay"))?.k.written === false), "and the knob plays its default again");
 
 // After the options written: `follow(out, { release: ms(150) })` leaves out its attack.
 const kick = read("tracks/kick.ts");
@@ -179,7 +188,7 @@ check(await until(() => read("tracks/kick.ts") === kick), "undo takes it out aga
 
 // An ⌥-click puts a knob at its declared default (taste.md §5.2; a double-click types a value now):
 // for one already there, that writes nothing.
-const tune = '[data-module="kick"] [data-node="kick"] [data-knob="tune"]';
+const tune = '[data-module="kick"] [data-node="drums.drum"] [data-knob="tune"]';
 await page.$eval(`${tune} svg`, (e) => e.scrollIntoView({ block: "center" }));
 const tb = await box(`${tune} svg`);
 const revision = (await state()).view.revision;

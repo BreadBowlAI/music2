@@ -201,8 +201,7 @@ carries() {
     [ -x "$f" ] || fail "no program $f"
   done
   for f in std/m2pkg.toml std/kernels/std.wasm std/src std/samples.toml std/samples/kit/kick.wav packs/@m2/synths/m2pkg.toml \
-    packs/@m2/drums/m2pkg.toml packs/@m2/effects/m2pkg.toml packs/@m2/effects/kernels/effects.wasm packs/@m2/synths/presets \
-    ${app:+web/index.html}; do
+    packs/@m2/drums/m2pkg.toml packs/@m2/effects/m2pkg.toml packs/@m2/synths/presets ${app:+web/index.html}; do
     [ -e "$res/$f" ] || fail "nothing at $res/$f"
   done
   n=$(ls "$ROOT/templates" | grep -cv '\.md$' || true)
@@ -213,8 +212,11 @@ carries() {
     [ -f "$res/examples/$f/music2.toml" ] || fail "no example $f in $res/examples"
   done
   cmp -s "$res/std/kernels/std.wasm" "$ROOT/std/kernels/std.wasm" || fail "$res/std/kernels/std.wasm isn't the committed std.wasm"
-  cmp -s "$res/packs/@m2/effects/kernels/effects.wasm" "$ROOT/packs/@m2/effects/kernels/effects.wasm" ||
-    fail "$res/packs/@m2/effects/kernels/effects.wasm isn't the committed one"
+  # Each of music2's own packs' kernel modules (PACK-21), as committed.
+  for f in "$ROOT"/packs/*/*/kernels/*.wasm; do
+    f=${f#"$ROOT/"}
+    cmp -s "$res/$f" "$ROOT/$f" || fail "$res/$f isn't the committed one"
+  done
 }
 
 # floor <file>...: the oldest glibc the files can run on: the newest GLIBC_ version they need that

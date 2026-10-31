@@ -478,7 +478,8 @@ fn builds(
     );
     let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     let manifest = format!(
-        "[project]\nname = \"check\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}\"\n\"{name}\" = {{ path = {} }}\n",
+        "[project]\nname = \"check\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{}\"\n\"{name}\" = {{ path = {} }}\n",
+        sdk_line(),
         std_requirement(std),
         serde_json::to_string(&dir.to_string_lossy()).expect("a string")
     );
@@ -521,6 +522,17 @@ fn placed(src: Option<&str>, message: &str, name: &PackName) -> String {
 }
 
 /// The requirement that admits the std in `std`.
+/// The line a manifest writes for `version`: the shortest requirement that admits it, `"2"` for
+/// 2.0.0, `"0.9"` for 0.9.1 (`Requirement::admitting`, the one rule).
+pub fn line_for(version: &str) -> String {
+    Version::parse(version).map_or_else(|| version.to_string(), |v| Requirement::admitting(v).to_string())
+}
+
+/// What every song and pack music2 writes asks for of `@m2/core`: the SDK's major alone (PACK-23).
+pub fn sdk_line() -> String {
+    line_for(m2_script::SDK_VERSION)
+}
+
 fn std_requirement(std: &Path) -> String {
     let v = pack::PkgManifest::at(std).map(|m| m.package.version).unwrap_or(Version(0, 0, 0));
     Requirement::minor(v).to_string()
@@ -572,7 +584,9 @@ fn install_checked(dir: &Path, store: &Store, std: &Path) -> Result<Install, Vec
     if !problems.is_empty() {
         return Err(problems);
     }
-    build(dir).map_err(|e| vec![e.to_string()])?;
+    // The store's copy gets the listing (`Store::install` makes it): nothing is written into the
+    // folder installed from, which may be one it can only read (review Y18; `m2 pack build` writes
+    // a folder's listing, PACK-6).
     store.install(dir).map_err(|e| vec![e])
 }
 
@@ -597,7 +611,8 @@ pub fn new_pack(folder: &Path, name: &PackName, std: &Path) -> Result<(), String
     let label = short.replace('-', " ");
     let manifest = format!(
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\ndescription = \"\"\nauthors = []\ntags = []\n\n\
-         [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}\"\n",
+         [dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{}\"\n",
+        sdk_line(),
         std_requirement(std)
     );
     // Built from std's typed blocks, as `@m2/synths`' simple instruments are: TypeScript checks

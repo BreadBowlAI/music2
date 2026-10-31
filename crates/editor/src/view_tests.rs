@@ -196,7 +196,7 @@ fn the_mixers_inputs_follow_the_code_and_imports_land_where_they_are_written() {
     // The attack it leaves out comes after what it writes (PKG-3).
     assert_eq!(inputs(follow), ["in:audio", "release:control", "attack:control"]);
     assert!(follow.inputs[0].inlet.is_some(), "`out` is a cable from the kick");
-    assert_eq!(wire(kick, "kick", "follow"), ("out".into(), "in".into(), "audio"));
+    assert_eq!(wire(kick, "drums.drum", "follow"), ("out".into(), "in".into(), "audio"));
 }
 
 #[test]

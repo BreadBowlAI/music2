@@ -4,8 +4,12 @@
 // Each declares an `editor.category`, so the editor offers it after any audio and writes its
 // `insert` when it is added. A control is `.smooth()` when its kernel reads it every sample without
 // smoothing it, so a step would click (PKG-14); the others' kernels smooth their controls
-// themselves, or read them once per block. Each plays std's kernel of its name, but the
-// bitcrusher, which plays the pack's own (`@m2/effects:bitcrush`, built from kernels-src/, PACK-21).
+// themselves, or read them once per block. Chorus and drive play std's kernel of their name (as
+// @m2/synths does); the others play the pack's own (`@m2/effects:delay` …, built from kernels-src/,
+// PACK-21).
+//
+// A card with more than a few knobs is put in order by its groups (CARD-17): reverb's room and its
+// mix, phaser's sweep and its mix. None is a filter, so none draws a filter's curve.
 //
 // Chorus, phaser, tremolo and bitcrush follow the song: each passes `time.playing` to its
 // kernel, so its wobble (or the bitcrusher's sample clock) moves only while the song plays.
@@ -30,7 +34,7 @@ export const delay = component(
     output: port.audio(),
     editor: { category: "Delay & Reverb", description: "Echoes that repeat and fade away", insert: { time: 0.25, feedback: 0.3, mix: 0.3 } },
   },
-  (x: Audio, { time, feedback, mix }: Params) => kernel("std:delay", { in: x, time, feedback, mix }),
+  (x: Audio, { time, feedback, mix }: Params) => kernel("@m2/effects:delay", { in: x, time, feedback, mix }),
 );
 
 /**
@@ -50,9 +54,14 @@ export const reverb = component(
       mix: control.frac(0.25).range(0, 1),
     },
     output: port.audio(),
-    editor: { category: "Delay & Reverb", description: "Space: the sound of a room or a hall around it", insert: { size: 0.6, damping: 0.5, mix: 0.25 } },
+    editor: {
+      category: "Delay & Reverb",
+      description: "Space: the sound of a room or a hall around it",
+      insert: { size: 0.6, damping: 0.5, mix: 0.25 },
+      groups: { Room: ["size", "damping"], Mix: ["mix"] },
+    },
   },
-  (x: Audio, { size, damping, mix }: Params) => kernel("std:reverb", { in: x, size, damping, mix }),
+  (x: Audio, { size, damping, mix }: Params) => kernel("@m2/effects:reverb", { in: x, size, damping, mix }),
 );
 
 // ---------------------------------------------------------------- modulation
@@ -89,9 +98,14 @@ export const phaser = component(
       mix: control.frac(0.5).range(0, 1),
     },
     output: port.audio(),
-    editor: { category: "Modulation", description: "A swirling, sweeping whoosh", insert: { rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 } },
+    editor: {
+      category: "Modulation",
+      description: "A swirling, sweeping whoosh",
+      insert: { rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 },
+      groups: { Sweep: ["rate", "depth", "feedback"], Mix: ["mix"] },
+    },
   },
-  (x: Audio, { rate, depth, feedback, mix }: Params) => kernel("std:phaser", { in: x, rate, depth, feedback, mix, playing: time.playing }),
+  (x: Audio, { rate, depth, feedback, mix }: Params) => kernel("@m2/effects:phaser", { in: x, rate, depth, feedback, mix, playing: time.playing }),
 );
 
 /** Tremolo: the volume pulses `rate` times a second, dipping by `depth` (1 is down to silence). */
@@ -105,7 +119,7 @@ export const tremolo = component(
     output: port.audio(),
     editor: { category: "Modulation", description: "Pulses the volume up and down", insert: { rate: 5, depth: 0.5 } },
   },
-  (x: Audio, { rate, depth }: Params) => kernel("std:tremolo", { in: x, rate, depth, playing: time.playing }),
+  (x: Audio, { rate, depth }: Params) => kernel("@m2/effects:tremolo", { in: x, rate, depth, playing: time.playing }),
 );
 
 // ---------------------------------------------------------------- colour
@@ -156,5 +170,5 @@ export const widen = component(
     output: port.audio(),
     editor: { category: "Utility", description: "Makes the stereo image wider, or narrower toward mono", insert: { width: 1.5 } },
   },
-  (x: Audio, { width }: Params) => kernel("std:widen", { in: x, width }),
+  (x: Audio, { width }: Params) => kernel("@m2/effects:widen", { in: x, width }),
 );

@@ -22,9 +22,9 @@ fn refusal(r: Result<Edited, EditError>) -> String {
     }
 }
 
-// First-song's hats play @m2/synths' simple `hat` (not in the + Track list): to the drum
-// kit, the call reads the same notes, `drums` is imported on a line of its own, and `hat`'s import
-// goes with its line. One revision, labelled as the toast says it.
+// First-song's hats play the Drum, its menu at hats: to the drum kit, the call reads the same
+// notes, its plain setting goes with the old call, and `drums`, the binding both share, stays
+// imported. One revision, labelled as the toast says it.
 #[test]
 fn swap_replaces_the_call_and_its_import() {
     let f = fixture("examples/first-song");
@@ -42,22 +42,22 @@ fn swap_replaces_the_call_and_its_import() {
 }
 
 // An import the rest of the file still reads stays (`ms`, read by the kick's `follow`), and so
-// does the binding the new instrument shares with the old (`drums`, from the kit to the hats).
+// does the binding the new instrument shares with the old (`drums`, from the Drum to the kit and back).
 #[test]
 fn swap_keeps_a_used_import() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    swap(&mut s, "kick", "@m2/drums:drum-kick").unwrap();
+    swap(&mut s, "kick", "@m2/drums:drum-kit").unwrap();
     assert_eq!(
         f.read("tracks/kick.ts"),
-        "import { ms, track } from \"@m2/core\";\nimport { follow } from \"std/dsp\";\nimport { drums } from \"@m2/drums\";\n\n\
-         export default track(\"kick\", { name: \"Kick\" }, ({ lane }) => {\n  const out = drums.kick(lane.notes(\"hits\"));\n  \
+        "import { ms, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { follow } from \"std/dsp\";\n\n\
+         export default track(\"kick\", { name: \"Kick\" }, ({ lane }) => {\n  const out = drums.kit(lane.notes(\"hits\"));\n  \
          // Exported so other tracks can duck to the kick.\n  return { out, env: follow(out, { release: ms(150) }) };\n});\n"
     );
     swap(&mut s, "hats", "@m2/drums:drum-kit").unwrap();
     let kit = f.read("tracks/hats.ts");
-    swap(&mut s, "hats", "@m2/drums:drum-hats").unwrap();
-    assert_eq!(f.read("tracks/hats.ts"), kit.replace("drums.kit(", "drums.hats("), "the drums import stays as it was");
+    swap(&mut s, "hats", "@m2/drums:drum").unwrap();
+    assert_eq!(f.read("tracks/hats.ts"), kit.replace("drums.kit(", "drums.drum("), "the drums import stays as it was");
 }
 
 // First-song's bass sets its cutoff from a lane and an LFO: changing its instrument would lose
@@ -98,8 +98,8 @@ fn swap_refuses_two_instruments() {
     let f2 = fixture("templates/starter");
     let mut s2 = f2.open();
     assert_eq!(refusal(swap(&mut s2, "clap", "@m2/synths:synth-pad")), "Clap is built from parts, not one instrument. Change it in code.");
-    swap(&mut s2, "hats", "@m2/drums:drum-hats").unwrap();
-    assert_eq!(refusal(swap(&mut s2, "hats", "@m2/drums:drum-hats")), "Hats plays Hats already.");
+    swap(&mut s2, "hats", "@m2/drums:drum-kit").unwrap();
+    assert_eq!(refusal(swap(&mut s2, "hats", "@m2/drums:drum-kit")), "Hats plays Drum kit already.");
     assert!(matches!(swap(&mut s2, "hats", "std:no-such"), Err(EditError::NotFound(_))));
 }
 

@@ -65,9 +65,9 @@ fn nodes(fx: bool) -> (Value, &'static str) {
             {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
             {"id": "e", "op": "kernel", "kernel": "std:adsr", "inputs": {"gate": "g"}},
             {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "e"}},
-            {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a"}},
+            {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "a"}},
             {"id": "wet", "op": "const", "value": 0.25, "origin": {"site": 12, "arg": ["0"]}},
-            {"id": "r", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d", "mix": "wet"}}]}}),
+            {"id": "r", "op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": "d", "mix": "wet"}}]}}),
         json!({"id": "c", "op": "lane", "lane": "level"}),
         json!({"id": "t", "op": "time", "of": "beats"}),
         json!({"id": "l", "op": "kernel", "kernel": "std:lfo", "inputs": {"beats": "t"}}),
@@ -83,10 +83,10 @@ fn nodes(fx: bool) -> (Value, &'static str) {
         json!({"id": "k", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}}),
         json!({"id": "h", "op": "const", "value": 0.3, "origin": {"site": 11, "arg": ["0"]}}),
         json!({"id": "sum", "op": "kernel", "kernel": "std:add", "inputs": {"a": "x", "b": "k"}}),
-        json!({"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "sum"}}),
+        json!({"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "sum"}}),
     ];
     let last = if fx {
-        n.push(json!({"id": "fx", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d"}}));
+        n.push(json!({"id": "fx", "op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": "d"}}));
         "fx"
     } else {
         "d"
@@ -106,7 +106,7 @@ fn build(fx: bool, bpm: f64) -> Song {
         ns.extend((0..300).map(|k| json!({"pitch": k % 120, "start": 12, "length": 1})));
     }
     let files = [
-        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
+        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n".to_string()),
         ("song.ts", String::new()),
         ("data/arrangement.json", json!({"tempo": [{"beat": 0, "bpm": bpm}]}).to_string()),
         // Equal keys: the first note twice.
@@ -612,7 +612,7 @@ fn probes_on(gain: f64, host: Option<Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let dir = temp("trap-plugins");
     let ns: Vec<Value> = (0..64).map(|k| json!({"pitch": 48 + (k % 7) * 3, "start": k as f64 * 0.25, "length": 1.5})).collect();
     for (name, text) in [
-        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
+        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n".to_string()),
         ("song.ts", String::new()),
         ("data/song/notes.json", json!({"clips": [{"id": "a", "start": 0, "length": 16, "notes": ns}]}).to_string()),
     ] {

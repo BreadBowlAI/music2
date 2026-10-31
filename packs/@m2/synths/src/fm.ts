@@ -1,19 +1,20 @@
 // @m2/synths/fm: FM keys, bells and metal.
 //
-// One engine, std's `std:fm` kernel: two pairs of sine operators, each a modulator into a
-// carrier, mixed; the first modulator feeds back on itself. Each pair's brightness (how far
+// One engine, the pack's own `@m2/synths:fm` kernel (built from kernels-src/): two pairs of sine
+// operators, each a modulator into a carrier, mixed; the first modulator feeds back on itself. Each pair's brightness (how far
 // its modulator bends its carrier) falls after the note starts, and rises with velocity and
 // `tone`, as on a DX electric piano. The carriers and modulators are frequency ratios to the
 // note: whole numbers sound harmonic, others clang like a bell. `fm.custom` has every knob;
 // the others are patches of it. The kernel smooths its own knobs, so none here is
-// `.smooth()`. `voices: 1` plays one note at a time, as the polysynth does.
+// `.smooth()`. `voices: 1` plays one note at a time, as the polysynth does. Each card is put in
+// order by its groups (CARD-17), and a sound with a whole envelope draws it, to drag (CARD-16).
 
-import { component, control, kernel, poly, port, setting, signature, type Audio, type Events, type Params, type Value } from "@m2/core";
+import { component, control, kernel, poly, port, setting, signature, view, type Audio, type Events, type Params, type Value } from "@m2/core";
 import { mono, type Voice } from "std/dsp";
 
-/** The engine for a note, with a patch of kernel inputs (see `std:fm` in std's `m2pkg.toml`). */
+/** The engine for a note, with a patch of kernel inputs (see `@m2/synths:fm` in the pack's `m2pkg.toml`). */
 function engine(n: Voice, patch: Record<string, Value>): Audio {
-  return kernel("std:fm", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch });
+  return kernel("@m2/synths:fm", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch });
 }
 
 /** One note at a time (legato, without a slide) when `voices` is 1, else one voice per note. */
@@ -26,6 +27,9 @@ const RATIO = (r: number) => control.scalar(r).range(0.5, 16).log();
 const AMOUNT = (i: number) => control.scalar(i).range(0, 8);
 const TIME = (s: number) => control.secs(s).range(0.001, 10).log();
 const VEL_SENS = (v: number) => control.frac(v).range(0, 1).label("vel sens");
+const LEVEL01 = (v: number) => control.frac(v).range(0, 1);
+/** How loud a note is over time, to drag. */
+const AMP = view.envelope("attack", "decay", "sustain", "release");
 
 export const fm = {
   /** The whole FM engine, every knob out: start here for a sound of your own. */
@@ -67,7 +71,17 @@ export const fm = {
       settings: { voices: setting.int(12) },
       output: port.audio(),
       // The + Track list (PKG-7) puts the ready-made sounds first, and this, with every knob, last.
-      editor: { category: "Sound design", description: "The FM synth with every knob: two operator pairs, feedback, envelopes" },
+      editor: {
+        category: "Sound design",
+        description: "The FM synth with every knob: two operator pairs, feedback, envelopes",
+        views: { amp: AMP },
+        groups: {
+          "Pair A": ["carrierA", "modulatorA", "amountA", "brightDecayA", "feedback"],
+          "Pair B": ["carrierB", "modulatorB", "amountB", "brightDecayB", "mixB", "detune"],
+          Tone: ["tone", "drop", "dropTime"],
+          Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens", "level"],
+        },
+      },
     },
     (notes: Events, p: Params): Audio =>
       play(notes, p.voices, (n) =>
@@ -107,16 +121,23 @@ export const fm = {
         tone: control.frac(0.5).range(0, 1),
         // How much of the tine (the bell-like attack) is heard.
         tine: control.frac(0.35).range(0, 1),
+        attack: TIME(0.002),
         decay: control.secs(3.5).range(0.2, 12).log(),
+        sustain: LEVEL01(0),
         release: TIME(0.35),
         // Wide by default: an electric piano lives on its dynamics.
         velSens: VEL_SENS(0.8),
       },
       settings: { voices: setting.int(12) },
       output: port.audio(),
-      editor: { category: "Instruments", description: "An electric piano: a warm body and a tine that barks when played hard" },
+      editor: {
+        category: "Instruments",
+        description: "An electric piano: a warm body and a tine that barks when played hard",
+        views: { amp: AMP },
+        groups: { Sound: ["tone", "tine"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+      },
     },
-    (notes: Events, { tone, tine, decay, release, velSens, voices }: Params): Audio =>
+    (notes: Events, { tone, tine, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
       play(notes, voices, (n) =>
         engine(n, {
           // The body: 1:1, mellowing over a second.
@@ -129,7 +150,9 @@ export const fm = {
           mix_b: tine,
           detune: 3,
           tone,
+          attack,
           decay,
+          sustain,
           release,
           vel_amount: velSens,
         }),
@@ -145,14 +168,22 @@ export const fm = {
       inputs: { notes: port.notes() },
       controls: {
         tone: control.frac(0.5).range(0, 1),
+        attack: TIME(0.002),
         decay: control.secs(4).range(0.3, 15).log(),
+        sustain: LEVEL01(0),
+        release: TIME(0.6),
         velSens: VEL_SENS(0.6),
       },
       settings: { voices: setting.int(12) },
       output: port.audio(),
-      editor: { category: "Instruments", description: "A glassy bell: bright, shimmering and long" },
+      editor: {
+        category: "Instruments",
+        description: "A glassy bell: bright, shimmering and long",
+        views: { amp: AMP },
+        groups: { Sound: ["tone"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+      },
     },
-    (notes: Events, { tone, decay, velSens, voices }: Params): Audio =>
+    (notes: Events, { tone, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
       play(notes, voices, (n) =>
         engine(n, {
           // A modulator at 3.5× gives the bell its inharmonic partials.
@@ -166,9 +197,10 @@ export const fm = {
           fall_b: 1.5,
           mix_b: 0.45,
           tone,
+          attack,
           decay,
-          sustain: 0,
-          release: 0.6,
+          sustain,
+          release,
           vel_amount: velSens,
         }),
       ),
@@ -192,8 +224,13 @@ export const fm = {
       },
       settings: { voices: setting.int(8) },
       output: port.audio(),
-      // Percussion, so it plays from a drum lane and is listed with the drums.
-      editor: { category: "Drums", description: "Metallic FM percussion: a clangy, inharmonic hit with a zap" },
+      // Percussion, so it plays from a drum lane and is listed with the drums. A hit rings for its
+      // decay however long its note: no envelope of four to draw.
+      editor: {
+        category: "Drums",
+        description: "Metallic FM percussion: a clangy, inharmonic hit with a zap",
+        groups: { Sound: ["tone", "feedback", "drop"], Loudness: ["decay", "velSens"] },
+      },
     },
     (notes: Events, { tone, decay, feedback, drop, velSens, voices }: Params): Audio =>
       play(notes, voices, (n) =>

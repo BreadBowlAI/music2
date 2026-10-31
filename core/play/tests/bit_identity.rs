@@ -224,8 +224,8 @@ import { mixer } from "std/mix";
 export default track("drums", ({ lane }) =>
   mixer({
     kit: drums.kit(lane.notes("kit")),
-    snare: drums.snare(lane.notes("snare")),
-    hats: drums.hats(lane.notes("hats")),
+    snare: drums.drum(lane.notes("snare"), { drum: "snare" }),
+    hats: drums.drum(lane.notes("hats"), { drum: "hats" }),
   }),
 );
 "#,
@@ -1039,13 +1039,13 @@ fn mixing_song(mix: &str) -> Song {
         &[
             (
                 "music2.toml",
-                "[project]\nname = \"mixing\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\
-                 \"@m2/drums\" = \"1\"\n\"@m2/mixing\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
+                "[project]\nname = \"mixing\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\
+                 \"@m2/drums\" = \"2\"\n\"@m2/mixing\" = \"1\"\n\"@m2/synths\" = \"2\"\n",
             ),
             ("song.ts", &song),
             (
                 "tracks/kick.ts",
-                "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\"kick\", ({ lane }) => drums.kick(lane.notes(\"hits\")));\n",
+                "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\"kick\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\n",
             ),
             (
                 "tracks/pad.ts",
