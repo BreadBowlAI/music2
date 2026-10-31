@@ -129,6 +129,8 @@ pub struct Render {
     reproducible: bool,
     /// Written as `m2 bounce` writes: 32-bit float, nothing clipped ([`Render::write_float`]).
     float: bool,
+    /// The file's loudness is measured as it is written ([`Render::measuring`]).
+    measure: bool,
 }
 
 /// What a render says when a plugin's latency changed while it rendered (RENDER-17).
@@ -142,6 +144,10 @@ pub struct Rendered {
     pub sample_rate: u32,
     /// The loudest sample, in dBFS, before anything above 0 dB was clipped.
     pub peak_db: f64,
+    /// The file's integrated loudness, in LUFS (BS.1770, gated, as `m2 listen` measures it,
+    /// TAP-7), when the render was asked to measure it: None otherwise, under the gate, or for a
+    /// file shorter than 400 ms.
+    pub lufs: Option<f64>,
     /// Samples silenced because a kernel made a NaN or an infinity.
     pub non_finite: u64,
     /// Whether it is what an export holds there: rendered from the song's start (RENDER-5). A
@@ -258,6 +264,7 @@ impl Render {
             exact,
             reproducible,
             float: false,
+            measure: false,
         }
     }
 
@@ -340,6 +347,13 @@ impl Render {
     #[cfg(test)]
     pub(crate) fn info(&self) -> Arc<m2_runtime::PlanInfo> {
         self.renderer.info()
+    }
+
+    /// Measure the file's integrated loudness as it is written ([`Rendered::lufs`], TAP-7): an
+    /// export's. Other renders don't pay for it.
+    pub fn measuring(mut self) -> Render {
+        self.measure = true;
+        self
     }
 
     /// Stop rendering when `stop` is set (the app is quitting): the write then fails, and
@@ -461,7 +475,7 @@ impl Render {
         // A disk that can't lock just goes unswept.
         let lock = file.try_clone()?;
         let _ = m2_os::fs::try_lock(&lock);
-        let mut out = Out { wav: hound::WavWriter::new(BufWriter::new(file), spec)?, frames: 0, peak: 0.0, float: self.float };
+        let mut out = Out::new(hound::WavWriter::new(BufWriter::new(file), spec)?, self.float, self.sample_rate, self.measure);
         let mut chunk = vec![[0.0f32; 2]; CHUNK];
         let start = self.first;
         match self.length {
@@ -492,6 +506,7 @@ impl Render {
         }
         // No block follows soon: the workers sleep now.
         self.runner.rest();
+        let lufs = out.meter.as_ref().and_then(|m| m.measures().lufs);
         let Out { wav, frames, peak, .. } = out;
         wav.finalize()?;
         progress(1.0);
@@ -499,6 +514,7 @@ impl Render {
             frames,
             sample_rate: self.sample_rate,
             peak_db: 20.0 * (peak.max(1e-9) as f64).log10(),
+            lufs,
             non_finite: self.renderer.non_finite(),
             latency_changed: self.renderer.latency_moved().len(),
             exact: self.exact,
@@ -537,10 +553,22 @@ struct Out {
     peak: f32,
     /// 32-bit float as rendered; else 24-bit, clipped at 0 dBFS.
     float: bool,
+    /// The file's loudness, measured as it is written when asked (TAP-7), and each side of the
+    /// frames it reads next.
+    meter: Option<crate::listen::Meter>,
+    sides: [Vec<f32>; 2],
 }
 
 impl Out {
+    fn new(wav: hound::WavWriter<BufWriter<File>>, float: bool, rate: u32, measure: bool) -> Out {
+        let meter = measure.then(|| crate::listen::Meter::new(rate, crate::listen::Wants::default()));
+        Out { wav, frames: 0, peak: 0.0, float, meter, sides: [vec![], vec![]] }
+    }
+
     fn push(&mut self, frames: &[[f32; 2]]) -> Result<()> {
+        let [l, r] = &mut self.sides;
+        l.clear();
+        r.clear();
         for f in frames {
             for &s in f {
                 self.peak = self.peak.max(s.abs());
@@ -549,6 +577,15 @@ impl Out {
                     false => self.wav.write_sample((s.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32)?,
                 }
             }
+            // What the file holds: clipped at 0 dBFS unless it is float.
+            if self.meter.is_some() {
+                let held = |s: f32| if self.float { s } else { s.clamp(-1.0, 1.0) };
+                l.push(held(f[0]));
+                r.push(held(f[1]));
+            }
+        }
+        if let Some(m) = &mut self.meter {
+            m.push(l, r);
         }
         self.frames += frames.len() as u64;
         Ok(())
@@ -718,12 +755,16 @@ mod tests {
 
         /// Render the project in it to `out.wav`; the samples read back, left channel.
         fn render(&self, length: Length) -> (Rendered, Vec<f32>) {
+            self.render_as(length, |r| r)
+        }
+
+        /// [`Dir::render`], the render first made as `how` makes it.
+        fn render_as(&self, length: Length, how: impl FnOnce(Render) -> Render) -> (Rendered, Vec<f32>) {
             let project = Project::open(&self.0).unwrap();
             let mut packages = std_packages();
             let compiled = Arc::new(m2_session::compile(&project, &mut packages).unwrap_or_else(|e| panic!("{e:?}")));
             let out = self.0.join("out.wav");
-            let r = Render::new(compiled.clone(), &packages, SAMPLE_RATE, 0.0, length, Threads::Exactly(1))
-                .unwrap()
+            let r = how(Render::new(compiled.clone(), &packages, SAMPLE_RATE, 0.0, length, Threads::Exactly(1)).unwrap())
                 .write(&out, |_| {})
                 .unwrap();
             let mut wav = hound::WavReader::open(&out).unwrap();
@@ -768,6 +809,25 @@ mod tests {
         assert!(left[last - 1].abs() > SILENT, "sounding until {last}");
         assert!(left[last..].iter().all(|s| s.abs() <= SILENT), "then silent");
         assert!(r.peak_db > -30.0 && r.peak_db < 0.0, "peak {}", r.peak_db);
+    }
+
+    // TAP-7: a render asked to measure (an export's) says its file's integrated loudness, as a
+    // listen's meter reads the file: a 1 kHz sine at −20 dBFS on both sides reads −20 LUFS (EBU
+    // Tech 3341's case 1, louder). Any other render measures nothing (the review's P7).
+    #[test]
+    fn a_render_says_its_files_loudness() {
+        let dir = Dir::new(&[(
+            "song.ts",
+            "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { scale } from 'std/math';\n\
+             export default song(() => scale(osc.sine(hz(1000)), 0.1));\n",
+        )]);
+        assert_eq!(dir.render(Length::Seconds(1.0)).0.lufs, None, "not asked: not measured");
+        let (r, left) = dir.render_as(Length::Seconds(5.0), Render::measuring);
+        let mut m = crate::listen::Meter::new(SAMPLE_RATE, crate::listen::Wants::default());
+        m.push(&left, &left);
+        let (said, read) = (r.lufs.expect("a loudness"), m.measures().lufs.unwrap());
+        assert!((said - read).abs() < 0.01, "it says {said:.3} LUFS; the file reads {read:.3}");
+        assert!((said + 20.0).abs() < 0.1, "{said:.3} LUFS");
     }
 
     #[test]

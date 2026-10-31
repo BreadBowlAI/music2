@@ -34,6 +34,7 @@ fn clips(s: &Session, lane: &str) -> Vec<(Option<String>, f64, f64)> {
     let spans: Vec<(f64, f64)> = match &d {
         LaneData::Notes(c) => c.iter().map(|c| (c.start, c.length)).collect(),
         LaneData::Control { clips, .. } => clips.iter().map(|c| (c.start, c.length)).collect(),
+        LaneData::Steps { clips, .. } => clips.iter().map(|c| (c.start, c.length)).collect(),
         LaneData::Audio(c) => c.iter().map(|c| (c.start, c.length)).collect(),
     };
     d.ids().into_iter().zip(spans).map(|(id, (s, l))| (id.map(str::to_string), s, l)).collect()

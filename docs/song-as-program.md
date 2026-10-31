@@ -380,7 +380,7 @@ These live elsewhere on purpose:
 | `std/mix` | `mixer` (channel gain and pan), `master` (a limiter) |
 | `std/sampler` | `sampler`: plays a WAV file on each note, higher or lower by the note |
 
-Since std 0.6 std is the toolbox, and the sounds made from it are packs that ship with music2 ([PKG-17](architecture.md#component-descriptors), [PACK-15](architecture.md#packs)):
+Since std 0.7 std is the toolbox, and the sounds made from it are packs that ship with music2 ([PKG-17](architecture.md#component-descriptors), [PACK-15](architecture.md#packs)):
 
 | Pack | Contents |
 |---|---|
@@ -402,7 +402,7 @@ Seventeen are offered by the editor as effects: the four filters, `std/fx`'s but
 | `std/theory` | keys, scales, chord names | plain TypeScript |
 | `std/fx` | `pump` (ducking in time with the beat, with no sidechain) | modules |
 
-Built since: a lead, keys, strings, drums and a sampler (`synth.lead`, `fm.keys`, `synth.strings`, the drums, `std/sampler`), unison, FM, and sends and buses in `std/mix`; the sounds are `@m2/` packs since std 0.6. ("Mute in song" is not a mixer control but a track option in `@m2/core`: [MON-5](architecture.md#monitoring-overlays-and-mute-in-song).)
+Built since: a lead, keys, strings, drums and a sampler (`synth.lead`, `fm.keys`, `synth.strings`, the drums, `std/sampler`), unison, FM, and sends and buses in `std/mix`; the sounds are `@m2/` packs since std 0.7. ("Mute in song" is not a mixer control but a track option in `@m2/core`: [MON-5](architecture.md#monitoring-overlays-and-mute-in-song).)
 
 The standard library is also the main test of principle 2. If writing `std/mix` or a drum machine needs something kernels and modules can't express, the core gets a general mechanism for it, never a special case.
 
@@ -777,7 +777,7 @@ Agents may keep writing files directly: that is the save path, and every problem
 - **Packages** may import only `m2.asset_read`, must export the full ABI, and must say the runtime's ABI version in their `m2_abi` section ([Kernel ABI v1](kernel-abi.md)).
 
 **Settled while building:**
-- `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/filter`, `std/fx`, `std/mix` and `std/sampler` (and, before std 0.6, `std/instruments`, `std/synth`, `std/fm` and `std/drums`, now the packs `@m2/synths` and `@m2/drums`). Kernel ids are `package:kernel`, e.g. `std:svf`.
+- `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/filter`, `std/fx`, `std/mix` and `std/sampler` (and, before std 0.7, `std/instruments`, `std/synth`, `std/fm` and `std/drums`, now the packs `@m2/synths` and `@m2/drums`). Kernel ids are `package:kernel`, e.g. `std:svf`.
 - Units in TypeScript are functions (`hz(800)`), and plain numbers are untyped literals.
 - `feedback()` declares its kind up front (`feedback("audio<1>")`), and its input is given later with `.set()`.
 - Inside `poly`, a voice can read any signal from its module. Lanes and imports are always created at module level, so voices never contain them. So is `time` read in a track's own code outside any `key()` frame. Read inside a component call or a `key()` frame, it is made in that frame, one node per frame, and a voice has its own (since the `sounds` merge: [WRITE-8](architecture.md#expectations-and-the-delta)).

@@ -465,6 +465,8 @@ fn held_in(data: Holds, lane: &str) -> String {
     match data {
         Holds::Notes => format!("notes in {lane}"),
         Holds::Control => format!("automation in {lane}"),
+        Holds::Choice => format!("a choice's names in {lane}"),
+        Holds::Switch => format!("a switch's on and off in {lane}"),
         Holds::Audio => format!("audio clips in {lane}"),
         Holds::Empty => format!("{lane}, which is empty"),
         Holds::Unknown => format!("{lane}, which no lane can read"),
@@ -574,6 +576,8 @@ pub fn noun(data: Holds) -> &'static str {
     match data {
         Holds::Notes => "notes",
         Holds::Control => "automation",
+        Holds::Choice => "a choice's names",
+        Holds::Switch => "a switch's on and off",
         Holds::Audio => "audio clips",
         Holds::Empty => "empty lane",
         Holds::Unknown => "lane data",
@@ -597,6 +601,8 @@ fn words(data: Holds, place: &str, why: &str, to: To<'_>, file: &str) -> (String
     let (what, it, they, belong, unread, hear) = match data {
         Holds::Notes => ("Notes", "them", "they", "belong", "aren't playing", "hear"),
         Holds::Control => ("Automation", "it", "it", "belongs", "isn't used", "hear"),
+        Holds::Choice => ("A choice's names", "them", "they", "belong", "aren't used", "hear"),
+        Holds::Switch => ("A switch's on and off", "it", "it", "belongs", "isn't used", "hear"),
         Holds::Audio => ("Audio clips", "them", "they", "belong", "aren't playing", "hear"),
         Holds::Empty => ("An empty lane file", "it", "it", "belongs", "isn't used", "use"),
         Holds::Unknown => {

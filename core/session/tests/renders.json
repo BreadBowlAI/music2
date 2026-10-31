@@ -8,5 +8,5 @@
     "templates/empty": "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
     "templates/starter": "bb198cc782fdd1f0eeb2d09be7d677a45dbc074fb46b65c9ac2a38821a1d92d2"
   },
-  "std": "0.6.0"
+  "std": "0.7.0"
 }

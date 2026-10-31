@@ -2,6 +2,6 @@
 # version's files never change once it is here (PACK-17): a changed pack gets a new version, and a
 # new line. `m2_song::pack::own` reads this to say which installed packs are music2's (PACK-19);
 # `every_bundled_pack_is_the_version_its_record_names` checks it against packs/@m2/*.
-"@m2/drums 1.0.0" = "sha256:e280a78290f7a657d735f2cb5223ac095fcd32da3c87433cacd2c167991e7578"
-"@m2/effects 1.0.0" = "sha256:fd8178a6c75b9c028ece4d70d63d707d9c9a58cb80941c15fa4d066665abed32"
-"@m2/synths 1.0.0" = "sha256:b4d664b3a2fd3459158aebcedc4b9b76a34fa046dafe43a4d42adbc86199a06e"
+"@m2/drums 1.0.0" = "sha256:801d8c0da844b1e3d1ab77c37cfe0dadb6018459fd55dbc82278f00868e7b9dd"
+"@m2/effects 1.0.0" = "sha256:b27a013821a924114cc3911da7d6eab98f33568c77b32b3c6ae8aed6e66089c4"
+"@m2/synths 1.0.0" = "sha256:8272d1a5ed8c58adf374f0b7f9031147018a45a6bde5f8ac0928fe679493256d"

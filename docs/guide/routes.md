@@ -220,6 +220,16 @@ An example body:
 
 The drags in progress: knobs, clips and the tempo.
 
+### `POST /api/graph/loudness`
+
+Measure the song's loudness as it plays (LUFS, and its true peak), in the meters and each answer, while you ask again within 10 s; or stop.
+
+An example body:
+
+```json
+{"session": 7, "client": "w1", "on": true}
+```
+
 ### `POST /api/graph/markers`
 
 Write the ruler's markers, the whole list, into layout.json. It writes the song: one undo step.
@@ -342,7 +352,7 @@ An example body:
 
 ### `POST /api/graph/sample`
 
-Give a Sampler a WAV file on this computer. It writes the song: one undo step. Bodies up to 1024 MiB.
+Give a recording on a card (a Sampler's file, or `setting` of the call) a WAV file on this computer. It writes the song: one undo step. Bodies up to 1024 MiB.
 
 An example body:
 
@@ -350,14 +360,24 @@ An example body:
 {"session": 7, "at": 42, "call": "tracks/drums.ts#2", "file": "/Users/you/Samples/kick.wav"}
 ```
 
-### `POST /api/graph/set`
+### `POST /api/graph/scope`
 
-Write a knob's value into the code, as one undo step (for an agent, never a drag's commit). It writes the song: one undo step.
+Show a box's sound as it plays: its last frames, to the window that asks (and in each answer), while you ask again within 10 s; or stop.
 
 An example body:
 
 ```json
-{"session": 7, "revision": 42, "id": "song.ts#2/0.hats.pan", "gesture": "set", "value": 0.45}
+{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}
+```
+
+### `POST /api/graph/set`
+
+Write a knob's value, or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step (for an agent, never a drag's commit). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "revision": 42, "id": "tracks/bass.ts#3/@shape", "gesture": "set", "value": "square"}
 ```
 
 ### `POST /api/graph/song-key`
@@ -532,7 +552,7 @@ Its query, as JSON:
 
 ### `POST /api/library/sample`
 
-Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or a Sampler's file at `call`. It writes the song: one undo step.
+Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or the recording of call `call` (a Sampler's file, or its `setting`). It writes the song: one undo step.
 
 An example body:
 

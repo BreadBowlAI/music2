@@ -69,8 +69,8 @@ crate::api::routes! {
         "End a knob drag without saving, so the code's value plays again",
         r#"{"session": 7, "id": "tracks/keys.ts#1/@brightness", "gesture": "drag-1"}"#;
     POST "/api/graph/set" => graph_set; writes, agents,
-        "Write a knob's value into the code, as one undo step (for an agent, never a drag's commit)",
-        r#"{"session": 7, "revision": 42, "id": "song.ts#2/0.hats.pan", "gesture": "set", "value": 0.45}"#;
+        "Write a knob's value, or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step (for an agent, never a drag's commit)",
+        r#"{"session": 7, "revision": 42, "id": "tracks/bass.ts#3/@shape", "gesture": "set", "value": "square"}"#;
     GET "/api/graph/leases" => graph_leases; reads, agents,
         "The drags in progress: knobs, clips and the tempo",
         r#"{}"#;
@@ -256,6 +256,10 @@ struct WsQuery {
     /// the window's gestures end (C6). Only a page's socket names a window.
     #[serde(default)]
     client: Option<String>,
+    /// An agent's socket listens for meters only when it asks (`meters=1`, `m2 watch --meters`);
+    /// a window's always does (TAP-4).
+    #[serde(default)]
+    meters: Option<String>,
 }
 
 async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) -> Response {
@@ -263,8 +267,9 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
     // its query says: its closing ends nothing the musician holds (AGENT-3).
     let page = !crate::caller::now().is_agent();
     let client = q.client.filter(|_| page);
+    let meters = page || q.meters.is_some_and(|m| m == "1" || m == "true");
     upgrade.on_upgrade(move |socket| async move {
-        ws_loop(s.clone(), socket, client.clone(), page).await;
+        ws_loop(s.clone(), socket, client.clone(), page, meters).await;
         if !page {
             return;
         }
@@ -281,14 +286,15 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
     })
 }
 
-/// Forward every event (toasts, `graph`) and the latest meters to one client until it goes away,
-/// and take what a page's socket sends: audition, whose answers go to this socket only, and the
-/// MIDI keyboard's target (`routes_8b::ws_text`). What an agent's socket sends is ignored: those
+/// Forward every event (toasts, `graph`) and, when it listens for them (`listens`), the latest
+/// meters to one client until it goes away, with its window's own scopes after them (TAP-4,
+/// TAP-8); and take what a page's socket sends: audition, whose answers go to this socket only, and
+/// the MIDI keyboard's target (`routes_8b::ws_text`). What an agent's socket sends is ignored: those
 /// are the musician's (AGENT-11). A socket that falls behind is told how many events it missed
 /// (AGENT-6): `{"t": "lagged", "missed": n}`, then hears on from the oldest still kept.
-async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>, page: bool) {
+async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>, page: bool, listens: bool) {
     let (unheard, mut events, _page) = state.subscribe(page);
-    let mut meters = state.meters.subscribe();
+    let mut meters = listens.then(|| state.meters.subscribe());
     for text in unheard {
         if socket.send(Message::Text(text.into())).await.is_err() {
             return;
@@ -296,9 +302,16 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<Str
     }
     loop {
         tokio::select! {
-            Ok(()) = meters.changed() => {
-                let text = meters.borrow_and_update().clone();
-                if socket.send(Message::Text(text.into())).await.is_err() {
+            Ok(()) = async { meters.as_mut().expect("listens").changed().await }, if meters.is_some() => {
+                let Some(m) = meters.as_mut() else { continue };
+                let sent = m.borrow_and_update().clone();
+                if socket.send(Message::Text(sent.all.clone().into())).await.is_err() {
+                    break;
+                }
+                let mine = client.as_ref().and_then(|c| sent.scopes.iter().find(|(w, _)| w == c));
+                if let Some((_, text)) = mine
+                    && socket.send(Message::Text(text.clone().into())).await.is_err()
+                {
                     break;
                 }
             }
@@ -430,16 +443,18 @@ struct SetReq {
     revision: u64,
     id: String,
     gesture: String,
-    value: f64,
+    /// A knob's number, or a setting's value: a number, a string or a boolean (CARD-4).
+    value: Value,
     #[serde(default)]
-    expect: Option<f64>,
+    expect: Option<Value>,
 }
 
-/// Commit a value: the gesture's lease when it has one, else a plain value edit. While the draft
-/// doesn't compile a gesture's commit is pending: `{"pending": true, "errors": …}` (C5).
+/// Commit a value: the gesture's lease when it has one, else a plain value edit; a setting's value
+/// is one Tx on its call (CARD-4). While the draft doesn't compile a gesture's commit is pending:
+/// `{"pending": true, "errors": …}` (C5).
 async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.set(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await;
+    let result = blocking(move || state.graph.set_any(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

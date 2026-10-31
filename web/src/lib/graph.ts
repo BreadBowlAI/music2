@@ -11,6 +11,38 @@ export interface Origin { site: number; arg?: string[]; scale?: number; control?
 /** Where a value lives (HOME-1): the code, a lane, a plugin's state, `layout.json`, `data/arrangement.json` (the tempo and time signature), or this machine's `.music2/`. */
 export type Home = "code" | "lane" | "state" | "layout" | "arrangement" | "local";
 
+/**
+ * What a value is (CARD-2), never how it is drawn: the card picks a knob or a number box, a menu,
+ * a switch, a waveform, a menu of the song's tracks, or a sentence.
+ */
+export type ValueKind = "number" | "choice" | "switch" | "recording" | "regions" | "keymap" | "track";
+
+/** One option of a choice or a switch: the value written in the code, and what the menu says. */
+export interface Choice { value: string | number | boolean; label: string }
+
+/**
+ * A setting of a call (CARD-1): a value that decides what is built, so a change rebuilds the sound.
+ * `value` is what the call plays (null where the code works it out); `readonly` says why the card
+ * can't change it, when it can't; `said` is what regions or a keymap play, in words.
+ */
+export interface Setting {
+  id: string;
+  slot: string;
+  label: string;
+  kind: ValueKind;
+  /** A whole number: a fraction is refused. */
+  whole?: boolean;
+  options?: Choice[];
+  value: unknown;
+  written: boolean;
+  home: Home;
+  readonly?: string;
+  expression?: string;
+  said?: string;
+  file: string;
+  line: number;
+}
+
 export interface Knob {
   id: string;
   label: string;
@@ -34,6 +66,9 @@ export interface Knob {
   home: Home;
   /** Why it can't be automated (HOME-2), when it can't: its menu says so instead of offering it. */
   automate_refused?: string;
+  /** A number (the server always says; a knob made here may leave it out), or a plugin's stepped parameter as a choice or a switch (CARD-6), whose options write their numbers. */
+  kind?: ValueKind;
+  options?: Choice[];
 }
 
 export interface ViewNode {
@@ -65,6 +100,8 @@ export interface ViewNode {
   voices?: string;
   /** A hosted plugin's call: its node in the graph, the key of the state's `plugins` (HOST-7). */
   plugin?: string;
+  /** Its component's settings, in its descriptor's order (CARD-1). */
+  settings?: Setting[];
 }
 
 /** A plugin's box (HOST-7, MON-6): its own window, the parameters a gesture in it latched, and whether its window changed its sound, not saved yet (AGENT-3). */
@@ -492,6 +529,11 @@ export interface GraphState extends GraphStatus {
   leases?: GraphLease[];
   /** Each hosted plugin by its node (`ViewNode.plugin`): its window, and what is latched. */
   plugins?: Record<string, PluginBox>;
+  /**
+   * The song's integrated loudness, in LUFS, as the last export measured it (TAP-7): null when the
+   * song changed since, or none was made. Absent from older servers.
+   */
+  loudness?: { lufs: number } | null;
 }
 
 /** Why the open project is read-only here, with WRITE-18's message. */
@@ -701,6 +743,8 @@ type Stepped = Edit & { undo_name?: StepName | null; redo_name?: StepName | null
 
 export const graphApi = {
   get: () => call<GraphState>(""),
+  /** Ask for the song's loudness (TAP-6), again within 10 s to keep it, or stop. */
+  loudness: (session: number, on: boolean) => call("/loudness", { session, client: clientId, on }),
   /** Open or close a plugin's own window (HOST-7); a plugin without one, or no screen, says why. */
   pluginWindow: (session: number, node: string, open: boolean) => call<{ window: string }>("/plugin/window", { session, node, open }),
   /** Re-enable: the lane or cable drives a latched parameter again (every one without `id`, MON-6). */
@@ -722,6 +766,9 @@ export const graphApi = {
       step,
       call<Edit & { pending?: boolean; errors?: unknown[] }>("/set", { session, revision, id, gesture, value, expect, client: clientId }),
     ),
+  /** A setting's value, or a knob's as a menu or a switch sets it (CARD-4): one edit of its call, one undo step. */
+  setValue: (session: number, revision: number, id: string, value: Choice["value"], step: Step) =>
+    edit(session, step, call<Edit>("/set", { session, revision, id, gesture: "set", value, client: clientId })),
   connect: (session: number, revision: number, from: string, to: string, step: Step) =>
     edit(session, step, call<Edit>("/connect", { session, revision, from, to })),
   disconnect: (session: number, revision: number, id: string, step: Step) => edit(session, step, call<Edit>("/disconnect", { session, revision, id })),

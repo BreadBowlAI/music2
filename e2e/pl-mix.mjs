@@ -5,9 +5,9 @@
 // both, a dash when they differ, ⌥-click solos exactly the two. The strip menu's Mute in song, one
 // undo step, and M on a strip muted in the song opening that menu. Then the meters: two bars on
 // every track strip and on Master, the size each is; while first-song plays, Hats' strip meter reads
-// as its header meter does (the same tap, before the fader), also with its fader at −30 dB; the
-// floor after a stop; a clip dot when Hats goes over the top, cleared by a click, and none on
-// Master. A PC page's words, and the lint in each new state.
+// as its header meter does (the same tap, after the fader: TAP-5), and both fall with its fader at
+// −30 dB; the floor after a stop; a clip dot when Hats goes over the top, cleared by a click, and
+// none on Master. A PC page's words, and the lint in each new state.
 //
 //   node e2e/pl-mix.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, ROOT, sleep, until, write } from "./fixlib.mjs";
@@ -165,7 +165,7 @@ check(sizes.find((s) => s.id === "hats")?.w === 7 && sizes.every((s) => s.w > 0)
 check(sizes.filter((s) => s.id !== "master").every((s) => s.w === 7) && sizes.find((s) => s.id === "master").w === 11, "two bars: 2 × 3 px on a track's strip, 2 × 5 px on Master, 1 px between");
 check(sizes.every((s) => s.travel - s.h <= 4 && s.h > 40), `each is the fader's travel tall (${sizes.map((s) => `${s.h}/${s.travel}`).join(" ")})`);
 const titles = { hats: await page.$eval(meterOf("hats"), (e) => e.title).catch(() => ""), master: await page.$eval(meterOf("master"), (e) => e.title).catch(() => "") };
-check(titles.hats === "Hats's level. Its fader doesn't change this meter." && titles.master === "The song's level", `their tooltips: "${titles.hats}", "${titles.master}"`);
+check(titles.hats === "Hats's level, after its fader." && titles.master === "The song's level", `their tooltips: "${titles.hats}", "${titles.master}"`);
 
 /** The Hats strip's meter and the Hats header's, read at the same moment. */
 const pair = () =>
@@ -205,9 +205,13 @@ await page.keyboard.type("-30");
 await page.keyboard.press("Enter");
 check(await until(() => read("song.ts").includes("hats: { in: hats.out, db: db(-30), pan: 0.3 },")), "Hats' fader goes to −30 dB");
 await sleep(600);
-const loud = (s) => s.strip > -24;
-const after = await samples(loud);
-check(after.every((s) => Math.abs(s.strip - s.head) <= 1.5) && after.some(loud), `and its strip meter still reads as the header's: before the fader (${told(after, loud)})`);
+// TAP-5: both read after the fader now, so both fell by about the 24 dB it moved.
+const top = (reads) => Math.max(...reads.map((s) => s.strip));
+const after = await samples(heard);
+check(
+  after.every((s) => Math.abs(s.strip - s.head) <= 1.5) && after.some(heard) && top(after) <= top(before) - 18,
+  `and its strip meter still reads as the header's, after the fader: both fell (${told(after, heard)}; from ${top(before)} dB to ${top(after)})`,
+);
 await linted("[data-testid=mix]", "the Mix view playing");
 await page.screenshot({ path: `${ROOT}/pl-mix-playing.png` });
 check(await stopSong(), "Space stops");

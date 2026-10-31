@@ -616,7 +616,7 @@ fn data_pack(dir: &Path) {
     std::fs::create_dir_all(dir.join("instruments")).unwrap();
     std::fs::write(
         dir.join("m2pkg.toml"),
-        "[package]\nname = \"@alice/piano\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+        "[package]\nname = \"@alice/piano\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
     )
     .unwrap();
     std::fs::write(

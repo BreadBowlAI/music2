@@ -9,7 +9,9 @@ use super::*;
 mod audition;
 mod cell;
 mod decode;
+mod events;
 mod fpenv;
+mod kinds;
 mod latency;
 mod limits;
 mod live;
@@ -360,7 +362,7 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
 
 /// Kernel `id` for node `n`, with no settings, in a sandbox of its own.
 fn plain_kernel(pk: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64) -> Result<KernelInst> {
-    KernelInst::new(pk, n, &Kernel { id, channels, inputs, values: &[], assets: &[], sample_rate }, 0, pk.limits.of(false))
+    KernelInst::new(pk, n, &Kernel { id, channels, inputs, values: &[], assets: &[], sample_rate, notes: &[] }, 0, pk.limits.of(false))
 }
 
 /// A std kernel `id` as a node of its own, its inputs at their defaults, stereo.
@@ -435,6 +437,7 @@ fn two_states_in_one_instance_play_independently() {
                 values: &[],
                 assets: &[],
                 offline: None,
+                notes: &[],
             },
         )
         .unwrap()
@@ -1578,6 +1581,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
             values: &values,
             assets: &assets,
             offline: None,
+            notes: &[],
         };
         let s = sb.state(prefix, &spec).unwrap();
         sb.seal().unwrap();

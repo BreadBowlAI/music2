@@ -139,7 +139,7 @@ fn a_moved_std_module_names_the_pack_to_use() {
             format!("import {{ song }} from \"@m2/core\";\nimport {{ {name} }} from \"{module}\";\nexport default song(() => {name});\n");
         let e = error_of(&[("song.ts", &song)]);
         assert_eq!(e.code, "pkg.missing", "{module}: {e}");
-        assert!(e.message.starts_with(&format!("`{module}` is no longer std's: since std 0.6 its sounds are in the pack {pack}")), "{e}");
+        assert!(e.message.starts_with(&format!("`{module}` is no longer std's: since std 0.7 its sounds are in the pack {pack}")), "{e}");
         assert!(
             e.message.contains(&format!("Import them from \"{pack}\""))
                 && e.message.contains(&format!("\"{pack}\" = \"1\" under [dependencies]")),
@@ -164,7 +164,7 @@ fn a_moved_std_effect_through_a_namespace_names_the_pack_to_use() {
                 export default song(() => fx.compress(fx.reverb(kernel(\"std:saw\", { freq: 110 }))));\n";
     let e = error_of(&[("song.ts", song)]);
     assert_eq!(e.code, "pkg.missing", "{e}");
-    assert!(e.message.starts_with("`reverb` is no longer in std/fx: since std 0.6 it is in the pack @m2/effects"), "{e}");
+    assert!(e.message.starts_with("`reverb` is no longer in std/fx: since std 0.7 it is in the pack @m2/effects"), "{e}");
     assert_eq!(e.src.as_deref(), Some("song.ts:3:42"), "at the name: {e:?}");
     let fine = "import { song, kernel } from \"@m2/core\";\nimport * as fx from \"std/fx\";\n\
                 export default song(() => fx.limit(fx.compress(kernel(\"std:saw\", { freq: 110 }))));\n";
@@ -195,7 +195,7 @@ fn a_moved_std_effect_names_the_pack_to_use() {
                 export default song(() => compress(reverb(kernel(\"std:saw\", { freq: 110 }))));\n";
     let e = error_of(&[("song.ts", song)]);
     assert_eq!(e.code, "pkg.missing", "{e}");
-    assert!(e.message.starts_with("`reverb` is no longer in std/fx: since std 0.6 it is in the pack @m2/effects"), "{e}");
+    assert!(e.message.starts_with("`reverb` is no longer in std/fx: since std 0.7 it is in the pack @m2/effects"), "{e}");
     assert!(e.message.contains("Import it from \"@m2/effects\"") && e.message.contains("\"@m2/effects\" = \"1\""), "{e}");
     assert_eq!(e.src.as_deref(), Some("song.ts:2:20"), "at the name: {e:?}");
     let fine = "import { song, kernel } from \"@m2/core\";\nimport { compress, limit } from \"std/fx\";\n\

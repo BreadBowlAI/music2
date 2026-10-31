@@ -312,15 +312,16 @@ fn label(d: &ControlDesc) -> String {
     d.label.clone().unwrap_or_else(|| d.name.clone())
 }
 
-/// Each declared control of `sound` that holds a number (a dictionary's are left out), with how it
-/// is written in the call.
+/// Each declared control of `sound` that holds a number (a dictionary's, a choice and a switch are
+/// left out: a preset holds numbers, and a place isn't one, CARD-10), with how it is written in the
+/// call.
 fn slots(s: &Session, sound: &Sound) -> Vec<(ControlDesc, Slotted)> {
     let all = controls::controls(s);
     let rev = s.accepted();
     let text = rev.snapshot.files.get(Path::new(&sound.site.file)).map_or("", |t| &t[..]);
     let desc = &sound.desc;
     let mut out = vec![];
-    for d in desc.controls.iter().filter(|d| d.each.is_none()) {
+    for d in desc.controls.iter().filter(|d| d.each.is_none() && d.unit.is_none_or(m2_ir::Unit::is_number)) {
         let found =
             all.iter().find(|c| c.calls.contains(&sound.site.id) && c.declared.iter().any(|x| x.component == desc.id && x.slot == d.name));
         let slotted = match found {

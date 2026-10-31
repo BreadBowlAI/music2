@@ -72,8 +72,8 @@ fn velocity_is_the_keys() {
     assert_eq!(read(&[0x90, 60, 32]), Said::On { h: 60, pitch: 60.0, velocity: 32.0 / 127.0 });
     assert_eq!(read(&[0x9F, 0, 1]), Said::On { h: 15 * 128, pitch: 0.0, velocity: 1.0 / 127.0 });
     assert_eq!(read(&[0x83, 60, 0]), Said::Off { h: 3 * 128 + 60 });
-    assert_eq!(read(&[0xB0, 64, 63]), Said::Pedal(false));
-    assert_eq!(read(&[0xB2, 64, 64]), Said::Pedal(true));
+    assert_eq!(read(&[0xB0, 64, 63]), Said::Pedal([0xB0, 64, 63]));
+    assert_eq!(read(&[0xB2, 64, 0xC0]), Said::Pedal([0xB2, 64, 64]));
     assert_eq!(read(&[0xB0, 123, 0]), Said::AllOff);
     assert_eq!(read(&[0xB0, 120, 0]), Said::AllOff);
     for ignored in [&[0xB0, 7, 64][..], &[0xE0, 64], &[0xD0, 30], &[0xC0, 5], &[0xF8], &[0x90, 60], &[]] {
@@ -93,25 +93,77 @@ fn channels_dont_share_a_key() {
     eventually("and channel 2's its own", || live(&graph) == 0);
 }
 
+// RENDER-35, RENDER-37: a keyboard's sustain pedal reaches the lane it plays, as its wheels do, on
+// any channel; its keys' Offs reach the lane when they are let go, pedal or not (the voices hold
+// the sound, RENDER-38; a plugin holds its own). Let up, the lane's pedal is at rest again.
 #[test]
-fn the_sustain_pedal_holds_offs_until_it_lifts() {
+fn a_keyboards_pedal_reaches_its_lane() {
     let (_f, graph) = played();
     send(&graph, &[0x90, 36, 100]);
     eventually("the key sounds", || live(&graph) == 1);
-    send(&graph, &[0xB0, 64, 127]);
+    send(&graph, &[0xB3, 64, 127]);
+    eventually("the pedal reaches the kick's lane", || wheels(&graph) == 1);
     send(&graph, &[0x80, 36, 0]);
-    stays(&graph, 1, "the pedal holds it after its key is up");
-    // Struck again under the pedal: one note, not two, and the pedal's lift doesn't end the new one
-    // while its key is down.
-    send(&graph, &[0x90, 36, 80]);
-    stays(&graph, 1, "struck again: one note");
-    send(&graph, &[0x90, 38, 80]);
-    send(&graph, &[0x80, 38, 0]);
-    eventually("two notes under the pedal", || live(&graph) == 2);
+    eventually("the key's Off reaches the lane at once", || live(&graph) == 0);
     send(&graph, &[0xB0, 64, 0]);
-    eventually("the pedal's lift ends the one let go", || live(&graph) == 1);
-    send(&graph, &[0x80, 36, 0]);
-    eventually("the held key ends with its Off", || live(&graph) == 0);
+    eventually("let up", || wheels(&graph) == 0);
+    graph.midi_target(None).unwrap();
+    send(&graph, &[0xB0, 64, 127]);
+    stays_still(&graph, "no target: no lane takes it");
+}
+
+/// A saw on `keys` from std's toolbox, which sounds while its key is held and fades over 0.3 s once
+/// let go.
+const PAD: &str = "import { poly, secs, song, track } from '@m2/core';\nimport { adsr, osc, vca } from 'std/dsp';\n\
+                   const k = track('keys', ({ lane }) => poly(lane.notes('notes'), (n) => \
+                   vca(osc.saw(n.pitch), adsr(n.gate, { attack: secs(0.01), sustain: 0.5, release: secs(0.3) }))));\n\
+                   export default song(() => k.out);\n";
+
+// RENDER-38, live with keys from a keyboard: a note let go while the pedal is down rings on, as long
+// as the pedal stays down, and fades once it lifts, as one let go without the pedal does at once. A
+// key still down when the pedal lifts sounds on until it is let go.
+#[test]
+fn a_note_let_go_under_the_pedal_rings_on() {
+    let fixture = Fixture::new();
+    fixture.put("song.ts", PAD);
+    let (p, mut d) = m2_play::Player::driven(48_000);
+    let graph = Graph::with_player(p).stored();
+    graph.open(&fixture.0).unwrap();
+    // The loudest sample of the last of `blocks` callbacks of 10 ms.
+    let mut level = |blocks: usize| {
+        let (mut buf, mut most) = ([0.0f32; 2 * 480], 0.0f32);
+        for _ in 0..blocks {
+            d.fill(&mut buf, 2);
+            drop(d.drain_retired());
+            most = buf.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        }
+        most
+    };
+    level(4);
+    assert_eq!(graph.midi(Event::Plugged("Keys")).as_deref(), Some("Keys is connected. It plays the selected track."));
+    graph.midi_target(Some(("keys".into(), "notes".into()))).unwrap();
+    // Without the pedal: let go, it fades within two seconds.
+    send(&graph, &[0x90, 60, 100]);
+    assert!(level(20) > 0.05, "the key sounds");
+    send(&graph, &[0x80, 60, 0]);
+    assert!(level(200) < 1e-4, "let go, it fades");
+    // With it: let go, it sounds on for two seconds, then fades once the pedal lifts.
+    send(&graph, &[0xB0, 64, 127]);
+    send(&graph, &[0x90, 60, 100]);
+    assert!(level(20) > 0.05);
+    send(&graph, &[0x80, 60, 0]);
+    assert!(level(200) > 0.05, "the pedal holds its sound");
+    assert_eq!(live(&graph), 0, "its key is up");
+    send(&graph, &[0xB0, 64, 0]);
+    assert!(level(200) < 1e-4, "the pedal up lets it fade");
+    // A key still down at the lift.
+    send(&graph, &[0xB0, 64, 127]);
+    send(&graph, &[0x90, 60, 100]);
+    assert!(level(20) > 0.05);
+    send(&graph, &[0xB0, 64, 0]);
+    assert!(level(200) > 0.05, "its key is down: it sounds on past the lift");
+    send(&graph, &[0x80, 60, 0]);
+    assert!(level(200) < 1e-4, "let go, it fades");
 }
 
 #[test]

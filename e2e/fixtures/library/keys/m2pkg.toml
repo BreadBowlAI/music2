@@ -9,4 +9,4 @@ tags = ["keys"]
 
 [dependencies]
 "@m2/core" = "1"
-std = "0.5"
+std = "0.7"

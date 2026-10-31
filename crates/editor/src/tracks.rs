@@ -1023,6 +1023,7 @@ fn fresh(data: &LaneData, taken: &mut Vec<String>) -> LaneData {
     match &mut d {
         LaneData::Notes(clips) => clips.iter_mut().for_each(|c| (c.id, c.other_id) = (Some(fresh_id(taken)), None)),
         LaneData::Control { clips, .. } => clips.iter_mut().for_each(|c| (c.id, c.other_id) = (Some(fresh_id(taken)), None)),
+        LaneData::Steps { clips, .. } => clips.iter_mut().for_each(|c| (c.id, c.other_id) = (Some(fresh_id(taken)), None)),
         LaneData::Audio(clips) => clips.iter_mut().for_each(|c| (c.id, c.other_id) = (Some(fresh_id(taken)), None)),
     }
     d

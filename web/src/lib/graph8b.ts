@@ -43,6 +43,8 @@ declare module "./graph" {
     xruns?: number;
     /** For 10 s after an audio lane missed its audio: what to say (RENDER-30). */
     disk?: string;
+    /** Why the meters read before the faders, when they couldn't be placed after them (TAP-5): a bug. */
+    meters?: string | null;
     /** The device's other errors since the player started. */
     device_errors?: number;
   }
@@ -93,10 +95,21 @@ export type Peaks = [number, number];
 /** The meters (8b.8), about 30 times a second while the engine runs, and once more as it idles. */
 export interface MetersIn {
   t: "meters";
-  /** Each track's loudest sample since the last message, after its mute and solo. */
+  /**
+   * Each track's loudest sample since the last message, after its mute and solo: after its fader
+   * when its channel is its own, else where it enters the song (TAP-5).
+   */
   tracks: Record<string, Peaks>;
+  /** Each mixer channel's, after its fader (TAP-5). Absent from older servers. */
+  channels?: Record<string, Peaks>;
   /** The song's output. */
   out: Peaks;
+  /**
+   * The output's loudness (TAP-6), while some client asks for it (`POST /api/graph/loudness`, the Mix
+   * view does): the last 3 s in LUFS and the largest true peak of the last 3 s in dBTP, each null
+   * until there is one.
+   */
+  loudness?: { short: number | null; true_peak: number | null };
   /** The sound input's loudest sample, while a take records on an audio lane (io). */
   input?: number[];
   dsp: { load: number; dropouts: number };

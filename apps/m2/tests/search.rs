@@ -220,7 +220,7 @@ fn m2_adds_a_sample_with_the_app_closed() {
 fn loops_pack(dir: &Path, version: &str) {
     std::fs::create_dir_all(dir).unwrap();
     let toml = format!(
-        "[package]\nname = \"@alice/loops\"\nversion = \"{version}\"\nlicense = \"CC-BY-4.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n"
+        "[package]\nname = \"@alice/loops\"\nversion = \"{version}\"\nlicense = \"CC-BY-4.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n"
     );
     std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
     std::fs::write(dir.join("samples.toml"), "[folder.\"loops\"]\n").unwrap();

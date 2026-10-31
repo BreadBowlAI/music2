@@ -44,7 +44,7 @@ pub const SDK: &str = include_str!("../sdk/core.ts");
 
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
 /// requirement is checked against it (FMT-2, FMT-3).
-pub const SDK_VERSION: &str = "1.8.0";
+pub const SDK_VERSION: &str = "1.10.0";
 
 const CORE: &str = "@m2/core";
 
@@ -604,7 +604,7 @@ impl State {
 /// What a package file not there is called: a build error like any other.
 const NOT_FOUND: &str = "file not found";
 
-/// What moved out of std into the packs music2 ships, in std 0.6 (PKG-17): a std module, whole or
+/// What moved out of std into the packs music2 ships, in std 0.7 (PKG-17): a std module, whole or
 /// only the names listed, and the pack it is in now. The one table: an import of one says where.
 pub const MOVED: &[(&str, &[&str], &str)] = &[
     ("instruments", &[], "@m2/synths"),
@@ -620,8 +620,8 @@ fn moved_from_std(sub: &str, name: Option<&str>) -> Option<String> {
     let (_, names, pack) =
         MOVED.iter().find(|(m, names, _)| *m == sub && name.is_none_or(|n| names.contains(&n)) && name.is_some() != names.is_empty())?;
     let what = match name {
-        Some(n) => format!("`{n}` is no longer in std/{sub}: since std 0.6 it is in the pack {pack}"),
-        None => format!("`std/{sub}` is no longer std's: since std 0.6 its sounds are in the pack {pack}"),
+        Some(n) => format!("`{n}` is no longer in std/{sub}: since std 0.7 it is in the pack {pack}"),
+        None => format!("`std/{sub}` is no longer std's: since std 0.7 its sounds are in the pack {pack}"),
     };
     let it = if names.is_empty() { "them" } else { "it" };
     let mono = if sub == "synth" && name.is_none() { " (`mono` and `Voice` stay std's, in std/dsp)" } else { "" };
@@ -1422,6 +1422,8 @@ fn frame_at(line: &str) -> Option<String> {
 mod bus_tests;
 #[cfg(test)]
 mod kernel_settings_tests;
+#[cfg(test)]
+mod kinds_tests;
 #[cfg(test)]
 mod mute_tests;
 #[cfg(test)]

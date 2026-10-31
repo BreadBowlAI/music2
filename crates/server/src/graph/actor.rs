@@ -363,6 +363,8 @@ pub(crate) struct Plays {
     /// The arrangement a tempo drag plays in place of the accepted one's (RENDER-27a): None when
     /// it plays the accepted arrangement. While set, every change is an activation.
     pub(super) tempo: Option<Arc<m2_song::Arrangement>>,
+    /// Whose each of its meters is (TAP-5).
+    pub(super) meters: Arc<super::meters::Layout>,
 }
 
 /// Whether two checked graphs number their cells alike (the same constants at the same places),
@@ -627,14 +629,16 @@ fn build(
     owner: &m2_plugins::Owner,
     basis: Basis,
     data: Option<&m2_song::DataSet>,
-) -> Result<Renderer> {
+) -> Result<(Renderer, Arc<super::meters::Layout>)> {
     // A tempo drag's arrangement in place of the accepted one (RENDER-27a).
     let (flat, data, rate) = (&rev.compiled.flat, data.unwrap_or(&rev.compiled.data), rev.project.sample_rate());
     // The kernels the revision was built with (PACK-9).
     let packages = packages.viewing(&rev.compiled.view);
-    let r = Renderer::prepare(flat, data, &packages, rate, audio, owner, basis)?;
+    let mut r = Renderer::prepare(flat, data, &packages, rate, audio, owner, basis)?;
     audio.prune();
-    Ok(r)
+    // Its meters, after the faders, or before them when that can't be (TAP-5).
+    let layout = super::meters::lay_out(&mut r, rev);
+    Ok((r, layout))
 }
 
 impl Open {
@@ -655,8 +659,9 @@ impl Open {
         self.plays.as_ref().is_some_and(|p| p.epoch == device.epoch)
     }
 
-    /// What the engine plays once `r`, built from `revision`, plays in `device`'s player.
-    fn describe(&self, r: &Renderer, device: &Device, revision: Arc<Revision>) -> Plays {
+    /// What the engine plays once `r`, built from `revision` with its meters laid out as `meters`
+    /// says, plays in `device`'s player.
+    fn describe(&self, r: &Renderer, device: &Device, revision: Arc<Revision>, meters: Arc<super::meters::Layout>) -> Plays {
         let info = r.info();
         Plays {
             epoch: device.epoch,
@@ -668,6 +673,7 @@ impl Open {
             info,
             controls: self.controls.clone(),
             tempo: None,
+            meters,
         }
     }
 
@@ -807,12 +813,12 @@ impl Open {
             false => build(&target, &session.packages, audio, owner, basis, leased.as_ref()),
         };
         prepared.prepare_ns = t.elapsed().as_nanos() as u64 - prepared.continues_ns;
-        let r = match built {
-            Ok(r) => Box::new(r),
+        let (r, meters) = match built {
+            Ok((r, meters)) => (Box::new(r), meters),
             Err(e) => return (Way::Unbuilt(e), prepared),
         };
         prepared.fresh = r.stats().fresh;
-        let mut plays = self.describe(&r, device, target);
+        let mut plays = self.describe(&r, device, target, meters);
         plays.tempo = tempo.cloned();
         let way = match kind {
             Kind::Activate => Way::Activate(r, plays),
@@ -1221,6 +1227,14 @@ impl Actor {
             if let Some(p) = cp.open.as_ref().filter(|p| p.engine.token == token) {
                 r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, &target));
             }
+            // Its taps as asked (TAP-9): watched as the meters are, the loudness's ring and each
+            // scope's pointed, each scope's call followed into the accepted revision first.
+            if let Some(taps) = r.info().taps.as_deref() {
+                super::meters::watch(taps, cp.meters.watched);
+                let accepted = o.session.accepted_arc();
+                cp.asks.follow(&accepted);
+                cp.asks.point(taps, &target, &accepted, &o.session.packages);
+            }
         }
         let sent = (|| -> Result<Sent> {
             match way {
@@ -1332,6 +1346,7 @@ impl Actor {
                 o.origins()
             },
             tempo: p.tempo.as_ref().map(|a| Arc::new(a.tempo_map())),
+            meters: p.meters.clone(),
         });
         let dev = device.as_ref().ok().filter(|d| plays.as_ref().is_some_and(|p| p.epoch == d.epoch));
         for (id, kept) in decisions {
@@ -1373,6 +1388,15 @@ impl Actor {
                 if let (Some(t), Some(d)) = (target, dev) {
                     d.player.set_cells(&t.cells, inst.value);
                 }
+            }
+        }
+        // What is asked of what plays when no new renderer was sent (TAP-9): the scopes follow the
+        // accepted revision, and show only while what plays is built from its code.
+        if !renderer && let Some(p) = o.plays.as_ref().filter(|p| dev.is_some_and(|d| d.epoch == p.epoch)) {
+            let accepted = o.session.accepted_arc();
+            cp.asks.follow(&accepted);
+            if let Some(taps) = p.info.taps.as_deref() {
+                cp.asks.point(taps, &p.revision, &accepted, &o.session.packages);
             }
         }
         if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
@@ -1486,9 +1510,9 @@ impl Actor {
         let built = match o.session.accepted().has_code() {
             true => {
                 let accepted = o.session.accepted_arc();
-                let mut r = build(&accepted, &o.session.packages, &mut o.audio, &self.inner.owner, Basis::Fresh, None)?;
+                let (mut r, meters) = build(&accepted, &o.session.packages, &mut o.audio, &self.inner.owner, Basis::Fresh, None)?;
                 r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, &accepted));
-                let plays = o.describe(&r, &device, accepted);
+                let plays = o.describe(&r, &device, accepted, meters);
                 Some((r, plays))
             }
             false => None,
@@ -1501,6 +1525,12 @@ impl Actor {
             if let Some(p) = cp.open.as_mut() {
                 let (controls, accepted) = (p.engine.controls.clone(), p.engine.accepted.clone());
                 p.engine = Arc::new(EngineView { plays: None, controls, accepted, ..*p.engine });
+            }
+            // What was asked of the song before ends; the new plan's meters are watched as they
+            // are (TAP-9).
+            cp.asks = Default::default();
+            if let Some(taps) = built.as_ref().and_then(|(r, _)| r.info().taps.clone()) {
+                super::meters::watch(&taps, cp.meters.watched);
             }
         }
         let view = match built {
@@ -1516,6 +1546,7 @@ impl Actor {
                     routes: plays.revision.compiled.flat.routes.clone(),
                     origins: None,
                     tempo: None,
+                    meters: plays.meters.clone(),
                 };
                 o.load(&device, r, plays, 0.0, None)?;
                 super::faults::sent(&self.inner, &o, o.plays.as_ref().expect("loaded"));
@@ -1713,7 +1744,7 @@ impl Actor {
             // Offline renders run at the project's rate (RENDER-31a).
             let threads = crate::export::export_threads(env, idle, false);
             let render = Render::new(rev.clone(), packages, rate, 0.0, length, threads).map_err(super::plainly)?;
-            return Ok(super::Export { song, dir, render, problems, lent: None });
+            return Ok(super::Export { song, dir, render, problems, lent: None, token: o.token, revision: rev.number });
         };
         let threads = crate::export::export_threads(env, idle, true);
         let render = Render::lending(rev.clone(), packages, rate, length, &lend, threads).map_err(super::plainly)?;
@@ -1746,7 +1777,7 @@ impl Actor {
             }
             lent.hooks = Some(hooks);
         }
-        Ok(super::Export { song, dir, render, problems, lent: Some(lent) })
+        Ok(super::Export { song, dir, render, problems, lent: Some(lent), token, revision: rev.number })
     }
 
     /// An export gave back the live instances it borrowed (RENDER-1): what waited for it plays
@@ -1930,6 +1961,30 @@ impl Actor {
                 Err(anyhow!("{e}"))
             }
         }
+    }
+
+    /// A plain write of any value, with no gesture lease (CARD-4): a setting's, one Tx on its call;
+    /// else a knob's number, as [`Actor::set_value`] writes it.
+    pub(super) fn set_any(
+        &mut self,
+        token: u64,
+        revision: u64,
+        id: &str,
+        gesture: &str,
+        value: Value,
+        expect: Option<Value>,
+    ) -> Result<Value> {
+        let o = self.open.as_ref().context("no project is open")?;
+        if m2_editor::settings::names(&o.session, revision, id) {
+            let id = id.to_string();
+            return self.edit(token, move |s| m2_editor::settings::set(s, revision, &id, &value, expect.as_ref()));
+        }
+        let number = value.as_f64().ok_or_else(|| anyhow!("`{id}` is a knob: its value is a number, not {value}"))?;
+        let expect = match expect {
+            None => None,
+            Some(e) => Some(e.as_f64().ok_or_else(|| anyhow!("`{id}` is a knob: expect a number, not {e}"))?),
+        };
+        self.set_value(token, revision, id, gesture, number, expect)
     }
 
     /// An edit through the session; whatever happened, the accepted revision plays after it.

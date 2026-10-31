@@ -18,7 +18,7 @@
 
 [package]
 name = "std"
-version = "0.6.0"
+version = "0.7.0"
 license = "MIT OR Apache-2.0"
 description = "The toolbox sounds are made of: oscillators, envelopes, filters, the Sampler, the mixer, the effects mixing needs, and every kernel"
 wasm = "kernels/std.wasm"
@@ -417,7 +417,8 @@ outputs = ["out: audio<2>"]
 #                                            13 pan       -1..1
 #                                            14 offset    frames into the file it starts from
 # `count` is how many times notes have started on the lane (std:hitcount of a one-voice poly of
-# std:drumhit), read when the note starts: its turn is ((count - 1) mod of) + 1. Left out, 1.
+# std:drumhit), or on the note's key (its `keyCount`, with std/sampler's `turns: "key"`), read when
+# the note starts: its turn is ((count - 1) mod of) + 1. Left out, 1.
 [[kernel]]
 name = "regions"
 description = "Sampler voice for regions: when a note starts, every attack region whose keys hold its pitch, whose velocity range holds its velocity (round(velocity × 127), 1 to 127) and whose round robin position is its turn (from `count`) plays from its offset, summed; when it ends, the release regions that match it start and play to their end. A region with a loop loops from its end to its start while the note is held, crossfaded over up to 5 ms, then plays on. Each plays as std:sampler's file does, with its tune, volume and pan; stereo out"

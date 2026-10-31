@@ -31,7 +31,7 @@ use wasmtime::{AsContextMut, Caller, Extern, ExternType, Func, Instance, Memory,
 use crate::audio::Asset;
 use crate::limit::{self, Deadline, TooSlow};
 use crate::stream::Wav;
-use crate::{BLOCK, KERNEL_MEMORY, PORT_BYTES, WasmContext};
+use crate::{BLOCK, EVENT_BYTES, KERNEL_MEMORY, NOTES_HEAD, PORT_BYTES, WasmContext};
 
 /// Bytes of a v1 settings block (`m2_kernel::Settings` on wasm32).
 const SETTINGS_BYTES: usize = 60;
@@ -53,6 +53,9 @@ pub(crate) struct Spec<'a> {
     /// An offline kernel's time map (`flags` bit 0): pairs of (source seconds, output seconds).
     /// `None` for a live kernel.
     pub(crate) offline: Option<&'a [[f64; 2]]>,
+    /// Its `events<note>` inputs, by place among its inputs, and the events each holds (ABI-8):
+    /// each one entry in the port table, a header and that many events.
+    pub(crate) notes: &'a [(usize, usize)],
 }
 
 /// Where a sandbox reads an asset from (`docs/kernel-abi.md`, The asset import): the host's choice,
@@ -324,9 +327,12 @@ pub(crate) struct State {
     process: TypedFunc<(u32, u32, u32, u32), ()>,
     reset: TypedFunc<u32, ()>,
     active: TypedFunc<u32, u32>,
-    /// Each input's buffer and each output's: `PORT_BYTES`, channel 1 at `BLOCK` floats in.
+    /// Each input's buffer and each output's: `PORT_BYTES`, channel 1 at `BLOCK` floats in; an
+    /// events input's header and its events (ABI-8).
     pub(crate) ins: Vec<usize>,
     pub(crate) outs: Vec<usize>,
+    /// Each input's bytes: what debug builds compare (ABI-1).
+    pub(crate) in_len: Vec<usize>,
 }
 
 impl Sandbox {
@@ -412,7 +418,10 @@ impl Sandbox {
         let map = spec.offline.unwrap_or_default();
         let (nv, na, nm) = (spec.values.len(), spec.assets.len(), map.len());
         let table_len: usize = channels.iter().map(|&c| c as usize).sum();
-        let settings_at = n * PORT_BYTES;
+        let room = |p: usize| spec.notes.iter().find(|(i, _)| *i == p).map(|(_, cap)| *cap);
+        let lens: Vec<usize> =
+            (0..n).map(|p| room(p).map_or(PORT_BYTES, |cap| (NOTES_HEAD + cap * EVENT_BYTES).next_multiple_of(16))).collect();
+        let settings_at: usize = lens.iter().sum();
         let list_at = settings_at + SETTINGS_BYTES;
         let values_at = (list_at + 4 * n).next_multiple_of(8);
         let assets_at = values_at + 8 * nv;
@@ -424,7 +433,7 @@ impl Sandbox {
         if block == 0 || !block.is_multiple_of(16) || block + bytes > self.memory.data_size(&self.store) {
             bail!("`{prefix}`'s module gave no room for a state's ports ({bytes} bytes)");
         }
-        let bufs: Vec<usize> = (0..n).map(|p| block + p * PORT_BYTES).collect();
+        let bufs: Vec<usize> = lens.iter().scan(block, |at, len| Some(std::mem::replace(at, *at + len))).collect();
         let mut io = Vec::with_capacity(table_len);
         for (p, &c) in channels.iter().enumerate() {
             io.extend((0..c as usize).map(|ch| (bufs[p] + ch * BLOCK * 4) as u32));
@@ -466,6 +475,11 @@ impl Sandbox {
             }
         }
         data[block + table_at..block + bytes].copy_from_slice(bytemuck::cast_slice(&io));
+        // An events input's header (ABI-8): none yet, its room, and where its events are.
+        for &(p, cap) in spec.notes {
+            let head = [0, cap as u32, (bufs[p] + NOTES_HEAD) as u32, 0];
+            data[bufs[p]..bufs[p] + NOTES_HEAD].copy_from_slice(bytemuck::cast_slice(&head));
+        }
         self.arm();
         let handle = new.call(&mut self.store, (block + settings_at) as u32)?;
         if handle == 0 || handle as usize >= self.memory.data_size(&self.store) {
@@ -474,7 +488,8 @@ impl Sandbox {
         let outs = bufs[inputs..].to_vec();
         let mut ins = bufs;
         ins.truncate(inputs);
-        Ok(State { handle, io: (block + table_at) as u32, process, reset, active, ins, outs })
+        let in_len = lens[..inputs].to_vec();
+        Ok(State { handle, io: (block + table_at) as u32, process, reset, active, ins, outs, in_len })
     }
 
     /// Seal it: from now on its memory and tables never grow, so its memory never moves. Every page

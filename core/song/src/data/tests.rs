@@ -4,7 +4,7 @@ use super::*;
 use crate::Snapshot;
 use crate::diag::Severity;
 
-const MANIFEST: &str = "[project]\nname = \"Test\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+const MANIFEST: &str = "[project]\nname = \"Test\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
 
 /// A project folder with `files`, removed when dropped.
 struct Dir(PathBuf);
@@ -160,6 +160,61 @@ fn unit_mismatch_offers_retag() {
     // DIAG-1: the fix is a Tx confined to its lane, with an id derived from what it was raised on.
     assert_eq!(fix.tx.expect, Expect::Confined(Confined { lanes: vec![LaneAddr::new("bass", "cutoff").unwrap()], ..Default::default() }));
     assert!(fix.tx.id.starts_with("fix-") && fix.tx.validate().is_ok(), "{}", fix.tx.id);
+}
+
+fn shapes() -> LaneKind {
+    LaneKind::Choice { options: ["saw", "square", "sine"].map(String::from).to_vec() }
+}
+
+// CARD-15 (review K8): a name the choice doesn't have is a warning that says where it is in the
+// song: the beat of its point, not of its clip.
+#[test]
+fn an_unknown_name_says_its_beat() {
+    let text = r#"{"unit": "choice", "clips": [{"id": "c1", "start": 4, "length": 8, "points": [[0, "saw"], [2, "nope"]]}]}"#;
+    let d = Dir::new(&[("data/song/shape.json", text.as_bytes())]);
+    let (_, diags) = d.project().data(&lanes(&[("song", "shape", shapes())]), None);
+    assert_eq!(codes(&diags), ["lane.unknown-option"]);
+    let m = &diags[0].message;
+    assert!(m.contains("at beat 6, clip 1 names \"nope\""), "{m}");
+}
+
+// FMT-10, CARD-15 (review K9): a lane of names whose file holds another kind says what it holds and
+// what it needs, and offers no Retag: numbers aren't names.
+#[test]
+fn a_lane_of_names_in_another_unit_says_what_it_needs() {
+    for (file, kind, holds, needs) in [
+        (
+            r#"{"unit": "hz", "clips": [{"id": "c1", "start": 0, "length": 4, "points": [[0, 500]]}]}"#,
+            shapes(),
+            "holds automation in `hz`",
+            "lane `pick` of song feeds a choice of \"saw\", \"square\", \"sine\": write its points as those names",
+        ),
+        (
+            r#"{"unit": "switch", "clips": [{"id": "c1", "start": 0, "length": 4, "points": [[0, true]]}]}"#,
+            shapes(),
+            "holds true and false",
+            "feeds a choice",
+        ),
+        (
+            r#"{"unit": "choice", "clips": [{"id": "c1", "start": 0, "length": 4, "points": [[0, "saw"]]}]}"#,
+            LaneKind::Switch,
+            "holds a choice's names",
+            "lane `pick` of song feeds a switch: write its points as true or false",
+        ),
+        (
+            r#"{"unit": "switch", "clips": [{"id": "c1", "start": 0, "length": 4, "points": [[0, true]]}]}"#,
+            hz(),
+            "holds true and false",
+            "is declared in `hz`",
+        ),
+    ] {
+        let d = Dir::new(&[("data/song/pick.json", file.as_bytes())]);
+        let (_, diags) = d.project().data(&lanes(&[("song", "pick", kind)]), None);
+        assert_eq!(codes(&diags), ["lane.unit-mismatch"], "{file}");
+        let m = &diags[0].message;
+        assert!(m.contains(holds) && m.contains(needs) && !m.contains("Retag"), "{file}: {m}");
+        assert!(diags[0].fixes.is_empty(), "{file}: no Retag");
+    }
 }
 
 // FMT-12: anonymous clips, invalid ids and duplicates are diagnostics with fixes, never parse

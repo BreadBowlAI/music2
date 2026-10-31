@@ -15,7 +15,7 @@ A song that plays them lists them, as the templates do:
 ```toml
 [dependencies]
 "@m2/core" = "1"
-std = "0.6"
+std = "0.7"
 "@m2/synths" = "1"
 "@m2/effects" = "1"
 ```
@@ -28,7 +28,7 @@ import { reverb } from "@m2/effects";
 
 When you add one of their sounds from + Track or the browser, music2 writes those lines for you, and `music2.lock` too.
 
-A song made before std 0.6 is told, in words, what to change: first its std line, to `std = "0.6"`; then, for each import of `std/synth`, `std/fm`, `std/drums` or `std/instruments`, or of `std/fx`'s `reverb` and the other effects that colour a sound, which pack it is in now and the line to add. The move changed no sound: the song plays the same bits as before.
+A song made before std 0.7 is told, in words, what to change: first its std line, to `std = "0.7"`; then, for each import of `std/synth`, `std/fm`, `std/drums` or `std/instruments`, or of `std/fx`'s `reverb` and the other effects that colour a sound, which pack it is in now and the line to add. The move changed no sound: the song plays the same bits as before.
 
 **Instruments.** Each takes a notes lane and returns sound. The `voices` setting is how many notes can sound at once (`synth.lead(notes, { voices: 4 })` plays chords). A typical note, at velocity 0.8, peaks between -15 and -12 dBFS, so a four-note chord still has room, and the drums sit as on a drum machine: the kick near -6, snare and clap near -9, hats near -16. Notes played harder are louder, and most sounds get brighter too. On the synths and FM sounds, `velSens` ("vel sens") is how much: the level follows velocity^(2 × velSens), so a note at velocity 0 is silent, and at 0.5 a note at 0.3 is 10 dB below one at 1. The keys start widest (0.8), the 808 narrowest (0.3).
 
@@ -89,7 +89,14 @@ A song made before std 0.6 is told, in words, what to change: first its std line
   How it plays:
   - A note's velocity, 0 to 1 in the piano roll, is a number from 1 to 127 here: velocity × 127, rounded. So 0.5 is 64.
   - Every region whose `keys`, `velocity` and turn match plays, all at once (layers). A pad region under every note, say, plays with the piano's.
-  - The turn counts the notes the lane has played, whatever their key: notes that start together count once, so a chord's notes all take the same turn. So notes that take turns on one lane keep their takes: a kick and a snare that alternate (kick, snare, kick, snare) each play the same take every time, and so do the two notes of a trill. Give each drum whose takes must alternate a lane of its own. (A turn for each key is [gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#sounds).)
+  - Whose turn it is: `turns` says how the takes count.
+
+    | `turns` | Counts | A kick and a snare that alternate on one lane |
+    |---|---|---|
+    | `"lane"` (the default) | every note the lane plays, whatever its key; notes that start together count once | each drum plays the same take every time |
+    | `"key"` (std 0.6.0) | each key its own notes, as SFZ instruments do; a chord's notes each count on their own key | each drum takes 1, 2, 1, 2 |
+
+    For drums or a piano made of recordings, `turns: "key"` is usually what you want: `sampler(notes, { regions, turns: "key" })`.
   - The turns are the same in an export, and when you open the song and play it from the start. Play it again (Return, then Space), jump, or try notes on the lane, and the turns carry on from where they were, so a take may swap.
   - Every take of a round robin must be there wherever it plays: `[1, 3]` and `[2, 3]` with no `[3, 3]` is refused, since every third note would play nothing.
   - A `"release"` region plays to its end when the note stops, whatever `mode` says.
@@ -97,7 +104,7 @@ A song made before std 0.6 is told, in words, what to change: first its std line
   - A mistake is said in words when the song builds: "regions: region 3: keys 70 to 60: the lowest is above the highest".
   - Regions can come from a helper function or a `const`, as a list of many files is easiest to write. A `trigger` kept in a `const` needs the const's type, or the code editor reads it as any text: `const keyUps: Region[] = [{ file: "key-up.wav", trigger: "release" }]`, with `import { type Region } from "@m2/core"`.
 
-  The Sampler's card in Device says what it plays ("5 recordings, 2 layers, round robin of 2, release sounds, loops"). Its regions are changed in code: a WAV dropped on it is refused. Not yet: a sustain pedal, choke groups (an open hat cut by a closed one), blends between velocity layers, and instruments too big for memory ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#sounds)).
+  The Sampler's card in Device says what it plays ("5 recordings, 2 layers, round robin of 2, release sounds, loops"). Its regions are changed in code: a WAV dropped on it is refused. A MIDI keyboard's sustain pedal holds its notes, as it holds every instrument's ([The window](window.md)). Not yet: choke groups (an open hat cut by a closed one), blends between velocity layers, and instruments too big for memory ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#sounds)).
 - **The first instruments** (`@m2/synths`): `bass`, `kick`, `hat`, `pluck` and `pad`, simple versions built from std's building blocks below, short enough to read and copy. Code plays them; the lists leave them out. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `drums.kick`, `drums.hats`, `synth.pluck` and `synth.pad`. The templates still start new songs with the first ones.
 
 [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.

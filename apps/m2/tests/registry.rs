@@ -301,7 +301,7 @@ fn library_bucket(t: &Temp) -> (PathBuf, String, String) {
     write(
         &keys.join("m2pkg.toml"),
         "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nauthors = [\"Bob\"]\n\
-         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
     );
     write(&keys.join("src/index.ts"), KEYS);
     let r = reg.to_str().unwrap();
