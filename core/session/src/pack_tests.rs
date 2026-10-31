@@ -629,3 +629,33 @@ fn an_outside_edit_with_its_pack_there_is_one_undo_step() {
     );
     std::fs::remove_dir_all(&root).ok();
 }
+
+// CARD-10, CARD-11, CARD-12: a choice a song writes by its name reaches a pack's kernel as the
+// option's place, and a switch as 1 or 0: heard end to end, through `@test/kinds`, whose kernels
+// play what they read (`tests/fixtures/packs/kinds`).
+#[test]
+fn a_choice_in_a_pack_plays_its_place() {
+    let root = scratch("kinds");
+    copy(&fixtures().join("kinds"), &root.join("kinds"));
+    let song = root.join("song");
+    std::fs::create_dir_all(&song).unwrap();
+    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    std::fs::write(song.join("music2.toml"), format!("{manifest}\"@test/kinds\" = {{ path = \"../kinds\" }}\n")).unwrap();
+    let mut pk = packages(&root.join("no-store"));
+    for (call, heard) in [
+        ("shape({ shape: \"sine\" })", 2.0),
+        ("shape({ shape: \"square\" })", 1.0),
+        ("shape()", 0.0),
+        ("sub({ on: true })", 1.0),
+        ("sub()", 0.0),
+    ] {
+        let code = format!(
+            "import {{ song }} from \"@m2/core\";\nimport {{ shape, sub }} from \"@test/kinds\";\nexport default song(() => {call});\n"
+        );
+        std::fs::write(song.join("song.ts"), code).unwrap();
+        let c = compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{call}: {d:?}"));
+        let out = Renderer::new(&c.flat, &c.data, &pk, 48_000).unwrap().render(0.05).unwrap();
+        assert!(out.iter().all(|f| f[0] == heard as f32), "{call}: {:?}", &out[..2]);
+    }
+    std::fs::remove_dir_all(&root).ok();
+}

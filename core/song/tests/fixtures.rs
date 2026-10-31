@@ -59,6 +59,8 @@ fn fixture_data_files_are_canonical() {
                         Holds::Notes => LaneKind::Notes,
                         Holds::Audio => LaneKind::Audio,
                         Holds::Control | Holds::Empty => LaneKind::Control { unit: unit.clone() },
+                        Holds::Choice => LaneKind::Choice { options: vec![] },
+                        Holds::Switch => LaneKind::Switch,
                         Holds::Unknown => panic!("{}: no lane can read it", f.display()),
                     };
                     let read = LaneData::read(&text, &kind).unwrap_or_else(|e| panic!("{}: {e:?}", f.display()));
