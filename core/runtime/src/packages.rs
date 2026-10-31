@@ -276,9 +276,22 @@ impl PackageSet {
     }
 
     /// Load the package in `dir` (which holds `m2pkg.toml`, read strictly: PACK-2) and show it
-    /// beside what the set shows: how a host loads std.
+    /// beside what the set shows: how a host loads std, the one folder whose name `std` is trusted
+    /// (ABI-11). A pack is loaded with [`PackageSet::load_pack`].
     pub fn load(&mut self, dir: &Path) -> Result<&Package> {
-        let p = self.loaded_at(dir)?;
+        let p = self.loaded_at(dir, None)?;
+        self.show_loaded(p)
+    }
+
+    /// Load pack `name` from `dir` and show it beside what the set shows, as [`PackageSet::load`]
+    /// does: a pack is never std, and a folder whose `m2pkg.toml` names another package, or says
+    /// `std`, is refused before anything of it is compiled or run (ABI-11).
+    pub fn load_pack(&mut self, dir: &Path, name: &str) -> Result<&Package> {
+        let p = self.loaded_at(dir, Some(name))?;
+        self.show_loaded(p)
+    }
+
+    fn show_loaded(&mut self, p: Arc<Package>) -> Result<&Package> {
         let name = p.name.clone();
         if self.view.packages.contains_key(&name) {
             bail!("package `{name}` is loaded twice");
@@ -291,11 +304,21 @@ impl PackageSet {
     /// whose `m2pkg.toml` and wasm are unchanged is shared, and one whose either file changed is
     /// loaded again (PACK-9). The wasm's hash comes from the hash cache (FMT-16), a stat when it
     /// is unchanged.
-    fn loaded_at(&mut self, dir: &Path) -> Result<Arc<Package>> {
+    ///
+    /// A pack (`pack`, its name as the caller found it) is checked against the manifest read here,
+    /// before anything is compiled: never std, and never another package. So std's trust (no time
+    /// checks, ABI-11) goes only to the folder a host loads as std.
+    fn loaded_at(&mut self, dir: &Path, pack: Option<&str>) -> Result<Arc<Package>> {
+        if pack == Some(m2_song::pack::STD) {
+            bail!("{}: std comes with music2: a pack is named @owner/name", dir.display());
+        }
         let path = dir.join(m2_song::pack::PKG_MANIFEST);
         let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         let m =
             m2_song::pack::PkgManifest::read(&text).map_err(anyhow::Error::msg).with_context(|| format!("reading {}", path.display()))?;
+        if let Some(pack) = pack.filter(|p| *p != m.package.name.as_str()) {
+            bail!("{} holds {}, not {pack}", dir.display(), m.package.name);
+        }
         let wasm = match &m.package.wasm {
             Some(w) => {
                 let p = dir.join(w);
@@ -387,10 +410,7 @@ impl PackageSet {
             view.packages.insert(m2_song::pack::STD.to_string(), std.clone());
         }
         for (name, dir) in packs {
-            let p = self.loaded_at(dir).with_context(|| format!("loading {name}"))?;
-            if p.name != *name {
-                bail!("{} holds {}, not {name}", dir.display(), p.name);
-            }
+            let p = self.loaded_at(dir, Some(name)).with_context(|| format!("loading {name}"))?;
             view.packages.insert(name.clone(), p);
         }
         // The very view shown, when it holds the same versions: a plan of it borrows the set.
