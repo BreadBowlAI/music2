@@ -58,15 +58,16 @@ pub fn comes_with(name: &PackName) -> Option<Version> {
 }
 
 /// What to do first when a song asks for (or keeps) `asked` of one of music2's own packs, which
-/// music2 no longer comes with: the line to write for the version it comes with now (review Y5).
-/// None for another pack, or one music2 comes with that `asked` already is.
-// The upgrade track (FMT-3a) puts "run `m2 upgrade <song>`" first here once it exists.
+/// music2 no longer comes with: `m2 upgrade`, which moves the whole song (AGENT-14), then the line
+/// to write for the version it comes with now (review Y5). None for another pack, or one music2
+/// comes with that `asked` already is.
 pub fn move_on(name: &PackName, asked: &super::Requirement) -> Option<String> {
     let now = comes_with(name).filter(|v| !asked.matches(*v))?;
     let line = super::Requirement::admitting(now);
     Some(format!(
-        "music2 now comes with {name} {now}: change its line in music2.toml to \"{name}\" = \"{line}\", then run `m2 pack lock <song>`. \
-         The song's code may need changes"
+        "{}music2 now comes with {name} {now}: change its line in music2.toml to \"{name}\" = \"{line}\", then run `m2 pack lock <song>`. \
+         The song's code may need changes",
+        crate::UPGRADE
     ))
 }
 

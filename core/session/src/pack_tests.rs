@@ -738,8 +738,9 @@ fn a_song_made_before_wave_3_is_told_the_line_to_write() {
     let mut pk = bundled_store(&root);
     let now = m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join("@m2/synths")).unwrap().package.version;
     let first = format!(
-        "music2 now comes with @m2/synths {now}: change its line in music2.toml to \"@m2/synths\" = \"{}\", then run `m2 pack lock \
+        "{}music2 now comes with @m2/synths {now}: change its line in music2.toml to \"@m2/synths\" = \"{}\", then run `m2 pack lock \
          <song>`. The song's code may need changes",
+        m2_song::UPGRADE,
         now.0
     );
     let song = root.join("song");

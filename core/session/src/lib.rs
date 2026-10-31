@@ -501,7 +501,8 @@ export default song(() => v.out);
         // std is 0.x, so a song asks for it by its first two numbers.
         let Version(major, minor, _) = Version::parse(&std_packages().get("std").unwrap().version).unwrap();
         let hint = format!(
-            "This app has std {major}.{minor}. To use it, change the std line in music2.toml to std = \"{major}.{minor}\". The song"
+            "{}This app has std {major}.{minor}. To use it, change the std line in music2.toml to std = \"{major}.{minor}\". The song",
+            m2_song::UPGRADE
         );
         assert!(e[0].message.starts_with(&hint), "{}", e[0].message);
         // A newer @m2/core than this app's: no way to move but a newer music2.
@@ -515,8 +516,9 @@ export default song(() => v.out);
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);
         let Version(major, _, _) = Version::parse(m2_script::SDK_VERSION).unwrap();
         let hint = format!(
-            "This app has @m2/core {major}. To use it, change the @m2/core line in music2.toml to \"@m2/core\" = \"{major}\". The song's \
-             code may need changes. music2.toml asks for @m2/core \"1\""
+            "{}This app has @m2/core {major}. To use it, change the @m2/core line in music2.toml to \"@m2/core\" = \"{major}\". The song's \
+             code may need changes. music2.toml asks for @m2/core \"1\"",
+            m2_song::UPGRADE
         );
         assert!(e[0].message.starts_with(&hint), "{}", e[0].message);
         std::fs::remove_dir_all(dir).ok();
