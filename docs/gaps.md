@@ -194,9 +194,11 @@ The old engine, with its own song files and screens, was removed in October 2026
 | 21 | **The rest of the effect comforts**: the old Pump (ducking in time with the beat, with no sidechain), a compressor keyed from another track, and moving effects that aren't written one inside the other, or across files (refused in words today). | Pump is a pop staple. | Yes | medium |
 
 - **Built since track effects2**: `@m2/mixing`, a pack music2 ships ([PACK-26](architecture.md#packs)): an eight-band parametric EQ, a gate that another track can key, a transient shaper, a de-esser and a multiband compressor, each with its own kernel and presets.
-- **The EQ's card draws band 8's curve only**: no view draws an EQ's whole curve, every band's shape and gain together (that is a new view, a change to the card's closed vocabulary, CARD-16). The filter view draws a low-pass, which band 8 is at its start, so its picture is wrong once band 8's shape is changed.
+- **The EQ's card draws no curve**: no view draws an EQ's whole curve, every band's shape and gain together (that is a new view, a change to the card's closed vocabulary, CARD-16), and the filter view draws a low-pass, which no band is at the EQ's start.
+- **The gate's key is declared `many()`** (`gate(pad.out, kick.out)`): core has no input a call may leave out, so the gate's descriptor says it takes any number of keys. TypeScript allows one, and the build refuses more. An input that may be left out (`port.audio().optional()`) is a minor of `@m2/core`, a change of its own.
+- **A big change on a very resonant EQ band arrives late**: a new shape, or a jump of gain, Q or frequency, settles on a second filter before it is crossfaded in, so it never booms; at a high Q and a low frequency that takes up to a second.
 - **A gate's key is written in code** (`gate(pad.out, kick.out)`): its card has no picker of tracks for it; the Device view's picker is the Duck's own.
-- **A preset of the EQ holds its numbers only**: it can't turn a band on or change its shape, since a preset holds numbers (CARD-10).
+- **A preset of the EQ holds its numbers only**: it can't turn a band on or change its shape, since a preset's values are numbers (FMT-22). CARD-10 promises a choice's name in a preset too; that isn't built yet.
 - **The EQ's cuts are 12 dB per octave**, with no steeper slope to pick; the multiband compressor has three bands, and no way to hear one band alone; the de-esser has no way to hear only what it takes out.
 
 ## Export

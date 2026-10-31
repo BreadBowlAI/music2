@@ -1,9 +1,9 @@
 // @m2/mixing's parametric EQ from + Effect (PACK-26, PACK-10): added after the keys' pluck, it
 // writes its call, its import, the pack's [dependencies] line and its lock in one edit. Its card
-// shows its eight bands under their headings and band 8's curve. A band's shape is a menu: picking
-// one writes its name, one undo step, and ⌘Z takes the code back byte for byte; dragging band 8's
-// curve moves its frequency and Q in one step, undone as one. One more ⌘Z takes the EQ out, with
-// its import, dependency and lock. Each state linted.
+// shows its eight bands under their headings, and no picture (no view draws an EQ's whole curve
+// yet). A band's shape is a menu: picking one writes its name, one undo step, and ⌘Z takes the code
+// back byte for byte; turning band 3's frequency knob writes it, one undo step, undone as one. One
+// more ⌘Z takes the EQ out, with its import, dependency and lock. Each state linted.
 //
 //   node e2e/mixing.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, sleep, until } from "./fixlib.mjs";
@@ -55,11 +55,10 @@ check(
   at("Band 3") < at("On 3") && at("On 3") < at("Shape 3") && at("Shape 3") < at("Frequency 3") && at("Gain 3") < at("Q 3") && at("Q 3") < at("Band 4"),
   `each band's values under its heading: ${rows.slice(at("Band 3"), at("Band 4") + 1).join(", ")}`,
 );
-check(at("Band 8") < at("Q 8") && at("Q 8") < at("curve") && at("curve") === rows.length - 1, `band 8 ends with its curve: ${rows.slice(at("Band 8")).join(", ")}`);
+check(at("Band 8") < at("Q 8") && at("Q 8") === rows.length - 1, `band 8 ends with its Q: ${rows.slice(at("Band 8")).join(", ")}`);
 const kinds = await page.$$eval(`${card} [data-knob="Shape 3"], ${card} [data-knob="On 3"], ${card} [data-knob="Gain 3"]`, (els) => els.map((e) => `${e.dataset.knob} ${e.dataset.kind} ${e.dataset.value}`));
 check(JSON.stringify(kinds) === JSON.stringify(["On 3 switch true", 'Shape 3 choice "bell"', "Gain 3 number 0"]), `a band's switch, menu and knob: ${JSON.stringify(kinds)}`);
-await seen(`${card} [data-view="curve"]`);
-check(!!(await page.$(`${card} [data-view="curve"][data-view-kind="filter"] [data-handle="peak"]`)), "band 8 draws its curve, with a peak to drag");
+check(!(await page.$(`${card} [data-view]`)), "it draws no picture: no view draws an EQ's whole curve yet");
 await linted(card, "the EQ's card");
 await page.screenshot({ path: `${process.argv[2]}/mixing-eq.png` });
 
@@ -81,23 +80,21 @@ await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => files() === withEq), "⌘Z takes the code back, byte for byte");
 
-// ---------------------------------------------------------------- band 8's curve (CARD-27, CARD-22)
+// ---------------------------------------------------------------- a band's frequency knob (PKG-3)
 
-const peak = await seen(`${card} [data-view="curve"] [data-handle="peak"]`);
-await page.mouse.move(peak.x + peak.width / 2, peak.y + peak.height / 2);
+const freq = `${card} [data-knob="Frequency 3"]`;
+const grip = await seen(`${freq} svg`);
+await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
 await page.mouse.down();
-await page.mouse.move(peak.x + peak.width / 2 - 40, peak.y + peak.height / 2 - 15, { steps: 10 });
-await sleep(200);
+for (let i = 1; i <= 8; i++) await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 - i * 4);
 await page.mouse.up();
-const moved = () => read("tracks/keys.ts").match(/eq\(pluck\(lane\.notes\("chords"\)\), \{ freq8: ([0-9.]+), q8: ([0-9.]+) \}\)/);
-check(await until(() => !!moved()), `dragging the curve's peak writes band 8's frequency and Q: ${read("tracks/keys.ts").match(/=> .*/)?.[0]}`);
-const [, hz, q] = moved() ?? [];
-check(Number(hz) < 18000 && Number(q) > 0.71, `left and up: a lower frequency (${hz} Hz) and a higher Q (${q})`);
-check(await stepIs("Parametric EQ frequency 8 and q 8"), `as one undo step: ${await undoTitle()}`);
-await linted(`${card} [data-view="curve"]`, "the curve");
+const turned = () => read("tracks/keys.ts").match(/eq\(pluck\(lane\.notes\("chords"\)\), \{ freq3: ([0-9.]+) \}\)/);
+check(await until(() => !!turned()), `turning band 3's frequency up writes it into the call: ${read("tracks/keys.ts").match(/=> .*/)?.[0]}`);
+check(Number(turned()?.[1]) > 250, `above its 250 Hz: ${turned()?.[1]} Hz`);
+check(await stepIs("Parametric EQ frequency 3"), `one undo step: ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
-check(await until(() => files() === withEq), "one ⌘Z takes both back");
+check(await until(() => files() === withEq), "⌘Z takes it back, byte for byte");
 
 // ---------------------------------------------------------------- undo the EQ itself
 

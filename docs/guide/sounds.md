@@ -139,7 +139,7 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 |---|---|
 | **band** | a part of the sound, from its low notes to its high ones |
 | **shape** | what an EQ band does: a *low cut* takes out what is below its frequency, a *high cut* what is above; a *low shelf* or *high shelf* turns everything below or above up or down; a *bell* turns the notes around its frequency up or down |
-| **Q** | how narrow a bell is (higher is narrower), or how sharp a cut's corner |
+| **Q** | how narrow a bell is (higher is narrower), how sharp a cut's corner, or how big a shelf's bump and dip at its corner (above 0.71; a lot of both at 18) |
 | **threshold** | the level, in dB, where a tool starts to act |
 | **attack**, **release** | how fast a tool acts, and how fast it lets go |
 | **hold** | how long a gate stays open once the sound gets quiet |
@@ -149,11 +149,11 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 | **transient** | the very start of a hit: its crack, click or thump |
 | **sustain** | the rest of a hit, as it rings and fades |
 
-- **The EQ** starts flat: band 1 (a low cut at 30 Hz) and band 8 (a high cut at 18 kHz) are off, the six between at 0 dB, so adding it changes nothing until you turn a knob. Its card shows each band under its own heading, `Band 1` to `Band 8`. A cut takes out 12 dB more each octave further away; its `gain` does nothing. Every band is the standard filter of its shape (RBJ's, as in most EQs), and a knob or menu moved while it plays glides, so it never clicks. Band 8 also draws its curve; that picture is of a high cut, so it is right only while band 8 is one.
+- **The EQ** starts flat: band 1 (a low cut at 30 Hz) and band 8 (a high cut at 18 kHz) are off, the six between at 0 dB, so adding it changes nothing until you turn a knob. Its card shows each band under its own heading, `Band 1` to `Band 8`. A cut takes out 12 dB more each octave further away; its `gain` does nothing. Every band is the standard filter of its shape (RBJ's, as in most EQs). A band moved while it plays crossfades to its new setting, so a change never clicks or booms; a big change on a very resonant band (a high Q, a low frequency) waits up to a second for the new filter to settle before you hear it. A small move, a knob's drag or a lane's line, is heard at once. The card draws no curve yet.
 - **The gate** opens when the sound reaches `threshold`, and closes once it has stayed 6 dB under it for `hold` (at least 25 ms, so a low note's waves don't close it). Keyed by another track, `gate(pad.out, kick.out)` opens the pad only while the kick plays: the kick is its sidechain, so muting the kick doesn't change it. Its key is written in code for now.
-- **The transient shaper** turns a hit's start by up to `attack` dB, and its tail by up to `sustain` dB. A steady sound passes as it is.
-- **The de-esser** turns down only the band around `freq` (5 to 8 kHz for most voices), and only while it is louder than `threshold`, by at most `amount` dB. A voice's body, and anything lower, is left alone.
-- **The multiband compressor** splits the sound where `lowMid` and `midHigh` say, with the crossovers most multiband compressors use (Linkwitz-Riley's). At ratio 1 it changes no level at any frequency; like every crossover of its kind, it turns the phase a little.
+- **The transient shaper** turns a hit's start by up to `attack` dB, and its tail by up to `sustain` dB. The faster a tail fades, the more of `sustain` it gets: a snare's short ring all of it, a piano's long fade a quarter or so in its first half second, more as it goes on. A steady sound passes as it is.
+- **The de-esser** turns down the band around `freq` (5 to 8 kHz for most voices), a bell about an octave and a half wide, deepest at `freq`, and only while that band is louder than `threshold`, by at most `amount` dB. While it works, a loud tone an octave away loses a dB or so; a voice's body, two octaves and more below, is left alone.
+- **The multiband compressor** splits the sound where `lowMid` and `midHigh` say, with the crossovers most multiband compressors use (Linkwitz-Riley's); if they cross, the lower one splits the lows from the mids. At ratio 1, with every band's `gain` at 0, it changes no level at any frequency; like every crossover of its kind, it turns the phase a little.
 - Each has a few presets on its card's **Presets** (`Tight drums`, `Punchy drums`, `Bright voice`, `Gentle glue` …).
 
 **`mixer` and `master`** (`std/mix`): `mixer` adds tracks together. Each channel has a level, `db` (0 when left out), and can have a `pan`, `sends` to buses and a `to` (a group bus instead of the master): see [Buses, sends and groups](https://github.com/BreadBowlAI/music2/blob/main/docs/song-as-program.md#buses-sends-and-groups). `master` has a level too, then a limiter, so the song never clips. A level of −96 dB or lower is silence.
