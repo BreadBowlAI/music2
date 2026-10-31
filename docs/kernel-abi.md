@@ -140,14 +140,16 @@ A kernel's input of kind `events<note>` in its manifest (ABI-8). Built in track 
 | Part | Rule |
 |---|---|
 | Wiring | connected straight to a notes lane at a module's top level, never inside a `poly` voice (a voice's kernels get their note from its note fields). It must be connected |
+| Calls | whole blocks: `from` 0, `to` 128. So an event's frame is also its index in the call's other inputs |
 | Table | one entry: the address of the header |
-| Header (16 bytes) | `count` u32 at 0: events this block; `cap` u32 at 4: 1024; `events` address at 8: where they start (just after the header); 4 bytes kept at 12 |
+| Header (16 bytes) | `count` u32 at 0: events this block; `cap` u32 at 4: how many it has room for; `events` address at 8: where they start (just after the header); 4 bytes kept at 12 |
 | Each event (24 bytes) | `kind` u32 at 0, `frame` u32 at 4, `id` u32 at 8, then three 4-byte values at 12, 16 and 20 (below) |
 | `frame` | the frame in the block, 0 to `max_block` − 1: never counted from `from`. A call reads the events whose frame is in its `from..to` |
 | Order | by frame; at one frame the controllers (MIDI) first, then Offs, then Ons, so a key can be struck again where it was let go |
 | What comes | the lane's notes, live ones (a keyboard, the window's keys) included, and its controllers from live input: pitch bend, CC 1 (the mod wheel), CC 64 (the sustain pedal), CC 121. Late with the lane when the kernel is late |
-| When | written by the host before each `k_process`, in the state's own block, placed at birth. Read-only: a kernel never writes it (ABI-1), and debug builds check the whole header and its 1024 events after each call |
-| Past `cap` | every event that isn't an On is kept, and the latest Ons are left out. Never silently: an offline render fails, naming the sound; live the sound plays on and music2 says so once a plan (`notes.dropped`). A lane's buffer holds at most 812 a block unless its notes need more than 256 sounding at once or 128 starting in one block |
+| When | written by the host before each `k_process`, in the state's own block, placed at birth. Read-only: a kernel never writes it (ABI-1), and debug builds check the whole header and its events after each call |
+| Room (`cap`) | all its lane's buffer can bring in a block, so no event is ever left out: 812 for most lanes, more for a lane whose notes need more than 256 sounding at once or 128 starting in one block, twice that through a note delay |
+| Shape | its lane, how late it comes and its room are part of the kernel's shape: rewired to another lane, made late or on time by latency compensation, or its lane grown past its room, the kernel is new, and the old one plays out the edit's window hearing no notes. So a kernel never hears one lane's notes start and another's end |
 
 | `kind` | Means | Values at 12, 16, 20 |
 |---|---|---|

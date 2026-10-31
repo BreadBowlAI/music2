@@ -46,9 +46,6 @@ pub enum Code {
     InputLost,
     /// The OS refuses music2 the microphone during a take, which recorded silence (`input.refused`).
     InputRefused,
-    /// A kernel got more note events in one block than its events input holds (ABI-8): the latest
-    /// Ons were left out (`notes.dropped`).
-    NotesDropped,
 }
 
 impl Code {
@@ -56,9 +53,6 @@ impl Code {
     pub fn of(e: &anyhow::Error) -> Code {
         if e.downcast_ref::<OutOfMemory>().is_some() {
             return Code::OutOfMemory;
-        }
-        if e.downcast_ref::<NotesDropped>().is_some() {
-            return Code::NotesDropped;
         }
         match e.downcast_ref::<PluginStopped>() {
             Some(p) => p.code,
@@ -77,7 +71,6 @@ impl Code {
             Code::InputMissing => "input.missing",
             Code::InputLost => "input.lost",
             Code::InputRefused => "input.refused",
-            Code::NotesDropped => "notes.dropped",
         }
     }
 
@@ -122,30 +115,6 @@ impl std::fmt::Display for PluginStopped {
 }
 
 impl std::error::Error for PluginStopped {}
-
-/// A kernel got more note events in one block than its events input holds (ABI-8): why an offline
-/// render fails (`notes.dropped`). Live the kernel plays on with what fits, and says it once.
-#[derive(Debug)]
-pub struct NotesDropped {
-    /// The node's name.
-    pub name: String,
-    /// Its input's name.
-    pub input: String,
-    /// The events that came in the block, and how many were left out.
-    pub came: u32,
-    pub dropped: u32,
-}
-
-impl std::fmt::Display for NotesDropped {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (name, input, came, dropped) = (&self.name, &self.input, self.came, self.dropped);
-        let cap = crate::NOTES_CAP;
-        let notes = if dropped == 1 { "note was" } else { "notes were" };
-        write!(f, "{name} got {came} note events in one block, more than the {cap} its input `{input}` holds: {dropped} {notes} left out")
-    }
-}
-
-impl std::error::Error for NotesDropped {}
 
 /// What stopped an offline render (RENDER-1): a fault that changed its sound, as numbers, and the
 /// error that said so, when one did (a node's). Its words are the error's, or the code's; the

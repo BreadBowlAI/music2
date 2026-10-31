@@ -197,9 +197,7 @@ impl Namer {
             }
             _ => self.nodes_problem(code, parts)?,
         };
-        // A sound that left notes out plays on (ABI-8): a warning.
-        let said = if code == Code::NotesDropped { Diagnostic::warning } else { Diagnostic::error };
-        Some(Diagnostic { module, ..said(code.diag(), message) })
+        Some(Diagnostic { module, ..Diagnostic::error(code.diag(), message) })
     }
 
     /// [`Self::problem`] for a fault of nodes: a sound that stopped, plugins that failed.
@@ -226,12 +224,6 @@ impl Namer {
                 "{} stopped working, so music2 made it silent. {on} music2 starts it again from its saved settings. If it stops again \
                  soon after, it stays silent until you open the song again.",
                 self.plugin_named(first)
-            ),
-            Code::NotesDropped => format!(
-                "{} got more notes at once than it can take ({} events in {} samples), so the latest were left out. It plays on.",
-                self.sound_named(first),
-                m2_runtime::NOTES_CAP,
-                m2_runtime::BLOCK
             ),
             Code::PluginCrashed | Code::PluginHung => {
                 let names: Vec<String> = nodes.iter().map(|&n| self.plugin_named(n)).collect();
@@ -287,11 +279,6 @@ impl Namer {
             },
             (Code::TooLong, _) => format!("{part} is too long to hold whole ({TOO_LONG}), {not}"),
             (Code::Stopped, _) => format!("{part} stopped working, {not}{detail}"),
-            (Code::NotesDropped, _) => format!(
-                "{part} got more notes at once than it can take ({} events in {} samples), {not}{detail}",
-                m2_runtime::NOTES_CAP,
-                m2_runtime::BLOCK
-            ),
             // No offline render reads the sound input.
             (Code::InputMissing | Code::InputLost | Code::InputRefused, _) => format!("The sound input stopped, {not}"),
         }
