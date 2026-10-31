@@ -1166,7 +1166,8 @@ change that code first",
         Some("edit") => text::edit(&args)?,
         Some("write") => text::write(&args)?,
         Some("undo") => {
-            // Undo lives in the open app (AGENT-4): history is in its memory.
+            // Undo lives in the open app (AGENT-4): the one writer of the song's history, kept with
+            // the song (WRITE-23); with it closed, there is nothing to take back from here.
             let dir = PathBuf::from(arg(1)?);
             let Some(holder) = app::holder(&dir) else {
                 bail!("nothing to undo: undo lives in the open app, and music2 doesn't have this song open");

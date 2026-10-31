@@ -23,3 +23,15 @@ fn a_change_m2_made_while_the_app_was_closed_is_undone_in_the_app() {
     assert!(o.status.success(), "{}", said(&o));
     assert_eq!(a.read("data/arrangement.json"), before, "undone in the app, byte for byte");
 }
+
+// WRITE-23 (review U6): what `m2` tells agents says so: a write with the app closed is an undo step
+// of the song's history, never "undo isn't kept".
+#[test]
+fn m2s_notes_say_a_write_with_the_app_closed_is_kept_for_undo() {
+    let home = std::env::temp_dir().join(format!("m2-undo-notes-{}", std::process::id()));
+    let o = m2_in(&home, &["docs", "commands"], &[]);
+    let notes = String::from_utf8_lossy(&o.stdout).replace('\n', " ");
+    assert!(o.status.success(), "{}", said(&o));
+    assert!(!notes.contains("undo isn't kept"), "the notes still say undo isn't kept");
+    assert!(notes.contains("an undo step of the song's history"), "{notes}");
+}

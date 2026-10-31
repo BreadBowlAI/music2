@@ -20,7 +20,7 @@ use m2_script::Catalog;
 use m2_script::sites::Site;
 use m2_song::{Project, Sha, Snapshot, TempoMap, Version};
 
-use crate::history::Bound;
+use crate::history::{Bound, Move, Moving};
 use crate::lock::{Access, ReadOnly};
 use crate::texts::Texts;
 use crate::tx::journal::Journal;
@@ -248,8 +248,13 @@ pub struct Session {
     pub(crate) last_change: Option<Change>,
     /// How much undo keeps (WRITE-26).
     pub(crate) bound: crate::history::Bound,
-    /// Why undo and redo go back no further than their oldest steps (WRITE-24).
+    /// Why undo and redo go back no further than their oldest steps, as this session found them
+    /// when it read the history back (WRITE-24).
     pub(crate) ends: (Option<crate::history::End>, Option<crate::history::End>),
+    /// The step an undo, a redo or a take-back moves while its change is written (WRITE-25).
+    pub(crate) moving: Option<crate::history::Moving>,
+    /// A name given since the history was last written: written with the next change, or at close.
+    pub(crate) unwritten: bool,
     /// The history's records in `.music2/undo/` (WRITE-23).
     pub(crate) records: crate::history::Records,
 }
@@ -432,8 +437,10 @@ impl Session {
             by: Source::Page,
             why: None,
             last_change: None,
-            bound: crate::history::BOUND,
+            bound: crate::history::bound(),
             ends: (None, None),
+            moving: None,
+            unwritten: false,
             records: Default::default(),
         };
         // The way back, as the last writer left it (WRITE-23).
@@ -609,6 +616,10 @@ impl Session {
     /// (the app opening it again) can take it.
     pub fn unlock(&mut self) {
         if self.access.writer() {
+            // A name given since the last write goes with the history (WRITE-23).
+            if self.unwritten {
+                self.keep_history();
+            }
             // Nothing is taken back from now on (AGENT-3): the before-images kept are those undo,
             // which outlives the session (WRITE-26), and the journals still name.
             self.last_change = None;
@@ -686,24 +697,30 @@ impl Session {
 
     /// A new change's undo step: remembered, ending any redo. It is named by the revision it made
     /// (the accepted one now), and gets the next id (AGENT-2). Its id.
+    /// Its history was written ahead of the change that made it (WRITE-25), or is written after it
+    /// by the caller (an outside step's).
     pub(crate) fn record_tx(&mut self, mut step: TxStep) -> u64 {
         step.made = self.accepted.number;
+        self.stamp(&mut step);
         self.steps += 1;
-        step.id = self.steps;
-        step.images = crate::history::images(&self.dir, &step).unwrap_or(0);
-        // Not the watcher's: whoever the app says the request is by (AGENT-10), named by its words.
+        step.images = crate::history::images(&self.dir, &step).unwrap_or_default();
+        let cleared = std::mem::take(&mut self.redo);
+        let pushed = self.push_history(step);
+        self.ends.1 = None;
+        self.last_change = Some(Change::Commit { cleared, pushed });
+        self.steps
+    }
+
+    /// The id the next step gets, and who it is by: whoever the app says the request is by
+    /// (AGENT-10), named by its words, when it isn't the watcher's.
+    pub(crate) fn stamp(&self, step: &mut TxStep) {
+        step.id = self.steps + 1;
         if step.source == Source::Page {
             step.source = self.by.clone();
             if step.name.is_none() {
                 step.name = self.why.clone().map(|w| (w, false));
             }
         }
-        let pushed = self.push_history(step);
-        let cleared = std::mem::take(&mut self.redo);
-        self.ends.1 = None;
-        self.last_change = Some(Change::Commit { cleared, pushed });
-        self.keep_history();
-        self.steps
     }
 
     /// Who the steps recorded from now on are by, and what they are called when `why` is given
@@ -720,7 +737,7 @@ impl Session {
         let done = match self.last_change.take() {
             None => return Err(StepError::Nothing("nothing to take back")),
             Some(Change::Commit { cleared, mut pushed }) => {
-                let done = self.step(false)?;
+                let done = self.step_as(Move::Retract)?;
                 // The step its undo pushed goes, the redo the commit ended comes back, and so do the
                 // oldest steps it pushed out of a full history.
                 self.redo.pop();
@@ -767,7 +784,8 @@ impl Session {
         match self.history.iter_mut().chain(self.redo.iter_mut()).rev().find(|t| t.made == made) {
             Some(t) => {
                 t.name = Some((name.to_string(), structural));
-                self.keep_history();
+                // A name guards nothing: it goes with the next write (WRITE-23).
+                self.unwritten = true;
                 true
             }
             None => false,
@@ -789,23 +807,37 @@ impl Session {
     }
 
     /// Push `step` on undo's history, forgetting the oldest steps past what it keeps (WRITE-26):
-    /// those, oldest first. The newest is always kept.
+    /// those, oldest first.
     fn push_history(&mut self, step: TxStep) -> Vec<TxStep> {
         self.history.push(step);
+        self.bound_stacks()
+    }
+
+    /// Keep both stacks within the bound (WRITE-26): their steps, the text and data their inverses
+    /// hold, and the before-images they name, each image once. Past it, undo's oldest steps go
+    /// first, then redo's farthest, never either's top. Those undo lost, oldest first.
+    pub(crate) fn bound_stacks(&mut self) -> Vec<TxStep> {
         let Bound { steps, text, images } = self.bound;
-        let mut kept: usize = self.history.iter().map(TxStep::retained).sum();
-        let mut held: u64 = self.history.iter().map(|t| t.images).sum();
-        let mut out = 0;
-        while self.history.len() - out > 1 && (self.history.len() - out > steps || kept > text || held > images) {
-            kept -= self.history[out].retained();
-            held -= self.history[out].images;
-            out += 1;
+        let over = |h: &[TxStep], r: &[TxStep]| {
+            let kept: usize = h.iter().chain(r).map(TxStep::retained).sum();
+            let held: BTreeMap<Sha, u64> = h.iter().chain(r).flat_map(|t| t.images.iter().copied()).collect();
+            h.len() + r.len() > steps || kept > text || held.values().sum::<u64>() > images
+        };
+        let mut out = vec![];
+        while over(&self.history, &self.redo) {
+            if self.history.len() > 1 {
+                out.push(self.history.remove(0));
+            } else if self.redo.len() > 1 {
+                self.redo.remove(0);
+            } else {
+                break;
+            }
         }
-        if out > 0 {
+        if !out.is_empty() {
             // Undo now ends at the bound, before whatever ended it.
             self.ends.0 = None;
         }
-        self.history.drain(..out).collect()
+        out
     }
 
     /// Undo the newest change made in this session: commit its stored inverse (WRITE-21), which
@@ -875,6 +907,14 @@ impl Session {
 
     /// Commit the inverse on top of one stack; its own inverse goes on the other.
     fn step(&mut self, redo: bool) -> Result<Stepped, StepError> {
+        self.step_as(if redo { Move::Redo } else { Move::Undo })
+    }
+
+    /// [`Session::step`], as `of` moves the stacks: the history is written ahead of its files as
+    /// that move (WRITE-25). A take-back moves them as an undo does here; [`Session::retract`] then
+    /// puts them as they were.
+    fn step_as(&mut self, of: Move) -> Result<Stepped, StepError> {
+        let redo = of == Move::Redo;
         // Undo lives in the app that holds the lock: `m2 undo` asks it there (AGENT-1, AGENT-4).
         if self.forward.is_some() {
             return Err(StepError::ReadOnly(
@@ -894,13 +934,16 @@ impl Session {
         } else {
             None
         };
+        let (raw, id) = (step.raw, step.id);
+        self.moving = Some(Moving { of, from: Some(step) });
         let result = match refused {
             Some(e) => Err(e),
-            None => self.commit_tx(&tx, step.raw).map_err(StepError::Refused),
+            None => self.commit_tx(&tx, raw).map_err(StepError::Refused),
         };
+        let step = self.moving.take().and_then(|m| m.from).expect("the step moved");
         match result {
             Ok((done, inverse)) => {
-                if self.refused == step.id {
+                if self.refused == id {
                     self.refused = 0;
                 }
                 if let Some(mut inverse) = inverse {
@@ -908,11 +951,14 @@ impl Session {
                     // name (AGENT-2).
                     (inverse.made, inverse.name) = (done.number, step.name.clone());
                     (inverse.id, inverse.source) = (step.id, step.source.clone());
-                    inverse.images = crate::history::images(&self.dir, &inverse).unwrap_or(0);
+                    inverse.images = crate::history::images(&self.dir, &inverse).unwrap_or_default();
                     if redo { &mut self.history } else { &mut self.redo }.push(inverse);
+                    self.bound_stacks();
+                } else {
+                    // Nothing to write, so nothing was written ahead: the step went, said now.
+                    self.keep_history();
                 }
                 self.last_change = Some(if redo { Change::Redo } else { Change::Undo });
-                self.keep_history();
                 let (before, after) = tx.label.clone();
                 Ok(Stepped { number: done.number, file: step.file.clone(), before, after, committed: done })
             }
@@ -921,6 +967,10 @@ impl Session {
                     self.refused = step.id;
                 }
                 if redo { &mut self.redo } else { &mut self.history }.push(step);
+                // Written ahead, it never landed: the history as it is again.
+                if matches!(e, StepError::Refused(_)) {
+                    self.keep_history();
+                }
                 Err(e)
             }
         }
