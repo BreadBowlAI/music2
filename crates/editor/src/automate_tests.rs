@@ -288,3 +288,115 @@ fn a_lane_read_by_name_is_taken_out() {
     assert_eq!(f.read("tracks/bass.ts"), bass.replace("lane.mask(\"drop\")", "1"));
     assert!(!f.0.join("data/bass/drop.json").exists());
 }
+
+/// A project whose track `lead` plays `tone`, a sound of the project's own with a choice and a
+/// switch, called as `call`.
+fn with_choice(call: &str) -> Fixture {
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write(
+        "lib/tone.ts",
+        "import { component, control, port } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
+         export const tone = component(\n  { id: \"tone\", controls: { shape: control.choice([\"saw\", \"square\", \"sine\"], \"saw\"), sub: control.bool(false) }, output: port.audio() },\n  () => osc.saw(110),\n);\n",
+    );
+    let song = format!(
+        "import {{ song, track }} from \"@m2/core\";\nimport {{ tone }} from \"./lib/tone\";\n\
+         const lead = track(\"lead\", () => {call});\nexport default song(() => lead.out);\n"
+    );
+    f.write("song.ts", song);
+    f
+}
+
+// HOME-2, CARD-14, CARD-15: Automate on a choice writes a lane of names, its fallback the name as
+// written; on a switch left out of its call, its default as true or false. Each lane's file is
+// a lane of names, empty; the IR's lane has the choice's unit and its place. Undo puts it back, and
+// Remove automation writes the fallback back as it was.
+#[test]
+fn automate_writes_a_lane_of_names() {
+    let f = with_choice("tone({ shape: \"square\" })");
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let song = f.read("song.ts");
+    let shape = s.controls().into_iter().find(|c| c.literal == "\"square\"").expect("the choice, written by its name");
+    assert_eq!((shape.value, shape.unit.map(|u| u.to_string())), (1.0, Some("choice<saw|square|sine>".into())));
+    // What a menu offers (review K6), and why a number isn't written: m2 and the API can't write a name yet.
+    assert_eq!(shape.options(), Some(vec!["saw", "square", "sine"]));
+    let sub = s.controls().into_iter().find(|c| c.id.ends_with("/@sub")).expect("the switch left out");
+    assert!(sub.is_switch() && sub.options().is_none() && !shape.is_switch());
+    let e = s.set(s.accepted().number, &shape.id, 2.0, None).unwrap_err().to_string();
+    assert!(
+        e.contains("shape is a choice, written by its name (\"saw\", \"square\" or \"sine\"): change it in the code, as shape: \"square\""),
+        "{e}"
+    );
+    let e = s.set(s.accepted().number, &sub.id, 1.0, None).unwrap_err().to_string();
+    assert!(e.contains("sub is a switch, written true or false: change it in the code, as sub: true"), "{e}");
+    let a = s.automate(s.accepted().number, &shape.id).unwrap();
+    assert_eq!((a.lane.to_string(), a.edited.before.as_str()), ("lead/shape".to_string(), "shape \"square\""));
+    let want =
+        song.replace("() => tone({ shape: \"square\" })", "({ lane }) => tone({ shape: lane.control(\"shape\", \"choice\", \"square\") })");
+    assert_eq!(f.read("song.ts"), want);
+    assert_eq!(f.read("data/lead/shape.json"), "{\"unit\": \"choice\", \"clips\": []}\n");
+    let decl = |s: &Session, key: &str| {
+        let m = s.accepted().compiled.ir.modules.iter().find(|m| m.key == "lead").unwrap().clone();
+        m.lanes.iter().find(|l| l.key == key).map(|l| (l.kind.to_string(), l.default))
+    };
+    assert_eq!(decl(&s, "shape"), Some(("control<choice<saw|square|sine>>".to_string(), Some(1.0))));
+
+    // The switch the call leaves out: its default, false, written into the call as the lane.
+    let sub = s.controls().into_iter().find(|c| c.id.ends_with("/@sub")).expect("the switch left out");
+    s.automate(s.accepted().number, &sub.id).unwrap();
+    assert!(
+        f.read("song.ts")
+            .contains("shape: lane.control(\"shape\", \"choice\", \"square\"), sub: lane.control(\"sub\", \"switch\", false) })"),
+        "{}",
+        f.read("song.ts")
+    );
+    assert_eq!(f.read("data/lead/sub.json"), "{\"unit\": \"switch\", \"clips\": []}\n");
+    assert_eq!(decl(&s, "sub"), Some(("control<switch>".to_string(), Some(0.0))));
+
+    // Undo, then take the choice's automation out: at the playhead, the name its lane plays there;
+    // with none, its fallback as written.
+    s.undo().unwrap();
+    assert_eq!(f.read("song.ts"), want);
+    f.write("data/lead/shape.json", "{\"unit\": \"choice\", \"clips\": [{\"start\": 0, \"length\": 4, \"points\": [[0, \"sine\"]]}]}\n");
+    s.refresh();
+    remove(&mut s, "lead", "shape", Some(1.0)).unwrap();
+    assert_eq!(f.read("song.ts"), song.replace("() => tone({ shape: \"square\" })", "({ lane }) => tone({ shape: \"sine\" })"));
+    s.undo().unwrap();
+    remove(&mut s, "lead", "shape", None).unwrap();
+    assert_eq!(f.read("song.ts"), song.replace("() => tone(", "({ lane }) => tone("));
+    assert!(!f.0.join("data/lead/shape.json").exists());
+}
+
+/// `with_choice`, the track's function taking its lanes and running `body`.
+fn with_lanes(body: &str) -> Fixture {
+    let f = with_choice("tone()");
+    let song = f.read("song.ts").replace("track(\"lead\", () => tone())", &format!("track(\"lead\", ({{ lane }}) => {{\n  {body}\n}})"));
+    f.write("song.ts", song);
+    f
+}
+
+// CARD-14 (review K5): disconnecting a lane of names from a choice writes the choice's default as
+// its name, and from a switch as true or false. The lane still feeds another choice, or else
+// disconnecting it would leave a lane with no names: that is refused in words.
+#[test]
+fn disconnect_writes_a_choices_default_as_its_name() {
+    let f = with_lanes(
+        "const pick = lane.control(\"pick\", \"choice\", \"sine\");\n  const on = lane.control(\"on\", \"switch\", true);\n  tone({ shape: pick });\n  return tone({ shape: pick, sub: on });",
+    );
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let song = f.read("song.ts");
+    let inlet = |s: &Session, name: &str| s.inlets().into_iter().rfind(|i| i.name == name).unwrap_or_else(|| panic!("{name} is a cable"));
+    let on = inlet(&s, "on");
+    let e = s.disconnect(on.revision, &on.id).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("on", "false"));
+    let pick = inlet(&s, "pick");
+    let e = s.disconnect(pick.revision, &pick.id).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("pick", "\"saw\""));
+    assert_eq!(f.read("song.ts"), song.replace("tone({ shape: pick, sub: on })", "tone({ shape: \"saw\", sub: false })"));
+    // The lane's last choice: without it, the lane would have no names.
+    let pick = inlet(&s, "pick");
+    let e = s.disconnect(pick.revision, &pick.id).unwrap_err();
+    assert!(e.to_string().contains("pick is a lane of names, and this is the only choice it feeds"), "{e}");
+}

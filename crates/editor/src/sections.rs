@@ -254,6 +254,7 @@ fn holds(kind: &LaneKind) -> &'static str {
         LaneKind::Notes => "notes",
         LaneKind::Audio => "audio",
         LaneKind::Control { .. } => "automation",
+        LaneKind::Choice { .. } | LaneKind::Switch => "names",
     }
 }
 

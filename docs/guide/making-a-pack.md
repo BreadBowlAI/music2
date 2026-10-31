@@ -89,6 +89,64 @@ export const feltSample = component(
 
 A recording is named by the pack and its path in the pack: `"@alice/felt-piano:samples/C4.wav"`. It must be inside the pack, spelled exactly as the file is named.
 
+## Choices, switches, views and groups
+
+A sound's code says what each of its values is. It never says how to draw it: the app picks a knob, a menu or a switch. Two kinds of control are not numbers:
+
+| Declared | A song writes | The sound's code gets | Its kernel reads |
+|---|---|---|---|
+| `control.choice(["saw", "square", "sine"], "saw")` | `shape: "square"` | a `Choice` of those names | the option's place: 0, 1 or 2 |
+| `control.bool(false)` | `sub: true` | a `Switch` | 1 for true, 0 for false |
+
+- A **choice** is one of a few named options. Its last argument is what a song gets when it leaves the choice out. A song always writes the name, never the number: so a new version of your pack may add options, or change their order, and no song changes.
+- A choice has 1 to 64 options, each named once. Each name is 1 to 24 characters on one line, with no space at either end, and none of `|`, `<` and `>`.
+- A **switch** is on or off.
+- Both play at once when they change, with no rebuild, and both can be automated: the lane holds names (`"square"`), or `true` and `false`, and each point holds until the next.
+- The kernel that reads a choice names its options in its port, in `m2pkg.toml`: `"shape: control<choice<saw|square|sine>> = 0"`. Only a choice with exactly those names, in that order, reaches it; a number, or a choice of other names, is an error. A switch's port is `control<switch>`.
+- The code editor checks all this as you type: a name the choice doesn't have, or a choice handed to a number such as a cutoff, is a red line, and the build says the same in words.
+
+**Views** are pictures over the sound's own controls. A view holds no value; dragging it moves the controls it shows.
+
+| View | Draws | Its names must be |
+|---|---|---|
+| `view.envelope("attack", "decay", "sustain", "release")` | the envelope's shape | three times (`control.secs`, `control.ms` or `control.beats`) and a level (`control.frac`, `control.linear` or `control.db`) |
+| `view.filter("cutoff", "q")` | the filter's curve | a frequency (`control.hz`) and a `control.scalar` |
+| `view.keys("regions")` | which recording plays on which keys | a `setting.regions()` or `setting.keymap()` |
+| `view.scope()` | the sound as it plays | (no names) |
+
+**Groups** put the card in order. Each group names some of the sound's values and views, each once. Values in no group go last, under More.
+
+```ts
+import { component, control, kernel, poly, port, view, type Audio, type Events } from "@m2/core";
+
+export const wobble = component(
+  {
+    id: "wobble",
+    label: "Wobble bass",
+    inputs: { notes: port.notes() },
+    controls: {
+      shape: control.choice(["saw", "square", "sine"], "saw"),
+      sub: control.bool(true),
+      cutoff: control.hz(800).range(40, 8000).log(),
+      q: control.scalar(0.7),
+      attack: control.secs(0.005), decay: control.secs(0.2), sustain: control.frac(0.6), release: control.secs(0.3),
+    },
+    output: port.audio(),
+    editor: {
+      category: "Bass",
+      views: { amp: view.envelope("attack", "decay", "sustain", "release"), filter: view.filter("cutoff", "q") },
+      groups: { Sound: ["shape", "sub"], Filter: ["filter", "cutoff", "q"], Amp: ["amp"] },
+    },
+  },
+  // A voice of the pack's own kernel, whose port is "shape: control<choice<saw|square|sine>> = 0".
+  (notes: Events, c): Audio => poly(notes, (n) => kernel("@alice/wobble:voice", { pitch: n.pitch, gate: n.gate, ...c }) as Audio),
+);
+```
+
+A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. The card doesn't draw menus, switches, views or groups yet: a later version of music2 does.
+
+A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
+
 ## An instrument written as data
 
 An instrument that plays recordings needs no code. Write it as a file, `instruments/<id>.toml`: which recording plays for which notes, how hard, and when. music2 makes it into the same kind of instrument as one written in code.
@@ -103,6 +161,7 @@ mode = "gate"              # stop with the note ("oneshot" plays each recording 
 release = 0.4              # seconds to fade out when the note ends
 velocity = 0.7             # how much playing harder makes it louder, 0 to 1
 voices = 16                # how many notes sound at once
+turns = "key"              # round robin: each key takes its own turns ("lane", the default, counts the lane's notes)
 
 [[region]]                 # one recording
 file = "samples/C4-soft.wav"
@@ -130,7 +189,7 @@ volume = -20               # dB
 | `description`, `tags` | one line about it; words for search (kept for later) | none |
 | `engine` | `"std:sampler"` | must be there |
 | `tune`, `level`, `attack`, `release`, `velocity` | the Sampler's knobs where they start: semitones (-24 to 24), dB (-24 to 12), seconds (0 to 2), seconds (0 to 5), 0 to 1 | the Sampler's |
-| `mode`, `voices` | `"oneshot"` or `"gate"`; notes at once, 1 to 128 | `"oneshot"`, 8 |
+| `mode`, `voices`, `turns` | `"oneshot"` or `"gate"`; notes at once, 1 to 128; whose count a round robin follows, `"lane"` or `"key"` ([Sounds](sounds.md)) | `"oneshot"`, 8, `"lane"` |
 
 Each `[[region]]` takes the Sampler's region fields: `file` (a path in the pack), `root`, `keys`, `velocity`, `round_robin` (`[1, 3]`: take 1 of 3, played in turn), `trigger` (`"attack"` or `"release"`), `loop` (`[start, end]` in frames, played while the note is held), `tune` (cents), `volume` (dB), `pan` (-1 to 1) and `offset` (frames). [Sounds](sounds.md) says what each does.
 
@@ -154,7 +213,7 @@ m2 pack import-sfz "Felt Piano.sfz" felt-piano --name @alice/felt-piano --label 
 
 | It writes | From |
 |---|---|
-| `instruments/felt-piano.toml` | every region of the SFZ music2 can play |
+| `instruments/felt-piano.toml` | every region of the SFZ music2 can play, with `turns = "key"`: SFZ counts a round robin's turns by key |
 | `samples/` | the recordings those regions play, copied |
 | `m2pkg.toml` | the name you give; the licence from `--license`, or from the licence file beside the SFZ when it is clear |
 | `README.md` | the credits in the SFZ's first comments, and what the import couldn't keep |
@@ -258,5 +317,6 @@ What the registry asks beyond `m2 pack check`:
 | Size | 10 GB at most |
 | The same files | the `.tar.gz` holds exactly the files the listed hash names. A version, once listed, never changes: to change anything, raise the version and list it again |
 | Plain words | every label, description, tag, author and file name is on one line, with no hidden character |
+| Quick code | its preview renders: a kernel call that runs past its time limit (a kernel that never returns) refuses the version. While a song plays a call gets 100 ms, and 5 s everywhere else; the checks cost your kernels' calls about a fifth more ([the time limit](https://github.com/BreadBowlAI/music2/blob/main/docs/kernel-abi.md#the-time-limit-abi-6-abi-7)) |
 
 A person from BreadBowlAI reads every pull request and merges it; the robot's answer on it is advice. To hide a version of yours from search, add `yanked = "why"` to it. Taking a version down for good (a licence or legal problem) is BreadBowlAI's to do.

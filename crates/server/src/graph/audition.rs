@@ -13,7 +13,8 @@
 //!   keepalive every 2 s while a key is held). The last two let go of all its notes at once.
 //! - **A MIDI keyboard** is a source too (`midi:<name>`, `graph/midi.rs`). It sends no keepalive:
 //!   a key held down says nothing, so the watchdog never lets it go (Q6). It moves its lane's pitch
-//!   wheel and mod wheel too ([`Graph::wheel`]); when it lets go, they go back to rest there.
+//!   wheel, mod wheel and sustain pedal too ([`Graph::wheel`]); when it lets go, they go back to
+//!   rest there.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -50,6 +51,11 @@ pub struct Audition {
     /// keyboard's always do.
     #[serde(default)]
     pub record: bool,
+    /// Its Offs come while a keyboard's pedal is down: the lane hears them (its voices hold the
+    /// sound, RENDER-38), and a take keeps their notes until the pedal lifts (RENDER-36). Never a
+    /// window's.
+    #[serde(skip)]
+    pub pedalled: bool,
 }
 
 /// A key struck: the window's handle for it, its pitch (0 to 127, fractions tune it) and its
@@ -173,7 +179,9 @@ impl Graph {
                 && let Some(slot) = slot_of(p, &m, &l)
             {
                 d.player.live(p.generation, slot, LiveEv::Off { source: id, handle: *h })?;
-                record.off(d, (id, *h));
+                if !a.pedalled {
+                    record.off(d, (id, *h));
+                }
             }
         }
         let Some((m, l)) = lane.filter(|_| !a.on.is_empty()) else { return Ok(None) };
@@ -192,7 +200,8 @@ impl Graph {
     }
 
     /// Move a wheel of lane `(module, lane)` of the open song, from the keyboard `client` (RENDER-14's
-    /// `Midi`, D8): pitch bend, the mod wheel or reset all controllers, as `bytes`. The wheels it
+    /// `Midi`, D8, RENDER-35): pitch bend, the mod wheel, the sustain pedal or reset all controllers,
+    /// as `bytes`. The wheels it
     /// moved on another lane go back to rest there first. A lane nothing plays takes nothing. Never
     /// waits for the session.
     pub(super) fn wheel(&self, client: &str, lane: Option<(String, String)>, bytes: [u8; 3]) {
@@ -225,6 +234,23 @@ impl Graph {
             return;
         }
         rest(open.engine.token, playing(open.engine.plays.as_ref(), device.as_ref()), source);
+    }
+
+    /// The notes of a take that `client` let go under its pedal, `handles`, end where they are heard
+    /// now: the pedal lifted, or the key was struck again (RENDER-36). The lane heard them let go
+    /// already.
+    pub(super) fn take_lets_go(&self, client: &str, handles: &[u32]) {
+        if handles.is_empty() {
+            return;
+        }
+        let device = self.inner.current_device();
+        let Some(d) = device.as_ref() else { return };
+        let mut cp = self.inner.control.lock();
+        let ControlPlane { audition, record, .. } = &mut *cp;
+        let id = audition.source(client).id;
+        for h in handles {
+            record.off(d, (id, *h));
+        }
     }
 
     /// The window `client` closed: every note it holds is let go.

@@ -9,8 +9,11 @@ use super::*;
 mod audition;
 mod cell;
 mod decode;
+mod events;
 mod fpenv;
+mod kinds;
 mod latency;
+mod limits;
 mod live;
 mod overlay;
 mod parts;
@@ -359,7 +362,7 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
 
 /// Kernel `id` for node `n`, with no settings, in a sandbox of its own.
 fn plain_kernel(pk: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64) -> Result<KernelInst> {
-    KernelInst::new(pk, n, &Kernel { id, channels, inputs, values: &[], assets: &[], sample_rate }, 0)
+    KernelInst::new(pk, n, &Kernel { id, channels, inputs, values: &[], assets: &[], sample_rate, notes: &[] }, 0, pk.limits.of(false))
 }
 
 /// A std kernel `id` as a node of its own, its inputs at their defaults, stereo.
@@ -434,6 +437,7 @@ fn two_states_in_one_instance_play_independently() {
                 values: &[],
                 assets: &[],
                 offline: None,
+                notes: &[],
             },
         )
         .unwrap()
@@ -441,12 +445,12 @@ fn two_states_in_one_instance_play_independently() {
     let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
     let controls = [0.01, 0.5, 0.5];
     let alone = |seed: usize| {
-        let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+        let mut sb = sandbox::Sandbox::new(module, pk.limits.of(false)).unwrap();
         let s = born(&mut sb);
         sb.seal().unwrap();
         play_state(&mut sb, &s, 20, sound(seed), controls)
     };
-    let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+    let mut sb = sandbox::Sandbox::new(module, pk.limits.of(false)).unwrap();
     let (a, b) = (born(&mut sb), born(&mut sb));
     sb.seal().unwrap();
     let (mut heard_a, mut heard_b) = (vec![], vec![]);
@@ -643,7 +647,7 @@ fn package(wat: &str) -> PathBuf {
 }
 
 /// A package folder holding one hand-written kernel module, `@test/t:k`, its ports as `ports` declares.
-fn package_with(wat: &str, ports: &str) -> PathBuf {
+pub(crate) fn package_with(wat: &str, ports: &str) -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir =
         std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
@@ -1565,7 +1569,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
     }
     // Each read, in turn: the count `asset_read` returned, and the floats' bits.
     let reads = |held: sandbox::Held, channel: u32| -> Vec<(u32, Vec<u32>)> {
-        let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+        let mut sb = sandbox::Sandbox::new(module, pk.limits.of(false)).unwrap();
         let values = [channel as f64];
         let assets = [Some(held)];
         let spec = sandbox::Spec {
@@ -1577,6 +1581,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
             values: &values,
             assets: &assets,
             offline: None,
+            notes: &[],
         };
         let s = sb.state(prefix, &spec).unwrap();
         sb.seal().unwrap();

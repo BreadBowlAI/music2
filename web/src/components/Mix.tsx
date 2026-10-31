@@ -22,7 +22,7 @@ import {
   type StripSend,
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
-import { OUT } from "../lib/meters";
+import { channelMeter, OUT, useLoudness } from "../lib/meters";
 import { mod } from "../lib/native";
 import { muteInSongCall } from "../lib/overlays";
 import { tones } from "../lib/palette";
@@ -188,7 +188,8 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
   const [menu, setMenu] = useState(false);
   const at = placeOf(db ?? pan) ?? mixer;
   const editable = !locked;
-  const meter = tracks ? <StripMeter channels={strip.modules} name={strip.label} /> : null;
+  // After its fader when it has a channel (TAP-5); else its tracks, where they enter the song.
+  const meter = tracks ? <StripMeter channels={strip.channel ? [channelMeter(strip.channel)] : strip.modules} name={strip.label} fader={!!strip.channel} /> : null;
   return (
     <div
       data-strip={strip.channel ?? one ?? ""}
@@ -289,7 +290,7 @@ function MasterStrip({ knob, lane, session, revision, locked, mixer, buses }: St
       <div ref={name} className="h-5 shrink-0 px-1.5 flex items-center justify-center">
         <span data-testid="strip-name" className="text-sm font-medium text-fg">Master</span>
       </div>
-      <div className="h-[46px] shrink-0" />
+      <MasterLoudness />
       <div className="h-6 shrink-0" />
       <div className="shrink-0" style={{ height: buses.length * SEND_H }} />
       {knob ? (
@@ -305,14 +306,41 @@ function MasterStrip({ knob, lane, session, revision, locked, mixer, buses }: St
   );
 }
 
+/** A number as taste.md writes it: "−14", with a true minus. */
+const minus = (n: number) => (n < 0 ? `−${-n}` : String(n));
+
 /**
- * A strip's meter (taste.md §2.8; Q1 to Q3, X23): two bars, left and right, 3 px each with 1 px
- * between (Master's 5 px), beside the fader, its travel tall. A track's is read where its sound
- * enters the mixer, so its fader doesn't move it; a strip of several tracks shows the louder of
- * them on each side. Above it, a clip dot stays lit until clicked. Master's is the song's output,
- * with no dot: it ends in a limiter. Placed in the fader's column, so a drag on it moves the fader.
+ * Master's loudness (TAP-6), where a track's pan would be: the last 3 seconds in LUFS, and the
+ * loudest point of them between samples (the true peak), while the song plays; "—" until there is
+ * one (it takes 3 seconds) or in silence.
  */
-function StripMeter({ channels, name, master = false }: { channels: string[]; name: string; master?: boolean }) {
+function MasterLoudness() {
+  const { short, peak } = useLoudness();
+  return (
+    <div
+      data-testid="master-loudness"
+      className="h-[46px] shrink-0 px-1.5 flex flex-col items-center justify-center gap-0.5 tabular-nums cursor-default"
+      title="How loud the song is, as ears hear it: the last 3 seconds, in LUFS. Streaming services play songs at about −14 LUFS. Peak is the loudest point between samples: over 0 dB, it can distort when it's played or streamed."
+    >
+      <span data-testid="master-lufs" className="text-sm font-medium text-fg whitespace-nowrap">
+        {short === null ? "— LUFS" : `${minus(short)} LUFS`}
+      </span>
+      <span data-testid="master-peak" className="text-xs text-fg-muted whitespace-nowrap">
+        {peak === null ? "Peak —" : `Peak ${minus(peak)} dB`}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * A strip's meter (taste.md §2.8; Q1 to Q3, X23; TAP-5): two bars, left and right, 3 px each with
+ * 1 px between (Master's 5 px), beside the fader, its travel tall. A strip with a channel reads it
+ * after its fader, so the fader moves it; one without reads its tracks where they enter the song,
+ * the louder of them on each side. Above it, a clip dot stays lit until clicked. Master's is the
+ * song's output, with no dot: it ends in a limiter. Placed in the fader's column, so a drag on it
+ * moves the fader.
+ */
+function StripMeter({ channels, name, master = false, fader = false }: { channels: string[]; name: string; master?: boolean; fader?: boolean }) {
   const width = master ? 11 : 7;
   return (
     <>
@@ -321,7 +349,7 @@ function StripMeter({ channels, name, master = false }: { channels: string[]; na
           channels={channels}
           bars={2}
           label={`${name} level`}
-          title={master ? "The song's level" : `${name}'s level. Its fader doesn't change this meter.`}
+          title={master ? "The song's level" : fader ? `${name}'s level, after its fader.` : `${name}'s level.`}
           className="w-full h-full"
         />
       </div>

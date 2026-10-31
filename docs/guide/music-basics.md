@@ -126,4 +126,5 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Chop** or **slice** | Cut a recording into short pieces and replay them as a new rhythm | Audio clips with an `offset` into the file |
 | **Formant** | The "vowel" character of a voice; shifting it makes a voice sound smaller or bigger without changing the note | Not in music2 |
 | **Latency** | A delay some effects add; the software has to make up for it so everything stays in time | music2 makes up for a plugin's latency, so every track stays in time, live and in exports |
-| **True peak** | The real loudest point of the audio, which streaming services check | Not shown in the app yet: its meters show each track's level, red at 0 dB ([gap #20](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#mixing)). `m2 listen` measures it, for agents |
+| **True peak** | The real loudest point of the audio, which streaming services check | **Peak** on Master's strip in the Mix view, the loudest of the last 3 seconds; `m2 listen` measures it too, for agents |
+| **LUFS** | Loudness as ears hear it; streaming services play songs at about −14 LUFS | On Master's strip in the Mix view (the last 3 seconds), and in the Export dialog (the whole song, after an export) |

@@ -396,3 +396,23 @@ fn a_plugin_hears_the_bend_as_midi() {
     assert_eq!(kinds, [(0, Note::Midi), (0, Note::Midi), (0, Note::On)], "{notes:?}");
     assert_eq!((notes[0].2, notes[1].2), (midi([0xE0, 0x7F, 0x7F]), midi([0xB0, 1, 100])));
 }
+
+// RENDER-37: a plugin gets the pedal as MIDI, in order with its notes, and each note's Off when its
+// key is let go: the voices' holding is a poly's, never the plugin's.
+#[test]
+fn a_plugin_gets_the_pedal_and_its_offs_on_time() {
+    let (mut rig, g, h) = probed(&DataSet::empty());
+    rig.send(wheel(g, 1, [0xB0, 64, 127]));
+    rig.send(on(g, 1, 7, 60.0));
+    rig.run(BLOCK);
+    rig.send(off(g, 1, 7));
+    rig.run(BLOCK);
+    rig.send(wheel(g, 1, [0xB0, 64, 0]));
+    rig.run(BLOCK);
+    let notes = probe::stats(h).unwrap().notes();
+    let kinds: Vec<(i64, Note)> = notes.iter().map(|n| (n.0, n.1)).collect();
+    let midi = |b: [u8; 3]| i32::from_le_bytes([b[0], b[1], b[2], 0]);
+    let at = |block: i64| block * BLOCK as i64;
+    assert_eq!(kinds, [(at(0), Note::Midi), (at(0), Note::On), (at(1), Note::Off), (at(2), Note::Midi)], "{notes:?}");
+    assert_eq!((notes[0].2, notes[3].2), (midi([0xB0, 64, 127]), midi([0xB0, 64, 0])));
+}

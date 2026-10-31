@@ -26,6 +26,7 @@ pub fn set(s: &mut Session, at: u64, id: &str, value: f64, expect: Option<f64>) 
         return Err(EditError::Rejected(format!("{value} is not a number that can be written")));
     }
     let c = resolve(s, at, id)?;
+    c.numbered()?;
     if let Some(e) = expect
         && e != c.value
     {

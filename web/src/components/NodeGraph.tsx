@@ -8,7 +8,6 @@ import {
   ChevronDown,
   Clock,
   Ellipsis,
-  FileAudio,
   Hash,
   LogIn,
   LogOut,
@@ -63,6 +62,7 @@ import { MenuRow, Popover } from "./ui";
 import { undoAction } from "./GraphCanvas";
 import PointMenu, { unautomate } from "./ClipMenu";
 import PresetPopover from "./PresetPopover";
+import { MenuValue, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 const Locked = createContext<string | null>(null);
@@ -86,7 +86,7 @@ function compactMixer(m: ModuleView, mix: MixView): { module: ModuleView; card: 
   if (mixers.length !== 1) return null;
   const node = mixers[0];
   const channels = new Set(mix.strips.flatMap((s) => (s.channel ? [s.channel] : []))).size;
-  const card: ViewNode = { ...node, knobs: [], readonly: [], inlets: [], inputs: [{ id: CHANNELS, label: "Channels", kind: "audio" }] };
+  const card: ViewNode = { ...node, knobs: [], readonly: [], inlets: [], settings: [], inputs: [{ id: CHANNELS, label: "Channels", kind: "audio" }] };
   // Each signal drawn once into the card, whichever channels it feeds.
   const seen = new Set<string>();
   const port_edges = m.port_edges.flatMap((e) => {
@@ -280,8 +280,8 @@ const KNOB_H = 40;
 const VALUE_H = 48;
 
 const inputHeight = (p: InputPort) => (p.knob ? KNOB_H : p.readonly != null ? VALUE_H : ROW_H);
-/** A Sampler's file row, under its knobs: where a WAV or FLAC is dropped. */
-const SAMPLE_H = 36;
+/** The settings a card shows (CARD-7), under its knobs, in its descriptor's order. */
+const settingsOf = (n: ViewNode) => (n.settings ?? []).filter(shown);
 /** An instrument's line under its name: how it plays its notes. */
 const VOICES_H = 24;
 
@@ -319,8 +319,11 @@ function geometry(n: ViewNode) {
     outs.set(o.id, y + ROW_H / 2);
     y += ROW_H;
   });
-  const w = n.inputs.length && n.outputs.length ? NODE_W : SLIM_W;
-  return { w, h: (n.outputs.length + n.inputs.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0)) + (n.sampler ? SAMPLE_H : 0), ins, outs };
+  // Its settings after its ports' rows: they have no port of their own.
+  const settings = settingsOf(n);
+  for (const x of settings) y += settingHeight(x);
+  const w = (n.inputs.length || settings.length) && n.outputs.length ? NODE_W : SLIM_W;
+  return { w, h: n.outputs.length + n.inputs.length + settings.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0), ins, outs };
 }
 
 interface Placed { node: ViewNode; x: number; y: number; w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }
@@ -795,6 +798,10 @@ function NodeCard({
   // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
   const off = !!node.bypassed;
   // An instrument (it takes notes) or an effect of a component has Presets, and so does a plugin (HOST-8).
+  // Its settings (CARD-7); a card with one recording takes a file dropped anywhere on it, as a Sampler's does.
+  const settings = mixing ? [] : settingsOf(node);
+  const recordings = settings.filter((x) => x.kind === "recording" && !x.readonly);
+  const tracks = useContext(Tracks);
   const sound =
     node.kind === "call" &&
     !mixing &&
@@ -806,8 +813,9 @@ function NodeCard({
       data-node={node.label}
       data-node-id={node.id}
       data-bypassed={off || undefined}
-      data-sampler-call={node.sampler ? node.id : undefined}
-      data-sampler-title={node.sampler ? titled : undefined}
+      data-recording-call={recordings.length === 1 ? node.id : undefined}
+      data-recording-setting={recordings.length === 1 ? recordings[0].slot : undefined}
+      data-recording-title={recordings.length === 1 ? titled : undefined}
       title={where ?? undefined}
     >
       <div className={clsx("h-10 shrink-0 pl-3 pr-1.5 flex items-center gap-2 min-w-0", !small && "border-b border-line")}>
@@ -946,7 +954,7 @@ function NodeCard({
           </div>
         </div>
       )}
-      {!small && !mixing && (node.outputs.length > 0 || node.inputs.length > 0) && (
+      {!small && !mixing && (node.outputs.length > 0 || node.inputs.length > 0 || settings.length > 0) && (
         <div data-node-body className={clsx("py-1.5", off && "opacity-50")}>
           {node.inputs.map((i) => (
             <InputRow
@@ -965,9 +973,11 @@ function NodeCard({
           {node.outputs.slice(node.inputs.length).map((o) => (
             <div key={o.id} className="h-7" />
           ))}
+          {settings.map((x) => (
+            <SettingRow key={x.id} x={x} owner={titled} card={titled} call={node.id} session={session} revision={revision} editable={editable} locked={why} tracks={tracks} />
+          ))}
         </div>
       )}
-      {node.sampler && <SampleRow files={node.sampler.files} regions={node.sampler.regions} />}
       {node.outputs.map((o, j) => (
         <OutputPortView
           key={o.id}
@@ -1050,36 +1060,6 @@ function PluginRow({ node, title, session }: { node: string; title: string; sess
           </button>
         </>
       )}
-    </div>
-  );
-}
-
-/**
- * A Sampler's file (track ab), under its knobs: "Drop a WAV or FLAC here" until it has one. The whole
- * card takes a dropped WAV or FLAC (`data-sampler-call`; a FLAC comes in as a WAV, FMT-24), which it
- * then plays.
- */
-function SampleRow({ files, regions }: { files: string[]; regions?: string }) {
-  const said = regions ?? (files.length === 0 ? "Drop a WAV or FLAC here" : files.length === 1 ? files[0] : `${files.length} files: ${files.join(", ")}`);
-  return (
-    <div
-      data-testid="sampler-file"
-      className={clsx(
-        "mx-2 mb-2 h-7 shrink-0 px-2 flex items-center gap-1.5 rounded-sm text-xs min-w-0",
-        files.length ? "bg-chrome text-fg" : "border border-dashed border-line-strong text-fg-muted",
-      )}
-      title={
-        regions !== undefined
-          ? `Plays ${regions}, each recording on its own notes and velocities. They are set in its code.`
-          : files.length > 1
-            ? `Plays ${files.join(", ")}, each on its own range of notes. They are set in its code.`
-            : files.length
-              ? `Plays ${files[0]}. Drop another WAV or FLAC on this card to play it instead.`
-              : "Drop a WAV or FLAC file from your computer on this card to play it"
-      }
-    >
-      <FileAudio size={12} className="shrink-0" />
-      <span className="truncate">{said}</span>
     </div>
   );
 }
@@ -1474,9 +1454,19 @@ function KnobControl({
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   // A control the call leaves out plays its default until its first edit writes it into the call (PKG-3).
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
+  // A plugin's stepped parameter (CARD-6) is a menu of its names or a switch, in this same row: still
+  // a knob to the rest of the app (its glow, its id for the focus, the pointer and cables).
+  const pick = knob.kind === "choice" || knob.kind === "switch";
+  const how = pick
+    ? `Click to ${knob.kind === "switch" ? "turn it on or off" : "choose"} · right-click to automate it`
+    : `Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
   const title = !editable
     ? `${why ?? "It can't be edited right now"}.`
-    : `${shared}Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
+    : `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
+  /** A menu's or a switch's pick: its option's number written into the code, one undo step. */
+  const pickValue = (v: number | string | boolean) =>
+    graphApi.setValue(session, revision, knob.id, v, { name: knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}` }).catch((error) => toast(words(error)));
+  const off = editable ? null : `${why ?? "It can't be edited right now"}.`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
   // The whole row drags it, its label and value too, not only the 28px circle (taste.md §2.2).
@@ -1497,12 +1487,13 @@ function KnobControl({
       data-default={!knob.written || undefined}
       aria-disabled={disabled}
       title={title}
-      {...grip.handlers}
+      data-kind={knob.kind ?? "number"}
+      {...(pick ? {} : grip.handlers)}
       // A double-click anywhere on it types a value (taste.md §2.14), but on its input's port.
-      onDoubleClick={(e) => e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
+      onDoubleClick={(e) => !pick && e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
       className={clsx(
         "group/knob relative h-10 pl-4 pr-4 flex items-center gap-2 min-w-0 transition-colors duration-80",
-        !disabled && "cursor-ns-resize touch-none",
+        !disabled && !pick && "cursor-ns-resize touch-none",
         // While a cable is dragged, the knobs it can land on: washed, and the one under it more.
         "[[data-cabling]_&[data-knob-id]]:bg-accent-wash [[data-cabling]_&[data-knob-id]:hover]:bg-accent-soft",
       )}
@@ -1517,6 +1508,17 @@ function KnobControl({
         <div className="text-xs text-fg-muted truncate">{label}</div>
         {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
       </div>
+      {pick ? (
+        <>
+          {knob.kind === "switch" ? (
+            <SwitchValue value={knob} label={label} off={off} onFlip={pickValue} />
+          ) : (
+            <MenuValue value={knob} label={label} off={off} title={title} onPick={pickValue} />
+          )}
+          <HomeMarker home={knob.home} label={label} />
+        </>
+      ) : (
+        <>
       {/* Its home (HOME-1): a value the code leaves out plays its default, in muted text; written, in full. */}
       {typing ? (
         <span className="relative shrink-0">
@@ -1582,6 +1584,8 @@ function KnobControl({
           onType={type}
         />
       </div>
+        </>
+      )}
       {menu && (
         <KnobMenu
           knob={knob}

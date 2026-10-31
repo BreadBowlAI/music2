@@ -35,7 +35,7 @@ fn mute_and_solo_answer_with_the_overlay_state() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
@@ -172,7 +172,7 @@ fn audition_over_http_and_the_websocket() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-audition-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
@@ -228,7 +228,7 @@ fn a_tools_socket_cant_audition_or_aim_the_midi_keyboard() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-tools-socket-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
@@ -271,7 +271,7 @@ fn mute_in_song_is_refused_read_only() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-ro-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     let song = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\n\
                 const kick = track('kick', () => osc.sine(55));\nexport default song(() => kick.out);\n";
@@ -298,7 +298,7 @@ fn meters_reach_every_window_and_the_status_has_the_load() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-meters-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
@@ -334,7 +334,7 @@ fn clip_gestures_over_http() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-clips-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
@@ -383,7 +383,7 @@ fn section_gestures_over_http() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-sections-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("data/kick")).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
@@ -434,7 +434,7 @@ fn the_rolls_lane_write_takes_clips_as_the_timeline_shows_them() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-lane-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
@@ -468,7 +468,7 @@ fn remove_automation_over_http() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-unautomate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     let song = "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\n\
                 export default song(({ lane }) => osc.sine(lane.control(\"freq\", \"hz\", hz(440))));\n";
@@ -531,5 +531,105 @@ fn follow_tempo_through_the_clips_route() {
     assert!(line().contains(r#""warp": []"#), "{}", line());
     let (status, why) = follow(true, "kick/hits", "my53vvkc");
     assert_eq!(status, 400, "{why:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+impl Ws {
+    /// The `t` of every message until `meters` meters messages came, in order.
+    fn kinds(&mut self, meters: usize) -> Vec<String> {
+        let mut seen = vec![];
+        while seen.iter().filter(|t| *t == "meters").count() < meters {
+            let mut h = [0u8; 2];
+            self.0.read_exact(&mut h).unwrap();
+            let len = match h[1] & 0x7f {
+                126 => {
+                    let mut n = [0u8; 2];
+                    self.0.read_exact(&mut n).unwrap();
+                    u16::from_be_bytes(n) as usize
+                }
+                127 => {
+                    let mut n = [0u8; 8];
+                    self.0.read_exact(&mut n).unwrap();
+                    u64::from_be_bytes(n) as usize
+                }
+                n => n as usize,
+            };
+            let mut body = vec![0u8; len];
+            self.0.read_exact(&mut body).unwrap();
+            if h[0] & 0x0f == 1
+                && let Ok(v) = serde_json::from_slice::<Value>(&body)
+            {
+                seen.push(v["t"].as_str().unwrap_or("").to_string());
+            }
+        }
+        seen
+    }
+}
+
+/// A song of one saw, `lead`, open and playing in a server of its own: the server, and the saw's
+/// box id in the graph view.
+fn playing_a_saw(name: &str) -> (crate::Running, std::path::PathBuf, String) {
+    let dir = std::env::temp_dir().join(format!("m2-routes-8b-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    std::fs::write(
+        dir.join("song.ts"),
+        "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\n\
+         const lead = track('lead', () => osc.saw(110));\nexport default song(() => lead.out);\n",
+    )
+    .unwrap();
+    let running =
+        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
+            .unwrap();
+    running.state.graph.open(&dir).unwrap();
+    running.state.graph.transport("play").unwrap();
+    let state = running.state.graph.state().unwrap();
+    let nodes = state["view"]["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap().clone());
+    let saw = nodes.filter(|n| n["label"] == "osc.saw").map(|n| n["id"].as_str().unwrap().to_string()).next().unwrap();
+    (running, dir, saw)
+}
+
+// TAP-4 (the review's P6): a window's socket always hears the meters; an agent's only when it asks
+// for them (`meters=1`, which `m2 watch --meters` sends). With no listener, nothing runs.
+#[test]
+fn an_agents_socket_hears_meters_only_when_it_asks() {
+    let (running, dir, _) = playing_a_saw("agent-meters");
+    let url = &running.url;
+    let _agent = Ws::connect(url, "token=t00ls");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(running.state.meters.receiver_count(), 0, "an agent's socket that didn't ask doesn't listen");
+    let mut asking = Ws::connect(url, "token=t00ls&meters=1");
+    let m = asking.next("meters");
+    assert!(m["tracks"]["lead"][0].as_f64().unwrap() > 0.5, "{m}");
+    let mut page = Ws::connect(url, "client=w1&token=t0k");
+    assert_eq!(page.next("meters")["t"], "meters", "a window always listens");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// TAP-8 (the review's P7 and P9): a scope's frames go only to the socket of the window that asked
+// for it. An agent's client is its own: naming a window's, it neither stops nor keeps that window's
+// scope; and its own scope's last frames come in each answer to its ask.
+#[test]
+fn a_scopes_frames_go_only_to_the_window_that_asked() {
+    let (running, dir, saw) = playing_a_saw("scope-socket");
+    let url = &running.url;
+    let session = running.state.graph.session().unwrap();
+    let (mut w1, mut w2) = (Ws::connect(url, "client=w1&token=t0k"), Ws::connect(url, "client=w2&token=t0k"));
+    let ask = |client: &str, on: bool| json!({"session": session, "client": client, "module": "lead", "node": saw, "on": on});
+    assert_eq!(post(url, "/api/graph/scope", Some("t0k"), &ask("w1", true)).0, 200);
+    let s = w1.next("scopes");
+    assert_eq!(s["scopes"][0]["frames"][0].as_array().map(Vec::len), Some(1024), "{}", s["scopes"][0]["node"]);
+    assert!(!w2.kinds(10).iter().any(|t| t == "scopes"), "nothing for a window that didn't ask");
+    // An agent naming w1 asks for a scope of its own, and its stop ends only that one.
+    let (status, mine) = post(url, "/api/graph/scope", Some("t00ls"), &ask("w1", true));
+    assert_eq!((status, &mine["scope"]["channels"]), (200, &json!(1)), "{mine}");
+    std::thread::sleep(Duration::from_millis(200));
+    let (_, again) = post(url, "/api/graph/scope", Some("t00ls"), &ask("w1", true));
+    assert_eq!(again["scope"]["frames"][0].as_array().map(Vec::len), Some(1024), "an agent sees its frames in the answer");
+    assert_eq!(post(url, "/api/graph/scope", Some("t00ls"), &ask("w1", false)), (200, json!({})));
+    w1.kinds(3);
+    assert!(w1.kinds(10).iter().any(|t| t == "scopes"), "the window's scope goes on");
     let _ = std::fs::remove_dir_all(&dir);
 }

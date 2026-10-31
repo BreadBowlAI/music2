@@ -1,0 +1,26 @@
+[package]
+name = "@test/kinds"
+version = "0.1.0"
+license = "CC0-1.0"
+description = "A pack for music2's tests: a choice and a switch, and kernels that play what they read"
+authors = ["music2"]
+tags = ["test"]
+wasm = "k.wasm"
+
+[dependencies]
+"@m2/core" = "1"
+std = "0.5"
+
+# Each kernel's one output is its one input, as sound. Their module is made from text by
+# `the_kinds_pack_fixture_holds_this_module` (core/runtime/src/tests/kinds.rs).
+[[kernel]]
+name = "k"
+description = "Plays the place of the choice it reads"
+inputs = ["shape: control<choice<saw|square|sine>> = 0"]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "s"
+description = "Plays the switch it reads, 1 or 0"
+inputs = ["on: control<switch> = 0"]
+outputs = ["out: audio<1>"]

@@ -131,6 +131,13 @@ fn lane(s: &Session, lane: &str) -> Vec<String> {
                 format!("{} {}+{} [{}]", id(&c.id), n(c.start), n(c.length), join(points))
             })
             .collect(),
+        LaneData::Steps { clips, .. } => clips
+            .iter()
+            .map(|c| {
+                let points = c.points.iter().map(|(b, v)| format!("{}:{}", n(*b), serde_json::to_string(v).unwrap())).collect();
+                format!("{} {}+{} [{}]", id(&c.id), n(c.start), n(c.length), join(points))
+            })
+            .collect(),
         LaneData::Audio(cs) => cs
             .iter()
             .map(|c| {
