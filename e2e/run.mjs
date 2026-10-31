@@ -169,6 +169,7 @@ export const SUITES = [
   ["s8-songbar", "fix", { expect: 84, s: 13 }],
   ["nx-click", "fix", { expect: 20, s: 8, sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["s8-mix", "fix", { expect: 80, s: 23 }],
+  ["taps", "fix", { expect: 23, s: 20 }],
   ["pl-mix", "fix", { expect: 47, s: 14, tier: "nightly", why: "speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18)" }],
   ["bus-mix", "fix", { expect: 38, s: 8 }],
   ["pl-sounds", "fix", { expect: 46, s: 4 }],

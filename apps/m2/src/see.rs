@@ -82,7 +82,9 @@ pub fn watch(args: &[String]) -> Result<()> {
     let meters = crate::words::on(args, "--meters");
     let app = app::looking(dir.as_ref())?;
     let session = app.session();
-    let mut socket = m2_server::socket::Socket::open(app.url(), &format!("/api/ws?token={}", app.key()))
+    // The meters only when asked: the app runs them only for a socket that listens (TAP-4).
+    let listen = if meters { "&meters=1" } else { "" };
+    let mut socket = m2_server::socket::Socket::open(app.url(), &format!("/api/ws?token={}{listen}", app.key()))
         .map_err(|e| anyhow!("couldn't follow the app: {e}"))?;
     // The socket is read on a thread of its own, always, so the app never waits for this one; what
     // waits for whoever reads this one is kept up to WAITING, and the rest counted.

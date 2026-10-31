@@ -47,6 +47,7 @@ pub mod rekey;
 pub mod rename;
 pub mod render;
 pub mod sampler;
+pub mod scope;
 pub mod settings;
 pub mod sfz;
 pub mod sites;

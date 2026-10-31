@@ -134,7 +134,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 20 | **Meters after the fader, and loudness in the app.** The app's meters read each track and bus before its fader, so a fader move doesn't move them: after-fader taps need the engine (`core/runtime`). The Export dialog says nothing of loudness. (`m2 listen` already measures each track after its fader, and the mix's loudness and true peak, from the command line.) | You can't see what a fader does to a track's level, or how loud a song is. | Partly (a meter on each track) | medium |
+| 20 | **The rest of meters and loudness.** A track that shares a mixer channel with another track, or goes into two, has no fader of its own: its header shows its own sound, before any fader (its strip reads after the channel's). The song's whole loudness is known only once it is exported: the Export dialog says it then, not before. A card can't show its sound's scope yet (`view.scope()`, [Typed sounds](designs/cards/design.md) §3.2, track `views`): the stream it will draw is built. Built since track `taps` ([TAP-1 to TAP-9](architecture.md#taps)): meters after the fader, on each strip and each track with a channel of its own; the song's loudness over the last 3 s and its true peak on Master's strip while the Mix view shows, measured as `m2 listen` measures them; the export's loudness in the Export dialog; and a scope's stream, `POST /api/graph/scope`. | A beginner mixes by the meters, and a shared channel's fader can't say what one of its tracks does. | Partly (a meter on each track) | small |
 
 - **Soloing a bus plays its tracks' dry sound too**: a wet-only solo needs a cell per path.
 - **A send has no pan of its own**, and can't be made mono.
@@ -357,7 +357,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 ## The old app's parts not back yet
 
-Every row marked **No** was missing from the old app too. Of the rows marked **Partly**, the old app also lacked: copying notes between clips (#15), chord stamps and an arpeggiator (#16), and loudness and meters after the fader (#20). Undo that survives closing (#29), which it lacked too, is built since `trust` ([Saving and undo](guide/saving.md)).
+Every row marked **No** was missing from the old app too. Of the rows marked **Partly**, the old app also lacked: copying notes between clips (#15), chord stamps and an arpeggiator (#16), and loudness and meters after the fader (#20, built since). Undo that survives closing (#29), which it lacked too, is built since `trust` ([Saving and undo](guide/saving.md)).
 
 | From the old app | Still missing |
 |---|---|

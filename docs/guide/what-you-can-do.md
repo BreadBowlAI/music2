@@ -18,7 +18,7 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Draw and edit notes | **Notes** (⌥2), the piano roll |
 | Edit clips: move, copy, trim, split, join, repeat | the timeline |
 | Turn knobs, add effects, connect cables | **Device** (⌥1) |
-| Mix: faders, pans, mute, solo, and meters | **Mix** (⌥3), and each track's header |
+| Mix: faders, pans, mute, solo, meters, and how loud the song is (LUFS) | **Mix** (⌥3), and each track's header |
 | Share a reverb or a delay, or group tracks under one fader | **Mix** (⌥3) ▸ **Add bus** |
 | Save a sound's knobs as a preset, or load one | **Presets** on an instrument's, an effect's or a plugin's card in **Device**. Yours are in `~/Music/music2/Presets`; a plugin's own are listed too |
 | Draw automation (knob moves over time) | right-click a knob ▸ **Automate**, then draw on the timeline |

@@ -22,6 +22,7 @@
   - The button shows how far along it is, and you can keep playing and editing meanwhile. It exports the song as it was when you clicked. If you close the song or open another, the export carries on, and a message in the corner shows how far along it is.
   - A song with plugins pauses while it exports, as a tape would: the export borrows the plugins that play, so they don't need a second copy. The top bar says **Paused for export**. Afterwards play goes on where it paused, and a note held across the pause starts again. Edits made meanwhile are heard once the export is done.
   - If any part breaks while it exports (a sound, a plugin that crashes or stays stuck for 30 seconds, a file that can't be read, a stretch), the export fails and names the part and its track. No file is written with a part silent. Playback goes on.
+  - When it's done, the export knows the song's loudness: the whole file, in LUFS (loudness as ears hear it; streaming services play songs at about −14 LUFS). The Export dialog says it next time you open it, until you change the song.
   - Quitting while a song is being exported asks first: quitting stops the export, and no file is saved.
   - The file is written under a hidden name and renamed when it's complete. A hidden file left by an export that was cut off (the app was killed) is removed by the next export into that folder.
   - When it's done, a message gives the file's name and length, with **Show in Finder** (**Show in Folder** on Linux; in a browser, it says which folder).

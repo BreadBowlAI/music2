@@ -9,12 +9,16 @@
 //   silence it ended in; then none. When the socket closes, every meter reads the floor.
 // - The scale runs from −60 to +6 dBFS. The fill is `fg-muted` below −6, `warn` from −6 to 0 and
 //   `danger` at 0 or above.
-// - A header's meter is one bar, the louder side; a Mix strip's is two, left and right, and a strip
-//   of several tracks ("Kick + Snare") shows the louder of them on each side.
+// - A header's meter is one bar, the louder side; a Mix strip's is two, left and right. A strip
+//   with a channel reads the channel, after its fader (TAP-5); one without, its tracks, the
+//   louder of them on each side.
 // - A track whose peak reaches 0 dBFS has clipped: its strip's dot stays lit until clicked.
+// - The output's loudness (TAP-6), for Master's strip, is kept here too, and told only when the
+//   words it is shown in change.
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { CLOSED, on } from "./events";
+import { graphApi } from "./graph";
 import type { MetersIn } from "./graph8b";
 import { useStore } from "./store";
 
@@ -30,6 +34,8 @@ const ARIA_MS = 100;
 export const OUT = "song";
 /** The sound input's meter, while a take records audio (io): no track's key has an `@`. */
 export const INPUT = "@input";
+/** A mixer channel's meter, after its fader (TAP-5): no track's key has a `:`. */
+export const channelMeter = (channel: string) => `channel:${channel}`;
 /** The space between a two-bar meter's bars, in CSS pixels. */
 const GAP = 1;
 
@@ -102,8 +108,10 @@ function hear(key: string, peaks: number[], now: number) {
 function onMeters(msg: MetersIn) {
   const now = performance.now();
   for (const [key, peaks] of Object.entries(msg.tracks ?? {})) hear(key, peaks, now);
+  for (const [key, peaks] of Object.entries(msg.channels ?? {})) hear(channelMeter(key), peaks, now);
   if (msg.out) hear(OUT, msg.out, now);
   if (msg.input) hear(INPUT, msg.input, now);
+  hearLoudness(msg.loudness);
 }
 
 /** Every meter to the floor: what it was told is old news. */
@@ -114,6 +122,54 @@ function floor() {
       s.peak = -Infinity;
     }
   }
+  hearLoudness(undefined);
+}
+
+// ---------------------------------------------------------------- loudness (TAP-6)
+
+/** The output's loudness as Master's strip says it: whole LUFS, the true peak to a tenth of a dB; null for none. */
+export interface Loudness {
+  short: number | null;
+  peak: number | null;
+}
+
+let loudness: Loudness = { short: null, peak: null };
+const loudnessTold = new Set<() => void>();
+
+function hearLoudness(l: MetersIn["loudness"]) {
+  const short = l?.short == null ? null : Math.round(l.short);
+  const peak = l?.true_peak == null ? null : Math.round(l.true_peak * 10) / 10;
+  if (short === loudness.short && peak === loudness.peak) return;
+  loudness = { short, peak };
+  loudnessTold.forEach((f) => f());
+}
+
+/** How often a view that shows the loudness asks for it again: the server keeps an ask 10 s. */
+const ASK_MS = 4000;
+
+/**
+ * The output's loudness, asked for while the calling view shows (TAP-6: the server measures it only
+ * then), and stopped when it goes; re-rendered only when its words change.
+ */
+export function useLoudness(): Loudness {
+  const session = useStore((s) => s.graph?.session);
+  useEffect(() => {
+    if (session === undefined) return;
+    const ask = (on: boolean) => void graphApi.loudness(session, on).catch(() => {});
+    ask(true);
+    const again = setInterval(() => ask(true), ASK_MS);
+    return () => {
+      clearInterval(again);
+      ask(false);
+    };
+  }, [session]);
+  return useSyncExternalStore(
+    (f) => {
+      loudnessTold.add(f);
+      return () => void loudnessTold.delete(f);
+    },
+    () => loudness,
+  );
 }
 
 /** The colours, read once from the design's tokens. */
@@ -246,6 +302,7 @@ export function mount(keys: string[], canvas: HTMLCanvasElement, bars: 1 | 2 = 1
     stopListening?.();
     stopListening = null;
     levels.clear();
+    hearLoudness(undefined);
     cancelAnimationFrame(frame);
     frame = 0;
   };

@@ -88,7 +88,7 @@ pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, Plu
 pub use plugins::PluginInstance;
 pub use sandbox::{OutOfMemory, TooManySounds};
 pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
-pub use taps::{Copies, Copying, Peaks, TapAt, TapSlots};
+pub use taps::{Copies, Copying, Peaks, RING, RINGS, TapAt, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
@@ -3103,12 +3103,10 @@ impl Renderer {
         let sound: Box<[(u8, u32)]> = flat.nodes.iter().zip(&arrive).map(|(n, &a)| (audio(n.outputs.first()), a)).collect();
         let copy_sites: Box<[(usize, u8, u32)]> =
             flat.overlays.iter().enumerate().map(|(k, s)| (base + k, placed.nodes[k].channels, arrive[s.src.node])).collect();
-        // A live plan's meters (8b.8): its output, and each celled overlay by its track.
-        let taps = (mode == m2_plugins::RenderMode::Realtime).then(|| {
-            let sites: Vec<(usize, &str, u8)> =
-                flat.overlays.iter().enumerate().map(|(k, s)| (base + k, s.module.as_str(), placed.nodes[k].channels)).collect();
-            Taps::new(&sites)
-        });
+        // A live plan's taps (TAP-1): its rings, and what may be a point. Its meters are the
+        // server's to lay out ([`Renderer::tap`]).
+        let taps = (mode == m2_plugins::RenderMode::Realtime)
+            .then(|| Taps::new(taps::TapSlots::new(sound.iter().map(|s| s.0).collect(), copy_sites.iter().map(|s| (s.0, s.1)).collect())));
         for (i, e) in graph.exec.iter_mut().enumerate().take(checked.nodes.len()) {
             if let Exec::Plugin(p) = e {
                 p.reports = Some((report.clone(), i));
@@ -3220,6 +3218,20 @@ impl Renderer {
         let mut r = Renderer::new(flat, data, packages, sample_rate)?;
         r.transport = Transport::starting(t0);
         Ok(r)
+    }
+
+    /// Lay out a live plan's meters (TAP-5, TAP-9): each reads the louder of its points, channel by
+    /// channel, its channels its widest point's; [`TapSlots::take`] gives them in this order,
+    /// after the output. Only on a plan prepared for the live engine and not yet read
+    /// ([`Renderer::info`]); replaces any meters it had.
+    pub fn tap(&mut self, meters: &[Vec<TapAt>]) -> Result<()> {
+        let (Some(taps), Some(info)) = (self.plan.taps.as_mut(), Arc::get_mut(&mut self.plan.info)) else {
+            bail!("only a live plan that nothing has read yet takes meters (TAP-2, TAP-9)");
+        };
+        info.taps = None;
+        let laid = taps.lay_out(meters);
+        info.taps = Some(taps.slots().clone());
+        laid
     }
 
     /// What copy taps at `at` read (AGENT-7): each tap's exec node (None: the song's output), its
@@ -3425,8 +3437,8 @@ impl Renderer {
             }
             self.frames[f] = frame;
         }
-        // The meters (8b.8): read after the graph ran, so they change no bit.
-        if let Some(t) = &self.plan.taps {
+        // The taps (TAP-1): read after the graph ran, so they change no bit.
+        if let Some(t) = &mut self.plan.taps {
             t.write(&self.plan.graph.bufs, &self.frames);
         }
         Ok(())
