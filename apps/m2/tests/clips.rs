@@ -79,8 +79,8 @@ fn clip_gestures_from_the_terminal() {
         (&["move", "kick/hits@9.3.2", "--by", "1", "--to", "bass/cutoff"][..], "A notes clip can't go on an automation lane"),
         (&["create", "kick/hits", "--at", "9.5"][..], "bar 9 has 4 beats"),
         (&["delete", "kick/hits"][..], "isn't a clip"),
-        (&["fold", "kick/hits:x"][..], "create|move|resize|split"),
-        (&["delete", "kick/hits@9.3.2", "--copy"][..], "--copy isn't something"),
+        (&["fold", "kick/hits:x"][..], "create, move, resize, split"),
+        (&["delete", "kick/hits@9.3.2", "--copy"][..], "`--copy` isn't a flag of"),
     ] {
         let o = m2(&[&["clips", dir][..], args].concat());
         assert!(!o.status.success() && said(&o).contains(says), "{args:?}: {}", said(&o));
