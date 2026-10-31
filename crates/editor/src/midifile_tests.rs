@@ -39,7 +39,7 @@ fn note(channel: u8, key: u8, velocity: u8, start: u64, end: u64) -> SmfNote {
     SmfNote { channel, key, velocity, start, end }
 }
 
-/// A song of one track, `pad`, playing `std/instruments`' pad from lane `chords`, holding `clips`;
+/// A song of one track, `pad`, playing `@m2/synths`' simple pad from lane `chords`, holding `clips`;
 /// and any more files.
 fn pad_song(clips: &str, more: &[(&str, &str)]) -> Fixture {
     let f = Fixture::new();

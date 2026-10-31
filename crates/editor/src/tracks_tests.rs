@@ -484,11 +484,11 @@ fn near(a: &str, b: &str) -> bool {
     word || letter
 }
 
-// T3, the + Track list: std's ready-made sounds first, in groups (drums from a `hits` lane): the
+// T3, the + Track list: music2's ready-made sounds first, in groups (drums from a `hits` lane): the
 // drum kit, then the single drums and FM metal; then the instruments; then the sampler; then the two
-// with every knob.
-// std's first five instruments have fuller ones in std/drums and std/synth, so they have no
-// category and the list leaves them out. No two rows are hard to tell apart.
+// with every knob. @m2/synths' first five instruments have fuller ones in @m2/drums and the
+// polysynth, so they have no category and the list leaves them out (PACK-15). No two rows are hard
+// to tell apart.
 #[test]
 fn the_instruments_are_stds_sounds_in_order() {
     let f = fixture("templates/empty");
@@ -525,7 +525,9 @@ fn the_instruments_are_stds_sounds_in_order() {
         design("@m2/synths:synth-custom", "Polysynth"),
     ];
     assert_eq!(rows, want);
-    assert!(list.iter().all(|i| i.module != "std/instruments"), "the first five are left out");
+    let first = ["bass", "kick", "hat", "pluck", "pad"].map(|id| format!("@m2/synths:{id}"));
+    assert!(list.iter().all(|i| !first.contains(&i.component)), "the first five are left out");
+    assert!(first.iter().all(|c| s.catalog().components.contains_key(c)), "though the catalog has them, for code");
     assert_eq!((list[0].name.as_str(), list[0].module.as_str()), ("drums.kit", "@m2/drums"), "imported as a member of its object");
     for (k, a) in list.iter().enumerate() {
         for b in &list[k + 1..] {

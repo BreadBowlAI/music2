@@ -440,7 +440,7 @@ fn sounds(src: &Sources, components: &[Item]) -> Vec<Item> {
 }
 
 /// The sounds your Presets folder has presets for, by the `sound` each file names: two folders
-/// down (`std/synth-pluck/Warm.json`), as [`presets::folder`] files them.
+/// down (`_m2_synths/synth-pluck/Warm.json`), as [`presets::folder`] files them.
 fn your_sounds(yours: &Path) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
     let dirs = |d: &Path| -> Vec<std::path::PathBuf> {

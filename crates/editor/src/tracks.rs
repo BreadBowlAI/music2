@@ -39,8 +39,8 @@ pub struct Instrument {
     /// The ComponentId (`@m2/synths:synth-pluck`): what adding names.
     pub component: String,
     pub label: String,
-    /// Where it is imported from and as what: `pluck` from `std/instruments`, or a member of an
-    /// exported object, `synth.pad` from `std/synth`.
+    /// Where it is imported from and as what: `sampler` from `std/sampler`, or a member of an
+    /// exported object, `synth.pad` from `@m2/synths`.
     pub name: String,
     pub module: String,
     pub description: String,

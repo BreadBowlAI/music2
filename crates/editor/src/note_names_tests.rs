@@ -41,7 +41,7 @@ fn a_drum_kit_lane_names_its_notes() {
 }
 
 // A pluck names no notes, nor does a lane two different instruments read, nor the hats' lane of
-// std/instruments' simple hat.
+// @m2/synths' simple hat.
 #[test]
 fn a_pluck_lane_has_no_names() {
     let f = fixture("examples/first-song");

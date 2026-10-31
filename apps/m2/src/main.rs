@@ -697,7 +697,7 @@ fn run() -> Result<()> {
         Some("add-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let wanted = arg(2)?;
-            // By ComponentId (`@m2/synths:synth-pluck`) or by its export (`synth.pluck`, `std/synth.synth.pluck`).
+            // By ComponentId (`@m2/synths:synth-pluck`) or by its export (`synth.pluck`, `@m2/synths.synth.pluck`).
             let list = s.instruments();
             let inst = list
                 .iter()

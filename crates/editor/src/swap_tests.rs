@@ -22,7 +22,7 @@ fn refusal(r: Result<Edited, EditError>) -> String {
     }
 }
 
-// First-song's hats play std/instruments' simple `hat` (not in the + Track list): to the drum
+// First-song's hats play @m2/synths' simple `hat` (not in the + Track list): to the drum
 // kit, the call reads the same notes, `drums` is imported on a line of its own, and `hat`'s import
 // goes with its line. One revision, labelled as the toast says it.
 #[test]

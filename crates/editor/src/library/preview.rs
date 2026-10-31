@@ -132,7 +132,7 @@ fn notes(p: Phrase) -> Vec<Note> {
 }
 
 /// How code imports `id`, as `alias`: the import line, and what calls it. `synth.pluck` from
-/// `std/synth` is `import { synth as alias } from "std/synth";`, called as `alias.pluck`.
+/// `@m2/synths` is `import { synth as alias } from "@m2/synths";`, called as `alias.pluck`.
 fn imported(catalog: &Catalog, id: &str, alias: &str) -> Result<(String, String), String> {
     let cant = || format!("{id} can't be imported, so it has no preview.");
     let exports = catalog.exports.get(id).ok_or_else(cant)?;
