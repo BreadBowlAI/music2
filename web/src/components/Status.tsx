@@ -12,7 +12,7 @@ import Attention from "./Attention";
 import { Button, Details, keepFocus, Popover } from "./ui";
 
 type Tone = "danger" | "warn" | "neutral";
-interface State { id: "offline" | "compile" | "problems" | "no-output" | "dropout" | "disk" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
+interface State { id: "offline" | "compile" | "problems" | "no-output" | "dropout" | "disk" | "meters" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
 
 // Hover darkens every tone, as it does a ghost button: the soft fill mixed toward its strong colour.
 const TONE: Record<Tone, string> = {
@@ -62,6 +62,8 @@ function states(graph: GraphState, status: GraphStatus | undefined, connected: b
   if (status?.playing && dropouts.recent) out.push({ id: "dropout", tone: "warn", label: "Sound dropped out", Icon: TriangleAlert });
   // An audio clip read from the disk too late played a moment of silence (RENDER-30).
   if (status?.disk) out.push({ id: "disk", tone: "warn", label: "Disk too slow", Icon: HardDrive });
+  // The meters couldn't be placed after the faders (TAP-5): a bug, said, not hidden.
+  if (status?.meters) out.push({ id: "meters", tone: "neutral", label: "Meters before faders", Icon: Info });
   if (status?.playing && (status.load ?? 0) >= HEAVY) out.push({ id: "load", tone: "warn", label: "Heavy load", Icon: Gauge });
   if (graph.read_only) out.push({ id: "read-only", tone: "neutral", label: "Read only", Icon: Lock });
   if (status?.paused === "exporting") out.push({ id: "paused", tone: "neutral", label: "Paused for export", Icon: Pause });
@@ -166,6 +168,11 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                 {s.id === "disk" && (
                   <Item state={s} title="Disk too slow">
                     {status?.disk}
+                  </Item>
+                )}
+                {s.id === "meters" && (
+                  <Item state={s} title="Meters before faders">
+                    {status?.meters}
                   </Item>
                 )}
                 {s.id === "load" && (

@@ -24,6 +24,9 @@
 - **Template:** what a new song starts from, such as the Starter beat.
 - **Bounce:** rendering one track to an audio file in the song's `assets/`, often to chop it up again.
 - **Stems:** each track exported as its own audio file, to mix or share elsewhere.
+- **Meter:** the bar that shows how loud a track, a strip or the song is, as it plays.
+- **LUFS:** loudness as ears hear it. Streaming services play songs at about −14 LUFS; Master's strip and the Export dialog say a song's.
+- **Scope:** a picture of a sound's wave as it plays.
 - **Take:** one recording, from Record to stop.
 - **Sampler:** an instrument that plays an audio file on each note, higher or lower by the note.
   - **Region:** one recording in a Sampler's map, with the notes, how hard and in which turn it plays ([Sounds](sounds.md)).

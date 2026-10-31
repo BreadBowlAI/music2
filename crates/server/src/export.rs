@@ -8,7 +8,7 @@
 //! it was once the file is written. One export runs at a time. Clients hear how it goes as `export`
 //! events, each naming the `song` and its project folder (`dir`), and whether playback is `paused`
 //! for it: `progress` (0..1, at most ten a second), then `done` with the file's `path`, `seconds`,
-//! `peak_db` and the `problems` it carries (what the revision knows leaves a part silent: a plugin
+//! `peak_db`, its integrated loudness `lufs` (TAP-7; null under the gate) and the `problems` it carries (what the revision knows leaves a part silent: a plugin
 //! that isn't installed, FMT-18a, a missing file, a state or lane that doesn't load; one it couldn't
 //! borrow, `plugin.not-borrowed`), or an `error`, with the `code` of the fault that stopped it, when
 //! one did (RENDER-1).
@@ -177,8 +177,9 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
             }
         };
         // From here the session prepares nothing for a song whose plugins play: until `lent` drops.
-        let Export { song, dir, render, problems, lent } = state.graph.export(Length::Song)?;
-        let render = render.stop_when(state.exports.stop.clone());
+        let Export { song, dir, render, problems, lent, token, revision } = state.graph.export(Length::Song)?;
+        // Its loudness, measured as it is written (TAP-7).
+        let render = render.stop_when(state.exports.stop.clone()).measuring();
         *state.exports.song.lock() = Some(song.clone());
         let thread_state = state.clone();
         let thread_path = path.clone();
@@ -240,14 +241,22 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                         let words = m2_editor::render::LATENCY_CHANGED;
                         carried.push(Diagnostic::warning("latency.changed", format!("{}{}", words[..1].to_uppercase(), &words[1..])));
                     }
-                    json!({"done": true, "path": path, "seconds": r.seconds(), "peak_db": r.peak_db, "problems": carried})
+                    // Its loudness, which the state carries while the song stays as it rendered (TAP-7).
+                    state.graph.exported(token, revision, r.lufs);
+                    let lufs = r.lufs.map(|l| (l * 10.0).round() / 10.0);
+                    json!({"done": true, "path": path, "seconds": r.seconds(), "peak_db": r.peak_db, "lufs": lufs, "problems": carried})
                 }
                 // A fault that stopped it carries its code (RENDER-1).
                 Err(e) => {
                     json!({"error": format!("{e:#}"), "code": m2_editor::faults::Faulted::of(&e).map(|f| f.code), "path": thread_path})
                 }
             };
+            let measured = event.get("lufs").is_some();
             state.announce(with(&about, event));
+            // The windows' state carries the loudness now (TAP-7).
+            if measured {
+                state.graph_changed();
+            }
         })?;
         Ok(path)
     })();
@@ -671,6 +680,26 @@ pub(crate) mod tests {
         assert_eq!(wav.duration() as f64, seconds * 48_000.0);
         assert!(!state.exports.running());
         assert!(!std::fs::read_dir(&project.0).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().ends_with(".part")));
+    }
+
+    // TAP-7: an export says its file's integrated loudness, and the graph state carries it while
+    // the song stays the revision it rendered; an edit makes it unknown again.
+    #[test]
+    fn an_export_says_its_loudness_and_the_state_carries_it_until_the_song_changes() {
+        let project = Temp::new();
+        let song = "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { scale } from 'std/math';\n\
+                    export default song(() => scale(osc.sine(hz(1000)), 0.1));\n";
+        let state = open(&project, song);
+        assert_eq!(state.graph.state().unwrap()["loudness"], Value::Null, "unknown before an export");
+        let mut events = state.events.subscribe();
+        start(&state, Some(project.0.join("out.wav"))).unwrap();
+        let done = until_finished(&mut events).pop().unwrap();
+        let lufs = done["lufs"].as_f64().unwrap_or_else(|| panic!("no loudness in {done}"));
+        assert!((lufs + 20.0).abs() < 0.15, "a 1 kHz sine at −20 dBFS: {lufs} LUFS");
+        assert_eq!(state.graph.state().unwrap()["loudness"], json!({"lufs": lufs}), "the state carries it");
+        let token = state.graph.session().unwrap();
+        state.graph.write_file(Some(token), "song.ts", song, &song.replace("0.1", "0.2")).unwrap();
+        assert_eq!(state.graph.state().unwrap()["loudness"], Value::Null, "the song changed: unknown again");
     }
 
     // The ex plan's D7 (RENDER-1): what the revision knows leaves a part silent is said with the
