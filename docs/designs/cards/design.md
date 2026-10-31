@@ -219,7 +219,8 @@ only: a notes lane can't record it yet (#24, which needs a format change).
 | every kernel (`std.wasm`) | |
 
 - **The kernels stay in std.** A pack's sound calls them by id (`kernel("std:svf", …)`), as any pack can.
-  Moving a pack's kernels into a wasm of its own is later, and changes no sound.
+  Moving a pack's kernels into a wasm of its own is later, and changes no sound. (Changed by the owner:
+  §7.1.)
 - **The move changes no bit.** Each fixture renders the same bits through the packs as it did through
   std (`renders.json`, `e2e/renders.sha256`).
 - The packs live in the repo at `packs/@m2/<name>/`, are checked by `m2 pack check` in CI, and ship
@@ -231,6 +232,24 @@ only: a notes lane can't record it yet (#24, which needs a format change).
   them as installed packs, with no special case.
 - std's version moves to 0.6.0, since it loses components. A song asking for std "0.5" is told what to
   change, as today ([FMT-3](../../architecture.md#manifest-and-versions)).
+
+### 7.1 A pack's own kernels (since 2026-10-31, evening)
+
+The owner, after §7 was written: "I want to keep the core as little as possible. Most things should
+go inside packs. That's a design choice." So §7's "the kernels stay in std" changed: **a kernel only
+one pack's sounds play is that pack's own.** std keeps the kernels sounds are built on.
+
+| | How |
+|---|---|
+| Where its code lives | beside the pack, `packs/@m2/effects/kernels-src/`, written with std's kit. It is no part of the pack: only the wasm built from it ships ([PACK-20](../../architecture.md#packs)) |
+| How it is built | by the one script, `std/build.sh`, with std's: one Cargo workspace, one lock, the same bytes in any folder. `--check` proves every committed `.wasm` is its source's build ([ABI-10](../../architecture.md#kernel-abi-reservations)) |
+| How it runs | as std's, with no time limit, when the pack's files are a version music2 ships (`own`, PACK-19). A changed copy, or a stranger's pack, gets the limit ([ABI-11](../../architecture.md#kernel-abi-reservations)) |
+| A kernel that moves | takes the pack's name (`std:bitcrush` is `@m2/effects:bitcrush`), plays the same bits, moves std's version and the pack's, and a song that calls the old name is told where it went ([PACK-21](../../architecture.md#packs)) |
+
+The first to move is the bitcrusher (track `packcode`): one kernel, one effect, played by one pack,
+with its own tests. Wave 3 moves more the same way: the synth and FM voices into `@m2/synths`, the
+drum voice into `@m2/drums`, and reverb, phaser, tremolo and widen into `@m2/effects`. Delay, drive
+and chorus stay std's, since two packs play them.
 
 ## 8. The pack contract
 
