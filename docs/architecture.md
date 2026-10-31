@@ -1458,6 +1458,40 @@ Everything else is counted and named in plain words when the import ends, never 
 
 **In short:** a tap copies a signal at one point of the graph for the window to show (a meter, a scope), without changing what plays. Rules TAP-1 to TAP-9 (track `taps`, [Typed sounds](designs/cards/design.md) §5).
 
+| Words | Meaning here |
+|---|---|
+| **point** | Where a tap reads: the song's output, a top-level node's first output, or an overlay site (a track where its audio enters another module, [MON-1](#monitoring-overlays-and-mute-in-song)). |
+| **peaks** | Each channel's largest \|x\| since the server last took them: a meter. |
+| **frames** | A ring of the last frames a point gave: a scope, or the master's loudness. |
+| **LUFS** | Loudness as ears hear it (ITU-R BS.1770): −14 LUFS is about what streaming services play songs at. |
+
+**TAP-1.** A tap MUST be a point of a live plan whose block is read after the graph ran, into slots the server reads, and never by the graph. A tap gives peaks or frames. The meters, the master's loudness and a scope are taps: one mechanism, three uses. An agent's listen copies the same points of its own offline render ([AGENT-7](#agents)'s copy taps), by the same `TapAt`.
+- *Why:* one way to look, so a new way to look is a use of it, not an engine change.
+
+**TAP-2.** A tap MUST change no bit, and MUST NOT reach an export or any offline render. Only a plan prepared for the live engine has taps; an export, a bounce, a stem and a listen have none. With every tap on, every pure fixture plays the export's bits ([RENDER-33](#the-bit-identity-test)).
+- *Why:* looking at a sound must never change it ([Typed sounds](designs/cards/design.md) §2.7).
+
+**TAP-3.** The audio thread MUST NOT wait, lock or allocate for a tap ([RENDER-28](#plans-data-and-arrangement-swaps)). A plan's taps are laid out, and its rings allocated, while it is prepared. Peaks are raised with `fetch_max` into atomic slots. A ring is written with atomics; the frames a block may overwrite are marked before it writes, and its head moves after, so a reader drops what was overwritten while it read. Turning taps on or off, and pointing a ring at another point, are atomic stores the audio thread takes at its next block: never a new plan, never a message on the queue.
+- *Why:* a meter or a scope that glitched playback would be worse than none.
+
+**TAP-4.** A tap MUST cost nothing while no one looks. The meters' peaks are raised only while a window listens for meters, and a ring copies only while it points somewhere. Unwatched, a plan's taps cost one atomic load per block, and one per ring.
+- *Why:* most of the time nobody watches a scope, and an agent's app has no window at all.
+
+**TAP-5.** Meters MUST read after the fader. The server lays out each live plan's meters before it is sent. Each channel of the song's one std mixer is read at its fader (after its pan and gain), so a fader move moves it; a bus's channel too. Master's meter is the song's output, after the master's fader and ceiling. A track's meter is its channel's when the channel is its own. A track whose audio goes two ways (into two channels, into a channel it shares with another track, into no channel, or in a song without one std mixer) has no fader of its own: its meter reads where its audio enters the song, the louder of its ways, before any fader. Mute and solo act before the fader ([MON-1](#monitoring-overlays-and-mute-in-song)), so a muted track's meters read silence.
+- *Why:* a fader that doesn't move its meter looks broken (gaps #20). A shared channel's fader turns down more than one track, so one track's meter can't be read after it.
+
+**TAP-6.** While a window listens for meters, the server MUST work out the master's short-term loudness (the last 3 s, in LUFS) and its true peak (the largest of the last 3 s, in dBTP) from the song's output frames, off the audio thread, by the code `m2 listen` measures with ([AGENT-7](#agents)), and send them with the meters. Under 3 s heard, or under the gate (−70 LUFS), there is no loudness. The Mix view's master strip says them in words ("−14 LUFS"). It matches `m2 listen`'s within 0.1 LU.
+- *Why:* how loud a song is, is the first thing a mastering beginner asks, and two meters that disagree would teach them nothing.
+
+**TAP-7.** An export of the song MUST measure its integrated loudness (BS.1770, gated, by the same code) and say it when done. While the song stays the revision that export rendered, the graph state carries it (`loudness`), and the Export dialog shows it.
+- *Why:* the loudness that matters is the file's; a number measured live, from wherever play started, would be another.
+
+**TAP-8.** A window or an agent MAY ask for a scope on a node of the graph view, by its id: the call's own output, at the top of its track (`POST /api/graph/scope`). While it asks, every meters message carries that node's last 1,024 frames, about 30 times a second. A scope lasts while its client asks: it ends when the client says stop, when its window closes, or 10 s after its last ask (a window asks again every few seconds). A plan has 4 rings for scopes; a fifth is refused in words, as is a node that makes no sound or plays inside an instrument's voices.
+- *Why:* a card's scope ([Typed sounds](designs/cards/design.md) §3.2's `view.scope()`) needs the sound as it plays, and only while it is shown.
+
+**TAP-9.** Each new plan MUST get the taps asked before it is sent: its meters laid out (TAP-5), watched if the meters are, and each scope pointed at its node, found again by its id in that plan's revision. A scope whose node is gone sends nothing until its node is back or the scope ends. The server reads the taps of the plan that plays, and only those.
+- *Why:* an edit makes a new plan, and a meter or a scope must not go blank because of it.
+
 ## PluginHost
 
 ```rust
