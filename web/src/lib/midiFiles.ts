@@ -216,7 +216,7 @@ export async function importMidi() {
  */
 function midiTarget(t: DropTarget): MidiTarget | null {
   const graph = useStore.getState().graph;
-  if (!graph || t.kind === "none" || t.kind === "sampler") return null;
+  if (!graph || t.kind === "none" || t.kind === "recording") return null;
   if (t.kind === "below") return { kind: "below", beat: t.beat };
   const track = graph.timeline.tracks.find((x) => x.module === t.module);
   if (!track?.track) return null;

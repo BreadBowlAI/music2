@@ -70,12 +70,24 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - Select the Song, and its mixer is one small box that says how many channels it has: the levels and pans are in the Mix view (its **Open Mix** link, or ⌥3). The master's volume and ceiling stay knobs there.
   - A knob whose number is in grey is a control the code leaves out, such as a bass's `drive` when the code says only `bass(notes)`: it plays the instrument's or effect's default. Turning it writes the number into the call (`bass(notes, { drive: 9 })`), and undo takes it out again.
   - A row that says **edit in code** is a value the app can't turn into a knob (see [Editing from the app](code.md#editing-from-the-app)).
+  - **Settings** sit under a card's knobs. A setting decides how a sound is built: an LFO's **Shape** (sine, tri, saw or square), how many notes an instrument plays at once (**Voices**), a Sampler's **Mode** and its file. Each kind has its own control:
+
+    | You see | It is | To change it |
+    |---|---|---|
+    | a word with ▾ | a choice | click it and pick another |
+    | a small switch | on or off | click it |
+    | a box with a number | a number | click it, type, then Return (Escape leaves it). **Voices** and other counts take whole numbers only: `2.5` is refused, in red under the box |
+    | a waveform and a file name | a recording | drop a WAV or FLAC file on it (or on the card) to play that instead |
+    | a track's name with ▾ | a track | pick another track |
+
+    Each change is written into the sound's code (`lfo(time.beats, { shape: "saw" })`) as one Undo step. A setting decides what is built, so changing one rebuilds that sound: a note playing just then may stop. A grey value is the default, not written in the code yet. A setting the code works out, or a list of regions, says **edit in code**.
+  - A plugin's parameter that has a few steps with names (a filter's type, say) is a menu of the plugin's own names, and one that is just off or on (a bypass) is a switch. The code still holds the number.
   - Cables: drag from a named output (the dot at the right edge of a box whose result has a `const` name in the code) onto a knob. The ✕ on a connected input disconnects it.
   - An effect card's ⋯ menu has **Turn off** (the sound goes on without it; the card stays, dimmed, "Reverb · Off", and `bypass: true` goes into its code) and **Turn on**, and **Move left** and **Move right**, which swap it with the effect next to it. Each is one undo step. A Duck's card says what it listens to ("Listens to: Kick ▾"): click it to pick another track.
   - **+** on a box that makes sound opens the effect browser: 17 effects in seven groups (Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility), as the effects themselves declare them. Type to search, then press Enter or click. The bin icon on an effect removes it.
   - Zoom with ⌘ and scroll, or pinch. The buttons at the bottom right zoom and fit the graph to the panel.
   - An instrument's card says how it plays under its name, such as "Plays one note at a time." (the rest is in its tooltip).
-  - A **Sampler**'s card takes a WAV or FLAC file: drop one on it (see [Sounds and effects](sounds.md)).
+  - A **Sampler**'s card takes a WAV or FLAC file: drop one on it, or on its recording's row (see [Sounds and effects](sounds.md)).
   - A CLAP plugin's box has **Open window**, for the plugin's own window (see [CLAP plugins](plugins.md)).
 - **Mix** (⌥3, or X): a strip for each track, in the timeline's order, and Master on the right.
   - Each strip has the track's colour and name, a pan knob, **M** and **S** (as on the track's header; a strip shared by two tracks acts on both), and a fader with its level under it. Beside the fader, two bars (left and right) show how loud the track is. They read the track before its fader, as the header's meter does. A small red dot over them means the track went over the top: click it to clear it. Master's meter is the whole song.

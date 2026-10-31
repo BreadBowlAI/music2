@@ -8,7 +8,6 @@ import {
   ChevronDown,
   Clock,
   Ellipsis,
-  FileAudio,
   Hash,
   LogIn,
   LogOut,
@@ -63,6 +62,7 @@ import { MenuRow, Popover } from "./ui";
 import { undoAction } from "./GraphCanvas";
 import PointMenu, { unautomate } from "./ClipMenu";
 import PresetPopover from "./PresetPopover";
+import { KnobPick, SettingRow, settingHeight, shown } from "./Settings";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 const Locked = createContext<string | null>(null);
@@ -280,8 +280,8 @@ const KNOB_H = 40;
 const VALUE_H = 48;
 
 const inputHeight = (p: InputPort) => (p.knob ? KNOB_H : p.readonly != null ? VALUE_H : ROW_H);
-/** A Sampler's file row, under its knobs: where a WAV or FLAC is dropped. */
-const SAMPLE_H = 36;
+/** The settings a card shows (CARD-7), under its knobs, in its descriptor's order. */
+const settingsOf = (n: ViewNode) => (n.settings ?? []).filter(shown);
 /** An instrument's line under its name: how it plays its notes. */
 const VOICES_H = 24;
 
@@ -319,8 +319,11 @@ function geometry(n: ViewNode) {
     outs.set(o.id, y + ROW_H / 2);
     y += ROW_H;
   });
-  const w = n.inputs.length && n.outputs.length ? NODE_W : SLIM_W;
-  return { w, h: (n.outputs.length + n.inputs.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0)) + (n.sampler ? SAMPLE_H : 0), ins, outs };
+  // Its settings after its ports' rows: they have no port of their own.
+  const settings = settingsOf(n);
+  for (const x of settings) y += settingHeight(x);
+  const w = (n.inputs.length || settings.length) && n.outputs.length ? NODE_W : SLIM_W;
+  return { w, h: n.outputs.length + n.inputs.length + settings.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0), ins, outs };
 }
 
 interface Placed { node: ViewNode; x: number; y: number; w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }
@@ -795,6 +798,10 @@ function NodeCard({
   // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
   const off = !!node.bypassed;
   // An instrument (it takes notes) or an effect of a component has Presets, and so does a plugin (HOST-8).
+  // Its settings (CARD-7); a card with one recording takes a file dropped anywhere on it, as a Sampler's does.
+  const settings = mixing ? [] : settingsOf(node);
+  const recordings = settings.filter((x) => x.kind === "recording" && !x.readonly);
+  const tracks = useContext(Tracks);
   const sound =
     node.kind === "call" &&
     !mixing &&
@@ -806,8 +813,9 @@ function NodeCard({
       data-node={node.label}
       data-node-id={node.id}
       data-bypassed={off || undefined}
-      data-sampler-call={node.sampler ? node.id : undefined}
-      data-sampler-title={node.sampler ? titled : undefined}
+      data-recording-call={recordings.length === 1 ? node.id : undefined}
+      data-recording-setting={recordings.length === 1 ? recordings[0].slot : undefined}
+      data-recording-title={recordings.length === 1 ? titled : undefined}
       title={where ?? undefined}
     >
       <div className={clsx("h-10 shrink-0 pl-3 pr-1.5 flex items-center gap-2 min-w-0", !small && "border-b border-line")}>
@@ -946,7 +954,7 @@ function NodeCard({
           </div>
         </div>
       )}
-      {!small && !mixing && (node.outputs.length > 0 || node.inputs.length > 0) && (
+      {!small && !mixing && (node.outputs.length > 0 || node.inputs.length > 0 || settings.length > 0) && (
         <div data-node-body className={clsx("py-1.5", off && "opacity-50")}>
           {node.inputs.map((i) => (
             <InputRow
@@ -965,9 +973,11 @@ function NodeCard({
           {node.outputs.slice(node.inputs.length).map((o) => (
             <div key={o.id} className="h-7" />
           ))}
+          {settings.map((x) => (
+            <SettingRow key={x.id} x={x} owner={titled} card={titled} call={node.id} session={session} revision={revision} editable={editable} locked={why} tracks={tracks} />
+          ))}
         </div>
       )}
-      {node.sampler && <SampleRow files={node.sampler.files} regions={node.sampler.regions} />}
       {node.outputs.map((o, j) => (
         <OutputPortView
           key={o.id}
@@ -1050,36 +1060,6 @@ function PluginRow({ node, title, session }: { node: string; title: string; sess
           </button>
         </>
       )}
-    </div>
-  );
-}
-
-/**
- * A Sampler's file (track ab), under its knobs: "Drop a WAV or FLAC here" until it has one. The whole
- * card takes a dropped WAV or FLAC (`data-sampler-call`; a FLAC comes in as a WAV, FMT-24), which it
- * then plays.
- */
-function SampleRow({ files, regions }: { files: string[]; regions?: string }) {
-  const said = regions ?? (files.length === 0 ? "Drop a WAV or FLAC here" : files.length === 1 ? files[0] : `${files.length} files: ${files.join(", ")}`);
-  return (
-    <div
-      data-testid="sampler-file"
-      className={clsx(
-        "mx-2 mb-2 h-7 shrink-0 px-2 flex items-center gap-1.5 rounded-sm text-xs min-w-0",
-        files.length ? "bg-chrome text-fg" : "border border-dashed border-line-strong text-fg-muted",
-      )}
-      title={
-        regions !== undefined
-          ? `Plays ${regions}, each recording on its own notes and velocities. They are set in its code.`
-          : files.length > 1
-            ? `Plays ${files.join(", ")}, each on its own range of notes. They are set in its code.`
-            : files.length
-              ? `Plays ${files[0]}. Drop another WAV or FLAC on this card to play it instead.`
-              : "Drop a WAV or FLAC file from your computer on this card to play it"
-      }
-    >
-      <FileAudio size={12} className="shrink-0" />
-      <span className="truncate">{said}</span>
     </div>
   );
 }
@@ -1224,6 +1204,11 @@ function InputRow({
   // Keyed by the knob alone: a save that breaks the code mid-drag must not remount it, which
   // would cancel the drag (WRITE-22: the server keeps it, and a release then is saved once the
   // code compiles); nor may one that renumbers it (see `held`).
+  if (knob && (knob.kind === "choice" || knob.kind === "switch")) {
+    // A plugin's stepped parameter (CARD-6): a menu of its names, or a switch.
+    const label = controlLabel(input.label, tracks);
+    return <KnobPick knob={knob} label={label} owner={owner} session={session} revision={revision} editable={editable} locked={why} dot={<Dot id={input.id} kind="control" filled={false} />} />;
+  }
   if (knob) {
     const key = knobKey(knob.id);
     return (

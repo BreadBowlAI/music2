@@ -174,6 +174,7 @@ export const SUITES = [
   ["pl-ids", "fix", { expect: 39, s: 3, tier: "nightly", why: "flake: a rename took more than one revision, at half CPU (2026-10-21)" }],
   ["pc-keys", "fix", { expect: 37, s: 3 }],
   ["ab-sampler", "export", { expect: 23, s: 4 }],
+  ["cards", "fix", { expect: 31, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 19, s: 2 }],
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
