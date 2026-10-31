@@ -27,9 +27,10 @@ pub struct Limits {
 
 impl Default for Limits {
     /// 100 ms live: about 37 blocks at 48 kHz, which no working kernel's call comes near, and short
-    /// enough that the song is heard again at once. 2 s for the rest, which wait for no device.
+    /// enough that the song is heard again at once. 5 s for the rest, which wait for no device and
+    /// may run at background priority, where a busy computer gives them the CPU late.
     fn default() -> Limits {
-        Limits { live: Duration::from_millis(100), offline: Duration::from_secs(2) }
+        Limits { live: Duration::from_millis(100), offline: Duration::from_secs(5) }
     }
 }
 
@@ -95,7 +96,7 @@ impl std::fmt::Display for TooSlow {
 
 impl std::error::Error for TooSlow {}
 
-/// `d` in words: `100 ms`, `2 s`.
+/// `d` in words: `100 ms`, `5 s`.
 pub(crate) fn said(d: Duration) -> String {
     match d.as_millis() {
         ms if ms < 1000 || !ms.is_multiple_of(1000) => format!("{ms} ms"),

@@ -335,7 +335,7 @@ impl Namer {
     /// wrote it, with its place and the package it is from (ABI-7), as a sentence's subject: the
     /// outermost call of a package's component it was made inside, by the component's label
     /// ("Growl on Bass, from @alice/growl,"); else, for a kernel called outside any, the kernel by
-    /// its name. A node not in the song is named as it is.
+    /// its name, and an instrument as such. A node not in the song is named as it is.
     pub fn slow_sound(&self, name: &str) -> String {
         let ir = self.song.ir();
         let found = ir.modules.iter().find_map(|m| {
@@ -343,16 +343,17 @@ impl Namer {
             let mut at = None;
             crate::controls::walk(&m.nodes, &mut |n| {
                 if at.is_none() && n.id == id {
-                    let kernel = match &n.op {
-                        Op::Kernel { kernel, .. } => Some(kernel.clone()),
-                        _ => None,
+                    let (kernel, what) = match &n.op {
+                        Op::Kernel { kernel, .. } => (Some(kernel.clone()), id),
+                        Op::Poly { .. } => (None, "instrument"),
+                        _ => (None, id),
                     };
-                    at = Some((n.frame, kernel));
+                    at = Some((n.frame, kernel, what.to_string()));
                 }
             });
-            at.map(|(frame, kernel)| (m, frame, kernel))
+            at.map(|(frame, kernel, what)| (m, frame, kernel, what))
         });
-        let Some((m, frame, kernel)) = found else { return name.to_string() };
+        let Some((m, frame, kernel, what)) = found else { return name.to_string() };
         let label = |id: &str| self.song.components().and_then(|c| c.get(id)).map(|d| d.label.clone());
         let component = m.chain(frame).into_iter().filter_map(|f| f.component.as_deref()).find_map(|id| {
             let (package, bare) = m2_song::pack::split_id(id)?;
@@ -362,7 +363,7 @@ impl Namer {
         let place = self.place_of(&m.key);
         match component.or(kernel) {
             Some((what, package)) => format!("{} {place}, from {package},", capital(&what)),
-            None => format!("The {} {place}", name.rsplit_once('/').map_or(name, |(_, id)| id)),
+            None => format!("The {what} {place}"),
         }
     }
 

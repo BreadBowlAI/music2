@@ -257,12 +257,12 @@ fn a_sound_too_slow_to_get_ready_is_said_once_and_not_tried_again() {
     let t = std::time::Instant::now();
     assert!(rig.graph.poll());
     let took = t.elapsed();
-    assert!(took >= std::time::Duration::from_secs(2) && took < std::time::Duration::from_secs(10), "stopped at its limit: {took:?}");
+    assert!(took >= std::time::Duration::from_secs(5) && took < std::time::Duration::from_secs(15), "stopped at its limit: {took:?}");
     let told: Vec<String> = rig.graph.expire().into_iter().filter(|t| t.contains("took too long")).collect();
     let said = "Your last change is saved, but Stuck on Keys, from @test/stuck, took too long to get ready and was stopped, so the \
                 version before it keeps playing. Take the sound out, or undo the change. (In detail: keys/";
     assert!(told.len() == 1 && told[0].starts_with(said), "{told:?}");
-    assert!(told[0].ends_with("took too long and was stopped: one call into it ran past 2 s (ABI-6))"), "{told:?}");
+    assert!(told[0].ends_with("took too long and was stopped: one call into it ran past 5 s (ABI-6))"), "{told:?}");
     rig.fill(2);
     assert!(rig.graph.status().playing, "the version before plays on");
     let t = std::time::Instant::now();
@@ -276,8 +276,8 @@ fn a_sound_too_slow_to_get_ready_is_said_once_and_not_tried_again() {
     std::fs::remove_dir_all(&pack).ok();
 }
 
-// ABI-7, LIB-3: ⌘F's preview of a sound whose kernel never gets ready stops at the limit and says
-// so, naming the sound and its pack: what the panel shows in place of playing it.
+// ABI-7, LIB-3: ⌘F's preview of a sound whose kernel never gets ready stops at the limit, 5 s, and
+// says so, naming the sound and its pack: what the panel shows in place of playing it.
 #[test]
 fn a_preview_of_a_sound_too_slow_stops_and_says_so() {
     let fixture = Fixture::new();
@@ -289,7 +289,7 @@ fn a_preview_of_a_sound_too_slow_stops_and_says_so() {
     let e = crate::library::preview(&Default::default(), "@test/stuck:stuck", &packages, None, &fixture.0.join("previews"))
         .map(drop)
         .unwrap_err();
-    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+    assert!(t.elapsed() < std::time::Duration::from_secs(15), "{:?}", t.elapsed());
     // The preview's song plays it on its one track, Play.
     let said = "Stuck on Play, from @test/stuck, took too long to get ready and was stopped, so the file wasn't made.";
     assert_eq!(format!("{e:#}"), said);
