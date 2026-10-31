@@ -124,7 +124,10 @@ fn a_switch_reaches_its_kernel_as_0_or_1() {
 // have.
 #[test]
 fn a_wrong_choice_is_refused_in_words() {
-    refused("return every(lane.notes(\"n\"), { shape: \"squar\" as any });", "every(): shape is one of \"saw\", \"square\", \"sine\", not \"squar\"");
+    refused(
+        "return every(lane.notes(\"n\"), { shape: \"squar\" as any });",
+        "every(): shape is one of \"saw\", \"square\", \"sine\", not \"squar\"",
+    );
     refused("return every(lane.notes(\"n\"), { shape: 1 as any });", "every(): shape is one of \"saw\", \"square\", \"sine\", not 1");
     refused("return every(lane.notes(\"n\"), { shape: true as any });", "not true");
     for (declared, says) in [
@@ -139,7 +142,10 @@ fn a_wrong_choice_is_refused_in_words() {
         let lib = format!(
             "import {{ component, control, kernel }} from \"@m2/core\";\nexport const c = component({{ id: \"c\", controls: {{ x: {declared} }} }}, (p: any) => kernel(\"test:c\", p));\n"
         );
-        let e = build_of(&[("lib/c.ts", &lib), ("song.ts", "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(() => c());\n")]);
+        let e = build_of(&[
+            ("lib/c.ts", &lib),
+            ("song.ts", "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(() => c());\n"),
+        ]);
         let e = e.err().unwrap_or_else(|| panic!("{declared} builds"));
         assert!(e.iter().any(|d| d.message.contains(says) && d.message.contains("the control \"x\"")), "{declared}: {says}\n{e:?}");
     }
@@ -151,7 +157,10 @@ fn a_wrong_switch_is_refused_in_words() {
     refused("return every(lane.notes(\"n\"), { sub: 1 as any });", "every(): sub is true or false, not 1");
     refused("return every(lane.notes(\"n\"), { sub: \"on\" as any });", "every(): sub is true or false, not \"on\"");
     let lib = "import { component, control, kernel } from \"@m2/core\";\nexport const c = component({ id: \"c\", controls: { x: control.bool(1 as any) } }, (p: any) => kernel(\"test:c\", p));\n";
-    let e = build_of(&[("lib/c.ts", lib), ("song.ts", "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(() => c());\n")]);
+    let e = build_of(&[
+        ("lib/c.ts", lib),
+        ("song.ts", "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(() => c());\n"),
+    ]);
     assert!(e.err().unwrap().iter().any(|d| d.message.contains("its default must be true or false, not 1")));
 }
 
@@ -193,15 +202,20 @@ fn lane_of(b: &Build, key: &str) -> (String, Option<f64>) {
 // its name, the first when left out. A switch's lane falls back to 1 or 0.
 #[test]
 fn a_lane_of_names_takes_the_options_of_the_choice_it_feeds() {
-    let b = built("return every(lane.notes(\"n\"), { shape: lane.control(\"shape\", \"choice\", \"square\"), sub: lane.control(\"sub\", \"switch\", true) });");
+    let b = built(
+        "return every(lane.notes(\"n\"), { shape: lane.control(\"shape\", \"choice\", \"square\"), sub: lane.control(\"sub\", \"switch\", true) });",
+    );
     assert_eq!(lane_of(&b, "shape"), ("control<choice<saw|square|sine>>".to_string(), Some(1.0)));
     assert_eq!(lane_of(&b, "sub"), ("control<switch>".to_string(), Some(1.0)));
     let n = feeding(&b, "test:every", "shape");
     assert!(matches!(&n.op, Op::Lane { lane } if lane == "shape"), "the kernel reads the lane");
-    let b = built("return every(lane.notes(\"n\"), { shape: lane.control(\"shape\", \"choice\"), sub: lane.control(\"sub\", \"switch\") });");
+    let b =
+        built("return every(lane.notes(\"n\"), { shape: lane.control(\"shape\", \"choice\"), sub: lane.control(\"sub\", \"switch\") });");
     assert_eq!((lane_of(&b, "shape").1, lane_of(&b, "sub").1), (Some(0.0), Some(0.0)));
     // One lane may feed several choices of the same options.
-    built("const s = lane.control(\"shape\", \"choice\", \"sine\");\nevery(lane.notes(\"n\"), { shape: s });\nreturn every(lane.notes(\"n\"), { shape: s });");
+    built(
+        "const s = lane.control(\"shape\", \"choice\", \"sine\");\nevery(lane.notes(\"n\"), { shape: s });\nreturn every(lane.notes(\"n\"), { shape: s });",
+    );
 }
 
 // CARD-14: a lane of names that feeds no choice, feeds choices of other options, or falls back to a
@@ -209,7 +223,10 @@ fn a_lane_of_names_takes_the_options_of_the_choice_it_feeds() {
 // of names where a number goes.
 #[test]
 fn a_lane_of_names_is_refused_in_words() {
-    refused("lane.control(\"shape\", \"choice\", \"saw\");\nreturn every(lane.notes(\"n\"));", "lane \"shape\" of \"song\" is a lane of names, but it feeds no choice");
+    refused(
+        "lane.control(\"shape\", \"choice\", \"saw\");\nreturn every(lane.notes(\"n\"));",
+        "lane \"shape\" of \"song\" is a lane of names, but it feeds no choice",
+    );
     refused(
         "return every(lane.notes(\"n\"), { shape: lane.control(\"shape\", \"choice\", \"tri\") });",
         "every(): shape: the lane \"shape\" falls back to \"tri\", which isn't one of \"saw\", \"square\", \"sine\"",
@@ -218,10 +235,22 @@ fn a_lane_of_names_is_refused_in_words() {
         "const s = lane.control(\"shape\", \"choice\", \"saw\");\nwave({ shape: s });\nreturn every(lane.notes(\"n\"), { shape: s });",
         "the lane \"shape\" also feeds wave()'s shape, one of \"sine\", \"saw\": a lane of names has one set of names",
     );
-    refused("return every(lane.notes(\"n\"), { sub: lane.control(\"sub\", \"switch\", 1 as any) });", "lane \"sub\": a switch's lane falls back to true or false, not 1");
-    refused("return every(lane.notes(\"n\"), { shape: lane.control(\"shape\", \"choice\", 2 as any) });", "a choice's lane falls back to one of its choice's names");
-    refused("return tone({ cutoff: lane.control(\"shape\", \"choice\", \"saw\") as any });", "tone(): cutoff is a number (hz), and this is a lane of names");
-    refused("return every(lane.notes(\"n\"), { shape: lane.control(\"sub\", \"switch\") as any });", "every(): shape is one of \"saw\", \"square\", \"sine\"");
+    refused(
+        "return every(lane.notes(\"n\"), { sub: lane.control(\"sub\", \"switch\", 1 as any) });",
+        "lane \"sub\": a switch's lane falls back to true or false, not 1",
+    );
+    refused(
+        "return every(lane.notes(\"n\"), { shape: lane.control(\"shape\", \"choice\", 2 as any) });",
+        "a choice's lane falls back to one of its choice's names",
+    );
+    refused(
+        "return tone({ cutoff: lane.control(\"shape\", \"choice\", \"saw\") as any });",
+        "tone(): cutoff is a number (hz), and this is a lane of names",
+    );
+    refused(
+        "return every(lane.notes(\"n\"), { shape: lane.control(\"sub\", \"switch\") as any });",
+        "every(): shape is one of \"saw\", \"square\", \"sine\"",
+    );
 }
 
 /// The descriptor `d` declares, built in a song that calls it: `component(d, …)` with `controls`.
@@ -230,7 +259,10 @@ fn declared(controls: &str, settings: &str, editor: &str) -> Result<Build, Vec<D
         "import {{ component, control, kernel, port, setting, view }} from \"@m2/core\";\n\
          export const c = component({{ id: \"c\", controls: {{ {controls} }}, settings: {{ {settings} }}, editor: {editor} as any }}, (p: any) => kernel(\"test:c\", {{}}));\n"
     );
-    build_of(&[("lib/c.ts", &lib), ("song.ts", "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(() => c());\n")])
+    build_of(&[
+        ("lib/c.ts", &lib),
+        ("song.ts", "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(() => c());\n"),
+    ])
 }
 
 fn declaration_refused(controls: &str, settings: &str, editor: &str, says: &str) {
@@ -258,11 +290,26 @@ fn views_are_checked_against_their_descriptor() {
         ]
     );
     for (editor, says) in [
-        ("{ views: { env: view.envelope(\"a\", \"d\", \"s\", \"rel\") } }", "editor.views' \"env\": the envelope's release names \"rel\", which isn't a control of this sound"),
-        ("{ views: { lp: view.filter(\"a\", \"q\") } }", "editor.views' \"lp\": the filter's cutoff names \"a\", a control in seconds, but it must be a frequency (hz)"),
-        ("{ views: { env: view.envelope(\"a\", \"d\", \"shape\", \"r\") } }", "the envelope's sustain names \"shape\", a choice, but it must be a level (unit01 or gain or db)"),
-        ("{ views: { env: view.envelope(\"f\", \"d\", \"s\", \"r\") } }", "the envelope's attack names \"f\", a control in hz, but it must be a time (seconds or beats)"),
-        ("{ views: { map: view.keys(\"file\") } }", "the keys's regions names \"file\", a setting of asset, but keys show regions or a keymap"),
+        (
+            "{ views: { env: view.envelope(\"a\", \"d\", \"s\", \"rel\") } }",
+            "editor.views' \"env\": the envelope's release names \"rel\", which isn't a control of this sound",
+        ),
+        (
+            "{ views: { lp: view.filter(\"a\", \"q\") } }",
+            "editor.views' \"lp\": the filter's cutoff names \"a\", a control in seconds, but it must be a frequency (hz)",
+        ),
+        (
+            "{ views: { env: view.envelope(\"a\", \"d\", \"shape\", \"r\") } }",
+            "the envelope's sustain names \"shape\", a choice, but it must be a level (unit01 or gain or db)",
+        ),
+        (
+            "{ views: { env: view.envelope(\"f\", \"d\", \"s\", \"r\") } }",
+            "the envelope's attack names \"f\", a control in hz, but it must be a time (seconds or beats)",
+        ),
+        (
+            "{ views: { map: view.keys(\"file\") } }",
+            "the keys's regions names \"file\", a setting of asset, but keys show regions or a keymap",
+        ),
         ("{ views: { map: view.keys(\"a\") } }", "the keys's regions names \"a\", which isn't a setting of this sound"),
         ("{ views: { f: view.scope() } }", "editor.views' \"f\": \"f\" is a value of this sound; give the view a name of its own"),
         ("{ views: { env: { kind: \"envelope\" } } }", "editor.views' \"env\" must be made with view.envelope()"),
@@ -280,14 +327,21 @@ fn views_are_checked_against_their_descriptor() {
 // carries them in order.
 #[test]
 fn groups_are_checked_against_their_descriptor() {
-    let b = declared(ADSR, "n: setting.int(1)", "{ views: { lp: view.filter(\"f\", \"q\") }, groups: { Filter: [\"lp\", \"f\", \"q\"], Other: [\"n\", \"shape\"] } }")
-        .unwrap_or_else(|e| panic!("{e:?}"));
+    let b = declared(
+        ADSR,
+        "n: setting.int(1)",
+        "{ views: { lp: view.filter(\"f\", \"q\") }, groups: { Filter: [\"lp\", \"f\", \"q\"], Other: [\"n\", \"shape\"] } }",
+    )
+    .unwrap_or_else(|e| panic!("{e:?}"));
     let d = b.components.iter().find(|d| d.id == "c").unwrap();
     let g = |name: &str, items: &[&str]| Group { name: name.into(), items: items.iter().map(|s| s.to_string()).collect() };
     assert_eq!(d.editor.groups, [g("Filter", &["lp", "f", "q"]), g("Other", &["n", "shape"])]);
     for (editor, says) in [
         ("{ groups: { One: [\"a\", \"b\"] } }", "editor.groups' \"One\" names \"b\", which isn't a value or a view of this sound"),
-        ("{ groups: { One: [\"a\"], Two: [\"d\", \"a\"] } }", "editor.groups' \"Two\" names \"a\", which is in \"One\" too: each value or view goes in one group, once"),
+        (
+            "{ groups: { One: [\"a\"], Two: [\"d\", \"a\"] } }",
+            "editor.groups' \"Two\" names \"a\", which is in \"One\" too: each value or view goes in one group, once",
+        ),
         ("{ groups: { One: [\"a\", \"a\"] } }", "editor.groups' \"One\" names \"a\", which is in it already"),
         ("{ groups: { One: \"a\" } }", "editor.groups' \"One\" must be a list of this sound's values and views"),
         ("{ groups: { \"A name that is far too long\": [\"a\"] } }", "a group's name is one line of 1 to 24 characters"),

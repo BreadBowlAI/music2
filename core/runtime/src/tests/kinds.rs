@@ -99,3 +99,17 @@ fn an_unknown_name_is_a_warning_and_plays_the_fallback() {
     assert_eq!(quarters(&out), [Some(2.0), Some(2.0), Some(1.0), Some(1.0), Some(0.0), Some(0.0), Some(1.0), Some(1.0)]);
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// The module of the pack fixture `core/session/tests/fixtures/packs/kinds`, as text: `k` copies its
+/// one input (a choice) to its sound, and `s` (a switch) the same.
+fn kinds_module() -> String {
+    module_v1(&format!("{}{}", kernel_v1("k", &out_v1("(local.get $x)")), kernel_v1("s", &out_v1("(local.get $x)"))))
+}
+
+// CARD-10, CARD-12: `core/session`'s `a_choice_in_a_pack_plays_its_place` hears a song's choice end to
+// end, through this kernel; the fixture's bytes are this text's.
+#[test]
+fn the_kinds_pack_fixture_holds_this_module() {
+    let at = Path::new(env!("CARGO_MANIFEST_DIR")).join("../session/tests/fixtures/packs/kinds/k.wasm");
+    assert_eq!(std::fs::read(&at).ok(), Some(wasm(&kinds_module())), "{} is wasm(kinds_module())", at.display());
+}

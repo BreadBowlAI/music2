@@ -846,7 +846,9 @@ fn clips_of(d: &LaneData) -> Vec<Clip> {
 /// Why a gesture refuses a lane of names (CARD-15): its clips are written in its file until the
 /// lane's own editor comes (track `views`).
 fn names(track: &str, lane: &str) -> String {
-    format!("{track}'s {lane} lane holds a choice's names or a switch's on and off, whose clips can't be drawn here yet; edit them in its file")
+    format!(
+        "{track}'s {lane} lane holds a choice's names or a switch's on and off, whose clips can't be drawn here yet; edit them in its file"
+    )
 }
 
 /// A lane of `kind` holding `clips`, in canonical order. Clips are of the lane's kind.

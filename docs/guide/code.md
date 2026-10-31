@@ -101,7 +101,7 @@ export default song(() =>
 - `id` names the clip. music2 gives every clip it writes one; a clip without one still plays.
 - music2 writes these files in one form, one clip and one note per line, so they diff well. The order of clips and notes in a file never changes what plays.
 
-Automation and mask clips hold `points` instead of notes: `[beat, value]` pairs, with straight lines in between, and their file records the lane's unit (`{"unit": "hz", "clips": [...]}`). Audio clips name a file in `assets/`, pin it with `hash` (the first 16 hex digits of its SHA-256), and can have `offset`, `gain_db`, `fade_in`, `fade_out`, `reverse`, `pitch` and `warp`; see `examples/resample/data/chops/clips.json`.
+Automation and mask clips hold `points` instead of notes: `[beat, value]` pairs, with straight lines in between, and their file records the lane's unit (`{"unit": "hz", "clips": [...]}`). A lane that feeds a choice holds names instead, and one that feeds a switch `true` and `false`; each point holds until the next (`{"unit": "choice", "clips": [{"start": 0, "length": 8, "points": [[0, "saw"], [4, "square"]]}]}`). A name the choice doesn't have plays the lane's fallback there, with a warning. Audio clips name a file in `assets/`, pin it with `hash` (the first 16 hex digits of its SHA-256), and can have `offset`, `gain_db`, `fade_in`, `fade_out`, `reverse`, `pitch` and `warp`; see `examples/resample/data/chops/clips.json`.
 
 ## Units
 
@@ -119,20 +119,22 @@ A number in the code can carry a unit, written as a function. Plugging a value w
 | `bipolar(-0.3)` | a value from -1 to 1, like pan |
 | `scalar(2)` | a number with no unit |
 
+A choice and a switch aren't numbers. A choice is written by one of its names (`shape: "square"`), and a switch as `true` or `false`. Neither fits a number's input, and a choice fits only a choice with the same names in the same order.
+
 ## The SDK (`@m2/core`)
 
 | Name | What it is |
 |---|---|
 | `track(key, { name }?, fn)` | a track: `fn` gets `{ key, lane, time }` and returns its sound, or an object of named outputs such as `{ out, env }`. `name` is its label; code never sees it |
 | `song(fn)` | the root module in `song.ts`, with the key `song`: whatever it returns is what you hear |
-| `lane.notes(key)`, `lane.control(key, unit, fallback)`, `lane.mask(key)`, `lane.audio(key)` | the timeline lanes, each with an optional last argument `{ name, shared }` |
+| `lane.notes(key)`, `lane.control(key, unit, fallback)`, `lane.mask(key)`, `lane.audio(key)` | the timeline lanes, each with an optional last argument `{ name, shared }`. For a choice the unit is `"choice"` and the fallback a name (`lane.control("shape", "choice", "saw")`); for a switch, `"switch"` and `true` or `false` |
 | `key(k, fn)` | runs `fn` in a frame named `k`, which files the saved settings of the plugins built inside it under `k` |
 | `time.beats`, `time.seconds`, `time.playing` | the song's position, and 1 while it plays (0 while stopped). A track gets `time` in its `fn`; a component's body imports it from `@m2/core` |
 | `poly(notes, voice, { voices, mode, retrigger, steal, glide })` | plays a voice for each note at once (`voices`, 16); or one note at a time, each starting again (`mode: "mono"`) or sliding from the one held (`"legato"`) over `glide` seconds; `retrigger: false` carries a voice on into its next note; `steal` says which note stops when too many are held: `"oldest"`, `"quietest"` or `"none"` |
 | `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
 | `kernel(id, inputs)` | one kernel, such as `kernel("std:svf", { … })` |
 | `plugin("clap:<id>", inputs)` | a CLAP plugin; `key` in its inputs names its saved settings (see [CLAP plugins](plugins.md)) |
-| `component({ id, inputs, controls, settings, output, positional, editor }, body)` | declares a component: the signals it reads, its controls (knobs, each with a unit, a default and a range), its settings, and how the editor offers it. Every std function is one (see `std/src`); the older `component({ controls }, fn)`, which only marks which arguments are knobs, still works |
+| `component({ id, inputs, controls, settings, output, positional, editor }, body)` | declares a component: the signals it reads, its controls (knobs, each with a unit, a default and a range; or a choice, `control.choice(["saw", "square"], "saw")`, or a switch, `control.bool(false)`), its settings, and how the editor offers it, with its views and groups ([Making a pack](making-a-pack.md#choices-switches-views-and-groups)). Every std function is one (see `std/src`); the older `component({ controls }, fn)`, which only marks which arguments are knobs, still works |
 
 ## Your own components
 

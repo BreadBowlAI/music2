@@ -89,10 +89,23 @@ impl Control {
     /// The value `value` plays as, exactly as a commit would write it (the literal's spelling,
     /// rounded through its units): what a gesture's update sends the engine (WRITE-22). Pure.
     pub fn audition(&self, value: f64) -> Result<f64, EditError> {
+        self.numbered()?;
         Ok(match &self.edit {
             Edit::Literal { lens, .. } => lens.propose(value)?.value,
             Edit::Insert(_) => lens::propose(value, 1.0)?.value,
         })
+    }
+
+    /// Why it isn't set as a number, when it is a choice or a switch: its value is a name, or true or
+    /// false (CARD-10, CARD-11), never a place. Its menu or switch is track `views`'.
+    pub(crate) fn numbered(&self) -> Result<(), EditError> {
+        match self.unit {
+            Some(u) if !u.is_number() => {
+                let what = if u == Unit::Switch { "a switch, set to true or false" } else { "a choice, set by its name" };
+                Err(EditError::Rejected(format!("this value is {what}, not a number")))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// For a control its call leaves out: the edits writing `written` (a signal's name, or a
@@ -200,7 +213,11 @@ fn control(rev: &Revision, sites: &HashMap<u32, &Site>, m: &Module, origin: &Ori
         let insertion = Insertion::plan(site, desc, &slot.slot, text, options_of(m, site.id).ok()?, &rev.compiled.units).ok()?;
         (format!("{}#{}/@{}", site.file, site.ordinal, slot.slot), String::new(), 1.0, Edit::Insert(insertion))
     } else {
-        let lens = LiteralLens::read(site, origin, text, value)?;
+        // A choice or a switch is written by its name, or true or false (CARD-10, CARD-11).
+        let lens = match unit.filter(|u| !u.is_number()) {
+            Some(u) => LiteralLens::named(site, origin, text, u, value)?,
+            None => LiteralLens::read(site, origin, text, value)?,
+        };
         // A quantity (`hz(500)`) is its own call; a plain number is written in its instance's
         // call, or, for an old-form component, is a constant with no unit.
         let quantity = match &origin.control {

@@ -264,10 +264,16 @@ pub enum LaneKind {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LaneData {
     Notes(Vec<NoteClip>),
-    Control { unit: Option<String>, clips: Vec<ControlClip> },
+    Control {
+        unit: Option<String>,
+        clips: Vec<ControlClip>,
+    },
     /// A lane of names (CARD-15): a choice's, read against `options`, or a switch's (`None`).
     /// Its file records the unit `choice` or `switch`.
-    Steps { options: Option<Vec<String>>, clips: Vec<StepClip> },
+    Steps {
+        options: Option<Vec<String>>,
+        clips: Vec<StepClip>,
+    },
     Audio(Vec<AudioClip>),
 }
 
@@ -958,8 +964,11 @@ impl Holds {
     pub fn of(text: &str) -> Holds {
         let kinds = [(LaneKind::Notes, Holds::Notes), (LaneKind::Control { unit: None }, Holds::Control), (LaneKind::Audio, Holds::Audio)];
         // A lane of names is known by its unit, which its points need.
-        let unit = serde_json::from_str::<Map<String, Value>>(text).ok().and_then(|m| m.get("unit").and_then(Value::as_str).map(str::to_string));
-        for (u, kind, holds) in [("choice", LaneKind::Choice { options: vec![] }, Holds::Choice), ("switch", LaneKind::Switch, Holds::Switch)] {
+        let unit =
+            serde_json::from_str::<Map<String, Value>>(text).ok().and_then(|m| m.get("unit").and_then(Value::as_str).map(str::to_string));
+        for (u, kind, holds) in
+            [("choice", LaneKind::Choice { options: vec![] }, Holds::Choice), ("switch", LaneKind::Switch, Holds::Switch)]
+        {
             if unit.as_deref() == Some(u) && LaneData::read(text, &kind).is_ok() {
                 return holds;
             }
@@ -1378,7 +1387,10 @@ mod tests {
         let LaneData::Steps { clips, options } = LaneData::read(text, &shapes()).unwrap() else { panic!() };
         let lane = ControlLane::steps(&clips, options.as_deref());
         let at = |b: f64| lane.value_at(b, 9.0);
-        assert_eq!([at(0.0), at(4.0), at(5.5), at(5.99), at(6.0), at(7.9), at(8.0), at(11.9), at(12.0)], [9.0, 1.0, 1.0, 1.0, 9.0, 9.0, 2.0, 2.0, 9.0]);
+        assert_eq!(
+            [at(0.0), at(4.0), at(5.5), at(5.99), at(6.0), at(7.9), at(8.0), at(11.9), at(12.0)],
+            [9.0, 1.0, 1.0, 1.0, 9.0, 9.0, 2.0, 2.0, 9.0]
+        );
         let switch = r#"{"unit": "switch", "clips": [{"start": 0, "length": 4, "points": [[0, true], [1, false]]}]}"#;
         let LaneData::Steps { clips, options } = LaneData::read(switch, &LaneKind::Switch).unwrap() else { panic!() };
         let lane = ControlLane::steps(&clips, options.as_deref());

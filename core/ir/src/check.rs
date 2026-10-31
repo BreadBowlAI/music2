@@ -1248,7 +1248,11 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>, plugin: 
         if let (PortKind::Any | PortKind::Control(None), Kind::Control(Some(u))) = (p.kind, k)
             && !u.is_number()
         {
-            let only = if u == Unit::Switch { "a switch reaches only a port of a switch" } else { "a choice reaches only a port of its own options" };
+            let only = if u == Unit::Switch {
+                "a switch reaches only a port of a switch"
+            } else {
+                "a choice reaches only a port of its own options"
+            };
             errs.push(format!("input `{}` ({}) works with numbers, and {k} isn't a number: {only}", p.name, p.kind));
             continue;
         }

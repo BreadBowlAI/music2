@@ -352,7 +352,9 @@ mod tests {
         assert_eq!(serde_json::from_str::<Unit>("\"switch\"").unwrap(), Unit::Switch);
         assert_eq!(serde_json::from_str::<Unit>("\"hz\"").unwrap(), Unit::Hz);
         // Names: 1 to 64, each once, each one line of 1 to 24 characters with no space at an end.
-        for bad in ["choice<>", "choice<a|a>", "choice<a||b>", "choice< a|b>", "choice<a|b >", "choice<abcdefghijklmnopqrstuvwxy>", "choice"] {
+        for bad in
+            ["choice<>", "choice<a|a>", "choice<a||b>", "choice< a|b>", "choice<a|b >", "choice<abcdefghijklmnopqrstuvwxy>", "choice"]
+        {
             assert!(bad.parse::<Unit>().is_err(), "{bad}");
         }
         let many = (0..65).map(|i| i.to_string()).collect::<Vec<_>>().join("|");
