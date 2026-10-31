@@ -609,6 +609,11 @@ export interface GraphState extends GraphStatus {
    */
   has_code?: boolean;
   /**
+   * The song asks for (or locks) an older @m2/core, std or one of music2's own packs than this app
+   * has (AGENT-14): the status offers Upgrade it. Absent from older servers.
+   */
+  upgrade?: boolean;
+  /**
    * Why this app can't write the project (WRITE-17): another program holds its lock, or its folder
    * can't be locked. Null when it can.
    */
@@ -829,6 +834,18 @@ function edit<T extends { revision: number; before: string; after: string; pendi
     .finally(() => within || ours.end());
 }
 
+/**
+ * What an upgrade did (FMT-25): each file it changed, with its lines before and after; what it left
+ * to change by hand; the revision it made, or null when nothing was written, and then why (`refused`:
+ * what doesn't build after it).
+ */
+export interface Upgraded {
+  changes: { file: string; lines: string[] }[];
+  left: { file: string; line: number; what: string; write: string }[];
+  written: number | null;
+  refused: string[];
+}
+
 /** An edit's answer. `step`: the undo step it made, by its id (AGENT-2); an undo's or a redo's: the step it took back. */
 type Edit = { file: string; before: string; after: string; revision: number; step?: number };
 /**
@@ -974,6 +991,11 @@ export const graphApi = {
   undo: (session: number, step?: number) => answer<Stepped>("/undo", { session, step }),
   /** Try the project's lock again (the read-only banner's Retry). Answers with the state. */
   retryLock: (session: number) => call<GraphState>("/lock/retry", { session }),
+  /**
+   * Move a song made for an older music2 to this one in one step (FMT-25, AGENT-14): one undo
+   * step, named Upgrade, written only if the song then builds. What it did is `upgraded`.
+   */
+  upgrade: (session: number) => call<{ upgraded: Upgraded; step?: number }>("/upgrade", { session }),
   redo: (session: number, step?: number) => answer<Stepped>("/redo", { session, step }),
   /**
    * Skip the newest step, `step`, which undo can't take back: it leaves the history and nothing is

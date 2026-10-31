@@ -1,7 +1,7 @@
 import clsx from "clsx";
-import { CircleAlert, CodeXml, Download, Gauge, HardDrive, Hourglass, Info, Lock, Pause, TriangleAlert, VolumeX, WifiOff } from "lucide-react";
+import { CircleAlert, CircleArrowUp, CodeXml, Download, Gauge, HardDrive, Hourglass, Info, Lock, Pause, TriangleAlert, VolumeX, WifiOff } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
+import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly, type Upgraded } from "../lib/graph";
 import { cancelGet, getMissing, missingPacks, sizeWords, useGetting, type MissingPack } from "../lib/library";
 import { usePill } from "../lib/overlays";
 import { openSettings } from "../lib/settings";
@@ -9,10 +9,11 @@ import { placeOf, technical, Words } from "../lib/plain";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import Attention from "./Attention";
+import { undoAction } from "./GraphCanvas";
 import { Button, Details, keepFocus, Popover } from "./ui";
 
 type Tone = "danger" | "warn" | "neutral";
-interface State { id: "offline" | "compile" | "problems" | "no-output" | "dropout" | "disk" | "meters" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
+interface State { id: "offline" | "upgrade" | "compile" | "problems" | "no-output" | "dropout" | "disk" | "meters" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
 
 // Hover darkens every tone, as it does a ghost button: the soft fill mixed toward its strong colour.
 const TONE: Record<Tone, string> = {
@@ -44,6 +45,8 @@ interface Dropouts {
 function states(graph: GraphState, status: GraphStatus | undefined, connected: boolean, dropouts: Dropouts): State[] {
   const out: State[] = [];
   if (!connected) out.push({ id: "offline", tone: "danger", label: "Reconnecting…", Icon: WifiOff });
+  // Made for an older music2 (AGENT-14): the one step that moves it comes before why it doesn't compile.
+  if (graph.upgrade) out.push({ id: "upgrade", tone: graph.has_code === false ? "danger" : "warn", label: "Made for an older music2", Icon: CircleArrowUp });
   // Danger when nothing plays at all (WRITE-20); otherwise the last version that compiled plays on.
   if (graph.view.draft_errors.length > 0)
     out.push({ id: "compile", tone: graph.has_code === false ? "danger" : "warn", label: "Code doesn't compile", Icon: graph.has_code === false ? CircleAlert : TriangleAlert });
@@ -136,6 +139,7 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                     Reconnecting… Editing is off until it is back.
                   </Item>
                 )}
+                {s.id === "upgrade" && <Upgrade graph={graph} state={s} onDone={() => setAnchor(null)} />}
                 {s.id === "compile" && (
                   <Compile
                     graph={graph}
@@ -238,6 +242,67 @@ function Item({ state, title, children, action, icon = true }: { state: State; t
         {children && <div className="text-sm text-fg-muted">{children}</div>}
         {action && <div className="mt-2 flex">{action}</div>}
       </div>
+    </div>
+  );
+}
+
+/** "3 files" or "music2.toml": what an upgrade changed, in a few words. */
+function changedWords(up: Upgraded) {
+  const files = up.changes.map((c) => c.file);
+  return files.length === 1 ? files[0] : `${files.length} files`;
+}
+
+/**
+ * A song made for an older music2 (AGENT-14): Upgrade it moves it to this one in one step, one undo
+ * step, shown as it lands. When the song wouldn't build after it, nothing is written, and what is
+ * left to change by hand shows here, by file and line, with the line to write.
+ */
+function Upgrade({ graph, state, onDone }: { graph: GraphState; state: State; onDone: () => void }) {
+  const toast = useStore((s) => s.toast);
+  const [running, setRunning] = useState(false);
+  const [left, setLeft] = useState<Upgraded | null>(null);
+  const run = async () => {
+    setRunning(true);
+    try {
+      const { upgraded: up, step } = await graphApi.upgrade(graph.session);
+      if (up.written !== null) {
+        onDone();
+        toast(`Upgraded to this music2: changed ${changedWords(up)}`, undoAction(graph.session, step));
+      } else setLeft(up);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+  return (
+    <div data-testid="upgrade">
+      <Item
+        state={state}
+        title="This song was made for an older music2"
+        action={
+          <Button variant="secondary" size="sm" onClick={run} disabled={running} data-testid="upgrade-run" className="shrink-0">
+            Upgrade it
+          </Button>
+        }
+      >
+        Upgrade moves it to this music2 in one step: its lines in music2.toml, the packs it plays, and the sounds and knobs that changed. Undo takes it back.
+      </Item>
+      {left && (
+        <ul data-testid="upgrade-left" className="px-2 pb-2 pl-8 space-y-1 text-sm select-text break-words">
+          <li className="text-fg">Nothing was changed: the song wouldn't play after it. Change these by hand first, then Upgrade it again.</li>
+          {left.left.map((l, i) => (
+            <li key={i} className="text-fg">
+              <span className="text-fg-muted">
+                {l.file}, line {l.line}:
+              </span>{" "}
+              {l.what}
+              {l.write && <span className="block font-mono text-xs text-fg-muted">{l.write}</span>}
+            </li>
+          ))}
+          {left.left.length === 0 && left.refused.slice(0, 3).map((r, i) => <li key={`r${i}`} className="text-fg-muted">{r}</li>)}
+        </ul>
+      )}
     </div>
   );
 }
