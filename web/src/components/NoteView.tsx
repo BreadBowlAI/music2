@@ -653,7 +653,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const clipboardRef = useRef((op: "copy" | "cut" | "paste") => (op === "paste" ? paste() : copy(op === "cut")));
   clipboardRef.current = (op) => (op === "paste" ? paste() : copy(op === "cut"));
   useEffect(() => {
-    const focused = () => !!root.current?.contains(document.activeElement) && !(document.activeElement instanceof HTMLInputElement);
+    const focused = () => !!root.current?.contains(document.activeElement);
     const hook = () => focused() && duplicateRef.current();
     const quantizeHook = () => focused() && (toolRef.current({ kind: "quantize" }), true);
     // View ▸ Zoom In and Zoom Out zoom the roll while it has the keyboard (X3); Taller and Shorter
