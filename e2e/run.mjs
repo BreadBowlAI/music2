@@ -181,6 +181,7 @@ export const SUITES = [
   ["ab-sampler", "export", { expect: 23, s: 4 }],
   ["cards", "fix", { expect: 33, s: 6 }],
   ["card-views", "fix", { expect: 61, s: 12 }],
+  ["wavetable", "fix", { expect: 30, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
