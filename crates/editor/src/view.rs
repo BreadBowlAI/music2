@@ -28,7 +28,9 @@ use m2_session::{Home, Session};
 use crate::cable::{Inlet, Outlet, inlets, outlets};
 use crate::controls::{Control, Declared, controls, declared, not_insertable};
 use crate::effect::{Listens, bypass_refused, calls_of, effect_at, is_bypassed, listens, move_row};
+use crate::kind::{self, Choice};
 use crate::sampler::{self, SamplerCard};
+use crate::settings::Setting;
 use crate::sites::{Params, fn_params};
 use crate::voices;
 
@@ -172,6 +174,9 @@ pub struct ViewNode {
     /// An instrument's card: how it plays its notes, in plain words (RENDER-16). Read-only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voices: Option<String>,
+    /// Its component's settings, in its descriptor's order (CARD-1).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<Setting>,
 }
 
 /// An effect card's ⋯ menu (Next D1, D2): each row's words when it can't run here.
@@ -262,6 +267,11 @@ pub struct Knob {
     /// Why it can't be automated (HOME-2), when it can't: its menu says so instead of offering it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automate_refused: Option<String>,
+    /// What it is (CARD-2): a number, or a plugin's stepped parameter as a choice or a switch
+    /// (CARD-6), whose menu writes its option's number.
+    pub kind: kind::Kind,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<Choice>,
 }
 
 /// What every declared control a value feeds says of `f`, when they all agree.
@@ -614,6 +624,15 @@ pub fn view(session: &Session) -> GraphView {
                 });
                 continue;
             };
+            // A hosted plugin's parameter it sets: a switch or a choice when stepped (CARD-6).
+            let (kind, options) = all
+                .iter()
+                .find_map(|k| match &k.op {
+                    Op::Plugin { plugin, inputs, .. } => inputs.iter().find(|(_, r)| split_ref(r).0 == n.id).map(|(p, _)| (plugin, p)),
+                    _ => None,
+                })
+                .and_then(|(plugin, port)| session.packages.plugin_param(plugin, port))
+                .map_or((kind::Kind::Number, vec![]), |(p, steps)| kind::of_param(p.stepped, p.min, p.max, steps));
             let port = consumer.and_then(|(sig, p)| sig?.inputs.iter().find(|i| i.name == p));
             let port_unit = port.and_then(|p| match p.kind {
                 PortKind::Control(u) => u,
@@ -654,6 +673,8 @@ pub fn view(session: &Session) -> GraphView {
                 uses: c.uses,
                 home: c.home,
                 automate_refused: automate_refused(c, &value_key(&c.origin).expect("keyed")),
+                kind,
+                options,
             });
         }
         // Cables end on the innermost call containing the name, like knobs.
@@ -808,6 +829,10 @@ pub fn view(session: &Session) -> GraphView {
                 plugin: plugins.get(g).cloned(),
                 sampler,
                 voices,
+                settings: match g {
+                    Group::Site(s) if kind == "call" => crate::settings::of_card(rev, sites[s]),
+                    _ => vec![],
+                },
             });
             id
         };
@@ -917,6 +942,7 @@ pub fn view(session: &Session) -> GraphView {
                 plugin: None,
                 sampler: None,
                 voices: None,
+                settings: vec![],
             });
             // A track's output that an effect turned off gives on comes from its card.
             let (r, g) = match off.iter().find(|(_, _, input)| input.contains(r.as_str())) {

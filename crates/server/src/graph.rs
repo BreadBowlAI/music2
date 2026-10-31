@@ -1539,6 +1539,23 @@ impl Graph {
         }
     }
 
+    /// [`Graph::set`] for any value (CARD-4): a number for a knob, through its gesture's lease
+    /// when it has one; or a setting's value (a number, a string or a boolean), one Tx on its call.
+    pub fn set_any(&self, token: u64, revision: u64, id: &str, gesture: &str, value: Value, expect: Option<Value>) -> Result<Value> {
+        let number = value.as_f64().filter(|_| expect.as_ref().is_none_or(Value::is_number));
+        if let Some(v) = number
+            && !crate::caller::now().is_agent()
+            && let Some(lease) = self.lease_of(token, revision, id, gesture)?
+        {
+            return match self.commit(lease, v, expect.and_then(|e| e.as_f64()))? {
+                Committed::Written(v) => Ok(v),
+                Committed::Pending { errors } => Ok(json!({"pending": true, "errors": errors})),
+            };
+        }
+        let (id, gesture) = (id.to_string(), gesture.to_string());
+        self.call(move |a| a.set_any(token, revision, &id, &gesture, value, expect))
+    }
+
     // ------------------------------------------------------------ edits through the session
 
     /// Connect a named signal to a control's input, in code. The graph changes shape, so a new

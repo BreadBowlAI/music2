@@ -102,7 +102,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **Your presets can't be renamed or deleted** in the app, and there is no Show in Finder: tidy the Presets folder by hand.
 - **A card doesn't say which preset it came from**, or that its knobs changed since.
-- **Presets hold a sound's numbers only**: not its settings (`voices`, `mode`, #35), and not whole tracks, chains or the mixer.
+- **Presets hold a sound's numbers only**: not its settings (`voices`, `mode`), and not whole tracks, chains or the mixer.
 - **music2's own presets are for five sounds** (Synth pluck, Synth pad, Synth bass, Reverb and Delay), two each.
 - **A preset is for one sound**: a Synth pluck's doesn't load into the older Pluck (`std:pluck`), nor the other way.
 - **A control a load can't write into its call** (its options are a variable) is left as it is without a word.
@@ -197,12 +197,16 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 35 | **Knobs for more numbers**: a number held in a variable (`const cutoff = 800`) or worked out from others (`2 * 440`) shows **edit in code**; settings such as an instrument's `voices`, `mode` and `glide` aren't on its card (the card says how it plays, read-only). | A beginner who gives a number a name, as tutorials teach, loses its knob. | No | medium |
+| 35 | **Knobs for more numbers**: a number held in a variable (`const cutoff = 800`) or worked out from others (`2 * 440`) shows **edit in code**, and so does a setting held in one (a card shows its settings since track `cards`, CARD-1). | A beginner who gives a number a name, as tutorials teach, loses its knob. | No | medium |
 | 1 | **The rest of changing an instrument**: a track whose instrument is built from parts, has two instruments or a plugin, or whose settings code works out, is refused in words. Adding a track to a song that mixes its own way, or changing a track's instrument to a CLAP plugin, still needs code (+ Track can add a plugin track). | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
 | 10 | **The rest of changing a track's ID**: a track with a new ID restarts its sounds (its plugins' and instruments' state isn't carried over, design-8b §11.3), and the status popover has no Restore for a rename done by hand in code (DIAG-6). | A rename shouldn't cut a sound that is playing. | Yes | small |
 
 - **A knob let go while the code doesn't compile** keeps playing its new value, and is written once the code compiles; after 30 seconds it is dropped, with a message. Writing it at once, when the broken file is another one, is the owner's call (the step 6 design's C21).
 - **Two numbers edited on neighbouring lines by another program** count as a change to the calls between them, so the song is rebuilt (crossfaded) rather than the numbers written into what plays.
+- **A setting can't be taken back out of its call** from the card: choosing its default writes the default in (CARD-4).
+- **Regions and a keymap are words on a card**: their picture, and changing them there, come with views (CARD-20 to CARD-29).
+- **A plugin's menu says the names its default state gives its steps**, asked once when it is described (CARD-6). Surge XT marks none of its parameters stepped, so its filter types and the like are knobs, as numbers from 0 to 1.
+- **A mixer channel's `to` on a track's own mixer card lists every track**, buses or not; the build refuses one that isn't a bus channel of that mixer, in words. The Mix view's routing knows its buses.
 
 ## Problems and help
 

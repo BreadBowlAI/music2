@@ -632,6 +632,21 @@ fn run() -> Result<()> {
                     for r in &n.readonly {
                         println!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
                     }
+                    // Its settings (CARD-1): what each is, what it plays, and its id for `m2 set`.
+                    for x in &n.settings {
+                        let value = match (&x.value, &x.expression, &x.said) {
+                            (_, _, Some(said)) => said.clone(),
+                            (serde_json::Value::Null, Some(e), _) => format!("`{e}`"),
+                            (v, ..) => v.to_string(),
+                        };
+                        let kind = serde_json::to_value(x.kind)?.as_str().unwrap_or_default().to_string();
+                        let how = match (&x.readonly, x.written) {
+                            (Some(why), _) => format!("  (edit in code: {why})"),
+                            (None, false) => "  (default)".to_string(),
+                            (None, true) => String::new(),
+                        };
+                        println!("      {:14} {:>9} {kind:9} {}{how}", x.label, value, x.id);
+                    }
                 }
             }
         }
@@ -649,10 +664,30 @@ fn run() -> Result<()> {
         Some("set") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let id = arg(2)?;
-            let value: f64 = arg(3)?.parse().context("value")?;
-            let expect: Option<f64> = flag(&args, "--expect").map(|v| v.parse()).transpose().context("--expect")?;
             let t = Instant::now();
             let at = s.accepted().number;
+            // A setting (CARD-4): its value as written, a number, true or false, or a word.
+            if m2_editor::settings::names(&s, at, &id) {
+                let read = |v: String| match v.as_str() {
+                    "true" => serde_json::Value::Bool(true),
+                    "false" => serde_json::Value::Bool(false),
+                    _ => v
+                        .parse::<f64>()
+                        .ok()
+                        .and_then(serde_json::Number::from_f64)
+                        .map_or(serde_json::Value::String(v), serde_json::Value::Number),
+                };
+                let expect = flag(&args, "--expect").map(read);
+                let e = m2_editor::settings::set(&mut s, at, &id, &read(arg(3)?), expect.as_ref()).map_err(|e| anyhow!("{e}"))?;
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                match e.revision == at {
+                    true => println!("{id}: it is that already; nothing to write"),
+                    false => println!("{}: `{}` → `{}` (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision),
+                }
+                return Ok(());
+            }
+            let value: f64 = arg(3)?.parse().context("value")?;
+            let expect: Option<f64> = flag(&args, "--expect").map(|v| v.parse()).transpose().context("--expect")?;
             let c = s.set(at, &id, value, expect).map_err(|e| anyhow!("{e}"))?;
             println!(
                 "{}: `{}` → `{}` (revision {}, verified in {:.0} ms)",

@@ -1890,6 +1890,30 @@ impl Actor {
         }
     }
 
+    /// A plain write of any value, with no gesture lease (CARD-4): a setting's, one Tx on its call;
+    /// else a knob's number, as [`Actor::set_value`] writes it.
+    pub(super) fn set_any(
+        &mut self,
+        token: u64,
+        revision: u64,
+        id: &str,
+        gesture: &str,
+        value: Value,
+        expect: Option<Value>,
+    ) -> Result<Value> {
+        let o = self.open.as_ref().context("no project is open")?;
+        if m2_editor::settings::names(&o.session, revision, id) {
+            let id = id.to_string();
+            return self.edit(token, move |s| m2_editor::settings::set(s, revision, &id, &value, expect.as_ref()));
+        }
+        let number = value.as_f64().ok_or_else(|| anyhow!("`{id}` is a knob: its value is a number, not {value}"))?;
+        let expect = match expect {
+            None => None,
+            Some(e) => Some(e.as_f64().ok_or_else(|| anyhow!("`{id}` is a knob: expect a number, not {e}"))?),
+        };
+        self.set_value(token, revision, id, gesture, number, expect)
+    }
+
     /// An edit through the session; whatever happened, the accepted revision plays after it.
     pub(super) fn edit(&mut self, token: u64, edit: impl FnOnce(&mut Session) -> Result<Edited, EditError>) -> Result<Value> {
         self.edit_and(token, |s| edit(s).map(|e| (e, json!({}))))

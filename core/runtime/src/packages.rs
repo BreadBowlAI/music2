@@ -131,12 +131,20 @@ pub struct PackageSet {
 /// A hosted plugin as the last build found it.
 #[derive(Clone)]
 enum Hosted {
-    /// Instantiated once to read its ports and parameters.
-    Installed(KernelSig, m2_plugins::Info),
+    /// Instantiated once to read its ports, its parameters and their steps' names.
+    Installed(KernelSig, Box<(m2_plugins::Info, Steps)>),
     /// Not installed, or not loadable (FMT-18a): typed from the code as written, played as
     /// silence or as its input passed through. Its ports are those of the last build.
     Missing(KernelSig),
 }
+
+/// What a plugin calls each step of its stepped parameters, by parameter id: for each one of at
+/// most [`MOST_STEPS`] steps that names every step (CARD-6). Asked once, when it is described.
+type Steps = BTreeMap<u32, Vec<String>>;
+
+/// The most steps a stepped parameter's names are asked for: one with more is a number to every
+/// editor (CARD-6), and asking would cost a call to the plugin for each step.
+pub const MOST_STEPS: u32 = 64;
 
 /// The engine every kernel runs in.
 ///
@@ -384,8 +392,8 @@ impl PackageSet {
                 continue;
             }
             match describe_plugin(&*self.host, id) {
-                Ok((sig, info)) => {
-                    self.plugins.insert(id.to_string(), Hosted::Installed(sig, info));
+                Ok((sig, info, steps)) => {
+                    self.plugins.insert(id.to_string(), Hosted::Installed(sig, Box::new((info, steps))));
                 }
                 Err(e) => errors.push(format!("{e:#}")),
             }
@@ -396,9 +404,19 @@ impl PackageSet {
     /// An installed plugin's ports and parameters, once described.
     pub fn plugin_info(&self, id: &str) -> Option<&m2_plugins::Info> {
         match self.plugins.get(id)? {
-            Hosted::Installed(_, info) => Some(info),
+            Hosted::Installed(_, described) => Some(&described.0),
             Hosted::Missing(_) => None,
         }
+    }
+
+    /// The parameter of installed plugin `plugin` that port `port` addresses (`<name>_<id>`,
+    /// FMT-18), by its id alone, and what the plugin calls each of its steps when it named them
+    /// all (CARD-6).
+    pub fn plugin_param(&self, plugin: &str, port: &str) -> Option<(&m2_plugins::Param, Option<&[String]>)> {
+        let Hosted::Installed(_, described) = self.plugins.get(plugin)? else { return None };
+        let (info, steps) = &**described;
+        let (_, id) = m2_plugins::param_address(port)?;
+        Some((info.params.iter().find(|p| p.id == id)?, steps.get(&id).map(Vec::as_slice)))
     }
 
     /// Whether the last build found `id` missing, so its node plays silence or its input (FMT-18a).
@@ -451,7 +469,7 @@ impl PackageSet {
                 let Op::Plugin { plugin, inputs, .. } = &mut n.op else { return };
                 let at = |d: Diagnostic| d.module(key.clone()).at(n.src.clone());
                 match self.plugins.get(plugin.as_str()) {
-                    Some(Hosted::Installed(sig, _)) => {
+                    Some(Hosted::Installed(sig, ..)) => {
                         let (bound, found) = bind(plugin, sig, std::mem::take(inputs));
                         *inputs = bound;
                         diags.extend(found.into_iter().map(at));
@@ -497,7 +515,7 @@ impl Kernels for PackageSet {
 
     fn plugin(&self, id: &str) -> Option<&KernelSig> {
         match self.plugins.get(id)? {
-            Hosted::Installed(sig, _) | Hosted::Missing(sig) => Some(sig),
+            Hosted::Installed(sig, ..) | Hosted::Missing(sig) => Some(sig),
         }
     }
 }
@@ -590,7 +608,7 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
 /// instance created and activated through the host (on the plugin main thread), then destroyed:
 /// activating is what measures its latency at its default state, which the check refuses inside a
 /// `poly` voice only (RENDER-21); a node's own instance measures its own (RENDER-17).
-fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plugins::Info)> {
+fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plugins::Info, Steps)> {
     let Some(clap_id) = id.strip_prefix("clap:") else { bail!("plugin ids start with `clap:`, not `{id}`") };
     // Found by the host, which loads plugin code: the app never does (HOST-3).
     let (found, _) = host.scan();
@@ -599,10 +617,29 @@ fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plu
         .find(|f| f.id == clap_id)
         .with_context(|| format!("no CLAP plugin `{clap_id}` is installed (looked in {:?})", m2_plugins::search_paths()))?;
     let (h, mut info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
+    // Here, off the audio thread, once for the plugin: never while a card is drawn (CARD-6).
+    let steps = steps_of(host, h, &info.params);
     let latency = host.activate(h, 48_000, 128);
     host.destroy(h);
     info.latency = latency?;
-    Ok((plugin_sig(id, &info)?, info))
+    Ok((plugin_sig(id, &info)?, info, steps))
+}
+
+/// What instance `h` calls each step of each stepped parameter of 2 to [`MOST_STEPS`] steps, by
+/// parameter id; a parameter with a step it gives no name is left out (CARD-6).
+fn steps_of(host: &dyn PluginHost, h: m2_plugins::Handle, params: &[m2_plugins::Param]) -> Steps {
+    let stepped = |p: &&m2_plugins::Param| {
+        p.stepped && p.min.fract() == 0.0 && p.max.fract() == 0.0 && p.max > p.min && p.max - p.min < f64::from(MOST_STEPS)
+    };
+    let name = |id: u32, v: f64| match host.main_call(h, m2_plugins::MainCall::Text(id, v)) {
+        Ok(m2_plugins::Reply::Text(Some(t))) => Some(t.trim().to_string()),
+        _ => None,
+    };
+    params
+        .iter()
+        .filter(stepped)
+        .filter_map(|p| Some((p.id, (0..=(p.max - p.min) as u32).map(|i| name(p.id, p.min + f64::from(i))).collect::<Option<Vec<_>>>()?)))
+        .collect()
 }
 
 /// The ports of an installed plugin: `in`, `notes`, each parameter by its address (FMT-18), `out`.
@@ -798,7 +835,7 @@ mod tests {
             latency: 0,
             gui: false,
         };
-        set.plugins.insert(id.into(), Hosted::Installed(plugin_sig(id, &info).unwrap(), info));
+        set.plugins.insert(id.into(), Hosted::Installed(plugin_sig(id, &info).unwrap(), Box::new((info, Steps::new()))));
     }
 
     /// One plugin after a sine, with `ports` written as `port: constant`.
