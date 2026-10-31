@@ -127,7 +127,14 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    const measure = () => setRoom((r) => (r && r.w === el.clientWidth && r.h === el.clientHeight ? r : { w: el.clientWidth, h: el.clientHeight }));
+    // The panel's whole box, less a scrollbar each way: never the room the scrollbars showing now
+    // leave. Those come and go with the zoom, so a fit to them flickers: a scrollbar shows, the fit
+    // shrinks the graph, the scrollbar goes, the fit grows it, every frame (DV-5).
+    const measure = () => {
+      const bar = scrollbarRoom();
+      const w = el.offsetWidth - bar, h = el.offsetHeight - bar;
+      setRoom((r) => (r && r.w === w && r.h === h ? r : { w, h }));
+    };
     measure();
     const watch = new ResizeObserver(measure);
     watch.observe(el);
@@ -212,9 +219,23 @@ const CHROME_W = 64;
 const CHROME_H = 64;
 
 /**
+ * How much room a scrollbar takes from what it scrolls: none where scrollbars float over it (a Mac
+ * with a trackpad), else its width (a mouse, or "Show scroll bars: Always").
+ */
+function scrollbarRoom() {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;visibility:hidden;overflow:scroll;width:40px;height:40px";
+  document.body.append(probe);
+  const room = probe.offsetWidth - probe.clientWidth;
+  probe.remove();
+  return room;
+}
+
+/**
  * The zoom Fit picks (taste.md §3.5, DV-5): a sound that fits the panel's height at full size (a
  * chain, one row of cards) opens at 100% and scrolls sideways, the way signal reads; one that
- * doesn't is shrunk to fit, down to 75%, and scrolls past that.
+ * doesn't is shrunk to fit, down to 75%, and scrolls past that. `room` leaves a scrollbar's room
+ * each way, so what fits never needs one.
  */
 function fitZoom(laid: { width: number; height: number }, room: { w: number; h: number }) {
   const tall = (room.h - CHROME_H) / laid.height;
