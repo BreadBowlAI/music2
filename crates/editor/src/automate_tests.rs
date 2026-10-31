@@ -387,8 +387,7 @@ fn disconnect_writes_a_choices_default_as_its_name() {
     let mut s = f.open();
     assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
     let song = f.read("song.ts");
-    let inlet =
-        |s: &Session, name: &str| s.inlets().into_iter().filter(|i| i.name == name).last().unwrap_or_else(|| panic!("{name} is a cable"));
+    let inlet = |s: &Session, name: &str| s.inlets().into_iter().rfind(|i| i.name == name).unwrap_or_else(|| panic!("{name} is a cable"));
     let on = inlet(&s, "on");
     let e = s.disconnect(on.revision, &on.id).unwrap();
     assert_eq!((e.before.as_str(), e.after.as_str()), ("on", "false"));

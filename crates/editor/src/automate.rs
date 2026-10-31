@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use m2_ir::{Kind, Module, Unit};
+use m2_ir::{Kind, Module};
 use m2_script::sites::{Arg, Site};
 use m2_session::Session;
 use m2_song::tx::{Confined, Declared as Ranges, Expect, Op, Payload, Range, TxPath};
