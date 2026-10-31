@@ -4,6 +4,6 @@ format = 1
 sample_rate = 48000
 
 [dependencies]
-"@m2/core" = "1"
-std = "0.8"
+"@m2/core" = "2"
+std = "0.9"
 "@test/tiny" = "0.1"

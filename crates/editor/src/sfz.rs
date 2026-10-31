@@ -1173,10 +1173,11 @@ pub fn import(i: &Import) -> Result<Imported, String> {
     let std_req =
         m2_song::Requirement::minor(m2_song::pack::PkgManifest::at(i.std).map(|m| m.package.version).unwrap_or(m2_song::Version(0, 5, 0)));
     let manifest = format!(
-        "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nlicense = {}\ndescription = {}\nauthors = []\ntags = []\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{std_req}\"\n",
+        "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nlicense = {}\ndescription = {}\nauthors = []\ntags = []\n\n[dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{std_req}\"\n",
         i.name,
         quote(&license),
         quote(&format!("{label}, from an SFZ instrument")),
+        crate::packs::sdk_line(),
     );
     let mut readme = format!(
         "# {label}\n\n**In short:** a music2 pack made by `m2 pack import-sfz` from `{}`: one instrument, `{}:{id}`, \

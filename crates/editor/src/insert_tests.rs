@@ -334,28 +334,28 @@ fn connecting_a_control_the_call_leaves_out_writes_the_name_into_it() {
     assert_eq!(fixture.source(), original);
 }
 
-// D14, 6.5: disconnecting writes the receiving control's default as its descriptor spells it:
-// `ms(45)`, the constructor imported when the file doesn't have it, never `0.045` with float noise
+// D14, 6.5: disconnecting writes the receiving control's default as its descriptor spells it (the
+// kit's hat decay): `ms(45)`, the constructor imported when the file doesn't have it, never `0.045` with float noise
 // or a base value in another unit; a spelling of scale 1 is written as its plain number.
 #[test]
 fn disconnect_writes_the_spelled_default() {
     for imported in ["song", "ms, song"] {
         let source = format!(
-            "import {{ {imported} }} from \"@m2/core\";\nimport {{ lfo }} from \"std/control\";\nimport {{ hat }} from \"@m2/synths\";\n\
+            "import {{ {imported} }} from \"@m2/core\";\nimport {{ lfo }} from \"std/control\";\nimport {{ drums }} from \"@m2/drums\";\n\
              import {{ xrange }} from \"std/math\";\nexport default song(({{ lane, time }}) => {{\n  \
-             const d = xrange(lfo(time.beats), 0.02, 0.08);\n  return hat(lane.notes(\"hits\"), {{ decay: d }});\n}});\n"
+             const d = xrange(lfo(time.beats), 0.02, 0.08);\n  return drums.kit(lane.notes(\"hits\"), {{ hatDecay: d }});\n}});\n"
         );
         let fixture = Fixture::new(&source);
         let mut s = fixture.open();
         let inlet = s.inlets().into_iter().find(|i| i.name == "d").unwrap();
         s.disconnect(s.accepted().number, &inlet.id).unwrap_or_else(|e| panic!("{imported}: {e}"));
         let now = fixture.source();
-        assert!(now.contains("hat(lane.notes(\"hits\"), { decay: ms(45) })"), "{now}");
+        assert!(now.contains("drums.kit(lane.notes(\"hits\"), { hatDecay: ms(45) })"), "{now}");
         assert!(
             now.starts_with("import { ms, song } from \"@m2/core\";") || now.starts_with("import { song, ms } from \"@m2/core\";"),
             "{now}"
         );
-        let decay = s.controls().into_iter().find(|c| c.origin.slot() == Some("decay")).unwrap();
+        let decay = s.controls().into_iter().find(|c| c.origin.slot() == Some("hatDecay")).unwrap();
         assert_eq!(decay.value, 45.0 * 0.001, "exactly `ms(45)`");
     }
     // A spelling of scale 1 is its number.

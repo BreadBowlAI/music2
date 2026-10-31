@@ -126,7 +126,7 @@ fn acyclic(p: &Parts) -> bool {
 // and the tracks read nothing.
 #[test]
 fn a_track_is_one_partition() {
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(&three());
     let r = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
     let g = &r.plan.graph;
@@ -217,7 +217,7 @@ fn every_edge_goes_forward() {
 // RENDER-2 (8a): the same plan gives the same schedule: partitions, their nodes, labels and reads.
 #[test]
 fn the_schedule_is_the_same_for_the_same_plan() {
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(&three());
     let a = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
     let b = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
@@ -228,7 +228,7 @@ fn the_schedule_is_the_same_for_the_same_plan() {
 // 8a (design §5): the heaviest track is taken first; the song, which reads all, is no root.
 #[test]
 fn the_most_critical_partitions_go_first() {
-    let pk = std_packages();
+    let pk = own_packages();
     let r = Renderer::new(&flat(&three()), &DataSet::empty(), &pk, SR).unwrap();
     let p = &schedule(&r).parts;
     let roots: Vec<&str> = schedule(&r).tasks.roots().iter().map(|&q| p.label(q).0).collect();
@@ -238,7 +238,7 @@ fn the_most_critical_partitions_go_first() {
 // 8a: a song of one module is one partition, and a chain of modules wakes no worker: width 1.
 #[test]
 fn a_chain_has_width_one() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (a, _) = sine_track(110.0, 2);
     let ir = song(a, "out", json!([]));
     let r = Renderer::new(&flat(&ir), &DataSet::empty(), &pk, SR).unwrap();
@@ -306,7 +306,7 @@ fn rules_hold(r: &Renderer, old: &Flat, new: &Flat) {
 // with the track it carries.
 #[test]
 fn ghosts_fades_and_overlays_take_their_labels() {
-    let pk = std_packages();
+    let pk = own_packages();
     let before =
         sidechained("s", 220.0, json!([{"id": "mix", "op": "kernel", "kernel": "std:add", "inputs": {"a": "kick", "b": "pad"}}]), "mix");
     // The pad's sine is replaced: a ghost, and `m`'s input fades. The song's mix reads a new delay
@@ -317,7 +317,7 @@ fn ghosts_fades_and_overlays_take_their_labels() {
         330.0,
         json!([
             {"id": "dt", "op": "const", "value": 0.01, "unit": "seconds"},
-            {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "pad", "time": "dt"}},
+            {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "pad", "time": "dt"}},
             {"id": "mix", "op": "kernel", "kernel": "std:add", "inputs": {"a": "kick", "b": "d"}},
             {"id": "h", "op": "const", "value": 0.5},
             {"id": "o2", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "mix", "by": "h"}}]),
@@ -382,7 +382,7 @@ fn every_read() -> (Ir, DataSet) {
 #[test]
 #[cfg_attr(not(debug_assertions), ignore = "the check runs in debug builds")]
 fn reads_lists_every_read() {
-    let mut pk = std_packages();
+    let mut pk = own_packages();
     let (mut ir, data) = every_read();
     let diags = pk.bind_plugins(&mut ir);
     assert!(diags.iter().all(|d| d.code == "plugin.missing"), "{diags:?}");
@@ -430,7 +430,7 @@ fn at(f: &Flat, r: &Renderer, name: &str) -> usize {
 
 /// The first block of `ir` on `runner`, strict: what it says, and `r` after it.
 fn first_block(ir: &Ir, runner: &mut Runner) -> (Result<(), String>, Renderer, Flat) {
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(ir);
     let mut r = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
     let said = r.render_block_on(0, runner).map(drop).map_err(|e| e.to_string());
@@ -490,7 +490,7 @@ fn random_song(seed: u64) -> Ir {
             _ if k == fb_at => json!({"op": "kernel", "kernel": "std:add", "inputs": {"a": pick(&mut s), "b": "fb"}}),
             (_, 1) => json!({"op": "kernel", "kernel": "std:scale", "inputs": {"in": pick(&mut s), "by": "c"}}),
             (_, 2) => json!({"op": "kernel", "kernel": "std:add", "inputs": {"a": pick(&mut s), "b": pick(&mut s)}}),
-            _ => json!({"op": "kernel", "kernel": "std:delay", "inputs": {"in": pick(&mut s), "time": "t"}}),
+            _ => json!({"op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": pick(&mut s), "time": "t"}}),
         };
         let mut node = node;
         node["id"] = json!(format!("n{k}"));
@@ -531,7 +531,7 @@ fn shuffle_and_cut(r: &mut Renderer, seed: u64) -> usize {
 // over the whole test some read a producer that ran on another thread.
 #[test]
 fn random_convex_partitions_give_the_same_bits() {
-    let pk = std_packages();
+    let pk = own_packages();
     let seconds = 64.0 * BLOCK as f64 / SR as f64;
     let mut pools = spreads([4, 7]);
     for seed in 0..200u64 {
@@ -599,7 +599,7 @@ fn crossings() -> (Ir, DataSet) {
 // another partition.
 #[test]
 fn cross_module_feedback_captures_and_sidechains_on_n_threads() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (ir, data) = crossings();
     let f = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
     let one = Renderer::new(&f, &data, &pk, SR).unwrap().render(4.0).unwrap();
@@ -619,7 +619,7 @@ fn cross_module_feedback_captures_and_sidechains_on_n_threads() {
 fn a_song_with_a_plugin_runs_no_task_on_a_worker() {
     m2_plugins::test_main_thread();
     m2_plugins::probe::install();
-    let mut pk = std_packages();
+    let mut pk = own_packages();
     let ((k, _), (h, _)) = (sine_track(55.0, 1), sine_track(440.0, 1));
     let mut ir = tracks(
         &[
@@ -697,7 +697,7 @@ fn first_song_mix() -> Ir {
 // Constants run in no partition. The same bits on 1 and 4 threads.
 #[test]
 fn a_mixer_strip_runs_with_its_track() {
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(&first_song_mix());
     let r = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
     let g = &r.plan.graph;
@@ -736,13 +736,13 @@ fn constants_run_in_no_partition() {
     assert_eq!(p.part_of(0), NONE);
     assert!(p.reads(1, 0) && !p.reads(0, 1), "the song waits for the track, and the track for nothing");
     // A song's written constants, and a notes lane.
-    let pk = std_packages();
+    let pk = own_packages();
     let r = Renderer::new(&flat(&first_song_mix()), &DataSet::empty(), &pk, SR).unwrap();
     let g = &r.plan.graph;
     assert_eq!(g.order.iter().filter(|&&i| matches!(g.exec[i], Exec::Const(_))).count(), 9, "the mix's written constants");
     whole(&g.order, &g.exec, &schedule(&r).parts);
     let (ir, data) = every_read();
-    let mut pk = std_packages();
+    let mut pk = own_packages();
     let mut ir = ir;
     pk.bind_plugins(&mut ir);
     let r = Renderer::new(&check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}")), &data, &pk, SR).unwrap();
@@ -802,7 +802,7 @@ fn bused() -> Ir {
 // 1, 4 and 7 threads give the same bits.
 #[test]
 fn a_song_and_its_buses_split_into_partitions_with_no_cycle() {
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(&bused());
     let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
     assert_eq!(f.routes, [pair("a", "verb"), pair("b", "verb"), pair("verb", "echo")]);

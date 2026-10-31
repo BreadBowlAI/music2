@@ -16,7 +16,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use m2_runtime::PackageSet;
 use m2_song::Project;
 
-use super::preview::{ARRANGEMENT, lane, wanted};
+use super::preview::{ARRANGEMENT, lane};
 use crate::render::{Length, Render, Threads};
 
 /// std's kit: each drum's file name, and the note std's drum kit plays it on (General MIDI).
@@ -69,8 +69,8 @@ fn make_in(std: &Path, drums: &Path, note: u8, work: &Path) -> Result<Vec<u8>> {
     let drums = drums.canonicalize().with_context(|| format!("finding @m2/drums at {}", drums.display()))?;
     let manifest = format!(
         "[project]\nname = \"Kit\"\nformat = 1\nsample_rate = {RATE}\n\n[dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{}\"\n\"@m2/drums\" = {{ path = {} }}\n",
-        wanted(m2_script::SDK_VERSION),
-        wanted(&version),
+        crate::packs::line_for(m2_script::SDK_VERSION),
+        crate::packs::line_for(&version),
         serde_json::to_string(&drums.to_string_lossy()).expect("a string")
     );
     let files = [

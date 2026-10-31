@@ -59,10 +59,11 @@ case_ "std's kernel source, changed" "std/kernels/std.wasm: a rebuild differs fr
   "$export_more std/kernels-src/src/lib.rs"
 case_ "a pack with kernel source that names no module" "packs/@m2/effects: its crate builds a module, but its m2pkg.toml names no wasm" \
   'sed -i.old "/^wasm = /d" packs/@m2/effects/m2pkg.toml && rm packs/@m2/effects/m2pkg.toml.old'
-# A bundled pack that says it has a module, and holds one, but no source builds it.
-no_source='m=packs/@m2/drums/m2pkg.toml && { sed -n "1,/^version = /p" $m; echo "wasm = \"kernels/drums.wasm\""; sed "1,/^version = /d" $m; } > $m.new &&
-  mv $m.new $m && mkdir -p packs/@m2/drums/kernels && cp packs/@m2/effects/kernels/effects.wasm packs/@m2/drums/kernels/drums.wasm'
-case_ "a bundled pack's module with no source" "packs/@m2/drums: its m2pkg.toml names kernels/drums.wasm, but no crate of the kernels' workspace builds it" \
+# A bundled pack that says it has a module, and holds one, but no source builds it (every pack music2
+# ships has kernels of its own since wave 3, so one is made for the case).
+no_source='mkdir -p packs/@m2/stray/kernels && printf "[package]\nname = \"@m2/stray\"\nversion = \"1.0.0\"\nwasm = \"kernels/stray.wasm\"\n" > packs/@m2/stray/m2pkg.toml &&
+  cp packs/@m2/effects/kernels/effects.wasm packs/@m2/stray/kernels/stray.wasm'
+case_ "a bundled pack's module with no source" "packs/@m2/stray: its m2pkg.toml names kernels/stray.wasm, but no crate of the kernels' workspace builds it" \
   "$no_source"
 
 # metadata <dir>: each crate of the kernels' workspace in a copy of the tree at <dir>, with the

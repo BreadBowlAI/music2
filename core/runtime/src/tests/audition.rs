@@ -53,7 +53,7 @@ fn a_live_note_sounds_and_ends() {
 fn probed(data: &DataSet) -> (Rig, u64, m2_plugins::Handle) {
     m2_plugins::test_main_thread();
     probe::install();
-    let mut pk = std_packages();
+    let mut pk = own_packages();
     let mut ir = song(
         json!([{"id": "n", "op": "lane", "lane": "notes"}, {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"notes": "n"}}]),
         "p",
@@ -129,12 +129,12 @@ fn a_live_note_survives_stop_seek_and_wrap() {
 #[test]
 fn a_live_note_moves_with_its_lane_across_an_activation() {
     let plain = synth(0.05, json!([]), "v");
-    let delayed = synth(0.05, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d");
+    let delayed = synth(0.05, json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}}]), "d");
     let data = DataSet::empty();
     // Notes enough to outgrow the scheduler: 300 at beat 64.
     let many: Vec<Value> = (0..300).map(|k| json!({"pitch": k % 100, "start": 64, "length": 1})).collect();
     let grown = with_notes(json!({"clips": [{"id": "c", "start": 0, "length": 128, "notes": many}]}), at_bpm(120.0));
-    let pk = std_packages();
+    let pk = own_packages();
     let (p, d) = (flat(&plain), flat(&delayed));
     let (mut rig, g) = rig(&plain, &data);
     rig.cmd(Cmd::Play);
@@ -164,7 +164,7 @@ fn a_live_note_moves_with_its_lane_across_an_activation() {
 #[test]
 fn a_replaced_consumer_ends_its_live_notes() {
     let (gated, enveloped) = (synth(0.0, json!([]), "v"), synth(0.05, json!([]), "v"));
-    let pk = std_packages();
+    let pk = own_packages();
     let (mut rig, g) = rig(&gated, &DataSet::empty());
     rig.send(on(g, 1, 7, 69.0));
     assert!(peak(&rig.run(8 * BLOCK)) > 0.5);

@@ -71,7 +71,7 @@ pub fn write(dir: &Path, r: &Reference) -> Result<()> {
     let name = r.name();
     put(
         "music2.toml",
-        format!("[project]\nname = \"{name}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n")
+        format!("[project]\nname = \"{name}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n")
             .as_bytes(),
     )?;
     put(".gitignore", b".music2/\n")?;

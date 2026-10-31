@@ -204,6 +204,8 @@ fn an_import_writes_a_pack_and_says_what_it_left_out() {
     assert!(t.contains("file = \"samples/C4-LOUD.wav\"") || t.contains("file = \"samples/c4-loud.wav\""), "{t}");
     assert!(folder.join("samples/c4-loud.wav").is_file() || folder.join("samples/C4-LOUD.wav").is_file());
     let m = std::fs::read_to_string(folder.join("m2pkg.toml")).unwrap();
+    // PACK-23 (review Y16): it asks for @m2/core by the SDK's major alone.
+    assert!(m.contains("\n\"@m2/core\" = \"2\"\n"), "{m}");
     assert!(m.contains("name = \"@ada/tiny-keys\"") && m.contains("license = \"CC-BY-4.0\""), "{m}");
     let readme = std::fs::read_to_string(folder.join("README.md")).unwrap();
     assert!(readme.contains("Tiny Keys, recorded by Ada.") && readme.contains("controller moved"), "{readme}");

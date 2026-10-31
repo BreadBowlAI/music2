@@ -1039,7 +1039,7 @@ mod tests {
     fn naming_a_song_changes_only_the_name_line_of_its_manifest() {
         let t = Temp::new();
         let manifest = "# The starter.\n[project]\nname = \"Starter beat\"   # its label\nformat = 1\nsample_rate = 44100\n\n\
-                        [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+                        [dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
         std::fs::write(t.0.join("music2.toml"), manifest).unwrap();
         let name = "Night \"drive\" \\ ☕";
         set_name(&t.0, name).unwrap();
@@ -1232,7 +1232,7 @@ mod tests {
         // again, and the song open before stays open.
         let opened = open_new(&graph, &t.0, "Fine", &template("empty"), None).unwrap();
         let templates = Temp::new();
-        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
         let newer = templates.0.join("newer");
         std::fs::create_dir_all(&newer).unwrap();
         std::fs::write(newer.join("music2.toml"), manifest.replace("format = 1", "format = 2")).unwrap();

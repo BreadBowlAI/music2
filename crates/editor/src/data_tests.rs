@@ -167,8 +167,8 @@ fn a_renamed_lanes_file_is_moved_where_it_belongs() {
 fn a_track_that_was_there_beside_is_not_the_renamed_one() {
     let fixture = Fixture::first_song();
     let mut s = fixture.open();
-    let clap = "import { track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\n\
-                export default track(\"clap\", ({ lane }) => kick(lane.notes(\"hits\")));\n";
+    let clap = "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\n\
+                export default track(\"clap\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\n";
     fixture.write("tracks/clap.ts", clap);
     let song = fixture.read("song.ts").unwrap();
     let song =
@@ -379,7 +379,7 @@ fn a_value_whose_units_changed_around_it_is_not_offered_for_undo() {
 #[test]
 fn plugin_state_is_moved_or_deleted_with_its_sidecar_and_undone() {
     let fixture = Fixture(std::env::temp_dir().join(format!("m2-relink-state-{}", std::process::id())));
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n";
     // Not installed, so it plays nothing, but its state is still filed under its keys (FMT-18a).
     let song = "import { plugin, song, track } from \"@m2/core\";\n\
                 const l = track(\"lead\", ({ lane }) =>\n\
@@ -497,7 +497,7 @@ fn deleted_data_comes_back_after_its_lane_is_declared_again() {
 #[test]
 fn a_plugin_state_saved_as_one_tx_is_undone_whole() {
     let fixture = Fixture(std::env::temp_dir().join(format!("m2-plugin-state-{}", std::process::id())));
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n";
     // Not installed, so it plays nothing, but its state is still filed under its keys (FMT-18a).
     let song = "import { plugin, song, track } from \"@m2/core\";\n\
                 const l = track(\"lead\", ({ lane }) =>\n\

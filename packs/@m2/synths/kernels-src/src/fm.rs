@@ -1,11 +1,10 @@
 //! `fm`, the FM voice behind @m2/synths' FM keys, bells and metal: two operator pairs, each a sine
 //! modulator into a sine carrier, mixed, at 2× and decimated, so a bright patch's upper
 //! sidebands fold into the decimator's stopband instead of back into the audio. Port order
-//! must match `std/m2pkg.toml`.
-
-use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
+//! must match the pack's `m2pkg.toml`.
 
 use m2_dsp::voice::{DcBlock, Env, Glide, Halfband, Memo, Ramp, Stage, TICK, clampf, hash, hz, pitch_of, sin2pi};
+use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
 // Inputs, in manifest order.
 const PITCH: usize = 0;

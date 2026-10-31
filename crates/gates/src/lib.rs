@@ -145,9 +145,14 @@ pub fn fixture(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
 }
 
+/// std, and music2's own packs as the test store holds them installed: a song's build loads the
+/// packs it locks from the store, and a render plays their kernels (PACK-21) from this set.
 pub fn load_std() -> Result<PackageSet> {
     let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
     p.load(&std_dir()).with_context(|| format!("loading std from {}", std_dir().display()))?;
+    for (name, dir) in m2_song::pack::test_packs() {
+        p.load(&dir).with_context(|| format!("loading {name} from {}", dir.display()))?;
+    }
     Ok(p)
 }
 

@@ -44,7 +44,7 @@ function longSong(dir, name, minutes) {
   fs.mkdirSync(`${dir}/data/pad`, { recursive: true });
   fs.writeFileSync(
     `${dir}/music2.toml`,
-    `[project]\nname = ${JSON.stringify(name)}\nentry = "song.ts"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "1"\nstd = "0.8"\n"@m2/synths" = "1"\n`,
+    `[project]\nname = ${JSON.stringify(name)}\nentry = "song.ts"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "2"\nstd = "0.9"\n"@m2/synths" = "2"\n`,
   );
   fs.writeFileSync(`${dir}/song.ts`, "import { song, track } from '@m2/core';\nimport { pad } from '@m2/synths';\nconst p = track('pad', { name: 'Pad' }, ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n");
   const beats = minutes * 120;
@@ -83,7 +83,7 @@ check(dots2.json?.name === "My song 2" && dots2.json?.dir.endsWith("/My song 2")
 const empty = dots2.json.dir;
 const code = fs.readFileSync(`${empty}/song.ts`, "utf8");
 check(code.includes("delete the // in front of the two") && !code.includes("Make a file"), "song.ts says to delete two //s, not to make a file");
-fs.writeFileSync(`${empty}/song.ts`, code.replace("// const drums", "const drums").replace("// drums: drums.out", "drums: drums.out"));
+fs.writeFileSync(`${empty}/song.ts`, code.replace("// const beat", "const beat").replace("// drums: beat.out", "drums: beat.out"));
 check(await until(async () => (await api("graph")).json?.timeline?.tracks?.some((t) => t.track && t.module === "drums")), "with those two lines on, a Drums track shows");
 check(await until(async () => (await page.$$eval("[data-track]", (els) => els.map((e) => e.dataset.track))).includes("drums")), "in the timeline");
 await sleep(400);
@@ -267,7 +267,7 @@ await idle();
 const nop = `${S}/no-plugin`;
 fs.rmSync(nop, { recursive: true, force: true });
 fs.mkdirSync(nop, { recursive: true });
-fs.writeFileSync(`${nop}/music2.toml`, `[project]\nname = "No plugin"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "1"\nstd = "0.8"\n`);
+fs.writeFileSync(`${nop}/music2.toml`, `[project]\nname = "No plugin"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "2"\nstd = "0.9"\n`);
 fs.writeFileSync(`${nop}/song.ts`, "import { hz, plugin, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => plugin('clap:com.example.not-installed', { in: osc.sine(hz(440)) }));\n");
 const opened = await api("graph/open", { path: nop });
 check(opened.status === 200 && (opened.json?.problems ?? []).some((p) => p.code === "plugin.missing"), "a song whose plugin isn't installed opens, saying so");

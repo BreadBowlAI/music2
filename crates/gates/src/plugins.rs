@@ -529,8 +529,8 @@ fn kick_call(session: &m2_session::Session, dir: &Path) -> Result<String> {
         .compiled
         .sites
         .iter()
-        .find(|s| s.in_project && s.file == "tracks/kick.ts" && s.callee == "kick")
-        .with_context(|| format!("no call to kick in {}", dir.join("tracks/kick.ts").display()))?;
+        .find(|s| s.in_project && s.file == "tracks/kick.ts" && s.callee == "drums.drum")
+        .with_context(|| format!("no call to drums.drum in {}", dir.join("tracks/kick.ts").display()))?;
     Ok(format!("{}#{}", site.file, site.ordinal))
 }
 

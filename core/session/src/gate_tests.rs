@@ -446,7 +446,7 @@ fn bitcrush_plays_from_its_pack_with_the_bits_it_had_in_std() {
     f.write(
         "music2.toml",
         format!(
-            "[project]\nname = \"crush\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}.{}\"\n\
+            "[project]\nname = \"crush\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"{}.{}\"\n\
              \"@m2/effects\" = \"1\"\n",
             std.0, std.1
         ),
@@ -475,6 +475,243 @@ fn bitcrush_plays_from_its_pack_with_the_bits_it_had_in_std() {
         })
         .collect();
     assert_eq!(kernels, ["@m2/effects:bitcrush"; 2], "the bitcrusher is the pack's own");
+}
+
+/// The engines that left std for their packs in wave 3, as std played them (std 0.8.0, `@m2/synths`
+/// 1.0.0, `@m2/drums` 1.0.0, `@m2/effects` 1.1.0, `8a914b1`): the polysynth and the FM synth on one
+/// lane, the drum machine on another, and delay, reverb, phaser, tremolo and widen over them.
+/// Recorded before the kernels moved (PACK-21).
+const ENGINES: &str = "d09c156022b2db81ce7707cb2ff4268637cc2ad5d8a29c2298706f77c0cb9956";
+
+/// Every kernel id the graph `nodes` names, its voices' included.
+fn kernel_ids(nodes: &[FNode], into: &mut Vec<String>) {
+    for n in nodes {
+        match &n.op {
+            FOp::Kernel { kernel, .. } => into.push(kernel.clone()),
+            FOp::Poly { voice, .. } => kernel_ids(&voice.nodes, into),
+            _ => {}
+        }
+    }
+}
+
+// PACK-21, ABI-10: the polysynth's and the FM synth's voices play from `@m2/synths`' own module,
+// the drum machine's from `@m2/drums`', and delay, reverb, phaser, tremolo and widen from `@m2/effects`',
+// each by its pack's id, and std has none of them: the bits they had as std's.
+#[test]
+fn engines_play_from_their_packs_with_the_bits_they_had_in_std() {
+    let f = Fixture::new();
+    let std = m2_song::Version::parse(&std_packages().get("std").unwrap().version).unwrap();
+    f.write(
+        "music2.toml",
+        format!(
+            "[project]\nname = \"engines\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"{}.{}\"\n\
+             \"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n",
+            std.0, std.1
+        ),
+    );
+    let note =
+        |pitch: &str, start: f64, length: f64| serde_json::json!({"pitch": pitch, "start": start, "length": length, "velocity": 0.8});
+    let lane =
+        |notes: Vec<serde_json::Value>| serde_json::json!({"clips": [{"id": "c1", "start": 0, "length": 4, "notes": notes}]}).to_string();
+    f.write("data/keys/notes.json", lane(vec![note("C4", 0.0, 1.5), note("E4", 0.0, 1.5), note("G3", 2.0, 1.0), note("A4", 2.5, 1.0)]));
+    let beat = ["C2", "F#2", "D2", "F#2", "C2", "A#2", "D#2", "F2"];
+    f.write("data/beat/notes.json", lane(beat.iter().enumerate().map(|(i, p)| note(p, i as f64 * 0.5, 0.25)).collect()));
+    f.write(
+        "song.ts",
+        "import { song, track } from \"@m2/core\";\nimport { osc, pan } from \"std/dsp\";\nimport { sum } from \"std/math\";\n\
+         import { synth, fm } from \"@m2/synths\";\nimport { drums } from \"@m2/drums\";\n\
+         import { delay, phaser, reverb, tremolo, widen } from \"@m2/effects\";\n\n\
+         const keys = track(\"keys\", ({ lane }) =>\n  sum(synth.custom(lane.notes(\"notes\"), { square: 0.3, unison: 3, filterEnv: 2 }), fm.custom(lane.notes(\"notes\"))),\n);\n\
+         const beat = track(\"beat\", ({ lane }) => drums.kit(lane.notes(\"notes\")));\n\n\
+         export default song(() =>\n  sum(\n    reverb(delay(keys.out, { time: 0.3, feedback: 0.4 }), { mix: 0.4 }),\n    widen(phaser(beat.out)),\n    \
+         tremolo(pan(osc.saw(110), -0.3), { depth: 0.8 }),\n  ),\n);\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{:?} {:?}", s.draft_errors, s.problems());
+    let sound = render_song(&s);
+    assert!(peak(&sound) > 0.3, "the song plays");
+    assert_eq!(bits(&sound), ENGINES, "the engines play other bits from their packs than they did from std");
+    let mut kernels = vec![];
+    kernel_ids(&s.accepted().compiled.flat.nodes, &mut kernels);
+    kernels.retain(|k| ["synth", "fm", "drum", "delay", "reverb", "phaser", "tremolo", "widen"].contains(&k.split_once(':').unwrap().1));
+    kernels.sort();
+    kernels.dedup();
+    assert_eq!(
+        kernels,
+        [
+            "@m2/drums:drum",
+            "@m2/effects:delay",
+            "@m2/effects:phaser",
+            "@m2/effects:reverb",
+            "@m2/effects:tremolo",
+            "@m2/effects:widen",
+            "@m2/synths:fm",
+            "@m2/synths:synth"
+        ],
+        "each engine is its pack's own"
+    );
+}
+
+/// What each of `@m2/drums`' nine single drums played (`drums.kick(lane.notes("notes"))` …) of
+/// [`one_drum_song`]'s beat, as std's `std:drum` played them (std 0.8.0, `@m2/drums` 1.0.0,
+/// `8a914b1`; the move into the pack changed no bit): recorded before the Drum took their place.
+const SINGLES: [(&str, &str); 9] = [
+    ("kick", "7767ad38a756c3203d0814167a2d32f95d493741baf83936a7c197ab83ec8b31"),
+    ("snare", "67d0f6b40f595767b3fcbcb4edbe3bf09b7f458c43ac39ebf1e5a92445f4a69b"),
+    ("clap", "6436617e03b0b01a1908ee68f61e6a1b5b1e12c9e4d7f92f72e2c2854b3acfce"),
+    ("hats", "4f5a0555ef5887cace130d9bb3f45e6e30f86e8e7f66dd4f53e96b943a88f474"),
+    ("tom", "4d11e75353f1aa2e3a6508e5d24126d6dfc96463125a657132000655f9f35a0e"),
+    ("rim", "67627b850030b3d510db5ea84f9ac2f58e87648391926b47f2cb1ddc3c25e2fe"),
+    ("cowbell", "4040bd8781d3f22787142d8e03ef5dc8d0fb3a5644615c11ef4e73c368f46df9"),
+    ("cymbal", "a523877b8f5157e958b97efbe1f26b93cf23339f5cf8895b158f84fe0b500a96"),
+    ("shaker", "a3738e16376c19dc610801a90c2e28ce3b9f23258ceaddeba64739af2b790582"),
+];
+
+/// A song whose one track, `beat`, plays `call` on a beat of five hits of several notes and
+/// strengths, asking for the `@m2/drums` and `@m2/synths` this tree bundles.
+fn one_drum_song(f: &Fixture, call: &str) {
+    let note =
+        |pitch: &str, start: f64, velocity: f64| serde_json::json!({"pitch": pitch, "start": start, "length": 0.25, "velocity": velocity});
+    let notes = vec![note("C2", 0.0, 0.8), note("D2", 0.5, 0.5), note("F#2", 1.0, 1.0), note("A#2", 1.5, 0.7), note("A2", 2.0, 0.9)];
+    notes_song(f, call, notes);
+}
+
+/// A song of one track whose notes lane `notes` plays `call` (which may use `drums` and `synth`).
+fn notes_song(f: &Fixture, call: &str, notes: Vec<serde_json::Value>) {
+    let std = m2_song::Version::parse(&std_packages().get("std").unwrap().version).unwrap();
+    let major = |pack: &str| m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join(pack)).unwrap().package.version.0;
+    f.write(
+        "music2.toml",
+        format!(
+            "[project]\nname = \"drum\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"{}.{}\"\n\
+             \"@m2/drums\" = \"{}\"\n\"@m2/synths\" = \"{}\"\n",
+            std.0,
+            std.1,
+            major("@m2/drums"),
+            major("@m2/synths")
+        ),
+    );
+    f.write("data/beat/notes.json", serde_json::json!({"clips": [{"id": "c1", "start": 0, "length": 4, "notes": notes}]}).to_string());
+    f.write(
+        "song.ts",
+        format!(
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\nimport {{ synth }} from \"@m2/synths\";\n\n\
+             const beat = track(\"beat\", ({{ lane }}) => {call});\n\nexport default song(() => beat.out);\n"
+        ),
+    );
+}
+
+// CARD-33: the Drum plays each drum its menu offers as that drum's single instrument played it,
+// bit for bit, its knobs at their defaults; and its knobs move the drum it plays.
+#[test]
+fn the_drum_plays_each_drum_as_its_single_did() {
+    for (drum, single) in SINGLES {
+        let f = Fixture::new();
+        one_drum_song(&f, &format!("drums.drum(lane.notes(\"notes\"), {{ drum: \"{drum}\" }})"));
+        let s = f.open();
+        assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{drum}: {:?} {:?}", s.draft_errors, s.problems());
+        assert_eq!(bits(&render_song(&s)), single, "the Drum's {drum} plays other bits than drums.{drum} did");
+    }
+    // Tuned up, shorter and harder, a kick is another sound.
+    let f = Fixture::new();
+    one_drum_song(&f, "drums.drum(lane.notes(\"notes\"), { tune: 5, decay: 0.5, punch: 0.4 })");
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let moved = render_song(&s);
+    assert!(peak(&moved) > 0.05 && bits(&moved) != SINGLES[0].1, "the knobs move the kick");
+}
+
+// CARD-32: the polysynth's wave shape is a menu, written by its name, which reaches the synth's
+// kernel as its place; another shape plays another sound, and the saw, its default, is the synth
+// as it always was (`engines_play_from_their_packs_with_the_bits_they_had_in_std` holds its bits).
+#[test]
+fn a_synths_wave_shape_reaches_its_kernel_as_its_place() {
+    let mut heard = vec![];
+    for (shape, place) in [("saw", 0.0), ("square", 1.0), ("triangle", 2.0), ("sine", 3.0)] {
+        let f = Fixture::new();
+        one_drum_song(&f, &format!("synth.custom(lane.notes(\"notes\"), {{ shape: \"{shape}\" }})"));
+        let s = f.open();
+        assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{shape}: {:?} {:?}", s.draft_errors, s.problems());
+        let rev = s.accepted();
+        let flat = &rev.compiled.flat;
+        // The synth's kernel in its voice, and what its `shape` (input 31) reads: a constant, in the
+        // voice or captured from outside it.
+        let (voice, synth) = flat
+            .nodes
+            .iter()
+            .find_map(|n| match &n.op {
+                FOp::Poly { voice, .. } => voice
+                    .nodes
+                    .iter()
+                    .find(|v| matches!(&v.op, FOp::Kernel { kernel, .. } if kernel == "@m2/synths:synth"))
+                    .map(|k| (voice, k)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{shape}: no synth voice"));
+        let FOp::Kernel { inputs, .. } = &synth.op else { unreachable!() };
+        let value = match &inputs[31] {
+            m2_ir::Input::Const(v) => *v,
+            m2_ir::Input::Port { src, .. } => match &voice.nodes[src.node].op {
+                FOp::Const(v) => *v,
+                FOp::Capture(from) => match &flat.nodes[from.node].op {
+                    FOp::Const(v) => *v,
+                    other => panic!("{shape}: the shape comes from {other:?}"),
+                },
+                other => panic!("{shape}: the shape comes from {other:?}"),
+            },
+            other => panic!("{shape}: {other:?}"),
+        };
+        assert_eq!(value, place, "{shape} reaches the kernel as its place");
+        let sound = render_song(&s);
+        assert!(peak(&sound) > 0.05, "{shape} plays");
+        heard.push(bits(&sound));
+    }
+    heard.sort();
+    heard.dedup();
+    assert_eq!(heard.len(), 4, "each shape plays a sound of its own");
+}
+
+/// The RMS of both channels of `x`, in dB.
+fn rms_db(x: &[[f32; 2]]) -> f64 {
+    let p = x.iter().map(|f| (f[0] as f64).powi(2) + (f[1] as f64).powi(2)).sum::<f64>() / (2 * x.len().max(1)) as f64;
+    10.0 * p.max(1e-30).log10()
+}
+
+// CARD-32 (review Y2): a pick of shape never jumps the loudness. Every sound of the polysynth's
+// with a shape, held on one note, is within 1.5 dB of its saw at every shape; and a four-note
+// chord of it stays under full scale at every shape, so an export never clips.
+#[test]
+fn every_synth_sound_keeps_its_loudness_at_every_shape() {
+    let note = |pitch: &str, velocity: f64| serde_json::json!({"pitch": pitch, "start": 0.0, "length": 4.0, "velocity": velocity});
+    let render = |sound: &str, shape: &str, notes: Vec<serde_json::Value>| {
+        let f = Fixture::new();
+        notes_song(&f, &format!("synth.{sound}(lane.notes(\"notes\"), {{ shape: \"{shape}\" }})"), notes);
+        let s = f.open();
+        assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{sound} {shape}: {:?} {:?}", s.draft_errors, s.problems());
+        render_song(&s)
+    };
+    let mut said = vec![];
+    for sound in ["custom", "supersaw", "lead", "pad", "pluck", "bass", "strings"] {
+        let held = |shape: &str| {
+            let x = render(sound, shape, vec![note(if sound == "bass" { "A1" } else { "A3" }, 0.8)]);
+            rms_db(&x[..(2.0 * 48_000.0) as usize])
+        };
+        let saw = held("saw");
+        for shape in ["square", "triangle", "sine"] {
+            let d = held(shape) - saw;
+            if d.abs() > 1.5 {
+                said.push(format!("{sound} at {shape}: {d:+.1} dB from its saw"));
+            }
+        }
+        for shape in ["saw", "square", "triangle", "sine"] {
+            let chord = ["C4", "E4", "G4", "B4"].map(|p| note(p, 0.8)).to_vec();
+            let top = peak(&render(sound, shape, chord));
+            if top >= 1.0 {
+                said.push(format!("{sound}'s chord at {shape} peaks at {:+.1} dBFS", 20.0 * top.log10()));
+            }
+        }
+    }
+    assert!(said.is_empty(), "{}", said.join("\n"));
 }
 
 fn peak(x: &[[f32; 2]]) -> f32 {
@@ -567,7 +804,7 @@ fn the_mixer_and_master_gains_change_no_bit() {
 #[test]
 fn compile_never_opens_an_asset() {
     let f = Fixture::new();
-    f.write("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n");
+    f.write("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n");
     f.write(
         "song.ts",
         "import { song, track } from \"@m2/core\";\n\
@@ -597,4 +834,151 @@ fn p50_builds_202_sandboxes() {
     let boxes = rev.compiled.flat.nodes.iter().filter(|n| matches!(n.op, FOp::Kernel { .. } | FOp::Poly { .. })).count();
     let r = Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, rev.project.sample_rate()).unwrap();
     assert_eq!((r.sandboxes(), boxes), (202, 202));
+}
+
+// ---- review Y6/Y8 songs (shared by the recorder at main and the tests at wave3) ----
+
+/// Thirty-two hits a sixteenth apart, never two at once, over several notes and strengths: more
+/// ring at once than four voices hold, for the drums that ring long.
+fn dense_beat() -> Vec<serde_json::Value> {
+    (0..32)
+        .map(|i| {
+            let pitch = ["C2", "D2", "F#2", "A#2", "G#2", "A2", "C3", "D#3"][i % 8];
+            serde_json::json!({"pitch": pitch, "start": i as f64 * 0.25, "length": 0.2, "velocity": 0.4 + 0.6 * ((i * 7) % 11) as f64 / 10.0})
+        })
+        .collect()
+}
+
+/// Two hits on one sample, four times.
+fn doubled_beat() -> Vec<serde_json::Value> {
+    (0..8)
+        .map(|i| {
+            let pitch = ["C2", "F#2"][i % 2];
+            serde_json::json!({"pitch": pitch, "start": (i / 2) as f64, "length": 0.5, "velocity": 0.5 + 0.1 * i as f64})
+        })
+        .collect()
+}
+
+/// Five notes of mixed lengths and strengths, two of them overlapping.
+fn five_notes() -> Vec<serde_json::Value> {
+    [("A3", 0.0, 1.5, 0.8), ("C4", 0.5, 0.25, 0.5), ("E4", 1.0, 3.0, 1.0), ("G3", 2.0, 0.5, 0.3), ("A4", 2.5, 1.0, 0.9)]
+        .iter()
+        .map(|(p, s, l, v)| serde_json::json!({"pitch": p, "start": s, "length": l, "velocity": v}))
+        .collect()
+}
+
+/// A song of one track playing `call` on `notes`, with `deps` as its `[dependencies]`.
+fn y_song(f: &Fixture, deps: &str, call: &str, notes: Vec<serde_json::Value>) {
+    f.write("music2.toml", format!("[project]\nname = \"y\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n{deps}"));
+    f.write("data/beat/notes.json", serde_json::json!({"clips": [{"id": "c1", "start": 0, "length": 12, "notes": notes}]}).to_string());
+    f.write(
+        "song.ts",
+        format!(
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\nimport {{ bass, fm, pad, pluck, synth }} from \"@m2/synths\";\n\n\
+             const beat = track(\"beat\", ({{ lane }}) => {call});\n\nexport default song(() => beat.out);\n"
+        ),
+    );
+}
+
+/// The named sounds of `@m2/synths` (y8), as `(name, call)`.
+const NAMED: [(&str, &str); 13] = [
+    ("synth.supersaw", "synth.supersaw(lane.notes(\"notes\"))"),
+    ("synth.lead", "synth.lead(lane.notes(\"notes\"))"),
+    ("synth.pad", "synth.pad(lane.notes(\"notes\"))"),
+    ("synth.pluck", "synth.pluck(lane.notes(\"notes\"))"),
+    ("synth.sub", "synth.sub(lane.notes(\"notes\"))"),
+    ("synth.bass", "synth.bass(lane.notes(\"notes\"))"),
+    ("synth.strings", "synth.strings(lane.notes(\"notes\"))"),
+    ("fm.keys", "fm.keys(lane.notes(\"notes\"))"),
+    ("fm.bell", "fm.bell(lane.notes(\"notes\"))"),
+    ("fm.metal", "fm.metal(lane.notes(\"notes\"))"),
+    ("bass", "bass(lane.notes(\"notes\"))"),
+    ("pluck", "pluck(lane.notes(\"notes\"))"),
+    ("pad", "pad(lane.notes(\"notes\"))"),
+];
+
+/// What each of `@m2/drums`' nine single drums played of [`dense_beat`] (at its own voices, 4, or
+/// 6 for the hats and the tom) and of [`doubled_beat`], and what each named sound of `@m2/synths`
+/// played of [`five_notes`] at its defaults: recorded at `1cd9b79` (main before wave 3: std 0.8.0,
+/// `@m2/drums` and `@m2/synths` 1.0.0), with the songs these tests play (review Y6, Y8).
+const DENSE: [(&str, &str); 9] = [
+    ("kick", "b0b62bd32f989601e3a7cd2276769d46018b21509033aeab12251115ee9565d6"),
+    ("snare", "ac01f945eda49570f9043cbabfe9fe0742a807110c057219c26ad82d33cdab1e"),
+    ("clap", "391affbe61d5b8be721b782135a3e1b1224eccb3a9681719d1a640303f44187f"),
+    ("hats", "75e2a08e8c48a929cb083cf79afd645177ef62884cc875792d061cd5a110870e"),
+    ("tom", "52b25824070c69d3a9f4c03b1721c7afdf70c664b6a073672ae3f49883087ce9"),
+    ("rim", "2d16290baf1aa685c54e60f1a6a6011c0a1828b689cbd6e3817d98f9bdd5fb41"),
+    ("cowbell", "5452c25cb14d3b7f40ecaba812c808591501484f48a97d195d4a9304b10d2bbf"),
+    ("cymbal", "3e2d7e8d459a40fa865d875b569e1074a290022b9871dcd840331bfec88ed0bc"),
+    ("shaker", "fc2abcf187191e93cf4af68691d14bd9a2a4b32595e7133858a86281c61cbd0f"),
+];
+const DOUBLED: [(&str, &str); 9] = [
+    ("kick", "c0975c22c2a7f7ef6cc944356ede57da1e766ed8ae6c4545e06d47553f35c75a"),
+    ("snare", "de680c8638efb26767a954e0b883eaf13ca15e2cbee3fdf5e9529307f487a72c"),
+    ("clap", "ebfb53e024f80697c922df9b40d402a818794bf37c916d21b4a94ac55392a051"),
+    ("hats", "d00584031ba39252af3834df4aa729b2ec5349976ec93149130654ceebb7f16c"),
+    ("tom", "025218510141a480d515147df8514ef79287216e3cd2bc3beedd7b7d594f3596"),
+    ("rim", "32766cf5cd0105fd744c5409ad743a602b00373be2eeda0209d491281802d359"),
+    ("cowbell", "c550cb50bd964fa0a326fbee6fa1d2e733c732d8f2cbf119b95af3678d90ab8d"),
+    ("cymbal", "6c10f9c00ceb1d5f29d28dc2329c798a0b73067d57e540db3ebb3652d94954ac"),
+    ("shaker", "f6ae5e2f1173b2cf88717357e80ed71d439553489cd110f12bc5362dab75cff6"),
+];
+const NAMED_BITS: [(&str, &str); 13] = [
+    ("synth.supersaw", "d0beb5c2ec3afede7ee479d38831e0f7d3dda6e37fbdc49ed209f477d5ea3624"),
+    ("synth.lead", "311ac8abdee69686ce0bda17c60cbef257f21ad4ccb295d732fea23d113bca2a"),
+    ("synth.pad", "4f68f5a7b687f89fcd3cb320d8accacb1e7ce2f35c4758a4d748bbe53566a279"),
+    ("synth.pluck", "0193dfbf3445e63ff7d6ccdf0c8ddd782e7f38f64666c1aa550f4f32f97beac4"),
+    ("synth.sub", "c558be1599658595ffaccd336ed1e21eec0ea8e975ca3ea230f5f9f1f12ed7ad"),
+    ("synth.bass", "ab7ef1855345faaedc9a42324fb23980b7cc063048a19162c338a1af3d36cbba"),
+    ("synth.strings", "1f7f4aa442a315299c973cf8c8f798335426b4bd7188eecb18b633aac8168d96"),
+    ("fm.keys", "dfbff17bcb17f7fcbbe9cd9db4ffa848c875fb2c519a0f26a1326543b863d40b"),
+    ("fm.bell", "d58e695da0b95957ab258932df1e84f80713dd7898b4f0e07db15a598fb71300"),
+    ("fm.metal", "d90ad214b5fcfa8d571d0c8d3eeee1b66390dedaa96d5c7ba1a307b2e73bba0b"),
+    ("bass", "e40ed13e9d3bbdccb4b6e887ceccab47b04dba295c362c7dcb2027cb4b1974cf"),
+    ("pluck", "464b7411dff513df7cecf992d9dfdb211e4c033d06f449c206d966096d8b591f"),
+    ("pad", "002e5b6c2b2f492ac6b7549a5d0c45d5421c370771e8caf8db1881820ff9eb39"),
+];
+
+/// `call` played on `notes` in a song asking for what this tree bundles.
+fn render_y(call: &str, notes: Vec<serde_json::Value>) -> String {
+    let f = Fixture::new();
+    let std = m2_song::Version::parse(&std_packages().get("std").unwrap().version).unwrap();
+    let major = |pack: &str| m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join(pack)).unwrap().package.version.0;
+    let deps = format!(
+        "\"@m2/core\" = \"2\"\nstd = \"{}.{}\"\n\"@m2/drums\" = \"{}\"\n\"@m2/synths\" = \"{}\"\n",
+        std.0,
+        std.1,
+        major("@m2/drums"),
+        major("@m2/synths")
+    );
+    y_song(&f, &deps, call, notes);
+    let s = f.open();
+    assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{call}: {:?} {:?}", s.draft_errors, s.problems());
+    bits(&render_song(&s))
+}
+
+// CARD-33 (review Y6): One drum at its single's voices (4, or 6 for the hats and the tom) plays the
+// bits its single did on a beat where more ring at once than its voices hold; and two hits on one
+// sample of a drum that chokes as its single did. (Two hits on one sample of a drum that rings on,
+// a tom, rim, cowbell or shaker, count as two where its single counted one: CARD-33 says so.)
+#[test]
+fn one_drum_plays_its_singles_bits_at_their_voices() {
+    for ((drum, dense), (_, doubled)) in DENSE.iter().zip(DOUBLED) {
+        let voices = if matches!(*drum, "hats" | "tom") { 6 } else { 4 };
+        let call = format!("drums.drum(lane.notes(\"notes\"), {{ drum: \"{drum}\", voices: {voices} }})");
+        assert_eq!(&render_y(&call, dense_beat()), dense, "One drum's {drum} at {voices} voices, on a dense beat");
+        if matches!(*drum, "kick" | "snare" | "clap" | "hats" | "cymbal") {
+            assert_eq!(render_y(&call, doubled_beat()), doubled, "One drum's {drum}, two hits on one sample");
+        }
+    }
+}
+
+// CARD-31 (review Y8): every named sound of `@m2/synths`, given its new knobs at its patch's own
+// numbers, plays at its defaults the bits it played before wave 3.
+#[test]
+fn the_named_sounds_play_the_bits_they_did() {
+    for (name, call) in NAMED {
+        let want = NAMED_BITS.iter().find(|(n, _)| *n == name).unwrap().1;
+        assert_eq!(render_y(call, five_notes()), want, "{name} plays other bits than it did");
+    }
 }

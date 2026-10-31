@@ -11,10 +11,9 @@ tags = ["mixing", "eq", "gate", "transient", "de-esser", "multiband", "compresso
 wasm = "kernels/mixing.wasm"
 
 [dependencies]
-# @m2/core 1.8 or later: the EQ's shapes are menus and its bands switches (`control.choice`,
-# `control.bool`), and its card has groups and a view, which 1.8.0 added. It uses none of std's
-# code, so it needs no std.
-"@m2/core" = "1.8"
+# @m2/core 2, the pack contract (PACK-22): any 2.x runs it, and a change to @m2/core that would
+# break it is a 3.0.0. It uses none of std's code, so it needs no std.
+"@m2/core" = "2"
 
 # ---------------------------------------------------------------- its own kernels
 # Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/mixing:eq", …)`.

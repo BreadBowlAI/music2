@@ -264,9 +264,10 @@ fn a_bucket_is_read_over_http() {
     assert!(out.contains("@alice/drums 1.0.0 is published with the hash"), "{out}");
 }
 
-const KEYS: &str = r#"import { component, control, kernel, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
+const KEYS: &str = r#"import { component, control, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
+import { adsr, osc, svf, vca } from "std/dsp";
 
-/** A soft pluck, on std's synth kernel. */
+/** A soft pluck, built from std's blocks. */
 export const softKeys = component(
   {
     id: "soft-keys",
@@ -275,11 +276,11 @@ export const softKeys = component(
     inputs: { notes: port.notes() },
     controls: { brightness: control.hz(1800).range(200, 20000) },
     output: port.audio(),
-    editor: { category: "Keys", description: "A soft pluck, on std's synth kernel" },
+    editor: { category: "Keys", description: "A soft pluck, built from std's blocks" },
   },
-  // A pack never imports another (PACK-3): std's synth kernel, played as a soft pluck.
+  // A pack never imports another (PACK-3): a soft pluck, built from std's blocks.
   (notes: Events, { brightness }: Params): Audio =>
-    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: brightness, decay: 0.45, sustain: 0, release: 0.25 }), { voices: 12 }),
+    poly(notes, (n) => vca(svf.lowpass(osc.saw(n.pitch), brightness), adsr(n.gate, { decay: 0.45, sustain: 0, release: 0.25 })), { voices: 12 }),
 );
 "#;
 
@@ -301,7 +302,7 @@ fn library_bucket(t: &Temp) -> (PathBuf, String, String) {
     write(
         &keys.join("m2pkg.toml"),
         "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nauthors = [\"Bob\"]\n\
-         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
     );
     write(&keys.join("src/index.ts"), KEYS);
     let r = reg.to_str().unwrap();

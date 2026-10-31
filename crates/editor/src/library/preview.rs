@@ -374,15 +374,6 @@ pub fn loudness(samples: &[f32]) -> Option<f64> {
     Some(lufs(mean(&kept)))
 }
 
-/// A version as a manifest asks for it: `1` of `1.4.0`, `0.4` of `0.4.0`.
-pub(super) fn wanted(version: &str) -> String {
-    match version.split('.').collect::<Vec<_>>().as_slice() {
-        ["0", minor, ..] => format!("0.{minor}"),
-        [major, ..] => major.to_string(),
-        [] => version.to_string(),
-    }
-}
-
 /// Render `song` with `packages` loaded, in `work` (a folder of the cache, made here and removed
 /// after), and write the preview to `out`: 16-bit stereo at [`RATE`], [`SECONDS`] long, through a
 /// part file renamed into place, which goes if anything fails. A pure render, so the same song and
@@ -415,7 +406,7 @@ impl Drop for Part<'_> {
 
 fn render_in(song: &Song, packages: &[(String, PathBuf)], work: &Path, out: &Path) -> Result<()> {
     let mut set = PackageSet::default();
-    let mut deps = format!("\"@m2/core\" = \"{}\"\n", wanted(m2_script::SDK_VERSION));
+    let mut deps = format!("\"@m2/core\" = \"{}\"\n", crate::packs::line_for(m2_script::SDK_VERSION));
     for (name, dir) in packages {
         // std as the host loads it; a pack as one, never trusted as std by its folder's word (ABI-11).
         let p = match name.as_str() {
@@ -427,7 +418,7 @@ fn render_in(song: &Song, packages: &[(String, PathBuf)], work: &Path, out: &Pat
         // lock, and the folder may be a path pack's, not the store's. Its whole path: the song is
         // in `work`, and a relative one would be read from there.
         let wants = match name.as_str() {
-            m2_song::pack::STD => format!("\"{}\"", wanted(&p.version)),
+            m2_song::pack::STD => format!("\"{}\"", crate::packs::line_for(&p.version)),
             _ => format!("{{ path = {} }}", serde_json::to_string(&std::path::absolute(dir)?.to_string_lossy())?),
         };
         deps += &format!("{} = {wants}\n", serde_json::to_string(name)?);

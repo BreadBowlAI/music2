@@ -1,6 +1,9 @@
 //! The kernels of the `std` package. Port order must match `std/m2pkg.toml`.
 //!
-//! No kernel allocates in `process`.
+//! No kernel allocates in `process`. The blocks they share with music2's own packs' kernels are
+//! `m2_dsp`'s; a kernel only one pack's sounds play is that pack's own (PACK-21): the polysynth's
+//! and the FM synth's voices are `@m2/synths`', the drum voice `@m2/drums'`, and reverb, phaser,
+//! tremolo and widen `@m2/effects'`, since std 0.9.
 
 use std::f32::consts::{PI, SQRT_2, TAU};
 
@@ -556,74 +559,6 @@ impl Kernel for Svf {
 
 export!(svf, Svf);
 
-// ---------------------------------------------------------------- time effects
-
-/// Longest delay time, in seconds.
-const MAX_DELAY: f32 = 2.0;
-
-/// Feedback delay with a dry/wet mix. Inputs: in, time, feedback, mix.
-pub struct Delay {
-    sr: f32,
-    lines: Vec<Vec<f32>>,
-    pos: usize,
-    /// Samples since anything audible was written into a line.
-    quiet: usize,
-}
-
-impl Kernel for Delay {
-    const INPUTS: usize = 4;
-    const OUTPUTS: usize = 1;
-
-    fn new(cfg: &Cfg) -> Self {
-        let (sample_rate, channels) = (cfg.sample_rate, cfg.channels);
-        let len = (MAX_DELAY * sample_rate) as usize + 2;
-        Delay { sr: sample_rate, lines: vec![vec![0.0; len]; channels], pos: 0, quiet: usize::MAX }
-    }
-
-    /// As `new` leaves it, its lines cleared in place: a reset takes no memory.
-    fn reset(&mut self, _: &Cfg) {
-        self.lines.iter_mut().for_each(|l| l.fill(0.0));
-        (self.pos, self.quiet) = (0, usize::MAX);
-    }
-
-    fn process(&mut self, io: &mut Io) {
-        let len = self.lines[0].len();
-        let start = self.pos;
-        let mut quietest = usize::MAX;
-        for ch in 0..self.lines.len() {
-            let ([x, time, fb, mix], [out]) = io.ports([(0, ch), (1, 0), (2, 0), (3, 0)], [(0, ch)]);
-            let line = &mut self.lines[ch];
-            let mut pos = start;
-            let mut quiet = self.quiet;
-            for i in 0..out.len() {
-                let d = (time[i].clamp(0.0, MAX_DELAY) * self.sr).max(1.0);
-                let back = d.floor() as usize;
-                let frac = d - back as f32;
-                let a = line[(pos + len - back) % len];
-                let b = line[(pos + len - back - 1) % len];
-                let wet = a + (b - a) * frac;
-                let w = x[i] + wet * fb[i].clamp(0.0, 0.95);
-                line[pos] = w;
-                quiet = if w.abs() > 1e-5 { 0 } else { quiet.saturating_add(1) };
-                let m = mix[i].clamp(0.0, 1.0);
-                out[i] = x[i] * (1.0 - m) + wet * m;
-                pos = (pos + 1) % len;
-            }
-            quietest = quietest.min(quiet);
-            if ch + 1 == self.lines.len() {
-                self.pos = pos;
-            }
-        }
-        self.quiet = quietest;
-    }
-
-    fn active(&self) -> bool {
-        self.quiet < self.lines[0].len()
-    }
-}
-
-export!(delay, Delay);
-
 // ---------------------------------------------------------------- dynamics and colour
 
 /// Soft saturation, peak-normalised. Inputs: in, amount (dB of drive).
@@ -711,15 +646,12 @@ export!(limit, Limit);
 
 mod fx;
 
-pub use fx::{Chorus, Compress, Eq3, Phaser, Reverb, Tremolo, Widen};
+pub use fx::{Chorus, Compress, Eq3};
 
-// ---------------------------------------------------------------- instruments
+// ---------------------------------------------------------------- the Sampler
 
-mod drums;
-mod fm;
 mod notes;
 mod sampler;
-mod synth;
 #[cfg(test)]
 mod testkit;
 
@@ -729,7 +661,4 @@ mod stretch;
 
 pub use stretch::Stretch;
 
-pub use drums::Drum;
-pub use fm::Fm;
 pub use notes::{DrumHit, HitCount};
-pub use synth::Synth;

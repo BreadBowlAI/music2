@@ -75,7 +75,7 @@ check(
   song.tempo?.includes("Drag up or down (Shift for fine)") && song.play === "Play (Space)",
   `the song bar's tooltips say Shift and Space: ${song.tempo?.split("\n")[1]} | ${song.play}`,
 );
-const knob = await page.$eval("[data-testid=graph] [data-knob-id]", (e) => e.title).catch(() => "");
+const knob = await page.$eval("[data-testid=graph] [data-knob-id]:not([data-kind=choice])", (e) => e.title).catch(() => "");
 check(knob.includes("Drag (Shift for fine)") && knob.includes("Alt-click to reset"), `a knob's tooltip says Shift for fine and Alt-click: ${knob.split("\n").at(-1)}`);
 await noMac("the window");
 

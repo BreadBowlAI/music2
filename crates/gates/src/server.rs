@@ -384,7 +384,7 @@ fn add_effect_with_plugins(out: &mut Outcome, lab: &Lab, o: &Opts, dir: &Path, g
     let calls: Vec<String> = {
         let s = lab.session(dir)?;
         let sites = &s.accepted().compiled.sites;
-        let kick = sites.iter().filter(|x| x.in_project && x.file == "tracks/kick.ts" && x.callee == "kick");
+        let kick = sites.iter().filter(|x| x.in_project && x.file == "tracks/kick.ts" && x.callee == "drums.drum");
         let lead = sites.iter().filter(|x| x.in_project && x.file == "tracks/lead.ts" && x.callee == "plugin").max_by_key(|x| x.ordinal);
         kick.take(1).chain(lead).map(|x| format!("{}#{}", x.file, x.ordinal)).collect()
     };
@@ -448,8 +448,8 @@ fn update_heard_ms(graph: &Graph, seq: u64, from_ns: u64, rate: u32) -> Option<f
 /// build slow.
 /// with-plugins' `tracks/kick.ts` with the kick wrapped in a delay: a structural save.
 fn delayed_kick(kick: &str) -> String {
-    kick.replace("import { kick }", "import { delay } from \"@m2/effects\";\nimport { kick }")
-        .replace("const out = kick(lane.notes(\"hits\"));", "const out = delay(kick(lane.notes(\"hits\")));")
+    kick.replace("import { drums }", "import { delay } from \"@m2/effects\";\nimport { drums }")
+        .replace("const out = drums.drum(lane.notes(\"hits\"));", "const out = delay(drums.drum(lane.notes(\"hits\")));")
 }
 
 fn slow(base: &str, n: u64) -> String {

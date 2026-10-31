@@ -36,6 +36,7 @@ const NAMES: [&str; INPUTS] = [
     "level",
     "seed",
     "wheel",
+    "shape",
 ];
 
 /// The manifest's defaults, with `changes` applied.
@@ -501,4 +502,87 @@ fn noise_and_sub_are_there() {
     let sub = held(&patch(&[(SAW, 0.0), (SUB, 1.0), (SUB_OCTAVE, -1.0)]), 60.0, 1.0);
     let f = peak_hz(&sub.left()[s(0.2)..], SR, 20.0, 2_000.0);
     assert!((f / (hz(60.0) / 2.0) as f64 - 1.0).abs() < 0.005, "sub at {f:.1}");
+}
+
+/// The power of `x` within 8 Hz of `f`.
+fn band(x: &[f32], f: f64) -> f64 {
+    spectrum(x, SR).iter().filter(|s| (s.0 - f).abs() < 8.0).map(|s| s.1).sum()
+}
+
+// CARD-12, wave 3: `shape`, a choice, says what the stack's main wave is. The saw is its default,
+// the synth as it always was; a square at width 0.5 has no even harmonics; a triangle's harmonics
+// fall faster than the saw's; a sine has almost none. Each plays the note's pitch, and a change of
+// shape while a note plays glides over a tick: no click.
+#[test]
+fn the_shape_picks_the_stacks_wave() {
+    let open = [(CUTOFF, 20_000.0), (KEYTRACK, 0.0), (SUSTAIN, 1.0), (RESONANCE, 0.0)];
+    let wave = |shape: f32| held(&patch(&[&open[..], &[(SHAPE, shape)]].concat()), 57.0, 1.0).left()[s(0.2)..].to_vec();
+    let [saw, square, triangle, sine] = [0.0, 1.0, 2.0, 3.0].map(wave);
+    assert_eq!(saw, held(&patch(&open), 57.0, 1.0).left()[s(0.2)..].to_vec(), "the saw is the default");
+    let f0 = hz(57.0) as f64;
+    // Each harmonic's power against the fundamental's.
+    let ratio = |x: &[f32], k: f64| band(x, k * f0) / band(x, f0);
+    for (name, x) in [("saw", &saw), ("square", &square), ("triangle", &triangle), ("sine", &sine)] {
+        let f = peak_hz(x, SR, 100.0, 400.0);
+        assert!((f / f0 - 1.0).abs() < 0.005, "{name} plays at {f:.1} Hz");
+    }
+    assert!(ratio(&saw, 2.0) > 0.1, "a saw has its second harmonic: {}", ratio(&saw, 2.0));
+    assert!(
+        ratio(&square, 2.0) < 1e-3 && ratio(&square, 3.0) > 0.05,
+        "a square has odd harmonics only: {} {}",
+        ratio(&square, 2.0),
+        ratio(&square, 3.0)
+    );
+    assert!(
+        ratio(&triangle, 3.0) < ratio(&saw, 3.0) / 4.0,
+        "a triangle's fall faster: {} against {}",
+        ratio(&triangle, 3.0),
+        ratio(&saw, 3.0)
+    );
+    assert!(ratio(&sine, 2.0) < 1e-4 && ratio(&sine, 3.0) < 1e-4, "a sine has almost none: {} {}", ratio(&sine, 2.0), ratio(&sine, 3.0));
+    // A change while the note plays glides: the biggest step is no bigger than the saw's own.
+    let base = patch(&open);
+    let changing = play::<Synth>(s(1.0), BLOCK, &|p, _c, t| match p {
+        PITCH => 57.0,
+        GATE => 1.0,
+        SHAPE => [0.0, 3.0][(t >= s(0.5)) as usize],
+        _ => base[p],
+    });
+    let x = changing.left();
+    assert!(max_step(&x, s(0.49), s(0.52)) <= 1.2 * max_step(&saw, 0, s(0.3)), "a change of shape doesn't click");
+}
+
+/// The RMS of `x`, in dB.
+fn rms_db(x: &[f32]) -> f64 {
+    let p = x.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / x.len().max(1) as f64;
+    10.0 * p.max(1e-30).log10()
+}
+
+// CARD-32 (review Y2): another shape plays alone on the stack, where the saw and the pulse were,
+// as loud as they were (the RMS of their mix, worked out from their levels and the width, and with
+// a sub at the note itself, which adds to the fundamental they share), so a pick never jumps the
+// loudness. Its square is a square, whatever the width; its sine has nothing of the pulse in it.
+#[test]
+fn each_shape_is_as_loud_as_the_saw_and_pulse_it_replaces() {
+    let open = [(CUTOFF, 20_000.0), (KEYTRACK, 0.0), (SUSTAIN, 1.0), (RESONANCE, 0.0)];
+    // (saw, pulse, width): a saw alone, the lead's, the pad's, the bass's, and a pulse alone.
+    for (saw, pulse, width, sub) in
+        [(1.0, 0.0, 0.5, 0.0), (1.0, 0.5, 0.45, 0.0), (1.0, 0.25, 0.3, 0.0), (1.0, 0.4, 0.5, 0.5), (0.0, 1.0, 0.2, 0.0)]
+    {
+        let mix = [(SAW, saw), (SQUARE, pulse), (WIDTH, width), (SUB, sub), (SUB_OCTAVE, 0.0)];
+        let wave = |shape: f32| held(&patch(&[&open[..], &mix[..], &[(SHAPE, shape)]].concat()), 57.0, 1.0).left()[s(0.2)..].to_vec();
+        let [as_designed, square, triangle, sine] = [0.0, 1.0, 2.0, 3.0].map(wave);
+        let level = rms_db(&as_designed);
+        for (name, x) in [("square", &square), ("triangle", &triangle), ("sine", &sine)] {
+            let d = rms_db(x) - level;
+            assert!(d.abs() < 0.5, "saw {saw}, pulse {pulse} at {width}, sub {sub}: the {name} is {d:+.2} dB from the mix it replaces");
+        }
+        let f0 = hz(57.0) as f64;
+        let ratio = |x: &[f32], k: f64| band(x, k * f0) / band(x, f0);
+        assert!(ratio(&square, 2.0) < 1e-3, "saw {saw}, pulse {pulse} at {width}: the square is a square, whatever the width");
+        assert!(
+            sub > 0.0 || ratio(&sine, 2.0) < 1e-4 && ratio(&sine, 3.0) < 1e-4,
+            "saw {saw}, pulse {pulse} at {width}: the sine is a sine alone"
+        );
+    }
 }

@@ -675,8 +675,8 @@ mod tests {
 
     fn song(kick: &str, lanes: &str) -> String {
         format!(
-            "import {{ song, track }} from \"@m2/core\";\nimport {{ kick }} from \"@m2/synths\";\n\
-             const k = track(\"{kick}\", ({{ lane }}) => {{ {lanes} return kick(lane.notes(\"hits\")); }});\n\
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\n\
+             const k = track(\"{kick}\", ({{ lane }}) => {{ {lanes} return drums.drum(lane.notes(\"hits\")); }});\n\
              export default song(() => k.out);\n"
         )
     }
@@ -691,12 +691,12 @@ mod tests {
             .enumerate()
             .map(|(i, n)| {
                 let (n, lane) = n.split_once('.').unwrap_or((n, "hits"));
-                format!("const t{i} = track(\"{n}\", ({{ lane }}) => kick(lane.notes(\"{lane}\")));\n")
+                format!("const t{i} = track(\"{n}\", ({{ lane }}) => drums.drum(lane.notes(\"{lane}\")));\n")
             })
             .collect();
         let outs: Vec<String> = (0..names.len()).map(|i| format!("t{i}.out")).collect();
         format!(
-            "import {{ song, track }} from \"@m2/core\";\nimport {{ kick }} from \"@m2/synths\";\n\
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\n\
              import {{ sum }} from \"std/math\";\n{}export default song(() => sum({}));\n",
             made.concat(),
             outs.join(", ")

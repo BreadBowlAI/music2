@@ -51,7 +51,7 @@ pub(super) fn synth(release: f64, after: Value, out: &str) -> Ir {
 
 /// A renderer as the live engine gets it: not strict, stopped at 0.
 pub(super) fn live(ir: &Ir, data: &DataSet) -> Renderer {
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Renderer::new(&flat, data, &pk, SR).unwrap();
     r.set_strict(false);
@@ -61,7 +61,7 @@ pub(super) fn live(ir: &Ir, data: &DataSet) -> Renderer {
 
 /// `ir` checked against std.
 pub(super) fn flat(ir: &Ir) -> Flat {
-    check(ir, &std_packages()).unwrap_or_else(|e| panic!("{e:?}"))
+    check(ir, &own_packages()).unwrap_or_else(|e| panic!("{e:?}"))
 }
 
 /// An engine driven by hand: messages in, what it retires out.
@@ -174,7 +174,7 @@ fn a_jump_never_resets_a_kernel() {
             {"id": "t", "op": "const", "value": 0.25, "unit": "seconds"},
             {"id": "f", "op": "const", "value": 0.9},
             {"id": "m", "op": "const", "value": 1},
-            {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "m"}}]),
+            {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "m"}}]),
         "d",
     );
     let data =
@@ -208,13 +208,13 @@ fn a_jump_never_resets_a_kernel() {
 #[test]
 fn every_graph_reset_is_counted() {
     let ir = synth(0.0, json!([]), "v");
-    let delayed = synth(0.0, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d");
+    let delayed = synth(0.0, json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}}]), "d");
     let data = with_notes(json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 1}]}]}), at_bpm(120.0));
     let mut offline = live(&ir, &data);
     assert_eq!(offline.resets(), 0, "building isn't a reset");
     offline.seek(1000).unwrap();
     assert_eq!(offline.resets(), 1, "an offline seek replays from a reset (RENDER-1)");
-    let pk = std_packages();
+    let pk = own_packages();
     let (plain, delayed) = (flat(&ir), flat(&delayed));
     let mut rig = Rig::of(&plain, &data, live(&ir, &data));
     rig.cmd(Cmd::Play);
@@ -283,7 +283,7 @@ fn stopped_lanes_and_time_hold_while_kernels_run() {
         &ir,
         &[("data/song/level.json", json!({"unit": "gain", "clips": [{"start": 0, "length": 8, "points": [[0, 0], [8, 1]]}]}))],
     );
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(&ir, &pk).unwrap();
     let node = |name: &str| flat.nodes.iter().position(|n| n.name == name).unwrap();
     let (c, t, l) = (node("song/c"), node("song/t"), node("song/l"));
@@ -363,7 +363,7 @@ fn time_playing_follows_the_transport() {
 fn an_audio_lane_crossfades_at_a_wrap() {
     let (ir, tl, dir) =
         audio_song(&[("a441.wav", vec![sine(441.0, 3.0, SR)], SR)], json!([{"start": 0, "length": 4, "asset": "a441.wav"}]));
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(&ir, &pk).unwrap();
     let material = Renderer::new(&flat, &tl, &pk, SR).unwrap().render(1.0).unwrap();
     let own = max_step(&material);
@@ -498,7 +498,7 @@ fn plugin_events_merge_as_a_stable_sort_did() {
 // at its start isn't chased.
 #[test]
 fn range_renders_start_fresh_and_dont_chase() {
-    let pk = std_packages();
+    let pk = own_packages();
     let (ir, data) = goldens::g2();
     let flat = check(&ir, &pk).unwrap();
     let full = Renderer::new(&flat, &data, &pk, SR).unwrap().render(1.0).unwrap();
@@ -525,9 +525,9 @@ fn retriggered() -> (Ir, DataSet) {
                 {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
                 {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
                 {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}},
-                {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a"}},
+                {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "a"}},
                 {"id": "wet", "op": "const", "value": 0.25, "origin": {"site": 2, "arg": ["0"]}},
-                {"id": "r", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d", "mix": "wet"}}]}},
+                {"id": "r", "op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": "d", "mix": "wet"}}]}},
             cell::smooth_const("lvl", 0.8, 3),
             {"id": "out", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": "lvl"}}]),
         "out",
@@ -543,7 +543,7 @@ fn retriggered() -> (Ir, DataSet) {
 #[test]
 fn prewarming_keeps_kernel_memory_flat() {
     let (ir, data) = retriggered();
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(&ir, &pk).unwrap();
     let mut r = Renderer::new(&flat, &data, &pk, SR).unwrap();
     let before = r.kernel_memory_bytes();
@@ -579,7 +579,7 @@ fn prewarming_keeps_kernel_memory_flat() {
 #[test]
 fn rendering_live_allocates_nothing() {
     let (ir, data) = retriggered();
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(&ir, &pk).unwrap();
     let mut rig = Rig::of(&flat, &data, live(&ir, &data));
     rig.cmd(Cmd::Play);
@@ -588,7 +588,7 @@ fn rendering_live_allocates_nothing() {
     let mut edited = ir.clone();
     edited.modules[0]
         .nodes
-        .push(serde_json::from_value(json!({"id": "d2", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "out"}})).unwrap());
+        .push(serde_json::from_value(json!({"id": "d2", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "out"}})).unwrap());
     edited.modules[0].exports.insert("out".into(), "d2".into());
     let next = rig.prepare(&check(&edited, &pk).unwrap(), &data, &pk);
     // A box marked as gone non-finite, which the activation resets as it moves it (RENDER-25).
@@ -649,13 +649,13 @@ fn activations_crossfade_without_jumping_back() {
     );
     let delayed = song(
         json!([{"id": "f", "op": "const", "value": 440, "unit": "hz"}, {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
-            {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}]),
+            {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "o"}}]),
         "d",
         json!([]),
     );
     let own = max_step(&render(&sine_ir, &DataSet::empty(), 0.1));
     let mut seed = 7;
-    let pk = std_packages();
+    let pk = own_packages();
     let (plain, delayed) = (flat(&sine_ir), flat(&delayed));
     let mut rig = Rig::of(&plain, &DataSet::empty(), live(&sine_ir, &DataSet::empty()));
     rig.cmd(Cmd::Play);
@@ -711,7 +711,7 @@ fn an_activation_across_a_tempo_change_keeps_the_beat() {
     };
     let (d120, dir1) = data(120.0);
     let mut seed = 3;
-    let pk = std_packages();
+    let pk = own_packages();
     let f = flat(&ir);
     for bpm in [90.0, 150.0, 90.0, 150.0] {
         let (other, dir2) = data(bpm);
@@ -756,9 +756,9 @@ fn an_activation_across_a_tempo_change_keeps_the_beat() {
 #[test]
 fn structural_messages_keep_their_order() {
     let ir = synth(0.0, json!([]), "v");
-    let delayed = synth(0.0, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d");
+    let delayed = synth(0.0, json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}}]), "d");
     let data = with_notes(json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 1}]}]}), at_bpm(120.0));
-    let pk = std_packages();
+    let pk = own_packages();
     let (plain, delayed) = (flat(&ir), flat(&delayed));
     let mut rig = Rig::of(&plain, &data, live(&ir, &data));
     rig.cmd(Cmd::Play);
@@ -850,7 +850,7 @@ fn the_engine_idles_only_when_nothing_can_sound() {
                 {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}},
                 {"id": "t", "op": "const", "value": 0.5, "unit": "seconds"},
                 {"id": "f", "op": "const", "value": 0.5},
-                {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a", "time": "t", "feedback": "f", "mix": "m"}},
+                {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "a", "time": "t", "feedback": "f", "mix": "m"}},
                 {"id": "m", "op": "const", "value": 1}]}}]),
         "v",
         json!([{"key": "notes", "kind": "events<note>"}]),
@@ -877,7 +877,7 @@ fn the_engine_idles_only_when_nothing_can_sound() {
 fn activations_while_a_voice_sounds_dont_click() {
     let held = |after: Value, out: &str| synth(0.05, after, out);
     let plain = held(json!([]), "v");
-    let delayed = held(json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d");
+    let delayed = held(json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}}]), "d");
     let data = with_notes(
         json!({"clips": [{"start": 0, "length": 64, "notes": [
         {"pitch": 69, "start": 0, "length": 64}, {"pitch": 69, "start": 16, "length": 48}, {"pitch": 69, "start": 32, "length": 32}]}]}),
@@ -890,7 +890,7 @@ fn activations_while_a_voice_sounds_dont_click() {
     );
     let own = max_step(&render(&sine, &DataSet::empty(), 0.1));
     let mut seed = 5;
-    let pk = std_packages();
+    let pk = own_packages();
     let (p, d) = (flat(&plain), flat(&delayed));
     for k in 0..6 {
         let mut rig = Rig::of(&p, &data, live(&plain, &data));
