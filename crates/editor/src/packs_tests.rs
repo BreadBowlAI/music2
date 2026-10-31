@@ -62,7 +62,9 @@ fn a_pack_in_the_store_is_offered() {
     let keys = crate::tracks::instruments(&s).into_iter().find(|i| i.component == "@test/tiny:tiny-keys").expect("offered");
     assert_eq!((keys.module.as_str(), keys.name.as_str(), keys.category.as_str()), ("@test/tiny", "tinyKeys", "Keys"));
     assert_eq!(from(&s, "@test/tiny:tiny-keys"), Some(From { name: "@test/tiny".into(), version: "0.1.0".into() }));
-    assert_eq!(from(&s, "@m2/synths:synth-pluck"), None);
+    assert_eq!(from(&s, "std:sampler"), None, "std's items are from no pack");
+    // music2's own sounds are a pack's, in the store as any (PACK-15).
+    assert_eq!(from(&s, "@m2/synths:synth-pluck"), Some(From { name: "@m2/synths".into(), version: "1.0.0".into() }));
     assert_eq!(keys.pack, Some(From { name: "@test/tiny".into(), version: "0.1.0".into() }), "the list knows its pack");
     assert!(crate::effect::effects(&s).iter().any(|e| e.component == "@test/tiny:tiny-crunch"));
 }
@@ -263,7 +265,8 @@ fn a_pack_this_app_cant_run_isnt_offered() {
     install_as(&f, "@test/later", "1.0.0", |t| t.replace("std = \"0.4\"", "std = \"9.0\""), None);
     let s = open(&f);
     assert_eq!(from(&s, "@test/tiny:tiny-keys").map(|p| p.version), Some("0.1.0".into()));
-    let offered: Vec<String> = m2_session::offered(&s.packages).into_iter().map(|(n, ..)| n).collect();
+    // Beside the packs music2 ships, which every store holds (PACK-16).
+    let offered: Vec<String> = m2_session::offered(&s.packages).into_iter().map(|(n, ..)| n).filter(|n| !n.starts_with("@m2/")).collect();
     assert_eq!(offered, ["@test/tiny"], "@test/later needs std 9.0");
 }
 
