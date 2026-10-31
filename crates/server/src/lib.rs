@@ -434,8 +434,9 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
 const METERS_EVERY: Duration = Duration::from_millis(33);
 
 /// `music2-meters`: every 33 ms, the meters of what plays go to every window (8b.8,
-/// [`graph::Graph::meters`]), on their own channel, never through the session. The load is read
-/// even with no window, so the status's `load` stays current. Ends once the state is dropped.
+/// [`graph::Graph::meters`]), on their own channel, never through the session. The taps run only
+/// while a window or an agent's socket listens (TAP-4). The load is read even with none, so the
+/// status's `load` stays current. Ends once the state is dropped.
 fn spawn_meters(state: &Arc<AppState>) {
     let weak = Arc::downgrade(state);
     std::thread::Builder::new()
@@ -444,9 +445,8 @@ fn spawn_meters(state: &Arc<AppState>) {
             loop {
                 std::thread::sleep(METERS_EVERY);
                 let Some(state) = weak.upgrade() else { return };
-                if let Some(m) = state.graph.meters()
-                    && state.meters.receiver_count() > 0
-                {
+                state.graph.watch_meters(state.meters.receiver_count() > 0);
+                if let Some(m) = state.graph.meters() {
                     state.meters.send_replace(m.to_string());
                 }
             }

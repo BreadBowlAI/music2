@@ -62,6 +62,7 @@ mod preview;
 mod projects;
 pub mod record;
 mod rekey;
+pub mod scope;
 mod songkey;
 pub(crate) mod steps;
 mod take_audio;
@@ -184,6 +185,10 @@ pub struct Export {
     /// The live plugin instances it borrows, taken on the export's thread with playback paused,
     /// given back when this drops.
     pub lent: Option<crate::export::Lent>,
+    /// The song's session and the accepted revision it renders: what its loudness is the
+    /// loudness of (TAP-7).
+    pub token: u64,
+    pub revision: u64,
 }
 
 /// What the engine is busy with besides playing, and what its device reported. Its fields go into
@@ -352,6 +357,8 @@ struct ControlPlane {
     tempo: tempo_lease::TempoLeases,
     /// The take recording, and the takes waiting to be written (lane B).
     record: record::Recorder,
+    /// The scopes windows and agents ask for (TAP-8).
+    scopes: scope::Scopes,
 }
 
 /// How a control named at a revision is found without the session.
@@ -472,6 +479,9 @@ struct Inner {
     output: output::Outputs,
     /// The graph state's `plugins` (HOST-7, MON-6), as the actor last published it.
     plugins: Mutex<Value>,
+    /// The last export's integrated loudness, with the session and the revision it rendered
+    /// (TAP-7): the state's `loudness` while that revision is accepted.
+    exported: Mutex<Option<(u64, u64, f64)>>,
     /// The plugin instances whose window is open, by handle.
     open_windows: Mutex<HashSet<u64>>,
     /// `plugins` changed since the watcher last asked.
@@ -631,6 +641,7 @@ impl Inner {
             layout: Mutex::default(),
             output,
             plugins: Mutex::new(Value::Object(Default::default())),
+            exported: Mutex::default(),
             open_windows: Mutex::default(),
             plugins_changed: AtomicBool::new(false),
             offered: Mutex::new(HashMap::new()),
@@ -794,6 +805,11 @@ impl Inner {
         // that loads later.
         state["point"] = self.pointer(token);
         state["comparing"] = self.compared(token);
+        // The song's loudness, while it is the revision the last export measured (TAP-7).
+        state["loudness"] = match *self.exported.lock() {
+            Some((t, r, lufs)) if t == token && r == shown.revision => json!({"lufs": (lufs * 10.0).round() / 10.0}),
+            _ => Value::Null,
+        };
         Some(state)
     }
 
@@ -1075,6 +1091,12 @@ impl Graph {
         let mut export = self.call(move |a| a.export(length, jobs))?;
         export.problems.extend(self.overlays_warning());
         Ok(export)
+    }
+
+    /// An export of revision `revision` of session `token` measured `lufs` (TAP-7): the graph
+    /// state carries it while that revision is accepted. One under the gate forgets it.
+    pub fn exported(&self, token: u64, revision: u64, lufs: Option<f64>) {
+        *self.inner.exported.lock() = lufs.map(|l| (token, revision, l));
     }
 
     /// What the engine is busy with besides playing: paused for an export, and the plugins being
@@ -1416,6 +1438,7 @@ impl Graph {
     /// values play again. Its pending commits stay: it let go, so it meant to save.
     pub fn client_gone(&self, client: &str) {
         self.audition_gone(client);
+        self.scopes_gone(client);
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
         let mut i = 0;

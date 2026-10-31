@@ -44,6 +44,9 @@ crate::api::routes! {
     POST "/api/graph/plugin/latch" => plugin_latch; reads, musician,
         "Let a lane or a cable drive a plugin's parameter again",
         r#"{"session": 7, "node": "synth"}"#;
+    POST "/api/graph/scope" => graph_scope; reads, agents,
+        "Show a box's sound as it plays: its last frames in every meters message while you ask (again within 10 s), or stop",
+        r#"{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
@@ -183,6 +186,25 @@ struct AuditionReq {
 async fn graph_audition(State(s): S, Json(r): Json<AuditionReq>) -> ApiResult {
     let answer = blocking(move || s.graph.audition(&r.client, r.audition)).await?;
     Ok(Json(answer.unwrap_or_else(|| json!({}))))
+}
+
+#[derive(Deserialize)]
+struct ScopeReq {
+    session: u64,
+    /// The window, or the agent, asking: the scope lasts while one asks.
+    client: String,
+    /// The box, by its module's key and its id in the graph view.
+    module: String,
+    node: String,
+    on: bool,
+}
+
+/// Start, keep or stop a scope (TAP-8): `{session, client, module, node, on}`. While a client
+/// asks (again within 10 s), every meters message carries the box's last frames. Not a write: it
+/// works read-only. Answers `{scope: {module, node, channels}}`, or `{}` for a stop; what isn't a
+/// sound at the top of its track is refused in words.
+async fn graph_scope(State(s): S, Json(r): Json<ScopeReq>) -> ApiResult {
+    Ok(Json(blocking(move || s.graph.scope(r.session, &r.client, &r.module, &r.node, r.on)).await?))
 }
 
 #[derive(Deserialize)]

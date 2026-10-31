@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use common::*;
 use m2_play::Player;
-use m2_runtime::{BLOCK, Cmd, Continues, Copying, LaneSwap, PlanInfo, Pool, Renderer, Runner, Stats, TapAt, notes_data};
+use m2_runtime::{BLOCK, Cmd, Continues, Copying, LaneSwap, PlanInfo, Pool, RINGS, Renderer, Runner, Stats, TapAt, notes_data};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -109,6 +109,53 @@ fn copy_taps_change_no_bit() {
         assert!(peak(&export) > 0.0 || name.contains("empty"), "{name} makes sound");
         assert_eq!(first_diff(&tapped, &export), None, "{name}: a copy tap changed what renders");
         assert_eq!(first_diff(&copied[..frames], &export), None, "{name}: the output's copy is what rendered");
+    }
+}
+
+// TAP-2, RENDER-33: with every tap on, every pure fixture plays the export's bits, the whole song:
+// a live plan with a meter at every overlay site and at every node with sound, watched, and every
+// ring pointed at the output or a node with sound, moved on to the next ones before every buffer,
+// while the meters are taken and the rings read as the server reads them.
+#[test]
+fn every_tap_on_changes_no_bit() {
+    for name in PURE {
+        let song = fixture(name);
+        let frames = (song.seconds() * song.rate as f64) as usize;
+        let export = offline(&song, frames);
+        let mut r = Renderer::prepare(
+            &song.flat,
+            &song.data,
+            &song.packages,
+            song.rate,
+            &mut m2_runtime::audio::Cache::default(),
+            &m2_plugins::Owner::discard(),
+            m2_runtime::Basis::Fresh,
+        )
+        .unwrap();
+        r.set_strict(false);
+        let audio = |i: usize| matches!(song.flat.nodes[i].outputs.first(), Some(m2_ir::Kind::Audio(_)));
+        let sound: Vec<TapAt> = (0..song.flat.nodes.len()).filter(|&i| audio(i)).map(TapAt::Node).collect();
+        let mut meters: Vec<Vec<TapAt>> = (0..song.flat.overlays.len()).map(|k| vec![TapAt::Site(k)]).collect();
+        meters.extend(sound.iter().map(|&a| vec![a]));
+        r.tap(&meters).unwrap();
+        let taps = r.info().taps.clone().expect("a live plan has taps");
+        taps.watch(true);
+        let points: Vec<TapAt> = std::iter::once(TapAt::Out).chain(sound).collect();
+        let (_player, mut d) = playing(r, song.rate);
+        let (mut turn, mut read, mut framed) = (0, vec![], 0);
+        let heard = hear(&mut d, frames, &mut |_, _| {
+            for ring in 0..RINGS {
+                if taps.frames(ring, 0, 1024, &mut read).is_some() {
+                    framed += read.len();
+                }
+                taps.point(ring, Some(points[(turn + ring) % points.len()])).unwrap();
+            }
+            drop(taps.take());
+            turn += 1;
+        });
+        assert!(peak(&export) > 0.0 || name.contains("empty"), "{name} makes sound");
+        assert!(framed > 0, "{name}: the rings were read");
+        assert_eq!(first_diff(&heard, &export), None, "{name}: a tap changed what plays");
     }
 }
 

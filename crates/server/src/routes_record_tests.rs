@@ -185,7 +185,8 @@ fn an_audio_take_through_the_routes() {
     let tone = json!({"tone": {"hz": 440.0, "seconds": 0.5, "gain": 0.5}});
     let (status, injected) = post(&running.url, "/api/graph/input/inject", &tone);
     assert_eq!(status, 200, "{injected:#}");
-    // The meters say the input's level while it records.
+    // The meters say the input's level while it records, to a window that listens (TAP-4).
+    let _window = state.meters.subscribe();
     let t = Instant::now();
     let mut level = 0.0;
     while level < 0.4 && t.elapsed() < Duration::from_secs(3) {

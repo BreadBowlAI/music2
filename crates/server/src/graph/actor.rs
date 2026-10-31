@@ -356,6 +356,8 @@ pub(crate) struct Plays {
     /// The arrangement a tempo drag plays in place of the accepted one's (RENDER-27a): None when
     /// it plays the accepted arrangement. While set, every change is an activation.
     pub(super) tempo: Option<Arc<m2_song::Arrangement>>,
+    /// Whose each of its meters is (TAP-5).
+    pub(super) meters: Arc<super::meters::Layout>,
 }
 
 /// Whether two checked graphs number their cells alike (the same constants at the same places),
@@ -570,7 +572,7 @@ fn packages(inner: &Inner) -> Result<PackageSet> {
 
 /// What of `from`'s graph each node of `to`'s continues (ID-15): every node itself for the same
 /// build, else the names of what changed. An activation keeps by it, and an export borrows by it.
-fn continuing(from: &Revision, to: &Revision) -> Continues {
+pub(super) fn continuing(from: &Revision, to: &Revision) -> Continues {
     match Arc::ptr_eq(from.compiled.code(), to.compiled.code()) {
         true => Continues::identity(&to.compiled.flat),
         false => m2_session::tx::continues::continues(from, to),
@@ -608,14 +610,23 @@ fn build(
     owner: &m2_plugins::Owner,
     basis: Basis,
     data: Option<&m2_song::DataSet>,
-) -> Result<Renderer> {
+) -> Result<(Renderer, Arc<super::meters::Layout>)> {
     // A tempo drag's arrangement in place of the accepted one (RENDER-27a).
     let (flat, data, rate) = (&rev.compiled.flat, data.unwrap_or(&rev.compiled.data), rev.project.sample_rate());
     // The kernels the revision was built with (PACK-9).
     let packages = packages.viewing(&rev.compiled.view);
-    let r = Renderer::prepare(flat, data, &packages, rate, audio, owner, basis)?;
+    let mut r = Renderer::prepare(flat, data, &packages, rate, audio, owner, basis)?;
     audio.prune();
-    Ok(r)
+    // Its meters, after the fader (TAP-5). A layout that can't be made leaves it with none.
+    let (taps, layout) = super::meters::layout(rev);
+    let layout = match r.tap(&taps) {
+        Ok(()) => layout,
+        Err(e) => {
+            eprintln!("music2: the meters couldn't be laid out: {e:#}");
+            super::meters::Layout::default()
+        }
+    };
+    Ok((r, Arc::new(layout)))
 }
 
 impl Open {
@@ -636,8 +647,9 @@ impl Open {
         self.plays.as_ref().is_some_and(|p| p.epoch == device.epoch)
     }
 
-    /// What the engine plays once `r`, built from `revision`, plays in `device`'s player.
-    fn describe(&self, r: &Renderer, device: &Device, revision: Arc<Revision>) -> Plays {
+    /// What the engine plays once `r`, built from `revision` with its meters laid out as `meters`
+    /// says, plays in `device`'s player.
+    fn describe(&self, r: &Renderer, device: &Device, revision: Arc<Revision>, meters: Arc<super::meters::Layout>) -> Plays {
         let info = r.info();
         Plays {
             epoch: device.epoch,
@@ -649,6 +661,7 @@ impl Open {
             info,
             controls: self.controls.clone(),
             tempo: None,
+            meters,
         }
     }
 
@@ -788,12 +801,12 @@ impl Open {
             false => build(&target, &session.packages, audio, owner, basis, leased.as_ref()),
         };
         prepared.prepare_ns = t.elapsed().as_nanos() as u64 - prepared.continues_ns;
-        let r = match built {
-            Ok(r) => Box::new(r),
+        let (r, meters) = match built {
+            Ok((r, meters)) => (Box::new(r), meters),
             Err(e) => return (Way::Unbuilt(e), prepared),
         };
         prepared.fresh = r.stats().fresh;
-        let mut plays = self.describe(&r, device, target);
+        let mut plays = self.describe(&r, device, target, meters);
         plays.tempo = tempo.cloned();
         let way = match kind {
             Kind::Activate => Way::Activate(r, plays),
@@ -1181,6 +1194,12 @@ impl Actor {
             if let Some(p) = cp.open.as_ref().filter(|p| p.engine.token == token) {
                 r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, &target));
             }
+            // Its taps as asked (TAP-9): watched as the meters are, and each scope pointed at its
+            // box in what it is built from.
+            if let Some(taps) = r.info().taps.as_deref() {
+                super::meters::watch(taps, cp.meters.watched);
+                cp.scopes.point(taps, &target, &o.session.packages);
+            }
         }
         let sent = (|| -> Result<Sent> {
             match way {
@@ -1292,6 +1311,7 @@ impl Actor {
                 o.origins()
             },
             tempo: p.tempo.as_ref().map(|a| Arc::new(a.tempo_map())),
+            meters: p.meters.clone(),
         });
         let dev = device.as_ref().ok().filter(|d| plays.as_ref().is_some_and(|p| p.epoch == d.epoch));
         for (id, kept) in decisions {
@@ -1444,9 +1464,9 @@ impl Actor {
         let built = match o.session.accepted().has_code() {
             true => {
                 let accepted = o.session.accepted_arc();
-                let mut r = build(&accepted, &o.session.packages, &mut o.audio, &self.inner.owner, Basis::Fresh, None)?;
+                let (mut r, meters) = build(&accepted, &o.session.packages, &mut o.audio, &self.inner.owner, Basis::Fresh, None)?;
                 r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, &accepted));
-                let plays = o.describe(&r, &device, accepted);
+                let plays = o.describe(&r, &device, accepted, meters);
                 Some((r, plays))
             }
             false => None,
@@ -1459,6 +1479,11 @@ impl Actor {
             if let Some(p) = cp.open.as_mut() {
                 let (controls, accepted) = (p.engine.controls.clone(), p.engine.accepted.clone());
                 p.engine = Arc::new(EngineView { plays: None, controls, accepted, ..*p.engine });
+            }
+            // The song before's scopes end; the new plan's meters are watched as they are (TAP-9).
+            cp.scopes = Default::default();
+            if let Some(taps) = built.as_ref().and_then(|(r, _)| r.info().taps.clone()) {
+                super::meters::watch(&taps, cp.meters.watched);
             }
         }
         let view = match built {
@@ -1474,6 +1499,7 @@ impl Actor {
                     routes: plays.revision.compiled.flat.routes.clone(),
                     origins: None,
                     tempo: None,
+                    meters: plays.meters.clone(),
                 };
                 o.load(&device, r, plays, 0.0, None)?;
                 super::faults::sent(&self.inner, &o, o.plays.as_ref().expect("loaded"));
@@ -1671,7 +1697,7 @@ impl Actor {
             // Offline renders run at the project's rate (RENDER-31a).
             let threads = crate::export::export_threads(env, idle, false);
             let render = Render::new(rev.clone(), packages, rate, 0.0, length, threads).map_err(super::plainly)?;
-            return Ok(super::Export { song, dir, render, problems, lent: None });
+            return Ok(super::Export { song, dir, render, problems, lent: None, token: o.token, revision: rev.number });
         };
         let threads = crate::export::export_threads(env, idle, true);
         let render = Render::lending(rev.clone(), packages, rate, length, &lend, threads).map_err(super::plainly)?;
@@ -1704,7 +1730,7 @@ impl Actor {
             }
             lent.hooks = Some(hooks);
         }
-        Ok(super::Export { song, dir, render, problems, lent: Some(lent) })
+        Ok(super::Export { song, dir, render, problems, lent: Some(lent), token, revision: rev.number })
     }
 
     /// An export gave back the live instances it borrowed (RENDER-1): what waited for it plays
