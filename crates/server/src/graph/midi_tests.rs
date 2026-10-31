@@ -112,12 +112,16 @@ fn a_keyboards_pedal_reaches_its_lane() {
     stays_still(&graph, "no target: no lane takes it");
 }
 
-/// A pad on `keys`, which sounds while its key is held and fades over 0.8 s once let go.
-const PAD: &str = "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\n\
-                   const k = track('keys', ({ lane }) => pad(lane.notes('notes')));\nexport default song(() => k.out);\n";
+/// A saw on `keys` from std's toolbox, which sounds while its key is held and fades over 0.3 s once
+/// let go.
+const PAD: &str = "import { poly, secs, song, track } from '@m2/core';\nimport { adsr, osc, vca } from 'std/dsp';\n\
+                   const k = track('keys', ({ lane }) => poly(lane.notes('notes'), (n) => \
+                   vca(osc.saw(n.pitch), adsr(n.gate, { attack: secs(0.01), sustain: 0.5, release: secs(0.3) }))));\n\
+                   export default song(() => k.out);\n";
 
 // RENDER-38, live with keys from a keyboard: a note let go while the pedal is down rings on, as long
-// as the pedal stays down, and fades once it lifts, as one let go without the pedal does at once.
+// as the pedal stays down, and fades once it lifts, as one let go without the pedal does at once. A
+// key still down when the pedal lifts sounds on until it is let go.
 #[test]
 fn a_note_let_go_under_the_pedal_rings_on() {
     let fixture = Fixture::new();
@@ -152,6 +156,14 @@ fn a_note_let_go_under_the_pedal_rings_on() {
     assert_eq!(live(&graph), 0, "its key is up");
     send(&graph, &[0xB0, 64, 0]);
     assert!(level(200) < 1e-4, "the pedal up lets it fade");
+    // A key still down at the lift.
+    send(&graph, &[0xB0, 64, 127]);
+    send(&graph, &[0x90, 60, 100]);
+    assert!(level(20) > 0.05);
+    send(&graph, &[0xB0, 64, 0]);
+    assert!(level(200) > 0.05, "its key is down: it sounds on past the lift");
+    send(&graph, &[0x80, 60, 0]);
+    assert!(level(200) < 1e-4, "let go, it fades");
 }
 
 #[test]

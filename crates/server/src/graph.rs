@@ -1114,6 +1114,7 @@ impl Graph {
             bail!("can't seek to beat {beat}");
         }
         self.record_jump();
+        self.midi_pedals_up();
         if self.inner.timing.lock().is_none() {
             bail!("no project is open");
         }
@@ -1936,6 +1937,9 @@ impl Graph {
             other => bail!("unknown transport action {other}"),
         };
         player.transport(cmd)?;
+        if cmd == Cmd::Stop && st.playing {
+            self.midi_pedals_up();
+        }
         // The status says stopped at once, but the engine takes the stop at its next block line, up
         // to a block on. A seek back to where the status was, sent with it, keeps the playhead where
         // it was seen to stop: it never moves after that.

@@ -141,19 +141,22 @@ pub(crate) fn hold<N: Pedalled>(events: &[Event], mut down: bool, start: u64, ea
 }
 
 /// The voice a note starting at engine sample `t` gets, or none (`steal: "none"` and every voice
-/// busy): a free voice, else the one `steal` names. A voice given a note this block is taken last.
+/// busy): a free voice, else the one `steal` names. A voice given a note this block is taken last,
+/// and one whose note only the pedal holds first (RENDER-38): its key is up, as a piano's damper
+/// would be.
 pub(crate) fn pick(voices: &[VoiceSlot], steal: Steal) -> Option<usize> {
     if let Some(i) = voices.iter().position(|v| v.note.is_none() && !v.taken) {
         return Some(i);
     }
     let all = 0..voices.len();
+    let kept = |i: usize| !voices[i].note.is_some_and(|n| n.held);
     match steal {
-        Steal::Oldest => all.min_by_key(|&i| voices[i].born),
+        Steal::Oldest => all.min_by_key(|&i| (kept(i), voices[i].born)),
         // The lowest peak over its last block; a tie goes to the oldest.
         Steal::Quietest => all.min_by(|&a, &b| {
-            let key = |i: usize| (voices[i].taken, voices[i].last_peak, voices[i].born);
-            let ((ta, pa, ba), (tb, pb, bb)) = (key(a), key(b));
-            ta.cmp(&tb).then(pa.total_cmp(&pb)).then(ba.cmp(&bb))
+            let key = |i: usize| (voices[i].taken, kept(i), voices[i].last_peak, voices[i].born);
+            let ((ta, ka, pa, ba), (tb, kb, pb, bb)) = (key(a), key(b));
+            ta.cmp(&tb).then(ka.cmp(&kb)).then(pa.total_cmp(&pb)).then(ba.cmp(&bb))
         }),
         Steal::None => None,
     }

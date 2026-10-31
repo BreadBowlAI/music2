@@ -25,7 +25,7 @@ use wasmtime::{Caller, Engine, Extern, ExternType, Func, Instance, Memory, Modul
 
 use crate::audio::Asset;
 use crate::stream::Wav;
-use crate::{BLOCK, KERNEL_MEMORY, NOTES_BYTES, NOTES_CAP, NOTES_HEAD, PORT_BYTES, WasmContext};
+use crate::{BLOCK, EVENT_BYTES, KERNEL_MEMORY, NOTES_HEAD, PORT_BYTES, WasmContext};
 
 /// Bytes of a v1 settings block (`m2_kernel::Settings` on wasm32).
 const SETTINGS_BYTES: usize = 60;
@@ -47,9 +47,9 @@ pub(crate) struct Spec<'a> {
     /// An offline kernel's time map (`flags` bit 0): pairs of (source seconds, output seconds).
     /// `None` for a live kernel.
     pub(crate) offline: Option<&'a [[f64; 2]]>,
-    /// Its `events<note>` inputs, by place among its inputs (ABI-8): each one entry in the port
-    /// table, a header and [`NOTES_CAP`] events.
-    pub(crate) notes: &'a [usize],
+    /// Its `events<note>` inputs, by place among its inputs, and the events each holds (ABI-8):
+    /// each one entry in the port table, a header and that many events.
+    pub(crate) notes: &'a [(usize, usize)],
 }
 
 /// Where a sandbox reads an asset from (`docs/kernel-abi.md`, The asset import): the host's choice,
@@ -263,7 +263,7 @@ pub(crate) struct State {
     reset: TypedFunc<u32, ()>,
     active: TypedFunc<u32, u32>,
     /// Each input's buffer and each output's: `PORT_BYTES`, channel 1 at `BLOCK` floats in; an
-    /// events input's header and its events, [`NOTES_BYTES`] (ABI-8).
+    /// events input's header and its events (ABI-8).
     pub(crate) ins: Vec<usize>,
     pub(crate) outs: Vec<usize>,
     /// Each input's bytes: what debug builds compare (ABI-1).
@@ -323,7 +323,9 @@ impl Sandbox {
         let map = spec.offline.unwrap_or_default();
         let (nv, na, nm) = (spec.values.len(), spec.assets.len(), map.len());
         let table_len: usize = channels.iter().map(|&c| c as usize).sum();
-        let lens: Vec<usize> = (0..n).map(|p| if spec.notes.contains(&p) { NOTES_BYTES } else { PORT_BYTES }).collect();
+        let room = |p: usize| spec.notes.iter().find(|(i, _)| *i == p).map(|(_, cap)| *cap);
+        let lens: Vec<usize> =
+            (0..n).map(|p| room(p).map_or(PORT_BYTES, |cap| (NOTES_HEAD + cap * EVENT_BYTES).next_multiple_of(16))).collect();
         let settings_at: usize = lens.iter().sum();
         let list_at = settings_at + SETTINGS_BYTES;
         let values_at = (list_at + 4 * n).next_multiple_of(8);
@@ -378,8 +380,8 @@ impl Sandbox {
         }
         data[block + table_at..block + bytes].copy_from_slice(bytemuck::cast_slice(&io));
         // An events input's header (ABI-8): none yet, its room, and where its events are.
-        for &p in spec.notes {
-            let head = [0, NOTES_CAP as u32, (bufs[p] + NOTES_HEAD) as u32, 0];
+        for &(p, cap) in spec.notes {
+            let head = [0, cap as u32, (bufs[p] + NOTES_HEAD) as u32, 0];
             data[bufs[p]..bufs[p] + NOTES_HEAD].copy_from_slice(bytemuck::cast_slice(&head));
         }
         let handle = new.call(&mut self.store, (block + settings_at) as u32)?;

@@ -622,7 +622,9 @@ impl<K: Kernel> Host<K> {
         self.process_range(0, frames);
     }
 
-    /// Frames `from..to` of a block, as a host calls a voice's kernels where its note changes.
+    /// Frames `from..to` of a block, as kernel ABI v1 lets a host call. (music2 calls from 0: a voice's
+    /// part of a block is copied to the start of its buffers, and a kernel that takes notes runs
+    /// only on whole blocks.)
     pub fn process_range(&mut self, from: u32, to: u32) {
         let mb = self.max_block;
         self.table.clear();

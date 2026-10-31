@@ -89,7 +89,7 @@ export const feltSample = component(
 
 A recording is named by the pack and its path in the pack: `"@alice/felt-piano:samples/C4.wav"`. It must be inside the pack, spelled exactly as the file is named.
 
-A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/arp:arp", { notes: lane.notes("notes") })`.
+A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
 
 ## An instrument written as data
 

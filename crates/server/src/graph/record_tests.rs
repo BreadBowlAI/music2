@@ -234,6 +234,39 @@ fn a_take_keeps_a_note_the_pedal_held() {
     assert_eq!(c["notes"].as_array().unwrap().len(), 3, "no pedal in the lane");
 }
 
+// RENDER-36 (review E8): a Stop lets the pedal up for the take as for the lane. The foot still down,
+// a key let go after it ends at its Off in the next take, as the voices end it there, not where the
+// foot at last lifts.
+#[test]
+fn a_stop_lets_the_takes_pedal_up_too() {
+    let mut r = Rig::new();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(0.5);
+    r.key(&[0xB0, 64, 127]);
+    r.to(1.0);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written().get("empty").is_some(), "the first take holds no note");
+    r.fill(10);
+    let from = r.graph.status().beat;
+    r.anchored(0, from);
+    r.start(false, None);
+    r.to(from + 0.5);
+    let on = r.key(&[0x90, 60, 100]);
+    r.to(from + 1.0);
+    let off = r.key(&[0x80, 60, 0]);
+    r.to(from + 2.0);
+    r.key(&[0xB0, 64, 0]);
+    r.to(from + 2.5);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object());
+    let c = &r.clips()[0];
+    let (pitch, start, length, _) = note(c, 0);
+    let at = c["start"].as_f64().unwrap();
+    assert_eq!(pitch, 60.0);
+    assert!(on.less(at).has(start) && off.less(at).has(start + length), "to its Off: {on:?} to {off:?}, written {start} for {length}");
+}
+
 // D4: a note goes where it was heard between two callbacks, not on the callback's line.
 #[test]
 fn notes_land_between_callbacks() {

@@ -13,7 +13,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 24 | **The rest of recording notes**: recording the pitch and mod wheels and the sustain pedal (it needs controller data in a notes lane, a format bump: today the pedal plays live only, and a take keeps each note as long as the pedal held it, RENDER-36); recording over a clip into it (overdub), and one clip for each time round a loop; the computer keyboard's velocity and sustain. | Expressive parts use the wheels; loop recording builds a part in layers. | No | medium |
+| 24 | **The rest of recording notes**: recording the pitch and mod wheels and the sustain pedal (it needs controller data in a notes lane, a format bump: today the pedal plays live only, and a take keeps each of a keyboard's notes as long as its pedal held it, but a note from the computer's keys only as long as its key, RENDER-36); recording over a clip into it (overdub), and one clip for each time round a loop; the computer keyboard's velocity and sustain. | Expressive parts use the wheels; loop recording builds a part in layers. | No | medium |
 | 25 | **The rest of recording audio**: an arm button (hear yourself without recording); takes stacked per loop pass; punch in and out; inputs 3 and 4 (only the first two channels record); a recording offset for a device that reports its latency wrongly (the output's is taken as two buffers). | Singers stack takes and fix one line by punching in. | No | medium |
 
 - **A take waits while the code doesn't compile.** It is written once the code compiles; closing the song first loses it (a message says so).

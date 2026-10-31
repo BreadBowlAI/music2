@@ -508,3 +508,90 @@ fn a_stop_or_a_panic_lets_the_pedal_up() {
     rig.cmd(Cmd::Seek(0.5));
     assert!(all(&rig.run(4 * BLOCK), 0.0), "a panic lets it up");
 }
+
+// RENDER-38 (review E4): a note whose key is still down when the pedal lifts sounds on until its own
+// Off: the lift ends only the notes the pedal holds.
+#[test]
+fn a_key_still_down_at_the_lift_sounds_on() {
+    let f = probed(json!({"voices": 2}), 0.0, false);
+    let data = notes(&[(60.0, 0.0, 2.0, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(pedal(g, 127));
+    rig.run(40 * BLOCK);
+    rig.send(pedal(g, 0));
+    let out = rig.run(at(2.5) - 40 * BLOCK);
+    let from = |b: f64| at(b) - 40 * BLOCK;
+    assert!(all(&out[..from(2.0)], 60.0), "its key is down: it sounds on past the lift");
+    assert!(all(&out[from(2.0)..], 0.0), "then ends at its Off");
+}
+
+// RENDER-38 (review E4): a note struck and let go within one block under the pedal rings on: the
+// notes that start in a block are held by the pedal as those already in voices are.
+#[test]
+fn a_note_struck_and_let_go_in_one_block_rings_on() {
+    let f = probed(json!({"voices": 2}), 0.0, false);
+    // From frame 24 to frame 72 of the third block.
+    let s = (2.0 * BLOCK as f64 + 24.0) / BEAT as f64;
+    let data = notes(&[(60.0, s, 48.0 / BEAT as f64, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(pedal(g, 127));
+    let out = rig.run(at(0.5));
+    assert!(all(&out[2 * BLOCK + 24..], 60.0), "held past its Off at frame 72 of its block");
+}
+
+// RENDER-38, RENDER-16: a pool moved whole while the pedal is down keeps the notes it holds, and lets
+// them go when the pedal lifts.
+#[test]
+fn a_kept_pool_keeps_its_pedal() {
+    let f = probed(json!({"voices": 2}), 0.0, false);
+    let data = notes(&[(60.0, 0.0, 0.25, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(pedal(g, 127));
+    rig.run(94 * BLOCK);
+    activate(&mut rig, &f, &data);
+    let held = rig.run(94 * BLOCK);
+    assert_eq!(rig.e.current().unwrap().stats().kept.polys, 1);
+    assert!(all(&held, 60.0), "held across the activation");
+    rig.send(pedal(rig.e.current().unwrap().generation(), 0));
+    assert!(all(&rig.run(4 * BLOCK), 0.0), "the lift ends it");
+}
+
+// RENDER-38, RENDER-35: a pool made new (its shape changed) while the pedal is down hears the pedal
+// again, as a new consumer hears its lane's wheels: a note let go after the rebuild is held.
+#[test]
+fn a_new_pool_hears_the_pedal() {
+    let (two, three) = (probed(json!({"voices": 2}), 0.0, false), probed(json!({"voices": 3}), 0.0, false));
+    let data = notes(&[(64.0, 1.0, 0.25, 0.8)]);
+    let (mut rig, g) = live_rig(&two, &data);
+    rig.send(pedal(g, 127));
+    rig.run(94 * BLOCK);
+    activate(&mut rig, &three, &data);
+    let out = rig.run(at(2.0) - 94 * BLOCK);
+    assert_eq!(rig.e.current().unwrap().stats().kept.polys, 0, "a new pool");
+    assert!(all(&out[at(1.0) - 94 * BLOCK..], 64.0), "held past its Off at 1.25");
+}
+
+// RENDER-38, RENDER-16 (review E7): when the pedal has filled the voices, a new note takes the voice
+// of a note only the pedal holds before one whose key is still down. Two voices: a bass note held
+// down, a note let go under the pedal, then a third note: the bass sounds on.
+#[test]
+fn the_pedal_gives_up_its_own_notes_first() {
+    for steal in ["oldest", "quietest"] {
+        let f = probed(json!({"voices": 2, "alloc": {"steal": steal}}), 0.0, false);
+        let data = notes(&[(36.0, 0.0, 4.0, 0.8), (60.0, 0.5, 0.25, 0.8), (64.0, 1.0, 0.25, 0.8)]);
+        let (mut rig, g) = live_rig(&f, &data);
+        rig.send(pedal(g, 127));
+        let out = rig.run(at(1.5));
+        assert_eq!(out[at(1.25)][0], 36.0 + 64.0, "{steal}: the held-down bass and the new note, not the pedal's");
+    }
+}
+
+// RENDER-38 (review E2): an Off is never moved later: a lift ends a held note at the lift only if it
+// hasn't ended before (a release at an activation), so its gate never opens again.
+#[test]
+fn a_lift_never_reopens_an_ended_note() {
+    let mut n = VoiceNote { id: 7, pitch: 60.0, velocity: 0.8, on: 0, off: 1_000, count: 1, held: true };
+    let lift = [Event::Midi { frame: 0, bytes: [0xB0, 64, 127] }, Event::Midi { frame: 10, bytes: [0xB0, 64, 0] }];
+    crate::poly::hold(&lift, true, 5_000, &mut |f: &mut dyn FnMut(&mut VoiceNote)| f(&mut n));
+    assert_eq!((n.off, n.held), (1_000, false));
+}

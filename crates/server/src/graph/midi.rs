@@ -209,6 +209,15 @@ impl Graph {
         let _ = self.audition(&client(name), a);
     }
 
+    /// A seek or a Stop let the lanes' pedals up (RENDER-36): every keyboard's pedal is up for its
+    /// take too, until the foot lifts and presses it again. A take that ran ended there, with the
+    /// notes it kept.
+    pub(super) fn midi_pedals_up(&self) {
+        for k in &mut self.inner.control.lock().midi.keyboards {
+            (k.pedal, k.held_back) = (false, BTreeSet::new());
+        }
+    }
+
     /// What MIDI keyboards play from now on: lane `(module, lane)` of the open song, or nothing.
     /// The last window to say wins (Q4). The wheels a keyboard moved on another lane go back to
     /// rest there; its held keys sound on where they are.
