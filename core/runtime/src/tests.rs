@@ -20,6 +20,7 @@ mod parts;
 mod poly;
 mod stream;
 mod taps;
+mod wavetable;
 
 const SR: u32 = 48_000;
 

@@ -1,0 +1,25 @@
+{
+  "m2preset": 1,
+  "name": "Slow pad",
+  "sound": "@m2/wavetable:wavetable",
+  "values": {
+    "attack": 0.8,
+    "cutoff": 2500,
+    "decay": 1,
+    "filterAttack": 1.2,
+    "filterEnv": 1.5,
+    "filterRelease": 1.8,
+    "filterSustain": 0.5,
+    "levelA": 0.8,
+    "levelB": 0.6,
+    "lfoCutoff": 0.5,
+    "lfoPosition": 0.25,
+    "lfoRate": 0.2,
+    "pitchB": 0.12,
+    "positionA": 0.5,
+    "positionB": 0.6,
+    "release": 1.8,
+    "sustain": 0.9,
+    "velSens": 0.35
+  }
+}

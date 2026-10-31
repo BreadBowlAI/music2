@@ -562,7 +562,7 @@ export default song(() => v.out);
                 (m.package.name, m.package.version, hash)
             })
             .collect();
-        assert_eq!(bundled.len(), 3, "@m2/drums, @m2/effects and @m2/synths");
+        assert_eq!(bundled.len(), 4, "@m2/drums, @m2/effects, @m2/synths and @m2/wavetable");
         let (mut songs, mut wrong) = (0, vec![]);
         let mut stack: Vec<PathBuf> = ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"].map(|r| repo.join(r)).into();
         while let Some(d) = stack.pop() {

@@ -16,7 +16,7 @@ fn std_dir() -> PathBuf {
 /// The packs music2 ships (PACK-15), each from its folder in the repo.
 fn bundled() -> Vec<(String, PathBuf)> {
     let packs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
-    ["@m2/drums", "@m2/effects", "@m2/synths"].map(|p| (p.to_string(), packs.join(p))).into()
+    ["@m2/drums", "@m2/effects", "@m2/synths", "@m2/wavetable"].map(|p| (p.to_string(), packs.join(p))).into()
 }
 
 fn options(files: &[(&str, &str)]) -> Options {

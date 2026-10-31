@@ -230,7 +230,12 @@ fn every_factory_preset_loads() {
 
             let f = keys("track", "synth.pluck(lane.notes(\"chords\"))");
             // The song lists the pack each sound is from (PACK-10).
-            f.write("music2.toml", f.read("music2.toml") + "\"@m2/effects\" = \"1\"\n");
+            let mut toml = f.read("music2.toml") + "\"@m2/effects\" = \"1\"\n";
+            let pack = p.sound.split(':').next().unwrap();
+            if !toml.contains(&format!("\"{pack}\" =")) {
+                toml += &format!("\"{pack}\" = \"1\"\n");
+            }
+            f.write("music2.toml", toml);
             let s = f.open();
             let desc = s.catalog().components.get(&p.sound).unwrap_or_else(|| panic!("{}: no sound {}", file.display(), p.sound)).clone();
             for k in p.values.keys() {
@@ -270,5 +275,5 @@ fn every_factory_preset_loads() {
             n += 1;
         }
     }
-    assert_eq!(n, 10, "two each for Pluck, Pad, Bass, Reverb and Delay");
+    assert_eq!(n, 14, "two each for Pluck, Pad, Bass, Reverb and Delay, and the Wavetable's four");
 }

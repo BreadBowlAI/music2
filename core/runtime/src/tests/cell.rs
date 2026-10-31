@@ -445,8 +445,9 @@ fn every_kernel(sigs: &[&KernelSig], p: &str, src: &Sources, site: &mut u32, nod
                     });
                     *site += 1;
                     let mut node = if site.is_multiple_of(2) { smooth_const(&cell, value, *site) } else { step_const(&cell, value, *site) };
+                    // Its IR spelling: a choice's names its options (`choice<lowpass|…>`), as its port's does.
                     if let Some(u) = unit {
-                        node["unit"] = json!(u.name());
+                        node["unit"] = json!(u.to_string());
                     }
                     nodes.push(node);
                     cell

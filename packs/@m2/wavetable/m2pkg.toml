@@ -1,0 +1,57 @@
+[package]
+name = "@m2/wavetable"
+version = "1.0.0"
+license = "MIT OR Apache-2.0"
+description = "music2's wavetable synth: two oscillators that slide through tables of waveforms, a filter, two envelopes, an LFO and unison"
+authors = ["music2"]
+repository = "https://github.com/BreadBowlAI/music2"
+tags = ["synth", "wavetable", "pad", "bass", "lead", "pluck"]
+# Its own kernel (PACK-21, PACK-27), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is
+# no part of the pack (PACK-20).
+wasm = "kernels/wavetable.wasm"
+
+[dependencies]
+# @m2/core 1.8 or later: the filter's shape is a choice control, and the card has views and groups,
+# which 1.8.0 added.
+"@m2/core" = "1.8"
+# It calls no std kernel; std/dsp's `mono` gives one voice its glide.
+std = "0.7"
+
+# ---------------------------------------------------------------- its own kernel
+# Port syntax as std's m2pkg.toml says. Called by the pack's id: `kernel("@m2/wavetable:voice", …)`.
+
+[[kernel]]
+name = "voice"
+description = "One voice of the wavetable synth: two oscillators reading band-limited tables, their unison, a filter, an amp and a filter envelope, an LFO. Its values: table A and table B (0 basic, 1 pulse, 2 vowels, 3 harmonics, 4 digital), the asset that is A's table and B's (its place among the assets, or -1 for none: then the built-in one plays), and the unison voices (1 to 8). A table is frames of 2048 samples; position (0 to 1) slides through them"
+inputs = [
+  "pitch: control<semitones> = 60",
+  "gate: control<unit01> = 0",
+  "velocity: control<unit01> = 0.8",
+  "a_position: control<unit01> = 0",
+  "a_pitch: control<semitones> = 0 in -24..24",
+  "a_level: control<unit01> = 1",
+  "b_position: control<unit01> = 0",
+  "b_pitch: control<semitones> = 0 in -24..24",
+  "b_level: control<unit01> = 0",
+  "detune: control<semitones> = 0.1 in 0..1",
+  "spread: control<unit01> = 0.5",
+  "filter: control<choice<lowpass|bandpass|highpass|notch>> = 0",
+  "cutoff: control<hz> = 20000",
+  "q: control<scalar> = 0.707 in 0.5..12",
+  "keytrack: control<unit01> = 0",
+  "env: control<scalar> = 0 in -8..8",
+  "f_attack: control<seconds> = 0.005",
+  "f_decay: control<seconds> = 0.3",
+  "f_sustain: control<unit01> = 0",
+  "f_release: control<seconds> = 0.3",
+  "attack: control<seconds> = 0.005",
+  "decay: control<seconds> = 0.5",
+  "sustain: control<unit01> = 0.8",
+  "release: control<seconds> = 0.3",
+  "lfo_rate: control<hz> = 2 in 0.05..20",
+  "lfo_position: control<unit01> = 0",
+  "lfo_cutoff: control<scalar> = 0 in 0..4",
+  "vel_amount: control<unit01> = 0.5",
+  "level: control<db> = 0 in -24..12",
+]
+outputs = ["out: audio<2>"]

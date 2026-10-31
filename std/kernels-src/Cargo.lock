@@ -28,3 +28,11 @@ dependencies = [
  "m2-dsp",
  "m2-kernel",
 ]
+
+[[package]]
+name = "m2-wavetable-kernels"
+version = "0.1.0"
+dependencies = [
+ "m2-dsp",
+ "m2-kernel",
+]
