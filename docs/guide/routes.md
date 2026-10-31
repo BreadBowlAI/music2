@@ -350,6 +350,16 @@ An example body:
 {"session": 7, "at": 42, "call": "tracks/drums.ts#2", "file": "/Users/you/Samples/kick.wav"}
 ```
 
+### `POST /api/graph/scope`
+
+Show a box's sound as it plays: its last frames in every meters message while you ask (again within 10 s), or stop.
+
+An example body:
+
+```json
+{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}
+```
+
 ### `POST /api/graph/set`
 
 Write a knob's value into the code, as one undo step (for an agent, never a drag's commit). It writes the song: one undo step.
