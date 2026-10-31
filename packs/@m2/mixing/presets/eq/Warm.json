@@ -1,0 +1,14 @@
+{
+  "m2preset": 1,
+  "name": "Warm",
+  "sound": "@m2/mixing:eq",
+  "values": {
+    "freq2": 120,
+    "freq6": 5000,
+    "freq7": 9000,
+    "gain2": 3,
+    "gain6": -2,
+    "gain7": -3,
+    "q6": 1
+  }
+}

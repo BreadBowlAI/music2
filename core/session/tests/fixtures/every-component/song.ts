@@ -7,6 +7,7 @@ import { bandpass, highpass, lowpass, notch } from "std/filter";
 import { drums } from "@m2/drums";
 import { bass, fm, hat, kick, pad, pluck, synth } from "@m2/synths";
 import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
+import { deesser, eq, gate, multiband, transient } from "@m2/mixing";
 import { compress, duck, eq3, limit } from "std/fx";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
@@ -59,5 +60,8 @@ export default song(({ lane, time }) => {
     drums.shaker(lane.notes("shaker")),
   );
   const chops = sampler(lane.notes("chops"), { tune: 2, mode: "gate" });
-  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops }));
+  const mixed = multiband(deesser(transient(gate(eq(tones, { freq3: wobble, gain3: 3, on1: true, shape8: "high shelf" }), hit, { threshold: -30 }), { attack: 4 }), { amount: 4 }), {
+    lowRatio: 3,
+  });
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed }));
 });
