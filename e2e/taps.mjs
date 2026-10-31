@@ -26,23 +26,29 @@ const FLOOR = -60;
 const db = (x) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
 const strip = (id) => `[data-testid=mix] [data-strip="${id}"]`;
 const playing = async () => (await api("/status")).body.playing;
-/** The loudest the server's meters said of channel `key` (after its fader) over `ms`, in dB. */
-const channelOver = async (key, ms) => {
+/**
+ * Over `ms`: the loudest the server's meters said of the Keys channel (after its fader), in dB;
+ * the Keys strip's and header's meters read at the same moments, in whole dB (one loop draws
+ * every meter, so two of one level agree); and the loudest the strip read.
+ */
+const listen = async (ms) => {
   const from = heard.length;
-  await sleep(ms);
-  return Math.max(...heard.slice(from).map((h) => db(h.m.channels?.[key]?.[0] ?? 0)));
-};
-/** The loudest meter `sel` read over `ms`, in whole dB. */
-const meterOver = async (sel, ms) => {
-  let top = FLOOR;
+  const reads = [];
   const t = Date.now();
   while (Date.now() - t < ms) {
-    top = Math.max(top, Number(await page.$eval(sel, (e) => e.getAttribute("aria-valuenow")).catch(() => FLOOR)));
+    reads.push(
+      await page.evaluate(() => {
+        const read = (sel) => Number(document.querySelector(sel)?.getAttribute("aria-valuenow") ?? -60);
+        return { strip: read('[data-testid=mix] [data-strip="keys"] [role=meter]'), head: read('[data-testid=timeline] [data-track="keys"] [role=meter]') };
+      }),
+    );
     await sleep(40);
   }
-  return top;
+  const server = Math.max(...heard.slice(from).map((h) => db(h.m.channels?.keys?.[0] ?? 0)));
+  return { server, reads, strip: Math.max(...reads.map((r) => r.strip)) };
 };
-const stripOver = (id, ms) => meterOver(`${strip(id)} [role=meter]`, ms);
+/** Whether the strip's and the header's meters read alike at every read. */
+const alike = (l) => l.reads.every((r) => Math.abs(r.strip - r.head) <= 1);
 
 // The first bar, looped, so what plays repeats while the fader moves.
 const session = (await state()).session;
@@ -55,9 +61,8 @@ await sleep(2500);
 
 // ---------------------------------------------------------------- a fader dragged down (TAP-5)
 
-const keys0 = await channelOver("keys", 2500);
-const strip0 = await stripOver("keys", 2500);
-check(keys0 > -40 && strip0 > FLOOR, `the Keys channel sounds, and its strip meter shows it (${keys0.toFixed(1)} dB; the strip ${strip0} dB)`);
+const before = await listen(2500);
+check(before.server > -40 && before.strip > FLOOR && alike(before), `the Keys channel sounds; its strip's and header's meters show it, alike at every read (${before.server.toFixed(1)} dB; the strip up to ${before.strip} dB)`);
 const was = read("song.ts").match(/keys: \{ in: keys\.out, db: db\((-?[\d.]+)\)/)?.[1];
 const thumb = await box(`${strip("keys")} [data-fader] [data-testid=fader-thumb]`);
 await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
@@ -69,12 +74,13 @@ check(await until(() => read("song.ts").match(moved)?.[1] !== was), `let go, the
 const drop = Number(read("song.ts").match(moved)?.[1]) - Number(was);
 check(drop < -10, `60 px down is more than 10 dB down (${drop.toFixed(1)} dB)`);
 await sleep(600);
-const keys1 = await channelOver("keys", 2500);
-const strip1 = await stripOver("keys", 2500);
-check(Math.abs(keys1 - keys0 - drop) < 1, `the server's Keys meter fell by the fader's move: ${(keys1 - keys0).toFixed(1)} dB for ${drop.toFixed(1)}`);
-check(strip1 <= strip0 + drop + 3 && strip1 < strip0, `and the strip's meter fell with it: ${strip0} to ${strip1} dB`);
-const head = await meterOver('[data-testid=timeline] [data-track="keys"] [role=meter]', 2500);
-check(head > FLOOR && Math.abs(head - strip1) <= 2, `as did the Keys header's meter: its channel is its own (${head} dB; the strip ${strip1})`);
+const after = await listen(2500);
+check(Math.abs(after.server - before.server - drop) < 1, `the server's Keys meter fell by the fader's move: ${(after.server - before.server).toFixed(1)} dB for ${drop.toFixed(1)}`);
+check(
+  after.strip > FLOOR && after.strip <= Math.round(after.server) + 1 && after.strip <= before.strip - 6,
+  `and the strip's meter fell with it: up to ${before.strip} dB, then up to ${after.strip} (the server's ${after.server.toFixed(1)})`,
+);
+check(alike(after), `as did the Keys header's meter, alike at every read: its channel is its own (${after.reads.slice(0, 8).map((r) => `${r.strip}/${r.head}`).join(" ")})`);
 const title = await page.$eval(`${strip("keys")} [role=meter]`, (e) => e.title).catch(() => "");
 check(title === "Keys's level, after its fader.", `its tooltip says where it reads: "${title}"`);
 
