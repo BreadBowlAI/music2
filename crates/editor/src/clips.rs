@@ -205,6 +205,7 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                         "An audio clip plays a sound file. Drop a WAV file here, or use File ▸ Import Audio…".into(),
                     ));
                 }
+                LaneKind::Choice { .. } | LaneKind::Switch => return Err(EditError::Rejected(names(&l.track, &l.label))),
             };
             l.added.push((clip, true));
         }
@@ -837,7 +838,17 @@ fn clips_of(d: &LaneData) -> Vec<Clip> {
         LaneData::Notes(c) => c.iter().cloned().map(Clip::Notes).collect(),
         LaneData::Control { clips, .. } => clips.iter().cloned().map(Clip::Control).collect(),
         LaneData::Audio(c) => c.iter().cloned().map(Clip::Audio).collect(),
+        // A gesture never reaches a lane of names (`Work::lane` refuses it).
+        LaneData::Steps { .. } => vec![],
     }
+}
+
+/// Why a gesture refuses a lane of names (CARD-15): its clips are written in its file until the
+/// lane's own editor comes (track `views`).
+fn names(track: &str, lane: &str) -> String {
+    format!(
+        "{track}'s {lane} lane holds a choice's names or a switch's on and off, whose clips can't be drawn here yet; edit them in its file"
+    )
 }
 
 /// A lane of `kind` holding `clips`, in canonical order. Clips are of the lane's kind.
@@ -875,6 +886,8 @@ fn fits(from: &LaneKind, to: &LaneKind) -> Result<(), String> {
     let noun = |k: &LaneKind| match k {
         LaneKind::Notes => ("A notes clip", "a notes lane"),
         LaneKind::Control { .. } => ("An automation clip", "an automation lane"),
+        LaneKind::Choice { .. } => ("A choice's clip", "a choice's lane"),
+        LaneKind::Switch => ("A switch's clip", "a switch's lane"),
         LaneKind::Audio => ("An audio clip", "an audio lane"),
     };
     match (from, to) {
@@ -934,6 +947,9 @@ impl Work<'_> {
                 )));
             }
             let kind = m2_runtime::lane_kind(decl.kind);
+            if matches!(kind, LaneKind::Choice { .. } | LaneKind::Switch) {
+                return Err(EditError::Rejected(names(m.label(), decl.label())));
+            }
             let was = match rev.compiled.data.lane(module, key) {
                 Some(d) if d.fits(&kind) => clips_of(d),
                 _ => vec![],

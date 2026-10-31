@@ -40,6 +40,21 @@ export type Control<U extends Unit = Unit> = Signal<ControlKind<U>>;
 export type Events = Signal<EventsKind>;
 export type Mask = Control<"unit01">;
 
+/** What a choice's signal carries, for types only: its options, in place order (CARD-13). */
+export type ChoiceKind<O extends readonly string[] = readonly string[]> = { readonly choice: Readonly<O> };
+/** What a switch's signal carries, for types only. */
+export type SwitchKind = { readonly switch: true };
+
+declare const STEPS: unique symbol;
+
+/**
+ * A choice's signal (CARD-10): the place of one of the options `O`, which only a choice of exactly
+ * these options, in this order, takes. No number's slot takes it: a place isn't a number (CARD-13).
+ */
+export type Choice<O extends readonly string[] = readonly string[]> = Signal<ChoiceKind<O>> & { readonly [STEPS]: ChoiceKind<O> };
+/** A switch's signal (CARD-11): 1 for on, 0 for off. Only a switch takes it. */
+export type Switch = Signal<SwitchKind> & { readonly [STEPS]: SwitchKind };
+
 /** A kernel instance. As a signal it is its `out` port; `.port(name)` gives the others. */
 export class KernelNode<K = unknown> extends Signal<K> {
   port<P = unknown>(name: string): Signal<P> {
@@ -162,8 +177,11 @@ function unitTable(): string {
   return JSON.stringify(Object.entries(UNITS).map(([name, [unit, scale, canonical]]) => ({ name, unit, scale, canonical })));
 }
 
-/** Anything that can feed an input: a signal, a plain number (fits any unit), or a quantity. */
-export type Value<K = unknown> = Signal<K> | number | Quantity;
+/**
+ * Anything that can feed a number's input: a signal, a plain number (fits any unit), or a
+ * quantity. Not a choice's or a switch's signal: a place isn't a number (CARD-13).
+ */
+export type Value<K = unknown> = (Signal<K> & { readonly [STEPS]?: never }) | number | Quantity;
 
 /**
  * One sounding note, as seen by a voice inside `poly`. `pitch` has the lane's pitch wheel in it
@@ -270,7 +288,7 @@ function visible(s: Signal, from: Scope): boolean {
 }
 
 /** Turn a value into a ref usable in the current scope. */
-function ref(v: Value, what: string): string {
+function ref(v: Value | Signal, what: string): string {
   const scope = need(what);
   if (v instanceof Signal) {
     if (v.scope.module !== scope.module) {
@@ -302,7 +320,7 @@ export type KernelSettings = { assets?: readonly string[]; values?: readonly num
  * Unset inputs use the kernel's defaults. `settings` gives it the files it reads and numbers fixed
  * at build: `kernel("std:sampler", { pitch }, { assets: ["kick.wav"], values: [60] })`.
  */
-export function kernel<K = unknown>(id: string, inputs: Record<string, Value | undefined> = {}, settings: KernelSettings = {}): KernelNode<K> {
+export function kernel<K = unknown>(id: string, inputs: Record<string, Value | Choice | Switch | undefined> = {}, settings: KernelSettings = {}): KernelNode<K> {
   const site = takeSite(arguments);
   const scope = need(`kernel("${id}")`);
   const ins: Record<string, string> = {};
@@ -706,8 +724,23 @@ function describe(p: Place): string {
 /** A `key()` frame, or a module's top level: the keys used directly inside it, and where first. */
 type KeyFrame = { key: string; frames: Map<string, Place>; plugins: Map<string, Place> };
 
-/** A lane as declared so far. Kept here, out of reach of song code, since it holds a label. */
-type LaneRecord = { kind: string; default?: number; label?: string; chains: Map<string, Place>; shared: boolean; first: Place };
+/**
+ * A lane as declared so far. Kept here, out of reach of song code, since it holds a label. A lane
+ * of names (`control<choice>`) falls back to a name, and takes its options from the first choice
+ * it feeds, which `fed` names (CARD-14).
+ */
+type LaneRecord = {
+  kind: string;
+  default?: number | string;
+  label?: string;
+  chains: Map<string, Place>;
+  shared: boolean;
+  first: Place;
+  options?: readonly string[];
+  fed?: string;
+  /** A lane of names' fallbacks, as each declaration wrote it: compared once its options are known. */
+  fallbacks?: { name?: string; at: Place }[];
+};
 
 /** One evaluation of a component call or a `key()` frame, as the IR has it (`Module.frames`, ID-15). */
 type IrFrame = {
@@ -833,11 +866,17 @@ declare const PHANTOM: unique symbol;
 
 /** What a control declaration holds. Its numbers are in its spelling (`control.ms(45)`: 45). */
 type ControlSpec = {
+  /** A number in `unit`, a choice of `options`, or a switch (CARD-10, CARD-11). */
+  kind: "number" | "choice" | "switch";
   unit?: Unit;
   spelled?: Spelling;
   scale: number;
-  /** As written in the spelling; absent when the control is required. */
+  /** As written in the spelling; absent when the control is required. A choice's is its place, a switch's 1 or 0. */
   default?: number;
+  /** A choice's options, in place order. */
+  options?: readonly string[];
+  /** A choice's or a switch's default as written: a name, or true or false. */
+  initial?: string | boolean;
   range?: [number, number];
   log: boolean;
   strict: boolean;
@@ -851,66 +890,118 @@ type ControlSpec = {
 /**
  * A control: a value that may be written as a number (a knob), connected to a signal, or left
  * out (its default: "inherited"). Every number given to its builder is in its spelling:
- * `control.ms(45).range(5, 1000)` is 45 ms within 5 ms…1 s. `R` is whether a call must give it.
+ * `control.ms(45).range(5, 1000)` is 45 ms within 5 ms…1 s. `R` is whether a call must give it;
+ * `K` what it is, for types only: a number's unit, a `ChoiceKind` or the `SwitchKind`, with
+ * `undefined` when it is optional.
  */
-export class ControlDecl<R extends boolean = boolean> {
-  declare readonly [PHANTOM]?: R;
+export class ControlDecl<R extends boolean = boolean, K = unknown> {
+  declare readonly [PHANTOM]?: [R, K];
   /** @internal */
   constructor(spec: ControlSpec) {
     specs.set(this, spec);
   }
-  private with<Q extends boolean = R>(more: Partial<ControlSpec>): ControlDecl<Q> {
-    return new ControlDecl<Q>({ ...specOf<ControlSpec>(this), ...more });
+  private with<Q extends boolean = R, J = K>(more: Partial<ControlSpec>): ControlDecl<Q, J> {
+    return new ControlDecl<Q, J>({ ...specOf<ControlSpec>(this), ...more });
   }
-  /** The range a knob shows, in the control's spelling. A hint, never a clamp (PKG-8). */
-  range(lo: number, hi: number): ControlDecl<R> {
-    return this.with({ range: [lo, hi] });
+  /** The range a knob shows, in the control's spelling. A hint, never a clamp (PKG-8). A number's only. */
+  range(this: ControlDecl<R, Unit | undefined>, lo: number, hi: number): ControlDecl<R, K> {
+    return this.with({ range: [lo, hi] }) as ControlDecl<R, K>;
   }
   /** Make the range a validation constraint too: a value outside it is a build error (PKG-8). */
-  strict(): ControlDecl<R> {
-    return this.with({ strict: true });
+  strict(this: ControlDecl<R, Unit | undefined>): ControlDecl<R, K> {
+    return this.with({ strict: true }) as ControlDecl<R, K>;
   }
   /** A knob that moves logarithmically; needs a range above 0. */
-  log(): ControlDecl<R> {
-    return this.with({ log: true });
+  log(this: ControlDecl<R, Unit | undefined>): ControlDecl<R, K> {
+    return this.with({ log: true }) as ControlDecl<R, K>;
   }
   /** Another unit a value may have (`semitones` for a frequency), and the range, in that unit, a knob shows for it. */
-  accepts(unit: Unit, lo?: number, hi?: number, log = false): ControlDecl<R> {
+  accepts(this: ControlDecl<R, Unit | undefined>, unit: Unit, lo?: number, hi?: number, log = false): ControlDecl<R, K> {
     const range: [number, number] | undefined = lo === undefined && hi === undefined ? undefined : [lo as number, hi as number];
-    return this.with({ accepts: [...specOf<ControlSpec>(this).accepts, { unit, range, log }] });
+    return this.with({ accepts: [...specOf<ControlSpec>(this).accepts, { unit, range, log }] }) as ControlDecl<R, K>;
   }
   /** Its value ramps over one block when it changes while playing, for controls that click when stepped (PKG-14). */
-  smooth(): ControlDecl<R> {
-    return this.with({ smooth: true });
+  smooth(this: ControlDecl<R, Unit | undefined>): ControlDecl<R, K> {
+    return this.with({ smooth: true }) as ControlDecl<R, K>;
   }
   /** Left out, it makes no node at all: its presence changes the graph (PKG-5). */
-  optional(): ControlDecl<false> {
-    return this.with<false>({ optional: true });
+  optional(): ControlDecl<false, K | undefined> {
+    return this.with<false, K | undefined>({ optional: true });
   }
   /** Display text for its knob; the name is the default. */
-  label(text: string): ControlDecl<R> {
+  label(text: string): ControlDecl<R, K> {
     return this.with({ label: text });
   }
 }
 
 type ControlBuilders = {
   /** A control with no unit and no default, typed by what flows in (math helpers). */
-  any(): ControlDecl<true>;
+  any(): ControlDecl<true, Unit>;
+  /**
+   * A choice (CARD-10): one of `options`, named in a call (`shape: "square"`), with `d` the one a
+   * call that leaves it out gets. Its kernel reads the option's place, 0 to n − 1. Each name is 1
+   * to 24 characters, without `|`, `<` or `>`.
+   */
+  choice<const O extends readonly string[]>(options: O): ControlDecl<true, ChoiceKind<O>>;
+  choice<const O extends readonly string[]>(options: O, d: NoInfer<O[number]>): ControlDecl<false, ChoiceKind<O>>;
+  /** A switch (CARD-11): `true` or `false` in a call; its kernel reads 1 or 0. */
+  bool(): ControlDecl<true, SwitchKind>;
+  bool(d: boolean): ControlDecl<false, SwitchKind>;
 } & {
   /** A control in this spelling's unit, with a default in this spelling, or none (required). */
-  [S in Spelling]: { (): ControlDecl<true>; (v: number): ControlDecl<false> };
+  [S in Spelling]: { (): ControlDecl<true, UnitOf<S>>; (v: number): ControlDecl<false, UnitOf<S>> };
 };
 
-/** Declare a control: `control.hz(1000)`, `control.ms(45)`, `control.frac(0.3)`, `control.any()`. */
+/**
+ * Declare a control: `control.hz(1000)`, `control.ms(45)`, `control.frac(0.3)`, `control.any()`,
+ * `control.choice(["saw", "square"], "saw")`, `control.bool(false)`.
+ */
 export const control: ControlBuilders = (() => {
-  const base = { log: false, strict: false, accepts: [], smooth: false, optional: false };
-  const builders: Record<string, (v?: number) => ControlDecl> = { any: () => new ControlDecl({ ...base, scale: 1 }) };
+  const base = { kind: "number" as const, log: false, strict: false, accepts: [], smooth: false, optional: false };
+  const builders: Record<string, (...a: any[]) => ControlDecl<any, any>> = { any: () => new ControlDecl({ ...base, scale: 1 }) };
   for (const name of Object.keys(UNITS) as Spelling[]) {
     const [unit, scale] = UNITS[name];
     builders[name] = (v?: number) => new ControlDecl({ ...base, unit, spelled: name, scale, default: v });
   }
+  // A choice's or a switch's default is checked where its component is declared (`check`).
+  builders.choice = (options: readonly string[], d?: string) =>
+    new ControlDecl({ ...base, kind: "choice", scale: 1, options: Array.isArray(options) ? [...options] : options, initial: d, default: d === undefined ? undefined : Array.isArray(options) ? options.indexOf(d) : -1 });
+  builders.bool = (d?: boolean) => new ControlDecl({ ...base, kind: "switch", scale: 1, initial: d, default: d === undefined ? undefined : d === true ? 1 : 0 });
   return builders as unknown as ControlBuilders;
 })();
+
+/** The unit a control's constants have in the IR: a number's, `choice<…>` or `switch` (CARD-12). */
+function unitOfSpec(s: ControlSpec): string | undefined {
+  return s.kind === "choice" ? `choice<${(s.options ?? []).join("|")}>` : s.kind === "switch" ? "switch" : s.unit;
+}
+
+/** What a choice's or a switch's signal is, out of reach of types and song code (CARD-13). */
+type Steps = { kind: "switch" } | { kind: "choice"; options: readonly string[] } | { kind: "choice"; lane: LaneRecord; key: string; module: string };
+const stepsOf = new WeakMap<Signal, Steps>();
+
+/** The options a choice's signal has: a lane of names' are those of the choice it feeds, once it feeds one. */
+function optionsOf(k: Steps): readonly string[] | undefined {
+  return k.kind === "switch" ? undefined : "lane" in k ? k.lane.options : k.options;
+}
+
+/** `"saw", "square", "sine"`. */
+function listed(names: readonly string[]): string {
+  return names.map((n) => JSON.stringify(n)).join(", ");
+}
+
+/** What is wrong with `options` as a choice's (CARD-10), if anything. */
+function optionsProblem(options: unknown): string | undefined {
+  if (!Array.isArray(options) || options.length < 1 || options.length > 64) return "a choice needs a list of 1 to 64 names";
+  for (let i = 0; i < options.length; i++) {
+    const o = options[i];
+    const one = typeof o === "string" ? [...o].length : 0;
+    if (typeof o !== "string" || one < 1 || one > 24) return `its option ${i + 1} must be a name of 1 to 24 characters, not ${shown(o)}`;
+    if (o.trim() !== o) return `its option ${JSON.stringify(o)} has a space at an end`;
+    if (/[|<>\u0000-\u001f\u007f-\u009f]/.test(o)) return `its option ${JSON.stringify(o)} must be one line, without |, < or >`;
+    if (options.indexOf(o) !== i) return `its option ${JSON.stringify(o)} is named twice`;
+  }
+  return undefined;
+}
 
 /** What a port declaration holds. */
 type PortSpec = { kind: "audio" | "control" | "notes" | "any"; unit?: Unit; sidechain: boolean; many: boolean };
@@ -1037,6 +1128,57 @@ export function signature<F extends (...args: any[]) => any>(): Signature<F> {
   return SIGNATURE as Signature<any>;
 }
 
+/** What a view draws, by role, and the kind each must be: a time, a level, … (CARD-16). */
+type ViewNeeds = { readonly [role: string]: readonly [string, Want] };
+/** What a view's name may be: a control in one of `WANTS`' units, or a regions or keymap setting. */
+type Want = keyof typeof WANTS | "regions";
+const WANTS = {
+  time: ["seconds", "beats"],
+  level: ["unit01", "gain", "db"],
+  frequency: ["hz"],
+  scalar: ["scalar"],
+} as const satisfies Record<string, readonly Unit[]>;
+
+/** What a view declaration holds: its kind, and the name it draws for each role. */
+type ViewSpec = { kind: "envelope" | "filter" | "keys" | "scope"; names: Record<string, [unknown, Want]> };
+
+/**
+ * A view (CARD-16): a picture over values the sound declares, which holds none of its own. `V`
+ * says, for types only, which names it draws and the kind each must be.
+ */
+export class ViewDecl<V extends ViewNeeds = ViewNeeds> {
+  declare readonly [PHANTOM]?: V;
+  /** @internal */
+  constructor(spec: ViewSpec) {
+    specs.set(this, spec);
+  }
+}
+
+/**
+ * Declare a view in `editor.views`, naming this sound's own controls (CARD-16):
+ * `view.envelope("attack", "decay", "sustain", "release")` (times, and a level), `view.filter("cutoff", "q")`
+ * (a frequency and a scalar), `view.keys("regions")` (a `regions` or `keymap` setting), `view.scope()`.
+ */
+export const view = {
+  envelope<const A extends string, const D extends string, const S extends string, const R extends string>(
+    attack: A,
+    decay: D,
+    sustain: S,
+    release: R,
+  ): ViewDecl<{ attack: [A, "time"]; decay: [D, "time"]; sustain: [S, "level"]; release: [R, "time"] }> {
+    return new ViewDecl({ kind: "envelope", names: { attack: [attack, "time"], decay: [decay, "time"], sustain: [sustain, "level"], release: [release, "time"] } });
+  },
+  filter<const C extends string, const Q extends string>(cutoff: C, q: Q): ViewDecl<{ cutoff: [C, "frequency"]; q: [Q, "scalar"] }> {
+    return new ViewDecl({ kind: "filter", names: { cutoff: [cutoff, "frequency"], q: [q, "scalar"] } });
+  },
+  keys<const K extends string>(regions: K): ViewDecl<{ regions: [K, "regions"] }> {
+    return new ViewDecl({ kind: "keys", names: { regions: [regions, "regions"] } });
+  },
+  scope(): ViewDecl<{}> {
+    return new ViewDecl({ kind: "scope", names: {} });
+  },
+};
+
 /** A component's descriptor. */
 export type Descriptor = {
   /** Unique in its package, following the key rule (`delay`). The ComponentId is `<package>:<id>` (PKG-9). */
@@ -1060,8 +1202,18 @@ export type Descriptor = {
    * notes first; `insert` is written when the effect is added, each value in its control's
    * spelling; `notes` names what an instrument's notes play, by MIDI note (`{ 36: "Kick" }`), for
    * the piano roll's rows: whole numbers 0 to 127, each name one line of 1 to 24 characters.
+   * `views` are pictures over this sound's controls, each by a name of its own (CARD-16), and
+   * `groups` put its card in order: `{ Filter: ["filter", "cutoff", "q"] }`, each entry one of its
+   * values or views, each named once (CARD-17).
    */
-  editor?: { category?: string; description?: string; insert?: Record<string, number>; notes?: Record<number, string> };
+  editor?: {
+    category?: string;
+    description?: string;
+    insert?: Record<string, number>;
+    notes?: Record<number, string>;
+    views?: Record<string, ViewDecl<any>>;
+    groups?: Record<string, readonly string[]>;
+  };
 };
 
 /** What a component's body receives after its inputs: a signal per control, a value per setting. */
@@ -1081,7 +1233,7 @@ type PortKeys<E> = { [K in keyof E]: E[K] extends PortDecl<any, any> ? K : never
 type CtlKeys<E> = { [K in keyof E]: E[K] extends ControlDecl<any> ? K : never }[keyof E];
 type EachKeys<E> = { [K in keyof E]: E[K] extends EachDecl<infer _> ? K : never }[keyof E];
 type SetKeys<E> = { [K in keyof E]: E[K] extends SettingDecl<any, any> ? K : never }[keyof E];
-type EntryObject<E> = { [K in PortKeys<E>]: InArg<E[K]> } & { [K in CtlKeys<E>]?: Value } & {
+type EntryObject<E> = { [K in PortKeys<E>]: InArg<E[K]> } & { [K in CtlKeys<E>]?: CtlArg<E[K]> } & {
   [K in EachKeys<E>]?: E[K] extends EachDecl<infer F> ? Record<string, EntryArg<F>> : never;
 } & { [K in SetKeys<E>]?: SetArg<E[K]> };
 type EntryArg<E> = [PortKeys<E>] extends [never]
@@ -1089,11 +1241,17 @@ type EntryArg<E> = [PortKeys<E>] extends [never]
     ? EntryObject<E>
     : IsUnion<CtlKeys<E>> extends true
       ? EntryObject<E>
-      : Value | EntryObject<E>
+      : CtlArg<E[CtlKeys<E>]> | EntryObject<E>
   : IsUnion<PortKeys<E>> extends true
     ? EntryObject<E>
     : InArg<E[PortKeys<E>]> | EntryObject<E>;
-type CtlArg<C> = C extends EachDecl<infer E> ? Record<string, EntryArg<E>> : Value;
+type CtlArg<C> = C extends ControlDecl<any, infer K> ? KindArg<K> : C extends EachDecl<infer E> ? Record<string, EntryArg<E>> : Value;
+/** What a call writes for a control of kind `K`: a choice's names, a switch's booleans, else a number (CARD-13). */
+type KindArg<K> = [NonNullable<K>] extends [ChoiceKind<infer O>]
+  ? O[number] | Choice<O>
+  : [NonNullable<K>] extends [SwitchKind]
+    ? boolean | Switch
+    : Value;
 type SetArg<S> = S extends SettingDecl<infer T, any> ? T : never;
 type ArgOf<D, K> = K extends keyof Ins<D>
   ? InArg<Ins<D>[K]>
@@ -1202,12 +1360,83 @@ type SignatureFits<D> = D extends { signature: Signature<infer F extends (...arg
       : { signature: `the signature lists ${Required<Parameters<F>>["length"]} parameters, but the descriptor has ${SlotCount<D>}: the inputs positional doesn't name, then the positional slots` }
   : unknown;
 
+// The body's type, from the descriptor (CARD-13): its inputs as given, then its params, a signal for
+// each control (a `Choice` of a choice's options, a `Switch` for a switch) and a value per setting.
+type BodyCtl<C> = C extends ControlDecl<any, infer K>
+  ? (undefined extends K ? undefined : never) | BodyKind<NonNullable<K>>
+  : Record<string, Record<string, any>>;
+/** A control's signal in the body: a number's in its unit, a choice's, or a switch's. */
+type BodyKind<K> = [K] extends [Unit] ? Control<K> : [K] extends [ChoiceKind<infer O>] ? Choice<O> : [K] extends [SwitchKind] ? Switch : Signal;
+/** What a component's body receives after its inputs, typed from its descriptor. */
+export type BodyParams<D> = { readonly [K in keyof Ctls<D>]: BodyCtl<Ctls<D>[K]> } & { readonly [K in keyof Sets<D>]: SetArg<Sets<D>[K]> };
+/** One `any` for each element of `T`. */
+type Anys<T extends unknown[]> = T extends [unknown, ...infer R] ? [any, ...Anys<R>] : [];
+type Body<D> = (...args: [...Anys<Slots<keyof Ins<D>>>, BodyParams<D>]) => unknown;
+
+// Views and groups, checked against this very descriptor (CARD-16, CARD-17): a mistake makes the
+// descriptor's own view or group a type that says what is wrong, so the editor marks it there.
+type WantUnits = { [W in keyof typeof WANTS]: (typeof WANTS)[W][number] };
+type ViewsOf<D> = D extends { editor: { views: infer V extends Record<string, ViewDecl<any>> } } ? V : {};
+/** A card's values: its controls and settings. */
+type Values<D> = keyof Ctls<D> | keyof Sets<D>;
+/** What is wrong with a view's `role` naming `N`, which must be `W` (a kind), or never. */
+type RoleProblem<D, Role extends string, N, W> = W extends "regions"
+  ? N extends keyof Sets<D>
+    ? [SetArg<Sets<D>[N]>] extends [readonly Region[] | undefined]
+      ? never
+      : [SetArg<Sets<D>[N]>] extends [string | number | boolean | undefined]
+        ? `its setting names "${N & string}", which isn't a regions or keymap setting`
+        : never
+    : `its setting names "${N & string}", which isn't a setting of this sound`
+  : N extends keyof Ctls<D>
+    ? Ctls<D>[N] extends ControlDecl<any, infer K>
+      ? [NonNullable<K>] extends [WantUnits[W & keyof WantUnits]]
+        ? never
+        : `its ${Role} names "${N & string}", which isn't a ${W & string} (${WantUnits[W & keyof WantUnits]})`
+      : `its ${Role} names "${N & string}", a dictionary, not a ${W & string}`
+    : `its ${Role} names "${N & string}", which isn't a control of this sound`;
+type ViewProblem<D, Name, V> = Name extends keyof Ins<D> | Values<D>
+  ? `"${Name & string}" is a value of this sound: give the view a name of its own`
+  : V extends ViewDecl<infer Needs>
+    ? { [R in keyof Needs]: RoleProblem<D, R & string, Needs[R][0], Needs[R][1]> }[keyof Needs]
+    : never;
+type ViewsFit<D> = [{ [K in keyof ViewsOf<D>]: ViewProblem<D, K, ViewsOf<D>[K]> }[keyof ViewsOf<D>]] extends [never]
+  ? unknown
+  : { editor: { views: { [K in keyof ViewsOf<D>]: [ViewProblem<D, K, ViewsOf<D>[K]>] extends [never] ? unknown : ViewProblem<D, K, ViewsOf<D>[K]> } } };
+type GroupsOf<D> = D extends { editor: { groups: infer G extends Record<string, readonly string[]> } } ? G : {};
+// Each mapped over a type parameter, so a group's tuple maps to a tuple.
+/** The entries of `T` but the one at `I`. */
+type Without<T extends readonly unknown[], I> = { [J in keyof T]: J extends I ? never : T[J] }[number];
+/** Every entry of the groups `Gs` but the one at `I` of group `G`. */
+type OtherEntries<Gs, G, I> =
+  | { [H in Exclude<keyof Gs, G>]: Gs[H] extends readonly (infer X)[] ? X : never }[Exclude<keyof Gs, G>]
+  | Without<Extract<Gs[G & keyof Gs], readonly unknown[]>, I>;
+type EntryProblem<D, Gs, G, I, E> = E extends Values<D> | keyof ViewsOf<D>
+  ? E extends OtherEntries<Gs, G, I>
+    ? `"${E & string}" is named twice in the groups: each value or view goes in one group, once`
+    : never
+  : `"${E & string}" isn't a value or a view of this sound`;
+/** What is wrong with the entries of group `G` (its tuple `T`), if anything. */
+type GroupProblems<D, Gs, G, T extends readonly unknown[]> = { [I in keyof T]: EntryProblem<D, Gs, G, I, T[I]> }[number];
+type GroupsProblems<D, Gs = GroupsOf<D>> = { [G in keyof Gs]: GroupProblems<D, Gs, G, Extract<Gs[G], readonly unknown[]>> }[keyof Gs];
+// The groups themselves become what is wrong: a string, which no object of groups is.
+type GroupsFit<D> = [GroupsProblems<D>] extends [never] ? unknown : { editor: { groups: GroupsProblems<D> } };
+
+/** The old form's descriptor: the argument paths whose numbers are knobs. */
+type PathsDesc = { readonly controls: readonly string[] };
+/** Whether `D` is the old form's descriptor, which has no `id`. */
+type Old<D> = D extends { readonly id: unknown } ? false : D extends PathsDesc ? true : false;
+
 /**
  * Declare a component (PKG-1). The old form, `component({ controls: ["1.cutoff"] }, fn)`,
  * still works: it names the argument paths whose numbers are knobs, and gives editors less.
+ * One signature, not two overloads: so a mistake in a descriptor's views or groups is marked
+ * where it is written, by every TypeScript the editor may run (CARD-13).
  */
-export function component<F extends (...args: any[]) => any>(desc: { controls: string[] }, fn: F): F;
-export function component<const D extends Descriptor>(desc: D & SignatureFits<D>, body: (...args: any[]) => unknown): Call<D>;
+export function component<const D extends Descriptor | PathsDesc, F extends (...args: any[]) => any>(
+  desc: Old<D> extends true ? D : D & SignatureFits<D> & ViewsFit<D> & GroupsFit<D>,
+  body: Old<D> extends true ? F : Body<D>,
+): Old<D> extends true ? F : Call<D>;
 export function component(desc: any, fn: any): any {
   const site = takeSite(arguments);
   if (desc !== null && typeof desc === "object" && Object.prototype.hasOwnProperty.call(desc, "id")) return declared(desc as Descriptor, fn, site);
@@ -1365,6 +1594,18 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (!(d instanceof ControlDecl)) fail(`${where} "${name}" must be declared with control.<unit>(…), control.any() or each(…)`);
     const s = specOf<ControlSpec>(d as object);
     const what = `${where} "${name}"`;
+    if (s.label !== undefined && typeof s.label !== "string") fail(`${what}: its label must be a string`);
+    // A choice or a switch (CARD-10, CARD-11): no number's range, scale or glide.
+    if (s.kind !== "number") {
+      const word = s.kind === "choice" ? "a choice" : "a switch";
+      if (s.range || s.log || s.strict || s.accepts.length || s.smooth) fail(`${what} is ${word}, not a number: it has no range, log, strict, accepts or smooth`);
+      if (s.kind === "choice") {
+        const wrong = optionsProblem(s.options);
+        if (wrong) fail(`${what}: ${wrong}`);
+        if (s.initial !== undefined && !(typeof s.initial === "string" && s.options!.includes(s.initial))) fail(`${what}: its default must be one of ${listed(s.options!)}, not ${shown(s.initial)}`);
+      } else if (s.initial !== undefined && typeof s.initial !== "boolean") fail(`${what}: its default must be true or false, not ${shown(s.initial)}`);
+      return { name, spec: s };
+    }
     if (s.default !== undefined && !Number.isFinite(s.default)) fail(`${what}: its default must be a finite number`);
     if (s.range) {
       const [lo, hi] = s.range;
@@ -1382,7 +1623,6 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
         if (a.log && !(lo > 0)) fail(`${what}: accepts ${a.unit} as log needs a range above 0`);
       } else if (a.log) fail(`${what}: accepts ${a.unit} as log needs a range`);
     }
-    if (s.label !== undefined && typeof s.label !== "string") fail(`${what}: its label must be a string`);
     return { name, spec: s };
   };
 
@@ -1414,7 +1654,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
       else ctls.push(ctl(k, e, `the entry control of "${path}"`));
     }
     const name = path.slice(path.lastIndexOf(".") + 1);
-    return { name, spec: { scale: 1, log: false, strict: false, accepts: [], smooth: false, optional: false }, each: { inputs: ins, controls: ctls, settings: sets } };
+    return { name, spec: { kind: "number", scale: 1, log: false, strict: false, accepts: [], smooth: false, optional: false }, each: { inputs: ins, controls: ctls, settings: sets } };
   };
 
   const inputs = record("inputs", desc.inputs).map(([name, d]) => (named("input", name), input(name, d, "the input")));
@@ -1457,12 +1697,14 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   // Editor metadata.
   const editor = desc.editor ?? {};
   if (typeof editor !== "object" || editor === null) fail("editor must be an object");
-  for (const k of Object.keys(editor)) if (!["category", "description", "insert", "notes"].includes(k)) fail(`editor has no field "${k}" (fields: category, description, insert, notes)`);
+  const fields = ["category", "description", "insert", "notes", "views", "groups"];
+  for (const k of Object.keys(editor)) if (!fields.includes(k)) fail(`editor has no field "${k}" (fields: ${fields.join(", ")})`);
   if (editor.category !== undefined && (typeof editor.category !== "string" || !editor.category)) fail("editor.category must be a non-empty string");
   if (editor.description !== undefined && typeof editor.description !== "string") fail("editor.description must be a string");
   const insert = record("editor.insert", editor.insert).map(([slot, v]) => {
     const c = controls.find((x) => x.name === slot && !x.each);
     if (!c) fail(`editor.insert names "${slot}", which isn't a control`);
+    if (c!.spec.kind !== "number") fail(`editor.insert names "${slot}", a ${c!.spec.kind}: insert writes numbers`);
     if (typeof v !== "number" || !Number.isFinite(v)) fail(`editor.insert's "${slot}" must be a finite number`);
     const s = c!.spec;
     if (s.strict && s.range && !((v as number) >= s.range[0] && (v as number) <= s.range[1])) fail(`editor.insert's "${slot}" ${v} is outside its strict range`);
@@ -1475,6 +1717,53 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (typeof v !== "string" || !v.trim() || /[\r\n]/.test(v) || v.length > 24) fail(`editor.notes' name of ${k} must be one line of 1 to 24 characters, not ${shown(v)}`);
     notes[k] = v as string;
   }
+  // Views (CARD-16): each by a name of its own, over this very descriptor's controls in a unit that
+  // fits, or for keys its regions or keymap setting.
+  const views = record("editor.views", editor.views).map(([name, v]): Record<string, string> => {
+    const at = `editor.views' "${name}"`;
+    if (!NAME.test(name)) fail(`${at}: a view's name is a plain name, such as amp`);
+    if (names.has(name)) fail(`${at}: "${name}" is a value of this sound; give the view a name of its own`);
+    if (!(v instanceof ViewDecl)) fail(`${at} must be made with view.envelope(), view.filter(), view.keys() or view.scope()`);
+    const spec = specOf<ViewSpec>(v as object);
+    const out: Record<string, string> = { name, kind: spec.kind };
+    for (const [role, [n, want]] of Object.entries(spec.names)) {
+      const says = want === "regions" ? `${at}: the key map's setting` : `${at}: the ${spec.kind}'s ${role}`;
+      if (want === "regions") {
+        const st = settings.find((x) => x.name === n);
+        if (!st) fail(`${says} names ${shown(n)}, which isn't a setting of this sound (settings: ${settings.map((x) => x.name).join(", ") || "none"})`);
+        if (st!.spec.kind !== "regions" && st!.spec.kind !== "keymap") {
+          fail(`${says} names "${n}", ${SETTING_WORDS[st!.spec.kind]} setting, but a key map shows regions or a keymap`);
+        }
+      } else {
+        const c = controls.find((x) => x.name === n);
+        if (!c) fail(`${says} names ${shown(n)}, which isn't a control of this sound (controls: ${controls.map((x) => x.name).join(", ") || "none"})`);
+        const units: readonly Unit[] = WANTS[want];
+        const is = c!.each ? "a dictionary" : c!.spec.kind !== "number" ? `a ${c!.spec.kind}` : c!.spec.unit ? `a control in ${c!.spec.unit}` : "a control with no unit";
+        if (c!.each || c!.spec.kind !== "number" || !c!.spec.unit || !units.includes(c!.spec.unit)) fail(`${says} names "${n}", ${is}, but it must be a ${want} (${units.join(" or ")})`);
+      }
+      out[role] = n as string;
+    }
+    return out;
+  });
+  // Groups (CARD-17): each entry one of this sound's values or views, each in one group, once.
+  const values = [...controls, ...settings].map((x) => x.name);
+  const placed = new Map<string, string>();
+  const groups = record("editor.groups", editor.groups).map(([group, items]) => {
+    const at = `editor.groups' "${group}"`;
+    const chars = [...group].length;
+    if (chars < 1 || chars > 24 || /[\u0000-\u001f\u007f-\u009f]/.test(group)) fail(`${at}: a group's name is one line of 1 to 24 characters`);
+    if (!Array.isArray(items)) fail(`${at} must be a list of this sound's values and views, as ["cutoff", "q"]`);
+    for (const it of items as unknown[]) {
+      if (typeof it !== "string" || !(values.includes(it) || views.some((v) => v.name === it))) {
+        fail(`${at} names ${shown(it)}, which isn't a value or a view of this sound (${[...values, ...views.map((v) => v.name)].join(", ")})`);
+      }
+      const first = placed.get(it as string);
+      if (first !== undefined) fail(`${at} names "${it}", which is ${first === group ? "in it already" : `in "${first}" too`}: each value or view goes in one group, once`);
+      placed.set(it as string, group);
+    }
+    return { name: group, items: [...(items as string[])] };
+  });
+
   // A category on a component that takes notes and makes audio lists it as an instrument, which
   // a new track plays as `<name>(lane.notes(…))`, so it must build from its notes alone.
   const instrument = editor.category !== undefined && inputs[0]?.spec.kind === "notes";
@@ -1509,7 +1798,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   const setJson = (s: Set_) => ({ name: s.name, kind: s.spec.kind, default: s.spec.default ?? null, options: s.spec.options ?? null, ...(s.spec.optional ? { optional: true } : {}) });
   const ctlJson = (c: Ctl): unknown => ({
     name: c.name,
-    unit: c.spec.unit ?? null,
+    unit: unitOfSpec(c.spec) ?? null,
     default: c.spec.default === undefined ? null : spelled(c.spec, c.spec.default),
     range: c.spec.range ? c.spec.range.map((x) => x * c.spec.scale) : null,
     log: c.spec.log,
@@ -1538,7 +1827,8 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     settings: settings.map(setJson),
     output: output ? portJson(output) : null,
     positional: [...positional],
-    editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes },
+    // `views` and `groups` written only when there are some, so every other descriptor keeps its bytes.
+    editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes, ...(views.length ? { views } : {}), ...(groups.length ? { groups } : {}) },
   });
   const first = lead[0] === inputs[0] ? lead[0] : undefined;
   const bypassable = first?.spec.kind === "audio" && !first.spec.many && output?.kind === "audio" && !names.has("bypass");
@@ -1550,6 +1840,18 @@ function spelled(s: ControlSpec, written: number): { value: number; spelled: Spe
   // The same expression as the unit constructor's, so `control.ms(45)` is exactly `ms(45)` (PKG-4).
   return { value: written * s.scale, spelled: s.spelled ?? null, written };
 }
+
+/** What a setting of each kind is, in words: "a recording" setting. */
+const SETTING_WORDS: Record<SettingSpec["kind"], string> = {
+  number: "a number",
+  int: "a whole-number",
+  bool: "a true-or-false",
+  choice: "a choice",
+  asset: "a recording",
+  keymap: "a keymap",
+  regions: "a regions",
+  key: "a track's key",
+};
 
 /** A setting's problem after its name: "sample must be …", or "regions: region 3: …". */
 function said(name: string, problem: string): string {
@@ -1587,7 +1889,13 @@ function settingProblem(s: SettingSpec, v: unknown): string | undefined {
 
 function shown(v: unknown): string {
   if (typeof v === "string") return JSON.stringify(v);
-  if (v instanceof Signal) return "a signal";
+  if (v instanceof Signal) {
+    const k = stepsOf.get(v);
+    const options = k && optionsOf(k);
+    if (k?.kind === "switch") return "a switch";
+    if (k) return options ? `a choice of ${listed(options)}` : "a lane of names";
+    return v.unit ? `a number in ${v.unit}` : "a signal";
+  }
   if (v instanceof Quantity) return `a ${v.unit} value`;
   return v === null ? "null" : typeof v === "object" ? "an object" : String(v);
 }
@@ -1775,8 +2083,14 @@ type Made = { site: number | undefined; frame: number | undefined; scope: Scope;
  * slot; an optional control left out makes nothing (PKG-5).
  */
 function normalise(made: Made, slot: string, s: ControlSpec, g: Given | undefined): Signal | undefined {
+  if (s.kind !== "number") return normaliseStep(made, slot, s, g);
   const v = g?.value;
-  if (v instanceof Signal) return v;
+  if (v instanceof Signal) {
+    // A place isn't a number (CARD-13): the checker would refuse it where a kernel reads it; this says so where it is given.
+    const k = stepsOf.get(v);
+    if (k) fail(made.id, `${slot} is a number${s.unit ? ` (${s.unit})` : ""}, and this is ${shown(v)}, which only a ${k.kind} of its own takes`);
+    return v;
+  }
   const control = made.frame === undefined ? undefined : { frame: made.frame, slot, ...(s.smooth ? { smooth: true } : {}) };
   const constant = (value: number, unit: Unit | undefined, origin: Origin | undefined) => {
     if (s.strict) {
@@ -1809,6 +2123,144 @@ function normalise(made: Made, slot: string, s: ControlSpec, g: Given | undefine
     return constant(amounts.get(v)!, v.unit, origin);
   }
   return fail(made.id, `${slot}: expected a number, a quantity like hz(440) or a signal, not ${shown(v)}`);
+}
+
+/**
+ * A choice or a switch of a call (CARD-10, CARD-11): a name or a boolean, or the default, becomes
+ * one constant holding the place (or 1 or 0), whose unit is the choice's or `switch` (CARD-12);
+ * a choice's or a switch's signal passes through when it is of this very kind, and a lane of
+ * names takes this choice's options (CARD-14). Anything else is refused in words.
+ */
+function normaliseStep(made: Made, slot: string, s: ControlSpec, g: Given | undefined): Signal | undefined {
+  const v = g?.value;
+  const options = s.options ?? [];
+  const choice = s.kind === "choice";
+  const is = choice ? `one of ${listed(options)}` : "true or false";
+  if (v instanceof Signal) {
+    // Another track's export: its kind is known once every module has run, and checked then (`__build`).
+    if (!stepsOf.has(v) && importsOf.has(v)) {
+      given.push({ id: made.id, slot, spec: s, import: v, at: place(made.site) });
+      return v;
+    }
+    // A signal of no kind known here (a kernel's output): the checker decides where it lands (CARD-12).
+    if (!stepsOf.has(v) && v.unit === undefined) return v;
+    takes(made.id, slot, s, v, "");
+    return v;
+  }
+  if (v === undefined && s.optional) return undefined;
+  if (v === undefined && s.default === undefined) return fail(made.id, `${slot} is missing`);
+  let value: number;
+  if (v === undefined) value = s.default!;
+  else if (choice && typeof v === "string" && options.includes(v)) value = options.indexOf(v);
+  else if (!choice && typeof v === "boolean") value = v ? 1 : 0;
+  else return fail(made.id, `${slot} is ${is}, not ${shown(v)}`);
+  const control = made.frame === undefined ? undefined : { frame: made.frame, slot };
+  const origin =
+    made.site === undefined
+      ? undefined
+      : v === undefined
+        ? { site: made.site, control: { ...control!, inherited: true } }
+        : { site: made.site, arg: g!.path, control };
+  const out = new Signal(push(made.scope, { op: "const", value, unit: unitOfSpec(s) }, origin), made.scope);
+  stepsOf.set(out, choice ? { kind: "choice", options } : { kind: "switch" });
+  return out;
+}
+
+/**
+ * Check that the choice or switch `slot` of `id` (declared `s`) takes the signal `v`, else fail in
+ * words; a lane of names takes the choice's options. `named` names `v` when it is another track's
+ * export (`a.shape, `).
+ */
+function takes(id: string, slot: string, s: ControlSpec, v: Signal, named: string): void {
+  const options = s.options ?? [];
+  const choice = s.kind === "choice";
+  const k = stepsOf.get(v);
+  if (k?.kind === "switch" && !choice) return;
+  if (k?.kind === "choice" && choice) {
+    if ("lane" in k) return bind(id, slot, k, options);
+    if (sameNames(k.options, options)) return;
+  }
+  const is = choice ? `one of ${listed(options)}` : "true or false";
+  const lane = choice ? `lane.control("${slot}", "choice", ${JSON.stringify(options[0])})` : `lane.control("${slot}", "switch", false)`;
+  fail(id, `${slot} is ${is}: give it ${choice ? "a name" : "a boolean"}, or a lane of them as ${lane}, not ${named}${shown(v)}`);
+}
+
+/** A choice or a switch given another track's export: checked once every module has run. */
+type Given_ = { id: string; slot: string; spec: ControlSpec; import: Signal; at: Place };
+const given: Given_[] = [];
+
+/**
+ * Check every choice and switch given another track's export (CARD-14), now that every module has
+ * run: an import's kind is its export's. A lane of names exported takes the options there.
+ */
+function checkGiven(): void {
+  for (const g of given) {
+    let v: Signal | undefined = g.import;
+    let name = "";
+    // An export may itself be an import: follow it, a step for each module at most.
+    for (let n = 0; v && importsOf.has(v) && !stepsOf.has(v) && n <= tracks.size; n++) {
+      const from = importsOf.get(v)!;
+      name = `${from.module}.${from.export}`;
+      v = exported.get(name);
+    }
+    // An export that isn't there is the checker's to say.
+    if (!v || (!stepsOf.has(v) && v.unit === undefined)) continue;
+    try {
+      takes(g.id, g.slot, g.spec, v, `${name}, `);
+    } catch (e) {
+      throw new Error(`${(e as Error).message}, at ${describe(g.at)}`);
+    }
+  }
+}
+
+/** Whether two choices have the same options, in the same order. */
+function sameNames(a: readonly string[] | undefined, b: readonly string[]): boolean {
+  return a !== undefined && a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/**
+ * A lane of names given to the choice `slot` of `options` (CARD-14): the first choice it feeds gives
+ * it its options, which every other must have too. Each declaration's fallback must then be one of
+ * them, and all one (one left out is the first).
+ */
+function bind(id: string, slot: string, k: { lane: LaneRecord; key: string; module: string }, options: readonly string[]): void {
+  const { lane, key } = k;
+  if (lane.options === undefined) {
+    for (const f of lane.fallbacks ?? []) {
+      if (f.name !== undefined && !options.includes(f.name)) {
+        fail(id, `${slot}: the lane "${key}" falls back to ${JSON.stringify(f.name)}, which isn't one of ${listed(options)}`);
+      }
+    }
+    lane.options = options;
+    lane.fed = `${id}()'s ${slot}`;
+    for (const f of lane.fallbacks ?? []) agrees(lane, key, k.module, f);
+  } else if (!sameNames(lane.options, options)) {
+    fail(
+      id,
+      `${slot} is one of ${listed(options)}, but the lane "${key}" also feeds ${lane.fed}, one of ${listed(lane.options)}: ` +
+        `a lane of names has one set of names, so give each its own lane`,
+    );
+  }
+}
+
+/**
+ * That fallback `f` of a lane of names, its options known, names the option its others do (a
+ * fallback left out is the first option); else `lane.conflict` (CARD-14). The lane's fallback is that one.
+ */
+function agrees(lane: LaneRecord, key: string, module: string, f: { name?: string; at: Place }): void {
+  const options = lane.options!;
+  const name = f.name ?? options[0];
+  const said = (g: { name?: string }) => `a choice's lane falling back to ${JSON.stringify(g.name ?? options[0])}${g.name === undefined ? " (its first option, left out)" : ""}`;
+  const first = lane.fallbacks![0];
+  if (lane.default !== undefined && lane.default !== name) {
+    throw new BuildError(
+      "lane.conflict",
+      `lane "${key}" of "${module}" is declared as ${said(first)} at ${describe(first.at)}, and again as ${said(f)} at ${describe(f.at)}. ` +
+        `A lane has one kind and one set of settings; give the other its own key`,
+      module,
+    );
+  }
+  lane.default = name;
 }
 
 /**
@@ -1959,6 +2411,13 @@ export type Ctx = {
     notes(key: string, opts?: LaneOptions): Events;
     /** An automation lane; `fallback` applies where no clip is. */
     control<U extends Unit>(key: string, unit: U, fallback?: number | Quantity<U>, opts?: LaneOptions): Control<U>;
+    /**
+     * A lane of names, for a choice (CARD-14): its points hold the choice's names, and it takes
+     * its options from the choice it feeds. `fallback` is one of them; left out, the first.
+     */
+    control(key: string, unit: "choice", fallback?: string, opts?: LaneOptions): Choice<any>;
+    /** A lane of true and false, for a switch (CARD-14). `fallback` left out is `false`. */
+    control(key: string, unit: "switch", fallback?: boolean, opts?: LaneOptions): Switch;
     /** A 0..1 lane that is 0 where no clip is. Use it to switch behaviour on and off over time. */
     mask(key: string, opts?: LaneOptions): Mask;
     /** Audio clips from the timeline (stereo unless `channels` is 1). */
@@ -1981,7 +2440,9 @@ function options(what: string, o: unknown, allowed: Record<string, "string" | "b
   return o as Record<string, unknown>;
 }
 
-function laneKind(kind: string, fallback: number | undefined): string {
+function laneKind(kind: string, fallback: number | string | undefined): string {
+  if (kind === "control<switch>") return `a switch's lane falling back to ${fallback === 1}`;
+  if (kind === "control<choice>") return "a choice's lane";
   return fallback === undefined ? kind : `${kind} with fallback ${fallback}`;
 }
 
@@ -1990,7 +2451,7 @@ function laneKind(kind: string, fallback: number | undefined): string {
  * lane; with others it is `lane.conflict`. Declared from two `key()` frame chains it is
  * `lane.shared`, unless every declaration says `shared: true` (ID-6).
  */
-function declareLane(m: ModuleBuild, k: string, kind: string, fallback: number | undefined, opts: unknown, site: number | undefined) {
+function declareLane(m: ModuleBuild, k: string, kind: string, fallback: number | string | undefined, opts: unknown, site: number | undefined): LaneRecord {
   checkKey("the lane key", k, m.key);
   const o = options(`lane "${k}"`, opts, { name: "string", shared: "boolean" }) as LaneOptions;
   const lanes = infoOf(m).lanes;
@@ -1998,11 +2459,26 @@ function declareLane(m: ModuleBuild, k: string, kind: string, fallback: number |
   const where = chain.slice(1).map((f) => f.key).join("/");
   const here = place(site);
   const have = lanes.get(k);
+  // A lane of names' fallback is compared once its options are known (`bind`): one left out is the first.
+  const names = kind === "control<choice>";
   if (!have) {
-    lanes.set(k, { kind, default: fallback, label: o.name, chains: new Map([[where, here]]), shared: o.shared === true, first: here });
-    return;
+    const made: LaneRecord = names
+      ? { kind, label: o.name, chains: new Map([[where, here]]), shared: o.shared === true, first: here, fallbacks: [{ name: fallback as string | undefined, at: here }] }
+      : { kind, default: fallback, label: o.name, chains: new Map([[where, here]]), shared: o.shared === true, first: here };
+    lanes.set(k, made);
+    return made;
   }
-  if (have.kind !== kind || have.default !== fallback || (o.name !== undefined && have.label !== undefined && o.name !== have.label)) {
+  if (names && have.kind === kind) {
+    const f = { name: fallback as string | undefined, at: here };
+    have.fallbacks!.push(f);
+    if (have.options) {
+      if (f.name !== undefined && !have.options.includes(f.name)) {
+        throw new Error(`lane "${k}" falls back to ${JSON.stringify(f.name)} at ${describe(here)}, which isn't one of ${listed(have.options)}`);
+      }
+      agrees(have, k, m.key, f);
+    }
+  }
+  if (have.kind !== kind || (!names && have.default !== fallback) || (o.name !== undefined && have.label !== undefined && o.name !== have.label)) {
     const was = laneKind(have.kind, have.default) + (have.label !== undefined ? ` named "${have.label}"` : "");
     const now = laneKind(kind, fallback) + (o.name !== undefined ? ` named "${o.name}"` : "");
     throw new BuildError(
@@ -2024,6 +2500,7 @@ function declareLane(m: ModuleBuild, k: string, kind: string, fallback: number |
       m.key,
     );
   }
+  return have;
 }
 
 /** A bus plays what it is fed: it has no lane to play or record (RENDER-34). */
@@ -2044,11 +2521,26 @@ function ctxFor(m: ModuleBuild): Ctx {
         declareLane(m, key, "events<note>", undefined, opts, site);
         return produced(site, laneNode(key, undefined, site));
       },
-      control(key, unit, fallback, opts) {
+      control(key: string, unit: string, fallback?: unknown, opts?: LaneOptions): any {
         const site = takeSite(arguments);
+        // A lane of names, or of true and false (CARD-14): a choice's takes its options from the choice it feeds.
+        if (unit === "switch" || unit === "choice") {
+          const want = unit === "switch" ? "boolean" : "string";
+          if (fallback !== undefined && typeof fallback !== want) {
+            const what = unit === "switch" ? "true or false" : "one of its choice's names, as \"saw\"";
+            throw new Error(`lane "${key}": a ${unit}'s lane falls back to ${what}, not ${shown(fallback)}`);
+          }
+          const switched = fallback === true ? 1 : 0;
+          const rec = declareLane(m, key, `control<${unit}>`, unit === "switch" ? switched : (fallback as string | undefined), opts, site);
+          const s = laneNode(key, undefined, site);
+          stepsOf.set(s, unit === "switch" ? { kind: "switch" } : { kind: "choice", lane: rec, key, module: m.key });
+          return produced(site, s);
+        }
+        if (!UNIT_NAMES.includes(unit as Unit)) throw new Error(`lane "${key}": no unit ${shown(unit)} (units: ${UNIT_NAMES.join(", ")}; or "choice" or "switch")`);
         const v = fallback instanceof Quantity ? amounts.get(fallback)! : fallback;
+        if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v))) throw new Error(`lane "${key}": its fallback must be a number, as ${unit === "hz" ? "hz(500)" : "0.5"}, not ${shown(v)}`);
         declareLane(m, key, `control<${unit}>`, v ?? 0, opts, site);
-        return produced(site, laneNode(key, unit, site));
+        return produced(site, laneNode(key, unit as Unit, site));
       },
       mask(key, opts) {
         const site = takeSite(arguments);
@@ -2083,6 +2575,11 @@ export type BusCtx = Ctx & {
   /** What the song feeds the bus: `feed(bus, x)` in song code, or std's mixer's sends and outputs. */
   readonly input: Audio;
 };
+
+/** Each import of another track's export, by its signal: which track and export it reads. */
+const importsOf = new WeakMap<Signal, { module: string; export: string }>();
+/** Each module's exports, by `<module>.<export>`: what an import's kind is (CARD-14). */
+const exported = new Map<string, Signal>();
 
 /** Registered tracks (buses too) by key. Private: it holds labels, which song code must never see. */
 const tracks = new Map<string, { fn: TrackFn<any>; label?: string; muted: boolean; src?: string; at: Place; bus: boolean; handle: object }>();
@@ -2136,7 +2633,10 @@ function declareTrack<E extends Exports>(word: "track" | "bus", key: string, a: 
       const m = scope.module;
       const id = `${key}.${prop}`;
       let s = m.imports.get(id);
-      if (!s) m.imports.set(id, (s = new Signal(push(m.root, { op: "import", module: key, export: prop }), m.root)));
+      if (!s) {
+        m.imports.set(id, (s = new Signal(push(m.root, { op: "import", module: key, export: prop }), m.root)));
+        importsOf.set(s, { module: key, export: prop });
+      }
       return s;
     },
   });
@@ -2190,6 +2690,7 @@ function exportsOf(m: ModuleBuild, value: unknown) {
     if (!(v instanceof Signal)) throw new Error(`${m.key}: export "${k}" must be a signal`);
     if (v.scope !== m.root) throw new Error(`${m.key}: export "${k}" must not come from inside a poly voice`);
     m.exports[k] = v.ref;
+    exported.set(`${m.key}.${k}`, v);
   };
   if (value instanceof Signal) one("out", value);
   else if (value && typeof value === "object") for (const [k, v] of Object.entries(value)) one(k, v);
@@ -2232,6 +2733,8 @@ export function __build(root: unknown): string {
   const modules = [run("song", false, r.fn, r.src)];
   for (const [key, t] of tracks) modules.push(run(key, true, t.fn, t.src, t.bus));
   if (firstError) throw firstError;
+  checkGiven();
+  if (firstError) throw firstError;
   for (const [key, t] of tracks) {
     if (t.bus && !fed.has(key)) {
       throw new Error(
@@ -2252,7 +2755,18 @@ export function __build(root: unknown): string {
     root: { module: "song", export: "out" },
     modules: modules.map((m) => {
       const t = tracks.get(m.key);
-      const lanes = [...infoOf(m).lanes].map(([key, l]) => ({ key, kind: l.kind, default: l.default, label: l.label }));
+      const lanes = [...infoOf(m).lanes].map(([key, l]) => {
+        if (l.kind !== "control<choice>") return { key, kind: l.kind, default: l.default, label: l.label };
+        // A lane of names: its choice's unit, and its fallback's place, made again at every build (CARD-14).
+        if (!l.options) {
+          throw new Error(
+            `lane "${key}" of "${m.key}" is a lane of names, but it feeds no choice, so it has no names, at ${describe(l.first)}. ` +
+              `Give it to a choice, as shape: lane.control("${key}", "choice", "saw"), or declare it with a unit`,
+          );
+        }
+        const place = l.default === undefined ? 0 : l.options.indexOf(l.default as string);
+        return { key, kind: `control<choice<${l.options.join("|")}>>`, default: place, label: l.label };
+      });
       const frames = infoOf(m).table;
       // `muted` and `bus` only when true: every other IR keeps its bytes (ID-11).
       const muted = m.track && t?.muted ? true : undefined;

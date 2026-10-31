@@ -3,7 +3,7 @@
 //! can choose a graph target or approve its own result: revision resolution and independent
 //! graph verification belong to the session.
 
-use m2_ir::Origin;
+use m2_ir::{Origin, Unit};
 use m2_script::component::EachDesc;
 use m2_script::sites::{Arg, Site};
 use m2_script::{Descriptor, UnitCtor};
@@ -52,6 +52,32 @@ impl LiteralLens {
 
     pub fn propose(&self, value: f64) -> Result<LiteralEdit, EditError> {
         propose(value, self.scale)
+    }
+
+    /// A choice's name or a switch's `true` or `false` written at `origin` (CARD-10, CARD-11): its
+    /// literal, when it says `value`, the place (or 1 or 0) the build made of it. A name is a
+    /// string written without escapes.
+    pub fn named(site: &Site, origin: &Origin, source: &str, unit: Unit, value: f64) -> Option<Self> {
+        let (start, end) = site.arg(&origin.arg)?.span();
+        let literal = source.get(start as usize..end as usize)?;
+        let says = match unit {
+            Unit::Switch => f64::from(u8::from(match literal {
+                "true" => true,
+                "false" => false,
+                _ => return None,
+            })),
+            Unit::Choice(o) => {
+                let quote =
+                    literal.chars().next().filter(|q| matches!(q, '"' | '\'' | '`') && literal.len() >= 2 && literal.ends_with(*q))?;
+                let name = &literal[quote.len_utf8()..literal.len() - quote.len_utf8()];
+                if name.contains(['\\', quote]) || (quote == '`' && name.contains("${")) {
+                    return None;
+                }
+                o.place(name)? as f64
+            }
+            _ => return None,
+        };
+        (says == value).then(|| Self { start, end, literal: literal.into(), scale: 1.0 })
     }
 }
 

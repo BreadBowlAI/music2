@@ -41,7 +41,7 @@ pub use diag::{Diagnostic, Fix, Severity};
 pub use hash::{HashCache, Hashing, Sha};
 pub use key::{ClipId, Key, LaneAddr, ROOT};
 pub use lane::{
-    AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, canonical, parse_pitch,
+    AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, StepsOf, canonical, parse_pitch,
 };
 pub use manifest::{Dependency, FORMAT, Manifest, Requirement, SDK, Version};
 pub use pack::{Lock, PackName};

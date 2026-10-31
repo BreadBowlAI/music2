@@ -1,6 +1,6 @@
 //! Kernel signatures: the typed ports a package declares for each kernel.
 
-use crate::kind::PortKind;
+use crate::kind::{PortKind, Unit};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PortSig {
@@ -16,7 +16,10 @@ pub struct PortSig {
 impl PortSig {
     /// Parse `"name: kind [= default] [in lo..hi]"`.
     pub fn parse(spec: &str) -> Result<PortSig, String> {
-        let (spec_, range) = match spec.rsplit_once(" in ") {
+        // A choice's options may hold spaces, `=` and ` in ` (CARD-12): what follows the kind is
+        // read after its last `>`.
+        let after = spec.rfind('>').map_or(0, |i| i + 1);
+        let (spec_, range) = match spec[after..].rsplit_once(" in ").map(|(rest, r)| (&spec[..after + rest.len()], r)) {
             Some((rest, r)) => {
                 let bad = || format!("port `{spec}`: a range is written `in lo..hi`");
                 let (lo, hi) = r.trim().split_once("..").ok_or_else(bad)?;
@@ -29,8 +32,8 @@ impl PortSig {
             None => (spec, None),
         };
         let mut port = PortSig::parse_plain(spec_).map_err(|e| e.replace(spec_, spec))?;
-        if range.is_some() && !matches!(port.kind, PortKind::Control(_)) {
-            return Err(format!("port `{spec}`: only controls can have a range"));
+        if range.is_some() && !matches!(port.kind, PortKind::Control(u) if u.is_none_or(Unit::is_number)) {
+            return Err(format!("port `{spec}`: only controls of a number can have a range"));
         }
         port.range = range;
         Ok(port)
@@ -39,8 +42,11 @@ impl PortSig {
     /// `"name: kind [= default]"`.
     fn parse_plain(spec: &str) -> Result<PortSig, String> {
         let (name, rest) = spec.split_once(':').ok_or_else(|| format!("port `{spec}`: expected `name: kind`"))?;
-        let (kind, default) = match rest.split_once('=') {
-            Some((k, d)) => (k, Some(d.trim().parse::<f64>().map_err(|_| format!("port `{spec}`: default must be a number"))?)),
+        let after = rest.rfind('>').map_or(0, |i| i + 1);
+        let (kind, default) = match rest[after..].split_once('=') {
+            Some((k, d)) => {
+                (&rest[..after + k.len()], Some(d.trim().parse::<f64>().map_err(|_| format!("port `{spec}`: default must be a number"))?))
+            }
             None => (rest, None),
         };
         let name = name.trim();
@@ -50,6 +56,12 @@ impl PortSig {
         let kind: PortKind = kind.parse().map_err(|e| format!("port `{spec}`: {e}"))?;
         if default.is_some() && !matches!(kind, PortKind::Control(_) | PortKind::Any) {
             return Err(format!("port `{spec}`: only controls can have defaults"));
+        }
+        // An unconnected choice or switch plays its default, which must be one of its places (CARD-12).
+        if let (PortKind::Control(Some(u)), Some(d)) = (kind, default)
+            && let Err(holds) = u.holds(d)
+        {
+            return Err(format!("port `{spec}`: its default must be {holds}, not {d}"));
         }
         Ok(PortSig { name: name.to_string(), kind, default, range: None })
     }
@@ -133,7 +145,6 @@ impl Kernels for std::collections::HashMap<String, KernelSig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kind::Unit;
 
     #[test]
     fn parse_ports() {
@@ -153,6 +164,37 @@ mod tests {
         assert_eq!(PortSig::parse("t: control<db> in -80..12").unwrap().range, Some((-80.0, 12.0)));
         for bad in ["in: audio<1> in 0..1", "x: control = 1 in 2..1", "x: control = 1 in 0-1", "x: control in a..b"] {
             assert!(PortSig::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    // CARD-12: a choice's port names its options, which may hold spaces, `=` and ` in `; its
+    // default is a place.
+    #[test]
+    fn parse_choice_and_switch_ports() {
+        let p = PortSig::parse("shape: control<choice<sine|fade in|a=b>> = 1").unwrap();
+        assert_eq!(p.kind.to_string(), "control<choice<sine|fade in|a=b>>");
+        assert_eq!((p.default, p.range), (Some(1.0), None));
+        let p = PortSig::parse("on: control<switch> = 0").unwrap();
+        assert_eq!(p.kind, PortKind::Control(Some(Unit::Switch)));
+        for bad in ["s: control<choice<>>", "s: control<choice<a|a>>", "s: control<choice<a> = 1", "s: control<choice<a|b>> = 0 in 0..1"] {
+            assert!(PortSig::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    // CARD-12 (review K7): a choice's or a switch's port defaults to one of its places, which an
+    // unconnected port plays.
+    #[test]
+    fn a_choice_ports_default_is_one_of_its_places() {
+        for ok in ["s: control<choice<a|b|c>> = 2", "s: control<choice<a|b|c>> = 0", "on: control<switch> = 1", "on: control<switch>"] {
+            assert!(PortSig::parse(ok).is_ok(), "{ok}");
+        }
+        for (bad, says) in [
+            ("s: control<choice<a|b|c>> = 7.5", "its default must be a whole number from 0 to 2, not 7.5"),
+            ("s: control<choice<a|b|c>> = 3", "its default must be a whole number from 0 to 2, not 3"),
+            ("on: control<switch> = 0.5", "its default must be 0 or 1, not 0.5"),
+        ] {
+            let e = PortSig::parse(bad).unwrap_err();
+            assert!(e.contains(says), "{bad}: {e}");
         }
     }
 

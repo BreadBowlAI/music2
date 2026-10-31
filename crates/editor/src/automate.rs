@@ -4,7 +4,8 @@
 //!
 //! One Tx, confined to the value's expression, the function's parameter list and the new lane
 //! (WRITE-3's example): `pan: 0.3` becomes `pan: lane.control("hats-pan", "bipolar", 0.3)` (the lane
-//! Hats pan), and
+//! Hats pan), a choice's `shape: "square"` a lane of names, `lane.control("shape", "choice", "square")`
+//! (CARD-14), and
 //! `() =>` becomes `({ lane }) =>` when the function didn't take its lanes yet. Undo takes the
 //! lane file away and writes the value back, in one step.
 
@@ -18,7 +19,7 @@ use m2_song::tx::{Confined, Declared as Ranges, Expect, Op, Payload, Range, TxPa
 use m2_song::{DataPath, Key, LaneAddr, LaneData, ROOT};
 
 use crate::cable::{consts_of, descriptor_default, spelled};
-use crate::controls::{Control, resolve};
+use crate::controls::{Control, resolve, written_as};
 use crate::mix::{self, Mixing};
 use crate::plan::{self, path};
 use crate::rename::track_call;
@@ -205,9 +206,10 @@ pub fn automate(s: &mut Session, at: u64, id: &str) -> Result<Automated, EditErr
             written
         }
         None => {
-            let (written, import) = match descriptor_default(&rev.compiled, &consts) {
-                Some(d) => spelled(&d, &imported_names(&text, "@m2/core"), &rev.compiled.units),
-                None => (number(c.value), None),
+            let (written, import) = match (written_as(unit, c.value), descriptor_default(&rev.compiled, &consts)) {
+                (Some(name), _) => (name, None),
+                (None, Some(d)) => spelled(&d, &imported_names(&text, "@m2/core"), &rev.compiled.units),
+                (None, None) => (number(c.value), None),
             };
             edits.extend(c.planned(&read(&written)).ok_or_else(|| EditError::NotFound(id.to_string()))?);
             // The call makes an inherited control (PKG-3): its range is what changes.
@@ -227,7 +229,8 @@ pub fn automate(s: &mut Session, at: u64, id: &str) -> Result<Automated, EditErr
 
     let file = path(&c.file)?;
     let lane_file = TxPath::lane(&addr);
-    let empty = m2_song::canonical(&LaneData::Control { unit: Some(unit.name().to_string()), clips: vec![] });
+    // An automation lane records its unit; a lane of names, `choice` or `switch` (CARD-15).
+    let empty = m2_song::canonical(&LaneData::empty(&m2_runtime::lane_kind(Kind::Control(Some(unit)))));
     let ops = vec![plan::text_edit(&file, &text, &edits), Op::Write { file: lane_file, bytes: Payload::Text(empty.into()) }];
     let declared = Ranges::Ranges(ranges.iter().map(|&(a, b)| Range::bytes(a, b)).collect());
     let expect = Expect::Confined(Confined { ranges: [(file, declared)].into(), lanes: vec![addr.clone()], modules: vec![] });
@@ -305,6 +308,8 @@ pub fn remove(s: &mut Session, module: &str, lane: &str, beat: Option<f64>) -> R
                 None => decl.default.unwrap_or(0.0),
             };
             match fallback.and_then(ctor_of) {
+                // A choice's place is written as its name, a switch's as true or false.
+                _ if unit.is_some_and(|u| !u.is_number()) => (unit.and_then(|u| written_as(u, v)).unwrap_or_else(|| number(v)), None),
                 Some(c) => (format!("{}({})", c.name, number(v / c.scale)), None),
                 None if fallback.is_some_and(|(a, b)| text[a as usize..b as usize].parse::<f64>().is_ok()) => (number(v), None),
                 None => match unit.and_then(|u| units.iter().find(|c| c.unit == u && c.canonical)) {
