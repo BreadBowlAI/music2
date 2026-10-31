@@ -355,19 +355,32 @@ struct Checker<'a> {
     diags: Vec<Diagnostic>,
 }
 
-/// The kernels that left std for a pack music2 ships, each its pack's own since (PACK-21): its id in
-/// std, its id now, the std that lost it, the pack's first version with it, and the component of
-/// the pack that plays it. The one table: a song (or an older pack's code) calling an old id is
-/// told where it went.
-pub const MOVED_KERNELS: &[(&str, &str, &str, &str, &str)] = &[("std:bitcrush", "@m2/effects:bitcrush", "0.8", "1.1", "bitcrush")];
+/// A kernel that left std for a pack music2 ships, to be that pack's own (PACK-21).
+pub struct Moved {
+    /// Its id in std: `std:bitcrush`.
+    pub from: &'static str,
+    /// Its id now: `@m2/effects:bitcrush`.
+    pub to: &'static str,
+    /// The std that no longer has it: `0.8`.
+    pub std: &'static str,
+    /// The pack's first version with it: `1.1`.
+    pub since: &'static str,
+    /// The pack's component that plays it: `bitcrush`.
+    pub component: &'static str,
+}
+
+/// Every kernel that left std for a pack music2 ships (PACK-21): the one table, so a song (or an
+/// older pack's code) that calls one by its old id is told where it went.
+pub const MOVED_KERNELS: &[Moved] =
+    &[Moved { from: "std:bitcrush", to: "@m2/effects:bitcrush", std: "0.8", since: "1.1", component: "bitcrush" }];
 
 /// Why kernel `id` isn't there, when it left std for a pack ([`MOVED_KERNELS`]): where it is now,
 /// and how a song moves to it.
 fn moved_from_std(id: &str) -> Option<String> {
-    let (old, new, std, version, component) = MOVED_KERNELS.iter().find(|(old, ..)| *old == id)?;
-    let pack = new.split_once(':')?.0;
+    let Moved { from, to, std, since, component } = MOVED_KERNELS.iter().find(|m| m.from == id)?;
+    let pack = to.split_once(':')?.0;
     Some(format!(
-        "`{old}` is no longer std's: since std {std} it is `{new}`, the pack {pack}' own kernel, from {pack} {version}, which \
+        "`{from}` is no longer std's: since std {std} it is `{to}`, the pack {pack}' own kernel, from {pack} {since}, which \
          comes with music2. A song plays it as `{component}` from \"{pack}\"; a song locked to an older {pack} moves with \
          `m2 pack update <song> {pack}`"
     ))

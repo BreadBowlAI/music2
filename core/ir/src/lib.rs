@@ -26,7 +26,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub use check::{Consumer, FNode, FOp, Flat, Input, MOVED_KERNELS, NoteField, OverlaySite, PortRef, Voice, check};
+pub use check::{Consumer, FNode, FOp, Flat, Input, MOVED_KERNELS, Moved, NoteField, OverlaySite, PortRef, Voice, check};
 pub use kind::{EventType, Kind, Names, PortKind, Unit};
 pub use sig::{KernelSig, Kernels, PortSig};
 

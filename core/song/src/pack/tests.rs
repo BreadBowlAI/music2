@@ -204,7 +204,9 @@ fn a_packs_kernel_source_is_no_part_of_it() {
     let dir = scratch("kernels-src");
     pack_at(&dir, "@alice/x", "1.0.0");
     let bare = Listing::of(&dir).unwrap();
-    for (file, text) in [("kernels-src/Cargo.toml", "[package]\n"), ("kernels-src/src/lib.rs", "//! x\n"), ("kernels-src/target/x.wasm", "x")] {
+    for (file, text) in
+        [("kernels-src/Cargo.toml", "[package]\n"), ("kernels-src/src/lib.rs", "//! x\n"), ("kernels-src/target/x.wasm", "x")]
+    {
         std::fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
         std::fs::write(dir.join(file), text).unwrap();
     }

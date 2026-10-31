@@ -623,7 +623,7 @@ mod tests {
         };
         let s = start();
         let installed: Vec<String> = m2_song::pack::Store::at(store.clone()).list().iter().map(|(n, v)| format!("{n} {}", v[0])).collect();
-        assert_eq!(installed, ["@m2/drums 1.0.0", "@m2/effects 1.0.0", "@m2/synths 1.0.0"]);
+        assert_eq!(installed, ["@m2/drums 1.0.0", "@m2/effects 1.1.0", "@m2/synths 1.0.0"]);
         // A new song from the starter template, locked to them (PACK-18), builds from this store
         // alone: no registry, no network.
         let song = project::create(&home, "Song", &resources::templates_dir().join("starter")).unwrap();
