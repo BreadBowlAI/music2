@@ -110,8 +110,8 @@ A sound's code says what each of its values is. It never says how to draw it: th
 | View | Draws | Its names must be |
 |---|---|---|
 | `view.envelope("attack", "decay", "sustain", "release")` | the envelope's shape | three times (`control.secs`, `control.ms` or `control.beats`) and a level (`control.frac`, `control.linear` or `control.db`) |
-| `view.filter("cutoff", "q")` | the filter's curve | a frequency (`control.hz`) and a `control.scalar` |
-| `view.keys("regions")` | which recording plays on which keys | a `setting.regions()` or `setting.keymap()` |
+| `view.filter("cutoff", "q")` | a low-pass filter's curve (12 dB per octave), worked out from the two knobs: a picture, not a measurement | a frequency (`control.hz`) and a `control.scalar` |
+| `view.keys("regions")` | which recording plays on which keys, as std's Sampler plays them | a `setting.regions()` or `setting.keymap()` |
 | `view.scope()` | the sound as it plays | (no names) |
 
 **Groups** put the card in order. Each group names some of the sound's values and views, each once. Values in no group go last, under More.
@@ -143,7 +143,7 @@ export const wobble = component(
 );
 ```
 
-A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. The card doesn't draw menus, switches, views or groups yet: a later version of music2 does.
+A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. On the card a choice is a menu and a switch a switch, the views are pictures whose corners move their knobs, and the groups are titles over their rows (see [The window](window.md)).
 
 A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
 
