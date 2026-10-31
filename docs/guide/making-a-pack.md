@@ -17,9 +17,11 @@ felt-piano/
   instruments/*.toml    instruments written as data, imported as "@alice/felt-piano/instruments"
   presets/<id>/*.json   its sounds: presets/felt-piano/Soft.json
   samples/              recordings its code plays
+  kernels/*.wasm        sound code of its own, if any (most packs have none)
+  kernels-src/          that code's Rust source: no part of the pack
 ```
 
-A pack holds only `.ts`, `.wasm`, `.toml`, `.json`, `.md`, `.txt`, `.wav` and `.flac` files (in any capitals: `.WAV` is a WAV), and `LICENSE`. Recordings and samples may be WAV or FLAC (FLAC: the same sound, about half the size; 8, 16 or 24 bits).
+A pack holds only `.ts`, `.wasm`, `.toml`, `.json`, `.md`, `.txt`, `.wav` and `.flac` files (in any capitals: `.WAV` is a WAV), and `LICENSE`. Its `kernels-src/` folder, the source of [kernels of its own](#kernels-of-its-own), is no part of it: music2 leaves it out of the pack's files, its fingerprint and its install. Recordings and samples may be WAV or FLAC (FLAC: the same sound, about half the size; 8, 16 or 24 bits).
 
 **How much audio a pack may hold.** music2 holds an instrument's recordings whole in memory while a song plays it. So a pack is held to what its audio files' headers say (a *sample* here is one number of sound: one channel at one moment, so a second of stereo at 48 kHz is 96,000):
 
@@ -157,6 +159,33 @@ export const wobble = component(
 A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. The card doesn't draw menus, switches, views or groups yet: a later version of music2 does.
 
 A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
+
+## Kernels of its own
+
+A *kernel* is the code that makes the sound, compiled to WebAssembly (wasm). Most packs need none: std's blocks and kernels make most sounds. A pack may bring its own, written in Rust with music2's kit, `m2-kernel`.
+
+| Step | What to do |
+|---|---|
+| 1. The source | a Rust crate in the pack's folder, `kernels-src/`: a `Cargo.toml` and `src/lib.rs`. It is no part of the pack: only the wasm you build from it ships, and a build left in it changes nothing |
+| 2. The kit | in its `Cargo.toml`: `[lib] crate-type = ["cdylib"]`, and under `[dependencies]` the kit from a copy of music2's source: `m2-kernel = { path = "<music2>/std/kernels-src/kernel" }` |
+| 3. A kernel | a `struct` that implements the kit's `Kernel` (how many inputs and outputs, `new` and `process`), then `export!(crush, Crush);`. Write `abi!();` once in the crate |
+| 4. Build it | `rustup target add wasm32-unknown-unknown` once, then `cargo build --release --target wasm32-unknown-unknown` in `kernels-src/`, and copy `target/wasm32-unknown-unknown/release/<crate>.wasm` (the crate's name with `_` for `-`) to `kernels/<name>.wasm` |
+| 5. Say so | in `m2pkg.toml`, under `[package]`: `wasm = "kernels/<name>.wasm"`; and a `[[kernel]]` for each kernel, its ports in the order its code reads them |
+| 6. Call it | in the pack's code: `kernel("@you/name:crush", { in: x, bits })` |
+
+```toml
+[[kernel]]
+name = "crush"
+description = "Rounds each sample to `bits`"
+inputs = ["in: audio<*>", "bits: control<scalar> = 8 in 1..16"]
+outputs = ["out: audio<*>"]
+```
+
+- music2's own `@m2/effects` is built this way: its bitcrusher's source is `packs/@m2/effects/kernels-src` in music2's repository, its `[[kernel]]` is in the pack's `m2pkg.toml`, and `src/index.ts` calls it.
+- The kit's rules, byte by byte, are in [Kernel ABI v1](https://github.com/BreadBowlAI/music2/blob/main/docs/kernel-abi.md). Above all: take memory only when the kernel is made (`new`), never in `process`.
+- Your pack's kernels run with a time limit on every call (Quick code, [below](#listing-it-in-the-registry)). music2's own packs' run without one, as std's do: their files are a version music2 ships, built from its own source.
+- A wasm file keeps the paths of the files it was built from, for its error messages. To leave your computer's folder names out, build with `RUSTFLAGS="--remap-path-prefix=$HOME=~"`.
+- A change to a kernel is a change to the pack: raise its version.
 
 ## An instrument written as data
 

@@ -8,14 +8,14 @@
 | Word | Meaning |
 |---|---|
 | **std** | music2's toolbox, in `std/`: what sounds are made of. TypeScript in `std/src`, kernels (the code that makes the sound) in `std/kernels/std.wasm`, built from Rust in `std/kernels-src` |
-| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels. They come with the app and with `m2` |
+| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels, and their own (`@m2/effects`' bitcrusher, built from Rust beside it). They come with the app and with `m2` |
 
 A song that plays them lists them, as the templates do:
 
 ```toml
 [dependencies]
 "@m2/core" = "1"
-std = "0.7"
+std = "0.8"
 "@m2/synths" = "1"
 "@m2/effects" = "1"
 ```
@@ -28,7 +28,7 @@ import { reverb } from "@m2/effects";
 
 When you add one of their sounds from + Track or the browser, music2 writes those lines for you, and `music2.lock` too.
 
-A song made before std 0.7 is told, in words, what to change: first its std line, to `std = "0.7"`; then, for each import of `std/synth`, `std/fm`, `std/drums` or `std/instruments`, or of `std/fx`'s `reverb` and the other effects that colour a sound, which pack it is in now and the line to add. The move changed no sound: the song plays the same bits as before.
+A song made before std 0.8 is told, in words, what to change: first its std line, to `std = "0.8"`; then, for each import of `std/synth`, `std/fm`, `std/drums` or `std/instruments`, or of `std/fx`'s `reverb` and the other effects that colour a sound, which pack it is in now and the line to add. Code that calls the kernel `std:bitcrush` itself is told it is `@m2/effects:bitcrush` since std 0.8, and a song locked to `@m2/effects` 1.0.0 that plays `bitcrush` moves with `m2 pack update <song> @m2/effects`. The moves changed no sound: the song plays the same bits as before.
 
 **Instruments.** Each takes a notes lane and returns sound. The `voices` setting is how many notes can sound at once (`synth.lead(notes, { voices: 4 })` plays chords). A typical note, at velocity 0.8, peaks between -15 and -12 dBFS, so a four-note chord still has room, and the drums sit as on a drum machine: the kick near -6, snare and clap near -9, hats near -16. Notes played harder are louder, and most sounds get brighter too. On the synths and FM sounds, `velSens` ("vel sens") is how much: the level follows velocity^(2 × velSens), so a note at velocity 0 is silent, and at 0.5 a note at 0.3 is 10 dB below one at 1. The keys start widest (0.8), the 808 narrowest (0.3).
 

@@ -29,7 +29,7 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 | Run the app | `cargo run --locked --release -p music2-desktop` |
 | Rust tests | `cargo test --locked --workspace` (build `m2-plugin-host` first: `cargo build --locked -p m2-plugins --bin m2-plugin-host`) |
 | Browser suites | see [e2e/README.md](e2e/README.md) |
-| Rebuild std's kernels | `std/build.sh` (`std/build.sh --check` proves the committed `std.wasm`) |
+| Rebuild the kernels: std's and music2's own packs' | `std/build.sh` (`std/build.sh --check` proves every committed `.wasm`) |
 | Check the docs: every link, and the guide's website | `ci/guide.sh check` (`ci/pr.sh docs` runs it) |
 | Make the guide's two pages made from code again (`commands.md`, `routes.md`) | `ci/guide.sh gen`, after changing `apps/m2/src/commands.rs` or a route |
 | Preview the guide's website while you write | `ci/guide.sh serve` (http://localhost:3000) |
@@ -49,7 +49,7 @@ A desktop DAW where a song is a TypeScript program: a Rust server and engine, st
 10. **Plain words** in docs, UI text and commit messages. Every doc starts with "In short". The guide, `docs/guide/`, is for musicians new to music and for agents: short sentences, tables, a one-line meaning for any jargon.
 11. **A big change starts with a design note** under `docs/designs/` and the owner's yes.
 12. **Keep `ci/check.sh` working in bash 3.2** (macOS's bash).
-13. **Don't edit `std/kernels/std.wasm` by hand** or take a side on it in a merge: rebuild it with `std/build.sh`.
+13. **Don't edit a committed `.wasm` by hand** (`std/kernels/std.wasm`, a pack's `kernels/*.wasm`) or take a side on it in a merge: rebuild it with `std/build.sh`.
 
 ## Pull requests
 

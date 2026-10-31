@@ -1,6 +1,6 @@
 # Kernel ABI v1
 
-The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3, ABI-5, ABI-6, ABI-7, ABI-8 and ABI-9](architecture.md#kernel-abi-reservations); this page is the detail behind them.
+The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3, ABI-5 to ABI-11](architecture.md#kernel-abi-reservations); this page is the detail behind them.
 
 ## In short
 
@@ -13,7 +13,8 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 - A kernel may take **notes**: an `events<note>` input gets its lane's notes and controllers each block, stamped to the sample.
 - A module says its version in a small part of its file named **`m2_abi`**: **1**. music2 reads it first, before it looks at anything else. It refuses a module built for any other version, and says which.
 - v1 only ever grows at the end: new optional exports, and new fields at the end of the settings block. Anything else is v2.
-- A pack's kernels have a **time limit** on every call: 100 ms while the song plays, 5 s for everything else. A call still running then is stopped, and its sound goes silent ([below](#the-time-limit-abi-6-abi-7)). std's kernels, music2's own, have none.
+- A pack's kernels have a **time limit** on every call: 100 ms while the song plays, 5 s for everything else. A call still running then is stopped, and its sound goes silent ([below](#the-time-limit-abi-6-abi-7)). std's kernels and those of music2's own packs have none.
+- Every module music2 ships is **built from its source** in the repo by one script, `std/build.sh`, to the same bytes in any folder ([below](#building-a-module-abi-10)).
 
 | Part | Where below |
 |---|---|
@@ -25,6 +26,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 | A kernel music2 runs to make a render | [Offline kernels](#offline-kernels) |
 | What every kernel must keep | [The five rules](#the-five-rules-abi-5) |
 | How long a call may take | [The time limit](#the-time-limit-abi-6-abi-7) |
+| How a module is built from Rust | [Building a module](#building-a-module-abi-10) |
 | What is fixed now, built later | [Reserved shapes](#reserved-shapes) |
 
 The Rust kit (`std/kernels-src/kernel`) writes all of this for you. Write a `struct`, implement `Kernel`, and call `export!`. In `Kernel::new`, `cfg.values` holds your numbers and `cfg.assets` your audio files; `asset.read(channel, frame, &mut buf)` reads one. A kernel that takes notes names those inputs in `Kernel::NOTES` and reads them with `io.events(i)`. `std:sampler` (`std/kernels-src/src/sampler.rs`) is a whole example.
@@ -199,7 +201,7 @@ The host checks rules 1 and 2 by construction (the seal and the prewarm). Debug 
 
 ## The time limit (ABI-6, ABI-7)
 
-Every call into a pack's kernel must return within its limit. A call still running then is stopped where it is (a trap), however far it got. std's kernels, music2's own code, run with no limit and no checks.
+Every call into a pack's kernel must return within its limit. A call still running then is stopped where it is (a trap), however far it got. std's kernels, music2's own code, run with no limit and no checks, and so do the kernels of music2's own packs: a pack whose files are a version music2 ships (ABI-11). A changed copy of one, or anyone else's pack, has the limit.
 
 | Calls | Limit |
 |---|---|
@@ -211,6 +213,21 @@ Every call into a pack's kernel must return within its limit. A call still runni
 - Stopped while the song plays, the kernel's sound is silent until the song is built again, and its sandbox isn't called again until then; the status names the sound, its track and whose code it runs (`sound.too-slow`). Offline, the render fails, naming it. Stopped as it is made (`k_new`, or its first `k_reset`), the sound doesn't load, and music2 doesn't make that kernel with those settings again until the song opens again or the pack changes. The registry refuses a version whose preview was stopped.
 - What it costs: the checks are compiled into a pack's kernels, at each function's start and each loop's turn. Measured on std's 36 kernels compiled as a pack's, a call costs about a fifth more (+20.6 % in all; least for kernels with long straight runs, most for small kernels with tight loops). Keep the work of a call in few, long loops.
 - How it works, for the curious: wasmtime's epochs. A thread moves a counter on every 10 ms, and the compiled code checks it at each function's start and each loop's turn.
+
+## Building a module (ABI-10)
+
+A module is built with the Rust kit from one crate, compiled for `wasm32-unknown-unknown`. For the modules music2 ships, one script does it, the same way for each:
+
+| Module | Its source | Its file |
+|---|---|---|
+| std's | `std/kernels-src` | `std/kernels/std.wasm` |
+| a pack music2 ships, with kernels of its own | the pack's `kernels-src/`, such as `packs/@m2/effects/kernels-src` | where the pack's `m2pkg.toml` says, `wasm = "kernels/effects.wasm"` |
+
+- They are one Cargo workspace, `std/kernels-src`: the kit, std's crate and each pack's crate, with one `Cargo.lock` and one release profile (`opt-level = 3`, `lto`, one codegen unit, `panic = "abort"`, `strip`). A pack's crate joins it with `package.workspace = "../../../../std/kernels-src"`.
+- `std/build.sh` builds them all and copies each module to its file. `std/build.sh --check` builds a copy in a temporary folder and compares each with the committed file, byte for byte. CI runs it on every pull request.
+- The bytes depend only on the sources and the pinned toolchain (`rust-toolchain.toml`). Paths reach the build relative to the repo (`--remap-path-prefix`): cargo names a file outside the workspace's folder (a pack's crate) by its whole path, which would put the machine's folder into the module.
+- A pack's `kernels-src/` is no part of the pack (PACK-20): the store, the listing and its hash see only the module.
+- Writing a pack of your own: the guide's [Making a pack](guide/making-a-pack.md#kernels-of-its-own) has the steps.
 
 ## Reserved shapes
 
