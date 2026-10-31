@@ -20,6 +20,7 @@ use m2_script::Catalog;
 use m2_script::sites::Site;
 use m2_song::{Project, Sha, Snapshot, TempoMap, Version};
 
+use crate::history::Bound;
 use crate::lock::{Access, ReadOnly};
 use crate::texts::Texts;
 use crate::tx::journal::Journal;
@@ -165,13 +166,6 @@ impl std::fmt::Display for StepError {
 /// How many past revisions an edit can be planned against.
 const PAST: usize = 64;
 
-/// How many changes undo goes back through; the oldest are forgotten first.
-const HISTORY: usize = 500;
-
-/// How many bytes of text and data undo keeps alive at most (WRITE-21); the oldest steps are
-/// forgotten first, though never the newest.
-pub(crate) const RETAINED: usize = 64 << 20;
-
 pub struct Session {
     pub packages: PackageSet,
     pub(crate) dir: PathBuf,
@@ -252,6 +246,12 @@ pub struct Session {
     pub(crate) why: Option<String>,
     /// The last commit, undo or redo: what [`Session::retract`] takes back (AGENT-3).
     pub(crate) last_change: Option<Change>,
+    /// How much undo keeps (WRITE-26).
+    pub(crate) bound: crate::history::Bound,
+    /// Why undo and redo go back no further than their oldest steps (WRITE-24).
+    pub(crate) ends: (Option<crate::history::End>, Option<crate::history::End>),
+    /// The history's records in `.music2/undo/` (WRITE-23).
+    pub(crate) records: crate::history::Records,
 }
 
 /// The last change this session made, as [`Session::retract`] takes it back.
@@ -432,7 +432,14 @@ impl Session {
             by: Source::Page,
             why: None,
             last_change: None,
+            bound: crate::history::BOUND,
+            ends: (None, None),
+            records: Default::default(),
         };
+        // The way back, as the last writer left it (WRITE-23).
+        if s.access.writer() {
+            s.read_history();
+        }
         s.problems = s.gather_problems();
         Ok(s)
     }
@@ -563,6 +570,7 @@ impl Session {
                 self.kept = scan.keep;
                 self.pending.extend(scan.awaiting);
                 self.access = Access::Writer(lock);
+                self.read_history();
                 self.problems = self.gather_problems();
                 true
             }
@@ -581,7 +589,9 @@ impl Session {
             match crate::lock::acquire(&self.dir, &self.program, std::time::Duration::ZERO) {
                 Ok(lock) => {
                     self.access = Access::Writer(lock);
-                    // What another writer left meanwhile is read as at any lock.
+                    // What another writer left meanwhile is read as at any lock; the history's
+                    // records went with the folder, and are written again (WRITE-23).
+                    self.records.forget();
                     self.rescan();
                 }
                 Err(why) => {
@@ -599,7 +609,10 @@ impl Session {
     /// (the app opening it again) can take it.
     pub fn unlock(&mut self) {
         if self.access.writer() {
-            let keep = self.interrupted.iter().flat_map(|j| j.blobs()).chain(self.kept.iter().copied()).collect();
+            // Nothing is taken back from now on (AGENT-3): the before-images kept are those undo,
+            // which outlives the session (WRITE-26), and the journals still name.
+            self.last_change = None;
+            let keep = self.blobs_in_use();
             stage::close(&mut *self.disk, &self.dir, &mut self.pending, &keep);
             self.access = Access::ReadOnly(ReadOnly::Asked);
         }
@@ -677,6 +690,7 @@ impl Session {
         step.made = self.accepted.number;
         self.steps += 1;
         step.id = self.steps;
+        step.images = crate::history::images(&self.dir, &step).unwrap_or(0);
         // Not the watcher's: whoever the app says the request is by (AGENT-10), named by its words.
         if step.source == Source::Page {
             step.source = self.by.clone();
@@ -686,7 +700,9 @@ impl Session {
         }
         let pushed = self.push_history(step);
         let cleared = std::mem::take(&mut self.redo);
+        self.ends.1 = None;
         self.last_change = Some(Change::Commit { cleared, pushed });
+        self.keep_history();
         self.steps
     }
 
@@ -718,6 +734,7 @@ impl Session {
             Some(Change::Redo) => self.step(false)?,
         };
         self.last_change = None;
+        self.keep_history();
         Ok(done)
     }
 
@@ -750,6 +767,7 @@ impl Session {
         match self.history.iter_mut().chain(self.redo.iter_mut()).rev().find(|t| t.made == made) {
             Some(t) => {
                 t.name = Some((name.to_string(), structural));
+                self.keep_history();
                 true
             }
             None => false,
@@ -770,15 +788,22 @@ impl Session {
         (self.history.last().map(named), self.redo.last().map(named))
     }
 
-    /// Push `step` on undo's history, forgetting the oldest steps past what it keeps: those, oldest
-    /// first.
+    /// Push `step` on undo's history, forgetting the oldest steps past what it keeps (WRITE-26):
+    /// those, oldest first. The newest is always kept.
     fn push_history(&mut self, step: TxStep) -> Vec<TxStep> {
         self.history.push(step);
+        let Bound { steps, text, images } = self.bound;
         let mut kept: usize = self.history.iter().map(TxStep::retained).sum();
+        let mut held: u64 = self.history.iter().map(|t| t.images).sum();
         let mut out = 0;
-        while self.history.len() - out > HISTORY || (kept > RETAINED && self.history.len() - out > 1) {
+        while self.history.len() - out > 1 && (self.history.len() - out > steps || kept > text || held > images) {
             kept -= self.history[out].retained();
+            held -= self.history[out].images;
             out += 1;
+        }
+        if out > 0 {
+            // Undo now ends at the bound, before whatever ended it.
+            self.ends.0 = None;
         }
         self.history.drain(..out).collect()
     }
@@ -844,6 +869,7 @@ impl Session {
         }
         self.history.pop();
         self.last_change = None;
+        self.keep_history();
         true
     }
 
@@ -882,9 +908,11 @@ impl Session {
                     // name (AGENT-2).
                     (inverse.made, inverse.name) = (done.number, step.name.clone());
                     (inverse.id, inverse.source) = (step.id, step.source.clone());
+                    inverse.images = crate::history::images(&self.dir, &inverse).unwrap_or(0);
                     if redo { &mut self.history } else { &mut self.redo }.push(inverse);
                 }
                 self.last_change = Some(if redo { Change::Redo } else { Change::Undo });
+                self.keep_history();
                 let (before, after) = tx.label.clone();
                 Ok(Stepped { number: done.number, file: step.file.clone(), before, after, committed: done })
             }

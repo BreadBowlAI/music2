@@ -262,10 +262,15 @@ fn locked(dir: &Path, also: &str) -> Result<Session> {
         s.forward_to(Box::new(to));
         return Ok(s);
     }
-    let s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
+    let mut s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
     if let Some(r) = s.access().refusal() {
         bail!("{}{also}", r.message);
     }
+    // With the app closed, its step goes in the song's one history, which the app reads back when
+    // it opens the song: an agent's, by the name it gives (WRITE-23, AGENT-10).
+    let who = app::who();
+    let caller = m2_server::caller::Caller::agent(who.by.as_deref(), who.why.as_deref());
+    s.act_as(caller.source(), caller.why());
     Ok(s)
 }
 

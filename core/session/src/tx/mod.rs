@@ -43,7 +43,7 @@ mod steps_tests;
 #[cfg(test)]
 mod take_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -316,12 +316,40 @@ pub(crate) struct TxStep {
     /// (AGENT-2): both follow it through undo and redo.
     pub id: u64,
     pub source: crate::session::Source,
+    /// The hash each file it touches held before its change, None where there was none: what its
+    /// undo puts back (WRITE-23). A file it touches that isn't here held what the step left.
+    pub before: BTreeMap<TxPath, Option<Sha>>,
+    /// The bytes of the before-images it names in `.music2/tx/blobs/`, read when it is recorded:
+    /// undo's bound for them (WRITE-26).
+    pub images: u64,
+    /// The name of its record in `.music2/undo/`, once written (WRITE-25).
+    pub record: Option<Sha>,
 }
 
 impl TxStep {
     pub fn new(inverse: Tx, raw: bool, data_only: bool, file: String) -> TxStep {
         let size = retained(&inverse);
-        TxStep { inverse, raw, data_only, file, size, made: 0, name: None, id: 0, source: crate::session::Source::Page }
+        let source = crate::session::Source::Page;
+        TxStep { inverse, raw, data_only, file, size, made: 0, name: None, id: 0, source, before: BTreeMap::new(), images: 0, record: None }
+    }
+
+    /// [`TxStep::new`] for a Tx whose disk work was `targets`: what each held before is what its
+    /// undo puts back.
+    fn of_targets(inverse: Tx, raw: bool, data_only: bool, file: String, targets: &[Target]) -> TxStep {
+        let mut step = TxStep::new(inverse, raw, data_only, file);
+        for t in targets {
+            let held: Vec<(&str, Option<Sha>)> = match t {
+                Target::Write { path, before, .. } => vec![(path, before.as_ref().map(|b| b.sha))],
+                Target::Remove { path, before } => vec![(path, Some(before.sha))],
+                Target::Rename { from, to, hash, .. } => vec![(from, Some(*hash)), (to, None)],
+            };
+            for (path, sha) in held {
+                if let Ok(p) = TxPath::new(path) {
+                    step.before.insert(p, sha);
+                }
+            }
+        }
+        step
     }
 
     /// The before-images in `blobs/` it needs.
@@ -1652,7 +1680,7 @@ impl Session {
         inverse.base = planned.inverse_base.clone();
         // Shown where the change is now: a renamed file or folder by its new name.
         let file = inverse.touched().first().or(tx.touched().first()).map(|p| p.to_string()).unwrap_or_default();
-        TxStep::new(inverse, raw, data_only, file)
+        TxStep::of_targets(inverse, raw, data_only, file, &planned.targets)
     }
 
     /// What a commit to `candidate` tells the host before it is journaled (PLANE-5).

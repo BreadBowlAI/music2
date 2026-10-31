@@ -16,7 +16,7 @@
 //! A path that waits stays waiting until a batch makes the draft build, and a Tx touching one is
 //! a conflict: so a lane moved together with a broken code change never plays empty.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -266,6 +266,7 @@ impl Session {
         let others = changed.len().saturating_sub(1);
         let mut ops = vec![];
         let mut bases = vec![];
+        let mut before = BTreeMap::new();
         for p in &changed {
             let name = m2_song::path::slashed(p);
             let cant = |why| Outside::Cant { file: name.clone(), why, others };
@@ -291,6 +292,8 @@ impl Session {
             if let Some(why) = self.unwritable(&file, &left) {
                 return cant(why);
             }
+            // What its undo puts back: the text the app knew, or nothing (WRITE-23).
+            before.insert(file.clone(), text_of(&was, p).map(|t| Sha::of(t.as_bytes())));
             bases.push((file, left));
             ops.push(op);
         }
@@ -307,8 +310,9 @@ impl Session {
         inverse.base.extend(bases);
         // Raw, as a save's step is: taken in like an outside write when undone (WRITE-21).
         let mut step = TxStep::new(inverse, true, false, file.clone());
+        step.before = before;
         // More than undo keeps would push every other step out of it.
-        if step.retained() > crate::session::RETAINED {
+        if step.retained() > self.bound.text {
             return Outside::Cant { file, why: Cant::TooBig, others };
         }
         step.source = crate::session::Source::Outside;
@@ -483,7 +487,9 @@ impl Session {
             let shown = summarize(cur.text.as_deref().unwrap_or(""), text);
             let mut inverse = Tx::new("undo-save", (shown.1, shown.0), vec![undo], Expect::Identical);
             inverse.base.insert(p.clone(), Base::Sha(after));
-            self.record_tx(TxStep::new(inverse, true, false, p.to_string()));
+            let mut step = TxStep::new(inverse, true, false, p.to_string());
+            step.before.insert(p.clone(), cur.sha);
+            self.record_tx(step);
         }
         Ok(Saved { taken, recorded })
     }
