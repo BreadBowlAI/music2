@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use m2_ir::LaneDecl;
 use m2_session::{ConflictFile, Revision, Session};
+use m2_song::lane::{Step, StepClip};
 use m2_song::tx::{Confined, Expect, Op, Payload, TxPath};
 use m2_song::{AudioClip, ClipId, ControlClip, DataPath, LaneAddr, LaneData, LaneKind, Note, NoteClip, canonical};
 use serde::{Deserialize, Serialize};
@@ -403,7 +404,9 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 .iter()
                 .map(|i| match &l.was[*i] {
                     Clip::Notes(c) => Ok(c),
-                    Clip::Control(_) => Err("Automation clips can't be joined: the lane's fallback would stop playing in their gaps."),
+                    Clip::Control(_) | Clip::Steps(_) => {
+                        Err("Automation clips can't be joined: the lane's fallback would stop playing in their gaps.")
+                    }
                     Clip::Audio(_) => Err("Audio clips can't be joined yet: that needs a render of them as one sound."),
                 })
                 .collect::<Result<_, _>>()
@@ -541,6 +544,8 @@ fn joined(clips: &[&NoteClip]) -> NoteClip {
 pub(crate) enum Clip {
     Notes(NoteClip),
     Control(ControlClip),
+    /// A clip of a lane of names (CARD-15): a choice's or a switch's.
+    Steps(StepClip),
     Audio(AudioClip),
 }
 
@@ -549,6 +554,7 @@ impl Clip {
         match self {
             Clip::Notes(c) => c.start,
             Clip::Control(c) => c.start,
+            Clip::Steps(c) => c.start,
             Clip::Audio(c) => c.start,
         }
     }
@@ -557,6 +563,7 @@ impl Clip {
         match self {
             Clip::Notes(c) => c.length,
             Clip::Control(c) => c.length,
+            Clip::Steps(c) => c.length,
             Clip::Audio(c) => c.length,
         }
     }
@@ -569,6 +576,7 @@ impl Clip {
         match self {
             Clip::Notes(c) => c.id.as_deref(),
             Clip::Control(c) => c.id.as_deref(),
+            Clip::Steps(c) => c.id.as_deref(),
             Clip::Audio(c) => c.id.as_deref(),
         }
     }
@@ -577,6 +585,7 @@ impl Clip {
         match self {
             Clip::Notes(c) => c.start = x,
             Clip::Control(c) => c.start = x,
+            Clip::Steps(c) => c.start = x,
             Clip::Audio(c) => c.start = x,
         }
     }
@@ -585,6 +594,7 @@ impl Clip {
         match self {
             Clip::Notes(c) => c.length = x,
             Clip::Control(c) => c.length = x,
+            Clip::Steps(c) => c.length = x,
             Clip::Audio(c) => c.length = x,
         }
     }
@@ -594,6 +604,7 @@ impl Clip {
         let (slot, other) = match self {
             Clip::Notes(c) => (&mut c.id, &mut c.other_id),
             Clip::Control(c) => (&mut c.id, &mut c.other_id),
+            Clip::Steps(c) => (&mut c.id, &mut c.other_id),
             Clip::Audio(c) => (&mut c.id, &mut c.other_id),
         };
         (*slot, *other) = (id, None);
@@ -604,6 +615,7 @@ impl Clip {
         let other = match self {
             Clip::Notes(c) => c.other_id.is_some(),
             Clip::Control(c) => c.other_id.is_some(),
+            Clip::Steps(c) => c.other_id.is_some(),
             Clip::Audio(c) => c.other_id.is_some(),
         };
         self.id().filter(|id| !other && ClipId::valid(id))
@@ -617,6 +629,7 @@ impl Clip {
         match self {
             Clip::Notes(c) => c.notes.iter_mut().for_each(|n| n.start += by),
             Clip::Control(c) => c.points.iter_mut().for_each(|p| p.0 += by),
+            Clip::Steps(c) => c.points.iter_mut().for_each(|p| p.0 += by),
             Clip::Audio(c) => {
                 audio_edge(c, "its left edge")?;
                 if c.warp.is_empty() {
@@ -666,6 +679,23 @@ impl Clip {
                     b.points = [(0.0, r)].into_iter().chain(after).collect();
                 }
             }
+            (Clip::Steps(a), Clip::Steps(b)) => {
+                // Each name holds until the next point, the first from the clip's start: the second
+                // part starts with the one in effect at the cut (a point there opens it).
+                let points = std::mem::take(&mut a.points);
+                let held = step_at(&points, cut);
+                a.points = points.iter().filter(|p| p.0 < cut).cloned().collect();
+                if a.points.is_empty()
+                    && let Some(first) = points.first()
+                {
+                    a.points.push((0.0, first.1.clone()));
+                }
+                b.points = held
+                    .map(|v| (0.0, v))
+                    .into_iter()
+                    .chain(points.iter().filter(|p| p.0 > cut).map(|p| (p.0 - cut, p.1.clone())))
+                    .collect();
+            }
             (Clip::Audio(a), Clip::Audio(b)) => {
                 audio_edge(a, "split")?;
                 if a.warp.is_empty() && a.reverse {
@@ -706,6 +736,12 @@ fn value_at(points: &[(f64, f64)], t: f64) -> Option<f64> {
             if b1 > b0 { v0 + (v1 - v0) * (t - b0) / (b1 - b0) } else { v1 }
         }
     })
+}
+
+/// What a lane of names plays at `t`, beats from its clip's start: the last point at or before it,
+/// else the first (it holds from the clip's start). None with no points.
+fn step_at(points: &[(f64, Step)], t: f64) -> Option<Step> {
+    points.iter().rev().find(|p| p.0 <= t).or(points.first()).map(|p| p.1.clone())
 }
 
 /// What `points` play just before `t`: where a step is at `t`, the value it steps from.
@@ -838,8 +874,8 @@ pub(crate) fn clips_of(d: &LaneData) -> Vec<Clip> {
         LaneData::Notes(c) => c.iter().cloned().map(Clip::Notes).collect(),
         LaneData::Control { clips, .. } => clips.iter().cloned().map(Clip::Control).collect(),
         LaneData::Audio(c) => c.iter().cloned().map(Clip::Audio).collect(),
-        // A gesture never reaches a lane of names (`Work::lane` refuses it).
-        LaneData::Steps { .. } => vec![],
+        // A clip gesture never reaches a lane of names (`Work::lane` refuses it); a section does.
+        LaneData::Steps { clips, .. } => clips.iter().cloned().map(Clip::Steps).collect(),
     }
 }
 
@@ -858,6 +894,7 @@ pub(crate) fn lane_data(kind: &LaneKind, clips: Vec<Clip>) -> LaneData {
         match (&mut d, c) {
             (LaneData::Notes(v), Clip::Notes(c)) => v.push(c),
             (LaneData::Control { clips, .. }, Clip::Control(c)) => clips.push(c),
+            (LaneData::Steps { clips, .. }, Clip::Steps(c)) => clips.push(c),
             (LaneData::Audio(v), Clip::Audio(c)) => v.push(c),
             _ => unreachable!("kinds are checked before a clip lands on a lane"),
         }
@@ -869,8 +906,14 @@ pub(crate) fn lane_data(kind: &LaneKind, clips: Vec<Clip>) -> LaneData {
 /// A clip as the lane format writes it, read as a clip of a lane of `kind`.
 pub(crate) fn parse(v: &Value, kind: &LaneKind) -> Result<Clip, EditError> {
     let mut top = serde_json::Map::new();
-    if let LaneKind::Control { unit: Some(u) } = kind {
-        top.insert("unit".into(), Value::String(u.clone()));
+    let unit = match kind {
+        LaneKind::Control { unit: Some(u) } => Some(u.as_str()),
+        LaneKind::Choice { .. } => Some("choice"),
+        LaneKind::Switch => Some("switch"),
+        _ => None,
+    };
+    if let Some(u) = unit {
+        top.insert("unit".into(), Value::String(u.into()));
     }
     top.insert("clips".into(), Value::Array(vec![v.clone()]));
     match LaneData::read(&Value::Object(top).to_string(), kind) {
@@ -896,6 +939,8 @@ pub(crate) fn fits(from: &LaneKind, to: &LaneKind) -> Result<(), String> {
             Err(format!("{{from}} ({a}) and {{to}} ({b}) can't share clips: their units differ"))
         }
         (LaneKind::Control { .. }, LaneKind::Control { .. }) => Ok(()),
+        // A name the choice doesn't have plays the lane's fallback (CARD-15).
+        (LaneKind::Choice { .. }, LaneKind::Choice { .. }) | (LaneKind::Switch, LaneKind::Switch) => Ok(()),
         _ => Err(format!("{} can't go on {}", noun(from).0, noun(to).1)),
     }
 }

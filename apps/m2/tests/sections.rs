@@ -75,7 +75,7 @@ fn section_gestures_from_the_terminal() {
         (&["delete", "Bridge"][..], "`Bridge` isn't bars or a marker"),
         (&["delete", "16-9"][..], "the last bar comes before the first"),
         (&["move", "1-8"][..], "needs `--to`"),
-        (&["move", "1-8", "--to", "9.2"][..], "must be on a bar line"),
+        (&["move", "1-8", "--to", "9.2"][..], "The bars go at the start of a bar, not at bar 9 beat 2."),
         (&["fold", "1-8"][..], "duplicate, move, delete"),
         (&["delete", "1-8", "--to", "9"][..], "`--to` isn't a flag of"),
     ] {

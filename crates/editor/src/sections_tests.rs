@@ -153,7 +153,9 @@ fn files(f: &Fixture) -> BTreeMap<String, Vec<u8>> {
         .into_iter()
         .map(|p| (p.strip_prefix(&f.0).unwrap().to_string_lossy().into_owned(), std::fs::read(&p).unwrap()))
         .collect();
-    out.insert("layout.json".into(), std::fs::read(f.0.join("layout.json")).unwrap());
+    if let Ok(bytes) = std::fs::read(f.0.join("layout.json")) {
+        out.insert("layout.json".into(), bytes);
+    }
     out
 }
 
@@ -189,17 +191,20 @@ fn at124(beats: f64) -> f64 {
 fn a_span_off_the_bar_lines_is_refused() {
     let (f, mut s) = song();
     let before = files(&f);
+    // Places as a person counts them, from 1 (R14): beat 33 is bar 9's second beat.
     let words = refused(&mut s, Gesture::Delete { start: 33.0, end: 64.0 });
-    assert!(words.contains("must be on a bar line: beat 33 is inside bar 9"), "{words}");
+    assert!(words.ends_with("A section starts at the start of a bar, not at bar 9 beat 2."), "{words}");
+    let words = refused(&mut s, Gesture::Delete { start: 32.0, end: 62.0 });
+    assert!(words.ends_with("A section ends at the end of a bar, not at bar 16 beat 3."), "{words}");
     let words = refused(&mut s, Gesture::Delete { start: 32.0, end: 32.0 });
     assert!(words.contains("ends after it starts"), "{words}");
     let words = refused(&mut s, Gesture::Delete { start: f64::NAN, end: 32.0 });
-    assert!(words.contains("from the song's start on"), "{words}");
+    assert!(words.ends_with("A section starts at the start of a bar, and NaN isn't a place in the song."), "{words}");
     // In 3/4 from bar 21 (beat 80), bar 22 starts at beat 83.
     let words = refused(&mut s, Gesture::InsertBars { at: 84.0, bars: 1 });
-    assert!(words.contains("beat 84 is inside bar 22"), "{words}");
+    assert!(words.ends_with("New bars go at the start of a bar, not at bar 22 beat 2."), "{words}");
     let words = refused(&mut s, Gesture::Move { start: 32.0, end: 64.0, to: 97.0 });
-    assert!(words.contains("on a bar line"), "{words}");
+    assert!(words.ends_with("The bars go at the start of a bar, not at bar 26 beat 3."), "{words}");
     assert!(refused(&mut s, Gesture::InsertBars { at: 32.0, bars: 0 }).contains("Insert 1 to 999 bars"));
     assert!(refused(&mut s, Gesture::InsertBars { at: 32.0, bars: 1000 }).contains("Insert 1 to 999 bars"));
     assert_eq!(files(&f), before);
@@ -215,9 +220,9 @@ fn each_gesture_is_one_undo_step_byte_for_byte() {
     let (f, mut s) = song();
     let copy = section(s.accepted(), 32.0, 64.0).unwrap();
     let gestures = [
-        (Gesture::Paste { section: copy, at: 64.0 }, false),
-        (Gesture::Duplicate { start: 32.0, end: 64.0, to: None }, false),
-        (Gesture::Move { start: 32.0, end: 64.0, to: 98.0 }, false),
+        (Gesture::Paste { section: copy, at: 0.0 }, false),
+        (Gesture::Duplicate { start: 32.0, end: 64.0, to: Some(0.0) }, false),
+        (Gesture::Move { start: 32.0, end: 64.0, to: 0.0 }, false),
         (Gesture::Delete { start: 32.0, end: 64.0 }, false),
         (Gesture::InsertBars { at: 32.0, bars: 2 }, true),
         (Gesture::DeleteBars { start: 32.0, end: 64.0 }, true),
@@ -285,10 +290,12 @@ fn a_clip_crossing_each_edge_is_split_there() {
     s.undo().unwrap();
     // A copy of the bars takes the audio clip's later part: it starts 4 beats later in its file.
     let copy = section(s.accepted(), 32.0, 64.0).unwrap();
-    go(&mut s, Gesture::Paste { section: copy, at: 80.0 });
+    go(&mut s, Gesture::Paste { section: copy, at: 0.0 });
+    let later = format!("offset {} fades 0/0.02", n(at124(4.0)));
     assert_eq!(
         lane(&s, "vox/clips"),
-        ["v0000001 28+8 offset 0 fades 0.01/0.02".to_string(), format!("* 80+4 offset {} fades 0/0.02", n(at124(4.0)))]
+        [format!("* 0+4 {later}"), format!("* 32+4 {later}")],
+        "the copy at bar 1, and the clip's part after bar 9"
     );
     s.undo().unwrap();
     // An audio clip Split can't split refuses the gesture, in words.
@@ -297,7 +304,12 @@ fn a_clip_crossing_each_edge_is_split_there() {
     drop(s);
     let mut s = f.open();
     let words = refused(&mut s, Gesture::Delete { start: 32.0, end: 64.0 });
-    assert!(words.contains("its pitch is changed"), "{words}");
+    assert!(
+        words.ends_with(
+            "Vox's audio clip at bar 8 has its pitch changed, so it can't be cut at bar 9. Set its pitch back to 0, or move it off bar 9."
+        ),
+        "{words}"
+    );
 }
 
 // ARR-4: a paste replaces what the bars it lands on held, lane by lane: split at their edges, the
@@ -309,32 +321,25 @@ fn a_paste_replaces_what_was_there() {
     let kick = copy.lanes.iter().find(|l| l.lane == addr("kick/hits")).unwrap();
     assert_eq!(kick.clips.len(), 1, "only the clips that overlap the bars, whole: {kick:?}");
     assert!(copy.lanes.iter().any(|l| l.lane == addr("hats/hits") && l.clips.is_empty()), "every lane, an empty one too");
-    let done = go(&mut s, Gesture::Paste { section: copy, at: 64.0 });
-    assert_eq!(
-        (done.edited.before.as_str(), done.edited.after.as_str()),
-        ("bars 17–26", "a copy of bars 9–16"),
-        "into the 3/4 from bar 21"
-    );
+    let cutoff = copy.lanes.iter().find(|l| l.lane == addr("bass/cutoff")).unwrap();
+    assert_eq!(cutoff.kind, Holds::Control { unit: Some("hz".into()) }, "each lane with its kind (R12)");
+    let done = go(&mut s, Gesture::Paste { section: copy, at: 0.0 });
+    assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("bars 1–8", "a copy of bars 9–16"));
     let pasted = [
-        ("kick/hits", vec!["k0000001 0+32 [24@0+1 24@16+1]", "k0000002 32+32 [24@0+1 24@8+1]", "* 64+32 [24@0+1 24@8+1]"]),
-        (
-            "bass/notes",
-            vec!["b0000001 24+16 [40@0+2 40@6+4 40@10+2]", "b0000002 56+8 [43@0+2 43@6+2]", "* 64+8 [40@2+2]", "* 88+8 [43@0+2 43@6+2]"],
-        ),
-        ("bass/cutoff", vec!["c0000001 16+48 [0:300 48:1725]", "* 64+32 [0:775 32:1725]"]),
+        ("kick/hits", vec!["* 0+32 [24@0+1 24@8+1]", "k0000002 32+32 [24@0+1 24@8+1]", "k0000003 64+16 [24@0+1]"]),
+        ("bass/notes", vec!["* 0+8 [40@2+2]", "* 24+8 [43@0+2 43@6+2]", "* 32+8 [40@2+2]", "b0000002 56+16 [43@0+2 43@6+4 43@12+2]"]),
+        ("bass/cutoff", vec!["* 0+32 [0:775 32:1725]", "* 32+48 [0:775 48:2200]"]),
     ];
     for (l, want) in &pasted {
         assert_eq!(lane(&s, l), *want, "{l}");
     }
-    assert_eq!(
-        lane(&s, "vox/clips"),
-        ["v0000001 28+8 offset 0 fades 0.01/0.02".to_string(), format!("* 64+4 offset {} fades 0/0.02", n(at124(4.0)))]
-    );
+    let later = format!("offset {} fades 0/0.02", n(at124(4.0)));
+    assert_eq!(lane(&s, "vox/clips"), [format!("* 0+4 {later}"), format!("* 32+4 {later}")]);
     // The app selects what was placed.
     assert_eq!(done.made.iter().filter(|(l, _)| *l == addr("bass/notes")).count(), 2, "{:?}", done.made);
     assert_eq!(f.read("data/arrangement.json"), ARRANGEMENT);
     s.undo().unwrap();
-    go(&mut s, Gesture::Duplicate { start: 32.0, end: 64.0, to: None });
+    go(&mut s, Gesture::Duplicate { start: 32.0, end: 64.0, to: Some(0.0) });
     for (l, want) in &pasted {
         assert_eq!(lane(&s, l), *want, "duplicate: {l}");
     }
@@ -345,14 +350,10 @@ fn a_paste_replaces_what_was_there() {
 #[test]
 fn a_move_leaves_a_gap_and_keeps_ids() {
     let (_f, mut s) = song();
-    // Bar 27, in the 3/4.
-    let done = go(&mut s, Gesture::Move { start: 32.0, end: 64.0, to: 98.0 });
-    assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("bars 9–16", "bars 27–37"));
-    assert_eq!(lane(&s, "kick/hits"), ["k0000001 0+32 [24@0+1 24@16+1]", "k0000003 64+16 [24@0+1]", "k0000002 98+32 [24@0+1 24@8+1]"]);
-    assert_eq!(
-        lane(&s, "bass/notes"),
-        ["b0000001 24+8 [40@0+2 40@6+2]", "* 64+8 [43@4+2]", "* 98+8 [40@2+2]", "b0000002 122+8 [43@0+2 43@6+2]"]
-    );
+    let done = go(&mut s, Gesture::Move { start: 32.0, end: 64.0, to: 0.0 });
+    assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("bars 9–16", "bars 1–8"));
+    assert_eq!(lane(&s, "kick/hits"), ["k0000002 0+32 [24@0+1 24@8+1]", "k0000003 64+16 [24@0+1]"]);
+    assert_eq!(lane(&s, "bass/notes"), ["* 0+8 [40@2+2]", "b0000002 24+8 [43@0+2 43@6+2]", "* 64+8 [43@4+2]"]);
 }
 
 // ARR-5: a copy keeps what was copied: cut (copied, then emptied) and pasted back, the bars play as
@@ -367,17 +368,36 @@ fn a_cut_then_a_paste_keeps_the_copy() {
     assert_ne!(kick(&s), was);
     go(&mut s, Gesture::Paste { section: copy.clone(), at: 32.0 });
     assert_eq!(kick(&s), was, "the kick plays as it did");
+    // A lane the song no longer has is skipped while the copy holds nothing for it (R7).
+    let kick_lane = copy.lanes.iter().find(|l| l.lane == addr("kick/hits")).unwrap().clone();
     let mut gone = copy.clone();
-    gone.lanes.push(SectionLane { lane: addr("lead/notes"), clips: vec![] });
-    let words = refused(&mut s, Gesture::Paste { section: gone, at: 32.0 });
-    assert!(words.contains("The copy has lead's notes lane, which the song doesn't have now"), "{words}");
+    gone.lanes.push(SectionLane { lane: addr("lead/notes"), kind: Holds::Notes, clips: vec![] });
+    go(&mut s, Gesture::Paste { section: gone.clone(), at: 0.0 });
+    s.undo().unwrap();
+    // One it holds clips for refuses the paste, naming every such lane, and never asks for a copy
+    // again: after a cut there is none to make.
+    gone.lanes.push(SectionLane { lane: addr("lead/notes"), kind: Holds::Notes, clips: kick_lane.clips.clone() });
+    gone.lanes.push(SectionLane { lane: addr("pad/chords"), kind: Holds::Notes, clips: kick_lane.clips.clone() });
+    let words = refused(&mut s, Gesture::Paste { section: gone, at: 0.0 });
+    assert!(
+        words.ends_with(
+            "The copy has clips for lead's notes lane and pad's chords lane, which the song doesn't have now, so it can't be pasted."
+        ),
+        "{words}"
+    );
+    assert!(!words.contains("again"), "{words}");
+    // A lane that takes another kind of clip (R12): checked by the copy's kind, as a clip paste is.
     let mut other = copy.clone();
-    let notes = other.lanes.iter().find(|l| l.lane == addr("kick/hits")).unwrap().clips.clone();
-    other.lanes.iter_mut().find(|l| l.lane == addr("bass/cutoff")).unwrap().clips = notes;
-    let words = refused(&mut s, Gesture::Paste { section: other, at: 32.0 });
-    assert!(words.contains("The copy has notes clips for Bass's cutoff lane, which holds automation now."), "{words}");
+    let cutoff = other.lanes.iter_mut().find(|l| l.lane == addr("bass/cutoff")).unwrap();
+    (cutoff.kind, cutoff.clips) = (Holds::Notes, kick_lane.clips.clone());
+    let words = refused(&mut s, Gesture::Paste { section: other, at: 0.0 });
+    assert!(words.ends_with("Bass's cutoff lane: a notes clip can't go on an automation lane, so the copy can't be pasted."), "{words}");
+    let mut hz = copy.clone();
+    hz.lanes.iter_mut().find(|l| l.lane == addr("bass/cutoff")).unwrap().kind = Holds::Control { unit: Some("db".into()) };
+    let words = refused(&mut s, Gesture::Paste { section: hz, at: 0.0 });
+    assert!(words.contains("their units differ"), "{words}");
     let words = refused(&mut s, Gesture::Paste { section: copy, at: 33.0 });
-    assert!(words.contains("on a bar line"), "{words}");
+    assert!(words.ends_with("A paste goes at the start of a bar, not at bar 9 beat 2."), "{words}");
 }
 
 // ARR-6: insert bars opens bars at a bar line, in the time signature before it: every clip, marker,
@@ -390,7 +410,9 @@ fn insert_bars_moves_everything_after() {
     assert!(done.made.is_empty(), "nothing to select: {:?}", done.made);
     assert_eq!(lane(&s, "kick/hits"), ["k0000001 0+32 [24@0+1 24@16+1]", "k0000002 40+32 [24@0+1 24@8+1]", "k0000003 72+16 [24@0+1]"]);
     assert_eq!(lane(&s, "bass/notes"), ["b0000001 24+8 [40@0+2 40@6+2]", "* 40+8 [40@2+2]", "b0000002 64+16 [43@0+2 43@6+4 43@12+2]"]);
-    assert_eq!(lane(&s, "bass/cutoff"), ["c0000001 16+16 [0:300 16:775]", "* 40+48 [0:775 48:2200]"]);
+    // The automation across bar 9 holds its value there over the new bars (R11); notes and audio
+    // leave them empty.
+    assert_eq!(lane(&s, "bass/cutoff"), ["c0000001 16+24 [0:300 16:775 24:775]", "* 40+48 [0:775 48:2200]"]);
     assert_eq!(
         lane(&s, "vox/clips"),
         ["v0000001 28+4 offset 0 fades 0.01/0".to_string(), format!("* 40+4 offset {} fades 0/0.02", n(at124(4.0)))]
@@ -481,5 +503,226 @@ fn a_gesture_that_changes_nothing_writes_nothing() {
     let steps = s.last_step();
     let done = go(&mut s, Gesture::Delete { start: 200.0, end: 212.0 });
     assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("no change", "no change"));
-    assert_eq!((s.last_step(), files(&f)), (steps, before));
+    assert_eq!((s.last_step(), files(&f)), (steps, before.clone()));
+    // A move to where the bars are, and a duplicate onto themselves, change nothing either (R9).
+    for g in [Gesture::Move { start: 32.0, end: 64.0, to: 32.0 }, Gesture::Duplicate { start: 32.0, end: 64.0, to: Some(32.0) }] {
+        let done = go(&mut s, g.clone());
+        assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("no change", "no change"), "{g:?}");
+        assert_eq!((s.last_step(), files(&f)), (steps, before.clone()), "{g:?}");
+    }
+}
+
+// ARR-4 (review R3): a section lands on whole bars. Bars 9–16 are 32 beats; from bar 17 they would
+// end one beat into bar 26 of the 3/4, so a paste, a duplicate or a move there is refused in words,
+// and a copy whose bars aren't bars of the song is too. Nothing is written.
+#[test]
+fn a_section_lands_on_whole_bars() {
+    let (f, mut s) = song();
+    let before = files(&f);
+    let copy = section(s.accepted(), 32.0, 64.0).unwrap();
+    let inside =
+        "At bar 17, bars 9–16 would end inside bar 26, where the bars are another length: put them where they end at the end of a bar.";
+    let words = refused(&mut s, Gesture::Paste { section: copy.clone(), at: 64.0 });
+    assert!(words.ends_with(inside), "{words}");
+    assert!(refused(&mut s, Gesture::Duplicate { start: 32.0, end: 64.0, to: None }).ends_with(inside));
+    assert!(refused(&mut s, Gesture::Move { start: 32.0, end: 64.0, to: 64.0 }).ends_with(inside));
+    let mut off = copy.clone();
+    (off.start, off.end) = (33.0, 34.5);
+    let words = refused(&mut s, Gesture::Paste { section: off, at: 0.0 });
+    assert!(words.ends_with("A section starts at the start of a bar, not at bar 9 beat 2."), "{words}");
+    let mut odd = copy;
+    odd.end = f64::INFINITY;
+    let words = refused(&mut s, Gesture::Paste { section: odd, at: 0.0 });
+    assert!(words.ends_with("The copy's bars aren't a span of the song: copy them again."), "{words}");
+    assert_eq!(files(&f), before);
+    // Twelve bars of 4/4 from bar 9 end at beat 80, where the 3/4 starts: they fit.
+    go(&mut s, Gesture::Duplicate { start: 32.0, end: 48.0, to: Some(64.0) });
+}
+
+/// A song of one track whose tone takes a choice and a switch from lanes of names (CARD-15): the
+/// shape is a saw from beat 16, a square from beat 28; the sub is on from bar 17 (beat 64).
+fn names_song() -> (Fixture, Session) {
+    let f = Fixture::new();
+    f.write("music2.toml", crate::testing::MANIFEST);
+    f.write(
+        "lib/tone.ts",
+        "import { component, control, port } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
+         export const tone = component(\n  { id: \"tone\", controls: { shape: control.choice([\"saw\", \"square\", \"sine\"], \"saw\"), sub: control.bool(false) }, output: port.audio() },\n  () => osc.saw(110),\n);\n",
+    );
+    f.write(
+        "song.ts",
+        "import { song, track } from \"@m2/core\";\nimport { tone } from \"./lib/tone\";\n\
+         const lead = track(\"lead\", ({ lane }) => tone({ shape: lane.control(\"shape\", \"choice\", \"saw\"), sub: lane.control(\"sub\", \"switch\", false) }));\n\
+         export default song(() => lead.out);\n",
+    );
+    f.write(
+        "data/lead/shape.json",
+        "{\"unit\": \"choice\", \"clips\": [\n  {\"id\": \"s0000001\", \"start\": 16, \"length\": 32, \"points\": [[0, \"saw\"], [12, \"square\"]]}\n]}\n",
+    );
+    f.write(
+        "data/lead/sub.json",
+        "{\"unit\": \"switch\", \"clips\": [\n  {\"id\": \"w0000001\", \"start\": 64, \"length\": 16, \"points\": [[0, true]]}\n]}\n",
+    );
+    let s = f.open();
+    assert!(
+        s.draft_errors.is_empty() && s.accepted().compiled.problems.iter().all(|d| !d.code.starts_with("lane.")),
+        "{:?}",
+        s.draft_errors
+    );
+    (f, s)
+}
+
+/// A lane of names' clips as `lane` writes them, its points `beat:value`.
+fn steps(s: &Session, lane: &str) -> Vec<String> {
+    let a = addr(lane);
+    let Some(d) = s.accepted().compiled.data.lane(a.module.as_str(), a.lane.as_str()) else { return vec![] };
+    let LaneData::Steps { clips, .. } = &**d else { panic!("{lane} isn't a lane of names") };
+    let old = ["s0000001", "w0000001"];
+    clips
+        .iter()
+        .map(|c| {
+            let id = c.id.as_deref().filter(|i| old.contains(i)).unwrap_or("*");
+            let points: Vec<String> = c.points.iter().map(|(b, v)| format!("{}:{}", n(*b), serde_json::to_string(v).unwrap())).collect();
+            format!("{id} {}+{} [{}]", n(c.start), n(c.length), points.join(" "))
+        })
+        .collect()
+}
+
+// ARR-1, ARR-3, ARR-6 (review R1): lanes of names are part of every section. Insert bars moves
+// the switch on with the rest, and splits the choice at the edge: its later part starts with the
+// name in effect there, and its first part holds it over the new bars. Delete bars takes them out;
+// a copy carries their clips and kinds, and a paste puts them in place of what was there.
+#[test]
+fn lanes_of_names_move_with_the_bars() {
+    let (f, mut s) = names_song();
+    let before = files(&f);
+    go(&mut s, Gesture::InsertBars { at: 32.0, bars: 2 });
+    assert_eq!(steps(&s, "lead/shape"), ["s0000001 16+24 [0:\"saw\" 12:\"square\"]", "* 40+16 [0:\"square\"]"]);
+    assert_eq!(steps(&s, "lead/sub"), ["w0000001 72+16 [0:true]"]);
+    s.undo().unwrap();
+    assert_eq!(files(&f), before);
+    go(&mut s, Gesture::DeleteBars { start: 32.0, end: 48.0 });
+    assert_eq!(steps(&s, "lead/shape"), ["s0000001 16+16 [0:\"saw\" 12:\"square\"]"]);
+    assert_eq!(steps(&s, "lead/sub"), ["w0000001 48+16 [0:true]"]);
+    s.undo().unwrap();
+    let copy = section(s.accepted(), 32.0, 48.0).unwrap();
+    let kinds: Vec<&Holds> = copy.lanes.iter().map(|l| &l.kind).collect();
+    let options = ["saw", "square", "sine"].map(String::from).to_vec();
+    assert_eq!(kinds, [&Holds::Choice { options }, &Holds::Switch]);
+    go(&mut s, Gesture::Paste { section: copy, at: 64.0 });
+    assert_eq!(steps(&s, "lead/shape"), ["s0000001 16+32 [0:\"saw\" 12:\"square\"]", "* 64+16 [0:\"square\"]"]);
+    assert!(steps(&s, "lead/sub").is_empty(), "the copy's sub was off there: {:?}", steps(&s, "lead/sub"));
+    s.undo().unwrap();
+    assert_eq!(files(&f), before);
+}
+
+// ARR-2 (review R2): a section reaches every lane, so while a lane file doesn't read (it plays the
+// clips it had before), every section gesture is refused, naming the file, and nothing moves.
+#[test]
+fn a_lane_file_that_doesnt_read_refuses_them() {
+    let (f, mut s) = song();
+    f.write("data/hats/hits.json", "{\"clips\": [ {\"start\": 40, \"length\": 4, \"notes\": []} ,]}\n");
+    s.refresh();
+    let before = files(&f);
+    let words = "data/hats/hits.json doesn't read right now, so its clips can't move with the bars: fix the file first.";
+    for g in [
+        Gesture::InsertBars { at: 32.0, bars: 2 },
+        Gesture::Delete { start: 32.0, end: 64.0 },
+        Gesture::Duplicate { start: 0.0, end: 32.0, to: None },
+    ] {
+        let said = refused(&mut s, g.clone());
+        assert!(said.ends_with(words), "{g:?}: {said}");
+    }
+    assert_eq!(files(&f), before);
+}
+
+// ARR-6 (review R2, R6): while data/arrangement.json or layout.json doesn't read, insert and delete
+// bars are refused in words naming it, and change nothing; the gestures that move clips only are
+// still taken (WRITE-14).
+#[test]
+fn a_file_that_doesnt_read_refuses_the_time_gestures() {
+    let (f, mut s) = song();
+    f.write("data/arrangement.json", ARRANGEMENT.replace("\"bpm\": 140", "\"bpm\": 1400"));
+    s.refresh();
+    let before = files(&f);
+    for g in [Gesture::InsertBars { at: 32.0, bars: 1 }, Gesture::DeleteBars { start: 32.0, end: 64.0 }] {
+        let said = refused(&mut s, g.clone());
+        assert!(said.ends_with("data/arrangement.json doesn't read right now, so its tempo and time signature changes can't move with the bars: fix the file first."), "{g:?}: {said}");
+        assert!(!said.contains("compile"), "the code compiles: {said}");
+    }
+    assert_eq!(files(&f), before);
+    go(&mut s, Gesture::Delete { start: 32.0, end: 64.0 });
+    s.undo().unwrap();
+    f.write("data/arrangement.json", ARRANGEMENT);
+    s.refresh();
+    f.write("layout.json", "{ not json");
+    let before = files(&f);
+    for g in [Gesture::InsertBars { at: 32.0, bars: 1 }, Gesture::DeleteBars { start: 32.0, end: 64.0 }] {
+        let said = refused(&mut s, g.clone());
+        assert!(
+            said.ends_with("layout.json doesn't read right now, so its markers can't move with the bars: fix it, or reset the layout."),
+            "{g:?}: {said}"
+        );
+    }
+    assert_eq!(files(&f), before);
+    let copy = section(s.accepted(), 32.0, 64.0).unwrap();
+    go(&mut s, Gesture::Paste { section: copy, at: 0.0 });
+    assert_eq!(f.read("layout.json"), "{ not json", "a paste never writes the layout");
+}
+
+/// The test song with `arrangement` as its tempo and time signatures.
+fn with_arrangement(arrangement: &str) -> (Fixture, Session) {
+    let (f, s) = song();
+    drop(s);
+    f.write("data/arrangement.json", arrangement);
+    let s = f.open();
+    (f, s)
+}
+
+/// An arrangement in its canonical form: `(beat, bpm)` and `(beat, beats, unit)`.
+fn arrangement(tempo: &[(f64, f64)], meter: &[(f64, u32, u32)]) -> String {
+    let a = m2_song::Arrangement {
+        tempo: tempo.iter().map(|&(beat, bpm)| m2_song::Tempo { beat, bpm }).collect(),
+        meter: meter.iter().map(|&(beat, beats, unit)| m2_song::Meter { beat, beats, unit }).collect(),
+    };
+    a.canonical()
+}
+
+// ARR-7 (review R6): the time signature half. Of the changes inside the deleted bars, the one in
+// effect at their end lands at their start, unless it repeats what plays before it; one at their
+// end edge moves to their start; and a 7/8 bar keeps its place in the count.
+#[test]
+fn delete_bars_keeps_what_follows_in_time() {
+    // Three bars of 3/4 between 4/4s (bars 9 to 11): taking them out leaves the 4/4 alone.
+    let (f, mut s) = with_arrangement(&arrangement(&[(0.0, 124.0)], &[(0.0, 4, 4), (32.0, 3, 4), (41.0, 4, 4)]));
+    go(&mut s, Gesture::DeleteBars { start: 32.0, end: 41.0 });
+    assert_eq!(f.read("data/arrangement.json"), arrangement(&[(0.0, 124.0)], &[(0.0, 4, 4)]));
+    drop(s);
+    // Bar 4 (4/4) and bar 5 (the first 7/8): the 7/8 and its tempo land at bar 4, and the 4/4 after
+    // the second 7/8 bar follows it.
+    let (f, mut s) = with_arrangement(&arrangement(&[(0.0, 124.0), (16.0, 90.0)], &[(0.0, 4, 4), (16.0, 7, 8), (23.0, 4, 4)]));
+    go(&mut s, Gesture::DeleteBars { start: 12.0, end: 19.5 });
+    assert_eq!(f.read("data/arrangement.json"), arrangement(&[(0.0, 124.0), (12.0, 90.0)], &[(0.0, 4, 4), (12.0, 7, 8), (15.5, 4, 4)]));
+    drop(s);
+    // A change at the end edge: bars 17 to 20 out, the 3/4 from bar 21 starts at bar 17.
+    let (f, mut s) = with_arrangement(ARRANGEMENT);
+    go(&mut s, Gesture::DeleteBars { start: 64.0, end: 80.0 });
+    assert_eq!(f.read("data/arrangement.json"), arrangement(&[(0.0, 124.0), (48.0, 140.0), (64.0, 100.0)], &[(0.0, 4, 4), (64.0, 3, 4)]));
+    assert_eq!(marks(&f), ["Verse@0", "Chorus@32", "Bridge@64"]);
+}
+
+// ARR-7 (review R10): when nothing follows the deleted bars, the changes and markers inside them go,
+// and the song's own first tempo and time signature stay: the song isn't left at its last tempo.
+#[test]
+fn delete_bars_to_the_end() {
+    let (f, mut s) = song();
+    go(&mut s, Gesture::DeleteBars { start: 0.0, end: 200.0 });
+    assert_eq!(f.read("data/arrangement.json"), arrangement(&[(0.0, 124.0)], &[(0.0, 4, 4)]));
+    assert!(marks(&f).is_empty(), "{:?}", marks(&f));
+    assert!(lane(&s, "kick/hits").is_empty() && lane(&s, "bass/cutoff").is_empty());
+    s.undo().unwrap();
+    // From bar 17 to the end: what plays before bar 17 stays as it was.
+    go(&mut s, Gesture::DeleteBars { start: 64.0, end: 200.0 });
+    assert_eq!(f.read("data/arrangement.json"), arrangement(&[(0.0, 124.0), (48.0, 140.0)], &[(0.0, 4, 4)]));
+    assert_eq!(marks(&f), ["Verse@0", "Chorus@32"]);
 }

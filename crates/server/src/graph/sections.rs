@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
 use m2_editor::sections::Gesture;
 use parking_lot::Mutex;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::Graph;
 use super::clips::{Answer, Refused};
@@ -36,5 +36,19 @@ impl Graph {
             (Err(e), Some(Refused::Changed)) => Ok(Answer::Changed(format!("{e:#}"))),
             (Err(e), _) => Err(e),
         }
+    }
+}
+
+impl Graph {
+    /// A copy of bars `start` to `end` of the open song (ARR-5): every lane's kind and the clips that
+    /// overlap them, as `{section}`. Only a read: it works in a read-only window too.
+    pub fn section_copy(&self, token: u64, start: f64, end: f64) -> Result<Value> {
+        self.call(move |a| match a.open.as_ref().filter(|o| o.token == token) {
+            Some(o) => {
+                let section = m2_editor::sections::section(o.session.accepted(), start, end).map_err(|e| anyhow!("{e}"))?;
+                Ok(json!({ "section": section }))
+            }
+            None => bail!("the open project changed; refresh the graph before copying"),
+        })
     }
 }

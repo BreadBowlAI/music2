@@ -43,12 +43,55 @@ pub struct Section {
     pub lanes: Vec<SectionLane>,
 }
 
-/// One lane of a copied section.
+/// One lane of a copied section: its address, its kind, and its clips.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SectionLane {
     #[serde(flatten)]
     pub lane: LaneAddr,
+    #[serde(flatten)]
+    pub kind: Holds,
     pub clips: Vec<Value>,
+}
+
+/// What a lane holds, as a copy carries it (`"kind": "control", "unit": "hz"`): a lane's kind, as
+/// the lane format reads it (FMT-10).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Holds {
+    Notes,
+    Control {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
+    Choice {
+        options: Vec<String>,
+    },
+    Switch,
+    Audio,
+}
+
+impl From<&LaneKind> for Holds {
+    fn from(k: &LaneKind) -> Holds {
+        match k {
+            LaneKind::Notes => Holds::Notes,
+            LaneKind::Control { unit } => Holds::Control { unit: unit.clone() },
+            LaneKind::Choice { options } => Holds::Choice { options: options.clone() },
+            LaneKind::Switch => Holds::Switch,
+            LaneKind::Audio => Holds::Audio,
+        }
+    }
+}
+
+impl From<&Holds> for LaneKind {
+    fn from(h: &Holds) -> LaneKind {
+        match h {
+            Holds::Notes => LaneKind::Notes,
+            Holds::Control { unit } => LaneKind::Control { unit: unit.clone() },
+            Holds::Choice { options } => LaneKind::Choice { options: options.clone() },
+            Holds::Switch => LaneKind::Switch,
+            Holds::Audio => LaneKind::Audio,
+        }
+    }
 }
 
 /// What a producer does to a section (ARR-2). Beats from the song's start, each on a bar line.
@@ -84,54 +127,95 @@ pub struct Planned {
     pub label: (String, String),
 }
 
-/// A lane of the song as a gesture finds it: its clips, and why its file can't be written, when it
-/// doesn't read (it plays the clips it had before, FMT-9, and writing those would lose its text).
+/// A lane of the song as a gesture finds it: its kind, its clips, what a person calls it (`Bass`,
+/// `cutoff`), and the file it is read from, which may not read now: it then plays the clips it had
+/// before (FMT-9), and its newer text can't move with the bars.
 struct Now {
     kind: LaneKind,
     was: Vec<Clip>,
-    broken: Option<String>,
+    track: String,
+    label: String,
+    file: String,
+    broken: bool,
+}
+
+impl Now {
+    /// `Bass's cutoff lane`.
+    fn named(&self) -> String {
+        format!("{}'s {} lane", self.track, self.label)
+    }
 }
 
 /// Every lane the accepted revision declares, by address.
 fn lanes(rev: &Revision) -> BTreeMap<LaneAddr, Now> {
     let mut out = BTreeMap::new();
     for (addr, kind) in &rev.compiled.decls.lanes {
-        let shown = DataPath::lane(addr).to_string();
-        let broken = rev.compiled.problems.iter().find(|d| d.src.as_deref() == Some(&shown) && d.code.starts_with("lane."));
-        let broken = broken.map(|d| format!("{shown} doesn't read as the lane right now ({}): fix the file first", d.code));
+        let file = DataPath::lane(addr).to_string();
+        let broken = rev.compiled.problems.iter().any(|d| d.src.as_deref() == Some(&file) && d.code.starts_with("lane."));
         let was = match rev.compiled.data.lane(addr.module.as_str(), addr.lane.as_str()) {
             Some(d) if d.fits(kind) => clips::clips_of(d),
             _ => vec![],
         };
-        out.insert(addr.clone(), Now { kind: kind.clone(), was, broken });
+        let m = rev.compiled.ir.modules.iter().find(|m| m.key == addr.module.as_str());
+        let track = m.map_or_else(|| addr.module.to_string(), |m| m.label().to_string());
+        let label = m
+            .and_then(|m| m.lanes.iter().find(|l| l.key == addr.lane.as_str()))
+            .map_or_else(|| addr.lane.to_string(), |l| l.label().to_string());
+        out.insert(addr.clone(), Now { kind: kind.clone(), was, track, label, file, broken });
     }
     out
 }
 
-/// The clips of `clips` cut at the span `a` to `b` (ARR-3): those outside it, whole or split off,
-/// and those inside. A clip that crosses an edge is split there, as Split splits.
-fn cut(clips: &[Clip], a: f64, b: f64, tempo: &TempoMap) -> Result<(Vec<Clip>, Vec<Clip>), EditError> {
-    let (mut outside, mut inside) = (vec![], vec![]);
-    for c in clips {
-        if c.end() <= a || c.start() >= b {
-            outside.push(c.clone());
-            continue;
+/// Where clips are cut (ARR-3): the song's tempo, which an audio clip's later part is placed by, and
+/// its bars, which a refusal counts in.
+struct Edge<'a> {
+    tempo: &'a TempoMap,
+    arr: &'a Arrangement,
+}
+
+impl Edge<'_> {
+    /// Clip `c` of track `track` cut at song beat `at`, as Split cuts it. An audio clip Split can't
+    /// cut refuses in words: which clip, and what to change in the app (review R14).
+    fn split(&self, c: &Clip, at: f64, track: &str) -> Result<(Clip, Clip), EditError> {
+        if let Clip::Audio(a) = c {
+            let (bar, edge) = (self.arr.bar_at(a.start).0 + 1, self.arr.bar_at(at).0 + 1);
+            let why = match () {
+                _ if a.pitch != 0.0 => format!("has its pitch changed, so it can't be cut at bar {edge}. Set its pitch back to 0"),
+                _ if a.reverse && !a.warp.is_empty() => {
+                    format!("plays backwards and follows the tempo, so it can't be cut at bar {edge}. Turn Reverse off")
+                }
+                _ => return c.split(at, self.tempo),
+            };
+            return Err(EditError::Rejected(format!("{track}'s audio clip at bar {bar} {why}, or move it off bar {edge}.")));
         }
-        let mut rest = c.clone();
-        if rest.start() < a {
-            let (before, from) = rest.split(a, tempo)?;
-            outside.push(before);
-            rest = from;
-        }
-        if rest.end() > b {
-            let (within, after) = rest.split(b, tempo)?;
-            inside.push(within);
-            outside.push(after);
-        } else {
-            inside.push(rest);
-        }
+        c.split(at, self.tempo)
     }
-    Ok((outside, inside))
+
+    /// The clips of `clips` (track `track`'s) cut at the span `a` to `b`: those outside it, whole or
+    /// split off, and those inside. A clip that crosses an edge is split there.
+    fn cut(&self, clips: &[Clip], a: f64, b: f64, track: &str) -> Result<(Vec<Clip>, Vec<Clip>), EditError> {
+        let (mut outside, mut inside) = (vec![], vec![]);
+        for c in clips {
+            if c.end() <= a || c.start() >= b {
+                outside.push(c.clone());
+                continue;
+            }
+            let mut rest = c.clone();
+            if rest.start() < a {
+                let (before, from) = self.split(&rest, a, track)?;
+                outside.push(before);
+                rest = from;
+            }
+            if rest.end() > b {
+                let (within, after) = self.split(&rest, b, track)?;
+                inside.push(within);
+                outside.push(after);
+            } else {
+                inside.push(rest);
+            }
+        }
+        Ok((outside, inside))
+    }
 }
 
 /// `clips` moved by `by` beats, each a copy with no id (it gets a fresh one) unless `keep`.
@@ -145,31 +229,60 @@ fn moved(clips: Vec<Clip>, by: f64, keep: bool) -> impl Iterator<Item = Clip> {
     })
 }
 
-/// `beat`, which must be a bar line of the song (ARR-1), on it exactly: `what` says which in the
-/// refusal.
-fn bar_line(arr: &Arrangement, beat: f64, what: &str) -> Result<f64, EditError> {
-    if !(beat.is_finite() && beat >= 0.0) {
-        return Err(EditError::Rejected(format!("{what} is a beat from the song's start on, not {beat}.")));
+/// A clip's first part before bars opened at its cut, held over them (ARR-6): an automation or a
+/// names clip goes on playing its value at the cut; notes and audio leave the new bars empty.
+fn held(mut c: Clip, len: f64) -> Clip {
+    match &mut c {
+        Clip::Control(a) => {
+            if let Some(&(_, v)) = a.points.last() {
+                a.points.push((a.length + len, v));
+            }
+            a.length += len;
+        }
+        Clip::Steps(a) => a.length += len,
+        Clip::Notes(_) | Clip::Audio(_) => {}
     }
-    let (bar, into) = arr.bar_at(beat);
+    c
+}
+
+/// `beat`, which must be a bar line of the song (ARR-1), on it exactly. `head` says what goes there
+/// ("A paste goes at the start of a bar"); the refusal counts bars and beats from 1.
+fn bar_line(arr: &Arrangement, beat: f64, head: &str) -> Result<f64, EditError> {
+    if !(beat.is_finite() && beat >= 0.0) {
+        return Err(EditError::Rejected(format!("{head}, and {beat} isn't a place in the song.")));
+    }
+    let into = arr.bar_at(beat).1;
     let left = arr.meter_at(beat).bar() - into;
     match () {
         _ if into.abs() < EPS => Ok(beat - into),
         _ if left.abs() < EPS => Ok(beat + left),
-        _ => Err(EditError::Rejected(format!(
-            "{what} must be on a bar line: beat {} is inside bar {}.",
-            m2_song::lane::number(beat),
-            bar + 1
-        ))),
+        _ => Err(EditError::Rejected(format!("{head}, not at {}.", crate::notes::place(arr, beat)))),
     }
 }
 
 /// A section's span: both ends on bar lines, the end after the start (ARR-1).
 fn span(arr: &Arrangement, start: f64, end: f64) -> Result<(f64, f64), EditError> {
-    let (a, b) = (bar_line(arr, start, "A section's start")?, bar_line(arr, end, "A section's end")?);
+    let a = bar_line(arr, start, "A section starts at the start of a bar")?;
+    let b = bar_line(arr, end, "A section ends at the end of a bar")?;
     match b > a {
         true => Ok((a, b)),
         false => Err(EditError::Rejected("A section ends after it starts: pick one bar or more.".into())),
+    }
+}
+
+/// Bars `a` to `b` put at bar line `to`: they must end at the end of a bar there (ARR-4), or the
+/// time signatures differ and the section would half cover a bar.
+fn lands(arr: &Arrangement, a: f64, b: f64, to: f64) -> Result<(), EditError> {
+    let end = to + (b - a);
+    let (bar, into) = arr.bar_at(end);
+    match into.abs() < EPS || (arr.meter_at(end).bar() - into).abs() < EPS {
+        true => Ok(()),
+        false => Err(EditError::Rejected(format!(
+            "At bar {}, {} would end inside bar {}, where the bars are another length: put them where they end at the end of a bar.",
+            arr.bar_at(to).0 + 1,
+            bars_words(arr, a, b),
+            bar + 1
+        ))),
     }
 }
 
@@ -208,15 +321,19 @@ fn inserted(arr: &Arrangement, at: f64, len: f64) -> Arrangement {
 /// `entries` (changes in effect until the next, by beat) with the span `a` to `b` taken out
 /// (ARR-7): those before it stay, those at or after its end move earlier by its length, and of those
 /// inside it only the one in effect at its end stays, at its start. One that lands at the start
-/// saying what `same` says plays there already is left out.
+/// saying what `same` says plays there already is left out. With nothing after the span to keep in
+/// step (`follows` false), those inside go, and the song's own first entry stays.
 fn closed<T: Clone>(
     entries: &[T],
     beat: impl Fn(&T) -> f64,
     set: impl Fn(&mut T, f64),
     same: impl Fn(&T, &T) -> bool,
-    a: f64,
-    b: f64,
+    (a, b): (f64, f64),
+    follows: bool,
 ) -> Vec<T> {
+    if !follows {
+        return entries.iter().enumerate().filter(|(i, e)| beat(e) < a || (*i == 0 && beat(e) == 0.0)).map(|(_, e)| e.clone()).collect();
+    }
     let mut out: Vec<T> = entries.iter().filter(|e| beat(e) < a).cloned().collect();
     let land = |mut e: T, at: f64, out: &mut Vec<T>| {
         set(&mut e, at);
@@ -237,53 +354,47 @@ fn closed<T: Clone>(
     out
 }
 
-/// What a copied clip is, by its shape: the kind of lane it came from.
-fn shape(v: &Value) -> Option<&'static str> {
-    let has = |k: &str| v.get(k).is_some();
-    match () {
-        _ if has("notes") => Some("notes"),
-        _ if has("asset") => Some("audio"),
-        _ if has("points") => Some("automation"),
-        _ => None,
-    }
-}
-
-/// The kind of clip a lane of `kind` holds, in the same words.
-fn holds(kind: &LaneKind) -> &'static str {
-    match kind {
-        LaneKind::Notes => "notes",
-        LaneKind::Audio => "audio",
-        LaneKind::Control { .. } => "automation",
-        LaneKind::Choice { .. } | LaneKind::Switch => "names",
-    }
-}
-
-/// The clips of `lane` in a copied section, read as clips of the lane of the same keys now (ARR-5):
-/// a lane the song doesn't declare now, or one of another kind, refuses the paste.
-fn copied(rev: &Revision, now: &BTreeMap<LaneAddr, Now>, lane: &SectionLane) -> Result<Vec<Clip>, EditError> {
-    let name = || {
-        let m = rev.compiled.ir.modules.iter().find(|m| m.key == lane.lane.module.as_str());
-        let l = m.and_then(|m| m.lanes.iter().find(|l| l.key == lane.lane.lane.as_str()));
-        match (m, l) {
-            (Some(m), Some(l)) => format!("{}'s {} lane", m.label(), l.label()),
-            _ => format!("{}'s {} lane", lane.lane.module, lane.lane.lane),
+/// The clips of a copied section, read as clips of the lanes of the same keys now (ARR-5), by lane.
+/// A lane the song doesn't declare now is skipped when the copy holds nothing for it; one it holds
+/// clips for refuses the paste, naming every such lane. A lane that doesn't take the copy's kind of
+/// clip refuses it, as a clip paste does.
+fn copied(now: &BTreeMap<LaneAddr, Now>, section: &Section) -> Result<Vec<(LaneAddr, Vec<Clip>)>, EditError> {
+    let mut lost: Vec<String> = vec![];
+    for l in section.lanes.iter().filter(|l| !now.contains_key(&l.lane) && !l.clips.is_empty()) {
+        let name = format!("{}'s {} lane", l.lane.module, l.lane.lane);
+        if !lost.contains(&name) {
+            lost.push(name);
         }
-    };
-    let Some(n) = now.get(&lane.lane) else {
-        return Err(EditError::Missing(format!("The copy has {}, which the song doesn't have now; copy the bars again.", name())));
-    };
-    lane.clips
-        .iter()
-        .map(|v| match shape(v) {
-            Some(s) if s == holds(&n.kind) => clips::parse(v, &n.kind),
-            Some(s) => Err(EditError::Rejected(format!("The copy has {s} clips for {}, which holds {} now.", name(), holds(&n.kind)))),
-            None => Err(EditError::Rejected("A copied clip holds notes, points or audio.".into())),
-        })
-        .collect()
+    }
+    if let Some((last, rest)) = lost.split_last() {
+        let names = if rest.is_empty() { last.clone() } else { format!("{} and {last}", rest.join(", ")) };
+        return Err(EditError::Rejected(format!(
+            "The copy has clips for {names}, which the song doesn't have now, so it can't be pasted."
+        )));
+    }
+    let mut out = vec![];
+    for l in &section.lanes {
+        let Some(n) = now.get(&l.lane) else { continue };
+        let refuse = |why: String| {
+            let mut c = why.chars();
+            let why: String = c.next().map(|f| f.to_lowercase().chain(c).collect()).unwrap_or_default();
+            EditError::Rejected(format!("{}: {why}, so the copy can't be pasted.", n.named()))
+        };
+        clips::fits(&LaneKind::from(&l.kind), &n.kind)
+            .map_err(|why| refuse(why.replace("{from}", "the copy's clips").replace("{to}", "this lane")))?;
+        let clips = l
+            .clips
+            .iter()
+            .map(|v| clips::parse(v, &n.kind).map_err(|e| refuse(format!("A clip in the copy doesn't read ({e})"))))
+            .collect::<Result<_, _>>()?;
+        out.push((l.lane.clone(), clips));
+    }
+    Ok(out)
 }
 
 /// The section `start` to `end` of `rev`, as a copy of it is kept (ARR-5): every lane of the song,
-/// each with the clips that overlap the span, whole. The window makes it from the timeline it draws.
+/// each with its kind and the clips that overlap the span, whole. The window's ⌘C asks for it
+/// (`POST /api/graph/sections/copy`).
 pub fn section(rev: &Revision, start: f64, end: f64) -> Result<Section, EditError> {
     let (a, b) = span(&rev.project.arrangement, start, end)?;
     let lanes = lanes(rev)
@@ -291,7 +402,7 @@ pub fn section(rev: &Revision, start: f64, end: f64) -> Result<Section, EditErro
         .map(|(lane, n)| {
             let over = n.was.iter().filter(|c| c.start() < b && c.end() > a);
             let clips = over.map(|c| serde_json::from_str(&c.line(&n.kind)).expect("a canonical line is JSON")).collect();
-            SectionLane { lane, clips }
+            SectionLane { lane, kind: Holds::from(&n.kind), clips }
         })
         .collect();
     Ok(Section { start: a, end: b, lanes })
@@ -302,40 +413,51 @@ pub fn section(rev: &Revision, start: f64, end: f64) -> Result<Section, EditErro
 /// the same revision, markers, gesture and ids give the same plan.
 pub fn apply(rev: &Revision, markers: &[Marker], g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> String) -> Result<Planned, EditError> {
     let arr = &rev.project.arrangement;
-    let tempo = rev.compiled.data.tempo();
+    let edge = Edge { tempo: rev.compiled.data.tempo(), arr };
     let now = lanes(rev);
+    // A section reaches every lane: one whose newer text can't be read can't move with it (ARR-2).
+    if let Some(n) = now.values().find(|n| n.broken) {
+        return Err(EditError::Rejected(format!(
+            "{} doesn't read right now, so its clips can't move with the bars: fix the file first.",
+            n.file
+        )));
+    }
+    let nothing = || Planned { lanes: vec![], arrangement: None, markers: None, label: ("no change".into(), "no change".into()) };
     // Each lane's clips after the gesture, each with whether the gesture put it there (to select).
     let mut after: BTreeMap<LaneAddr, Vec<(Clip, bool)>> = BTreeMap::new();
     let (mut arrangement, mut moved_markers) = (None, None);
     let kept = |cs: Vec<Clip>| cs.into_iter().map(|c| (c, false)).collect::<Vec<_>>();
     let label = match g {
         Gesture::Paste { section, at } => {
-            let at = bar_line(arr, *at, "A paste")?;
-            let (a, b) = (section.start, section.end);
-            if !(a.is_finite() && b.is_finite() && a >= 0.0 && b > a) {
-                return Err(EditError::Rejected("The copy's bars don't read: copy them again.".into()));
+            let at = bar_line(arr, *at, "A paste goes at the start of a bar")?;
+            if !(section.start.is_finite() && section.end.is_finite()) {
+                return Err(EditError::Rejected("The copy's bars aren't a span of the song: copy them again.".into()));
             }
-            if section.lanes.is_empty() {
-                return Err(EditError::Rejected("Nothing to paste.".into()));
-            }
-            for lane in &section.lanes {
-                let (_, inside) = cut(&copied(rev, &now, lane)?, a, b, tempo)?;
-                let (outside, _) = cut(&now[&lane.lane].was, at, at + (b - a), tempo)?;
+            let (a, b) = span(arr, section.start, section.end)?;
+            lands(arr, a, b, at)?;
+            for (lane, clips) in copied(&now, section)? {
+                let n = &now[&lane];
+                let (_, inside) = edge.cut(&clips, a, b, &n.track)?;
+                let (outside, _) = edge.cut(&n.was, at, at + (b - a), &n.track)?;
                 let mut out = kept(outside);
                 out.extend(moved(inside, at - a, false).map(|c| (c, true)));
-                after.insert(lane.lane.clone(), out);
+                after.insert(lane, out);
             }
             (bars_words(arr, at, at + (b - a)), format!("a copy of {}", bars_words(arr, a, b)))
         }
         Gesture::Duplicate { start, end, to } => {
             let (a, b) = span(arr, *start, *end)?;
             let to = match to {
-                Some(t) => bar_line(arr, *t, "Where the copy goes")?,
+                Some(t) => bar_line(arr, *t, "A copy goes at the start of a bar")?,
                 None => b,
             };
+            if to == a {
+                return Ok(nothing());
+            }
+            lands(arr, a, b, to)?;
             for (lane, n) in &now {
-                let (_, inside) = cut(&n.was, a, b, tempo)?;
-                let (outside, _) = cut(&n.was, to, to + (b - a), tempo)?;
+                let (_, inside) = edge.cut(&n.was, a, b, &n.track)?;
+                let (outside, _) = edge.cut(&n.was, to, to + (b - a), &n.track)?;
                 let mut out = kept(outside);
                 out.extend(moved(inside, to - a, false).map(|c| (c, true)));
                 after.insert(lane.clone(), out);
@@ -344,10 +466,14 @@ pub fn apply(rev: &Revision, markers: &[Marker], g: &Gesture, mint: &mut dyn FnM
         }
         Gesture::Move { start, end, to } => {
             let (a, b) = span(arr, *start, *end)?;
-            let to = bar_line(arr, *to, "Where the section goes")?;
+            let to = bar_line(arr, *to, "The bars go at the start of a bar")?;
+            if to == a {
+                return Ok(nothing());
+            }
+            lands(arr, a, b, to)?;
             for (lane, n) in &now {
-                let (rest, inside) = cut(&n.was, a, b, tempo)?;
-                let (outside, _) = cut(&rest, to, to + (b - a), tempo)?;
+                let (rest, inside) = edge.cut(&n.was, a, b, &n.track)?;
+                let (outside, _) = edge.cut(&rest, to, to + (b - a), &n.track)?;
                 let mut out = kept(outside);
                 out.extend(moved(inside, to - a, true).map(|c| (c, true)));
                 after.insert(lane.clone(), out);
@@ -357,12 +483,12 @@ pub fn apply(rev: &Revision, markers: &[Marker], g: &Gesture, mint: &mut dyn FnM
         Gesture::Delete { start, end } => {
             let (a, b) = span(arr, *start, *end)?;
             for (lane, n) in &now {
-                after.insert(lane.clone(), kept(cut(&n.was, a, b, tempo)?.0));
+                after.insert(lane.clone(), kept(edge.cut(&n.was, a, b, &n.track)?.0));
             }
             (bars_words(arr, a, b), format!("empty {}", bars_words(arr, a, b)))
         }
         Gesture::InsertBars { at, bars } => {
-            let at = bar_line(arr, *at, "New bars")?;
+            let at = bar_line(arr, *at, "New bars go at the start of a bar")?;
             if !(1..=BARS_MAX).contains(bars) {
                 return Err(EditError::Rejected(format!("Insert 1 to {BARS_MAX} bars.")));
             }
@@ -375,8 +501,8 @@ pub fn apply(rev: &Revision, markers: &[Marker], g: &Gesture, mint: &mut dyn FnM
                     } else if c.start() >= at {
                         out.extend(moved(vec![c.clone()], len, true).map(|c| (c, false)));
                     } else {
-                        let (before, from) = c.split(at, tempo)?;
-                        out.push((before, false));
+                        let (before, from) = edge.split(c, at, &n.track)?;
+                        out.push((held(before, len), false));
                         out.extend(moved(vec![from], len, true).map(|c| (c, false)));
                     }
                 }
@@ -391,16 +517,25 @@ pub fn apply(rev: &Revision, markers: &[Marker], g: &Gesture, mint: &mut dyn FnM
         }
         Gesture::DeleteBars { start, end } => {
             let (a, b) = span(arr, *start, *end)?;
+            // Whether anything after the bars must keep its tempo, time signature and name (ARR-7).
+            let follows = now.values().any(|n| n.was.iter().any(|c| c.end() > b + EPS))
+                || markers.iter().any(|m| m.beat >= b - EPS)
+                || arr.tempo.iter().skip(1).any(|t| t.beat >= b - EPS)
+                || arr.meter.iter().skip(1).any(|m| m.beat >= b - EPS);
             for (lane, n) in &now {
-                let (outside, _) = cut(&n.was, a, b, tempo)?;
+                let (outside, _) = edge.cut(&n.was, a, b, &n.track)?;
                 let out = outside.into_iter().map(|c| if c.start() >= b { moved(vec![c], a - b, true).next().expect("one") } else { c });
                 after.insert(lane.clone(), kept(out.collect()));
             }
             let mut arr2 = arr.clone();
-            arr2.tempo = closed(&arr.tempo, |t| t.beat, |t, x| t.beat = x, |p, e| p.bpm == e.bpm, a, b);
-            arr2.meter = closed(&arr.meter, |m| m.beat, |m, x| m.beat = x, |p, e| (p.beats, p.unit) == (e.beats, e.unit), a, b);
+            arr2.tempo = closed(&arr.tempo, |t| t.beat, |t, x| t.beat = x, |p, e| p.bpm == e.bpm, (a, b), follows);
+            arr2.meter = closed(&arr.meter, |m| m.beat, |m, x| m.beat = x, |p, e| (p.beats, p.unit) == (e.beats, e.unit), (a, b), follows);
             arrangement = Some(arr2);
-            moved_markers = Some(closed(markers, |m| m.beat, |m, x| m.beat = x, |_, _| false, a, b));
+            moved_markers = Some(match follows {
+                true => closed(markers, |m| m.beat, |m, x| m.beat = x, |_, _| false, (a, b), true),
+                // A marker has no first one of the song's own: those in the bars go.
+                false => markers.iter().filter(|m| m.beat < a).cloned().collect(),
+            });
             (bars_words(arr, a, b), format!("{} taken out", bars_words(arr, a, b)))
         }
     };
@@ -408,13 +543,9 @@ pub fn apply(rev: &Revision, markers: &[Marker], g: &Gesture, mint: &mut dyn FnM
     for (lane, out) in after {
         let n = &now[&lane];
         let same = clips::lane_data(&n.kind, out.iter().map(|(c, _)| c.clone()).collect()) == clips::lane_data(&n.kind, n.was.clone());
-        if same {
-            continue;
+        if !same {
+            edits.push(clips::finished(lane, &n.kind, out, mint));
         }
-        if let Some(why) = &n.broken {
-            return Err(EditError::Rejected(why.clone()));
-        }
-        edits.push(clips::finished(lane, &n.kind, out, mint));
     }
     Ok(Planned {
         lanes: edits,
@@ -453,10 +584,21 @@ pub fn edit_as(s: &mut Session, g: &Gesture, tx_id: &str) -> Result<ClipsEdited,
         Read::Valid(l) => markers::read(l),
         _ => vec![],
     };
-    if matches!(read, Read::Invalid(_)) && matches!(g, Gesture::InsertBars { .. } | Gesture::DeleteBars { .. }) {
-        return Err(EditError::Rejected(
-            "layout.json doesn't read, so its markers can't move with the bars: fix it, or reset the layout".into(),
-        ));
+    // Insert and delete bars write the arrangement and the markers whole: while either file doesn't
+    // read, its newer text couldn't move with the bars (ARR-6).
+    if matches!(g, Gesture::InsertBars { .. } | Gesture::DeleteBars { .. }) {
+        let arrangement = std::fs::read_to_string(rev.project.dir.join(crate::song::FILE));
+        if arrangement.is_ok_and(|text| Arrangement::read(&text).is_err()) {
+            return Err(EditError::Rejected(format!(
+                "{} doesn't read right now, so its tempo and time signature changes can't move with the bars: fix the file first.",
+                crate::song::FILE
+            )));
+        }
+        if matches!(read, Read::Invalid(_)) {
+            return Err(EditError::Rejected(
+                "layout.json doesn't read right now, so its markers can't move with the bars: fix it, or reset the layout.".into(),
+            ));
+        }
     }
     let planned = apply_as(rev, &marks, g, tx_id)?;
     let made: Vec<(LaneAddr, String)> = planned.lanes.iter().flat_map(|e| e.made.iter().map(|id| (e.lane.clone(), id.clone()))).collect();

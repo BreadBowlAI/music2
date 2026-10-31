@@ -409,16 +409,37 @@ fn section_gestures_over_http() {
     let (status, refused) = post(url, "/api/graph/sections", Some("t0k"), &off);
     assert_eq!(
         (status, &refused["error"]),
-        (400, &json!("edit rejected: New bars must be on a bar line: beat 2 is inside bar 1.")),
+        (400, &json!("edit rejected: New bars go at the start of a bar, not at bar 1 beat 3.")),
         "said whole"
     );
     let unknown = json!({"session": session, "gesture": {"op": "fold", "start": 0, "end": 4}});
     assert_eq!(post(url, "/api/graph/sections", Some("t0k"), &unknown).0, 422, "a gesture that doesn't read");
 
-    // Read-only: refused before anything is planned, and nothing changes.
+    // ARR-5, ARR-9 (review R12): the copy is the server's, read with every lane's kind; pasted back
+    // through the gesture route, it is the bars as they were.
+    let (status, copied) = post(url, "/api/graph/sections/copy", Some("t0k"), &json!({"session": session, "start": 4, "end": 8}));
+    assert_eq!(status, 200, "{copied:#}");
+    let section = &copied["section"];
+    assert_eq!(
+        (&section["start"], &section["end"], &section["lanes"][0]["kind"]),
+        (&json!(4.0), &json!(8.0), &json!("notes")),
+        "{copied:#}"
+    );
+    assert_eq!(section["lanes"][0]["clips"].as_array().map(Vec::len), Some(1), "{copied:#}");
+    let off = json!({"session": session, "start": 5, "end": 8});
+    assert_eq!(post(url, "/api/graph/sections/copy", Some("t0k"), &off).0, 400, "bars only");
+    let paste = json!({"session": session, "gesture": {"op": "paste", "section": section, "at": 12}});
+    let (status, done) = post(url, "/api/graph/sections", Some("t0k"), &paste);
+    assert_eq!((status, &done["after"]), (200, &json!("a copy of bar 2")), "{done:#}");
+    let file = std::fs::read_to_string(dir.join("data/kick/hits.json")).unwrap();
+    assert!(file.contains("\"start\": 12, \"length\": 4"), "{file}");
+
+    // Read-only: refused before anything is planned, and nothing changes; a copy is only a read.
     running.state.graph.close();
     let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let (status, copied) = post(url, "/api/graph/sections/copy", Some("t0k"), &json!({"session": session, "start": 4, "end": 8}));
+    assert_eq!((status, copied["section"]["start"].as_f64()), (200, Some(4.0)), "{copied:#}");
     let delete = json!({"session": session, "gesture": {"op": "delete", "start": 0, "end": 4}});
     let (status, answer) = post(url, "/api/graph/sections", Some("t0k"), &delete);
     assert_eq!(status, 423, "{answer:#}");
