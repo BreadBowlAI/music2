@@ -228,6 +228,12 @@ fn write(
         };
         let head = ring.head();
         let until = end.map(|n| (first + n as i64).max(0) as u64);
+        // Frames written past the end before it was known (a punch's end, seen on the take thread's
+        // tick) go: the file holds the take, to the frame.
+        if let Some(u) = until.filter(|u| at > *u) {
+            file.keep(file.frames() - (at - u));
+            at = u;
+        }
         let to = until.map_or(head, |u| u.min(head));
         while at < to && stopped.is_none() {
             let n = ((to - at) as usize).min(PIECE);

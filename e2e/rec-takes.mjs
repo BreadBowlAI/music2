@@ -61,8 +61,12 @@ const rev0 = (await state()).view.revision;
 const undo0 = await undoTitle();
 await page.click(r);
 check(await until(async () => (await armed()).audio === "clips", 2000), `R arms it on its audio lane (${JSON.stringify(await armed())})`);
-const lit = await page.$eval(r, (e) => ({ pressed: e.getAttribute("aria-pressed"), bg: getComputedStyle(e).backgroundColor, color: getComputedStyle(e).color }));
-check(lit.pressed === "true" && lit.bg === "rgb(175, 61, 54)" && lit.color === "rgb(255, 255, 255)", `lit: danger, a white R (${JSON.stringify(lit)})`);
+const lit = () => page.$eval(r, (e) => ({ pressed: e.getAttribute("aria-pressed"), bg: getComputedStyle(e).backgroundColor, color: getComputedStyle(e).color }));
+await page.mouse.move(700, 600);
+check(
+  await until(async () => JSON.stringify(await lit()) === JSON.stringify({ pressed: "true", bg: "rgb(175, 61, 54)", color: "rgb(255, 255, 255)" }), 2000),
+  `lit: danger, a white R (${JSON.stringify(await lit())})`,
+);
 check((await state()).view.revision === rev0 && (await undoTitle()) === undo0, "no edit, no undo step");
 await page.click(r, { button: "right" });
 check(await until(() => page.$("[data-testid=arm-menu]"), 2000), "right-click opens its input's menu");
@@ -87,10 +91,11 @@ const plays = await page.$eval("[data-testid=piano-plays]", (e) => e.textContent
 check(plays === "Plays Bass", `it plays the armed notes track, not the selected Kick (${plays})`);
 const velocity = () => page.$eval("[data-testid=piano-velocity]", (e) => ({ v: Number(e.dataset.velocity), text: e.textContent })).catch(() => null);
 check((await velocity())?.text === "−80%=", `velocity 80% at first (${JSON.stringify(await velocity())})`);
-await press("-");
-await press("-");
+// By place: the main row's − (puppeteer's "-" is the keypad's).
+await press("Minus");
+await press("Minus");
 check(await until(async () => (await velocity())?.v === 0.6, 1000), `− twice: 60% (${JSON.stringify(await velocity())})`);
-await press("=");
+await press("Equal");
 check(await until(async () => (await velocity())?.v === 0.7, 1000), `= once: 70% (${JSON.stringify(await velocity())})`);
 await press("c");
 check(await until(async () => (await status()).loop?.on === true, 2000), "C still loops while the piano is on");

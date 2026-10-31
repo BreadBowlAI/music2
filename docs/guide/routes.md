@@ -384,6 +384,16 @@ An example body:
 {"session": 7}
 ```
 
+### `POST /api/graph/take`
+
+Choose which take an audio clip over a loop plays (from 1). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2}
+```
+
 ### `POST /api/graph/tempo`
 
 Set the tempo at a beat, or add or remove a tempo change there. It writes the song: one undo step.
@@ -610,6 +620,10 @@ The tools key gets 403 for these (AGENT-11): ask the musician, or show them wher
 
 Say what the musician looks at (the page posts it).
 
+### `POST /api/graph/arm`
+
+Arm a track to record, or disarm it, and choose the input channels it records.
+
 ### `POST /api/graph/audition`
 
 Play or let go of notes on a lane, as the piano roll and the keyboard do.
@@ -720,7 +734,7 @@ Drop the take, or stop counting in.
 
 ### `POST /api/graph/record/start`
 
-Record a take on a notes lane or an audio lane.
+Record a take on the armed tracks, or on a notes lane or an audio lane; punch on the loop, overdub notes.
 
 ### `POST /api/graph/record/stop`
 

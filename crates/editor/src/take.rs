@@ -81,6 +81,8 @@ pub struct Growing {
     limit: Arc<AtomicU64>,
     /// A write failed: nothing more is added.
     broken: bool,
+    /// Frames were written past the take's end: [`Self::finish`] cuts them off.
+    trim: bool,
 }
 
 fn io(e: impl std::fmt::Display) -> EditError {
@@ -127,7 +129,19 @@ impl Growing {
             io(e)
         })?;
         let channels = channels.clamp(1, 2);
-        Ok(Growing { folder, part, wanted, writer: Some(writer), _lock: lock, channels, rate, frames: 0, limit, broken: false })
+        Ok(Growing {
+            folder,
+            part,
+            wanted,
+            writer: Some(writer),
+            _lock: lock,
+            channels,
+            rate,
+            frames: 0,
+            limit,
+            broken: false,
+            trim: false,
+        })
     }
 
     /// The length its file can't grow past, in bytes: what a full disk does (tests).
@@ -172,6 +186,14 @@ impl Growing {
         Ok(())
     }
 
+    /// Keep only the first `frames` written: the rest, written before the take's end was known,
+    /// is cut off as the file is finished, and nothing more is added.
+    pub fn keep(&mut self, frames: u64) {
+        if frames < self.frames {
+            (self.frames, self.trim, self.broken) = (frames, true, true);
+        }
+    }
+
     /// Frames written so far.
     pub fn frames(&self) -> u64 {
         self.frames
@@ -189,6 +211,7 @@ impl Growing {
     /// stays, and a later sweep takes it.
     pub fn finish(mut self, name: &str) -> Result<Imported, EditError> {
         let w = self.writer.take().ok_or_else(|| io("it is finished"))?;
+        // Cut short (`keep`), or after a failed write: the frames counted are what is kept.
         if self.broken {
             // hound writes its header again as it drops, failing or not: `cut` sets it right.
             drop(w);

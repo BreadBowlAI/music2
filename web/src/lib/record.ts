@@ -172,7 +172,7 @@ export async function startRecording() {
   // The armed tracks, else the selected one (MON-9): the server records into the armed ones.
   const armed = Object.entries(graph.arm?.armed ?? {})[0];
   const t = armed ? { module: armed[0], lane: armed[1] } : currentRecordTarget();
-  if (!t) return toast("Select a notes track or an audio track to record on it, or arm one with its R.");
+  if (!t) return toast("Select a notes track or an audio track to record on it.");
   useRecord.setState({ asking: true });
   try {
     const o = await loadRecordOptions();
@@ -333,9 +333,9 @@ export async function arm(module: string, change: { lane?: string; armed?: boole
 /** How many channels the sound input Settings chose has: what a track's R menu lists. */
 export async function inputChannels(): Promise<{ name: string; channels: number }> {
   try {
-    const [s, list] = await Promise.all([settingsApi.get(), fetch("/api/audio/inputs").then((r) => r.json() as Promise<{ inputs: { id: string; name: string; default: boolean; channels: number }[] }>)]);
+    const [s, inputs] = await Promise.all([settingsApi.get(), settingsApi.inputs()]);
     const id = s.input?.device ?? null;
-    const input = list.inputs.find((i) => i.id === id) ?? list.inputs.find((i) => i.default) ?? list.inputs[0];
+    const input = inputs.find((i) => i.id === id) ?? inputs.find((i) => i.default) ?? inputs[0];
     return input ? { name: input.name, channels: Math.max(1, input.channels) } : { name: "The input", channels: 2 };
   } catch {
     return { name: "The input", channels: 2 };

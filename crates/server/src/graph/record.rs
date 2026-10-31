@@ -510,6 +510,10 @@ impl Take {
                 let takes: Vec<f64> = kept.iter().map(|(x, _)| ((x + lead) / rate).max(0.0)).collect();
                 Placing { start, offset: takes.get(plays).copied().unwrap_or(0.0), length: Some(end - start), takes }
             }
+            // A punch that ran to its end covers its range exactly; else as long as the file.
+            Span::To { end, e } if at.1 >= e as f64 => {
+                Placing { start: self.from, offset: lead / rate, length: Some(end - self.from), takes: vec![] }
+            }
             _ => Placing { start: self.from, offset: lead / rate, length: None, takes: vec![] },
         }
     }

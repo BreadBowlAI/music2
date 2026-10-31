@@ -1517,6 +1517,9 @@ mod audio {
         r.graph.record_start(r.token, "vox", "clips", opts).unwrap();
         r.to(3.0);
         assert!(r.clips().len() == 1, "nothing yet on the way in");
+        // The take thread finds the take's start, so its writer writes as it records: past the
+        // range's end too, before the next tick sees the take end there.
+        r.graph.record_tick();
         r.to(7.0);
         let said = r.written();
         assert!(said["written"].is_object(), "{said}");
