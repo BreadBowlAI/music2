@@ -148,6 +148,7 @@ export const SUITES = [
   ["st-audio", "fix", { expect: 94, s: 8, tier: "nightly", why: "flake: the revision moved after an MP3 was refused (HANDOFF.md)" }],
   ["pl-zoom", "fix", { expect: 62, s: 20 }],
   ["pl-arrange", "fix", { expect: 60, s: 8 }],
+  ["sections", "fix", { expect: 32, s: 7 }],
   ["nx-nits", "fix", { expect: 27, s: 6 }],
   ["s4-attn", "fix", { expect: 13, s: 2 }],
   ["s4-problems", "fix", { expect: 18, s: 2 }],

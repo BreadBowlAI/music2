@@ -17,6 +17,7 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Add a track: 22 of music2's own sounds (synths, FM keys, a drum machine), a Sampler, a pack's sound, or an empty audio track | **+ Track** (⌘T), or the browser on the left |
 | Draw and edit notes | **Notes** (⌥2), the piano roll |
 | Edit clips: move, copy, trim, split, join, repeat | the timeline |
+| Copy a chorus, or insert and delete bars, on every track at once | drag across the ruler, then ⌘C and ⌘V, or right-click ([Sections](sections.md)) |
 | Turn knobs, add effects, connect cables | **Device** (⌥1) |
 | Mix: faders, pans, mute, solo, meters, and how loud the song is (LUFS) | **Mix** (⌥3), and each track's header |
 | Share a reverb or a delay, or group tracks under one fader | **Mix** (⌥3) ▸ **Add bus** |

@@ -411,6 +411,23 @@ pub const COMMANDS: &[Command] = &[
                `points`, `audio` and `set`.",
     },
     Command {
+        name: "sections",
+        also: &[],
+        usage: "m2 sections <project> duplicate <bars> [--to <bar>]\n\
+                m2 sections <project> move <bars> --to <bar>\n\
+                m2 sections <project> delete <bars>\n\
+                m2 sections <project> insert-bars <bars>\n\
+                m2 sections <project> delete-bars <bars>\n\
+                m2 sections <project> json <gesture.json | ->",
+        words: "one gesture on whole bars of every track at once, as one edit that undo takes back. `<bars>` are bars \
+                counted from 1 (`9-16`, or `9` for one), or a marker's name (`Chorus`: to the next marker). \
+                `duplicate` copies them right after themselves (or to bar `--to`) and `move` moves them, each in \
+                place of what was there; `delete` empties them; `insert-bars` opens as many empty bars where they \
+                start, and `delete-bars` takes them out: everything after moves, markers and tempo changes too",
+        more: "A clip that crosses the bars' edge is split there. `json` also takes `paste`, with a copied section, \
+               as `POST /api/graph/sections` does. See [Sections](sections.md).",
+    },
+    Command {
         name: "unautomate",
         also: &[],
         usage: "m2 unautomate <project> <track>/<lane> [--at <place>] [--beats]",

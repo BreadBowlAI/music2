@@ -64,6 +64,7 @@ mod projects;
 pub mod record;
 mod rekey;
 pub mod scope;
+mod sections;
 mod songkey;
 pub(crate) mod steps;
 mod take_audio;

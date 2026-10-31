@@ -683,6 +683,57 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 - *Why:* time signatures are needed for bars, plugins and the tempo bar, and every reader must count bars the same way. Two entries at one beat would be decided by file order.
 - *Today:* matches since step 4 (`core/song/src/arrangement.rs`).
 
+### Sections
+
+A section is a span of bars across every track: an intro, a verse, a chorus. Its gestures copy, move and empty it, and insert or delete bars, each as one Tx on the data files (gaps #23).
+
+**ARR-1.** A section is a span of whole bars, `[start, end)` in beats: both ends on bar lines of the song's time signatures ([FMT-13](#arrangement)), `start` 0 or more, `end` after it. It reaches every lane the accepted revision declares: each track's and the song's own, lanes of names (a choice's or a switch's, CARD-15) included. A gesture names it by its beats, and a span off the bar lines, empty or not a number is refused in words, which count bars and beats from 1 (`bar 9 beat 2`). A marker is where a section starts, never a second kind of mark: the span from a marker to the next is a section when both are on bar lines.
+- *Why:* pop songs are built in sections, and bars are what musicians count. Spans on bar lines keep every gesture's edges on the grid the time signature changes keep.
+- *Today:* matches since `sections` (`crates/editor/src/sections.rs`; `a_span_off_the_bar_lines_is_refused`).
+
+**ARR-2.** The section gestures:
+
+| Gesture | What it does |
+|---|---|
+| `paste {section, at}` | puts a copied section ([ARR-5](#sections)) at bar line `at` |
+| `duplicate {start, end, to?}` | puts a copy of the section at bar line `to`, or right after itself |
+| `move {start, end, to}` | puts the section at bar line `to`, and leaves a gap where it was |
+| `delete {start, end}` | empties the section, and leaves a gap |
+| `insert-bars {at, bars}` | opens empty bars at bar line `at`; everything from there on moves later ([ARR-6](#sections)) |
+| `delete-bars {start, end}` | takes the bars out; everything after moves earlier ([ARR-7](#sections)) |
+
+Each is one Tx and one undo step ([WRITE-21](#undo)): a `Clips` op for each lane it changes (the whole lane when its clips can't all be named by id, as a clip gesture writes it), a `Write` of `data/arrangement.json` and of `layout.json` when they change, and `Confined { the lanes it changes }`, which admits the arrangement it writes ([WRITE-6](#expectations-and-the-delta)). The planner asserts that each lane reads every clip as written and none deleted, and that the arrangement is the one asked for. No code changes, so a song whose draft doesn't build takes them, checked against its last accepted lanes ([WRITE-14](#bases-and-revisions)). A section reaches every lane, so while any lane file of the song doesn't read (it plays the clips it had before, FMT-9), every section gesture is refused in words naming the file. A gesture that changes nothing writes nothing and says so: a move to where the section is, a duplicate onto itself.
+- *Why:* copying a chorus across every track is one gesture in other DAWs, and must be one undo step here. A lane whose newer text can't be read can't move with the rest.
+- *Today:* matches since `sections` (`sections::apply`, pure, and `sections::edit`; `each_gesture_is_one_undo_step_byte_for_byte`, `a_song_that_doesnt_build_takes_them`, `a_lane_file_that_doesnt_read_refuses_them`, `a_gesture_that_changes_nothing_writes_nothing`).
+
+**ARR-3.** A clip that crosses an edge of a span a gesture reads, empties or opens is split at the edge for it, as Split splits a clip: a note that crosses is shortened to the edge, automation takes its value at the edge on both sides, a lane of names' later part starts with the name or the switch in effect at the edge, and an audio clip's later part starts later in its file. What is inside is the section's; what is outside stays where it is. An audio clip Split can't cut (its pitch changed; reversed and warped) refuses the gesture in words naming its track and bar, and what to change in the app.
+- *Why:* a section is exact to the bar, whatever the clips' own edges are.
+- *Today:* matches since `sections` (`Clip::split` in `crates/editor/src/clips.rs`; `a_clip_crossing_each_edge_is_split_there`, `lanes_of_names_move_with_the_bars`).
+
+**ARR-4.** What a section puts at a bar line replaces what was there: on each lane the section has, the span it lands on is emptied ([ARR-3](#sections)) and its clips are placed, so those bars play what the section played, an empty lane of it included. A lane it doesn't have keeps its clips. A section lands on whole bars: a paste, duplicate or move whose span would end inside a bar where it lands (the time signatures differ there) is refused in words. A placed copy gets a fresh id ([FMT-12](#lane-files-and-clip-ids)); a move keeps the id of a clip that was inside whole.
+- *Why:* a paste into bars that hold music must not layer two parts on one lane, and a section that half covers a bar is no longer bars. To make room instead, insert bars first.
+- *Today:* matches since `sections` (`a_paste_replaces_what_was_there`, `a_section_lands_on_whole_bars`).
+
+**ARR-5.** A copied section is its span, on bar lines of the song, and for every lane of the song its kind and the clips that overlap the span, whole, as the lane format writes them: `{"start": 64, "end": 96, "lanes": [{"module": "bass", "lane": "notes", "kind": "notes", "clips": [...]}]}` (an automation lane's kind carries its `unit`, a choice's its `options`). The server makes it (`sections::section`; the window asks `POST /api/graph/sections/copy` at ⌘C), so the window's copy is the one the tests check, lanes of names included. `paste` cuts each clip to the span ([ARR-3](#sections)) and places it on the lane of the same keys, when that lane takes the copy's kind (as a clip paste checks it). A lane the song doesn't declare now is skipped when the copy holds no clip for it; one it holds clips for refuses the paste, naming every such lane. A note belongs to the bars it starts in, as Split has it: a note that starts before the copied bars stays where it is, and isn't copied. `duplicate` and `move` read their section from the accepted revision the same way.
+- *Why:* a copy keeps what was copied when the song changes before the paste (a cut, then the paste), and the cut is made in one place, the server's, with the song's tempo.
+- *Today:* matches since `sections` (`a_cut_then_a_paste_keeps_the_copy`, `section_copy_over_http`).
+
+**ARR-6.** Insert bars opens `bars` bars (1 to 999) at bar line `at`, in the time signature just before it (at the song's start, its own). Everything at or after `at` moves later by them: clips with their notes, points and audio, markers, and tempo and time signature changes. The song's first tempo and time signature stay at beat 0. A clip that crosses `at` is split there ([ARR-3](#sections)), and its second part moves; an automation or names clip's first part holds its value at `at` over the new bars, so they play what played there, while notes and audio leave them empty. While `layout.json` or `data/arrangement.json` doesn't read, insert and delete bars are refused in words naming the file, as its markers or changes couldn't move with them.
+- *Why:* what starts at a bar line belongs to the music after it: a chorus's marker and its tempo change move with the chorus. A sweep with bars opened in it must not jump to the knob's default there.
+- *Today:* matches since `sections` (`insert_bars_moves_everything_after`, `insert_bars_inside_a_clip_splits_it`, `a_file_that_doesnt_read_refuses_the_time_gestures`).
+
+**ARR-7.** Delete bars takes the span's bars out: its clips go (split at its edges, [ARR-3](#sections)), and everything at or after its end moves earlier by its length. Of the markers, the tempo changes and the time signature changes inside the span, only the one in effect at its end stays, moved to its start, so what follows plays, and is named, as before; a tempo or time signature change that would say what plays already there is left out. When nothing follows the bars (no clip, marker or change at or after their end), the markers and changes inside them go, and the song's own first tempo and time signature stay.
+- *Why:* deleting the first bars of a verse must not take its name or its tempo with them; deleting the end of a song must not leave its last tempo at bar 1.
+- *Today:* matches since `sections` (`delete_bars_keeps_what_follows`, `delete_bars_keeps_what_follows_in_time`, `delete_bars_to_the_end`).
+
+**ARR-8.** Only insert bars and delete bars move the song's time: its markers, tempo changes and time signature changes. Paste, duplicate, move and delete change clips only.
+- *Why:* a section is what the tracks play; the tempo, the meter and the markers say how the song's time runs, and only a gesture that changes that time moves them.
+- *Today:* matches since `sections` (`each_gesture_is_one_undo_step_byte_for_byte` checks both files for every gesture).
+
+**ARR-9.** One route takes every section gesture: `POST /api/graph/sections` `{session, gesture}`, answered as `POST /api/graph/clips` answers ([AGENT-8](#agents); `m2 call` reaches it); `POST /api/graph/sections/copy` `{session, start, end}` reads a copy ([ARR-5](#sections)). `m2 sections` runs a gesture from the terminal, its bars counted from 1 (`9-16`) or named by a marker (`Chorus`: to the next marker, or the song's end), and takes the lock ([WRITE-18](#the-project-lock)). In the window, the ruler's top band, where the markers are, selects bars: a drag there selects whole bars (each end at the nearest bar line), a click the bar under it, and a marker's menu has Select to next marker. A drag on the rest of the ruler sets the loop and selects nothing, as before (taste.md TL-10). One selection at a time: selecting bars lets go of the selected track, clips and automation point, and selecting any of those lets go of the bars. The selected bars look as a marquee does, a 1 px accent outline and an accent wash across every lane, and are lit in the ruler's top band. ⌘C and ⌘X copy and cut them, ⌘V pastes the copy at the playhead's bar, ⌘D duplicates them, ⌫ empties them, ⌘I inserts as many bars where they start, ⇧⌘⌫ deletes them, Esc lets go, and the lanes' right-click menu over them has each.
+- *Why:* agents and the musician reach the same gestures, as for clips (WRITE-9); a loop set to listen must never become what ⌘D or ⌫ act on.
+- *Today:* matches since `sections` (`crates/server/src/routes_8b.rs`, `apps/m2/tests/sections.rs`, `e2e/sections.mjs`).
+
 ### Assets and hashes
 
 **FMT-14.** An asset MUST never be overwritten: a new version gets a new name, and assets are created with create-only semantics (`O_EXCL`). An asset name is a relative path under `assets/`, with `/` between folders. It is NFC, and has no empty, `.` or `..` segment, no segment that starts with `.`, and no `\`, `:` or control character. A name with a `:` is a package's file instead ([PACK-5](#packs)), so the two never collide. An import whose name is taken gets a numeric suffix (`kick 2.wav`). An asset is always inside the project: importing copies the file. `m2 bounce --force` is removed.
