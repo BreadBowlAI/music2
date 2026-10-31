@@ -259,5 +259,6 @@ What the registry asks beyond `m2 pack check`:
 | Size | 10 GB at most |
 | The same files | the `.tar.gz` holds exactly the files the listed hash names. A version, once listed, never changes: to change anything, raise the version and list it again |
 | Plain words | every label, description, tag, author and file name is on one line, with no hidden character |
+| Quick code | its preview renders: a kernel call that runs past its time limit (a kernel that never returns) refuses the version. While a song plays a call gets 100 ms, and 5 s everywhere else; the checks cost your kernels' calls about a fifth more ([the time limit](https://github.com/BreadBowlAI/music2/blob/main/docs/kernel-abi.md#the-time-limit-abi-6-abi-7)) |
 
 A person from BreadBowlAI reads every pull request and merges it; the robot's answer on it is advice. To hide a version of yours from search, add `yanked = "why"` to it. Taking a version down for good (a licence or legal problem) is BreadBowlAI's to do.
