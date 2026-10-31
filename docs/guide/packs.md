@@ -1,7 +1,7 @@
 # Packs
 
 **In short**
-- A pack is a folder of instruments, effects, sounds and recordings that someone made, ready to use in your songs. music2's own sounds are three packs that come with it.
+- A pack is a folder of instruments, effects, sounds and recordings that someone made, ready to use in your songs. music2's own sounds are packs that come with it.
 - You install one from its folder with `m2 pack install <folder>`. Its instruments and effects then show in the browser and + Track, with music2's.
 - A song keeps the exact version of each pack it uses in `music2.lock`, so it sounds the same years later.
 
@@ -26,6 +26,7 @@ music2's sounds are packs too, made by music2 and kept in the repository at `pac
 | `@m2/synths` | the polysynth's sounds (supersaw, lead, pad, pluck, 808 sub, bass, strings), the FM synth's (keys, bell, metal), each synth with every knob, and five simple instruments to read and copy |
 | `@m2/drums` | an 808/909 drum machine: the whole kit, and each drum on its own |
 | `@m2/effects` | delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen |
+| `@m2/mixing` | the tools a mix needs: an eight-band EQ, a gate, a transient shaper, a de-esser and a multiband compressor |
 
 They come with the app and with `m2`. When either starts, it installs each one your store doesn't have yet, as `m2 pack install` would; a start that finds them there writes nothing. From then on they are packs like any other: a song lists them in `music2.toml`, locks them in `music2.lock`, and keeps the version it was made with when a newer music2 brings a newer one. The templates and examples come locked to them.
 

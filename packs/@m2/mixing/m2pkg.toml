@@ -1,0 +1,82 @@
+[package]
+name = "@m2/mixing"
+version = "1.0.0"
+license = "MIT OR Apache-2.0"
+description = "music2's mixing tools: an eight-band parametric EQ, a gate, a transient shaper, a de-esser and a multiband compressor"
+authors = ["music2"]
+repository = "https://github.com/BreadBowlAI/music2"
+tags = ["mixing", "eq", "gate", "transient", "de-esser", "multiband", "compressor", "dynamics"]
+# Its own kernels (PACK-21, PACK-26), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/
+# is no part of the pack (PACK-20).
+wasm = "kernels/mixing.wasm"
+
+[dependencies]
+# @m2/core 1.8 or later: the EQ's shapes are menus and its bands switches (`control.choice`,
+# `control.bool`), and its card has groups and a view, which 1.8.0 added. It uses none of std's
+# code, so it needs no std.
+"@m2/core" = "1.8"
+
+# ---------------------------------------------------------------- its own kernels
+# Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/mixing:eq", …)`.
+# Each is safe with any input or setting (no NaN, nothing over +80 dBFS), and its tails end in exact
+# silence. A choice's port reads its option's place, a switch's 0 or 1 (CARD-12).
+
+[[kernel]]
+name = "eq"
+description = "Eight-band parametric EQ: each band an RBJ biquad (low cut, low shelf, bell, high shelf or high cut; cuts are 12 dB per octave) run as a TPT state-variable filter. A band moves by crossfading to a settled filter at its new setting, so no change booms. Flat with every band off or at 0 dB; never over +80 dBFS"
+inputs = [
+  "in: audio<*>",
+  "shape1: control<choice<low cut|low shelf|bell|high shelf|high cut>> = 0", "freq1: control<hz> = 30 in 20..20000", "gain1: control<db> = 0 in -24..24", "q1: control<scalar> = 0.71 in 0.1..18", "on1: control<switch> = 0",
+  "shape2: control<choice<low cut|low shelf|bell|high shelf|high cut>> = 1", "freq2: control<hz> = 100 in 20..20000", "gain2: control<db> = 0 in -24..24", "q2: control<scalar> = 0.71 in 0.1..18", "on2: control<switch> = 1",
+  "shape3: control<choice<low cut|low shelf|bell|high shelf|high cut>> = 2", "freq3: control<hz> = 250 in 20..20000", "gain3: control<db> = 0 in -24..24", "q3: control<scalar> = 1 in 0.1..18", "on3: control<switch> = 1",
+  "shape4: control<choice<low cut|low shelf|bell|high shelf|high cut>> = 2", "freq4: control<hz> = 1000 in 20..20000", "gain4: control<db> = 0 in -24..24", "q4: control<scalar> = 1 in 0.1..18", "on4: control<switch> = 1",
+  "shape5: control<choice<low cut|low shelf|bell|high shelf|high cut>> = 2", "freq5: control<hz> = 2500 in 20..20000", "gain5: control<db> = 0 in -24..24", "q5: control<scalar> = 1 in 0.1..18", "on5: control<switch> = 1",
+  "shape6: control<choice<low cut|low shelf|bell|high shelf|high cut>> = 2", "freq6: control<hz> = 6000 in 20..20000", "gain6: control<db> = 0 in -24..24", "q6: control<scalar> = 1 in 0.1..18", "on6: control<switch> = 1",
+  "shape7: control<choice<low cut|low shelf|bell|high shelf|high cut>> = 3", "freq7: control<hz> = 10000 in 20..20000", "gain7: control<db> = 0 in -24..24", "q7: control<scalar> = 0.71 in 0.1..18", "on7: control<switch> = 1",
+  "shape8: control<choice<low cut|low shelf|bell|high shelf|high cut>> = 4", "freq8: control<hz> = 18000 in 20..20000", "gain8: control<db> = 0 in -24..24", "q8: control<scalar> = 0.71 in 0.1..18", "on8: control<switch> = 0",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "gate"
+description = "Gate: opens when key reaches threshold (dB), closes once key has stayed 6 dB under it for hold (at least 25 ms); opens over attack, closes over release, down to range (dB). key is stereo or mono: a mono sound's copied to both sides"
+inputs = [
+  "in: audio<*>",
+  "key: audio<2>",
+  "threshold: control<db> = -40 in -80..0",
+  "attack: control<seconds> = 0.001 in 0.0001..0.1",
+  "hold: control<seconds> = 0.05 in 0..0.5",
+  "release: control<seconds> = 0.1 in 0.005..2",
+  "range: control<db> = -80 in -80..0",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "transient"
+description = "Transient shaper: a hit's start up to attack dB louder or softer, its tail up to sustain dB, from two followers of the level (the loudest sample of the last 25 ms). Unchanged where the level holds"
+inputs = ["in: audio<*>", "attack: control<db> = 0 in -24..24", "sustain: control<db> = 0 in -24..24"]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "deesser"
+description = "De-esser: the band around freq (a band-pass of Q 1) turned down while louder than threshold (dB), by at most amount (dB): a bell, deepest at freq, whose depth follows the band's level. Its detector hears the band through a second band-pass, so a loud low note never sets it off"
+inputs = [
+  "in: audio<*>",
+  "freq: control<hz> = 6000 in 2000..16000",
+  "threshold: control<db> = -30 in -60..0",
+  "amount: control<db> = 6 in 0..24",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "multiband"
+description = "Three-band compressor: Linkwitz-Riley crossovers (24 dB per octave) at low_mid and mid_high (crossed, the lower splits low from mid), each band a stereo-linked soft-knee compressor (ratio 1 is off). The bands sum to an all-pass: flat in level"
+inputs = [
+  "in: audio<*>",
+  "low_mid: control<hz> = 200 in 40..2000",
+  "mid_high: control<hz> = 2500 in 500..16000",
+  "low_threshold: control<db> = -18", "low_ratio: control<scalar> = 2 in 1..20", "low_attack: control<seconds> = 0.02 in 0.0001..1", "low_release: control<seconds> = 0.2 in 0.005..5", "low_gain: control<db> = 0 in -24..24",
+  "mid_threshold: control<db> = -18", "mid_ratio: control<scalar> = 2 in 1..20", "mid_attack: control<seconds> = 0.01 in 0.0001..1", "mid_release: control<seconds> = 0.15 in 0.005..5", "mid_gain: control<db> = 0 in -24..24",
+  "high_threshold: control<db> = -18", "high_ratio: control<scalar> = 2 in 1..20", "high_attack: control<seconds> = 0.005 in 0.0001..1", "high_release: control<seconds> = 0.1 in 0.005..5", "high_gain: control<db> = 0 in -24..24",
+]
+outputs = ["out: audio<*>"]

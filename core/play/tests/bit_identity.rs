@@ -1017,3 +1017,90 @@ fn a_latent_plugin_on_a_bus_stays_aligned() {
     let heard = live(&cancel, cancel.rate as usize * 4, None);
     assert_eq!(peak(&heard), 0.0, "live, the same");
 }
+
+/// A song of every tool of `@m2/mixing` (PACK-26): a kick through the transient shaper, a pad
+/// through the EQ and a gate the kick keys, keys through the de-esser, and the mix through the
+/// multiband compressor. `mix` is the mixer's channels.
+fn mixing_song(mix: &str) -> Song {
+    let notes = |pitches: &[&str], every: f64, length: f64| {
+        let notes: Vec<Value> = (0..(8.0 / every) as usize)
+            .flat_map(|i| pitches.iter().map(move |p| json!({"pitch": p, "start": i as f64 * every, "length": length, "velocity": 0.8})))
+            .collect();
+        json!({"clips": [{"id": "c1", "start": 0, "length": 8, "notes": notes}]}).to_string()
+    };
+    let song = format!(
+        "import {{ song }} from \"@m2/core\";\nimport {{ deesser, eq, gate, multiband, transient }} from \"@m2/mixing\";\n\
+         import {{ master, mixer }} from \"std/mix\";\nimport keys from \"./tracks/keys\";\nimport kick from \"./tracks/kick\";\n\
+         import pad from \"./tracks/pad\";\n\n\
+         export default song(() => master(multiband(mixer({mix}), {{ lowRatio: 3, lowThreshold: -24, highGain: 1 }})));\n"
+    );
+    project(
+        "mixing",
+        &[
+            (
+                "music2.toml",
+                "[project]\nname = \"mixing\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\
+                 \"@m2/drums\" = \"1\"\n\"@m2/mixing\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
+            ),
+            ("song.ts", &song),
+            (
+                "tracks/kick.ts",
+                "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\"kick\", ({ lane }) => drums.kick(lane.notes(\"hits\")));\n",
+            ),
+            (
+                "tracks/pad.ts",
+                "import { track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\nexport default track(\"pad\", ({ lane }) => synth.pad(lane.notes(\"chords\")));\n",
+            ),
+            (
+                "tracks/keys.ts",
+                "import { track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\nexport default track(\"keys\", ({ lane }) => synth.pluck(lane.notes(\"chords\")));\n",
+            ),
+            ("data/kick/hits.json", &notes(&["C1"], 1.0, 0.25)),
+            ("data/pad/chords.json", &notes(&["C3", "E3", "G3"], 4.0, 4.0)),
+            ("data/keys/chords.json", &notes(&["E5", "B5"], 0.5, 0.25)),
+        ],
+    )
+}
+
+// PACK-26, RENDER-2, RENDER-33: a song that plays every tool of @m2/mixing, its gate keyed by
+// another track, renders the same bits on 4 threads as on one, and plays live what it exports. The
+// gate opens on each kick and shuts between them.
+#[test]
+fn the_mixing_tools_give_the_same_bits_on_1_and_4_threads() {
+    let song = mixing_song(
+        "{ kick: transient(kick.out, { attack: 6, sustain: -3 }), \
+         pad: gate(eq(pad.out, { on1: true, freq1: 120, gain4: 3, shape8: \"high shelf\", on8: true, gain8: -4 }), kick.out, \
+         { threshold: -30, hold: 0.04, release: 0.08, range: -60 }), keys: deesser(keys.out, { freq: 5000, threshold: -40, amount: 8 }) }",
+    );
+    let kernels: Vec<&str> = song
+        .flat
+        .nodes
+        .iter()
+        .filter_map(|n| if let m2_ir::FOp::Kernel { kernel, .. } = &n.op { Some(kernel.as_str()) } else { None })
+        .collect();
+    for tool in ["eq", "gate", "transient", "deesser", "multiband"] {
+        assert!(kernels.contains(&format!("@m2/mixing:{tool}").as_str()), "the song plays @m2/mixing:{tool}: {kernels:?}");
+    }
+    let frames = (song.seconds() * song.rate as f64) as usize;
+    let one = offline(&song, frames);
+    assert!(peak(&one) > 0.1, "the song sounds: {}", peak(&one));
+    for (n, diff, on_workers, _) in on_threads(&song, frames, &[4], &one) {
+        assert_eq!(diff, None, "the mixing song on {n} threads: the same bits");
+        assert!(on_workers > 0, "the mixing song on {n} threads: tasks ran on workers");
+    }
+    check("the mixing song", &song, frames, None);
+    // The pad alone, through the gate the kick keys, against the pad alone ungated: open just after
+    // each kick (a beat is 0.5 s), as it is; shut at its range, -80 dB, once its release is over. The
+    // kick holds the key over the closing level for about 230 ms, then come the hold (40 ms) and the
+    // release (80 ms), so it is shut from about 390 ms: measured from 400 ms to 475 ms (review Z5).
+    let gated = offline(&mixing_song("{ pad: gate(pad.out, kick.out, { threshold: -30, hold: 0.04, release: 0.08 }) }"), frames);
+    let ungated = offline(&mixing_song("{ pad: pad.out }"), frames);
+    let beat = song.rate as usize / 2;
+    let db = |r: std::ops::Range<usize>| 20.0 * (rms(&gated[r.clone()]) / rms(&ungated[r])).log10();
+    let (open, shut): (Vec<f32>, Vec<f32>) =
+        (1..7).map(|b| (db(b * beat + beat / 50..b * beat + beat / 5), db(b * beat + beat * 8 / 10..b * beat + beat * 19 / 20))).unzip();
+    assert!(
+        open.iter().all(|o| o.abs() < 1.0) && shut.iter().all(|s| (s + 80.0).abs() < 2.0),
+        "the kick opens the pad's gate, and it shuts to its range: open {open:?} dB, shut {shut:?} dB"
+    );
+}

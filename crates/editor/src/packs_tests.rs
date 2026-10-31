@@ -418,7 +418,7 @@ fn an_install_removes_a_copy_a_stopped_install_left_aside() {
 fn the_bundled_packs_pass_check() {
     let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
     let packs = m2_song::pack::bundled(&m2_song::pack::source_packs());
-    assert_eq!(packs.len(), 3, "@m2/drums, @m2/effects and @m2/synths: {packs:?}");
+    assert_eq!(packs.len(), 4, "@m2/drums, @m2/effects, @m2/mixing and @m2/synths: {packs:?}");
     for dir in packs {
         assert_eq!(check(&dir, &std_dir), Vec::<String>::new(), "{}", dir.display());
         assert!(!dir.join(LISTING).exists(), "{}: checking writes nothing where it ships", dir.display());
