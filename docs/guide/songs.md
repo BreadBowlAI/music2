@@ -4,6 +4,7 @@
 - New songs go in `~/Music/music2`, each in its own folder. Nothing is ever replaced.
 - Save As makes a copy; Settings picks the sound output, the input and where songs go.
 - Export writes the song as a WAV file, each track as stems, or the notes as MIDI.
+- A song made with an older music2 says so: **Upgrade it** moves it to this music2 in one step ([below](#opening-a-song-made-with-an-older-music2)).
 
 - **New Song…** (the start screen, or File → New Song…, ⌘N, even while a song is open) asks for a name, a tempo (the template's until you type one; Tab moves to it) and how the song starts:
   - **Starter beat**: six tracks (kick, clap, hats, bass, chords and a hook), 8 bars at 116 BPM, ready to play and change.
@@ -27,3 +28,28 @@
   - The file is written under a hidden name and renamed when it's complete. A hidden file left by an export that was cut off (the app was killed) is removed by the next export into that folder.
   - When it's done, a message gives the file's name and length, with **Show in Finder** (**Show in Folder** on Linux; in a browser, it says which folder).
   - `m2 render` writes the same file.
+
+## Opening a song made with an older music2
+
+**In short**
+- A song made with an older music2 opens, but stays silent until it is upgraded.
+- **Upgrade it** in the status pill, or `m2 upgrade <song>`, moves it in one step. One Undo takes it all back.
+
+- music2 moves sounds between versions: its synths, drums and effects are packs of their own now (`@m2/synths`, `@m2/drums`, `@m2/effects`), and **One drum** plays what nine separate drums played. A song made before that asks for an older music2 in its `music2.toml` (`std = "0.4"`, say), so it doesn't build here.
+- The status pill in the top bar says **Made for an older music2**. Click it, then **Upgrade it**. music2 rewrites the song for this version as one change, and a message says which files changed. **Undo** (⌘Z) puts every file back as it was.
+- What it changes, and nothing else (not your notes, your mix or your comments):
+
+| Was | Is now |
+|---|---|
+| `"@m2/core" = "1"`, `std = "0.4"` to `"0.8"` | `"@m2/core" = "2"`, `std = "0.9"`, a line for each pack the song plays, and `music2.lock` (the exact versions) |
+| `import { synth } from "std/synth"` | `import { synth } from "@m2/synths"` (a pack: a set of sounds) |
+| `kick(notes)`, `drums.snare(notes)` | One drum: `drums.drum(notes)`, `drums.drum(notes, { drum: "snare" })` |
+| a drum's `tune: hz(50)` (in Hz, how many times a second it shakes) | `tune` in semitones (one piano key each) from the drum's own pitch |
+| a drum's `decay: ms(30)` (in seconds) | `decay` as times the drum's own length: 1 is its own, 2 twice as long |
+| a kick's `punch`, a snare's `snap` (0 to 1) | `punch`, −1 to 1: 0 is the drum's own |
+| `synth.bass(notes, { decay })` | `biteDecay`: the bass's `decay` is how its notes fade now |
+
+- A drum may sound a little different: the simple kick and hat were other sounds than One drum's.
+- If something can't be rewritten for you (a knob your code works out, say), nothing is written. The message lists each place by file and line, with the line to write. Change those by hand, then upgrade again.
+- From the terminal, `m2 upgrade <song>` does the same, and prints each line before (`-`) and after (`+`). `m2 upgrade <song> --check` only shows what it would change. With the app open, the app makes the change, as one undo step.
+- Your own presets for the old single drums don't move: they are outside the song.

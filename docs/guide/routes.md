@@ -538,6 +538,16 @@ An example body:
 {"session": 7}
 ```
 
+### `POST /api/graph/upgrade`
+
+Move a song made for an older music2 to this one in one step, as m2 upgrade does: one undo step, written only if the song then builds (check: only say what it would change). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "check": false}
+```
+
 ### `GET /api/library`
 
 Search everything you can add: instruments, sounds (presets), effects, samples and plugins, best first; q's words may name a kind, loop, one-shot, a tempo or a key; fits (a beat) keeps the loops that fit the song there.
