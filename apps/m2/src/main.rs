@@ -470,7 +470,15 @@ fn run(args: Vec<String>) -> Result<()> {
             }
         }
         Some("kernels") => {
-            let pk = packages()?;
+            let mut pk = packages()?;
+            // The kernels of the packs music2 comes with too (PACK-21), from the store, as any pack.
+            if let Some(store) = packs_store() {
+                for dir in m2_song::pack::bundled(&m2_server::resources::packs_dir()) {
+                    let Ok(m) = m2_song::pack::PkgManifest::at(&dir) else { continue };
+                    let at = store.version_dir(&m.package.name, &m.package.version);
+                    pk.load_pack(&at, m.package.name.as_str()).with_context(|| format!("loading {}", m.package.name))?;
+                }
+            }
             let mut sigs: Vec<_> = pk.kernel_sigs().collect();
             sigs.sort_by(|a, b| a.id.cmp(&b.id));
             for s in sigs {

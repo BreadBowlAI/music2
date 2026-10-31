@@ -1,10 +1,10 @@
 // Track ex (one path for faults, RENDER-25, DIAG-4): a sound that crashes while the song plays is a
 // problem the app shows where problems are, in the status pill's popover, naming the sound and its
 // track, and it is toasted once. On a server of its own, on a copy of first-song, with a copy of std
-// whose `noise` kernel traps at once (e2e/trapwasm.mjs, as sound-stops does), so only Hats'
-// instrument uses it. Play: one toast; the pill says "1 problem"; its popover lists it as an error
-// (`sound.stopped`) in words that name Hats; Hats' header marks it and Kick's doesn't; no second
-// toast while the song plays on.
+// whose `noise` kernel traps at once (e2e/trapwasm.mjs, as sound-stops does) and hats written to
+// play on it (NOISE_HATS), so only Hats' instrument uses it. Play: one toast; the pill says "1
+// problem"; its popover lists it as an error (`sound.stopped`) in words that name Hats; Hats' header
+// marks it and Kick's doesn't; no second toast while the song plays on.
 //
 //   node e2e/ex-faults.mjs <root> <home>     (the `none` kind: no project open)
 import puppeteer from "puppeteer-core";
@@ -12,7 +12,7 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { exe } from "./chrome.mjs";
 import { HEADLESS, REPO } from "./env.mjs";
-import { trapping } from "./trapwasm.mjs";
+import { NOISE_HATS, trapping } from "./trapwasm.mjs";
 
 const [ROOT, HOME] = process.argv.slice(2);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -43,6 +43,7 @@ fs.writeFileSync(`${std}/kernels/std.wasm`, trapping(fs.readFileSync(`${REPO}/st
 const song = `${ROOT}/song`;
 fs.rmSync(song, { recursive: true, force: true });
 fs.cpSync(`${REPO}/examples/first-song`, song, { recursive: true });
+fs.writeFileSync(`${song}/tracks/hats.ts`, NOISE_HATS);
 
 const file = `${ROOT}/faults.json`;
 fs.rmSync(file, { force: true });

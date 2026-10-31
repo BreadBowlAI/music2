@@ -174,7 +174,7 @@ pub struct View {
 pub enum ViewOf {
     /// Its four times and level: an envelope's shape, whose corners move them.
     Envelope { attack: String, decay: String, sustain: String, release: String },
-    /// A frequency and a scalar: a filter's curve, whose peak moves them.
+    /// A frequency, and a q or a resonance from 0 to 1 (CARD-30): a filter's curve, whose peak moves them.
     Filter { cutoff: String, q: String },
     /// A `regions` or `keymap` setting: which recording plays on which keys.
     Keys { regions: String },

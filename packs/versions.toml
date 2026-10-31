@@ -1,9 +1,11 @@
-# In short: every version of music2's own packs this source tree has bundled, with its hash. A
-# version's files never change once it is here (PACK-17): a changed pack gets a new version, and a
-# new line. `m2_song::pack::own` reads this to say which installed packs are music2's (PACK-19);
-# `every_bundled_pack_is_the_version_its_record_names` checks it against packs/@m2/*.
-"@m2/drums 1.0.0" = "sha256:801d8c0da844b1e3d1ab77c37cfe0dadb6018459fd55dbc82278f00868e7b9dd"
-"@m2/effects 1.0.0" = "sha256:b27a013821a924114cc3911da7d6eab98f33568c77b32b3c6ae8aed6e66089c4"
-"@m2/effects 1.1.0" = "sha256:887cf4cab36bf70de6797b253a5f77c8aeedfb3f362e53b925564324ccf55c0e"
-"@m2/synths 1.0.0" = "sha256:8272d1a5ed8c58adf374f0b7f9031147018a45a6bde5f8ac0928fe679493256d"
-"@m2/wavetable 1.0.0" = "sha256:0fc50d34d884ea96fd8da01600cd02ece8c3a8ebd5b52193d336077862108a1b"
+# In short: every version of music2's own packs a release ships, with its hash. A version's files
+# never change from the first release that ships it (PACK-17, PACK-18): a changed pack gets a new
+# version, and a new line. Until a release ships one, a branch records the one version of each pack
+# it will ship, never one for each step. `m2_song::pack::own` reads this to say which installed packs
+# are music2's (PACK-19); `every_bundled_pack_is_the_version_its_record_names` checks it against
+# packs/@m2/*. No release has shipped music2's own packs yet, so it holds one version of each.
+"@m2/drums 2.0.0" = "sha256:fa027f39d888fc789f14f8359909e6505b190b6decd1e2ce2eac305afeac0289"
+"@m2/effects 1.2.0" = "sha256:e49f20aefced6adbff11d6556f367f647b5c3accc68d94f5f64f7d47a23e0aef"
+"@m2/mixing 1.0.0" = "sha256:f75958ad72f7e2778468603f8706665b76140396e03bdf1bae9f4d0d597ed2a3"
+"@m2/synths 2.0.0" = "sha256:cb4e6877557e966e17f3187b8065e53471a071007dbc760f8c7061d4e2341d99"
+"@m2/wavetable 1.0.0" = "sha256:ed3edcb302775582ba93a7ad912e84b0aaa533ed33e83b8458e511dc509dd123"

@@ -1,4 +1,5 @@
-// @m2/synths/simple: the first instruments, built only from std's blocks.
+// @m2/synths/simple: the first instruments, built only from std's blocks: a bass, a pluck and a pad.
+// (The drums are @m2/drums': its Drum plays a kick or hats, and its kit a whole beat.)
 //
 // Each one takes a notes lane and returns audio. They are ordinary components, so copy one into
 // your project and change it if you want something different: short enough to read, they show
@@ -45,57 +46,6 @@ export const bass = component(
       { voices: p.voices },
     );
     return drive(v, p.drive);
-  },
-);
-
-/** A sine kick with a fast pitch drop. */
-export const kick = component(
-  {
-    id: "kick",
-    label: "Kick",
-    signature: signature<(notes: Events) => Audio>(),
-    inputs: { notes: port.notes() },
-    controls: {
-      tune: control.hz(48).range(20, 200).log(),
-      decay: control.secs(0.32).range(0.01, 2).log(),
-    },
-    output: port.audio(),
-    editor: { unlisted: true, description: "A simple sine kick built from the blocks in std/dsp; drums.kick is the drum machine's" },
-  },
-  function kick(notes: Events, { tune, decay }: Params): Audio {
-    return poly(
-      notes,
-      (n) => {
-        const amp = adsr(n.gate, { attack: ms(1), decay, sustain: 0, release: ms(60) });
-        const drop = adsr(n.gate, { attack: ms(1), decay: ms(45), sustain: 0, release: ms(30) });
-        const f = xrange(drop, tune, hz(170));
-        return drive(vca(osc.sine(f), scale(amp, n.velocity)), 3);
-      },
-      { voices: 2 },
-    );
-  },
-);
-
-/** Closed hi-hat: highpassed noise with a short envelope. */
-export const hat = component(
-  {
-    id: "hat",
-    label: "Hat",
-    signature: signature<(notes: Events) => Audio>(),
-    inputs: { notes: port.notes() },
-    controls: { decay: control.ms(45).range(5, 1000).log() },
-    output: port.audio(),
-    editor: { unlisted: true, description: "A simple noise hat built from the blocks in std/dsp; drums.hats is the drum machine's" },
-  },
-  function hat(notes: Events, { decay }: Params): Audio {
-    return poly(
-      notes,
-      (n) => {
-        const env = adsr(n.gate, { attack: ms(1), decay, sustain: 0, release: ms(30) });
-        return vca(svf.highpass(noise(7), hz(7500), 0.9), scale(env, scale(n.velocity, 0.5)));
-      },
-      { voices: 4 },
-    );
   },
 );
 

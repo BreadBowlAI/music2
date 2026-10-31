@@ -1,6 +1,7 @@
-import { component, control, kernel, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
+import { component, control, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
+import { adsr, osc, svf, vca } from "std/dsp";
 
-/** A warm pad, on std's synth kernel. */
+/** A warm pad, built from std's blocks. */
 export const warmPad = component(
   {
     id: "warm-pad",
@@ -9,9 +10,9 @@ export const warmPad = component(
     inputs: { notes: port.notes() },
     controls: { brightness: control.hz(1800).range(200, 20000) },
     output: port.audio(),
-    editor: { category: "Pads", description: "A warm pad, on std's synth kernel" },
+    editor: { category: "Pads", description: "A warm pad, built from std's blocks" },
   },
-  // A pack never imports another (PACK-3): std's synth kernel, played as a soft pluck.
+  // A pack never imports another (PACK-3): a soft pluck, built from std's blocks.
   (notes: Events, { brightness }: Params): Audio =>
-    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: brightness, decay: 0.45, sustain: 0, release: 0.25 }), { voices: 12 }),
+    poly(notes, (n) => vca(svf.lowpass(osc.saw(n.pitch), brightness), adsr(n.gate, { decay: 0.45, sustain: 0, release: 0.25 })), { voices: 12 }),
 );

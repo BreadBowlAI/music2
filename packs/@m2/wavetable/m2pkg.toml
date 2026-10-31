@@ -11,11 +11,11 @@ tags = ["synth", "wavetable", "pad", "bass", "lead", "pluck"]
 wasm = "kernels/wavetable.wasm"
 
 [dependencies]
-# @m2/core 1.8 or later: the filter's shape is a choice control, and the card has views and groups,
-# which 1.8.0 added.
-"@m2/core" = "1.8"
-# It calls no std kernel; std/dsp's `mono` gives one voice its glide.
-std = "0.7"
+# @m2/core 2, the pack contract (PACK-22): any 2.x runs it, and a change to @m2/core that would
+# break it is a 3.0.0.
+"@m2/core" = "2"
+# It calls no std kernel, but uses std's code: std/dsp's `mono` gives one voice its glide.
+std = "0.9"
 
 # ---------------------------------------------------------------- its own kernel
 # Port syntax as std's m2pkg.toml says. Called by the pack's id: `kernel("@m2/wavetable:voice", …)`.

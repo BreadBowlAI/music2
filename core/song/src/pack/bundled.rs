@@ -39,6 +39,38 @@ pub fn own(name: &PackName, version: &Version, hash: &Sha) -> bool {
     recorded().iter().any(|(n, v, h)| n == name && v == version && h == hash)
 }
 
+/// The `m2pkg.toml` of each pack this source tree bundles, compiled in: what music2 comes with.
+const BUNDLES: [&str; 5] = [
+    include_str!("../../../../packs/@m2/drums/m2pkg.toml"),
+    include_str!("../../../../packs/@m2/effects/m2pkg.toml"),
+    include_str!("../../../../packs/@m2/mixing/m2pkg.toml"),
+    include_str!("../../../../packs/@m2/synths/m2pkg.toml"),
+    include_str!("../../../../packs/@m2/wavetable/m2pkg.toml"),
+];
+
+/// The version of `name` this music2 comes with (PACK-15), if it is one of its own packs: the one
+/// it bundles, not every version it ever bundled ([`recorded`]).
+pub fn comes_with(name: &PackName) -> Option<Version> {
+    BUNDLES
+        .iter()
+        .map(|t| super::PkgManifest::read(t).expect("a bundled m2pkg.toml reads"))
+        .find(|m| &m.package.name == name)
+        .map(|m| m.package.version)
+}
+
+/// What to do first when a song asks for (or keeps) `asked` of one of music2's own packs, which
+/// music2 no longer comes with: the line to write for the version it comes with now (review Y5).
+/// None for another pack, or one music2 comes with that `asked` already is.
+// The upgrade track (FMT-3a) puts "run `m2 upgrade <song>`" first here once it exists.
+pub fn move_on(name: &PackName, asked: &super::Requirement) -> Option<String> {
+    let now = comes_with(name).filter(|v| !asked.matches(*v))?;
+    let line = super::Requirement::admitting(now);
+    Some(format!(
+        "music2 now comes with {name} {now}: change its line in music2.toml to \"{name}\" = \"{line}\", then run `m2 pack lock <song>`. \
+         The song's code may need changes"
+    ))
+}
+
 /// Every pack folder in `from`, `<from>/@owner/name` with its `m2pkg.toml`, sorted.
 pub fn bundled(from: &Path) -> Vec<PathBuf> {
     let mut out = vec![];

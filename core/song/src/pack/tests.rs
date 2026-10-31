@@ -29,7 +29,7 @@ fn installed(store: &Store, name: &str, version: &str) -> Sha {
     listing.hash()
 }
 
-const SONG: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+const SONG: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.4\"\n";
 
 fn song_with(deps: &str) -> Manifest {
     Manifest::read(&format!("{SONG}{deps}")).unwrap()
@@ -112,17 +112,17 @@ fn asset_refs_name_the_song_or_a_package() {
 fn a_package_manifest_is_read_strictly() {
     let good = "[package]\nname = \"@alice/felt-piano\"\nversion = \"1.2.0\"\nlicense = \"CC-BY-4.0\"\ndescription = \"soft\"\n\
                 authors = [\"Alice\"]\nrepository = \"https://github.com/alice/felt-piano\"\ntags = [\"keys\"]\n\n\
-                [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+                [dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.4\"\n";
     let m = PkgManifest::read(good).unwrap();
     assert_eq!((m.package.name.as_str(), m.package.version), ("@alice/felt-piano", Version(1, 2, 0)));
     assert_eq!((m.package.authors.len(), m.package.tags.len(), m.package.license.as_deref()), (1, 1, Some("CC-BY-4.0")));
-    assert!(m.needs(Version(1, 6, 0), Version(0, 4, 1)).is_ok());
+    assert!(m.needs(Version(2, 6, 0), Version(0, 4, 1)).is_ok());
     // std is a lower bound (PACK-2): a std that grew since meets it, an older one doesn't.
-    assert!(m.needs(Version(1, 6, 0), Version(0, 5, 0)).is_ok(), "std 0.5 meets 0.4");
-    assert!(m.needs(Version(1, 6, 0), Version(1, 0, 0)).is_ok(), "std 1.0 meets 0.4");
-    assert!(m.needs(Version(1, 6, 0), Version(0, 3, 9)).unwrap_err().contains("std"), "std 0.3.9 doesn't meet 0.4");
+    assert!(m.needs(Version(2, 6, 0), Version(0, 5, 0)).is_ok(), "std 0.5 meets 0.4");
+    assert!(m.needs(Version(2, 6, 0), Version(1, 0, 0)).is_ok(), "std 1.0 meets 0.4");
+    assert!(m.needs(Version(2, 6, 0), Version(0, 3, 9)).unwrap_err().contains("std"), "std 0.3.9 doesn't meet 0.4");
     // The SDK keeps the caret rule.
-    assert!(m.needs(Version(2, 0, 0), Version(0, 4, 0)).unwrap_err().contains("@m2/core"));
+    assert!(m.needs(Version(3, 0, 0), Version(0, 4, 0)).unwrap_err().contains("@m2/core"));
     for bad in [
         good.replace("tags =", "colour = \"red\"\ntags ="),
         good.replace("[dependencies]", "[other]\nx = 1\n[dependencies]"),
@@ -590,7 +590,10 @@ fn installing_the_bundled_packs_twice_writes_nothing() {
             other => panic!("{other:?}"),
         })
         .collect();
-    assert_eq!(names, ["@m2/drums 1.0.0", "@m2/effects 1.1.0", "@m2/synths 1.0.0", "@m2/wavetable 1.0.0"]);
+    let bundled: Vec<String> =
+        bundled(&source_packs()).iter().map(|d| PkgManifest::at(d).unwrap().package).map(|p| format!("{} {}", p.name, p.version)).collect();
+    assert_eq!(names, bundled);
+    assert_eq!(names.len(), 5, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths and @m2/wavetable");
     for (dir, _) in &first {
         let m = PkgManifest::at(dir).unwrap();
         let hash = store.check(&m.package.name, &m.package.version).unwrap();
@@ -613,7 +616,8 @@ fn installing_the_bundled_packs_twice_writes_nothing() {
 fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on() {
     let d = scratch("clash");
     let store = Store::at(d.join("Packs"));
-    let theirs = installed(&store, "@m2/synths", "1.0.0");
+    let v = PkgManifest::at(&source_packs().join("@m2/synths")).unwrap().package.version;
+    let theirs = installed(&store, "@m2/synths", &v.to_string());
     let done = install_bundled(&source_packs(), &store);
     let said: Vec<(String, Result<String, String>)> = done
         .into_iter()
@@ -623,9 +627,10 @@ fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on(
         .collect();
     assert_eq!(said[0], ("drums".into(), Ok("Installed".into())));
     assert_eq!(said[1], ("effects".into(), Ok("Installed".into())));
-    let Err(why) = &said[2].1 else { panic!("{said:?}") };
-    assert!(why.starts_with("@m2/synths 1.0.0 is installed already with other files"), "{why}");
-    assert_eq!(store.check(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0)).unwrap(), theirs, "theirs is left as it was");
+    assert_eq!(said[2], ("mixing".into(), Ok("Installed".into())));
+    let Err(why) = &said[3].1 else { panic!("{said:?}") };
+    assert!(why.starts_with(&format!("@m2/synths {v} is installed already with other files")), "{why}");
+    assert_eq!(store.check(&PackName::new("@m2/synths").unwrap(), &v).unwrap(), theirs, "theirs is left as it was");
     remove_tree(&d).unwrap();
 }
 
@@ -636,7 +641,7 @@ fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on(
 fn every_bundled_pack_is_the_version_its_record_names() {
     let mut wrong = vec![];
     let packs = bundled(&source_packs());
-    assert_eq!(packs.len(), 4, "@m2/drums, @m2/effects, @m2/synths and @m2/wavetable");
+    assert_eq!(packs.len(), 5, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths and @m2/wavetable");
     for dir in &packs {
         let m = PkgManifest::at(dir).unwrap();
         let (name, v) = (&m.package.name, m.package.version);
@@ -717,7 +722,8 @@ fn a_song_locked_to_music2s_own_pack_is_told_how_to_get_it_back() {
     let store = Store::at(root.join("Packs"));
     let song = root.join("song");
     std::fs::create_dir_all(&song).unwrap();
-    let (name, v, hash) = recorded().iter().find(|(n, ..)| n.as_str() == "@m2/synths").cloned().expect("recorded");
+    let bundled = PkgManifest::at(&source_packs().join("@m2/synths")).unwrap().package.version;
+    let (name, v, hash) = recorded().iter().find(|(n, v, _)| n.as_str() == "@m2/synths" && *v == bundled).cloned().expect("recorded");
     let m = song_with(&format!("\"{name}\" = \"{v}\"\n"));
     let lock = Lock::default().with(name.clone(), v, hash);
     let said = |store: &Store| {

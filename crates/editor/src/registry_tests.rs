@@ -62,9 +62,10 @@ pub(crate) fn tone(path: &Path) {
     w.finalize().unwrap();
 }
 
-const KEYS: &str = r#"import { component, control, kernel, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
+const KEYS: &str = r#"import { component, control, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
+import { adsr, osc, svf, vca } from "std/dsp";
 
-/** A soft pluck, on std's synth kernel. */
+/** A soft pluck, built from std's blocks. */
 export const softKeys = component(
   {
     id: "soft-keys",
@@ -73,11 +74,11 @@ export const softKeys = component(
     inputs: { notes: port.notes() },
     controls: { brightness: control.hz(1800).range(200, 20000) },
     output: port.audio(),
-    editor: { category: "Keys", description: "A soft pluck, on std's synth kernel" },
+    editor: { category: "Keys", description: "A soft pluck, built from std's blocks" },
   },
-  // A pack never imports another (PACK-3): std's synth kernel, played as a soft pluck.
+  // A pack never imports another (PACK-3): a soft pluck, built from std's blocks.
   (notes: Events, { brightness }: Params): Audio =>
-    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: brightness, decay: 0.45, sustain: 0, release: 0.25 }), { voices: 12 }),
+    poly(notes, (n) => vca(svf.lowpass(osc.saw(n.pitch), brightness), adsr(n.gate, { decay: 0.45, sustain: 0, release: 0.25 })), { voices: 12 }),
 );
 "#;
 
@@ -109,7 +110,7 @@ impl World {
         write(
             &keys.join("m2pkg.toml"),
             "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\ndescription = \"Soft keys\"\nauthors = [\"Bob\"]\n\
-             repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+             repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
         );
         write(&keys.join("src/index.ts"), KEYS);
         write(
@@ -488,7 +489,7 @@ fn spin_world(name: &str, wasm: &[u8]) -> World {
     let spin = w.t.0.join("src/spin-0.1.0");
     write(
         &spin.join("m2pkg.toml"),
-        "[package]\nname = \"@carol/spin\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\n\
+        "[package]\nname = \"@carol/spin\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\"@m2/core\" = \"2\"\n\
          std = \"0.7\"\n\n[[kernel]]\nname = \"spin\"\ndescription = \"Never returns\"\noutputs = [\"out: audio<1>\"]\n",
     );
     write(&spin.join("k.wasm"), wasm);

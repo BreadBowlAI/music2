@@ -3,8 +3,9 @@
 //
 // - Envelope: the attack, decay, sustain and release as a shape. Its corners move them: the peak the
 //   attack, the decay's corner the decay and the sustain, the end the release.
-// - Filter: a 12 dB per octave resonant low-pass curve from cutoff and q, a picture of a low-pass,
-//   not a measurement of the sound. Its peak moves cutoff (across, on a log scale) and q (up).
+// - Filter: a resonant low-pass curve from cutoff and q, a picture of a low-pass, not a measurement
+//   of the sound: drawn at 12 dB per octave whatever the filter's own slope (a view doesn't say it),
+//   so its words name no slope. Its peak moves cutoff (across, on a log scale) and q (up).
 // - Keys: which recording plays on which keys and how hard; a click plays the key, as hard as high.
 // - Scope: the call's sound as it plays, asked of the server only while it shows (TAP-8).
 //
@@ -330,6 +331,11 @@ export function lowpassDb(f: number, cutoff: number, q: number) {
   return -10 * Math.log10((1 - r * r) ** 2 + (r / q) ** 2);
 }
 
+/** A resonance from 0 to 1 drawn as a q (CARD-30): 0.5 at 0, no bump at all, to 30 at 1, where a synth's filter sings. */
+export const resonanceQ = (r: number) => 0.5 * 60 ** Math.min(1, Math.max(0, r));
+/** The resonance a q is drawn for, from 0 to 1. */
+const qResonance = (q: number) => Math.min(1, Math.max(0, Math.log(q / 0.5) / Math.log(60)));
+
 function FilterView({ view, ...p }: ViewProps & { view: Extract<CardView, { kind: "filter" }> }) {
   const svg = useRef<SVGSVGElement>(null);
   const drag = useViewDrag(p);
@@ -337,7 +343,11 @@ function FilterView({ view, ...p }: ViewProps & { view: Extract<CardView, { kind
   const shown = drawn(p, [["cutoff", view.cutoff], ["q", view.q]]);
   if ("cant" in shown) return <Cant why={shown.cant} />;
   const parts = shown.parts;
-  const [cutoff, q] = held ?? parts.map((d) => d.value);
+  // Its second value a q, or a resonance from 0 to 1, drawn as the q it stands for.
+  const resonant = parts[1].unit === "unit01";
+  const qName = resonant ? "resonance" : "q";
+  const [cutoff, value] = held ?? parts.map((d) => d.value);
+  const q = resonant ? resonanceQ(value) : value;
   const H = VIEW_H.filter - 8;
   const xOf = (f: number) => (Math.log(f / F_LO) / Math.log(F_HI / F_LO)) * W;
   const yOf = (db: number) => (1 - (Math.min(DB_HI, Math.max(DB_LO, db)) - DB_LO) / (DB_HI - DB_LO)) * H;
@@ -349,7 +359,7 @@ function FilterView({ view, ...p }: ViewProps & { view: Extract<CardView, { kind
   const used = [0, 1].filter((i) => parts[i].knob && !parts[i].why);
   const press = (e: React.PointerEvent<SVGCircleElement>) => {
     if (e.button !== 0 || !used.length || !svg.current) return;
-    const start = [cutoff, q];
+    const start = [cutoff, value];
     const at0 = { x: xOf(cutoff), db: 20 * Math.log10(q) };
     drag.begin(used.map((i) => parts[i].knob!));
     setHeld(start);
@@ -363,7 +373,8 @@ function FilterView({ view, ...p }: ViewProps & { view: Extract<CardView, { kind
         if (across && used.includes(0)) vals[0] = inRange(parts[0].knob, Math.round(Math.min(F_HI, Math.max(F_LO, F_LO * (F_HI / F_LO) ** ((at0.x + dx) / W)))));
         if (upDown && used.includes(1)) {
           const db = at0.db - (dy / H) * (DB_HI - DB_LO);
-          vals[1] = inRange(parts[1].knob, Math.round(Math.min(40, Math.max(0.1, 10 ** (db / 20))) * 100) / 100);
+          const to = Math.min(40, Math.max(0.1, 10 ** (db / 20)));
+          vals[1] = inRange(parts[1].knob, Math.round((resonant ? qResonance(to) : to) * 100) / 100);
         }
         setHeld(vals);
         drag.move(used.map((i) => vals[i]));
@@ -379,13 +390,13 @@ function FilterView({ view, ...p }: ViewProps & { view: Extract<CardView, { kind
   return (
     <Picture
       caption="Cuts the highs · a drawing"
-      title={`A drawing of a filter that cuts the highs above the cutoff (${hz}), each octave up 12 dB quieter, with a bump at the cutoff that the q (${q}) makes taller. Worked out from the two knobs: not measured from the sound.\nDrag the bump: across for the cutoff, up for the q${fixed.map((d) => `\n${d.why}`).join("")}`}
+      title={`A drawing of a filter that cuts the highs above the cutoff (${hz}), with a bump at the cutoff that the ${qName} (${value}) makes taller. Worked out from the two knobs: not measured from the sound.\nDrag the bump: across for the cutoff, up for the ${qName}${fixed.map((d) => `\n${d.why}`).join("")}`}
     >
       <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="w-full h-full overflow-visible" data-filter>
         <line x1={0} x2={W} y1={yOf(0)} y2={yOf(0)} stroke="var(--color-line)" />
         <path d={`${curve} L${W},${H} L0,${H} Z`} fill="var(--color-fg)" fillOpacity={0.06} stroke="none" />
         <path d={curve} fill="none" stroke={held ? "var(--color-accent)" : "var(--color-fg)"} strokeWidth={1.5} />
-        <Handle id="peak" x={peak.x} y={peak.y} held={!!held} title={[`Cutoff ${hz} · q ${q}`, ...parts.flatMap((d) => (d.why ? [d.why] : []))].join("\n")} fixed={!used.length} onDown={press} />
+        <Handle id="peak" x={peak.x} y={peak.y} held={!!held} title={[`Cutoff ${hz} · ${qName} ${value}`, ...parts.flatMap((d) => (d.why ? [d.why] : []))].join("\n")} fixed={!used.length} onDown={press} />
       </svg>
     </Picture>
   );

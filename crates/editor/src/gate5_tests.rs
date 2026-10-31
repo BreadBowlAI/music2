@@ -230,8 +230,8 @@ fn a_broken_package_module_still_opens() {
     f.write("music2.toml", crate::testing::MANIFEST);
     f.write(
         "song.ts",
-        "import { song, track } from \"@m2/core\";\nimport { kick } from \"@m2/synths\";\n\
-         const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
+        "import { song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\
+         const k = track(\"kick\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
     );
     let s = Session::open(&f.0, std.packages()).unwrap_or_else(|d| panic!("the project must open: {d:?}"));
     let invalid: Vec<String> = s.problems().iter().filter(|d| d.code == "pkg.invalid").map(|d| d.to_string()).collect();
@@ -240,7 +240,7 @@ fn a_broken_package_module_still_opens() {
     assert!(invalid.iter().any(|m| m.contains("std/src/fx.ts") && m.contains("std/src/filter.ts")), "both places: {invalid:?}");
     let catalog = s.catalog();
     assert!(!catalog.components.contains_key("std:lfo") && !catalog.components.contains_key("std:limit"));
-    assert!(catalog.components.contains_key("@m2/synths:kick") && catalog.components.contains_key("std:compress"));
+    assert!(catalog.components.contains_key("@m2/synths:pluck") && catalog.components.contains_key("std:compress"));
     assert!(s.effects().iter().all(|e| e.component != "std:limit"));
     let rev = s.accepted();
     let r = m2_runtime::Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap().render(0.1).unwrap();
@@ -282,8 +282,8 @@ const SPELLED: [(&str, &str); 2] =
 
 // Critique 1 of the step 5 design, D5, D11, PKG-1: every call the planners write type-checks as
 // the code editor checks songs (strict, against the SDK and std sources). On every-component,
-// each control a call leaves out is written in (a number as a value edit writes it, and a signal's
-// name as `connect` does), each effect is added, and each instrument + Track lists is added as a
+// each control a call leaves out is written in (a number as a value edit writes it, a choice's name
+// or a switch's true or false, and a number's signal by name as `connect` does), each effect is added, and each instrument + Track lists is added as a
 // new track's `track(…)` call (8b.1); each mixer channel with no pan gets its first pan, and each
 // that leaves out its fader gets one in the style of a mixer whose other entries write `db(…)`
 // (8b.3b); every call so written is listed in tests/forms/forms.ts, which must be as recorded
@@ -305,8 +305,17 @@ fn planned_call_forms_are_current() {
     for c in &inherited {
         let call = site(c.origin.site);
         let slot = c.origin.slot().unwrap();
-        let value = c.number(&if c.value == 0.0 { "0".to_string() } else { c.value.to_string() });
+        // A choice's value is written as its name and a switch's as true or false (CARD-21); no
+        // cable of a number reaches either (CARD-12).
+        let steps = c.unit.filter(|u| !u.is_number());
+        let value = match steps {
+            Some(u) => crate::kind::said(Some(u), c.value).expect("one of its places").to_string(),
+            None => c.number(&if c.value == 0.0 { "0".to_string() } else { c.value.to_string() }),
+        };
         for (what, written) in [("a value", value.as_str()), ("a cable", "wobble")] {
+            if steps.is_some() && written == "wobble" {
+                continue;
+            }
             let Some(edits) = c.planned(written) else { continue };
             if written == "wobble" && edits[0].0 < wobble_end {
                 continue;

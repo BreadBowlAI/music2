@@ -11,9 +11,9 @@ use super::super::tests::Fixture;
 
 /// A bass through a delay and a hat, each a track with its own name, into std's mixer.
 const SONG: &str = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { delay } from '@m2/effects';\n\
-                    import { hat } from '@m2/synths';\nimport { mixer } from 'std/mix';\n\
+                    import { drums } from '@m2/drums';\nimport { mixer } from 'std/mix';\n\
                     const bass = track('bass', { name: 'Bass' }, () => delay(osc.saw(110)));\n\
-                    const hats = track('hats', { name: 'Hats' }, ({ lane }) => hat(lane.notes('hits')));\n\
+                    const hats = track('hats', { name: 'Hats' }, ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
                     export default song(() => mixer({ bass: bass.out, hats: hats.out }));\n";
 
 /// The song open with a driven player, playing.
@@ -112,7 +112,7 @@ pub(in crate::graph) fn listed(problems: &Value) -> Vec<(String, Option<String>,
 }
 
 fn delay(op: &FOp) -> bool {
-    matches!(op, FOp::Kernel { kernel, .. } if kernel == "std:delay")
+    matches!(op, FOp::Kernel { kernel, .. } if kernel == "@m2/effects:delay")
 }
 
 /// What starts it again, in words every platform shares: the key is the menu's to show, ⌘. on a Mac
@@ -183,7 +183,7 @@ fn a_sound_too_slow_is_named_with_its_pack_and_stays_through_stop_all_sound() {
     };
     rig.report(Code::TooSlow, rig.node("bass", delay));
     rig.report(Code::TooSlow, rig.node("hats", |op| matches!(op, FOp::Poly { .. })));
-    let said = [slow("Delay on Bass, from @m2/effects,"), slow("Hat on Hats, from @m2/synths,")];
+    let said = [slow("Delay on Bass, from @m2/effects,"), slow("One drum on Hats, from @m2/drums,")];
     assert_eq!(rig.told(), said);
     let listed: Vec<_> =
         said.iter().zip(["bass", "hats"]).map(|(w, k)| ("sound.too-slow".to_string(), Some(k.to_string()), w.clone())).collect();
@@ -228,7 +228,7 @@ fn stuck_at(dir: &std::path::Path) {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("k.wasm"), STUCK).unwrap();
     let manifest = "[package]\nname = \"@test/stuck\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\
-                    \"@m2/core\" = \"1\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"stuck\"\noutputs = [\"out: audio<1>\"]\n";
+                    \"@m2/core\" = \"2\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"stuck\"\noutputs = [\"out: audio<1>\"]\n";
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
     let code = "import { component, kernel, port, signature, type Audio, type Events } from \"@m2/core\";\n\
                 export const stuck = component(\n  { id: \"stuck\", label: \"Stuck\", signature: signature<(notes: Events) => Audio>(), \
@@ -272,7 +272,7 @@ fn hum_at(dir: &std::path::Path) {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("k.wasm"), HUM).unwrap();
     let manifest = "[package]\nname = \"@test/hum\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\
-                    \"@m2/core\" = \"1\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"hum\"\ninputs = [\"in: control<*>\"]\noutputs = [\"out: audio<1>\"]\n";
+                    \"@m2/core\" = \"2\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"hum\"\ninputs = [\"in: control<*>\"]\noutputs = [\"out: audio<1>\"]\n";
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
     std::fs::write(dir.join("src/index.ts"), "export const nothing = 0;\n").unwrap();
 }

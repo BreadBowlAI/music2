@@ -9,7 +9,7 @@
 //! sample_rate = 48000     # required: the rate the engine runs and exports at
 //!
 //! [dependencies]
-//! "@m2/core" = "1"        # required: the SDK version the code is written against
+//! "@m2/core" = "2"        # required: the SDK version the code is written against
 //! std = "0.2"             # every package the code imports from must be listed
 //! "@alice/felt-piano" = "1.2"                  # a pack from the store (PACK-7)
 //! "@bob/strings" = { path = "../strings" }     # a pack in a folder
@@ -153,7 +153,7 @@ impl Manifest {
         }
         if !m.dependencies.contains_key(SDK) {
             return Err(invalid(format!(
-                "{MANIFEST} must list the SDK the code is written against: add `\"{SDK}\" = \"1\"` under [dependencies]"
+                "{MANIFEST} must list the SDK the code is written against: add `\"{SDK}\" = \"2\"` under [dependencies]"
             )));
         }
         Ok(m)
@@ -162,8 +162,9 @@ impl Manifest {
     /// Check every `[dependencies]` requirement against what is installed (FMT-3): an unmet
     /// `@m2/core` is `sdk.unsatisfied`, any other package `pkg.unsatisfied`. `installed` gives
     /// the version of a package, or `None` when it isn't installed. A song that asks for an older
-    /// std is also told how to move to the one the app has; never for a newer std, or another
-    /// package. A pack in a folder has no requirement: resolving it says what it is (PACK-9).
+    /// std, or an older major of `@m2/core` (PACK-24), is also told how to move to the one the app
+    /// has; never for a newer one, or another package. A pack in a folder has no requirement:
+    /// resolving it says what it is (PACK-9).
     pub fn check_dependencies(&self, installed: impl Fn(&str) -> Option<Version>) -> Vec<Diagnostic> {
         let mut out = vec![];
         for (name, req) in self.dependencies.iter().filter_map(|(n, d)| Some((n, d.requirement()?))) {
@@ -179,6 +180,15 @@ impl Manifest {
                     format!(
                         "This app has std {now}. To use it, change the std line in {MANIFEST} to std = \"{now}\". The song may sound a \
                          little different. {MANIFEST} asks for {name} \"{req}\" (at least {}, below {}), but {v} is installed",
+                        req.0,
+                        req.upper()
+                    )
+                }
+                Some(v) if name == SDK && v >= req.upper() => {
+                    let now = Requirement::admitting(v);
+                    format!(
+                        "This app has {SDK} {now}. To use it, change the {SDK} line in {MANIFEST} to \"{SDK}\" = \"{now}\". The song's code \
+                         may need changes. {MANIFEST} asks for {name} \"{req}\" (at least {}, below {}), but {v} is installed",
                         req.0,
                         req.upper()
                     )
@@ -501,7 +511,7 @@ mod tests {
         assert_eq!(Version::parse("1.2"), None);
     }
 
-    // FMT-3: each dependency is checked, the SDK with its own code.
+    // FMT-3, PACK-24: each dependency is checked, the SDK with its own code.
     #[test]
     fn unmet_dependencies() {
         let m = Manifest::read(GOOD).unwrap();
@@ -518,7 +528,7 @@ mod tests {
         assert!(d[0].message.contains("\"1\"") && d[0].message.contains("2.0.0"), "names both versions: {}", d[0].message);
         assert!(d[1].message.contains("\"0.2\"") && d[1].message.contains("0.3.0"), "{}", d[1].message);
         // A song for an older std is told how to move (L7), first, so a line cut short at the
-        // window's edge still shows it (review finding D3); a newer SDK says nothing of the kind.
+        // window's edge still shows it (review finding D3).
         assert!(
             d[1].message.starts_with(
                 "This app has std 0.3. To use it, change the std line in music2.toml to std = \"0.3\". The song may sound a little different. "
@@ -526,6 +536,18 @@ mod tests {
             "{}",
             d[1].message
         );
+        // PACK-24: so is a song for an older major of @m2/core, and told its code may need changes.
+        assert!(
+            d[0].message.starts_with(
+                "This app has @m2/core 2. To use it, change the @m2/core line in music2.toml to \"@m2/core\" = \"2\". The song's code may \
+                 need changes. music2.toml asks for @m2/core \"1\""
+            ),
+            "{}",
+            d[0].message
+        );
+        // An SDK older than the song asks for needs a newer music2, so no such hint.
+        let d = m.check_dependencies(installed("0.9.0", Some("0.2.4")));
+        assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);
         assert!(!d[0].message.contains("This app has"), "{}", d[0].message);
         // A std older than the song asks for needs a newer music2, so no such hint.
         let d = m.check_dependencies(installed("1.0.0", Some("0.1.9")));

@@ -248,11 +248,13 @@ one pack's sounds play is that pack's own.** std keeps the kernels sounds are bu
 
 The first to move is the bitcrusher (track `packcode`): one kernel, one effect, played by one pack,
 with its own tests. Wave 3 moves more the same way: the synth and FM voices into `@m2/synths`, the
-drum voice into `@m2/drums`, and reverb, phaser, tremolo and widen into `@m2/effects`. Drive and
-chorus stay std's, since two packs play them; delay stays too (the owner's choice), though only
-`@m2/effects` plays it: the SDK's own example of a component calls `std:delay`. What more than one
-module is made of is one crate, `m2-dsp`, so each move takes only the kernel's own code. A pack
-that calls a std kernel by its id breaks when that kernel moves, so the guide no longer invites it.
+drum voice into `@m2/drums`, and delay, reverb, phaser, tremolo and widen into `@m2/effects`. Drive
+and chorus stay std's, since two packs play them (`@m2/effects`' drive and chorus, `@m2/synths`'
+simple bass and its strings). The delay moves too: only `@m2/effects` plays it. That is the lead's
+application of the owner's rule, "Keep the core as little as possible. Most things should go inside
+packs" (2026-10-31): an earlier draft kept it in std. What more than one module is made of is one crate,
+`m2-dsp`, so each move takes only the kernel's own code. A pack that calls a std kernel by its id
+breaks when that kernel moves, so the guide no longer invites it.
 
 ## 8. The pack contract
 

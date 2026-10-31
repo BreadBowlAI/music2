@@ -28,8 +28,8 @@ pub fn flush(x: f32) -> f32 {
     if x.abs() < 1e-15 { 0.0 } else { x }
 }
 
-/// One-pole smoother for controls. It starts at its first target and lands exactly on a
-/// target once it is close, so a settled control costs nothing to compare against.
+/// One-pole smoother for controls: it starts at its first target, and lands on one within a millionth (of 1 plus it), or stays where a
+/// float step stalls short of it (20 ms from 1 kHz to 18 kHz: 0.94 Hz short), the same each run: inaudible for a control, no follower.
 pub struct Glide {
     value: f32,
     coef: f32,

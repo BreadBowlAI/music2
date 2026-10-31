@@ -856,7 +856,7 @@ export function key<T>(k: string, fn: () => T): T {
  *     controls: { time: control.secs(0.25).range(0.001, 2).log().smooth(), mix: control.frac(0.3) },
  *     output: port.audio(),
  *     editor: { category: "Delay & Reverb", insert: { time: 0.25, mix: 0.3 } },
- *   }, (x: Audio, { time, mix }: Params) => kernel("std:delay", { in: x, time, mix }));
+ *   }, (x: Audio, { time, mix }: Params) => kernel("@m2/effects:delay", { in: x, time, mix }));
  *
  * A call is `delay(x)`, `delay(x, { time: 0.5 })`: first the inputs `positional` doesn't name,
  * then the `positional` slots (`lowpass(x, 1000, 0.7)`), then one options object naming any
@@ -1144,7 +1144,8 @@ const WANTS = {
   time: ["seconds", "beats"],
   level: ["unit01", "gain", "db"],
   frequency: ["hz"],
-  scalar: ["scalar"],
+  // How much a filter rings at its cutoff: a q, or a resonance from 0 to 1, as a synth's knob says it (CARD-30).
+  q: ["scalar", "unit01"],
 } as const satisfies Record<string, readonly Unit[]>;
 
 /** What a view declaration holds: its kind, and the name it draws for each role. */
@@ -1165,7 +1166,8 @@ export class ViewDecl<V extends ViewNeeds = ViewNeeds> {
 /**
  * Declare a view in `editor.views`, naming this sound's own controls (CARD-16):
  * `view.envelope("attack", "decay", "sustain", "release")` (times, and a level), `view.filter("cutoff", "q")`
- * (a frequency and a scalar), `view.keys("regions")` (a `regions` or `keymap` setting), `view.scope()`.
+ * (a frequency, and a q or a resonance from 0 to 1, CARD-30), `view.keys("regions")` (a `regions` or
+ * `keymap` setting), `view.scope()`.
  */
 export const view = {
   envelope<const A extends string, const D extends string, const S extends string, const R extends string>(
@@ -1176,8 +1178,8 @@ export const view = {
   ): ViewDecl<{ attack: [A, "time"]; decay: [D, "time"]; sustain: [S, "level"]; release: [R, "time"] }> {
     return new ViewDecl({ kind: "envelope", names: { attack: [attack, "time"], decay: [decay, "time"], sustain: [sustain, "level"], release: [release, "time"] } });
   },
-  filter<const C extends string, const Q extends string>(cutoff: C, q: Q): ViewDecl<{ cutoff: [C, "frequency"]; q: [Q, "scalar"] }> {
-    return new ViewDecl({ kind: "filter", names: { cutoff: [cutoff, "frequency"], q: [q, "scalar"] } });
+  filter<const C extends string, const Q extends string>(cutoff: C, q: Q): ViewDecl<{ cutoff: [C, "frequency"]; q: [Q, "q"] }> {
+    return new ViewDecl({ kind: "filter", names: { cutoff: [cutoff, "frequency"], q: [q, "q"] } });
   },
   keys<const K extends string>(regions: K): ViewDecl<{ regions: [K, "regions"] }> {
     return new ViewDecl({ kind: "keys", names: { regions: [regions, "regions"] } });

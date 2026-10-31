@@ -120,9 +120,9 @@ fn random_structural_edits_leak_nothing() {
         let (fx, import) = [("delay", "delay"), ("reverb", "reverb"), ("", "")][(k / 4) % 3];
         let instrument = match t {
             "bass" => "bass(lane.notes(\"notes\")",
-            "hats" => "hat(lane.notes(\"hits\"))",
+            "hats" => "drums.drum(lane.notes(\"hits\"), { drum: \"hats\" })",
             "keys" => "pluck(lane.notes(\"chords\"))",
-            _ => "kick(lane.notes(\"hits\"))",
+            _ => "drums.drum(lane.notes(\"hits\"))",
         };
         edits.push((
             file(t),

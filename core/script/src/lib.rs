@@ -43,8 +43,9 @@ use sha2::{Digest, Sha256};
 pub const SDK: &str = include_str!("../sdk/core.ts");
 
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
-/// requirement is checked against it (FMT-2, FMT-3).
-pub const SDK_VERSION: &str = "1.10.0";
+/// requirement is checked against it (FMT-2, FMT-3). From 2.0.0 it is the pack contract: a change
+/// that breaks a pack's code is a new major (PACK-22).
+pub const SDK_VERSION: &str = "2.0.0";
 
 const CORE: &str = "@m2/core";
 

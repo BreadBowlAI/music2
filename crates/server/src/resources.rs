@@ -402,13 +402,16 @@ mod tests {
         let store = m2_song::pack::Store::at(t.0.join("Packs"));
         store.install(&theirs).unwrap();
         let said = installing_packs(&from, &store.dir, true);
+        let v = m2_song::pack::PkgManifest::at(&from.join("@m2/synths")).unwrap().package.version;
         assert_eq!(
             said,
-            ["@m2/synths 1.0.0 in your packs folder isn't the one music2 comes with. To use music2's: `m2 pack remove @m2/synths \
-              1.0.0`, then start music2 again"],
+            [format!(
+                "@m2/synths {v} in your packs folder isn't the one music2 comes with. To use music2's: `m2 pack remove @m2/synths {v}`, \
+                 then start music2 again"
+            )],
         );
         let loud = installing_packs(&from, &t.0.join("Packs-2"), false);
-        assert_eq!(loud.len(), 4, "{loud:?}");
+        assert_eq!(loud.len(), 5, "{loud:?}");
         assert!(loud.iter().all(|l| !l.contains("..")), "{loud:?}");
         m2_song::pack::remove_tree(&t.0).unwrap();
     }

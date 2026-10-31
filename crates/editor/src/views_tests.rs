@@ -510,3 +510,89 @@ fn a_group_naming_a_dictionary_holds_its_entries() {
     assert_eq!(sorted, ["parts.a.db", "parts.a.shape", "parts.b.db", "parts.b.shape"], "{groups:?}");
     assert!(groups.iter().all(|g| g.0 != "More"), "nothing left for More: {groups:?}");
 }
+
+// CARD-31: every sound music2's own packs list is dressed, and its card shows it: the groups its
+// descriptor declares, in their order (More last, for what no group names), and its views. Every
+// instrument of @m2/synths and @m2/drums has groups; every polysynth sound with a wave to pick has
+// its shape as a menu; every sound with a whole envelope has one to drag; every sound with a cutoff
+// and a resonance its filter's curve.
+#[test]
+fn music2s_own_sounds_show_their_groups_and_views() {
+    let calls = [
+        ("@m2/synths:synth-custom", "synth.custom(lane.notes(\"n\"))"),
+        ("@m2/synths:synth-supersaw", "synth.supersaw(lane.notes(\"n\"))"),
+        ("@m2/synths:synth-lead", "synth.lead(lane.notes(\"n\"))"),
+        ("@m2/synths:synth-pad", "synth.pad(lane.notes(\"n\"))"),
+        ("@m2/synths:synth-pluck", "synth.pluck(lane.notes(\"n\"))"),
+        ("@m2/synths:synth-sub", "synth.sub(lane.notes(\"n\"))"),
+        ("@m2/synths:synth-bass", "synth.bass(lane.notes(\"n\"))"),
+        ("@m2/synths:synth-strings", "synth.strings(lane.notes(\"n\"))"),
+        ("@m2/synths:fm-custom", "fm.custom(lane.notes(\"n\"))"),
+        ("@m2/synths:fm-keys", "fm.keys(lane.notes(\"n\"))"),
+        ("@m2/synths:fm-bell", "fm.bell(lane.notes(\"n\"))"),
+        ("@m2/synths:fm-metal", "fm.metal(lane.notes(\"n\"))"),
+        ("@m2/drums:drum-kit", "drums.kit(lane.notes(\"n\"))"),
+        ("@m2/drums:drum", "drums.drum(lane.notes(\"n\"))"),
+        ("@m2/effects:reverb", "reverb(osc.saw(110))"),
+        ("@m2/effects:phaser", "phaser(osc.saw(110))"),
+    ];
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    let tracks: Vec<String> =
+        calls.iter().enumerate().map(|(i, (_, call))| format!("const t{i} = track(\"t{i}\", ({{ lane }}) => {call});")).collect();
+    let outs: Vec<String> = (0..calls.len()).map(|i| format!("t{i}: t{i}.out")).collect();
+    f.write(
+        "song.ts",
+        format!(
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\nimport {{ phaser, reverb }} from \"@m2/effects\";\n\
+             import {{ fm, synth }} from \"@m2/synths\";\nimport {{ osc }} from \"std/dsp\";\nimport {{ mixer }} from \"std/mix\";\n\n{}\n\n\
+             export default song(() => mixer({{ {} }}));\n",
+            tracks.join("\n"),
+            outs.join(", ")
+        ),
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{:?} {:?}", s.draft_errors, s.problems());
+    let view = s.view();
+    let catalog = s.catalog();
+    for (i, (id, _)) in calls.iter().enumerate() {
+        let d = &catalog.components[*id];
+        let module = view.modules.iter().find(|m| m.key == format!("t{i}")).unwrap();
+        let card = module.nodes.iter().find(|n| n.title.as_deref() == Some(d.label.as_str())).unwrap_or_else(|| panic!("{id}'s card"));
+        let mut want: Vec<&str> = d.editor.groups.iter().map(|g| g.name.as_str()).collect();
+        let grouped: Vec<&str> = d.editor.groups.iter().flat_map(|g| g.items.iter().map(String::as_str)).collect();
+        let values = d.controls.iter().map(|c| c.name.as_str()).chain(d.settings.iter().map(|x| x.name.as_str()));
+        let views = d.editor.views.iter().map(|v| v.name.as_str());
+        if values.chain(views).any(|v| !grouped.contains(&v)) {
+            want.push("More");
+        }
+        let got: Vec<&str> = card.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(got, want, "{id}'s groups");
+        let views: Vec<&str> = card.views.iter().map(|v| v.name.as_str()).collect();
+        let declared: Vec<&str> = d.editor.views.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(views, declared, "{id}'s views");
+        let instrument = id.starts_with("@m2/synths:") || id.starts_with("@m2/drums:");
+        assert!(!instrument || !d.editor.groups.is_empty(), "{id} has groups");
+        let has = |slot: &str| d.controls.iter().any(|c| c.name == slot);
+        if ["attack", "decay", "sustain", "release"].iter().all(|x| has(x)) {
+            assert!(declared.contains(&"amp"), "{id} draws its envelope");
+        }
+        if has("cutoff") && has("resonance") {
+            assert!(declared.contains(&"filter"), "{id} draws its filter");
+        }
+        if id.starts_with("@m2/synths:synth-") && has("saw")
+            || ["@m2/synths:synth-supersaw", "@m2/synths:synth-lead", "@m2/synths:synth-pad"].contains(id)
+        {
+            let shape = card.knobs.iter().find(|k| k.slot.as_deref() == Some("shape")).unwrap_or_else(|| panic!("{id}'s shape"));
+            assert_eq!(shape.kind, crate::kind::Kind::Choice, "{id}'s shape is a menu");
+        }
+    }
+    // One drum's menu (review Y11): its drums, a control, so a pick plays with no rebuild and can be
+    // automated, labelled "sound" so its undo step reads "One drum sound"; its voices the one setting.
+    let drum = view.modules.iter().find(|m| m.key == "t13").unwrap().nodes.iter().find(|n| n.title.as_deref() == Some("One drum")).unwrap();
+    let menu = drum.knobs.iter().find(|k| k.slot.as_deref() == Some("drum")).expect("One drum's menu");
+    assert_eq!((menu.kind, menu.label.as_str()), (crate::kind::Kind::Choice, "sound"));
+    let names: Vec<String> = menu.options.iter().map(|o| o.value.as_str().unwrap().to_string()).collect();
+    assert_eq!(names, ["kick", "snare", "clap", "hats", "tom", "rim", "cowbell", "cymbal", "shaker"]);
+    assert_eq!(drum.settings.iter().map(|x| x.slot.as_str()).collect::<Vec<_>>(), ["voices"]);
+}

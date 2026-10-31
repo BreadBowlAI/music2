@@ -9,7 +9,7 @@ use super::*;
 use crate::testing::Fixture;
 
 /// A song's manifest that needs std alone: these songs play `@test/tiny` from a store of their own.
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n";
 
 /// The fixture pack `@test/tiny`.
 fn tiny() -> PathBuf {
@@ -64,7 +64,8 @@ fn a_pack_in_the_store_is_offered() {
     assert_eq!(from(&s, "@test/tiny:tiny-keys"), Some(From { name: "@test/tiny".into(), version: "0.1.0".into() }));
     assert_eq!(from(&s, "std:sampler"), None, "std's items are from no pack");
     // music2's own sounds are a pack's, in the store as any (PACK-15).
-    assert_eq!(from(&s, "@m2/synths:synth-pluck"), Some(From { name: "@m2/synths".into(), version: "1.0.0".into() }));
+    let synths = m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join("@m2/synths")).unwrap().package.version;
+    assert_eq!(from(&s, "@m2/synths:synth-pluck"), Some(From { name: "@m2/synths".into(), version: synths.to_string() }));
     assert_eq!(keys.pack, Some(From { name: "@test/tiny".into(), version: "0.1.0".into() }), "the list knows its pack");
     assert!(crate::effect::effects(&s).iter().any(|e| e.component == "@test/tiny:tiny-crunch"));
 }
@@ -77,7 +78,7 @@ fn adding_a_pack_instrument_writes_its_dependency_and_lock_in_one_undo() {
     let (mut s, hash) = song_and_store(&f);
     let made = crate::tracks::add(&mut s, "@test/tiny:tiny-keys", None, None, None).unwrap_or_else(|e| panic!("{e}"));
     let manifest = f.read("music2.toml");
-    assert!(manifest.ends_with("std = \"0.8\"\n\"@test/tiny\" = \"0.1\"\n"), "{manifest}");
+    assert!(manifest.ends_with("std = \"0.9\"\n\"@test/tiny\" = \"0.1\"\n"), "{manifest}");
     let lock = Lock::read(&f.read("music2.lock")).unwrap();
     assert_eq!(lock.get(&PackName::new("@test/tiny").unwrap()).map(|l| (l.version, l.hash)), Some((Version(0, 1, 0), hash)));
     let track = f.read(&format!("tracks/{}.ts", made.module));
@@ -126,7 +127,9 @@ fn adding_a_pack_effect_writes_its_dependency_and_lock() {
     let (mut s, _) = song_and_store(&f);
     let made = crate::tracks::add(&mut s, "@m2/synths:synth-pluck", None, None, None).unwrap();
     // A pack music2 ships is added as any pack is (PACK-15, PACK-10).
-    assert!(f.read("music2.toml").contains("\"@m2/synths\" = \"1.0\"") && f.read("music2.lock").contains("@m2/synths"));
+    let v = m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join("@m2/synths")).unwrap().package.version;
+    let line = format!("\"@m2/synths\" = \"{}.{}\"", v.0, v.1);
+    assert!(f.read("music2.toml").contains(&line) && f.read("music2.lock").contains("@m2/synths"), "{line}");
     let file = format!("tracks/{}.ts", made.module);
     let rev = s.accepted();
     let site = rev.compiled.sites.iter().find(|x| x.file == file && x.callee.ends_with("pluck")).expect("the pluck's call");
@@ -142,13 +145,13 @@ fn adding_a_pack_effect_writes_its_dependency_and_lock() {
 fn the_dependency_line_goes_at_the_end_of_its_table() {
     let name = PackName::new("@a/b").unwrap();
     let req = Requirement::parse("1.2").unwrap();
-    let text = "[project]\nname = \"x\"\n\n[dependencies]\n\"@m2/core\" = \"1\" # the SDK\nstd = \"0.4\"\n\n[other]\n";
+    let text = "[project]\nname = \"x\"\n\n[dependencies]\n\"@m2/core\" = \"2\" # the SDK\nstd = \"0.4\"\n\n[other]\n";
     let (at, line) = dependency_line(text, &name, &req).unwrap();
     let mut out = text.to_string();
     out.insert_str(at as usize, &line);
     assert_eq!(
         out,
-        "[project]\nname = \"x\"\n\n[dependencies]\n\"@m2/core\" = \"1\" # the SDK\nstd = \"0.4\"\n\"@a/b\" = \"1.2\"\n\n[other]\n"
+        "[project]\nname = \"x\"\n\n[dependencies]\n\"@m2/core\" = \"2\" # the SDK\nstd = \"0.4\"\n\"@a/b\" = \"1.2\"\n\n[other]\n"
     );
     let (at, line) = dependency_line("[dependencies]\nstd = \"0.4\"", &name, &req).unwrap();
     assert_eq!((at, line.as_str()), (26, "\n\"@a/b\" = \"1.2\"\n"), "a last line with no newline gets one");
@@ -260,7 +263,7 @@ fn a_pack_this_app_cant_run_isnt_offered() {
     let f = Fixture::new();
     song_and_store(&f);
     // A newer @test/tiny for an SDK this app doesn't have: 0.1.0 is still offered.
-    install_as(&f, "@test/tiny", "0.2.0", |t| t.replace("\"@m2/core\" = \"1\"", "\"@m2/core\" = \"9\""), None);
+    install_as(&f, "@test/tiny", "0.2.0", |t| t.replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"9\""), None);
     // A pack whose every version needs a std this app doesn't have.
     install_as(&f, "@test/later", "1.0.0", |t| t.replace("std = \"0.4\"", "std = \"9.0\""), None);
     let s = open(&f);
@@ -418,7 +421,7 @@ fn an_install_removes_a_copy_a_stopped_install_left_aside() {
 fn the_bundled_packs_pass_check() {
     let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
     let packs = m2_song::pack::bundled(&m2_song::pack::source_packs());
-    assert_eq!(packs.len(), 4, "@m2/drums, @m2/effects, @m2/synths and @m2/wavetable: {packs:?}");
+    assert_eq!(packs.len(), 5, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths and @m2/wavetable: {packs:?}");
     for dir in packs {
         assert_eq!(check(&dir, &std_dir), Vec::<String>::new(), "{}", dir.display());
         assert!(!dir.join(LISTING).exists(), "{}: checking writes nothing where it ships", dir.display());
@@ -472,12 +475,13 @@ fn a_component_with_no_category_is_named_unless_it_says_unlisted() {
              (notes: Events): Audio => poly(notes, (n) => vca(osc.sine(n.pitch), adsr(n.gate))),\n);\n"
         )
     };
+    // The pack imports std/dsp's blocks already.
     let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
-    let blocks = "import { adsr, osc, vca } from \"std/dsp\";\n";
-    std::fs::write(dir.join("src/index.ts"), format!("{blocks}{index}{}", plain(""))).unwrap();
+    assert!(index.contains("import { adsr, osc, svf, vca } from \"std/dsp\";"));
+    std::fs::write(dir.join("src/index.ts"), format!("{index}{}", plain(""))).unwrap();
     let problems = check(&dir, &std_dir);
     assert!(problems.iter().any(|p| p.starts_with("@test/tiny:tiny-plain") && p.contains("has no category")), "{problems:?}");
-    std::fs::write(dir.join("src/index.ts"), format!("{blocks}{index}{}", plain("\n    editor: { unlisted: true },"))).unwrap();
+    std::fs::write(dir.join("src/index.ts"), format!("{index}{}", plain("\n    editor: { unlisted: true },"))).unwrap();
     assert_eq!(check(&dir, &std_dir), Vec::<String>::new(), "said on purpose");
     let s = song_and_store_with(&f, &[("src/index.ts", &std::fs::read_to_string(dir.join("src/index.ts")).unwrap())]).0;
     assert!(s.catalog().components.contains_key("@test/tiny:tiny-plain"), "code can play it");

@@ -6,7 +6,9 @@
 # its controls, their defaults and ranges, and how the editor offers it. std is the toolbox
 # (PKG-17): the sounds made from these kernels are the packs @m2/synths, @m2/drums and
 # @m2/effects (packs/@m2/), which call them by id. A kernel only one pack's sounds play is that
-# pack's own, built beside it (PACK-21): @m2/effects' bitcrusher since std 0.8.
+# pack's own, built beside it (PACK-21): @m2/effects' bitcrusher since std 0.8; since std 0.9 the
+# polysynth's and the FM synth's voices (@m2/synths), the drum voice (@m2/drums), and delay,
+# reverb, phaser, tremolo and widen (@m2/effects).
 #
 # Port syntax: "name: kind [= default] [in lo..hi]".
 #   kinds: audio<1|2|*>, control<unit|*>, events<note>, and * (any kind).
@@ -19,7 +21,7 @@
 
 [package]
 name = "std"
-version = "0.8.0"
+version = "0.9.0"
 license = "MIT OR Apache-2.0"
 description = "The toolbox sounds are made of: oscillators, envelopes, filters, the Sampler, the mixer, the effects mixing needs, and the kernels they are built on"
 wasm = "kernels/std.wasm"
@@ -153,19 +155,6 @@ description = "State-variable filter with lowpass, bandpass and highpass outputs
 inputs = ["in: audio<*>", "cutoff: control<hz> = 1000", "q: control<scalar> = 0.707"]
 outputs = ["lp: audio<*>", "bp: audio<*>", "hp: audio<*>"]
 
-# ---------------------------------------------------------------- time effects
-
-[[kernel]]
-name = "delay"
-description = "Feedback delay, up to 2 seconds, with a dry/wet mix"
-inputs = [
-  "in: audio<*>",
-  "time: control<seconds> = 0.25",
-  "feedback: control<unit01> = 0.3",
-  "mix: control<unit01> = 0.3",
-]
-outputs = ["out: audio<*>"]
-
 # ---------------------------------------------------------------- dynamics and colour
 
 [[kernel]]
@@ -187,23 +176,12 @@ inputs = ["in: audio<*>", "ceiling: control<db> = -1"]
 outputs = ["out: audio<*>"]
 
 # ---------------------------------------------------------------- more effects
-# The kernels of @m2/effects' reverb, modulation and width, and std/fx's compression and EQ.
-# Each kernel is safe with any input or setting: no NaN, no runaway feedback, and
-# tails that end in exact silence. Chorus, phaser and tremolo follow the song
-# through their last input, `playing`: @m2/effects connects it to `time.playing`. Left out, it
-# is 1, as if the song always played. The bitcrusher is @m2/effects' own kernel since std 0.8
-# (`@m2/effects:bitcrush`, PACK-21).
-
-[[kernel]]
-name = "reverb"
-description = "Freeverb-style reverb, stereo for a stereo input; mix is an equal-power crossfade"
-inputs = [
-  "in: audio<*>",
-  "size: control<unit01> = 0.6",
-  "damping: control<unit01> = 0.5",
-  "mix: control<unit01> = 0.25",
-]
-outputs = ["out: audio<*>"]
+# The chorus (@m2/effects' and @m2/synths' strings'), and std/fx's compression and EQ. Each kernel
+# is safe with any input or setting: no NaN, no runaway feedback, and tails that end in exact
+# silence. The chorus follows the song through its last input, `playing`: @m2/effects connects it
+# to `time.playing`. Left out, it is 1, as if the song always played. @m2/effects' own kernels are
+# the bitcrusher (since std 0.8), and delay, reverb, phaser, tremolo and widen (since std 0.9,
+# PACK-21).
 
 [[kernel]]
 name = "chorus"
@@ -215,25 +193,6 @@ inputs = [
   "mix: control<unit01> = 0.5",
   "playing: control<unit01> = 1",
 ]
-outputs = ["out: audio<*>"]
-
-[[kernel]]
-name = "phaser"
-description = "Six-stage phaser with feedback; stereo sides sweep a quarter cycle apart. The sweep moves only while playing is 1 (left out, always)"
-inputs = [
-  "in: audio<*>",
-  "rate: control<hz> = 0.4 in 0.05..20",
-  "depth: control<unit01> = 0.7",
-  "feedback: control<unit01> = 0.5",
-  "mix: control<unit01> = 0.5",
-  "playing: control<unit01> = 1",
-]
-outputs = ["out: audio<*>"]
-
-[[kernel]]
-name = "tremolo"
-description = "Sine tremolo: dips the level by depth (1 = to silence), rate times a second. It pulses only while playing is 1 (left out, always)"
-inputs = ["in: audio<*>", "rate: control<hz> = 5 in 0.05..20", "depth: control<unit01> = 0.5", "playing: control<unit01> = 1"]
 outputs = ["out: audio<*>"]
 
 [[kernel]]
@@ -263,120 +222,11 @@ inputs = [
 ]
 outputs = ["out: audio<*>"]
 
-[[kernel]]
-name = "widen"
-description = "Mid/side width: 0 mono, 1 unchanged, 2 twice as wide; widens mono input too, and stays mono-compatible"
-inputs = ["in: audio<2>", "width: control<scalar> = 1.5 in 0..2"]
-outputs = ["out: audio<2>"]
-
-# ---------------------------------------------------------------- instruments
-# The voices of @m2/synths' polysynth and FM synth, and of @m2/drums. Each is one kernel per voice: a whole
-# instrument in one place costs far less than the same sound built from small kernels.
-# Each smooths its own continuous controls, reads times and counts when a note starts or
-# on its own control clock (never the host's blocks), and ends in exact silence.
-
-[[kernel]]
-name = "synth"
-description = "Polysynth voice: a unison saw and pulse stack, a sub sine and noise, driven into a 4-pole ladder lowpass with its own envelope, then an amp envelope; stereo. The level follows velocity^(2 × vel_amount), so velocity 0 is silent. `wheel` (the mod wheel) deepens the vibrato by up to half a semitone, at once"
-inputs = [
-  "pitch: control<semitones>",
-  "gate: control<unit01>",
-  "velocity: control<unit01> = 0.8",
-  "saw: control<unit01> = 1",
-  "square: control<unit01> = 0",
-  "width: control<unit01> = 0.5 in 0.05..0.95",
-  "sub: control<unit01> = 0",
-  "sub_octave: control<scalar> = -1 in -2..0",
-  "noise: control<unit01> = 0",
-  "unison: control<scalar> = 1 in 1..7",
-  "detune: control<unit01> = 0.2",
-  "spread: control<unit01> = 0.5",
-  "drop: control<semitones> = 0 in 0..48",
-  "drop_time: control<seconds> = 0.04",
-  "vibrato: control<semitones> = 0 in 0..2",
-  "cutoff: control<hz> = 8000",
-  "resonance: control<unit01> = 0.1",
-  "keytrack: control<unit01> = 0.5",
-  "env: control<scalar> = 0 in -4..8",
-  "f_attack: control<seconds> = 0.002",
-  "f_decay: control<seconds> = 0.3",
-  "f_sustain: control<unit01> = 0",
-  "attack: control<seconds> = 0.003",
-  "decay: control<seconds> = 0.5",
-  "sustain: control<unit01> = 0.8",
-  "release: control<seconds> = 0.3",
-  "drive: control<db> = 0 in 0..24",
-  "vel_amount: control<unit01> = 0.5",
-  "level: control<db> = 0 in -24..12",
-  "seed: control<scalar> = 1",
-  "wheel: control<unit01> = 0",
-]
-outputs = ["out: audio<2>"]
-
-[[kernel]]
-name = "fm"
-description = "FM voice: two sine-operator pairs (a modulator into a carrier each), the first modulator with feedback, at 2× and decimated; brightness follows velocity and key, as on an electric piano, and `drop` bends each note down into its pitch. The level follows velocity^(2 × vel_amount)"
-inputs = [
-  "pitch: control<semitones>",
-  "gate: control<unit01>",
-  "velocity: control<unit01> = 0.8",
-  "ratio_a: control<scalar> = 1 in 0.5..16",
-  "mod_a: control<scalar> = 1 in 0.5..16",
-  "index_a: control<scalar> = 1.5 in 0..8",
-  "fall_a: control<seconds> = 1",
-  "ratio_b: control<scalar> = 1 in 0.5..16",
-  "mod_b: control<scalar> = 14 in 0.5..32",
-  "index_b: control<scalar> = 0.8 in 0..8",
-  "fall_b: control<seconds> = 0.1",
-  "mix_b: control<unit01> = 0.35",
-  "feedback: control<unit01> = 0",
-  "detune: control<scalar> = 0 in 0..20",
-  "tone: control<unit01> = 0.5",
-  "attack: control<seconds> = 0.002",
-  "decay: control<seconds> = 3",
-  "sustain: control<unit01> = 0",
-  "release: control<seconds> = 0.4",
-  "vel_amount: control<unit01> = 0.7",
-  "level: control<db> = 0 in -24..12",
-  "drop: control<semitones> = 0 in 0..48",
-  "drop_time: control<seconds> = 0.04",
-]
-outputs = ["out: audio<1>"]
-
-[[kernel]]
-name = "drum"
-description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the kit"
-inputs = [
-  "pitch: control<semitones>",
-  "velocity: control<unit01> = 0.8",
-  "hits: audio<1>",
-  "count: audio<1>",
-  "model: control<scalar> = -1",
-  "kick_tune: control<hz> = 48 in 30..120",
-  "kick_decay: control<seconds> = 0.45",
-  "punch: control<unit01> = 0.5",
-  "snare_tune: control<hz> = 190 in 100..400",
-  "snap: control<unit01> = 0.6",
-  "snare_decay: control<seconds> = 0.18",
-  "clap_tone: control<hz> = 1200",
-  "clap_decay: control<seconds> = 0.25",
-  "hat_tone: control<hz> = 8000",
-  "hat_decay: control<seconds> = 0.045",
-  "open_decay: control<seconds> = 0.45",
-  "tom_tune: control<hz> = 130",
-  "tom_decay: control<seconds> = 0.35",
-  "rim_tone: control<hz> = 1700",
-  "bell_tune: control<hz> = 540",
-  "cymbal_decay: control<seconds> = 1.6",
-  "shake_decay: control<seconds> = 0.06",
-  "drive: control<db> = 0 in 0..24",
-  "kick_level: control<db> = 0 in -24..12",
-  "snare_level: control<db> = 0 in -24..12",
-  "hat_level: control<db> = 0 in -24..12",
-  "tom_level: control<db> = 0 in -24..12",
-  "perc_level: control<db> = 0 in -24..12",
-]
-outputs = ["out: audio<1>"]
+# ---------------------------------------------------------------- the Sampler
+# std/sampler's voices, and what counts its notes. Each reads times and counts when a note starts
+# or on its own clock (never the host's blocks), and ends in exact silence. The instrument voices
+# that were std's are their packs' own since std 0.9 (PACK-21): `@m2/synths:synth`,
+# `@m2/synths:fm` and `@m2/drums:drum`.
 
 [[kernel]]
 name = "sampler"
@@ -428,7 +278,7 @@ outputs = ["out: audio<2>"]
 
 [[kernel]]
 name = "drumhit"
-description = "Marks the start of a note for std's drums (and, in one voice, the note starts std/sampler counts for its round robin): on its first sample, 16^group for the choke group of its drum (by General MIDI pitch, or `model`) plus 16^5 for every hit, else 0"
+description = "Marks the start of a note for @m2/drums' drum voices (and, in one voice, the note starts std/sampler counts for its round robin): on its first sample, 16^group for the choke group of its drum (by General MIDI pitch, or `model`) plus 16^5 for every hit, else 0"
 inputs = ["pitch: control<semitones>", "model: control<scalar> = -1"]
 outputs = ["out: audio<1>"]
 

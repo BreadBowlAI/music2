@@ -5,8 +5,9 @@ import { choose, lfo, when } from "std/control";
 import { adsr, follow, gain, mono, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
 import { drums } from "@m2/drums";
-import { bass, fm, hat, kick, pad, pluck, synth } from "@m2/synths";
+import { bass, fm, pad, pluck, synth } from "@m2/synths";
 import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
+import { deesser, eq, gate, multiband, transient } from "@m2/mixing";
 import { compress, duck, eq3, limit } from "std/fx";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
@@ -22,9 +23,9 @@ export default song(({ lane, time }) => {
   const pulse = osc.square(110);
   const soft = osc.tri();
   const env = adsr(lane.mask("gate"), { attack: 0.01 });
-  const hit = kick(lane.notes("kick"));
+  const hit = drums.drum(lane.notes("kick"));
   const side = follow(hit);
-  const beat = add(hit, hat(lane.notes("hats")));
+  const beat = add(hit, drums.drum(lane.notes("hats"), { drum: "hats" }));
   const tones = sum(bass(lane.notes("bass"), { cutoff: wobble }), pluck(lane.notes("chords")), pad(lane.notes("pad")));
   const filtered = notch(bandpass(highpass(lowpass(tones, 1200), 200, 0.9), wobble), 3000);
   const shaped = svf.highpass(svf.bandpass(svf.lowpass(buzz, 800), 900), 100);
@@ -49,17 +50,20 @@ export default song(({ lane, time }) => {
   const metal = fm.metal(lane.notes("metal"), { drop: semis(12) });
   const kit = sum(
     drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3 }),
-    drums.kick(lane.notes("boom"), { decay: 1.2 }),
-    drums.snare(lane.notes("snare")),
-    drums.clap(lane.notes("clap")),
-    drums.hats(lane.notes("hats2"), { openDecay: 0.6 }),
-    drums.tom(lane.notes("toms")),
-    drums.rim(lane.notes("rim")),
-    drums.cowbell(lane.notes("cowbell")),
-    drums.cymbal(lane.notes("crash")),
-    drums.shaker(lane.notes("shaker")),
+    drums.drum(lane.notes("boom"), { decay: 1.2 }),
+    drums.drum(lane.notes("snare"), { drum: "snare" }),
+    drums.drum(lane.notes("clap"), { drum: "clap" }),
+    drums.drum(lane.notes("hats2"), { drum: "hats", decay: 1.3 }),
+    drums.drum(lane.notes("toms"), { drum: "tom" }),
+    drums.drum(lane.notes("rim"), { drum: "rim" }),
+    drums.drum(lane.notes("cowbell"), { drum: "cowbell" }),
+    drums.drum(lane.notes("crash"), { drum: "cymbal" }),
+    drums.drum(lane.notes("shaker"), { drum: "shaker" }),
   );
   const chops = sampler(lane.notes("chops"), { tune: 2, mode: "gate" });
+  const mixed = multiband(deesser(transient(gate(eq(tones, { freq3: wobble, gain3: 3, on1: true, shape8: "high shelf" }), hit, { threshold: -30 }), { attack: 4 }), { amount: 4 }), {
+    lowRatio: 3,
+  });
   const tables = wavetable(lane.notes("tables"), { tableA: "vowels", positionA: level, filter: "bandpass", unison: 3 });
-  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, tables }));
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables }));
 });

@@ -13,9 +13,9 @@ use super::super::midi::Event;
 use super::super::tests::Fixture;
 use super::*;
 
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
-                    const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\n\
-                    const k = track('keys', { name: 'Keys' }, ({ lane }) => kick(lane.notes('notes')));\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { sum } from 'std/math';\n\
+                    const b = track('bass', { name: 'Bass' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
+                    const k = track('keys', { name: 'Keys' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
                     export default song(() => sum(b.out, k.out));\n";
 /// Frames a beat lasts at 120 bpm, and a callback's.
 const BEAT: f64 = 24_000.0;
@@ -1480,10 +1480,10 @@ mod audio {
         assert!(!s.is_empty() && s.iter().all(|x| *x == 0.2), "channel 2 alone: {:?}", &s[..4]);
     }
 
-    const BAND: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
+    const BAND: &str = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { sum } from 'std/math';\n\
                         const vox = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\
                         const gtr = track('gtr', { name: 'Gtr' }, ({ lane }) => lane.audio('clips'));\n\
-                        const keys = track('keys', { name: 'Keys' }, ({ lane }) => kick(lane.notes('notes')));\n\
+                        const keys = track('keys', { name: 'Keys' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
                         export default song(() => sum(sum(vox.out, gtr.out), keys.out));\n";
 
     // MON-9, MON-14: Record records into every armed track at once: a microphone on channel 1, a
@@ -1764,9 +1764,9 @@ fn a_take_begun_while_an_agents_import_copies_leaves_nothing() {
     use crate::caller::{Caller, as_caller};
     use m2_editor::import::{Source, Target};
     // The rig's song, with an audio track to bring the file onto.
-    let song = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
-                const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\n\
-                const k = track('keys', { name: 'Keys' }, ({ lane }) => kick(lane.notes('notes')));\n\
+    let song = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { sum } from 'std/math';\n\
+                const b = track('bass', { name: 'Bass' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
+                const k = track('keys', { name: 'Keys' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
                 const v = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\
                 export default song(() => sum(sum(b.out, k.out), v.out));\n";
     let r = Rig::with(&[("song.ts", song), ("data/vox/clips.json", "{\"clips\": []}\n")]);
@@ -2027,8 +2027,8 @@ fn keys_either_side_of_a_wrap_stay_in_their_pass() {
 fn an_armed_track_that_leaves_the_song_is_disarmed() {
     let mut r = Rig::new();
     r.graph.arm(r.token, "keys", Some("notes"), Some(true), None, m2_play::InputChoice::default(), false).unwrap();
-    let only_bass = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
-                     const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\n\
+    let only_bass = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+                     const b = track('bass', { name: 'Bass' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
                      export default song(() => b.out);\n";
     r.fixture.put("song.ts", only_bass);
     assert!(r.graph.poll());

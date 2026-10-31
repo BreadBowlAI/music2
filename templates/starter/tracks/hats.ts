@@ -1,4 +1,4 @@
-import { ms, track } from "@m2/core";
-import { hat } from "@m2/synths";
+import { track } from "@m2/core";
+import { drums } from "@m2/drums";
 
-export default track("hats", { name: "Hats" }, ({ lane }) => hat(lane.notes("hits"), { decay: ms(40) }));
+export default track("hats", { name: "Hats" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "hats", decay: 0.9 }));

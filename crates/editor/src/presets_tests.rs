@@ -127,8 +127,17 @@ fn saving_a_std_preset_writes_every_control_of_the_call() {
     let s = f.open();
     let before = f.read("tracks/keys.ts");
     let saved = capture(&s, s.accepted().number, &call(&s, "synth.pluck"), "Mine").unwrap();
-    let want: BTreeMap<String, f64> =
-        [("brightness", 3000.0), ("decay", 0.45), ("spread", 0.7), ("velSens", 0.5)].map(|(k, v)| (k.to_string(), v)).into();
+    let want: BTreeMap<String, f64> = [
+        ("attack", 0.003),
+        ("brightness", 3000.0),
+        ("decay", 0.45),
+        ("release", 0.25),
+        ("spread", 0.7),
+        ("sustain", 0.0),
+        ("velSens", 0.5),
+    ]
+    .map(|(k, v)| (k.to_string(), v))
+    .into();
     assert_eq!(
         saved.preset,
         Preset { name: "Mine".into(), sound: "@m2/synths:synth-pluck".into(), values: want, plugin_version: None, state: None }
@@ -229,13 +238,11 @@ fn every_factory_preset_loads() {
             assert_eq!(factory(&std, &p.sound), Some(folder.clone()), "{} is in its sound's folder", file.display());
 
             let f = keys("track", "synth.pluck(lane.notes(\"chords\"))");
-            // The song lists the pack each sound is from (PACK-10).
-            let mut toml = f.read("music2.toml") + "\"@m2/effects\" = \"1\"\n";
+            // The song lists the pack each sound is from (PACK-10): first-song lists @m2/synths.
             let pack = p.sound.split(':').next().unwrap();
-            if !toml.contains(&format!("\"{pack}\" =")) {
-                toml += &format!("\"{pack}\" = \"1\"\n");
+            if pack != "@m2/synths" {
+                f.write("music2.toml", f.read("music2.toml") + &format!("\"{pack}\" = \"1\"\n"));
             }
-            f.write("music2.toml", toml);
             let s = f.open();
             let desc = s.catalog().components.get(&p.sound).unwrap_or_else(|| panic!("{}: no sound {}", file.display(), p.sound)).clone();
             for k in p.values.keys() {
@@ -275,5 +282,5 @@ fn every_factory_preset_loads() {
             n += 1;
         }
     }
-    assert_eq!(n, 14, "two each for Pluck, Pad, Bass, Reverb and Delay, and the Wavetable's four");
+    assert_eq!(n, 24, "two each for Pluck, Pad, Bass, Reverb and Delay, for each of @m2/mixing's five tools, and the Wavetable's four");
 }

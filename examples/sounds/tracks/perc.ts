@@ -1,19 +1,19 @@
-import { db, ms, secs, track } from "@m2/core";
+import { db, track } from "@m2/core";
 import { drums } from "@m2/drums";
 import { mixer } from "std/mix";
 
-// The drums one at a time, each on a lane of its own: a long boom at each drop, a snare roll
+// The drums one at a time, each a Drum on a lane of its own: a long boom at each drop, a snare roll
 // into it, a clap layer, more hats, a tom fill, rim, cowbell, crash and shaker.
 export default track("perc", { name: "Percussion" }, ({ lane }) =>
   mixer({
-    boom: { in: drums.kick(lane.notes("boom"), { decay: secs(1.4), punch: 0.3 }), db: db(-4) },
-    roll: drums.snare(lane.notes("roll"), { snap: 0.75 }),
-    clap: { in: drums.clap(lane.notes("clap")), db: db(-3) },
-    hats: { in: drums.hats(lane.notes("hats"), { decay: ms(30) }), pan: 0.35 },
-    tom: { in: drums.tom(lane.notes("tom")), pan: -0.2 },
-    rim: { in: drums.rim(lane.notes("rim")), db: db(-4), pan: 0.25 },
-    cowbell: { in: drums.cowbell(lane.notes("cowbell")), db: db(-6), pan: -0.35 },
-    crash: { in: drums.cymbal(lane.notes("crash")), db: db(-2), pan: -0.15 },
-    shaker: { in: drums.shaker(lane.notes("shaker")), pan: 0.4 },
+    boom: { in: drums.drum(lane.notes("boom"), { decay: 3.1, punch: -0.2 }), db: db(-4) },
+    roll: drums.drum(lane.notes("roll"), { drum: "snare", punch: 0.15 }),
+    clap: { in: drums.drum(lane.notes("clap"), { drum: "clap" }), db: db(-3) },
+    hats: { in: drums.drum(lane.notes("hats"), { drum: "hats", decay: 0.67 }), pan: 0.35 },
+    tom: { in: drums.drum(lane.notes("tom"), { drum: "tom" }), pan: -0.2 },
+    rim: { in: drums.drum(lane.notes("rim"), { drum: "rim" }), db: db(-4), pan: 0.25 },
+    cowbell: { in: drums.drum(lane.notes("cowbell"), { drum: "cowbell" }), db: db(-6), pan: -0.35 },
+    crash: { in: drums.drum(lane.notes("crash"), { drum: "cymbal" }), db: db(-2), pan: -0.15 },
+    shaker: { in: drums.drum(lane.notes("shaker"), { drum: "shaker" }), pan: 0.4 },
   }),
 );

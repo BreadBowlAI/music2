@@ -272,6 +272,22 @@ fn declaration_refused(controls: &str, settings: &str, editor: &str, says: &str)
 
 const ADSR: &str = "a: control.ms(5), d: control.beats(1), s: control.db(-6), r: control.secs(0.2), f: control.khz(2), q: control.scalar(1), shape: control.choice([\"lo\", \"hi\"], \"lo\")";
 
+// CARD-30: a filter view's q is a q (a plain number) or a resonance from 0 to 1, as a synth's knob
+// says it; anything else is refused in words naming both.
+#[test]
+fn a_filter_views_q_is_a_q_or_a_resonance() {
+    let b = declared("f: control.hz(800), res: control.frac(0.3)", "", "{ views: { lp: view.filter(\"f\", \"res\") } }")
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let d = b.components.iter().find(|d| d.id == "c").unwrap();
+    assert_eq!(d.editor.views[0].of, ViewOf::Filter { cutoff: "f".into(), q: "res".into() });
+    declaration_refused(
+        "f: control.hz(800), g: control.db(0)",
+        "",
+        "{ views: { lp: view.filter(\"f\", \"g\") } }",
+        "the filter's q names \"g\", a control in db, but it must be a q (scalar or unit01)",
+    );
+}
+
 // CARD-16: a view names this very descriptor's controls, in a unit that fits (or for keys its
 // regions or keymap setting), by a name of its own; the descriptor carries the views in order.
 #[test]

@@ -108,7 +108,7 @@ fn add_bus_reverb_writes_the_effects_packs_dependency_and_lock() {
     let now = m2_song::pack::Lock::read(&f.read("music2.lock")).unwrap();
     let entry = now.get(&effects).expect("its lock entry");
     assert_eq!((entry.version, entry.hash), (v, hash));
-    assert_eq!(now.packs.len(), 2, "the lock keeps @m2/synths' entry as it was");
+    assert_eq!(now.packs.len(), 3, "the lock keeps @m2/drums' and @m2/synths' entries as they were");
     assert!(s.problems().is_empty(), "{:?}", s.problems());
     s.undo().unwrap();
     assert_eq!((f.read("music2.toml"), f.read("music2.lock")), (manifest, lock), "one undo takes both back");

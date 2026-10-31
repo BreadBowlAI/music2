@@ -412,7 +412,7 @@ fn a_listing_that_leaves_its_folder_is_refused() {
 fn a_pack_for_a_newer_music2_stops_before_its_files() {
     let t = Temp::new("get-newer");
     let bucket = t.0.join("bucket");
-    let manifest = b"[package]\nname = \"@alice/tiny\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"9.0\"\n";
+    let manifest = b"[package]\nname = \"@alice/tiny\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"9.0\"\n";
     let v = by_hand(&bucket, &[("m2pkg.toml", manifest), ("src/index.ts", b"export {};\n")], &["m2pkg.toml", "src/index.ts"]);
     std::fs::remove_file(bucket.join(blob_path(&Sha::of(b"export {};\n")))).unwrap();
     let remote = Remote::new(&file_url(&bucket), &t.0.join("cache")).unwrap();

@@ -116,7 +116,13 @@ pub const COMMANDS: &[Command] = &[
                 background priority, one at a time; it writes nothing into the song",
         more: "It works with the app open or closed. [Listening](listening.md) says what each number means.",
     },
-    Command { name: "kernels", also: &[], usage: "m2 kernels [--json]", words: "list every kernel and its typed ports", more: "" },
+    Command {
+        name: "kernels",
+        also: &[],
+        usage: "m2 kernels [--json]",
+        words: "list every kernel and its typed ports: std's, and those of the packs music2 comes with",
+        more: "",
+    },
     Command {
         name: "bounce",
         also: &[],

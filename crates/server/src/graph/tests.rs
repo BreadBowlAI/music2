@@ -6,7 +6,7 @@ use m2_play::{DeviceErrorKind, Driver};
 use super::*;
 use m2_editor::Gestures;
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
 
 pub(super) struct Fixture(pub(super) PathBuf);
 
@@ -395,8 +395,8 @@ fn effects_are_listed_added_and_removed_and_the_player_follows() {
 fn a_lane_write_plays_the_new_notes_and_undo_takes_them_back() {
     let fixture = Fixture::new();
     fixture.write(
-        "import { track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
-         const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+        "import { track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+         const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\nexport default song(() => k.out);\n",
     );
     let graph = fixture.open();
     let state = graph.state().unwrap();
@@ -423,9 +423,9 @@ fn a_lane_write_plays_the_new_notes_and_undo_takes_them_back() {
 fn the_published_timeline_is_the_sessions_and_shares_what_didnt_change() {
     let fixture = Fixture::new();
     fixture.write(
-        "import { track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
-         const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\n\
-         const s = track('snare', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => sum(k.out, s.out));\n",
+        "import { track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { sum } from 'std/math';\n\
+         const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\n\
+         const s = track('snare', ({ lane }) => drums.drum(lane.notes('hits')));\nexport default song(() => sum(k.out, s.out));\n",
     );
     fixture.put("data/snare/hits.json", "{\"clips\": [{\"id\": \"s\", \"start\": 0, \"length\": 4, \"notes\": []}]}\n");
     let graph = fixture.open();
@@ -510,8 +510,8 @@ fn a_track_renamed_and_a_knob_automated_play_and_undo() {
 /// A Kick track renamed Kicks in its code, with its notes left under the old name.
 fn renamed_kick(fixture: &Fixture) {
     fixture.write(
-        "import { track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
-         const k = track('kicks', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+        "import { track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+         const k = track('kicks', ({ lane }) => drums.drum(lane.notes('hits')));\nexport default song(() => k.out);\n",
     );
     std::fs::create_dir_all(fixture.0.join("data/kick")).unwrap();
     let notes = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#;
@@ -835,9 +835,9 @@ fn a_saved_file_plays_at_once_and_a_save_over_a_change_is_refused() {
     assert!(graph.files().is_err() && graph.write_file(None, "song.ts", "", "").is_err());
 }
 
-/// A kick track whose decay is a knob at 0.3 s.
-pub(super) const KICK: &str = "import { secs, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
-                    const k = track('kick', ({ lane }) => kick(lane.notes('hits'), { decay: secs(0.3) }));\n\
+/// A kick track whose decay is a knob at 0.3 (times its own).
+pub(super) const KICK: &str = "import { secs, track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+                    const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits'), { decay: 0.3 }));\n\
                     export default song(() => k.out);\n";
 
 pub(super) fn kick_clips(pitches: &[&str]) -> Vec<NoteClip> {
@@ -890,7 +890,7 @@ fn a_lane_write_while_playing_is_swapped_into_the_playing_renderer() {
     graph.undo(token).unwrap();
     assert_eq!(generation(&graph), first, "still no new renderer");
     assert!(synced(&graph));
-    assert!(fixture.read("song.ts").contains("secs(0.5)"));
+    assert!(fixture.read("song.ts").contains("decay: 0.5 }"));
 }
 
 // Step 3's gates time an edit or a seek from when it was asked for (or the session was ready to
@@ -1089,7 +1089,7 @@ fn a_structural_edit_takes_over_where_playback_is() {
     let state = graph.state().unwrap();
     let revision = state["view"]["revision"].as_u64().unwrap();
     let nodes = state["view"]["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap().clone());
-    let call = nodes.into_iter().find(|n| n["kind"] == "call" && n["audio"] == true && n["label"].as_str().unwrap().contains("kick"));
+    let call = nodes.into_iter().find(|n| n["kind"] == "call" && n["audio"] == true && n["label"].as_str().unwrap().contains("drums.drum"));
     let before = graph.status().beat;
     graph.add_effect(token, revision, call.unwrap()["id"].as_str().unwrap(), "@m2/effects:delay").unwrap();
     let after = graph.status();
@@ -1884,8 +1884,8 @@ fn three_tracks(fixture: &Fixture) {
     fixture.put(
         "song.ts",
         "import { hz, secs, song, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\nimport { sum } from 'std/math';\n\
-         import { kick } from '@m2/synths';\nimport { a } from './tracks/a';\nimport { b } from './tracks/b';\n\
-         import { c } from './tracks/c';\nconst k = track('kick', ({ lane }) => kick(lane.notes('hits'), { decay: secs(0.3) }));\n\
+         import { drums } from '@m2/drums';\nimport { a } from './tracks/a';\nimport { b } from './tracks/b';\n\
+         import { c } from './tracks/c';\nconst k = track('kick', ({ lane }) => drums.drum(lane.notes('hits'), { decay: 0.3 }));\n\
          export default song(() => vca(sum(a.out, b.out, c.out, k.out), 0.25));\n",
     );
     for (key, call) in [("a", "osc.sine(hz(800))"), ("b", "osc.tri(hz(300))"), ("c", "osc.saw(hz(200))")] {
@@ -3666,10 +3666,18 @@ fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
         graph.state().unwrap()["instruments"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().into()).collect();
     // std's ready-made sounds (T3): drums, instruments (the Wavetable their last), the sampler, then
     // the two with every knob.
-    assert_eq!(names.len(), 24, "{names:?}");
+    assert_eq!(names.len(), 16, "{names:?}");
     assert_eq!(
-        (names[0].as_str(), names[10].as_str(), names[11].as_str(), names[20].as_str(), names[21].as_str(), names[23].as_str()),
-        ("Drum kit", "FM metal", "FM keys", "Wavetable", "Sampler", "Polysynth")
+        (
+            names[0].as_str(),
+            names[1].as_str(),
+            names[2].as_str(),
+            names[3].as_str(),
+            names[12].as_str(),
+            names[13].as_str(),
+            names[15].as_str()
+        ),
+        ("Drum kit", "One drum", "FM metal", "FM keys", "Wavetable", "Sampler", "Polysynth")
     );
     assert_eq!(graph.state().unwrap()["palette"][0], "rose");
     let added = graph.add_track(token, "@m2/synths:synth-pluck", None, None, Some("kick".into())).unwrap();
@@ -4084,8 +4092,8 @@ fn a_first_pan_in_a_mono_mix_while_playing_is_inaudible() {
         );
         fixture.put(
             "tracks/thump.ts",
-            "import { track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
-             export default track('thump', { name: 'Thump' }, ({ lane }) => kick(lane.notes('hits')));\n",
+            "import { track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+             export default track('thump', { name: 'Thump' }, ({ lane }) => drums.drum(lane.notes('hits')));\n",
         );
         fixture.put("data/low/notes.json", "{\"clips\": []}\n");
         fixture.put("data/thump/hits.json", "{\"clips\": []}\n");
