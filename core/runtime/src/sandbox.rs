@@ -15,9 +15,10 @@
 //! shared and outside every sandbox, which allocates nothing and never waits; or, for a sandbox off
 //! the audio thread, from its file on disk.
 //!
-//! Every call into it runs with a deadline ([`crate::limit`], ABI-6): its birth's limit while it is
-//! born, its plan's once sealed. A call past it stops, and the sandbox is stuck: a panic never
-//! calls it again (ABI-7).
+//! Every call into a pack's sandbox runs with a deadline ([`crate::limit`], ABI-6): its birth's
+//! limit while it is born and prewarmed, its plan's once it plays. A call past it stops, and the
+//! sandbox is stuck: a panic never calls it again (ABI-7). std's, music2's own, run with no checks
+//! ([`crate::packages::checked`]).
 //!
 //! The rest of the runtime sees states and their port buffers, and never a `Store`.
 
@@ -25,9 +26,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use wasmtime::{
-    AsContextMut, Caller, Engine, Extern, ExternType, Func, Instance, Memory, Module, ResourceLimiter, Store, TypedFunc, ValType,
-};
+use wasmtime::{AsContextMut, Caller, Extern, ExternType, Func, Instance, Memory, Module, ResourceLimiter, Store, TypedFunc, ValType};
 
 use crate::audio::Asset;
 use crate::limit::{self, Deadline, TooSlow};
@@ -270,19 +269,22 @@ fn interrupted(e: &anyhow::Error) -> bool {
     e.chain().any(|c| c.downcast_ref::<wasmtime::Trap>() == Some(&wasmtime::Trap::Interrupt))
 }
 
-/// A store and an instance of `module` in it, with its limits and its imports, and its memory.
-/// Its start function, if it has one, may run for `limit` (ABI-6).
-pub(crate) fn instantiate(engine: &Engine, module: &Module, limit: std::time::Duration) -> Result<(Store<Host>, Instance, Memory)> {
+/// A store and an instance of `module` in it, on its module's engine, with its limits and its
+/// imports, and its memory. Its start function, if it has one, may run for `limit` when the module
+/// has the time checks (ABI-6).
+pub(crate) fn instantiate(module: &Module, limit: std::time::Duration) -> Result<(Store<Host>, Instance, Memory)> {
     let host =
         Host { sealed: false, refused: false, memory: None, assets: vec![], buf: vec![], pcm: [vec![], vec![]], piece: None, deadline: 0 };
-    let mut store = Store::new(engine, host);
+    let mut store = Store::new(module.engine(), host);
     store.limiter(|l| l);
     let ext = imports(&mut store, module)?;
-    arm(&mut store, limit::ticks(limit));
+    if crate::packages::checks(module) {
+        arm(&mut store, limit::ticks(limit));
+    }
     let instance = match Instance::new(&mut store, module, &ext).wctx(|| "instantiating") {
         Ok(i) => i,
         Err(e) if interrupted(&e) => {
-            bail!("its module took too long to start and was stopped (ABI-6): its start ran past {}", limit::said(limit))
+            bail!("its module took too long to start and was stopped: its start ran past {}", limit::said(limit))
         }
         Err(e) => return Err(e),
     };
@@ -301,9 +303,9 @@ pub(crate) struct Sandbox {
     /// hundreds, and cold) where its memory is. A sealed memory never grows or moves.
     base: NonNull<u8>,
     len: usize,
-    /// Its limits, and the one each call has now, in ticks too: its birth's until it is sealed
-    /// (ABI-6).
-    deadline: Deadline,
+    /// Its limits, and the one each call has now, in ticks too: its birth's until it plays (ABI-6).
+    /// None for a module with no time checks: std's.
+    deadline: Option<Deadline>,
     limit: std::time::Duration,
     ticks: u64,
     /// A call ran past its deadline: a panic never calls it again in this plan (ABI-7).
@@ -328,19 +330,31 @@ pub(crate) struct State {
 }
 
 impl Sandbox {
-    /// A sandbox of `module`, to be born: states may be made in it until it is sealed. Each call
-    /// into it may run as `deadline` says (ABI-6).
-    pub(crate) fn new(engine: &Engine, module: &Module, deadline: Deadline) -> Result<Sandbox> {
-        let (mut store, instance, memory) = instantiate(engine, module, deadline.born)?;
+    /// A sandbox of `module`, on its module's engine, to be born: states may be made in it until it
+    /// is sealed. Each call into it may run as `deadline` says when the module has the time checks
+    /// (ABI-6).
+    pub(crate) fn new(module: &Module, deadline: Deadline) -> Result<Sandbox> {
+        let (mut store, instance, memory) = instantiate(module, deadline.born)?;
         let alloc = instance.get_typed_func::<(u32, u32), u32>(&mut store, "m2_alloc")?;
         let base = NonNull::new(memory.data_ptr(&store)).context("the kernel memory has no address")?;
         let (limit, ticks) = (deadline.born, limit::ticks(deadline.born));
+        let deadline = crate::packages::checks(module).then_some(deadline);
         Ok(Sandbox { store, instance, memory, alloc, base, len: 0, deadline, limit, ticks, stuck: false })
     }
 
-    /// Give the next call its deadline (ABI-6). Never allocates.
+    /// Give the next call its deadline, when it has the checks (ABI-6). Never allocates.
     fn arm(&mut self) {
-        arm(&mut self.store, self.ticks);
+        if self.deadline.is_some() {
+            arm(&mut self.store, self.ticks);
+        }
+    }
+
+    /// From now on each call has its plan's limit, not its birth's: it plays, once born, sealed and
+    /// prewarmed (ABI-6).
+    pub(crate) fn play(&mut self) {
+        if let Some(d) = self.deadline {
+            (self.limit, self.ticks) = (d.sealed, limit::ticks(d.sealed));
+        }
     }
 
     /// Whether a call into it ran past its deadline, so it is called no more in this plan (ABI-7).
@@ -467,7 +481,6 @@ impl Sandbox {
     /// is touched once, read and written back, so the system has each one ready before it plays.
     pub(crate) fn seal(&mut self) -> Result<()> {
         self.store.data_mut().sealed = true;
-        (self.limit, self.ticks) = (self.deadline.sealed, limit::ticks(self.deadline.sealed));
         let base = NonNull::new(self.memory.data_ptr(&self.store)).context("the kernel memory has no address")?;
         if base != self.base {
             bail!("its kernel memory moved while it was born (RENDER-32: a kernel memory never moves)");

@@ -10,7 +10,7 @@
 
 use anyhow::{Context, Result};
 use m2_song::Sha;
-use wasmtime::{Engine, Module};
+use wasmtime::Module;
 
 use crate::limit::Deadline;
 use crate::packages::PackageSet;
@@ -24,7 +24,6 @@ pub(crate) const STRETCH: &str = "std:stretch";
 /// names what it makes (the cache's renders, D8). Cheap to clone.
 #[derive(Clone)]
 pub(crate) struct Kernel {
-    engine: Engine,
     module: Module,
     prefix: String,
     pub(crate) sha: Sha,
@@ -39,8 +38,8 @@ impl Kernel {
             return None;
         }
         let (module, prefix, _) = packages.module_for(id)?;
-        let (engine, module, prefix) = (packages.engine.clone(), module.clone(), prefix.to_string());
-        Some(Kernel { engine, module, prefix, sha: packages.module_sha(id)?, deadline: packages.limits.of(false) })
+        let (module, prefix) = (module.clone(), prefix.to_string());
+        Some(Kernel { module, prefix, sha: packages.module_sha(id)?, deadline: packages.limits.of(false) })
     }
 }
 
@@ -62,7 +61,7 @@ pub(crate) fn run(k: &Kernel, r: &Run, sink: &mut dyn FnMut(&[&[f32]]) -> Result
     let _mode = fpenv::Canon::enter();
     let ch = r.channels.clamp(1, 2);
     let name = &k.prefix;
-    let mut sb = Sandbox::new(&k.engine, &k.module, k.deadline).with_context(|| format!("`{name}`"))?;
+    let mut sb = Sandbox::new(&k.module, k.deadline).with_context(|| format!("`{name}`"))?;
     let assets = [Some(r.source.clone())];
     let spec = Spec {
         inputs: 0,
@@ -81,6 +80,7 @@ pub(crate) fn run(k: &Kernel, r: &Run, sink: &mut dyn FnMut(&[&[f32]]) -> Result
     sb.seal().with_context(|| format!("`{name}`"))?;
     // The prewarm: a reset that would take memory fails here.
     state.reset(&mut sb).map_err(|e| sb.ran_out(name, e)).with_context(|| format!("`{name}`'s reset"))?;
+    sb.play();
     let out = state.outs[0];
     let mut block = [[0.0f32; BLOCK]; 2];
     let mut done = 0;

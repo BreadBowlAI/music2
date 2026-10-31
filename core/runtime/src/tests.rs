@@ -442,12 +442,12 @@ fn two_states_in_one_instance_play_independently() {
     let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
     let controls = [0.01, 0.5, 0.5];
     let alone = |seed: usize| {
-        let mut sb = sandbox::Sandbox::new(&pk.engine, module, pk.limits.of(false)).unwrap();
+        let mut sb = sandbox::Sandbox::new(module, pk.limits.of(false)).unwrap();
         let s = born(&mut sb);
         sb.seal().unwrap();
         play_state(&mut sb, &s, 20, sound(seed), controls)
     };
-    let mut sb = sandbox::Sandbox::new(&pk.engine, module, pk.limits.of(false)).unwrap();
+    let mut sb = sandbox::Sandbox::new(module, pk.limits.of(false)).unwrap();
     let (a, b) = (born(&mut sb), born(&mut sb));
     sb.seal().unwrap();
     let (mut heard_a, mut heard_b) = (vec![], vec![]);
@@ -644,7 +644,7 @@ fn package(wat: &str) -> PathBuf {
 }
 
 /// A package folder holding one hand-written kernel module, `@test/t:k`, its ports as `ports` declares.
-fn package_with(wat: &str, ports: &str) -> PathBuf {
+pub(crate) fn package_with(wat: &str, ports: &str) -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir =
         std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
@@ -1566,7 +1566,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
     }
     // Each read, in turn: the count `asset_read` returned, and the floats' bits.
     let reads = |held: sandbox::Held, channel: u32| -> Vec<(u32, Vec<u32>)> {
-        let mut sb = sandbox::Sandbox::new(&pk.engine, module, pk.limits.of(false)).unwrap();
+        let mut sb = sandbox::Sandbox::new(module, pk.limits.of(false)).unwrap();
         let values = [channel as f64];
         let assets = [Some(held)];
         let spec = sandbox::Spec {

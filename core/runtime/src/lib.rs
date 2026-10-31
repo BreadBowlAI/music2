@@ -50,7 +50,7 @@ pub mod fpenv;
 pub mod gauge;
 mod keep;
 pub mod latency;
-pub mod limit;
+pub(crate) mod limit;
 mod offline;
 mod overlay;
 pub mod packages;
@@ -81,7 +81,7 @@ pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
-pub use limit::{Limits, TooSlow};
+pub use limit::TooSlow;
 pub use m2_pool::{Counters, ENTRY_BUCKETS, Meter, Pool, Runner, Setup, Trip};
 pub use packages::{Package, PackageSet, View};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
@@ -263,7 +263,7 @@ impl KernelInst {
     fn new(packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64, deadline: limit::Deadline) -> Result<KernelInst> {
         let id = k.id;
         let (module, prefix, _) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
-        let mut sandbox = Sandbox::new(&packages.engine, module, deadline).with_context(|| format!("{}: `{id}`", n.name))?;
+        let mut sandbox = Sandbox::new(module, deadline).with_context(|| format!("{}: `{id}`", n.name))?;
         let mut k = KernelInst::born(&mut sandbox, 0, prefix, packages, n, k, shape)?;
         sandbox.seal().with_context(|| n.name.clone())?;
         k.own = Some(sandbox);
@@ -1164,6 +1164,12 @@ struct Graph {
     poisoned: Vec<bool>,
 }
 
+/// The top-level node of `flat` whose box node `name` is: itself, or the instrument whose voice it
+/// is in.
+fn box_of(flat: &Flat, name: &str) -> Option<usize> {
+    flat.nodes.iter().position(|n| n.name == name || matches!(&n.op, FOp::Poly { voice, .. } if voice.nodes.iter().any(|v| v.name == name)))
+}
+
 /// The sandboxes a renderer of `flat` holds, its top-level nodes `used` (RENDER-32): one for each
 /// kernel outside an instrument, and one for each package an instrument's voices run kernels of.
 fn sandboxes(flat: &Flat, used: &[bool], packages: &PackageSet) -> usize {
@@ -1237,9 +1243,18 @@ type Boxed<'a> = &'a dyn Fn(usize) -> Make;
 
 impl Builder<'_> {
     /// How long each call into the sandboxes it makes may run (ABI-6): a plan for the live engine
-    /// (realtime) has the live limit once sealed.
+    /// (realtime) has the live limit once it plays.
     fn deadline(&self) -> limit::Deadline {
         self.packages.limits.of(self.mode == m2_plugins::RenderMode::Realtime)
+    }
+
+    /// A new box of shape `shape` may be made: not when one of that shape got stuck being born
+    /// before, which is refused at once, in the same words (ABI-7).
+    fn unstuck(&self, shape: u64) -> Result<()> {
+        match self.packages.stuck.get(shape) {
+            Some(slow) => Err(slow.into()),
+            None => Ok(()),
+        }
     }
 
     fn slot(&self, module: &str, lane: &str) -> Result<usize> {
@@ -1302,7 +1317,10 @@ impl Builder<'_> {
                 let k = Kernel { id: kernel, channels: *channels, inputs, values, assets: &read, sample_rate: self.sample_rate };
                 let inst = match boxed {
                     Make::New(shape) if in_voice => Some(Box::new(self.in_pool(n, &k, shape)?)),
-                    Make::New(shape) => Some(Box::new(KernelInst::new(self.packages, n, &k, shape, self.deadline())?)),
+                    Make::New(shape) => {
+                        self.unstuck(shape)?;
+                        Some(Box::new(KernelInst::new(self.packages, n, &k, shape, self.deadline())?))
+                    }
                     _ => None,
                 };
                 Exec::Kernel(KernelNode { inputs: inputs.to_vec(), seen: vec![COPY; inputs.len()], inst })
@@ -1330,6 +1348,7 @@ impl Builder<'_> {
                 };
                 let pool = match boxed {
                     Make::New(shape) => {
+                        self.unstuck(shape)?;
                         // Its voices' states are born in sandboxes of its own, sealed once all are born.
                         let outer = std::mem::take(&mut self.pool);
                         let mut built = || -> Result<Vec<VoiceSlot>> {
@@ -1399,7 +1418,7 @@ impl Builder<'_> {
         let at = match self.pool.iter().position(|(p, _)| p == package) {
             Some(at) => at,
             None => {
-                let sb = Sandbox::new(&self.packages.engine, module, self.deadline()).with_context(|| format!("{}: `{id}`", n.name))?;
+                let sb = Sandbox::new(module, self.deadline()).with_context(|| format!("{}: `{id}`", n.name))?;
                 self.pool.push((package.to_string(), sb));
                 self.pool.len() - 1
             }
@@ -2104,7 +2123,8 @@ impl Graph {
 
     /// Reset every kernel once, in voices too, after its sandbox is sealed: a reset that would take
     /// memory fails here, off the audio thread, naming its node (RENDER-28). A reset leaves a state
-    /// as it was born, so nothing sounds different.
+    /// as it was born, so nothing sounds different. It runs with the birth's limit; then each
+    /// sandbox plays, with its plan's (ABI-6).
     fn prewarm(&mut self) -> Result<()> {
         self.prewarm_in(&mut [])
     }
@@ -2113,12 +2133,16 @@ impl Graph {
     fn prewarm_in(&mut self, pool: &mut [Sandbox]) -> Result<()> {
         for e in &mut self.exec {
             match e {
-                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.prewarm(pool)?,
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => {
+                    k.prewarm(pool)?;
+                    k.own.iter_mut().for_each(Sandbox::play);
+                }
                 Exec::Poly(p) => {
                     if let Some(p) = p.pool.as_deref_mut() {
                         for v in &mut p.voices {
                             v.graph.prewarm_in(&mut p.sandboxes)?;
                         }
+                        p.sandboxes.iter_mut().for_each(Sandbox::play);
                     }
                 }
                 _ => {}
@@ -2742,8 +2766,15 @@ impl Renderer {
         if needed > SANDBOX_LIMIT {
             return Err(TooManySounds { needed, limit: SANDBOX_LIMIT }.into());
         }
-        let mut graph = b.graph(&flat.nodes, &flat.order, false, &boxed, &w.room)?;
-        graph.prewarm()?;
+        let born = b.graph(&flat.nodes, &flat.order, false, &boxed, &w.room).and_then(|mut g| g.prewarm().map(|()| g));
+        // A box whose birth or prewarm ran past its limit is refused at once from now on (ABI-7).
+        if let Err(e) = &born
+            && let Some(slow) = e.downcast_ref::<TooSlow>()
+            && let Some(at) = box_of(flat, &slow.node)
+        {
+            packages.stuck.insert(shapes[at].as_ref().map_or(0, Shape::hash64), slow);
+        }
+        let mut graph = born?;
         // Ghosts, then fade nodes, after the new graph's nodes (RENDER-25a).
         let n = flat.nodes.len();
         b.at = None;

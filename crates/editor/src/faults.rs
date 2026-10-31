@@ -332,10 +332,18 @@ impl Namer {
     }
 
     /// The sound node `name` (`<module>/<id>`, a voice's node too) is part of, as the song's code
-    /// wrote it, with its place and the package it is from (ABI-7), as a sentence's subject: the
-    /// outermost call of a package's component it was made inside, by the component's label
-    /// ("Growl on Bass, from @alice/growl,"); else, for a kernel called outside any, the kernel by
-    /// its name, and an instrument as such. A node not in the song is named as it is.
+    /// wrote it, with its place and whose code it runs (ABI-7), as a sentence's subject:
+    /// - made inside a package's component: the outermost such call, by the component's label, and
+    ///   its package ("Growl on Bass, from @alice/growl,"); and when the time-checked code it runs
+    ///   (a pack's kernels, [`m2_runtime::packages::checked`]) is another package's, that one too
+    ///   ("…, from @bob/synth, with sound code from @alice/growl,");
+    /// - a kernel the song's own code calls: the kernel by its name, and its package ("The growl on
+    ///   Bass, from @alice/growl,");
+    /// - an instrument the song's own code writes: as the song's own, with the packages whose
+    ///   time-checked kernels its voices run ("The instrument on Keys, from the song's own code,
+    ///   with sound code from @alice/growl,").
+    ///
+    /// A node not in the song is named as it is.
     pub fn slow_sound(&self, name: &str) -> String {
         let ir = self.song.ir();
         let found = ir.modules.iter().find_map(|m| {
@@ -343,27 +351,54 @@ impl Namer {
             let mut at = None;
             crate::controls::walk(&m.nodes, &mut |n| {
                 if at.is_none() && n.id == id {
-                    let (kernel, what) = match &n.op {
-                        Op::Kernel { kernel, .. } => (Some(kernel.clone()), id),
-                        Op::Poly { .. } => (None, "instrument"),
-                        _ => (None, id),
+                    // The kernels it runs: its own, or its voices'.
+                    let mut kernels = vec![];
+                    let mut kernel_of = |n: &m2_ir::Node| {
+                        if let Op::Kernel { kernel, .. } = &n.op {
+                            kernels.push(kernel.clone());
+                        }
                     };
-                    at = Some((n.frame, kernel, what.to_string()));
+                    kernel_of(n);
+                    let what = match &n.op {
+                        Op::Kernel { kernel, .. } => m2_song::pack::split_id(kernel).map_or(kernel.as_str(), |(_, k)| k).to_string(),
+                        Op::Poly { body, .. } => {
+                            crate::controls::walk(&body.nodes, &mut kernel_of);
+                            "instrument".to_string()
+                        }
+                        _ => id.to_string(),
+                    };
+                    at = Some((n.frame, kernels, what, matches!(n.op, Op::Kernel { .. })));
                 }
             });
-            at.map(|(frame, kernel, what)| (m, frame, kernel, what))
+            at.map(|(frame, kernels, what, kernel)| (m, frame, kernels, what, kernel))
         });
-        let Some((m, frame, kernel, what)) = found else { return name.to_string() };
+        let Some((m, frame, kernels, what, kernel)) = found else { return name.to_string() };
+        let place = self.place_of(&m.key);
+        // The packages whose time-checked code it runs, in order, once each.
+        let mut code: Vec<&str> = kernels
+            .iter()
+            .filter_map(|k| m2_song::pack::split_id(k).map(|(p, _)| p))
+            .filter(|p| m2_runtime::packages::checked(p))
+            .collect();
+        code.sort();
+        code.dedup();
         let label = |id: &str| self.song.components().and_then(|c| c.get(id)).map(|d| d.label.clone());
         let component = m.chain(frame).into_iter().filter_map(|f| f.component.as_deref()).find_map(|id| {
             let (package, bare) = m2_song::pack::split_id(id)?;
             Some((label(id).unwrap_or_else(|| bare.to_string()), package))
         });
-        let kernel = kernel.as_deref().and_then(m2_song::pack::split_id).map(|(package, bare)| (bare.to_string(), package));
-        let place = self.place_of(&m.key);
-        match component.or(kernel) {
-            Some((what, package)) => format!("{} {place}, from {package},", capital(&what)),
-            None => format!("The {what} {place}"),
+        let with = |skip: &str| match code.iter().filter(|p| **p != skip).copied().collect::<Vec<_>>() {
+            others if others.is_empty() => String::new(),
+            others => format!(" with sound code from {},", or(&others)),
+        };
+        match (component, kernel) {
+            (Some((label, package)), _) => format!("{} {place}, from {package},{}", capital(&label), with(package)),
+            // A kernel the song's own code calls: its own package's.
+            (None, true) => match kernels.first().and_then(|k| m2_song::pack::split_id(k)) {
+                Some((package, _)) => format!("The {what} {place}, from {package},"),
+                None => format!("The {what} {place}"),
+            },
+            (None, false) => format!("The {what} {place}, from the song's own code,{}", with("")),
         }
     }
 
@@ -450,6 +485,14 @@ fn lower(words: &str) -> String {
     match words.strip_prefix("The ") {
         Some(rest) => format!("the {rest}"),
         None => words.to_string(),
+    }
+}
+
+/// `a`, `a or b`, `a, b or c`.
+fn or(names: &[&str]) -> String {
+    match names {
+        [rest @ .., last] if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        _ => names.concat(),
     }
 }
 

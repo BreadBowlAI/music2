@@ -237,10 +237,76 @@ fn stuck_at(dir: &std::path::Path) {
     std::fs::write(dir.join("src/index.ts"), code).unwrap();
 }
 
+/// The module of `@test/hum` ([`hum_at`]), from this text: a kernel `hum`, one control input and one
+/// output, which plays silence.
+///
+/// ```wat
+/// (module
+///   (@custom "m2_abi" "\01\00\00\00")
+///   (memory (export "memory") 1)
+///   (func (export "m2_alloc") (param i32 i32) (result i32) (i32.const 8192))
+///   (func (export "hum_ports") (result i32) (i32.const 257))
+///   (func (export "hum_new") (param i32) (result i32) (i32.const 4096))
+///   (func (export "hum_reset") (param i32))
+///   (func (export "hum_active") (param i32) (result i32) (i32.const 0))
+///   (func (export "hum_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32)
+///     (block $done (loop $l
+///       (br_if $done (i32.ge_u (local.get $from) (local.get $to)))
+///       (f32.store (i32.add (i32.load offset=4 (local.get $io)) (i32.shl (local.get $from) (i32.const 2))) (f32.const 0))
+///       (local.set $from (i32.add (local.get $from) (i32.const 1)))
+///       (br $l)))))
+/// ```
+const HUM: &[u8] = &[
+    0, 97, 115, 109, 1, 0, 0, 0, 1, 27, 5, 96, 2, 127, 127, 1, 127, 96, 0, 1, 127, 96, 1, 127, 1, 127, 96, 1, 127, 0, 96, 4, 127, 127, 127,
+    127, 0, 3, 7, 6, 0, 1, 2, 3, 2, 4, 5, 3, 1, 0, 1, 7, 82, 7, 6, 109, 101, 109, 111, 114, 121, 2, 0, 8, 109, 50, 95, 97, 108, 108, 111,
+    99, 0, 0, 9, 104, 117, 109, 95, 112, 111, 114, 116, 115, 0, 1, 7, 104, 117, 109, 95, 110, 101, 119, 0, 2, 9, 104, 117, 109, 95, 114,
+    101, 115, 101, 116, 0, 3, 10, 104, 117, 109, 95, 97, 99, 116, 105, 118, 101, 0, 4, 11, 104, 117, 109, 95, 112, 114, 111, 99, 101, 115,
+    115, 0, 5, 10, 72, 6, 6, 0, 65, 128, 192, 0, 11, 5, 0, 65, 129, 2, 11, 5, 0, 65, 128, 32, 11, 2, 0, 11, 4, 0, 65, 0, 11, 43, 0, 2, 64,
+    3, 64, 32, 2, 32, 3, 79, 13, 1, 32, 1, 40, 2, 4, 32, 2, 65, 2, 116, 106, 67, 0, 0, 0, 0, 56, 2, 0, 32, 2, 65, 1, 106, 33, 2, 12, 0, 11,
+    11, 11, 0, 11, 6, 109, 50, 95, 97, 98, 105, 1, 0, 0, 0, 0, 41, 4, 110, 97, 109, 101, 2, 20, 1, 5, 4, 0, 1, 115, 1, 2, 105, 111, 2, 4,
+    102, 114, 111, 109, 3, 2, 116, 111, 3, 12, 1, 5, 2, 0, 4, 100, 111, 110, 101, 1, 1, 108,
+];
+
+/// A pack `@test/hum` at `dir`: its one kernel, `hum`, and no component.
+fn hum_at(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("k.wasm"), HUM).unwrap();
+    let manifest = "[package]\nname = \"@test/hum\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\
+                    \"@m2/core\" = \"1\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"hum\"\ninputs = [\"in: control<*>\"]\noutputs = [\"out: audio<1>\"]\n";
+    std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
+    std::fs::write(dir.join("src/index.ts"), "export const nothing = 0;\n").unwrap();
+}
+
+// ABI-7 (review T5): an instrument the song's own code writes around a pack's kernel is named as
+// the song's own, with the pack whose sound code it runs: no package's component made it.
+#[test]
+fn a_song_written_instrument_too_slow_names_the_pack_whose_code_it_runs() {
+    let pack = std::env::temp_dir().join(format!("m2-faults-hum-{}", std::process::id()));
+    hum_at(&pack);
+    let at = serde_json::to_string(&pack.to_string_lossy()).unwrap();
+    let song = SONG
+        .replace("import { mixer }", "import { kernel, poly } from '@m2/core';\nimport { mixer }")
+        .replace(
+            "export default",
+            "const keys = track('keys', { name: 'Keys' }, ({ lane }) => poly(lane.notes('k'), (n) => kernel('@test/hum:hum', { in: n.pitch })));\nexport default",
+        )
+        .replace("hats: hats.out", "hats: hats.out, keys: keys.out");
+    let rig = Rig::with(&song, |f| {
+        let manifest = std::fs::read_to_string(f.0.join("music2.toml")).unwrap();
+        f.put("music2.toml", &format!("{manifest}\"@test/hum\" = {{ path = {at} }}\n"));
+    });
+    rig.report(Code::TooSlow, rig.node("keys", |op| matches!(op, FOp::Poly { .. })));
+    let said = "The instrument on Keys, from the song's own code, with sound code from @test/hum, took too long and was stopped. It \
+                stays silent until the song is built again. The rest of the song plays on.";
+    assert_eq!(rig.told(), [said]);
+    std::fs::remove_dir_all(&pack).ok();
+}
+
 // ABI-7: a change whose sound's kernel never gets ready (its `k_new` never returns) isn't made: it
 // is stopped at the limit, the version before plays on, and the user is told once which sound
-// and whose. The catch-up doesn't try that revision again, which would wait the limit each time.
-// Taking the sound out plays the change.
+// and whose, in words with no node's or rule's id. The catch-up doesn't try that revision again,
+// which would wait the limit each time; and later edits, of the code elsewhere or of data, are
+// refused at once (review T3), not said again. Taking the sound out plays the change.
 #[test]
 fn a_sound_too_slow_to_get_ready_is_said_once_and_not_tried_again() {
     let mut rig = Rig::new();
@@ -260,17 +326,35 @@ fn a_sound_too_slow_to_get_ready_is_said_once_and_not_tried_again() {
     assert!(took >= std::time::Duration::from_secs(5) && took < std::time::Duration::from_secs(15), "stopped at its limit: {took:?}");
     let told: Vec<String> = rig.graph.expire().into_iter().filter(|t| t.contains("took too long")).collect();
     let said = "Your last change is saved, but Stuck on Keys, from @test/stuck, took too long to get ready and was stopped, so the \
-                version before it keeps playing. Take the sound out, or undo the change. (In detail: keys/";
-    assert!(told.len() == 1 && told[0].starts_with(said), "{told:?}");
-    assert!(told[0].ends_with("took too long and was stopped: one call into it ran past 5 s (ABI-6))"), "{told:?}");
+                version before it keeps playing. Take the sound out, or undo the change.";
+    assert_eq!(told, [said]);
     rig.fill(2);
     assert!(rig.graph.status().playing, "the version before plays on");
     let t = std::time::Instant::now();
     assert!(!rig.graph.catch_up(), "not tried again");
     assert!(t.elapsed() < std::time::Duration::from_secs(1), "{:?}", t.elapsed());
     assert!(rig.graph.expire().iter().all(|t| !t.contains("took too long")), "said once");
+    // Two later edits, the bass's code and the hats' notes: each refused at once, and not said again.
+    let edits = [
+        ("song.ts", with.replace("osc.saw(110)", "osc.saw(220)")),
+        (
+            "data/hats/hits.json",
+            "{\"clips\": [{\"start\": 0, \"length\": 4, \"notes\": [{\"pitch\": 42, \"start\": 0, \"length\": 0.25}]}]}\n".into(),
+        ),
+    ];
+    for (path, text) in edits {
+        rig.fixture.put(path, &text);
+        let t = std::time::Instant::now();
+        rig.graph.poll();
+        assert!(t.elapsed() < std::time::Duration::from_secs(1), "{path}: refused at once, {:?}", t.elapsed());
+        assert!(rig.graph.expire().iter().all(|t| !t.contains("took too long")), "{path}: not said again");
+        rig.fill(2);
+        assert!(rig.graph.status().playing, "{path}: the version before plays on");
+    }
     rig.fixture.put("song.ts", SONG);
+    let t = std::time::Instant::now();
     assert!(rig.graph.poll());
+    assert!(t.elapsed() < std::time::Duration::from_secs(1), "{:?}", t.elapsed());
     rig.fill(2);
     assert!(rig.graph.status().playing && rig.graph.expire().iter().all(|t| !t.contains("took too long")));
     std::fs::remove_dir_all(&pack).ok();
