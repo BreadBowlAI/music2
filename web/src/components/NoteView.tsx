@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Lock, Minus, MousePointer2, Pencil, Plus, ZoomIn, ZoomOut } from "lucide-react";
+import { Check, ChevronDown, FoldVertical, Lock, Minus, MousePointer2, Pencil, Plus, UnfoldVertical, ZoomIn, ZoomOut } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   barAt,
@@ -27,8 +27,9 @@ import { attach, KEY_VELOCITY, PAINT_MS, pulse, release, retune, strike, useAudi
 import { onFrame } from "../lib/clock";
 import { ROLL_RULER_H } from "../lib/layout";
 import { chord, isMac, keyName, mod, native } from "../lib/native";
-import { humanize, legato, quantize, swing, SWINGS, swingUnit, targets, transpose } from "../lib/noteTools";
-import { inKey } from "../lib/songKey";
+import { humanize, legato, quantize, swingUnit, targets, transpose } from "../lib/noteTools";
+import { chordAt, fit, inKey, loadTheory, stepIn, useTheory, type KeyView } from "../lib/songKey";
+import { getLocal, setLocal, useLocal } from "../lib/local";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { pickName, useGrid } from "../lib/grid";
 import { keysWidth, namesOf, pitchName, rowName } from "../lib/rowNames";
@@ -39,15 +40,20 @@ import { DockSlot } from "./Dock";
 import GridChip from "./GridChip";
 import NoteMenu, { type NoteTool } from "./NoteMenu";
 import { Hatch, HBands, VLines } from "./draw";
-import { Button, EmptyState, keepFocus, Segment } from "./ui";
+import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
 import { afterLaneWrites, hasOwnId } from "../lib/graph";
-import { serverRef, type Gesture as ClipGesture } from "../lib/clips";
+import { playhead, send as sendGesture, serverRef, useClipboard, type Copied, type Gesture as ClipGesture, type ServerRef } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { look } from "../lib/focus";
 
 // The roll's sizes (taste.md §3.5); its ruler is the arrangement's, 28px. The key column is 56 px,
-// or 88 where its keys say drum names (`keysWidth`, polish A4).
+// or 88 where its keys say drum names (`keysWidth`, polish A4). A row is 14 px unless the view
+// settings say another height, 10 to 24 (NOTE-9, taste.md NT-5).
 const ROW_H = 14;
+const ROW_MIN = 10;
+const ROW_MAX = 24;
+/** How much ⌘↓ and ⌘↑ change a row's height, in px. */
+const ROW_STEP = 2;
 const VEL_H = 64;
 /** The velocity strip's bars stop this far from its edges. */
 const VEL_PAD = 8;
@@ -64,6 +70,10 @@ const DOUBLE_PX = 5;
 
 /** The part of a clip the piano roll edits: its length and its notes. */
 interface Shape { length: number; notes: Note[] }
+/** The roll's view settings (NOTE-9), this machine's, in the song's `.music2/view.json`: Lock to key, folded drum rows, the row height. */
+interface RollView { lock?: boolean; fold?: boolean; rows?: number }
+/** Whether a pointer event holds ⌘ (Ctrl on Linux): the note goes off the grid (NOTE-6). On a Mac a Ctrl-click is a right-click. */
+const offGrid = (e: { metaKey: boolean; ctrlKey: boolean }) => (isMac ? e.metaKey : e.ctrlKey);
 interface Box { x0: number; y0: number; x1: number; y1: number }
 /**
  * What a shape of the clip was made from: the lane's clips at a revision (the graph's, or the
@@ -73,6 +83,7 @@ interface Box { x0: number; y0: number; x1: number; y1: number }
 type Basis = { revision: number; clips: NoteClip[] } | "pending";
 type Gesture =
   | { kind: "move" | "resize"; pointer: number; x0: number; y0: number; index: number; base: Shape; from: Basis; sel: ReadonlySet<number>; shift: boolean; picked: boolean; result?: Shape }
+  /** Draw mode's press (B): one note, or a chord stamp's notes (NOTE-4), all after `base`'s; a drag sets their length. */
   | { kind: "empty"; pointer: number; x0: number; y0: number; keep: ReadonlySet<number>; moved: boolean }
   | { kind: "paint"; pointer: number; base: Shape; from: Basis; cells: Set<string>; result: Shape }
   | { kind: "draw"; pointer: number; x0: number; base: Shape; from: Basis; moved: boolean; result: Shape }
@@ -120,8 +131,9 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   // A bar as long as the time signature where the clip starts says (FMT-13).
   const bpb = barAt(timeline.meter, server?.start ?? 0).length;
   const tone = trackColors(timeline, module) ?? GRAPHITE;
+  const declared = findLane(timeline, module, lane);
   // The key column: wider where its keys say drum names. Effects read it through a ref.
-  const keysW = keysWidth(findLane(timeline, module, lane));
+  const keysW = keysWidth(declared);
   const keysWRef = useRef(keysW);
   keysWRef.current = keysW;
 
@@ -133,6 +145,23 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   // Where a note lands: on the grid while snap is on, anywhere (0) while it is off.
   const snap = snapOn ? gridStep : 0;
   const draw = useShell((s) => s.draw);
+  // The roll's view settings (NOTE-9): Lock to key, folded drum rows, the row height.
+  const roll = useLocal<RollView>("roll", {});
+  const setRoll = (r: RollView) => setLocal("roll", { ...getLocal<RollView>("roll", {}), ...r });
+  const rowH = clamp(Math.round(roll.rows ?? ROW_H), ROW_MIN, ROW_MAX);
+  // A lane whose rows are named drums has no key (X26): no shading by it, no Lock to key, no chords.
+  const names = namesOf(declared);
+  const drums = Object.keys(names).length > 0;
+  const keyed: KeyView | null = timeline.key && !drums ? timeline.key : null;
+  const locking = !!keyed && !!roll.lock;
+  // The chord a stamp places (NOTE-4), while the key has chords to stamp.
+  const tool = useShell((s) => s.chord);
+  const stamp = keyed && keyed.chords.length > 0 ? tool : null;
+  // Swing's amounts, the grooves and the chord kinds: the server's table, read once.
+  const theory = useTheory((t) => t.theory);
+  useEffect(() => void loadTheory(), []);
+  /** Where the pointer is over the grid, for a stamp's outline: null when it isn't, or no chord is picked. */
+  const [hover, setHover] = useState<{ beat: number; pitch: number; off: boolean } | null>(null);
   const [ppb, setPpb] = useState(48);
   const [visible, setVisible] = useState(0);
   const [marquee, setMarquee] = useState<Box | null>(null);
@@ -145,8 +174,10 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const grid = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
-  /** The note a pointer holds down on the grid, sounding (audition): its handle, null when nothing sounds. */
-  const hold = useRef<{ pointer: number; h: number | null } | null>(null);
+  /** The notes a pointer holds down on the grid, sounding (audition): their handles, null where nothing sounds. A chord stamp holds several. */
+  const hold = useRef<{ pointer: number; h: (number | null)[] } | null>(null);
+  /** A gesture that added notes (a paste), on its way: the clip's notes before it, to select the new ones once its revision shows. */
+  const added = useRef<{ revision: number; before: Note[] } | null>(null);
   /** The last press on empty grid: a second one close by is a double-click's. */
   const lastEmpty = useRef<{ t: number; x: number; y: number } | null>(null);
   const sending = useRef<{ busy: boolean; next: { shape: Shape; name?: string } | null }>({ busy: false, next: null });
@@ -176,6 +207,17 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   const clip: Shape | null = draft ?? (server ? { length: server.length, notes: server.notes } : null);
   const start = server?.start ?? 0;
+  // The rows shown, top to bottom (NOTE-8): on a drum lane, folded, the drums the clip used when it
+  // opened or Fold was pressed (the kit's named rows if none), and any a note is on since, so no row
+  // goes while you work; else every pitch, 127 down to 0.
+  const folded = drums && roll.fold !== false;
+  const [foldFrom, setFoldFrom] = useState<number[]>(() => usedRows(names, server?.notes ?? []));
+  const rows = folded ? [...new Set([...foldFrom, ...(server?.notes ?? []).map((n) => n.pitch), ...(clip?.notes ?? []).map((n) => n.pitch)])].sort((a, b) => b - a) : null;
+  const nRows = rows ? rows.length : TOP + 1;
+  /** The row pitch `p` is on, from the top; -1 when it isn't shown. */
+  const rowOf = (p: number) => (rows ? rows.indexOf(p) : TOP - p);
+  /** The pitch of row `r` from the top, the nearest row there is. */
+  const pitchOfRow = (r: number) => (rows ? rows[clamp(r, 0, rows.length - 1)] : clamp(TOP - r, 0, TOP));
   // A new note is a grid step long, snapped or not (as in Live).
   const step = gridStep;
 
@@ -190,6 +232,12 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
       if (n !== draft.notes.length) setSelected(new Set());
     } else if (n !== seen.current) setSelected(new Set());
     seen.current = n;
+    // A paste's notes, once the graph shows them: selected (NOTE-5).
+    const a = added.current;
+    if (a && !draft && server && graph.view.revision >= a.revision) {
+      added.current = null;
+      setSelected(new Set(addedTo(a.before, server.notes)));
+    }
   });
 
   // Audition listens while the roll is open; closing it (another clip, another view) lets go of every note.
@@ -202,10 +250,11 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     setPpb(clamp(Math.floor((el.clientWidth - keysWRef.current - 32) / server.length), 12, 160));
     // Centred on the clip's pitches, so its whole range shows when it fits (a row to spare at
     // 14px rows for an octave in the 300px dock), and on whole rows: no key cut under the ruler.
+    // Folded, its few rows start at the top.
     const pitches = server.notes.map((n) => n.pitch);
     const mid = pitches.length ? (Math.min(...pitches) + Math.max(...pitches)) / 2 : 60;
-    const centred = ROLL_RULER_H + (TOP - mid) * ROW_H + ROW_H / 2 - (ROLL_RULER_H + el.clientHeight) / 2;
-    el.scrollTop = Math.round(centred / ROW_H) * ROW_H;
+    const centred = ROLL_RULER_H + (TOP - mid) * rowH + rowH / 2 - (ROLL_RULER_H + el.clientHeight) / 2;
+    el.scrollTop = rows ? 0 : Math.round(centred / rowH) * rowH;
     root.current?.focus({ preventScroll: true });
     // Only on opening: later edits keep the view where the user put it.
   }, []);
@@ -240,6 +289,21 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     if (el) anchor.current = { beat: (el.scrollLeft + el.clientWidth / 2 - keysW) / ppb, x: el.clientWidth / 2 - keysW };
     setPpb((p) => clamp(p * by, 8, 400));
   };
+  /** The row in the middle of the roll, kept there while rows get taller or shorter. */
+  const rowAnchor = useRef<number | null>(null);
+  /** ⌘↓ (`dir` 1) and ⌘↑ (-1): rows 2 px taller or shorter, 10 to 24 px (NOTE-9, taste.md NT-5). */
+  const resizeRows = (dir: 1 | -1) => {
+    const h = clamp(rowH + dir * ROW_STEP, ROW_MIN, ROW_MAX);
+    const el = scroller.current;
+    if (h === rowH) return;
+    if (el) rowAnchor.current = (el.scrollTop + (el.clientHeight - ROLL_RULER_H) / 2) / rowH;
+    setRoll({ rows: h });
+  };
+  useLayoutEffect(() => {
+    const el = scroller.current, r = rowAnchor.current;
+    rowAnchor.current = null;
+    if (el && r !== null) el.scrollTop = Math.max(0, r * rowH - (el.clientHeight - ROLL_RULER_H) / 2);
+  }, [rowH]);
 
   // ---------------------------------------------------------------- writing
 
@@ -345,6 +409,41 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   };
 
   /**
+   * This clip as a gesture names it now, without the hash the window drew it with: a gesture sent
+   * after this view's own writes lands on what they wrote.
+   */
+  const named = (): ServerRef | null => {
+    const l = findLane(latest.current.timeline, module, lane);
+    const r = l ? serverRef(l, ref) : null;
+    if (!r) return null;
+    const { sha: _sha, ...rest } = r;
+    return rest;
+  };
+
+  /**
+   * A clip gesture on this clip that the server works out (a groove, NOTE-7; a paste, NOTE-5),
+   * sent after this view's lane writes on their way, so it lands on what they wrote: one Tx, one
+   * undo step named `name`. Its notes show when the graph does; with `select`, the notes it added
+   * are then selected.
+   */
+  const act = (make: (clip: ServerRef) => ClipGesture, name: string, select = false) => {
+    if (locked) return;
+    const before = clip?.notes ?? [];
+    afterLaneWrites(latest.current, (within) => {
+      const c = named();
+      if (!c) return Promise.reject(new Error("This clip is gone."));
+      return sendGesture(latest.current, make(c), { name }, undefined, within);
+    })
+      .then((done) => {
+        if (!select || done.before === done.after) return;
+        added.current = { revision: done.revision, before };
+        // Drawn again, in case the graph showed the revision before this answer came.
+        setWrites((n) => n + 1);
+      })
+      .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+  };
+
+  /**
    * Gesture `g` shows `shape` now: while the song plays it is heard so (8b.7), by a lease begun at
    * its first change. None while a write of this view is on its way or the roll shows one the graph
    * doesn't yet (the lease names the clip as the graph draws it), nor on a lane with a clip without
@@ -403,9 +502,9 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     };
   }, []);
 
-  /** Beat `b` of the clip on the snap grid, which follows the song's bars. */
-  const snapBeat = (b: number, floor = false) => {
-    if (!snap) return clean(b);
+  /** Beat `b` of the clip on the snap grid, which follows the song's bars; `off` (⌘ held): where it is (NOTE-6). */
+  const snapBeat = (b: number, floor = false, off = false) => {
+    if (!snap || off) return clean(b);
     const q = (floor ? Math.floor : Math.round)((start + b) / snap + 1e-9) * snap;
     return clean(q - start);
   };
@@ -413,7 +512,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const at = (e: { clientX: number; clientY: number }) => {
     const r = grid.current!.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
-    return { x, y, beat: x / ppb, pitch: clamp(TOP - Math.floor(y / ROW_H), 0, TOP) };
+    return { x, y, beat: x / ppb, pitch: pitchOfRow(Math.floor(y / rowH)) };
   };
 
   const picked = clip ? [...selected].filter((i) => i < clip.notes.length) : [];
@@ -443,8 +542,41 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   };
 
   /**
+   * ⌘C, or with `cut` ⌘X (NOTE-5): the selected notes onto the window's one clipboard, as one notes
+   * clip that starts where the first of them does, so the timeline pastes it as a clip too.
+   */
+  const copy = (cut: boolean) => {
+    if (!clip || !picked.length) return;
+    const notes = picked.map((i) => clip.notes[i]);
+    const first = Math.min(...notes.map((n) => n.start));
+    const end = Math.max(...notes.map((n) => n.start + n.length));
+    const copied: Copied = {
+      module,
+      lane,
+      clip: { start: clean(start + first), length: clean(Math.max(end - first, MIN_LEN)), notes: notes.map((n) => ({ ...n, start: clean(n.start - first) })) },
+    };
+    useClipboard.setState({ copied: [copied] });
+    if (cut && !locked) remove(picked, `cutting ${trackName()} notes`);
+  };
+
+  /**
+   * ⌘V (NOTE-5): the clipboard's notes into this clip, keeping their distances, the earliest at the
+   * playhead when it is inside the clip (else at its start), on the grid while it snaps, and at the
+   * key's notes while Lock to key is on. One Tx; the pasted notes are selected.
+   */
+  const paste = () => {
+    const copied = useClipboard.getState().copied.filter((c) => "notes" in c.clip);
+    if (!clip || !copied.length || locked) return;
+    const now = playhead() - start;
+    const into = now >= 0 && now < clip.length ? now : 0;
+    const at = clean(start + Math.max(0, snapBeat(into, true)));
+    act((c) => ({ op: "paste", clips: copied, at, into: c, ...(locking ? { fit: true } : {}) }), `pasting ${trackName()} notes`, true);
+  };
+
+  /**
    * A note tool (D1) on the selected notes, or on every note when none is selected (Q25): one
-   * lane write, one undo step named for it. The selection stays as it was.
+   * lane write, one undo step named for it. The selection stays as it was. Swing and the grooves
+   * (NOTE-7) are the server's: one clip gesture.
    */
   const runTool = (t: NoteTool) => {
     if (!clip || locked) return;
@@ -453,6 +585,11 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const keep = new Set(picked);
     if (t.kind === "delete") return remove(all, `deleting ${who}`);
     if (t.kind === "duplicate") return void duplicate(all, `duplicating ${who}`);
+    if (t.kind === "swing" || t.kind === "groove") {
+      const groove = t.kind === "swing" ? { name: "swing", amount: t.amount, step: swingUnit(gridStep) } : { name: t.name };
+      const label = t.kind === "swing" ? "swinging" : `${theory?.grooves.find((g) => g.name === t.name)?.label ?? t.name} on`;
+      return act((c) => ({ op: "groove", clips: [c], ...(picked.length ? { notes: picked } : {}), groove }), `${label} ${who}`);
+    }
     let notes: Note[] | null = null;
     let name = who;
     switch (t.kind) {
@@ -472,22 +609,30 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
         notes = humanize(clip.notes, picked, (b) => 1 / msOf(1, b));
         name = `humanizing ${who}`;
         break;
-      case "swing":
-        notes = swing(clip.notes, picked, SWINGS[t.amount], swingUnit(gridStep), start);
-        name = `swinging ${who}`;
-        break;
     }
     if (notes) commit({ length: clip.length, notes }, keep, basis(), name);
   };
 
-  /** Move the selected notes by `dp` semitones and `dt` beats, staying on the keyboard and in the clip. */
+  /**
+   * Move the selected notes by `dp` semitones and `dt` beats, staying on the keyboard and in the
+   * clip. With Lock to key, a semitone up or down is the next note of the key instead (NOTE-3).
+   */
   const nudge = (dp: number, dt: number) => {
     if (!clip || !picked.length) return;
     const notes = picked.map((i) => clip.notes[i]);
+    const inKeyStep = locking && Math.abs(dp) === 1 ? (dp as 1 | -1) : 0;
     dp = clamp(dp, -Math.min(...notes.map((n) => n.pitch)), TOP - Math.max(...notes.map((n) => n.pitch)));
     dt = Math.max(dt, -Math.min(...notes.map((n) => n.start)));
     if (!dp && !dt) return;
-    commit({ length: clip.length, notes: clip.notes.map((n, i) => (selected.has(i) ? { ...n, pitch: n.pitch + dp, start: clean(n.start + dt) } : n)) }, selected);
+    const pitch = (p: number) => (inKeyStep ? stepIn(keyed!, p, inKeyStep) : p + dp);
+    commit({ length: clip.length, notes: clip.notes.map((n, i) => (selected.has(i) ? { ...n, pitch: pitch(n.pitch), start: clean(n.start + dt) } : n)) }, selected);
+  };
+
+  /** I: the next inversion of the chord a stamp places (NOTE-4). */
+  const invert = () => {
+    if (!stamp || !keyed) return;
+    const n = keyed.chords[0]?.kinds[stamp.kind]?.shapes.length ?? 1;
+    useShell.getState().set({ chord: { kind: stamp.kind, inversion: (stamp.inversion + 1) % n } });
   };
 
   const setLength = (beats: number) => {
@@ -503,19 +648,49 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   toolRef.current = runTool;
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  const rowsRef = useRef(resizeRows);
+  rowsRef.current = resizeRows;
+  const clipboardRef = useRef((op: "copy" | "cut" | "paste") => (op === "paste" ? paste() : copy(op === "cut")));
+  clipboardRef.current = (op) => (op === "paste" ? paste() : copy(op === "cut"));
   useEffect(() => {
-    const focused = () => !!root.current?.contains(document.activeElement);
+    const focused = () => !!root.current?.contains(document.activeElement) && !(document.activeElement instanceof HTMLInputElement);
     const hook = () => focused() && duplicateRef.current();
     const quantizeHook = () => focused() && (toolRef.current({ kind: "quantize" }), true);
-    // View ▸ Zoom In and Zoom Out zoom the roll while it has the keyboard (X3).
+    // View ▸ Zoom In and Zoom Out zoom the roll while it has the keyboard (X3); Taller and Shorter
+    // Tracks (⌘↓ and ⌘↑) make its rows taller and shorter (NOTE-9).
     const zoomHook = (dir: 1 | -1) => focused() && (zoomRef.current(dir > 0 ? 1.5 : 1 / 1.5), true);
+    const rowsHook = (dir: 1 | -1) => focused() && (rowsRef.current(dir), true);
+    // ⌘C, ⌘X and ⌘V are the roll's notes while it has the keyboard (NOTE-5).
+    const takes = () => focused();
+    const clipboard = (op: "copy" | "cut" | "paste") => clipboardRef.current(op);
     editorHooks.duplicate = hook;
     editorHooks.quantize = quantizeHook;
     editorHooks.zoom = zoomHook;
+    editorHooks.rows = rowsHook;
+    editorHooks.takesClipboard = takes;
+    editorHooks.clipboard = clipboard;
+    // In the app the menu bar's Cut, Copy and Paste run the web view's commands (M7): the roll
+    // takes them while it has the keyboard.
+    const listeners = (["copy", "cut", "paste"] as const).flatMap((op) => [
+      [`before${op}`, (e: Event) => void (focused() && e.preventDefault())],
+      [
+        op,
+        (e: Event) => {
+          if (!focused()) return;
+          e.preventDefault();
+          clipboard(op);
+        },
+      ],
+    ]) as [string, (e: Event) => void][];
+    for (const [type, f] of listeners) document.addEventListener(type, f);
     return () => {
       if (editorHooks.duplicate === hook) delete editorHooks.duplicate;
       if (editorHooks.quantize === quantizeHook) delete editorHooks.quantize;
       if (editorHooks.zoom === zoomHook) delete editorHooks.zoom;
+      if (editorHooks.rows === rowsHook) delete editorHooks.rows;
+      if (editorHooks.takesClipboard === takes) delete editorHooks.takesClipboard;
+      if (editorHooks.clipboard === clipboard) delete editorHooks.clipboard;
+      for (const [type, f] of listeners) document.removeEventListener(type, f);
     };
   }, []);
 
@@ -538,6 +713,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     else if ((e.key === "Delete" || e.key === "Backspace") && !clip.notes.length && !draft) removeClip();
     else if (cmd && key === "d" && !native) duplicate();
     else if (cmd && key === "a") setSelected(new Set(clip.notes.map((_, i) => i)));
+    // I: the chord a stamp places, in its next inversion (NOTE-4).
+    else if (key === "i" && !cmd && !e.altKey && !e.shiftKey && stamp) invert();
     else if (e.key === "Escape" && picked.length) setSelected(new Set());
     // ⌥← and ⌥→ are never the roll's (X1): they go to the page.
     else if (arrows[e.key] && picked.length && !cmd && !e.altKey) nudge(...arrows[e.key]);
@@ -550,15 +727,15 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   // ---------------------------------------------------------------- the grid's gestures
 
-  /** Sound `pitch` while pointer `pointer` stays down. */
-  const sound = (pointer: number, pitch: number, velocity: number) => {
-    release(hold.current?.h ?? null);
-    hold.current = { pointer, h: strike(module, lane, pitch, velocity) };
+  /** Sound `pitches` while pointer `pointer` stays down: a note, or a chord stamp's notes. */
+  const sound = (pointer: number, pitches: number[], velocity: number) => {
+    hold.current?.h.forEach(release);
+    hold.current = { pointer, h: pitches.map((p) => strike(module, lane, p, velocity)) };
   };
-  /** Pointer `pointer` let go: so does the note it held. */
+  /** Pointer `pointer` let go: so do the notes it held. */
   const letGo = (pointer: number) => {
     if (hold.current?.pointer !== pointer) return;
-    release(hold.current.h);
+    hold.current.h.forEach(release);
     hold.current = null;
   };
   /** How long `beats` from beat `from` of the clip last, in ms, at the song's tempo there. */
@@ -574,32 +751,35 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     root.current?.focus({ preventScroll: true });
     e.currentTarget.setPointerCapture(e.pointerId);
     const p = at(e);
+    const off = offGrid(e);
     const target = (e.target as HTMLElement).closest<HTMLElement>("[data-note]");
     if (!target) {
-      // A double-click's second press sounds the note it is about to add, while it is held.
+      // A double-click's second press sounds the notes it is about to add, while it is held.
       const last = lastEmpty.current;
       const now = performance.now();
       lastEmpty.current = { t: now, x: p.x, y: p.y };
-      if (!draw && !locked && last && now - last.t < DOUBLE_MS && Math.hypot(p.x - last.x, p.y - last.y) < DOUBLE_PX && noteAt(p, clip.length)) {
+      const adding = !locked && last && now - last.t < DOUBLE_MS && Math.hypot(p.x - last.x, p.y - last.y) < DOUBLE_PX ? notesAt(p, clip.length, off) : [];
+      if (!draw && adding.length) {
         lastEmpty.current = null;
-        sound(e.pointerId, p.pitch, VELOCITY);
+        sound(e.pointerId, adding.map((n) => n.pitch), VELOCITY);
       }
-      // Draw mode (B), as in GarageBand: a press adds a note there, sounding while held, and a drag
-      // sets its length; an ⌥-drag paints one in each cell it crosses.
+      // Draw mode (B), as in GarageBand: a press adds a note there (or a chord stamp's notes),
+      // sounding while held, and a drag sets their length; an ⌥-drag paints one in each cell it crosses.
       if (draw && !locked) {
         if (e.altKey) {
           const g: Gesture = { kind: "paint", pointer: e.pointerId, base: clip, from: basis(), cells: new Set(), result: clip };
           gesture.current = g;
-          paint(g, p);
+          paint(g, p, off);
           return;
         }
-        const note = noteAt(p, clip.length);
-        if (!note) return;
-        const g: Gesture = { kind: "draw", pointer: e.pointerId, x0: p.x, base: clip, from: basis(), moved: false, result: { length: clip.length, notes: [...clip.notes, note] } };
+        const notes = notesAt(p, clip.length, off);
+        if (!notes.length) return;
+        const g: Gesture = { kind: "draw", pointer: e.pointerId, x0: p.x, base: clip, from: basis(), moved: false, result: { length: clip.length, notes: [...clip.notes, ...notes] } };
         gesture.current = g;
+        setHover(null);
         setDraft(g.result);
         hear(g, g.result);
-        sound(e.pointerId, note.pitch, note.velocity);
+        sound(e.pointerId, notes.map((n) => n.pitch), notes[0].velocity);
         return;
       }
       gesture.current = { kind: "empty", pointer: e.pointerId, x0: p.x, y0: p.y, keep: e.shiftKey ? selected : new Set(), moved: false };
@@ -607,7 +787,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     }
     const i = Number(target.dataset.note);
     // The note sounds while it is held, at its own velocity: read only too.
-    sound(e.pointerId, clip.notes[i].pitch, clip.notes[i].velocity);
+    sound(e.pointerId, [clip.notes[i].pitch], clip.notes[i].velocity);
     const was = selected.has(i);
     const sel = e.shiftKey ? (was ? selected : new Set([...selected, i])) : was ? selected : new Set([i]);
     setSelected(sel);
@@ -619,10 +799,18 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   const onGridMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const g = gesture.current;
+    // With a chord picked, the pointer shows where its stamp would land.
+    if (!g && stamp && !locked && clip) {
+      const p = at(e);
+      const h = { beat: p.beat, pitch: p.pitch, off: offGrid(e) };
+      if (!(e.target as HTMLElement).closest("[data-note]")) setHover(h);
+      else setHover(null);
+    }
     if (!g || g.pointer !== e.pointerId || g.kind === "velocity" || !clip) return;
     const p = at(e);
-    if (g.kind === "paint") return paint(g, p);
-    if (g.kind === "draw") return stretch(g, p);
+    const off = offGrid(e);
+    if (g.kind === "paint") return paint(g, p, off);
+    if (g.kind === "draw") return stretch(g, p, off);
     if (g.kind === "empty") {
       if (!g.moved && Math.hypot(p.x - g.x0, p.y - g.y0) < 4) return;
       g.moved = true;
@@ -630,8 +818,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
       setMarquee(box);
       const hit = new Set(g.keep);
       clip.notes.forEach((n, i) => {
-        const x = n.start * ppb, y = (TOP - n.pitch) * ROW_H;
-        if (x + Math.max(n.length * ppb, 4) > box.x0 && x < box.x1 && y + ROW_H > box.y0 && y < box.y1) hit.add(i);
+        const x = n.start * ppb, y = rowOf(n.pitch) * rowH;
+        if (y >= 0 && x + Math.max(n.length * ppb, 4) > box.x0 && x < box.x1 && y + rowH > box.y0 && y < box.y1) hit.add(i);
       });
       setSelected(hit);
       return;
@@ -642,14 +830,21 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const raw = (p.x - g.x0) / ppb;
     let notes: Note[];
     if (g.kind === "move") {
-      const dt = Math.max(snapBeat(n0.start + raw) - n0.start, -Math.min(...moving.map((n) => n.start)));
-      const dp = clamp(Math.round((g.y0 - p.y) / ROW_H), -Math.min(...moving.map((n) => n.pitch)), TOP - Math.max(...moving.map((n) => n.pitch)));
-      notes = base.map((n, i) => (g.sel.has(i) ? { ...n, start: clean(n.start + dt), pitch: n.pitch + dp } : n));
+      const dt = Math.max(snapBeat(n0.start + raw, false, off) - n0.start, -Math.min(...moving.map((n) => n.start)));
+      // Rows moved, so that every moving note stays on a row shown (all 128, or a folded kit's).
+      const at0 = moving.map((n) => rowOf(n.pitch));
+      const by = clamp(Math.round((g.y0 - p.y) / rowH), Math.max(...at0) - (nRows - 1), Math.min(...at0));
+      // With Lock to key the grabbed note lands on the key's note nearest the row under the
+      // pointer, and the others move as far, each then to its nearest note of the key (NOTE-3).
+      const dp = keyed && locking ? fit(keyed, n0.pitch + by) - n0.pitch : 0;
+      const pitch = (q: number) => (keyed && locking ? fit(keyed, q + dp) : pitchOfRow(rowOf(q) - by));
+      notes = base.map((n, i) => (g.sel.has(i) ? { ...n, start: clean(n.start + dt), pitch: pitch(n.pitch) } : n));
       // The held note plays each pitch it crosses: an Off for the old, an On for the new.
-      if (hold.current?.pointer === e.pointerId) hold.current.h = retune(hold.current.h, n0.pitch + dp, n0.velocity);
+      const held = hold.current;
+      if (held?.pointer === e.pointerId && held.h.length === 1) held.h = [retune(held.h[0], pitch(n0.pitch), n0.velocity)];
     } else {
-      const min = snap || MIN_LEN;
-      const dl = Math.max(snapBeat(n0.start + n0.length + raw) - n0.start, min) - n0.length;
+      const min = snap && !off ? snap : MIN_LEN;
+      const dl = Math.max(snapBeat(n0.start + n0.length + raw, false, off) - n0.start, min) - n0.length;
       notes = base.map((n, i) => (g.sel.has(i) ? { ...n, length: clean(Math.max(n.length + dl, min)) } : n));
     }
     g.result = { length: g.base.length, notes };
@@ -702,38 +897,56 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     else if (g.kind !== "empty" && g.result) setDraft(g.base);
   };
 
-  /** A note in the cell at `p`, a grid step long (as in Live), if the cell is inside the clip. */
-  const noteAt = (p: { beat: number; pitch: number }, length: number): Note | null => {
-    const from = Math.max(0, snapBeat(p.beat, true));
+  /**
+   * A note in the cell at `p`, a grid step long (as in Live), if the cell is inside the clip; with
+   * `off` (⌘ held) where the pointer is, not on the grid (NOTE-6). With Lock to key its pitch is the
+   * key's nearest note (NOTE-3).
+   */
+  const noteAt = (p: { beat: number; pitch: number }, length: number, off = false): Note | null => {
+    const from = Math.max(0, snapBeat(p.beat, true, off));
     if (from >= length) return null;
-    return { pitch: p.pitch, start: from, length: clean(Math.min(step, length - from)), velocity: VELOCITY };
-  };
-
-  /** A double-click on empty grid: a note in that cell. */
-  const addNote = (p: { beat: number; pitch: number }) => {
-    const note = clip && noteAt(p, clip.length);
-    if (!clip || !note) return;
-    commit({ length: clip.length, notes: [...clip.notes, note] }, new Set([clip.notes.length]));
+    const pitch = keyed && locking ? fit(keyed, p.pitch) : p.pitch;
+    return { pitch, start: from, length: clean(Math.min(step, length - from)), velocity: VELOCITY };
   };
 
   /**
-   * Draw mode: the note being drawn ends where the pointer is, past a 3 px drag (on the grid when it
-   * snaps), never shorter than a grid step (or the smallest length unsnapped). Its pitch stays.
+   * What a press or a double-click at `p` adds: the chord picked (NOTE-4), built on the key's note
+   * nearest the row, or one note. None outside the clip, or where the key has no such chord.
    */
-  const stretch = (g: Extract<Gesture, { kind: "draw" }>, p: { x: number; beat: number }) => {
+  const notesAt = (p: { beat: number; pitch: number }, length: number, off = false): Note[] => {
+    const one = noteAt(p, length, off);
+    if (!one || !stamp || !keyed) return one ? [one] : [];
+    const c = chordAt(keyed, p.pitch, stamp.kind, stamp.inversion);
+    return c ? c.pitches.map((pitch) => ({ ...one, pitch })) : [];
+  };
+
+  /** A double-click on empty grid: a note in that cell, or a chord stamp's notes; they are selected. */
+  const addNote = (p: { beat: number; pitch: number }, off = false) => {
+    const notes = clip ? notesAt(p, clip.length, off) : [];
+    if (!clip || !notes.length) return;
+    commit({ length: clip.length, notes: [...clip.notes, ...notes] }, new Set(notes.map((_, k) => clip.notes.length + k)));
+  };
+
+  /**
+   * Draw mode: the notes being drawn (one, or a chord's) end where the pointer is, past a 3 px drag
+   * (on the grid when it snaps, unless ⌘ is held), never shorter than a grid step (or the smallest
+   * length unsnapped). Their pitches stay.
+   */
+  const stretch = (g: Extract<Gesture, { kind: "draw" }>, p: { x: number; beat: number }, off: boolean) => {
     if (!g.moved && Math.abs(p.x - g.x0) < 3) return;
     g.moved = true;
-    const n0 = g.result.notes[g.base.notes.length];
-    const length = clean(Math.max(snapBeat(p.beat) - n0.start, snap || MIN_LEN));
+    const drawn = g.result.notes.slice(g.base.notes.length);
+    const n0 = drawn[0];
+    const length = clean(Math.max(snapBeat(p.beat, false, off) - n0.start, snap && !off ? snap : MIN_LEN));
     if (length === n0.length) return;
-    g.result = { length: g.base.length, notes: [...g.base.notes, { ...n0, length }] };
+    g.result = { length: g.base.length, notes: [...g.base.notes, ...drawn.map((n) => ({ ...n, length }))] };
     setDraft(g.result);
     hear(g, g.result);
   };
 
   /** Draw mode's ⌥-drag: a note in each new cell under the pointer that has none starting there; written as one edit on release. */
-  const paint = (g: Extract<Gesture, { kind: "paint" }>, p: { beat: number; pitch: number }) => {
-    const note = noteAt(p, g.base.length);
+  const paint = (g: Extract<Gesture, { kind: "paint" }>, p: { beat: number; pitch: number }, off = false) => {
+    const note = noteAt(p, g.base.length, off);
     const cell = note && `${note.start}:${note.pitch}`;
     if (!note || !cell || g.cells.has(cell) || g.result.notes.some((n) => n.start === note.start && n.pitch === note.pitch)) return;
     g.cells.add(cell);
@@ -808,10 +1021,9 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   const end = Math.max(clip.length, ...clip.notes.map((n) => n.start + n.length));
   const width = Math.max(visible, Math.ceil((end + bpb) / bpb) * bpb * ppb);
-  const height = (TOP + 1) * ROW_H;
+  const height = nRows * rowH;
   const shown = new Set(picked);
   const track = graph.view.modules.find((m) => m.key === module);
-  const declared = findLane(timeline, module, lane);
   const title = track ? moduleName(track) : module;
   const laneName = declared ? laneTitle(declared) : lane;
   // The view is Notes already: its lane is worth naming only beside the track's other notes lanes.
@@ -822,10 +1034,12 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const lifting = gesture.current?.kind === "move" && !!gesture.current.result;
   // The rows shaded: those out of the song's key while one is set (Q24), else the black keys'. A
   // lane whose rows are named drums is never shaded by the key: a kit has no key (X26).
-  const drums = Object.keys((declared as { names?: Record<string, string> } | null)?.names ?? {}).length > 0;
-  const keyed = timeline.key && !drums ? inKey(timeline.key) : null;
+  const keyNotes = keyed ? inKey(keyed) : null;
   // A kit's rows are drums, not keys: none shaded (next D4c).
-  const shaded = (keyed ? Array.from({ length: 12 }, (_, pc) => pc).filter((pc) => !keyed.has(pc)) : drums ? [] : BLACK).join(",");
+  const shaded = (keyNotes ? Array.from({ length: 12 }, (_, pc) => pc).filter((pc) => !keyNotes.has(pc)) : drums ? [] : BLACK).join(",");
+  // Where a stamp would land under the pointer (NOTE-4): its chord's name and notes, outlined.
+  const ghost = hover && stamp && keyed && !gesture.current ? notesAt(hover, clip.length, hover.off) : [];
+  const ghostChord = hover && stamp && keyed ? chordAt(keyed, hover.pitch, stamp.kind, stamp.inversion) : null;
 
   return (
     <div
@@ -876,6 +1090,47 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
             {/* Grid [1/16 ▾] and the snap toggle (taste.md §3.5). */}
             <GridChip view="notes" />
             <Divider />
+            {/* With the song's key: Lock to key and the chord a stamp places (NOTE-3, NOTE-4); on a kit's lane, Fold (NOTE-8). */}
+            {keyed && (
+              <>
+                <Button
+                  size="sm"
+                  data-testid="lock-key"
+                  active={locking}
+                  aria-pressed={locking}
+                  onMouseDown={keepFocus}
+                  onClick={() => setRoll({ lock: !locking })}
+                  title={`Lock to key (${keyed.name}): ${locking ? "on" : "off"}. While it is on, notes you draw, drag or paste go to the nearest note of the key, and ↑ ↓ move to the next one`}
+                  className="!px-1.5"
+                >
+                  In key
+                </Button>
+                <ChordTool keyed={keyed} />
+                <Divider />
+              </>
+            )}
+            {drums && (
+              <>
+                <Button
+                  size="sm"
+                  data-testid="fold-rows"
+                  active={folded}
+                  aria-pressed={folded}
+                  onMouseDown={keepFocus}
+                  onClick={() => {
+                    // Folding again folds to what the clip uses now.
+                    if (!folded) setFoldFrom(usedRows(names, server.notes));
+                    setRoll({ fold: !folded });
+                  }}
+                  title={folded ? "Fold: on. Only the drums this clip uses show; click to show every row" : "Fold: off. Every row shows; click to show only the drums this clip uses"}
+                  className="!px-1.5 !gap-1"
+                >
+                  {folded ? <UnfoldVertical size={14} /> : <FoldVertical size={14} />}
+                  Fold
+                </Button>
+                <Divider />
+              </>
+            )}
           </>
         )}
         <LengthField
@@ -888,10 +1143,10 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
         <AuditionTools graph={graph} module={module} lane={lane} />
         <Divider />
         <div className="shrink-0 flex items-center">
-          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(0.8)} title={`Zoom out (${mod.cmd} + scroll)`} aria-label="Zoom out" className="w-ctl-sm !px-0">
+          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(0.8)} title={`Zoom out (${mod.cmd} + scroll). Rows taller or shorter: ${chord("↓")} ${chord("↑")}`} aria-label="Zoom out" className="w-ctl-sm !px-0">
             <ZoomOut size={16} />
           </Button>
-          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(1.25)} title={`Zoom in (${mod.cmd} + scroll)`} aria-label="Zoom in" className="w-ctl-sm !px-0">
+          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(1.25)} title={`Zoom in (${mod.cmd} + scroll). Rows taller or shorter: ${chord("↓")} ${chord("↑")}`} aria-label="Zoom in" className="w-ctl-sm !px-0">
             <ZoomIn size={16} />
           </Button>
         </div>
@@ -910,40 +1165,48 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
               <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} tone={tone} />
             </div>
             <div className="flex">
-              <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} tone={tone} module={module} lane={lane} names={namesOf(declared)} width={keysW} />
+              <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} tone={tone} module={module} lane={lane} names={names} width={keysW} rows={rows} rowH={rowH} />
               <div
                 ref={grid}
                 data-testid="roll-grid"
                 data-shaded={shaded}
-                className={clsx("relative touch-none", locked ? "cursor-default" : draw ? "cursor-crosshair" : "cursor-default")}
+                data-rows={rows ? rows.join(",") : undefined}
+                data-row-height={rowH}
+                data-ppb={ppb}
+                className={clsx("relative touch-none", locked ? "cursor-default" : draw || stamp ? "cursor-crosshair" : "cursor-default")}
                 style={{ width, height }}
                 title={
                   locked
                     ? why === "lane"
                       ? `Read only until ${file} reads again`
                       : "Read only until the code compiles"
-                    : draw
-                      ? `Draw: click to add a note · drag to set its length · ${mod.alt}-drag to paint notes · B to select`
-                      : `Double-click to add a note · drag a note to move it · drag its right edge to resize · drag across empty space to select · ${keyName("Backspace")} deletes · ${chord("D")} duplicates · arrows move · B to draw · right-click for note tools`
+                    : stamp && ghostChord
+                      ? `${draw ? "Click" : "Double-click"} to place ${ghostChord.name} (${ghostChord.numeral} in ${keyed?.name}) · I for the next inversion · hold ${mod.cmd} to place it off the grid`
+                      : draw
+                        ? `Draw: click to add a note · drag to set its length · ${mod.alt}-drag to paint notes · hold ${mod.cmd} to place off the grid · B to select`
+                        : `Double-click to add a note · drag a note to move it (hold ${mod.cmd} to place it off the grid) · drag its right edge to resize · drag across empty space to select · ${keyName("Backspace")} deletes · ${chord("D")} duplicates · ${chord("C")} copies · ${chord("V")} pastes · arrows move · B to draw · right-click for note tools`
                 }
                 onContextMenu={onGridMenu}
                 onDoubleClick={(e) => {
                   // Select mode adds notes with a double-click; Draw mode added one on the first click.
                   if (locked || draw || (e.target as HTMLElement).closest("[data-note]")) return;
-                  addNote(at(e));
+                  addNote(at(e), offGrid(e));
                 }}
                 onPointerDown={onGridDown}
                 onPointerMove={onGridMove}
+                onPointerLeave={() => setHover(null)}
                 onPointerUp={onGridUp}
                 onPointerCancel={onGridCancel}
                 onLostPointerCapture={onGridCancel}
               >
-                <Lanes width={width} ppb={ppb} meter={timeline.meter} start={start} step={gridStep} shaded={shaded} />
+                <Lanes width={width} ppb={ppb} meter={timeline.meter} start={start} step={gridStep} shaded={shaded} rowH={rowH} folded={!!rows} />
                 {/* Past the clip's end: hatched, behind its edge in the track's colour. */}
                 <div className="absolute top-0 bottom-0 right-0 pointer-events-none border-l-2 bg-chrome/70" style={{ left: clip.length * ppb, borderColor: tone.bar }}>
                   <Hatch />
                 </div>
                 {clip.notes.map((n, i) => {
+                  const row = rowOf(n.pitch);
+                  if (row < 0) return null;
                   const w = Math.max(n.length * ppb - 1, 4);
                   const outside = n.start >= clip.length;
                   const on = shown.has(i);
@@ -974,16 +1237,16 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                       style={
                         {
                           left: n.start * ppb,
-                          top: (TOP - n.pitch) * ROW_H + 1,
+                          top: row * rowH + 1,
                           width: w,
-                          height: ROW_H - 2,
+                          height: rowH - 2,
                           background: on ? tone.ink : locked ? "var(--color-line-strong)" : fill(tone, n.velocity),
                           "--note-ink": tone.ink,
                         } as React.CSSProperties
                       }
                     >
-                      {/* One line inside the note, cut short with "…" when the note is short. */}
-                      {w > 26 && (
+                      {/* One line inside the note, cut short with "…" when the note is short; none in a row too short for it. */}
+                      {w > 26 && rowH >= 12 && (
                         <span className="absolute left-1.5 right-1 top-1/2 -translate-y-1/2 whitespace-nowrap overflow-x-clip text-ellipsis text-xs font-medium leading-none pointer-events-none">
                           {rowName(declared, n.pitch)}
                         </span>
@@ -993,6 +1256,24 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                     </div>
                   );
                 })}
+                {/* Where a stamp would land: its notes outlined, its chord named by the first (NOTE-4). */}
+                {ghost.map((n, k) => (
+                  <div
+                    key={`ghost${k}`}
+                    data-ghost={n.pitch}
+                    className="absolute z-10 pointer-events-none rounded-xs border border-dashed"
+                    style={{ left: n.start * ppb, top: rowOf(n.pitch) * rowH + 1, width: Math.max(n.length * ppb - 1, 4), height: rowH - 2, borderColor: tone.ink }}
+                  />
+                ))}
+                {ghost.length > 0 && ghostChord && (
+                  <div
+                    data-testid="stamp-name"
+                    className="absolute z-20 pointer-events-none px-1 rounded-xs text-xs font-medium leading-4 text-white whitespace-nowrap"
+                    style={{ left: ghost[0].start * ppb, top: Math.max(0, rowOf(Math.max(...ghost.map((n) => n.pitch))) * rowH - 18), background: tone.ink }}
+                  >
+                    {ghostChord.name} · {ghostChord.numeral}
+                  </div>
+                )}
                 {marquee && (
                   <div
                     className="absolute z-20 pointer-events-none rounded-xs border border-accent bg-accent/10"
@@ -1006,7 +1287,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
         </div>
         {clip.notes.length === 0 && (
           <EmptyState className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap" style={{ left: keysW + Math.min(clip.length * ppb, visible) / 2 }}>
-            {draw ? "Click in the grid to add a note" : "Double-click in the grid to add a note"}
+            {stamp ? (draw ? "Click in the grid to place a chord" : "Double-click in the grid to place a chord") : draw ? "Click in the grid to add a note" : "Double-click in the grid to add a note"}
           </EmptyState>
         )}
       </div>
@@ -1084,6 +1365,113 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 // In a narrow dock (the browser open in a small window) the tools' dividers go before any tool does.
 const Divider = () => <div className="w-px h-5 shrink-0 bg-line @max-[900px]/dock:hidden" />;
 
+/** What a folded kit's roll starts from (NOTE-8): the drums `notes` use; the kit's named rows when they use none. */
+function usedRows(names: Record<string, string>, notes: readonly Note[]): number[] {
+  return notes.length ? [...new Set(notes.map((n) => n.pitch))] : Object.keys(names).map(Number);
+}
+
+/** The places in `after` of the notes `before` hasn't (as many of each as it adds): what a paste added. */
+function addedTo(before: readonly Note[], after: readonly Note[]): number[] {
+  const left = new Map<string, number>();
+  const id = (n: Note) => JSON.stringify([n.pitch, n.start, n.length, n.velocity]);
+  for (const n of before) left.set(id(n), (left.get(id(n)) ?? 0) + 1);
+  return after.flatMap((n, i) => {
+    const k = left.get(id(n)) ?? 0;
+    if (k > 0) {
+      left.set(id(n), k - 1);
+      return [];
+    }
+    return [i];
+  });
+}
+
+/** An inversion's name: Root, 1st, 2nd, 3rd. */
+const INVERSIONS = ["Root", "1st", "2nd", "3rd"];
+
+/**
+ * The chord a stamp places (NOTE-4): `Chord ▾` while the roll adds single notes, the chord's kind
+ * (and inversion) once one is picked. Its menu lists single notes and the kinds of the server's
+ * table, each saying what it is, and the inversions (I steps through them). The window's choice,
+ * as Draw mode is.
+ */
+function ChordTool({ keyed }: { keyed: KeyView }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const tool = useShell((s) => s.chord);
+  const kinds = useTheory((t) => t.theory?.chords);
+  const none = keyed.chords.length === 0;
+  const set = (chord: { kind: string; inversion: number } | null) => useShell.getState().set({ chord });
+  const kind = kinds?.find((k) => k.name === tool?.kind);
+  const tick = (on: boolean) => (on ? <Check size={14} className="text-fg" /> : <span className="block size-3.5" />);
+  const label = tool && kind ? `${kind.label}${tool.inversion ? ` ${INVERSIONS[tool.inversion]}` : ""}` : "Chord";
+  return (
+    <>
+      <Button
+        size="sm"
+        data-testid="chord-tool"
+        data-chord={tool && !none ? tool.kind : undefined}
+        aria-haspopup="menu"
+        aria-expanded={!!anchor}
+        aria-disabled={none}
+        active={!!tool && !none}
+        onMouseDown={keepFocus}
+        onClick={(e) => {
+          if (none) return;
+          const b = e.currentTarget;
+          setAnchor((a) => (a ? null : b));
+        }}
+        title={
+          none
+            ? `${keyed.name} has no chords to stamp: pick a key with a scale of seven notes`
+            : `Chord stamps: pick a chord, then a click in Draw (or a double-click) places it, built on ${keyed.name}'s notes so it fits`
+        }
+        className={clsx("!px-1.5 !gap-1", none ? "text-fg-off cursor-default" : "text-fg", anchor && "bg-hover")}
+      >
+        {label}
+        <ChevronDown size={12} className="text-fg-muted" />
+      </Button>
+      {anchor && (
+        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Chord stamp" data-testid="chord-menu" className="w-[264px]">
+          <MenuRow role="menuitemradio" data-chord="none" aria-checked={!tool} icon={tick(!tool)} onClick={() => (setAnchor(null), set(null))} detail="A click adds one note">
+            Single notes
+          </MenuRow>
+          <div role="separator" className="my-1 h-px bg-line" />
+          {(kinds ?? []).map((k) => (
+            <MenuRow
+              key={k.name}
+              role="menuitemradio"
+              data-chord={k.name}
+              aria-checked={tool?.kind === k.name}
+              icon={tick(tool?.kind === k.name)}
+              detail={k.words}
+              onClick={() => {
+                setAnchor(null);
+                set({ kind: k.name, inversion: tool?.kind === k.name ? tool.inversion : 0 });
+              }}
+            >
+              {k.label}
+            </MenuRow>
+          ))}
+          {tool && kind && (
+            <>
+              <div role="separator" className="my-1 h-px bg-line" />
+              <div role="group" aria-label="Inversion" title="An inversion moves the lowest notes up an octave (I)" className="min-h-ctl pl-2 pr-1 flex items-center gap-2 text-sm">
+                <span className="flex-1 text-fg">Inversion</span>
+                <div className="h-ctl-sm flex items-center gap-0.5 p-0.5 rounded-sm bg-hover">
+                  {INVERSIONS.slice(0, kind.inversions).map((name, i) => (
+                    <Segment key={name} role="menuitemradio" aria-checked={tool.inversion === i} data-inversion={i} on={tool.inversion === i} onClick={() => set({ kind: tool.kind, inversion: i })} className="!px-1.5">
+                      {name}
+                    </Segment>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </Popover>
+      )}
+    </>
+  );
+}
+
 /**
  * The clip's length in bars, typed or stepped a bar at a time. `bars` is how many it spans and
  * `toBeats` turns a count of bars into beats, both as the song's time signatures count them.
@@ -1144,7 +1532,9 @@ function LengthField({
  * does, and every row is drawn alike, a line under each: no black keys (next D4c).
  * The keyboard is an instrument (NT-3): a key sounds on lane `module.lane` while held, at
  * `KEY_VELOCITY`, and a drag along it plays each key it reaches. A key that sounds, from a key or
- * a note held anywhere in the roll, is drawn in `press`, never like a selected note's.
+ * a note held anywhere in the roll, is drawn in `press`, never like a selected note's. `rows`: the
+ * pitches shown, top to bottom, on a folded kit's lane (NOTE-8); null for all 128. Each row is
+ * `rowH` px (NOTE-9).
  */
 const Keys = memo(
   function Keys({
@@ -1154,6 +1544,8 @@ const Keys = memo(
     lane,
     names,
     width,
+    rows,
+    rowH,
   }: {
     selected: Set<number>;
     tone: TrackColor;
@@ -1162,12 +1554,15 @@ const Keys = memo(
     /** The lane's note names, by MIDI note. */
     names: Record<string, string>;
     width: number;
+    rows: number[] | null;
+    rowH: number;
   }) {
     const drums = Object.keys(names).length > 0;
     const held = useAudition((s) => s.held);
     const sounding = new Set([...held.values()].filter((n) => n.module === module && n.lane === lane).map((n) => n.pitch));
     const press = useRef<{ pointer: number; h: number | null; pitch: number } | null>(null);
-    const pitchAt = (e: React.PointerEvent<HTMLDivElement>) => clamp(TOP - Math.floor((e.clientY - e.currentTarget.getBoundingClientRect().top) / ROW_H), 0, TOP);
+    const shown = rows ?? Array.from({ length: TOP + 1 }, (_, k) => TOP - k);
+    const pitchAt = (e: React.PointerEvent<HTMLDivElement>) => shown[clamp(Math.floor((e.clientY - e.currentTarget.getBoundingClientRect().top) / rowH), 0, shown.length - 1)];
     const up = (e: React.PointerEvent<HTMLDivElement>) => {
       if (press.current?.pointer !== e.pointerId) return;
       release(press.current.h);
@@ -1198,8 +1593,7 @@ const Keys = memo(
         onPointerCancel={up}
         onLostPointerCapture={up}
       >
-        {Array.from({ length: TOP + 1 }, (_, k) => {
-          const p = TOP - k;
+        {shown.map((p) => {
           const black = !drums && BLACK.includes(p % 12);
           const on = sounding.has(p);
           const lit = !on && selected.has(p);
@@ -1212,7 +1606,7 @@ const Keys = memo(
                 "relative",
                 drums ? "border-b border-line" : p % 12 === 0 ? "border-b border-line-strong" : !black && !BLACK.includes((p + 11) % 12) && "border-b border-line",
               )}
-              style={{ height: ROW_H }}
+              style={{ height: rowH }}
             >
               {on ? <div className="absolute inset-0 bg-press" /> : lit && <div className="absolute inset-0" style={{ background: tone.bar }} />}
               {/* The edge between the two white keys either side of a black one, under it: every white key is a key. */}
@@ -1248,6 +1642,8 @@ const Keys = memo(
     a.lane === b.lane &&
     a.width === b.width &&
     a.names === b.names &&
+    a.rowH === b.rowH &&
+    (a.rows ?? []).join() === (b.rows ?? []).join() &&
     a.selected.size === b.selected.size &&
     [...a.selected].every((p) => b.selected.has(p)),
 );
@@ -1255,23 +1651,44 @@ const Keys = memo(
 /**
  * Row shading (`shaded`: the pitch classes darker, "1,3,6,8,10" for the black keys, or those out of
  * the song's key), a line under each C, and the bar, beat and snap lines, bars as the song's time
- * signatures count them.
+ * signatures count them. Rows are `rowH` px; `folded`: a kit's rows, a line under each, no C's.
  */
-const Lanes = memo(function Lanes({ width, ppb, meter, start, step, shaded }: { width: number; ppb: number; meter: Meter[]; start: number; step: number; shaded: string }) {
+const Lanes = memo(function Lanes({
+  width,
+  ppb,
+  meter,
+  start,
+  step,
+  shaded,
+  rowH,
+  folded,
+}: {
+  width: number;
+  ppb: number;
+  meter: Meter[];
+  start: number;
+  step: number;
+  shaded: string;
+  rowH: number;
+  folded: boolean;
+}) {
   const dark = new Set(shaded ? shaded.split(",").map(Number) : []);
-  // From the top: pitch 127 (G9) down, twelve rows a period: the shaded rows darker, a line under each.
-  const bands = Array.from({ length: 12 }, (_, k) => {
-    const pc = (TOP - k) % 12;
-    return [
-      ...(dark.has(pc) ? [{ y: k * ROW_H, h: ROW_H, color: "var(--color-hover)" }] : []),
-      { y: (k + 1) * ROW_H - 1, h: 1, color: pc === 0 ? "var(--color-line)" : "var(--color-hover)" },
-    ];
-  }).flat();
+  // From the top: pitch 127 (G9) down, twelve rows a period: the shaded rows darker, a line under
+  // each. A folded kit's rows aren't pitches in order: one row a period, a line under it.
+  const bands = folded
+    ? [{ y: rowH - 1, h: 1, color: "var(--color-hover)" }]
+    : Array.from({ length: 12 }, (_, k) => {
+        const pc = (TOP - k) % 12;
+        return [
+          ...(dark.has(pc) ? [{ y: k * rowH, h: rowH, color: "var(--color-hover)" }] : []),
+          { y: (k + 1) * rowH - 1, h: 1, color: pc === 0 ? "var(--color-line)" : "var(--color-hover)" },
+        ];
+      }).flat();
   /** Where the first of the lines every `period` beats from `origin` falls, in pixels from `from`. */
   const offset = (origin: number, from: number, period: number) => (((((origin - from) % period) + period) % period) * ppb);
   return (
     <>
-      <HBands period={12 * ROW_H} bands={bands} />
+      <HBands period={(folded ? 1 : 12) * rowH} bands={bands} />
       {meterSpans(meter, start, start + width / ppb).map((s) => (
         <VLines
           key={s.start}

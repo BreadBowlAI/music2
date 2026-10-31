@@ -667,6 +667,11 @@ export const editorHooks: {
   quantize?: () => boolean;
   /** View ▸ Zoom In / Zoom Out (`dir` 1 or -1): the roll's own zoom while it has the keyboard (X3). */
   zoom?: (dir: 1 | -1) => boolean;
+  /** View ▸ Taller (1) and Shorter (-1) Tracks, ⌘↓ and ⌘↑: the roll's rows while it has the keyboard (NOTE-9). */
+  rows?: (dir: 1 | -1) => boolean;
+  /** Whether ⌘C, ⌘X and ⌘V are the roll's notes now: it has the keyboard (NOTE-5). */
+  takesClipboard?: () => boolean;
+  clipboard?: (op: "copy" | "cut" | "paste") => void;
   undo?: (redo: boolean) => boolean;
   /** A menu command whose chord the code editor binds (⌘D): its own action while it has the keyboard. */
   chord?: (id: string) => boolean;

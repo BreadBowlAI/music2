@@ -116,6 +116,9 @@ check(!rows.some((r) => r.startsWith("octave_")), `and has no octave rows: ${row
 await linted("[data-testid=note-menu]", "a drum lane's note menu");
 await page.keyboard.press("Escape");
 await until(async () => !(await page.$("[data-testid=note-menu]")));
+// A kit's roll folds to the drums its clip uses (NOTE-8): Fold off shows every row, 60 and 61 too.
+await page.click("[data-testid=fold-rows]");
+await until(async () => !!(await page.$('[data-testid=roll-keys] [data-key="61"]')));
 const fills = await page.evaluate(() => {
   document.querySelector('[data-testid=roll-keys] [data-key="61"]').scrollIntoView({ block: "center" });
   const at = (p) => {
