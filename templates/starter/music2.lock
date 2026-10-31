@@ -2,10 +2,10 @@
 
 [[pack]]
 name = "@m2/effects"
-version = "1.1.0"
-hash = "sha256:e49ff8b782bb6a632513380a71c417acedb2527920f4685647ac4da27ed69821"
+version = "1.2.0"
+hash = "sha256:c98557c18086b9e3d9a3c54d6abb89e827549e662ba5b861ef457cdbdc3fa1ab"
 
 [[pack]]
 name = "@m2/synths"
-version = "1.0.0"
-hash = "sha256:8272d1a5ed8c58adf374f0b7f9031147018a45a6bde5f8ac0928fe679493256d"
+version = "1.1.0"
+hash = "sha256:5bc4556a0c5c0c4a3cbcdb0b18e4a3cad5239592ba0dc7c44d82e0fe9803697a"

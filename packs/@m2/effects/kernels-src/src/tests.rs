@@ -1,5 +1,5 @@
 //! Native tests for the pack's kernels: what every effect of std's guarantees (std's
-//! `fx/tests.rs`, where these were until the bitcrusher left std), then what each one is for.
+//! `fx/tests.rs`, where these were until each left std), then what each one is for.
 
 use m2_kernel::{Host, PORT_CHANNELS};
 
@@ -41,12 +41,23 @@ struct Fx {
     controls: &'static [f32],
 }
 
-/// Every effect at the settings the effect menu starts it with, and playing: the last of
-/// bitcrush's is `playing`, 1.
-const ALL: [Fx; 1] = [Fx { name: "bitcrush", run: run::<Bitcrush>, controls: &[8.0, 12_000.0, 1.0, 1.0] }];
+/// Every effect at the settings the effect menu starts it with, and playing: the last of phaser's,
+/// tremolo's and bitcrush's is `playing`, 1.
+const ALL: [Fx; 5] = [
+    Fx { name: "reverb", run: run::<Reverb>, controls: &[0.6, 0.5, 0.25] },
+    Fx { name: "phaser", run: run::<Phaser>, controls: &[0.4, 0.7, 0.5, 0.5, 1.0] },
+    Fx { name: "tremolo", run: run::<Tremolo>, controls: &[5.0, 0.5, 1.0] },
+    Fx { name: "bitcrush", run: run::<Bitcrush>, controls: &[8.0, 12_000.0, 1.0, 1.0] },
+    Fx { name: "widen", run: run::<Widen>, controls: &[1.5] },
+];
+
+/// The effect named `name`.
+fn fx(name: &str) -> &'static Fx {
+    ALL.iter().find(|fx| fx.name == name).unwrap()
+}
 
 /// The effects whose last input is `playing`.
-const FOLLOW: [&str; 1] = ["bitcrush"];
+const FOLLOW: [&str; 3] = ["phaser", "tremolo", "bitcrush"];
 
 /// Inputs: `audio(channel, t)` on port 0 and constant `controls` on the rest.
 fn with<'a>(audio: &'a dyn Fn(usize, usize) -> f32, controls: &'a [f32]) -> impl Fn(usize, usize, usize) -> f32 + 'a {
@@ -72,6 +83,14 @@ fn noise(c: usize, t: usize) -> f32 {
 
 fn peak(x: &[[f32; 2]]) -> f32 {
     x.iter().fold(0.0, |m, f| m.max(f[0].abs()).max(f[1].abs()))
+}
+
+fn rms(x: &[[f32; 2]], c: usize) -> f32 {
+    (x.iter().map(|f| f[c] as f64 * f[c] as f64).sum::<f64>() / x.len() as f64).sqrt() as f32
+}
+
+fn db(x: f32) -> f32 {
+    20.0 * x.log10()
 }
 
 // ---------------------------------------------------------------- every effect
@@ -184,8 +203,9 @@ fn deterministic_whatever_the_block_size() {
 
 #[test]
 fn mono_stays_mono() {
-    // Each works on one channel too, so it fits wherever a mono sound goes (a panned mixer channel).
-    for fx in &ALL {
+    // Everything but the widener works on one channel too, so it fits wherever a mono sound goes
+    // (a panned mixer channel).
+    for fx in ALL.iter().filter(|fx| fx.name != "widen") {
         let out = (fx.run)(1, 24_000, BLOCK, &with(&saw, fx.controls));
         assert!(peak(&out) > 0.1 && out.iter().all(|f| f[1] == 0.0), "{} doesn't process mono on its own", fx.name);
     }
@@ -199,6 +219,160 @@ fn every_effect_changes_the_sound() {
         let diff = out.iter().enumerate().map(|(t, f)| (f[0] - dry(0, t)).abs().max((f[1] - dry(1, t)).abs())).fold(0.0, f32::max);
         assert!(diff > 0.05, "{} barely changes a saw (by {diff})", fx.name);
     }
+}
+
+// ---------------------------------------------------------------- ABI v1
+
+/// One state's port buffers, each `BLOCK` floats, and the port table pointing at them: inputs
+/// first, one mono channel each.
+struct Ports {
+    bufs: Vec<Vec<f32>>,
+    table: Vec<*mut f32>,
+}
+
+impl Ports {
+    fn new(n: usize) -> Ports {
+        let mut bufs = vec![vec![0.0f32; BLOCK]; n];
+        let table = bufs.iter_mut().map(|b| b.as_mut_ptr()).collect();
+        Ports { bufs, table }
+    }
+}
+
+type DelayState = m2_kernel::State<Delay>;
+
+/// A block of `@m2/effects:delay` through its exports: its input `x(t)` from sample `t`, a 10 ms echo fed
+/// back by half, half wet. Returns its output.
+fn delay_block(state: *mut DelayState, ports: &mut Ports, t: usize, x: impl Fn(usize) -> f32) -> Vec<f32> {
+    for (k, v) in ports.bufs[0].iter_mut().enumerate() {
+        *v = x(t + k);
+    }
+    for (p, v) in [(1, 0.01), (2, 0.5), (3, 0.5)] {
+        ports.bufs[p].fill(v);
+    }
+    // SAFETY: `state` is one `new` returned, and the table points at this state's own buffers.
+    unsafe { crate::delay::process(state, ports.table.as_ptr(), 0, BLOCK as u32) };
+    ports.bufs[4].clone()
+}
+
+// ABI v1 (report §2.3): every call names its state, so one instance of a module holds many, and no
+// state lives in a static. Two delays made through the exports, fed different sounds in turns, each
+// play exactly what one plays alone: neither hears the other's echoes.
+#[test]
+fn two_states_in_one_instance_play_independently() {
+    let channels = [1u32; 5];
+    let settings = m2_kernel::settings(&m2_kernel::Cfg::new(SR, BLOCK, 1), &channels);
+    let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
+    let new = || unsafe { crate::delay::new(&settings) };
+    let alone = |seed: usize| {
+        let (state, mut ports) = (new(), Ports::new(5));
+        (0..20).flat_map(|b| delay_block(state, &mut ports, b * BLOCK, sound(seed))).collect::<Vec<f32>>()
+    };
+    let (a, b) = (new(), new());
+    let (mut pa, mut pb) = (Ports::new(5), Ports::new(5));
+    let (mut heard_a, mut heard_b) = (vec![], vec![]);
+    for block in 0..20 {
+        heard_a.extend(delay_block(a, &mut pa, block * BLOCK, sound(0)));
+        heard_b.extend(delay_block(b, &mut pb, block * BLOCK, sound(1)));
+    }
+    assert!(heard_a.iter().any(|&v| v != 0.0) && heard_a != heard_b, "they play different sounds");
+    assert!(heard_a == alone(0), "the first state plays as it does alone");
+    assert!(heard_b == alone(1), "the second state plays as it does alone");
+}
+
+// ABI v1: a kernel whose state holds a `Vec` clears it in place at a reset (a reset takes no
+// memory), and starts over exactly as a new one does.
+#[test]
+fn kernels_with_lines_reset_in_place_to_where_they_started() {
+    use m2_dsp::testkit::assert_reset_starts_over;
+    assert_reset_starts_over::<Delay>(&[0.5, 0.01, 0.5, 0.5], 5_000);
+    assert_reset_starts_over::<Reverb>(&[0.5, 0.6, 0.5, 0.5], 5_000);
+    assert_reset_starts_over::<Widen>(&[0.5, 1.5], 5_000);
+}
+
+// ---------------------------------------------------------------- each effect
+
+#[test]
+fn reverb_rings_on_and_then_lets_a_voice_end() {
+    let mut host = Host::<Reverb>::new(SR, BLOCK as u32, 2);
+    let mut tail = vec![];
+    let mut ended = None;
+    for b in 0..(48_000 * 12 / BLOCK) {
+        for c in 0..2 {
+            for k in 0..BLOCK {
+                let t = b * BLOCK + k;
+                host.port_mut(0)[c * BLOCK + k] = if t < 4_800 { noise(0, t) } else { 0.0 };
+            }
+        }
+        for (p, v) in [(1, 0.6), (2, 0.5), (3, 0.5)] {
+            host.port_mut(p).fill(v);
+        }
+        host.process(BLOCK as u32);
+        let o = host.port_mut(Reverb::INPUTS);
+        tail.extend((0..BLOCK).map(|k| [o[k], o[BLOCK + k]]));
+        if ended.is_none() && !host.active() {
+            ended = Some(b * BLOCK);
+        }
+    }
+    let s = |x: f32| (x * SR) as usize;
+    assert!(peak(&tail[s(0.3)..s(0.6)]) > 1e-2, "no tail after the input stopped");
+    assert!(tail[s(0.3)..].iter().any(|f| (f[0] - f[1]).abs() > 1e-3), "a centred sound should get a stereo tail");
+    let ended = ended.expect("the reverb never stops being active");
+    assert!(ended > s(0.6) && ended < s(10.0), "active until {:.2} s", ended as f32 / SR);
+    assert!(peak(&tail[ended..]) < 1e-4, "still audible after it stopped being active");
+}
+
+#[test]
+fn reverb_wet_level_and_size() {
+    // Fully wet on sustained noise, it's about as loud as the dry sound.
+    let wet = (fx("reverb").run)(2, 96_000, BLOCK, &with(&noise, &[0.6, 0.5, 1.0]));
+    let ratio = db(rms(&wet[48_000..], 0) / rms(&(0..48_000).map(|t| [noise(0, t), 0.0]).collect::<Vec<_>>(), 0));
+    assert!((-6.0..3.0).contains(&ratio), "fully wet is {ratio:.1} dB from dry");
+    // A bigger room rings longer.
+    let burst = |c, t| if t < 4_800 { noise(c, t) } else { 0.0 };
+    let tail = |size| rms(&(fx("reverb").run)(2, 72_000, BLOCK, &with(&burst, &[size, 0.5, 1.0]))[48_000..], 0);
+    assert!(tail(0.9) > 4.0 * tail(0.3), "size 0.9 tail {} vs size 0.3 tail {}", tail(0.9), tail(0.3));
+}
+
+#[test]
+fn phaser_is_an_allpass_until_mixed_with_the_dry_sound() {
+    let dry = rms(&(0..48_000).map(|t| [noise(0, t), 0.0]).collect::<Vec<_>>(), 0);
+    let wet = (fx("phaser").run)(1, 48_000, BLOCK, &with(&noise, &[0.4, 0.7, 0.0, 1.0, 1.0]));
+    let level = db(rms(&wet, 0) / dry);
+    assert!(level.abs() < 1.0, "fully wet without feedback is {level:.1} dB from dry");
+    let mixed = (fx("phaser").run)(1, 48_000, BLOCK, &with(&noise, &[0.4, 0.7, 0.0, 0.5, 1.0]));
+    let level = db(rms(&mixed, 0) / dry);
+    assert!(level < -1.5, "the notches only take away {level:.1} dB");
+}
+
+#[test]
+fn tremolo_dips_by_its_depth() {
+    let dc = |_, _| 0.5;
+    let out = (fx("tremolo").run)(1, 48_000, BLOCK, &with(&dc, &[5.0, 1.0, 1.0]));
+    let (lo, hi) = out.iter().fold((f32::MAX, 0.0f32), |(lo, hi), f| (lo.min(f[0]), hi.max(f[0])));
+    assert!(lo < 0.005 && hi > 0.499, "level swings between {lo} and {hi}");
+    // Five dips a second.
+    let dips = out.windows(3).filter(|w| w[1][0] < w[0][0] && w[1][0] <= w[2][0]).count();
+    assert_eq!(dips, 5);
+    let still = (fx("tremolo").run)(1, 4_800, BLOCK, &with(&dc, &[5.0, 0.0, 1.0]));
+    assert!(still.iter().all(|f| f[0] == 0.5), "depth 0 changes the sound");
+}
+
+#[test]
+fn widen_keeps_mono_compatibility() {
+    let fx = fx("widen").run;
+    let same = fx(1, 4_800, BLOCK, &with(&saw, &[1.0]));
+    assert!(
+        same.iter().enumerate().all(|(t, f)| (f[0] - saw(0, t)).abs() < 1e-6 && (f[1] - saw(1, t)).abs() < 1e-6),
+        "width 1 changes the sound"
+    );
+    let mono = fx(1, 4_800, BLOCK, &with(&saw, &[0.0]));
+    assert!(mono.iter().all(|f| f[0] == f[1]), "width 0 isn't mono");
+    // A mono input gets width, and the added side cancels when summed back to mono.
+    let center = |_, t| 0.5 * saw(0, t);
+    let wide = fx(1, 48_000, BLOCK, &with(&center, &[2.0]));
+    let width = wide.iter().map(|f| (f[0] - f[1]).abs()).fold(0.0, f32::max);
+    assert!(width > 0.1, "a mono input only gets {width} of side");
+    assert!(wide.iter().enumerate().all(|(t, f)| ((f[0] + f[1]) * 0.5 - center(0, t)).abs() < 1e-6), "not mono compatible");
 }
 
 // ---------------------------------------------------------------- the bitcrusher

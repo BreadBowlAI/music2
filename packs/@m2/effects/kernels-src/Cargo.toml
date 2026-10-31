@@ -14,3 +14,4 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 m2-kernel = { path = "../../../../std/kernels-src/kernel" }
+m2-dsp = { path = "../../../../std/kernels-src/dsp" }

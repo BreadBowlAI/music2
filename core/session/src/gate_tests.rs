@@ -477,6 +477,81 @@ fn bitcrush_plays_from_its_pack_with_the_bits_it_had_in_std() {
     assert_eq!(kernels, ["@m2/effects:bitcrush"; 2], "the bitcrusher is the pack's own");
 }
 
+/// The engines that left std for their packs in wave 3, as std played them (std 0.8.0, `@m2/synths`
+/// 1.0.0, `@m2/drums` 1.0.0, `@m2/effects` 1.1.0, `8a914b1`): the polysynth and the FM synth on one
+/// lane, the drum machine on another, and delay, reverb, phaser, tremolo and widen over them.
+/// Recorded before the kernels moved (PACK-21).
+const ENGINES: &str = "d09c156022b2db81ce7707cb2ff4268637cc2ad5d8a29c2298706f77c0cb9956";
+
+/// Every kernel id the graph `nodes` names, its voices' included.
+fn kernel_ids(nodes: &[FNode], into: &mut Vec<String>) {
+    for n in nodes {
+        match &n.op {
+            FOp::Kernel { kernel, .. } => into.push(kernel.clone()),
+            FOp::Poly { voice, .. } => kernel_ids(&voice.nodes, into),
+            _ => {}
+        }
+    }
+}
+
+// PACK-21, ABI-10: the polysynth's and the FM synth's voices play from `@m2/synths`' own module,
+// the drum machine's from `@m2/drums`', and delay, reverb, phaser, tremolo and widen from `@m2/effects`',
+// each by its pack's id, and std has none of them: the bits they had as std's.
+#[test]
+fn engines_play_from_their_packs_with_the_bits_they_had_in_std() {
+    let f = Fixture::new();
+    let std = m2_song::Version::parse(&std_packages().get("std").unwrap().version).unwrap();
+    f.write(
+        "music2.toml",
+        format!(
+            "[project]\nname = \"engines\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}.{}\"\n\
+             \"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
+            std.0, std.1
+        ),
+    );
+    let note =
+        |pitch: &str, start: f64, length: f64| serde_json::json!({"pitch": pitch, "start": start, "length": length, "velocity": 0.8});
+    let lane =
+        |notes: Vec<serde_json::Value>| serde_json::json!({"clips": [{"id": "c1", "start": 0, "length": 4, "notes": notes}]}).to_string();
+    f.write("data/keys/notes.json", lane(vec![note("C4", 0.0, 1.5), note("E4", 0.0, 1.5), note("G3", 2.0, 1.0), note("A4", 2.5, 1.0)]));
+    let beat = ["C2", "F#2", "D2", "F#2", "C2", "A#2", "D#2", "F2"];
+    f.write("data/beat/notes.json", lane(beat.iter().enumerate().map(|(i, p)| note(p, i as f64 * 0.5, 0.25)).collect()));
+    f.write(
+        "song.ts",
+        "import { song, track } from \"@m2/core\";\nimport { osc, pan } from \"std/dsp\";\nimport { sum } from \"std/math\";\n\
+         import { synth, fm } from \"@m2/synths\";\nimport { drums } from \"@m2/drums\";\n\
+         import { delay, phaser, reverb, tremolo, widen } from \"@m2/effects\";\n\n\
+         const keys = track(\"keys\", ({ lane }) =>\n  sum(synth.custom(lane.notes(\"notes\"), { square: 0.3, unison: 3, filterEnv: 2 }), fm.custom(lane.notes(\"notes\"))),\n);\n\
+         const beat = track(\"beat\", ({ lane }) => drums.kit(lane.notes(\"notes\")));\n\n\
+         export default song(() =>\n  sum(\n    reverb(delay(keys.out, { time: 0.3, feedback: 0.4 }), { mix: 0.4 }),\n    widen(phaser(beat.out)),\n    \
+         tremolo(pan(osc.saw(110), -0.3), { depth: 0.8 }),\n  ),\n);\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{:?} {:?}", s.draft_errors, s.problems());
+    let sound = render_song(&s);
+    assert!(peak(&sound) > 0.3, "the song plays");
+    assert_eq!(bits(&sound), ENGINES, "the engines play other bits from their packs than they did from std");
+    let mut kernels = vec![];
+    kernel_ids(&s.accepted().compiled.flat.nodes, &mut kernels);
+    kernels.retain(|k| ["synth", "fm", "drum", "delay", "reverb", "phaser", "tremolo", "widen"].contains(&k.split_once(':').unwrap().1));
+    kernels.sort();
+    kernels.dedup();
+    assert_eq!(
+        kernels,
+        [
+            "@m2/drums:drum",
+            "@m2/effects:delay",
+            "@m2/effects:phaser",
+            "@m2/effects:reverb",
+            "@m2/effects:tremolo",
+            "@m2/effects:widen",
+            "@m2/synths:fm",
+            "@m2/synths:synth"
+        ],
+        "each engine is its pack's own"
+    );
+}
+
 fn peak(x: &[[f32; 2]]) -> f32 {
     x.iter().fold(0.0, |m, f| m.max(f[0].abs()).max(f[1].abs()))
 }

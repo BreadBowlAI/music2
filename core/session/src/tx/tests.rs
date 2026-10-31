@@ -327,7 +327,7 @@ fn an_added_effect_is_confined() {
     assert!(d.read("song.ts").contains("delay(osc.saw(hz(110)), { time: 0.25 })"));
     let delta = &done.delta;
     assert!(delta.removed.is_empty(), "the wrapped call keeps its names: {:?}", delta.removed);
-    assert!(!delta.added.is_empty() && delta.added.iter().any(|n| n.op["kernel"] == json!("std:delay")), "{:?}", delta.added);
+    assert!(!delta.added.is_empty() && delta.added.iter().any(|n| n.op["kernel"] == json!("@m2/effects:delay")), "{:?}", delta.added);
     assert!(!delta.rewired.is_empty());
     assert!(delta.values.is_empty() && delta.modules.is_empty());
     s.undo().unwrap();

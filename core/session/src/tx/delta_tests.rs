@@ -149,7 +149,7 @@ fn a_wrap_keeps_the_wrapped_calls_names() {
     let checked = s.check(&tx).unwrap();
     let delta = &checked.delta;
     assert!(delta.removed.is_empty() && delta.values.is_empty() && delta.modules.is_empty(), "{delta:?}");
-    assert!(delta.added.iter().any(|n| n.op["kernel"] == serde_json::json!("std:delay")), "{:?}", delta.added);
+    assert!(delta.added.iter().any(|n| n.op["kernel"] == serde_json::json!("@m2/effects:delay")), "{:?}", delta.added);
     // Every added node was made by the new call, which starts in the first insertion.
     assert!(delta.added.iter().all(|n| n.name.iter().any(|seg| seg.contains("song.ts:e0."))), "{:?}", delta.added);
     // Each rewired input now reads an added node, and read the wrapped call's output before.

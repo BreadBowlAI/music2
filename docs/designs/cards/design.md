@@ -248,8 +248,11 @@ one pack's sounds play is that pack's own.** std keeps the kernels sounds are bu
 
 The first to move is the bitcrusher (track `packcode`): one kernel, one effect, played by one pack,
 with its own tests. Wave 3 moves more the same way: the synth and FM voices into `@m2/synths`, the
-drum voice into `@m2/drums`, and reverb, phaser, tremolo and widen into `@m2/effects`. Delay, drive
-and chorus stay std's, since two packs play them.
+drum voice into `@m2/drums`, and delay, reverb, phaser, tremolo and widen into `@m2/effects`. Drive
+and chorus stay std's, since two packs play them (`@m2/effects`' drive and chorus, `@m2/synths`'
+simple bass and its strings). The blocks several modules are made of (filters, envelopes, the
+oscillators' steps, which drum a General MIDI note is) are one crate in the kernels' workspace that
+std's crate and each pack's use: written once, never copied.
 
 ## 8. The pack contract
 

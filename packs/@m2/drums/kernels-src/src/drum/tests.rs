@@ -240,7 +240,7 @@ fn chokes_stay_in_their_group() {
     }
     // The field that marks every hit (for hitcount) chokes nothing: a tom's hit doesn't cut
     // a kick, and a kick's hit (its field and its group's) still does.
-    let h = crate::notes::HIT_FIELD as f32;
+    let h = m2_dsp::gm::HIT_FIELD as f32;
     assert_eq!(ringing(36.0, h), free(36.0));
     assert_eq!(ringing(36.0, 8.0 * h), free(36.0));
     assert_eq!(ringing(36.0, h + 1.0), 0.0);

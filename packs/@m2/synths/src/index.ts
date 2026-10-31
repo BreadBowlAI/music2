@@ -6,7 +6,9 @@
 // - `bass`, `kick`, `hat`, `pluck`, `pad`: the first instruments, short ones built from std's
 //   blocks to read and copy (./simple).
 //
-// Each plays std's kernels by id. To build a voice of your own, std/dsp has the blocks and `mono`.
+// The polysynth and the FM synth play the pack's own kernels (`@m2/synths:synth`, `@m2/synths:fm`,
+// built from kernels-src/); the rest play std's by id. To build a voice of your own, std/dsp has
+// the blocks and `mono`.
 
 export { fm } from "./fm";
 export { bass, hat, kick, pad, pluck } from "./simple";

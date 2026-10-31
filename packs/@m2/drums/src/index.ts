@@ -1,7 +1,7 @@
 // @m2/drums: an 808/909-style drum machine (PACK-15).
 //
-// One engine, std's `std:drum` kernel, plays every drum. `drums.kit` maps notes to drums by
-// their General MIDI numbers, so one notes lane plays a whole beat: C2 (36) kick, D2 (38)
+// One engine, the pack's own `@m2/drums:drum` kernel (built from kernels-src/), plays every drum.
+// `drums.kit` maps notes to drums by their General MIDI numbers, so one notes lane plays a whole beat: C2 (36) kick, D2 (38)
 // snare, D#2 (39) clap, F#2 (42) closed hat, G#2 (44) pedal hat, A#2 (46) open hat, toms
 // on F2, G2, A2, B2, C3 and D3 (41 to 50), C#2 (37) rim, C#3 (49) crash, D#3 (51) ride,
 // F#3 (54) tambourine, G#3 (56) cowbell, A4 and A#4 (69, 70) shakers, D#5 (75) claves.
@@ -20,7 +20,7 @@ import { component, control, kernel, poly, port, setting, signature, type Audio,
 const MODEL = { kit: -1, kick: 0, snare: 1, clap: 2, hats: 3, tom: 4, rim: 5, cowbell: 6, cymbal: 7, shaker: 8 } as const;
 
 /**
- * The drum voices for `notes`, with a patch of kernel inputs (see `std:drum` in std's `m2pkg.toml`).
+ * The drum voices for `notes`, with a patch of kernel inputs (see `@m2/drums:drum` in the pack's `m2pkg.toml`).
  * Every voice hears every hit, marked by its choke group, so the next hit of its group fades
  * it out; a drum that never chokes needs only one voice to mark them (its hits on one sample
  * then count once, told apart by their keys). Outside the voices, `hitcount` counts the hits,
@@ -30,7 +30,7 @@ const MODEL = { kit: -1, kick: 0, snare: 1, clap: 2, hats: 3, tom: 4, rim: 5, co
 function machine(notes: Events, model: number, voices: number, chokes: boolean, patch: Record<string, Value>): Audio {
   const hits = poly(notes, (n) => kernel("std:drumhit", { pitch: n.pitch, model }), { voices: chokes ? 8 : 1 });
   const count = kernel("std:hitcount", { hits });
-  return poly(notes, (n) => kernel("std:drum", { pitch: n.pitch, velocity: n.velocity, hits, count, model, ...patch }), { voices });
+  return poly(notes, (n) => kernel("@m2/drums:drum", { pitch: n.pitch, velocity: n.velocity, hits, count, model, ...patch }), { voices });
 }
 
 const KICK_TUNE = control.hz(48).range(30, 120).log();
@@ -47,7 +47,7 @@ const LEVEL = (what: string) => control.db(0).range(-24, 12).label(`${what} leve
 
 /** What the hats play on their named notes: closed on every other. */
 const HAT_NOTES = { 42: "Closed hat", 44: "Pedal hat", 46: "Open hat" };
-/** The kit's notes by name, for the piano roll's rows: the General MIDI notes `std:drum` plays (see above). */
+/** The kit's notes by name, for the piano roll's rows: the General MIDI notes `@m2/drums:drum` plays (see above). */
 const KIT_NOTES = {
   36: "Kick",
   37: "Rim",

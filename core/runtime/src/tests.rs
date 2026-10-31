@@ -172,7 +172,7 @@ fn data(ir: &Ir, dir: &Path) -> DataSet {
 }
 
 fn render(ir: &Ir, tl: &DataSet, seconds: f64) -> Vec<[f32; 2]> {
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
     Renderer::new(&flat, tl, &pk, SR).unwrap().render(seconds).unwrap()
 }
@@ -431,13 +431,13 @@ fn play_state(sb: &mut sandbox::Sandbox, s: &sandbox::State, blocks: usize, x: i
 }
 
 // ABI v1 (report §2.3), in wasm: every call names its state, so one sandbox holds many. Two delays
-// born in one sandbox of std.wasm, fed different sounds in turns, each play exactly what one plays in
-// a sandbox of its own: neither hears the other's echoes. (std/kernels-src's test of the same name
-// runs the kit natively.)
+// born in one sandbox of `@m2/effects`' module, fed different sounds in turns, each play exactly what
+// one plays in a sandbox of its own: neither hears the other's echoes. (The pack's kernels' test of
+// the same name runs the kit natively.)
 #[test]
 fn two_states_in_one_instance_play_independently() {
-    let pk = std_packages();
-    let (module, prefix, _) = pk.module_for("std:delay").unwrap();
+    let pk = own_packages();
+    let (module, prefix, _) = pk.module_for("@m2/effects:delay").unwrap();
     let born = |sb: &mut sandbox::Sandbox| {
         sb.state(
             prefix,
@@ -551,7 +551,7 @@ fn tricky() -> (Ir, DataSet, PathBuf) {
                 {"id": "q", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
                 {"id": "h", "op": "const", "value": 0.3},
                 {"id": "mix", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "q"}}]}},
-            {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}},
+            {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}},
         ]),
         "d",
         json!([{"key": "notes", "kind": "events<note>"}]),
@@ -571,7 +571,7 @@ fn tricky() -> (Ir, DataSet, PathBuf) {
 #[test]
 fn every_buffer_size_gives_the_same_samples() {
     let (ir, tl, dir) = tricky();
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(&ir, &pk).unwrap();
     let total = 24_000;
     let mut reference = vec![[0.0; 2]; total];
@@ -592,7 +592,7 @@ fn every_buffer_size_gives_the_same_samples() {
 #[test]
 fn seeking_gives_the_same_samples_as_a_full_render() {
     let (ir, tl, dir) = tricky();
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(&ir, &pk).unwrap();
     let mut r = Renderer::new(&flat, &tl, &pk, SR).unwrap();
     let full = r.render(1.0).unwrap();
@@ -618,7 +618,7 @@ fn echoes_inside_a_voice_outlive_its_note() {
                 {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
                 {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}},
                 {"id": "t", "op": "const", "value": 0.25, "unit": "seconds"},
-                {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a", "time": "t", "mix": "m"}},
+                {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "a", "time": "t", "mix": "m"}},
                 {"id": "m", "op": "const", "value": 0.5}]}},
         ]),
         "v",
@@ -949,7 +949,7 @@ fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
         &synth,
         &[("data/song/notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 60, "start": 0, "length": 0.2}]}]}))],
     );
-    let pk = std_packages();
+    let pk = own_packages();
     let mut r = Renderer::new(&check(&synth, &pk).unwrap(), &tl, &pk, SR).unwrap();
     r.render(0.05).unwrap();
     assert_eq!(r.active_voices(), 1);
@@ -967,7 +967,7 @@ fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
                 {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
                 {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
                 {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}},
-                {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a", "time": "t"}},
+                {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "a", "time": "t"}},
                 {"id": "t", "op": "const", "value": 0.5, "unit": "seconds"}]}},
         ]),
         "v",
@@ -1415,6 +1415,39 @@ fn a_kernel_that_left_std_says_where_it_went() {
     assert_eq!((e[0].code, e[0].message.as_str()), ("code.check", "unknown kernel `std:crush`"));
 }
 
+// PACK-21, PKG-17: the engines that left std in wave 3 (std 0.9) are their packs' own: the
+// polysynth's and the FM synth's voices @m2/synths', the drum voice @m2/drums', and delay, reverb,
+// phaser, tremolo and widen @m2/effects'. std keeps none of them, each pack's module has its own, and a call
+// of the old id is told where it went.
+#[test]
+fn the_engines_left_std_for_their_packs() {
+    let moved = [
+        ("std:synth", "@m2/synths:synth", "synth.custom"),
+        ("std:fm", "@m2/synths:fm", "fm.custom"),
+        ("std:drum", "@m2/drums:drum", "drums.kit"),
+        ("std:delay", "@m2/effects:delay", "delay"),
+        ("std:reverb", "@m2/effects:reverb", "reverb"),
+        ("std:phaser", "@m2/effects:phaser", "phaser"),
+        ("std:tremolo", "@m2/effects:tremolo", "tremolo"),
+        ("std:widen", "@m2/effects:widen", "widen"),
+    ];
+    let (std, own) = (std_packages(), own_packages());
+    for (from, to, component) in moved {
+        assert!(m2_ir::Kernels::kernel(&std, from).is_none(), "std has no {from}");
+        assert!(m2_ir::Kernels::kernel(&own, to).is_some(), "{to} is in its pack's module");
+        let ir = song(json!([{"id": "c", "op": "kernel", "kernel": from, "src": "song.ts:4:3"}]), "c", json!([]));
+        let e = check(&ir, &std).expect_err("refused");
+        assert_eq!((e[0].code, e[0].src.as_deref()), ("pkg.missing", Some("song.ts:4:3")), "{e:?}");
+        let pack = to.split_once(':').unwrap().0;
+        assert!(
+            e[0].message.starts_with(&format!("`{from}` is no longer std's: since std 0.9 it is `{to}`, the pack {pack}' own kernel"))
+                && e[0].message.contains(&format!("A song plays it as `{component}` from \"{pack}\"")),
+            "{from}: {}",
+            e[0].message
+        );
+    }
+}
+
 // Information only (PLAT-1): how fast `std:stretch` makes a warped clip's render here. A minute of
 // stereo 44.1 kHz audio laid out over 75 s and up 3 semitones, in a 48 kHz song, into its file.
 #[test]
@@ -1829,7 +1862,7 @@ mod goldens {
 
     /// `frames` of `ir` playing `data`, asked for in buffers of `sizes` in turn.
     pub(super) fn hash(ir: &Ir, data: &DataSet, frames: usize, sizes: &[usize]) -> String {
-        let pk = std_packages();
+        let pk = own_packages();
         let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
         let mut r = Renderer::new(&flat, data, &pk, SR).unwrap();
         let mut out = vec![[0.0f32; 2]; frames];
@@ -1890,7 +1923,7 @@ mod goldens {
                     {"id": "q", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
                     {"id": "h", "op": "const", "value": 0.3},
                     {"id": "mix", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "q"}}]}},
-                {"id": "dl", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]),
+                {"id": "dl", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}}]),
             "dl",
             serde_json::from_str(NOTES).unwrap(),
         );

@@ -55,7 +55,7 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 
 ## An instrument
 
-An instrument is a `component(…)` whose first input is notes and whose output is sound; an effect's first input is sound. Give each a label and a category: the browser groups by it. A component only code should play says `editor: { unlisted: true }` instead of a category: no list offers it. `m2 pack check` names one that says neither, as one you forgot. Build a voice from std's blocks (`std/dsp`, `std/math`), as below: the code editor checks every call as you type. A kernel called by its id, `kernel("std:synth", { … })`, works too, but only the build checks the names of its inputs.
+An instrument is a `component(…)` whose first input is notes and whose output is sound; an effect's first input is sound. Give each a label and a category: the browser groups by it. A component only code should play says `editor: { unlisted: true }` instead of a category: no list offers it. `m2 pack check` names one that says neither, as one you forgot. Build a voice from std's blocks (`std/dsp`, `std/math`), as below: the code editor checks every call as you type. A kernel called by its id, `kernel("std:svf", { … })`, works too, but only the build checks the names of its inputs.
 
 ```ts
 import { component, control, file, hz, ms, poly, port, secs, signature, type Audio, type Events, type Params } from "@m2/core";

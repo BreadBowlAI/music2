@@ -1,7 +1,7 @@
 // @m2/synths/synth: the polysynth, and the instruments voiced on it.
 //
-// One engine, std's `std:synth` kernel: a unison stack of saws and pulses with a sub and
-// noise, a drive, a 4-pole ladder lowpass with its own envelope, then the amp envelope.
+// One engine, the pack's own `@m2/synths:synth` kernel (built from kernels-src/): a unison stack of
+// saws and pulses with a sub and noise, a drive, a 4-pole ladder lowpass with its own envelope, then the amp envelope.
 // Each instrument here is that engine with a patch of plain numbers and a few knobs;
 // `synth.custom` has every knob. A whole voice is one kernel, which costs far less than
 // the same sound built from small ones, and the kernel smooths its own knobs, so none
@@ -25,9 +25,9 @@ function play(notes: Events, voices: number, glide: Value, voice: (note: Voice) 
   return voices === 1 ? mono(notes, voice, { glide }) : poly(notes, voice, { voices });
 }
 
-/** The engine for a note, with a patch of kernel inputs (see `std:synth` in std's `m2pkg.toml`). The mod wheel deepens its vibrato. */
+/** The engine for a note, with a patch of kernel inputs (see `@m2/synths:synth` in the pack's `m2pkg.toml`). The mod wheel deepens its vibrato. */
 function engine(n: Voice, patch: Record<string, Value>): Audio {
-  return kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, wheel: n.modWheel, ...patch });
+  return kernel("@m2/synths:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, wheel: n.modWheel, ...patch });
 }
 
 // Ranges every instrument here shares, so the same knob turns the same way everywhere.

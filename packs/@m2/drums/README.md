@@ -9,5 +9,5 @@
 import { drums } from "@m2/drums";
 ```
 
-Every drum plays std's `std:drum` kernel. The guide's page Sounds and effects lists the kit's notes and
-knobs: `m2 docs sounds` prints it.
+Every drum plays the pack's own kernel, `@m2/drums:drum`, in `kernels/drums.wasm`. The guide's page
+Sounds and effects lists the kit's notes and knobs: `m2 docs sounds` prints it.

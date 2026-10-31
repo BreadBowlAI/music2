@@ -366,7 +366,7 @@ These live elsewhere on purpose:
 
 ## The standard library
 
-`std` is a set of ordinary packages, versioned separately from the app. Today it is one package in `std/`: one WebAssembly module with 37 kernels, one of them the offline kernel `std:stretch` (`std/kernels/std.wasm`, built from `std/kernels-src`) and the TypeScript modules below (`std/src`). A kernel only one pack's sounds play is that pack's own, built the same way beside it (PACK-21: `@m2/effects`' bitcrusher since std 0.8).
+`std` is a set of ordinary packages, versioned separately from the app. Today it is one package in `std/`: one WebAssembly module with 29 kernels, one of them the offline kernel `std:stretch` (`std/kernels/std.wasm`, built from `std/kernels-src`) and the TypeScript modules below (`std/src`). A kernel only one pack's sounds play is that pack's own, built the same way beside it (PACK-21: `@m2/effects`' bitcrusher since std 0.8; since std 0.9 the polysynth's, the FM synth's and the drum machine's voices, and the delay, reverb, phaser, tremolo and widener).
 
 **Built:**
 
@@ -755,7 +755,7 @@ Agents may keep writing files directly: that is the save path, and every problem
 | CLAP plugin hosting, in a process of its own (`m2-plugin-host`) | `core/plugins` (`m2-plugins`) |
 | Playback on the audio device, and its input | `core/play` (`m2-play`) |
 | The engine's thread pool; what differs on each OS | `core/pool` (`m2-pool`), `core/os` (`m2-os`) |
-| The `std` package: manifest, 37 kernels (one offline), 17 effects, TypeScript modules | `std/` (kernels built with `std/build.sh`, which builds music2's own packs' too) |
+| The `std` package: manifest, 29 kernels (one offline), 17 effects, TypeScript modules | `std/` (kernels built with `std/build.sh`, which builds music2's own packs' too) |
 | CLI: 42 commands (`m2` alone lists them) | `apps/m2` |
 | The app's server: the open project and playback (`graph.rs`), the code editor's files (`files.rs`), new songs (`project.rs`), Export Audio (`export.rs`), the bundled resources (`resources.rs`), every route, in one table (`api.rs`; `m2 routes` prints it) | `crates/server` (`m2-server`) |
 | The desktop app and its UI: start screen, New Song dialog, timeline, graph, piano roll, code editor, effect browser, Export | `apps/music2-desktop`, `web/` |

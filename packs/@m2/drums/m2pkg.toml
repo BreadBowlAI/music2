@@ -1,13 +1,58 @@
 [package]
 name = "@m2/drums"
-version = "1.0.0"
+version = "1.1.0"
 license = "MIT OR Apache-2.0"
 description = "music2's 808/909 drum machine: a whole kit on one notes lane, and each drum as an instrument of its own"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
 tags = ["drums", "drum machine", "808", "909", "kit"]
+# Its own kernel (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
+# part of the pack (PACK-20).
+wasm = "kernels/drums.wasm"
 
 [dependencies]
 # Any @m2/core 1.x: what these components use is older than std 0.7 (below), which comes only with apps that have it all.
 "@m2/core" = "1"
+# std's drumhit and hitcount, which mark and count its hits, are in std 0.7 and later; the drum
+# voice is its own.
 std = "0.7"
+
+# ---------------------------------------------------------------- its own kernel
+# Port syntax as std's m2pkg.toml says. Called by the pack's id: `kernel("@m2/drums:drum", …)`.
+# It reads times when a hit starts (never the host's blocks), and ends in exact silence. It was
+# std's until std 0.9, and plays the same bits.
+
+[[kernel]]
+name = "drum"
+description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the kit"
+inputs = [
+  "pitch: control<semitones>",
+  "velocity: control<unit01> = 0.8",
+  "hits: audio<1>",
+  "count: audio<1>",
+  "model: control<scalar> = -1",
+  "kick_tune: control<hz> = 48 in 30..120",
+  "kick_decay: control<seconds> = 0.45",
+  "punch: control<unit01> = 0.5",
+  "snare_tune: control<hz> = 190 in 100..400",
+  "snap: control<unit01> = 0.6",
+  "snare_decay: control<seconds> = 0.18",
+  "clap_tone: control<hz> = 1200",
+  "clap_decay: control<seconds> = 0.25",
+  "hat_tone: control<hz> = 8000",
+  "hat_decay: control<seconds> = 0.045",
+  "open_decay: control<seconds> = 0.45",
+  "tom_tune: control<hz> = 130",
+  "tom_decay: control<seconds> = 0.35",
+  "rim_tone: control<hz> = 1700",
+  "bell_tune: control<hz> = 540",
+  "cymbal_decay: control<seconds> = 1.6",
+  "shake_decay: control<seconds> = 0.06",
+  "drive: control<db> = 0 in 0..24",
+  "kick_level: control<db> = 0 in -24..12",
+  "snare_level: control<db> = 0 in -24..12",
+  "hat_level: control<db> = 0 in -24..12",
+  "tom_level: control<db> = 0 in -24..12",
+  "perc_level: control<db> = 0 in -24..12",
+]
+outputs = ["out: audio<1>"]

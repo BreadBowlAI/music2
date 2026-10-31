@@ -112,7 +112,7 @@ pub(in crate::graph) fn listed(problems: &Value) -> Vec<(String, Option<String>,
 }
 
 fn delay(op: &FOp) -> bool {
-    matches!(op, FOp::Kernel { kernel, .. } if kernel == "std:delay")
+    matches!(op, FOp::Kernel { kernel, .. } if kernel == "@m2/effects:delay")
 }
 
 /// What starts it again, in words every platform shares: the key is the menu's to show, ⌘. on a Mac

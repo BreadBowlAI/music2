@@ -38,10 +38,10 @@ fn a_flush_to_zero_set_by_the_caller_changes_no_bit() {
     assert!(after, "the thread flushes again afterwards");
 }
 
-/// One note on a synth and an fm voice, then nothing, through every std kernel that keeps state:
-/// a filter, a delay and a reverb on long feedback, chorus, phaser, tremolo, a compressor, an eq,
-/// a limiter, drive, a ducker following the fm voice, and a widener, and `@m2/effects`' own
-/// bitcrusher (PACK-21), all summed.
+/// One note on `@m2/synths`' synth and fm voices, then nothing, through every kernel music2 ships
+/// that keeps state: std's filter, chorus, compressor, eq, limiter, drive, and a ducker following
+/// the fm voice, and `@m2/effects`' own delay and reverb on long feedback, phaser, tremolo,
+/// bitcrusher and widener (PACK-21), all summed.
 fn long_tail() -> (Ir, DataSet) {
     let voice = |kernel: &str| {
         json!({"op": "poly", "events": "n", "voices": 2, "body": {"out": "x", "nodes": [
@@ -51,7 +51,7 @@ fn long_tail() -> (Ir, DataSet) {
     let c = |id: &str, v: f64| json!({"id": id, "op": "const", "value": v});
     let fx = |id: &str, kernel: &str, inputs: Value| json!({"id": id, "op": "kernel", "kernel": kernel, "inputs": inputs});
     let mut nodes = vec![json!({"id": "n", "op": "lane", "lane": "notes"})];
-    let (mut s, mut f) = (voice("std:synth"), voice("std:fm"));
+    let (mut s, mut f) = (voice("@m2/synths:synth"), voice("@m2/synths:fm"));
     s["id"] = json!("s");
     f["id"] = json!("f");
     nodes.extend([s, f]);
@@ -69,12 +69,12 @@ fn long_tail() -> (Ir, DataSet) {
     nodes.extend([
         fx("fs", "std:pan", json!({"in": "f"})),
         fx("svf", "std:svf", json!({"in": "s", "cutoff": "cut", "q": "q"})),
-        fx("delay", "std:delay", json!({"in": "s", "time": "t", "feedback": "hi", "mix": "one"})),
-        fx("reverb", "std:reverb", json!({"in": "s", "size": "big", "damping": "low", "mix": "one"})),
-        fx("verb2", "std:reverb", json!({"in": "fs", "size": "big", "damping": "low", "mix": "one"})),
+        fx("delay", "@m2/effects:delay", json!({"in": "s", "time": "t", "feedback": "hi", "mix": "one"})),
+        fx("reverb", "@m2/effects:reverb", json!({"in": "s", "size": "big", "damping": "low", "mix": "one"})),
+        fx("verb2", "@m2/effects:reverb", json!({"in": "fs", "size": "big", "damping": "low", "mix": "one"})),
         fx("chorus", "std:chorus", json!({"in": "s"})),
-        fx("phaser", "std:phaser", json!({"in": "s", "feedback": "hi"})),
-        fx("tremolo", "std:tremolo", json!({"in": "s"})),
+        fx("phaser", "@m2/effects:phaser", json!({"in": "s", "feedback": "hi"})),
+        fx("tremolo", "@m2/effects:tremolo", json!({"in": "s"})),
         fx("compress", "std:compress", json!({"in": "s", "threshold": "deep", "ratio": "ratio"})),
         fx("eq3", "std:eq3", json!({"in": "s"})),
         fx("bitcrush", "@m2/effects:bitcrush", json!({"in": "s"})),
@@ -82,7 +82,7 @@ fn long_tail() -> (Ir, DataSet) {
         fx("drive", "std:drive", json!({"in": "s"})),
         fx("follow", "std:follow", json!({"in": "f"})),
         fx("duck", "std:duck", json!({"in": "s", "side": "follow"})),
-        fx("widen", "std:widen", json!({"in": "s"})),
+        fx("widen", "@m2/effects:widen", json!({"in": "s"})),
     ]);
     let sum = [
         "svf.lp", "svf.bp", "svf.hp", "delay", "reverb", "verb2", "chorus", "phaser", "tremolo", "compress", "eq3", "bitcrush", "limit",
@@ -105,11 +105,11 @@ fn long_tail() -> (Ir, DataSet) {
 }
 
 // OS-49 (8a, Decision 12): subnormal numbers are slow on x86, so std flushes its recursive state
-// below about 1e-15 (`fx.rs`), and so does the bitcrusher, `@m2/effects`' own kernel since std 0.8.
-// One note, then five minutes of silence, through every std kernel that keeps state and the
-// bitcrusher, counting the subnormal samples in every node's output: counted, not timed.
-// std 0.2's filter, delay and envelope follower still let theirs through (a sum of subnormals is
-// one too, so the adds after them are left out). This test names them: when a std bump flushes
+// below about 1e-15 (`m2_dsp::flush`), and so do music2's own packs' kernels (PACK-21). One note,
+// then five minutes of silence, through every kernel music2 ships that keeps state, counting the
+// subnormal samples in every node's output: counted, not timed. std 0.2's filter, delay (now
+// `@m2/effects`') and envelope follower still let theirs through (a sum of subnormals is one too,
+// so the adds after them are left out). This test names them: when a std bump flushes
 // them (OS-49's deferred fix), it fails, and the list shrinks to none.
 #[test]
 fn which_std_kernels_make_subnormals_in_a_five_minute_tail() {
@@ -137,5 +137,5 @@ fn which_std_kernels_make_subnormals_in_a_five_minute_tail() {
     kernels.dedup();
     let counts: Vec<String> =
         (0..f.nodes.len()).filter(|&i| subnormal[i] > 0).map(|i| format!("{}: {}", f.nodes[i].name, subnormal[i])).collect();
-    assert_eq!(kernels, ["std:delay", "std:follow", "std:svf"], "the kernels whose outputs held subnormal samples: {counts:?}");
+    assert_eq!(kernels, ["@m2/effects:delay", "std:follow", "std:svf"], "the kernels whose outputs held subnormal samples: {counts:?}");
 }

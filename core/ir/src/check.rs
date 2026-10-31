@@ -371,8 +371,17 @@ pub struct Moved {
 
 /// Every kernel that left std for a pack music2 ships (PACK-21): the one table, so a song (or an
 /// older pack's code) that calls one by its old id is told where it went.
-pub const MOVED_KERNELS: &[Moved] =
-    &[Moved { from: "std:bitcrush", to: "@m2/effects:bitcrush", std: "0.8", since: "1.1", component: "bitcrush" }];
+pub const MOVED_KERNELS: &[Moved] = &[
+    Moved { from: "std:bitcrush", to: "@m2/effects:bitcrush", std: "0.8", since: "1.1", component: "bitcrush" },
+    Moved { from: "std:synth", to: "@m2/synths:synth", std: "0.9", since: "1.1", component: "synth.custom" },
+    Moved { from: "std:fm", to: "@m2/synths:fm", std: "0.9", since: "1.1", component: "fm.custom" },
+    Moved { from: "std:drum", to: "@m2/drums:drum", std: "0.9", since: "1.1", component: "drums.kit" },
+    Moved { from: "std:delay", to: "@m2/effects:delay", std: "0.9", since: "1.2", component: "delay" },
+    Moved { from: "std:reverb", to: "@m2/effects:reverb", std: "0.9", since: "1.2", component: "reverb" },
+    Moved { from: "std:phaser", to: "@m2/effects:phaser", std: "0.9", since: "1.2", component: "phaser" },
+    Moved { from: "std:tremolo", to: "@m2/effects:tremolo", std: "0.9", since: "1.2", component: "tremolo" },
+    Moved { from: "std:widen", to: "@m2/effects:widen", std: "0.9", since: "1.2", component: "widen" },
+];
 
 /// Why kernel `id` isn't there, when it left std for a pack ([`MOVED_KERNELS`]): where it is now,
 /// and how a song moves to it.

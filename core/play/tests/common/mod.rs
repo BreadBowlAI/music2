@@ -19,12 +19,17 @@ pub fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// std, and music2's own packs as the test store holds them installed (PACK-16): the kernels a song
+/// written by hand calls by id (`@m2/effects:delay`), as a build would load them.
 pub fn std_packages() -> PackageSet {
     // Plugins run their main-thread calls on the tests' dedicated thread (HOST-2, C1).
     m2_plugins::test_main_thread();
     m2_plugins::probe::install();
     let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
     p.load(&repo().join("std")).expect("std loads");
+    for (name, dir) in m2_song::pack::test_packs() {
+        p.load(&dir).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+    }
     p
 }
 
@@ -128,7 +133,7 @@ pub fn project(what: &str, files: &[(&str, &str)]) -> Song {
 pub fn project_on(what: &str, files: &[(&str, &str)], host: Option<std::sync::Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let dir = temp(what);
     let manifest = format!(
-        "[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n"
+        "[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n"
     );
     for (rel, text) in [("music2.toml", manifest.as_str())].into_iter().chain(files.iter().copied()) {
         let path = dir.join(rel);

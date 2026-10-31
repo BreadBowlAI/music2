@@ -583,7 +583,10 @@ fn installing_the_bundled_packs_twice_writes_nothing() {
             other => panic!("{other:?}"),
         })
         .collect();
-    assert_eq!(names, ["@m2/drums 1.0.0", "@m2/effects 1.1.0", "@m2/synths 1.0.0"]);
+    let bundled: Vec<String> =
+        bundled(&source_packs()).iter().map(|d| PkgManifest::at(d).unwrap().package).map(|p| format!("{} {}", p.name, p.version)).collect();
+    assert_eq!(names, bundled);
+    assert_eq!(names.len(), 3, "@m2/drums, @m2/effects and @m2/synths");
     for (dir, _) in &first {
         let m = PkgManifest::at(dir).unwrap();
         let hash = store.check(&m.package.name, &m.package.version).unwrap();
@@ -606,7 +609,8 @@ fn installing_the_bundled_packs_twice_writes_nothing() {
 fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on() {
     let d = scratch("clash");
     let store = Store::at(d.join("Packs"));
-    let theirs = installed(&store, "@m2/synths", "1.0.0");
+    let v = PkgManifest::at(&source_packs().join("@m2/synths")).unwrap().package.version;
+    let theirs = installed(&store, "@m2/synths", &v.to_string());
     let done = install_bundled(&source_packs(), &store);
     let said: Vec<(String, Result<String, String>)> = done
         .into_iter()
@@ -617,8 +621,8 @@ fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on(
     assert_eq!(said[0], ("drums".into(), Ok("Installed".into())));
     assert_eq!(said[1], ("effects".into(), Ok("Installed".into())));
     let Err(why) = &said[2].1 else { panic!("{said:?}") };
-    assert!(why.starts_with("@m2/synths 1.0.0 is installed already with other files"), "{why}");
-    assert_eq!(store.check(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0)).unwrap(), theirs, "theirs is left as it was");
+    assert!(why.starts_with(&format!("@m2/synths {v} is installed already with other files")), "{why}");
+    assert_eq!(store.check(&PackName::new("@m2/synths").unwrap(), &v).unwrap(), theirs, "theirs is left as it was");
     remove_tree(&d).unwrap();
 }
 
@@ -710,7 +714,8 @@ fn a_song_locked_to_music2s_own_pack_is_told_how_to_get_it_back() {
     let store = Store::at(root.join("Packs"));
     let song = root.join("song");
     std::fs::create_dir_all(&song).unwrap();
-    let (name, v, hash) = recorded().iter().find(|(n, ..)| n.as_str() == "@m2/synths").cloned().expect("recorded");
+    let bundled = PkgManifest::at(&source_packs().join("@m2/synths")).unwrap().package.version;
+    let (name, v, hash) = recorded().iter().find(|(n, v, _)| n.as_str() == "@m2/synths" && *v == bundled).cloned().expect("recorded");
     let m = song_with(&format!("\"{name}\" = \"{v}\"\n"));
     let lock = Lock::default().with(name.clone(), v, hash);
     let said = |store: &Store| {

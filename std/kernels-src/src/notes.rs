@@ -1,14 +1,12 @@
-//! Notes as signals, for what `poly` can't do on its own: `drumhit` tells drum voices when
-//! another hit chokes them, and `hitcount` counts a lane's hits, so each gets a seed of its
+//! Notes as signals, for what `poly` can't do on its own: `drumhit` tells drum voices (`@m2/drums`')
+//! when another hit chokes them, by `m2_dsp::gm`'s marks, and `hitcount` counts a lane's hits, so each gets a seed of its
 //! own. Port order must match `std/m2pkg.toml`. (std's one note at a time, `mono()`, is the
 //! `poly` op's `"legato"` mode since std 0.3.0: `std:notecv` and `std:mono` are gone.)
 
 use m2_kernel::{Cfg, Io, Kernel, export};
 
-use crate::drums::{Kind, kind_of};
-
-/// Where `drumhit` marks every hit, above the five choke groups' fields: 16^5.
-pub(crate) const HIT_FIELD: u32 = 1 << 20;
+pub(crate) use m2_dsp::gm::HIT_FIELD;
+use m2_dsp::gm::{Kind, kind_of};
 
 /// Marks a drum hit, on the note's first sample, else 0: 16^group for its drum's choke group
 /// (by General MIDI pitch, or `model`), which the drum voices read, plus [`HIT_FIELD`] for

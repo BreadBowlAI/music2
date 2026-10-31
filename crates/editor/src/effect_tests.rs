@@ -79,7 +79,7 @@ fn adding_wraps_the_call_and_imports_the_effect_and_removing_restores_it_exactly
             _ => None,
         })
         .collect();
-    assert_eq!(readers, ["std:saw", "std:delay"]);
+    assert_eq!(readers, ["std:saw", "@m2/effects:delay"]);
 
     let removed = s.remove_effect(rev(&s), &call(&s, "delay")).unwrap();
     assert_eq!((removed.before.as_str(), removed.after.as_str()), (delayed, "osc.saw(hz(110))"));
@@ -398,7 +398,7 @@ fn a_native_caller_takes_no_site() {
 
 // ---------------------------------------------------------------- what the engine keeps (ID-13)
 
-/// A kernel node by what it reads as constants: `std:delay[0.388,0.3,0.3]`.
+/// A kernel node by what it reads as constants: `@m2/effects:delay[0.388,0.3,0.3]`.
 fn by_consts(flat: &m2_ir::Flat, n: &m2_ir::FNode) -> String {
     let m2_ir::FOp::Kernel { kernel, inputs, .. } = &n.op else { return n.name.clone() };
     let consts: Vec<String> = inputs
@@ -460,9 +460,12 @@ fn a_delay_added_inside_a_delay_keeps_the_users_delay() {
     ));
     let mut s = f.open();
     let saw = call(&s, "osc.saw");
-    let pairs = continued(&mut s, "std:delay", |s| drop(s.add_effect(rev(s), &saw, "@m2/effects:delay").unwrap()));
+    let pairs = continued(&mut s, "@m2/effects:delay", |s| drop(s.add_effect(rev(s), &saw, "@m2/effects:delay").unwrap()));
     assert!(f.source().contains("delay(delay(osc.saw(hz(110)), { time: 0.25, feedback: 0.3, mix: 0.3 }), { time: 0.388 })"));
-    assert_eq!(pairs, [made("std:delay[0.25,0.3,0.3]"), kept("std:delay[0.388,0.3,0.3]", "std:delay[0.388,0.3,0.3]")]);
+    assert_eq!(
+        pairs,
+        [made("@m2/effects:delay[0.25,0.3,0.3]"), kept("@m2/effects:delay[0.388,0.3,0.3]", "@m2/effects:delay[0.388,0.3,0.3]")]
+    );
 }
 
 // ID-13: Add Effect on the delay call itself wraps it in a new delay: the wrapped one keeps its
@@ -474,9 +477,12 @@ fn a_delay_wrapped_around_a_delay_keeps_the_wrapped_one() {
     ));
     let mut s = f.open();
     let delay = call(&s, "delay");
-    let pairs = continued(&mut s, "std:delay", |s| drop(s.add_effect(rev(s), &delay, "@m2/effects:delay").unwrap()));
+    let pairs = continued(&mut s, "@m2/effects:delay", |s| drop(s.add_effect(rev(s), &delay, "@m2/effects:delay").unwrap()));
     assert!(f.source().contains("delay(delay(osc.saw(hz(110)), { time: 0.388 }), { time: 0.25, feedback: 0.3, mix: 0.3 })"));
-    assert_eq!(pairs, [made("std:delay[0.25,0.3,0.3]"), kept("std:delay[0.388,0.3,0.3]", "std:delay[0.388,0.3,0.3]")]);
+    assert_eq!(
+        pairs,
+        [made("@m2/effects:delay[0.25,0.3,0.3]"), kept("@m2/effects:delay[0.388,0.3,0.3]", "@m2/effects:delay[0.388,0.3,0.3]")]
+    );
 }
 
 // ID-13: Remove Effect on either of two delays, one inside the other: the delay that stays keeps
@@ -486,11 +492,11 @@ fn removing_either_of_two_delays_keeps_the_other() {
     let source = format!(
         "{HEAD}import {{ delay }} from \"@m2/effects\";\nexport default song(() => delay(delay(osc.saw(hz(110)), {{ time: 0.25 }}), {{ time: 0.388 }}));\n"
     );
-    for (which, stays) in [(1, "std:delay[0.388,0.3,0.3]"), (0, "std:delay[0.25,0.3,0.3]")] {
+    for (which, stays) in [(1, "@m2/effects:delay[0.388,0.3,0.3]"), (0, "@m2/effects:delay[0.25,0.3,0.3]")] {
         let f = Fixture::new(&source);
         let mut s = f.open();
         let target = calls_in(&s, "song.ts", "delay")[which].clone();
-        let pairs = continued(&mut s, "std:delay", |s| drop(s.remove_effect(rev(s), &target).unwrap()));
+        let pairs = continued(&mut s, "@m2/effects:delay", |s| drop(s.remove_effect(rev(s), &target).unwrap()));
         assert_eq!(pairs, [kept(stays, stays)], "removing the {} delay", ["outer", "inner"][which]);
     }
 }
@@ -520,12 +526,12 @@ fn the_starters_add_reverb_keeps_the_hooks_reverb() {
     let f = crate::testing::fixture("templates/starter");
     let mut s = f.open();
     let widen = calls_in(&s, "tracks/hook.ts", "widen")[0].clone();
-    let pairs = continued(&mut s, "std:reverb", |s| drop(s.add_effect(rev(s), &widen, "@m2/effects:reverb").unwrap()));
+    let pairs = continued(&mut s, "@m2/effects:reverb", |s| drop(s.add_effect(rev(s), &widen, "@m2/effects:reverb").unwrap()));
     assert!(
         f.read("tracks/hook.ts")
             .contains("reverb(reverb(widen(echoes, { width: 1.3 }), { size: 0.6, damping: 0.5, mix: 0.25 }), { size: 0.6, mix: 0.2 })")
     );
-    let hook = [made("std:reverb[0.6,0.5,0.25]"), kept("std:reverb[0.6,0.5,0.2]", "std:reverb[0.6,0.5,0.2]")];
+    let hook = [made("@m2/effects:reverb[0.6,0.5,0.25]"), kept("@m2/effects:reverb[0.6,0.5,0.2]", "@m2/effects:reverb[0.6,0.5,0.2]")];
     assert!(pairs.iter().filter(|p| p.1.is_none()).count() == 1 && hook.iter().all(|p| pairs.contains(p)), "{pairs:?}");
     let widen = calls_in(&s, "tracks/chords.ts", "widen")[0].clone();
     let pairs = continued(&mut s, "std:chorus", |s| drop(s.add_effect(rev(s), &widen, "@m2/effects:chorus").unwrap()));
@@ -640,7 +646,7 @@ fn bypass_writes_bypass_true_into_the_options() {
     let f = Fixture::new(&original);
     let mut s = f.open();
     let knobs = s.controls().len();
-    assert!(running(&s).contains(&"std:reverb".to_string()));
+    assert!(running(&s).contains(&"@m2/effects:reverb".to_string()));
     let done = switch(&mut s, "reverb", true).unwrap();
     assert_eq!(f.source(), original.replace("{ size: 0.8 }", "{ size: 0.8, bypass: true }"));
     assert_eq!(
@@ -653,7 +659,7 @@ fn bypass_writes_bypass_true_into_the_options() {
     assert_eq!(s.controls().len(), knobs, "its knobs stay to set");
     s.undo().unwrap();
     assert_eq!(f.source(), original);
-    assert!(running(&s).contains(&"std:reverb".to_string()));
+    assert!(running(&s).contains(&"@m2/effects:reverb".to_string()));
 }
 
 // Next D1: a call with no options object gets a new one, after its last argument; one written
@@ -700,7 +706,7 @@ fn bypass_off_takes_it_out_and_its_braces() {
         let mut s = f.open();
         assert_eq!(running(&s), ["std:saw"], "{call_text}: off at first");
         assert_eq!(turned(&f, &mut s, "reverb", false), fx_song(after), "{call_text}");
-        assert!(running(&s).contains(&"std:reverb".to_string()), "{call_text}");
+        assert!(running(&s).contains(&"@m2/effects:reverb".to_string()), "{call_text}");
     }
 }
 
@@ -730,7 +736,7 @@ fn bypass_then_unbypass_is_the_same_code() {
 fn a_bypassed_effect_runs_nothing() {
     let f = Fixture::new(&fx_song("delay(reverb(osc.saw(hz(110)), { bypass: true }), { time: 0.1 })"));
     let mut s = f.open();
-    assert_eq!(running(&s), ["std:saw", "std:delay"]);
+    assert_eq!(running(&s), ["std:saw", "@m2/effects:delay"]);
     let off = s.accepted_arc();
     let removed = s.remove_effect(rev(&s), &call(&s, "reverb")).unwrap();
     assert_eq!(removed.after, "osc.saw(hz(110))");
@@ -808,11 +814,11 @@ fn two_nested_effects_swap() {
     let swapped = fx_song("reverb(delay(osc.saw(hz(110)), { time: 0.1 }), { size: 0.8 })");
     let f = Fixture::new(&original);
     let mut s = f.open();
-    assert_eq!(running(&s), ["std:saw", "std:reverb", "std:delay"]);
+    assert_eq!(running(&s), ["std:saw", "@m2/effects:reverb", "@m2/effects:delay"]);
     let done = moved(&mut s, "delay", true).unwrap();
     assert_eq!(f.source(), swapped);
     assert_eq!((done.before.as_str(), done.after.as_str()), ("delay(reverb(…))", "reverb(delay(…))"));
-    assert_eq!(running(&s), ["std:saw", "std:delay", "std:reverb"]);
+    assert_eq!(running(&s), ["std:saw", "@m2/effects:delay", "@m2/effects:reverb"]);
     s.undo().unwrap();
     assert_eq!(f.source(), original);
     moved(&mut s, "reverb", false).unwrap();

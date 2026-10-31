@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use m2_runtime::PackageSet;
 use m2_session::Session;
 
-pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
 
 pub(crate) fn std_packages() -> PackageSet {
     let mut p = PackageSet::default().with_store(m2_song::pack::test_store());

@@ -1,6 +1,6 @@
 [package]
 name = "@m2/effects"
-version = "1.1.0"
+version = "1.2.0"
 license = "MIT OR Apache-2.0"
 description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen"
 authors = ["music2"]
@@ -13,11 +13,58 @@ wasm = "kernels/effects.wasm"
 [dependencies]
 # Any @m2/core 1.x: what these components use is older than std 0.7 (below), which comes only with apps that have it all.
 "@m2/core" = "1"
-# The std kernels its effects play are all in std 0.7 and later; its bitcrusher is its own.
+# The std kernels its effects play (chorus and drive, which @m2/synths plays too) are in std 0.7
+# and later; the rest are its own.
 std = "0.7"
 
 # ---------------------------------------------------------------- its own kernels
 # Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/effects:bitcrush", …)`.
+# Each is safe with any input or setting: no NaN, no runaway feedback, and tails that end in exact
+# silence. Phaser, tremolo and the bitcrusher follow the song through their last input, `playing`:
+# the pack connects it to `time.playing`. Left out, it is 1, as if the song always played. Delay,
+# reverb, phaser, tremolo and widen were std's until std 0.9, and play the same bits.
+
+[[kernel]]
+name = "delay"
+description = "Feedback delay, up to 2 seconds, with a dry/wet mix"
+inputs = [
+  "in: audio<*>",
+  "time: control<seconds> = 0.25",
+  "feedback: control<unit01> = 0.3",
+  "mix: control<unit01> = 0.3",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "reverb"
+description = "Freeverb-style reverb, stereo for a stereo input; mix is an equal-power crossfade"
+inputs = [
+  "in: audio<*>",
+  "size: control<unit01> = 0.6",
+  "damping: control<unit01> = 0.5",
+  "mix: control<unit01> = 0.25",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "phaser"
+description = "Six-stage phaser with feedback; stereo sides sweep a quarter cycle apart. The sweep moves only while playing is 1 (left out, always)"
+inputs = [
+  "in: audio<*>",
+  "rate: control<hz> = 0.4 in 0.05..20",
+  "depth: control<unit01> = 0.7",
+  "feedback: control<unit01> = 0.5",
+  "mix: control<unit01> = 0.5",
+  "playing: control<unit01> = 1",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "tremolo"
+description = "Sine tremolo: dips the level by depth (1 = to silence), rate times a second. It pulses only while playing is 1 (left out, always)"
+inputs = ["in: audio<*>", "rate: control<hz> = 5 in 0.05..20", "depth: control<unit01> = 0.5", "playing: control<unit01> = 1"]
+outputs = ["out: audio<*>"]
+
 
 [[kernel]]
 name = "bitcrush"
@@ -30,3 +77,9 @@ inputs = [
   "playing: control<unit01> = 1",
 ]
 outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "widen"
+description = "Mid/side width: 0 mono, 1 unchanged, 2 twice as wide; widens mono input too, and stays mono-compatible"
+inputs = ["in: audio<2>", "width: control<scalar> = 1.5 in 0..2"]
+outputs = ["out: audio<2>"]

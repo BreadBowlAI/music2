@@ -262,12 +262,17 @@ fn a_packs_instrument_plays_from_its_pack() {
     let scratch = Scratch::new("pack");
     let acme = scratch.0.join("acme");
     std::fs::create_dir_all(acme.join("src")).unwrap();
-    std::fs::write(acme.join("m2pkg.toml"), "[package]\nname = \"@acme/tones\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(
+        acme.join("m2pkg.toml"),
+        "[package]\nname = \"@acme/tones\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+    )
+    .unwrap();
     std::fs::write(
         acme.join("src/keys.ts"),
-        r#"import { component, kernel, poly, port, signature, type Audio, type Events } from "@m2/core";
+        r#"import { component, poly, port, signature, type Audio, type Events } from "@m2/core";
+import { adsr, osc, svf, vca } from "std/dsp";
 
-/** A test pack's instrument, built on std's synth kernel (a pack never imports another, PACK-3). */
+/** A test pack's instrument, built built from std's blocks (a pack never imports another, PACK-3). */
 export const bell = component(
   {
     id: "bell",
@@ -279,7 +284,7 @@ export const bell = component(
     editor: { category: "Instruments", description: "A bell from a pack" },
   },
   (notes: Events): Audio =>
-    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: 4500, sustain: 0, decay: 0.45 }), { voices: 12 }),
+    poly(notes, (n) => vca(svf.lowpass(osc.saw(n.pitch), 4500), adsr(n.gate, { decay: 0.45, sustain: 0, release: 0.25 })), { voices: 12 }),
 );
 "#,
     )

@@ -166,8 +166,8 @@ fn std_is_declared_with_descriptors() {
 }
 
 // Polish A4: the drum kit names the notes it plays, for the piano roll's rows: the General MIDI
-// notes the `std:drum` kernel maps (std/kernels-src/src/drums/tests.rs, KIT); the hats name their
-// pedal and open notes. No other std instrument names its notes.
+// notes the `@m2/drums:drum` kernel maps (m2_dsp::gm; packs/@m2/drums/kernels-src/src/drum/tests.rs,
+// KIT); the hats name their pedal and open notes. No other std instrument names its notes.
 #[test]
 fn the_drum_kit_names_its_notes() {
     let catalog = describe(&packages());
@@ -740,12 +740,20 @@ fn std_one_note_sounds_are_one_poly() {
     let legato = m2_ir::Alloc { mode: m2_ir::Mode::Legato, retrigger: false, steal: m2_ir::Steal::Oldest };
     assert_eq!(polys.len(), 3, "one poly each");
     let (_, voices, alloc, glide) = polys[0];
-    assert_eq!((polys[0].0, voices, alloc), ("std:synth", 1, legato), "the lead");
+    assert_eq!((polys[0].0, voices, alloc), ("@m2/synths:synth", 1, legato), "the lead");
     let glide = glide.expect("the lead's glide");
     assert!(matches!(glide.op, Op::Const { value, .. } if (value - 0.06).abs() < 1e-12), "{glide:?}");
     assert_eq!(glide.origin.as_ref().and_then(|o| o.slot()), Some("glide"), "the lead's glide knob");
-    assert_eq!((polys[1].0, polys[1].1, polys[1].2, polys[1].3.is_none()), ("std:fm", 1, legato, true), "FM keys, one voice: no glide");
-    assert_eq!((polys[2].0, polys[2].1, polys[2].2, polys[2].3.is_none()), ("std:synth", 16, m2_ir::Alloc::default(), true), "the pad");
+    assert_eq!(
+        (polys[1].0, polys[1].1, polys[1].2, polys[1].3.is_none()),
+        ("@m2/synths:fm", 1, legato, true),
+        "FM keys, one voice: no glide"
+    );
+    assert_eq!(
+        (polys[2].0, polys[2].1, polys[2].2, polys[2].3.is_none()),
+        ("@m2/synths:synth", 16, m2_ir::Alloc::default(), true),
+        "the pad"
+    );
 }
 
 // PKG-3, PKG-4, PKG-16: a Sampler that plays regions sends every knob to std:regions, each left out

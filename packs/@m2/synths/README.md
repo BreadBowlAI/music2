@@ -10,5 +10,6 @@
 import { fm, synth } from "@m2/synths";
 ```
 
-Every sound here plays std's kernels (`std:synth`, `std:fm`, and std/dsp's blocks). The guide's page
-Sounds and effects says what each knob does: `m2 docs sounds` prints it.
+The polysynth and the FM synth play the pack's own kernels, `@m2/synths:synth` and `@m2/synths:fm`, in
+`kernels/synths.wasm`; the first instruments play std/dsp's blocks. The guide's page Sounds and effects
+says what each knob does: `m2 docs sounds` prints it.

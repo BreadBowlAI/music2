@@ -1,7 +1,7 @@
 // @m2/synths/fm: FM keys, bells and metal.
 //
-// One engine, std's `std:fm` kernel: two pairs of sine operators, each a modulator into a
-// carrier, mixed; the first modulator feeds back on itself. Each pair's brightness (how far
+// One engine, the pack's own `@m2/synths:fm` kernel (built from kernels-src/): two pairs of sine
+// operators, each a modulator into a carrier, mixed; the first modulator feeds back on itself. Each pair's brightness (how far
 // its modulator bends its carrier) falls after the note starts, and rises with velocity and
 // `tone`, as on a DX electric piano. The carriers and modulators are frequency ratios to the
 // note: whole numbers sound harmonic, others clang like a bell. `fm.custom` has every knob;
@@ -11,9 +11,9 @@
 import { component, control, kernel, poly, port, setting, signature, type Audio, type Events, type Params, type Value } from "@m2/core";
 import { mono, type Voice } from "std/dsp";
 
-/** The engine for a note, with a patch of kernel inputs (see `std:fm` in std's `m2pkg.toml`). */
+/** The engine for a note, with a patch of kernel inputs (see `@m2/synths:fm` in the pack's `m2pkg.toml`). */
 function engine(n: Voice, patch: Record<string, Value>): Audio {
-  return kernel("std:fm", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch });
+  return kernel("@m2/synths:fm", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch });
 }
 
 /** One note at a time (legato, without a slide) when `voices` is 1, else one voice per note. */

@@ -1,0 +1,17 @@
+[package]
+name = "m2-synths-kernels"
+description = "The @m2/synths pack's own kernels, compiled to packs/@m2/synths/kernels/synths.wasm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+# A member of the kernels' one workspace (ABI-10): one Cargo.lock, one profile, and std/build.sh
+# builds them all. This folder is no part of the pack (PACK-20).
+workspace = "../../../../std/kernels-src"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+m2-kernel = { path = "../../../../std/kernels-src/kernel" }
+m2-dsp = { path = "../../../../std/kernels-src/dsp" }

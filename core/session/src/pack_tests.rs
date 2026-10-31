@@ -118,12 +118,12 @@ fn a_pack_that_needs_another_std_is_broken() {
     let root = scratch("needs");
     copy(&fixtures(), &root);
     let manifest = root.join("tiny/m2pkg.toml");
-    let text = std::fs::read_to_string(&manifest).unwrap().replace("std = \"0.4\"", "std = \"0.9\"");
+    let text = std::fs::read_to_string(&manifest).unwrap().replace("std = \"0.4\"", "std = \"0.10\"");
     std::fs::write(&manifest, text).unwrap();
     let mut pk = packages(&root.join("no-store"));
     let e = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).err().unwrap();
     assert_eq!(codes(&e), ["pkg.broken"]);
-    assert!(e[0].message.contains("std \"0.9\""), "{}", e[0].message);
+    assert!(e[0].message.contains("std \"0.10\""), "{}", e[0].message);
     assert!(pk.get("@test/tiny").is_none(), "a pack that can't be used isn't kept");
     std::fs::remove_dir_all(&root).ok();
 }
@@ -641,7 +641,7 @@ fn a_choice_in_a_pack_plays_its_place() {
     copy(&fixtures().join("kinds"), &root.join("kinds"));
     let song = root.join("song");
     std::fs::create_dir_all(&song).unwrap();
-    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n";
+    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n";
     std::fs::write(song.join("music2.toml"), format!("{manifest}\"@test/kinds\" = {{ path = \"../kinds\" }}\n")).unwrap();
     let mut pk = packages(&root.join("no-store"));
     for (call, heard) in [

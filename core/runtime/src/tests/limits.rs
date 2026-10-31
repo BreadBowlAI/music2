@@ -105,13 +105,13 @@ fn short() -> Limits {
 }
 
 /// Two tracks: `@test/l:<kind>` on `a`, on a cue cell (site 5) starting at `cue`, and a sine
-/// through a delay on `b`, into the song's sum.
+/// through std's chorus on `b`, into the song's sum.
 fn two_tracks(kind: &str, cue: f64) -> Ir {
     let a = json!([step_const("cue", cue, 5), {"id": "k", "op": "kernel", "kernel": format!("@test/l:{kind}"), "inputs": {"in": "cue"}}]);
     let b = json!([
         {"id": "fr", "op": "const", "value": 330, "unit": "hz"},
         {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "fr"}},
-        {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}},
+        {"id": "d", "op": "kernel", "kernel": "std:chorus", "inputs": {"in": "o"}},
     ]);
     let track = |key: &str, nodes: Value, out: &str| json!({"key": key, "track": true, "nodes": nodes, "exports": {"out": out}});
     let song = json!([

@@ -1,14 +1,13 @@
 //! `synth`, the polysynth voice behind @m2/synths: a unison stack of saws and pulses with
 //! a sub sine and noise, at 2× (band-limited steps, a drive, then a 4-pole ladder with its
 //! own envelope, whose saturation would alias at 1×), decimated, then the amp envelope.
-//! Port order must match `std/m2pkg.toml`.
+//! Port order must match the pack's `m2pkg.toml`.
 
-use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
-
-use crate::voice::{
+use m2_dsp::voice::{
     Clip, DcBlock, Drive, Env, Glide, Halfband, Ladder, LadderCoefs, Memo, Noise, Ramp, Stage, Steps, TICK, clampf, hash, hz, one_pole,
     pan, pitch_of, sin2pi,
 };
+use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
 // Inputs, in manifest order.
 const PITCH: usize = 0;

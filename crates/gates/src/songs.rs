@@ -20,7 +20,7 @@ fn project(name: &str, song: &str, lanes: &[(&str, Vec<NoteClip>)]) -> Files {
         (
             "music2.toml".into(),
             format!(
-                "[project]\nname = \"{name}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n"
+                "[project]\nname = \"{name}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n"
             ),
         ),
         ("data/arrangement.json".into(), Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: BPM }], meter: vec![] }.canonical()),
