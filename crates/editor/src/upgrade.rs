@@ -143,9 +143,20 @@ fn plan(s: &Session) -> Result<Plan, EditError> {
     let app = m2_session::app(&s.packages);
     let (mut left, mut code, mut packs) = (vec![], vec![], BTreeSet::new());
     let mut lanes: BTreeMap<String, Knob> = BTreeMap::new();
+    // The modules whose names still mean what they meant before wave 3 renamed them: std's that
+    // moved, and music2's own packs the song asks for an older major of. A song made for this
+    // music2 keeps what its names mean now (its bass's `decay` is the envelope's).
+    let mut old: BTreeSet<String> = MOVED_FROM.iter().map(|m| m.to_string()).collect();
+    for (name, dep) in &manifest.dependencies {
+        if PackName::new(name).is_ok_and(|n| pack::comes_with(&n).is_some())
+            && dep.requirement().is_some_and(|req| older(name, req, &app).is_some())
+        {
+            old.insert(name.clone());
+        }
+    }
     for (path, text) in files.iter().filter(|(p, _)| matches!(DataPath::parse(p), DataPath::Code(_))) {
         let file = m2_song::path::slashed(path);
-        let mut f = Code::read(&file, text);
+        let mut f = Code::read(&file, text, &old);
         f.upgrade();
         left.append(&mut f.left);
         packs.extend(f.packs.iter().cloned());
@@ -185,15 +196,18 @@ fn plan(s: &Session) -> Result<Plan, EditError> {
     }
     // The lock, as `m2 pack lock` writes it from the manifest as it will be (PACK-8).
     let lock_text = text_of(m2_song::path::LOCK);
-    let mut old = lock_text.as_deref().and_then(|t| Lock::read(t).ok()).unwrap_or_default();
+    let mut locked = lock_text.as_deref().and_then(|t| Lock::read(t).ok()).unwrap_or_default();
     // music2's own packs move to the versions it comes with: an older one the store keeps may be
     // made for an older @m2/core, which this app can't run (PACK-22).
-    old.packs.retain(|l| pack::comes_with(&l.name).is_none_or(|v| v == l.version));
+    let kept = locked.packs.len();
+    locked.packs.retain(|l| pack::comes_with(&l.name).is_none_or(|v| v == l.version));
+    // Only a song that moves is locked again: one made for this music2 keeps its lock, or none.
+    let moves = !edits.is_empty() || locked.packs.len() != kept;
     let new_manifest = Manifest::read(&manifest_after).map_err(|d| EditError::Rejected(d.message))?;
-    let lock = pack::relock(&new_manifest, &old, s.packages.store(), &app, pack::Move::Needed)
+    let lock = pack::relock(&new_manifest, &locked, s.packages.store(), &app, pack::Move::Needed)
         .map_err(|d| EditError::Rejected(d.into_iter().map(|d| d.message).collect::<Vec<_>>().join("\n")))?;
     let canonical = lock.canonical();
-    if lock_text.as_deref() != Some(canonical.as_str()) && !(lock_text.is_none() && lock.packs.is_empty()) {
+    if moves && lock_text.as_deref() != Some(canonical.as_str()) && !(lock_text.is_none() && lock.packs.is_empty()) {
         let said: Vec<String> = lock.packs.iter().map(|l| format!("{} {}", l.name, l.version)).collect();
         let what = if said.is_empty() { "locks no packs".to_string() } else { format!("locks {}", said.join(", ")) };
         let line = if lock_text.is_none() { format!("new: {what}") } else { what };
@@ -325,6 +339,8 @@ const SIMPLE: &[Drum] = &[
     Drum { old: "hat", drum: "hats", knobs: &[("decay", "decay", Some(Knob::Decay(0.045)))] },
 ];
 
+/// std's modules that moved into the packs, whose names meant what they did before wave 3.
+const MOVED_FROM: &[&str] = &["std/instruments", "std/synth", "std/drums"];
 /// The modules the simple kick and hat came from.
 const SIMPLE_FROM: &[&str] = &["std/instruments", "@m2/synths"];
 /// The modules `drums` came from, and is from.
@@ -432,10 +448,12 @@ struct Code<'t> {
     /// What One drum's `drums` is called here, and whether its import must be added; or why it
     /// can't be.
     drums: Result<(String, bool), String>,
+    /// The modules whose names mean what they did before wave 3 (`plan`'s `old`).
+    old: &'t BTreeSet<String>,
 }
 
 impl<'t> Code<'t> {
-    fn read(file: &str, text: &'t str) -> Code<'t> {
+    fn read(file: &str, text: &'t str, old: &'t BTreeSet<String>) -> Code<'t> {
         let imports = imports(text);
         let mut locals = BTreeMap::new();
         for i in &imports {
@@ -468,12 +486,13 @@ impl<'t> Code<'t> {
             packs: BTreeSet::new(),
             lanes: vec![],
             drums,
+            old,
         }
     }
 
-    /// Whether local name `name` is `what`, imported from one of `from`.
-    fn is(&self, name: &str, from: &[&str], what: &str) -> bool {
-        self.locals.get(name).is_some_and(|(m, n)| from.contains(&m.as_str()) && n == what)
+    /// Whether local name `name` is `what`, imported from one of `from` as it was before wave 3.
+    fn was(&self, name: &str, from: &[&str], what: &str) -> bool {
+        self.locals.get(name).is_some_and(|(m, n)| from.contains(&m.as_str()) && self.old.contains(m) && n == what)
     }
 
     /// What local name `local` is of `@m2/core`, if it is one of its: `hz` for `hz`.
@@ -503,16 +522,16 @@ impl<'t> Code<'t> {
                 None => (callee, None),
             };
             match member {
-                None if self.is(object, SIMPLE_FROM, "kick") || self.is(object, SIMPLE_FROM, "hat") => {
+                None if self.was(object, SIMPLE_FROM, "kick") || self.was(object, SIMPLE_FROM, "hat") => {
                     let name = self.locals[object].1.clone();
                     let d = SIMPLE.iter().find(|d| d.old == name).expect("kick or hat");
                     self.drum(site, &sites, d, false);
                 }
-                Some(m) if self.is(object, DRUMS_FROM, "drums") && SINGLES.iter().any(|d| d.old == m) => {
+                Some(m) if self.was(object, DRUMS_FROM, "drums") && SINGLES.iter().any(|d| d.old == m) => {
                     let d = SINGLES.iter().find(|d| d.old == m).expect("a single");
                     self.drum(site, &sites, d, true);
                 }
-                Some("bass") if self.is(object, SYNTH_FROM, "synth") => self.bass(site),
+                Some("bass") if self.was(object, SYNTH_FROM, "synth") => self.bass(site),
                 None if self.core(object) == Some("kernel") => self.kernel(site),
                 _ => {}
             }
@@ -789,10 +808,10 @@ impl<'t> Code<'t> {
     /// `synth.bass`, where it isn't called. Left as it is, and named.
     fn others(&mut self) {
         let mut found = vec![];
-        for (local, (module, name)) in &self.locals {
-            let simple = SIMPLE_FROM.contains(&module.as_str()) && SIMPLE.iter().any(|d| d.old == name);
-            let drums = DRUMS_FROM.contains(&module.as_str()) && name == "drums";
-            let synth = SYNTH_FROM.contains(&module.as_str()) && name == "synth";
+        for (local, (_, name)) in &self.locals {
+            let simple = self.was(local, SIMPLE_FROM, name) && SIMPLE.iter().any(|d| d.old == name);
+            let drums = self.was(local, DRUMS_FROM, "drums");
+            let synth = self.was(local, SYNTH_FROM, "synth");
             if !(simple || drums || synth) {
                 continue;
             }

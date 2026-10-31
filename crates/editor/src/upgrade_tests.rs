@@ -295,3 +295,27 @@ fn an_older_own_pack_in_the_store_is_locked_to_the_one_music2_comes_with() {
     assert!(s.draft_errors.is_empty(), "it builds: {:?}", s.draft_errors);
     assert!(!needed(&s));
 }
+
+// FMT-25: the renames are of what a song made before them meant. A song made for this music2 whose
+// bass sets its `decay` (the envelope's, since wave 3) keeps it: the upgrade leaves it as it is.
+#[test]
+fn a_current_songs_bass_decay_is_its_envelopes_and_stays() {
+    let f = Fixture::new();
+    f.write("music2.toml", crate::testing::MANIFEST);
+    f.write("song.ts", song_of(&["bass"]));
+    f.write(
+        "tracks/bass.ts",
+        "import { track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\n\
+         export default track(\"bass\", ({ lane }) => synth.bass(lane.notes(\"n\"), { decay: 0.3 }));\n",
+    );
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let before = bytes(&f);
+    let up = upgrade(&mut s, false).unwrap();
+    assert!(up.changes.iter().all(|c| c.file != "tracks/bass.ts"), "{:?}", up.changes);
+    assert!(up.left.is_empty(), "{:?}", up.left);
+    assert_eq!(
+        bytes(&f).into_iter().find(|(p, _)| p == Path::new("tracks/bass.ts")),
+        before.into_iter().find(|(p, _)| p == Path::new("tracks/bass.ts"))
+    );
+}
