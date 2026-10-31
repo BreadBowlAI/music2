@@ -21,11 +21,12 @@ mod listen;
 mod search;
 mod see;
 mod text;
+mod words;
 
 fn main() -> ExitCode {
-    // Answered before anything starts: the usage, the guide (AGENT-12), and a command m2 doesn't
-    // know, which is refused with 2.
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Answered before anything starts: the usage, the guide (AGENT-12), a command m2 doesn't
+    // know, which is refused with 2, and a word the command doesn't take (AGENT-13).
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         None => return usage(),
         Some(word) if HELP.contains(&word) => return usage(),
@@ -33,16 +34,24 @@ fn main() -> ExitCode {
             println!("m2 {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        Some("docs") => return docs::docs(&args),
         // m2 run again as the plugin host for a song it plays (`m2_plugins::run_main` serves it).
         Some(word) if word == m2_plugins::HOST_FLAG => {}
-        // Put first, these aren't a command: app::take_who says where they go.
-        Some(word) if ["--as", "--why"].contains(&word) => {}
-        Some(word) if commands::find(word).is_none() => {
+        // --as or --why put first isn't a command m2 doesn't know: app::take_who says where they go.
+        Some(word) if commands::find(word).is_none() && !["--as", "--why"].contains(&word) => {
             eprintln!("error: m2 has no command `{word}`: m2 alone lists them, and m2 docs commands says what each does");
             return ExitCode::from(2);
         }
-        _ => {}
+        // The guide needs nothing started (AGENT-12).
+        Some("docs") => {
+            return match command_words(args) {
+                Ok(words) => docs::docs(&words),
+                Err(code) => code,
+            };
+        }
+        Some(_) => match command_words(args) {
+            Ok(words) => args = words,
+            Err(code) => return code,
+        },
     }
     // Tests: `M2_PROBE` set, songs may play the probe plugin (`clap:m2.probe`), in the host process
     // as any plugin, so a test can make a plugin fail or its host crash while `m2 render` plays it.
@@ -55,9 +64,9 @@ fn main() -> ExitCode {
     m2_os::dirs::keep_cache();
     // HOST-2: the command runs on a worker while the main thread serves plugins as their main
     // thread, with its run loop; plugins it created are destroyed there before it exits.
-    m2_plugins::run_main(|| {
+    m2_plugins::run_main(move || {
         m2_server::resources::keep_hashes();
-        let ran = run();
+        let ran = run(args);
         // What the command hashed since the project was read (an installed pack's files, checked
         // as the song resolves them: PACK-6) is a stat for the next one (FMT-16).
         m2_song::HashCache::global().save();
@@ -82,6 +91,32 @@ fn main() -> ExitCode {
     })
 }
 
+/// The words after `m2`, for the command they name: `--as` and `--why` taken off the end (AGENT-10),
+/// then the rest read against the command's usage (AGENT-13). The words to run it with; or the
+/// exit status to end with: 0 when they ask for its usage (printed), 2 for a word it doesn't
+/// take, 1 for `--as` or `--why` out of place (each said).
+fn command_words(mut args: Vec<String>) -> Result<Vec<String>, ExitCode> {
+    if let Err(e) = app::take_who(&mut args) {
+        eprintln!("error: {e:#}");
+        return Err(ExitCode::FAILURE);
+    }
+    if args.first().and_then(|w| commands::find(w)).is_none() {
+        eprintln!("error: name a command first: m2 <command> … --as <name> --why \"<words>\"");
+        return Err(ExitCode::FAILURE);
+    }
+    match words::read(&args) {
+        words::Read::Run(words) => Ok(words),
+        words::Read::Help(c) => {
+            print!("{}", commands::entry(c));
+            Err(ExitCode::SUCCESS)
+        }
+        words::Read::Refused(why) => {
+            eprintln!("error: {why}");
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
 /// The words that ask for the usage, as `m2` alone does. Not commands: the table hasn't got them.
 const HELP: &[&str] = &["help", "--help", "-h"];
 
@@ -99,8 +134,14 @@ fn usage_of(word: &str) -> String {
     commands::find(word).map_or_else(String::new, |c| c.usage.replace('\n', "\n  "))
 }
 
+/// The value of flag `name`, in words `words::read` handed on (AGENT-13).
 fn flag(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+    words::value(args, name)
+}
+
+/// Whether flag `name` was given, in words `words::read` handed on (AGENT-13).
+fn on(args: &[String], name: &str) -> bool {
+    words::on(args, name)
 }
 
 /// How many threads `m2 render` and `m2 bounce` use on the project in `dir` (8a): `--threads`, else
@@ -121,7 +162,7 @@ fn threads(args: &[String], dir: &Path, range: bool) -> Result<render::Threads> 
 /// the plugins at another rate would sound different, and the converter for exporting at
 /// another rate isn't built, so `--sr` is refused rather than honoured.
 fn render_rate(args: &[String], project: &Project) -> Result<u32> {
-    if args.iter().any(|a| a == "--sr") {
+    if on(args, "--sr") {
         bail!("--sr is gone: a song renders at its own sample_rate ({} Hz, in music2.toml)", project.sample_rate());
     }
     Ok(project.sample_rate())
@@ -317,11 +358,9 @@ fn report(diags: Vec<Diagnostic>) -> anyhow::Error {
     anyhow!("{} problem{} found", diags.len(), if diags.len() == 1 { "" } else { "s" })
 }
 
-fn run() -> Result<()> {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    // Who writes, and why: for the step it makes in the open app (AGENT-10).
-    app::take_who(&mut args)?;
-    let args = args;
+/// Run the command `args` names, its words as [`words::read`] hands them on: its place words in
+/// order, then its flags.
+fn run(args: Vec<String>) -> Result<()> {
     let cmd = args.first().map_or("", String::as_str);
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument: {}", usage_of(cmd)));
     match args.first().map(String::as_str) {
@@ -329,7 +368,7 @@ fn run() -> Result<()> {
             use m2_server::project::{self, Source};
             let dir = arg(1)?;
             if dir.starts_with('-') {
-                bail!("name the new song's folder first: m2 new <folder> [--template ID | --example ID]");
+                bail!("a new song's folder can't start with `-`, which reads as a flag or a number: name it another way");
             }
             let (source, what, ids) = match flag(&args, "--example") {
                 Some(id) => (Source::Example(id), "example", project::examples()),
@@ -348,7 +387,7 @@ fn run() -> Result<()> {
         Some("check" | "build") => {
             let mut pk = packages()?;
             let (project, c) = compile(Path::new(&arg(1)?), &mut pk)?;
-            if args.iter().any(|a| a == "--json") {
+            if on(&args, "--json") {
                 println!("{}", serde_json::to_string_pretty(&c.ir)?);
                 return Ok(());
             }
@@ -362,7 +401,7 @@ fn run() -> Result<()> {
             let out = PathBuf::from(arg(2)?);
             let sr = render_rate(&args, &project)?;
             let from = match (flag(&args, "--from"), flag(&args, "--from-bar")) {
-                (Some(_), Some(_)) => bail!("say where to start once: --from (seconds) or --from-bar (a bar, from 1)"),
+                (Some(_), Some(_)) => unreachable!("its usage takes one of them at most"),
                 (None, Some(bar)) => {
                     let bar: u64 = bar.parse().ok().filter(|&b| b >= 1).with_context(|| format!("--from-bar {bar}: bars count from 1"))?;
                     c.data.tempo().seconds_at(bar_start(&project.arrangement, bar - 1))
@@ -428,7 +467,7 @@ fn run() -> Result<()> {
                         })
                         .collect::<Vec<_>>()
                 };
-                if args.iter().any(|a| a == "--json") {
+                if on(&args, "--json") {
                     println!(
                         "{}",
                         serde_json::json!({"id": s.id, "description": s.description, "inputs": ports(&s.inputs), "outputs": ports(&s.outputs)})
@@ -598,7 +637,7 @@ fn run() -> Result<()> {
         Some("graph") => {
             let s = reader(Path::new(&arg(1)?))?;
             let v = s.view();
-            if args.iter().any(|a| a == "--json") {
+            if on(&args, "--json") {
                 println!("{}", serde_json::to_string_pretty(&v)?);
                 return Ok(());
             }
@@ -741,19 +780,7 @@ fn run() -> Result<()> {
         Some("import") => {
             // Studio lane A's A4: what the app's File ▸ Import Audio… does, from the terminal.
             let dir = PathBuf::from(arg(1)?);
-            let mut files = vec![];
-            let mut i = 2;
-            while i < args.len() {
-                if args[i].starts_with("--") {
-                    i += 2;
-                    continue;
-                }
-                files.push(PathBuf::from(&args[i]));
-                i += 1;
-            }
-            if files.is_empty() {
-                bail!("m2 import names the WAV or FLAC files to bring in: {}", usage_of("import"));
-            }
+            let files: Vec<PathBuf> = words::places(&args)[1..].iter().map(PathBuf::from).collect();
             // While the app has the song open, the app's own import brings the files in, so they
             // come into the song only inside the change that lands (AGENT-1, AGENT-3).
             if let Some(holder) = app::holder(&dir) {
@@ -825,7 +852,7 @@ fn run() -> Result<()> {
         Some("delete-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let track = arg(2)?;
-            let cascade = args.iter().any(|a| a == "--cascade");
+            let cascade = on(&args, "--cascade");
             let shown = |d: &m2_editor::Dependent| format!("  {} in {} ({}, line {})", d.component, d.label, d.file, d.line);
             match s.delete_track(&track, cascade).map_err(|e| anyhow!("{e}"))? {
                 m2_editor::Deleted::Done { edited, excised } => {
@@ -866,7 +893,7 @@ change that code first",
                 "order" => s.reorder(&args[3..]),
                 "colour" | "color" => s.recolour(&arg(3)?, &arg(4)?),
                 "reset" => m2_editor::layout::reset(&mut s),
-                other => bail!("m2 layout <project> order <IDs…> | colour <ID> <colour> | reset, not `{other}`"),
+                _ => unreachable!("its usage takes only these"),
             }
             .map_err(|e| anyhow!("{e}"))?;
             println!("layout.json: {} → {} (no revision: the layout isn't part of the song)", e.before, e.after);
@@ -1070,7 +1097,7 @@ change that code first",
             }
         },
         Some("plugin-state") => {
-            if args.iter().any(|a| a == "--force") {
+            if on(&args, "--force") {
                 bail!("--force is gone: saving a plugin's state replaces what is there as one edit, which undo puts back (WRITE-1)");
             }
             let dir = PathBuf::from(arg(1)?);
@@ -1118,7 +1145,6 @@ change that code first",
         Some("search") => search::search(&args)?,
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         // main refused every word the table doesn't hold, and a test holds the table to these arms.
-        None => bail!("name a command first: m2 <command> … --as <name> --why \"<words>\""),
         _ => bail!("m2 has no command `{cmd}`"),
     }
     Ok(())
@@ -1230,7 +1256,7 @@ fn pack(args: &[String]) -> Result<()> {
             let only = args.get(3).map(|n| PackName::new(n).map_err(|e| anyhow!(e))).transpose()?;
             let moving = match (command, &only) {
                 ("lock", None) => m2_song::pack::Move::Needed,
-                ("lock", Some(_)) => bail!("{}", usage_of("pack")),
+                ("lock", Some(_)) => unreachable!("its usage takes one word"),
                 (_, None) => m2_song::pack::Move::All,
                 (_, Some(name)) => m2_song::pack::Move::Only(name),
             };
@@ -1240,7 +1266,7 @@ fn pack(args: &[String]) -> Result<()> {
                 None => println!("{} says that already", m2_song::path::LOCK),
             }
         }
-        _ => bail!("{}", usage_of("pack")),
+        _ => unreachable!("its usage takes only these"),
     }
     Ok(())
 }
@@ -1354,7 +1380,7 @@ fn registry(args: &[String]) -> Result<()> {
                 bail!("{n} version{s} not built: {it} pending, and the rest are in the catalog");
             }
         }
-        _ => bail!("{}", usage_of("registry")),
+        _ => unreachable!("its usage takes only these"),
     }
     Ok(())
 }
@@ -1555,7 +1581,7 @@ fn tx(args: &[String]) -> Result<()> {
         let hash = m2_song::Sha::parse_prefixed(&h).with_context(|| format!("--seen {h}: a hash is `sha256:` and 64 hex digits"))?;
         tx.expect = m2_song::Expect::Seen(hash);
     }
-    let check = args.iter().any(|a| a == "--check");
+    let check = on(args, "--check");
     // Whatever the code says: the session refuses what needs it to compile, in JSON, and a
     // recovery fix's Tx needs it not (P3).
     let mut s = match check {

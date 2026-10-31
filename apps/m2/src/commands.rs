@@ -1,6 +1,7 @@
 //! Every `m2` command, declared once (AGENT-12): `m2`'s usage and `m2 docs commands` (the guide's
 //! `docs/guide/commands.md`) are both made from [`COMMANDS`]. A command `m2` doesn't know is
-//! refused, exit status 2.
+//! refused, exit status 2; so is a word a command doesn't take, since each `usage` is also the
+//! grammar its words are read against (AGENT-13, `words.rs`).
 //!
 //! Each entry's `words` is what `m2` prints; `more` is what the guide adds. Both are Markdown: the
 //! usage strips the backticks.
@@ -11,7 +12,8 @@ pub struct Command {
     pub name: &'static str,
     /// Other words that run it (`build` for `check`).
     pub also: &'static [&'static str],
-    /// How it is called: one form a line, each starting `m2 `.
+    /// How it is called: one form a line, each starting `m2 `, and the grammar its words are read
+    /// against (AGENT-13): its place words, then its flags, `[…]` around what can be left out.
     pub usage: &'static str,
     /// What it does, in a few lines.
     pub words: &'static str,
@@ -44,8 +46,13 @@ in the app or package `m2` came in (`music2.app/Contents/Resources`, or `lib/mus
 `bin` that holds `m2` on Linux, as in `/usr/lib/music2`), or else in the source tree it was built \
 from.
 
-`m2` alone, `m2 help` or `m2 --help` prints this; `m2 --version` (or `-V`) prints which `m2` this is. A command `m2` doesn't know is refused, with exit \
-status 2. `m2 docs` prints the guide, built into this `m2`.";
+`m2` alone, `m2 help` or `m2 --help` prints this, and `m2 --version` (or `-V`) which `m2` this is. \
+`m2 <command> --help` prints that command's part. A command `m2` doesn't know is refused, with exit status 2. So is a word a command \
+doesn't take, before anything is read or written, and `m2` says which: a flag it hasn't got, a flag without its value, \
+a word too many or too few. A word that starts with `-` is a flag, unless it is a number (`-6`), has a space in it, \
+or is `-` alone: standard input, where the usage says `| -`. A flag's value is the next word, unless that is a flag; \
+a `<text>` is the next word whatever it is. Flags can go anywhere after the command, but `--as` and `--why` go last. \
+`m2 docs` prints the guide, built into this `m2`.";
 
 /// The guide's page only: commands to try, on a copy of an example.
 pub const EXAMPLES: &str = "\
@@ -99,12 +106,12 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "listen",
         also: &[],
-        usage: "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]",
+        usage: "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with <tx.json | ->] [--png out.png] [--json]",
         words: "measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, ten octave bands, \
                 stereo and masking, for the mix and each track, its own sound and as it reaches the mix. The bars \
                 count from 1 (else the loop when one is on, else the song), with 2 bars of preroll; `--tracks` \
-                measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx checked \
-                and never written, before and after; `--png` draws the bands over time. Its own process, at \
+                measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx (from a file, or \
+                standard input) checked and never written, before and after; `--png` draws the bands over time. Its own process, at \
                 background priority, one at a time; it writes nothing into the song",
         more: "It works with the app open or closed. [Listening](listening.md) says what each number means.",
     },
@@ -212,7 +219,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "layout",
         also: &[],
-        usage: "m2 layout <project> order <IDs…>\nm2 layout <project> colour <ID> <colour>\nm2 layout <project> reset",
+        usage: "m2 layout <project> order <IDs…>\nm2 layout <project> colour|color <ID> <colour>\nm2 layout <project> reset",
         words: "reorder or recolour tracks in `layout.json` (no revision), or write the default layout over one that \
                 doesn't read; the colours are rose, teal, amber, indigo, green, plum, olive, blue, coral, cyan, violet \
                 and lime",
@@ -387,13 +394,13 @@ pub const COMMANDS: &[Command] = &[
         name: "clips",
         also: &[],
         usage: "m2 clips <project> create <track>/<lane> --at <place> [--length B] [--beats]\n\
-                m2 clips <project> move <clip>… --by B [--to <track>/<lane>] [--copy] [--beats]\n\
+                m2 clips <project> move <clip>… [--by B] [--to <track>/<lane>] [--copy] [--beats]\n\
                 m2 clips <project> resize <clip> --start <place> --length B [--beats]\n\
                 m2 clips <project> split <clip>… --at <place> [--beats]\n\
-                m2 clips <project> join <clip>…\n\
-                m2 clips <project> duplicate <clip>… [--grid B]\n\
-                m2 clips <project> quantize <clip>… --grid B [--ends]\n\
-                m2 clips <project> delete <clip>…\n\
+                m2 clips <project> join <clip>… [--beats]\n\
+                m2 clips <project> duplicate <clip>… [--grid B] [--beats]\n\
+                m2 clips <project> quantize <clip>… --grid B [--ends] [--beats]\n\
+                m2 clips <project> delete <clip>… [--beats]\n\
                 m2 clips <project> json <gesture.json | ->",
         words: "one clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), \
                 or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or \
@@ -467,7 +474,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "point",
         also: &[],
-        usage: "m2 point <project> <target> <words>\nm2 point <project> --clear",
+        usage: "m2 point <project> <target> [<words>]\nm2 point <project> --clear",
         words: "show a note in the open app at `track:bass`, `clip:bass/notes:<id>`, `lane:bass/cutoff`, `knob:<id>` \
                 or `bars:9-16` (by `--as`); it never moves the musician's view: they press play. `--clear` takes it \
                 away; so does their OK",
@@ -501,7 +508,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "search",
         also: &[],
-        usage: "m2 search <words…> [--kind <kind>] [--json]",
+        usage: "m2 search [<words…>] [--kind <kind>] [--json]",
         words: "find what can be added to a song: instruments, sounds (presets), effects, samples and plugins, best \
                 first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where \
                 it is from, and its id, which adding it names",
@@ -529,6 +536,12 @@ pub const COMMANDS: &[Command] = &[
     },
 ];
 
+/// Flags that are gone: never shown, but still known, so that the command says why, in words that
+/// need the song read first (`--sr`: it renders at the song's own rate, which it names). One
+/// written with a value (`--sr N`) takes the next word when it isn't a flag; any may be given
+/// more than once: whatever is given, the command says it is gone.
+pub const GONE: &[(&str, &str)] = &[("render", "--sr N"), ("bounce", "--sr N"), ("plugin-state", "--force")];
+
 /// The command `word` runs, by its name or another word for it.
 pub fn find(word: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.name == word || c.also.contains(&word))
@@ -538,23 +551,31 @@ pub fn find(word: &str) -> Option<&'static Command> {
 pub fn usage() -> String {
     let mut out = format!("{TITLE}\n\nUSAGE:\n");
     for c in COMMANDS {
-        let forms: Vec<String> = c.usage.lines().flat_map(|f| wrap_form(f, WIDTH - 2)).collect();
-        // One short form: the words start beside it; else below the forms.
-        let beside = forms.len() == 1 && forms[0].chars().count() + 3 <= WORDS;
-        if !beside {
-            for f in &forms {
-                out += &format!("  {f}\n");
-            }
-        }
-        for (i, w) in wrap(&plain(c.words), WIDTH - WORDS).iter().enumerate() {
-            if i == 0 && beside {
-                out += &format!("  {:<width$}{w}\n", forms[0], width = WORDS - 2);
-            } else {
-                out += &format!("{}{w}\n", " ".repeat(WORDS));
-            }
-        }
+        out += &entry(c);
     }
     format!("{out}\n{}\n", wrap(&plain(NOTES), WIDTH).join("\n"))
+}
+
+/// One command's part of the usage: its forms, and its words beside or below them. `m2 <command>
+/// --help` prints it (AGENT-13).
+pub fn entry(c: &Command) -> String {
+    let mut out = String::new();
+    let forms: Vec<String> = c.usage.lines().flat_map(|f| wrap_form(f, WIDTH - 2)).collect();
+    // One short form: the words start beside it; else below the forms.
+    let beside = forms.len() == 1 && forms[0].chars().count() + 3 <= WORDS;
+    if !beside {
+        for f in &forms {
+            out += &format!("  {f}\n");
+        }
+    }
+    for (i, w) in wrap(&plain(c.words), WIDTH - WORDS).iter().enumerate() {
+        if i == 0 && beside {
+            out += &format!("  {:<width$}{w}\n", forms[0], width = WORDS - 2);
+        } else {
+            out += &format!("{}{w}\n", " ".repeat(WORDS));
+        }
+    }
+    out
 }
 
 /// The guide's page of every command, `docs/guide/commands.md`, as `m2 docs commands` prints it.
@@ -701,15 +722,14 @@ mod tests {
         assert!(extra.is_empty(), "apps/m2/src/commands.rs declares {extra:?}, which m2 doesn't run");
     }
 
-    /// Flags m2 reads only to refuse them, with why: never shown.
-    const REFUSED: &[&str] = &[
-        "--sr",    // a song renders at its own rate (RENDER-31a)
-        "--force", // plugin-state replaces a state as one edit, which undo puts back
-        "--bras",  // listen's test of a misspelt flag
+    /// Flags only tests name, as ones m2 hasn't got: never shown.
+    const TESTS: &[&str] = &[
+        "--bras", // listen's test of a misspelt flag
+        "--nope", // words.rs's test of a flag no command has
     ];
 
     // AGENT-12: every flag m2 reads is in a command's usage, or in the notes (--as, --why), but
-    // those it reads only to refuse.
+    // those gone, which it knows only to refuse (GONE).
     #[test]
     fn every_flag_is_shown() {
         let shown: String = COMMANDS.iter().map(|c| c.usage).chain([NOTES]).collect::<Vec<_>>().join("\n");
@@ -726,7 +746,8 @@ mod tests {
             }
         }
         assert!(read.contains("--json") && read.contains("--as"), "no flags found in {}: {read:?}", dir.display());
-        let hidden: Vec<_> = read.iter().filter(|f| !shown.contains(f.as_str()) && !REFUSED.contains(&f.as_str())).collect();
+        let gone: Vec<&str> = GONE.iter().map(|(_, f)| f.split(' ').next().unwrap()).chain(TESTS.iter().copied()).collect();
+        let hidden: Vec<_> = read.iter().filter(|f| !shown.contains(f.as_str()) && !gone.contains(&f.as_str())).collect();
         assert!(hidden.is_empty(), "m2 reads {hidden:?}, which no usage line in apps/m2/src/commands.rs shows");
     }
 
