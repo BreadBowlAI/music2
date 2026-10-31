@@ -37,7 +37,7 @@ if [ -n "$left" ]; then
   echo "$left" | head -40
   n=$(echo "$left" | wc -l | tr -d ' ')
   if [ "$n" -gt 40 ]; then echo "... and $((n - 40)) more"; fi
-  echo "Give a test's server a store of its own (graph.keep_store(&m2_song::pack::test_store())), and a program it runs a HOME of its own (m2_song::pack::test_home())."
+  echo "Give a test's server a store and a Presets folder of its own (graph.keep_store(&m2_song::pack::test_store()), graph.keep_presets), and a program it runs a HOME of its own (m2_song::pack::test_home())."
   bad=1
 fi
 exit $bad

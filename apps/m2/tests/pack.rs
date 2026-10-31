@@ -225,8 +225,9 @@ fn check_says_what_is_wrong() {
     for want in ["tool.sh", "licence", "sparkle", "samples/gone.wav"] {
         assert!(text.contains(want), "says {want}: {text}");
     }
-    // An effect without a category isn't one the lists can offer, nor an instrument.
-    assert!(text.contains("tiny-crunch"), "{text}");
+    // An effect without a category isn't one the lists can offer, nor an instrument: named, as one
+    // its author forgot (PACK-12).
+    assert!(text.lines().any(|l| l.contains("tiny-crunch") && l.contains("has no category")), "{text}");
 }
 
 // PACK-12: a new pack checks as made, and installs.
