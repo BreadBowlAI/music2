@@ -641,7 +641,7 @@ fn a_choice_in_a_pack_plays_its_place() {
     copy(&fixtures().join("kinds"), &root.join("kinds"));
     let song = root.join("song");
     std::fs::create_dir_all(&song).unwrap();
-    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(song.join("music2.toml"), format!("{manifest}\"@test/kinds\" = {{ path = \"../kinds\" }}\n")).unwrap();
     let mut pk = packages(&root.join("no-store"));
     for (call, heard) in [
