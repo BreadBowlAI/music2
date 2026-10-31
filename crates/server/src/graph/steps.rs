@@ -7,8 +7,8 @@
 //! agent's Tx, `m2`, a save in another editor) is named plainly by what it changed: "Bass notes",
 //! "the tempo or time signature", "the code in tracks/bass.ts". The state says both tops as
 //! `undo_name` and `redo_name` (`{name, structural, given}`, or null); an undo or a redo answers
-//! with the name of what it took back. Names last while the song is open (gaps #29's second half
-//! is left: they go when it closes).
+//! with the name of what it took back. Names last as long as their steps, which are kept with the
+//! song and read back when it opens (WRITE-23).
 
 use anyhow::{Context, Result, bail};
 use m2_session::{Source, StepName};
@@ -168,7 +168,8 @@ pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>) 
     if let Some(id) = step
         && top.as_ref().map(|t| t.id) != Some(id)
     {
-        return Err(NotNewest { redo, newest: took }.into());
+        let end = if redo { o.session.redo_end() } else { o.session.undo_end() };
+        return Err(NotNewest { redo, newest: took, end }.into());
     }
     let files = top.as_ref().map(|t| t.files.clone()).unwrap_or_default();
     // AGENT-3: checked as its writes are, by the files it puts back.
@@ -219,7 +220,7 @@ impl Graph {
             o.check_token(token)?;
             let top = o.session.step_names().0;
             if top.as_ref().map(|t| t.id) != Some(step) {
-                return Err(NotNewest { redo: false, newest: named(top.as_ref(), &o.timeline) }.into());
+                return Err(NotNewest { redo: false, newest: named(top.as_ref(), &o.timeline), end: None }.into());
             }
             if !o.session.skip_undo(step) {
                 bail!("Undo can take that change back, so it wasn't skipped.");
@@ -283,6 +284,8 @@ impl std::error::Error for Stuck {}
 pub struct NotNewest {
     pub redo: bool,
     pub newest: Value,
+    /// Why there is nothing more, when something cut undo (or redo) off (WRITE-24).
+    pub end: Option<m2_session::End>,
 }
 
 impl std::fmt::Display for NotNewest {
@@ -290,8 +293,21 @@ impl std::fmt::Display for NotNewest {
         match (said(&self.newest), self.redo) {
             (Some(newest), false) => write!(f, "Nothing was undone: it isn't the newest change now. The newest is {newest}."),
             (Some(next), true) => write!(f, "Nothing was redone: it isn't the next change to redo now. The next is {next}."),
-            (None, false) => write!(f, "Nothing was undone: there is nothing to undo."),
-            (None, true) => write!(f, "Nothing was redone: there is nothing to redo."),
+            (None, redo) => {
+                let (what, done) = if redo { ("Redo", "redone") } else { ("Undo", "undone") };
+                match self.end {
+                    Some(m2_session::End::Outside) => {
+                        write!(f, "Nothing was {done}: {what} isn't possible past the change made outside music2.")
+                    }
+                    Some(m2_session::End::Unread) => {
+                        write!(
+                            f,
+                            "Nothing was {done}: {what} isn't possible past this point, as the undo history kept with the song couldn't be read."
+                        )
+                    }
+                    None => write!(f, "Nothing was {done}: there is nothing to {}.", what.to_lowercase()),
+                }
+            }
         }
     }
 }

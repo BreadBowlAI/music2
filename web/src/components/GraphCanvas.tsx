@@ -98,6 +98,15 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     useShell.getState().resetSelection();
     forget();
     if (graph.has_code === false) useShell.setState({ view: "code", dock: true });
+    // Code typed and not saved when the song last closed: the code editor offers it back (WRITE-27).
+    const left = graph.drafts ?? [];
+    if (left.length)
+      useStore
+        .getState()
+        .toast(left.length === 1 ? `${left[0]} has changes that weren't saved.` : `${left.length} code files have changes that weren't saved.`, {
+          label: "Show code",
+          run: () => useShell.setState({ view: "code", dock: true }),
+        });
   }, []);
 
   // The selection, by module key. A label changed in the code changes nothing here; a key changed

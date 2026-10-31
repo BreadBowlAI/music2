@@ -36,8 +36,9 @@ musician sees it there, and `m2 undo` takes it back. While the musician drags wh
 records, or has unsaved code in its file, the app refuses it: `m2` waits up to 30 s, then exits 3, \
 changing nothing. Don't write the song's files directly while the app has it open: the app can't \
 refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files \
-itself, and undo isn't kept once it exits. Reading, rendering and `bounce` without `--place` work all \
-the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while \
+itself, each write an undo step of the song's history, yours by `--as`, which the app reads back \
+when it opens the song (`m2 undo` needs the app open). Reading, rendering and `bounce` without \
+`--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while \
 listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can \
 do: `m2 call` refuses it, and `m2 point` shows them where instead.
 

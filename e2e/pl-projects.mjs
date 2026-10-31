@@ -384,7 +384,7 @@ if (part("c3")) {
   const words = rename ? await rename.evaluate((e) => e.innerText) : "";
   const box = await app.$eval("[data-testid=rename-song-folder]", (e) => e.checked).catch(() => null);
   check(
-    words.includes("Rename First Song 2") && box === true && words.includes("The song closes and opens again. After that, Undo can't go back past this."),
+    words.includes("Rename First Song 2") && box === true && words.includes("The song closes and opens again from its new folder."),
     `“Rename First Song 2”, Also rename its folder (on), and what that does: ${words.replace(/\n+/g, " | ")}`,
   );
   const badRename = await lint(app, "[data-testid=rename-song-dialog]");

@@ -41,6 +41,7 @@ pub mod audition;
 pub mod busy;
 pub mod clips;
 pub(crate) mod compare;
+mod drafts;
 mod events;
 pub(crate) mod exchange;
 mod faults;
@@ -338,6 +339,9 @@ struct Published {
     /// The page's view settings (`view_file::KEYS`), as read at the open and set since: the
     /// state's `local`.
     local: serde_json::Map<String, Value>,
+    /// The code editor's drafts found when the song opened, not yet restored or discarded
+    /// (WRITE-27): what the code editor offers back.
+    drafts: Vec<drafts::Left>,
 }
 
 /// What `begin`, `update`, `cancel` and every read use, behind one short lock. The actor holds it
@@ -781,14 +785,15 @@ impl Inner {
     /// above a dragged knob gives it a new id, and the page finds its drag's knob by its lease
     /// (WRITE-22).
     fn state(&self) -> Option<Value> {
-        let (shown, leases, overlays, local, token) = {
+        let (shown, leases, overlays, local, drafts, token) = {
             let cp = self.control.lock();
             let p = cp.open.as_ref()?;
             let now = Instant::now();
             let token = p.engine.token;
             let leases: Vec<LeaseInfo> =
                 cp.leases.live.iter().filter(|l| l.token == token).filter_map(|l| l.seen_at(p.shown.revision, now)).collect();
-            (p.shown.clone(), leases, p.overlays.state(), Value::Object(p.local.clone()), token)
+            let drafts: Vec<&str> = p.drafts.iter().map(|d| d.file.as_str()).collect();
+            (p.shown.clone(), leases, p.overlays.state(), Value::Object(p.local.clone()), json!(drafts), token)
         };
         let status = self.status();
         let mut state = shown.state.clone();
@@ -803,6 +808,8 @@ impl Inner {
         state["leases"] = json!(leases);
         state["overlays"] = overlays;
         state["local"] = local;
+        // The code files with text left unsaved when the song last closed (WRITE-27).
+        state["drafts"] = drafts;
         state["midi"] = self.midi_state();
         state["record"] = self.record_state();
         state["plugins"] = self.plugins.lock().clone();
@@ -2098,8 +2105,15 @@ impl Graph {
     /// The project's TypeScript files, for the code editor (see [`files::list`]): the accepted
     /// revision's as published, with what the disk says now.
     pub fn files(&self) -> Result<Value> {
-        let shown = self.inner.control.lock().open.as_ref().context("no project is open")?.shown.clone();
-        files::list(&shown.files)
+        let (shown, left) = {
+            let cp = self.inner.control.lock();
+            let p = cp.open.as_ref().context("no project is open")?;
+            (p.shown.clone(), p.drafts.clone())
+        };
+        let mut list = files::list(&shown.files)?;
+        // The drafts the song opened with, offered back (WRITE-27).
+        list["left"] = json!(left);
+        Ok(list)
     }
 
     /// The SDK and package sources the code editor checks imports against.

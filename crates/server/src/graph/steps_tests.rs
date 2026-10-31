@@ -315,7 +315,7 @@ fn a_step_event_names_what_its_delta_changed() {
 }
 
 /// A server on first-song's files, with the test token: its url, the graph and the session.
-fn serving() -> (Fixture, crate::Running, u64) {
+pub(in crate::graph) fn serving() -> (Fixture, crate::Running, u64) {
     let fixture = first_song_files();
     let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
     let running = crate::start_with(options, Graph::silent()).unwrap();
@@ -392,4 +392,32 @@ fn a_stuck_undo_answers_409_and_can_be_skipped() {
     assert_eq!((status, &body["undo_name"]["step"]), (200, &json!(mine)), "{body}");
     assert!(fixture.read("tracks/bass.ts").contains("changed again"), "skipping writes nothing");
     assert_eq!(post("/api/graph/undo", mine).0, 200, "Undo reaches the step before it");
+}
+
+// WRITE-23, WRITE-24: a song closed and opened again keeps its undo, named as the window named it.
+// A file changed outside the app while it was closed ends undo at the step that touched it: the
+// state says why (`undo_end`), and ⌘Z, naming no step, is told so in words.
+#[test]
+fn undo_survives_closing_and_says_where_it_ends() {
+    let (fixture, running, session) = serving();
+    let graph = &running.state.graph;
+    let made = set(graph, 0.3, 0.4);
+    graph.name_step(session, made, "Hats pan".into(), false).unwrap();
+    graph.close();
+    graph.open(&fixture.0).unwrap();
+    let s = graph.state().unwrap();
+    assert_eq!(
+        (&s["undo_name"]["name"], &s["undo_name"]["given"], &s["undo_end"]),
+        (&json!("Hats pan"), &json!(true), &Value::Null),
+        "{s}"
+    );
+    graph.close();
+    fixture.put("song.ts", &format!("{}// changed in an editor\n", fixture.read("song.ts")));
+    let session = graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
+    let s = graph.state().unwrap();
+    assert_eq!((&s["undo_name"], &s["can_undo"], &s["undo_end"]), (&Value::Null, &json!(false), &json!("outside")), "{s}");
+    let (status, body) =
+        crate::routes_8b::tests::post(&running.url, "/api/graph/undo", Some("t0k"), &json!({"session": session, "step": 0}));
+    assert_eq!(status, 409, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("Undo isn't possible past the change made outside music2"), "{body}");
 }
