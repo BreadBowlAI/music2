@@ -44,9 +44,10 @@ static EXIT: AtomicU8 = AtomicU8::new(0);
 static AFTER: Mutex<Vec<String>> = Mutex::new(vec![]);
 
 /// Take `--as <name>` and `--why <words>` off the end of the command line before the command reads
-/// it (`m2 clips` refuses flags it doesn't know); `--as` wins over `M2_AS`. Only at the end, after
-/// the command's own arguments: so a value given to another option (`m2 edit … --new "--why"`) is
-/// that value, never taken for one of them. One left before the end, not a value, is refused.
+/// it (every command refuses flags it doesn't know, AGENT-13); `--as` wins over `M2_AS`. Only at the
+/// end, after the command's own arguments: so a text given to another option (`m2 edit … --new
+/// "--why"`, `--new <text>`) is that text, never taken for one of them. One left before the end,
+/// not such a text, is refused.
 pub fn take_who(args: &mut Vec<String>) -> Result<()> {
     let mut who = Who { by: std::env::var("M2_AS").ok().filter(|s| !s.trim().is_empty()), why: None };
     let flag = |a: &str| a == "--as" || a == "--why";
@@ -58,8 +59,9 @@ pub fn take_who(args: &mut Vec<String>) -> Result<()> {
             _ => why = why.or(Some(value)),
         }
     }
-    // Anywhere else, one is the value of the option before it, or out of place.
-    if let Some(i) = (0..args.len()).find(|&i| flag(&args[i]) && (i == 0 || !args[i - 1].starts_with("--"))) {
+    // Anywhere else, one is the text of the option before it, or out of place.
+    let text = |i: usize| i > 0 && crate::words::takes_text(&args[0], &args[i - 1]);
+    if let Some(i) = (0..args.len()).find(|&i| flag(&args[i]) && !text(i)) {
         let f = &args[i];
         if i + 1 == args.len() {
             bail!("{f} needs words after it: {f} \"…\"");

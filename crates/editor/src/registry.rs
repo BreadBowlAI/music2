@@ -238,10 +238,10 @@ pub fn add(a: &Add) -> Result<Added, Vec<String>> {
 }
 
 /// How long the robot gives one version (REG-5): its check, its copy into the bucket and its
-/// previews. A kernel's code first runs as a preview renders, and music2's engine sets a kernel no
-/// fuel or epoch limit (a live kernel that never returns is a broken real-time rule, P4, which a
-/// test of the kernel catches), so a version past it is refused and its thread, which can't be
-/// stopped, is left to end with the robot. Its code in TypeScript has QuickJS's own limit.
+/// previews. A kernel's code first runs as a preview renders, where each call has its time limit
+/// (ABI-6): a preview a kernel's limit stopped refuses the version at once (ABI-7). A version past
+/// this for any other reason is refused, and its thread, which can't be stopped, is left to end
+/// with the robot. Its code in TypeScript has QuickJS's own limit.
 pub const LONGEST: Duration = Duration::from_secs(10 * 60);
 
 /// What [`build`] builds.
@@ -669,7 +669,11 @@ fn publish(p: &Publish) -> Result<Facts, String> {
                     blob_bytes(job, sha, &wav)?;
                     (Some(sha), None)
                 }
-                Err(why) => (None, Some(format!("{}'s preview didn't render: {why}.", item.label))),
+                // A kernel that never returns is broken: the version isn't listed (ABI-7).
+                Err(Unrendered { why, too_slow: true }) => {
+                    return Err(format!("{}'s preview was stopped, so it isn't built: {why}", item.label));
+                }
+                Err(Unrendered { why, .. }) => (None, Some(format!("{}'s preview didn't render: {why}.", item.label))),
             },
         };
         blobs.extend(preview);
@@ -699,13 +703,29 @@ fn publish(p: &Publish) -> Result<Facts, String> {
     Ok(facts)
 }
 
+/// Why an item's preview didn't render, in words, and whether a kernel's time limit stopped it
+/// (ABI-6), which refuses the version (ABI-7).
+struct Unrendered {
+    why: String,
+    too_slow: bool,
+}
+
+impl From<String> for Unrendered {
+    fn from(why: String) -> Unrendered {
+        Unrendered { why, too_slow: false }
+    }
+}
+
 /// An item's preview rendered (REG-5): the song the app's ⌘F writes for it ([`preview::of`]),
 /// rendered by its code ([`preview::render`]) in `work`. The WAV's bytes, or why not.
-fn render(item: &Item, catalog: &m2_script::Catalog, packages: &[(String, PathBuf)], work: &Path, n: usize) -> Result<Vec<u8>, String> {
+fn render(item: &Item, catalog: &m2_script::Catalog, packages: &[(String, PathBuf)], work: &Path, n: usize) -> Result<Vec<u8>, Unrendered> {
     let (song, loads) = preview::of(item, catalog, packages, None)?;
     let wav = work.join(format!("preview-{n}.wav"));
-    preview::render(&song, &loads, &work.join(format!("song-{n}")), &wav).map_err(|e| format!("{e:#}"))?;
-    let bytes = std::fs::read(&wav).map_err(|e| e.to_string());
+    preview::render(&song, &loads, &work.join(format!("song-{n}")), &wav).map_err(|e| Unrendered {
+        too_slow: crate::faults::Faulted::of(&e).is_some_and(|f| f.code == m2_runtime::fault::Code::TooSlow.diag()),
+        why: format!("{e:#}"),
+    })?;
+    let bytes = std::fs::read(&wav).map_err(|e| e.to_string().into());
     let _ = std::fs::remove_file(&wav);
     bytes
 }

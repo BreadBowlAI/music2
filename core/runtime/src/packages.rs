@@ -11,6 +11,7 @@ use serde::Deserialize;
 use wasmtime::{Engine, ExternType, Module, ValType};
 
 use crate::WasmContext;
+use crate::limit::Limits;
 
 /// A `[[kernel]]` of `m2pkg.toml`, read strictly (PACK-2): the rest of the file is
 /// `m2_song::pack::PkgManifest`'s.
@@ -112,9 +113,6 @@ impl View {
 /// session shows its accepted revision's (PACK-9).
 #[derive(Clone)]
 pub struct PackageSet {
-    /// Always [`engine`]'s, whose memories never move: each sandbox keeps its memory's address from
-    /// its seal (RENDER-32), so no other engine may be put here.
-    pub(crate) engine: Engine,
     /// What its lookups see.
     view: Arc<View>,
     /// Every version loaded and still held by a view, by what it is known by: a build that resolves
@@ -126,6 +124,10 @@ pub struct PackageSet {
     /// Where installed packs are (PACK-6): none unless set, so only what asks for one reads a
     /// store; the app and `m2` give this computer's (`m2_os::dirs::packs()`).
     store: Option<m2_song::pack::Store>,
+    /// How long each call into its kernels may run (ABI-6).
+    pub(crate) limits: Limits,
+    /// The boxes whose birth ran past its limit (ABI-7): refused at once after.
+    pub(crate) stuck: crate::limit::Stuck,
 }
 
 /// A hosted plugin as the last build found it.
@@ -136,6 +138,13 @@ enum Hosted {
     /// Not installed, or not loadable (FMT-18a): typed from the code as written, played as
     /// silence or as its input passed through. Its ports are those of the last build.
     Missing(KernelSig),
+}
+
+/// Whether package `package`'s kernels run with the time limit (ABI-6): every pack's, a stranger's
+/// code; not std's, music2's own, shipped with the app, reviewed and tested, which runs with no
+/// checks. The one place this is decided.
+pub fn checked(package: &str) -> bool {
+    package != m2_song::pack::STD
 }
 
 /// The engine every kernel runs in.
@@ -151,32 +160,51 @@ enum Hosted {
 /// so two renderers of p50 hold about 1.2% of the address space. A sealed memory never grows, so it
 /// never moves, and a sandbox keeps its address.
 ///
-/// One engine for the process, as wasmtime intends: a module one package set loaded can be played
+/// Two engines, the same but for one switch (ABI-6): a `checked` one compiles the time checks into
+/// a pack's kernels, at each function's start and each loop's turn, and has a ticker
+/// ([`crate::limit::start`]) that starts with it, on the first pack loaded, and lives as long as it
+/// does; std's has none, so std's kernels cost what they did before the limit. [`checked`] says which
+/// a package's module is compiled by, and a sandbox runs on its module's own engine.
+///
+/// One of each for the process, as wasmtime intends: a module one package set loaded can be played
 /// through any other (a render of a revision plays its view through a copy of the session's set,
-/// and the gates' lab compiles with one set and plays with another). Two engines refuse each
-/// other's modules.
-pub fn engine() -> Engine {
-    static ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
-    ENGINE
+/// and the gates' lab compiles with one set and plays with another).
+pub fn engine(checked: bool) -> Engine {
+    ENGINES[checked as usize]
         .get_or_init(|| {
             let mut config = wasmtime::Config::new();
             config.cranelift_nan_canonicalization(false);
             config.wasm_relaxed_simd(false);
             config.memory_may_move(false);
-            Engine::new(&config).expect("wasmtime engine")
+            config.epoch_interruption(checked);
+            let engine = Engine::new(&config).expect("wasmtime engine");
+            if checked {
+                crate::limit::start(&engine);
+            }
+            engine
         })
         .clone()
+}
+
+/// The two [`engine`]s, std's first, each made when first asked for.
+static ENGINES: [std::sync::OnceLock<Engine>; 2] = [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+
+/// Whether `module` was compiled with the time checks: by the [`engine`] of a pack's modules (none
+/// was, while no pack has been loaded).
+pub(crate) fn checks(module: &Module) -> bool {
+    ENGINES[1].get().is_some_and(|e| Engine::same(e, module.engine()))
 }
 
 impl Default for PackageSet {
     fn default() -> Self {
         PackageSet {
-            engine: engine(),
             view: Arc::default(),
             loaded: HashMap::new(),
             plugins: HashMap::new(),
             host: m2_plugins::host(),
             store: None,
+            limits: Limits::default(),
+            stuck: Default::default(),
         }
     }
 }
@@ -196,6 +224,13 @@ impl PackageSet {
     /// Find installed packs in `store` (PACK-6): this computer's is `m2_os::dirs::packs()`.
     pub fn with_store(mut self, store: PathBuf) -> PackageSet {
         self.store = Some(m2_song::pack::Store::at(store));
+        self
+    }
+
+    /// Give each call into its kernels `limits` instead of the default (ABI-6): tests shorten them.
+    #[cfg(test)]
+    pub(crate) fn with_limits(mut self, limits: Limits) -> PackageSet {
+        self.limits = limits;
         self
     }
 
@@ -259,8 +294,10 @@ impl PackageSet {
                 let sha = m2_song::Sha::of(&bytes);
                 files.insert(format!("{name}/{w}"), sha.hex());
                 check_abi(&bytes).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
-                let module = Module::new(&self.engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
-                verify_module(&self.engine, &module, &kernels).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
+                let engine = engine(checked(&name));
+                let module = Module::new(&engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
+                let verified = verify_module(&module, &kernels, self.limits.offline);
+                verified.with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 (Some(module), Some(sha))
             }
             None if !kernels.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
@@ -706,8 +743,9 @@ fn check_abi(bytes: &[u8]) -> Result<()> {
 /// A package's module, built for this ABI ([`check_abi`], before it was compiled), checked before
 /// any kernel of it is made (ABI-3): its one import, if any, is `m2.asset_read`; its memory is a
 /// defined 32-bit memory of 64 KiB pages, not shared, which the hardware checks can guard
-/// (RENDER-32); and it has the ABI's exports, with their signatures.
-fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Result<()> {
+/// (RENDER-32); and it has the ABI's exports, with their signatures. Its start function, if any,
+/// may run for `limit` (ABI-6).
+fn verify_module(module: &Module, kernels: &[KernelDecl], limit: std::time::Duration) -> Result<()> {
     let exports: HashMap<&str, ExternType> = module.exports().map(|e| (e.name(), e.ty())).collect();
     let func = |name: &str, params: &[ValType], results: &[ValType]| -> Result<()> {
         match exports.get(name) {
@@ -731,7 +769,7 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
         Some(ExternType::Memory(_)) => {}
         _ => bail!("missing export `memory`"),
     }
-    crate::sandbox::instantiate(engine, module)?;
+    crate::sandbox::instantiate(module, limit)?;
     func("m2_alloc", &[ValType::I32, ValType::I32], &[ValType::I32])?;
     for k in kernels {
         let n = &k.name;
@@ -748,13 +786,21 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
 mod tests {
     use super::*;
 
-    // One engine for the process: a view one set loaded can be played by any other set, as the
-    // gates' lab compiles with one set and plays with another, and a render of a revision plays its
-    // view through a copy of the session's set. Two engines refuse each other's modules.
+    // One engine of each kind for the process (ABI-6): a view one set loaded can be played by any
+    // other set, as the gates' lab compiles with one set and plays with another, and a render of a
+    // revision plays its view through a copy of the session's set. Two engines refuse each other's
+    // modules, so each set compiles std with std's one engine, and a pack with the packs' one.
     #[test]
     fn every_set_shares_one_engine() {
-        let (a, b) = (PackageSet::default(), PackageSet::default());
-        assert!(Engine::same(&a.engine, &b.engine), "two package sets, two engines");
+        let (a, b) = (std_set(), std_set());
+        let engine = |set: &PackageSet, id| set.module_for(id).unwrap().0.engine().clone();
+        assert!(Engine::same(&engine(&a, "std:sine"), &engine(&b, "std:sine")), "two package sets, two engines");
+        assert!(Engine::same(&engine(&a, "std:sine"), &super::engine(false)) && !checks(a.module_for("std:sine").unwrap().0));
+        let mut a = a;
+        a.load(&pack("@test/a", "1.0.0", "")).unwrap();
+        let mut b = b;
+        b.load(&pack("@test/a", "1.0.0", "")).unwrap();
+        assert!(Engine::same(&engine(&a, "@test/a:k"), &engine(&b, "@test/a:k")) && checks(a.module_for("@test/a:k").unwrap().0));
     }
 
     fn manifest(effect: &str) -> Result<PackageSet> {

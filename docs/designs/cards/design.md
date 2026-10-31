@@ -180,13 +180,16 @@ In a song, `wobble(lane.notes("bass"), { shape: "square" })`, and the code edito
 
 ### 6.1 A time limit
 
-Every kernel call runs with a deadline (wasmtime's epoch interruption: a counter that another thread
-moves on; a call past its deadline stops with a trap).
+Every call into a pack's kernel runs with a deadline (wasmtime's epoch interruption: a counter that
+another thread moves on; a call past its deadline stops with a trap). std's kernels, music2's own
+code, shipped with the app, reviewed and tested, run with no checks: measured, the checks cost a
+kernel's call about a fifth of its time, which only a stranger's code should pay.
 - **Live**, a call that runs far past a block's time stops. That sound goes silent until the song builds
   again, and the status names it and its pack ("Growl, from @alice/growl, took too long and was stopped").
 - **In an export** the limit is generous (one call may take seconds). Past it the export fails in words;
   it is never quietly different.
-- The checks cost a little in every kernel. That cost is measured with the timing gates before it ships.
+- The checks cost a pack's kernels a little in every call; std's pay nothing. That cost is measured
+  before it ships ([ABI-6](../../architecture.md#kernel-abi-reservations)).
 
 ### 6.2 Events for kernels
 
@@ -259,7 +262,7 @@ only: a notes lane can't record it yet (#24, which needs a format change).
 | D3 | The pack contract stable by version? | Yes, from wave 3 (the owner, as recommended) |
 | D4 | A choice in files: its name or its place? | Its name; a kernel gets its place |
 | D5 | Sustain: in each kernel, or in the voices? | In the voices; a plugin gets CC 64 |
-| D6 | The time limit: fuel or epochs? | Epochs |
+| D6 | The time limit: fuel or epochs? | Epochs, and only a pack's own kernels (the lead, 2026-10-31, after the review measured the cost) |
 | D7 | Bundled packs: read from the app, or installed into the store? | Installed into the store |
 | D8 | Which effects std keeps | The ones mixing needs: eq, compress, limit, duck |
 

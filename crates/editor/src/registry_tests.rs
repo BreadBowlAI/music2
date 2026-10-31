@@ -451,18 +451,46 @@ const SPIN: &[u8] = &[
     104, 101, 97, 112,
 ];
 
-// REG-5 (review G8): a version is given a time; one whose kernel never returns (P4) as its preview
-// renders is refused when it runs out, and the robot goes on: the others are built.
-#[test]
-fn a_kernel_that_never_returns_is_refused_and_the_rest_are_built() {
-    let w = World::new("spin");
+/// A kernel module whose kernel `spin` returns from each `spin_process`, but only after spinning
+/// 50,000,000 turns: tens of milliseconds a call, far inside its time limit (ABI-6), so a preview of
+/// it takes minutes. Made by `wat` once, from this text:
+///
+/// ```text
+/// (module
+///   (@custom "m2_abi" "\01\00\00\00")
+///   (memory (export "memory") 1)
+///   (func (export "m2_alloc") (param i32 i32) (result i32) (i32.const 8192))
+///   (func (export "spin_new") (param i32) (result i32) (i32.const 4096))
+///   (func (export "spin_ports") (result i32) (i32.const 1))
+///   (func (export "spin_reset") (param i32))
+///   (func (export "spin_active") (param i32) (result i32) (i32.const 0))
+///   (func (export "spin_process") (param i32 i32 i32 i32) (local $k i32)
+///     (local.set $k (i32.const 50000000))
+///     (loop $l
+///       (local.set $k (i32.sub (local.get $k) (i32.const 1)))
+///       (br_if $l (i32.gt_s (local.get $k) (i32.const 0))))))
+/// ```
+const SLOW: &[u8] = &[
+    0, 97, 115, 109, 1, 0, 0, 0, 1, 27, 5, 96, 2, 127, 127, 1, 127, 96, 1, 127, 1, 127, 96, 0, 1, 127, 96, 1, 127, 0, 96, 4, 127, 127, 127,
+    127, 0, 3, 7, 6, 0, 1, 2, 3, 1, 4, 5, 3, 1, 0, 1, 7, 87, 7, 6, 109, 101, 109, 111, 114, 121, 2, 0, 8, 109, 50, 95, 97, 108, 108, 111,
+    99, 0, 0, 8, 115, 112, 105, 110, 95, 110, 101, 119, 0, 1, 10, 115, 112, 105, 110, 95, 112, 111, 114, 116, 115, 0, 2, 10, 115, 112, 105,
+    110, 95, 114, 101, 115, 101, 116, 0, 3, 11, 115, 112, 105, 110, 95, 97, 99, 116, 105, 118, 101, 0, 4, 12, 115, 112, 105, 110, 95, 112,
+    114, 111, 99, 101, 115, 115, 0, 5, 10, 56, 6, 6, 0, 65, 128, 192, 0, 11, 5, 0, 65, 128, 32, 11, 4, 0, 65, 1, 11, 2, 0, 11, 4, 0, 65, 0,
+    11, 28, 1, 1, 127, 65, 128, 225, 235, 23, 33, 4, 3, 64, 32, 4, 65, 1, 107, 33, 4, 32, 4, 65, 0, 74, 13, 0, 11, 11, 0, 11, 6, 109, 50,
+    95, 97, 98, 105, 1, 0, 0, 0, 0, 21, 4, 110, 97, 109, 101, 2, 6, 1, 5, 1, 4, 1, 107, 3, 6, 1, 5, 1, 0, 1, 108,
+];
+
+/// A world with `@carol/spin` 0.1.0 listed and staged, beside the others: its one instrument, Spin,
+/// is its kernel `spin`, made of `wasm`.
+fn spin_world(name: &str, wasm: &[u8]) -> World {
+    let w = World::new(name);
     let spin = w.t.0.join("src/spin-0.1.0");
     write(
         &spin.join("m2pkg.toml"),
         "[package]\nname = \"@carol/spin\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\n\
          std = \"0.5\"\n\n[[kernel]]\nname = \"spin\"\ndescription = \"Never returns\"\noutputs = [\"out: audio<1>\"]\n",
     );
-    write(&spin.join("k.wasm"), SPIN);
+    write(&spin.join("k.wasm"), wasm);
     write(
         &spin.join("src/index.ts"),
         "import { component, kernel, port, signature, type Audio, type Events } from \"@m2/core\";\n\n\
@@ -472,12 +500,38 @@ fn a_kernel_that_never_returns_is_refused_and_the_rest_are_built() {
     );
     w.list("@carol/spin", "0.1.0", &spin, "");
     w.stage();
+    w
+}
+
+// REG-5 (review G8): a version is given a time; one whose preview runs past it (here every call of
+// its kernel returns, inside its own limit, but the preview would take minutes) is refused when it
+// runs out, and the robot goes on: the others are built.
+#[test]
+fn a_version_past_its_time_is_refused_and_the_rest_are_built() {
+    let w = spin_world("slow", SLOW);
     let started = std::time::Instant::now();
     let built = w.run(&w.t.0.join("bucket"), None, std::time::Duration::from_secs(20)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
     assert!(started.elapsed() < std::time::Duration::from_secs(120), "the robot went on: {:?}", started.elapsed());
     let [failed] = built.failed.as_slice() else { panic!("{:?}", built.failed) };
     assert_eq!(failed.name.as_str(), "@carol/spin");
     assert!(failed.problems[0].contains("@carol/spin 0.1.0 took longer than 20 s to check and build"), "{:?}", failed.problems);
+    assert_eq!(built.built.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["@alice/drums", "@bob/keys"]);
+}
+
+// ABI-7, REG-5, REG-6: a version whose kernel never returns (P4) as its preview renders is refused in
+// the time limit's words (ABI-6), before the version's own time runs out, and the robot goes on: the
+// others are built.
+#[test]
+fn a_kernel_that_never_returns_is_refused_in_its_limits_words() {
+    let w = spin_world("spin", SPIN);
+    let started = std::time::Instant::now();
+    let built = w.run(&w.t.0.join("bucket"), None, std::time::Duration::from_secs(20)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    assert!(started.elapsed() < std::time::Duration::from_secs(120), "the robot went on: {:?}", started.elapsed());
+    let [failed] = built.failed.as_slice() else { panic!("{:?}", built.failed) };
+    assert_eq!(failed.name.as_str(), "@carol/spin");
+    let stopped = "@carol/spin 0.1.0: Spin's preview was stopped, so it isn't built: Spin on Play, from @carol/spin, took too long \
+                   and was stopped, so the file wasn't made.";
+    assert_eq!(failed.problems, [stopped], "stopped by the kernel's limit, not the version's");
     assert_eq!(built.built.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["@alice/drums", "@bob/keys"]);
 }
 

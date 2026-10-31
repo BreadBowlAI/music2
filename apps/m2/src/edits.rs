@@ -6,12 +6,15 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow, bail};
 
+use crate::words::{on, places, value};
+
 /// Whether `cmd` is one of these.
 pub fn handles(cmd: &str) -> bool {
     matches!(cmd, "mute-in-song" | "clips" | "unautomate")
 }
 
-/// Run `cmd`, with the command line's arguments (`args[0]` is `cmd`).
+/// Run `cmd`, with the words `words::read` handed on (`args[0]` is `cmd`): its usage took them
+/// (AGENT-13).
 pub fn run(cmd: &str, args: &[String]) -> Result<()> {
     match cmd {
         "mute-in-song" => mute_in_song(args),
@@ -23,16 +26,8 @@ pub fn run(cmd: &str, args: &[String]) -> Result<()> {
 
 /// `m2 mute-in-song <project> <track>… on|off`: one Tx, one undo step (MON-5).
 fn mute_in_song(args: &[String]) -> Result<()> {
-    let usage = "say which tracks, then on or off: m2 mute-in-song <project> <track>… on|off";
-    let [_, dir, rest @ .., last] = args else { bail!("{usage}") };
-    let muted = match last.as_str() {
-        "on" => true,
-        "off" => false,
-        _ => bail!("{usage}"),
-    };
-    if rest.is_empty() {
-        bail!("{usage}");
-    }
+    let [_, dir, rest @ .., last] = args else { unreachable!("its usage takes three words at least") };
+    let muted = last == "on";
     let mut s = super::session(Path::new(dir))?;
     let t = Instant::now();
     let e = m2_editor::mute::mute_in_song(&mut s, rest, muted).map_err(|e| anyhow!("{e}"))?;
@@ -47,20 +42,15 @@ fn mute_in_song(args: &[String]) -> Result<()> {
 /// `m2 unautomate <project> <track>/<lane> [--at <place>] [--beats]`: the lane's value at the
 /// place (else its fallback) written back where it is read, and its file removed (HOME-2).
 fn unautomate(args: &[String]) -> Result<()> {
-    let usage = "say which lane: m2 unautomate <project> <track>/<lane> [--at <bar.beat>]";
-    let [_, dir, rest @ ..] = args else { bail!("{usage}") };
-    let mut f = Flags::read(rest)?;
-    let [lane] = &f.words[..] else { bail!("{usage}") };
+    let [dir, lane] = &places(args)[..] else { unreachable!("its usage takes two words") };
     let lane = lane_addr(lane)?;
     let mut s = super::session(Path::new(dir))?;
     let arr = s.accepted().project.arrangement.clone();
-    let beats = f.on("--beats");
-    let at = match f.take("--at").flatten() {
-        Some(t) if beats => Some(t.parse::<f64>().map_err(|_| anyhow!("`{t}` isn't a number of beats"))?),
+    let at = match value(args, "--at") {
+        Some(t) if on(args, "--beats") => Some(t.parse::<f64>().map_err(|_| anyhow!("`{t}` isn't a number of beats"))?),
         Some(t) => Some(m2_editor::clips::position(&arr, &t).map_err(|e| anyhow!("{e}"))?),
         None => None,
     };
-    f.done()?;
     let t = Instant::now();
     let e = m2_editor::automate::remove(&mut s, lane.module.as_str(), lane.lane.as_str(), at).map_err(|e| anyhow!("{e}"))?;
     let ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -68,53 +58,51 @@ fn unautomate(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-const CLIPS: &str = "m2 clips <project> create|move|resize|split|join|duplicate|quantize|delete|json …; see m2 --help";
-
 /// `m2 clips <project> <gesture> …`: one clip gesture, one Tx, one undo step (8b.5). Clips are
 /// `track/lane:id`, or `track/lane@place` for the first clip that starts there. Places are
 /// bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; distances and lengths are beats.
 fn clips(args: &[String]) -> Result<()> {
     use m2_editor::clips::{Gesture, edit, position};
-    let [_, dir, op, rest @ ..] = args else { bail!("{CLIPS}") };
+    let [dir, op, words @ ..] = &places(args)[..] else { unreachable!("its usage takes two words at least") };
     let mut s = super::session(Path::new(dir))?;
     let arr = s.accepted().project.arrangement.clone();
-    let mut f = Flags::read(rest)?;
-    let beats = f.on("--beats");
+    // Every gesture but `json` names its clips or places, in beats with --beats.
+    let beats = op != "json" && on(args, "--beats");
     let place = |text: &str| match beats {
         true => text.parse::<f64>().map_err(|_| anyhow!("`{text}` isn't a number of beats")),
         false => position(&arr, text).map_err(|e| anyhow!("{e}")),
     };
-    let refs = |f: &Flags| f.words.iter().map(|w| clip_ref(w, &place)).collect::<Result<Vec<_>>>();
+    let need = |name: &str| value(args, name).ok_or_else(|| anyhow!("say {name}"));
+    let refs = || words.iter().map(|w| clip_ref(w, &place)).collect::<Result<Vec<_>>>();
     let g = match op.as_str() {
-        "create" => {
-            let [lane] = &f.words[..] else { bail!("say which lane: m2 clips <project> create <track>/<lane> --at <place>") };
-            Gesture::Create { lane: lane_addr(lane)?, start: place(&f.need("--at")?)?, length: f.number("--length")? }
-        }
-        "move" => Gesture::Move { clips: refs(&f)?, by: f.number("--by")?.unwrap_or(0.0), to: f.lane("--to")?, copy: f.on("--copy") },
+        "create" => Gesture::Create { lane: lane_addr(&words[0])?, start: place(&need("--at")?)?, length: number(args, "--length")? },
+        "move" => Gesture::Move {
+            clips: refs()?,
+            by: number(args, "--by")?.unwrap_or(0.0),
+            to: value(args, "--to").map(|v| lane_addr(&v)).transpose()?,
+            copy: on(args, "--copy"),
+        },
         "resize" => {
-            let [clip] = &refs(&f)?[..] else { bail!("say which clip: m2 clips <project> resize <clip> --start <place> --length <beats>") };
-            let length = f.number("--length")?.ok_or_else(|| anyhow!("say how long, in beats: --length 4"))?;
-            Gesture::Resize { clip: clip.clone(), start: place(&f.need("--start")?)?, length }
+            let length = number(args, "--length")?.ok_or_else(|| anyhow!("say how long, in beats: --length 4"))?;
+            Gesture::Resize { clip: clip_ref(&words[0], &place)?, start: place(&need("--start")?)?, length }
         }
-        "duplicate" => Gesture::Duplicate { clips: refs(&f)?, range: None, grid: f.number("--grid")?, times: None },
-        "split" => Gesture::Split { clips: refs(&f)?, at: place(&f.need("--at")?)? },
-        "join" => Gesture::Join { clips: refs(&f)? },
+        "duplicate" => Gesture::Duplicate { clips: refs()?, range: None, grid: number(args, "--grid")?, times: None },
+        "split" => Gesture::Split { clips: refs()?, at: place(&need("--at")?)? },
+        "join" => Gesture::Join { clips: refs()? },
         "quantize" => {
-            let grid = f.number("--grid")?.ok_or_else(|| anyhow!("say the grid, in beats: --grid 0.25 for sixteenths"))?;
-            Gesture::Quantize { clips: refs(&f)?, notes: None, grid, ends: f.on("--ends") }
+            let grid = number(args, "--grid")?.ok_or_else(|| anyhow!("say the grid, in beats: --grid 0.25 for sixteenths"))?;
+            Gesture::Quantize { clips: refs()?, notes: None, grid, ends: on(args, "--ends") }
         }
-        "delete" => Gesture::Delete { clips: refs(&f)? },
+        "delete" => Gesture::Delete { clips: refs()? },
         "json" => {
-            let [file] = &f.words[..] else { bail!("give the gesture as JSON: m2 clips <project> json <gesture.json | ->") };
-            let text = match file.as_str() {
+            let text = match words[0].as_str() {
                 "-" => std::io::read_to_string(std::io::stdin())?,
                 path => std::fs::read_to_string(path)?,
             };
             serde_json::from_str(&text).map_err(|e| anyhow!("the gesture doesn't read: {e}"))?
         }
-        _ => bail!("{CLIPS}"),
+        _ => unreachable!("its usage takes only these"),
     };
-    f.done()?;
     let t = Instant::now();
     let done = edit(&mut s, &g).map_err(|e| anyhow!("{e}"))?;
     let ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -145,53 +133,7 @@ fn clip_ref(text: &str, place: &dyn Fn(&str) -> Result<f64>) -> Result<m2_editor
     Ok(m2_editor::clips::ClipRef { lane: lane_addr(lane)?, id, at, sha: None })
 }
 
-/// A command's words and `--flag value` pairs; a flag left unread is refused.
-struct Flags {
-    words: Vec<String>,
-    flags: Vec<(String, Option<String>)>,
-}
-
-impl Flags {
-    const SWITCHES: [&str; 3] = ["--copy", "--beats", "--ends"];
-
-    fn read(args: &[String]) -> Result<Flags> {
-        let (mut words, mut flags) = (vec![], vec![]);
-        let mut it = args.iter();
-        while let Some(a) = it.next() {
-            match a.strip_prefix("--") {
-                Some(_) if Self::SWITCHES.contains(&a.as_str()) => flags.push((a.clone(), None)),
-                Some(_) => flags.push((a.clone(), Some(it.next().ok_or_else(|| anyhow!("{a} needs a value"))?.clone()))),
-                None => words.push(a.clone()),
-            }
-        }
-        Ok(Flags { words, flags })
-    }
-
-    fn take(&mut self, name: &str) -> Option<Option<String>> {
-        let i = self.flags.iter().position(|(f, _)| f == name)?;
-        Some(self.flags.remove(i).1)
-    }
-
-    fn on(&mut self, name: &str) -> bool {
-        self.take(name).is_some()
-    }
-
-    fn need(&mut self, name: &str) -> Result<String> {
-        self.take(name).flatten().ok_or_else(|| anyhow!("say {name}"))
-    }
-
-    fn number(&mut self, name: &str) -> Result<Option<f64>> {
-        self.take(name).flatten().map(|v| v.parse::<f64>().map_err(|_| anyhow!("{name} takes a number of beats, not `{v}`"))).transpose()
-    }
-
-    fn lane(&mut self, name: &str) -> Result<Option<m2_song::LaneAddr>> {
-        self.take(name).flatten().map(|v| lane_addr(&v)).transpose()
-    }
-
-    fn done(&self) -> Result<()> {
-        match self.flags.first() {
-            Some((f, _)) => bail!("{f} isn't something this gesture takes"),
-            None => Ok(()),
-        }
-    }
+/// Flag `name`'s value, a number of beats.
+fn number(args: &[String], name: &str) -> Result<Option<f64>> {
+    value(args, name).map(|v| v.parse::<f64>().map_err(|_| anyhow!("{name} takes a number of beats, not `{v}`"))).transpose()
 }
