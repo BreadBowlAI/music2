@@ -14,3 +14,8 @@ hash = "sha256:887cf4cab36bf70de6797b253a5f77c8aeedfb3f362e53b925564324ccf55c0e"
 name = "@m2/synths"
 version = "1.0.0"
 hash = "sha256:8272d1a5ed8c58adf374f0b7f9031147018a45a6bde5f8ac0928fe679493256d"
+
+[[pack]]
+name = "@m2/wavetable"
+version = "1.0.0"
+hash = "sha256:6f8226ebf2009658019c60a20db881e46dce4ed190daf0b561124c97d86ca165"
