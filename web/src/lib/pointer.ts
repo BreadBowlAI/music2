@@ -102,6 +102,11 @@ export function targetBox(p: Pointer): DOMRect | null {
   }
 }
 
+/** Whether `p` is a knob a folded card hides (CARD-25): its "N more" row stands for it, and Show unfolds the card. */
+export function behindFold(p: Pointer): boolean {
+  return p.kind === "knob" && !!p.knob && !document.querySelector(`[data-knob-id="${CSS.escape(p.knob)}"]`) && !!document.querySelector(`[data-hides~="${CSS.escape(p.knob)}"]`);
+}
+
 /** Whether `p` is a knob of another track than the one the dock shows: only selecting would show it. */
 export function elsewhere(p: Pointer): boolean {
   return p.kind === "knob" && !!p.track && !!p.knob && !knobOf(p.knob) && useShell.getState().module !== p.track;

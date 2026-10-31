@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp } from "lucide-react";
 import { useEffect, useState, type CSSProperties } from "react";
-import { dismissPointer, elsewhere, reveal, seenIn, targetBox, usePointer, type Pointer } from "../lib/pointer";
+import { behindFold, dismissPointer, elsewhere, reveal, seenIn, targetBox, usePointer, type Pointer } from "../lib/pointer";
 import { canvas } from "../lib/shell";
 import { keepFocus } from "./ui";
 
@@ -58,7 +58,8 @@ function placed(p: Pointer, area: DOMRect, aside: boolean): Place | null {
       const above = mark.top - area.top > 48;
       style = above ? { left: left(mark.left), top: mark.top - 6, transform: "translateY(-100%)" } : { left: left(mark.left), top: mark.top + mark.height + 6 };
     }
-    return { mark, style, edge: null, show: !!folded };
+    // A knob behind a folded card's "N more" row: Show unfolds it.
+    return { mark, style, edge: null, show: !!folded || behindFold(p) };
   }
   // Out of view: it waits at the edge nearest where its target is (AGENT-6); bars under the ruler.
   const edge: Edge = box.right <= area.left ? "left" : box.left >= area.right ? "right" : box.bottom <= area.top ? "up" : "down";

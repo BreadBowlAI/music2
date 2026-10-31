@@ -11,7 +11,7 @@
 //
 //   node e2e/card-views.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
-import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { page, errors, api, key, view, box, posts } = await open(1440, 900);
@@ -130,8 +130,27 @@ await page.screenshot({ path: `${ROOT}/views-card.png` });
 await page.click(`${card} [data-fold]`);
 check(await until(async () => JSON.stringify(await groups()) === '["Sound"]'), `folded, it shows its first group: ${JSON.stringify(await groups())}`);
 check(!!(await page.$(`${card} [data-unfold]`)), "and says how many more rows there are");
-await page.click(`${card} [data-unfold]`);
-check(await until(async () => (await groups()).length === 4), "unfolded again, all four");
+// A knob the folded card hides is still a knob (AGENT-5, AGENT-6): an agent's change to it lights
+// the "N more" row, an agent's pointer at it shows there, and Show unfolds the card to it.
+const state = (await api("")).body;
+const sustainId = state.view.modules.find((m) => m.key === "wobble").nodes.find((n) => n.title === "Wobble").knobs.find((k) => k.slot === "sustain").id;
+const agent = (path, body) =>
+  page.evaluate(
+    async (url, key, path, body) => (await fetch(`${url}${path}`, { method: "POST", headers: { "x-m2-token": key, "content-type": "application/json" }, body: JSON.stringify(body) })).status,
+    sess.url,
+    sess.token,
+    path,
+    body,
+  );
+check((await agent("/api/graph/set", { session: state.session, revision: state.view.revision, id: sustainId, gesture: "agent", value: 0.5 })) === 200, "an agent sets the sustain, which the folded card hides");
+check(await until(async () => !!(await page.$(`${card} [data-unfold][data-glow]`))), "its change lights the row that stands for it");
+// Written now, the knob has its written id.
+const sustainNow = (await api("")).body.view.modules.find((m) => m.key === "wobble").nodes.find((n) => n.title === "Wobble").knobs.find((k) => k.slot === "sustain").id;
+check((await agent("/api/point", { session: state.session, target: `knob:${sustainNow}`, words: "this one" })) === 200, "an agent points at it");
+check(await until(async () => !!(await page.$("[data-testid=pointer-show]"))), "the pointer offers Show");
+await page.click("[data-testid=pointer-show]");
+check(await until(async () => (await groups()).length === 4 && !!(await page.$(`${card} [data-knob-id="${sustainNow}"]`))), "Show unfolds the card to the knob");
+await page.click("[data-testid=pointer-ok]").catch(() => {});
 
 // ---------------------------------------------------------------- a choice's menu and a switch (CARD-20, CARD-21)
 
