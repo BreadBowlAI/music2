@@ -75,7 +75,10 @@ fn nodes(fx: bool) -> (Value, &'static str) {
         json!({"id": "vc", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": if fx { "half" } else { "c" }}}),
         json!({"id": "vl", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "vc", "by": "l"}}),
         json!({"id": "a", "op": "lane", "lane": "clips"}),
-        json!({"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "vl", "b": "a"}}),
+        // A second audio lane, which nothing plays but a live input (MON-8).
+        json!({"id": "a2", "op": "lane", "lane": "heard"}),
+        json!({"id": "aa", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "a2"}}),
+        json!({"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "vl", "b": "aa"}}),
         json!({"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "sum"}),
         json!({"id": "k", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}}),
         json!({"id": "h", "op": "const", "value": 0.3, "origin": {"site": 11, "arg": ["0"]}}),
@@ -128,7 +131,7 @@ fn build(fx: bool, bpm: f64) -> Song {
     let ir: m2_ir::Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
         "modules": [{"key": "song", "nodes": n, "exports": {"out": out}, "frames": [{"site": 1, "component": "test:level"}], "lanes": [
             {"key": "notes", "kind": "events<note>"}, {"key": "level", "kind": "control<gain>", "default": 0},
-            {"key": "clips", "kind": "audio<1>"}]}]}))
+            {"key": "clips", "kind": "audio<1>"}, {"key": "heard", "kind": "audio<1>"}]}]}))
     .unwrap();
     let packages = std_packages();
     let flat = m2_ir::check(&ir, &packages).unwrap_or_else(|e| panic!("{e:?}"));
@@ -466,14 +469,15 @@ fn live_notes_never_allocate() {
 // RENDER-30a, MON-13: a sound input's callback allocates and frees nothing: a device's at 44.1 kHz
 // with four channels, converted to the song's 48 kHz, in buffers of odd sizes, into a ring for each
 // pair; and the output's callback, as it hands the silent input what was injected and the engine
-// hears channels 3–4 on the audio lane (MON-8), across a stop, the idle engine kept awake, a loop's
-// wraps, and hearing stopped and started again.
+// hears channels 3–4 on one audio lane and channel 1 alone on another, at once (MON-8, review Q11),
+// across a stop, the idle engine kept awake, a loop's wraps, and hearing stopped and started again.
 #[test]
 fn the_input_callback_never_allocates() {
     let song = build(false, 120.0);
     let r = song.renderer();
     let (generation, info) = (r.generation(), r.info());
     let slot = info.lanes.iter().position(|l| l.lane.lane == "clips").unwrap() as u32;
+    let other = info.lanes.iter().position(|l| l.lane.lane == "heard").unwrap() as u32;
     let (player, mut d) = Player::driven(SR);
     player.open(r).unwrap();
     player.name_inputs(&["Desk:4"]);
@@ -503,6 +507,7 @@ fn the_input_callback_never_allocates() {
     fill(&mut d, 4096);
     let three_four = m2_play::Channels::Pair(2);
     player.hear(generation, slot, Some((&silent, three_four))).unwrap();
+    player.hear(generation, other, Some((&silent, m2_play::Channels::One(0)))).unwrap();
     player.play();
     player.set_loop(Some((0.0, 1.0))).unwrap();
     fill(&mut d, 60_000);

@@ -21,7 +21,7 @@
 import { create } from "zustand";
 import { on } from "./events";
 import { useClipSelection } from "./clips";
-import { findLane, clipIndex, lockReason, type GraphState, type TimelineTrack } from "./graph";
+import { findLane, clipIndex, lockReason, type ClipRef, type GraphState, type TimelineTrack } from "./graph";
 import { useGrid } from "./grid";
 import { holdTarget, currentRecordTarget } from "./playTarget";
 import { request } from "./projects";
@@ -312,10 +312,18 @@ useStore.subscribe((s) => {
   selectWritten(s.graph);
 });
 
-/** The lane a track's R arms: its notes lane, else its audio lane (MON-9). */
-export function armLane(track: TimelineTrack): { lane: string; audio: boolean } | null {
-  const notes = track.lanes.find((l) => l.kind === "notes");
-  const audio = track.lanes.find((l) => l.kind === "audio");
+/**
+ * The lane a track's R arms (MON-9): its notes lane, else its audio lane; of several, the one of the
+ * clip the Notes view shows for that track (`shown`), as what plays chooses (playTarget.ts), else the
+ * first.
+ */
+export function armLane(track: TimelineTrack, shown?: ClipRef): { lane: string; audio: boolean } | null {
+  const pick = (kind: "notes" | "audio") => {
+    const lanes = track.lanes.filter((l) => l.kind === kind);
+    return (shown?.module === track.module ? lanes.find((l) => l.key === shown.lane) : undefined) ?? lanes[0];
+  };
+  const notes = pick("notes");
+  const audio = pick("audio");
   return notes ? { lane: notes.key, audio: false } : audio ? { lane: audio.key, audio: true } : null;
 }
 

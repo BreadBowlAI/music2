@@ -300,29 +300,43 @@ impl Take {
     }
 
     /// Where `(clock, pos)` (`Player::heard_frame`: the engine clock and the transport frame) is
-    /// in the take, once the anchor is known. The clock never wraps, but steps by blocks; the
-    /// transport's frame is exact. So the frame says, in the pass the clock says or one next to it,
-    /// when it is within two blocks of where the clock puts the transport; else it jumped since or
-    /// never moved (a count), and the clock says.
+    /// in the take, once the anchor is known: by the loop, never a straight line (review Q1). The
+    /// clock never wraps, but steps by blocks; the transport's frame is exact, but `heard_frame`
+    /// moves it back by the output's latency in a straight line, so just after a wrap it can say a
+    /// frame before the loop's start. So the clock says how far the take has gone, and the frame
+    /// refines it, by what it is off from where the clock puts the transport, taken round the loop:
+    /// when that is within two blocks. Then the frames since the anchor are split into a pass and a
+    /// frame inside it ([`Self::split`]).
     fn place(&self, (clock, pos): (u64, u64)) -> Option<Place> {
-        let anchor = self.anchor? as i64;
-        let (c, f, pos) = (clock as i64, self.frame as i64, pos as i64);
-        let near = 2 * m2_runtime::BLOCK as i64;
-        let (k, expect): (i64, Box<dyn Fn(i64) -> i64>) = match self.span {
-            Span::Loop { s, e, .. } if e > s => {
-                let (s, e) = (s as i64, e as i64);
-                let wrap = anchor + (e - f);
-                let k = if c < wrap { 0 } else { 1 + (c - wrap) / (e - s) };
-                (k, Box::new(move |k| if k == 0 { f + (c - anchor) } else { s + (c - wrap) - (k - 1) * (e - s) }))
-            }
-            _ => (0, Box::new(move |_| f + (c - anchor))),
-        };
-        for kk in [k, k + 1, k - 1] {
-            if kk >= 0 && (expect(kk) - pos).abs() <= near && (kk == 0 || matches!(self.span, Span::Loop { .. })) {
-                return Some((kk as u32, pos as f64));
+        let mut since = clock as i64 - self.anchor? as i64;
+        let mut off = pos as i64 - self.split(since).1 as i64;
+        if let Span::Loop { s, e, .. } = self.span
+            && e > s
+        {
+            let len = (e - s) as i64;
+            off = off.rem_euclid(len);
+            if off > len / 2 {
+                off -= len;
             }
         }
-        Some((k as u32, expect(k) as f64))
+        if off.abs() <= 2 * m2_runtime::BLOCK as i64 {
+            since += off;
+        }
+        Some(self.split(since))
+    }
+
+    /// The place `since` frames after the anchor: in the first pass, from where the take starts to
+    /// the loop's end (before the anchor too: the way in); in each pass after, from the loop's start
+    /// to its end. Never a frame outside its pass.
+    fn split(&self, since: i64) -> Place {
+        let f = self.frame as i64;
+        match self.span {
+            Span::Loop { s, e, .. } if e > s && since >= e as i64 - f => {
+                let (len, past) = ((e - s) as i64, since - (e as i64 - f));
+                (1 + (past / len) as u32, (s as i64 + past % len) as f64)
+            }
+            _ => (0, (f + since) as f64),
+        }
     }
 
     /// Frames from the anchor to `at`, through the passes before it.
@@ -579,8 +593,8 @@ impl Recorder {
 
     /// The ring of the first audio lane while a take records on one: what the meters read the
     /// input's level from.
-    pub(super) fn input(&self) -> Option<&Arc<m2_play::ring::Ring>> {
-        self.take.as_ref().and_then(|t| t.audio.first()).map(|a| &a.ring)
+    pub(super) fn input(&self) -> Option<(&Arc<m2_play::ring::Ring>, Channels)> {
+        self.take.as_ref().and_then(|t| t.audio.first()).map(|a| (&a.ring, a.channels))
     }
 
     /// What MIDI keyboards play in song `token`, whatever a window selects: the take's notes lane
@@ -754,6 +768,26 @@ fn send_hearing(cp: &mut ControlPlane, device: Option<&Device>) {
                 let _ = d.player.hear(now.generation, *slot, Some((l, *ch)));
             }
         }
+    }
+}
+
+/// The song the windows see changed (a new revision): an arm on a track or lane it no longer shows
+/// is dropped at once, and so is a track's choice of channels, so the keyboards play the selected
+/// track again and Record records it (MON-9; review Q2). A take that runs keeps its lanes.
+pub(super) fn prune_arms(cp: &mut ControlPlane, token: u64) {
+    let Some(p) = cp.open.as_ref().filter(|p| p.engine.token == token) else { return };
+    let tracks = &p.shown.timeline.tracks;
+    let shows = |m: &str, l: &str, audio: bool| {
+        let lane = tracks.iter().find(|t| t.module == m).and_then(|t| t.lanes.iter().find(|x| x.key == l));
+        lane.is_some_and(|x| x.json["kind"].as_str() == Some(if audio { "audio" } else { "notes" }))
+    };
+    let kept: BTreeMap<String, (String, bool)> =
+        cp.record.arms.armed.iter().filter(|(m, (l, a))| shows(m, l, *a)).map(|(m, x)| (m.clone(), x.clone())).collect();
+    let tracks: Vec<String> = tracks.iter().map(|t| t.module.clone()).collect();
+    let a = &mut cp.record.arms;
+    if a.token == token {
+        a.armed = kept;
+        a.channels.retain(|m, _| tracks.contains(m));
     }
 }
 
@@ -1059,11 +1093,17 @@ impl Graph {
                 let bar = (meter.beats as f64 * frames_per_beat).round().max(1.0) as u64;
                 let frames = bar.div_ceil(m2_runtime::BLOCK as u64) * m2_runtime::BLOCK as u64;
                 take.phase = Phase::Count { seq, frames, beats: meter.beats, ms: bar as f64 / rate * 1000.0 };
-                // A note in the count's last beat lands on the first, unless the song plays first.
-                take.lead = if take.skip == 0 { frames_per_beat } else { 0.0 };
+                // A note in the count's last beat lands on the first (D27).
+                take.lead = frames_per_beat;
             } else {
                 take.phase = Phase::Play { seq: player.transport(m2_runtime::Cmd::Play)? };
             }
+        }
+        // A way in (the song plays up to where recording starts) is a count too: a note in its last
+        // beat lands on the first (MON-10, MON-11; review Q5).
+        if take.skip > 0 {
+            let unit = take.arrangement.meter_at(from).unit as f64;
+            take.lead = 4.0 / unit * 60.0 / take.tempo.bpm_at(from) * rate;
         }
         take.start = match (take.punch && !take.overdub, take.notes.is_some()) {
             (true, _) | (false, false) => from,

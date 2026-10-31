@@ -11,12 +11,15 @@ import { useState } from "react";
 import { arm, armLane, channelChoices, channelsSaid, inputChannels } from "../lib/record";
 import { useRecord } from "../lib/record";
 import type { TimelineTrack } from "../lib/graph";
+import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { keepFocus, MenuRow, Popover } from "./ui";
 
 export default function Arm({ track, name }: { track: TimelineTrack; name: string }) {
   const module = track.module;
-  const target = armLane(track);
+  // The lane of the clip the Notes view shows for this track, as what plays chooses (review Q12).
+  const shown = useShell((s) => s.clips[track.module]);
+  const target = armLane(track, shown);
   const armed = useStore((s) => s.graph?.arm?.armed[module] ?? null);
   const chosen = useStore((s) => s.graph?.arm?.channels[module] ?? null);
   const connected = useStore((s) => s.connected);

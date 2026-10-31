@@ -12,7 +12,7 @@
 
 ## Recording
 
-- **Record notes:** select a track that plays notes and press R (or the red **Record** button after Play, or Transport → Record). Stopped, it counts in one bar of clicks (the button says 4, 3, 2, 1), then plays; playing, it starts at once. Play a MIDI keyboard or the keyboard piano: the notes show as you play. R again, or Space, ends it: one clip over whole bars, one undo step. Right-click the button for **Count in first** and **Snap notes to the grid**. On the keyboard piano, − and = make the notes softer and louder (10% a step; the piano shows how loud).
+- **Record notes:** select a track that plays notes and press R (or the red **Record** button after Play, or Transport → Record). Stopped, it counts in one bar of clicks (the button says 4, 3, 2, 1), then plays; playing, it starts at once. Play a MIDI keyboard or the keyboard piano: the notes show as you play. R again, or Space, ends it: one clip over whole bars, one undo step. Right-click the button for **Count in first** and **Snap notes to the grid**. With the loop on, recording starts at the loop's start: the song plays up to it first, and a note struck just before it lands on its first beat. On the keyboard piano, − and = make the notes softer and louder (10% a step; the piano shows how loud).
 - **Record your voice or a guitar:** select an audio track and press R. It counts in, then records from the sound input into a new file in `assets/` ("Vox take.wav"). The take grows as a red clip, with a bar showing how loud the input is. R again ends it: one clip, one undo step; the file stays if you undo.
 - **Settings → Sound input** picks the input. **Hear yourself while recording** plays the input through the track's effects and fader while it records, and on an armed track (below) before you record too. It is off at first: use headphones, as speakers feed back into the microphone. An export never has it.
 
@@ -20,7 +20,7 @@
 
 | To do this | Do this | What happens |
 |---|---|---|
-| Choose the tracks that record | Click **R** on each track's header (it turns red) | R records into every armed track at once. With none armed, it records the selected track, as before. Arming is not an edit: there is nothing to undo. |
+| Choose the tracks that record | Click **R** on each track's header (it turns red) | R records into every armed track at once. With none armed, it records the selected track, as before. Arming is not an edit: there is nothing to undo. A track with two notes lanes records the one its open clip is on. |
 | Hear yourself before you record | Arm an audio track, with **Hear yourself** on in Settings | You hear the input through the track, with no take. |
 | Play a notes track with the keyboards | Arm it | The MIDI keyboards and the keyboard piano play it, whatever you select. One notes track is armed at a time: arming another moves it. |
 | Record input 3–4, or one input alone | Right-click an audio track's **R** | It lists the input's channels: a pair (1–2, 3–4, …) records in stereo, one alone records in mono. |

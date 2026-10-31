@@ -191,6 +191,8 @@ fn write(
     let mut planar = vec![Vec::with_capacity(PIECE); channels.width() as usize];
     let mut ended: Option<Instant> = None;
     let mut stopped: Option<String> = None;
+    // Frames past the take's end were written, then cut off: the waveform is made from the file.
+    let mut cut = false;
     let mut put = |file: &mut Growing, frames: &[[f32; 2]]| -> Option<String> {
         let n = (frames.len() as u64).min(file.room()) as usize;
         if let Err(e) = file.append(&frames[..n]) {
@@ -232,7 +234,7 @@ fn write(
         // tick) go: the file holds the take, to the frame.
         if let Some(u) = until.filter(|u| at > *u) {
             file.keep(file.frames() - (at - u));
-            at = u;
+            (at, cut) = (u, true);
         }
         let to = until.map_or(head, |u| u.min(head));
         while at < to && stopped.is_none() {
@@ -264,8 +266,11 @@ fn write(
             }
             let rate = file.rate();
             let made = file.finish(name).map_err(|e| anyhow!("{e}"))?;
-            // Its waveform, from the frames as written (D31: no second decode).
-            drop(Store::global().put(made.hash, peaks.done(rate)));
+            // Its waveform, from the frames as written (D31: no second decode); one cut short
+            // makes its own from the file as kept, when it is first asked for (review Q4).
+            if !cut {
+                drop(Store::global().put(made.hash, peaks.done(rate)));
+            }
             return Ok(Some((made, gone, stopped)));
         }
     }

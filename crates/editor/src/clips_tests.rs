@@ -1035,3 +1035,12 @@ fn overdub_grows_the_clip_to_hold_the_take() {
     assert_eq!(clips(&s, "kick/hits").len(), 2, "over no clip: one of its own");
     assert_eq!(done.made.len(), 1);
 }
+
+// MON-10 (review Q9): the take's gesture is the server's own: the clips and drag routes can't be
+// asked for it.
+#[test]
+fn the_takes_gesture_is_off_the_wire() {
+    let asked =
+        serde_json::json!({"op": "record", "takes": [{"module": "kick", "lane": "hits", "clip": take(0.0, 4.0, &[]), "how": "replace"}]});
+    assert!(serde_json::from_value::<Gesture>(asked).is_err(), "refused");
+}

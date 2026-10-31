@@ -153,7 +153,10 @@ pub enum Gesture {
         #[serde(default)]
         offset: Option<f64>,
     },
-    /// A take written (MON-10 to MON-12): each take's clip on its lane, as its `how` says.
+    /// A take written (MON-10 to MON-12): each take's clip on its lane, as its `how` says. The
+    /// take thread's own: never read from or written to the wire, so the clips and drag routes
+    /// can't be asked for it (review Q9).
+    #[serde(skip)]
     Record {
         takes: Vec<Taken>,
     },
@@ -376,6 +379,13 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 if !(o.is_finite() && *o >= 0.0) {
                     return Err(EditError::Rejected("Where a clip starts in its file is a number of seconds, 0 or more.".into()));
                 }
+                // A clip that follows the tempo plays from its warp markers, each a moment of its
+                // file: they move with it, so it plays from the new place too (MON-11, review Q3).
+                let by = *o - c.offset;
+                if c.warp.iter().any(|m| m.0 + by < -1e-9) {
+                    return Err(EditError::Rejected("The clip can't start before the start of its audio.".into()));
+                }
+                c.warp.iter_mut().for_each(|m| m.0 = (m.0 + by).max(0.0));
                 c.offset = *o;
             }
             // On again keeps the markers it has: they hold its beats since it was turned on.

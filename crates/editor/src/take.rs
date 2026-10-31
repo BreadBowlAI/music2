@@ -81,8 +81,9 @@ pub struct Growing {
     limit: Arc<AtomicU64>,
     /// A write failed: nothing more is added.
     broken: bool,
-    /// Frames were written past the take's end: [`Self::finish`] cuts them off.
-    trim: bool,
+    /// Frames were written past the take's end ([`Self::keep`]): nothing more is added, and
+    /// [`Self::finish`] cuts the file to the frames kept.
+    cut_short: bool,
 }
 
 fn io(e: impl std::fmt::Display) -> EditError {
@@ -140,7 +141,7 @@ impl Growing {
             frames: 0,
             limit,
             broken: false,
-            trim: false,
+            cut_short: false,
         })
     }
 
@@ -163,6 +164,9 @@ impl Growing {
     pub fn append(&mut self, frames: &[[f32; 2]]) -> Result<(), EditError> {
         if self.broken {
             return Err(io("a write failed before"));
+        }
+        if self.cut_short {
+            return Err(io("it was cut at the take's end"));
         }
         if frames.len() as u64 > self.room() {
             return Err(io("a WAV file can't be that long"));
@@ -190,7 +194,7 @@ impl Growing {
     /// is cut off as the file is finished, and nothing more is added.
     pub fn keep(&mut self, frames: u64) {
         if frames < self.frames {
-            (self.frames, self.trim, self.broken) = (frames, true, true);
+            (self.frames, self.cut_short) = (frames, true);
         }
     }
 
@@ -212,7 +216,7 @@ impl Growing {
     pub fn finish(mut self, name: &str) -> Result<Imported, EditError> {
         let w = self.writer.take().ok_or_else(|| io("it is finished"))?;
         // Cut short (`keep`), or after a failed write: the frames counted are what is kept.
-        if self.broken {
+        if self.broken || self.cut_short {
             // hound writes its header again as it drops, failing or not: `cut` sets it right.
             drop(w);
             self.cut().map_err(io)?;
