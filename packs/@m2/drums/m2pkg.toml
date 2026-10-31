@@ -1,8 +1,8 @@
 [package]
 name = "@m2/drums"
-version = "2.1.0"
+version = "2.0.0"
 license = "MIT OR Apache-2.0"
-description = "music2's 808/909 drum machine: a whole kit on one notes lane, and a Drum that plays one drum from its menu"
+description = "music2's 808/909 drum machine: a whole kit on one notes lane, and One drum, which plays one drum from its menu"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
 tags = ["drums", "drum machine", "808", "909", "kit"]
@@ -25,13 +25,51 @@ std = "0.7"
 
 [[kernel]]
 name = "drum"
-description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the kit. A Drum's own knobs move whatever drum it plays: `tune` its pitch in semitones, `decay` times its decays, `push` added to a kick's punch or a snare's snap; at 0, 1 and 0 they change no bit"
+description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the kit. One drum's own knobs (`one`) move whatever drum it plays; the kit leaves them at 0, 1 and 0, where they change no bit"
 inputs = [
   "pitch: control<semitones>",
   "velocity: control<unit01> = 0.8",
   "hits: audio<1>",
   "count: audio<1>",
   "model: control<scalar> = -1",
+  "kick_tune: control<hz> = 48 in 30..120",
+  "kick_decay: control<seconds> = 0.45",
+  "punch: control<unit01> = 0.5",
+  "snare_tune: control<hz> = 190 in 100..400",
+  "snap: control<unit01> = 0.6",
+  "snare_decay: control<seconds> = 0.18",
+  "clap_tone: control<hz> = 1200",
+  "clap_decay: control<seconds> = 0.25",
+  "hat_tone: control<hz> = 8000",
+  "hat_decay: control<seconds> = 0.045",
+  "open_decay: control<seconds> = 0.45",
+  "tom_tune: control<hz> = 130",
+  "tom_decay: control<seconds> = 0.35",
+  "rim_tone: control<hz> = 1700",
+  "bell_tune: control<hz> = 540",
+  "cymbal_decay: control<seconds> = 1.6",
+  "shake_decay: control<seconds> = 0.06",
+  "drive: control<db> = 0 in 0..24",
+  "kick_level: control<db> = 0 in -24..12",
+  "snare_level: control<db> = 0 in -24..12",
+  "hat_level: control<db> = 0 in -24..12",
+  "tom_level: control<db> = 0 in -24..12",
+  "perc_level: control<db> = 0 in -24..12",
+  "tune: control<semitones> = 0 in -24..24",
+  "decay: control<scalar> = 1 in 0.1..10",
+  "push: control<bipolar> = 0 in -1..1",
+]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "one"
+description = "One drum's voice: the drum voice with its drum a menu, `drum` (kick, snare, clap, hats (G#2 pedal, A#2 open), tom (A2 at its tune), rim, cowbell, cymbal, shaker), read when a hit starts; any hit on its lane (from drumhit) fades out a drum that chokes (kick, snare, clap, hats, cymbal), as its single did. Its knobs move whatever drum it plays: `tune` its pitch in semitones, `decay` times its decays (the rim's ring and the cowbell's too), `push` added to a kick's punch or a snare's snap, or on any other drum how much harder (or softer, below 0) its first 15 ms are; at 0, 1 and 0 they change no bit"
+inputs = [
+  "pitch: control<semitones>",
+  "velocity: control<unit01> = 0.8",
+  "hits: audio<1>",
+  "count: audio<1>",
+  "drum: control<choice<kick|snare|clap|hats|tom|rim|cowbell|cymbal|shaker>> = 0",
   "kick_tune: control<hz> = 48 in 30..120",
   "kick_decay: control<seconds> = 0.45",
   "punch: control<unit01> = 0.5",

@@ -485,3 +485,107 @@ fn a_drums_knobs_move_the_drum_it_plays() {
     let bright = |push: f32| centroid(&with(1.0, 38.0, &[(PUSH, push)])[..s(0.2)], SR);
     assert!(bright(0.4) > bright(0.0), "a pushed snare snaps harder: {} against {}", bright(0.4), bright(0.0));
 }
+
+/// `one`'s ports: the drum kernel's, but its drum is a menu, `drum`, where the kit has `model`.
+const ONE_NAMES: [&str; INPUTS] = {
+    let mut n = NAMES;
+    n[MODEL] = "drum";
+    n
+};
+
+#[test]
+fn ones_ports_match_the_manifest() {
+    defaults("one", &ONE_NAMES);
+}
+
+/// One drum (`one`) playing `drum`, its place in the menu, at `pitch`, with `hits` on the choke input.
+fn one(drum: f32, pitch: f32, frames: usize, changes: &[(usize, f32)], hits: &dyn Fn(usize) -> f32) -> Vec<f32> {
+    let mut p = defaults("one", &ONE_NAMES);
+    for &(port, v) in changes {
+        p[port] = v;
+    }
+    p[MODEL] = drum;
+    let input = |port: usize, _c: usize, t: usize| match port {
+        PITCH => pitch,
+        VELOCITY => 0.8,
+        HITS => hits(t),
+        _ => p[port],
+    };
+    play::<One>(frames, BLOCK, &input).left()
+}
+
+/// The menu's drums, by place: each with a pitch it plays on.
+const MENU: [(&str, f32); 9] = [
+    ("kick", 36.0),
+    ("snare", 38.0),
+    ("clap", 39.0),
+    ("hats", 42.0),
+    ("tom", 45.0),
+    ("rim", 37.0),
+    ("cowbell", 56.0),
+    ("cymbal", 49.0),
+    ("shaker", 69.0),
+];
+
+// CARD-33 (review Y11): One drum's drum is a menu, a control its kernel reads when a hit starts:
+// each place plays the drum the kit's kernel plays with that model, bit for bit.
+#[test]
+fn one_drum_plays_each_drum_as_the_drum_kernel_does() {
+    for (place, (name, pitch)) in MENU.iter().enumerate() {
+        let mut p = patch(&[]);
+        p[MODEL] = place as f32;
+        let drum = hit(&p, *pitch, 0.8, s(2.0), &|_| 0.0).left();
+        assert_eq!(one(place as f32, *pitch, s(2.0), &[], &|_| 0.0), drum, "{name}");
+    }
+}
+
+// CARD-33 (review Y11): every hit on One drum's lane is of its one drum, so a drum that chokes
+// (kick, snare, clap, hats, cymbal) is cut by the next hit whatever group drumhit marked it with,
+// as its single was; one that rings on (tom, rim, cowbell, shaker) never is. Its own first
+// sample's hit is its own.
+#[test]
+fn one_drum_chokes_on_any_hit_where_its_drum_chokes() {
+    let at = s(0.02);
+    let h = m2_dsp::kit::HIT_FIELD as f32;
+    for (place, (name, pitch)) in MENU.iter().enumerate() {
+        let after =
+            |hits: f32| peak_in(&one(place as f32, *pitch, s(0.3), &[], &|t| if t == at { hits } else { 0.0 }), at + s(0.01), s(0.02));
+        let free = after(0.0);
+        assert!(free > 0.0, "{name} rings");
+        let chokes = matches!(*name, "kick" | "snare" | "clap" | "hats" | "cymbal");
+        // A hit marked in the tom's group (no choke group: the field alone) and one in the kick's.
+        for hits in [h, h + 1.0, 2.0 * h + 4096.0] {
+            assert_eq!(after(hits) == 0.0, chokes, "{name}, a hit marked {hits}");
+        }
+        let first = one(place as f32, *pitch, s(0.3), &[], &|t| if t == 0 { h + 1.0 } else { 0.0 });
+        assert!(peak(&first[s(0.01)..]) > 0.0, "{name}: its own hit is no choke");
+    }
+}
+
+// CARD-33 (review Y7): every knob of One drum moves every drum its menu offers: `tune`, `decay`
+// (the rim's ring and the cowbell's too), `punch` (a kick's thump, a snare's snap, and on the
+// others how hard the hit's first 15 ms are) and `drive`.
+#[test]
+fn every_knob_of_one_drum_moves_every_drum_it_offers() {
+    for (place, (name, pitch)) in MENU.iter().enumerate() {
+        let play = |changes: &[(usize, f32)]| one(place as f32, *pitch, s(3.0), changes, &|_| 0.0);
+        let plain = play(&[]);
+        for (knob, value) in
+            [("tune", (TUNE, 5.0)), ("decay", (DECAY, 2.0)), ("punch", (PUSH, 0.8)), ("punch", (PUSH, -0.8)), ("drive", (DRIVE, 12.0))]
+        {
+            assert_ne!(play(&[value]), plain, "{name}'s {knob} at {} changes nothing", value.1);
+        }
+        let rings = |decay: f32| last_sound(&one(place as f32, *pitch, s(8.0), &[(DECAY, decay)], &|_| 0.0)).unwrap() as f32;
+        assert!(rings(2.0) > 1.3 * rings(1.0), "{name} rings longer at decay 2: {} then {} samples", rings(1.0), rings(2.0));
+        if !matches!(*name, "kick" | "snare") {
+            let first = |push: f32| peak_in(&play(&[(PUSH, push)]), 0, s(0.004));
+            assert!(
+                first(0.8) > first(0.0) && first(-0.8) < first(0.0),
+                "{name}'s punch moves its first ms: {} {} {}",
+                first(-0.8),
+                first(0.0),
+                first(0.8)
+            );
+        }
+    }
+}

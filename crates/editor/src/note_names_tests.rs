@@ -40,8 +40,8 @@ fn a_drum_kit_lane_names_its_notes() {
     assert_eq!(names(&s, "drum-kit", "hits").len(), 20);
 }
 
-// A pluck names no notes, nor does a lane two different instruments read, nor the hats' lane of
-// @m2/synths' simple hat.
+// A pluck names no notes, nor does a lane two different instruments read, nor One drum's (its
+// hats' names would have to follow its menu: gaps.md, review Y14).
 #[test]
 fn a_pluck_lane_has_no_names() {
     let f = fixture("examples/first-song");

@@ -237,13 +237,16 @@ fn check_says_what_is_wrong() {
     assert!(text.lines().any(|l| l.contains("tiny-crunch") && l.contains("has no category")), "{text}");
 }
 
-// PACK-12: a new pack checks as made, and installs.
+// PACK-12: a new pack checks as made, and installs. PACK-23 (review Y16): it asks for @m2/core by
+// the SDK's major alone.
 #[test]
 fn a_new_pack_checks() {
     let t = Temp::new("new");
     let folder = t.0.join("felt");
     let out = t.m2(&["pack", "new", folder.to_str().unwrap(), "--name", "@alice/felt-piano"]);
     assert!(out.status.success(), "{}", said(&out));
+    let manifest = std::fs::read_to_string(folder.join("m2pkg.toml")).unwrap();
+    assert!(manifest.contains("\n\"@m2/core\" = \"2\"\n"), "{manifest}");
     let out = t.m2(&["pack", "check", folder.to_str().unwrap()]);
     assert!(out.status.success(), "{}", said(&out));
     // Its voice is std's typed blocks, which TypeScript checks as you type; never a kernel's
@@ -915,4 +918,73 @@ fn an_sfz_beside_the_working_folder_reads_only_its_folder() {
     let text = failed(t.m2_in(&t.0.join("in"), &["pack", "import-sfz", "i.sfz", "../pack", "--name", "@test/x"]));
     assert!(text.contains("i.sfz:1: `sample=../secret.wav` leaves the SFZ's folder"), "{text}");
     assert!(!t.0.join("pack").exists());
+}
+
+// Review Y12: `m2 kernels` lists every kernel a song can call: std's, and the kernels of the packs
+// music2 comes with (PACK-21), read from the store as any pack is (PACK-16), so an agent finds the
+// polysynth's, the drums' and the effects' voices there.
+#[test]
+fn m2_kernels_lists_the_kernels_of_the_packs_music2_comes_with() {
+    let t = Temp::new("kernels");
+    let listed = ok(t.m2(&["kernels"]));
+    for id in
+        ["std:svf", "@m2/synths:synth", "@m2/synths:fm", "@m2/drums:drum", "@m2/drums:one", "@m2/effects:delay", "@m2/effects:bitcrush"]
+    {
+        assert!(
+            listed.lines().any(|l| l.starts_with(&format!("{id} ")) || l.starts_with(&format!("{id}("))),
+            "{id} isn't listed:\n{listed}"
+        );
+    }
+}
+
+/// Every file under `dir` with its bytes, sorted.
+fn tree_of(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            if e.file_type().unwrap().is_dir() {
+                stack.push(e.path());
+            } else {
+                out.push((e.path().strip_prefix(dir).unwrap().to_path_buf(), std::fs::read(e.path()).unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// PACK-6 (review Y18): `m2 pack install <folder>` copies the pack into the store and never writes
+// into the folder it installs from: no `m2pack.json` is left there (`m2 pack build` is the one
+// command that writes it), and a folder it may only read installs as well.
+#[test]
+fn installing_from_a_folder_writes_nothing_into_it() {
+    let t = Temp::new("install-read-only");
+    let folder = t.0.join("felt");
+    ok(t.m2(&["pack", "new", folder.to_str().unwrap(), "--name", "@alice/felt-piano"]));
+    let before = tree_of(&folder);
+    m2_song::pack::read_only_inside(&folder).unwrap();
+    m2_song::pack::set_read_only(&folder, true).unwrap();
+    let out = t.m2(&["pack", "install", folder.to_str().unwrap()]);
+    for dir in walk_dirs(&folder) {
+        writable(&dir);
+    }
+    assert!(out.status.success(), "a folder it may only read installs: {}", said(&out));
+    assert_eq!(tree_of(&folder), before, "nothing is written into the folder");
+    assert!(!folder.join("m2pkg.json").exists() && !folder.join("m2pack.json").exists());
+}
+
+/// Every folder under `dir`, `dir` too.
+fn walk_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut out = vec![dir.to_path_buf()];
+    let mut i = 0;
+    while i < out.len() {
+        for e in std::fs::read_dir(&out[i]).unwrap().flatten() {
+            if e.file_type().unwrap().is_dir() {
+                out.push(e.path());
+            }
+        }
+        i += 1;
+    }
+    out
 }

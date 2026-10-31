@@ -91,6 +91,8 @@ export default song(({ lane, time }) => {
     drums.drum(lane.notes("kick"), { drive: 0 }),
     // song.ts:24 `drums.drum` leaves out drive: a cable written in
     drums.drum(lane.notes("kick"), { drive: wobble }),
+    // song.ts:24 `drums.drum` leaves out drum: a value written in
+    drums.drum(lane.notes("kick"), { drum: "kick" }),
     // song.ts:24 `drums.drum` leaves out punch: a value written in
     drums.drum(lane.notes("kick"), { punch: 0 }),
     // song.ts:24 `drums.drum` leaves out punch: a cable written in
@@ -793,6 +795,8 @@ export default song(({ lane, time }) => {
     drums.drum(lane.notes("boom"), { decay: 1.2, drive: 0 }),
     // song.ts:51 `drums.drum` leaves out drive: a cable written in
     drums.drum(lane.notes("boom"), { decay: 1.2, drive: wobble }),
+    // song.ts:51 `drums.drum` leaves out drum: a value written in
+    drums.drum(lane.notes("boom"), { decay: 1.2, drum: "kick" }),
     // song.ts:51 `drums.drum` leaves out punch: a value written in
     drums.drum(lane.notes("boom"), { decay: 1.2, punch: 0 }),
     // song.ts:51 `drums.drum` leaves out punch: a cable written in

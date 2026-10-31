@@ -72,7 +72,7 @@ check(await until(async () => (await listInfo())?.active === "@m2/drums:drum-kit
 check((await listInfo())?.code === 'tracks/hats.ts · drums.kit(lane.notes("hits"))', `its foot shows the code it writes: ${(await listInfo())?.code}`);
 const rev0 = await revision();
 await page.keyboard.press("Enter");
-const kit = orig.hats.replace('import { drums } from "@m2/drums";', 'import { drums } from "@m2/drums";').replace(/drums\.drum\(lane\.notes\("hits"\), \{[^}]*\}\)/, 'drums.kit(lane.notes("hits"))');
+const kit = orig.hats.replace(/drums\.drum\(lane\.notes\("hits"\), \{[^}]*\}\)/, 'drums.kit(lane.notes("hits"))');
 check(await until(() => read("tracks/hats.ts") === kit), `Return writes drums.kit(lane.notes("hits")) in tracks/hats.ts (${read("tracks/hats.ts").split("\n").find((l) => l.includes("track("))})`);
 // The toast says the edit is done: since std 0.6 it writes music2.toml and music2.lock too (PACK-10),
 // so the files may land a moment before the revision does.

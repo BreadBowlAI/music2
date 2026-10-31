@@ -2,9 +2,10 @@
 // with a Lead track added. The Lead's card shows its groups; its wave shape is a menu of four names,
 // and picking sine writes `shape: "sine"`, one undo step, and the sound changes while it plays: the
 // scope's frames lose the saw's sharp edge (their slope's energy falls). Its
-// envelope's attack corner, dragged right, writes a longer attack. The kick plays One drum: its
-// menu lists the nine drums, and picking the snare writes `drum: "snare"`, one undo step, ⌘Z taking
-// it back byte for byte. Each card linted.
+// envelope's attack corner, dragged right, writes a longer attack; its filter's peak, dragged up, a
+// higher resonance in hundredths, and its words say resonance. The kick plays One drum: its menu (a
+// control) lists the nine drums, and picking the snare writes `drum: "snare"`, one undo step named
+// by its label ("One drum sound"), ⌘Z taking it back byte for byte. Each card linted.
 //
 //   node e2e/dressed.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -56,7 +57,7 @@ await view("graph");
 const card = '[data-module="lead"] [data-node="synth.lead"]';
 check(await until(async () => !!(await page.$(`${card} [data-group]`)), 15000), "the Lead's card shows its groups");
 const groups = await page.$$eval(`${card} [data-group]`, (els) => els.map((e) => e.textContent));
-check(JSON.stringify(groups.slice(0, 3)) === '["Sound","Filter","Amp"]', `Sound, Filter and Amp first (CARD-31): ${JSON.stringify(groups)}`);
+check(JSON.stringify(groups.slice(0, 3)) === '["Sound","Filter","Loudness"]', `Sound, Filter and Loudness first (CARD-31): ${JSON.stringify(groups)}`);
 await linted(card, "the Lead's card");
 
 // ---------------------------------------------------------------- the wave shape (CARD-32)
@@ -140,6 +141,26 @@ check(await stepIs("Lead attack"), `one undo step: ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes it back");
+// ---------------------------------------------------------------- the filter's resonance (CARD-30)
+
+// The Lead's filter view draws its resonance (0 to 1) as the q it stands for; its peak dragged up
+// writes a higher resonance, in hundredths, inside 0 to 1, and its words say resonance.
+const peakSel = `${card} [data-view="filter"] [data-handle="peak"]`;
+const peakAt = await seen(peakSel);
+const said = await page.$eval(peakSel, (e) => e.querySelector("title")?.textContent ?? "");
+check(!!peakAt && said.includes("resonance") && !said.includes("· q "), `the Lead's filter view names its resonance: ${said.split("\n")[0]}`);
+const resonanceBefore = await page.$eval(`${card} [data-knob="resonance"]`, (e) => Number(e.dataset.value));
+await page.mouse.move(peakAt.x + peakAt.width / 2, peakAt.y + peakAt.height / 2);
+await page.mouse.down();
+await page.mouse.move(peakAt.x + peakAt.width / 2, peakAt.y + peakAt.height / 2 - 25, { steps: 10 });
+await sleep(200);
+await page.mouse.up();
+check(await until(() => /resonance: [0-9.]+/.test(read("tracks/lead.ts"))), `dragging the peak up writes the resonance: ${read("tracks/lead.ts").match(/synth\.lead\([^\n]*/)?.[0]}`);
+const res = read("tracks/lead.ts").match(/resonance: ([0-9.]+)/)?.[1] ?? "";
+check(Number(res) > resonanceBefore && Number(res) <= 1 && /^\d(\.\d{1,2})?$/.test(res), `higher, in hundredths, inside 0 to 1: ${resonanceBefore} → ${res}`);
+await page.mouse.click(10, 10);
+await key("Meta+z");
+check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes it back");
 await page.screenshot({ path: `${ROOT}/dressed-lead.png` });
 
 // ---------------------------------------------------------------- One drum's menu (CARD-33)
@@ -147,10 +168,10 @@ await page.screenshot({ path: `${ROOT}/dressed-lead.png` });
 await page.click('[data-module-tab="kick"] [data-testid=track-label]');
 await view("graph");
 const drum = '[data-module="kick"] [data-node="drums.drum"]';
-check(await until(async () => !!(await page.$(`${drum} [data-setting="drum"]`)), 15000), "the kick's One drum shows its drum menu");
+check(await until(async () => !!(await page.$(`${drum} [data-knob="sound"]`)), 15000), "the kick's One drum shows its drum menu");
 check(JSON.stringify(await page.$$eval(`${drum} [data-group]`, (els) => els.map((e) => e.textContent))) === '["Drum","More"]', "under its Drum group");
 const kick = read("tracks/kick.ts");
-const menu = `${drum} [data-setting="drum"]`;
+const menu = `${drum} [data-knob="sound"]`;
 await seen(menu);
 check((await page.$eval(menu, (e) => e.dataset.value)) === '"kick"', "at kick, its default");
 await page.click(`${menu} [data-testid=setting-menu]`);
@@ -162,9 +183,9 @@ n = posts.length;
 await page.click('[data-testid=setting-options] [data-option="snare"]');
 check(await until(() => read("tracks/kick.ts") === kick.replace('drums.drum(lane.notes("hits"))', 'drums.drum(lane.notes("hits"), { drum: "snare" })')), `picking the snare writes it: ${read("tracks/kick.ts").match(/drums\.drum\([^\n]*/)?.[0]}`);
 check(posts.slice(n).filter((p) => p.url === "/api/graph/set").length === 1, "one write");
-check(await stepIs("One drum drum"), `one undo step: ${await undoTitle()}`);
+check(await stepIs("One drum sound"), `one undo step, named by its label: ${await undoTitle()}`);
 check(await until(async () => (await page.$eval(menu, (e) => e.dataset.value).catch(() => null)) === '"snare"'), "the menu shows the snare");
-for (const k of ["tune", "decay", "punch"]) check(!!(await page.$(`${drum} [data-knob="${k}"]`)), `its ${k} knob stays`);
+for (const k of ["tune", "decay ×", "punch ±"]) check(!!(await page.$(`${drum} [data-knob="${k}"]`)), `its ${k} knob stays`);
 await linted(drum, "One drum's card");
 await page.screenshot({ path: `${ROOT}/dressed-drum.png` });
 await page.mouse.click(10, 10);

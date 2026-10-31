@@ -3,8 +3,9 @@
 //
 // - Envelope: the attack, decay, sustain and release as a shape. Its corners move them: the peak the
 //   attack, the decay's corner the decay and the sustain, the end the release.
-// - Filter: a 12 dB per octave resonant low-pass curve from cutoff and q, a picture of a low-pass,
-//   not a measurement of the sound. Its peak moves cutoff (across, on a log scale) and q (up).
+// - Filter: a resonant low-pass curve from cutoff and q, a picture of a low-pass, not a measurement
+//   of the sound: drawn at 12 dB per octave whatever the filter's own slope (a view doesn't say it),
+//   so its words name no slope. Its peak moves cutoff (across, on a log scale) and q (up).
 // - Keys: which recording plays on which keys and how hard; a click plays the key, as hard as high.
 // - Scope: the call's sound as it plays, asked of the server only while it shows (TAP-8).
 //
@@ -389,7 +390,7 @@ function FilterView({ view, ...p }: ViewProps & { view: Extract<CardView, { kind
   return (
     <Picture
       caption="Cuts the highs · a drawing"
-      title={`A drawing of a filter that cuts the highs above the cutoff (${hz}), each octave up 12 dB quieter, with a bump at the cutoff that the ${qName} (${value}) makes taller. Worked out from the two knobs: not measured from the sound.\nDrag the bump: across for the cutoff, up for the ${qName}${fixed.map((d) => `\n${d.why}`).join("")}`}
+      title={`A drawing of a filter that cuts the highs above the cutoff (${hz}), with a bump at the cutoff that the ${qName} (${value}) makes taller. Worked out from the two knobs: not measured from the sound.\nDrag the bump: across for the cutoff, up for the ${qName}${fixed.map((d) => `\n${d.why}`).join("")}`}
     >
       <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="w-full h-full overflow-visible" data-filter>
         <line x1={0} x2={W} y1={yOf(0)} y2={yOf(0)} stroke="var(--color-line)" />

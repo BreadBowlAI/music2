@@ -217,7 +217,14 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     let app = app(packages);
     for r in &packs {
         let Some(p) = view.get(r.name.as_str()) else { continue };
-        app.meets(&p.needs).map_err(|why| broken(r.name.as_str(), format!("it {why}")))?;
+        app.meets(&p.needs).map_err(|why| {
+            // One of music2's own that it no longer comes with is moved on first (review Y5).
+            let asked = project.manifest.dependencies.get(r.name.as_str()).and_then(|d| d.requirement());
+            match asked.and_then(|req| m2_song::pack::move_on(&r.name, req)) {
+                Some(first) => broken(&format!("{first}. {}", r.name), format!("it {why}")),
+                None => broken(r.name.as_str(), format!("it {why}")),
+            }
+        })?;
     }
     let code = project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect();
     let mut opts = m2_script::Options::new(code, &project.manifest.project.entry);

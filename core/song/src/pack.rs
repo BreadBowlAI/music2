@@ -711,10 +711,15 @@ fn runnable(store: &Store, name: &PackName, req: &Requirement, app: &App) -> Res
 fn highest(store: &Store, name: &PackName, req: &Requirement, app: &App) -> Result<Resolved, Diagnostic> {
     let unsatisfied = |words: String| Diagnostic::error("pkg.unsatisfied", words).file(MANIFEST);
     let v = runnable(store, name, req, app).map_err(|why| {
-        unsatisfied(format!(
-            "{MANIFEST} asks for {name} \"{req}\", but the versions installed that it admits need a newer music2: {why}. Update \
-             music2, or install a version made for this one with `m2 pack install <folder>`"
-        ))
+        unsatisfied(match move_on(name, req) {
+            Some(first) => {
+                format!("{first}. {MANIFEST} asks for {name} \"{req}\", and the versions installed that it admits can't run here: {why}")
+            }
+            None => format!(
+                "{MANIFEST} asks for {name} \"{req}\", but the versions installed that it admits need a newer music2: {why}. Update \
+                 music2, or install a version made for this one with `m2 pack install <folder>`"
+            ),
+        })
     })?;
     // A newer admitted version being installed again is never passed over for an older one.
     if let Some((w, _)) = store.aside(name).into_iter().rev().find(|(w, _)| req.matches(*w) && v.is_none_or(|v| *w > v)) {
@@ -726,9 +731,10 @@ fn highest(store: &Store, name: &PackName, req: &Requirement, app: &App) -> Resu
             true => "none is installed".to_string(),
             false => format!("installed: {}", installed.iter().map(Version::to_string).collect::<Vec<_>>().join(", ")),
         };
-        return Err(unsatisfied(format!(
-            "{MANIFEST} asks for {name} \"{req}\", but {have}. Install it from its folder with `m2 pack install <folder>`"
-        )));
+        return Err(unsatisfied(match move_on(name, req) {
+            Some(first) => format!("{first}. {MANIFEST} asks for {name} \"{req}\", but {have}"),
+            None => format!("{MANIFEST} asks for {name} \"{req}\", but {have}. Install it from its folder with `m2 pack install <folder>`"),
+        }));
     };
     whole(store, name, v)
 }
@@ -768,8 +774,14 @@ fn resolve_one(
             Some(v) => format!(", or run `m2 pack lock <song>` to use {v}, which is installed (the song may sound different)"),
             None => String::new(),
         };
-        // One of music2's own comes back when music2 starts, if this music2 comes with it (PACK-16).
-        let fix = match own(name, &l.version, &l.hash) {
+        // One of music2's own comes back when music2 starts, if this music2 comes with it (PACK-16);
+        // one it no longer comes with is moved on, first (review Y5).
+        if let Some(first) = move_on(name, req) {
+            return Err(
+                Diagnostic::error("pkg.missing", format!("{first}. This song uses {name} {}, which isn't installed", l.version)).file(LOCK)
+            );
+        }
+        let fix = match comes_with(name) == Some(l.version) && own(name, &l.version, &l.hash) {
             true => "It comes with music2: start music2 again to put back the packs it comes with",
             false => "Install it from its folder with `m2 pack install <folder>`",
         };
@@ -871,7 +883,7 @@ pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, app: &App
 
 mod bundled;
 mod install;
-pub use bundled::{bundled, install_bundled, own, recorded};
+pub use bundled::{bundled, comes_with, install_bundled, move_on, own, recorded};
 #[cfg(any(test, feature = "testing"))]
 pub use bundled::{source_packs, test_home, test_packs, test_store};
 pub use install::{Install, read_only_inside, remove_tree, set_read_only};

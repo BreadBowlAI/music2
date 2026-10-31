@@ -1453,9 +1453,10 @@ fn song_code_cannot_call_an_offline_kernel() {
 
 // PACK-21: a kernel that left std for a pack music2 ships is no longer std's, and whatever calls it
 // by its old id is told, at the call, in `pkg.missing`'s words, what to do first, in the words the
-// user wrote (the review's X8): a song locked to an older version of the pack it went to (its
-// `bitcrush`) moves the song on; another pack's sound waits for its author; the song's own code
-// plays the pack's effect instead. Each then names the new id.
+// user wrote (the review's X8): another pack's sound waits for its author; the song's own code
+// plays the pack's effect instead, with the line a song writes for that pack today (review Y4).
+// Each then names the new id. (An older version of the pack the kernel went to asks for an older
+// @m2/core, so it never gets this far: PACK-22.)
 #[test]
 fn a_kernel_that_left_std_says_where_it_went() {
     let pk = std_packages();
@@ -1474,12 +1475,6 @@ fn a_kernel_that_left_std_says_where_it_went() {
         e[0].message.clone()
     };
     assert_eq!(
-        said(Some("@m2/effects:bitcrush")),
-        "Move this song to @m2/effects 1.1 or later: run `m2 pack update <song> @m2/effects`. Its `bitcrush` is from an older \
-         @m2/effects, which needs a kernel std 0.8 no longer has; @m2/effects 1.1 has its own, and sounds the same. \
-         (`std:bitcrush` is now `@m2/effects:bitcrush`.)"
-    );
-    assert_eq!(
         said(Some("@alice/crunchy:crunch")),
         "`crunch`, from @alice/crunchy, calls a kernel std 0.8 no longer has, so it can't play: its author must move it to \
          `@m2/effects:bitcrush`. Until then, play `bitcrush` from \"@m2/effects\" in its place. (`std:bitcrush` is now \
@@ -1487,7 +1482,7 @@ fn a_kernel_that_left_std_says_where_it_went() {
     );
     assert_eq!(
         said(None),
-        "Play `bitcrush` from \"@m2/effects\" instead: import it from \"@m2/effects\", and add \"@m2/effects\" = \"1.1\" under \
+        "Play `bitcrush` from \"@m2/effects\" instead: import it from \"@m2/effects\", and add \"@m2/effects\" = \"1\" under \
          [dependencies] in music2.toml. This song's code calls a kernel std 0.8 no longer has; it sounds the same. \
          (`std:bitcrush` is now `@m2/effects:bitcrush`.)"
     );
@@ -1528,6 +1523,18 @@ fn the_engines_left_std_for_their_packs() {
                 && m.ends_with(&format!("(`{from}` is now `{to}`.)")),
             "{from}: {m}"
         );
+    }
+}
+
+// PACK-21 (review Y4): the line a moved kernel's message tells a song to write for its pack is the
+// one that admits the version music2 bundles: its major alone (`"@m2/synths" = "2"`), never a
+// version an older @m2/core made, which this app can't run.
+#[test]
+fn moved_kernels_name_the_line_a_song_writes_today() {
+    for m in m2_ir::MOVED_KERNELS {
+        let pack = m.to.split_once(':').unwrap().0;
+        let bundled = m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join(pack)).unwrap().package.version;
+        assert_eq!(m.line, m2_song::Requirement::admitting(bundled).to_string(), "{}: music2 bundles {pack} {bundled}", m.from);
     }
 }
 

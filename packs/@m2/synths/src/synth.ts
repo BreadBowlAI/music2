@@ -19,7 +19,8 @@
 // Each sound's card is put in order by its groups (CARD-17): what it sounds like first, then its
 // filter and its loudness over time, each with a picture to drag (CARD-16): the filter's curve over
 // its cutoff and resonance, the envelope over its attack, decay, sustain and release. `shape` (a
-// menu) says what the stack's main wave is: a saw (as it always was), a square, a triangle or a sine.
+// menu) says what the stack plays: its saws and pulses (the sound as it was made), or a square, a
+// triangle or a sine alone, as loud (CARD-32).
 
 import { component, control, kernel, poly, port, setting, signature, time, view, type Audio, type Events, type Params, type Value } from "@m2/core";
 import { mono, type Voice } from "std/dsp";
@@ -60,8 +61,8 @@ export const synth = {
       controls: {
         // Oscillators: the stack's wave and how much of it, pulse (and its width), sub sine and noise.
         shape: SHAPE,
-        saw: control.frac(1).range(0, 1).label("wave"),
-        square: control.frac(0).range(0, 1),
+        saw: control.frac(1).range(0, 1).label("saw level"),
+        square: control.frac(0).range(0, 1).label("pulse level"),
         width: control.frac(0.5).range(0.05, 0.95).label("pulse width"),
         sub: control.frac(0).range(0, 1),
         noise: control.frac(0).range(0, 1),
@@ -104,7 +105,7 @@ export const synth = {
         groups: {
           Oscillators: ["shape", "saw", "square", "width", "sub", "subOctave", "noise", "unison", "detune", "spread"],
           Filter: ["filter", "cutoff", "resonance", "keytrack", "filterEnv", "filterAttack", "filterDecay", "filterSustain", "drive"],
-          Amp: ["amp", "attack", "decay", "sustain", "release", "velSens", "level"],
+          Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens", "level"],
           Pitch: ["vibrato", "drop", "dropTime", "glide"],
         },
       },
@@ -169,7 +170,7 @@ export const synth = {
         category: "Instruments",
         description: "Seven detuned saws, bright and wide: big chords and hooks",
         views: { amp: AMP, filter: FILTER },
-        groups: { Sound: ["shape", "detune", "spread"], Filter: ["filter", "cutoff", "resonance"], Amp: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        groups: { Sound: ["shape", "detune", "spread"], Filter: ["filter", "cutoff", "resonance"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, detune, spread, cutoff, resonance, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -222,7 +223,7 @@ export const synth = {
         category: "Instruments",
         description: "A singing mono lead that slides between overlapping notes",
         views: { amp: AMP, filter: FILTER },
-        groups: { Sound: ["shape", "glide", "vibrato", "drive"], Filter: ["filter", "cutoff", "resonance"], Amp: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        groups: { Sound: ["shape", "glide", "vibrato", "drive"], Filter: ["filter", "cutoff", "resonance"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, cutoff, resonance, glide, vibrato, drive, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -277,7 +278,7 @@ export const synth = {
         category: "Instruments",
         description: "A big, slow, wide pad that swells open",
         views: { amp: AMP, filter: FILTER },
-        groups: { Sound: ["shape", "spread"], Filter: ["filter", "cutoff", "resonance"], Amp: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        groups: { Sound: ["shape", "spread"], Filter: ["filter", "cutoff", "resonance"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, cutoff, resonance, attack, decay, sustain, release, spread, velSens, voices }: Params): Audio =>
@@ -333,7 +334,7 @@ export const synth = {
         description: "A bright, wide pluck for arps: a filter that snaps shut",
         // No filter picture: the brightness is where the filter starts, not a cutoff that holds.
         views: { amp: AMP },
-        groups: { Sound: ["shape", "brightness", "spread"], Amp: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        groups: { Sound: ["shape", "brightness", "spread"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, brightness, spread, attack, decay, sustain, release, velSens, voices }: Params): Audio => {
@@ -389,7 +390,7 @@ export const synth = {
         description: "An 808 bass: a deep sine with a punchy drop that rings out, sliding between notes",
         // A sine with no filter: no wave to pick, and no filter to draw.
         views: { amp: AMP },
-        groups: { Sound: ["drop", "drive", "glide"], Amp: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        groups: { Sound: ["drop", "drive", "glide"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { drop, drive, glide, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -445,7 +446,7 @@ export const synth = {
         groups: {
           Sound: ["shape", "glide"],
           Filter: ["filter", "cutoff", "resonance", "bite", "biteDecay"],
-          Amp: ["amp", "attack", "decay", "sustain", "release", "velSens"],
+          Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"],
         },
       },
     },
@@ -500,7 +501,7 @@ export const synth = {
         category: "Instruments",
         description: "A string machine: soft saws through a lush ensemble chorus",
         views: { amp: AMP, filter: FILTER },
-        groups: { Sound: ["shape", "ensemble"], Filter: ["filter", "cutoff", "resonance"], Amp: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        groups: { Sound: ["shape", "ensemble"], Filter: ["filter", "cutoff", "resonance"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, ensemble, cutoff, resonance, attack, decay, sustain, release, velSens, voices }: Params): Audio => {

@@ -1,6 +1,6 @@
 [package]
 name = "@m2/synths"
-version = "2.1.0"
+version = "2.0.0"
 license = "MIT OR Apache-2.0"
 description = "music2's synths: a polysynth's leads, pads, plucks and basses, an FM synth's keys and bells, and three simple instruments to read and copy"
 authors = ["music2"]

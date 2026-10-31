@@ -587,9 +587,12 @@ fn music2s_own_sounds_show_their_groups_and_views() {
             assert_eq!(shape.kind, crate::kind::Kind::Choice, "{id}'s shape is a menu");
         }
     }
-    // The Drum's menu: its drums, a setting (it decides which hits cut each other off).
+    // One drum's menu (review Y11): its drums, a control, so a pick plays with no rebuild and can be
+    // automated, labelled "sound" so its undo step reads "One drum sound"; its voices the one setting.
     let drum = view.modules.iter().find(|m| m.key == "t13").unwrap().nodes.iter().find(|n| n.title.as_deref() == Some("One drum")).unwrap();
-    let menu = drum.settings.iter().find(|x| x.slot == "drum").expect("the Drum's menu");
+    let menu = drum.knobs.iter().find(|k| k.slot.as_deref() == Some("drum")).expect("One drum's menu");
+    assert_eq!((menu.kind, menu.label.as_str()), (crate::kind::Kind::Choice, "sound"));
     let names: Vec<String> = menu.options.iter().map(|o| o.value.as_str().unwrap().to_string()).collect();
     assert_eq!(names, ["kick", "snare", "clap", "hats", "tom", "rim", "cowbell", "cymbal", "shaker"]);
+    assert_eq!(drum.settings.iter().map(|x| x.slot.as_str()).collect::<Vec<_>>(), ["voices"]);
 }

@@ -1177,7 +1177,7 @@ pub fn import(i: &Import) -> Result<Imported, String> {
         i.name,
         quote(&license),
         quote(&format!("{label}, from an SFZ instrument")),
-        m2_script::sdk_requirement(),
+        crate::packs::sdk_line(),
     );
     let mut readme = format!(
         "# {label}\n\n**In short:** a music2 pack made by `m2 pack import-sfz` from `{}`: one instrument, `{}:{id}`, \

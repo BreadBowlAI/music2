@@ -1,6 +1,8 @@
 //! `drum`, the voice behind @m2/drums: an 808/909-style machine in one kernel that picks
 //! its drum when the note starts, either from the note's General MIDI pitch or from a
-//! fixed `model` (`m2_dsp::kit`). Port order must match the pack's `m2pkg.toml`.
+//! fixed `model` (`m2_dsp::kit`). `one`, One drum's, is the same voice with its drum a menu
+//! (a choice, read when a hit starts) where the kit has `model`, cut by any hit on its lane when
+//! its drum chokes. Port order must match the pack's `m2pkg.toml`.
 //!
 //! Every drum is a one-shot: it reads its settings on its first sample, starts from exactly
 //! 0, and ends in exact silence at -90 dB. A hit in its choke group (from `drumhit`) fades
@@ -214,6 +216,12 @@ pub struct Drum {
     choke_len: f32,
     done: bool,
     dc_pole: f32,
+    /// One drum's (`one`): every hit on its lane is of its drum, so any hit chokes a drum that chokes.
+    one: bool,
+    /// How much harder (or softer) the hit's first `boost_len` samples are: One drum's `punch` on a
+    /// drum other than the kick and the snare. 0, as the kit leaves it: no bit changes.
+    boost: f32,
+    boost_len: u32,
 }
 
 impl Drum {
@@ -221,10 +229,10 @@ impl Drum {
         let sr = self.sr;
         let (kind, semis, alt) = kind_of(at(MODEL), at(PITCH));
         self.kind = kind;
-        // The Drum's knobs: its pitch moved by `tune` semitones, its decays `decay` times as long
-        // (the rim's and the cowbell's ring is their tone, so theirs stays), and `push` added to a
-        // kick's punch or a snare's snap. At 0, 1 and 0 (the kit's) each is left out, so no bit
-        // changes.
+        // One drum's knobs: its pitch moved by `tune` semitones, its decays `decay` times as long
+        // (the rim's ring and the cowbell's too), and `push` added to a kick's punch or a snare's
+        // snap, or on any other drum, how much harder its first 15 ms are. At 0, 1 and 0 (the
+        // kit's) each is left out, so no bit changes.
         let shift = if at(TUNE).is_finite() { clampf(at(TUNE), -48.0, 48.0) } else { 0.0 };
         let semis = if shift != 0.0 { semis + shift } else { semis };
         let ratio = if shift != 0.0 { (shift / 12.0).exp2() } else { 1.0 };
@@ -250,6 +258,8 @@ impl Drum {
         let time = |p: usize, lo: f32, hi: f32| longer(clampf(at(p), lo, hi));
         self.rise = ms(0.3);
         self.choke_len = CHOKE;
+        let (boost, boost_len) = if push != 0.0 && !matches!(kind, Kind::Kick | Kind::Snare) { (push, ms(15.0)) } else { (0.0, 1) };
+        (self.boost, self.boost_len) = (boost, boost_len);
         self.sound = match kind {
             Kind::Silent => Sound::Silent,
             Kind::Kick => {
@@ -372,12 +382,16 @@ impl Drum {
             }
             Kind::Rim | Kind::Claves => {
                 let (res, mix, life, level) = if kind == Kind::Rim {
-                    // A click into resonators, whose ring is their tone: `decay` leaves it as it is.
+                    // A click into resonators: `decay` lets them ring longer, and so narrower; a
+                    // resonator's ring from a click is as loud as its band is wide, so the level
+                    // follows the length, and the hit is as loud.
                     let f = moved(clampf(at(RIM_TONE), 300.0, 8_000.0), 300.0, 8_000.0);
-                    ([resonator(sr, f, 0.025), resonator(sr, 0.27 * f, 0.025)], [1.0, 0.6], 0.025, RIM_GAIN)
+                    let ring = longer(0.025);
+                    ([resonator(sr, f, ring), resonator(sr, 0.27 * f, ring)], [1.0, 0.6], ring, longer(RIM_GAIN))
                 } else {
                     let f = moved(2_500.0, 300.0, 8_000.0);
-                    ([resonator(sr, f, 0.06), resonator(sr, f, 0.06)], [1.0, 0.0], 0.06, CLAVES_GAIN)
+                    let ring = longer(0.06);
+                    ([resonator(sr, f, ring), resonator(sr, f, ring)], [1.0, 0.0], ring, longer(CLAVES_GAIN))
                 };
                 self.gain *= level;
                 Sound::Rim { res, mix, pulse: ms(0.25), hp: Svf::highpass(sr, 300.0, 0.7), life: Decay::new(life, sr) }
@@ -390,7 +404,7 @@ impl Drum {
                     dt: [f / sr, 1.48 * f / sr],
                     bus: Steps::default(),
                     bp: Svf::bandpass(sr, 1.6 * f, 0.8),
-                    envs: [Decay::from(0.7, 0.083, sr), Decay::from(0.3, 0.6, sr)],
+                    envs: [Decay::from(0.7, longer(0.083), sr), Decay::from(0.3, longer(0.6), sr)],
                 }
             }
             Kind::Shaker | Kind::Tambourine => {
@@ -557,6 +571,9 @@ impl Kernel for Drum {
             choke_len: CHOKE,
             done: false,
             dc_pole: DcBlock::pole(sample_rate.max(1.0)),
+            one: false,
+            boost: 0.0,
+            boost_len: 1,
         }
     }
 
@@ -565,7 +582,10 @@ impl Kernel for Drum {
         for i in 0..out.len() {
             if self.t == 0 {
                 self.start(&|p: usize| ins[p][i]);
-            } else if !self.done && self.fade_step == 0.0 && choked(self.kind, ins[HITS][i]) {
+            } else if !self.done
+                && self.fade_step == 0.0
+                && if self.one { any_hit(self.kind, ins[HITS][i]) } else { choked(self.kind, ins[HITS][i]) }
+            {
                 self.fade_step = 1.0 / (self.choke_len * self.sr);
             }
             out[i] = 0.0;
@@ -575,6 +595,9 @@ impl Kernel for Drum {
                     Some(mut y) => {
                         if self.t < self.rise {
                             y *= self.t as f32 / self.rise as f32;
+                        }
+                        if self.boost != 0.0 && self.t < self.boost_len {
+                            y *= 1.0 + self.boost * (1.0 - self.t as f32 / self.boost_len as f32);
                         }
                         if let Some((d, clip)) = &mut self.drive {
                             y = clip.tick(y * d.into) * d.out;
@@ -608,7 +631,36 @@ fn choked(kind: Kind, h: f32) -> bool {
     (1.0..16_777_216.0).contains(&h) && h == h.floor() && (h as u32 >> (4 * g)) & 15 != 0
 }
 
+/// Whether `hits` holds a hit (drumhit's field for every hit, whatever its group) and `kind` chokes:
+/// One drum's lane plays only its drum, so its next hit cuts it, as its single's did.
+fn any_hit(kind: Kind, h: f32) -> bool {
+    kind.group().is_some() && (1.0..16_777_216.0).contains(&h) && h == h.floor() && (h as u32 / m2_dsp::kit::HIT_FIELD) & 15 != 0
+}
+
 export!(drum, Drum);
+
+/// One drum's voice, `@m2/drums:one`: [`Drum`] with its drum a menu (its port 4, `drum`, a choice
+/// whose places are the models 0 to 8), cut by any hit on its lane when its drum chokes.
+pub struct One(Drum);
+
+impl Kernel for One {
+    const INPUTS: usize = INPUTS;
+    const OUTPUTS: usize = 1;
+
+    fn new(cfg: &Cfg) -> Self {
+        One(Drum { one: true, ..Drum::new(cfg) })
+    }
+
+    fn process(&mut self, io: &mut Io) {
+        self.0.process(io)
+    }
+
+    fn active(&self) -> bool {
+        self.0.active()
+    }
+}
+
+export!(one, One);
 
 #[cfg(test)]
 mod tests;

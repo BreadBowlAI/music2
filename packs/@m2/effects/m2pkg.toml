@@ -1,6 +1,6 @@
 [package]
 name = "@m2/effects"
-version = "1.4.0"
+version = "1.2.0"
 license = "MIT OR Apache-2.0"
 description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen"
 authors = ["music2"]

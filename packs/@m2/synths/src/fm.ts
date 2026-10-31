@@ -79,7 +79,7 @@ export const fm = {
           "Pair A": ["carrierA", "modulatorA", "amountA", "brightDecayA", "feedback"],
           "Pair B": ["carrierB", "modulatorB", "amountB", "brightDecayB", "mixB", "detune"],
           Tone: ["tone", "drop", "dropTime"],
-          Amp: ["amp", "attack", "decay", "sustain", "release", "velSens", "level"],
+          Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens", "level"],
         },
       },
     },
@@ -134,7 +134,7 @@ export const fm = {
         category: "Instruments",
         description: "An electric piano: a warm body and a tine that barks when played hard",
         views: { amp: AMP },
-        groups: { Sound: ["tone", "tine"], Amp: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        groups: { Sound: ["tone", "tine"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { tone, tine, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -180,7 +180,7 @@ export const fm = {
         category: "Instruments",
         description: "A glassy bell: bright, shimmering and long",
         views: { amp: AMP },
-        groups: { Sound: ["tone"], Amp: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        groups: { Sound: ["tone"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { tone, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -229,7 +229,7 @@ export const fm = {
       editor: {
         category: "Drums",
         description: "Metallic FM percussion: a clangy, inharmonic hit with a zap",
-        groups: { Sound: ["tone", "feedback", "drop"], Amp: ["decay", "velSens"] },
+        groups: { Sound: ["tone", "feedback", "drop"], Loudness: ["decay", "velSens"] },
       },
     },
     (notes: Events, { tone, decay, feedback, drop, velSens, voices }: Params): Audio =>

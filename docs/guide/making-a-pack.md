@@ -60,7 +60,7 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 | You see | It means |
 |---|---|
 | Your pack, made for `@m2/core` 2, in a newer music2 that has 2.5 | It runs as it did. |
-| `@a/x 1.3.0 is made for @m2/core 1, and this app has @m2/core 2.0.0 …` | The pack was made before the promise. Get a version made for 2, or ask its author for one. |
+| `@a/x, which this song uses, can't be used: it is made for @m2/core 1, and this app has @m2/core 2.0.0 …` (`m2 pack check`: `@a/x 1.3.0 is made for …`) | The pack was made before the promise. Get a version made for 2, or ask its author for one. |
 | `… is made for @m2/core 3, newer than this app's 2.0.0` | Update music2. |
 
 Songs get no such promise before music2 1.0: a new music2 may ask a song to change (it says how). Packs get this one, because other people's songs play them.
@@ -160,7 +160,7 @@ export const wobble = component(
     editor: {
       category: "Bass",
       views: { amp: view.envelope("attack", "decay", "sustain", "release"), filter: view.filter("cutoff", "q") },
-      groups: { Sound: ["shape", "sub"], Filter: ["filter", "cutoff", "q"], Amp: ["amp"] },
+      groups: { Sound: ["shape", "sub"], Filter: ["filter", "cutoff", "q"], Loudness: ["amp"] },
     },
   },
   // A voice of the pack's own kernel, whose port is "shape: control<choice<saw|square|sine>> = 0".

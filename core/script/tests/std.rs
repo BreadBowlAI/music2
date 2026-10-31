@@ -157,7 +157,8 @@ fn std_is_declared_with_descriptors() {
 
 // Polish A4: the drum kit names the notes it plays, for the piano roll's rows: the General MIDI
 // notes the `@m2/drums:drum` kernel maps (m2_dsp::gm; packs/@m2/drums/kernels-src/src/drum/tests.rs,
-// KIT). No other instrument names its notes (the Drum plays any one drum on every note).
+// KIT). No other instrument names its notes: One drum's names would have to follow its menu
+// (gaps.md, review Y14).
 #[test]
 fn the_drum_kit_names_its_notes() {
     let catalog = describe(&packages());

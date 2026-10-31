@@ -363,8 +363,9 @@ pub struct Moved {
     pub to: &'static str,
     /// The std that no longer has it: `0.8`.
     pub std: &'static str,
-    /// The pack's first version with it: `1.1`.
-    pub since: &'static str,
+    /// The line a song writes for the pack today, `"@m2/effects" = "1"`: the major of the version
+    /// music2 bundles (`moved_kernels_name_the_line_a_song_writes_today` holds it to that).
+    pub line: &'static str,
     /// The pack's component that plays it: `bitcrush`.
     pub component: &'static str,
 }
@@ -372,15 +373,15 @@ pub struct Moved {
 /// Every kernel that left std for a pack music2 ships (PACK-21): the one table, so a song (or an
 /// older pack's code) that calls one by its old id is told where it went.
 pub const MOVED_KERNELS: &[Moved] = &[
-    Moved { from: "std:bitcrush", to: "@m2/effects:bitcrush", std: "0.8", since: "1.1", component: "bitcrush" },
-    Moved { from: "std:synth", to: "@m2/synths:synth", std: "0.9", since: "1.1", component: "synth.custom" },
-    Moved { from: "std:fm", to: "@m2/synths:fm", std: "0.9", since: "1.1", component: "fm.custom" },
-    Moved { from: "std:drum", to: "@m2/drums:drum", std: "0.9", since: "1.1", component: "drums.kit" },
-    Moved { from: "std:delay", to: "@m2/effects:delay", std: "0.9", since: "1.2", component: "delay" },
-    Moved { from: "std:reverb", to: "@m2/effects:reverb", std: "0.9", since: "1.2", component: "reverb" },
-    Moved { from: "std:phaser", to: "@m2/effects:phaser", std: "0.9", since: "1.2", component: "phaser" },
-    Moved { from: "std:tremolo", to: "@m2/effects:tremolo", std: "0.9", since: "1.2", component: "tremolo" },
-    Moved { from: "std:widen", to: "@m2/effects:widen", std: "0.9", since: "1.2", component: "widen" },
+    Moved { from: "std:bitcrush", to: "@m2/effects:bitcrush", std: "0.8", line: "1", component: "bitcrush" },
+    Moved { from: "std:synth", to: "@m2/synths:synth", std: "0.9", line: "2", component: "synth.custom" },
+    Moved { from: "std:fm", to: "@m2/synths:fm", std: "0.9", line: "2", component: "fm.custom" },
+    Moved { from: "std:drum", to: "@m2/drums:drum", std: "0.9", line: "2", component: "drums.kit" },
+    Moved { from: "std:delay", to: "@m2/effects:delay", std: "0.9", line: "1", component: "delay" },
+    Moved { from: "std:reverb", to: "@m2/effects:reverb", std: "0.9", line: "1", component: "reverb" },
+    Moved { from: "std:phaser", to: "@m2/effects:phaser", std: "0.9", line: "1", component: "phaser" },
+    Moved { from: "std:tremolo", to: "@m2/effects:tremolo", std: "0.9", line: "1", component: "tremolo" },
+    Moved { from: "std:widen", to: "@m2/effects:widen", std: "0.9", line: "1", component: "widen" },
 ];
 
 /// Why kernel `id` isn't there, when it left std for a pack ([`MOVED_KERNELS`]): what to do first,
@@ -388,16 +389,14 @@ pub const MOVED_KERNELS: &[Moved] = &[
 /// code made it, or in the song's own code), then where the kernel is now. The app shows a
 /// message on one line, cut at the window's edge, so the fix comes first.
 fn moved_from_std(id: &str, component: Option<&str>) -> Option<String> {
-    let Moved { from, to, std, since, component: sound } = MOVED_KERNELS.iter().find(|m| m.from == id)?;
+    let Moved { from, to, std, line, component: sound } = MOVED_KERNELS.iter().find(|m| m.from == id)?;
     let pack = to.split_once(':')?.0;
     let now = format!("(`{from}` is now `{to}`.)");
     let (by, name) = component.and_then(|c| c.split_once(':')).filter(|(p, _)| *p != "std").unzip();
+    // An older version of the pack the kernel went to asks for an older @m2/core, so it is refused
+    // before any kernel is looked up (PACK-22): only another pack's sound, or the song's own code,
+    // gets here.
     Some(match (by, name) {
-        // An older version of the pack the kernel went to.
-        (Some(by), Some(name)) if by == pack => format!(
-            "Move this song to {pack} {since} or later: run `m2 pack update <song> {pack}`. Its `{name}` is from an older {pack}, \
-             which needs a kernel std {std} no longer has; {pack} {since} has its own, and sounds the same. {now}"
-        ),
         // Another pack's sound: its author must move it.
         (Some(by), Some(name)) => format!(
             "`{name}`, from {by}, calls a kernel std {std} no longer has, so it can't play: its author must move it to `{to}`. \
@@ -405,7 +404,7 @@ fn moved_from_std(id: &str, component: Option<&str>) -> Option<String> {
         ),
         // The song's own code.
         _ => format!(
-            "Play `{sound}` from \"{pack}\" instead: import it from \"{pack}\", and add \"{pack}\" = \"{since}\" under [dependencies] \
+            "Play `{sound}` from \"{pack}\" instead: import it from \"{pack}\", and add \"{pack}\" = \"{line}\" under [dependencies] \
              in music2.toml. This song's code calls a kernel std {std} no longer has; it sounds the same. {now}"
         ),
     })

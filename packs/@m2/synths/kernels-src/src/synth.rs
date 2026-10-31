@@ -1,8 +1,8 @@
 //! `synth`, the polysynth voice behind @m2/synths: a unison stack of saws and pulses with
 //! a sub sine and noise, at 2× (band-limited steps, a drive, then a 4-pole ladder with its
 //! own envelope, whose saturation would alias at 1×), decimated, then the amp envelope. Its
-//! `shape`, a choice (CARD-12), says what the stack's main wave is: a saw (as it always was), a
-//! square, a triangle or a sine.
+//! `shape`, a choice (CARD-12), says what the stack plays: its saws and pulses (as it always did),
+//! or a square, a triangle or a sine alone, as loud as the saws and pulses it replaces (CARD-32).
 //! Port order must match the pack's `m2pkg.toml`.
 
 use m2_dsp::voice::{
@@ -151,8 +151,8 @@ pub struct Synth {
     sub_dt: Ramp,
     vib_phase: f32,
     noise: Noise,
-    /// The levels of the saw, the pulse, the sub, the noise, the triangle and the sine.
-    levels: [Ramp; 6],
+    /// The levels of the saw, the pulse, the sub, the noise, the triangle, the sine and the square.
+    levels: [Ramp; 7],
     width: Ramp,
     bus: Steps,
     // Shaping, per channel.
@@ -287,16 +287,27 @@ impl Synth {
             self.dt[k].to((base * self.ratios[k]).min(top), jump);
         }
         self.sub_dt.to(base * self.sub_octave.exp2(), jump);
-        // The shape says which wave the `saw` level plays on the stack's phases: the saw (as it
-        // always was), the pulse (with its own level, at `width`), a triangle or a sine. A change
-        // glides over a tick, as the levels do.
-        let (saw, square, tri, sine) = match clampf(at(SHAPE).round(), 0.0, 3.0) as u32 {
-            SQUARE_WAVE => (0.0, square + saw, 0.0, 0.0),
-            TRIANGLE_WAVE => (0.0, square, saw, 0.0),
-            SINE_WAVE => (0.0, square, 0.0, saw),
-            _ => (saw, square, 0.0, 0.0),
+        // The shape says what the stack plays on its phases: the saw and the pulse at their levels
+        // (as it always did), or a square, a triangle or a sine alone, as loud as they were. Their
+        // mix's power is saw² / 3 + 4w(1 − w)(pulse² − saw × pulse), for a saw 2t − 1 and a pulse
+        // (t < w) × 2 − 2w. A sub at the note itself is in phase with the saw's fundamental, so it
+        // adds sub × b1 more, b1 = (2/π)(saw − pulse(1 − cos 2πw)) being the mix's fundamental
+        // along it. A shape at level A has power e × A² and fundamental f × A (a square's 1 and
+        // 4/π, a triangle's 1/3 and 8/π², a sine's 1/2 and 1), so A solves e A² + sub f A = both.
+        // A change glides over a tick, as the levels do.
+        use std::f32::consts::PI;
+        let w = clampf(width, 0.0, 1.0);
+        let mix = saw * saw / 3.0 + 4.0 * w * (1.0 - w) * (square * square - saw * square);
+        let u = if self.sub_octave == 0.0 { sub } else { 0.0 };
+        let both = mix + u * (2.0 / PI) * (saw - square * (1.0 - (2.0 * PI * w).cos()));
+        let alone = |e: f32, f: f32| ((-u * f + (u * u * f * f + 4.0 * e * both).max(0.0).sqrt()) / (2.0 * e)).max(0.0);
+        let (saw, square, tri, sine, sq) = match clampf(at(SHAPE).round(), 0.0, 3.0) as u32 {
+            SQUARE_WAVE => (0.0, 0.0, 0.0, 0.0, alone(1.0, 4.0 / PI)),
+            TRIANGLE_WAVE => (0.0, 0.0, alone(1.0 / 3.0, 8.0 / (PI * PI)), 0.0, 0.0),
+            SINE_WAVE => (0.0, 0.0, 0.0, alone(0.5, 1.0), 0.0),
+            _ => (saw, square, 0.0, 0.0, 0.0),
         };
-        for (r, v) in self.levels.iter_mut().zip([saw, square, sub, noise, tri, sine]) {
+        for (r, v) in self.levels.iter_mut().zip([saw, square, sub, noise, tri, sine, sq]) {
             r.to(v, jump);
         }
         self.width.to(width, jump);
@@ -379,10 +390,15 @@ impl Synth {
     /// One output sample on `CH` channels: a mono voice works out only the left.
     fn sample_in<const CH: usize>(&mut self) -> [f32; 2] {
         let n = self.voices;
-        let [saw, square, sub, noise, tri, sine] = self.levels.each_mut().map(|r| r.next());
+        let [saw, square, sub, noise, tri, sine, sq] = self.levels.each_mut().map(|r| r.next());
         // A triangle or a sine on the stack: neither steps, so neither needs a band-limited step,
         // and both are centred, so neither adds to `dc`. Off (the saw), not a bit changes.
         let shaped = tri != 0.0 || sine != 0.0;
+        // A square of its own (half low, half high, centred): it rises at half the phase and falls
+        // at the wrap, each a band-limited step. Like the triangle and the sine, its fundamental is
+        // in phase with the saw's (−sin 2πt), so the sub, which reinforces the saw's, reinforces it.
+        let squared = sq != 0.0;
+        let sq2b = 2.0 * sq;
         let w = self.width.next();
         let (saw2, sq2) = (2.0 * saw, 2.0 * square);
         let pulse = square != 0.0;
@@ -400,6 +416,14 @@ impl Synth {
                 let gain = self.gains[k];
                 let steps = |h: f32| [h * gain[0], h * gain[1]];
                 let mut t = self.phase[k] + dt;
+                if squared {
+                    if self.phase[k] < 0.5 && t >= 0.5 {
+                        self.bus.step::<CH>((t - 0.5) / dt, steps(sq2b));
+                    }
+                    if t >= 1.0 {
+                        self.bus.step::<CH>((t - 1.0) / dt, steps(-sq2b));
+                    }
+                }
                 if pulse {
                     // The pulse falls where the phase passes the width, and rises at the wrap.
                     if self.high[k] && t >= w {
@@ -428,7 +452,11 @@ impl Synth {
                 self.phase[k] = t;
                 let mut v = saw2 * t + if self.high[k] && pulse { sq2 } else { 0.0 };
                 if shaped {
-                    v += tri * (1.0 - 4.0 * (t - 0.5).abs()) + sine * sin2pi(t);
+                    // Both peak where the saw's fundamental does, at three quarters of the phase.
+                    v += tri * (1.0 - 4.0 * ((t + 0.75).fract() - 0.5).abs()) - sine * sin2pi(t);
+                }
+                if squared {
+                    v += if t < 0.5 { -sq } else { sq };
                 }
                 for (a, g) in acc.iter_mut().zip(gain).take(CH) {
                     *a += g * v;
@@ -505,7 +533,7 @@ impl Kernel for Synth {
             sub_dt: Ramp::default(),
             vib_phase: 0.0,
             noise: Noise::new(1),
-            levels: [Ramp::default(); 6],
+            levels: [Ramp::default(); 7],
             width: Ramp::default(),
             bus: Steps::default(),
             drive_on: false,

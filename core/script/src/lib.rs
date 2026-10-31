@@ -47,12 +47,6 @@ pub const SDK: &str = include_str!("../sdk/core.ts");
 /// that breaks a pack's code is a new major (PACK-22).
 pub const SDK_VERSION: &str = "2.0.0";
 
-/// What a song or a pack music2 writes asks for in `[dependencies] "@m2/core"`: the SDK's major
-/// alone, `"2"`, which any later 2.x meets (PACK-23).
-pub fn sdk_requirement() -> &'static str {
-    SDK_VERSION.split('.').next().unwrap_or(SDK_VERSION)
-}
-
 const CORE: &str = "@m2/core";
 
 /// Project modules are named by their snapshot path behind this prefix, so a project file

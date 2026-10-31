@@ -49,11 +49,13 @@ const EXPECTED = [
   ["bass", "std:xrange", "lo", true, null, false],
   ["bass", "std:xrange", "hi", true, null, false],
   ["bass", "@m2/synths:bass", "drive", false, [0, 36], false],
+  ["hats", "@m2/drums:drum", "drum", true, null, false],
   ["hats", "@m2/drums:drum", "tune", true, [-24, 24], false],
   ["hats", "@m2/drums:drum", "decay", false, [0.1, 10], true],
   ["hats", "@m2/drums:drum", "punch", false, [-1, 1], false],
   ["hats", "@m2/drums:drum", "drive", false, [0, 24], false],
   ["keys", "@m2/synths:pluck", "brightness", false, [200, 20000], true],
+  ["kick", "@m2/drums:drum", "drum", false, null, false],
   ["kick", "@m2/drums:drum", "tune", false, [-24, 24], false],
   ["kick", "@m2/drums:drum", "decay", false, [0.1, 10], true],
   ["kick", "@m2/drums:drum", "punch", false, [-1, 1], false],
@@ -76,7 +78,8 @@ for (const [module, component, slot, written, range, log] of EXPECTED) {
     x.k.written === written && sameRange(x.k.range, range) && x.k.log === log && x.k.home === "code",
     `${what}: ${written ? "written" : "left out"}, range ${JSON.stringify(range)}${log ? " log" : ""}, home code (${JSON.stringify([x.k.written, x.k.range, x.k.log, x.k.home])})`,
   );
-  if (!written) check(x.k.literal === "" && x.k.default !== null && close(x.k.value, x.k.default), `${what} plays its declared default ${x.k.default}`);
+  const same = typeof x.k.value === "string" ? x.k.value === x.k.default : close(x.k.value, x.k.default);
+  if (!written) check(x.k.literal === "" && x.k.default !== null && same, `${what} plays its declared default ${x.k.default}`);
   if (range) check(range[0] <= x.k.value && x.k.value <= range[1], `${what}: ${x.k.value} lies in its range`);
 }
 
@@ -85,7 +88,8 @@ for (const [module, component, slot, written, range, log] of EXPECTED) {
 // mixer is one compact card there: its levels and pans are on the Mix view's strips (MX-6), below.
 const onStrip = (x) => x.module === "song" && x.k.component === "std:mixer";
 const LOOK = { song: [], bass: [], hats: [], keys: [], kick: [] };
-for (const x of all) if (!onStrip(x)) LOOK[x.module].push(x);
+// A choice is a menu, not a knob to turn (its own suites, card-views and dressed, check it there).
+for (const x of all) if (!onStrip(x) && x.k.kind !== "choice") LOOK[x.module].push(x);
 for (const [module, list] of Object.entries(LOOK)) {
   await show(module);
   for (const { node, k } of list) {
@@ -154,7 +158,7 @@ const undo = async () => {
 // A new options object: the kick's `drums.drum(lane.notes("hits"))` leaves out its decay.
 const beat = read("tracks/kick.ts");
 await show("kick");
-const decay = '[data-module="kick"] [data-node="drums.drum"] [data-knob="decay"]';
+const decay = '[data-module="kick"] [data-node="drums.drum"] [data-knob="decay ×"]';
 await turn(decay, 32);
 const insertedDecay = /drums\.drum\(lane\.notes\("hits"\), \{ decay: (-?[0-9.e-]+) \}\)/;
 check(await until(() => insertedDecay.test(read("tracks/kick.ts"))), `turning the kick's decay writes it into the call (${read("tracks/kick.ts").match(/drums\.drum\(.*\)/)?.[0]})`);

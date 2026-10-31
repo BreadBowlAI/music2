@@ -698,3 +698,94 @@ fn kernels_src_is_one_name_to_the_build_and_the_store() {
     assert_eq!(m2_script::KERNELS_SRC, m2_song::pack::KERNELS_SRC);
     assert_eq!(m2_script::NOT_IN_KERNELS_SRC, m2_song::pack::NOT_IN_KERNELS_SRC);
 }
+
+/// A store with the packs this tree bundles installed, at `root/store`, and std.
+fn bundled_store(root: &Path) -> PackageSet {
+    let store = root.join("store");
+    for (dir, done) in m2_song::pack::install_bundled(&m2_song::pack::source_packs(), &Store::at(store.clone())) {
+        done.unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    }
+    packages(&store)
+}
+
+/// A song at `dir` asking for `deps`, whose code is `code`, with `lock` as its music2.lock if any.
+fn a_song(dir: &Path, deps: &str, code: &str, lock: Option<&str>) {
+    std::fs::create_dir_all(dir).unwrap();
+    let std = Version::parse(&crate::gate_tests::std_packages().get("std").unwrap().version).unwrap();
+    let manifest = format!(
+        "[project]\nname = \"old\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{}.{}\"\n{deps}",
+        m2_song::Requirement::admitting(Version::parse(m2_script::SDK_VERSION).unwrap()),
+        std.0,
+        std.1
+    );
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    std::fs::write(dir.join("song.ts"), code).unwrap();
+    match lock {
+        Some(l) => std::fs::write(dir.join("music2.lock"), l).unwrap(),
+        None => drop(std::fs::remove_file(dir.join("music2.lock"))),
+    }
+}
+
+const LEAD: &str = "import { song, track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\nconst t = track(\"t\", ({ lane }) => synth.lead(lane.notes(\"n\")));\nexport default song(() => t.out);\n";
+
+// Review Y5 (FMT-3a, PACK-24): a song made before wave 3 asks for `"@m2/synths" = "1"`, which this
+// music2 no longer comes with. Locked to 1.0.0, or not locked, it is told first the one thing to
+// do: the line to write for the version music2 comes with now, and to lock again; never that 1.0.0
+// comes with music2, nor to install it from a folder. Following that, it builds.
+#[test]
+fn a_song_made_before_wave_3_is_told_the_line_to_write() {
+    let root = scratch("before-wave-3");
+    let mut pk = bundled_store(&root);
+    let now = m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join("@m2/synths")).unwrap().package.version;
+    let first = format!(
+        "music2 now comes with @m2/synths {now}: change its line in music2.toml to \"@m2/synths\" = \"{}\", then run `m2 pack lock \
+         <song>`. The song's code may need changes",
+        now.0
+    );
+    let song = root.join("song");
+    let old_lock = "[[pack]]\nname = \"@m2/synths\"\nversion = \"1.0.0\"\nhash = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n";
+    for lock in [Some(old_lock), None] {
+        a_song(&song, "\"@m2/synths\" = \"1\"\n", LEAD, lock);
+        let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+        assert!(e.len() == 1 && e[0].message.starts_with(&first), "locked: {}: {e:?}", lock.is_some());
+        assert!(!e[0].message.contains("It comes with music2") && !e[0].message.contains("m2 pack install"), "{}", e[0].message);
+    }
+    // A store that still holds a 1.0.0 (made for @m2/core 1, which this app can't run): the same.
+    let dir = Store::at(root.join("store")).version_dir(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0));
+    copy(&m2_song::pack::source_packs().join("@m2/synths"), &dir);
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
+    let toml = toml.replace(&format!("version = \"{now}\""), "version = \"1.0.0\"").replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"1\"");
+    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
+    let listing = Listing::of(&dir).unwrap();
+    std::fs::write(dir.join(LISTING), listing.text()).unwrap();
+    let mut pk = packages(&root.join("store"));
+    let kept = format!("[[pack]]\nname = \"@m2/synths\"\nversion = \"1.0.0\"\nhash = \"{}\"\n", listing.hash().prefixed());
+    for lock in [Some(kept.as_str()), None] {
+        a_song(&song, "\"@m2/synths\" = \"1\"\n", LEAD, lock);
+        let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+        assert!(e.len() == 1 && e[0].message.starts_with(&first), "1.0.0 installed, locked: {}: {e:?}", lock.is_some());
+        assert!(!e[0].message.contains("newer music2"), "{}", e[0].message);
+    }
+    a_song(&song, &format!("\"@m2/synths\" = \"{}\"\n", now.0), LEAD, None);
+    compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|e| panic!("the line it named builds: {e:?}"));
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// Review Y4 (PACK-21): a song's own code that calls a kernel that left std is told the component
+// to play and the line to write; writing them, it builds.
+#[test]
+fn following_a_moved_kernels_words_builds() {
+    let root = scratch("moved-kernel");
+    let mut pk = bundled_store(&root);
+    let song = root.join("song");
+    let old = "import { kernel, song, track } from \"@m2/core\";\nconst t = track(\"t\", ({ lane }) => kernel(\"std:synth\", { gate: lane.mask(\"g\") }));\nexport default song(() => t.out);\n";
+    a_song(&song, "", old, None);
+    let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+    let said = &e[0].message;
+    let line = said.split("add ").nth(1).and_then(|r| r.split(" under").next()).unwrap_or_else(|| panic!("{said}"));
+    assert!(said.starts_with("Play `synth.custom` from \"@m2/synths\" instead") && line.ends_with("= \"2\""), "{said}");
+    let new = "import { song, track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\nconst t = track(\"t\", ({ lane }) => synth.custom(lane.notes(\"n\")));\nexport default song(() => t.out);\n";
+    a_song(&song, &format!("{line}\n"), new, None);
+    compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|e| panic!("following {said:?}: {e:?}"));
+    std::fs::remove_dir_all(&root).ok();
+}

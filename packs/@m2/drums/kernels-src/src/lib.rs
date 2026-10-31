@@ -1,5 +1,5 @@
 //! The kernels of the pack `@m2/drums`, its own sound code (PACK-21): the drum machine's voice,
-//! `drum`, called by the pack's id, `kernel("@m2/drums:drum", …)`. Port order must match the pack's
+//! `drum`, called by the pack's id, `kernel("@m2/drums:drum", …)`, and One drum's, `one`. Port order must match the pack's
 //! `m2pkg.toml`. Written with std's kit and blocks (`m2_kernel`, `m2_dsp`), built with std's kernels
 //! by `std/build.sh` into `packs/@m2/drums/kernels/drums.wasm` (ABI-10). This folder is no part of
 //! the pack (PACK-20): only the module built from it is.
@@ -16,4 +16,4 @@ mod drum;
 #[cfg(test)]
 mod testkit;
 
-pub use drum::Drum;
+pub use drum::{Drum, One};
