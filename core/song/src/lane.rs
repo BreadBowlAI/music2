@@ -268,13 +268,31 @@ pub enum LaneData {
         unit: Option<String>,
         clips: Vec<ControlClip>,
     },
-    /// A lane of names (CARD-15): a choice's, read against `options`, or a switch's (`None`).
-    /// Its file records the unit `choice` or `switch`.
+    /// A lane of names (CARD-15): a choice's or a switch's. Its file records the unit `choice` or
+    /// `switch`.
     Steps {
-        options: Option<Vec<String>>,
+        of: StepsOf,
         clips: Vec<StepClip>,
     },
     Audio(Vec<AudioClip>),
+}
+
+/// What a lane of names holds (CARD-15): a choice's names, read against its options, or a switch's
+/// true and false.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StepsOf {
+    Choice(Vec<String>),
+    Switch,
+}
+
+impl StepsOf {
+    /// What its file records as its unit.
+    pub fn unit(&self) -> &'static str {
+        match self {
+            StepsOf::Choice(_) => "choice",
+            StepsOf::Switch => "switch",
+        }
+    }
 }
 
 /// Why a lane file can't be played.
@@ -291,8 +309,8 @@ impl LaneData {
         match kind {
             LaneKind::Notes => LaneData::Notes(vec![]),
             LaneKind::Control { unit } => LaneData::Control { unit: unit.clone(), clips: vec![] },
-            LaneKind::Choice { options } => LaneData::Steps { options: Some(options.clone()), clips: vec![] },
-            LaneKind::Switch => LaneData::Steps { options: None, clips: vec![] },
+            LaneKind::Choice { options } => LaneData::Steps { of: StepsOf::Choice(options.clone()), clips: vec![] },
+            LaneKind::Switch => LaneData::Steps { of: StepsOf::Switch, clips: vec![] },
             LaneKind::Audio => LaneData::Audio(vec![]),
         }
     }
@@ -302,8 +320,8 @@ impl LaneData {
         match (self, kind) {
             (LaneData::Notes(_), LaneKind::Notes) | (LaneData::Audio(_), LaneKind::Audio) => true,
             (LaneData::Control { unit, .. }, LaneKind::Control { unit: want }) => want.is_none() || unit == want,
-            (LaneData::Steps { options: Some(o), .. }, LaneKind::Choice { options }) => o == options,
-            (LaneData::Steps { options: None, .. }, LaneKind::Switch) => true,
+            (LaneData::Steps { of: StepsOf::Choice(o), .. }, LaneKind::Choice { options }) => o == options,
+            (LaneData::Steps { of: StepsOf::Switch, .. }, LaneKind::Switch) => true,
             _ => false,
         }
     }
@@ -335,23 +353,24 @@ impl LaneData {
         }
         match kind {
             LaneKind::Choice { .. } | LaneKind::Switch => {
-                let (declared, options) = match kind {
-                    LaneKind::Choice { options } => ("choice", Some(options.clone())),
-                    _ => ("switch", None),
+                let of = match kind {
+                    LaneKind::Choice { options } => StepsOf::Choice(options.clone()),
+                    _ => StepsOf::Switch,
                 };
-                if unit.as_deref() != Some(declared) {
-                    return Err(LaneError::Unit { found: unit, declared: declared.into() });
+                if unit.as_deref() != Some(of.unit()) {
+                    return Err(LaneError::Unit { found: unit, declared: of.unit().into() });
                 }
+                let names = matches!(of, StepsOf::Choice(_));
                 let mut clips = each::<StepClip>(clips, kind)?;
                 for (i, c) in clips.iter_mut().enumerate() {
-                    let wrong = c.points.iter().position(|(_, p)| matches!(p, Step::Name(_)) != options.is_some());
+                    let wrong = c.points.iter().position(|(_, p)| matches!(p, Step::Name(_)) != names);
                     if let Some(j) = wrong {
-                        let what = if options.is_some() { "an option's name, as [4, \"square\"]" } else { "true or false, as [4, true]" };
+                        let what = if names { "an option's name, as [4, \"square\"]" } else { "true or false, as [4, true]" };
                         return Err(invalid(format!("{}: point {}: a point of {} holds {what}", at(i, c.start), j + 1, noun(kind))));
                     }
                     c.points.sort_by(|a, b| a.0.total_cmp(&b.0));
                 }
-                Ok(LaneData::Steps { options, clips: sorted(clips, |c| (c.start, c.id.as_deref())) })
+                Ok(LaneData::Steps { of, clips: sorted(clips, |c| (c.start, c.id.as_deref())) })
             }
             LaneKind::Notes | LaneKind::Audio if unit.is_some() => {
                 Err(invalid(format!("unknown field `unit`: only automation lanes have a unit, and this is {}", noun(kind))))
@@ -458,8 +477,8 @@ impl LaneData {
         match self {
             LaneData::Notes(_) => LaneKind::Notes,
             LaneData::Control { unit, .. } => LaneKind::Control { unit: unit.clone() },
-            LaneData::Steps { options: Some(options), .. } => LaneKind::Choice { options: options.clone() },
-            LaneData::Steps { options: None, .. } => LaneKind::Switch,
+            LaneData::Steps { of: StepsOf::Choice(options), .. } => LaneKind::Choice { options: options.clone() },
+            LaneData::Steps { of: StepsOf::Switch, .. } => LaneKind::Switch,
             LaneData::Audio(_) => LaneKind::Audio,
         }
     }
@@ -609,7 +628,7 @@ impl LaneData {
     pub fn unit(&self) -> Option<&str> {
         match self {
             LaneData::Control { unit, .. } => unit.as_deref(),
-            LaneData::Steps { options, .. } => Some(if options.is_some() { "choice" } else { "switch" }),
+            LaneData::Steps { of, .. } => Some(of.unit()),
             LaneData::Notes(_) | LaneData::Audio(_) => None,
         }
     }
@@ -1054,13 +1073,13 @@ impl ControlLane {
         ControlLane { clips, step: false }
     }
 
-    /// A lane of names, as the places it plays (CARD-15): an option's place among `options`, or a
-    /// switch's 1 or 0 (`options` is `None`). A name the choice doesn't have plays the lane's
-    /// fallback from its point to the next. Made off the audio thread, when the lane is prepared.
-    pub fn steps(clips: &[StepClip], options: Option<&[String]>) -> ControlLane {
-        let place = |p: &Step| match (p, options) {
-            (Step::Switch(on), None) => f64::from(u8::from(*on)),
-            (Step::Name(n), Some(o)) => o.iter().position(|x| x == n).map_or(f64::NAN, |i| i as f64),
+    /// A lane of names, as the places it plays (CARD-15): an option's place among a choice's
+    /// options, or a switch's 1 or 0. A name the choice doesn't have plays the lane's fallback from
+    /// its point to the next. Made off the audio thread, when the lane is prepared.
+    pub fn steps(clips: &[StepClip], of: &StepsOf) -> ControlLane {
+        let place = |p: &Step| match (p, of) {
+            (Step::Switch(on), StepsOf::Switch) => f64::from(u8::from(*on)),
+            (Step::Name(n), StepsOf::Choice(o)) => o.iter().position(|x| x == n).map_or(f64::NAN, |i| i as f64),
             _ => f64::NAN,
         };
         let clips = clips
@@ -1356,8 +1375,8 @@ mod tests {
     fn lanes_of_names_read_and_write_canonically() {
         let text = "{\"unit\": \"choice\", \"clips\": [\n  {\"id\": \"a1\", \"start\": 4, \"length\": 8, \"points\": [[0, \"square\"], [2, \"tri\"], [4, \"saw\"]]}\n]}\n";
         let d = LaneData::read(text, &shapes()).unwrap();
-        let LaneData::Steps { options, clips } = &d else { panic!("{d:?}") };
-        assert_eq!(options.as_deref(), Some(&["saw".to_string(), "square".into(), "sine".into()][..]));
+        let LaneData::Steps { of, clips } = &d else { panic!("{d:?}") };
+        assert_eq!(*of, StepsOf::Choice(vec!["saw".to_string(), "square".into(), "sine".into()]));
         assert_eq!(clips[0].points[1], (2.0, Step::Name("tri".into())), "a name the choice doesn't have is kept");
         assert_eq!(canonical(&d), text);
         assert!(d.fits(&shapes()) && !d.fits(&LaneKind::Switch) && !d.fits(&hz()));
@@ -1384,16 +1403,16 @@ mod tests {
     #[test]
     fn a_lane_of_names_steps() {
         let text = r#"{"unit": "choice", "clips": [{"start": 4, "length": 8, "points": [[1, "square"], [2, "tri"], [4, "sine"]]}]}"#;
-        let LaneData::Steps { clips, options } = LaneData::read(text, &shapes()).unwrap() else { panic!() };
-        let lane = ControlLane::steps(&clips, options.as_deref());
+        let LaneData::Steps { clips, of } = LaneData::read(text, &shapes()).unwrap() else { panic!() };
+        let lane = ControlLane::steps(&clips, &of);
         let at = |b: f64| lane.value_at(b, 9.0);
         assert_eq!(
             [at(0.0), at(4.0), at(5.5), at(5.99), at(6.0), at(7.9), at(8.0), at(11.9), at(12.0)],
             [9.0, 1.0, 1.0, 1.0, 9.0, 9.0, 2.0, 2.0, 9.0]
         );
         let switch = r#"{"unit": "switch", "clips": [{"start": 0, "length": 4, "points": [[0, true], [1, false]]}]}"#;
-        let LaneData::Steps { clips, options } = LaneData::read(switch, &LaneKind::Switch).unwrap() else { panic!() };
-        let lane = ControlLane::steps(&clips, options.as_deref());
+        let LaneData::Steps { clips, of } = LaneData::read(switch, &LaneKind::Switch).unwrap() else { panic!() };
+        let lane = ControlLane::steps(&clips, &of);
         assert_eq!([lane.value_at(0.5, 0.0), lane.value_at(1.5, 0.0)], [1.0, 0.0]);
     }
 

@@ -205,7 +205,7 @@ pub struct UnitCtor {
 
 impl ControlDesc {
     /// A choice's options, in place order (CARD-10).
-    pub fn options(&self) -> Option<m2_ir::Options> {
+    pub fn options(&self) -> Option<m2_ir::Names> {
         self.unit.and_then(Unit::options)
     }
 }

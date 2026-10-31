@@ -197,7 +197,7 @@ fn swap_of(plays: &PlaysView, rev: &Revision, lane: &LaneAddr, data: &LaneData) 
         }
         LaneData::Control { clips, .. } => LaneSwap::Control(Arc::new(m2_song::lane::ControlLane::new(clips.clone()))),
         // Names become places here, off the audio thread (CARD-15).
-        LaneData::Steps { options, clips } => LaneSwap::Control(Arc::new(m2_song::lane::ControlLane::steps(clips, options.as_deref()))),
+        LaneData::Steps { of, clips } => LaneSwap::Control(Arc::new(m2_song::lane::ControlLane::steps(clips, of))),
         LaneData::Audio(_) => return None,
     };
     Some((slot as u32, swap))

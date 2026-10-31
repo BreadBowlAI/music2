@@ -27,7 +27,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub use check::{Consumer, FNode, FOp, Flat, Input, NoteField, OverlaySite, PortRef, Voice, check};
-pub use kind::{EventType, Kind, Options, PortKind, Unit};
+pub use kind::{EventType, Kind, Names, PortKind, Unit};
 pub use sig::{KernelSig, Kernels, PortSig};
 
 /// 2: frames (`Module.frames`, `Node.frame`) and declared controls in origins (step 5).

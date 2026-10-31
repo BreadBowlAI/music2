@@ -268,6 +268,12 @@ impl<'a> Scope<'a> for Song {
             let have: Vec<&str> = m.lanes.iter().map(|l| l.key.as_str()).collect();
             format!("no lane `{lane}` declared (lanes: {})", if have.is_empty() { "none".into() } else { have.join(", ") })
         })?;
+        // A choice's or a switch's lane falls back to one of its places (CARD-12).
+        if let (Kind::Control(Some(u)), Some(v)) = (d.kind, d.default)
+            && let Err(holds) = u.holds(v)
+        {
+            return Err(format!("lane `{lane}` of {} falls back to {holds}, not {v}", d.kind));
+        }
         let op = FOp::Lane { module: m.key.clone(), lane: lane.to_string(), kind: d.kind, default: d.default.unwrap_or(0.0) };
         Ok((op, d.kind))
     }
@@ -952,6 +958,10 @@ impl<'a> Checker<'a> {
             let typed: Result<(FOp, Vec<Kind>), String> = match (&node.op, &res[i]) {
                 (Op::Lane { lane }, _) => scope.lane(m, lane).map(|(op, k)| (op, vec![k])),
                 (Op::Time { of }, _) => Ok((FOp::Time(*of), vec![Kind::Control(Some(of.unit()))])),
+                // A choice's or a switch's constant holds one of its places (CARD-12).
+                (Op::Const { value, unit: Some(u) }, _) if u.holds(*value).is_err() => {
+                    Err(format!("a constant of control<{u}> holds {}, not {value}", u.holds(*value).unwrap_err()))
+                }
                 (Op::Const { value, unit }, _) => Ok((FOp::Const(*value), vec![Kind::Control(*unit)])),
                 (Op::Kernel { kernel, .. } | Op::Plugin { plugin: kernel, .. }, Res::Kernel(conns)) => {
                     let is_plugin = matches!(node.op, Op::Plugin { .. });
@@ -984,9 +994,15 @@ impl<'a> Checker<'a> {
                     let mut typed_conns = HashMap::new();
                     let mut upstream_broken = false;
                     for (port, p) in conns {
+                        // A number written straight into the input (a constant that isn't a knob):
+                        // the one number a choice's or a switch's port may take (CARD-12).
+                        let written = match ops.get(p.node) {
+                            Some(Some(FOp::Const(v))) if items.get(p.node).is_some_and(|(_, n)| n.origin.is_none()) => Some(*v),
+                            _ => None,
+                        };
                         match kind_of(&kinds, *p) {
                             Some(k) => {
-                                typed_conns.insert(port.as_str(), (*p, k));
+                                typed_conns.insert(port.as_str(), (*p, k, written));
                             }
                             None => upstream_broken = true,
                         }
@@ -997,7 +1013,7 @@ impl<'a> Checker<'a> {
                     let unknown: Vec<&str> =
                         conns.iter().map(|(p, _)| p.as_str()).filter(|p| !sig.inputs.iter().any(|s| s.name == *p)).collect();
                     let notes_not_lane = is_plugin
-                        && typed_conns.get("notes").is_some_and(|(p, _)| !matches!(ops.get(p.node), Some(Some(FOp::Lane { .. }))));
+                        && typed_conns.get("notes").is_some_and(|(p, ..)| !matches!(ops.get(p.node), Some(Some(FOp::Lane { .. }))));
                     if notes_not_lane {
                         Err("a plugin's notes must come straight from a notes lane".into())
                     } else if !unknown.is_empty() {
@@ -1189,13 +1205,15 @@ fn find_cycle(deps: &[Vec<usize>], stuck: &[usize]) -> Vec<usize> {
     }
 }
 
-/// Whether a signal of kind `src` may connect where `dst` is expected.
+/// Whether a signal of kind `src` may connect where `dst` is expected. A choice or a switch meets
+/// no number, with a unit or without one (CARD-12).
 fn fits(src: Kind, dst: Kind) -> bool {
     match (src, dst) {
         (Kind::Audio(a), Kind::Audio(b)) => a <= b,
-        (Kind::Control(None), Kind::Control(_)) => true,
+        (Kind::Control(None), Kind::Control(None)) => true,
+        (Kind::Control(None), Kind::Control(Some(b))) => b.is_number(),
         (Kind::Control(Some(a)), Kind::Control(Some(b))) => a.fits(b),
-        (Kind::Control(Some(_)), Kind::Control(None)) => true,
+        (Kind::Control(Some(a)), Kind::Control(None)) => a.is_number(),
         (Kind::Events(a), Kind::Events(b)) => a == b,
         _ => false,
     }
@@ -1223,15 +1241,18 @@ fn join(a: Kind, b: Kind) -> Result<Kind, String> {
 /// Returns the inputs in declared order, the channel count, and the output kinds.
 /// `plugin`: the node is a hosted plugin, so `notes` may take events and unconnected
 /// parameters are left to the plugin.
-fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>, plugin: bool) -> Result<(Vec<Input>, u8, Vec<Kind>), String> {
+/// `conns` gives each connected input its source, its kind, and the number it is when it is a
+/// number written straight into it (a constant that isn't a knob).
+fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind, Option<f64>)>, plugin: bool) -> Result<(Vec<Input>, u8, Vec<Kind>), String> {
     let mut any: Option<Kind> = None;
     let mut chans: Option<u8> = None;
     let mut unit: Option<Unit> = None;
     let mut errs = vec![];
     for p in &sig.inputs {
-        let k = match (conns.get(p.name.as_str()), p.default) {
-            (Some((_, k)), _) => *k,
-            (None, Some(_)) => Kind::Control(None),
+        let (k, written) = match (conns.get(p.name.as_str()), p.default) {
+            (Some((_, k, written)), _) => (*k, *written),
+            // Its default, which a choice's or a switch's port holds as a place (`PortSig::parse`).
+            (None, Some(d)) => (Kind::Control(None), Some(d)),
             // A plugin's unconnected inputs are silence (audio, notes) or its own value (parameters).
             (None, None) if plugin => continue,
             (None, None) => {
@@ -1278,6 +1299,16 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>, plugin: 
                 _ => errs.push(mismatch()),
             },
             PortKind::Control(Some(want)) => match k {
+                // A number reaches a choice or a switch only written there, as one of its places.
+                Kind::Control(None) if !want.is_number() => match written.map(|v| (v, want.holds(v))) {
+                    Some((_, Ok(()))) => {}
+                    Some((v, Err(holds))) => errs.push(format!("input `{}` is {}: a number written into it must be {holds}, not {v}", p.name, p.kind)),
+                    None => errs.push(format!(
+                        "{}: only {}, or a number written there that is one of its places, reaches it",
+                        mismatch(),
+                        if want == Unit::Switch { "a switch" } else { "a choice of these options" }
+                    )),
+                },
                 Kind::Control(None) => {}
                 Kind::Control(Some(u)) if u.fits(want) => {}
                 _ => errs.push(mismatch()),
@@ -1300,7 +1331,7 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>, plugin: 
         .inputs
         .iter()
         .map(|p| match conns.get(p.name.as_str()) {
-            Some((src, k)) => {
+            Some((src, k, _)) => {
                 let dst = match p.kind {
                     PortKind::Audio(Some(n)) => n,
                     PortKind::Audio(None) => channels,
@@ -1478,6 +1509,105 @@ mod tests {
             .unwrap_err();
             assert!(e[0].message.contains("input `a`") && e[0].message.contains("isn't a number"), "{unit}: {}", e[0]);
         }
+    }
+
+    /// The errors of a song whose output is `out`, made of `nodes`, with `lanes` declared.
+    fn errors(nodes: serde_json::Value, out: &str, lanes: serde_json::Value) -> Vec<String> {
+        let ir = ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"},
+            "modules": [{"key": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": out}}]}));
+        check(&ir, &kinds_kernels()).err().unwrap_or_default().into_iter().map(|d| d.message).collect()
+    }
+
+    // CARD-12 (review K1): a number with no unit reaches a choice's or a switch's port only as a
+    // constant written there that is one of its places: a whole number from 0 to n - 1, or 0 or 1.
+    // A number worked out while the song plays (`std:range` of an LFO), or a knob's (a cell, which
+    // can be set to anything), never does.
+    #[test]
+    fn a_number_reaches_a_choice_only_as_one_of_its_places() {
+        for (k, input, value) in [("t:osc", "shape", 0.0), ("t:osc", "shape", 2.0), ("t:sub", "on", 1.0)] {
+            reading(k, input, value, None).unwrap_or_else(|e| panic!("{value} into {k}: {e:?}"));
+        }
+        for (k, input, value, says) in [
+            ("t:osc", "shape", 3.0, "a whole number from 0 to 2, not 3"),
+            ("t:osc", "shape", 1.5, "a whole number from 0 to 2, not 1.5"),
+            ("t:osc", "shape", -1.0, "a whole number from 0 to 2, not -1"),
+            ("t:sub", "on", 0.5, "0 or 1, not 0.5"),
+            ("t:sub", "on", 2.0, "0 or 1, not 2"),
+        ] {
+            let e = reading(k, input, value, None).err().unwrap_or_else(|| panic!("{value} into {k} checks"));
+            assert!(e[0].message.contains(says), "{value} into {k}: {}", e[0]);
+        }
+        // A number worked out while the song plays: `t:add` of two numbers has no unit.
+        let moving = json!([
+            {"id": "a", "op": "const", "value": 1}, {"id": "b", "op": "const", "value": 0.5},
+            {"id": "m", "op": "kernel", "kernel": "t:add", "inputs": {"a": "a", "b": "b"}},
+            {"id": "k", "op": "kernel", "kernel": "t:osc", "inputs": {"shape": "m"}},
+        ]);
+        let e = errors(moving, "k", json!([]));
+        assert!(e.iter().any(|m| m.contains("input `shape` expects control<choice<saw|square|sine>>, got number")), "{e:?}");
+        // A knob (a cell): its number can be set to anything while the song plays.
+        let knob = json!([
+            {"id": "c", "op": "const", "value": 1, "origin": {"site": 4, "arg": ["1"]}},
+            {"id": "k", "op": "kernel", "kernel": "t:osc", "inputs": {"shape": "c"}},
+        ]);
+        let e = errors(knob, "k", json!([]));
+        assert!(e.iter().any(|m| m.contains("input `shape` expects control<choice<saw|square|sine>>, got number")), "{e:?}");
+    }
+
+    // CARD-12 (review K1): a feedback carries a choice only as that very choice: a feedback of a
+    // number refuses a choice, and a feedback of a choice refuses a number.
+    #[test]
+    fn a_feedback_never_turns_a_choice_into_a_number() {
+        let choice = |id: &str| json!({"id": id, "op": "const", "value": 1, "unit": "choice<saw|square|sine>"});
+        // A choice into a feedback of a number, then into a frequency.
+        let e = errors(
+            json!([choice("c"), {"id": "f", "op": "feedback", "kind": "number", "input": "c"},
+                   {"id": "k", "op": "kernel", "kernel": "t:saw", "inputs": {"freq": "f"}}]),
+            "k",
+            json!([]),
+        );
+        assert!(e.iter().any(|m| m.contains("feedback is declared number but its input is control<choice<saw|square|sine>>")), "{e:?}");
+        // A number worked out while the song plays into a feedback of the choice.
+        let e = errors(
+            json!([{"id": "a", "op": "const", "value": 1}, {"id": "m", "op": "kernel", "kernel": "t:add", "inputs": {"a": "a", "b": "a"}},
+                   {"id": "f", "op": "feedback", "kind": "control<choice<saw|square|sine>>", "input": "m"},
+                   {"id": "k", "op": "kernel", "kernel": "t:osc", "inputs": {"shape": "f"}}]),
+            "k",
+            json!([]),
+        );
+        assert!(e.iter().any(|m| m.contains("feedback is declared control<choice<saw|square|sine>> but its input is number")), "{e:?}");
+        // The very choice: fine.
+        let e = errors(
+            json!([choice("c"), {"id": "f", "op": "feedback", "kind": "control<choice<saw|square|sine>>", "input": "c"},
+                   {"id": "k", "op": "kernel", "kernel": "t:osc", "inputs": {"shape": "f"}}]),
+            "k",
+            json!([]),
+        );
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    // CARD-12 (review K1): a constant of a choice or a switch, and a lane's fallback, hold a place.
+    #[test]
+    fn a_choice_constant_and_a_lane_fallback_hold_places() {
+        let reads = |id: &str, k: &str, input: &str| json!({"id": id, "op": "kernel", "kernel": k, "inputs": {input: "x"}});
+        let e = errors(json!([{"id": "x", "op": "const", "value": 3, "unit": "choice<saw|square|sine>"}, reads("k", "t:osc", "shape")]), "k", json!([]));
+        assert!(e.iter().any(|m| m.contains("control<choice<saw|square|sine>> holds a whole number from 0 to 2, not 3")), "{e:?}");
+        let e = errors(json!([{"id": "x", "op": "const", "value": 0.5, "unit": "switch"}, reads("k", "t:sub", "on")]), "k", json!([]));
+        assert!(e.iter().any(|m| m.contains("control<switch> holds 0 or 1, not 0.5")), "{e:?}");
+        for (kind, default, says) in [
+            ("control<choice<saw|square|sine>>", 1.5, "lane `x` of control<choice<saw|square|sine>> falls back to a whole number from 0 to 2, not 1.5"),
+            ("control<switch>", 2.0, "lane `x` of control<switch> falls back to 0 or 1, not 2"),
+        ] {
+            let (k, input) = if kind.contains("switch") { ("t:sub", "on") } else { ("t:osc", "shape") };
+            let e = errors(json!([{"id": "x", "op": "lane", "lane": "x"}, reads("k", k, input)]), "k", json!([{"key": "x", "kind": kind, "default": default}]));
+            assert!(e.iter().any(|m| m.contains(says)), "{kind}: {e:?}");
+        }
+        let fine = errors(
+            json!([{"id": "x", "op": "lane", "lane": "x"}, reads("k", "t:osc", "shape")]),
+            "k",
+            json!([{"key": "x", "kind": "control<choice<saw|square|sine>>", "default": 2}]),
+        );
+        assert!(fine.is_empty(), "{fine:?}");
     }
 
     #[test]

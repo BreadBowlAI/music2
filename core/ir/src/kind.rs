@@ -25,7 +25,7 @@ pub enum Unit {
     Switch,
     /// One of a list of named options, as its place in the list, 0 to n − 1 (CARD-10). Its unit is
     /// the list, so it fits only a port of exactly those options, in their order (CARD-12).
-    Choice(Options),
+    Choice(Names),
 }
 
 impl Unit {
@@ -52,7 +52,7 @@ impl Unit {
     }
 
     /// A choice's options.
-    pub fn options(self) -> Option<Options> {
+    pub fn options(self) -> Option<Names> {
         match self {
             Unit::Choice(o) => Some(o),
             _ => None,
@@ -62,6 +62,23 @@ impl Unit {
     /// Whether it is a number's unit: not a switch or a choice, which no math reads (CARD-12).
     pub fn is_number(self) -> bool {
         !matches!(self, Unit::Switch | Unit::Choice(_))
+    }
+
+    /// Whether `v` is a value of this unit, and if not, what the unit holds (CARD-12): a choice
+    /// holds a place, a whole number from 0 to n - 1, and a switch 0 or 1. A number's unit holds
+    /// any number.
+    pub fn holds(self, v: f64) -> Result<(), String> {
+        let ok = match self {
+            Unit::Switch => v == 0.0 || v == 1.0,
+            Unit::Choice(n) => v.fract() == 0.0 && v >= 0.0 && v < n.len() as f64,
+            _ => return Ok(()),
+        };
+        match self {
+            _ if ok => Ok(()),
+            Unit::Switch => Err("0 or 1".into()),
+            Unit::Choice(n) => Err(format!("a whole number from 0 to {}", n.len() - 1)),
+            _ => unreachable!("a number's unit holds any number"),
+        }
     }
 
     /// Whether a value in `self` may flow into a port expecting `into`.
@@ -92,7 +109,7 @@ impl FromStr for Unit {
             return Ok(Unit::Switch);
         }
         if let Some(names) = s.strip_prefix("choice<").and_then(|r| r.strip_suffix('>')) {
-            return Options::new(names.split('|')).map(Unit::Choice).map_err(|e| format!("`{s}`: {e}"));
+            return Names::new(names.split('|')).map(Unit::Choice).map_err(|e| format!("`{s}`: {e}"));
         }
         Unit::ALL.into_iter().find(|u| u.name() == s).ok_or_else(|| format!("unknown unit `{s}`"))
     }
@@ -118,15 +135,15 @@ pub const LONGEST_OPTION: usize = 24;
 /// A choice's options: their names, in place order (CARD-10). Each list is kept once for the life of
 /// the process, so a unit stays a plain value (`Copy`) that compares by its names.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Options(&'static [Box<str>]);
+pub struct Names(&'static [Box<str>]);
 
 /// Every list of options made so far, each once.
 static KEPT: LazyLock<Mutex<HashSet<&'static [Box<str>]>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-impl Options {
+impl Names {
     /// The options `names`, in order, or what is wrong with them: 1 to 64 names, each named once,
     /// each one line of 1 to 24 characters with no space at either end and none of `|`, `<`, `>`.
-    pub fn new<S: AsRef<str>>(names: impl IntoIterator<Item = S>) -> Result<Options, String> {
+    pub fn new<S: AsRef<str>>(names: impl IntoIterator<Item = S>) -> Result<Names, String> {
         let names: Vec<Box<str>> = names.into_iter().map(|n| Box::from(n.as_ref())).collect();
         if names.is_empty() || names.len() > MOST_OPTIONS {
             return Err(format!("a choice has 1 to {MOST_OPTIONS} options, not {}", names.len()));
@@ -141,11 +158,11 @@ impl Options {
         }
         let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(o) = kept.get(&names[..]) {
-            return Ok(Options(o));
+            return Ok(Names(o));
         }
         let o: &'static [Box<str>] = Box::leak(names.into_boxed_slice());
         kept.insert(o);
-        Ok(Options(o))
+        Ok(Names(o))
     }
 
     /// The names, in place order.
@@ -186,7 +203,7 @@ fn name_problem(n: &str) -> Option<&'static str> {
     }
 }
 
-impl fmt::Display for Options {
+impl fmt::Display for Names {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for (i, n) in self.0.iter().enumerate() {
             if i > 0 {
@@ -198,7 +215,7 @@ impl fmt::Display for Options {
     }
 }
 
-impl fmt::Debug for Options {
+impl fmt::Debug for Names {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_list().entries(self.0.iter()).finish()
     }

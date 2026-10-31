@@ -152,7 +152,7 @@ impl DataSet {
         match self.lane(module, lane).map(|d| &**d) {
             Some(LaneData::Control { clips, .. }) => ControlLane::new(clips.clone()),
             // Names become places here, off the audio thread (CARD-15).
-            Some(LaneData::Steps { options, clips }) => ControlLane::steps(clips, options.as_deref()),
+            Some(LaneData::Steps { of, clips }) => ControlLane::steps(clips, of),
             _ => ControlLane::default(),
         }
     }
@@ -280,7 +280,7 @@ impl Project {
                             if let LaneData::Audio(clips) = &*data {
                                 diags.extend(self.assets(addr, &file, text, clips, &data));
                             }
-                            if let LaneData::Steps { options: Some(options), clips } = &*data {
+                            if let LaneData::Steps { of: lane::StepsOf::Choice(options), clips } = &*data {
                                 diags.extend(unknown_options(addr, &file, options, clips));
                             }
                             lanes.insert(addr.clone(), data);

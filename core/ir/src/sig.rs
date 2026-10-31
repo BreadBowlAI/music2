@@ -57,6 +57,12 @@ impl PortSig {
         if default.is_some() && !matches!(kind, PortKind::Control(_) | PortKind::Any) {
             return Err(format!("port `{spec}`: only controls can have defaults"));
         }
+        // An unconnected choice or switch plays its default, which must be one of its places (CARD-12).
+        if let (PortKind::Control(Some(u)), Some(d)) = (kind, default)
+            && let Err(holds) = u.holds(d)
+        {
+            return Err(format!("port `{spec}`: its default must be {holds}, not {d}"));
+        }
         Ok(PortSig { name: name.to_string(), kind, default, range: None })
     }
 }
@@ -172,6 +178,23 @@ mod tests {
         assert_eq!(p.kind, PortKind::Control(Some(Unit::Switch)));
         for bad in ["s: control<choice<>>", "s: control<choice<a|a>>", "s: control<choice<a> = 1", "s: control<choice<a|b>> = 0 in 0..1"] {
             assert!(PortSig::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    // CARD-12 (review K7): a choice's or a switch's port defaults to one of its places, which an
+    // unconnected port plays.
+    #[test]
+    fn a_choice_ports_default_is_one_of_its_places() {
+        for ok in ["s: control<choice<a|b|c>> = 2", "s: control<choice<a|b|c>> = 0", "on: control<switch> = 1", "on: control<switch>"] {
+            assert!(PortSig::parse(ok).is_ok(), "{ok}");
+        }
+        for (bad, says) in [
+            ("s: control<choice<a|b|c>> = 7.5", "its default must be a whole number from 0 to 2, not 7.5"),
+            ("s: control<choice<a|b|c>> = 3", "its default must be a whole number from 0 to 2, not 3"),
+            ("on: control<switch> = 0.5", "its default must be 0 or 1, not 0.5"),
+        ] {
+            let e = PortSig::parse(bad).unwrap_err();
+            assert!(e.contains(says), "{bad}: {e}");
         }
     }
 
