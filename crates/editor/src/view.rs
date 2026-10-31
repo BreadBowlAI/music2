@@ -807,6 +807,10 @@ pub fn view(session: &Session) -> GraphView {
                 Group::Site(s) if kind == "call" => voices::card(&rev.compiled, *s),
                 _ => None,
             };
+            let settings = match (g, &component) {
+                (Group::Site(s), Some(c)) if kind == "call" => crate::settings::of_card(rev, m, sites[s], c),
+                _ => vec![],
+            };
             nodes.push(ViewNode {
                 id: id.clone(),
                 label,
@@ -829,10 +833,7 @@ pub fn view(session: &Session) -> GraphView {
                 plugin: plugins.get(g).cloned(),
                 sampler,
                 voices,
-                settings: match g {
-                    Group::Site(s) if kind == "call" => crate::settings::of_card(rev, sites[s]),
-                    _ => vec![],
-                },
+                settings,
             });
             id
         };

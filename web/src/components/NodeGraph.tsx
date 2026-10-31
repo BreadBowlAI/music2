@@ -86,7 +86,7 @@ function compactMixer(m: ModuleView, mix: MixView): { module: ModuleView; card: 
   if (mixers.length !== 1) return null;
   const node = mixers[0];
   const channels = new Set(mix.strips.flatMap((s) => (s.channel ? [s.channel] : []))).size;
-  const card: ViewNode = { ...node, knobs: [], readonly: [], inlets: [], inputs: [{ id: CHANNELS, label: "Channels", kind: "audio" }] };
+  const card: ViewNode = { ...node, knobs: [], readonly: [], inlets: [], settings: [], inputs: [{ id: CHANNELS, label: "Channels", kind: "audio" }] };
   // Each signal drawn once into the card, whichever channels it feeds.
   const seen = new Set<string>();
   const port_edges = m.port_edges.flatMap((e) => {

@@ -306,10 +306,12 @@ fn declared<'a>(desc: &'a Descriptor, slot: &str) -> Option<&'a SettingDesc> {
     }
 }
 
-/// The settings of the card of call `site` of `rev`, when it is a call of a component (CARD-1).
-pub(crate) fn of_card(rev: &Revision, site: &Site) -> Vec<Setting> {
-    let Some((m, desc)) = instance(rev, site.id) else { return vec![] };
-    let Some(text) = rev.snapshot.files.get(Path::new(&site.file)) else { return vec![] };
+/// The settings of the card of call `site` of `rev` (CARD-1), an instance of component `component`
+/// made in module `m`.
+pub(crate) fn of_card(rev: &Revision, m: &Module, site: &Site, component: &str) -> Vec<Setting> {
+    let (Some(desc), Some(text)) = (rev.compiled.components.get(component), rev.snapshot.files.get(Path::new(&site.file))) else {
+        return vec![];
+    };
     Call::new(rev, m, site, desc, text).all()
 }
 
