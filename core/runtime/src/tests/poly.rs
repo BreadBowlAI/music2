@@ -368,3 +368,230 @@ fn bend_and_wheel_reset_with_the_pool() {
     assert_eq!(rig.e.status().wheels, 0, "the lane is at rest");
     assert!(all(&out[out.len() - at(0.5)..], 60.0), "and so is the pool");
 }
+
+/// A poly over the notes lane, its options `opts`, whose voice plays its note's `keyCount` while its
+/// gate is open (mono: one voice plays the sum of its notes').
+fn counted(opts: Value) -> Flat {
+    let mut v = json!({"id": "v", "op": "poly", "events": "n", "voices": 1, "body": {"out": "o", "nodes": [
+        {"id": "k", "op": "lane", "lane": "keyCount"},
+        {"id": "g", "op": "lane", "lane": "gate"},
+        {"id": "o", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "k", "by": "g"}}]}});
+    v.as_object_mut().unwrap().extend(opts.as_object().unwrap().clone());
+    let ir = song(json!([{"id": "n", "op": "lane", "lane": "notes"}, v]), "v", json!([{"key": "notes", "kind": "events<note>"}]));
+    check(&ir, &packages()).unwrap_or_else(|e| panic!("{e:?}"))
+}
+
+/// What plays in the middle of each beat `beats` names.
+fn mids(out: &[[f32; 2]], beats: &[f64]) -> Vec<f32> {
+    beats.iter().map(|&b| out[at(b)][0]).collect()
+}
+
+// RENDER-39: a note's `keyCount` is how many notes have started on its key in the lane, itself
+// included: notes that alternate keys each count on their own key, a chord's notes each on theirs,
+// and notes that start together on one key once. Counted from the lane's notes, whether a voice
+// takes the note or not; and in a one-note pool too.
+#[test]
+fn a_note_reads_its_keys_count() {
+    // Kick, snare, kick, snare, kick: 1, 1, 2, 2, 3. Then a chord of 36, 38, 40 and 40 again.
+    let mut ns: Vec<(f64, f64, f64, f64)> =
+        [36.0, 38.0, 36.0, 38.0, 36.0].iter().enumerate().map(|(i, &p)| (p, i as f64 * 0.5, 0.25, 0.8)).collect();
+    ns.extend([36.0, 38.0, 40.0, 40.0].map(|p| (p, 3.0, 0.25, 0.8)));
+    let out = play(&counted(json!({"voices": 4})), &notes(&ns), 4.0);
+    assert_eq!(mids(&out, &[0.1, 0.6, 1.1, 1.6, 2.1]), [1.0, 1.0, 2.0, 2.0, 3.0]);
+    assert_eq!(out[at(3.1)][0], 4.0 + 3.0 + 1.0 + 1.0, "36's fourth, 38's third, and 40's first, twice");
+    // One voice that takes no note while it plays one: the note it refused still counts.
+    let none = counted(json!({"alloc": {"steal": "none"}}));
+    let out = play(&none, &notes(&[(36.0, 0.0, 1.0, 0.8), (36.0, 0.5, 0.25, 0.8), (36.0, 1.5, 0.25, 0.8)]), 2.0);
+    assert_eq!(mids(&out, &[0.6, 1.6]), [1.0, 3.0]);
+    // Legato: the one voice plays its newest note's count.
+    let mono = counted(json!({"alloc": {"mode": "legato", "retrigger": false}}));
+    let out = play(&mono, &notes(&[(36.0, 0.0, 1.0, 0.8), (38.0, 0.5, 1.0, 0.8), (36.0, 1.25, 0.5, 0.8)]), 2.0);
+    assert_eq!(mids(&out, &[0.25, 0.75, 1.5]), [1.0, 1.0, 2.0]);
+}
+
+// RENDER-39, RENDER-33: the count is the pool's, from the notes alone: live from 0 it plays the
+// export's counts, however long the engine ran first; a jump never resets it (back to the start,
+// the next kick is the fourth); a pool moved whole keeps it; a panic resets it.
+#[test]
+fn the_key_count_is_the_pools() {
+    let f = counted(json!({"voices": 2}));
+    let data = notes(&[(36.0, 0.0, 0.25, 0.8), (36.0, 0.5, 0.25, 0.8), (36.0, 1.0, 0.25, 0.8)]);
+    let export = play(&f, &data, 1.5);
+    let (mut rig, _) = live_rig(&f, &data);
+    rig.cmd(Cmd::Stop);
+    rig.run(10 * BLOCK);
+    rig.cmd(Cmd::Seek(0.0));
+    rig.cmd(Cmd::Play);
+    let live = rig.run(at(1.5));
+    assert_eq!(mids(&live, &[0.1, 0.6, 1.1]), mids(&export, &[0.1, 0.6, 1.1]), "live as the export");
+    rig.cmd(Cmd::Seek(0.0));
+    assert_eq!(mids(&rig.run(at(1.5)), &[0.1, 0.6, 1.1]), [4.0, 5.0, 6.0], "a jump carries on");
+    activate(&mut rig, &f, &data);
+    rig.cmd(Cmd::Seek(0.0));
+    let out = rig.run(at(1.5));
+    assert_eq!(rig.e.current().unwrap().stats().kept.polys, 1);
+    assert_eq!(mids(&out, &[0.1, 0.6, 1.1]), [7.0, 8.0, 9.0], "kept with the pool");
+    rig.send(Msg::Panic);
+    rig.cmd(Cmd::Seek(0.0));
+    rig.cmd(Cmd::Play);
+    assert_eq!(mids(&rig.run(at(1.5)), &[0.1, 0.6, 1.1]), [1.0, 2.0, 3.0], "a panic resets it");
+}
+
+/// The sustain pedal on the notes lane of the plan `g`, at `v`, on channel 1 (RENDER-35).
+fn pedal(g: u64, v: u8) -> Msg {
+    wheel(g, [0xB0, 64, v])
+}
+
+// RENDER-38: while the lane's pedal is down, a voice holds its note after its Off comes, until the
+// pedal lifts: at its block line, both notes held end at once. A note let go while it is up ends at
+// its Off, as always.
+#[test]
+fn the_pedal_holds_notes_until_it_lifts() {
+    let f = probed(json!({"voices": 2}), 0.0, false);
+    let data = notes(&[(60.0, 0.0, 0.25, 0.8), (64.0, 0.125, 0.25, 0.8), (67.0, 2.0, 0.25, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(pedal(g, 127));
+    let held = rig.run(150 * BLOCK);
+    assert!(all(&held[at(0.125)..], 124.0), "both held past their Offs at 0.25 and 0.375");
+    rig.send(pedal(g, 0));
+    assert!(all(&rig.run(4 * BLOCK), 0.0), "the pedal up ends both, from its block line");
+    let free = rig.run(at(2.5) - 154 * BLOCK);
+    assert!(all(&free[at(2.0) - 154 * BLOCK..at(2.25) - 154 * BLOCK], 67.0) && all(&free[at(2.25) - 154 * BLOCK..], 0.0), "up: at its Off");
+}
+
+// RENDER-38: a key struck again under the pedal ends the note held on it where the new one starts:
+// one note sounds, not two; another key's held note rings on.
+#[test]
+fn a_key_struck_again_under_the_pedal_ends_the_held_one() {
+    let f = probed(json!({"voices": 4}), 0.0, false);
+    let data = notes(&[(60.0, 0.0, 0.25, 0.8), (48.0, 0.0, 0.25, 0.8), (60.0, 0.5, 0.25, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(pedal(g, 127));
+    let out = rig.run(at(1.0));
+    assert!(all(&out[at(0.25)..at(0.5)], 108.0), "both held");
+    assert!(all(&out[at(0.5)..], 108.0), "60 struck again: still 60 and 48, not 60 twice");
+}
+
+// RENDER-38: in a legato pool the notes let go under the pedal stay in its note memory: the newest
+// sounds on, slid to, until the pedal lifts and the gate falls.
+#[test]
+fn a_mono_pool_holds_under_the_pedal() {
+    let data = notes(&[(60.0, 0.0, 0.25, 0.8), (64.0, 0.5, 0.25, 0.8)]);
+    let (mut rig, g) = live_rig(&legato(0.0), &data);
+    rig.send(pedal(g, 127));
+    let out = rig.run(250 * BLOCK);
+    assert!(open(&out, 1..250 * BLOCK), "the gate never falls");
+    assert_eq!((out[at(0.4)][0], out[at(0.6)][0], out[at(1.2)][0]), (60.0, 64.0, 64.0), "60 held, then 64, held");
+    rig.send(pedal(g, 0));
+    assert!(all(&rig.run(4 * BLOCK), 0.0), "the pedal up lets both go");
+}
+
+// RENDER-36, RENDER-38: a Stop lets the pedal up, so the notes it held end with the song's; a loop
+// going round leaves it down, so a note it holds rings on over the wrap; a panic lets it up too.
+#[test]
+fn a_stop_or_a_panic_lets_the_pedal_up() {
+    let f = probed(json!({"voices": 2}), 0.0, false);
+    let data = notes(&[(60.0, 0.0, 0.25, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(pedal(g, 127));
+    assert!(all(&rig.run(150 * BLOCK)[at(0.125)..], 60.0), "held");
+    rig.cmd(Cmd::Stop);
+    assert!(all(&rig.run(4 * BLOCK), 0.0), "Stop lets it up");
+    rig.cmd(Cmd::Seek(0.0));
+    rig.cmd(Cmd::Loop(Some((0.0, 1.0))));
+    rig.cmd(Cmd::Play);
+    rig.send(pedal(g, 127));
+    let looped = rig.run(282 * BLOCK);
+    assert!(all(&looped[at(0.5)..at(1.5)], 60.0), "a wrap leaves it down: the note rings on into the next lap");
+    rig.send(Msg::Panic);
+    rig.cmd(Cmd::Loop(None));
+    rig.cmd(Cmd::Seek(0.5));
+    assert!(all(&rig.run(4 * BLOCK), 0.0), "a panic lets it up");
+}
+
+// RENDER-38 (review E4): a note whose key is still down when the pedal lifts sounds on until its own
+// Off: the lift ends only the notes the pedal holds.
+#[test]
+fn a_key_still_down_at_the_lift_sounds_on() {
+    let f = probed(json!({"voices": 2}), 0.0, false);
+    let data = notes(&[(60.0, 0.0, 2.0, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(pedal(g, 127));
+    rig.run(40 * BLOCK);
+    rig.send(pedal(g, 0));
+    let out = rig.run(at(2.5) - 40 * BLOCK);
+    let from = |b: f64| at(b) - 40 * BLOCK;
+    assert!(all(&out[..from(2.0)], 60.0), "its key is down: it sounds on past the lift");
+    assert!(all(&out[from(2.0)..], 0.0), "then ends at its Off");
+}
+
+// RENDER-38 (review E4): a note struck and let go within one block under the pedal rings on: the
+// notes that start in a block are held by the pedal as those already in voices are.
+#[test]
+fn a_note_struck_and_let_go_in_one_block_rings_on() {
+    let f = probed(json!({"voices": 2}), 0.0, false);
+    // From frame 24 to frame 72 of the third block.
+    let s = (2.0 * BLOCK as f64 + 24.0) / BEAT as f64;
+    let data = notes(&[(60.0, s, 48.0 / BEAT as f64, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(pedal(g, 127));
+    let out = rig.run(at(0.5));
+    assert!(all(&out[2 * BLOCK + 24..], 60.0), "held past its Off at frame 72 of its block");
+}
+
+// RENDER-38, RENDER-16: a pool moved whole while the pedal is down keeps the notes it holds, and lets
+// them go when the pedal lifts.
+#[test]
+fn a_kept_pool_keeps_its_pedal() {
+    let f = probed(json!({"voices": 2}), 0.0, false);
+    let data = notes(&[(60.0, 0.0, 0.25, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(pedal(g, 127));
+    rig.run(94 * BLOCK);
+    activate(&mut rig, &f, &data);
+    let held = rig.run(94 * BLOCK);
+    assert_eq!(rig.e.current().unwrap().stats().kept.polys, 1);
+    assert!(all(&held, 60.0), "held across the activation");
+    rig.send(pedal(rig.e.current().unwrap().generation(), 0));
+    assert!(all(&rig.run(4 * BLOCK), 0.0), "the lift ends it");
+}
+
+// RENDER-38, RENDER-35: a pool made new (its shape changed) while the pedal is down hears the pedal
+// again, as a new consumer hears its lane's wheels: a note let go after the rebuild is held.
+#[test]
+fn a_new_pool_hears_the_pedal() {
+    let (two, three) = (probed(json!({"voices": 2}), 0.0, false), probed(json!({"voices": 3}), 0.0, false));
+    let data = notes(&[(64.0, 1.0, 0.25, 0.8)]);
+    let (mut rig, g) = live_rig(&two, &data);
+    rig.send(pedal(g, 127));
+    rig.run(94 * BLOCK);
+    activate(&mut rig, &three, &data);
+    let out = rig.run(at(2.0) - 94 * BLOCK);
+    assert_eq!(rig.e.current().unwrap().stats().kept.polys, 0, "a new pool");
+    assert!(all(&out[at(1.0) - 94 * BLOCK..], 64.0), "held past its Off at 1.25");
+}
+
+// RENDER-38, RENDER-16 (review E7): when the pedal has filled the voices, a new note takes the voice
+// of a note only the pedal holds before one whose key is still down. Two voices: a bass note held
+// down, a note let go under the pedal, then a third note: the bass sounds on.
+#[test]
+fn the_pedal_gives_up_its_own_notes_first() {
+    for steal in ["oldest", "quietest"] {
+        let f = probed(json!({"voices": 2, "alloc": {"steal": steal}}), 0.0, false);
+        let data = notes(&[(36.0, 0.0, 4.0, 0.8), (60.0, 0.5, 0.25, 0.8), (64.0, 1.0, 0.25, 0.8)]);
+        let (mut rig, g) = live_rig(&f, &data);
+        rig.send(pedal(g, 127));
+        let out = rig.run(at(1.5));
+        assert_eq!(out[at(1.25)][0], 36.0 + 64.0, "{steal}: the held-down bass and the new note, not the pedal's");
+    }
+}
+
+// RENDER-38 (review E2): an Off is never moved later: a lift ends a held note at the lift only if it
+// hasn't ended before (a release at an activation), so its gate never opens again.
+#[test]
+fn a_lift_never_reopens_an_ended_note() {
+    let mut n = VoiceNote { id: 7, pitch: 60.0, velocity: 0.8, on: 0, off: 1_000, count: 1, held: true };
+    let lift = [Event::Midi { frame: 0, bytes: [0xB0, 64, 127] }, Event::Midi { frame: 10, bytes: [0xB0, 64, 0] }];
+    crate::poly::hold(&lift, true, 5_000, &mut |f: &mut dyn FnMut(&mut VoiceNote)| f(&mut n));
+    assert_eq!((n.off, n.held), (1_000, false));
+}

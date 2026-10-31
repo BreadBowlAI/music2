@@ -54,6 +54,30 @@ impl Event {
         }
     }
 
+    /// The event as a kernel reads it (ABI-8, `docs/kernel-abi.md`): six 4-byte words, the kind
+    /// (0 On, 1 Off, 2 note expression, 3 param, 4 MIDI), the frame in the block, the note's id, and
+    /// three values: an On's pitch, velocity and `from_pitch` (NaN for none); an Off's release
+    /// velocity; a note expression's kind (0 pitch, 1 pressure, 2 timbre) and value; a param's
+    /// value; a MIDI message's three bytes in the low bytes of the first. Unused words are 0.
+    pub(crate) fn words(&self) -> [u32; 6] {
+        match *self {
+            Event::On { frame, id, pitch, velocity, from_pitch } => {
+                [0, frame, id, pitch.to_bits(), velocity.to_bits(), from_pitch.unwrap_or(f32::NAN).to_bits()]
+            }
+            Event::Off { frame, id, velocity } => [1, frame, id, velocity.to_bits(), 0, 0],
+            Event::NoteExpression { frame, id, kind, value } => {
+                let kind = match kind {
+                    Expression::Pitch => 0,
+                    Expression::Pressure => 1,
+                    Expression::Timbre => 2,
+                };
+                [2, frame, id, kind, value.to_bits(), 0]
+            }
+            Event::Param { frame, id, value } => [3, frame, id, value.to_bits(), 0, 0],
+            Event::Midi { frame, bytes: [a, b, c] } => [4, frame, 0, u32::from_le_bytes([a, b, c, 0]), 0, 0],
+        }
+    }
+
     /// At one frame, the wheels come first (RENDER-14: before the notes), then offs, so a key can
     /// be struck again at the frame it was let go.
     fn rank(&self) -> u8 {

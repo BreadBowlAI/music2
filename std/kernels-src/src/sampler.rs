@@ -20,8 +20,9 @@
 //! (halves round up). Every attack region whose keys hold the note's pitch (rounded), whose velocity
 //! range holds that velocity, and whose round robin position is the note's turn plays, summed: up to
 //! as many as one note can match (32 at most), the first in the list first. The turn comes from
-//! `count`, how many times notes have started on the lane, counted outside the voices so that it is
-//! the same in an export and live: ((count - 1) mod of) + 1. When the note ends, the release regions
+//! `count`, how many times notes have started on the lane, counted outside the voices, or on the
+//! note's key (its `keyCount`, which the voices' pool counts), so that it is the same in an export
+//! and live: ((count - 1) mod of) + 1. When the note ends, the release regions
 //! that match it (its key, and the velocity and turn it started with) start, and play to their end.
 //!
 //! A file plays sped up by 2^((pitch + tune - root) / 12) × its rate / the song's rate (a region's

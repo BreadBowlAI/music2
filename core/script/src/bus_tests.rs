@@ -63,7 +63,7 @@ fn a_bus_reads_what_the_song_feeds_it() {
     )
     .unwrap_or_else(|e| panic!("{e:?}"));
     assert!(muted.modules[1].bus && muted.modules[1].muted);
-    assert_eq!(SDK_VERSION, "1.8.0", "additions to @m2/core (FMT-2): buses in 1.5.0, regions in 1.6.0, file() in 1.7.0, kinds in 1.8.0");
+    assert_eq!(SDK_VERSION, "1.9.0", "additions to @m2/core (FMT-2): buses in 1.5.0, regions in 1.6.0, file() in 1.7.0, kinds in 1.8.0, keyCount in 1.9.0");
 }
 
 // RENDER-34: a bus plays what it is fed, so it declares no notes or audio lane. A control lane,

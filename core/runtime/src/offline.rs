@@ -72,6 +72,7 @@ pub(crate) fn run(k: &Kernel, r: &Run, sink: &mut dyn FnMut(&[&[f32]]) -> Result
         values: r.values,
         assets: &assets,
         offline: Some(r.map),
+        notes: &[],
     };
     let state = match sb.state(&k.prefix, &spec) {
         Ok(s) => s,

@@ -56,8 +56,8 @@ fn poly_options_reach_the_ir() {
     assert_eq!((voices, alloc), (1, Alloc { mode: Mode::Mono, retrigger: true, steal: Steal::None }));
     assert!(matches!(glide, Some(Op::Const { value: 0.05, unit: None })), "{glide:?}");
     assert_eq!(
-        SDK_VERSION, "1.8.0",
-        "additions to @m2/core (FMT-2): the poly op's options in 1.4.0, buses in 1.5.0, regions in 1.6.0, file() in 1.7.0, kinds in 1.8.0"
+        SDK_VERSION, "1.9.0",
+        "additions to @m2/core (FMT-2): the poly op's options in 1.4.0, buses in 1.5.0, regions in 1.6.0, file() in 1.7.0, kinds in 1.8.0, keyCount in 1.9.0"
     );
 }
 
@@ -119,4 +119,17 @@ fn the_mod_wheel_is_a_node_only_when_read() {
     assert_eq!(voice_lanes(&read), ["pitch", "gate", "velocity", "pressure", "timbre", "modWheel"]);
     let late = voiced(sine, "kept.modWheel").expect_err("read after its voice");
     assert!(late.iter().any(|d| d.message.contains("a note's modWheel is read inside its poly's voice, not after it")), "{late:?}");
+}
+
+// RENDER-39: `note.keyCount` is a note field, `audio<1>`: a `lane` node named `keyCount` in the
+// voice, made once and only when the voice reads it, so a voice that doesn't has the IR it had. Read
+// after its voice returned, it is an error in words.
+#[test]
+fn the_key_count_is_a_node_only_when_read() {
+    let sine = "kernel(\"std:sine\", { freq: 440 })";
+    let by = "kernel(\"std:add\", { a: n.keyCount, b: n.keyCount })";
+    let read = voiced(by, "").unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(voice_lanes(&read), ["pitch", "gate", "velocity", "pressure", "timbre", "keyCount"]);
+    let late = voiced(sine, "kept.keyCount").expect_err("read after its voice");
+    assert!(late.iter().any(|d| d.message.contains("a note's keyCount is read inside its poly's voice, not after it")), "{late:?}");
 }
