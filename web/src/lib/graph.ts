@@ -492,6 +492,11 @@ export interface GraphState extends GraphStatus {
   leases?: GraphLease[];
   /** Each hosted plugin by its node (`ViewNode.plugin`): its window, and what is latched. */
   plugins?: Record<string, PluginBox>;
+  /**
+   * The song's integrated loudness, in LUFS, as the last export measured it (TAP-7): null when the
+   * song changed since, or none was made. Absent from older servers.
+   */
+  loudness?: { lufs: number } | null;
 }
 
 /** Why the open project is read-only here, with WRITE-18's message. */

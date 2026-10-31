@@ -25,11 +25,14 @@ export default function ExportDialog() {
  * what it makes in one line. Song is chosen and Export… has the focus, so Return exports the song
  * as before (its question first while mutes or solos change what you hear, then the save panel in
  * the app). A choice is a radio: a click, Space or the arrow keys pick it, and Return from it goes
- * on. Stems are greyed, with why, for a song that plays plugins (Q40). Esc closes; Tab goes round;
- * no key reaches the page behind (`useModalKeys`).
+ * on. Stems are greyed, with why, for a song that plays plugins (Q40). The song's loudness shows
+ * when it is known: the last export measured it, and the song hasn't changed since (TAP-7). Esc
+ * closes; Tab goes round; no key reaches the page behind (`useModalKeys`).
  */
 function Dialog({ session, onClose }: { session: number; onClose: () => void }) {
   const [choice, setChoice] = useState<ExportChoice>("song");
+  // The song's loudness, while it is as the last export measured it (TAP-7).
+  const loudness = useStore((s) => s.graph?.loudness ?? null);
   // Why Stems can't be made: unknown until the server says, then null when they can.
   const [why, setWhy] = useState<string | null | undefined>(undefined);
   const box = useRef<HTMLDivElement>(null);
@@ -90,6 +93,11 @@ function Dialog({ session, onClose }: { session: number; onClose: () => void }) 
             );
           })}
         </div>
+        {loudness && (
+          <p data-testid="export-loudness" className="mt-4 text-sm text-fg-muted" title="Loudness as ears hear it (LUFS). Streaming services play songs at about −14 LUFS.">
+            The song's loudness is {loudness.lufs < 0 ? `−${-loudness.lufs}` : loudness.lufs} LUFS, measured when it was last exported.
+          </p>
+        )}
         <div className="mt-6 flex justify-end gap-2">
           <Button variant="secondary" size="lg" data-testid="export-dialog-cancel" onClick={onClose}>
             Cancel

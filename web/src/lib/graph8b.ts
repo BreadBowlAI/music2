@@ -93,10 +93,22 @@ export type Peaks = [number, number];
 /** The meters (8b.8), about 30 times a second while the engine runs, and once more as it idles. */
 export interface MetersIn {
   t: "meters";
-  /** Each track's loudest sample since the last message, after its mute and solo. */
+  /**
+   * Each track's loudest sample since the last message, after its mute and solo: after its fader
+   * when its channel is its own, else where it enters the song (TAP-5).
+   */
   tracks: Record<string, Peaks>;
+  /** Each mixer channel's, after its fader (TAP-5). Absent from older servers. */
+  channels?: Record<string, Peaks>;
   /** The song's output. */
   out: Peaks;
+  /**
+   * The output's loudness (TAP-6): the last 3 s in LUFS and the largest true peak of the last 3 s
+   * in dBTP, each null until there is one. Absent from older servers.
+   */
+  loudness?: { short: number | null; true_peak: number | null };
+  /** Each scope asked for (TAP-8): its box's last frames, a list per channel. */
+  scopes?: { module: string; node: string; frames: number[][] }[];
   /** The sound input's loudest sample, while a take records on an audio lane (io). */
   input?: number[];
   dsp: { load: number; dropouts: number };
