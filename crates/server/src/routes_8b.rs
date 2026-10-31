@@ -44,6 +44,12 @@ crate::api::routes! {
     POST "/api/graph/plugin/latch" => plugin_latch; reads, musician,
         "Let a lane or a cable drive a plugin's parameter again",
         r#"{"session": 7, "node": "synth"}"#;
+    POST "/api/graph/scope" => graph_scope; reads, agents,
+        "Show a box's sound as it plays: its last frames, to the window that asks (and in each answer), while you ask again within 10 s; or stop",
+        r#"{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}"#;
+    POST "/api/graph/loudness" => graph_loudness; reads, agents,
+        "Measure the song's loudness as it plays (LUFS, and its true peak), in the meters and each answer, while you ask again within 10 s; or stop",
+        r#"{"session": 7, "client": "w1", "on": true}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
@@ -183,6 +189,51 @@ struct AuditionReq {
 async fn graph_audition(State(s): S, Json(r): Json<AuditionReq>) -> ApiResult {
     let answer = blocking(move || s.graph.audition(&r.client, r.audition)).await?;
     Ok(Json(answer.unwrap_or_else(|| json!({}))))
+}
+
+#[derive(Deserialize)]
+struct ScopeReq {
+    session: u64,
+    /// The window, or the agent, asking: the scope lasts while one asks.
+    client: String,
+    /// The box, by its module's key and its id in the graph view.
+    module: String,
+    node: String,
+    on: bool,
+}
+
+/// Start, keep or stop a scope (TAP-8): `{session, client, module, node, on}`. While a client
+/// asks (again within 10 s), its window's socket gets the box's last frames with the meters. Not a
+/// write: it works read-only. Answers `{scope: {module, node, channels, frames}}`, or `{}` for a
+/// stop; what isn't a sound at the top of its track is refused in words.
+async fn graph_scope(State(s): S, Json(r): Json<ScopeReq>) -> ApiResult {
+    let client = own(&r.client);
+    Ok(Json(blocking(move || s.graph.scope(r.session, &client, &r.module, &r.node, r.on)).await?))
+}
+
+/// The client an ask is filed under: an agent's own name after `agent:`, so an agent never stops
+/// or keeps a window's ask by naming its client (AGENT-11).
+fn own(client: &str) -> String {
+    match crate::caller::now().is_agent() {
+        true => format!("agent:{client}"),
+        false => client.to_string(),
+    }
+}
+
+#[derive(Deserialize)]
+struct LoudnessReq {
+    session: u64,
+    /// The window, or the agent, asking: the loudness is measured while one asks.
+    client: String,
+    on: bool,
+}
+
+/// Start, keep or stop the song's loudness (TAP-6): `{session, client, on}`, as the Mix view asks
+/// while it shows. While a client asks (again within 10 s), the meters carry it. Not a write.
+/// Answers `{loudness: {short, true_peak}}` as last measured, or `{}` for a stop.
+async fn graph_loudness(State(s): S, Json(r): Json<LoudnessReq>) -> ApiResult {
+    let client = own(&r.client);
+    Ok(Json(blocking(move || s.graph.loudness(r.session, &client, r.on)).await?))
 }
 
 #[derive(Deserialize)]

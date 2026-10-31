@@ -178,6 +178,9 @@ await page.waitForSelector(typeIn);
 await page.keyboard.type("-60");
 await page.keyboard.press("Enter");
 await songIs(entry("kick: kick.out,", "kick: { in: kick.out, db: db(-60) },"));
+// The fader shows −60 dB before the wheel turns it, as a person would see it: a thumb measured
+// before the window has the new value is where 0 dB was, and its notch steps from there.
+await until(async () => (await faderOf("kick")).value === -60);
 const kt = await box(thumb("kick"));
 await page.mouse.move(kt.x + kt.width / 2, kt.y + kt.height / 2);
 await page.mouse.wheel({ deltaY: 40 });
