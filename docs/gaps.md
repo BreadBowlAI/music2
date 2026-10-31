@@ -206,7 +206,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A setting can't be taken back out of its call** from the card: choosing its default writes the default in (CARD-4).
 - **Regions and a keymap are words on a card**: their picture, and changing them there, come with views (CARD-20 to CARD-29).
 - **A plugin's menu says the names its default state gives its steps**, asked once when it is described (CARD-6). Surge XT marks none of its parameters stepped, so its filter types and the like are knobs, as numbers from 0 to 1.
-- **A mixer channel's `to` on a track's own mixer card lists every track**, buses or not; the build refuses one that isn't a bus channel of that mixer, in words. The Mix view's routing knows its buses.
+- **A mixer channel's `to` is offered only on the song's one mixer** (Master and its bus channels, CARD-2); on any other mixer it says **edit in code**. A key setting of a pack's sound offers the song's tracks, and the build judges the one picked.
+- **Settings have no glow and no pointer**: an agent's change to a setting doesn't light it, and `m2 point` can't point at one (AGENT-5 and AGENT-6 name knobs).
 
 ## Problems and help
 
