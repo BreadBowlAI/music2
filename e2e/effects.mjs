@@ -32,8 +32,8 @@ await page.click('[data-module="keys"] [data-effect="delay"]');
 await sleep(1500);
 const added = read();
 ok(added.includes(`({ lane }) => ${delayed}`), "pluck is wrapped in a delay");
-ok(/import \{ delay \} from "std\/fx";/.test(added), "and delay is imported");
-ok(added.replace(/\nimport \{ delay \} from "std\/fx";/, "").replace(delayed, "pluck(lane.notes(\"chords\"))") === original, "nothing else changed");
+ok(/import \{ delay \} from "@m2\/effects";/.test(added), "and delay is imported, from the pack music2 ships (PACK-15)");
+ok(added.replace(/\nimport \{ delay \} from "@m2\/effects";/, "").replace(delayed, "pluck(lane.notes(\"chords\"))") === original, "nothing else changed");
 // In words, with its Undo; never the code diff (taste.md ST-5, ST-6). Both by their labels (DV-2).
 ok((await page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent))).includes("Added Delay after PluckUndo"), "a toast says what was added, with Undo");
 ok(!!(await page.$('[data-module="keys"] [data-node="delay"]')), "a delay node appears in Keys");

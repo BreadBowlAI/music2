@@ -1,5 +1,6 @@
-//! MIDI files and songs (studio lane C, gaps #36): the std sound a MIDI part plays and the program
-//! a track is written with (Q33, one table for both ways), a song or one clip written as a MIDI
+//! MIDI files and songs (studio lane C, gaps #36): the sound of music2's own packs (PACK-15) a MIDI
+//! part plays and the program a track is written with (Q33, one table for both ways), a song or one
+//! clip written as a MIDI
 //! file for other music apps (Q37), and a MIDI file brought in as parts, its tempo map and its time
 //! signatures (Q32–Q36, D10, D11).
 //!
@@ -23,12 +24,13 @@ use crate::timeline::{self, TimelineLane};
 
 /// Ticks a beat in the files music2 writes.
 pub const TICKS: u16 = 960;
-/// What a part on channel 10 plays: General MIDI's drums, as `std/drums` names its notes.
-pub const DRUM_KIT: &str = "std:drum-kit";
+/// What a part on channel 10 plays: General MIDI's drums, as `@m2/drums` names its notes.
+pub const DRUM_KIT: &str = "@m2/drums:drum-kit";
 /// Channel 10, as files count channels from 0.
 const DRUM_CHANNEL: u8 = 9;
 
-/// A std sound: the General MIDI programs that pick it (Q33), and the one it is written with.
+/// A sound of music2's own packs (PACK-15): the General MIDI programs that pick it (Q33), and the
+/// one it is written with.
 struct Sound {
     component: &'static str,
     /// First and last, both in.
@@ -40,34 +42,34 @@ struct Sound {
 /// sound's own program, a fitting one of General MIDI's.
 const SOUNDS: &[Sound] = &[
     // Electric Piano 1.
-    Sound { component: "std:fm-keys", picked_by: &[(0, 7)], writes: 4 },
+    Sound { component: "@m2/synths:fm-keys", picked_by: &[(0, 7)], writes: 4 },
     // Tubular Bells.
-    Sound { component: "std:fm-bell", picked_by: &[(8, 15)], writes: 14 },
+    Sound { component: "@m2/synths:fm-bell", picked_by: &[(8, 15)], writes: 14 },
     // Pad 2 (warm).
-    Sound { component: "std:synth-pad", picked_by: &[(16, 23), (88, 103), (120, 127)], writes: 89 },
+    Sound { component: "@m2/synths:synth-pad", picked_by: &[(16, 23), (88, 103), (120, 127)], writes: 89 },
     // Acoustic Guitar (steel).
-    Sound { component: "std:synth-pluck", picked_by: &[(24, 31), (104, 111)], writes: 25 },
+    Sound { component: "@m2/synths:synth-pluck", picked_by: &[(24, 31), (104, 111)], writes: 25 },
     // Synth Bass 1.
-    Sound { component: "std:synth-bass", picked_by: &[(32, 39)], writes: 38 },
+    Sound { component: "@m2/synths:synth-bass", picked_by: &[(32, 39)], writes: 38 },
     // String Ensemble 1.
-    Sound { component: "std:synth-strings", picked_by: &[(40, 55)], writes: 48 },
+    Sound { component: "@m2/synths:synth-strings", picked_by: &[(40, 55)], writes: 48 },
     // Synth Brass 1.
-    Sound { component: "std:synth-supersaw", picked_by: &[(56, 63)], writes: 62 },
+    Sound { component: "@m2/synths:synth-supersaw", picked_by: &[(56, 63)], writes: 62 },
     // Lead 2 (sawtooth).
-    Sound { component: "std:synth-lead", picked_by: &[(64, 87)], writes: 81 },
+    Sound { component: "@m2/synths:synth-lead", picked_by: &[(64, 87)], writes: 81 },
     // Steel Drums.
-    Sound { component: "std:fm-metal", picked_by: &[(112, 119)], writes: 114 },
-    // std/instruments' simple sounds: written as their nearest, never picked.
-    Sound { component: "std:bass", picked_by: &[], writes: 38 },
-    Sound { component: "std:pluck", picked_by: &[], writes: 25 },
-    Sound { component: "std:pad", picked_by: &[], writes: 89 },
-    Sound { component: "std:synth-sub", picked_by: &[], writes: 38 },
+    Sound { component: "@m2/synths:fm-metal", picked_by: &[(112, 119)], writes: 114 },
+    // @m2/synths' simple sounds: written as their nearest, never picked.
+    Sound { component: "@m2/synths:bass", picked_by: &[], writes: 38 },
+    Sound { component: "@m2/synths:pluck", picked_by: &[], writes: 25 },
+    Sound { component: "@m2/synths:pad", picked_by: &[], writes: 89 },
+    Sound { component: "@m2/synths:synth-sub", picked_by: &[], writes: 38 },
 ];
 
-/// std/instruments' drums, which have no category: their lanes are drums too.
-const PLAIN_DRUMS: &[&str] = &["std:kick", "std:hat"];
+/// @m2/synths' simple drums, which have no category: their lanes are drums too.
+const PLAIN_DRUMS: &[&str] = &["@m2/synths:kick", "@m2/synths:hat"];
 
-/// The std sound a part plays (Q33): channel 10 plays the Drum kit; else its program's family;
+/// The sound a part plays (Q33): channel 10 plays the Drum kit; else its program's family;
 /// with no program, Synth bass when its notes average below C3, else FM keys.
 pub fn sound_for(drums: bool, program: Option<u8>, average_pitch: f64) -> &'static str {
     if drums {
@@ -75,10 +77,10 @@ pub fn sound_for(drums: bool, program: Option<u8>, average_pitch: f64) -> &'stat
     }
     match program {
         Some(p) => {
-            SOUNDS.iter().find(|s| s.picked_by.iter().any(|&(lo, hi)| (lo..=hi).contains(&p))).map_or("std:fm-keys", |s| s.component)
+            SOUNDS.iter().find(|s| s.picked_by.iter().any(|&(lo, hi)| (lo..=hi).contains(&p))).map_or("@m2/synths:fm-keys", |s| s.component)
         }
-        None if average_pitch < 48.0 => "std:synth-bass",
-        None => "std:fm-keys",
+        None if average_pitch < 48.0 => "@m2/synths:synth-bass",
+        None => "@m2/synths:fm-keys",
     }
 }
 
@@ -128,7 +130,7 @@ pub fn player_of(rev: &Revision, module: &str, lane: &str) -> Option<String> {
     }
 }
 
-/// Whether `component` plays drums: the Drum kit, any of std's Drums, std/instruments' kick and hat.
+/// Whether `component` plays drums: the Drum kit, any of the Drums group, @m2/synths' simple kick and hat.
 fn is_drums(rev: &Revision, component: &str) -> bool {
     PLAIN_DRUMS.contains(&component)
         || rev.compiled.components.get(component).is_some_and(|d| d.editor.category.as_deref() == Some("Drums"))
@@ -280,7 +282,7 @@ pub const SHORTEST: f64 = 1.0 / 64.0;
 pub struct Part {
     /// The track's name, or the sound's label when the track has none or makes several parts.
     pub label: String,
-    /// The std sound it plays (Q33).
+    /// The sound it plays (Q33).
     pub component: String,
     /// Its notes, in beats from the file's start, by start.
     pub notes: Vec<Note>,

@@ -1,6 +1,6 @@
 {
   // The SDK's call types and std's calls, checked as the app's code editor checks songs: strict,
-  // against the SDK and std sources. web's `npm run typecheck` (and so `npm run build`) runs it:
+  // against the SDK, std and the bundled packs' sources. web's `npm run typecheck` (and so `npm run build`) runs it:
   // `web/node_modules/.bin/tsc -p core/script/sdk/check`.
   "compilerOptions": {
     "target": "ES2020",
@@ -10,7 +10,7 @@
     "strict": true,
     "noEmit": true,
     "isolatedModules": true,
-    "paths": { "@m2/core": ["../core.ts"], "std/*": ["../../../../std/src/*"] }
+    "paths": { "@m2/core": ["../core.ts"], "std/*": ["../../../../std/src/*"], "@m2/*": ["../../../../packs/@m2/*/src/index.ts"] }
   },
   "files": ["calls.ts", "std.ts"]
 }

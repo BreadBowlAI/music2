@@ -7,6 +7,8 @@
 //! PkgManifest   m2pkg.toml, read strictly (PACK-2)
 //! Listing       m2pack.json: every file of an installed version, its size and hash (PACK-6)
 //! Store         ~/Music/music2/Packs/<name>/<version>/ (PACK-6)
+//! Store::install  a pack's folder copied in as a version, read-only (PACK-6, PACK-16)
+//! install_bundled the packs music2 ships, installed into the store when it starts (PACK-15 to PACK-17)
 //! Lock          music2.lock: the exact version and hash of each pack a song uses (PACK-8)
 //! resolve       the packs a song builds with, and what keeps one from it (PACK-9)
 //! relock        the lock `m2 pack lock` and `m2 pack update` write (PACK-8)
@@ -819,6 +821,11 @@ pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, app: &App
         false => Err(problems),
     }
 }
+
+mod bundled;
+mod install;
+pub use bundled::{bundled, install_bundled, source_packs, test_packs, test_store};
+pub use install::{Install, read_only_inside, remove_tree, set_read_only};
 
 #[cfg(test)]
 mod tests;

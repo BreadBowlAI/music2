@@ -13,7 +13,7 @@ use super::*;
 use m2_editor::render::Length;
 
 /// Two kick tracks: `kick` plays its `hits`, `snare` its own `hits`.
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\n\
                     const s = track('snare', ({ lane }) => kick(lane.notes('hits')));\n\
                     export default song(() => sum(k.out, s.out));\n";
@@ -222,7 +222,7 @@ fn midi_never_waits_for_a_compile() {
     fixture.put("tracks/b.ts", &slow(0));
     fixture.put(
         "song.ts",
-        "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+        "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
          import { b } from './tracks/b';\nconst k = track('kick', ({ lane }) => kick(lane.notes('hits')));\n\
          export default song(() => sum(k.out, b.out));\n",
     );

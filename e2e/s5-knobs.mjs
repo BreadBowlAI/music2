@@ -48,11 +48,11 @@ const EXPECTED = [
   ["bass", "std:lfo", "phase", false, [0, 1], false],
   ["bass", "std:xrange", "lo", true, null, false],
   ["bass", "std:xrange", "hi", true, null, false],
-  ["bass", "std:bass", "drive", false, [0, 36], false],
-  ["hats", "std:hat", "decay", false, [0.005, 1], true],
-  ["keys", "std:pluck", "brightness", false, [200, 20000], true],
-  ["kick", "std:kick", "tune", false, [20, 200], true],
-  ["kick", "std:kick", "decay", false, [0.01, 2], true],
+  ["bass", "@m2/synths:bass", "drive", false, [0, 36], false],
+  ["hats", "@m2/synths:hat", "decay", false, [0.005, 1], true],
+  ["keys", "@m2/synths:pluck", "brightness", false, [200, 20000], true],
+  ["kick", "@m2/synths:kick", "tune", false, [20, 200], true],
+  ["kick", "@m2/synths:kick", "decay", false, [0.01, 2], true],
   ["kick", "std:follow", "attack", false, [0.0001, 1], true],
   ["kick", "std:follow", "release", true, [0.001, 5], true],
 ];
@@ -158,14 +158,14 @@ check(written > 0.045 && written <= 1, `as a plain number in seconds, up from th
 check(read("tracks/hats.ts").replace(insertedHat, 'hat(lane.notes("hits"))') === hats, "and nothing else in the file changed");
 check(
   await until(async () => {
-    const x = await knobOf("hats", "std:hat", "decay");
+    const x = await knobOf("hats", "@m2/synths:hat", "decay");
     return x?.k.written && close(x.k.value, written) && !(await page.$(`${decay}[data-default]`));
   }),
   "the knob is written now, no longer drawn as a default",
 );
 await undo();
 check(await until(() => read("tracks/hats.ts") === hats), "undo takes out exactly what was inserted");
-check(await until(async () => (await knobOf("hats", "std:hat", "decay"))?.k.written === false), "and the knob plays its default again");
+check(await until(async () => (await knobOf("hats", "@m2/synths:hat", "decay"))?.k.written === false), "and the knob plays its default again");
 
 // After the options written: `follow(out, { release: ms(150) })` leaves out its attack.
 const kick = read("tracks/kick.ts");
@@ -263,10 +263,10 @@ check(await until(() => read("song.ts") === songFile), "undo takes the pan out")
 await view("graph");
 
 // ------------------------------------------------------------------ alias
-const echo = `import { track } from "@m2/core";\nimport { delay as echo } from "std/fx";\nimport { pluck } from "std/instruments";\n\nexport default track("keys", { name: "Keys" }, ({ lane }) => echo(pluck(lane.notes("chords"))));\n`;
+const echo = `import { track } from "@m2/core";\nimport { delay as echo } from "@m2/effects";\nimport { pluck } from "@m2/synths";\n\nexport default track("keys", { name: "Keys" }, ({ lane }) => echo(pluck(lane.notes("chords"))));\n`;
 write("tracks/keys.ts", echo);
-const echoNode = async () => (await state()).view.modules.find((m) => m.key === "keys")?.nodes.find((n) => n.component === "std:delay");
-check(await until(async () => !!(await echoNode()), 10000), "a delay imported as echo, saved by another editor, is a std:delay call");
+const echoNode = async () => (await state()).view.modules.find((m) => m.key === "keys")?.nodes.find((n) => n.component === "@m2/effects:delay");
+check(await until(async () => !!(await echoNode()), 10000), "a delay imported as echo, saved by another editor, is a @m2/effects:delay call");
 const node = await echoNode();
 check(node?.label === "echo" && node.effect === "Delay", `shown as echo, the Delay effect (${node?.label}, ${node?.effect})`);
 const delayKnobs = (node?.knobs ?? []).map((k) => [k.slot, k.written, k.range, k.log]);

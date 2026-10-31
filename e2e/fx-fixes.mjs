@@ -46,7 +46,7 @@ function longSong(dir, name, minutes) {
     `${dir}/music2.toml`,
     `[project]\nname = ${JSON.stringify(name)}\nentry = "song.ts"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "1"\nstd = "0.5"\n`,
   );
-  fs.writeFileSync(`${dir}/song.ts`, "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\nconst p = track('pad', { name: 'Pad' }, ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n");
+  fs.writeFileSync(`${dir}/song.ts`, "import { song, track } from '@m2/core';\nimport { pad } from '@m2/synths';\nconst p = track('pad', { name: 'Pad' }, ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n");
   const beats = minutes * 120;
   fs.writeFileSync(`${dir}/data/pad/chords.json`, JSON.stringify({ clips: [{ id: "chords1", start: 0, length: beats, notes: [45, 52, 57, 60, 64].map((pitch) => ({ pitch, start: 0, length: beats })) }] }));
   fs.writeFileSync(`${dir}/data/arrangement.json`, JSON.stringify({ tempo: [{ beat: 0, bpm: 120 }] }));

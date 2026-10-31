@@ -409,7 +409,7 @@ mod tests {
             let p = Project(dir);
             p.write(
                 "music2.toml",
-                "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+                "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
             );
             for (name, text) in files {
                 p.write(name, text);
@@ -428,7 +428,7 @@ mod tests {
         }
 
         fn session(&self) -> Session {
-            let mut packages = PackageSet::default();
+            let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
             packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
             Session::open(&self.0, packages).unwrap()
         }

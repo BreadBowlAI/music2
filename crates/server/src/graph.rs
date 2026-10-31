@@ -1554,7 +1554,7 @@ impl Graph {
         self.edit(token, move |s| s.disconnect(revision, &id))
     }
 
-    /// Put one of the packages' effects, named by its ComponentId (`std:delay`), after a call's
+    /// Put one of the packages' effects, named by its ComponentId (`@m2/effects:delay`), after a call's
     /// audio, in code.
     pub fn add_effect(&self, token: u64, revision: u64, call: &str, component: &str) -> Result<Value> {
         let (call, component) = (call.to_string(), component.to_string());
@@ -1622,7 +1622,7 @@ impl Graph {
         })
     }
 
-    /// Add a track playing instrument `component` (`std:synth-pluck`), named `label` (else the
+    /// Add a track playing instrument `component` (`@m2/synths:synth-pluck`), named `label` (else the
     /// instrument's), keyed `key` (else proposed from the label), below track `after` (WRITE-10).
     /// The answer names the track: `module` and `label`.
     pub fn add_track(

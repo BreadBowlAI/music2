@@ -1,6 +1,6 @@
 import { ms, track } from "@m2/core";
+import { kick } from "@m2/synths";
 import { follow } from "std/dsp";
-import { kick } from "std/instruments";
 
 export default track("kick", { name: "Kick" }, ({ lane }) => {
   const out = kick(lane.notes("hits"));

@@ -1,7 +1,7 @@
 {
   "m2preset": 1,
   "name": "Warm",
-  "sound": "std:synth-pad",
+  "sound": "@m2/synths:synth-pad",
   "values": {
     "attack": 0.9,
     "cutoff": 1200,

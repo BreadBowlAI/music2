@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// A component as its descriptor declares it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Descriptor {
-    /// The ComponentId: `<package>:<id>` (`std:delay`), or a project component's bare id (PKG-9).
+    /// The ComponentId: `<package>:<id>` (`@m2/effects:delay`), or a project component's bare id (PKG-9).
     pub id: String,
     pub label: String,
     /// The module that defines it, as imported: `std/fx`, or a project path (`lib/fx.ts`).

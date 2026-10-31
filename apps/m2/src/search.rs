@@ -18,8 +18,8 @@ use serde_json::Value;
 pub fn packages() -> Vec<(String, PathBuf)> {
     let std = m2_server::resources::std_dir();
     let mut packages = vec![("std".to_string(), std.clone())];
-    if let Some(store) = m2_os::dirs::packs() {
-        packages.extend(library::store_packs(&store, &std));
+    if let Some(store) = crate::packs_store() {
+        packages.extend(library::store_packs(&store.dir, &std));
     }
     packages
 }

@@ -44,7 +44,7 @@ impl Fixture {
     }
 
     fn open(&self) -> Session {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         Session::open(&self.0, packages).unwrap()
     }
@@ -253,7 +253,7 @@ export default song(() => {
 fn the_new_effects_knobs_span_what_their_controls_declare() {
     let fixture = Fixture::song(
         "import { song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { lowpass } from \"std/filter\";\n\
-         import { bitcrush, chorus, compress, widen } from \"std/fx\";\n\
+         import { bitcrush, chorus, widen } from \"@m2/effects\";\nimport { compress } from \"std/fx\";\n\
          export default song(() => widen(bitcrush(compress(chorus(lowpass(osc.saw(110), 20), { rate: 0.8 }), \
          { ratio: 3, attack: 0.01, release: 0.15 }), { bits: 8 }), { width: 1.5 }));\n",
     );
@@ -281,7 +281,7 @@ fn the_new_effects_knobs_span_what_their_controls_declare() {
 fn effects_that_follow_the_song_show_no_time_node() {
     let fixture = Fixture::song(
         "import { song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
-         import { bitcrush, chorus, phaser, tremolo } from \"std/fx\";\n\
+         import { bitcrush, chorus, phaser, tremolo } from \"@m2/effects\";\n\
          export default song(() => bitcrush(tremolo(phaser(chorus(chorus(osc.saw(110)), { rate: 0.8 })))));\n",
     );
     let s = fixture.open();

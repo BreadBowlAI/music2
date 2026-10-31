@@ -58,7 +58,7 @@ pub fn offers() -> Vec<get::Offer> {
             return vec![];
         }
     };
-    let store = Store::here();
+    let store = crate::packs_store();
     get::offers(&catalog, &|name| store.as_ref().and_then(|s| s.versions(name).last().copied()), &|_| false)
 }
 
@@ -104,7 +104,7 @@ fn get_one(remote: &Remote, store: &Store, name: &PackName, version: &m2_song::r
 /// folder given, or the one `m2` runs in).
 pub fn pack_get(arg: Option<&str>) -> Result<()> {
     let remote = remote()?;
-    let store = Store::here().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"))?;
+    let store = crate::packs_store().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"))?;
     let catalog = catalog(&remote)?;
     if let Some(named) = arg.filter(|a| a.starts_with('@')) {
         let (name, version) = match named[1..].split_once('@') {

@@ -1,4 +1,4 @@
-//! `fm`, the FM voice behind std/fm's keys, bells and metal: two operator pairs, each a sine
+//! `fm`, the FM voice behind @m2/synths' FM keys, bells and metal: two operator pairs, each a sine
 //! modulator into a sine carrier, mixed, at 2× and decimated, so a bright patch's upper
 //! sidebands fold into the decimator's stopband instead of back into the audio. Port order
 //! must match `std/m2pkg.toml`.

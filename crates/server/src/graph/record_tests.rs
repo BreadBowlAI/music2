@@ -13,7 +13,7 @@ use super::super::midi::Event;
 use super::super::tests::Fixture;
 use super::*;
 
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
                     const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\n\
                     const k = track('keys', { name: 'Keys' }, ({ lane }) => kick(lane.notes('notes')));\n\
                     export default song(() => sum(b.out, k.out));\n";
@@ -1350,7 +1350,7 @@ fn a_take_begun_while_an_agents_import_copies_leaves_nothing() {
     use crate::caller::{Caller, as_caller};
     use m2_editor::import::{Source, Target};
     // The rig's song, with an audio track to bring the file onto.
-    let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+    let song = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
                 const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\n\
                 const k = track('keys', { name: 'Keys' }, ({ lane }) => kick(lane.notes('notes')));\n\
                 const v = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\

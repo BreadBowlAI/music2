@@ -64,15 +64,15 @@ check(
   first?.title === "Change Hats's instrument" && first.shown === "Change Hats's instrument" && first.placeholder === "Find an instrument…" && first.focused,
   `titled for the track, its search field focused (${JSON.stringify(first)})`,
 );
-check(first?.ticked.length === 0, "Hats plays std/instruments' simple hat, which the list doesn't offer: nothing is ticked");
+check(first?.ticked.length === 0, "Hats plays @m2/synths' simple hat, which the list doesn't offer: nothing is ticked");
 await linted(LIST, "the list in change mode");
 await page.screenshot({ path: `${ROOT}/pl-sounds-list.png` });
 await page.keyboard.type("kit");
-check(await until(async () => (await listInfo())?.active === "std:drum-kit"), "typing kit picks the Drum kit");
+check(await until(async () => (await listInfo())?.active === "@m2/drums:drum-kit"), "typing kit picks the Drum kit");
 check((await listInfo())?.code === 'tracks/hats.ts · drums.kit(lane.notes("hits"))', `its foot shows the code it writes: ${(await listInfo())?.code}`);
 const rev0 = await revision();
 await page.keyboard.press("Enter");
-const kit = orig.hats.replace('import { hat } from "std/instruments";', 'import { drums } from "std/drums";').replace('hat(lane.notes("hits"))', 'drums.kit(lane.notes("hits"))');
+const kit = orig.hats.replace('import { hat } from "@m2/synths";', 'import { drums } from "@m2/drums";').replace('hat(lane.notes("hits"))', 'drums.kit(lane.notes("hits"))');
 check(await until(() => read("tracks/hats.ts") === kit), `Return writes drums.kit(lane.notes("hits")) in tracks/hats.ts (${read("tracks/hats.ts").split("\n").find((l) => l.includes("track("))})`);
 check((await revision()) === rev0 + 1 && read("song.ts") === orig.song, "one revision, and song.ts as it was");
 check(await toasted("Hats plays Drum kit now"), `a toast says "Hats plays Drum kit now" (${await toasts()})`);
@@ -82,7 +82,7 @@ await openMenu("hats");
 await page.click("[data-testid=track-menu] [data-testid=change-instrument]");
 await page.waitForSelector(LIST);
 const again = await listInfo();
-check(same(again?.ticked, ["std:drum-kit"]) && again.active === "std:drum-kit", `opened again, Drum kit is ticked and active (${JSON.stringify(again)})`);
+check(same(again?.ticked, ["@m2/drums:drum-kit"]) && again.active === "@m2/drums:drum-kit", `opened again, Drum kit is ticked and active (${JSON.stringify(again)})`);
 await key("Escape");
 check(await until(async () => !(await page.$(LIST))), "Esc closes it");
 check(await clickToastAction("Undo").then(() => until(() => read("tracks/hats.ts") === orig.hats)), "the toast's Undo puts hats.ts back, byte for byte");
@@ -115,7 +115,7 @@ await page.waitForSelector(LIST);
 check((await listInfo())?.title === "Change Keys's instrument", "it opens the list for Keys");
 await page.keyboard.type("fm bell");
 await page.keyboard.press("Enter");
-check(await until(() => read("tracks/keys.ts").includes('fm.bell(lane.notes("chords"))') && read("tracks/keys.ts").includes('import { fm } from "std/fm";')), `Keys plays an FM bell: ${read("tracks/keys.ts").split("\n").find((l) => l.includes("track("))}`);
+check(await until(() => read("tracks/keys.ts").includes('fm.bell(lane.notes("chords"))') && read("tracks/keys.ts").includes('import { fm } from "@m2/synths";')), `Keys plays an FM bell: ${read("tracks/keys.ts").split("\n").find((l) => l.includes("track("))}`);
 check(await toasted("Keys plays FM bell now"), `with its toast (${await toasts()})`);
 await key("Meta+z");
 check(await until(() => read("tracks/keys.ts") === orig.keys), "⌘Z puts keys.ts back");
@@ -143,7 +143,7 @@ async function openClip(lane) {
 const keyLabel = (pitch) => page.$eval(`[data-testid=roll-keys] [data-key="${pitch}"]`, (e) => e.querySelector("span")?.textContent ?? "").catch(() => null);
 const keysWidth = () => page.$eval("[data-testid=roll-keys]", (e) => Math.round(e.getBoundingClientRect().width)).catch(() => null);
 const s0 = await state();
-const added = await post("/track/add", { session: s0.session, component: "std:drum-kit" });
+const added = await post("/track/add", { session: s0.session, component: "@m2/drums:drum-kit" });
 check(added.status === 200 && added.body.module === "drum-kit", `a Drum kit track is added (${JSON.stringify(added.body).slice(0, 80)})`);
 await until(async () => (await state()).timeline.tracks.some((t) => t.module === "drum-kit"));
 const s1 = await state();
@@ -215,7 +215,7 @@ check((await keyLabel(48)) === "C3" && (await keyLabel(36)) === "C2" && (await k
 
 // A Lead plays one note at a time: its card in Device says so under its name, all of it in the tooltip.
 const s2 = await state();
-const lead = await post("/track/add", { session: s2.session, component: "std:synth-lead" });
+const lead = await post("/track/add", { session: s2.session, component: "@m2/synths:synth-lead" });
 await view("graph");
 await until(async () => !!(await page.$(`[data-module-tab="${lead.body.module}"]`)));
 await page.click(`[data-module-tab="${lead.body.module}"] [data-testid=track-label]`);

@@ -71,7 +71,7 @@ pub fn write(dir: &Path, r: &Reference) -> Result<()> {
     let name = r.name();
     put(
         "music2.toml",
-        format!("[project]\nname = \"{name}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n")
+        format!("[project]\nname = \"{name}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n")
             .as_bytes(),
     )?;
     put(".gitignore", b".music2/\n")?;
@@ -90,7 +90,7 @@ pub fn write(dir: &Path, r: &Reference) -> Result<()> {
         put(
             &format!("tracks/{key}.ts"),
             format!(
-                "import {{ track }} from \"@m2/core\";\nimport {{ delay, reverb }} from \"std/fx\";\nimport {{ bass, pad, pluck }} from \"std/instruments\";\n\n\
+                "import {{ track }} from \"@m2/core\";\nimport {{ delay, reverb }} from \"@m2/effects\";\nimport {{ bass, pad, pluck }} from \"@m2/synths\";\n\n\
                  export default track(\"{key}\", ({{ lane }}) => {body});\n"
             )
             .as_bytes(),
@@ -220,7 +220,7 @@ mod tests {
     }
 
     fn compile(dir: &Path) -> crate::Compiled {
-        let mut pk = PackageSet::default();
+        let mut pk = PackageSet::default().with_store(m2_song::pack::test_store());
         pk.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         crate::compile(&Project::open(dir).unwrap(), &mut pk).unwrap_or_else(|e| panic!("{e:?}"))
     }

@@ -17,8 +17,8 @@ use crate::{Running, ServeOptions, start_with};
 const PAGE: &str = "t0k";
 const TOOLS: &str = "t00ls";
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
 
 /// What AGENT-11 names as the musician's: each is in the table, and not for agents.

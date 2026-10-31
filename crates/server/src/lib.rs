@@ -158,10 +158,12 @@ impl AppState {
     }
 
     /// Read your presets and keep previews and samples' measures in `folders` from now on (LIB-1,
-    /// LIB-3, LIB-5), build songs with its store of packs, and start indexing the samples a search
-    /// will want first and fetching the registry's catalog (REG-12). Once.
+    /// LIB-3, LIB-5), install the packs music2 ships into its store of packs (PACK-16) and build
+    /// songs with that store, and start indexing the samples a search will want first and fetching
+    /// the registry's catalog (REG-12). Once.
     pub fn keep_library(&self, folders: library::Folders) {
         if let Some(store) = &folders.packs {
+            resources::install_packs(store, false);
             self.graph.keep_store(store);
         }
         if self.library.set(folders).is_ok() {
@@ -540,7 +542,7 @@ mod tests {
         std::fs::create_dir_all(&song).unwrap();
         std::fs::write(
             song.join("music2.toml"),
-            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
         )
         .unwrap();
         std::fs::write(
@@ -593,6 +595,49 @@ mod tests {
         AppState::new(String::new(), graph::Graph::default())
     }
 
+    // PACK-15, PACK-16: the server's start installs the packs music2 ships into the store it is
+    // given, from where they ship; a song from a template builds from that store; and a second
+    // start finds them there and writes nothing.
+    #[test]
+    fn the_servers_start_installs_the_packs_music2_ships_and_a_second_writes_nothing() {
+        let home = std::env::temp_dir().join(format!("m2-server-bundled-{}", std::process::id()));
+        let _ = m2_song::pack::remove_tree(&home);
+        let store = home.join("Packs");
+        let start = || {
+            let s = AppState::new(String::new(), graph::Graph::silent());
+            s.keep_library(library::Folders { packs: Some(store.clone()), ..library::Folders::default() });
+            s
+        };
+        let s = start();
+        let installed: Vec<String> = m2_song::pack::Store::at(store.clone()).list().iter().map(|(n, v)| format!("{n} {}", v[0])).collect();
+        assert_eq!(installed, ["@m2/drums 1.0.0", "@m2/effects 1.0.0", "@m2/synths 1.0.0"]);
+        // A new song from the starter template, locked to them (PACK-18), builds from this store
+        // alone: no registry, no network.
+        let song = project::create(&home, "Song", &resources::templates_dir().join("starter")).unwrap();
+        assert!(song.join("music2.lock").is_file(), "the template's lock comes with it");
+        s.graph.open(&song).unwrap();
+        let state = s.graph.state().unwrap();
+        assert_eq!(state["diagnostics"], json!([]), "{state}");
+        let touched = |dir: &Path| -> Vec<std::time::SystemTime> {
+            let mut out = vec![];
+            let mut stack = vec![dir.to_path_buf()];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).unwrap().flatten() {
+                    out.push(e.metadata().unwrap().modified().unwrap());
+                    if e.file_type().unwrap().is_dir() {
+                        stack.push(e.path());
+                    }
+                }
+            }
+            out
+        };
+        let before = touched(&store);
+        std::thread::sleep(Duration::from_millis(20));
+        drop(start());
+        assert_eq!(touched(&store), before, "a second start writes nothing");
+        m2_song::pack::remove_tree(&home).unwrap();
+    }
+
     /// The desktop app reports a bad project folder before its window connects.
     #[test]
     fn a_toast_no_client_heard_goes_to_the_next_one() {
@@ -638,9 +683,9 @@ mod tests {
     fn a_graph_event_carries_the_revision_and_its_problems() {
         let dir = std::env::temp_dir().join(format!("m2-server-news-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("data/kick")).unwrap();
-        let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+        let song = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
-        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
         std::fs::write(dir.join("music2.toml"), manifest).unwrap();
         std::fs::write(dir.join("song.ts"), song).unwrap();
         std::fs::write(dir.join("data/kick/old.json"), r#"{"clips": []}"#).unwrap();

@@ -1,7 +1,7 @@
 {
   "m2preset": 1,
   "name": "Big hall",
-  "sound": "std:reverb",
+  "sound": "@m2/effects:reverb",
   "values": {
     "damping": 0.35,
     "mix": 0.35,

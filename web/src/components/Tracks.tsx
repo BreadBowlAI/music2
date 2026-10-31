@@ -22,7 +22,7 @@ import PluginsFoot from "./PluginsFoot";
 // Every one is one undo step on the server; the timeline shows the result, so only what may be off
 // screen or is structural (add, duplicate, delete) says so in a toast (taste.md §2.14).
 
-/** What a dragged instrument row of the browser carries: its component (`std:synth-pluck`). */
+/** What a dragged instrument row of the browser carries: its component (`@m2/synths:synth-pluck`). */
 export const INSTRUMENT_DRAG = "application/x-m2-instrument";
 
 /** ⌘⌫ as this platform writes it. */

@@ -8,7 +8,7 @@ use super::super::tests::Fixture;
 use super::*;
 
 /// A kick on every beat, from std's drum.
-const KICK: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+const KICK: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
 
 /// Kick and bass tracks into std's mixer, and `more` after them.

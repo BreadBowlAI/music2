@@ -160,6 +160,8 @@ if [ -e "$OUT" ] && [ ! -e "$OUT/.m2-check" ]; then
   echo "ci/check.sh: $OUT wasn't made by a check, so it is left alone: name another folder in M2_CHECK_OUT"
   exit 2
 fi
+# A pack installed in the last check's scratch HOME is read-only (PACK-6, PACK-16).
+if [ -e "$OUT" ]; then chmod -R u+w "$OUT"; fi
 rm -rf "$OUT" && mkdir -p "$OUT/home" && : > "$OUT/.m2-check" || exit 2
 SCR=$(mktemp -d "${TMPDIR:-/tmp}/m2-check.XXXXXX") || exit 2
 START=$(date +%s)
@@ -344,7 +346,7 @@ stopped() {
   summary
   exit 1
 }
-trap 'closeapp; rm -rf "$SCR"' EXIT
+trap 'closeapp; chmod -R u+w "$SCR" 2> /dev/null; rm -rf "$SCR"' EXIT
 trap stopped INT TERM
 
 echo "music2 check of $SHA on $MACHINE (logs in $OUT)"

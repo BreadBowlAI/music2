@@ -77,7 +77,8 @@ fn pack_names() {
 #[test]
 fn ids_split_at_the_first_colon() {
     assert_eq!(split_id("@alice/felt-piano:felt-piano"), Some(("@alice/felt-piano", "felt-piano")));
-    assert_eq!(split_id("std:synth-pluck"), Some(("std", "synth-pluck")));
+    assert_eq!(split_id("std:svf-lowpass"), Some(("std", "svf-lowpass")));
+    assert_eq!(split_id("@m2/synths:synth-pluck"), Some(("@m2/synths", "synth-pluck")));
     assert_eq!(split_id("clap:org.example:odd"), Some(("clap", "org.example:odd")));
     assert_eq!(split_id("delay"), None, "a project's own component has no package");
 }
@@ -497,4 +498,98 @@ fn a_pipe_in_a_pack_is_refused_before_anything_is_read() {
     let e = Listing::of(&d).unwrap_err().to_string();
     assert!(e.contains("samples/hang.wav isn't a plain file (a pipe or a device)"), "{e}");
     assert!(pack_files(&d).is_err());
+}
+
+// PACK-6: a repair whose new copy can't go in (a scanner holding a file just written, on Windows)
+// puts the copy before back, read-only, and leaves nothing aside.
+#[test]
+fn a_repair_that_cant_put_the_new_copy_in_puts_the_old_one_back() {
+    let f = scratch("swap");
+    let pack = f.join("Packs/@a/x");
+    let (target, temp, old) = (pack.join("1.0.0"), pack.join(".1.0.0.1.tmp"), pack.join(".1.0.0.1.old"));
+    for (dir, text) in [(&target, "before"), (&temp, "new")] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("m2pack.json"), text).unwrap();
+    }
+    read_only_inside(&target).unwrap();
+    set_read_only(&target, true).unwrap();
+    let mut rename = |a: &Path, b: &Path| match a == temp {
+        true => Err(std::io::Error::other("held by another program")),
+        false => std::fs::rename(a, b),
+    };
+    assert!(install::swap(&temp, &target, &old, &mut rename).is_err());
+    assert_eq!(std::fs::read_to_string(target.join("m2pack.json")).unwrap(), "before", "the version is as it was");
+    assert!(!old.exists(), "nothing is left aside");
+    assert!(std::fs::metadata(&target).unwrap().permissions().readonly(), "read-only again");
+    remove_tree(&f).unwrap();
+}
+
+/// Every file and folder under `dir` with when it was last changed: what a write would move.
+fn stamps(dir: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut out = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        out.push((d.clone(), std::fs::metadata(&d).unwrap().modified().unwrap()));
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            match e.file_type().unwrap().is_dir() {
+                true => stack.push(e.path()),
+                false => out.push((e.path(), e.metadata().unwrap().modified().unwrap())),
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// PACK-15, PACK-16: the packs music2 ships install into an empty store, each as the version its
+// m2pkg.toml names, read-only; installing them again, as every start does, writes nothing.
+#[test]
+fn installing_the_bundled_packs_twice_writes_nothing() {
+    let d = scratch("bundled");
+    let store = Store::at(d.join("Packs"));
+    let first = install_bundled(&source_packs(), &store);
+    let names: Vec<String> = first
+        .iter()
+        .map(|(_, done)| match done {
+            Ok(Install::Installed { name, version, .. }) => format!("{name} {version}"),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(names, ["@m2/drums 1.0.0", "@m2/effects 1.0.0", "@m2/synths 1.0.0"]);
+    for (dir, _) in &first {
+        let m = PkgManifest::at(dir).unwrap();
+        let hash = store.check(&m.package.name, &m.package.version).unwrap();
+        assert_eq!(hash, Listing::of(dir).unwrap().hash(), "{}: the store holds the bundled files", dir.display());
+        assert!(!dir.join(LISTING).exists(), "nothing is written where it ships");
+        assert!(std::fs::metadata(store.version_dir(&m.package.name, &m.package.version)).unwrap().permissions().readonly());
+    }
+    let before = stamps(&store.dir);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    for (dir, done) in install_bundled(&source_packs(), &store) {
+        assert!(matches!(done, Ok(Install::Already { .. })), "{}: {done:?}", dir.display());
+    }
+    assert_eq!(stamps(&store.dir), before, "a second start writes nothing");
+    remove_tree(&d).unwrap();
+}
+
+// PACK-17: a version of an `@m2/` pack the store holds with other files is someone else's: the
+// bundled one is refused, in words, and the others install all the same.
+#[test]
+fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on() {
+    let d = scratch("clash");
+    let store = Store::at(d.join("Packs"));
+    let theirs = installed(&store, "@m2/synths", "1.0.0");
+    let done = install_bundled(&source_packs(), &store);
+    let said: Vec<(String, Result<String, String>)> = done
+        .into_iter()
+        .map(|(dir, r)| {
+            (dir.file_name().unwrap().to_string_lossy().into_owned(), r.map(|i| format!("{i:?}").split(' ').next().unwrap().to_string()))
+        })
+        .collect();
+    assert_eq!(said[0], ("drums".into(), Ok("Installed".into())));
+    assert_eq!(said[1], ("effects".into(), Ok("Installed".into())));
+    let Err(why) = &said[2].1 else { panic!("{said:?}") };
+    assert!(why.starts_with("@m2/synths 1.0.0 is installed already with other files"), "{why}");
+    assert_eq!(store.check(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0)).unwrap(), theirs, "theirs is left as it was");
+    remove_tree(&d).unwrap();
 }

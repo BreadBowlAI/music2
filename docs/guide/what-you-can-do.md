@@ -14,7 +14,7 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | You can | Where |
 |---|---|
 | Start a song from a template, or open an example | the start screen: **New Song…**, **Examples** |
-| Add a track: 22 std sounds, a Sampler, or an empty audio track | **+ Track** (⌘T), or the browser on the left |
+| Add a track: 22 of music2's own sounds (synths, FM keys, a drum machine), a Sampler, a pack's sound, or an empty audio track | **+ Track** (⌘T), or the browser on the left |
 | Draw and edit notes | **Notes** (⌥2), the piano roll |
 | Edit clips: move, copy, trim, split, join, repeat | the timeline |
 | Turn knobs, add effects, connect cables | **Device** (⌥1) |

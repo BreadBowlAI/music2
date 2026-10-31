@@ -15,7 +15,7 @@ use super::super::tests::{Fixture, eventually};
 use super::*;
 
 /// A bass track playing its `notes` lane.
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { bass } from '@m2/synths';\n\
                     const b = track('bass', ({ lane }) => bass(lane.notes('notes')));\nexport default song(() => b.out);\n";
 
 /// An E2 at beat 4, and one at beat 12.

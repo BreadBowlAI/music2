@@ -314,7 +314,7 @@ pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     for k in 0..o.edits {
         let (token, revision) = session_and_revision(&graph)?;
         if k % 2 == 0 {
-            graph.add_effect(token, revision, &call, "std:delay")?;
+            graph.add_effect(token, revision, &call, "@m2/effects:delay")?;
         } else {
             graph.undo(token)?;
         }
@@ -390,7 +390,7 @@ fn add_effect_with_plugins(out: &mut Outcome, lab: &Lab, o: &Opts, dir: &Path, g
     let sampler = Sampler::start(graph);
     for call in &calls {
         let (token, revision) = session_and_revision(graph)?;
-        graph.add_effect(token, revision, call, "std:delay")?;
+        graph.add_effect(token, revision, call, "@m2/effects:delay")?;
         timed.add(graph, rate)?;
         std::thread::sleep(Duration::from_secs_f64(rng.range(0.3, 1.0)));
     }
@@ -441,7 +441,7 @@ fn update_heard_ms(graph: &Graph, seq: u64, from_ns: u64, rate: u32) -> Option<f
 /// build slow.
 /// with-plugins' `tracks/kick.ts` with the kick wrapped in a delay: a structural save.
 fn delayed_kick(kick: &str) -> String {
-    kick.replace("import { kick }", "import { delay } from \"std/fx\";\nimport { kick }")
+    kick.replace("import { kick }", "import { delay } from \"@m2/effects\";\nimport { kick }")
         .replace("const out = kick(lane.notes(\"hits\"));", "const out = delay(kick(lane.notes(\"hits\")));")
 }
 

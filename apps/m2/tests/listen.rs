@@ -572,7 +572,7 @@ fn a_group_bus_is_measured_as_it_reaches_the_mix() {
 fn tracks_that_take_turns_hardly_mask_each_other() {
     let track = |key: &str| {
         format!(
-            "import {{ track }} from \"@m2/core\";\nimport {{ bass }} from \"std/instruments\";\n\nexport default track(\"{key}\", {{ name: \
+            "import {{ track }} from \"@m2/core\";\nimport {{ bass }} from \"@m2/synths\";\n\nexport default track(\"{key}\", {{ name: \
              \"{key}\" }}, ({{ lane }}) => bass(lane.notes(\"notes\")));\n"
         )
     };

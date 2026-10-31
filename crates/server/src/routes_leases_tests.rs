@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::graph::Graph;
 use crate::{ServeOptions, start_with};
 
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { bass } from '@m2/synths';\n\
                     const b = track('bass', ({ lane }) => bass(lane.notes('notes')));\nexport default song(() => b.out);\n";
 const NOTES: &str = r#"{"clips": [{"id": "a", "start": 0, "length": 16, "notes": [{"pitch": "E2", "start": 4, "length": 1}]}]}"#;
 
@@ -18,7 +18,7 @@ fn project(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("m2-routes-leases-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("data/bass")).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(dir.join("song.ts"), SONG).unwrap();
     std::fs::write(dir.join("data/bass/notes.json"), NOTES).unwrap();

@@ -10,8 +10,10 @@ use serde_json::{Value, json};
 use crate::graph::Graph;
 use crate::library::{Folders, Previews, preview};
 
-/// A server with no song open, and the tools key `t00ls`, keeping `folders` (scratch ones).
-fn serving(folders: Folders) -> crate::Running {
+/// A server with no song open, and the tools key `t00ls`, keeping `folders` (scratch ones). With no
+/// store named, the tests' store of the packs music2 ships: the app always keeps one (PACK-16).
+fn serving(mut folders: Folders) -> crate::Running {
+    folders.packs.get_or_insert_with(m2_song::pack::test_store);
     let options =
         crate::ServeOptions { port: 0, web_dir: std::env::temp_dir().join("m2-no-web"), token: "t00ls".into(), page_token: "t0k".into() };
     let running = crate::start_with(options, Graph::silent()).unwrap();
@@ -19,9 +21,9 @@ fn serving(folders: Folders) -> crate::Running {
     running
 }
 
-/// std alone: what a preview may load with no song open.
+/// std and the packs music2 ships (PACK-15): what a preview may load with no song open.
 fn std_only() -> Vec<(String, PathBuf)> {
-    vec![("std".to_string(), crate::resources::std_dir())]
+    std::iter::once(("std".to_string(), crate::resources::std_dir())).chain(m2_song::pack::test_packs()).collect()
 }
 
 /// `GET path` with the tools key: the status, the content type and the body.
@@ -80,7 +82,7 @@ fn wavs(dir: &Path) -> Vec<PathBuf> {
 
 /// Store your preset `name` for std's Synth pluck in `yours`, with this brightness.
 fn mine(yours: &Path, name: &str, brightness: f64) {
-    yours_for(yours, "std:synth-pluck", name, brightness);
+    yours_for(yours, "@m2/synths:synth-pluck", name, brightness);
 }
 
 /// Store your preset `name` for `sound` in `yours`, with this brightness.
@@ -101,13 +103,16 @@ fn yours_for(yours: &Path, sound: &str, name: &str, brightness: f64) {
 fn the_library_route_answers_the_one_search() {
     let scratch = Scratch::new("route");
     let running = serving(Folders { presets: Some(scratch.0.join("Presets")), ..Folders::default() });
-    assert_eq!(found(&running.url, "reverb")[0], "std:reverb");
-    assert_eq!(found(&running.url, "glass pluck")[0], "sound:std/std:synth-pluck/Glass");
+    assert_eq!(found(&running.url, "reverb")[0], "@m2/effects:reverb");
+    assert_eq!(found(&running.url, "glass pluck")[0], "sound:std/@m2/synths:synth-pluck/Glass");
     mine(&scratch.0.join("Presets"), "Glass pluck", 3000.0);
-    assert_eq!(found(&running.url, "glass pluck")[..2], ["sound:yours/std:synth-pluck/Glass pluck", "sound:std/std:synth-pluck/Glass"]);
+    assert_eq!(
+        found(&running.url, "glass pluck")[..2],
+        ["sound:yours/@m2/synths:synth-pluck/Glass pluck", "sound:std/@m2/synths:synth-pluck/Glass"]
+    );
     assert_eq!(
         found(&running.url, "delay effects"),
-        ["std:delay", "std:reverb"],
+        ["@m2/effects:delay", "@m2/effects:reverb"],
         "a kind typed is a filter: no sounds; Reverb by its category"
     );
     let (_, _, body) = get(&running.url, "/api/library?q=synth%20pluck");
@@ -120,16 +125,16 @@ fn the_library_route_answers_the_one_search() {
             first["instrument"].as_bool(),
             first["preview"].as_bool()
         ),
-        (Some("instrument"), Some("Synth pluck"), Some("std"), Some(true), Some(true))
+        (Some("instrument"), Some("Synth pluck"), Some("@m2/synths"), Some(true), Some(true))
     );
     let all = found(&running.url, "");
-    assert!(all.len() > 40 && all.contains(&"std:drum-kit".to_string()), "every item with no words: {}", all.len());
+    assert!(all.len() > 40 && all.contains(&"@m2/drums:drum-kit".to_string()), "every item with no words: {}", all.len());
 
     // With a song open: what its build offers.
     let dir = Scratch::new("route-song");
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir.0);
     running.state.graph.open(&dir.0).unwrap();
-    assert_eq!(found(&running.url, "reverb")[0], "std:reverb");
+    assert_eq!(found(&running.url, "reverb")[0], "@m2/effects:reverb");
 }
 
 // LIB-1: a search never waits for a plugin scan, which can take minutes: while one runs it
@@ -144,7 +149,7 @@ fn a_search_never_waits_for_a_plugin_scan() {
     std::thread::spawn(move || tx.send(found(&url, "reverb")));
     let answer = rx.recv_timeout(std::time::Duration::from_secs(30));
     drop(scan);
-    assert_eq!(answer.expect("the search answers while the plugins are scanned").first().map(String::as_str), Some("std:reverb"));
+    assert_eq!(answer.expect("the search answers while the plugins are scanned").first().map(String::as_str), Some("@m2/effects:reverb"));
 }
 
 /// A copy of `from` at `to`, but its audio.
@@ -168,7 +173,7 @@ fn a_preview_is_kept_until_what_it_renders_changes() {
     let (yours, cache) = (scratch.0.join("Presets"), scratch.0.join("cache"));
     let previews = Previews::default();
     mine(&yours, "Mine", 2000.0);
-    let id = "sound:yours/std:synth-pluck/Mine";
+    let id = "sound:yours/@m2/synths:synth-pluck/Mine";
     let first = preview(&previews, id, &std_only(), Some(&yours), &cache).unwrap();
     assert!(first.rendered && first.file.starts_with(&cache), "{:?}", first.file);
     let bytes = std::fs::read(&first.file).unwrap();
@@ -210,8 +215,8 @@ fn a_preview_is_kept_until_what_it_renders_changes() {
     );
     std::fs::remove_file(&busy).unwrap();
 
-    let pad = preview(&previews, "std:synth-pad", &std_only(), Some(&yours), &cache).unwrap();
-    assert!(pad.rendered && !preview(&previews, "std:synth-pad", &std_only(), Some(&yours), &cache).unwrap().rendered);
+    let pad = preview(&previews, "@m2/synths:synth-pad", &std_only(), Some(&yours), &cache).unwrap();
+    assert!(pad.rendered && !preview(&previews, "@m2/synths:synth-pad", &std_only(), Some(&yours), &cache).unwrap().rendered);
     assert_eq!(wavs(&cache).len(), 2);
     assert!(std::fs::read_dir(&cache).unwrap().flatten().all(|e| e.path().is_file()), "no song is left in the cache");
 }
@@ -225,7 +230,7 @@ fn a_second_ask_waits_for_the_first_render() {
     let asks: Vec<_> = (0..2)
         .map(|_| {
             let (previews, cache) = (previews.clone(), cache.clone());
-            std::thread::spawn(move || preview(&previews, "std:synth-strings", &std_only(), None, &cache).unwrap())
+            std::thread::spawn(move || preview(&previews, "@m2/synths:synth-strings", &std_only(), None, &cache).unwrap())
         })
         .collect();
     let answers: Vec<_> = asks.into_iter().map(|a| a.join().unwrap()).collect();
@@ -240,7 +245,7 @@ fn the_preview_route_answers_a_wav_or_says_why_not() {
     let scratch = Scratch::new("route-preview");
     let cache = scratch.0.join("previews");
     let running = serving(Folders { presets: Some(scratch.0.join("Presets")), previews: Some(cache.clone()), ..Folders::default() });
-    let (status, kind, body) = get(&running.url, "/api/library/preview?id=std:fm-bell");
+    let (status, kind, body) = get(&running.url, "/api/library/preview?id=@m2/synths:fm-bell");
     assert_eq!((status, kind.as_str(), &body[..4]), (200, "audio/wav", &b"RIFF"[..]));
     assert_eq!(wavs(&cache).iter().map(std::fs::read).collect::<Result<Vec<_>, _>>().unwrap(), [body], "kept in its cache folder");
     let (status, _, body) = get(&running.url, "/api/library/preview?id=std:sampler");
@@ -260,10 +265,9 @@ fn a_packs_instrument_plays_from_its_pack() {
     std::fs::write(acme.join("m2pkg.toml"), "[package]\nname = \"@acme/tones\"\nversion = \"0.1.0\"\n").unwrap();
     std::fs::write(
         acme.join("src/keys.ts"),
-        r#"import { component, port, signature, type Audio, type Events } from "@m2/core";
-import { synth } from "std/synth";
+        r#"import { component, kernel, poly, port, signature, type Audio, type Events } from "@m2/core";
 
-/** A test pack's instrument, built on std's pluck. */
+/** A test pack's instrument, built on std's synth kernel (a pack never imports another, PACK-3). */
 export const bell = component(
   {
     id: "bell",
@@ -274,7 +278,8 @@ export const bell = component(
     output: port.audio(),
     editor: { category: "Instruments", description: "A bell from a pack" },
   },
-  (notes: Events): Audio => synth.pluck(notes),
+  (notes: Events): Audio =>
+    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: 4500, sustain: 0, decay: 0.45 }), { voices: 12 }),
 );
 "#,
     )

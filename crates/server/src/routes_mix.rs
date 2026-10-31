@@ -17,7 +17,7 @@ type ApiResult = Result<Json<Value>, ApiError>;
 crate::api::routes! {
     POST "/api/graph/track/instrument" => track_instrument; writes, agents,
         "Change a track's instrument, by its component id as the state's instruments list it",
-        r#"{"session": 7, "module": "keys", "component": "std:synth-pad"}"#;
+        r#"{"session": 7, "module": "keys", "component": "@m2/synths:synth-pad"}"#;
     POST "/api/graph/track/rekey" => track_rekey; writes, agents,
         "Change a track's ID (its key)",
         r#"{"session": 7, "module": "keys", "key": "piano"}"#;
@@ -44,7 +44,7 @@ struct InstrumentReq {
     session: u64,
     /// The track, by its key.
     module: String,
-    /// The instrument it plays now on, by ComponentId (`std:synth-pad`), as the graph state's
+    /// The instrument it plays now on, by ComponentId (`@m2/synths:synth-pad`), as the graph state's
     /// `instruments` list it.
     component: String,
 }

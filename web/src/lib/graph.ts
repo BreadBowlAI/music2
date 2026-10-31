@@ -51,7 +51,7 @@ export interface ViewNode {
   inlets: { id: string; label: string; name: string; from: string }[];
   /** Whether its result is audio, which an effect can go after. */
   audio: boolean;
-  /** The component it is a call of (`std:delay`), whatever name the code calls it by (PKG-9). */
+  /** The component it is a call of (`@m2/effects:delay`), whatever name the code calls it by (PKG-9). */
   component: string | null;
   /** The effect this node is, by its label (`Delay`), if it can be removed. */
   effect: string | null;
@@ -87,7 +87,7 @@ export interface OutputPort { id: string; label: string; kind: PortKind; outlet:
 export interface PortEdge { from: string; from_port: string; to: string; to_port: string; kind: PortKind; late?: boolean }
 
 /**
- * An effect the packages offer: a component (`std:delay`) imported as `name` from `module`. `insert` is
+ * An effect the packages offer: a component (`@m2/effects:delay`) imported as `name` from `module`. `insert` is
  * what adding it writes after the audio (`, 1000` gives `lowpass(x, 1000)`). `category` is a free string
  * the browser groups by (PKG-7).
  */

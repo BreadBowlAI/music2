@@ -20,7 +20,7 @@ fn project(name: &str, song: &str, lanes: &[(&str, Vec<NoteClip>)]) -> Files {
         (
             "music2.toml".into(),
             format!(
-                "[project]\nname = \"{name}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n"
+                "[project]\nname = \"{name}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n"
             ),
         ),
         ("data/arrangement.json".into(), Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: BPM }], meter: vec![] }.canonical()),
@@ -73,7 +73,7 @@ pub fn tail(fx: Fx) -> Files {
     };
     let song = format!(
         "import {{ ms, poly, secs, song, track }} from \"@m2/core\";\nimport {{ adsr, osc, vca }} from \"std/dsp\";\n\
-         import {{ delay, reverb }} from \"std/fx\";\nimport {{ scale }} from \"std/math\";\n\n\
+         import {{ delay, reverb }} from \"@m2/effects\";\nimport {{ scale }} from \"std/math\";\n\n\
          const tone = track(\"tone\", ({{ lane }}) => {body});\n\nexport default song(() => tone.out);\n"
     );
     let length = if fx == Fx::VoiceDelay { 0.4 } else { 4.0 };
@@ -96,7 +96,7 @@ pub fn clicks() -> Files {
 pub fn sine(with_delay: bool) -> Files {
     let out = if with_delay { "delay(osc.sine(hz(440)), { time: 0.25, feedback: 0.3, mix: 0.3 })" } else { "osc.sine(hz(440))" };
     let song = format!(
-        "import {{ hz, song }} from \"@m2/core\";\nimport {{ osc }} from \"std/dsp\";\nimport {{ delay }} from \"std/fx\";\n\n\
+        "import {{ hz, song }} from \"@m2/core\";\nimport {{ osc }} from \"std/dsp\";\nimport {{ delay }} from \"@m2/effects\";\n\n\
          export default song(() => {out});\n"
     );
     project("sine", &song, &[])
@@ -110,7 +110,7 @@ pub fn poly_sine(with_delay: bool) -> Files {
     let body = if with_delay { format!("delay({voices}, {{ time: 0.25, feedback: 0.3, mix: 0.3 }})") } else { voices.to_string() };
     let song = format!(
         "import {{ ms, poly, secs, song, track }} from \"@m2/core\";\nimport {{ adsr, osc, vca }} from \"std/dsp\";\n\
-         import {{ delay }} from \"std/fx\";\n\nconst v = track(\"voice\", ({{ lane }}) => {body});\n\nexport default song(() => v.out);\n"
+         import {{ delay }} from \"@m2/effects\";\n\nconst v = track(\"voice\", ({{ lane }}) => {body});\n\nexport default song(() => v.out);\n"
     );
     let notes = (0..512).map(|b| note(69.0, b as f64, 0.9)).collect();
     project("poly-sine", &song, &[("voice/notes", vec![clip(Some("beats"), 0.0, 512.0, notes)])])
@@ -134,7 +134,7 @@ pub const PAD_NOTE: (f64, f64) = (4.0, 36.0);
 
 /// std's `pad` holding middle C over beats 4 to 36, written as `how` says.
 pub fn pad(how: Pad) -> Files {
-    let song = "import { song, track } from \"@m2/core\";\nimport { pad } from \"std/instruments\";\n\n\
+    let song = "import { song, track } from \"@m2/core\";\nimport { pad } from \"@m2/synths\";\n\n\
                 const p = track(\"pad\", ({ lane }) => pad(lane.notes(\"notes\")));\n\nexport default song(() => p.out);\n";
     let n = || note(60.0, PAD_NOTE.0, PAD_NOTE.1 - PAD_NOTE.0);
     let clips = match how {

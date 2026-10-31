@@ -16,7 +16,8 @@ struct Temp(PathBuf);
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
@@ -42,15 +43,15 @@ fn tracks_are_added_duplicated_deleted_and_laid_out_from_the_terminal() {
     let said = ok(&["add-track", dir, "synth.pluck", "--name", "Lead Vox", "--after", "kick"]);
     assert!(said.contains("added Lead Vox (Synth pluck), ID lead-vox, in tracks/lead-vox.ts"), "{said}");
     assert!(
-        read("tracks/lead-vox.ts").contains("import { synth } from \"std/synth\";")
+        read("tracks/lead-vox.ts").contains("import { synth } from \"@m2/synths\";")
             && read("tracks/lead-vox.ts").contains("synth.pluck(lane.notes(\"notes\"))")
     );
     assert!(read("song.ts").contains("\"lead-vox\": leadVox.out"));
     assert!(read("layout.json").contains("[\"kick\", \"lead-vox\", \"hats\""), "{}", read("layout.json"));
     // An instrument that isn't one says which there are.
-    let out = m2(&["add-track", dir, "std:delay"]);
+    let out = m2(&["add-track", dir, "@m2/effects:delay"]);
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success() && err.contains("std:synth-pluck (Synth pluck)") && !err.contains("std:pluck"), "{err}");
+    assert!(!out.status.success() && err.contains("@m2/synths:synth-pluck (Synth pluck)") && !err.contains("@m2/synths:pluck"), "{err}");
 
     let said = ok(&["duplicate-track", dir, "bass"]);
     assert!(said.contains("as Bass 2, ID bass-2"), "{said}");

@@ -1,7 +1,8 @@
-//! What music2 ships with: the std package, the song templates and the examples.
+//! What music2 ships with: the std package, its own packs (PACK-15), the song templates and the
+//! examples.
 //!
-//! Each is found, in order (PLAT-8): at its environment override (`$M2_STD`, `$M2_TEMPLATES`,
-//! `$M2_EXAMPLES`); in the bundle the running program is in, where Tauri puts its resources:
+//! Each is found, in order (PLAT-8): at its environment override (`$M2_STD`, `$M2_PACKS`,
+//! `$M2_TEMPLATES`, `$M2_EXAMPLES`); in the bundle the running program is in, where Tauri puts its resources:
 //! `Contents/Resources` beside `music2.app/Contents/MacOS/music2`, or `lib/music2` beside
 //! `bin/` in the Linux packages (`/usr/bin/music2` and `/usr/lib/music2` in the `.deb`, the same
 //! inside the AppImage, `bin/m2` and `lib/music2` in m2's `.tar.gz`); or in this source tree, for
@@ -34,6 +35,34 @@ pub fn keep_hashes() {
 /// The std package: `m2pkg.toml`, `kernels/*.wasm` and `src/*.ts`.
 pub fn std_dir() -> PathBuf {
     resolve("M2_STD", "std")
+}
+
+/// The packs music2 ships (PACK-15): `@m2/synths`, `@m2/drums` and `@m2/effects`, each a pack's
+/// folder, `packs/@m2/<name>`. Nothing reads them here but [`install_packs`]: songs and the lists
+/// read them from the store, as any pack (PACK-16).
+pub fn packs_dir() -> PathBuf {
+    resolve("M2_PACKS", "packs")
+}
+
+/// Install the packs music2 ships into the store at `store` (PACK-16): each version it hasn't got;
+/// one it holds with its hash and its files whole is left alone, so a start that finds them all
+/// writes nothing. One it holds with another hash is refused (PACK-17), and the log says so; the
+/// others go on. `quiet` leaves out what went as it should, as `m2` does: its output is its answer.
+pub fn install_packs(store: &Path, quiet: bool) {
+    use m2_song::pack::{Install, Store};
+    for (dir, done) in m2_song::pack::install_bundled(&packs_dir(), &Store::at(store.to_path_buf())) {
+        match done {
+            Ok(Install::Already { .. }) => {}
+            Ok(Install::Installed { name, version, .. }) if !quiet => {
+                eprintln!("music2: installed {name} {version}, which comes with music2, into {}", store.display())
+            }
+            Ok(Install::Repaired { name, version, why }) if !quiet => {
+                eprintln!("music2: put {name} {version} back as it comes with music2: its installed copy was changed ({why})")
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("music2: the pack in {}, which comes with music2, wasn't installed: {e}", dir.display()),
+        }
+    }
 }
 
 /// Song templates, one complete project per folder, each with a `template.toml`.

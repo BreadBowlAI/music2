@@ -1,7 +1,7 @@
 {
   "m2preset": 1,
   "name": "Soft",
-  "sound": "std:synth-pluck",
+  "sound": "@m2/synths:synth-pluck",
   "values": {
     "brightness": 1800,
     "decay": 0.6,

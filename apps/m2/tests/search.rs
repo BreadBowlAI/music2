@@ -56,28 +56,28 @@ fn out(o: &Output) -> String {
 #[test]
 fn with_the_app_closed_m2_searches_std_and_your_presets() {
     let home = Home::new("closed");
-    let yours = home.0.join("Music/music2/Presets/std/synth-pad");
+    let yours = home.0.join("Music/music2/Presets/_m2_synths/synth-pad");
     std::fs::create_dir_all(&yours).unwrap();
     std::fs::write(
         yours.join("Night.json"),
-        "{\n  \"m2preset\": 1,\n  \"name\": \"Night\",\n  \"sound\": \"std:synth-pad\",\n  \"values\": {}\n}\n",
+        "{\n  \"m2preset\": 1,\n  \"name\": \"Night\",\n  \"sound\": \"@m2/synths:synth-pad\",\n  \"values\": {}\n}\n",
     )
     .unwrap();
 
     let o = m2_in(&home.0, &["search", "reverb"]);
     assert!(o.status.success(), "{o:?}");
     let first = out(&o).lines().next().unwrap_or_default().to_string();
-    assert!(first.starts_with("Reverb ") && first.contains("effect") && first.ends_with("std:reverb"), "the best first: {first:?}");
+    assert!(first.starts_with("Reverb ") && first.contains("effect") && first.ends_with("@m2/effects:reverb"), "the best first: {first:?}");
 
     let o = m2_in(&home.0, &["search", "night", "--json"]);
     let items: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_else(|_| panic!("{o:?}"));
-    assert_eq!(items[0]["id"], "sound:yours/std:synth-pad/Night", "your presets are sounds: {items}");
+    assert_eq!(items[0]["id"], "sound:yours/@m2/synths:synth-pad/Night", "your presets are sounds: {items}");
     assert_eq!(items[0]["package"], "yours");
 
     let o = m2_in(&home.0, &["search", "pluck", "--kind", "sound", "--json"]);
     let items: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     let ids: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["sound:std/std:synth-pluck/Glass", "sound:std/std:synth-pluck/Soft"], "--kind sound: only sounds");
+    assert_eq!(ids, ["sound:std/@m2/synths:synth-pluck/Glass", "sound:std/@m2/synths:synth-pluck/Soft"], "--kind sound: only sounds");
 
     let o = m2_in(&home.0, &["search", "zzzq"]);
     assert!(o.status.success() && out(&o).is_empty(), "{o:?}");

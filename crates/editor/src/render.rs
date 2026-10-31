@@ -696,7 +696,7 @@ mod tests {
     const SAMPLE_RATE: u32 = 48_000;
 
     fn std_packages() -> PackageSet {
-        let mut p = PackageSet::default();
+        let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
         p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         p
     }
@@ -748,7 +748,7 @@ mod tests {
         Dir::new(&[
             (
                 "song.ts",
-                "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\nconst p = track('pad', ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n",
+                "import { song, track } from '@m2/core';\nimport { pad } from '@m2/synths';\nconst p = track('pad', ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n",
             ),
             ("data/pad/chords.json", clips),
             TEMPO,

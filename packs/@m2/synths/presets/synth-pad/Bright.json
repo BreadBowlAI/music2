@@ -1,7 +1,7 @@
 {
   "m2preset": 1,
   "name": "Bright",
-  "sound": "std:synth-pad",
+  "sound": "@m2/synths:synth-pad",
   "values": {
     "attack": 0.3,
     "cutoff": 6000,

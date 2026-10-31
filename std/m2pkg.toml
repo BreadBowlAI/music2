@@ -1,9 +1,11 @@
 # The music2 standard library. An ordinary package: nothing here is special to the core.
 #
 # This file describes the kernels only: their ports and the wasm file (PKG-2). The
-# components songs call (oscillators, filters, effects, instruments, the mixer) are
-# declared in TypeScript in src/, each with a descriptor that gives its controls, their
-# defaults and ranges, and how the editor offers it.
+# components songs call (oscillators, filters, envelopes, the Sampler, the mixer and the
+# effects mixing needs) are declared in TypeScript in src/, each with a descriptor that gives
+# its controls, their defaults and ranges, and how the editor offers it. std is the toolbox
+# (PKG-17): the sounds made from these kernels are the packs @m2/synths, @m2/drums and
+# @m2/effects (packs/@m2/), which call them by id.
 #
 # Port syntax: "name: kind [= default] [in lo..hi]".
 #   kinds: audio<1|2|*>, control<unit|*>, events<note>, and * (any kind).
@@ -16,9 +18,9 @@
 
 [package]
 name = "std"
-version = "0.5.0"
+version = "0.6.0"
 license = "MIT OR Apache-2.0"
-description = "Oscillators, envelopes, filters, mixing, dynamics, and the instruments built from them"
+description = "The toolbox sounds are made of: oscillators, envelopes, filters, the Sampler, the mixer, the effects mixing needs, and every kernel"
 wasm = "kernels/std.wasm"
 
 # ---------------------------------------------------------------- oscillators
@@ -184,10 +186,10 @@ inputs = ["in: audio<*>", "ceiling: control<db> = -1"]
 outputs = ["out: audio<*>"]
 
 # ---------------------------------------------------------------- more effects
-# The kernels of std/fx's reverb, modulation, compression, EQ, lo-fi and width.
+# The kernels of @m2/effects' reverb, modulation, lo-fi and width, and std/fx's compression and EQ.
 # Each kernel is safe with any input or setting: no NaN, no runaway feedback, and
 # tails that end in exact silence. Chorus, phaser, tremolo and bitcrush follow the song
-# through their last input, `playing`: std/fx connects it to `time.playing`. Left out, it
+# through their last input, `playing`: @m2/effects connects it to `time.playing`. Left out, it
 # is 1, as if the song always played.
 
 [[kernel]]
@@ -278,7 +280,7 @@ inputs = ["in: audio<2>", "width: control<scalar> = 1.5 in 0..2"]
 outputs = ["out: audio<2>"]
 
 # ---------------------------------------------------------------- instruments
-# The voices of std/synth, std/fm and std/drums. Each is one kernel per voice: a whole
+# The voices of @m2/synths' polysynth and FM synth, and of @m2/drums. Each is one kernel per voice: a whole
 # instrument in one place costs far less than the same sound built from small kernels.
 # Each smooths its own continuous controls, reads times and counts when a note starts or
 # on its own control clock (never the host's blocks), and ends in exact silence.

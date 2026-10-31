@@ -112,7 +112,7 @@ Show a track, named by its key, as `<name>`: its `track()` call's name, verified
 m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]
 ```
 
-Add a track playing an instrument (`std:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in `layout.json`, verified. It is what + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track.
+Add a track playing an instrument (`@m2/synths:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in `layout.json`, verified. It is what + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track.
 
 ## m2 import
 
@@ -210,7 +210,7 @@ Write the input's declared default in place of the name, verified.
 m2 effects <project>
 ```
 
-The effects packages offer, by id (`std:delay`), and the calls they can go after.
+The effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after.
 
 ## m2 add-effect
 
@@ -218,7 +218,7 @@ The effects packages offer, by id (`std:delay`), and the calls they can go after
 m2 add-effect <project> <call> <effect>
 ```
 
-Wrap a call's audio in an effect, named by its component id (`std:delay`) or its export (`std/fx.delay`), verified.
+Wrap a call's audio in an effect, named by its component id (`@m2/effects:delay`) or its export (`@m2/effects.delay`), verified.
 
 ## m2 remove-effect
 
@@ -429,7 +429,7 @@ m2 render /tmp/m2-scratch out.wav
 m2 controls /tmp/m2-scratch                                     # ids look like song.ts#2/0.hats.pan
 m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
 m2 set /tmp/m2-scratch 'tracks/hats.ts#1/@decay' 0.08            # a control the call leaves out: writes { decay: 0.08 }
-m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std:delay
+m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' @m2/effects:delay
 
 m2 new /tmp/m2-resample --example resample
 m2 bounce /tmp/m2-resample keys-again --track keys              # render the keys track to assets/keys-again.wav

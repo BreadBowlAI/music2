@@ -151,6 +151,8 @@ if [ -e "$OUT" ] && [ ! -e "$OUT/.m2-check" ]; then
   echo "ci/pr.sh: $OUT wasn't made by a check, so it is left alone: name another folder in M2_PR_OUT"
   exit 2
 fi
+# A pack installed in the last run's scratch HOME is read-only (PACK-6, PACK-16).
+if [ -e "$OUT" ]; then chmod -R u+w "$OUT"; fi
 rm -rf "$OUT" && mkdir -p "$OUT/home" && : > "$OUT/.m2-check" || exit 2
 : > "$OUT/results"
 BEFORE=$(git status --porcelain)

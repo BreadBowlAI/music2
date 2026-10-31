@@ -197,8 +197,8 @@ pub fn song(item: &Item, catalog: &Catalog, values: &BTreeMap<String, f64>) -> R
     let mut files = BTreeMap::new();
     files.insert("data/arrangement.json".to_string(), ARRANGEMENT.to_string());
     let text = if d.is_effect() {
-        let (keys_import, keys) = imported(catalog, "std:synth-pluck", "keys")?;
-        let (kit_import, kit) = imported(catalog, "std:drum-kit", "kit")?;
+        let (keys_import, keys) = imported(catalog, "@m2/synths:synth-pluck", "keys")?;
+        let (kit_import, kit) = imported(catalog, "@m2/drums:drum-kit", "kit")?;
         let both = format!("mixer({{ keys: {keys}(lane.notes(\"keys\")), drums: {kit}(lane.notes(\"hits\")) }})");
         // The loop: Am then F, plucked, over a kick, a snare and hats. Bar 1 is dry, bar 2 goes
         // through the effect.

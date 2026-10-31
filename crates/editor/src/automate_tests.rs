@@ -172,7 +172,7 @@ fn the_new_lanes_key_is_free() {
 fn the_lane_is_named_after_the_control() {
     let f = Fixture::new();
     f.write("music2.toml", MANIFEST);
-    let song = "import { secs, song, track } from \"@m2/core\";\nimport { fm } from \"std/fm\";\nimport { sum } from \"std/math\";\n\
+    let song = "import { secs, song, track } from \"@m2/core\";\nimport { fm } from \"@m2/synths\";\nimport { sum } from \"std/math\";\n\
                 const keys = track(\"keys\", ({ lane }) => {\n  const lead = fm.custom(lane.notes(\"a\"), { detune: 5, decay: secs(2) });\n  \
                 const pad = fm.custom(lane.notes(\"b\"), { decay: secs(4) });\n  return sum(lead, pad);\n});\n\
                 export default song(() => keys.out);\n";

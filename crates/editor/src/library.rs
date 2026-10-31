@@ -185,7 +185,7 @@ pub struct PresetOf {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Item {
     pub kind: Kind,
-    /// Its id in the library: a component's ComponentId (`std:synth-pluck`), a plugin's
+    /// Its id in the library: a component's ComponentId (`@m2/synths:synth-pluck`), a plugin's
     /// `clap:<id>`, a sound's `sound:<from>/<sound>/<name>`.
     pub id: String,
     pub label: String,
@@ -318,7 +318,7 @@ pub fn store_packs(store: &Path, std: &Path) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-/// The package a ComponentId is from: `std` of `std:delay`; `song` for the song's own.
+/// The package a ComponentId is from: `std` of `@m2/effects:delay`; `song` for the song's own.
 fn package_of(component: &str) -> String {
     component.split_once(':').map_or("song", |(p, _)| p).to_string()
 }

@@ -47,7 +47,13 @@ fn std_dir() -> std::path::PathBuf {
 
 /// std alone, as the library's packages.
 fn std_packages() -> Vec<(String, std::path::PathBuf)> {
-    vec![("std".to_string(), std_dir())]
+    std::iter::once(("std".to_string(), std_dir())).chain(m2_song::pack::test_packs()).collect()
+}
+
+/// The folder of the package that makes `component`, among [`std_packages`].
+fn package_dir(component: &str) -> std::path::PathBuf {
+    let package = m2_song::pack::split_id(component).unwrap().0;
+    std_packages().into_iter().find(|(n, _)| n == package).unwrap().1
 }
 
 // LIB-1: every word typed must match somewhere, in any capitals: a word of the label, inside the
@@ -131,21 +137,21 @@ fn a_kind_typed_filters_by_kind() {
 // `delay & reverb` what its category says. An item's whole id finds it first.
 #[test]
 fn what_is_typed_is_split_into_words_as_an_items_text_is() {
-    let catalog = m2_script::describe(&[("std".to_string(), std_dir())]);
+    let catalog = m2_script::describe(&std_packages());
     let all = items(&Sources { catalog: &catalog, packages: &std_packages(), yours: None, plugins: &[], samples: &[] });
     let first = |text: &str| found(&all, text).first().cloned().unwrap_or_else(|| format!("nothing for {text:?}"));
-    assert!(found(&all, "hi-hat").contains(&"std:drum-hats".to_string()), "{:?}", found(&all, "hi-hat"));
+    assert!(found(&all, "hi-hat").contains(&"@m2/drums:drum-hats".to_string()), "{:?}", found(&all, "hi-hat"));
     assert_eq!(found(&all, "hi-hat"), found(&all, "hi hat"));
     for typed in ["synth-pluck", "synth.pluck", "Synth  pluck", "synth pluck!"] {
-        assert_eq!(first(typed), "std:synth-pluck", "{typed}");
+        assert_eq!(first(typed), "@m2/synths:synth-pluck", "{typed}");
     }
-    assert_eq!(first("drum-kit"), "std:drum-kit");
-    assert_eq!(first("big-hall"), "sound:std/std:reverb/Big hall");
+    assert_eq!(first("drum-kit"), "@m2/drums:drum-kit");
+    assert_eq!(first("big-hall"), "sound:std/@m2/effects:reverb/Big hall");
     let both = found(&all, "delay & reverb");
-    assert!(both.contains(&"std:delay".to_string()) && both.contains(&"std:reverb".to_string()), "{both:?}");
+    assert!(both.contains(&"@m2/effects:delay".to_string()) && both.contains(&"@m2/effects:reverb".to_string()), "{both:?}");
     assert_eq!(found(&all, "delay & reverb"), found(&all, "delay reverb"), "& is no word");
-    assert_eq!(first("std:reverb"), "std:reverb", "an id typed");
-    assert_eq!(first("sound:std/std:reverb/Big hall"), "sound:std/std:reverb/Big hall");
+    assert_eq!(first("@m2/effects:reverb"), "@m2/effects:reverb", "an id typed");
+    assert_eq!(first("sound:std/@m2/effects:reverb/Big hall"), "sound:std/@m2/effects:reverb/Big hall");
     let items = [item(Kind::Instrument, "hh", "Hi-hat", &[], "", "std"), item(Kind::Instrument, "hhs", "Hi-hat shaker", &[], "", "std")];
     assert_eq!(found(&items, "hi hat"), ["hh", "hhs"], "the label word for word, its dash aside");
     assert_eq!(found(&items, "-"), ["hh", "hhs"], "nothing but punctuation is no word");
@@ -155,7 +161,7 @@ fn what_is_typed_is_split_into_words_as_an_items_text_is() {
 // and also the items whose label has the word: a name with a kind word in it is still found.
 #[test]
 fn a_kind_word_finds_that_kind_and_names_with_it() {
-    let catalog = m2_script::describe(&[("std".to_string(), std_dir())]);
+    let catalog = m2_script::describe(&std_packages());
     let plugins = [
         Plugin { id: "clap:aw".into(), name: "Consolidated".into(), vendor: "Airwindows".into(), instrument: false, effect: true },
         Plugin { id: "clap:sx".into(), name: "Surge XT".into(), vendor: "Surge".into(), instrument: true, effect: false },
@@ -165,10 +171,10 @@ fn a_kind_word_finds_that_kind_and_names_with_it() {
     let all = items(&Sources { catalog: &catalog, packages: &std_packages(), yours: None, plugins: &plugins, samples: &[] });
     assert_eq!(found(&all, "consolidated effect"), ["clap:aw"], "an effect plugin is an effect");
     let delays = found(&all, "delay effect");
-    assert_eq!(delays.first().map(String::as_str), Some("std:delay"));
+    assert_eq!(delays.first().map(String::as_str), Some("@m2/effects:delay"));
     assert!(delays.contains(&"clap:dly".to_string()), "{delays:?}");
     let effects = found(&all, "effects");
-    assert!(effects.contains(&"std:reverb".to_string()) && effects.contains(&"clap:aw".to_string()), "{effects:?}");
+    assert!(effects.contains(&"@m2/effects:reverb".to_string()) && effects.contains(&"clap:aw".to_string()), "{effects:?}");
     assert!(!effects.contains(&"clap:sx".to_string()) && !effects.iter().any(|i| i.starts_with("sound:")), "{effects:?}");
     let instruments = found(&all, "surge instrument");
     assert_eq!(instruments, ["clap:sx"], "an instrument plugin is an instrument");
@@ -279,33 +285,37 @@ fn a_key_needs_a_capital_and_a_sign_or_a_mode() {
 // sound with its sound's category; what code calls them, and a kit's drums, as tags.
 #[test]
 fn the_library_holds_stds_instruments_effects_and_presets() {
-    let catalog = m2_script::describe(&[("std".to_string(), std_dir())]);
+    let catalog = m2_script::describe(&std_packages());
     let all = items(&Sources { catalog: &catalog, packages: &std_packages(), yours: None, plugins: &[], samples: &[] });
     let get =
         |id: &str| all.iter().find(|i| i.id == id).unwrap_or_else(|| panic!("{id} in {:?}", all.iter().map(|i| &i.id).collect::<Vec<_>>()));
-    let pluck = get("std:synth-pluck");
+    let pluck = get("@m2/synths:synth-pluck");
     assert_eq!(
         (pluck.kind, pluck.label.as_str(), pluck.package.as_str(), pluck.instrument, pluck.preview),
-        (Kind::Instrument, "Synth pluck", "std", true, true)
+        (Kind::Instrument, "Synth pluck", "@m2/synths", true, true)
     );
     assert!(pluck.tags.contains(&"pluck".to_string()), "{:?}", pluck.tags);
-    let reverb = get("std:reverb");
+    let reverb = get("@m2/effects:reverb");
     assert_eq!((reverb.kind, reverb.category.as_str(), reverb.instrument), (Kind::Effect, "Delay & Reverb", false));
-    let glass = get("sound:std/std:synth-pluck/Glass");
+    let glass = get("sound:std/@m2/synths:synth-pluck/Glass");
     assert_eq!(
         (glass.kind, glass.label.as_str(), glass.category.as_str(), glass.component.as_str()),
-        (Kind::Sound, "Glass", "Instruments", "std:synth-pluck")
+        (Kind::Sound, "Glass", "Instruments", "@m2/synths:synth-pluck")
     );
     assert_eq!(glass.preset, Some(PresetOf { from: "std".into(), name: "Glass".into() }));
-    assert!(get("sound:std/std:reverb/Big hall").kind == Kind::Sound);
+    assert!(get("sound:std/@m2/effects:reverb/Big hall").kind == Kind::Sound);
     assert!(all.iter().all(|i| !i.category.is_empty()), "only what has a category (PKG-7)");
-    assert!(!all.iter().any(|i| i.id == "std:pluck"), "std/instruments' pluck has none");
-    let shipped = walk(&std_dir().join("presets")).into_iter().filter(|f| f.extension().is_some_and(|x| x == "json")).count();
-    assert_eq!(all.iter().filter(|i| i.kind == Kind::Sound).count(), shipped, "each of std's presets");
+    assert!(!all.iter().any(|i| i.id == "@m2/synths:pluck"), "@m2/synths' simple pluck has none");
+    let shipped = std_packages()
+        .iter()
+        .flat_map(|(_, dir)| walk(&dir.join("presets")))
+        .filter(|f| f.extension().is_some_and(|x| x == "json"))
+        .count();
+    assert_eq!(all.iter().filter(|i| i.kind == Kind::Sound).count(), shipped, "each of the packages' presets");
     // "snare" finds the drum kit by what its notes play; "glass" finds the pluck's sound.
-    assert!(found(&all, "snare").contains(&"std:drum-kit".to_string()));
-    assert_eq!(found(&all, "glass pluck").first().map(String::as_str), Some("sound:std/std:synth-pluck/Glass"));
-    assert_eq!(found(&all, "reverb")[0], "std:reverb");
+    assert!(found(&all, "snare").contains(&"@m2/drums:drum-kit".to_string()));
+    assert_eq!(found(&all, "glass pluck").first().map(String::as_str), Some("sound:std/@m2/synths:synth-pluck/Glass"));
+    assert_eq!(found(&all, "reverb")[0], "@m2/effects:reverb");
 }
 
 // LIB-1: your presets are sounds too, found by the sound each file names in its own folder; one
@@ -324,13 +334,13 @@ fn your_presets_are_sounds_and_a_missing_sounds_are_left_out() {
         };
         store(&yours.join(presets::folder(sound)), &p, false).unwrap();
     };
-    put("std:synth-pluck", "Short");
+    put("@m2/synths:synth-pluck", "Short");
     put("acme:gone", "Lost");
     put("clap:org.example.synth", "Init");
     // A file in another sound's folder isn't that sound's (P1).
-    std::fs::create_dir_all(yours.join("std/synth-pad")).unwrap();
-    std::fs::copy(yours.join("std/synth-pluck/Short.json"), yours.join("std/synth-pad/Short.json")).unwrap();
-    let catalog = m2_script::describe(&[("std".to_string(), std_dir())]);
+    std::fs::create_dir_all(yours.join("_m2_synths/synth-pad")).unwrap();
+    std::fs::copy(yours.join("_m2_synths/synth-pluck/Short.json"), yours.join("_m2_synths/synth-pad/Short.json")).unwrap();
+    let catalog = m2_script::describe(&std_packages());
     let plugins = [Plugin {
         id: "clap:org.example.synth".into(),
         name: "Example Synth".into(),
@@ -345,7 +355,7 @@ fn your_presets_are_sounds_and_a_missing_sounds_are_left_out() {
         sounds,
         [
             ("sound:yours/clap:org.example.synth/Init", "yours", "Plugins", false),
-            ("sound:yours/std:synth-pluck/Short", "yours", "Instruments", true)
+            ("sound:yours/@m2/synths:synth-pluck/Short", "yours", "Instruments", true)
         ]
     );
     let plugin = all.iter().find(|i| i.id == "clap:org.example.synth").unwrap();
@@ -362,7 +372,7 @@ mod previews {
     use crate::library::preview::{self, RATE, SECONDS};
 
     fn std_items() -> (m2_script::Catalog, Vec<Item>) {
-        let catalog = m2_script::describe(&[("std".to_string(), std_dir())]);
+        let catalog = m2_script::describe(&std_packages());
         let all = items(&Sources { catalog: &catalog, packages: &std_packages(), yours: None, plugins: &[], samples: &[] });
         (catalog, all)
     }
@@ -384,18 +394,18 @@ mod previews {
     fn a_previews_song_plays_a_phrase_for_its_category() {
         let (catalog, all) = std_items();
         let none = BTreeMap::new();
-        let kit = preview::song(get(&all, "std:drum-kit"), &catalog, &none).unwrap();
+        let kit = preview::song(get(&all, "@m2/drums:drum-kit"), &catalog, &none).unwrap();
         let mut beat = pitches(&kit.files["data/play/notes.json"]);
         beat.sort();
         beat.dedup();
         assert_eq!(beat, [36, 38, 42], "kick, snare and closed hat, by the kit's names");
-        let bass = preview::song(get(&all, "std:synth-bass"), &catalog, &none).unwrap();
+        let bass = preview::song(get(&all, "@m2/synths:synth-bass"), &catalog, &none).unwrap();
         assert!(pitches(&bass.files["data/play/notes.json"]).iter().all(|&p| p < 48), "a bass line, low");
-        let pad = preview::song(get(&all, "std:synth-pad"), &catalog, &none).unwrap();
+        let pad = preview::song(get(&all, "@m2/synths:synth-pad"), &catalog, &none).unwrap();
         assert_eq!(pitches(&pad.files["data/play/notes.json"]).len(), 12, "four chords of three notes");
         assert!(pad.files["song.ts"].contains("item.pad(lane.notes(\"notes\"))"), "{}", pad.files["song.ts"]);
 
-        let glass = get(&all, "sound:std/std:synth-pluck/Glass");
+        let glass = get(&all, "sound:std/@m2/synths:synth-pluck/Glass");
         let values: BTreeMap<String, f64> = [("brightness".to_string(), 9000.0), ("nope".to_string(), 1.0)].into();
         let sound = preview::song(glass, &catalog, &values).unwrap();
         assert!(
@@ -404,7 +414,7 @@ mod previews {
             sound.files["song.ts"]
         );
 
-        let reverb = preview::song(get(&all, "std:reverb"), &catalog, &none).unwrap();
+        let reverb = preview::song(get(&all, "@m2/effects:reverb"), &catalog, &none).unwrap();
         let text = &reverb.files["song.ts"];
         assert!(text.contains(r#"const wet = track("wet""#) && text.contains("item(mixer({"), "{text}");
         let starts = |f: &str| {
@@ -422,15 +432,19 @@ mod previews {
     fn every_std_item_with_a_preview_renders_one() {
         let (catalog, all) = std_items();
         let dir = std::env::temp_dir().join(format!("m2-preview-all-{}", std::process::id()));
-        let packages = [("std".to_string(), std_dir())];
+        let packages = std_packages();
         let mut failed = vec![];
         let mut under = vec![];
         for item in all.iter().filter(|i| i.preview) {
             let values = match &item.preset {
                 Some(p) => {
-                    crate::presets::read(&crate::presets::factory(&std_dir(), &item.component).unwrap(), &item.component, &p.name)
-                        .unwrap()
-                        .values
+                    crate::presets::read(
+                        &crate::presets::factory(&package_dir(&item.component), &item.component).unwrap(),
+                        &item.component,
+                        &p.name,
+                    )
+                    .unwrap()
+                    .values
                 }
                 None => BTreeMap::new(),
             };
@@ -507,9 +521,9 @@ mod previews {
     fn a_preview_renders_on_a_thread_of_its_own() {
         let (catalog, all) = std_items();
         let dir = std::env::temp_dir().join(format!("m2-preview-thread-{}", std::process::id()));
-        let song = preview::song(get(&all, "std:synth-strings"), &catalog, &BTreeMap::new()).unwrap();
+        let song = preview::song(get(&all, "@m2/synths:synth-strings"), &catalog, &BTreeMap::new()).unwrap();
         let (cpu, wall) = (m2_os::thread::cpu_time(), std::time::Instant::now());
-        preview::render(&song, &[("std".to_string(), std_dir())], &dir.join("work"), &dir.join("out.wav")).unwrap();
+        preview::render(&song, &std_packages(), &dir.join("work"), &dir.join("out.wav")).unwrap();
         let (cpu, wall) = (m2_os::thread::cpu_time() - cpu, wall.elapsed());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(cpu * 10 < wall, "the asking thread used {cpu:?} of the {wall:?} it took");
@@ -554,8 +568,8 @@ mod previews {
     fn a_preview_is_the_same_bits_twice_at_one_loudness() {
         let (catalog, all) = std_items();
         let dir = std::env::temp_dir().join(format!("m2-preview-test-{}", std::process::id()));
-        let packages = [("std".to_string(), std_dir())];
-        for id in ["std:synth-pad", "std:drum-kit", "std:delay"] {
+        let packages = std_packages();
+        for id in ["@m2/synths:synth-pad", "@m2/drums:drum-kit", "@m2/effects:delay"] {
             let song = preview::song(get(&all, id), &catalog, &BTreeMap::new()).unwrap();
             let (a, b) = (dir.join("a.wav"), dir.join("b.wav"));
             preview::render(&song, &packages, &dir.join("work"), &a).unwrap();
@@ -575,8 +589,8 @@ mod previews {
             assert_eq!(s[s.len() - 2..], [0.0, 0.0], "{id}: it fades out to silence");
         }
         // The fingerprint follows what it renders: another song, another hash.
-        let pad = preview::song(get(&all, "std:synth-pad"), &catalog, &BTreeMap::new()).unwrap();
-        let bright = preview::song(get(&all, "std:synth-pad"), &catalog, &[("cutoff".to_string(), 3000.0)].into()).unwrap();
+        let pad = preview::song(get(&all, "@m2/synths:synth-pad"), &catalog, &BTreeMap::new()).unwrap();
+        let bright = preview::song(get(&all, "@m2/synths:synth-pad"), &catalog, &[("cutoff".to_string(), 3000.0)].into()).unwrap();
         assert_eq!(preview::fingerprint(&pad, &packages), preview::fingerprint(&pad, &packages));
         assert_ne!(preview::fingerprint(&pad, &packages), preview::fingerprint(&bright, &packages));
         // And music2's version and its SDK's: an update renders anew.

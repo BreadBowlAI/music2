@@ -1,0 +1,12 @@
+[package]
+name = "@m2/synths"
+version = "1.0.0"
+license = "MIT OR Apache-2.0"
+description = "music2's synths: a polysynth's leads, pads, plucks and basses, an FM synth's keys and bells, and five simple instruments to read and copy"
+authors = ["music2"]
+repository = "https://github.com/BreadBowlAI/music2"
+tags = ["synth", "polysynth", "fm", "keys", "bass", "pad", "lead"]
+
+[dependencies]
+"@m2/core" = "1.7"
+std = "0.6"

@@ -119,7 +119,7 @@ Put an effect after a call's sound, by its component id as the state's effects l
 An example body:
 
 ```json
-{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "std:delay"}
+{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "@m2/effects:delay"}
 ```
 
 ### `POST /api/graph/effect/bypass`
@@ -411,7 +411,7 @@ Add a track playing an instrument, by its component id as the state's instrument
 An example body:
 
 ```json
-{"session": 7, "component": "std:synth-pluck", "label": "Pluck", "after": "keys"}
+{"session": 7, "component": "@m2/synths:synth-pluck", "label": "Pluck", "after": "keys"}
 ```
 
 ### `POST /api/graph/track/delete`
@@ -441,7 +441,7 @@ Change a track's instrument, by its component id as the state's instruments list
 An example body:
 
 ```json
-{"session": 7, "module": "keys", "component": "std:synth-pad"}
+{"session": 7, "module": "keys", "component": "@m2/synths:synth-pad"}
 ```
 
 ### `POST /api/graph/track/mute`
@@ -527,7 +527,7 @@ An item's preview: a short WAV of it playing, rendered offline and kept; a sampl
 Its query, as JSON:
 
 ```json
-{"id": "std:synth-pluck"}
+{"id": "@m2/synths:synth-pluck"}
 ```
 
 ### `POST /api/library/sample`

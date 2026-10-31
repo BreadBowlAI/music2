@@ -2,16 +2,15 @@
 // signal, some left out to play their declared defaults.
 import { semis, song } from "@m2/core";
 import { choose, lfo, when } from "std/control";
-import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
+import { adsr, follow, gain, mono, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
-import { drums } from "std/drums";
-import { fm } from "std/fm";
-import { bitcrush, chorus, compress, delay, drive, duck, eq3, limit, phaser, reverb, tremolo, widen } from "std/fx";
-import { bass, hat, kick, pad, pluck } from "std/instruments";
+import { drums } from "@m2/drums";
+import { bass, fm, hat, kick, pad, pluck, synth } from "@m2/synths";
+import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
+import { compress, duck, eq3, limit } from "std/fx";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
 import { sampler } from "std/sampler";
-import { mono, synth } from "std/synth";
 
 export default song(({ lane, time }) => {
   const sweep = lfo(time.beats, { period: 2 });

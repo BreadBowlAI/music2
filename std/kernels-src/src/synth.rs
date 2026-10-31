@@ -1,4 +1,4 @@
-//! `synth`, the polysynth voice behind std/synth: a unison stack of saws and pulses with
+//! `synth`, the polysynth voice behind @m2/synths: a unison stack of saws and pulses with
 //! a sub sine and noise, at 2× (band-limited steps, a drive, then a 4-pole ladder with its
 //! own envelope, whose saturation would alias at 1×), decimated, then the amp envelope.
 //! Port order must match `std/m2pkg.toml`.

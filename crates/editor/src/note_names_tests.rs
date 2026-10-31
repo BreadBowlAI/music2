@@ -20,7 +20,7 @@ fn names(s: &m2_session::Session, module: &str, lane: &str) -> Vec<(u8, String)>
 fn a_drum_kit_lane_names_its_notes() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    let made = s.add_track("std:drum-kit", None, None, None).unwrap();
+    let made = s.add_track("@m2/drums:drum-kit", None, None, None).unwrap();
     let got = names(&s, &made.module, "hits");
     assert_eq!(got.len(), 20, "{got:?}");
     assert!(
@@ -33,7 +33,7 @@ fn a_drum_kit_lane_names_its_notes() {
     // Played through another call (a project's own wrapper), the kit still names them.
     f.write(
         &made.edited.file,
-        "import { track } from \"@m2/core\";\nimport { drums } from \"std/drums\";\nimport { scale } from \"std/math\";\n\n\
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { scale } from \"std/math\";\n\n\
          export default track(\"drum-kit\", { name: \"Drum kit\" }, ({ lane }) => scale(drums.kit(lane.notes(\"hits\")), 0.5));\n",
     );
     s.refresh();
@@ -54,7 +54,7 @@ fn a_pluck_lane_has_no_names() {
     let f = fixture("examples/first-song");
     f.write(
         "tracks/hats.ts",
-        "import { track } from \"@m2/core\";\nimport { drums } from \"std/drums\";\nimport { pluck } from \"std/instruments\";\nimport { sum } from \"std/math\";\n\n\
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { pluck } from \"@m2/synths\";\nimport { sum } from \"std/math\";\n\n\
          export default track(\"hats\", { name: \"Hats\" }, ({ lane }) => sum(drums.kit(lane.notes(\"hits\")), pluck(lane.notes(\"hits\"))));\n",
     );
     let s = f.open();

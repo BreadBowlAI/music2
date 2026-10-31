@@ -1,14 +1,36 @@
 # Sounds and effects
 
 **In short**
-- std is the package of sounds that comes with music2: synths, FM sounds, a drum machine and a Sampler.
-- It has 17 effects in seven groups, a sidechain (`duck`), and the mixer and master.
+- music2's sounds come as three packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/drums` (a drum machine) and `@m2/effects` (delay, reverb, chorus and five more).
+- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the effects mixing needs (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 17 effects in seven groups.
+- The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 
-std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/kernels/std.wasm`, built from Rust in `std/kernels-src`.
+| Word | Meaning |
+|---|---|
+| **std** | music2's toolbox, in `std/`: what sounds are made of. TypeScript in `std/src`, kernels (the code that makes the sound) in `std/kernels/std.wasm`, built from Rust in `std/kernels-src` |
+| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels. They come with the app and with `m2` |
+
+A song that plays them lists them, as the templates do:
+
+```toml
+[dependencies]
+"@m2/core" = "1"
+std = "0.6"
+"@m2/synths" = "1"
+"@m2/effects" = "1"
+```
+
+```ts
+import { synth } from "@m2/synths";
+import { drums } from "@m2/drums";
+import { reverb } from "@m2/effects";
+```
+
+When you add one of their sounds from + Track or the browser, music2 writes those lines for you, and `music2.lock` too. A song made before std 0.6 that imports `std/synth`, `std/fm`, `std/drums`, `std/instruments`, or `std/fx`'s `reverb` and the other sounds, is told in words which pack to use instead.
 
 **Instruments.** Each takes a notes lane and returns sound. The `voices` setting is how many notes can sound at once (`synth.lead(notes, { voices: 4 })` plays chords). A typical note, at velocity 0.8, peaks between -15 and -12 dBFS, so a four-note chord still has room, and the drums sit as on a drum machine: the kick near -6, snare and clap near -9, hats near -16. Notes played harder are louder, and most sounds get brighter too. On the synths and FM sounds, `velSens` ("vel sens") is how much: the level follows velocity^(2 × velSens), so a note at velocity 0 is silent, and at 0.5 a note at 0.3 is 10 dB below one at 1. The keys start widest (0.8), the 808 narrowest (0.3).
 
-- **Synths** (`std/synth`), all one polysynth:
+- **Synths** (`@m2/synths`: `import { synth } from "@m2/synths"`), all one polysynth:
   - `synth.supersaw`: seven detuned saws, bright and wide, for big chords and hooks. Its filter starts wide open, as on a JP-8000; turn `cutoff` down to tame it. Knobs: `detune`, `spread` (how wide), `cutoff`, `attack`, `release`, `velSens`.
   - `synth.lead`: a singing lead that plays one note at a time. A note that starts before the last one ends slides into it, and a vibrato fades in on long notes. Knobs: `cutoff`, `glide`, `vibrato`, `drive`, `velSens`.
   - `synth.pad`: a big, slow, wide pad that swells open. Knobs: `cutoff`, `attack`, `release`, `spread`, `velSens`.
@@ -17,9 +39,9 @@ std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/k
   - `synth.bass`: a synth bass, one note at a time: a saw and a pulse with a sine under them, through a filter that bites as each note starts. Knobs: `cutoff`, `bite` (how many octaves the filter opens), `decay` (how fast it closes), `glide`, `velSens`.
   - `synth.strings`: a string machine, soft saws through an ensemble chorus. Knobs: `cutoff`, `attack`, `release`, `ensemble`, `velSens`.
   - `synth.custom`: the synth itself with every knob, to make your own sound: saw, pulse, sub and noise, a ladder filter with its own envelope, the amp envelope, drive, vibrato, a pitch drop and glide. `unison` (1 to 7 stacked voices) is a setting: `synth.custom(notes, { unison: 5 })`.
-  - With `voices: 1` any of them, and any FM sound, plays one note at a time: a note that starts before the last one ends carries on from it, without starting again (legato), and the ones with a `glide` knob slide to it. When that note ends while an older one is still held, the older one sounds again, sliding back: hold A1 on the 808 and tap A2 over it for the classic slide up and back. Notes that start together count as one, the last of them, and each note keeps its own velocity. `synth.lead`, `synth.sub` and `synth.bass` start that way, and their card in Device says "Plays one note at a time". For a voice of your own, `mono(notes, voice, { glide })` is `poly(notes, voice, { mode: "legato", retrigger: false, glide })` (std 0.3.0).
-- **FM** (`std/fm`), one FM synth: `fm.keys`, an electric piano with a warm body and a tine that barks when you play hard (knobs `tone`, `tine`, `decay`, `release`, `velSens`); `fm.bell`, a glassy bell (`tone`, `decay`, `velSens`); `fm.metal`, a short, clangy metallic hit that zaps down into its note (`tone`, `decay`, `feedback`, `drop`, `velSens`); and `fm.custom`, the FM synth with every knob. Its carriers and modulators are frequency ratios to the note: whole numbers sound harmonic, halves (the bell's 3.5) like a bell, and others such as 3.17 clang like metal. A ratio typed into the code is exact; dragged on a knob it lands near a value (2.03, say), so type the musical ones.
-- **Drums** (`std/drums`), an 808/909-style drum machine. `drums.kit` plays a whole beat from one notes lane, each drum on its General MIDI note, the numbers drum parts usually use:
+  - With `voices: 1` any of them, and any FM sound, plays one note at a time: a note that starts before the last one ends carries on from it, without starting again (legato), and the ones with a `glide` knob slide to it. When that note ends while an older one is still held, the older one sounds again, sliding back: hold A1 on the 808 and tap A2 over it for the classic slide up and back. Notes that start together count as one, the last of them, and each note keeps its own velocity. `synth.lead`, `synth.sub` and `synth.bass` start that way, and their card in Device says "Plays one note at a time". For a voice of your own, std's `mono(notes, voice, { glide })`, in `std/dsp`, is `poly(notes, voice, { mode: "legato", retrigger: false, glide })`.
+- **FM** (`@m2/synths`: `import { fm } from "@m2/synths"`), one FM synth: `fm.keys`, an electric piano with a warm body and a tine that barks when you play hard (knobs `tone`, `tine`, `decay`, `release`, `velSens`); `fm.bell`, a glassy bell (`tone`, `decay`, `velSens`); `fm.metal`, a short, clangy metallic hit that zaps down into its note (`tone`, `decay`, `feedback`, `drop`, `velSens`); and `fm.custom`, the FM synth with every knob. Its carriers and modulators are frequency ratios to the note: whole numbers sound harmonic, halves (the bell's 3.5) like a bell, and others such as 3.17 clang like metal. A ratio typed into the code is exact; dragged on a knob it lands near a value (2.03, say), so type the musical ones.
+- **Drums** (`@m2/drums`: `import { drums } from "@m2/drums"`), an 808/909-style drum machine. `drums.kit` plays a whole beat from one notes lane, each drum on its General MIDI note, the numbers drum parts usually use:
 
   | Note | Drum | Note | Drum |
   |---|---|---|---|
@@ -74,28 +96,28 @@ std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/k
   - Regions can come from a helper function or a `const`, as a list of many files is easiest to write. A `trigger` kept in a `const` needs the const's type, or the code editor reads it as any text: `const keyUps: Region[] = [{ file: "key-up.wav", trigger: "release" }]`, with `import { type Region } from "@m2/core"`.
 
   The Sampler's card in Device says what it plays ("5 recordings, 2 layers, round robin of 2, release sounds, loops"). Its regions are changed in code: a WAV dropped on it is refused. Not yet: a sustain pedal, choke groups (an open hat cut by a closed one), blends between velocity layers, and instruments too big for memory ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#sounds)).
-- **The first instruments** (`std/instruments`): `bass`, `kick`, `hat`, `pluck` and `pad`, simple versions built from the building blocks below, short enough to read and copy. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `drums.kick`, `drums.hats`, `synth.pluck` and `synth.pad`. The templates still start new songs with the first ones.
+- **The first instruments** (`@m2/synths`): `bass`, `kick`, `hat`, `pluck` and `pad`, simple versions built from std's building blocks below, short enough to read and copy. Code plays them; the lists leave them out. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `drums.kick`, `drums.hats`, `synth.pluck` and `synth.pad`. The templates still start new songs with the first ones.
 
 [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.
 
-**Effects**, as the effect browser groups them:
+**Effects**, as the effect browser groups them. Eight are `@m2/effects`'; the filters, `eq3`, `compress`, `limit`, `gain` and `pan` are std's, since mixing needs them:
 
 | Group | Effects |
 |---|---|
-| Filter | `lowpass`, `highpass`, `bandpass`, `notch` |
-| EQ | `eq3` |
-| Dynamics | `compress`, `limit` |
-| Distortion | `drive`, `bitcrush` |
-| Delay & Reverb | `delay`, `reverb` |
-| Modulation | `chorus`, `phaser`, `tremolo` |
-| Utility | `gain`, `pan`, `widen` |
+| Filter | `lowpass`, `highpass`, `bandpass`, `notch` (std, `std/filter`) |
+| EQ | `eq3` (std, `std/fx`) |
+| Dynamics | `compress`, `limit` (std, `std/fx`) |
+| Distortion | `drive`, `bitcrush` (`@m2/effects`) |
+| Delay & Reverb | `delay`, `reverb` (`@m2/effects`) |
+| Modulation | `chorus`, `phaser`, `tremolo` (`@m2/effects`) |
+| Utility | `gain`, `pan` (std, `std/dsp`), `widen` (`@m2/effects`) |
 
-Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped. So these effects, and std's drums, sound as in the export when you press Play, however long the song sat first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. An oscillator or `noise` written straight into a track's code, outside a voice, runs on while the song is stopped, so it may start from another place than in the export. A plugin may run on too.
+Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped. So these effects, and the drums, sound as in the export when you press Play, however long the song sat first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. An oscillator or `noise` written straight into a track's code, outside a voice, runs on while the song is stopped, so it may start from another place than in the export. A plugin may run on too.
 
 **`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays. It needs a second signal, so it's written in code rather than added from the browser.
 
 **`mixer` and `master`** (`std/mix`): `mixer` adds tracks together. Each channel has a level, `db` (0 when left out), and can have a `pan`, `sends` to buses and a `to` (a group bus instead of the master): see [Buses, sends and groups](https://github.com/BreadBowlAI/music2/blob/main/docs/song-as-program.md#buses-sends-and-groups). `master` has a level too, then a limiter, so the song never clips. A level of −96 dB or lower is silence.
 
-**Building blocks:** `std/dsp` (oscillators, noise, envelopes, filters, gain, pan), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`.
+**Building blocks** (std): `std/dsp` (oscillators, noise, envelopes, filters, gain, pan, and `mono` for a voice of your own), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`. A pack's sound is built from these and from std's kernels: `@m2/synths`' code is a good place to read how.
 
-`m2 kernels` lists every kernel with its typed inputs and outputs, and `m2 effects <song>` lists the effects (by their ids, such as `std:delay`) and where they can go.
+`m2 kernels` lists every kernel with its typed inputs and outputs, and `m2 effects <song>` lists the effects (by their ids, such as `@m2/effects:delay` or `std:eq3`) and where they can go.

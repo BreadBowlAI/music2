@@ -208,7 +208,7 @@ A bus file. `input` is what the song feeds it:
 
 ```ts
 import { bus } from "@m2/core";
-import { reverb } from "std/fx";
+import { reverb } from "@m2/effects";
 
 export default bus("verb", { name: "Reverb" }, ({ input }) => reverb(input, { mix: 1 }));
 ```
@@ -372,19 +372,23 @@ These live elsewhere on purpose:
 
 | Module | Contents |
 |---|---|
-| `std/dsp` | `osc.sine`, `osc.saw`, `osc.square`, `osc.tri`, `noise`, `adsr`, `follow`, `svf` (lowpass, bandpass, highpass), `vca`, `gain`, `pan` |
+| `std/dsp` | `osc.sine`, `osc.saw`, `osc.square`, `osc.tri`, `noise`, `adsr`, `follow`, `svf` (lowpass, bandpass, highpass), `vca`, `gain`, `pan`, `mono` |
 | `std/math` | `add`, `scale`, `blend`, `sum`, `mtof`, `range`, `xrange` |
 | `std/control` | `lfo`, `when`, `choose` |
 | `std/filter` | `lowpass`, `highpass`, `bandpass`, `notch` |
-| `std/fx` | `duck`, `delay`, `drive`, `limit`, `reverb`, `chorus`, `phaser`, `tremolo`, `compress`, `eq3`, `bitcrush`, `widen` |
+| `std/fx` | the effects mixing needs: `duck`, `limit`, `compress`, `eq3` |
 | `std/mix` | `mixer` (channel gain and pan), `master` (a limiter) |
-| `std/instruments` | `bass`, `kick`, `hat`, `pluck`, `pad` |
-| `std/synth` | one polysynth: `synth.supersaw`, `lead`, `pad`, `pluck`, `sub`, `bass`, `strings`, `custom`; and `mono` |
-| `std/fm` | one FM synth: `fm.keys`, `bell`, `metal`, `custom` |
-| `std/drums` | an 808/909-style drum machine: `drums.kit`, and each drum alone: `kick`, `snare`, `clap`, `hats`, `tom`, `rim`, `cowbell`, `cymbal`, `shaker` |
 | `std/sampler` | `sampler`: plays a WAV file on each note, higher or lower by the note |
 
-Seventeen of these are offered by the editor as effects: the four filters, the `std/fx` effects except `duck`, and `gain` and `pan`. Each says so in its [component descriptor](architecture.md#component-descriptors)'s `editor` field, which replaced `[[effect]]` in `std/m2pkg.toml` in step 5.
+Since std 0.6 std is the toolbox, and the sounds made from it are packs that ship with music2 ([PKG-17](architecture.md#component-descriptors), [PACK-15](architecture.md#packs)):
+
+| Pack | Contents |
+|---|---|
+| `@m2/synths` | one polysynth: `synth.supersaw`, `lead`, `pad`, `pluck`, `sub`, `bass`, `strings`, `custom`; one FM synth: `fm.keys`, `bell`, `metal`, `custom`; and the simple `bass`, `kick`, `hat`, `pluck`, `pad` |
+| `@m2/drums` | an 808/909-style drum machine: `drums.kit`, and each drum alone: `kick`, `snare`, `clap`, `hats`, `tom`, `rim`, `cowbell`, `cymbal`, `shaker` |
+| `@m2/effects` | `delay`, `reverb`, `chorus`, `phaser`, `tremolo`, `drive`, `bitcrush`, `widen` |
+
+Seventeen are offered by the editor as effects: the four filters, `std/fx`'s but `duck`, `gain` and `pan`, and `@m2/effects`' eight. Each says so in its [component descriptor](architecture.md#component-descriptors)'s `editor` field, which replaced `[[effect]]` in `std/m2pkg.toml` in step 5.
 
 **Not built yet:**
 
@@ -398,9 +402,9 @@ Seventeen of these are offered by the editor as effects: the four filters, the `
 | `std/theory` | keys, scales, chord names | plain TypeScript |
 | `std/fx` | `pump` (ducking in time with the beat, with no sidechain) | modules |
 
-Built since: a lead, keys, strings, drums and a sampler (`synth.lead`, `fm.keys`, `synth.strings`, `std/drums`, `std/sampler`), unison (`std/synth`), FM (`std/fm`), and sends and buses in `std/mix`. ("Mute in song" is not a mixer control but a track option in `@m2/core`: [MON-5](architecture.md#monitoring-overlays-and-mute-in-song).)
+Built since: a lead, keys, strings, drums and a sampler (`synth.lead`, `fm.keys`, `synth.strings`, the drums, `std/sampler`), unison, FM, and sends and buses in `std/mix`; the sounds are `@m2/` packs since std 0.6. ("Mute in song" is not a mixer control but a track option in `@m2/core`: [MON-5](architecture.md#monitoring-overlays-and-mute-in-song).)
 
-The standard library is also the main test of principle 2. If writing `std/mix` or `std/instruments/drums` needs something kernels and modules can't express, the core gets a general mechanism for it, never a special case.
+The standard library is also the main test of principle 2. If writing `std/mix` or a drum machine needs something kernels and modules can't express, the core gets a general mechanism for it, never a special case.
 
 ---
 
@@ -504,8 +508,8 @@ This is the shape of the real `examples/first-song` project, which builds and re
 ```ts
 // tracks/kick.ts
 import { ms, track } from "@m2/core";
+import { kick } from "@m2/synths";
 import { follow } from "std/dsp";
-import { kick } from "std/instruments";
 
 export default track("kick", { name: "Kick" }, ({ lane }) => {
   const out = kick(lane.notes("hits"));
@@ -517,8 +521,8 @@ export default track("kick", { name: "Kick" }, ({ lane }) => {
 ```ts
 // tracks/bass.ts
 import { hz, khz, track } from "@m2/core";
+import { bass } from "@m2/synths";
 import { blend, lfo } from "std/control";
-import { bass } from "std/instruments";
 import { xrange } from "std/math";
 
 export default track("bass", { name: "Bass" }, ({ lane, time }) => {
@@ -553,7 +557,7 @@ export default song(() =>
 );
 ```
 
-`bass()` from `std/instruments` is a component: a function that builds a `poly` voice out of `std/dsp` parts, declared with a [descriptor](architecture.md#component-descriptors). The descriptor says what a call takes and what the editor shows: `cutoff` and `drive` are knobs, each with a unit, a default and a range, so a `bass(...)` call shows as one box with both knobs, written or left at their defaults. `voices` is a setting: it shapes the graph, so it is no knob.
+`bass()` from `@m2/synths` is a component: a function that builds a `poly` voice out of `std/dsp` parts, declared with a [descriptor](architecture.md#component-descriptors). The descriptor says what a call takes and what the editor shows: `cutoff` and `drive` are knobs, each with a unit, a default and a range, so a `bass(...)` call shows as one box with both knobs, written or left at their defaults. `voices` is a setting: it shapes the graph, so it is no knob.
 
 ```ts
 export const bass = component(
@@ -633,7 +637,7 @@ This describes the app as it was at commit `92a19a3`, plus steps 1, 4 and 5 of t
 
 In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop <project-folder>`, opens a project. The window shows the timeline above a panel with a tab for each module, and three views of it: Graph, Code and Notes. The [guide](guide/window.md) describes how to use them.
 
-- **The view** (`crates/editor/src/view.rs`) shows the calls written in the project, not the kernels they expand into. Each component call is a frame in the IR, with its ComponentId (`std:bass`), and every node names the frame it was made in, so everything `bass(...)` builds is one node.
+- **The view** (`crates/editor/src/view.rs`) shows the calls written in the project, not the kernels they expand into. Each component call is a frame in the IR, with its ComponentId (`@m2/synths:bass`), and every node names the frame it was made in, so everything `bass(...)` builds is one node.
   - Knobs sit on the innermost call that contains where their number is written.
   - Knobs are named by property path (`hats.pan`, `hats.db`) or by the control they are (`hi`, `period`), with the range and log scale the component's descriptor declares for the value's unit. A control the call leaves out is a knob too, at its declared default; its first turn writes the number into the call.
   - `m2 graph <project>` prints the same view.
@@ -773,7 +777,7 @@ Agents may keep writing files directly: that is the save path, and every problem
 - **Packages** may import only `m2.asset_read`, must export the full ABI, and must say the runtime's ABI version in their `m2_abi` section ([Kernel ABI v1](kernel-abi.md)).
 
 **Settled while building:**
-- `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/filter`, `std/fx`, `std/mix`, `std/instruments`, `std/synth`, `std/fm`, `std/drums` and `std/sampler`. Kernel ids are `package:kernel`, e.g. `std:svf`.
+- `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/filter`, `std/fx`, `std/mix` and `std/sampler` (and, before std 0.6, `std/instruments`, `std/synth`, `std/fm` and `std/drums`, now the packs `@m2/synths` and `@m2/drums`). Kernel ids are `package:kernel`, e.g. `std:svf`.
 - Units in TypeScript are functions (`hz(800)`), and plain numbers are untyped literals.
 - `feedback()` declares its kind up front (`feedback("audio<1>")`), and its input is given later with `.set()`.
 - Inside `poly`, a voice can read any signal from its module. Lanes and imports are always created at module level, so voices never contain them. So is `time` read in a track's own code outside any `key()` frame. Read inside a component call or a `key()` frame, it is made in that frame, one node per frame, and a voice has its own (since the `sounds` merge: [WRITE-8](architecture.md#expectations-and-the-delta)).

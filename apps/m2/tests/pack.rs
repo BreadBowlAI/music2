@@ -165,8 +165,9 @@ fn check_says_what_is_wrong() {
     for want in ["tool.sh", "licence", "sparkle", "samples/gone.wav"] {
         assert!(text.contains(want), "says {want}: {text}");
     }
-    // An effect without a category isn't one the lists can offer, nor an instrument.
-    assert!(text.contains("tiny-crunch"), "{text}");
+    // An effect without a category is code's only, as std's can be (PKG-7): the lists leave it out,
+    // and it is no problem (PACK-12, since track starter: @m2/synths' first instruments have none).
+    assert!(!text.contains("tiny-crunch"), "{text}");
 }
 
 // PACK-12: a new pack checks as made, and installs.
@@ -437,7 +438,7 @@ fn tiny_with_kernel(t: &Temp, version: &str, tag: &str) -> PathBuf {
     wasm.extend(tag.as_bytes());
     std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
     let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
-    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+    let tone = "\nimport { hz } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
                 id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
                 inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
                 (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
@@ -587,7 +588,7 @@ fn sfz_fixture() -> PathBuf {
 fn tiny_keys_song(dir: &Path, pack: &Path) {
     std::fs::create_dir_all(dir.join("data/keys")).unwrap();
     let manifest = format!(
-        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n\
+        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n\
          \"@test/tiny-keys\" = {{ path = {:?} }}\n",
         pack.to_str().unwrap()
     );

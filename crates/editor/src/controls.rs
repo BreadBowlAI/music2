@@ -60,7 +60,7 @@ pub struct Control {
 /// value in the constant's unit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Declared {
-    /// The ComponentId (`std:delay`).
+    /// The ComponentId (`@m2/effects:delay`).
     pub component: String,
     /// The slot (`time`, `channels.hats.db`).
     pub slot: String,

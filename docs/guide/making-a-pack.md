@@ -56,9 +56,8 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 An instrument is a `component(…)` whose first input is notes and whose output is sound; an effect's first input is sound. Give each a label and a category: the browser groups by it.
 
 ```ts
-import { component, control, file, port, signature, type Audio, type Events, type Params } from "@m2/core";
+import { component, control, file, kernel, poly, port, signature, type Audio, type Events, type Params } from "@m2/core";
 import { sampler } from "std/sampler";
-import { synth } from "std/synth";
 
 export const feltPiano = component(
   {
@@ -70,7 +69,9 @@ export const feltPiano = component(
     output: port.audio(),
     editor: { category: "Keys", description: "A soft pluck" },
   },
-  (notes: Events, { brightness }: Params): Audio => synth.pluck(notes, { brightness }),
+  // std's synth kernel, one voice a note. A pack builds on std only: never on another pack, `@m2/synths` included.
+  (notes: Events, { brightness }: Params): Audio =>
+    poly(notes, (n) => kernel("std:synth", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, cutoff: brightness, sustain: 0 }), { voices: 12 }),
 );
 
 // A recording of the pack's own: file(import.meta, …) names it, "@alice/felt-piano:samples/C4.wav".

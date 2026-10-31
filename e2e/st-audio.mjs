@@ -449,7 +449,7 @@ check(await until(async () => (await toasts()).includes("Nothing was added to th
 // An instrument dragged from the browser is no file: no hint.
 const instrument = await page.evaluate(async (x, y) => {
   const dt = new DataTransfer();
-  dt.setData("application/x-m2-instrument", "std:synth-pluck");
+  dt.setData("application/x-m2-instrument", "@m2/synths:synth-pluck");
   const at = document.elementFromPoint(x, y);
   at.dispatchEvent(new DragEvent("dragenter", { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
   at.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));

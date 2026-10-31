@@ -36,7 +36,7 @@ use crate::{EditError, Edited, keys, ready};
 /// An instrument a new track can play (PKG-7): what the + Track list shows.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Instrument {
-    /// The ComponentId (`std:synth-pluck`): what adding names.
+    /// The ComponentId (`@m2/synths:synth-pluck`): what adding names.
     pub component: String,
     pub label: String,
     /// Where it is imported from and as what: `pluck` from `std/instruments`, or a member of an
@@ -368,7 +368,7 @@ fn adds(checked: &Checked, made: &[(String, String)]) -> Result<(), EditError> {
     }
 }
 
-/// What a new track plays: an instrument (its ComponentId, `std:synth-pluck`) or an installed
+/// What a new track plays: an instrument (its ComponentId, `@m2/synths:synth-pluck`) or an installed
 /// instrument plugin (`clap:<id>`, gaps #32) from a notes lane, or audio clips from an audio lane
 /// (lane A's A2).
 #[derive(Clone, Debug, PartialEq)]

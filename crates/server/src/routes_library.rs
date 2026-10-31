@@ -48,7 +48,7 @@ crate::api::routes! {
         r#"{"q": "warm pad"}"#;
     GET "/api/library/preview" => preview; reads, agents,
         "An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file (a FLAC's as the WAV of it)",
-        r#"{"id": "std:synth-pluck"}"#;
+        r#"{"id": "@m2/synths:synth-pluck"}"#;
     GET "/api/library/folders" => folders_get; reads, agents,
         "Your sample folders, each with how many samples it has and whether it is being indexed",
         r#"{}"#;

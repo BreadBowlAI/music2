@@ -14,7 +14,7 @@ export type ItemKind = "instrument" | "sound" | "effect" | "sample" | "plugin";
 /** An item, as the server's search answers it. */
 export interface LibraryItem {
   kind: ItemKind;
-  /** `std:synth-pluck`, `clap:<id>`, `sound:<from>/<sound>/<name>`. */
+  /** `@m2/synths:synth-pluck`, `clap:<id>`, `sound:<from>/<sound>/<name>`. */
   id: string;
   label: string;
   category: string;

@@ -147,11 +147,21 @@ fn number(x: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// This computer's store of packs (PACK-6), under `$HOME` (PLAT-7), with the packs music2 ships
+/// installed in it (PACK-16): the first time `m2` opens it in a run, quietly unless one can't be.
+/// None without a home folder.
+fn packs_store() -> Option<m2_song::pack::Store> {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    let dir = m2_os::dirs::packs()?;
+    INSTALLED.call_once(|| m2_server::resources::install_packs(&dir, true));
+    Some(m2_song::pack::Store::at(dir))
+}
+
 fn packages() -> Result<PackageSet> {
     let mut p = PackageSet::default();
-    // This computer's packs (PACK-6), under `$HOME` (PLAT-7).
-    if let Some(store) = m2_os::dirs::packs() {
-        p = p.with_store(store);
+    // This computer's packs (PACK-6), under `$HOME` (PLAT-7), music2's own among them.
+    if let Some(store) = packs_store() {
+        p = p.with_store(store.dir);
     }
     // Found the way the app finds it, so both load the same std.
     p.load(&m2_server::resources::std_dir()).context("loading the std package")?;
@@ -687,7 +697,7 @@ fn run() -> Result<()> {
         Some("add-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let wanted = arg(2)?;
-            // By ComponentId (`std:synth-pluck`) or by its export (`synth.pluck`, `std/synth.synth.pluck`).
+            // By ComponentId (`@m2/synths:synth-pluck`) or by its export (`synth.pluck`, `std/synth.synth.pluck`).
             let list = s.instruments();
             let inst = list
                 .iter()
@@ -913,7 +923,7 @@ change that code first",
             let at = s.accepted().number;
             let e = match command {
                 "add-effect" => {
-                    // By its ComponentId (`std:delay`), or by where it is exported (`std/fx.delay`).
+                    // By its ComponentId (`@m2/effects:delay`), or by where it is exported (`@m2/effects.delay`).
                     let effect = arg(3)?;
                     let by_export = || {
                         let (module, name) = effect.rsplit_once('.')?;
@@ -922,8 +932,9 @@ change that code first",
                     let component = if effect.contains(':') {
                         effect.clone()
                     } else {
-                        by_export()
-                            .context("name the effect by its id (std:delay) or its export (std/fx.delay); `m2 effects` lists them")?
+                        by_export().context(
+                            "name the effect by its id (@m2/effects:delay) or its export (@m2/effects.delay); `m2 effects` lists them",
+                        )?
                     };
                     s.add_effect(at, &arg(2)?, &component)
                 }
@@ -1095,10 +1106,10 @@ change that code first",
 /// from the library; list and remove what is installed; lock a song's.
 fn pack(args: &[String]) -> Result<()> {
     use m2_editor::packs;
-    use m2_song::pack::{PackName, Store};
+    use m2_song::pack::PackName;
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument: {}", usage_of("pack")));
     let std = m2_server::resources::std_dir();
-    let store = || Store::here().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"));
+    let store = || packs_store().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"));
     let failed = |problems: Vec<String>| {
         for p in &problems {
             eprintln!("problem: {p}");

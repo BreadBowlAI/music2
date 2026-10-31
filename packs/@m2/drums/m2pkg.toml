@@ -1,0 +1,12 @@
+[package]
+name = "@m2/drums"
+version = "1.0.0"
+license = "MIT OR Apache-2.0"
+description = "music2's 808/909 drum machine: a whole kit on one notes lane, and each drum as an instrument of its own"
+authors = ["music2"]
+repository = "https://github.com/BreadBowlAI/music2"
+tags = ["drums", "drum machine", "808", "909", "kit"]
+
+[dependencies]
+"@m2/core" = "1.7"
+std = "0.6"

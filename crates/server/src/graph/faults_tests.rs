@@ -10,8 +10,8 @@ use super::super::Graph;
 use super::super::tests::Fixture;
 
 /// A bass through a delay and a hat, each a track with its own name, into std's mixer.
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { delay } from 'std/fx';\n\
-                    import { hat } from 'std/instruments';\nimport { mixer } from 'std/mix';\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { delay } from '@m2/effects';\n\
+                    import { hat } from '@m2/synths';\nimport { mixer } from 'std/mix';\n\
                     const bass = track('bass', { name: 'Bass' }, () => delay(osc.saw(110)));\n\
                     const hats = track('hats', { name: 'Hats' }, ({ lane }) => hat(lane.notes('hits')));\n\
                     export default song(() => mixer({ bass: bass.out, hats: hats.out }));\n";

@@ -1,7 +1,7 @@
 {
   "m2preset": 1,
   "name": "Deep",
-  "sound": "std:synth-bass",
+  "sound": "@m2/synths:synth-bass",
   "values": {
     "bite": 1.5,
     "cutoff": 220,

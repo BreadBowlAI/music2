@@ -395,13 +395,12 @@ mod tests {
     use super::*;
 
     fn std_packages() -> PackageSet {
-        let mut p = PackageSet::default();
+        let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
         p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         p
     }
 
-    pub(crate) const MANIFEST: &str =
-        "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -419,7 +418,7 @@ mod tests {
     }
 
     const SONG: &str = r#"import { song } from "@m2/core";
-import { kick } from "std/instruments";
+import { kick } from "@m2/synths";
 import { track } from "@m2/core";
 const k = track("kick", ({ lane }) => kick(lane.notes("hits")));
 export default song(() => k.out);
@@ -509,7 +508,7 @@ export default song(() => v.out);
         let mut unmet = vec![];
         let (sdk, std) = (Version::parse(m2_script::SDK_VERSION), packages.get("std").and_then(|p| Version::parse(&p.version)));
         let mut packs = 0;
-        for root in ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"] {
+        for root in ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures", "packs"] {
             let mut found = 0;
             let mut stack = vec![repo.join(root)];
             while let Some(d) = stack.pop() {
@@ -535,11 +534,58 @@ export default song(() => v.out);
                 }
             }
             // Finding none fails: a test built in a folder that has since moved would pass having
-            // checked nothing.
-            assert!(found > 0, "no music2.toml under {}", repo.join(root).display());
+            // checked nothing. The bundled packs (PACK-15) are packs, not songs.
+            assert!(found > 0 || root == "packs", "no music2.toml under {}", repo.join(root).display());
         }
         assert!(packs > 0, "no m2pkg.toml under the fixtures: the packs' check checked nothing");
         assert!(unmet.is_empty(), "shipped projects and packs this build can't build:\n{}", unmet.join("\n"));
+    }
+
+    // PACK-18: every song the repo ships that imports a pack music2 ships (PACK-15) lists it in
+    // [dependencies] and locks it at the bundled version and hash; and no song locks another
+    // version of one. A bundled pack whose files changed fails here: give it a new version (PACK-17)
+    // and lock the songs again.
+    #[test]
+    fn every_shipped_song_locks_the_bundled_packs_it_plays() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let store = m2_song::pack::Store::at(m2_song::pack::test_store());
+        let bundled: Vec<(m2_song::pack::PackName, Version, m2_song::Sha)> = m2_song::pack::bundled(&m2_song::pack::source_packs())
+            .iter()
+            .map(|dir| {
+                let m = m2_song::pack::PkgManifest::at(dir).unwrap();
+                let hash = store.hash(&m.package.name, &m.package.version).unwrap();
+                (m.package.name, m.package.version, hash)
+            })
+            .collect();
+        assert_eq!(bundled.len(), 3, "@m2/drums, @m2/effects and @m2/synths");
+        let (mut songs, mut wrong) = (0, vec![]);
+        let mut stack: Vec<PathBuf> = ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"].map(|r| repo.join(r)).into();
+        while let Some(d) = stack.pop() {
+            if !d.join("music2.toml").is_file() {
+                stack.extend(std::fs::read_dir(&d).into_iter().flatten().flatten().filter(|e| e.path().is_dir()).map(|e| e.path()));
+                continue;
+            }
+            songs += 1;
+            let name = d.strip_prefix(&repo).unwrap().display().to_string();
+            let project = Project::open(&d).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            let code: String = project.code.values().map(|t| t.to_string()).collect();
+            for (pack, version, hash) in &bundled {
+                let plays = code.contains(&format!("from \"{pack}\"")) || code.contains(&format!("from \"{pack}/"));
+                let listed = project.manifest.dependencies.contains_key(pack.as_str());
+                let locked = project.lock.get(pack).map(|l| (l.version, l.hash));
+                match (plays, listed, locked) {
+                    (false, false, None) => {}
+                    (true, true, Some((v, h))) if v == *version && h == *hash => {}
+                    (true, false, _) => wrong.push(format!("{name}: plays {pack} but music2.toml doesn't list it")),
+                    (_, _, Some((v, h))) if v != *version || h != *hash => wrong.push(format!(
+                        "{name}: locks {pack} {v} ({h}), but music2 ships {version} ({hash}): lock it again with `m2 pack update {pack}` in it"
+                    )),
+                    _ => wrong.push(format!("{name}: {pack} is listed but not locked, or locked but not played")),
+                }
+            }
+        }
+        assert!(songs > 10, "found {songs} songs");
+        assert!(wrong.is_empty(), "songs the repo ships that don't lock the packs music2 ships (PACK-18):\n{}", wrong.join("\n"));
     }
 
     // DIAG-1: data no lane reads is a Warning among the revision's problems.
@@ -557,7 +603,7 @@ export default song(() => v.out);
     #[test]
     fn a_missing_plugin_is_a_problem_not_a_failure() {
         let src = r#"import { plugin, song, track } from "@m2/core";
-import { kick } from "std/instruments";
+import { kick } from "@m2/synths";
 import { sum } from "std/math";
 const k = track("kick", ({ lane }) => kick(lane.notes("hits")));
 const s = track("synth", { name: "Synth" }, ({ lane }) =>
@@ -582,7 +628,7 @@ import bass from "./tracks/bass";
 export default song(() => bass.out);
 "#;
         let bass = r#"import { db, track } from "@m2/core";
-import { bass } from "std/instruments";
+import { bass } from "@m2/synths";
 import { lowpass } from "std/filter";
 
 export default track("bass", ({ lane }) => {
@@ -607,7 +653,7 @@ export const dark = component(
 );
 "#;
         let bass = r#"import { track } from "@m2/core";
-import { bass } from "std/instruments";
+import { bass } from "@m2/synths";
 import { dark } from "../lib/dark";
 
 export default track("bass", ({ lane }) => dark(bass(lane.notes("notes"))));

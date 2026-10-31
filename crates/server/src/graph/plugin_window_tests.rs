@@ -458,7 +458,7 @@ fn an_agents_change_that_would_drop_a_window_not_saved_yet_is_taken_back() {
     let at = text.find(old).expect("the plugin's call");
     let path = TxPath::new("song.ts").unwrap();
     let edits = vec![
-        Edit { start: Pos::Byte(0), end: Pos::Byte(0), expected: String::new(), text: "import { pluck } from 'std/instruments';\n".into() },
+        Edit { start: Pos::Byte(0), end: Pos::Byte(0), expected: String::new(), text: "import { pluck } from '@m2/synths';\n".into() },
         Edit {
             start: Pos::Byte(at as u32),
             end: Pos::Byte((at + old.len()) as u32),

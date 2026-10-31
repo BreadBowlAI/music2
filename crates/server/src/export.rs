@@ -575,14 +575,14 @@ pub(crate) mod tests {
         "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(440)));\n";
 
     /// A minute of a held chord: an export long enough to be still rendering when asked.
-    const CHORD: &str = "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\n\
+    const CHORD: &str = "import { song, track } from '@m2/core';\nimport { pad } from '@m2/synths';\n\
                          const p = track('pad', ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n";
 
     /// The app's state with a project of `song.ts` (and the chord's clip) open.
     fn open(project: &Temp, song: &str) -> Arc<AppState> {
         project.write(
             "music2.toml",
-            "[project]\nname = \"untitled\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+            "[project]\nname = \"untitled\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n",
         );
         project.write("song.ts", song);
         let notes: Vec<String> = [45, 52, 57, 60, 64].iter().map(|p| format!(r#"{{"pitch": {p}, "start": 0, "length": 120}}"#)).collect();

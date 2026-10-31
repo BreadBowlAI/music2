@@ -1,7 +1,7 @@
 {
   "m2preset": 1,
   "name": "Glass",
-  "sound": "std:synth-pluck",
+  "sound": "@m2/synths:synth-pluck",
   "values": {
     "brightness": 9000,
     "decay": 0.3,

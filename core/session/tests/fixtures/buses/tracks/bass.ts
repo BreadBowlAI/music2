@@ -1,6 +1,6 @@
 import { hz, khz, track } from "@m2/core";
+import { bass } from "@m2/synths";
 import { blend, lfo } from "std/control";
-import { bass } from "std/instruments";
 import { xrange } from "std/math";
 
 export default track("bass", { name: "Bass" }, ({ lane, time }) => {
