@@ -132,7 +132,7 @@ fn m2_set_writes_a_choice_by_its_name() {
     put(
         &song,
         "music2.toml",
-        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n",
     );
     put(&song, "song.ts", TONE);
     let dir = song.to_str().unwrap();
