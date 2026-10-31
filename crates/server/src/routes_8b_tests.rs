@@ -395,19 +395,21 @@ fn section_gestures_over_http() {
     let dir = std::env::temp_dir().join(format!("m2-routes-8b-sections-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("data/kick")).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(
         dir.join("song.ts"),
-        "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+        "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
          const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
     )
     .unwrap();
     let hits = "{\"clips\": [\n  {\"id\": \"k0000001\", \"start\": 0, \"length\": 4, \"notes\": []}\n]}\n";
     std::fs::write(dir.join("data/kick/hits.json"), hits).unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     let duplicate = json!({"session": session, "gesture": {"op": "duplicate", "start": 0, "end": 4}});
