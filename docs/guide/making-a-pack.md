@@ -99,7 +99,7 @@ A sound's code says what each of its values is. It never says how to draw it: th
 | `control.bool(false)` | `sub: true` | a `Switch` | 1 for true, 0 for false |
 
 - A **choice** is one of a few named options. Its last argument is what a song gets when it leaves the choice out. A song always writes the name, never the number: so a new version of your pack may add options, or change their order, and no song changes.
-- Each name is 1 to 24 characters, without `|`, `<` or `>`.
+- A choice has 1 to 64 options, each named once. Each name is 1 to 24 characters on one line, with no space at either end, and none of `|`, `<` and `>`.
 - A **switch** is on or off.
 - Both play at once when they change, with no rebuild, and both can be automated: the lane holds names (`"square"`), or `true` and `false`, and each point holds until the next.
 - The kernel that reads a choice names its options in its port, in `m2pkg.toml`: `"shape: control<choice<saw|square|sine>> = 0"`. Only a choice with exactly those names, in that order, reaches it; a number, or a choice of other names, is an error. A switch's port is `control<switch>`.
@@ -143,7 +143,7 @@ export const wobble = component(
 );
 ```
 
-A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line where it is written, and the build refuses it in words. The card doesn't draw menus, switches, views or groups yet: a later version of music2 does.
+A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. The card doesn't draw menus, switches, views or groups yet: a later version of music2 does.
 
 ## An instrument written as data
 

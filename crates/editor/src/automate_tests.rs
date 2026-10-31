@@ -319,6 +319,17 @@ fn automate_writes_a_lane_of_names() {
     let song = f.read("song.ts");
     let shape = s.controls().into_iter().find(|c| c.literal == "\"square\"").expect("the choice, written by its name");
     assert_eq!((shape.value, shape.unit.map(|u| u.to_string())), (1.0, Some("choice<saw|square|sine>".into())));
+    // What a menu offers (review K6), and why a number isn't written: m2 and the API can't write a name yet.
+    assert_eq!(shape.options(), Some(vec!["saw", "square", "sine"]));
+    let sub = s.controls().into_iter().find(|c| c.id.ends_with("/@sub")).expect("the switch left out");
+    assert!(sub.is_switch() && sub.options().is_none() && !shape.is_switch());
+    let e = s.set(s.accepted().number, &shape.id, 2.0, None).unwrap_err().to_string();
+    assert!(
+        e.contains("shape is a choice, written by its name (\"saw\", \"square\" or \"sine\"): change it in the code, as shape: \"square\""),
+        "{e}"
+    );
+    let e = s.set(s.accepted().number, &sub.id, 1.0, None).unwrap_err().to_string();
+    assert!(e.contains("sub is a switch, written true or false: change it in the code, as sub: true"), "{e}");
     let a = s.automate(s.accepted().number, &shape.id).unwrap();
     assert_eq!((a.lane.to_string(), a.edited.before.as_str()), ("lead/shape".to_string(), "shape \"square\""));
     let want =
@@ -355,4 +366,38 @@ fn automate_writes_a_lane_of_names() {
     remove(&mut s, "lead", "shape", None).unwrap();
     assert_eq!(f.read("song.ts"), song.replace("() => tone(", "({ lane }) => tone("));
     assert!(!f.0.join("data/lead/shape.json").exists());
+}
+
+/// `with_choice`, the track's function taking its lanes and running `body`.
+fn with_lanes(body: &str) -> Fixture {
+    let f = with_choice("tone()");
+    let song = f.read("song.ts").replace("track(\"lead\", () => tone())", &format!("track(\"lead\", ({{ lane }}) => {{\n  {body}\n}})"));
+    f.write("song.ts", song);
+    f
+}
+
+// CARD-14 (review K5): disconnecting a lane of names from a choice writes the choice's default as
+// its name, and from a switch as true or false. The lane still feeds another choice, or else
+// disconnecting it would leave a lane with no names: that is refused in words.
+#[test]
+fn disconnect_writes_a_choices_default_as_its_name() {
+    let f = with_lanes(
+        "const pick = lane.control(\"pick\", \"choice\", \"sine\");\n  const on = lane.control(\"on\", \"switch\", true);\n  tone({ shape: pick });\n  return tone({ shape: pick, sub: on });",
+    );
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let song = f.read("song.ts");
+    let inlet =
+        |s: &Session, name: &str| s.inlets().into_iter().filter(|i| i.name == name).last().unwrap_or_else(|| panic!("{name} is a cable"));
+    let on = inlet(&s, "on");
+    let e = s.disconnect(on.revision, &on.id).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("on", "false"));
+    let pick = inlet(&s, "pick");
+    let e = s.disconnect(pick.revision, &pick.id).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("pick", "\"saw\""));
+    assert_eq!(f.read("song.ts"), song.replace("tone({ shape: pick, sub: on })", "tone({ shape: \"saw\", sub: false })"));
+    // The lane's last choice: without it, the lane would have no names.
+    let pick = inlet(&s, "pick");
+    let e = s.disconnect(pick.revision, &pick.id).unwrap_err();
+    assert!(e.to_string().contains("pick is a lane of names, and this is the only choice it feeds"), "{e}");
 }

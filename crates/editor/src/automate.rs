@@ -19,7 +19,7 @@ use m2_song::tx::{Confined, Declared as Ranges, Expect, Op, Payload, Range, TxPa
 use m2_song::{DataPath, Key, LaneAddr, LaneData, ROOT};
 
 use crate::cable::{consts_of, descriptor_default, spelled};
-use crate::controls::{Control, resolve};
+use crate::controls::{Control, resolve, written_as};
 use crate::mix::{self, Mixing};
 use crate::plan::{self, path};
 use crate::rename::track_call;
@@ -365,16 +365,6 @@ pub fn remove(s: &mut Session, module: &str, lane: &str, beat: Option<f64>) -> R
         }
     })?;
     Ok(Edited { revision: done.number, file: site.file.clone(), before: label.0, after: label.1 })
-}
-
-/// How a choice's place, or a switch's 1 or 0, is written in code (CARD-10, CARD-11): its name, or
-/// true or false. None for a number.
-fn written_as(unit: Unit, value: f64) -> Option<String> {
-    match unit {
-        Unit::Switch => Some((value != 0.0).to_string()),
-        Unit::Choice(o) => o.name(value as usize).filter(|_| value >= 0.0 && value.fract() == 0.0).map(json),
-        _ => None,
-    }
 }
 
 /// `s` as a JSON string, which is a TypeScript string.

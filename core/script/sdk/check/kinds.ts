@@ -4,7 +4,7 @@
 // the check too. `kinds_tests.rs` builds the same sound and its mistakes, and the build refuses
 // each of them again, even through `as any`.
 
-import { component, control, kernel, port, setting, view, type Audio, type Choice, type Ctx, type Events, type Switch } from "@m2/core";
+import { component, control, kernel, port, setting, view, type Audio, type Choice, type Control, type Ctx, type Events, type Switch } from "@m2/core";
 import { lowpass } from "std/filter";
 
 /** A sound that uses every kind a descriptor declares. */
@@ -65,7 +65,9 @@ every(notes, { sub: shapes });
 // @ts-expect-error a choice wired into a frequency
 lowpass(x, { cutoff: shapes });
 // @ts-expect-error a switch wired into a frequency
-lowpass(x, shapes);
+lowpass(x, on);
+// @ts-expect-error a switch wired into a frequency, in the options
+lowpass(x, { cutoff: on });
 // @ts-expect-error a lane of names wired into a frequency
 lowpass(x, ctx.lane.control("shape", "choice", "sine"));
 // @ts-expect-error a switch's lane falls back to true or false
@@ -96,7 +98,9 @@ export const handed = component(
   },
 );
 
-// Views name controls of this very descriptor, in a unit that fits.
+// Views name controls of this very descriptor, in a unit that fits. Each mistake is marked on the
+// view itself, by the code editor's TypeScript as by the project's: the directive stands on the
+// line before the view, so a mistake marked on `component` would leave it unused.
 export const views = [
   component(
     {
@@ -108,39 +112,111 @@ export const views = [
     () => x,
   ),
   component(
-    // @ts-expect-error a view naming a control this descriptor doesn't have
-    { id: "missing", controls: { a: control.secs(0.1), d: control.secs(0.1), s: control.frac(1), r: control.secs(0.1) }, editor: { views: { env: view.envelope("a", "d", "s", "rel") } } },
+    {
+      id: "missing",
+      controls: { a: control.secs(0.1), d: control.secs(0.1), s: control.frac(1), r: control.secs(0.1) },
+      editor: {
+        views: {
+          // @ts-expect-error a view naming a control this descriptor doesn't have
+          env: view.envelope("a", "d", "s", "rel"),
+        },
+      },
+    },
     () => x,
   ),
   component(
-    // @ts-expect-error a cutoff that is a time
-    { id: "wrong-unit", controls: { cutoff: control.secs(1), q: control.scalar(1) }, editor: { views: { lp: view.filter("cutoff", "q") } } },
+    {
+      id: "wrong-unit",
+      controls: { cutoff: control.secs(1), q: control.scalar(1) },
+      editor: {
+        views: {
+          // @ts-expect-error a cutoff that is a time
+          lp: view.filter("cutoff", "q"),
+        },
+      },
+    },
     () => x,
   ),
   component(
-    // @ts-expect-error a sustain that is a choice
-    { id: "a-choice", controls: { a: control.secs(0.1), s: control.choice(["low", "high"], "low") }, editor: { views: { env: view.envelope("a", "a", "s", "a") } } },
+    {
+      id: "a-choice",
+      controls: { a: control.secs(0.1), s: control.choice(["low", "high"], "low") },
+      editor: {
+        views: {
+          // @ts-expect-error a sustain that is a choice
+          env: view.envelope("a", "a", "s", "a"),
+        },
+      },
+    },
     () => x,
   ),
   component(
-    // @ts-expect-error keys over a setting that isn't regions or a keymap
-    { id: "not-regions", settings: { file: setting.asset("a.wav") }, editor: { views: { map: view.keys("file") } } },
+    {
+      id: "not-regions",
+      settings: { file: setting.asset("a.wav") },
+      editor: {
+        views: {
+          // @ts-expect-error keys over a setting that isn't regions or a keymap
+          map: view.keys("file"),
+        },
+      },
+    },
     () => x,
   ),
   component(
-    // @ts-expect-error a view named as one of the sound's values
-    { id: "taken", controls: { cutoff: control.hz(800), q: control.scalar(1) }, editor: { views: { cutoff: view.filter("cutoff", "q") } } },
+    {
+      id: "taken",
+      controls: { cutoff: control.hz(800), q: control.scalar(1) },
+      editor: {
+        views: {
+          // @ts-expect-error a view named as one of the sound's values
+          cutoff: view.filter("cutoff", "q"),
+        },
+      },
+    },
     () => x,
   ),
 ];
 
-// Groups name this descriptor's values and views, each once.
+// Groups name this descriptor's values and views, each once. A mistake is marked on `groups`.
 export const groups = [
   component({ id: "groups-ok", controls: { a: control.hz(1), b: control.hz(1) }, settings: { c: setting.int(1) }, editor: { groups: { One: ["a", "c"], Two: ["b"] } } }, () => x),
-  // @ts-expect-error a group naming a key this descriptor doesn't have
-  component({ id: "unknown", controls: { a: control.hz(1) }, editor: { groups: { One: ["a", "b"] } } }, () => x),
-  // @ts-expect-error a value in two groups
-  component({ id: "twice", controls: { a: control.hz(1), b: control.hz(1) }, editor: { groups: { One: ["a"], Two: ["b", "a"] } } }, () => x),
-  // @ts-expect-error a value twice in one group
-  component({ id: "twice-in-one", controls: { a: control.hz(1) }, editor: { groups: { One: ["a", "a"] } } }, () => x),
+  component({
+    id: "unknown",
+    controls: { a: control.hz(1) },
+    editor: {
+      // @ts-expect-error a group naming a key this descriptor doesn't have
+      groups: { One: ["a", "b"] },
+    },
+  }, () => x),
+  component({
+    id: "twice",
+    controls: { a: control.hz(1), b: control.hz(1) },
+    editor: {
+      // @ts-expect-error a value in two groups
+      groups: { One: ["a"], Two: ["b", "a"] },
+    },
+  }, () => x),
+  component({
+    id: "twice-in-one",
+    controls: { a: control.hz(1) },
+    editor: {
+      // @ts-expect-error a value twice in one group
+      groups: { One: ["a", "a"] },
+    },
+  }, () => x),
 ];
+
+// A body may type its knobs by their units, as the descriptor declares them.
+export const annotated = component(
+  { id: "annotated", inputs: { in: port.audio() }, controls: { cutoff: control.hz(800), q: control.scalar(0.7).optional() }, output: port.audio() },
+  (x: Audio, { cutoff, q }: { cutoff: Control<"hz">; q: Control<"scalar"> | undefined }) => kernel<Audio>("std:svf", { in: x, cutoff, q }) as Audio,
+);
+export const unannotated = component(
+  { id: "unannotated", controls: { cutoff: control.hz(800), any: control.any() }, output: port.audio() },
+  ({ cutoff, any }) => {
+    const hz: Control<"hz"> = cutoff;
+    const some: Control = any;
+    return kernel<Audio>("std:svf", { cutoff: hz, q: some }) as Audio;
+  },
+);

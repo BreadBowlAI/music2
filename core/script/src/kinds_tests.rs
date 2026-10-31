@@ -308,9 +308,9 @@ fn views_are_checked_against_their_descriptor() {
         ),
         (
             "{ views: { map: view.keys(\"file\") } }",
-            "the keys's regions names \"file\", a setting of asset, but keys show regions or a keymap",
+            "the key map's setting names \"file\", a recording setting, but a key map shows regions or a keymap",
         ),
-        ("{ views: { map: view.keys(\"a\") } }", "the keys's regions names \"a\", which isn't a setting of this sound"),
+        ("{ views: { map: view.keys(\"a\") } }", "the key map's setting names \"a\", which isn't a setting of this sound"),
         ("{ views: { f: view.scope() } }", "editor.views' \"f\": \"f\" is a value of this sound; give the view a name of its own"),
         ("{ views: { env: { kind: \"envelope\" } } }", "editor.views' \"env\" must be made with view.envelope()"),
         ("{ looks: {} }", "editor has no field \"looks\""),
@@ -369,4 +369,68 @@ fn the_catalog_carries_views_and_groups() {
     assert_eq!(groups, [("Sound", 3), ("Filter", 3), ("Amp", 5)]);
     assert!(d.control("shape").and_then(|c| c.options()).is_some());
     assert_eq!(catalog.instruments().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["pkg:every"]);
+}
+
+/// A song with a track `a` whose function is `track`, then the song's `song`; `lib/every.ts` imported.
+fn two(track: &str, song: &str) -> Result<Build, Vec<Diagnostic>> {
+    let text = format!(
+        "import {{ song, track }} from \"@m2/core\";\nimport {{ every, tone, wave }} from \"./lib/every\";\n\
+         const a = track(\"a\", ({{ lane }}) => {{\n{track}\n}});\nexport default song(({{ lane }}) => {{\n{song}\n}});\n"
+    );
+    build_of(&[("lib/every.ts", EVERY), ("song.ts", &text)])
+}
+
+// CARD-14 (review K4): a choice read from another track keeps its kind: an import's kind is its
+// export's, known once every module has run, and a choice given one is checked then, as any is. A
+// lane of names exported to another track takes the options of the choice it feeds there.
+#[test]
+fn a_choice_from_another_track_keeps_its_kind() {
+    // The lane, fed in its own track and in the song.
+    let both = "const s = lane.control(\"shape\", \"choice\", \"square\");\nreturn { out: every(lane.notes(\"n\"), { shape: s }), s };";
+    two(both, "return every(lane.notes(\"n\"), { shape: a.s });").unwrap_or_else(|e| panic!("{e:?}"));
+    // The lane, fed only in the song: it takes the options there.
+    let b = two(
+        "return { out: tone(), s: lane.control(\"shape\", \"choice\", \"square\") };",
+        "return every(lane.notes(\"n\"), { shape: a.s });",
+    )
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let lane = b.ir.modules.iter().find(|m| m.key == "a").unwrap().lanes.iter().find(|l| l.key == "shape").unwrap();
+    assert_eq!((lane.kind.to_string(), lane.default), ("control<choice<saw|square|sine>>".to_string(), Some(1.0)));
+    // A switch, too.
+    two("return { out: tone(), on: lane.control(\"on\", \"switch\", true) };", "return every(lane.notes(\"n\"), { sub: a.on });")
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    // A choice of other options, a number, and a switch where a choice goes, each refused in words.
+    for (track, says) in [
+        (
+            "const w = lane.control(\"w\", \"choice\", \"sine\");\nwave({ shape: w });\nreturn { out: tone(), s: w };",
+            "the lane \"w\" also feeds wave()'s shape, one of \"sine\", \"saw\": a lane of names has one set of names",
+        ),
+        ("return { out: tone(), s: lane.control(\"f\", \"hz\", 800) };", "not a.s, a number in hz"),
+        ("return { out: tone(), s: lane.control(\"on\", \"switch\") };", "not a.s, a switch"),
+    ] {
+        let e = two(track, "return every(lane.notes(\"n\"), { shape: a.s as any });").err().unwrap_or_else(|| panic!("{track} builds"));
+        assert!(e.iter().any(|d| d.message.contains(says)), "{track}: {says}\n{e:?}");
+    }
+}
+
+// CARD-14 (review K11): a lane of names declared twice agrees when its fallbacks name one option, a
+// fallback left out being the first; else it is `lane.conflict`, in words about a choice's lane.
+#[test]
+fn a_lane_of_names_declared_twice_agrees_on_its_fallback() {
+    let twice = |a: &str, b: &str| {
+        song(&format!(
+            "every(lane.notes(\"n\"), {{ shape: lane.control(\"shape\", \"choice\"{a}) }});\nreturn every(lane.notes(\"n\"), {{ shape: lane.control(\"shape\", \"choice\"{b}) }});"
+        ))
+    };
+    for (a, b) in [("", ", \"saw\""), (", \"saw\"", ""), (", \"sine\"", ", \"sine\"")] {
+        twice(a, b).unwrap_or_else(|e| panic!("{a} and {b}: {e:?}"));
+    }
+    let e = twice("", ", \"square\"").err().expect("a conflict");
+    let d = e.iter().find(|d| d.code == "lane.conflict").unwrap_or_else(|| panic!("{e:?}"));
+    assert!(
+        d.message.contains("a choice's lane falling back to \"saw\"") && d.message.contains("falling back to \"square\""),
+        "{}",
+        d.message
+    );
+    assert!(!d.message.contains("control<choice>"), "{}", d.message);
 }

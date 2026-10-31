@@ -1243,7 +1243,11 @@ fn join(a: Kind, b: Kind) -> Result<Kind, String> {
 /// parameters are left to the plugin.
 /// `conns` gives each connected input its source, its kind, and the number it is when it is a
 /// number written straight into it (a constant that isn't a knob).
-fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind, Option<f64>)>, plugin: bool) -> Result<(Vec<Input>, u8, Vec<Kind>), String> {
+fn type_kernel(
+    sig: &KernelSig,
+    conns: &HashMap<&str, (PortRef, Kind, Option<f64>)>,
+    plugin: bool,
+) -> Result<(Vec<Input>, u8, Vec<Kind>), String> {
     let mut any: Option<Kind> = None;
     let mut chans: Option<u8> = None;
     let mut unit: Option<Unit> = None;
@@ -1302,7 +1306,9 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind, Option<f64
                 // A number reaches a choice or a switch only written there, as one of its places.
                 Kind::Control(None) if !want.is_number() => match written.map(|v| (v, want.holds(v))) {
                     Some((_, Ok(()))) => {}
-                    Some((v, Err(holds))) => errs.push(format!("input `{}` is {}: a number written into it must be {holds}, not {v}", p.name, p.kind)),
+                    Some((v, Err(holds))) => {
+                        errs.push(format!("input `{}` is {}: a number written into it must be {holds}, not {v}", p.name, p.kind))
+                    }
                     None => errs.push(format!(
                         "{}: only {}, or a number written there that is one of its places, reaches it",
                         mismatch(),
@@ -1590,16 +1596,28 @@ mod tests {
     #[test]
     fn a_choice_constant_and_a_lane_fallback_hold_places() {
         let reads = |id: &str, k: &str, input: &str| json!({"id": id, "op": "kernel", "kernel": k, "inputs": {input: "x"}});
-        let e = errors(json!([{"id": "x", "op": "const", "value": 3, "unit": "choice<saw|square|sine>"}, reads("k", "t:osc", "shape")]), "k", json!([]));
+        let e = errors(
+            json!([{"id": "x", "op": "const", "value": 3, "unit": "choice<saw|square|sine>"}, reads("k", "t:osc", "shape")]),
+            "k",
+            json!([]),
+        );
         assert!(e.iter().any(|m| m.contains("control<choice<saw|square|sine>> holds a whole number from 0 to 2, not 3")), "{e:?}");
         let e = errors(json!([{"id": "x", "op": "const", "value": 0.5, "unit": "switch"}, reads("k", "t:sub", "on")]), "k", json!([]));
         assert!(e.iter().any(|m| m.contains("control<switch> holds 0 or 1, not 0.5")), "{e:?}");
         for (kind, default, says) in [
-            ("control<choice<saw|square|sine>>", 1.5, "lane `x` of control<choice<saw|square|sine>> falls back to a whole number from 0 to 2, not 1.5"),
+            (
+                "control<choice<saw|square|sine>>",
+                1.5,
+                "lane `x` of control<choice<saw|square|sine>> falls back to a whole number from 0 to 2, not 1.5",
+            ),
             ("control<switch>", 2.0, "lane `x` of control<switch> falls back to 0 or 1, not 2"),
         ] {
             let (k, input) = if kind.contains("switch") { ("t:sub", "on") } else { ("t:osc", "shape") };
-            let e = errors(json!([{"id": "x", "op": "lane", "lane": "x"}, reads("k", k, input)]), "k", json!([{"key": "x", "kind": kind, "default": default}]));
+            let e = errors(
+                json!([{"id": "x", "op": "lane", "lane": "x"}, reads("k", k, input)]),
+                "k",
+                json!([{"key": "x", "kind": kind, "default": default}]),
+            );
             assert!(e.iter().any(|m| m.contains(says)), "{kind}: {e:?}");
         }
         let fine = errors(

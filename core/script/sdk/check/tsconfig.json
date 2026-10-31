@@ -1,7 +1,9 @@
 {
   // The SDK's call types and std's calls, checked as the app's code editor checks songs: strict,
-  // against the SDK and std sources. web's `npm run typecheck` (and so `npm run build`) runs it:
-  // `web/node_modules/.bin/tsc -p core/script/sdk/check`.
+  // against the SDK and std sources. web's `npm run typecheck` (and so `npm run build`) runs it
+  // twice: with the project's TypeScript, `web/node_modules/.bin/tsc -p core/script/sdk/check`, and
+  // with the one the code editor runs, the one Monaco bundles, `node web/scripts/tsc-monaco.mjs
+  // core/script/sdk/check`, so each mistake is marked where the editor marks it (CARD-13).
   "compilerOptions": {
     "target": "ES2020",
     "module": "ESNext",

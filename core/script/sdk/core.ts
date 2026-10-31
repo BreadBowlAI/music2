@@ -738,6 +738,8 @@ type LaneRecord = {
   first: Place;
   options?: readonly string[];
   fed?: string;
+  /** A lane of names' fallbacks, as each declaration wrote it: compared once its options are known. */
+  fallbacks?: { name?: string; at: Place }[];
 };
 
 /** One evaluation of a component call or a `key()` frame, as the IR has it (`Module.frames`, ID-15). */
@@ -974,7 +976,7 @@ function unitOfSpec(s: ControlSpec): string | undefined {
 }
 
 /** What a choice's or a switch's signal is, out of reach of types and song code (CARD-13). */
-type Steps = { kind: "switch" } | { kind: "choice"; options: readonly string[] } | { kind: "choice"; lane: LaneRecord; key: string };
+type Steps = { kind: "switch" } | { kind: "choice"; options: readonly string[] } | { kind: "choice"; lane: LaneRecord; key: string; module: string };
 const stepsOf = new WeakMap<Signal, Steps>();
 
 /** The options a choice's signal has: a lane of names' are those of the choice it feeds, once it feeds one. */
@@ -1361,8 +1363,10 @@ type SignatureFits<D> = D extends { signature: Signature<infer F extends (...arg
 // The body's type, from the descriptor (CARD-13): its inputs as given, then its params, a signal for
 // each control (a `Choice` of a choice's options, a `Switch` for a switch) and a value per setting.
 type BodyCtl<C> = C extends ControlDecl<any, infer K>
-  ? (undefined extends K ? undefined : never) | ([NonNullable<K>] extends [ChoiceKind<infer O>] ? Choice<O> : [NonNullable<K>] extends [SwitchKind] ? Switch : Signal)
+  ? (undefined extends K ? undefined : never) | BodyKind<NonNullable<K>>
   : Record<string, Record<string, any>>;
+/** A control's signal in the body: a number's in its unit, a choice's, or a switch's. */
+type BodyKind<K> = [K] extends [Unit] ? Control<K> : [K] extends [ChoiceKind<infer O>] ? Choice<O> : [K] extends [SwitchKind] ? Switch : Signal;
 /** What a component's body receives after its inputs, typed from its descriptor. */
 export type BodyParams<D> = { readonly [K in keyof Ctls<D>]: BodyCtl<Ctls<D>[K]> } & { readonly [K in keyof Sets<D>]: SetArg<Sets<D>[K]> };
 /** One `any` for each element of `T`. */
@@ -1381,9 +1385,9 @@ type RoleProblem<D, Role extends string, N, W> = W extends "regions"
     ? [SetArg<Sets<D>[N]>] extends [readonly Region[] | undefined]
       ? never
       : [SetArg<Sets<D>[N]>] extends [string | number | boolean | undefined]
-        ? `its ${Role} names "${N & string}", which isn't a regions or keymap setting`
+        ? `its setting names "${N & string}", which isn't a regions or keymap setting`
         : never
-    : `its ${Role} names "${N & string}", which isn't a setting of this sound`
+    : `its setting names "${N & string}", which isn't a setting of this sound`
   : N extends keyof Ctls<D>
     ? Ctls<D>[N] extends ControlDecl<any, infer K>
       ? [NonNullable<K>] extends [WantUnits[W & keyof WantUnits]]
@@ -1418,12 +1422,21 @@ type GroupsProblems<D, Gs = GroupsOf<D>> = { [G in keyof Gs]: GroupProblems<D, G
 // The groups themselves become what is wrong: a string, which no object of groups is.
 type GroupsFit<D> = [GroupsProblems<D>] extends [never] ? unknown : { editor: { groups: GroupsProblems<D> } };
 
+/** The old form's descriptor: the argument paths whose numbers are knobs. */
+type PathsDesc = { readonly controls: readonly string[] };
+/** Whether `D` is the old form's descriptor, which has no `id`. */
+type Old<D> = D extends { readonly id: unknown } ? false : D extends PathsDesc ? true : false;
+
 /**
  * Declare a component (PKG-1). The old form, `component({ controls: ["1.cutoff"] }, fn)`,
  * still works: it names the argument paths whose numbers are knobs, and gives editors less.
+ * One signature, not two overloads: so a mistake in a descriptor's views or groups is marked
+ * where it is written, by every TypeScript the editor may run (CARD-13).
  */
-export function component<F extends (...args: any[]) => any>(desc: { controls: string[] }, fn: F): F;
-export function component<const D extends Descriptor>(desc: D & SignatureFits<D> & ViewsFit<D> & GroupsFit<D>, body: Body<D>): Call<D>;
+export function component<const D extends Descriptor | PathsDesc, F extends (...args: any[]) => any>(
+  desc: Old<D> extends true ? D : D & SignatureFits<D> & ViewsFit<D> & GroupsFit<D>,
+  body: Old<D> extends true ? F : Body<D>,
+): Old<D> extends true ? F : Call<D>;
 export function component(desc: any, fn: any): any {
   const site = takeSite(arguments);
   if (desc !== null && typeof desc === "object" && Object.prototype.hasOwnProperty.call(desc, "id")) return declared(desc as Descriptor, fn, site);
@@ -1714,11 +1727,13 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     const spec = specOf<ViewSpec>(v as object);
     const out: Record<string, string> = { name, kind: spec.kind };
     for (const [role, [n, want]] of Object.entries(spec.names)) {
-      const says = `${at}: the ${spec.kind}'s ${role}`;
+      const says = want === "regions" ? `${at}: the key map's setting` : `${at}: the ${spec.kind}'s ${role}`;
       if (want === "regions") {
         const st = settings.find((x) => x.name === n);
         if (!st) fail(`${says} names ${shown(n)}, which isn't a setting of this sound (settings: ${settings.map((x) => x.name).join(", ") || "none"})`);
-        if (st!.spec.kind !== "regions" && st!.spec.kind !== "keymap") fail(`${says} names "${n}", a setting of ${st!.spec.kind}, but keys show regions or a keymap`);
+        if (st!.spec.kind !== "regions" && st!.spec.kind !== "keymap") {
+          fail(`${says} names "${n}", ${SETTING_WORDS[st!.spec.kind]} setting, but a key map shows regions or a keymap`);
+        }
       } else {
         const c = controls.find((x) => x.name === n);
         if (!c) fail(`${says} names ${shown(n)}, which isn't a control of this sound (controls: ${controls.map((x) => x.name).join(", ") || "none"})`);
@@ -1826,6 +1841,18 @@ function spelled(s: ControlSpec, written: number): { value: number; spelled: Spe
   return { value: written * s.scale, spelled: s.spelled ?? null, written };
 }
 
+/** What a setting of each kind is, in words: "a recording" setting. */
+const SETTING_WORDS: Record<SettingSpec["kind"], string> = {
+  number: "a number",
+  int: "a whole-number",
+  bool: "a true-or-false",
+  choice: "a choice",
+  asset: "a recording",
+  keymap: "a keymap",
+  regions: "a regions",
+  key: "a track's key",
+};
+
 /** A setting's problem after its name: "sample must be …", or "regions: region 3: …". */
 function said(name: string, problem: string): string {
   return problem.startsWith(": ") ? `${name}${problem}` : `${name} ${problem}`;
@@ -1867,7 +1894,7 @@ function shown(v: unknown): string {
     const options = k && optionsOf(k);
     if (k?.kind === "switch") return "a switch";
     if (k) return options ? `a choice of ${listed(options)}` : "a lane of names";
-    return "a signal";
+    return v.unit ? `a number in ${v.unit}` : "a signal";
   }
   if (v instanceof Quantity) return `a ${v.unit} value`;
   return v === null ? "null" : typeof v === "object" ? "an object" : String(v);
@@ -2110,17 +2137,15 @@ function normaliseStep(made: Made, slot: string, s: ControlSpec, g: Given | unde
   const choice = s.kind === "choice";
   const is = choice ? `one of ${listed(options)}` : "true or false";
   if (v instanceof Signal) {
-    const k = stepsOf.get(v);
-    if (k?.kind === "switch" && !choice) return v;
-    if (k?.kind === "choice" && choice) {
-      if ("lane" in k) {
-        bind(made, slot, k.lane, k.key, options);
-        return v;
-      }
-      if (sameNames(k.options, options)) return v;
+    // Another track's export: its kind is known once every module has run, and checked then (`__build`).
+    if (!stepsOf.has(v) && importsOf.has(v)) {
+      given.push({ id: made.id, slot, spec: s, import: v, at: place(made.site) });
+      return v;
     }
-    const lane = choice ? `lane.control("${slot}", "choice", ${JSON.stringify(options[0])})` : `lane.control("${slot}", "switch", false)`;
-    return fail(made.id, `${slot} is ${is}: give it ${choice ? "a name" : "a boolean"}, or a lane of them as ${lane}, not ${shown(v)}`);
+    // A signal of no kind known here (a kernel's output): the checker decides where it lands (CARD-12).
+    if (!stepsOf.has(v) && v.unit === undefined) return v;
+    takes(made.id, slot, s, v, "");
+    return v;
   }
   if (v === undefined && s.optional) return undefined;
   if (v === undefined && s.default === undefined) return fail(made.id, `${slot} is missing`);
@@ -2141,6 +2166,53 @@ function normaliseStep(made: Made, slot: string, s: ControlSpec, g: Given | unde
   return out;
 }
 
+/**
+ * Check that the choice or switch `slot` of `id` (declared `s`) takes the signal `v`, else fail in
+ * words; a lane of names takes the choice's options. `named` names `v` when it is another track's
+ * export (`a.shape, `).
+ */
+function takes(id: string, slot: string, s: ControlSpec, v: Signal, named: string): void {
+  const options = s.options ?? [];
+  const choice = s.kind === "choice";
+  const k = stepsOf.get(v);
+  if (k?.kind === "switch" && !choice) return;
+  if (k?.kind === "choice" && choice) {
+    if ("lane" in k) return bind(id, slot, k, options);
+    if (sameNames(k.options, options)) return;
+  }
+  const is = choice ? `one of ${listed(options)}` : "true or false";
+  const lane = choice ? `lane.control("${slot}", "choice", ${JSON.stringify(options[0])})` : `lane.control("${slot}", "switch", false)`;
+  fail(id, `${slot} is ${is}: give it ${choice ? "a name" : "a boolean"}, or a lane of them as ${lane}, not ${named}${shown(v)}`);
+}
+
+/** A choice or a switch given another track's export: checked once every module has run. */
+type Given_ = { id: string; slot: string; spec: ControlSpec; import: Signal; at: Place };
+const given: Given_[] = [];
+
+/**
+ * Check every choice and switch given another track's export (CARD-14), now that every module has
+ * run: an import's kind is its export's. A lane of names exported takes the options there.
+ */
+function checkGiven(): void {
+  for (const g of given) {
+    let v: Signal | undefined = g.import;
+    let name = "";
+    // An export may itself be an import: follow it, a step for each module at most.
+    for (let n = 0; v && importsOf.has(v) && !stepsOf.has(v) && n <= tracks.size; n++) {
+      const from = importsOf.get(v)!;
+      name = `${from.module}.${from.export}`;
+      v = exported.get(name);
+    }
+    // An export that isn't there is the checker's to say.
+    if (!v || (!stepsOf.has(v) && v.unit === undefined)) continue;
+    try {
+      takes(g.id, g.slot, g.spec, v, `${name}, `);
+    } catch (e) {
+      throw new Error(`${(e as Error).message}, at ${describe(g.at)}`);
+    }
+  }
+}
+
 /** Whether two choices have the same options, in the same order. */
 function sameNames(a: readonly string[] | undefined, b: readonly string[]): boolean {
   return a !== undefined && a.length === b.length && a.every((x, i) => x === b[i]);
@@ -2148,22 +2220,47 @@ function sameNames(a: readonly string[] | undefined, b: readonly string[]): bool
 
 /**
  * A lane of names given to the choice `slot` of `options` (CARD-14): the first choice it feeds gives
- * it its options, which every other must have too, and its fallback must be one of them.
+ * it its options, which every other must have too. Each declaration's fallback must then be one of
+ * them, and all one (one left out is the first).
  */
-function bind(made: Made, slot: string, lane: LaneRecord, key: string, options: readonly string[]): void {
+function bind(id: string, slot: string, k: { lane: LaneRecord; key: string; module: string }, options: readonly string[]): void {
+  const { lane, key } = k;
   if (lane.options === undefined) {
-    if (typeof lane.default === "string" && !options.includes(lane.default)) {
-      fail(made.id, `${slot}: the lane "${key}" falls back to ${JSON.stringify(lane.default)}, which isn't one of ${listed(options)}`);
+    for (const f of lane.fallbacks ?? []) {
+      if (f.name !== undefined && !options.includes(f.name)) {
+        fail(id, `${slot}: the lane "${key}" falls back to ${JSON.stringify(f.name)}, which isn't one of ${listed(options)}`);
+      }
     }
     lane.options = options;
-    lane.fed = `${made.id}()'s ${slot}`;
+    lane.fed = `${id}()'s ${slot}`;
+    for (const f of lane.fallbacks ?? []) agrees(lane, key, k.module, f);
   } else if (!sameNames(lane.options, options)) {
     fail(
-      made.id,
+      id,
       `${slot} is one of ${listed(options)}, but the lane "${key}" also feeds ${lane.fed}, one of ${listed(lane.options)}: ` +
         `a lane of names has one set of names, so give each its own lane`,
     );
   }
+}
+
+/**
+ * That fallback `f` of a lane of names, its options known, names the option its others do (a
+ * fallback left out is the first option); else `lane.conflict` (CARD-14). The lane's fallback is that one.
+ */
+function agrees(lane: LaneRecord, key: string, module: string, f: { name?: string; at: Place }): void {
+  const options = lane.options!;
+  const name = f.name ?? options[0];
+  const said = (g: { name?: string }) => `a choice's lane falling back to ${JSON.stringify(g.name ?? options[0])}${g.name === undefined ? " (its first option, left out)" : ""}`;
+  const first = lane.fallbacks![0];
+  if (lane.default !== undefined && lane.default !== name) {
+    throw new BuildError(
+      "lane.conflict",
+      `lane "${key}" of "${module}" is declared as ${said(first)} at ${describe(first.at)}, and again as ${said(f)} at ${describe(f.at)}. ` +
+        `A lane has one kind and one set of settings; give the other its own key`,
+      module,
+    );
+  }
+  lane.default = name;
 }
 
 /**
@@ -2344,7 +2441,9 @@ function options(what: string, o: unknown, allowed: Record<string, "string" | "b
 }
 
 function laneKind(kind: string, fallback: number | string | undefined): string {
-  return fallback === undefined ? kind : `${kind} with fallback ${JSON.stringify(fallback)}`;
+  if (kind === "control<switch>") return `a switch's lane falling back to ${fallback === 1}`;
+  if (kind === "control<choice>") return "a choice's lane";
+  return fallback === undefined ? kind : `${kind} with fallback ${fallback}`;
 }
 
 /**
@@ -2360,12 +2459,26 @@ function declareLane(m: ModuleBuild, k: string, kind: string, fallback: number |
   const where = chain.slice(1).map((f) => f.key).join("/");
   const here = place(site);
   const have = lanes.get(k);
+  // A lane of names' fallback is compared once its options are known (`bind`): one left out is the first.
+  const names = kind === "control<choice>";
   if (!have) {
-    const made: LaneRecord = { kind, default: fallback, label: o.name, chains: new Map([[where, here]]), shared: o.shared === true, first: here };
+    const made: LaneRecord = names
+      ? { kind, label: o.name, chains: new Map([[where, here]]), shared: o.shared === true, first: here, fallbacks: [{ name: fallback as string | undefined, at: here }] }
+      : { kind, default: fallback, label: o.name, chains: new Map([[where, here]]), shared: o.shared === true, first: here };
     lanes.set(k, made);
     return made;
   }
-  if (have.kind !== kind || have.default !== fallback || (o.name !== undefined && have.label !== undefined && o.name !== have.label)) {
+  if (names && have.kind === kind) {
+    const f = { name: fallback as string | undefined, at: here };
+    have.fallbacks!.push(f);
+    if (have.options) {
+      if (f.name !== undefined && !have.options.includes(f.name)) {
+        throw new Error(`lane "${k}" falls back to ${JSON.stringify(f.name)} at ${describe(here)}, which isn't one of ${listed(have.options)}`);
+      }
+      agrees(have, k, m.key, f);
+    }
+  }
+  if (have.kind !== kind || (!names && have.default !== fallback) || (o.name !== undefined && have.label !== undefined && o.name !== have.label)) {
     const was = laneKind(have.kind, have.default) + (have.label !== undefined ? ` named "${have.label}"` : "");
     const now = laneKind(kind, fallback) + (o.name !== undefined ? ` named "${o.name}"` : "");
     throw new BuildError(
@@ -2420,7 +2533,7 @@ function ctxFor(m: ModuleBuild): Ctx {
           const switched = fallback === true ? 1 : 0;
           const rec = declareLane(m, key, `control<${unit}>`, unit === "switch" ? switched : (fallback as string | undefined), opts, site);
           const s = laneNode(key, undefined, site);
-          stepsOf.set(s, unit === "switch" ? { kind: "switch" } : { kind: "choice", lane: rec, key });
+          stepsOf.set(s, unit === "switch" ? { kind: "switch" } : { kind: "choice", lane: rec, key, module: m.key });
           return produced(site, s);
         }
         if (!UNIT_NAMES.includes(unit as Unit)) throw new Error(`lane "${key}": no unit ${shown(unit)} (units: ${UNIT_NAMES.join(", ")}; or "choice" or "switch")`);
@@ -2462,6 +2575,11 @@ export type BusCtx = Ctx & {
   /** What the song feeds the bus: `feed(bus, x)` in song code, or std's mixer's sends and outputs. */
   readonly input: Audio;
 };
+
+/** Each import of another track's export, by its signal: which track and export it reads. */
+const importsOf = new WeakMap<Signal, { module: string; export: string }>();
+/** Each module's exports, by `<module>.<export>`: what an import's kind is (CARD-14). */
+const exported = new Map<string, Signal>();
 
 /** Registered tracks (buses too) by key. Private: it holds labels, which song code must never see. */
 const tracks = new Map<string, { fn: TrackFn<any>; label?: string; muted: boolean; src?: string; at: Place; bus: boolean; handle: object }>();
@@ -2515,7 +2633,10 @@ function declareTrack<E extends Exports>(word: "track" | "bus", key: string, a: 
       const m = scope.module;
       const id = `${key}.${prop}`;
       let s = m.imports.get(id);
-      if (!s) m.imports.set(id, (s = new Signal(push(m.root, { op: "import", module: key, export: prop }), m.root)));
+      if (!s) {
+        m.imports.set(id, (s = new Signal(push(m.root, { op: "import", module: key, export: prop }), m.root)));
+        importsOf.set(s, { module: key, export: prop });
+      }
       return s;
     },
   });
@@ -2569,6 +2690,7 @@ function exportsOf(m: ModuleBuild, value: unknown) {
     if (!(v instanceof Signal)) throw new Error(`${m.key}: export "${k}" must be a signal`);
     if (v.scope !== m.root) throw new Error(`${m.key}: export "${k}" must not come from inside a poly voice`);
     m.exports[k] = v.ref;
+    exported.set(`${m.key}.${k}`, v);
   };
   if (value instanceof Signal) one("out", value);
   else if (value && typeof value === "object") for (const [k, v] of Object.entries(value)) one(k, v);
@@ -2610,6 +2732,8 @@ export function __build(root: unknown): string {
   outputs = [];
   const modules = [run("song", false, r.fn, r.src)];
   for (const [key, t] of tracks) modules.push(run(key, true, t.fn, t.src, t.bus));
+  if (firstError) throw firstError;
+  checkGiven();
   if (firstError) throw firstError;
   for (const [key, t] of tracks) {
     if (t.bus && !fed.has(key)) {

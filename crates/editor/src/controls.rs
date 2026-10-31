@@ -96,16 +96,32 @@ impl Control {
         })
     }
 
+    /// A choice's options, in place order (CARD-10): what its menu offers. None for anything else.
+    pub fn options(&self) -> Option<Vec<&'static str>> {
+        self.unit.and_then(Unit::options).map(|n| n.names().iter().map(|x| &**x).collect())
+    }
+
+    /// Whether it is a switch (CARD-11): true or false in the code, 1 or 0 here.
+    pub fn is_switch(&self) -> bool {
+        self.unit == Some(Unit::Switch)
+    }
+
     /// Why it isn't set as a number, when it is a choice or a switch: its value is a name, or true or
-    /// false (CARD-10, CARD-11), never a place. Its menu or switch is track `views`'.
+    /// false (CARD-10, CARD-11), never a place, and nothing writes one but the code yet.
     pub(crate) fn numbered(&self) -> Result<(), EditError> {
-        match self.unit {
-            Some(u) if !u.is_number() => {
-                let what = if u == Unit::Switch { "a switch, set to true or false" } else { "a choice, set by its name" };
-                Err(EditError::Rejected(format!("this value is {what}, not a number")))
+        let name = self.declared.first().map_or("this value", |d| d.label.as_str());
+        let words = match (self.options(), self.is_switch()) {
+            (Some(o), _) => {
+                let listed: Vec<String> = o.iter().map(|n| format!("{n:?}")).collect();
+                let (last, rest) = listed.split_last().expect("a choice has an option");
+                let names = if rest.is_empty() { last.clone() } else { format!("{} or {last}", rest.join(", ")) };
+                let example = o.get(1).or(o.first()).expect("a choice has an option");
+                format!("{name} is a choice, written by its name ({names}): change it in the code, as {name}: {example:?}")
             }
-            _ => Ok(()),
-        }
+            (None, true) => format!("{name} is a switch, written true or false: change it in the code, as {name}: true"),
+            (None, false) => return Ok(()),
+        };
+        Err(EditError::Rejected(words))
     }
 
     /// For a control its call leaves out: the edits writing `written` (a signal's name, or a
@@ -165,6 +181,19 @@ pub struct Audition {
     pub value: f64,
     /// The value in the accepted revision, to return to if the preview is cancelled.
     pub current: f64,
+}
+
+/// How a choice's place, or a switch's 1 or 0, is written in code (CARD-10, CARD-11): its name, or
+/// true or false. None for a number, or a place no option has.
+pub(crate) fn written_as(unit: Unit, value: f64) -> Option<String> {
+    match unit {
+        Unit::Switch => Some((value != 0.0).to_string()),
+        Unit::Choice(o) => {
+            let name = o.name(value as usize).filter(|_| value >= 0.0 && value.fract() == 0.0)?;
+            Some(serde_json::to_string(name).expect("a string serialises"))
+        }
+        _ => None,
+    }
 }
 
 /// The descriptor of the component whose instance frame `frame` of `m` is, if it was declared

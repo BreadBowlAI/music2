@@ -92,7 +92,7 @@ fn an_unknown_name_is_a_warning_and_plays_the_fallback() {
     assert_eq!(warned.len(), 1, "{diags:?}");
     let w = warned[0];
     assert_eq!((w.code, w.severity), ("lane.unknown-option", Severity::Warning));
-    for says in ["data/song/shape.json", "clip 1 (at beat 0)", "\"tri\"", "\"saw\", \"square\", \"sine\"", "fallback"] {
+    for says in ["data/song/shape.json", "at beat 1, clip 1 names", "\"tri\"", "\"saw\", \"square\", \"sine\"", "fallback"] {
         assert!(w.message.contains(says), "{says}: {}", w.message);
     }
     let out = played(&ir, &tl, &pk, 2.0);
