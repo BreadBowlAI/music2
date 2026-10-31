@@ -10,7 +10,7 @@
 import clsx from "clsx";
 import { Check, ChevronDown, FileAudio } from "lucide-react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import { controlLabel, graphApi, moduleName, type Choice, type Setting } from "../lib/graph";
+import { controlLabel, graphApi, inSentence, moduleName, type Choice, type Setting } from "../lib/graph";
 import { MISSING, usePeaks, type Peaks } from "../lib/peaks";
 import { useStore } from "../lib/store";
 import { MenuRow, Popover } from "./ui";
@@ -71,9 +71,9 @@ export function SettingRow(p: Props) {
   const label = controlLabel(x.label, tracks);
   const where = `In your code: ${x.file}, line ${x.line}`;
   const off = !editable ? `${locked ?? "It can't be edited right now"}.` : null;
-  /** Write `value`: one edit, named "LFO shape"; a refusal says why. */
+  /** Write `value`: one edit, named "LFO shape" by its label (CARD-34); a refusal says why. */
   const write = (value: Choice["value"]) =>
-    graphApi.setValue(session, revision, x.id, value, { name: `${owner} ${label.toLowerCase()}` }).catch((error) => toast(words(error)));
+    graphApi.setValue(session, revision, x.id, value, { name: `${owner} ${inSentence(label)}` }).catch((error) => toast(words(error)));
   const row = (control: ReactNode, title: string) => (
     <div
       className="relative h-7 pl-4 pr-3 flex items-center gap-2 text-xs min-w-0"

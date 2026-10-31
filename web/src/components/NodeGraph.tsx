@@ -31,6 +31,7 @@ import {
   findLane,
   fromUnit,
   graphApi,
+  inSentence,
   laneTitle,
   lockReason,
   moduleName,
@@ -1507,7 +1508,7 @@ function KnobControl({
     knob,
     editable,
     // Its undo step's name: the card and the control ("Delay feedback"), or a channel's own ("Hats volume").
-    name: knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}`,
+    name: knob.label.includes(".") ? label : `${owner} ${inSentence(label)}`,
     label,
     hold: (token, on) => (on ? held.set(token, { knob: mountKey, node: nodeKey }) : held.delete(token)),
   });
@@ -1740,7 +1741,7 @@ function PickControl({
   const pick = (v: number | string | boolean) => {
     setSaving(true);
     graphApi
-      .setValue(session, revision, knob.id, v, { name: knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}` })
+      .setValue(session, revision, knob.id, v, { name: knob.label.includes(".") ? label : `${owner} ${inSentence(label)}` })
       .catch((error) => toast(words(error)))
       .finally(() => setSaving(false));
   };

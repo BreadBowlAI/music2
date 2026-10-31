@@ -39,7 +39,7 @@ import { gain, osc, vca } from "std/dsp";
 import { master, mixer } from "std/mix";
 
 const box = component(
-  { id: "box", label: "Box", inputs: { in: port.audio() }, settings: { steps: setting.choice(["1", "2"], "1"), fast: setting.bool(false) }, output: port.audio() },
+  { id: "box", label: "Box", inputs: { in: port.audio() }, settings: { steps: setting.choice(["1", "2"], "1").label("step count"), fast: setting.bool(false) }, output: port.audio() },
   (x) => gain(x, 0.5),
 );
 
@@ -51,8 +51,8 @@ export default song(({ time }) =>
 // CARD-4: `m2 set` reads a word as the setting's kind needs it: a choice's option `2` is the word
 // "2", not the number 2; a switch takes true or false, or its options' names (On), and refuses
 // another word in words that say what it takes; an id no setting or knob has says so. `m2 graph` prints what the card shows: a channel's `to`
-// left out as Master, the code that works a value out once in backticks, and a plugin's stepped
-// parameter as the menu it is.
+// left out as Master, the code that works a value out once in backticks, a plugin's stepped
+// parameter as the menu it is, and a setting by its label (CARD-34).
 #[test]
 fn m2_set_reads_a_word_as_its_setting_takes_it() {
     let temp = Temp(std::env::temp_dir().join(format!("m2-settings-cli-{}", std::process::id())));
@@ -102,6 +102,9 @@ fn m2_set_reads_a_word_as_its_setting_takes_it() {
     assert!(line("a.to").contains("Master"), "{}", line("a.to"));
     assert!(line("shape").contains("`tri`") && !line("shape").contains("``"), "{}", line("shape"));
     assert!(line("mode_3").contains("choice: Soft | Warm | Hard") && line("mode_3").contains("Warm"), "{}", line("mode_3"));
+    // CARD-34: a setting is named by its label where it has one, by its name where it hasn't.
+    assert!(line("step count").contains("@steps"), "{}", line("step count"));
+    assert!(line("fast").contains("@fast"), "{}", line("fast"));
 }
 
 const TONE: &str = r#"import { component, control, port, song, view } from "@m2/core";

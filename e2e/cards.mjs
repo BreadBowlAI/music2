@@ -2,11 +2,12 @@
 // shape as a menu, at its default (sine, in grey) and saying a change rebuilds the sound; picking
 // saw writes `shape: "saw"` into its call, one undo step ("Undo LFO shape"), and ⌘Z takes the code
 // back byte for byte. A track whose sound is a component of the song's own (Box) shows a switch, a
-// number box and a recording: the switch writes `held: true`; the number box refuses 2.5 in words,
-// writing nothing, and writes 6 on Return; a WAV dropped on the recording (as a browser drops it)
-// comes into assets/ and the call names it (`sample: "tone.wav"`), one undo step ("Undo setting Box
-// to tone.wav"), its waveform drawn; and a track's menu lists the song's tracks as the timeline has
-// them, and writes the key picked. Each state linted.
+// number box and a recording, each row named by its setting's label ("Hold A") or its name
+// (Voices, CARD-34): the switch writes `held: true`, one undo step ("Undo Box hold A"); the number
+// box refuses 2.5 in words, writing nothing, and writes 6 on Return; a WAV dropped on the recording
+// (as a browser drops it) comes into assets/ and the call names it (`sample: "tone.wav"`), one undo
+// step ("Undo setting Box to tone.wav"), its waveform drawn; and a track's menu lists the song's
+// tracks as the timeline has them, and writes the key picked. Each state linted.
 //
 //   node e2e/cards.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -125,7 +126,7 @@ const box = component(
     id: "box",
     label: "Box",
     inputs: { notes: port.notes() },
-    settings: { held: setting.bool(false), voices: setting.int(4), sample: setting.asset().optional(), follows: setting.key().optional() },
+    settings: { held: setting.bool(false).label("hold A"), voices: setting.int(4), sample: setting.asset().optional(), follows: setting.key().optional() },
     output: port.audio(),
   },
   (notes, p) => sampler(notes, { sample: p.sample, mode: p.held ? "gate" : "oneshot", voices: p.voices }),
@@ -143,6 +144,9 @@ await sleep(150);
 const kinds = await page.$$eval(`${card} [data-setting]`, (els) => els.map((e) => `${e.dataset.setting}:${e.dataset.kind}`));
 check(JSON.stringify(kinds) === '["held:switch","voices:number","sample:recording","follows:track"]', `in its descriptor's order, each by its kind: ${JSON.stringify(kinds)}`);
 await linted(card, "Box's card");
+// A setting is named by its label where it has one ("hold A"), by its name where it hasn't (CARD-34).
+const names = await page.$$eval(`${card} [data-setting] > span:first-child`, (els) => els.map((e) => e.textContent));
+check(names[0] === "Hold A" && names[1] === "Voices", `its rows say its label, or its name: ${JSON.stringify(names)}`);
 
 // A switch.
 const sw = `${card} [data-setting="held"] [role=switch]`;
@@ -150,7 +154,7 @@ check((await page.$eval(sw, (e) => e.getAttribute("aria-checked"))) === "false",
 await page.click(sw);
 check(await until(() => read("tracks/box.ts").includes('box(lane.notes("notes"), { held: true })')), `flipping it writes held: true: ${read("tracks/box.ts").match(/box\(lane.*\)/)?.[0]}`);
 check(await until(async () => (await page.$eval(sw, (e) => e.getAttribute("aria-checked")).catch(() => null)) === "true"), "and it shows on");
-check(await stepIs("Box held"), `one undo step: ${await undoTitle()}`);
+check(await stepIs("Box hold A"), `one undo step, named by its label as written: ${await undoTitle()}`);
 
 // A whole number: a fraction is refused, said under the box; a whole one is written on Return.
 const num = `${card} [data-setting="voices"] [data-testid=setting-number]`;

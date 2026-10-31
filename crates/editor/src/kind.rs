@@ -79,6 +79,19 @@ pub fn of_setting(d: &SettingDesc) -> (Kind, bool, Vec<Choice>) {
     }
 }
 
+/// What a control or a setting is called (CARD-34), declared at `slot` with `label`: its label when
+/// it has one, else its name. A dictionary entry's is named by its key first (`channels.vox.to` is
+/// `vox.to`), then its label or its name (`vox.goes to`). The card, its undo steps, `m2 graph` and
+/// the API all name a value by this.
+pub fn named(label: Option<&str>, slot: &str) -> String {
+    let key = slot.split_once('.').map_or(slot, |(_, rest)| rest);
+    match (label, key.rsplit_once('.')) {
+        (Some(label), Some((entry, _))) => format!("{entry}.{label}"),
+        (Some(label), None) => label.to_string(),
+        (None, _) => key.to_string(),
+    }
+}
+
 /// What a cell's number is, as the code writes it (CARD-20): a choice's place as its name, a
 /// switch's 1 or 0 as `true` or `false`, a number as itself. None for a place no option has, or a
 /// number that isn't finite.

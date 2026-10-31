@@ -75,7 +75,7 @@ export const sampler = component(
     },
     settings: {
       sample: setting.asset().optional(),
-      root: setting.int(60),
+      root: setting.int(60).label("root note"),
       zones: setting.keymap(),
       regions: setting.regions(),
       mode: setting.choice(["oneshot", "gate"], "oneshot"),

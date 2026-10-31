@@ -236,6 +236,12 @@ export function controlLabel(label: string, track?: (key: string) => string | un
   const word = CHANNEL[rest] ?? rest;
   return word ? `${who} ${word}` : who;
 }
+/**
+ * A value's name as it reads inside a sentence, as an undo step says it after its card's
+ * ("Wavetable table A", "Lead shape"): its first letter small, and the rest as its label writes it,
+ * unless it starts with a word in capitals ("LFO rate"). CARD-34.
+ */
+export const inSentence = (name: string) => (/^\p{Lu}\p{Lu}/u.test(name) ? name : name.charAt(0).toLowerCase() + name.slice(1));
 /** What to show for a module: its label, and "Song" for the root module unless it has one. */
 export const moduleName = (m: { key: string; label?: string | null }) => (m.key === "song" && (!m.label || m.label === "song") ? "Song" : labelOf(m));
 /** The key, to show beside a name that doesn't already say it (`Lead Vox` · `lead-vox`, not `Bass` · `bass`); "" otherwise. */

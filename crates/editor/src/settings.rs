@@ -42,7 +42,8 @@ pub struct Setting {
     pub id: String,
     /// The setting: `shape`, or a dictionary entry's by its path (`channels.vox.to`).
     pub slot: String,
-    /// What it is called: its name, or a dictionary entry's by its key (`vox.to`).
+    /// What it is called (CARD-34): its label, else its name; a dictionary entry's by its key first
+    /// (`vox.to`).
     pub label: String,
     pub kind: Kind,
     /// A whole number (`setting.int`): a fraction is refused.
@@ -250,11 +251,10 @@ impl<'a> Call<'a> {
             },
             _ => None,
         };
-        let label = slot.split_once('.').map_or(slot.as_str(), |(_, rest)| rest).to_string();
         Setting {
             id: format!("{}#{}/@{slot}", self.site.file, self.site.ordinal),
+            label: kind::named(d.label.as_deref(), &slot),
             slot,
-            label,
             kind,
             whole,
             options,

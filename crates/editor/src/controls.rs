@@ -201,13 +201,12 @@ pub(crate) fn declared(compiled: &Compiled, m: &Module, origin: &Origin, unit: O
     let slot = origin.control.as_ref()?;
     let desc = component_of(compiled, m, slot.frame)?;
     let c = desc.control(&slot.slot)?;
-    // A dictionary entry's control is named by its key: `hats.db`.
-    let name = slot.slot.split_once('.').map_or(slot.slot.as_str(), |(_, rest)| rest);
     let range = desc.range_for(&slot.slot, unit);
     Some(Declared {
         component: desc.id.clone(),
         slot: slot.slot.clone(),
-        label: c.label.clone().unwrap_or_else(|| name.to_string()),
+        // A dictionary entry's control is named by its key first: `hats.db` (CARD-34).
+        label: crate::kind::named(c.label.as_deref(), &slot.slot),
         range: range.map(|r| r.0),
         log: range.is_some_and(|r| r.1),
         default: c.default.as_ref().filter(|_| unit == c.unit).map(|d| d.value),

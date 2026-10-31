@@ -84,7 +84,7 @@ When something is wrong, the song says so, in words, and doesn't build until it 
 | `pkg.changed` | the installed version isn't the copy the song was made with | put that one back (`m2 pack remove @owner/name <version>`, then `m2 pack install <its folder>`), or `m2 pack update <song> @owner/name` to use the installed one |
 | `pkg.unsatisfied` | no installed version fits `music2.toml`'s line, or the lock names one the line no longer allows. Or the versions that fit need a newer music2: a newer music2 on this computer installed them (the message says what they need) | install one that fits, or change the line; then `m2 pack lock <song>`. For a newer music2's version: update music2 |
 | `pkg.broken` | the pack needs a newer std or `@m2/core` than this app has | update music2, or use another version of the pack |
-| `pkg.broken` | the pack is made for another major version of `@m2/core` (`is made for @m2/core 1, and this app has @m2/core 2.0.0`) | get a version of the pack made for this app's: the message names it |
+| `pkg.broken` | the pack is made for another major version of `@m2/core` (`is made for @m2/core 1, and this app has @m2/core 2.1.0`) | get a version of the pack made for this app's: the message names it |
 | `sdk.unsatisfied` | the song asks for another major version of `@m2/core` than this app has | for an older one, the message says the line to write first (`"@m2/core" = "2"`); the song's code may need changes. For a newer one, update music2 |
 
 Removing a pack can't change a song: a song that locks it says `pkg.missing` until it is installed again.

@@ -109,6 +109,8 @@ fn every_setting_of_every_std_component_is_on_its_card() {
     assert_eq!((&mode.value, mode.written, &mode.readonly), (&json!("gate"), true, &None));
     let voices = setting(&s, "sampler", "voices");
     assert_eq!((voices.kind, voices.whole, &voices.value, voices.written), (Kind::Number, true, &json!(8), false));
+    // CARD-34: by its label where it has one, the note a recording plays at.
+    assert_eq!((voices.label.as_str(), setting(&s, "sampler", "root").label.as_str()), ("voices", "root note"));
     let sample = setting(&s, "sampler", "sample");
     assert_eq!((sample.kind, &sample.value, sample.written, &sample.readonly), (Kind::Recording, &Json::Null, false, &None));
     // Regions and keymaps are shown in words here, and changed in code (their picture is later).
@@ -149,6 +151,60 @@ const keys = track("keys", ({ lane }) => box(lane.notes("notes"), { voices: 6 })
 
 export default song(({ time }) => master(mixer({ keys: vca(keys.out, lfo(time.beats, { period: 4 })) })));
 "#;
+
+/// A song with a component of its own whose controls and settings have labels, or none, and a
+/// dictionary whose entry has some.
+const LABELLED: &str = r#"import { component, control, each, port, setting, song, track } from "@m2/core";
+import { gain } from "std/dsp";
+import { master, mixer } from "std/mix";
+import { sampler } from "std/sampler";
+
+const box = component(
+  {
+    id: "box",
+    label: "Box",
+    inputs: { notes: port.notes() },
+    controls: {
+      level: control.db(0).label("loudness"),
+      parts: each({ db: control.db(0).label("volume A"), mode: setting.bool(false).label("mode A"), fast: setting.bool(false) }),
+    },
+    settings: { held: setting.bool(false).label("hold A"), voices: setting.int(4) },
+    output: port.audio(),
+  },
+  (notes, p) => gain(gain(sampler(notes, { mode: p.held ? "gate" : "oneshot", voices: p.voices }), p.level), p.parts.a.db),
+);
+
+const keys = track("keys", ({ lane }) => box(lane.notes("notes"), { parts: { a: { db: -3 } } }));
+
+export default song(() => master(mixer({ keys: keys.out })));
+"#;
+
+// CARD-34: one function names a control or a setting wherever it shows: its label when its
+// descriptor gives one, else its name; a dictionary entry's by its key first, then its label or its
+// name (`a.mode A`, `a.fast`). The card's rows, `m2 graph` and the API read these names, and a
+// refusal says them.
+#[test]
+fn a_label_names_a_value_on_its_card() {
+    let f = song(LABELLED);
+    let mut s = f.open();
+    let label = |s: &Session, slot: &str| setting(s, "box", slot).label;
+    assert_eq!(label(&s, "held"), "hold A");
+    assert_eq!(label(&s, "voices"), "voices", "no label: its name");
+    assert_eq!(label(&s, "parts.a.mode"), "a.mode A");
+    assert_eq!(label(&s, "parts.a.fast"), "a.fast");
+    let knobs = card(&s, "box").knobs;
+    let knob = |slot: &str| {
+        knobs.iter().find(|k| k.slot.as_deref() == Some(slot)).unwrap_or_else(|| panic!("no {slot} in {knobs:?}")).label.clone()
+    };
+    assert_eq!(knob("level"), "loudness");
+    assert_eq!(knob("parts.a.db"), "a.volume A", "an entry's control, by the one rule");
+    let at = s.accepted().number;
+    let id = setting(&s, "box", "held").id;
+    match set(&mut s, at, &id, &json!(1), None) {
+        Err(EditError::Rejected(why)) => assert!(why.contains("hold A is true or false, not 1"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}
 
 /// Setting `slot` of `callee` set to `value` at the accepted revision, then undone: `after` is the
 /// call's code after it, exactly; one Tx, one undo step, and the code as it was after the undo.

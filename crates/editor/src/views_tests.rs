@@ -596,3 +596,28 @@ fn music2s_own_sounds_show_their_groups_and_views() {
     assert_eq!(names, ["kick", "snare", "clap", "hats", "tom", "rim", "cowbell", "cymbal", "shaker"]);
     assert_eq!(drum.settings.iter().map(|x| x.slot.as_str()).collect::<Vec<_>>(), ["voices"]);
 }
+
+// CARD-34: every value of std and music2's own packs reads as words on its card. A control or a
+// setting whose name is written in camelCase (`subOctave`, `tableA`) has a label ("sub octave"), so
+// the card, its undo step and `m2 graph` never show the code's spelling.
+#[test]
+fn music2s_own_values_read_as_words() {
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write("song.ts", "import { song } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\nexport default song(() => mixer({}));\n");
+    let s = f.open();
+    let catalog = s.catalog();
+    let camel = |name: &str| name.as_bytes().windows(2).any(|w| w[0].is_ascii_lowercase() && w[1].is_ascii_uppercase());
+    let (mut seen, mut wrong) = (0, vec![]);
+    for (id, d) in catalog.components.iter().filter(|(id, _)| id.starts_with("@m2/") || id.starts_with("std:")) {
+        let controls = d.controls.iter().filter(|c| c.each.is_none()).map(|c| (&c.name, &c.label));
+        for (name, label) in controls.chain(d.settings.iter().map(|x| (&x.name, &x.label))) {
+            seen += 1;
+            if camel(&crate::kind::named(label.as_deref(), name)) {
+                wrong.push(format!("{id}: {name}"));
+            }
+        }
+    }
+    assert!(seen > 200, "{seen} values");
+    assert!(wrong.is_empty(), "shown by a name in camelCase, so it wants a label (CARD-34): {wrong:?}");
+}
