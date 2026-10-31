@@ -590,7 +590,7 @@ fn installing_the_bundled_packs_twice_writes_nothing() {
             other => panic!("{other:?}"),
         })
         .collect();
-    assert_eq!(names, ["@m2/drums 1.0.0", "@m2/effects 1.1.0", "@m2/synths 1.0.0"]);
+    assert_eq!(names, ["@m2/drums 1.0.0", "@m2/effects 1.1.0", "@m2/mixing 1.0.0", "@m2/synths 1.0.0"]);
     for (dir, _) in &first {
         let m = PkgManifest::at(dir).unwrap();
         let hash = store.check(&m.package.name, &m.package.version).unwrap();
@@ -623,7 +623,8 @@ fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on(
         .collect();
     assert_eq!(said[0], ("drums".into(), Ok("Installed".into())));
     assert_eq!(said[1], ("effects".into(), Ok("Installed".into())));
-    let Err(why) = &said[2].1 else { panic!("{said:?}") };
+    assert_eq!(said[2], ("mixing".into(), Ok("Installed".into())));
+    let Err(why) = &said[3].1 else { panic!("{said:?}") };
     assert!(why.starts_with("@m2/synths 1.0.0 is installed already with other files"), "{why}");
     assert_eq!(store.check(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0)).unwrap(), theirs, "theirs is left as it was");
     remove_tree(&d).unwrap();
@@ -636,7 +637,7 @@ fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on(
 fn every_bundled_pack_is_the_version_its_record_names() {
     let mut wrong = vec![];
     let packs = bundled(&source_packs());
-    assert_eq!(packs.len(), 3, "@m2/drums, @m2/effects and @m2/synths");
+    assert_eq!(packs.len(), 4, "@m2/drums, @m2/effects, @m2/mixing and @m2/synths");
     for dir in &packs {
         let m = PkgManifest::at(dir).unwrap();
         let (name, v) = (&m.package.name, m.package.version);

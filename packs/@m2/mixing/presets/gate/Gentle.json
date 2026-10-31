@@ -1,0 +1,12 @@
+{
+  "m2preset": 1,
+  "name": "Gentle",
+  "sound": "@m2/mixing:gate",
+  "values": {
+    "attack": 0.005,
+    "hold": 0.1,
+    "range": -20,
+    "release": 0.3,
+    "threshold": -45
+  }
+}

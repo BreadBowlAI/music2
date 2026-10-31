@@ -1,0 +1,12 @@
+{
+  "m2preset": 1,
+  "name": "Tight drums",
+  "sound": "@m2/mixing:gate",
+  "values": {
+    "attack": 0.0005,
+    "hold": 0.03,
+    "range": -80,
+    "release": 0.06,
+    "threshold": -30
+  }
+}

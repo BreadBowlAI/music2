@@ -229,8 +229,11 @@ fn every_factory_preset_loads() {
             assert_eq!(factory(&std, &p.sound), Some(folder.clone()), "{} is in its sound's folder", file.display());
 
             let f = keys("track", "synth.pluck(lane.notes(\"chords\"))");
-            // The song lists the pack each sound is from (PACK-10).
-            f.write("music2.toml", f.read("music2.toml") + "\"@m2/effects\" = \"1\"\n");
+            // The song lists the pack each sound is from (PACK-10): first-song lists @m2/synths.
+            let pack = p.sound.split(':').next().unwrap();
+            if pack != "@m2/synths" {
+                f.write("music2.toml", f.read("music2.toml") + &format!("\"{pack}\" = \"1\"\n"));
+            }
             let s = f.open();
             let desc = s.catalog().components.get(&p.sound).unwrap_or_else(|| panic!("{}: no sound {}", file.display(), p.sound)).clone();
             for k in p.values.keys() {
@@ -270,5 +273,5 @@ fn every_factory_preset_loads() {
             n += 1;
         }
     }
-    assert_eq!(n, 10, "two each for Pluck, Pad, Bass, Reverb and Delay");
+    assert_eq!(n, 20, "two each for Pluck, Pad, Bass, Reverb and Delay, and for each of @m2/mixing's five tools");
 }
