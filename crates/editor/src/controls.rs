@@ -89,10 +89,39 @@ impl Control {
     /// The value `value` plays as, exactly as a commit would write it (the literal's spelling,
     /// rounded through its units): what a gesture's update sends the engine (WRITE-22). Pure.
     pub fn audition(&self, value: f64) -> Result<f64, EditError> {
+        self.numbered()?;
         Ok(match &self.edit {
             Edit::Literal { lens, .. } => lens.propose(value)?.value,
             Edit::Insert(_) => lens::propose(value, 1.0)?.value,
         })
+    }
+
+    /// A choice's options, in place order (CARD-10): what its menu offers. None for anything else.
+    pub fn options(&self) -> Option<Vec<&'static str>> {
+        self.unit.and_then(Unit::options).map(|n| n.names().iter().map(|x| &**x).collect())
+    }
+
+    /// Whether it is a switch (CARD-11): true or false in the code, 1 or 0 here.
+    pub fn is_switch(&self) -> bool {
+        self.unit == Some(Unit::Switch)
+    }
+
+    /// Why it isn't set as a number, when it is a choice or a switch: its value is a name, or true or
+    /// false (CARD-10, CARD-11), never a place, and nothing writes one but the code yet.
+    pub(crate) fn numbered(&self) -> Result<(), EditError> {
+        let name = self.declared.first().map_or("this value", |d| d.label.as_str());
+        let words = match (self.options(), self.is_switch()) {
+            (Some(o), _) => {
+                let listed: Vec<String> = o.iter().map(|n| format!("{n:?}")).collect();
+                let (last, rest) = listed.split_last().expect("a choice has an option");
+                let names = if rest.is_empty() { last.clone() } else { format!("{} or {last}", rest.join(", ")) };
+                let example = o.get(1).or(o.first()).expect("a choice has an option");
+                format!("{name} is a choice, written by its name ({names}): change it in the code, as {name}: {example:?}")
+            }
+            (None, true) => format!("{name} is a switch, written true or false: change it in the code, as {name}: true"),
+            (None, false) => return Ok(()),
+        };
+        Err(EditError::Rejected(words))
     }
 
     /// For a control its call leaves out: the edits writing `written` (a signal's name, or a
@@ -154,6 +183,19 @@ pub struct Audition {
     pub current: f64,
 }
 
+/// How a choice's place, or a switch's 1 or 0, is written in code (CARD-10, CARD-11): its name, or
+/// true or false. None for a number, or a place no option has.
+pub(crate) fn written_as(unit: Unit, value: f64) -> Option<String> {
+    match unit {
+        Unit::Switch => Some((value != 0.0).to_string()),
+        Unit::Choice(o) => {
+            let name = o.name(value as usize).filter(|_| value >= 0.0 && value.fract() == 0.0)?;
+            Some(serde_json::to_string(name).expect("a string serialises"))
+        }
+        _ => None,
+    }
+}
+
 /// The descriptor of the component whose instance frame `frame` of `m` is, if it was declared
 /// with one.
 pub(crate) fn component_of<'a>(compiled: &'a Compiled, m: &Module, frame: u32) -> Option<&'a Arc<Descriptor>> {
@@ -200,7 +242,11 @@ fn control(rev: &Revision, sites: &HashMap<u32, &Site>, m: &Module, origin: &Ori
         let insertion = Insertion::plan(site, desc, &slot.slot, text, options_of(m, site.id).ok()?, &rev.compiled.units).ok()?;
         (format!("{}#{}/@{}", site.file, site.ordinal, slot.slot), String::new(), 1.0, Edit::Insert(insertion))
     } else {
-        let lens = LiteralLens::read(site, origin, text, value)?;
+        // A choice or a switch is written by its name, or true or false (CARD-10, CARD-11).
+        let lens = match unit.filter(|u| !u.is_number()) {
+            Some(u) => LiteralLens::named(site, origin, text, u, value)?,
+            None => LiteralLens::read(site, origin, text, value)?,
+        };
         // A quantity (`hz(500)`) is its own call; a plain number is written in its instance's
         // call, or, for an old-form component, is a constant with no unit.
         let quantity = match &origin.control {

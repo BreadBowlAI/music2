@@ -177,7 +177,7 @@ impl Graph {
     /// code back; the file stays. A file that isn't a WAV is refused in words, and nothing is
     /// copied; nor is anything while the musician holds the song (AGENT-3). Answers the edit with
     /// `name` (the step's) and `asset`.
-    pub fn set_sample(&self, token: u64, at: u64, call: String, source: Source) -> Result<Value> {
+    pub fn set_sample(&self, token: u64, at: u64, call: String, setting: Option<String>, source: Source) -> Result<Value> {
         let dir = {
             let cp = self.inner.control.lock();
             let p = cp.open.as_ref().context("no project is open")?;
@@ -188,7 +188,19 @@ impl Graph {
                 bail!("{why}");
             }
             if !p.shown.state["view"]["draft_errors"].as_array().is_none_or(Vec::is_empty) {
-                bail!("The code doesn't compile, so the Sampler's file can't be set now. Fix the code first.");
+                // The recording by its card's title ("Box's sample"), as the drop's words name it.
+                let nodes = p.shown.state["view"]["modules"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|m| m["nodes"].as_array().into_iter().flatten());
+                let title = nodes.into_iter().find(|n| n["id"] == call.as_str()).and_then(|n| n["title"].as_str().map(str::to_string));
+                let what = match (&setting, title) {
+                    (None, _) => "the Sampler's file".to_string(),
+                    (Some(x), Some(t)) => format!("{t}'s {x}"),
+                    (Some(x), None) => x.clone(),
+                };
+                bail!("The code doesn't compile, so {what} can't be set now. Fix the code first.");
             }
             p.shown.dir.clone()
         };
@@ -200,11 +212,13 @@ impl Graph {
         let done = Graph::stage(&dir, vec![source]).map(|mut s| s.remove(0)).and_then(|staged| {
             self.call(move |a| {
                 a.edit_and(token, |s| {
+                    // Refused before the file is named into assets/, which keeps every file (CARD-5).
+                    takes(s, at, &call, setting.as_deref())?;
                     // Into the song only now, after this job's check (AGENT-3).
                     let file = staged.name()?;
-                    let e = m2_editor::sampler::set_sample(s, at, &call, &file)?;
+                    let (e, title) = recording(s, at, &call, setting.as_deref(), &file)?;
                     // AGENT-2: an agent's step is named by its words.
-                    let name = words.unwrap_or_else(|| format!("setting Sampler to {}", file.asset.as_str()));
+                    let name = words.unwrap_or_else(|| format!("setting {title} to {}", file.asset.as_str()));
                     s.name_step(e.revision, &name, false);
                     Ok((e, json!({"name": name, "asset": file.asset.as_str()})))
                 })
@@ -291,7 +305,14 @@ impl Graph {
     /// Sample `sample` from the library dropped on sampler call `call` of revision `at` (LIB-7):
     /// copied and noted as [`Graph::add_sample`] does, then it becomes the Sampler's `sample`, as a
     /// WAV dropped there does ([`Graph::set_sample`]): one Tx, one undo step.
-    pub fn sample_to_sampler(&self, token: u64, at: u64, call: String, sample: m2_editor::library::Sample) -> Result<Value> {
+    pub fn sample_to_sampler(
+        &self,
+        token: u64,
+        at: u64,
+        call: String,
+        setting: Option<String>,
+        sample: m2_editor::library::Sample,
+    ) -> Result<Value> {
         let dir = {
             let cp = self.inner.control.lock();
             let p = cp.open.as_ref().context("no project is open")?;
@@ -311,9 +332,10 @@ impl Graph {
         let done = Graph::stage(&dir, vec![Source::Path(sample.file.clone())]).map(|mut s| s.remove(0)).and_then(|staged| {
             self.call(move |a| {
                 a.edit_and(token, |s| {
+                    takes(s, at, &call, setting.as_deref())?;
                     let (file, _) = staged.name_noted(Some(&sample.from))?;
-                    let e = m2_editor::sampler::set_sample(s, at, &call, &file)?;
-                    let name = words.unwrap_or_else(|| format!("setting Sampler to {}", file.asset.as_str()));
+                    let (e, title) = recording(s, at, &call, setting.as_deref(), &file)?;
+                    let name = words.unwrap_or_else(|| format!("setting {title} to {}", file.asset.as_str()));
                     s.name_step(e.revision, &name, false);
                     Ok((e, json!({"name": name, "asset": file.asset.as_str()})))
                 })
@@ -323,6 +345,34 @@ impl Graph {
             let _ = std::fs::remove_dir(&assets);
         }
         done
+    }
+}
+
+/// Whether call `call` of revision `at` can take a file in recording `setting` (a Sampler's file
+/// when none is named), checked before one is named into `assets/` (CARD-5).
+fn takes(s: &m2_session::Session, at: u64, call: &str, setting: Option<&str>) -> Result<(), m2_editor::EditError> {
+    match setting {
+        None => m2_editor::sampler::can_take(s, at, call),
+        Some(x) => m2_editor::settings::can_take(s, at, &format!("{call}/@{x}")).map(drop),
+    }
+}
+
+/// `file` written into recording `setting` of call `call` (CARD-5), or a Sampler's file when no
+/// setting is named: the edit, and what the call is called ("Sampler").
+fn recording(
+    s: &mut m2_session::Session,
+    at: u64,
+    call: &str,
+    setting: Option<&str>,
+    file: &m2_editor::import::Imported,
+) -> Result<(m2_editor::Edited, String), m2_editor::EditError> {
+    match setting {
+        None => Ok((m2_editor::sampler::set_sample(s, at, call, file)?, "Sampler".to_string())),
+        Some(setting) => {
+            let id = format!("{call}/@{setting}");
+            let title = m2_editor::settings::title(s, at, &id).unwrap_or_else(|| setting.to_string());
+            Ok((m2_editor::settings::set_recording(s, at, &id, file)?, title))
+        }
     }
 }
 

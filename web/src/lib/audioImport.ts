@@ -13,7 +13,7 @@ import { useShell } from "./shell";
 import { useStore } from "./store";
 import { trackMade } from "./events";
 import { undoAction } from "../components/GraphCanvas";
-import { dropOnSampler, samplerHint } from "./sampler";
+import { dropOnRecording, recordingHint, type RecordingTarget } from "./recording";
 
 /** A file to bring in: its path on this computer (the app), or the file itself (a browser). */
 export type Incoming = { name: string; path: string } | { name: string; file: File };
@@ -135,17 +135,18 @@ export interface SampleAdded {
  * came from, then a clip at `to` (a loop at another tempo with Follow tempo on), or the file of the
  * Sampler `to` names. One undo step, with Undo in its toast.
  */
-export async function addSample(item: LibraryItem, to: Target | { kind: "sampler"; call: string; title: string }) {
+export async function addSample(item: LibraryItem, to: Target | RecordingTarget) {
   const { graph, connected, toast } = useStore.getState();
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return void toast(`${why}.`);
-  const body = to.kind === "sampler" ? { session: graph.session, id: item.id, at: graph.view.revision, call: to.call } : { session: graph.session, id: item.id, to };
+  const body =
+    to.kind === "recording" ? { session: graph.session, id: item.id, at: graph.view.revision, call: to.call, setting: to.setting } : { session: graph.session, id: item.id, to };
   try {
     const res = await fetch("/api/library/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
     const done = (await readJson(res)) as SampleAdded & { error?: string };
     if (!res.ok) throw new Error(done.error ?? `HTTP ${res.status}`);
-    if (to.kind === "sampler") {
+    if (to.kind === "recording") {
       useStore.getState().set({ graph: await graphApi.get() });
       return void toast(`${to.title} plays ${done.asset}`, undoAction(graph.session, done.step));
     }
@@ -185,7 +186,7 @@ export const sampleTarget = (graph: GraphState) => menuTarget(graph);
 
 onSample({
   hint(item, t) {
-    if (t.kind === "sampler") return `${t.title} plays ${item.label}`;
+    if (t.kind === "recording") return `${t.title} plays ${item.label}`;
     const graph = useStore.getState().graph;
     const to = audioTarget(t);
     if (!graph || !to) return null;
@@ -197,13 +198,13 @@ onSample({
     return `New audio track · ${bar}`;
   },
   where(t) {
-    if (t.kind === "sampler") return t;
+    if (t.kind === "recording") return t;
     const to = audioTarget(t);
     if (!to) return { kind: "none" };
     return to.kind === "lane" ? { kind: "lane", module: to.module, lane: to.lane, beat: to.beat } : to;
   },
   drop(item, t) {
-    if (t.kind === "sampler") return void addSample(item, t);
+    if (t.kind === "recording") return void addSample(item, t);
     const to = audioTarget(t);
     if (to) void addSample(item, to);
   },
@@ -302,7 +303,7 @@ const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-wave", "au
  */
 function audioTarget(t: DropTarget): Target | null {
   const graph = useStore.getState().graph;
-  if (!graph || t.kind === "none" || t.kind === "sampler") return null;
+  if (!graph || t.kind === "none" || t.kind === "recording") return null;
   if (t.kind === "below") return { kind: "below", beat: t.beat };
   const track = graph.timeline.tracks.find((x) => x.module === t.module);
   if (!track) return null;
@@ -314,7 +315,7 @@ function audioTarget(t: DropTarget): Target | null {
 
 onFiles(WAV, WAV_TYPES, {
   hint(files, t) {
-    if (t.kind === "sampler") return samplerHint(files, t);
+    if (t.kind === "recording") return recordingHint(files, t);
     const graph = useStore.getState().graph;
     const to = audioTarget(t);
     if (!graph || !to) return null;
@@ -326,13 +327,13 @@ onFiles(WAV, WAV_TYPES, {
     return files.length > 1 ? `${files.length} new audio tracks · ${bar}` : `New audio track · ${bar}`;
   },
   where(t) {
-    if (t.kind === "sampler") return t;
+    if (t.kind === "recording") return t;
     const to = audioTarget(t);
     if (!to) return { kind: "none" };
     return to.kind === "lane" ? { kind: "lane", module: to.module, lane: to.lane, beat: to.beat } : to;
   },
   drop(files, t) {
-    if (t.kind === "sampler") return void dropOnSampler(files, t);
+    if (t.kind === "recording") return void dropOnRecording(files, t);
     const to = audioTarget(t);
     if (!to) return;
     const incoming = files.flatMap((f): Incoming[] => (f.path ? [{ name: f.name, path: f.path }] : f.file ? [{ name: f.name, file: f.file }] : []));

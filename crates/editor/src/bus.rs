@@ -238,7 +238,7 @@ fn reaches(feeds: &BTreeMap<String, BTreeSet<String>>, from: &str, to: &str) -> 
 }
 
 /// What module `key` is called.
-fn label_of(rev: &Revision, key: &str) -> String {
+pub(crate) fn label_of(rev: &Revision, key: &str) -> String {
     rev.compiled.ir.modules.iter().find(|m| m.key == key).map_or(key, |m| m.label()).to_string()
 }
 

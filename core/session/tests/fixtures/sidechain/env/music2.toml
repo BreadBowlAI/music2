@@ -5,4 +5,4 @@ sample_rate = 48000
 
 [dependencies]
 "@m2/core" = "1"
-std = "0.5"
+std = "0.6"

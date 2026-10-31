@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",
-    "typecheck": "tsc --noEmit && tsc -p ../core/script/sdk/check && tsc -p ../crates/editor/tests/forms"
+    "typecheck": "tsc --noEmit && tsc -p ../core/script/sdk/check && tsc -p ../crates/editor/tests/forms && node scripts/tsc-monaco.mjs ../core/script/sdk/check && node scripts/tsc-monaco.mjs ../crates/editor/tests/forms"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
