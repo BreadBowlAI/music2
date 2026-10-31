@@ -325,9 +325,9 @@ fn automate_writes_a_lane_of_names() {
     let sub = s.controls().into_iter().find(|c| c.id.ends_with("/@sub")).expect("the switch left out");
     assert!(sub.is_switch() && sub.options().is_none() && !shape.is_switch());
     let e = s.set(s.accepted().number, &shape.id, 2.0, None).unwrap_err().to_string();
-    assert!(e.contains("shape is a choice, set by its name (\"saw\", \"square\" or \"sine\"), as \"square\", not by a number"), "{e}");
+    assert!(e.contains("shape is one of \"saw\", \"square\" or \"sine\": set it by its name"), "{e}");
     let e = s.set(s.accepted().number, &sub.id, 1.0, None).unwrap_err().to_string();
-    assert!(e.contains("sub is a switch, set to true or false, not to a number"), "{e}");
+    assert!(e.contains("sub is a switch: set it to true or false"), "{e}");
     let a = s.automate(s.accepted().number, &shape.id).unwrap();
     assert_eq!((a.lane.to_string(), a.edited.before.as_str()), ("lead/shape".to_string(), "shape \"square\""));
     let want =

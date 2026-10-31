@@ -47,6 +47,9 @@ pub struct CardView {
 /// What a view draws.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
+// A card's view is made once for each view the window draws, never kept by the thousand: its size
+// costs nothing, and boxing the envelope would only hide its parts behind a pointer.
+#[allow(clippy::large_enum_variant)]
 pub enum Drawn {
     /// An envelope's shape; its corners move the attack, the decay and sustain, and the release.
     Envelope { attack: Part, decay: Part, sustain: Part, release: Part },
@@ -75,6 +78,12 @@ pub struct Part {
     pub slot: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub knob: Option<String>,
+    /// What plays, when the card can't move it but the view can draw it: a lane's fallback, in
+    /// `unit` (review V6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
 }
@@ -101,9 +110,12 @@ pub(crate) fn groups(desc: &Descriptor, node: &ViewNode) -> Vec<CardGroup> {
     if desc.editor.groups.is_empty() {
         return vec![];
     }
+    // A group may name a dictionary (`parts`): its entries' values (`parts.a.db`) are its rows (review V7).
+    let named = |slot: &str, name: &str| slot == name || slot.strip_prefix(name).is_some_and(|rest| rest.starts_with('.'));
     let rows_of = |name: &str| -> Vec<Row> {
-        let mut rows: Vec<Row> = node.inputs.iter().filter(|p| p.slot.as_deref() == Some(name)).map(|p| Row::Input(p.id.clone())).collect();
-        rows.extend(node.settings.iter().filter(|x| x.slot == name).map(|x| Row::Setting(x.id.clone())));
+        let mut rows: Vec<Row> =
+            node.inputs.iter().filter(|p| p.slot.as_deref().is_some_and(|s| named(s, name))).map(|p| Row::Input(p.id.clone())).collect();
+        rows.extend(node.settings.iter().filter(|x| named(&x.slot, name)).map(|x| Row::Setting(x.id.clone())));
         if desc.editor.views.iter().any(|v| v.name == name) {
             rows.push(Row::View(name.to_string()));
         }
@@ -134,13 +146,30 @@ pub(crate) fn groups(desc: &Descriptor, node: &ViewNode) -> Vec<CardGroup> {
 /// Card `node`'s views (CARD-26), of call `site` of `desc`, made in module `m`; `notes` is the
 /// notes lane that plays the call, when one does.
 pub(crate) fn views(m: &Module, site: u32, desc: &Descriptor, node: &ViewNode, notes: Option<&LaneRef>) -> Vec<CardView> {
-    let part = |slot: &str| -> Part {
-        let knob = node.knobs.iter().find(|k| k.slot.as_deref() == Some(slot)).map(|k| k.id.clone());
-        let why = match knob {
-            Some(_) => None,
-            None => Some(why_not(m, node.inputs.iter().find(|p| p.slot.as_deref() == Some(slot)))),
-        };
-        Part { slot: slot.to_string(), knob, why }
+    let part = |slot: &str, draws: &[&str]| -> Part {
+        let fits = |u: Option<&str>| u.is_some_and(|u| draws.contains(&u));
+        let none = Part { slot: slot.to_string(), knob: None, value: None, unit: None, why: None };
+        // Its knob, when its value is in a unit the picture draws (review V2): a cutoff written in
+        // semitones isn't moved as Hz.
+        match node.knobs.iter().find(|k| k.slot.as_deref() == Some(slot)) {
+            Some(k) if fits(k.unit) => return Part { knob: Some(k.id.clone()), ..none },
+            Some(k) => {
+                return Part { why: Some(format!("it is written in {}, which this picture doesn't draw", unit_words(k.unit))), ..none };
+            }
+            None => {}
+        }
+        // A lane's fallback, which plays where no clip is, when it is in a unit the picture draws.
+        let input = node.inputs.iter().find(|p| p.slot.as_deref() == Some(slot));
+        let lane = input.and_then(|p| p.lane.as_ref()).and_then(|l| m.lanes.iter().find(|x| x.key == l.lane));
+        let held = lane.and_then(|l| match l.kind {
+            m2_ir::Kind::Control(u) if fits(u.map(m2_ir::Unit::name)) => Some((l.default.unwrap_or(0.0), u.map(m2_ir::Unit::name))),
+            _ => None,
+        });
+        let why = Some(why_not(m, input));
+        match held {
+            Some((value, unit)) => Part { value: Some(value), unit, why, ..none },
+            None => Part { why, ..none },
+        }
     };
     desc.editor
         .views
@@ -148,9 +177,15 @@ pub(crate) fn views(m: &Module, site: u32, desc: &Descriptor, node: &ViewNode, n
         .map(|v| {
             let of = match &v.of {
                 ViewOf::Envelope { attack, decay, sustain, release } => {
-                    Drawn::Envelope { attack: part(attack), decay: part(decay), sustain: part(sustain), release: part(release) }
+                    let (time, level) = (&["seconds", "beats"][..], &["unit01", "gain", "db"][..]);
+                    Drawn::Envelope {
+                        attack: part(attack, time),
+                        decay: part(decay, time),
+                        sustain: part(sustain, level),
+                        release: part(release, time),
+                    }
                 }
-                ViewOf::Filter { cutoff, q } => Drawn::Filter { cutoff: part(cutoff), q: part(q) },
+                ViewOf::Filter { cutoff, q } => Drawn::Filter { cutoff: part(cutoff, &["hz"]), q: part(q, &["scalar"]) },
                 ViewOf::Keys { regions } => {
                     let setting = node.settings.iter().find(|x| &x.slot == regions).map(|x| x.id.clone()).unwrap_or_default();
                     let (regions, why) = match crate::sampler::key_regions(m, site) {
@@ -164,6 +199,22 @@ pub(crate) fn views(m: &Module, site: u32, desc: &Descriptor, node: &ViewNode, n
             CardView { name: v.name.clone(), of }
         })
         .collect()
+}
+
+/// A unit in words, as a beginner reads it.
+fn unit_words(u: Option<&str>) -> &'static str {
+    match u {
+        Some("hz") => "Hz",
+        Some("db") => "dB",
+        Some("gain") => "a gain",
+        Some("semitones") => "semitones",
+        Some("seconds") => "seconds",
+        Some("beats") => "beats",
+        Some("unit01") => "a level from 0 to 1",
+        Some("bipolar") => "a value from −1 to 1",
+        Some("scalar") => "a plain number",
+        _ => "a number with no unit",
+    }
 }
 
 /// Why the card can't move the value at input `p`, in words.

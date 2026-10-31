@@ -159,7 +159,7 @@ fn m2_set_writes_a_choice_by_its_name() {
     let o = m2(&["set", dir, &id("shape"), "squar"]);
     assert!(!o.status.success() && said(&o).contains(r#"shape is one of "saw", "square" or "sine", not "squar""#), "{}", said(&o));
     let o = m2(&["set", dir, &id("shape"), "2"]);
-    assert!(!o.status.success() && said(&o).contains(r#"shape is one of "saw", "square" or "sine", not 2"#), "{}", said(&o));
+    assert!(!o.status.success() && said(&o).contains("shape is one of \"saw\", \"square\" or \"sine\", not 2\n"), "{}", said(&o));
     assert!(read().contains("tone({ shape: \"square\", sub: true })"), "nothing more written");
 
     let o = m2(&["graph", dir]);

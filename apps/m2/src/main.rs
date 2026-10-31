@@ -803,19 +803,7 @@ fn run(args: Vec<String>) -> Result<()> {
             // A setting (CARD-4): the word read as its kind takes it: one of its options by its value
             // or its name (`2`, `square`, `Master`, `On`), a number, true or false, or a word.
             if let Some(x) = m2_editor::settings::find(&s, at, &id) {
-                let read = |w: String| {
-                    let option = x.options.iter().find(|o| o.value.as_str() == Some(w.as_str()) || o.label.eq_ignore_ascii_case(&w));
-                    match (option, x.kind) {
-                        (Some(o), _) => o.value.clone(),
-                        (None, m2_editor::kind::Kind::Number) => w
-                            .parse::<f64>()
-                            .ok()
-                            .and_then(serde_json::Number::from_f64)
-                            .map_or(serde_json::Value::String(w), serde_json::Value::Number),
-                        (None, m2_editor::kind::Kind::Switch) if w == "true" || w == "false" => serde_json::Value::Bool(w == "true"),
-                        (None, _) => serde_json::Value::String(w),
-                    }
-                };
+                let read = |w: String| m2_editor::kind::word(x.kind, &x.options, &w);
                 let expect = flag(&args, "--expect").map(read);
                 let e = m2_editor::settings::set(&mut s, at, &id, &read(arg(3)?), expect.as_ref()).map_err(|e| anyhow!("{e}"))?;
                 let ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -825,24 +813,12 @@ fn run(args: Vec<String>) -> Result<()> {
                 }
                 return Ok(());
             }
-            // A knob: a number, or one of its options by its value or its name (a choice's name, a
-            // switch's On, a plugin's step), or true or false, as its card writes it (CARD-21).
+            // A knob: read the same way, by its options as its card offers them (a choice's names, a
+            // switch's On, a plugin's steps), as its card writes it (CARD-21).
             let view = s.view();
             let knob = view.modules.iter().flat_map(|m| &m.nodes).flat_map(|n| &n.knobs).find(|k| k.id == id);
             let Some(knob) = knob else { bail!("no control or setting `{id}` in that revision: `m2 graph {} --json` lists them", arg(1)?) };
-            let (kind, options) = (knob.kind, knob.options.clone());
-            let read = |w: String| {
-                let option = options.iter().find(|o| o.value.as_str() == Some(w.as_str()) || o.label.eq_ignore_ascii_case(&w));
-                match (option, kind) {
-                    (Some(o), _) => o.value.clone(),
-                    (None, m2_editor::kind::Kind::Switch) if w == "true" || w == "false" => serde_json::Value::Bool(w == "true"),
-                    (None, _) => w
-                        .parse::<f64>()
-                        .ok()
-                        .and_then(serde_json::Number::from_f64)
-                        .map_or(serde_json::Value::String(w), serde_json::Value::Number),
-                }
-            };
+            let read = |w: String| m2_editor::kind::word(knob.kind, &knob.options, &w);
             let (value, expect) = (read(arg(3)?), flag(&args, "--expect").map(read));
             let c = s.write(at, &id, &value, expect.as_ref()).map_err(|e| anyhow!("{e}"))?;
             println!(

@@ -111,14 +111,8 @@ impl Control {
     pub(crate) fn numbered(&self) -> Result<(), EditError> {
         let name = self.declared.first().map_or("this value", |d| d.label.as_str());
         let words = match (self.options(), self.is_switch()) {
-            (Some(o), _) => {
-                let listed: Vec<String> = o.iter().map(|n| format!("{n:?}")).collect();
-                let (last, rest) = listed.split_last().expect("a choice has an option");
-                let names = if rest.is_empty() { last.clone() } else { format!("{} or {last}", rest.join(", ")) };
-                let example = o.get(1).or(o.first()).expect("a choice has an option");
-                format!("{name} is a choice, set by its name ({names}), as {example:?}, not by a number")
-            }
-            (None, true) => format!("{name} is a switch, set to true or false, not to a number"),
+            (Some(o), _) => format!("{name} is one of {}: set it by its name", crate::kind::one_of(&o)),
+            (None, true) => format!("{name} is a switch: set it to true or false"),
             (None, false) => return Ok(()),
         };
         Err(EditError::Rejected(words))

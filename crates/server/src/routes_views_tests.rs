@@ -45,9 +45,11 @@ fn knob(graph: &Graph, slot: &str) -> (u64, Value) {
 #[test]
 fn a_choice_a_switch_and_a_drag_of_two_knobs_through_the_routes() {
     let dir = project("rw");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent().stored())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let (url, graph) = (running.url.clone(), &running.state.graph);
     let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let read = || std::fs::read_to_string(dir.join("song.ts")).unwrap();
@@ -115,6 +117,64 @@ fn a_choice_a_switch_and_a_drag_of_two_knobs_through_the_routes() {
     assert!(status == 400 && why["error"].as_str().unwrap().contains("sustain is a number, not \"loud\""), "{why:#}");
     assert_eq!(read(), before, "nothing written");
     assert!(graph.leases().is_empty(), "both leases ended");
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// CARD-22 (review V1, V4): a gesture's write that is refused before it is written ends every lease
+// of the gesture together, its controls playing the code's values again, and leaves none closing:
+// a knob named twice, and a lease that ended between the drag and its release. After each, the
+// knob takes a plain write and a new drag.
+#[test]
+fn a_refused_gesture_ends_all_its_leases() {
+    let dir = project("refused");
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
+    let (url, graph) = (running.url.clone(), &running.state.graph);
+    let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let read = || std::fs::read_to_string(dir.join("song.ts")).unwrap();
+    let call = |path: &str, body: Value| post(&url, path, Some("t0k"), &body);
+
+    // One knob named twice: refused in words, no lease left closing.
+    let (at, decay) = knob(graph, "decay");
+    let (status, why) =
+        call("/api/graph/preview", json!({"session": session, "revision": at, "id": decay["id"], "gesture": "g1", "value": 0.3}));
+    assert_eq!(status, 200, "{why:#}");
+    let body = json!({"session": session, "revision": at, "id": decay["id"], "gesture": "g1", "value": 0.25, "with": [{"id": decay["id"], "value": 0.35}]});
+    let (status, why) = call("/api/graph/set", body);
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("decay is given twice"), "{status} {why:#}");
+    assert!(graph.leases().is_empty(), "its lease ended: {:?}", graph.leases());
+    assert_eq!(read(), SONG, "nothing written");
+    let (status, done) =
+        call("/api/graph/set", json!({"session": session, "revision": at, "id": decay["id"], "gesture": "set", "value": 0.5}));
+    assert_eq!(status, 200, "a plain write takes it: {done:#}");
+    assert!(read().contains("decay: 0.5"));
+
+    // A lease that ended between the drag and its release (its own 200 ms went by): the gesture's
+    // other lease ends with it.
+    let (at, decay) = knob(graph, "decay");
+    let (_, sustain) = knob(graph, "sustain");
+    let (status, why) =
+        call("/api/graph/lease/begin", json!({"session": session, "revision": at, "id": sustain["id"], "gesture": "g2", "ttl_ms": 200}));
+    assert_eq!(status, 200, "{why:#}");
+    let (status, why) =
+        call("/api/graph/preview", json!({"session": session, "revision": at, "id": decay["id"], "gesture": "g2", "value": 0.3}));
+    assert_eq!(status, 200, "{why:#}");
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    graph.expire();
+    assert_eq!(graph.leases().len(), 1, "the sustain's lease ended by its time, the decay's lives");
+    let before = read();
+    let body = json!({"session": session, "revision": at, "id": decay["id"], "gesture": "g2", "value": 0.25, "with": [{"id": sustain["id"], "value": 0.5}]});
+    let (status, why) = call("/api/graph/set", body);
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("this gesture ended"), "{status} {why:#}");
+    assert!(graph.leases().is_empty(), "the decay's lease ended with it: {:?}", graph.leases());
+    assert_eq!(read(), before, "nothing written");
+    let (status, why) =
+        call("/api/graph/preview", json!({"session": session, "revision": at, "id": decay["id"], "gesture": "g3", "value": 0.3}));
+    assert_eq!(status, 200, "a new drag takes it: {why:#}");
     drop(running);
     let _ = std::fs::remove_dir_all(&dir);
 }

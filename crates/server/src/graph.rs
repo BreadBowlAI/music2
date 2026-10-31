@@ -606,6 +606,14 @@ fn parse_tx(v: &Value) -> Result<m2_song::Tx, (u16, Value)> {
 }
 
 /// Put a lease's code value back where its updates went: it ended without a commit.
+/// What closing leases for a commit found ([`Graph::close_leases`]).
+enum Closed {
+    /// They are closing: the commit decides.
+    Closing,
+    /// The one lease waits for the code to compile, with its newest value (C5).
+    Pending(Value),
+}
+
 fn put_back(l: &Lease, device: Option<&Device>) {
     if let (Some(t), Some(d)) = (&l.engine, device)
         && t.epoch == d.epoch
@@ -731,6 +739,25 @@ impl Inner {
     /// The player there is, as it is: what gesture leases send to, which never start one.
     fn current_device(&self) -> Option<Device> {
         self.player.lock().clone()
+    }
+
+    /// End each lease `pick` takes, saying `why` (WRITE-22): its control plays the code's value
+    /// again, and a release promised a save once the code compiles says it won't be (C5). The one
+    /// way a gesture's leases end when its commit can't decide, or is refused before it is written
+    /// (CARD-22): every lease of the gesture together.
+    pub(super) fn end_leases(&self, pick: impl Fn(&Lease) -> bool, why: &str) {
+        let device = self.current_device();
+        let mut cp = self.control.lock();
+        let mut i = 0;
+        while i < cp.leases.live.len() {
+            if !pick(&cp.leases.live[i]) {
+                i += 1;
+                continue;
+            }
+            let l = cp.leases.end(i, why.to_string());
+            put_back(&l, device.as_ref());
+            self.notices.lock().extend(l.unsaved(why));
+        }
     }
 
     fn status(&self) -> Status {
@@ -1364,42 +1391,60 @@ impl Graph {
     /// step that ends the lease (WRITE-22). While the draft doesn't compile, the commit waits,
     /// pending, and the value plays on (C5).
     pub fn commit(&self, lease: u64, value: f64, expect: Option<f64>) -> Result<Committed> {
-        {
-            let device = self.inner.current_device();
-            let mut cp = self.inner.control.lock();
-            let i = cp.leases.index(lease).map_err(|e| anyhow!(e))?;
-            let l = &mut cp.leases.live[i];
-            match &mut l.state {
-                State::Live => l.state = State::Closing { value, expect },
-                State::Closing { .. } => bail!("this gesture is being committed"),
-                State::Pending { value: v, expect: x, errors, .. } => {
-                    // Still waiting: the newest value is the one to save, and it plays now.
-                    let errors = errors.clone();
-                    let played = l.control.audition(value).map_err(|e| anyhow!("{e}"))?;
-                    (*v, *x) = (value, expect);
-                    l.playing = played;
-                    if let (Some(t), Some(d)) = (&l.engine, &device)
-                        && t.epoch == d.epoch
-                    {
-                        d.player.set_cells(&t.cells, played);
-                    }
-                    return Ok(Committed::Pending { errors });
-                }
-            }
+        if let Closed::Pending(errors) = self.close_leases(&[(lease, value, expect)], true)? {
+            return Ok(Committed::Pending { errors });
         }
         let committed = self.call(move |a| a.commit(lease));
         if committed.is_err() {
             // The actor failed without deciding (a bug): the lease mustn't stay closing forever.
-            let device = self.inner.current_device();
-            let mut cp = self.inner.control.lock();
-            if let Ok(i) = cp.leases.index(lease)
-                && matches!(cp.leases.live[i].state, State::Closing { .. })
-            {
-                let l = cp.leases.end(i, "its commit failed");
-                put_back(&l, device.as_ref());
-            }
+            self.inner.end_leases(|l| l.id == lease && matches!(l.state, State::Closing { .. }), "its commit failed");
         }
         committed
+    }
+
+    /// Close `leases`, each with the value (and `expect`) its commit writes, for one commit
+    /// (WRITE-22, CARD-22), under one lock: each must be there, not closing already, and named
+    /// once; then they are all closing, and the commit decides. A refusal closes none. With `wait`
+    /// (one knob's commit), a lease waiting for the code to compile (C5) takes the newest value,
+    /// plays it and goes on waiting; otherwise it is closed with the others.
+    fn close_leases(&self, leases: &[(u64, f64, Option<f64>)], wait: bool) -> Result<Closed> {
+        let device = self.inner.current_device();
+        let mut cp = self.inner.control.lock();
+        let mut at = vec![];
+        for (k, (lease, ..)) in leases.iter().enumerate() {
+            let i = cp.leases.index(*lease).map_err(|e| anyhow!(e))?;
+            let l = &cp.leases.live[i];
+            if leases[..k].iter().any(|x| x.0 == *lease) {
+                let name = l.control.declared.first().map_or("a value", |d| d.label.as_str());
+                bail!("{name} is given twice");
+            }
+            if matches!(l.state, State::Closing { .. }) {
+                bail!("this gesture is being committed");
+            }
+            at.push(i);
+        }
+        if let ([i], [(_, value, expect)]) = (at.as_slice(), leases)
+            && wait
+            && matches!(cp.leases.live[*i].state, State::Pending { .. })
+        {
+            // Still waiting: the newest value is the one to save, and it plays now.
+            let l = &mut cp.leases.live[*i];
+            let played = l.control.audition(*value).map_err(|e| anyhow!("{e}"))?;
+            let State::Pending { value: v, expect: x, errors, .. } = &mut l.state else { unreachable!("pending") };
+            let errors = errors.clone();
+            (*v, *x) = (*value, *expect);
+            l.playing = played;
+            if let (Some(t), Some(d)) = (&l.engine, &device)
+                && t.epoch == d.epoch
+            {
+                d.player.set_cells(&t.cells, played);
+            }
+            return Ok(Closed::Pending(errors));
+        }
+        for (i, (_, value, expect)) in at.into_iter().zip(leases) {
+            cp.leases.live[i].state = State::Closing { value: *value, expect: *expect };
+        }
+        Ok(Closed::Closing)
     }
 
     /// End lease `lease` without a commit: the code's value plays again. Acts on the control
@@ -1622,38 +1667,34 @@ impl Graph {
     /// (CARD-22): each one's lease of `gesture`, when it has one (an agent's never does), is closed
     /// here and ends in the step that writes them all, or in the refusal.
     pub fn set_all(&self, token: u64, revision: u64, gesture: &str, values: Vec<(String, Value)>) -> Result<Value> {
+        // Refused before it is written: every lease of the gesture ends with the refusal, so none
+        // plays on, or stays closing (review V1, V4).
+        let refused = |e: anyhow::Error| -> Result<Value> {
+            let why = e.to_string();
+            let mine =
+                |l: &Lease| l.token == token && l.owner.gesture.as_deref() == Some(gesture) && !matches!(l.state, State::Closing { .. });
+            self.inner.end_leases(mine, &why);
+            Err(e)
+        };
         let agent = crate::caller::now().is_agent();
         let mut leases = vec![];
         for (id, _) in &values {
-            leases.push(if agent { None } else { self.lease_of(token, revision, id, gesture)? });
-        }
-        {
-            let mut cp = self.inner.control.lock();
-            for (lease, (_, value)) in leases.iter().zip(&values) {
-                let Some(lease) = lease else { continue };
-                let i = cp.leases.index(*lease).map_err(|e| anyhow!(e))?;
-                let l = &mut cp.leases.live[i];
-                match l.state {
-                    State::Closing { .. } => bail!("this gesture is being committed"),
-                    _ => l.state = State::Closing { value: value.as_f64().unwrap_or_default(), expect: None },
-                }
+            match if agent { Ok(None) } else { self.lease_of(token, revision, id, gesture) } {
+                Ok(lease) => leases.push(lease),
+                Err(e) => return refused(e),
             }
         }
+        let closing: Vec<(u64, f64, Option<f64>)> =
+            leases.iter().zip(&values).filter_map(|(l, (_, v))| l.map(|l| (l, v.as_f64().unwrap_or_default(), None))).collect();
+        if let Err(e) = self.close_leases(&closing, false) {
+            return refused(e);
+        }
         let gesture = gesture.to_string();
-        let ours = leases.clone();
+        let ours: Vec<u64> = leases.iter().flatten().copied().collect();
         let written = self.call(move |a| a.set_all(token, revision, &gesture, values, leases));
         if written.is_err() {
             // The actor failed without deciding (a bug): no lease may stay closing forever.
-            let device = self.inner.current_device();
-            let mut cp = self.inner.control.lock();
-            for lease in ours.iter().flatten() {
-                if let Ok(i) = cp.leases.index(*lease)
-                    && matches!(cp.leases.live[i].state, State::Closing { .. })
-                {
-                    let l = cp.leases.end(i, "its commit failed");
-                    put_back(&l, device.as_ref());
-                }
-            }
+            self.inner.end_leases(|l| ours.contains(&l.id) && matches!(l.state, State::Closing { .. }), "its commit failed");
         }
         written
     }

@@ -173,6 +173,29 @@ fn values_one_gesture_moves_are_one_undo_step() {
     assert_eq!(f.read("song.ts"), song, "nothing written");
 }
 
+// CARD-21 (review V10, V16): a choice changed elsewhere is said by its name, a switch by on or
+// off, never by a place or 1 or 0; a number sent where a name goes says how it is set; and a
+// gesture of several values says each one's name before and after.
+#[test]
+fn a_choice_and_a_gesture_are_said_in_words() {
+    let f = wobble("{ shape: 'saw', decay: 0.4 }");
+    let mut s = f.open();
+    let at = s.accepted().number;
+    let shape = knob(&s, "shape");
+    let e = s.write(at, &shape.id, &json!("sine"), Some(&json!("square"))).unwrap_err().to_string();
+    assert!(e.contains("shape changed elsewhere: it is \"saw\" now, not \"square\""), "{e}");
+    let sub = knob(&s, "sub");
+    let e = s.write(at, &sub.id, &json!(true), Some(&json!(true))).unwrap_err().to_string();
+    assert!(e.contains("sub changed elsewhere: it is false now, not true"), "{e}");
+    let e = s.set(at, &shape.id, 2.0, None).unwrap_err().to_string();
+    assert!(e.contains("shape is one of \"saw\", \"square\" or \"sine\": set it by its name"), "{e}");
+    let e = s.set(at, &sub.id, 1.0, None).unwrap_err().to_string();
+    assert!(e.contains("sub is a switch: set it to true or false"), "{e}");
+    let (decay, sustain) = (knob(&s, "decay"), knob(&s, "sustain"));
+    let done = s.write_all(at, &[(decay.id.clone(), json!(0.25)), (sustain.id.clone(), json!(0.5))]).unwrap();
+    assert_eq!((done[0].before.as_str(), done[0].after.as_str()), ("decay 0.4, sustain (default)", "decay 0.25, sustain 0.5"));
+}
+
 /// `{"unit": "choice", "clips": [...]}` as a lane of names' file holds it.
 fn steps_file(clips: &str) -> String {
     format!("{{\"unit\": \"choice\", \"clips\": [{clips}]}}\n")
@@ -279,6 +302,58 @@ fn clip_gestures_draw_a_lane_of_names() {
     assert_eq!(file().matches("\"points\": [[0, \"saw\"], [2, \"sine\"]]").count(), 1, "{}", file());
 }
 
+// CARD-24 (review V9, V13): a left edge moved past a lane of names' points keeps what plays: the
+// points before the clip's new start become one at its start, holding the name playing there. A
+// clip goes onto a lane of names of other names neither by a move nor by a paste.
+#[test]
+fn a_lane_of_names_resizes_and_pastes_by_its_names() {
+    use crate::clips::{ClipRef, Copied, Gesture, edit};
+    use m2_song::LaneAddr;
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write(
+        "lib/tone.ts",
+        "import { component, control, port } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
+         export const tone = component(\n  { id: \"tone\", controls: { shape: control.choice([\"saw\", \"square\", \"sine\"], \"saw\"), mode: control.choice([\"lp\", \"hp\"], \"lp\") }, output: port.audio() },\n  () => osc.saw(110),\n);\n",
+    );
+    f.write(
+        "song.ts",
+        "import { song, track } from \"@m2/core\";\nimport { tone } from \"./lib/tone\";\n\
+         const lead = track(\"lead\", ({ lane }) => tone({ shape: lane.control(\"shape\", \"choice\", \"saw\"), mode: lane.control(\"mode\", \"choice\", \"lp\") }));\n\
+         export default song(() => lead.out);\n",
+    );
+    f.write(
+        "data/lead/shape.json",
+        steps_file("{\"id\": \"a\", \"start\": 0, \"length\": 8, \"points\": [[0, \"saw\"], [2, \"square\"], [5, \"sine\"]]}"),
+    );
+    f.write("data/lead/mode.json", "{\"unit\": \"choice\", \"clips\": []}\n");
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let shape = LaneAddr::new("lead", "shape").unwrap();
+    let clip = ClipRef { lane: shape.clone(), id: Some("a".into()), at: None, sha: None };
+    edit(&mut s, &Gesture::Resize { clip: clip.clone(), start: 3.0, length: 5.0 }).unwrap();
+    let read = |f: &Fixture| f.read("data/lead/shape.json");
+    assert!(
+        read(&f).contains("{\"id\": \"a\", \"start\": 3, \"length\": 5, \"points\": [[0, \"square\"], [2, \"sine\"]]}"),
+        "{}",
+        read(&f)
+    );
+    // Its left edge back out: the names stay where they play.
+    edit(&mut s, &Gesture::Resize { clip: clip.clone(), start: 1.0, length: 7.0 }).unwrap();
+    assert!(
+        read(&f).contains("{\"id\": \"a\", \"start\": 1, \"length\": 7, \"points\": [[2, \"square\"], [4, \"sine\"]]}"),
+        "{}",
+        read(&f)
+    );
+    let mode = LaneAddr::new("lead", "mode").unwrap();
+    let e =
+        edit(&mut s, &Gesture::Move { clips: vec![clip.clone()], by: 0.0, to: Some(mode.clone()), copy: true }).unwrap_err().to_string();
+    assert!(e.contains("can't share clips: their choices have other names"), "{e}");
+    let copied = Copied { from: shape.clone(), clip: json!({"start": 0, "length": 4, "points": [[0, "sine"]]}) };
+    let e = edit(&mut s, &Gesture::Paste { clips: vec![copied], to: Some(mode), at: 0.0 }).unwrap_err().to_string();
+    assert!(e.contains("can't share clips: their choices have other names"), "{e}");
+}
+
 // CARD-25: the view carries the card's groups in their declared order, each with its rows in the
 // order the group names them (an input by its id, a setting by its id, a view by its name), and a
 // last group, More, of what no group names; every control input says its slot. The notes input is
@@ -360,10 +435,78 @@ fn a_cards_views_are_in_the_view() {
     let attack = knob(&s, "attack");
     s.automate(s.accepted().number, &attack.id).unwrap();
     match &card(&s).views[0].of {
-        Drawn::Envelope { attack, .. } => {
+        Drawn::Envelope { attack, decay, .. } => {
             assert_eq!(attack.knob, None);
             assert_eq!(attack.why.as_deref(), Some("it follows the attack lane"));
+            // Drawn where it plays with no clip: the lane's fallback, in its unit (V6).
+            assert_eq!((attack.value, attack.unit), (Some(0.005), Some("seconds")));
+            // The other corners stay the card's to move.
+            assert_eq!((decay.knob.clone(), decay.value), (knob_id("decay"), None));
         }
         other => panic!("not an envelope: {other:?}"),
     }
+}
+
+// CARD-26 (review V2): a view moves a knob only in a unit it draws. A cutoff written in semitones
+// (std's FREQ accepts them: `semis(72)`) has no knob in the filter's picture, which says why, and
+// draws nothing for it; its q, in its own unit, is still the card's.
+#[test]
+fn a_view_moves_only_a_knob_in_a_unit_it_draws() {
+    use crate::views::Drawn;
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write(
+        "lib/tone.ts",
+        "import { component, control, port, view } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { osc } from \"std/dsp\";\n\
+         export const tone = component(\n  { id: \"tone\", label: \"Tone\", controls: { cutoff: control.hz(1000).range(20, 20000).log().accepts(\"semitones\", 0, 127), q: control.scalar(0.7) },\n\
+         output: port.audio(), editor: { views: { filter: view.filter(\"cutoff\", \"q\") } } },\n  ({ cutoff, q }) => lowpass(osc.saw(cutoff), { q }),\n);\n",
+    );
+    f.write(
+        "song.ts",
+        "import { semis, song, track } from \"@m2/core\";\nimport { tone } from \"./lib/tone\";\n\
+         const lead = track(\"lead\", () => tone({ cutoff: semis(72) }));\nexport default song(() => lead.out);\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let v = s.view();
+    let m = v.modules.into_iter().find(|m| m.key == "lead").unwrap();
+    let card = m.nodes.into_iter().find(|n| n.title.as_deref() == Some("Tone")).expect("Tone's card");
+    let cutoff = card.knobs.iter().find(|k| k.slot.as_deref() == Some("cutoff")).expect("the cutoff's knob");
+    assert_eq!((cutoff.unit, &cutoff.value), (Some("semitones"), &json!(72)));
+    match &card.views[0].of {
+        Drawn::Filter { cutoff, q } => {
+            assert_eq!((&cutoff.knob, cutoff.value), (&None, None));
+            assert_eq!(cutoff.why.as_deref(), Some("it is written in semitones, which this picture doesn't draw"));
+            assert!(q.knob.is_some() && q.why.is_none(), "{q:?}");
+        }
+        other => panic!("not a filter: {other:?}"),
+    }
+}
+
+// CARD-25 (review V7): a group may name a dictionary slot; its entries' values are its rows.
+#[test]
+fn a_group_naming_a_dictionary_holds_its_entries() {
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write(
+        "song.ts",
+        "import { component, control, each, port, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
+         const duo = component(\n  { id: \"duo\", label: \"Duo\", controls: { tone: control.hz(220), parts: each({ in: port.audio(), db: control.db(0), shape: control.choice([\"saw\", \"square\"], \"saw\") }) },\n\
+         output: port.audio(), editor: { groups: { Parts: [\"parts\"], Tone: [\"tone\"] } } },\n  ({ tone }) => osc.saw(tone),\n);\n\
+         export default song(() => duo({ tone: 220, parts: { a: { in: osc.saw(110), db: -6, shape: \"square\" }, b: { in: osc.saw(220), db: -3 } } }));\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let v = s.view();
+    let card = v.modules.iter().flat_map(|m| &m.nodes).find(|n| n.title.as_deref() == Some("Duo")).expect("Duo's card").clone();
+    let slot = |r: &crate::views::Row| match r {
+        crate::views::Row::Input(id) => card.inputs.iter().find(|p| &p.id == id).and_then(|p| p.slot.clone()).unwrap_or_default(),
+        other => format!("{other:?}"),
+    };
+    let groups: Vec<(String, Vec<String>)> = card.groups.iter().map(|g| (g.name.clone(), g.rows.iter().map(slot).collect())).collect();
+    let parts = groups.iter().find(|g| g.0 == "Parts").expect("Parts").1.clone();
+    let mut sorted = parts.clone();
+    sorted.sort();
+    assert_eq!(sorted, ["parts.a.db", "parts.a.shape", "parts.b.db", "parts.b.shape"], "{groups:?}");
+    assert!(groups.iter().all(|g| g.0 != "More"), "nothing left for More: {groups:?}");
 }

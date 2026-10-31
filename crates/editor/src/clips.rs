@@ -656,7 +656,16 @@ impl Clip {
         match self {
             Clip::Notes(c) => c.notes.iter_mut().for_each(|n| n.start += by),
             Clip::Control(c) => c.points.iter_mut().for_each(|p| p.0 += by),
-            Clip::Steps(c) => c.points.iter_mut().for_each(|p| p.0 += by),
+            // A lane of names keeps what plays: the points left before the clip's start become one
+            // at its start, holding the name playing there (review V13).
+            Clip::Steps(c) => {
+                c.points.iter_mut().for_each(|p| p.0 += by);
+                if c.points.iter().any(|p| p.0 < 0.0) {
+                    let held = step_at(&c.points, 0.0);
+                    let after: Vec<(f64, Step)> = c.points.iter().filter(|p| p.0 > 0.0).cloned().collect();
+                    c.points = held.map(|v| (0.0, v)).into_iter().chain(after).collect();
+                }
+            }
             Clip::Audio(c) => {
                 audio_edge(c, "its left edge")?;
                 if c.warp.is_empty() {
@@ -1008,14 +1017,13 @@ impl Lane {
         };
         match (&self.kind, v) {
             (LaneKind::Choice { options }, Point::Step(Step::Name(n))) if options.contains(n) => Ok(Step::Name(n.clone())),
-            (LaneKind::Choice { options }, _) => {
-                let listed: Vec<String> = options.iter().map(|n| format!("{n:?}")).collect();
-                let one_of = match listed.split_last() {
-                    Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
-                    _ => listed.join(""),
-                };
-                Err(EditError::Rejected(format!("{}'s {} lane is one of {one_of}, not {}", self.track, self.label, said(v))))
-            }
+            (LaneKind::Choice { options }, _) => Err(EditError::Rejected(format!(
+                "{}'s {} lane is one of {}, not {}",
+                self.track,
+                self.label,
+                crate::kind::one_of(options),
+                said(v)
+            ))),
             (LaneKind::Switch, Point::Step(Step::Switch(b))) => Ok(Step::Switch(*b)),
             _ => Err(EditError::Rejected(format!("{}'s {} lane is true or false, not {}", self.track, self.label, said(v)))),
         }

@@ -113,12 +113,7 @@ pub fn number(unit: Option<Unit>, name: &str, value: &Json) -> Result<f64, Strin
         },
         Some(Unit::Choice(o)) => match value.as_str().and_then(|v| o.place(v)) {
             Some(place) => Ok(place as f64),
-            None => {
-                let listed: Vec<String> = o.names().iter().map(|n| format!("{n:?}")).collect();
-                let (last, rest) = listed.split_last().expect("a choice has an option");
-                let one_of = if rest.is_empty() { last.clone() } else { format!("{} or {last}", rest.join(", ")) };
-                Err(format!("{name} is one of {one_of}, not {value}"))
-            }
+            None => Err(format!("{name} is one of {}, not {value}", one_of(o.names()))),
         },
         _ => value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| format!("{name} is a number, not {value}")),
     }
@@ -144,4 +139,27 @@ pub fn of_param(stepped: bool, min: f64, max: f64, steps: Option<&[String]>) -> 
     }
     let options = names.iter().enumerate().map(|(i, n)| Choice::new(min as i64 + i as i64, n.clone())).collect();
     (Kind::Choice, options)
+}
+
+/// A choice's names in words: `"saw", "square" or "sine"` (the one way they are listed).
+pub fn one_of(names: &[impl AsRef<str>]) -> String {
+    let listed: Vec<String> = names.iter().map(|n| format!("{:?}", n.as_ref())).collect();
+    match listed.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        _ => listed.join(""),
+    }
+}
+
+/// A word typed for a value of `kind` (`m2 set`), read as the value takes it: one of its
+/// `options` by its value or its name (`square`, `On`, `Master`), `true` or `false` for a switch,
+/// a number as the code writes it (`2`, never `2.0`), else the word itself.
+pub fn word(kind: Kind, options: &[Choice], w: &str) -> Json {
+    if let Some(o) = options.iter().find(|o| o.value.as_str() == Some(w) || o.label.eq_ignore_ascii_case(w)) {
+        return o.value.clone();
+    }
+    match (kind, w.parse::<f64>()) {
+        (Kind::Switch, _) if w == "true" || w == "false" => Json::Bool(w == "true"),
+        (_, Ok(n)) if n.is_finite() => number_json(n),
+        _ => Json::String(w.to_string()),
+    }
 }

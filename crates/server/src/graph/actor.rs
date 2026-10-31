@@ -2012,16 +2012,8 @@ impl Actor {
         leases: Vec<Option<u64>>,
     ) -> Result<Value> {
         let inner = self.inner.clone();
-        let end_all = |inner: &Arc<Inner>, why: &str| {
-            let device = inner.current_device();
-            let mut cp = inner.control.lock();
-            for lease in leases.iter().flatten() {
-                if let Ok(i) = cp.leases.index(*lease) {
-                    let l = cp.leases.end(i, why.to_string());
-                    put_back(&l, device.as_ref());
-                }
-            }
-        };
+        let ours: Vec<u64> = leases.iter().flatten().copied().collect();
+        let end_all = |inner: &Arc<Inner>, why: &str| inner.end_leases(|l| ours.contains(&l.id), why);
         let ready = (|| -> Result<Vec<String>> {
             let o = self.open.as_mut().context("no project is open")?;
             o.check_token(token)?;
