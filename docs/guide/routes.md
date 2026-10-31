@@ -624,7 +624,11 @@ Hear the newest change made elsewhere Before or After it (V), or close the pill.
 
 ### `POST /api/graph/draft`
 
-Keep the code editor's text of a file not yet saved, so a crash doesn't lose it (text null takes it out).
+Keep a window's text of a code file not yet saved, so a crash doesn't lose it (text null takes it out).
+
+### `POST /api/graph/draft/left`
+
+Say that unsaved code the song opened with was restored or discarded, so it isn't offered again.
 
 ### `POST /api/graph/export`
 

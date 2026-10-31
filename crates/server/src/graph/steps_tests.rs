@@ -315,7 +315,7 @@ fn a_step_event_names_what_its_delta_changed() {
 }
 
 /// A server on first-song's files, with the test token: its url, the graph and the session.
-fn serving() -> (Fixture, crate::Running, u64) {
+pub(in crate::graph) fn serving() -> (Fixture, crate::Running, u64) {
     let fixture = first_song_files();
     let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
     let running = crate::start_with(options, Graph::silent()).unwrap();

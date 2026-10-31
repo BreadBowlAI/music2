@@ -1,14 +1,18 @@
 // Track trust: undo that survives closing (gaps #29, WRITE-23 to WRITE-26) and code that survives a
 // crash (gaps #30, WRITE-27). On headless servers of its own, one after another, on one copy of
-// first-song, with the run's scratch HOME:
+// first-song (with a code file of its own, tracks/extra.ts, that no track imports), with the run's
+// scratch HOME:
 //   - an edit in one server; that server stopped, another opened on the song: Undo names the edit,
 //     and ⌘Z puts the file back byte for byte; ⇧⌘Z brings it back;
-//   - closed again, a file changed outside: Undo says it isn't possible past that change;
+//   - closed again, a file changed outside: what a pointer reaches on Undo (a hit test, not an
+//     attribute) says it isn't possible past that change;
 //   - text typed in the code editor and not saved is kept in .music2/drafts/ a second later, never
 //     in the song; the server killed (SIGKILL), another one opens the song: a notice says so, and
-//     the code editor offers it back, Restore putting it in the editor, unsaved;
-//   - killed again, the file changed meanwhile: the offer says the file changed; Discard throws the
-//     text away; lint.
+//     the code editor offers it back; typing in the file first, and an edit elsewhere, keep the
+//     offer and what it offers; Restore puts it in the editor, unsaved;
+//   - killed again, song.ts changed and tracks/extra.ts deleted meanwhile: the offer says the file
+//     changed; Discard throws the text away; the gone file's text is offered to copy, and copied;
+//     lint.
 //
 //   node e2e/tr-trust.mjs <root> <home>     (the `none` kind)
 import puppeteer from "puppeteer-core";
@@ -40,10 +44,13 @@ process.on("exit", () => servers.forEach((s) => s.exitCode === null && s.signalC
 
 const song = `${ROOT}/trust/First Song`;
 fs.cpSync(`${REPO}/examples/first-song`, song, { recursive: true });
+fs.writeFileSync(`${song}/tracks/extra.ts`, "// A file of its own.\n");
 const read = (f) => fs.readFileSync(`${song}/${f}`, "utf8");
+/** Every draft kept in .music2/drafts/, the ones left from before (in left/) too. */
 const drafts = () => {
+  const dir = `${song}/.music2/drafts`;
   try {
-    return fs.readdirSync(`${song}/.music2/drafts`).filter((n) => n.endsWith(".json")).map((n) => JSON.parse(fs.readFileSync(`${song}/.music2/drafts/${n}`, "utf8")));
+    return fs.readdirSync(dir, { recursive: true }).filter((n) => n.endsWith(".json")).map((n) => JSON.parse(fs.readFileSync(`${dir}/${n}`, "utf8")));
   } catch {
     return [];
   }
@@ -76,6 +83,7 @@ const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandb
 /** A page on server `s`, in a browser context of its own, the timeline showing. */
 async function pageOn(s) {
   const context = await browser.createBrowserContext();
+  await context.overridePermissions(s.url, ["clipboard-read", "clipboard-write", "clipboard-sanitized-write"]);
   const page = await context.newPage();
   await page.setViewport({ width: 1440, height: 900 });
   page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
@@ -93,6 +101,38 @@ const key = async (page, combo) => {
   for (const k of keys.slice(0, -1).reverse()) await page.keyboard.up(k);
 };
 const title = (page, label) => page.$eval(`button[aria-label="${label}"]`, (e) => e.title).catch(() => null);
+/** What a pointer at the middle of button `label` reaches, and the words that shows (its own title, or what holds it). */
+const hovered = (page, label) =>
+  page.evaluate((label) => {
+    const r = document.querySelector(`button[aria-label="${label}"]`).getBoundingClientRect();
+    return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest("[title]")?.getAttribute("title") ?? null;
+  }, label);
+/** Click the button with words `words` in the offer of unsaved code. */
+const offerButton = async (page, words) =>
+  (await page.evaluateHandle((w) => [...document.querySelectorAll("[data-testid=code-unsaved] button")].find((b) => b.textContent.trim() === w), words)).click();
+/** Open `file` in the code editor and type `text` at its end. */
+async function typeIn(page, file, text) {
+  await page.click(`[data-testid=code] [data-file='${file}']`);
+  await sleep(300);
+  await page.click("[data-testid=code] .view-lines");
+  await key(page, "Meta+ArrowDown");
+  await page.keyboard.type(text);
+}
+/** An edit to Bass's notes, as an agent's Tx: a change of the song that lists the code files again. */
+async function editNotes(p, s, id) {
+  const now = read("data/bass/notes.json");
+  const tx = {
+    id,
+    base: { "data/bass/notes.json": `sha256:${createHash("sha256").update(now).digest("hex")}` },
+    ops: [{ op: "clips", lane: ["bass", "notes"], put: [{ id, start: 8, length: 4, notes: [{ pitch: "G1", start: 0, length: 0.25 }] }], delete: [] }],
+    expect: { confined: { ranges: {}, lanes: [["bass", "notes"]], modules: [] } },
+  };
+  return p.page.evaluate(
+    async (t, body) => (await fetch("/api/tx/commit", { method: "POST", headers: { "x-m2-token": t, "content-type": "application/json" }, body: JSON.stringify(body) })).status,
+    s.page_token,
+    { session: (await p.state()).session, tx },
+  );
+}
 const toasts = (page) => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent ?? ""));
 const unsaved = (page) => page.$eval("[data-testid=code-unsaved]", (e) => e.textContent ?? "").catch(() => null);
 const shown = (page) => page.$eval("[data-testid=code] .view-lines", (e) => e.innerText.replace(/ /g, " ")).catch(() => "");
@@ -135,7 +175,7 @@ fs.writeFileSync(`${song}/data/bass/notes.json`, edited.replace(/"E1"/, '"F1"'))
 s = await serve("trust-3");
 p = await pageOn(s);
 const ended = "Undo isn't possible past the change made outside music2";
-check(await until(async () => (await title(p.page, "Undo")) === ended), `after a change made outside, Undo says so: ${await title(p.page, "Undo")}`);
+check(await until(async () => (await hovered(p.page, "Undo")) === ended), `after a change made outside, a pointer on Undo is told so: ${await hovered(p.page, "Undo")}`);
 check((await p.state()).undo_end === "outside", "and the state says why");
 
 // ------------------------------------------------------------ unsaved code, a crash
@@ -143,11 +183,8 @@ check((await p.state()).undo_end === "outside", "and the state says why");
 await p.page.click('[data-view-tab="code"]');
 await until(async () => !!(await p.page.$("[data-testid=code] .monaco-editor .view-lines")));
 const songTs = read("song.ts");
-await p.page.click("[data-testid=code] [data-file='song.ts']").catch(() => {});
-await until(async () => (await shown(p.page)).includes("song"));
-await p.page.click("[data-testid=code] .view-lines");
-await key(p.page, "Meta+ArrowDown");
-await p.page.keyboard.type("\n// typed, not saved\n");
+await until(async () => !!(await p.page.$("[data-testid=code] [data-file='song.ts']")));
+await typeIn(p.page, "song.ts", "\n// typed, not saved\n");
 check(await until(async () => drafts().some((d) => d.file === "song.ts" && d.text.includes("// typed, not saved")), 4000), "text typed is kept in .music2/drafts/ a second later");
 check(read("song.ts") === songTs, "never in the song's file");
 await p.close();
@@ -160,30 +197,50 @@ await p.page.click('[data-view-tab="code"]');
 check(await until(async () => (await unsaved(p.page)) === "song.ts has changes that weren't saved. Restore them?DiscardRestore"), `the code editor offers them back: ${await unsaved(p.page)}`);
 const barBad = await p.page.evaluate(lintIn, "[data-testid=code-unsaved]");
 check(barBad.length === 0, `the offer passes the taste lint: ${barBad.slice(0, 4).join(" | ")}`);
-const restore = await p.page.evaluateHandle(() => [...document.querySelectorAll("[data-testid=code-unsaved] button")].find((b) => b.textContent.trim() === "Restore"));
-await restore.click();
+// Typing in the file before answering, then a change elsewhere that lists the files again.
+await typeIn(p.page, "song.ts", "x");
+await sleep(1500);
+check((await editNotes(p, s, "trust4")) === 200, "an edit elsewhere lands");
+await sleep(1000);
+check(
+  (await unsaved(p.page)) !== null && drafts().some((d) => d.text.endsWith("// typed, not saved\n")),
+  `typing first, and an edit elsewhere, keep the offer and what it offers: ${await unsaved(p.page)}`,
+);
+await offerButton(p.page, "Restore");
 await sleep(200);
 await key(p.page, "Meta+ArrowDown");
 check(await until(async () => (await shown(p.page)).includes("// typed, not saved")), "Restore puts the text in the editor");
 const edited2 = await until(async () => !!(await p.page.$("[data-testid=code] [data-file='song.ts'][data-dirty]")));
 check(edited2 && read("song.ts") === songTs && (await unsaved(p.page)) === null, "unsaved (song.ts is marked edited), and the offer goes");
+await typeIn(p.page, "tracks/extra.ts", "// more\n");
+check(await until(async () => drafts().some((d) => d.file === "tracks/extra.ts"), 4000), "another file's text is kept too");
 await p.close();
 await s.kill();
 
-// ------------------------------------------------------------ the file changed meanwhile
+// ------------------------------------------------------------ the files changed meanwhile
 
 fs.writeFileSync(`${song}/song.ts`, `${songTs}// changed in another editor\n`);
+fs.rmSync(`${song}/tracks/extra.ts`);
 s = await serve("trust-5");
 p = await pageOn(s);
 await p.page.click('[data-view-tab="code"]');
 check(
-  await until(async () => (await unsaved(p.page))?.startsWith("song.ts has changes that weren't saved, but song.ts was changed since. Restore them over it?")),
+  await until(async () => (await unsaved(p.page))?.startsWith("song.ts has changes that weren't saved, and the file changed since then. Put your text back in the editor? Nothing is saved until you save.")),
   `a draft whose file changed says so: ${await unsaved(p.page)}`,
 );
-const discard = await p.page.evaluateHandle(() => [...document.querySelectorAll("[data-testid=code-unsaved] button")].find((b) => b.textContent.trim() === "Discard"));
-await discard.click();
-check(await until(async () => drafts().length === 0 && (await unsaved(p.page)) === null), "Discard throws it away");
+await offerButton(p.page, "Discard");
+check(await until(async () => !drafts().some((d) => d.file === "song.ts")), "Discard throws it away");
 check(read("song.ts") === `${songTs}// changed in another editor\n`, "and the file stays as the other editor left it");
+check(
+  await until(async () => (await unsaved(p.page)) === "tracks/extra.ts had changes that weren't saved, but the file is gone now.DiscardCopy the text"),
+  `a draft whose file is gone offers its text to copy: ${await unsaved(p.page)}`,
+);
+await offerButton(p.page, "Copy the text");
+check(await until(async () => (await toasts(p.page)).some((t) => t.includes("Copied the text extra.ts had."))), `Copy says so: ${JSON.stringify(await toasts(p.page))}`);
+const copied = await p.page.evaluate(() => navigator.clipboard.readText()).catch((e) => `couldn't read: ${e}`);
+check(copied === "// A file of its own.\n// more\n", `and the clipboard has the text: ${JSON.stringify(copied)}`);
+await offerButton(p.page, "Discard");
+check(await until(async () => drafts().length === 0 && (await unsaved(p.page)) === null), "Discard takes that one too");
 await p.close();
 await s.stop();
 

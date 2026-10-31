@@ -1,7 +1,7 @@
 // The code editor's side of the API: the project's TypeScript files, the sources its
 // imports resolve to, and saving a file over the text it was based on.
 
-import type { GraphState } from "./graph";
+import { clientId, type GraphState } from "./graph";
 import { token } from "./native";
 
 /**
@@ -16,12 +16,12 @@ export interface ProjectFiles {
   files: ProjectFile[];
   /** The file each module (by key) is defined in, when the compiler says. */
   modules: { key: string; label?: string; file: string | null }[];
-  /** Text left unsaved when the song last closed, offered back (WRITE-27); `changed`: its file changed since, or is gone. */
+  /** Text left unsaved when the song last closed, offered back until answered (WRITE-27); `changed`: its file changed since, or is gone. */
   left?: Left[];
 }
 
-/** A draft the song opened with: a file's text that wasn't saved (WRITE-27). */
-export interface Left { file: string; text: string; changed: boolean }
+/** A draft the song opened with: a file's text that wasn't saved (WRITE-27), by its id. */
+export interface Left { id: string; file: string; text: string; changed: boolean }
 
 /** What the file says on disk, which a save must be based on; null if it is gone. */
 export const onDisk = (f: ProjectFile) => (f.draft === undefined ? f.text : f.draft);
@@ -54,9 +54,14 @@ export const codeApi = {
     if (status >= 400) throw new Error(data.error ?? `HTTP ${status}`);
     return { ok: true, graph: data, step: (data as { step?: number }).step };
   },
-  /** Keep a file's unsaved text in the song's `.music2/drafts/`, so a crash doesn't lose it (WRITE-27); null: nothing unsaved now. */
+  /** Keep this window's unsaved text of a file in the song's `.music2/drafts/`, so a crash doesn't lose it (WRITE-27); null: nothing unsaved now. */
   draft: async (session: number, file: string, base: string, text: string | null) => {
-    const { status, data } = await request<object>("POST", "/draft", { session, file, base, text });
+    const { status, data } = await request<object>("POST", "/draft", { session, client: clientId, file, base, text });
+    if (status >= 400) throw new Error(data.error ?? `HTTP ${status}`);
+  },
+  /** A draft the song opened with was restored or discarded: it isn't offered again (WRITE-27). */
+  answered: async (session: number, id: string) => {
+    const { status, data } = await request<object>("POST", "/draft/left", { session, id });
     if (status >= 400) throw new Error(data.error ?? `HTTP ${status}`);
   },
 };

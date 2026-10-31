@@ -186,8 +186,11 @@ crate::api::routes! {
         "Say which files have changes not yet saved in the code editor",
         r#"{"session": 7, "files": ["tracks/keys.ts"]}"#;
     POST "/api/graph/draft" => graph_draft up to crate::TX_BODY; reads, musician,
-        "Keep the code editor's text of a file not yet saved, so a crash doesn't lose it (text null takes it out)",
-        r#"{"session": 7, "file": "tracks/keys.ts", "base": "the text it had", "text": "the text typed so far"}"#;
+        "Keep a window's text of a code file not yet saved, so a crash doesn't lose it (text null takes it out)",
+        r#"{"session": 7, "client": "the window's id", "file": "tracks/keys.ts", "base": "the text it had", "text": "the text typed so far"}"#;
+    POST "/api/graph/draft/left" => graph_draft_left; reads, musician,
+        "Say that unsaved code the song opened with was restored or discarded, so it isn't offered again",
+        r#"{"session": 7, "id": "5d41402abc4b2a76-9e107d9d372bb682"}"#;
     POST "/api/graph/export" => graph_export; reads, musician,
         "Export the song's audio, which may pause playback (agents render with m2 render)",
         r#"{"path": "/Users/you/Music/Night drive.wav"}"#;
@@ -1098,7 +1101,14 @@ async fn graph_export(State(s): S, Json(r): Json<ExportReq>) -> ApiResult {
 
 async fn graph_files(State(s): S) -> ApiResult {
     let state = s.clone();
-    Ok(Json(blocking(move || state.graph.files()).await?))
+    let mut files = blocking(move || state.graph.files()).await?;
+    // The text left unsaved is the musician's: an agent reads the song's files, not it (WRITE-27).
+    if crate::caller::now().is_agent()
+        && let Some(o) = files.as_object_mut()
+    {
+        o.remove("left");
+    }
+    Ok(Json(files))
 }
 
 async fn graph_types(State(s): S) -> ApiResult {
@@ -1132,6 +1142,9 @@ struct UnsavedReq {
 #[derive(Deserialize)]
 struct DraftReq {
     session: u64,
+    /// The window whose draft it is: each window keeps its own.
+    #[serde(default)]
+    client: String,
     file: String,
     /// The file's text the editor was in step with.
     base: String,
@@ -1142,7 +1155,20 @@ struct DraftReq {
 /// The code editor keeps a file's unsaved text in `.music2/drafts/` (WRITE-27), never in the song.
 async fn graph_draft(State(s): S, Json(r): Json<DraftReq>) -> ApiResult {
     let state = s.clone();
-    blocking(move || state.graph.set_draft(r.session, &r.file, &r.base, r.text.as_deref())).await?;
+    blocking(move || state.graph.set_draft(r.session, &r.client, &r.file, &r.base, r.text.as_deref())).await?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct DraftLeftReq {
+    session: u64,
+    id: String,
+}
+
+/// A draft the song opened with was restored or discarded (WRITE-27).
+async fn graph_draft_left(State(s): S, Json(r): Json<DraftLeftReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.answer_draft(r.session, &r.id)).await?;
     Ok(Json(json!({})))
 }
 

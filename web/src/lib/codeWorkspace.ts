@@ -4,8 +4,10 @@
 // disk in place; a file with unsaved edits keeps them and holds what the disk says instead.
 //
 // Unsaved text is kept in the song's `.music2/drafts/` a second after its last change, and taken
-// out once the file is clean (WRITE-27), so a crash doesn't lose it. What a song opens with is
-// offered back (`left`): Restore puts it in the buffer, unsaved; Discard throws it away.
+// out once the file is clean (WRITE-27), so a crash doesn't lose it: this window's own draft. What a
+// song opens with is offered back (`left`) until it is answered, whatever is typed meanwhile:
+// Restore puts it in the buffer, unsaved (⌘Z in the editor gets the typing back); Discard throws it
+// away.
 
 import type * as Monaco from "monaco-editor/editor";
 import { codeApi, onDisk, type Left, type ProjectFiles } from "./code";
@@ -44,8 +46,10 @@ export class Workspace {
   version = 0;
   /** Counts finished saves: a listing asked for before one is older than what it wrote. */
   epoch = 0;
-  /** Text left unsaved when the song last closed, by file: offered back until restored or discarded (WRITE-27). */
+  /** Text left unsaved when the song last closed, by its id: offered back until restored or discarded (WRITE-27). */
   left = new Map<string, Left>();
+  /** The ones answered here, which a listing asked for before the answer landed still has. */
+  private answered = new Set<string>();
   private listeners = new Set<() => void>();
   private disposed = false;
   /** The drafts sent, one after another, so an older text never lands after a newer one. */
@@ -111,12 +115,8 @@ export class Workspace {
       if (this.dirty(d)) d.theirs = null;
       else this.drop(d);
     }
-    // What the server still offers back, but a file whose buffer has edits of its own now.
-    const mine = (file: string) => {
-      const d = this.docs.get(file);
-      return !!d && this.dirty(d);
-    };
-    this.left = new Map((project.left ?? []).filter((l) => !mine(l.file)).map((l) => [l.file, l]));
+    // What the server still offers back: typing in its file meanwhile answers nothing.
+    this.left = new Map((project.left ?? []).filter((l) => !this.answered.has(l.id)).map((l) => [l.id, l]));
     this.emit();
   }
 
@@ -157,23 +157,34 @@ export class Workspace {
     this.drafting = this.drafting.then(() => codeApi.draft(session, path, base, text)).catch(() => {});
   }
 
-  /** Put the text `path` was left with in its buffer, unsaved, and keep it as its draft: never on disk (WRITE-27). */
-  restore(path: string) {
-    const l = this.left.get(path);
-    const d = this.docs.get(path);
+  /** Say the draft `id` was answered, once what was sent before it landed. */
+  private answer(id: string) {
+    const session = this.session;
+    this.answered.add(id);
+    this.left.delete(id);
+    this.drafting = this.drafting.then(() => codeApi.answered(session, id)).catch(() => {});
+  }
+
+  /**
+   * Put the text the draft `id` kept in its file's buffer, unsaved, as an edit ⌘Z takes back, and
+   * keep it as this window's draft before the draft left from before goes: never on disk (WRITE-27).
+   */
+  restore(id: string) {
+    const l = this.left.get(id);
+    const d = l && this.docs.get(l.file);
     if (!l || !d) return;
-    this.left.delete(path);
     d.model.pushStackElement();
     d.model.pushEditOperations([], [{ range: d.model.getFullModelRange(), text: l.text }], () => null);
     d.model.pushStackElement();
     this.keep(d);
+    this.answer(id);
     this.emit();
   }
 
-  /** Throw away the text `path` was left with (WRITE-27). */
-  discard(path: string) {
-    if (!this.left.delete(path)) return;
-    this.send(path, this.docs.get(path)?.base ?? "", null);
+  /** Throw away the text the draft `id` kept (WRITE-27). */
+  discard(id: string) {
+    if (!this.left.has(id)) return;
+    this.answer(id);
     this.emit();
   }
 
