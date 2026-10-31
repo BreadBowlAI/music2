@@ -1,8 +1,8 @@
-//! Building blocks of the instrument voices (`@m2/synths`' `synth` and `fm`, `@m2/drums`' `drum`,
-//! and std's Sampler): a fast sine, a band-limited step for oscillators, a 2× decimator, a ladder
-//! filter, envelopes, a soft clipper and noise.
+//! Building blocks of the instrument voices (`synth`, `fm`, `drum` and the Sampler's): a fast sine, a
+//! band-limited step for oscillators, a 2× decimator, a ladder filter, envelopes, a soft
+//! clipper and noise.
 //!
-//! The house rules are the crate's: audio that isn't finite counts as silence, controls are
+//! The house rules are fx.rs's: audio that isn't finite counts as silence, controls are
 //! clamped (NaN takes the low end) and recursive state is flushed far below hearing. A
 //! voice also keeps a control clock of its own, a tick every [`TICK`] samples counted from
 //! its first sample (never from the host's blocks), so its output is the same however the
@@ -10,7 +10,7 @@
 
 use std::f32::consts::{PI, SQRT_2};
 
-pub use crate::{Coef, Filter, Glide, clampf, flush, prewarp};
+pub use crate::fx::{Coef, Filter, Glide, clampf, flush, prewarp};
 
 /// Samples between control ticks. Values read at a tick are interpolated to the next.
 pub const TICK: u32 = 16;

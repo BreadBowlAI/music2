@@ -16,7 +16,7 @@
 
 use std::f32::consts::TAU;
 
-use m2_dsp::{Coef, Filter, Glide, Line, Phase, clampf, flush, sane};
+use m2_dsp::fx::{Coef, Filter, Glide, Line, Phase, clampf, flush, sane};
 use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
 // ---------------------------------------------------------------- modulation

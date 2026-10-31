@@ -23,6 +23,8 @@ libm.workspace = true
 
 [dev-dependencies]
 wasmtime = { workspace = true, features = ["wat"] }
+# The tests' store of the packs music2 ships (`m2_song::pack::test_packs`).
+m2-song = { workspace = true, features = ["testing"] }
 wat.workspace = true
 serde_json.workspace = true
 m2-kernel.workspace = true

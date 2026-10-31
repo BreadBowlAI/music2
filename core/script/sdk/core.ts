@@ -856,7 +856,7 @@ export function key<T>(k: string, fn: () => T): T {
  *     controls: { time: control.secs(0.25).range(0.001, 2).log().smooth(), mix: control.frac(0.3) },
  *     output: port.audio(),
  *     editor: { category: "Delay & Reverb", insert: { time: 0.25, mix: 0.3 } },
- *   }, (x: Audio, { time, mix }: Params) => kernel("std:delay", { in: x, time, mix }));
+ *   }, (x: Audio, { time, mix }: Params) => kernel("@m2/effects:delay", { in: x, time, mix }));
  *
  * A call is `delay(x)`, `delay(x, { time: 0.5 })`: first the inputs `positional` doesn't name,
  * then the `positional` slots (`lowpass(x, 1000, 0.7)`), then one options object naming any

@@ -1,6 +1,7 @@
-//! What the kernels' native tests share, std's and music2's own packs': a host that plays a kernel
-//! in blocks of any size, a manifest's ports, and a spectrum for measuring aliasing. Each crate's
-//! own `testkit` gives [`manifest_in`] and [`defaults_in`] its `m2pkg.toml`.
+//! What the kernels' native tests share (behind the feature `testing`): a host that plays a kernel in
+//! blocks of any size, a kernel's ports from its package's manifest, and a spectrum for measuring
+//! aliasing; [`effects`], the harness and the guarantees of every effect. std's tests and those of
+//! music2's own packs use it, so a kernel that moves from std into a pack keeps its tests as they are.
 
 use m2_kernel::{Host, Kernel, PORT_CHANNELS};
 
@@ -94,9 +95,9 @@ pub fn s(seconds: f32) -> usize {
     (seconds * SR) as usize
 }
 
-/// A kernel's ports from the text of its package's `m2pkg.toml`: `(name, default)` for its
-/// inputs, then its outputs' names. The tests play every kernel with the manifest's own defaults,
-/// so a port order or default that drifts from the code fails here.
+/// A kernel's ports from a package's `m2pkg.toml` (its text, `toml`): `(name, default)` for its
+/// inputs, then its outputs' names. The tests play every kernel with the manifest's own defaults, so a port
+/// order or default that drifts from the code fails here.
 pub fn manifest_in(toml: &str, kernel: &str) -> (Vec<(String, Option<f32>)>, Vec<String>) {
     let at = toml.find(&format!("name = \"{kernel}\"")).unwrap_or_else(|| panic!("no kernel {kernel} in m2pkg.toml"));
     let rest = &toml[at..];
@@ -117,7 +118,7 @@ pub fn manifest_in(toml: &str, kernel: &str) -> (Vec<(String, Option<f32>)>, Vec
     (inputs, outputs)
 }
 
-/// The defaults of `kernel` in the manifest `toml`, by port, with `names` checked against the
+/// The manifest's defaults for `kernel`, by port, with `names` checked against the
 /// manifest's order (an input without a default reads 0).
 pub fn defaults_in(toml: &str, kernel: &str, names: &[&str]) -> Vec<f32> {
     let (inputs, _) = manifest_in(toml, kernel);
@@ -328,3 +329,5 @@ pub fn torture(base: &[f32], keep: &[usize]) -> Vec<Vec<f32>> {
 pub fn max_step(x: &[f32], from: usize, to: usize) -> f32 {
     x[from.max(1)..to.min(x.len())].iter().zip(&x[from.max(1) - 1..]).fold(0.0, |m, (a, b)| m.max((a - b).abs()))
 }
+
+pub mod effects;

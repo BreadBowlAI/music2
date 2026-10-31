@@ -105,12 +105,13 @@ fn long_tail() -> (Ir, DataSet) {
 }
 
 // OS-49 (8a, Decision 12): subnormal numbers are slow on x86, so std flushes its recursive state
-// below about 1e-15 (`m2_dsp::flush`), and so do music2's own packs' kernels (PACK-21). One note,
-// then five minutes of silence, through every kernel music2 ships that keeps state, counting the
-// subnormal samples in every node's output: counted, not timed. std 0.2's filter, delay (now
-// `@m2/effects`') and envelope follower still let theirs through (a sum of subnormals is one too,
-// so the adds after them are left out). This test names them: when a std bump flushes
-// them (OS-49's deferred fix), it fails, and the list shrinks to none.
+// below about 1e-15 (`m2_dsp::fx::flush`), and so do music2's own packs' kernels (PACK-21): the
+// bitcrusher makes none either, as the only state of it that settles is its mix's smoothing, which
+// lands exactly on its target. One note, then five minutes of silence, through every kernel music2
+// ships that keeps state, counting the subnormal samples in every node's output: counted, not
+// timed. std 0.2's filter, delay (now `@m2/effects`') and envelope follower still let theirs through
+// (a sum of subnormals is one too, so the adds after them are left out). This test names them:
+// when a bump flushes them (OS-49's deferred fix), it fails, and the list shrinks to none.
 #[test]
 fn which_std_kernels_make_subnormals_in_a_five_minute_tail() {
     let pk = own_packages();

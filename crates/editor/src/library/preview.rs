@@ -417,7 +417,12 @@ fn render_in(song: &Song, packages: &[(String, PathBuf)], work: &Path, out: &Pat
     let mut set = PackageSet::default();
     let mut deps = format!("\"@m2/core\" = \"{}\"\n", wanted(m2_script::SDK_VERSION));
     for (name, dir) in packages {
-        let p = set.load(dir).with_context(|| format!("loading the {name} package"))?;
+        // std as the host loads it; a pack as one, never trusted as std by its folder's word (ABI-11).
+        let p = match name.as_str() {
+            m2_song::pack::STD => set.load(dir),
+            _ => set.load_pack(dir, name),
+        };
+        let p = p.with_context(|| format!("loading the {name} package"))?;
         // A pack from its folder, as the song's build found it (PACK-7): the preview's song has no
         // lock, and the folder may be a path pack's, not the store's. Its whole path: the song is
         // in `work`, and a relative one would be read from there.

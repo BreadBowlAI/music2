@@ -1,6 +1,6 @@
 //! `drum`, the voice behind @m2/drums: an 808/909-style machine in one kernel that picks
 //! its drum when the note starts, either from the note's General MIDI pitch or from a
-//! fixed `model` (`m2_dsp::gm`). Port order must match the pack's `m2pkg.toml`.
+//! fixed `model` (`m2_dsp::kit`). Port order must match the pack's `m2pkg.toml`.
 //!
 //! Every drum is a one-shot: it reads its settings on its first sample, starts from exactly
 //! 0, and ends in exact silence at -90 dB. A hit in its choke group (from `drumhit`) fades
@@ -9,7 +9,7 @@
 //! its first sample), so no two hits are quite the same (as on an analog machine) while
 //! every render is, and so is live playback from 0, however long the engine sat stopped.
 
-use m2_dsp::gm::{Kind, kind_of};
+use m2_dsp::kit::{Kind, kind_of};
 use m2_dsp::voice::{Clip, DcBlock, Decay, Drive, Noise, Square, Steps, Svf, T60, clampf, hash, pitch_of, sin2pi, soft};
 use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 

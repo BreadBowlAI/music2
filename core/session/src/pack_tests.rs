@@ -661,3 +661,11 @@ fn a_choice_in_a_pack_plays_its_place() {
     }
     std::fs::remove_dir_all(&root).ok();
 }
+
+// PACK-20: the build and the store name a pack's kernels' source the same, in the same words: the
+// script crate keeps its own copy, as it doesn't depend on m2-song.
+#[test]
+fn kernels_src_is_one_name_to_the_build_and_the_store() {
+    assert_eq!(m2_script::KERNELS_SRC, m2_song::pack::KERNELS_SRC);
+    assert_eq!(m2_script::NOT_IN_KERNELS_SRC, m2_song::pack::NOT_IN_KERNELS_SRC);
+}

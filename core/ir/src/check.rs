@@ -383,16 +383,32 @@ pub const MOVED_KERNELS: &[Moved] = &[
     Moved { from: "std:widen", to: "@m2/effects:widen", std: "0.9", since: "1.2", component: "widen" },
 ];
 
-/// Why kernel `id` isn't there, when it left std for a pack ([`MOVED_KERNELS`]): where it is now,
-/// and how a song moves to it.
-fn moved_from_std(id: &str) -> Option<String> {
-    let Moved { from, to, std, since, component } = MOVED_KERNELS.iter().find(|m| m.from == id)?;
+/// Why kernel `id` isn't there, when it left std for a pack ([`MOVED_KERNELS`]): what to do first,
+/// in the words the user wrote (the call is inside `component`, the innermost ComponentId whose
+/// code made it, or in the song's own code), then where the kernel is now. The app shows a
+/// message on one line, cut at the window's edge, so the fix comes first.
+fn moved_from_std(id: &str, component: Option<&str>) -> Option<String> {
+    let Moved { from, to, std, since, component: sound } = MOVED_KERNELS.iter().find(|m| m.from == id)?;
     let pack = to.split_once(':')?.0;
-    Some(format!(
-        "`{from}` is no longer std's: since std {std} it is `{to}`, the pack {pack}' own kernel, from {pack} {since}, which \
-         comes with music2. A song plays it as `{component}` from \"{pack}\"; a song locked to an older {pack} moves with \
-         `m2 pack update <song> {pack}`"
-    ))
+    let now = format!("(`{from}` is now `{to}`.)");
+    let (by, name) = component.and_then(|c| c.split_once(':')).filter(|(p, _)| *p != "std").unzip();
+    Some(match (by, name) {
+        // An older version of the pack the kernel went to.
+        (Some(by), Some(name)) if by == pack => format!(
+            "Move this song to {pack} {since} or later: run `m2 pack update <song> {pack}`. Its `{name}` is from an older {pack}, \
+             which needs a kernel std {std} no longer has; {pack} {since} has its own, and sounds the same. {now}"
+        ),
+        // Another pack's sound: its author must move it.
+        (Some(by), Some(name)) => format!(
+            "`{name}`, from {by}, calls a kernel std {std} no longer has, so it can't play: its author must move it to `{to}`. \
+             Until then, play `{sound}` from \"{pack}\" in its place. {now}"
+        ),
+        // The song's own code.
+        _ => format!(
+            "Play `{sound}` from \"{pack}\" instead: import it from \"{pack}\", and add \"{pack}\" = \"{since}\" under [dependencies] \
+             in music2.toml. This song's code calls a kernel std {std} no longer has; it sounds the same. {now}"
+        ),
+    })
 }
 
 /// A `code.check` error at a node, or at the module.
@@ -1019,7 +1035,8 @@ impl<'a> Checker<'a> {
                             self.diags.push(coded("kernel.offline", m, Some(node), message));
                             continue;
                         }
-                        if let Some(why) = moved_from_std(kernel).filter(|_| !is_plugin) {
+                        let component = m.chain(node.frame).into_iter().rev().find_map(|f| f.component.as_deref());
+                        if let Some(why) = moved_from_std(kernel, component).filter(|_| !is_plugin) {
                             self.diags.push(coded("pkg.missing", m, Some(node), why));
                             continue;
                         }

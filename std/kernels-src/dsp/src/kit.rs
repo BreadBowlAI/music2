@@ -1,12 +1,10 @@
-//! The General MIDI drums, as std's `drumhit` and `@m2/drums`' `drum` both read them: which drum a
-//! note plays (by its General MIDI note, or a fixed `model`), its choke group, and how `drumhit`
-//! marks a hit for the drum voices and `hitcount`. One place, so the marks a std kernel writes are
-//! the marks a pack's kernel reads.
+//! The drum kit's map, shared by the drum voice (`drum`) and what marks its hits (std's `drumhit`):
+//! which drum a note plays, by its General MIDI key or a fixed model, and each drum's choke group.
 
-use crate::clampf;
-use crate::voice::pitch_of;
+use crate::voice::{clampf, pitch_of};
 
-/// Where `drumhit` marks every hit, above the five choke groups' fields: 16^5.
+/// Where std's `drumhit` marks every hit, above the five choke groups' fields (16^group, 4 bits
+/// each): 16^5. `hitcount` counts this field; a drum voice reads its own group's.
 pub const HIT_FIELD: u32 = 1 << 20;
 
 /// The drums. The hats share one choke group; a crash chokes the crash, a ride doesn't.

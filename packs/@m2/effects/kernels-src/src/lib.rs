@@ -20,7 +20,7 @@
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
-use m2_dsp::{Filter, Glide, Line, Phase, clampf, flush, prewarp, sane};
+use m2_dsp::fx::{Filter, Glide, Line, Phase, clampf, flush, prewarp, sane};
 use m2_kernel::{Cfg, Io, Kernel, abi, export};
 
 abi!();

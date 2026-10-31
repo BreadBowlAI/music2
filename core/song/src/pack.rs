@@ -34,6 +34,16 @@ pub const LISTING: &str = "m2pack.json";
 /// The folder at a package's top that holds its kernels' source (PACK-20, ABI-10): no part of a pack.
 pub const KERNELS_SRC: &str = "kernels-src";
 
+/// Why nothing of a pack is read from [`KERNELS_SRC`]: it is never installed.
+pub const NOT_IN_KERNELS_SRC: &str =
+    "kernels-src/ is no part of the pack (the source of its kernels, never installed): put the built wasm in kernels/";
+
+/// Whether `rel`, a `/`-separated path inside a package's folder, is in its [`KERNELS_SRC`]: what no
+/// reader of a pack's files reads (PACK-20).
+pub fn in_kernels_src(rel: &str) -> bool {
+    rel.split('/').find(|p| !p.is_empty() && *p != ".") == Some(KERNELS_SRC)
+}
+
 /// A package's name (PACK-1): `std`, or `@owner/name`, each part 1 to 39 characters of `a-z`,
 /// `0-9` and `-`, neither starting nor ending with `-`. Never `@m2/core`, the SDK, and never a `:`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -201,6 +211,15 @@ impl PkgManifest {
         if let Some(other) = m.dependencies.keys().find(|d| !matches!(d.as_str(), SDK | STD)) {
             return Err(format!("package `{name}`: [dependencies] names `{other}`, but a pack may need only \"{SDK}\" and std"));
         }
+        // The module is one of the pack's files: inside it, and never in its kernels' source (PACK-20).
+        if let Some(w) = &m.package.wasm {
+            if Path::new(w).is_absolute() || w.split(['/', '\\']).any(|p| p == "..") {
+                return Err(format!("package `{name}`: `wasm = \"{w}\"` leaves the pack: name a file in it, such as kernels/<name>.wasm"));
+            }
+            if in_kernels_src(w) {
+                return Err(format!("package `{name}`: `{w}`: {NOT_IN_KERNELS_SRC}"));
+            }
+        }
         let RawInfo { name, license, description, authors, repository, tags, wasm, .. } = m.package;
         let package = PkgInfo { name, version, license, description, authors, repository, tags, wasm };
         Ok(PkgManifest { package, dependencies: m.dependencies, kernel: m.kernel })
@@ -362,6 +381,9 @@ pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
 /// lists it, with no case folding and no part a symbolic link (PACK-5, FMT-6a): what every disk
 /// finds the same, and never anything outside the package.
 pub fn package_file(dir: &Path, path: &str) -> Result<PathBuf, String> {
+    if in_kernels_src(path) {
+        return Err(NOT_IN_KERNELS_SRC.into());
+    }
     let mut at = dir.to_path_buf();
     for part in path.split('/') {
         let listed = std::fs::read_dir(&at).map_err(|_| "there is no such file".to_string())?;

@@ -1,13 +1,14 @@
 [package]
 name = "m2-dsp"
-description = "The building blocks music2's kernels are made of: filters, smoothers, envelopes, oscillator steps, a drum map"
+description = "What the kernels music2 ships are made of, shared by std's and its own packs': effect helpers, voice blocks, the drum kit's map, and the tests' harness"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
 
-# A member of the kernels' one workspace (ABI-10), beside the kit: std's crate and each of music2's
-# own packs' crates use it, so a block is written once and every module that uses it builds the
-# same code. It exports no kernel: a module is only what its own crate exports.
+[features]
+# The native tests' harness (`m2_dsp::testing`): std's tests and each pack crate's turn it on.
+testing = []
+
 [dependencies]
 m2-kernel = { path = "../kernel" }

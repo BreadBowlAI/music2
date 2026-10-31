@@ -118,13 +118,15 @@ fn std_packages() -> PackageSet {
     p
 }
 
-/// std and every pack music2 ships with kernels of its own (PACK-21), from the source tree: every
-/// kernel music2 ships, which the tests of every kernel play.
+/// std and every pack music2 ships with kernels of its own (PACK-21), installed as the app installs
+/// them (the tests' store): every kernel music2 ships, run as the app runs it, with no time checks
+/// (ABI-11). The tests of every kernel play them.
 fn own_packages() -> PackageSet {
     let mut p = std_packages();
-    for dir in m2_song::pack::bundled(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")) {
+    for (name, dir) in m2_song::pack::test_packs() {
         if m2_song::pack::PkgManifest::at(&dir).unwrap().package.wasm.is_some() {
-            p.load(&dir).unwrap_or_else(|e| panic!("{}: {e:#}", dir.display()));
+            let pack = p.load_pack(&dir, &name).unwrap_or_else(|e| panic!("{}: {e:#}", dir.display()));
+            assert!(!pack.checked, "{name} runs as music2's own");
         }
     }
     p
@@ -312,6 +314,62 @@ fn feedback_delays_one_block() {
     );
     let out = render(&ir, &DataSet::empty(), 0.5);
     assert!(peak(&out) < 2.5 && peak(&out) > 1.0);
+}
+
+/// The initial value of `module`'s first global, wasm-ld's stack pointer, which starts at the top
+/// of the stack: the stack's size, in bytes.
+fn stack_size(module: &[u8]) -> u32 {
+    fn leb(b: &[u8], at: &mut usize) -> u64 {
+        let (mut v, mut shift) = (0u64, 0);
+        loop {
+            let x = b[*at];
+            *at += 1;
+            v |= u64::from(x & 0x7f) << shift;
+            shift += 7;
+            if x < 0x80 {
+                return v;
+            }
+        }
+    }
+    let mut at = 8;
+    while at < module.len() {
+        let id = module[at];
+        at += 1;
+        let len = leb(module, &mut at) as usize;
+        if id == 6 {
+            let mut g = at;
+            assert!(leb(module, &mut g) > 0, "a global");
+            // i32, mutable, then `i32.const <value>` (a signed LEB, positive here).
+            assert_eq!(module[g..g + 3], [0x7f, 0x01, 0x41], "the stack pointer is the first global");
+            g += 3;
+            return leb(module, &mut g) as u32;
+        }
+        at += len;
+    }
+    panic!("no global section")
+}
+
+// ABI-10, RENDER-32: every module music2 ships is built with the kernels' own stack, the size their
+// `.cargo/config.toml` sets (64 KiB): each sandbox touches all of its memory once at its seal, so a
+// build that left the flag out (wasm-ld's 1 MiB) costs every sandbox a megabyte, and no render
+// would show it.
+#[test]
+fn every_module_music2_ships_has_the_kernels_stack() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let config = std::fs::read_to_string(root.join("std/kernels-src/.cargo/config.toml")).unwrap();
+    let flag = config.split("-zstack-size=").nth(1).expect("the config sets the stack's size");
+    let want: u32 = flag[..flag.find(|c: char| !c.is_ascii_digit()).unwrap()].parse().unwrap();
+    assert_eq!(want, 65_536, "the kernels' stack is 64 KiB (RENDER-32)");
+    let mut modules = vec![root.join("std/kernels/std.wasm")];
+    for dir in m2_song::pack::bundled(&root.join("packs")) {
+        if let Some(w) = m2_song::pack::PkgManifest::at(&dir).unwrap().package.wasm {
+            modules.push(dir.join(w));
+        }
+    }
+    assert!(modules.len() >= 2, "std's and @m2/effects' at least: {modules:?}");
+    for m in modules {
+        assert_eq!(stack_size(&std::fs::read(&m).unwrap()), want, "{}: its stack", m.display());
+    }
 }
 
 #[test]
@@ -1393,21 +1451,45 @@ fn song_code_cannot_call_an_offline_kernel() {
     assert!(m2_ir::Kernels::kernel(&pk, "std:stretch").is_none() && pk.kernel_sigs().all(|s| s.id != "std:stretch"));
 }
 
-// PACK-21: a kernel that left std for a pack music2 ships is no longer std's, and a song (or an
-// older pack's code) that calls it by its old id is told where it went, in `pkg.missing`'s words,
-// at its node: its new id, the pack and the first version with it, and how to move.
+// PACK-21: a kernel that left std for a pack music2 ships is no longer std's, and whatever calls it
+// by its old id is told, at the call, in `pkg.missing`'s words, what to do first, in the words the
+// user wrote (the review's X8): a song locked to an older version of the pack it went to (its
+// `bitcrush`) moves the song on; another pack's sound waits for its author; the song's own code
+// plays the pack's effect instead. Each then names the new id.
 #[test]
 fn a_kernel_that_left_std_says_where_it_went() {
-    let ir = song(json!([{"id": "c", "op": "kernel", "kernel": "std:bitcrush", "src": "song.ts:4:3"}]), "c", json!([]));
     let pk = std_packages();
     assert!(m2_ir::Kernels::kernel(&pk, "std:bitcrush").is_none(), "std has no bitcrusher");
-    let e = check(&ir, &pk).expect_err("refused");
-    assert_eq!(e.iter().map(|d| (d.code, d.src.as_deref())).collect::<Vec<_>>(), [("pkg.missing", Some("song.ts:4:3"))], "{e:?}");
+    // The call, made inside `component` (a ComponentId), or in the song's own code.
+    let said = |component: Option<&str>| {
+        let frames = match component {
+            Some(c) => json!([{"site": 1, "component": c}]),
+            None => json!([]),
+        };
+        let node = json!({"id": "c", "op": "kernel", "kernel": "std:bitcrush", "src": "song.ts:4:3", "frame": component.map(|_| 0)});
+        let mut ir = song(json!([node]), "c", json!([]));
+        ir.modules[0].frames = serde_json::from_value(frames).unwrap();
+        let e = check(&ir, &pk).expect_err("refused");
+        assert_eq!(e.iter().map(|d| (d.code, d.src.as_deref())).collect::<Vec<_>>(), [("pkg.missing", Some("song.ts:4:3"))], "{e:?}");
+        e[0].message.clone()
+    };
     assert_eq!(
-        e[0].message,
-        "`std:bitcrush` is no longer std's: since std 0.8 it is `@m2/effects:bitcrush`, the pack @m2/effects' own kernel, from \
-         @m2/effects 1.1, which comes with music2. A song plays it as `bitcrush` from \"@m2/effects\"; a song locked to an older \
-         @m2/effects moves with `m2 pack update <song> @m2/effects`"
+        said(Some("@m2/effects:bitcrush")),
+        "Move this song to @m2/effects 1.1 or later: run `m2 pack update <song> @m2/effects`. Its `bitcrush` is from an older \
+         @m2/effects, which needs a kernel std 0.8 no longer has; @m2/effects 1.1 has its own, and sounds the same. \
+         (`std:bitcrush` is now `@m2/effects:bitcrush`.)"
+    );
+    assert_eq!(
+        said(Some("@alice/crunchy:crunch")),
+        "`crunch`, from @alice/crunchy, calls a kernel std 0.8 no longer has, so it can't play: its author must move it to \
+         `@m2/effects:bitcrush`. Until then, play `bitcrush` from \"@m2/effects\" in its place. (`std:bitcrush` is now \
+         `@m2/effects:bitcrush`.)"
+    );
+    assert_eq!(
+        said(None),
+        "Play `bitcrush` from \"@m2/effects\" instead: import it from \"@m2/effects\", and add \"@m2/effects\" = \"1.1\" under \
+         [dependencies] in music2.toml. This song's code calls a kernel std 0.8 no longer has; it sounds the same. \
+         (`std:bitcrush` is now `@m2/effects:bitcrush`.)"
     );
     // Any other unknown kernel is unknown, as before.
     let ir = song(json!([{"id": "c", "op": "kernel", "kernel": "std:crush"}]), "c", json!([]));
@@ -1439,11 +1521,12 @@ fn the_engines_left_std_for_their_packs() {
         let e = check(&ir, &std).expect_err("refused");
         assert_eq!((e[0].code, e[0].src.as_deref()), ("pkg.missing", Some("song.ts:4:3")), "{e:?}");
         let pack = to.split_once(':').unwrap().0;
+        let m = &e[0].message;
         assert!(
-            e[0].message.starts_with(&format!("`{from}` is no longer std's: since std 0.9 it is `{to}`, the pack {pack}' own kernel"))
-                && e[0].message.contains(&format!("A song plays it as `{component}` from \"{pack}\"")),
-            "{from}: {}",
-            e[0].message
+            m.starts_with(&format!("Play `{component}` from \"{pack}\" instead"))
+                && m.contains("std 0.9 no longer has")
+                && m.ends_with(&format!("(`{from}` is now `{to}`.)")),
+            "{from}: {m}"
         );
     }
 }

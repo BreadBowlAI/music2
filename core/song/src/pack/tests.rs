@@ -215,6 +215,13 @@ fn a_packs_kernel_source_is_no_part_of_it() {
     std::fs::write(dir.join("src/kernels-src/a.ts"), "export const a = 1;\n").unwrap();
     let paths: Vec<String> = Listing::of(&dir).unwrap().files.into_iter().map(|f| f.path).collect();
     assert_eq!(paths, ["m2pkg.toml", "src/index.ts", "src/kernels-src/a.ts"], "only the top's is the source");
+    // Nothing of the pack is read from it (review X4): no file a song names, no module.
+    assert_eq!(package_file(&dir, "kernels-src/src/lib.rs").unwrap_err(), NOT_IN_KERNELS_SRC);
+    assert!(package_file(&dir, "src/kernels-src/a.ts").is_ok());
+    let with = |wasm: &str| PkgManifest::read(&format!("[package]\nname = \"@alice/x\"\nversion = \"1.0.0\"\nwasm = \"{wasm}\"\n"));
+    assert!(with("kernels/x.wasm").is_ok());
+    assert!(with("./kernels-src/x.wasm").unwrap_err().ends_with(NOT_IN_KERNELS_SRC));
+    assert!(with("../x.wasm").unwrap_err().contains("leaves the pack"));
     let store = Store::at(scratch("kernels-src-store"));
     store.install(&dir).unwrap();
     let at = store.version_dir(&PackName::new("@alice/x").unwrap(), &Version(1, 0, 0));

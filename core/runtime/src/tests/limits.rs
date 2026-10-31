@@ -582,6 +582,25 @@ fn a_module_that_never_starts_is_refused() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+// ABI-11 (review X7): std runs unchecked because the host loads it as std, never because a
+// folder's m2pkg.toml says `name = "std"`. A folder that says so, met where a pack loads (a
+// song's packs, `m2 pack check`, a preview), is refused before anything of it runs: its module's
+// start function traps at once, so had it been compiled and started, the error would be the trap's.
+#[test]
+fn a_folder_that_says_it_is_std_is_refused_before_its_code_runs() {
+    let dir = package(&module_v1(&format!("(func $boom unreachable) (start $boom) {}", crate::tests::kernel_v1("k", ""))));
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap().replace("name = \"@test/t\"", "name = \"std\"");
+    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
+    let e = format!("{:#}", std_packages().view_of(&[("@test/t".to_string(), dir.clone())]).map(drop).unwrap_err());
+    assert!(e.ends_with(&format!("{} holds std, not @test/t", dir.display())), "refused before its start ran: {e}");
+    let e = format!("{:#}", std_packages().load_pack(&dir, "std").map(drop).unwrap_err());
+    assert!(e.ends_with("std comes with music2: a pack is named @owner/name"), "{e}");
+    // As std, loaded by the host, it is compiled and its start runs, so it traps.
+    let e = format!("{:#}", PackageSet::default().load(&dir).map(drop).unwrap_err());
+    assert!(!e.contains("holds std"), "{e}");
+    std::fs::remove_dir_all(dir).ok();
+}
+
 // ABI-6, RENDER-33: a kernel slow across many ticks, but within its limit, is never stopped, and
 // the checks change no bit: it plays live what it renders offline, which is what its fast twin
 // renders.
