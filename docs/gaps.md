@@ -238,14 +238,12 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 30 | **Crash safety**: keep unsaved code-editor text through a crash, and simple project snapshots or backups. | Edits are on disk at once and a cut-off edit is offered back, but unsaved code is lost. | No | large |
-| 29 | **Undo that survives closing the app.** | Closing the app, or the song, loses all undo. | Partly (lost on closing too) | medium |
+| 30 | **Crash safety**: simple project snapshots or backups. Unsaved code-editor text survives a crash since `trust` ([WRITE-27](architecture.md#unsaved-code)). | Edits are on disk at once, a cut-off edit and unsaved code are offered back, but there is no way back to how the song was an hour or a day ago, apart from undo and git. | No | medium |
 | 31 | **The rest of Settings**: view settings that hold for every song (zoom, grids, the audition toggle and the metronome are kept per song). The sample rate stays the song's ([RENDER-31](architecture.md#sample-rate)). | Most people want one zoom for every song. | Partly (it showed the device and the folders) | small |
 | 12 | **A picture of each song in the recent list** (taste.md SS-2). | A small picture of each arrangement helps find the right song. | Yes (the Song Library) | small |
 | 28 | **Open a song by dropping its folder** on the window or the Dock. | Finding a song in the Finder is how many people open it. | Yes | small |
 
 - **The dock and the browser panel start over at each launch** (which view the dock shows, and its height): the browser's storage starts empty, as the page gets a new address each time.
-- **Renaming a song's folder starts Undo over**: the song closes and opens again from there (Rename Song… says so).
 - **A song asking for std "0.2", "0.3" or "0.4"** gets `pkg.unsatisfied` in this app (std 0.5.0); its message names the line to write (`std = "0.5"`). A "0.2" song may sound a little different (one-note sounds now keep each note's own velocity); a "0.3" or "0.4" song sounds the same, though the message says it may not.
 - **A song's std line names no patch version** (`std = "0.5"`), so a song that needs a later patch gets a missing import in an app with an earlier one, not `pkg.unsatisfied`.
 
@@ -351,7 +349,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 ## The old app's parts not back yet
 
-Every row marked **No** was missing from the old app too. Of the rows marked **Partly**, the old app also lacked: copying notes between clips (#15), chord stamps and an arpeggiator (#16), loudness and meters after the fader (#20), and undo that survives closing (#29).
+Every row marked **No** was missing from the old app too. Of the rows marked **Partly**, the old app also lacked: copying notes between clips (#15), chord stamps and an arpeggiator (#16), and loudness and meters after the fader (#20). Undo that survives closing (#29), which it lacked too, is built since `trust` ([Saving and undo](guide/saving.md)).
 
 | From the old app | Still missing |
 |---|---|

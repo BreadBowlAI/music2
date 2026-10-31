@@ -35,4 +35,4 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | See what's wrong, in plain words, with fixes | the status pill in the top bar |
 | Learn step by step | Help ▸ Make Your First Song |
 
-Every change is written into the song's files at once, and Undo (⌘Z) takes it back.
+Every change is written into the song's files at once, and Undo (⌘Z) takes it back, also after you close the song. Code you typed and didn't save is offered back after a crash ([Saving and undo](saving.md)).
