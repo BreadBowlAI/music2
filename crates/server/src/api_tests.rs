@@ -72,7 +72,7 @@ const THE_MUSICIANS: [(&str, &str); 46] = [
 ];
 
 /// Every song change the page makes, which stays open to agents (AGENT-11), and is a write.
-const SONG_CHANGES: [(&str, &str); 41] = [
+const SONG_CHANGES: [(&str, &str); 42] = [
     ("POST", "/api/tx/commit"),
     ("POST", "/api/graph/take"),
     ("POST", "/api/graph/set"),

@@ -1480,7 +1480,7 @@ mod audio {
         assert!(!s.is_empty() && s.iter().all(|x| *x == 0.2), "channel 2 alone: {:?}", &s[..4]);
     }
 
-    const BAND: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+    const BAND: &str = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\nimport { sum } from 'std/math';\n\
                         const vox = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\
                         const gtr = track('gtr', { name: 'Gtr' }, ({ lane }) => lane.audio('clips'));\n\
                         const keys = track('keys', { name: 'Keys' }, ({ lane }) => kick(lane.notes('notes')));\n\
@@ -2027,7 +2027,7 @@ fn keys_either_side_of_a_wrap_stay_in_their_pass() {
 fn an_armed_track_that_leaves_the_song_is_disarmed() {
     let mut r = Rig::new();
     r.graph.arm(r.token, "keys", Some("notes"), Some(true), None, m2_play::InputChoice::default(), false).unwrap();
-    let only_bass = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+    let only_bass = "import { song, track } from '@m2/core';\nimport { kick } from '@m2/synths';\n\
                      const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\n\
                      export default song(() => b.out);\n";
     r.fixture.put("song.ts", only_bass);
