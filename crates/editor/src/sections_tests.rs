@@ -159,6 +159,11 @@ fn go(s: &mut Session, g: Gesture) -> ClipsEdited {
     edit(s, &g).unwrap_or_else(|e| panic!("{g:?}: {e}"))
 }
 
+/// [`go`] as the Tx with id `tx_id`: the ids it mints are known (FMT-11).
+fn go_as(s: &mut Session, g: Gesture, tx_id: &str) -> ClipsEdited {
+    edit_as(s, &g, tx_id).unwrap_or_else(|e| panic!("{g:?}: {e}"))
+}
+
 fn refused(s: &mut Session, g: Gesture) -> String {
     match edit(s, &g) {
         Err(e) => e.to_string(),
@@ -241,6 +246,35 @@ fn a_clip_crossing_each_edge_is_split_there() {
     assert_eq!(lane(&s, "vox/clips"), ["v0000001 28+4 offset 0 fades 0.01/0"]);
     assert_eq!(f.read("data/arrangement.json"), ARRANGEMENT);
     assert_eq!(marks(&f), ["Verse@0", "Chorus@32", "Bridge@64"]);
+    s.undo().unwrap();
+    // The files exactly, with the ids a Tx of a known id gives (FMT-11): counted across the lanes,
+    // in their order, the cutoff's first.
+    go_as(&mut s, Gesture::Delete { start: 32.0, end: 64.0 }, "t1");
+    let new = |lane: &str, n: u32| m2_song::ClipId::derive("t1", &addr(lane), n);
+    let kick = KICK.replace(
+        "  {\"id\": \"k0000002\", \"start\": 32, \"length\": 32, \"notes\": [\n    {\"pitch\": \"C1\", \"start\": 0, \"length\": 1, \"velocity\": 0.8},\n    {\"pitch\": \"C1\", \"start\": 8, \"length\": 1, \"velocity\": 0.8}\n  ]},\n",
+        "",
+    );
+    assert_eq!(f.read("data/kick/hits.json"), kick);
+    let bass = format!(
+        r#"{{"clips": [
+  {{"id": "b0000001", "start": 24, "length": 8, "notes": [
+    {{"pitch": "E2", "start": 0, "length": 2, "velocity": 0.8}},
+    {{"pitch": "E2", "start": 6, "length": 2, "velocity": 0.8}}
+  ]}},
+  {{"id": "{}", "start": 64, "length": 8, "notes": [
+    {{"pitch": "G2", "start": 4, "length": 2, "velocity": 0.8}}
+  ]}}
+]}}
+"#,
+        new("bass/notes", 1)
+    );
+    assert_eq!(f.read("data/bass/notes.json"), bass);
+    let cutoff = format!(
+        "{{\"unit\": \"hz\", \"clips\": [\n  {{\"id\": \"c0000001\", \"start\": 16, \"length\": 16, \"points\": [[0, 300], [16, 775]]}},\n  {{\"id\": \"{}\", \"start\": 64, \"length\": 16, \"points\": [[0, 1725], [16, 2200]]}}\n]}}\n",
+        new("bass/cutoff", 0)
+    );
+    assert_eq!(f.read("data/bass/cutoff.json"), cutoff);
     s.undo().unwrap();
     // A copy of the bars takes the audio clip's later part: it starts 4 beats later in its file.
     let copy = section(s.accepted(), 32.0, 64.0).unwrap();

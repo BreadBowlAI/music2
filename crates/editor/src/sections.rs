@@ -31,7 +31,7 @@ use crate::{EditError, Edited};
 /// The most bars one Insert bars opens.
 pub const BARS_MAX: u32 = 999;
 
-/// How close two beats are to be one: a bar line to the 960th of a beat's millionth.
+/// How close two beats are to count as one.
 const EPS: f64 = 1e-9;
 
 /// A copied section (ARR-5): its span, and for every lane of the song the clips that overlap it,
@@ -145,15 +145,18 @@ fn moved(clips: Vec<Clip>, by: f64, keep: bool) -> impl Iterator<Item = Clip> {
     })
 }
 
-/// `beat`, which must be a bar line of the song (ARR-1): `what` says which in the refusal.
+/// `beat`, which must be a bar line of the song (ARR-1), on it exactly: `what` says which in the
+/// refusal.
 fn bar_line(arr: &Arrangement, beat: f64, what: &str) -> Result<f64, EditError> {
     if !(beat.is_finite() && beat >= 0.0) {
         return Err(EditError::Rejected(format!("{what} is a beat from the song's start on, not {beat}.")));
     }
     let (bar, into) = arr.bar_at(beat);
-    match into.abs() < EPS || (arr.meter_at(beat).bar() - into).abs() < EPS {
-        true => Ok(beat),
-        false => Err(EditError::Rejected(format!(
+    let left = arr.meter_at(beat).bar() - into;
+    match () {
+        _ if into.abs() < EPS => Ok(beat - into),
+        _ if left.abs() < EPS => Ok(beat + left),
+        _ => Err(EditError::Rejected(format!(
             "{what} must be on a bar line: beat {} is inside bar {}.",
             m2_song::lane::number(beat),
             bar + 1
@@ -221,12 +224,13 @@ fn closed<T: Clone>(
             out.push(e);
         }
     };
+    let after = |e: &&T| beat(e) >= b - EPS;
     if !entries.iter().any(|e| (beat(e) - b).abs() < EPS)
-        && let Some(last) = entries.iter().filter(|e| beat(e) >= a && beat(e) < b).last()
+        && let Some(last) = entries.iter().filter(|e| beat(e) >= a && !after(e)).last()
     {
         land(last.clone(), a, &mut out);
     }
-    for e in entries.iter().filter(|e| beat(e) >= b - EPS) {
+    for e in entries.iter().filter(after) {
         let at = (beat(e) - (b - a)).max(a);
         land(e.clone(), at, &mut out);
     }
